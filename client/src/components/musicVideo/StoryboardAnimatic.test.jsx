@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import StoryboardAnimatic, { shotAt } from './StoryboardAnimatic.jsx';
 
 const scenes = [
@@ -26,5 +26,34 @@ describe('StoryboardAnimatic', () => {
     fireEvent.timeUpdate(audio);
     expect(container.querySelector('img').getAttribute('src')).toBe('/data/images/frame-b.png');
     expect(screen.getByText('Shot 2 of 2 · 0:10')).toBeTruthy();
+  });
+});
+
+vi.mock('../../services/apiMusicVideo.js', () => ({
+  getMusicVideoLyricOverlayPreview: vi.fn(async () => ({ html: '<!doctype html><p>words</p>', assets: [], width: 1920, height: 1080, fps: 24, durationSec: 20 })),
+}));
+
+describe('StoryboardAnimatic lyrics', () => {
+  const lyricProject = {
+    id: 'p', scenes, audioAnalysis: { durationSec: 20 },
+    lyricCues: [{ id: 'c1', text: 'hello there', startSec: 1, endSec: 3 }],
+  };
+
+  it('lays the lyrics over the picture by default and hides them on the toggle', async () => {
+    render(<StoryboardAnimatic project={lyricProject} audioUrl="/song.mp3" />);
+    const overlay = await screen.findByTestId('animatic-lyrics');
+    expect(overlay.getAttribute('sandbox')).toBe('allow-scripts');
+    // The frameless shot's stand-in text moves out from under the words.
+    expect(screen.getByText('Opening').closest('figure')).toBeNull();
+    const toggle = screen.getByRole('button', { name: 'Lyrics' });
+    expect(toggle.getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(toggle);
+    await waitFor(() => expect(screen.queryByTestId('animatic-lyrics')).toBeNull());
+    expect(screen.getByText('Opening').closest('figure')).toBeTruthy();
+  });
+
+  it('offers no lyrics until the words are timed', () => {
+    render(<StoryboardAnimatic project={{ ...lyricProject, lyricCues: [{ id: 'c1', text: 'hello', startSec: null }] }} audioUrl="/song.mp3" />);
+    expect(screen.queryByRole('button', { name: 'Lyrics' })).toBeNull();
   });
 });

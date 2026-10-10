@@ -11,12 +11,15 @@
  * line sits in the text zone its shot will give it), else the lyrics laid out
  * as scenes: one per lyric-sheet section, or per four lines when the sheet has
  * no headers. The layout is built for the preview only; the board is untouched.
+ *
+ * `overlay` builds the same words on a transparent page with nothing else drawn,
+ * for the storyboard animatic to lay over its shot frames.
  */
 
 import { ServerError } from '../../lib/errorHandler.js';
 import { isNonBlankStr } from '../../lib/textUtils.js';
 import { buildDocumentPreview } from './documentPreview.js';
-import { readTemplateDocumentFiles } from './compositionDocument.js';
+import { readLyricOverlayDocumentFiles, readTemplateDocumentFiles } from './compositionDocument.js';
 import { documentSongDuration } from './documentRender.js';
 
 const LINES_PER_SCENE = 4;
@@ -66,8 +69,9 @@ function lyricScenes(cues, markers, durationSec) {
 /**
  * The preview page for the playthrough, in the shape `buildDocumentPreview`
  * returns. 409 until the song is analyzed and at least one line is timed.
+ * `overlay` swaps the template for the transparent words-only page.
  */
-export async function buildLyricPlaythroughPreview(project) {
+export async function buildLyricPlaythroughPreview(project, { overlay = false } = {}) {
   const durationSec = documentSongDuration(project);
   if (!durationSec) throw new ServerError('Analyze the song before playing the lyrics through', { status: 409, code: 'NOT_ANALYZED' });
   const cues = project.lyricCues || [];
@@ -78,5 +82,5 @@ export async function buildLyricPlaythroughPreview(project) {
   const scenes = shots.length ? shots : lyricScenes(cues, project.lyricMarkers, durationSec);
   // Only the song and the words: no composition, overlay text or narrative events of the project's own.
   const playthrough = { ...project, scenes, composition: { mode: 'document', textCues: [] } };
-  return buildDocumentPreview(playthrough, { files: await readTemplateDocumentFiles('layered') });
+  return buildDocumentPreview(playthrough, { files: overlay ? await readLyricOverlayDocumentFiles() : await readTemplateDocumentFiles('layered') });
 }

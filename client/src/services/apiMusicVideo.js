@@ -104,6 +104,7 @@ export const prepareMusicVideoSong = (id, options = {}) => request(`/music-video
 });
 // The lyric timing playthrough page: the aligned words over a plain frame (same shape as the composition preview).
 export const getMusicVideoLyricPlaythroughPreview = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/lyrics/playthrough/preview`, options);
+export const getMusicVideoLyricOverlayPreview = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/lyrics/overlay/preview`, options);
 export const musicVideoLyricAlignEventsUrl = (jobId) =>
   `/api/music-video/lyrics/align/${encodeURIComponent(jobId)}/events`;
 export const cancelMusicVideoLyricAlign = (jobId, options = {}) =>

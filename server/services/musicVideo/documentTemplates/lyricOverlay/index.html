@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lyric overlay</title>
+<style>
+/* Transparent: the storyboard animatic shows its frames under this page. */
+html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+#stage { display: block; width: 100vw; height: 100vh; object-fit: contain; }
+</style>
+<link rel="stylesheet" href="lyricType.css">
+</head>
+<body>
+<canvas id="stage"></canvas>
+<script src="portos-mv.js"></script><!-- portos-allow-hidden-content: the render-time data file -->
+<script type="module" src="lyricType.js"></script><!-- portos-allow-hidden-content: the shared PortOS lyric-type module -->
+<script src="engine.js"></script><!-- portos-allow-hidden-content: the reviewed overlay engine beside this page -->
+</body>
+</html>
