@@ -27,7 +27,7 @@ export const clearGoogleAuth = () => request('/calendar/google/auth/clear', { me
 export const apiSyncGoogleCalendar = (accountId, options = {}) => request(`/calendar/sync/${accountId}/api`, { method: 'POST', ...options });
 export const apiDiscoverCalendars = (accountId) => request(`/calendar/sync/${accountId}/discover-api`, { method: 'POST' });
 export const startGoogleAutoConfig = (options = {}) => request('/calendar/google/auto-configure/start', { method: 'POST', ...options });
-export const runGoogleAutoConfig = (email, options = {}) => request('/calendar/google/auto-configure/run', { method: 'POST', body: JSON.stringify({ email }), ...options });
+export const runGoogleAutoConfig = (email, { requestId, ...options } = {}) => request('/calendar/google/auto-configure/run', { method: 'POST', body: JSON.stringify({ email, ...(requestId ? { requestId } : {}) }), ...options });
 export const getDailyReview = (date, params = {}, options = {}) => {
   const str = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null)).toString();
   return request(`/calendar/review/${date}${str ? `?${str}` : ''}`, options);

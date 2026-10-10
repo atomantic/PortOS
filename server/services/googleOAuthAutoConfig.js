@@ -130,10 +130,10 @@ export async function runSteps(steps) {
   }
 }
 
-export async function runAutomatedSetup(userEmail, io) {
+export async function runAutomatedSetup(userEmail, io, requestId) {
   console.log('📅 Running automated Google OAuth setup via CDP');
   const emit = (step, message) => {
-    io?.emit('calendar:google:autoconfig', { step, message });
+    io?.emit('calendar:google:autoconfig', { step, message, ...(requestId ? { requestId } : {}) });
     console.log(`📅 Auto-config: ${message}`);
   };
 

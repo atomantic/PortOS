@@ -2765,7 +2765,10 @@ export const dailyReviewQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).default(0),
 });
 
-export const calendarAutoConfigureBodySchema = z.object({ email: optionalString });
+export const calendarAutoConfigureBodySchema = z.object({
+  email: optionalString,
+  requestId: z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/).optional(),
+});
 export const commandExecuteBodySchema = z.object({ command: nonEmptyString, workspacePath: nullishString });
 export const dataArchiveBodySchema = z.object({
   daysToKeep: z.preprocess((value) => (value == null ? undefined : value), z.coerce.number().finite().min(0).optional()),
