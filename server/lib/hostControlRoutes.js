@@ -55,10 +55,15 @@
  *     derive-from-manuscript/commit, manuscript cuts preview/apply, comic
  *     extract-pages, audio extract-lines, scene video, TTS and music
  *     rendering): none reaches the staged runner.
- *   - Caller-prompted AI outside Pipeline (#10908): game feedback, rounds
- *     generate/evaluate/derive-parts, personality generate, system-resource
- *     triage, mood-board style synthesis/compose/analyze and CoS task enhance
- *     take caller text and/or a caller-chosen provider; gated whole-operation.
+ *   - Caller-prompted AI outside Pipeline (#10908, #10989): game feedback,
+ *     rounds generate/evaluate/derive-parts, personality generate,
+ *     system-resource triage, mood-board style synthesis/compose/analyze, CoS
+ *     task enhance, Music Video cover design/generation and promotion plans,
+ *     and POST LLM scoring, rhetoric evaluation and drill-cache fill take
+ *     caller text and/or a caller-chosen provider; gated whole-operation.
+ *     POST /api/meatspace/post/drill is gated only when `type` is an LLM
+ *     drill; math, memory and cognitive drills stay open. Cover compose,
+ *     lettering saves and promotion reads stay open.
  *   - Creative Director and Creative Commissions (#10867): project create/edit
  *     choose agent instructions and provider pins; start/resume/directive/
  *     replan/plan-step/auto-cast/smoke-test/review enqueue or re-arm writable
@@ -135,6 +140,7 @@
  */
 
 import { canonicalStringify, isPlainObject } from './objects.js';
+import { LLM_DRILL_TYPES } from './postDrillTypes.js';
 import { escapeRegExp } from './textUtils.js';
 
 export const HOST_CONTROL_ROUTES = Object.freeze([
@@ -646,6 +652,18 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/mood-boards/:id/compose-prompt',
   'POST /api/mood-boards/:id/analyze',
   'POST /api/cos/tasks/enhance',
+  // Music Video cover design/generation and promotion planning, and POST LLM
+  // drills (#10989). Each hands free text and/or a caller-chosen provider to
+  // the prompt runner (or an image job a CLI/TUI agent can run) with no
+  // tool-free restriction. Cover compose, lettering PUT, thumbnail selection
+  // and promotion GET only record or read. POST /api/meatspace/post/drill is
+  // body-gated below so deterministic drills stay open.
+  'POST /api/music-video/:id/publish-kit/cover-art/design',
+  'POST /api/music-video/:id/publish-kit/cover-art/generate',
+  'POST /api/music-video/:id/publish/promotion-plan',
+  'POST /api/meatspace/post/score-llm',
+  'POST /api/meatspace/post/rhetoric/evaluate',
+  'POST /api/meatspace/post/drill-cache/fill',
 
   // Writers Room authoring reaches the staged runner, including CLI/TUI
   // fallback. Stored prose and live cursor text are caller-controlled; a
@@ -844,6 +862,9 @@ const COMPILED_BODY_ROUTES = [
   // sources, triage and Brain/Goal promotion stay data-only and open.
   ['POST /api/review/queue/resolve', (body) => /^\s*cos:/i.test(body?.id) ? ['id'] : []],
   ['POST /api/review/queue/promote-ask', (body) => body?.target === 'task' ? ['target'] : []],
+  // LLM drill types reach a caller-chosen provider (#10989). Math, memory and
+  // cognitive types stay open, including a missing or unknown type.
+  ['POST /api/meatspace/post/drill', (body) => LLM_DRILL_TYPES.includes(body?.type) ? ['type'] : []],
 ].map(([route, pick]) => ({ ...compileRoute(route), pick }));
 
 /** The host-control keys a request body names, for `method path` of a policy store; [] elsewhere. */
