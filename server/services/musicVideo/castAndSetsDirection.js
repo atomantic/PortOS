@@ -42,6 +42,13 @@ import { CAST_SETS_DEFINITION_LIMITS, normalizeDefinitions } from './castAndSets
 // shape the direction as words and are never image-generation inputs.
 const MOOD_BOARD_TEXT_ONLY = 'The image generator never sees the mood board: carry what you take from it (light, color, texture, grain, wardrobe feel) into your own words in the descriptions, lighting and looks.';
 
+// The look line rides on every plate prompt, and a plate is shot empty: a person
+// in either (a mood board's composed style often describes one) lands in the plate.
+const LOOK_AND_SET_RULES = [
+  '- look: palette, light quality, film stock, grain and texture only. Never a person, place, object or pose: it is appended to every image, including the empty set plates.',
+  '- sets: describe the EMPTY place. No people, characters, figures or actions; the protagonist appears only in tests.',
+].join('\n');
+
 export const CAST_SETS_LIMITS = Object.freeze({
   looks: { min: 1, max: 4 },
   sets: { min: 3, max: 8 },
@@ -135,6 +142,7 @@ export function moodBoardImageList(board, resolveItem) {
 const OUTPUT_SHAPE = `{
   "logline": "<one or two sentences: who, where, what happens>",
   "interpretation": "<how the song's references and themes shape this world>",
+  "look": "<one line of photographic look: palette, light quality, film stock, grain, texture; no people, places, objects or poses>",
   "protagonist": {
     "name": "<a name or designation>",
     "description": "<who they are in the song: age, vibe, attitude>",
@@ -145,7 +153,7 @@ const OUTPUT_SHAPE = `{
     "rules": ["<continuity or safety rule>"]
   },
   "looks": [{ "name": "<SHORT NAME>", "description": "<the complete outfit>", "chapters": "<which parts of the song>" }],
-  "sets": [{ "id": "<short-slug>", "name": "<set name>", "description": "<the empty location, concrete and visual>", "lighting": "<its one dominant light>", "sections": ["<section label it serves>"] }],
+  "sets": [{ "id": "<short-slug>", "name": "<set name>", "description": "<the empty location, concrete and visual, with nobody in it>", "lighting": "<its one dominant light>", "sections": ["<section label it serves>"] }],
   "songMap": [{ "section": 0, "setId": "<short-slug>" }],
   "tests": [{ "setId": "<short-slug>", "look": "<SHORT NAME>", "action": "<what the protagonist does in this frame>", "caption": "<the lyric or beat it serves>" }],
   "overlayConcept": { "summary": "<one persistent graphic layer that ties every shot together>", "elements": [{ "name": "<element>", "description": "<what it shows and when it changes>" }] },
@@ -155,6 +163,7 @@ const OUTPUT_SHAPE = `{
 const PROCEDURAL_OUTPUT_SHAPE = `{
   "logline": "<one or two sentences: who, where, what happens>",
   "interpretation": "<how the song's references and themes shape this world>",
+  "look": "<one line of photographic look: palette, light quality, film stock, grain, texture; no people, places, objects or poses>",
   "protagonist": {
     "name": "<a name or designation>",
     "description": "<who or what they are in the song: vibe, attitude>",
@@ -257,6 +266,7 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
     '- Never describe photographic people: no skin, pores, realistic hair, wardrobe photography or singing close-ups. A human or photo cutout is allowed ONLY as a set whose imageRole is "cutout", and only when the director guidance asks for one.',
     '- imageRole says what each planned image is FOR: "background" (a full-bleed environment layer), "texture" (a seamless surface), "decoration" (an isolated ornament) or "cutout" (an isolated subject to composite). Default to "background".',
     '- Give every set ONE dominant light color or quality so a cut tells the viewer where we are.',
+    LOOK_AND_SET_RULES,
     '- songMap: one entry per song section index listed above, naming the set that section plays in.',
     `- definitions: one reusable code definition per recurring character (at most ${CAST_SETS_DEFINITION_LIMITS.characters}). Draw it in a 200×200 box (origin top-left, y down) from at most ${CAST_SETS_DEFINITION_LIMITS.parts} simple parts; fills and strokes name a palette entry or a #hex. Expressions and poses are per-part overrides of the base parts; motion rules say what moves, by how much, over how many beats. Keep the definition consistent with the prose above.`,
     '- questions: up to three things you need the director to decide.',
@@ -264,6 +274,7 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
   const photographicRules = [
     `- ${CAST_SETS_LIMITS.looks.min}–${CAST_SETS_LIMITS.looks.max} looks, ${CAST_SETS_LIMITS.sets.min}–${CAST_SETS_LIMITS.sets.max} sets, ${CAST_SETS_LIMITS.tests.min}–${CAST_SETS_LIMITS.tests.max} tests.`,
     '- Give every set ONE dominant light color or quality so a cut tells the viewer where we are.',
+    LOOK_AND_SET_RULES,
     '- songMap: one entry per song section index listed above, naming the set that section plays in.',
     '- tests: in-set frames of the protagonist that prove the cast works in the world; each names a set id and a look name.',
     '- Wet or revealing looks use opaque fabric so the video stays safe to post.',
@@ -304,9 +315,11 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
 }
 
 const FEEDBACK_TEXT = 2000;
-// Only a direction call carrying standing feedback is asked for its own look line.
+// Every direction writes its own look line (palette, light, grain, texture);
+// with standing feedback it must also agree with that feedback.
+const LOOK_FIELD = '"look": "<one line of photographic look: palette, light quality, film stock, grain, texture; no people, places, objects or poses>"';
 const withLookField = (shape, wanted) => (wanted
-  ? shape.replace('"logline":', '"look": "<one line: film stock, light quality and sources, grain, color, agreeing with the director feedback>",\n  "logline":')
+  ? shape.replace(LOOK_FIELD, '"look": "<one line: film stock, light quality and sources, grain, color, agreeing with the director feedback; no people, places, objects or poses>"')
   : shape);
 
 // ---- parsing ----------------------------------------------------------------
@@ -529,6 +542,7 @@ export function mergeCastAndSetsDirection(previous, parsed, { sections = [], med
     ...(procedural ? { medium: 'procedural', world, definitions } : {}),
     logline: pick('logline', ''),
     interpretation: pick('interpretation', ''),
+    look: pick('look', ''),
     protagonist,
     looks,
     sets,

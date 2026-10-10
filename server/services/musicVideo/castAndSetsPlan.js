@@ -7,13 +7,13 @@
  * The prompts generalize the hand-made check-in's templates:
  *   - `character`   — the canonical five-view character sheet. First, and every
  *                     image of the protagonist after it uses it as reference #1.
- *                     Its own references are the mood-board images the
- *                     direction picked.
+ *                     It has no image references: mood board images are
+ *                     outside inspiration and only reach it as text.
  *   - `expressions` — a 2×3 expression sheet including the signature gesture.
  *   - `looks`       — the wardrobe lookbook, one panel per look.
- *   - `set:<id>`    — one EMPTY plate per set (no people), conditioned on the
- *                     mood board for look only; plates do not depend on the
- *                     character, so they render alongside it.
+ *   - `set:<id>`    — one EMPTY plate per set: any sentence of the description
+ *                     or look that puts a person in it is dropped. Plates do
+ *                     not depend on the character, so they render alongside it.
  *   - `test:<n>`    — the protagonist in a set: conditioned on that set's plate,
  *                     the character sheet and the looks sheet.
  *
@@ -43,6 +43,17 @@ const sentence = (s) => {
   return t && !/[.!?]$/.test(t) ? `${t}.` : t;
 };
 const join = (...parts) => parts.map(sentence).filter(Boolean).join(' ');
+
+// A sentence naming a person or the protagonist puts someone in an empty plate.
+const PERSON = /\b(she|he|her|hers|him|his|they|them|their|woman|women|man|men|girl|boy|person|people|figure|figures|silhouette|someone|somebody|protagonist|character|singer|drummer|dancer)\b/i;
+
+/** `text` without the sentences that describe a person (or `name`). */
+function withoutPeople(text, name = '') {
+  const who = String(name || '').trim().toLowerCase();
+  return String(text || '').split(/(?<=[.!?])\s+/)
+    .filter((part) => part.trim() && !PERSON.test(part) && !(who.length >= 3 && part.toLowerCase().includes(who)))
+    .join(' ');
+}
 
 function identity(p) {
   return [p.face && `face: ${p.face}`, p.hair && `hair: ${p.hair}`].filter(Boolean).join('; ');
@@ -88,7 +99,7 @@ const PROCEDURAL_ROLE_PROMPTS = {
 
 /** The procedural plan: one role-prompted plate per set, no photographic character work. */
 function buildProceduralImagePlan(direction, { revisionNotes = {} } = {}) {
-  const style = trimTo(direction.look, 500);
+  const style = withoutPeople(trimTo(direction.look, 500), direction.protagonist?.name);
   const world = direction.world || {};
   const plan = {};
   for (const set of direction.sets || []) {
@@ -186,6 +197,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
     ),
   };
 
+  const plateStyle = withoutPeople(style, p.name);
   for (const set of direction.sets || []) {
     const key = `set:${set.id}`;
     plan[key] = {
@@ -197,9 +209,9 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
       refKeys: [],
       prompt: join(
         'Empty set plate, no people',
-        set.description,
+        withoutPeople(set.description, p.name) || set.name,
         set.lighting && `Lighting: ${set.lighting}`,
-        style && `Look: ${style}`,
+        plateStyle && `Look: ${plateStyle}`,
         'Photorealistic music video location still',
         note(key),
       ),

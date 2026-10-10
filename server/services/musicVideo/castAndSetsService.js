@@ -210,21 +210,34 @@ async function runDirection(projectId, { providerId, model, effort, notes = [], 
   const sections = songSections(project);
   const { direction, missing } = mergeCastAndSetsDirection(notes.length ? previous : null, parsed, { sections, medium });
   if (missing.length) return fail(projectId, `The creative direction answer is missing: ${missing.join(', ')}`);
-  // The photographic look every image prompt carries: the mood board's composed
-  // style, else the project's visual style (never the board's literal places).
-  // While the director's sheet feedback stands, the direction's own look line
-  // (rewritten to agree with it) wins over both.
-  const baseLook = trimTo(board?.style?.prompt, 500) || trimTo(project.concept?.style, 500);
-  direction.look = (standing && parsed.look) || (standing && previous?.look) || baseLook || previous?.look || '';
+  // The look every image prompt carries. While the director's sheet feedback
+  // stands, the look line rewritten to agree with it wins; otherwise the
+  // director's palette/light/texture line, else the project's visual style.
+  // Never the board's composed style verbatim: it can describe a whole person
+  // and scene, which then lands in every empty set plate.
+  direction.look = (standing && (parsed.look || previous?.look)) || direction.look || trimTo(project.concept?.style, 500) || '';
   // Mood board images inform the direction as text only, never as image references.
   return writePlan(projectId, { direction, forceKeys, changes: previous ? describeDirectionChanges(previous, direction) : null });
+}
+
+/**
+ * A direction saved before the look was written by the director copied the
+ * mood board's composed style prompt verbatim (people and places included);
+ * such a look falls back to the project's visual style.
+ */
+async function withoutBoardLook(project, direction) {
+  const boardId = project?.visualSpec?.moodBoardId;
+  if (!direction?.look || !boardId) return direction;
+  const board = await deps.loadBoard(boardId).catch(() => null);
+  const boardLook = trimTo(board?.style?.prompt, 500);
+  return boardLook && direction.look === boardLook ? { ...direction, look: trimTo(project.concept?.style, 500) || '' } : direction;
 }
 
 /** (Re)build the plan from the stage's direction + accumulated per-image notes, then dispatch. */
 async function writePlan(projectId, { direction = null, forceKeys = [], changes = null } = {}) {
   const project = await requireProject(projectId);
   const stage = project.castAndSets;
-  const nextDirection = direction || stage.direction;
+  const nextDirection = await withoutBoardLook(project, direction || stage.direction);
   // A procedural project whose brief names no image tool is code-only: nothing
   // is rendered, so no image backend is needed (or consulted).
   const codeOnly = !musicVideoAllowsMedia(project, 'image') || nextDirection.medium === 'procedural' && !castAndSetsAllowsImages(project);
