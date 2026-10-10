@@ -27,6 +27,8 @@
 
 import { trimTo } from '../../lib/textUtils.js';
 import { isOutsideMusicVideoReference } from '../../lib/musicVideoConditioning.js';
+// A sentence naming a person or the protagonist puts someone in an empty plate.
+import { withoutPeople } from '../../lib/musicVideoCreativeContext.js';
 import { songSections } from './castAndSetsDirection.js';
 
 export const CAST_SETS_IMAGE_SIZE = Object.freeze({ width: 1536, height: 1024 });
@@ -45,17 +47,6 @@ const sentence = (s) => {
   return t && !/[.!?]$/.test(t) ? `${t}.` : t;
 };
 const join = (...parts) => parts.map(sentence).filter(Boolean).join(' ');
-
-// A sentence naming a person or the protagonist puts someone in an empty plate.
-const PERSON = /\b(she|he|her|hers|him|his|they|them|their|woman|women|man|men|girl|boy|person|people|figure|figures|silhouette|someone|somebody|protagonist|character|singer|drummer|dancer)\b/i;
-
-/** `text` without the sentences that describe a person (or `name`). */
-function withoutPeople(text, name = '') {
-  const who = String(name || '').trim().toLowerCase();
-  return String(text || '').split(/(?<=[.!?])\s+/)
-    .filter((part) => part.trim() && !PERSON.test(part) && !(who.length >= 3 && part.toLowerCase().includes(who)))
-    .join(' ');
-}
 
 function identity(p) {
   return [p.face && `face: ${p.face}`, p.hair && `hair: ${p.hair}`].filter(Boolean).join('; ');

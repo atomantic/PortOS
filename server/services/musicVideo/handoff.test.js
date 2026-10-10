@@ -134,6 +134,35 @@ describe('buildHandoffManifest typography (#8992)', () => {
    expect(manifest.scenes[0].shotPrompt).toContain('Universe style: Ink silhouettes');
  });
 
+describe('frame prompt look (mood board people stay out)', () => {
+  const scene = { framePrompt: 'An editing bay at night', prompt: 'Slow push in' };
+  const boardCaptions = 'Example board image; A young woman with loose hair leans out of a car window\nAmber window light, 35mm grain. She looks into the lens.\nAvoid: people, glossy CG';
+
+  it('drops person sentences from a mood board snapshot', async () => {
+    const { sceneFramePrompt } = await import('./handoff.js');
+    const prompt = sceneFramePrompt({ concept: { moodBoardStyle: boardCaptions }, visualSpec: {} }, scene);
+    expect(prompt).toContain('Amber window light, 35mm grain.');
+    expect(prompt).toContain('Avoid: people, glossy CG');
+    expect(prompt).not.toMatch(/woman|car window|She looks/);
+  });
+
+  it("uses the Cast & Sets director's look instead of the board snapshot", async () => {
+    const { sceneFramePrompt } = await import('./handoff.js');
+    const project = {
+      concept: { moodBoardStyle: boardCaptions },
+      visualSpec: {},
+      castAndSets: { status: 'approved', direction: { look: 'Hazy window daylight, worn wood, 35mm grain. She stands by the desk.' } },
+    };
+    const prompt = sceneFramePrompt(project, scene);
+    expect(prompt).toContain('Look (palette, light and texture only): Hazy window daylight, worn wood, 35mm grain.');
+    expect(prompt).not.toMatch(/Mood board look|Amber window light|She stands|woman/);
+    // Skipped Cast & Sets falls back to the (filtered) board snapshot.
+    const skipped = sceneFramePrompt({ ...project, castAndSets: { ...project.castAndSets, status: 'skipped' } }, scene);
+    expect(skipped).toContain('Amber window light');
+    expect(skipped).not.toContain('Hazy window daylight');
+  });
+});
+
 describe('sceneShotPrompt camera block (#10589)', () => {
   it('appends the four-part camera block for a planned shot, and nothing otherwise', async () => {
     const { sceneShotPrompt } = await import('./handoff.js');

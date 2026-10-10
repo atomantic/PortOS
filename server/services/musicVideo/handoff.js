@@ -1,6 +1,6 @@
 import { shotActionPrompt } from '../../lib/musicVideoActionContract.js';
 import { shotCameraPrompt } from '../../lib/cameraMovements.js';
-import { musicVideoCreativeContext } from '../../lib/musicVideoCreativeContext.js';
+import { musicVideoCreativeContext, musicVideoDirectorLook } from '../../lib/musicVideoCreativeContext.js';
 import { MOTION_CONTINUITY_CLAUSE } from '../../lib/musicVideoMotion.js';
 import { isOutsideMusicVideoReference } from '../../lib/musicVideoConditioning.js';
 /**
@@ -93,7 +93,7 @@ function composePrompt(primary, fallback, project, clause, { motion = false } = 
   return [
     primary?.trim() || fallback?.trim() || '',
     project.concept?.style?.trim() || '',
-    musicVideoCreativeContext(project.concept, { moodBoard: !motion }),
+    musicVideoCreativeContext(project.concept, { moodBoard: !motion, look: musicVideoDirectorLook(project) }),
     visualDirection(project.visualSpec),
     clause?.trim() || '',
     motion ? MOTION_CONTINUITY_CLAUSE : '',

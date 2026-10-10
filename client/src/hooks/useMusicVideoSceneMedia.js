@@ -1,7 +1,7 @@
 import { shotActionContractProblem, shotActionPrompt } from '../../../server/lib/musicVideoActionContract.js';
 import { shotCameraPrompt } from '../../../server/lib/cameraMovements.js';
 import { isOutsideMusicVideoReference, musicVideoConditioningReferences, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../server/lib/musicVideoConditioning.js';
-import { musicVideoCreativeContext } from '../../../server/lib/musicVideoCreativeContext.js';
+import { musicVideoCreativeContext, musicVideoDirectorLook } from '../../../server/lib/musicVideoCreativeContext.js';
 import { useEffect, useRef } from 'react';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';
@@ -163,7 +163,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   const failedScenes = { frame: frameLane.failedScenes, video: videoLane.failedScenes };
 
   const style = project?.concept?.style?.trim();
-  const direction = [musicVideoCreativeContext(project?.concept), visualDirection(project?.visualSpec)].filter(Boolean).join('; ');
+  const direction = [musicVideoCreativeContext(project?.concept, { look: musicVideoDirectorLook(project) }), visualDirection(project?.visualSpec)].filter(Boolean).join('; ');
   // The i2v prompt leaves the mood-board look out (handoff.js composePrompt): the frame already carries it.
   const motionDirection = [musicVideoCreativeContext(project?.concept, { moodBoard: false }), visualDirection(project?.visualSpec)].filter(Boolean).join('; ');
   const conditioning = conditioningReferences(project);
