@@ -14,7 +14,7 @@
  *     productionRunId,      // the production run that started it, if any
  *     route: { mode, model },
  *     direction,            // castAndSetsDirection.js shape (`medium`: absent = photographic)
- *     plan:   { [key]: { key, kind, label, prompt, deps, refKeys, setId?, testIndex? } },
+ *     plan:   { [key]: { key, kind, label, prompt, deps, refKeys, refImages?, setId?, testIndex? } },
  *     images: { [key]: { status, jobId, imageId, history, failures, error, updatedAt,
  *       submittedPrompt?, submittedPromptTruncated?, submittedReferences?, submittedRevision? } },
  *     artifactId, artifactVersion, notesApplied,

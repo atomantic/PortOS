@@ -7,7 +7,8 @@
  * The prompts generalize the hand-made check-in's templates:
  *   - `character`   — the canonical five-view character sheet. First, and every
  *                     image of the protagonist after it uses it as reference #1.
- *                     It has no image references: mood board images are
+ *                     Its references are the director's own character
+ *                     identity images (`refImages`); mood board images are
  *                     outside inspiration and only reach it as text.
  *   - `expressions` — a 2×3 expression sheet including the signature gesture.
  *   - `looks`       — the wardrobe lookbook, one panel per look.
@@ -25,6 +26,7 @@
  */
 
 import { trimTo } from '../../lib/textUtils.js';
+import { isOutsideMusicVideoReference } from '../../lib/musicVideoConditioning.js';
 import { songSections } from './castAndSetsDirection.js';
 
 export const CAST_SETS_IMAGE_SIZE = Object.freeze({ width: 1536, height: 1024 });
@@ -57,6 +59,19 @@ function withoutPeople(text, name = '') {
 
 function identity(p) {
   return [p.face && `face: ${p.face}`, p.hair && `hair: ${p.hair}`].filter(Boolean).join('; ');
+}
+
+/**
+ * The director's own identity references for the protagonist: the project's
+ * character references flagged to condition frames (their uploads or images
+ * PortOS rendered), never a mood board import or Pinterest pin, and never an
+ * earlier Cast & Sets output (the sheet would condition on itself).
+ */
+function identityImages(project) {
+  return [...new Set((project?.visualSpec?.references || [])
+    .filter((r) => r?.role === 'character' && r.condition && r.imageId
+      && !String(r.id || '').startsWith(CAST_SETS_REF_PREFIX) && !isOutsideMusicVideoReference(r))
+    .map((r) => r.imageId))].slice(0, MAX_CONDITIONING);
 }
 
 function rulesLine(p) {
@@ -130,9 +145,10 @@ function buildProceduralImagePlan(direction, { revisionNotes = {} } = {}) {
 
 /**
  * Build the full image plan for a direction: `{ [key]: { key, kind, label,
- * prompt, deps, refKeys, setId?, testIndex? } }`. `refKeys` name other plan
- * keys whose image is passed as a reference (in order): only this project's
- * own generated images, never mood board images. A revision note for a key is
+ * prompt, deps, refKeys, refImages?, setId?, testIndex? } }`. `refKeys` name
+ * other plan keys whose image is passed as a reference (in order), then
+ * `refImages` (the director's character identity images) follow: only the
+ * project's own images, never mood board images. A revision note for a key is
  * appended to its prompt.
  */
 export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = {} } = {}) {
@@ -143,6 +159,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
   const style = trimTo(direction.look, 500) || trimTo(project?.concept?.style, 500);
   const firstLight = direction.sets?.[0]?.lighting || '';
   const note = (key) => (revisionNotes[key] ? `Revision: ${revisionNotes[key]}` : '');
+  const identities = identityImages(project);
   const plan = {};
 
   plan.character = {
@@ -151,8 +168,10 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
     label: 'Character sheet',
     deps: [],
     refKeys: [],
+    refImages: identities,
     prompt: join(
       `Photographic character reference sheet of ONE consistent person, ${p.name || 'the protagonist'}: ${p.description || ''}`,
+      identities.length && 'The SAME person as the identity reference images: keep their face, hair and build exactly',
       identity(p),
       p.signature && `Signature detail, always visible: ${p.signature}`,
       firstLook && `Wearing ${firstLook.description}`,
@@ -170,6 +189,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
     label: 'Expression sheet',
     deps: ['character'],
     refKeys: ['character'],
+    refImages: identities,
     prompt: join(
       'Photographic expression sheet, 2 rows x 3 columns grid of tight close-ups of the SAME person as the character reference',
       identity(p),
@@ -188,6 +208,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
     label: 'Looks',
     deps: ['character'],
     refKeys: ['character'],
+    refImages: identities,
     prompt: join(
       `Fashion lookbook sheet of the SAME person as the character reference, ${looks.length} full-body panels side by side`,
       identity(p),
@@ -258,7 +279,8 @@ export function affectedImageKeys(previousPlan, nextPlan, force = []) {
   const out = new Set(force.filter((k) => nextPlan[k]));
   for (const [key, item] of Object.entries(nextPlan)) {
     const before = previousPlan?.[key];
-    if (!before || before.prompt !== item.prompt || before.refKeys.join('|') !== item.refKeys.join('|')) out.add(key);
+    if (!before || before.prompt !== item.prompt || before.refKeys.join('|') !== item.refKeys.join('|')
+      || (before.refImages || []).join('|') !== (item.refImages || []).join('|')) out.add(key);
   }
   let grew = true;
   while (grew) {

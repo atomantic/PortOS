@@ -16,8 +16,11 @@ function previewItem(ref, prompt) {
 function cardReferences(item, stage) {
   const image = stage.images?.[item.key] || {};
   if (typeof image.submittedPrompt === 'string') return image.submittedReferences || [];
-  return (item.refKeys || []).flatMap((key) => stage.images?.[key]?.imageId
-    ? [{ kind: 'image', filename: stage.images[key].imageId }] : []);
+  return [
+    ...(item.refKeys || []).flatMap((key) => stage.images?.[key]?.imageId
+      ? [{ kind: 'image', filename: stage.images[key].imageId }] : []),
+    ...(item.refImages || []).map((filename) => ({ kind: 'image', filename })),
+  ];
 }
 
 /**
