@@ -567,3 +567,43 @@ describe('Creative Director and Creative Commissions mutation inventory (#10867)
     expect(new Set(mutations().map(({ method, path }) => `${method} ${path}`)).size).toBe(22);
   });
 });
+
+describe('Caller-prompted AI outside Pipeline policy (#10908)', () => {
+  // Free caller text and/or a caller-chosen provider reach the prompt runner
+  // with no tool-free restriction, so a CLI/TUI provider runs as an agent.
+  const protectedRoutes = [
+    'POST /api/games/:id/feedback',
+    'POST /api/rounds/generate',
+    'POST /api/rounds/:id/generate',
+    'POST /api/rounds/:id/evaluate',
+    'POST /api/rounds/:id/derive-parts',
+    'POST /api/agents/personalities/generate',
+    'POST /api/system-resources/triage',
+    'POST /api/mood-boards/:id/synthesize-style',
+    'POST /api/mood-boards/:id/compose-prompt',
+    'POST /api/mood-boards/:id/analyze',
+    'POST /api/cos/tasks/enhance',
+  ];
+
+  it('gates each audited operation and maps every entry to a mounted route', () => {
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => method + ' ' + path));
+    for (const route of protectedRoutes) {
+      const [method, path] = route.split(' ');
+      expect(mounted.has(route), route).toBe(true);
+      expect(hostControlRouteFor(method, path), route).toBe(route);
+    }
+  });
+
+  it('keeps record CRUD and reads in those families open', () => {
+    for (const [method, path] of [
+      ['POST', '/api/games'],
+      ['PATCH', '/api/games/:id'],
+      ['POST', '/api/rounds'],
+      ['PATCH', '/api/rounds/:id'],
+      ['PUT', '/api/agents/personalities/:id'],
+      ['GET', '/api/system-resources/models/manifest'],
+      ['PATCH', '/api/mood-boards/:id'],
+      ['GET', '/api/mood-boards/:id/analyze'],
+    ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
+  });
+});

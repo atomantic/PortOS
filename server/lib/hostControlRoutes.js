@@ -16,8 +16,10 @@
  *   - apps: delete/archive/unarchive, scope-adherence — they
  *     change only PortOS's own records or read files; nothing runs.
  *   - CoS: stop/pause/kill/terminate/delete and feedback — they reduce or
- *     annotate execution, never start it; task reorder/refresh/enhance,
- *     templates and challenge — records and LLM text only. Goal-fidelity false-
+ *     annotate execution, never start it; task reorder/refresh, templates and
+ *     challenge — records and LLM text only. Task enhance is NOT in that
+ *     group: it hands caller text to a stage-configured provider that may be a
+ *     CLI/TUI agent (#10908). Goal-fidelity false-
  *     positive reports are gated because they can queue investigation agents.
  *   - tools (#9014): create/edit set trusted agent prompt text; DELETE only
  *     removes a tool from that context and stays open.
@@ -53,6 +55,10 @@
  *     derive-from-manuscript/commit, manuscript cuts preview/apply, comic
  *     extract-pages, audio extract-lines, scene video, TTS and music
  *     rendering): none reaches the staged runner.
+ *   - Caller-prompted AI outside Pipeline (#10908): game feedback, rounds
+ *     generate/evaluate/derive-parts, personality generate, system-resource
+ *     triage, mood-board style synthesis/compose/analyze and CoS task enhance
+ *     take caller text and/or a caller-chosen provider; gated whole-operation.
  *   - Creative Director and Creative Commissions (#10867): project create/edit
  *     choose agent instructions and provider pins; start/resume/directive/
  *     replan/plan-step/auto-cast/smoke-test/review enqueue or re-arm writable
@@ -606,6 +612,24 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/pipeline/issues/:id/stages/:stageId/extract-canon',
   'POST /api/pipeline/issues/:id/stages/:stageId/describe-canon',
   'POST /api/pipeline/issues/:id/stages/audio/cues/generate',
+
+  // Caller-prompted AI outside Pipeline (#10908): each route hands free text
+  // and/or a caller-chosen provider to `runPromptThroughProvider` with no
+  // tool-free restriction, so a CLI/TUI provider (or a fallback to one) runs as
+  // an approval-bypass agent. Gate the whole operation, before any provider
+  // call, run record or file read. Record CRUD and reads in these families stay
+  // open, and the neighbouring tool-free API-only routes are unaffected.
+  'POST /api/games/:id/feedback',
+  'POST /api/rounds/generate',
+  'POST /api/rounds/:id/generate',
+  'POST /api/rounds/:id/evaluate',
+  'POST /api/rounds/:id/derive-parts',
+  'POST /api/agents/personalities/generate',
+  'POST /api/system-resources/triage',
+  'POST /api/mood-boards/:id/synthesize-style',
+  'POST /api/mood-boards/:id/compose-prompt',
+  'POST /api/mood-boards/:id/analyze',
+  'POST /api/cos/tasks/enhance',
 
   // Writers Room authoring reaches the staged runner, including CLI/TUI
   // fallback. Stored prose and live cursor text are caller-controlled; a
