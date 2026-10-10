@@ -44,11 +44,15 @@
  *   - pipeline and FableLoom: autopilot start is gated — with gap filing or
  *     self-improvement on it queues CoS agents — and so are the Pipeline
  *     text/visual generation operations listed under "Pipeline authoring"
- *     below (#10068) and FableLoom authoring/production (#10668): callers
- *     choose the provider, and the staged runner can
- *     fall back to a CLI/TUI one, so they can launch a tool-capable agent
- *     against stored creative text. Ordinary record CRUD, reads and
- *     cancellation stay open.
+ *     and "Pipeline authoring, remainder" below (#10068, #10907) and
+ *     FableLoom authoring/production (#10668): callers choose the provider,
+ *     and the staged runner can fall back to a CLI/TUI one, so they can
+ *     launch a tool-capable agent against stored creative text. Ordinary
+ *     record CRUD, reads, cancellation and SSE progress stay open, as do the
+ *     deterministic Pipeline routes (series merge preview/apply, arc
+ *     derive-from-manuscript/commit, manuscript cuts preview/apply, comic
+ *     extract-pages, audio extract-lines, scene video, TTS and music
+ *     rendering): none reaches the staged runner.
  *   - Creative Director and Creative Commissions (#10867): project create/edit
  *     choose agent instructions and provider pins; start/resume/directive/
  *     replan/plan-step/auto-cast/smoke-test/review enqueue or re-arm writable
@@ -557,6 +561,51 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/pipeline/issues/:id/stages/comicPages/pages/:pageIndex/render',
   'POST /api/pipeline/issues/:id/stages/comicPages/pages/:pageIndex/refine-render',
   'POST /api/pipeline/issues/:id/stages/storyboards/scenes/:sceneIndex/shots/:shotIndex/render',
+
+  // Pipeline authoring, remainder (#10907): series/arc planning, analysis,
+  // manuscript, editorial and cover generation. Every entry below reaches
+  // `runStagedLLM` (or the cover render queue) with a caller-chosen
+  // providerId/model and no tool-free restriction, so a CLI/TUI provider or
+  // runtime fallback runs as an approval-bypass agent over stored prose. Gate
+  // the whole operation, including API-first requests, before any run, store
+  // write, checkpoint, SSE attach or queue effect. Autopilot, resume and retry
+  // reach the same services directly (not over HTTP) and are unaffected.
+  'POST /api/pipeline/series/generate-concept',
+  'POST /api/pipeline/series/merge/ai-resolve',
+  'POST /api/pipeline/series/:id/discover-voice',
+  'POST /api/pipeline/series/:id/arc/generate',
+  'POST /api/pipeline/series/:id/arc/verify',
+  'POST /api/pipeline/series/:id/arc/resolve-issues',
+  'POST /api/pipeline/series/:id/arc/derive-from-manuscript',
+  'POST /api/pipeline/series/:id/seasons/:seasonId/episodes/generate',
+  'POST /api/pipeline/series/:id/seasons/:seasonId/verify',
+  'POST /api/pipeline/series/:id/seasons/:seasonId/generate-beats',
+  'POST /api/pipeline/series/:id/seasons/:seasonId/cover-concepts/generate',
+  'POST /api/pipeline/series/:id/seasons/:seasonId/cover/render',
+  'POST /api/pipeline/series/:id/seasons/:seasonId/back-cover/render',
+  'POST /api/pipeline/series/:id/reverse-outline/generate',
+  'POST /api/pipeline/series/:id/continuity-bible/generate',
+  'POST /api/pipeline/issues/:id/pov-rewrites',
+  'POST /api/pipeline/series/:id/manuscript/completeness',
+  'POST /api/pipeline/series/:id/manuscript/completeness/stream',
+  'POST /api/pipeline/series/:id/manuscript/review/comments/:commentId/fix',
+  'POST /api/pipeline/series/:id/manuscript/reformat',
+  'POST /api/pipeline/issues/:id/editorial/analyze',
+  'POST /api/pipeline/series/:id/editorial/analyze',
+  'POST /api/pipeline/issues/:id/judge',
+  'POST /api/pipeline/series/:id/editorial/panel/run',
+  'POST /api/pipeline/series/:id/editorial/rank',
+  'POST /api/pipeline/series/:id/review',
+  'POST /api/pipeline/series/:id/review/fix',
+  'POST /api/pipeline/series/:id/editorial/checks/run',
+  'POST /api/pipeline/series/:id/editorial/custom-checks/preview',
+  'POST /api/pipeline/issues/:id/cover-concepts/generate',
+  'POST /api/pipeline/issues/:id/stages/comicPages/cover/render',
+  'POST /api/pipeline/issues/:id/stages/comicPages/back-cover/render',
+  'POST /api/pipeline/issues/:id/stages/storyboards/extract-scenes',
+  'POST /api/pipeline/issues/:id/stages/:stageId/extract-canon',
+  'POST /api/pipeline/issues/:id/stages/:stageId/describe-canon',
+  'POST /api/pipeline/issues/:id/stages/audio/cues/generate',
 
   // Writers Room authoring reaches the staged runner, including CLI/TUI
   // fallback. Stored prose and live cursor text are caller-controlled; a
