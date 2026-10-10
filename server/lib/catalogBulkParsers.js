@@ -108,6 +108,10 @@ export function parseJsonBulk(payload) {
   }
   const entries = rawEntries.map((entry, i) => {
     const normalized = normalizeEntry(entry, i);
+    // Export identity and attachments are validated by the bulk-entry schema.
+    for (const key of ['id', 'media', 'scraps']) {
+      if (entry[key] !== undefined) attachNonEnumerable(normalized, key, entry[key]);
+    }
     // Preserve the per-row role the export bundle stamped so the bulk-import
     // route can re-create each ingredient's ref link with its original role,
     // instead of collapsing every row onto the batch-level default. Rides as
@@ -360,13 +364,8 @@ export function parseMarkdownBulk(payload) {
   }
   const entries = out.map((entry, i) => {
     const normalized = normalizeEntry(entry, i);
-    // Parse scraps into a NON-enumerable sibling so the markdown re-import is
-    // lossy-but-not-corrupt (per PLAN [catalog-markdown-roundtrip-fences-scraps]):
-    // the bulk-import route does NOT persist scraps today — it spreads each
-    // entry into the `.strict()` catalogIngredientCreateSchema, which has no
-    // `scraps` field, so an enumerable key would reject the whole import. The
-    // data is preserved on `entry.scraps` for any consumer; persisting it into
-    // catalog_scraps/catalog_ingredient_sources is a tracked follow-up.
+    // Keep parser output compatible with callers consuming only draft fields.
+    // The bulk-import route explicitly validates and persists this metadata.
     if (Array.isArray(entry.scraps) && entry.scraps.length > 0) {
       attachNonEnumerable(normalized, 'scraps', entry.scraps);
     }

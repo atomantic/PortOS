@@ -20,7 +20,7 @@ export async function attachMedia(ingredientId, mediaKey, kind, options = {}) {
   // Every local portrait entry point shares the replacement transaction,
   // including the generic media API and file uploads.
   if (kind === 'portrait') return setPortraitMedia(ingredientId, mediaKey, options);
-  return insertMedia(query, ingredientId, mediaKey, kind, options);
+  return insertMedia(options.client ? options.client.query.bind(options.client) : query, ingredientId, mediaKey, kind, options);
 }
 
 async function insertMedia(runQuery, ingredientId, mediaKey, kind, options) {
@@ -64,7 +64,7 @@ export async function detachMedia(ingredientId, mediaKey, kind) {
 // attachment commit together, so overlapping HTTP/generation writes serialize
 // and a failed replacement leaves the previous portrait intact.
 export async function setPortraitMedia(ingredientId, mediaKey, options = {}) {
-  return withTransaction(async (client) => {
+  const replace = async (client) => {
     await client.query('SELECT id FROM catalog_ingredients WHERE id = $1 FOR UPDATE', [ingredientId]);
     await client.query(
       `UPDATE catalog_ingredient_media
@@ -74,7 +74,8 @@ export async function setPortraitMedia(ingredientId, mediaKey, options = {}) {
       [ingredientId, mediaKey],
     );
     return insertMedia(client.query.bind(client), ingredientId, mediaKey, 'portrait', options);
-  });
+  };
+  return options.client ? replace(options.client) : withTransaction(replace);
 }
 
 // Live (non-tombstoned) media rows for an ingredient's detail "Media" panel,

@@ -30,6 +30,7 @@ import {
   catalogEmbeddingsBackfillSchema,
   catalogMigrationRerunSchema,
   catalogBulkImportSchema,
+  catalogBulkEntrySchema,
   catalogExportQuerySchema,
   catalogRevisionQuerySchema,
   catalogRevisionRestoreSchema,
@@ -584,23 +585,21 @@ router.post('/bulk-import', asyncHandler(async (req, res) => {
   // Zod-validated shape so we can stamp each ref link with its original role.
   const entries = [];
   const perRowRoles = [];
-  // Round-tripped scraps (markdown `### Scraps`) ride as a non-enumerable
-  // `entry.scraps` sibling — captured here alongside the Zod-validated shape so
-  // they can be persisted as catalog_scraps rows in the same transaction below.
-  const perRowScraps = [];
+  // Explicitly validate the non-enumerable JSON/markdown metadata too.
   for (let i = 0; i < parsed.length; i++) {
     const entry = parsed[i];
     // Merge default tags onto each row (dedup), then validate the full
     // per-row shape against the same schema the single-create endpoint uses.
     const mergedTags = Array.from(new Set([...(entry.tags || []), ...defaultTags]));
-    const result = catalogIngredientCreateSchema.safeParse({ ...entry, tags: mergedTags });
+    const result = catalogBulkEntrySchema.safeParse({
+      ...entry, tags: mergedTags, id: entry.id, scraps: entry.scraps, media: entry.media,
+    });
     if (!result.success) {
       const msg = result.error.issues?.[0]?.message || result.error.message;
       throw new ServerError(`Bulk import entry ${i} invalid: ${msg}`, { status: 400 });
     }
     entries.push(result.data);
     perRowRoles.push(typeof entry.roleForExportedRef === 'string' ? entry.roleForExportedRef : null);
-    perRowScraps.push(Array.isArray(entry.scraps) ? entry.scraps : []);
   }
 
   // Optional ref-links: same shape as the /link route, applied once per
@@ -635,18 +634,34 @@ router.post('/bulk-import', asyncHandler(async (req, res) => {
 
   let scrapsCreated = 0;
   const created = await withTransaction(async (client) => {
+    // Serialize retries even when their explicit ingredient/scrap IDs do not
+    // exist yet. The transaction releases this lock on commit or rollback.
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('catalog-bulk-import'))");
     const out = [];
     for (let i = 0; i < entries.length; i++) {
       const entry = entries[i];
       const e = embeds[i];
-      const ing = await catalogDB.createIngredient({
+      const existing = entry.id
+        ? (await client.query('SELECT type, deleted FROM catalog_ingredients WHERE id = $1 FOR UPDATE', [entry.id])).rows[0]
+        : null;
+      if (existing && (existing.deleted || existing.type !== entry.type)) {
+        throw new ServerError('Imported ingredient ID is deleted or has a different type', { status: 409 });
+      }
+      const values = {
+        id: entry.id,
         type: entry.type,
         name: entry.name,
         payload: entry.payload || {},
         tags: entry.tags || [],
         embedding: e?.embedding ?? null,
         embeddingModel: e?.model ?? null,
-      }, { client });
+      };
+      const ing = existing
+        ? await catalogDB.updateIngredient(entry.id, values, { client })
+        : await catalogDB.createIngredient(values, { client });
+      for (const media of entry.media || []) {
+        await catalogDB.attachMedia(ing.id, media.mediaKey, media.kind, { ...media, client });
+      }
       // Stamp ref links inside the same transaction so a mid-batch failure
       // rolls back the link rows alongside their ingredients. Role precedence:
       // explicit `defaults.role` > the bundle row's own `roleForExportedRef` >
@@ -665,21 +680,32 @@ router.post('/bulk-import', asyncHandler(async (req, res) => {
           [ing.id, target.refKind, target.refId, role],
         );
       }
-      // Persist any round-tripped scraps as catalog_scraps rows + source links
-      // in the same transaction, so they roll back with the ingredient on a
-      // mid-batch failure. Only markdown imports carry scraps today; JSON/CSV
-      // rows have an empty list. No embedding is generated for an imported scrap
-      // (the ingredient already carries the searchable embedding) — the scrap is
-      // provenance, not a separate search target.
-      for (const s of perRowScraps[i]) {
-        if (!s || typeof s.rawText !== 'string' || !s.rawText.trim()) continue;
-        const scrap = await catalogDB.createScrap({
-          rawText: s.rawText,
-          sourceKind: (typeof s.sourceKind === 'string' && s.sourceKind.trim() ? s.sourceKind.trim() : 'import').slice(0, 32),
-          metadata: { importedVia: 'bulk-import', format },
+      // Preserve shared scrap identity. ID-less additions to an identified
+      // ingredient deduplicate by text/source, so retrying an edited bundle
+      // does not create new provenance on each attempt.
+      for (const s of entry.scraps || []) {
+        if (!s.rawText.trim()) continue;
+        const sourceKind = s.sourceKind || 'import';
+        const existingScrap = s.id
+          ? (await client.query('SELECT id, deleted FROM catalog_scraps WHERE id = $1 FOR UPDATE', [s.id])).rows[0]
+          : entry.id
+            ? (await client.query(
+              `SELECT s.id, s.deleted FROM catalog_scraps s
+               JOIN catalog_ingredient_sources src ON src.scrap_id = s.id
+               WHERE src.ingredient_id = $1 AND s.raw_text = $2
+                 AND s.source_kind = $3 AND s.deleted = false LIMIT 1`,
+              [ing.id, s.rawText, sourceKind],
+            )).rows[0]
+            : null;
+        if (existingScrap?.deleted) {
+          throw new ServerError('Imported scrap ID is deleted', { status: 409 });
+        }
+        const scrap = existingScrap || await catalogDB.createScrap({
+          ...s, sourceKind,
+          metadata: s.metadata || { importedVia: 'bulk-import', format },
         }, { client });
-        await catalogDB.linkIngredientToSource(ing.id, scrap.id, null, { client });
-        scrapsCreated++;
+        await catalogDB.linkIngredientToSource(ing.id, scrap.id, null, { client, preserveExisting: true });
+        if (!existingScrap) scrapsCreated++;
       }
       out.push({ id: ing.id, type: ing.type, name: ing.name });
     }
