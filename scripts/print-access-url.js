@@ -11,12 +11,14 @@ import { hasTailscaleCert } from '../lib/tailscale-https.js';
 import { certPaths } from '../lib/certPaths.js';
 import { getTailscaleHttpsUrl, readCertMeta } from '../lib/certMeta.js';
 import { join, dirname } from 'path';
+import { resolveHttpMirrorPortForRoot } from './lib/envFile.js';
+
 import { fileURLToPath } from 'url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const { dir: CERT_DIR, meta: META_PATH } = certPaths(join(ROOT, 'data'));
 const API_PORT = Number(process.env.PORT) || 5555;
-const MIRROR_PORT = Number(process.env.PORTOS_HTTP_PORT) || 5553;
+const MIRROR_PORT = resolveHttpMirrorPortForRoot(ROOT);
 
 if (!hasTailscaleCert(CERT_DIR)) {
   console.log(`Access at: http://localhost:${API_PORT}`);

@@ -11,6 +11,7 @@ import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { atomicWrite, PATHS, ensureDir, readJSONFile, getDateString } from '../lib/fileUtils.js';
 import { readLocalDailyLog, mutateDailyLog } from './meatspaceDailyLog.js';
+import { queueHealthWrite } from './meatspaceWriteQueues.js';
 import {
   isMortalLoomEnabled,
   mlArrayIfEnabled,
@@ -29,6 +30,10 @@ const WORKOUTS_FILE = join(MEATSPACE_DIR, 'workouts.json');
 
 const byDate = (a, b) => (a.date || '').localeCompare(b.date || '');
 
+// Every read-modify-write of the three files below runs inside `queueHealthWrite`
+// — the queue the federation snapshot apply (`dataSync.js`) also uses — so a peer
+// snapshot cannot overwrite a record added between its read and its write.
+// `writeLocal` itself is NOT queued: callers already hold the queue.
 async function writeLocal(file, data) {
   await ensureDir(MEATSPACE_DIR);
   await atomicWrite(file, data);
@@ -57,10 +62,12 @@ export async function addBloodTest(test) {
     const stored = await mlPush('bloodTests', { date, markers: { ...(markers || {}), ...flat } });
     return { date: stored.date, ...(stored.markers || {}) };
   }
-  const data = await getBloodTests();
-  data.tests.push(test);
-  data.tests.sort(byDate);
-  await writeLocal(BLOOD_TESTS_FILE, data);
+  await queueHealthWrite(async () => {
+    const data = await getBloodTests();
+    data.tests.push(test);
+    data.tests.sort(byDate);
+    await writeLocal(BLOOD_TESTS_FILE, data);
+  });
   console.log(`🩸 Blood test added for ${test.date}`);
   return test;
 }
@@ -122,21 +129,29 @@ export async function addEpigeneticTest(test) {
     console.log(`🧬 Epigenetic test added for ${stored.date} (MortalLoom)`);
     return stored;
   }
-  const data = await getEpigeneticTests();
-  data.tests.push(test);
-  data.tests.sort(byDate);
-  await writeLocal(EPIGENETIC_TESTS_FILE, data);
+  await queueHealthWrite(async () => {
+    const data = await getEpigeneticTests();
+    data.tests.push(test);
+    data.tests.sort(byDate);
+    await writeLocal(EPIGENETIC_TESTS_FILE, data);
+  });
   console.log(`🧬 Epigenetic test added for ${test.date}`);
   return test;
 }
 
 // === Eyes ===
 
-export async function getEyeExams() {
-  const ml = await mlArrayIfEnabled('eyeExams');
-  if (ml) return { exams: [...ml].sort(byDate) };
+const readLocalEyes = async () => {
   const data = await readJSONFile(EYES_FILE, { exams: [] });
-  const exams = Array.isArray(data?.exams) ? data.exams : [];
+  return { data, exams: Array.isArray(data?.exams) ? data.exams : [] };
+};
+
+/**
+ * Local eyes.json with every row id-stamped. MUST run inside `queueHealthWrite`:
+ * legacy rows have no id, so stamping rewrites the file.
+ */
+async function loadLocalEyeExamsQueued() {
+  const { data, exams } = await readLocalEyes();
   // Legacy eyes.json rows have no id. Stamp and persist them once so the ids
   // the client reads back are the ones later edits/deletes resolve.
   if (exams.some(e => !e.id)) {
@@ -144,6 +159,15 @@ export async function getEyeExams() {
     exams.sort(byDate);
     await writeLocal(EYES_FILE, { ...data, exams });
   }
+  return { ...data, exams };
+}
+
+export async function getEyeExams() {
+  const ml = await mlArrayIfEnabled('eyeExams');
+  if (ml) return { exams: [...ml].sort(byDate) };
+  const { data, exams } = await readLocalEyes();
+  // Only a legacy file needs the (queued) stamping write; the common read stays lock-free.
+  if (exams.some(e => !e.id)) return queueHealthWrite(loadLocalEyeExamsQueued);
   return { ...data, exams };
 }
 
@@ -162,11 +186,13 @@ export async function addEyeExam(exam) {
     console.log(`👁️ Eye exam added for ${stored.date} (MortalLoom)`);
     return stored;
   }
-  const data = await getEyeExams();
   const stored = { ...exam, id: exam.id || randomUUID() };
-  data.exams.push(stored);
-  data.exams.sort(byDate);
-  await writeLocal(EYES_FILE, data);
+  await queueHealthWrite(async () => {
+    const data = await loadLocalEyeExamsQueued();
+    data.exams.push(stored);
+    data.exams.sort(byDate);
+    await writeLocal(EYES_FILE, data);
+  });
   console.log(`👁️ Eye exam added for ${stored.date}`);
   return stored;
 }
@@ -174,38 +200,47 @@ export async function addEyeExam(exam) {
 const EYE_FIELDS = ['date', 'leftSphere', 'leftCylinder', 'leftAxis', 'rightSphere', 'rightCylinder', 'rightAxis'];
 
 export async function updateEyeExam(id, updates) {
-  const data = await getEyeExams();
-  const exam = data.exams.find(e => e.id === id);
-  if (!exam) return null;
   const patch = Object.fromEntries(EYE_FIELDS.filter(k => updates[k] !== undefined).map(k => [k, updates[k]]));
 
   if (await isMortalLoomEnabled()) {
+    const exam = (await getEyeExams()).exams.find(e => e.id === id);
+    if (!exam) return null;
     const updated = await mlPatchById('eyeExams', exam.id, patch);
     console.log(`👁️ Eye exam updated: ${updated?.date} (MortalLoom)`);
     return updated;
   }
 
-  Object.assign(exam, patch);
-  data.exams.sort(byDate);
-  await writeLocal(EYES_FILE, data);
-  console.log(`👁️ Eye exam updated ${id}: ${exam.date}`);
+  const exam = await queueHealthWrite(async () => {
+    const data = await loadLocalEyeExamsQueued();
+    const target = data.exams.find(e => e.id === id);
+    if (!target) return null;
+    Object.assign(target, patch);
+    data.exams.sort(byDate);
+    await writeLocal(EYES_FILE, data);
+    return target;
+  });
+  if (exam) console.log(`👁️ Eye exam updated ${id}: ${exam.date}`);
   return exam;
 }
 
 export async function removeEyeExam(id) {
-  const data = await getEyeExams();
-  const target = data.exams.find(e => e.id === id);
-  if (!target) return null;
-
   if (await isMortalLoomEnabled()) {
+    const target = (await getEyeExams()).exams.find(e => e.id === id);
+    if (!target) return null;
     const removed = await mlRemoveById('eyeExams', target.id);
     console.log(`👁️ Eye exam removed: ${removed?.date} (MortalLoom)`);
     return removed;
   }
 
-  data.exams = data.exams.filter(e => e.id !== id);
-  await writeLocal(EYES_FILE, data);
-  console.log(`👁️ Eye exam removed: ${target.date}`);
+  const target = await queueHealthWrite(async () => {
+    const data = await loadLocalEyeExamsQueued();
+    const found = data.exams.find(e => e.id === id);
+    if (!found) return null;
+    data.exams = data.exams.filter(e => e.id !== id);
+    await writeLocal(EYES_FILE, data);
+    return found;
+  });
+  if (target) console.log(`👁️ Eye exam removed: ${target.date}`);
   return target;
 }
 

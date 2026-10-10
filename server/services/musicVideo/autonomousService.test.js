@@ -592,6 +592,15 @@ describe('startAutonomousVideo', () => {
     expect(doubles.updateProject).toHaveBeenCalledWith('mv-auto', expect.objectContaining({ visualSpec: { moodBoardId: 'board-existing' } }));
   });
 
+  // Uniquely catches a character style chosen at start not reaching the project or the brief.
+  it('casts a chosen character style on the new project and writes the brief around that lead', async () => {
+    await service.startAutonomousVideo({ prompt: 'p', guidance: 'Keep it short', characterStyleId: 'claudia-slopcore' });
+    await vi.waitFor(() => expect(calls).toContain('production'));
+    expect(doubles.createProject).toHaveBeenCalledWith(expect.objectContaining({ concept: { prompt: 'p', characterStyleId: 'claudia-slopcore' } }));
+    const { guidance } = doubles.draftCreativeBrief.mock.calls[0][0];
+    expect(guidance).toMatch(/^Keep it short\n\nThe video stars Claudia \(Claudia slopcore character style\)/);
+  });
+
   it('rejects a blank prompt', async () => {
     await expect(service.startAutonomousVideo({ prompt: '   ' })).rejects.toMatchObject({ status: 400 });
     expect(calls).toEqual([]);

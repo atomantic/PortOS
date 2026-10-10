@@ -96,6 +96,19 @@ function mockExecFile(responses) {
   });
 }
 
+const NO_SUCH_VOLUME = { exitCode: 1, stdout: '', stderr: 'Error response from daemon: get x: no such volume' };
+// Docker destroy call order after the status probe: compose stop, compose rm,
+// volume rm x2, then verification (compose ps, volume inspect x2).
+const dockerDestroyResponses = (statusMode = 'native', overrides = {}) => {
+  const calls = [
+    { exitCode: 0, stdout: `Current mode: ${statusMode}` },
+    { exitCode: 0 }, { exitCode: 0 }, { exitCode: 0 }, { exitCode: 0 },
+    { exitCode: 0, stdout: '' }, NO_SUCH_VOLUME, NO_SUCH_VOLUME,
+  ];
+  for (const [index, response] of Object.entries(overrides)) calls[index] = response;
+  return calls;
+};
+
 function makeApp() {
   const app = express();
   app.use(express.json());
@@ -165,6 +178,93 @@ describe('database admin maintenance admission', () => {
     mockExecFile([{ exitCode: 0, stdout: 'started' }]);
     expect((await request(makeApp()).post('/api/database/start').send({ backend: 'docker' })).status).toBe(200);
     expect(execFile).toHaveBeenCalledTimes(1);
+  });
+});
+
+// #10888: db.sh picks start/stop from the mode it loads, which is the ACTIVE
+// backend (inherited env / saved .env). A native request must pin the child to
+// native, and must never touch Docker or the process's own environment.
+describe('lifecycle command failures (#10889)', () => {
+  it.each([
+    ['start', 'docker'], ['start', 'native'], ['stop', 'docker'], ['stop', 'native'],
+  ])('returns a non-2xx coded error when %s %s exits nonzero', async (action, backend) => {
+    mockExecFile([{ exitCode: 1, stderr: 'boom \u001b[31mfailure\u001b[0m' }]);
+
+    const res = await request(makeApp()).post(`/api/database/${action}`).send({ backend });
+
+    expect(res.status).toBe(500);
+    expect(res.body).toMatchObject({ code: 'DATABASE_COMMAND_FAILED' });
+    expect(res.body.error).toMatch(new RegExp(`Failed to ${action} ${backend}`, "i"));
+    expect(res.body.error).toContain('boom failure');
+    expect(res.body.timestamp).toBeDefined();
+  });
+
+  it('bounds the diagnostic included in the error', async () => {
+    mockExecFile([{ exitCode: 1, stderr: 'x'.repeat(5000) }]);
+    const res = await request(makeApp()).post('/api/database/start').send({ backend: 'docker' });
+    expect(res.status).toBe(500);
+    expect(res.body.error.length).toBeLessThan(600);
+  });
+});
+
+describe('native lifecycle targeting', () => {
+  const saved = { PGMODE: process.env.PGMODE, PGPORT: process.env.PGPORT, PGHOST: process.env.PGHOST };
+  afterEach(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  });
+
+  it.each(['start', 'stop'])('binds native %s to the native endpoint while Docker is the active mode', async (action) => {
+    process.env.PGMODE = 'docker';
+    process.env.PGPORT = '5561';
+    process.env.PGHOST = 'docker-host.example.com';
+    mockExecFile([{ exitCode: 0, stdout: `native ${action}` }]);
+
+    const res = await request(makeApp()).post(`/api/database/${action}`).send({ backend: 'native' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, output: `native ${action}` });
+    expect(execFile).toHaveBeenCalledTimes(1);
+    const [cmd, args, opts] = execFile.mock.calls[0];
+    expect(cmd).toBe('bash');
+    expect(args.at(-1)).toBe(action);
+    expect(opts.env).toMatchObject({ PGMODE: 'native', PGHOST: 'localhost', PGPORT: '5432' });
+    // Child-only: the server's own active-backend environment is unchanged.
+    expect(process.env).toMatchObject({ PGMODE: 'docker', PGPORT: '5561', PGHOST: 'docker-host.example.com' });
+  });
+
+  it.each([
+    ['start', ['compose', 'up', '-d', 'db']],
+    ['stop', ['compose', 'stop', 'db']],
+  ])('keeps Docker %s on Docker and away from db.sh', async (action, composeArgs) => {
+    process.env.PGMODE = 'native';
+    mockExecFile([{ exitCode: 0, stdout: '' }]);
+
+    const res = await request(makeApp()).post(`/api/database/${action}`).send({ backend: 'docker' });
+
+    expect(res.status).toBe(200);
+    expect(execFile).toHaveBeenCalledTimes(1);
+    expect(execFile.mock.calls[0][0]).toBe('docker');
+    expect(execFile.mock.calls[0][1]).toEqual(composeArgs);
+  });
+
+  it('refuses native lifecycle before any child process when the native endpoint aliases Docker', async () => {
+    vi.resetModules();
+    vi.doMock('../lib/ports.js', async (importOriginal) => ({
+      ...(await importOriginal()),
+      resolvePostgresPort: () => 5561,
+    }));
+    try {
+      const { startDatabase, stopDatabase } = await import('../services/dbAdmin.js');
+      for (const lifecycle of [startDatabase, stopDatabase]) {
+        await expect(lifecycle('native')).rejects.toThrow(/distinct native database endpoint/);
+      }
+      expect(execFile).not.toHaveBeenCalled();
+    } finally {
+      vi.doUnmock('../lib/ports.js');
+      vi.resetModules();
+    }
   });
 });
 
@@ -596,13 +696,7 @@ describe('POST /api/database/destroy', () => {
       // 2: docker compose rm -f db
       // 3: docker volume rm -f portos_portos-pgdata  (first volume attempt)
       // 4: docker volume rm -f portos-pgdata          (alternate volume attempt)
-      mockExecFile([
-        { exitCode: 0, stdout: 'Current mode: native', stderr: '' },
-        { exitCode: 0, stdout: '', stderr: '' }, // compose stop
-        { exitCode: 0, stdout: '', stderr: '' }, // compose rm
-        { exitCode: 0, stdout: '', stderr: '' }, // volume rm primary
-        { exitCode: 0, stdout: '', stderr: '' }, // volume rm alternate
-      ]);
+      mockExecFile(dockerDestroyResponses());
 
       const app = makeApp();
       const res = await request(app)
@@ -628,7 +722,71 @@ describe('POST /api/database/destroy', () => {
     });
   });
 
+  describe('docker destroy failures (#10889)', () => {
+    beforeEach(() => {
+      vi.stubEnv('PGHOST', 'localhost');
+      vi.stubEnv('PGPORT', '5432');
+    });
+
+    it.each([
+      ['compose stop', 1],
+      ['compose rm', 2],
+      ['primary volume rm', 3],
+      ['alternate volume rm', 4],
+    ])('reports a failed %s instead of success and stops issuing commands', async (_step, index) => {
+      mockExecFile(dockerDestroyResponses('native', { [index]: { exitCode: 1, stderr: 'permission denied' } }));
+
+      const res = await request(makeApp()).post('/api/database/destroy').send({ backend: 'docker' });
+
+      expect(res.status).toBe(500);
+      expect(res.body).toMatchObject({ code: 'DATABASE_COMMAND_FAILED' });
+      expect(res.body.error).toMatch(/permission denied/);
+      expect(res.body.timestamp).toBeDefined();
+      expect(execFile).toHaveBeenCalledTimes(index + 1);
+    });
+
+    it('fails when a selected volume still exists after removal', async () => {
+      mockExecFile(dockerDestroyResponses('native', { 6: { exitCode: 0, stdout: '[]' } }));
+      const res = await request(makeApp()).post('/api/database/destroy').send({ backend: 'docker' });
+      expect(res.status).toBe(500);
+      expect(res.body.error).toMatch(/still exists/);
+    });
+
+    it('does not mistake a daemon failure during verification for an absent volume', async () => {
+      mockExecFile(dockerDestroyResponses('native', { 7: { exitCode: 1, stderr: 'Cannot connect to the Docker daemon' } }));
+      const res = await request(makeApp()).post('/api/database/destroy').send({ backend: 'docker' });
+      expect(res.status).toBe(500);
+      expect(res.body.error).toMatch(/Cannot connect to the Docker daemon/);
+    });
+
+    it('fails when the container is still listed after removal', async () => {
+      mockExecFile(dockerDestroyResponses('native', { 5: { exitCode: 0, stdout: 'abc123\n' } }));
+      const res = await request(makeApp()).post('/api/database/destroy').send({ backend: 'docker' });
+      expect(res.status).toBe(500);
+      expect(res.body.error).toMatch(/container still exists/);
+    });
+
+    it('treats an already-absent target as an idempotent success', async () => {
+      mockExecFile(dockerDestroyResponses());
+      const res = await request(makeApp()).post('/api/database/destroy').send({ backend: 'docker' });
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+    });
+  });
+
   describe('native destroy path', () => {
+    it('reports a failed DROP DATABASE instead of success (#10889)', async () => {
+      vi.stubEnv('PGHOST', 'localhost');
+      vi.stubEnv('PGPORT', '5561');
+      mockExecFile([
+        { exitCode: 0, stdout: 'Current mode: docker' },
+        { exitCode: 2, stderr: 'connection refused' },
+      ]);
+      const res = await request(makeApp()).post('/api/database/destroy').send({ backend: 'native' });
+      expect(res.status).toBe(500);
+      expect(res.body.error).toMatch(/connection refused/);
+    });
+
     it('targets the canonical native endpoint instead of the active Docker port', async () => {
       vi.stubEnv('PGHOST', 'localhost');
       vi.stubEnv('PGPORT', '5561');
@@ -787,7 +945,7 @@ describe('POST /api/database/sync endpoint safety', () => {
     expect(execFile).toHaveBeenCalledTimes(1);
     finishProbe(new Error('probe failed'), '', 'probe failed');
     expect((await pending).status).toBe(409);
-    mockExecFile([{ exitCode: 0, stdout: 'Current mode: native' }]);
+    mockExecFile(dockerDestroyResponses());
     const res = await request(app).post('/api/database/destroy').send({ backend: 'docker' });
     expect(res.status).toBe(200);
   });

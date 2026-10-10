@@ -1,6 +1,8 @@
 import { MUSIC_VIDEO_MEDIA_MODES } from './musicVideoMediaPolicy.js';
 import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicVideoGrade.js';
 import { COVER_DESIGN_OPTIONS } from './musicVideoCoverOverlay.js';
+import { DISTROKID_REMEMBERED_OPTIONS } from './distrokidGenres.js';
+import { CROSS_LINK_EDIT_TARGETS } from './musicVideoCrossLinks.js';
 /**
  * Music Video production mode — Zod schemas + shared enums (issue #1760, Phase 1).
  *
@@ -705,6 +707,8 @@ export const musicVideoPublishCopyPatchSchema = z.object({
   youtube: z.object({ title: kitText(100), description: kitText(5000), tags: z.array(kitText(60)).max(30) }).partial().strict().optional(),
   shorts: z.object({ title: kitText(100), description: kitText(5000) }).partial().strict().optional(),
   x: z.object({ hook: kitText(280), story: kitText(25000) }).partial().strict().optional(),
+  linkedin: z.object({ post: kitText(3000) }).partial().strict().optional(),
+  facebook: z.object({ post: kitText(63206) }).partial().strict().optional(),
   tiktok: z.object({ caption: kitText(2200) }).partial().strict().optional(),
   instagram: z.object({ caption: kitText(2200) }).partial().strict().optional(),
   reddit: z.object({ title: kitText(300), body: kitText(40000) }).partial().strict().optional(),
@@ -783,20 +787,32 @@ export const musicVideoCoverArtGenerateSchema = z.object({
 
 // #9282: posting to a platform through the PortOS Browser. One strict options
 // object covers every target; each target's payload builder reads only its own.
-export const MUSIC_VIDEO_PUBLISH_TARGETS = Object.freeze(['youtube', 'shorts', 'tiktok', 'instagram', 'x', 'reddit', 'stackerNews', 'substack', 'suno', 'sunoHook', 'distrokid']);
+export const MUSIC_VIDEO_PUBLISH_TARGETS = Object.freeze(['youtube', 'shorts', 'tiktok', 'instagram', 'x', 'linkedin', 'facebook', 'reddit', 'stackerNews', 'substack', 'suno', 'sunoHook', 'distrokid']);
 export const musicVideoPublishTargetSchema = z.enum(MUSIC_VIDEO_PUBLISH_TARGETS);
 const publishUrl = z.string().url().max(500);
 // #9287: which platforms the director posts to (opt-in), the account for each,
 // and a post's link, reception and notes.
 const publishPlatformEntry = z.object({ enabled: z.boolean(), account: z.string().max(100).nullable() }).partial().strict();
-export const musicVideoPublishPlatformsPatchSchema = z.object(Object.fromEntries(MUSIC_VIDEO_PUBLISH_TARGETS.map((t) => [t, publishPlatformEntry.optional()]))).strict();
+// DistroKid also keeps the release answers that repeat on every project ('' or null forgets one).
+const rememberedAnswer = z.string().max(100).nullable();
+const distrokidPlatformEntry = publishPlatformEntry.extend({
+  defaults: z.object(Object.fromEntries(DISTROKID_REMEMBERED_OPTIONS.map((k) => [k, rememberedAnswer]))).partial().strict(),
+}).partial().strict();
+export const musicVideoPublishPlatformsPatchSchema = z.object(Object.fromEntries(MUSIC_VIDEO_PUBLISH_TARGETS
+  .map((t) => [t, (t === 'distrokid' ? distrokidPlatformEntry : publishPlatformEntry).optional()]))).strict();
 export const musicVideoPublishPostSchema = z.object({
   url: publishUrl.nullable(),
   // Marks the platform done without a link (a DistroKid upload has none until the stores go live).
   posted: z.literal(true),
   reception: z.enum(['good', 'mixed', 'poor']).nullable(),
   notes: z.string().max(2000).nullable(),
-}).partial().strict().refine((b) => Object.keys(b).length > 0, { message: 'url, posted, reception or notes is required' });
+  // The release's other posts this one now links to (cross-links), added to what it linked already.
+  links: z.array(musicVideoPublishTargetSchema).max(MUSIC_VIDEO_PUBLISH_TARGETS.length),
+}).partial().strict().refine((b) => Object.keys(b).length > 0, { message: 'url, posted, reception, notes or links is required' });
+// Whether new drafts list the release's other posts, and which posted platform gets its missing links.
+export const musicVideoPublishCrossLinksSchema = z.object({ enabled: z.boolean() }).strict();
+export const musicVideoCrossLinkTargetSchema = z.enum(CROSS_LINK_EDIT_TARGETS);
+export const musicVideoCrossLinkEditSchema = z.object({}).strict();
 export const musicVideoPublishPrepareSchema = z.object({
   subreddit: z.string().max(40),
   kind: z.enum(['self', 'link', 'video']),
@@ -804,6 +820,10 @@ export const musicVideoPublishPrepareSchema = z.object({
   flairId: z.string().max(100),
   flairText: z.string().max(64),
   firstComment: kitText(10000),
+  // LinkedIn, Facebook: put the full video and song links in a first comment (default on).
+  linksComment: z.boolean(),
+  // Facebook: turn on the post's AI label (default on).
+  aiLabel: z.boolean(),
   territory: z.string().max(40),
   // Substack: the publication (name.substack.com or a custom domain); defaults to the account under Where you post.
   publication: z.string().trim().min(1).max(200),
@@ -986,6 +1006,8 @@ export const musicVideoAutonomousStartSchema = z.object({
   checkpoints: z.array(z.enum(AUTONOMOUS_CHECKPOINT_IDS)).max(AUTONOMOUS_CHECKPOINT_IDS.length).optional(),
   // Reuse this existing mood board instead of generating one from the prompt.
   moodBoardId: z.string().trim().min(1).max(64).nullable().optional(),
+  // A built-in character style (musicVideoCharacterStyles.js) cast as protagonist from the start.
+  characterStyleId: z.enum(MUSIC_VIDEO_CHARACTER_STYLE_IDS).nullable().optional(),
   // The LLM that writes the brief and lyrics (blank = an eligible TUI provider, else the
   // install's active provider — see services/musicVideo/llmRoute.js).
   providerId: z.string().trim().min(1).max(200).nullable().optional(),

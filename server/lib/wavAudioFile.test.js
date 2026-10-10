@@ -1,5 +1,24 @@
-import { describe, expect, it } from 'vitest';
-import { measureWavAudio, wavDurationMs } from './wavAudioFile.js';
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+
+// ffmpeg double: like the real binary it opens its output path and writes
+// THROUGH a symlink there; the last argument is the output file.
+vi.mock('./ffmpeg.js', () => ({
+  findFfmpeg: vi.fn().mockResolvedValue('/fake/ffmpeg'),
+  runFfmpegProcess: vi.fn(async ({ args }) => {
+    await writeFile(args.at(-1), 'encoded-ogg');
+    return { ok: true };
+  }),
+}));
+
+const { measureWavAudio, wavDurationMs, writeWavAudioFile } = await import('./wavAudioFile.js');
+
+const tmpRoots = [];
+afterAll(async () => {
+  await Promise.all(tmpRoots.map((dir) => rm(dir, { recursive: true, force: true })));
+});
 
 // Minimal RIFF/WAVE writer: `samples` is interleaved, already in [-1, 1].
 function wav({ samples, channels = 2, sampleRate = 48000, format = 'int16', extensible = false, leadingChunk = false }) {
@@ -55,5 +74,25 @@ describe('measureWavAudio', () => {
     expect(measureWavAudio(wav({ samples: [0.1, 0.2], format: 'uint8' }))).toBeNull();
     expect(measureWavAudio(Buffer.from('not a wav file at all'))).toBeNull();
     expect(measureWavAudio(null)).toBeNull();
+  });
+});
+
+describe('writeWavAudioFile OGG staging (#10894)', () => {
+  it('replaces a leaf symlink at the OGG destination instead of encoding through it', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'wav-ogg-'));
+    tmpRoots.push(root);
+    const dir = join(root, 'out');
+    await mkdir(dir);
+    const victim = join(root, 'victim.ogg');
+    await writeFile(victim, 'victim-bytes');
+    await symlink(victim, join(dir, 'loop.ogg'));
+
+    const name = await writeWavAudioFile(wav({ samples: stereoTone(480, 0.25) }), dir, 'loop');
+
+    expect(name).toBe('loop.ogg');
+    expect(await readFile(victim, 'utf8')).toBe('victim-bytes');
+    expect((await lstat(join(dir, 'loop.ogg'))).isFile()).toBe(true);
+    expect(await readFile(join(dir, 'loop.ogg'), 'utf8')).toBe('encoded-ogg');
+    expect(await readdir(dir)).toEqual(['loop.ogg']); // no staged temp or WAV left behind
   });
 });

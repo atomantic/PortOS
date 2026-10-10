@@ -33,6 +33,7 @@ const MESSAGES = {
   restore_commit_unknown: 'The restore could not confirm whether the database dump was committed. Ordinary database work stays paused and the dump will NOT be replayed; retry recovery from Settings > Backup once PostgreSQL is reachable.',
   restore_schema_reconciliation: 'The database dump was applied, but schema recovery is incomplete. It was not rolled back and will not be replayed. Ordinary database work stays paused: retry recovery from Settings > Backup, or restart PortOS to retry automatically. If it keeps failing, check the server logs.',
   restore_execution_reconciliation: 'Execution request consumption and unresolved ownership are awaiting reconciliation. Database work stays paused; the dump will not be replayed. Recovery retries automatically at startup and can also be retried from Settings > Backup.',
+  restore_catalog_reconciliation: 'The database dump was applied, but catalog payload or universe-tag repair is incomplete. It will not be replayed. Ordinary database work stays paused: retry recovery from Settings > Backup, or restart PortOS to retry automatically.',
   restore_media_reconciliation: 'The database dump was applied, but the media index could not be rebuilt from local files. It will not be replayed. Ordinary database work stays paused: retry recovery from Settings > Backup, or restart PortOS.',
   restore_sync_resync: 'The database dump was applied, but peer sync could not be reset yet. It will not be replayed. Ordinary database work stays paused: retry recovery from Settings > Backup, or restart PortOS to retry automatically.',
   restore_recovery_release: 'The database dump was applied and repaired, but the recovery journal could not be cleared. Ordinary database work stays paused: retry recovery from Settings > Backup.',
@@ -170,6 +171,19 @@ export async function repairCommittedRestore(record) {
   if (reconciliationError) {
     console.error(`❌ DB restore ${record.id}: schema reconciliation failed: ${reconciliationError.message}`);
     return pendingRecoveryResult('restore_schema_reconciliation', record);
+  }
+  // The on-disk markers describe the pre-restore database, so an older snapshot
+  // would otherwise look already migrated on every later boot. Force both walks
+  // (each also re-stamps its marker) so catalog rows match the restored state.
+  const catalogError = await (async () => {
+    const { migrateCatalogPayload } = await import('../scripts/migrateCatalogPayload.js');
+    const { repairUniverseTags } = await import('../scripts/repairUniverseTags.js');
+    await migrateCatalogPayload({ force: true });
+    await repairUniverseTags({ force: true });
+  })().then(() => null, (err) => err);
+  if (catalogError) {
+    console.error(`❌ DB restore ${record.id}: catalog reconciliation failed: ${catalogError.message}`);
+    return pendingRecoveryResult('restore_catalog_reconciliation', record);
   }
   // Old snapshots may contain stale mirror rows; new snapshots omit them.
   // Either way disk is authoritative, including for a DB-only restore.

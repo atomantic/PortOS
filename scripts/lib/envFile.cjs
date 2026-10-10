@@ -50,4 +50,26 @@ function parseEnvFile(filePath) {
   return parseEnvContent(content);
 }
 
-module.exports = { parseEnvContent, parseEnvFile };
+const DEFAULT_HTTP_MIRROR_PORT = 5553;
+
+/**
+ * Effective loopback HTTP-mirror port (`PORTOS_HTTP_PORT`). Precedence matches
+ * the other machine-local settings: NONEMPTY exported value, then saved `.env`,
+ * then the canonical default. A value that is not an integer TCP port (1-65535)
+ * is skipped (falls through to the next source), so every consumer — PM2 config,
+ * setup/access/browser helpers — resolves the same port (#10950).
+ *
+ * @param {{ env?: Record<string, string|undefined>, dotenv?: Record<string, string> }} [sources]
+ * @returns {number}
+ */
+function resolveHttpMirrorPort({ env = process.env, dotenv = {} } = {}) {
+  for (const raw of [env.PORTOS_HTTP_PORT, dotenv.PORTOS_HTTP_PORT]) {
+    const text = String(raw ?? '').trim();
+    if (!/^\d+$/.test(text)) continue;
+    const port = Number(text);
+    if (port >= 1 && port <= 65535) return port;
+  }
+  return DEFAULT_HTTP_MIRROR_PORT;
+}
+
+module.exports = { parseEnvContent, parseEnvFile, resolveHttpMirrorPort, DEFAULT_HTTP_MIRROR_PORT };

@@ -22,7 +22,7 @@ const BASE_ENV = {
 const envFile = path.join(__dirname, '.env');
 // Parsed by the same dependency-free grammar setup uses (scripts/lib/envFile.cjs),
 // so quoted values resolve identically here and in setup (#9471).
-const { parseEnvFile } = require('./scripts/lib/envFile.cjs');
+const { parseEnvFile, resolveHttpMirrorPort } = require('./scripts/lib/envFile.cjs');
 const dotenv = parseEnvFile(envFile); // {} when .env is missing
 const envValue = (key) => dotenv[key] || null;
 // Same precedence as scripts/setup-db.js getMode(): a NONEMPTY exported PGMODE →
@@ -44,6 +44,8 @@ const PG_USER = process.env.PGUSER || envPgUser || 'portos';
 const PG_DATABASE = process.env.PGDATABASE || envPgDatabase || 'portos';
 const PG_PASSWORD = process.env.PGPASSWORD || envPgPassword || 'portos';
 const PG_HOST = process.env.PGHOST || envPgHost || 'localhost';
+// Express bind for portos-server only: nonempty exported HOST → .env → all interfaces (#10946).
+const SERVER_HOST = process.env.HOST || envValue('HOST') || '0.0.0.0';
 
 // pm2 restarts portos-server when its RSS crosses this — originally a memory-leak
 // safety valve. The committed default stays modest so the guard still fires on a
@@ -207,8 +209,8 @@ module.exports = {
         // real headroom at negligible cost — idle threads are just parked.
         UV_THREADPOOL_SIZE: '16',
         PORT: PORTS.API,
-        PORTOS_HTTP_PORT: PORTS.API_LOCAL, // Loopback HTTP mirror when HTTPS is active
-        HOST: '0.0.0.0',
+        PORTOS_HTTP_PORT: resolveHttpMirrorPort({ dotenv }), // exported > .env > PORTS.API_LOCAL (#10950); Loopback HTTP mirror when HTTPS is active
+        HOST: SERVER_HOST,
         PGHOST: PG_HOST,
         PGPORT: PG_PORT,
         PORTOS_NATIVE_PGPORT: DATABASE_ENDPOINTS.native.port,

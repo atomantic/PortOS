@@ -1,6 +1,16 @@
 import { request } from './apiCore.js';
 
 // Brain - Second Brain Feature
+
+// The entity-list routes select cursor mode only when `cursor` (or `search`) is
+// present in the query. A caller that opts into cursor paging passes `null` for
+// the first page (usePagedCollection), so serialize it as the empty initial
+// cursor rather than dropping it — dropping it selects the legacy offset
+// envelope, which carries no `nextCursor` and strands the list at page one.
+// Callers that omit the option entirely keep the legacy contract.
+const setEntityCursor = (params, cursor) => {
+  if (cursor !== undefined) params.set('cursor', cursor ?? '');
+};
 export const getBrainSummary = (options) => request('/brain/summary', options);
 export const getBrainSettings = (options) => request('/brain/settings', options);
 export const updateBrainSettings = (settings, options = {}) => request('/brain/settings', {
@@ -61,7 +71,7 @@ export const markBrainInboxDone = (id, options = {}) => request(`/brain/inbox/${
 export const getBrainPeople = (options = {}) => {
   const params = new URLSearchParams();
   if (options.search) params.set('search', options.search);
-  if (options.cursor !== undefined && options.cursor !== null) params.set('cursor', options.cursor);
+  setEntityCursor(params, options.cursor);
   if (options.limit) params.set('limit', options.limit);
   if (options.offset) params.set('offset', options.offset);
   const qs = params.toString();
@@ -88,7 +98,7 @@ export const getBrainProjects = (filters = {}) => {
   const params = new URLSearchParams();
   if (filters?.status) params.set('status', filters.status);
   if (filters?.search) params.set('search', filters.search);
-  if (filters?.cursor !== undefined && filters?.cursor !== null) params.set('cursor', filters.cursor);
+  setEntityCursor(params, filters?.cursor);
   if (filters?.limit) params.set('limit', filters.limit);
   if (filters?.offset) params.set('offset', filters.offset);
   const qs = params.toString();
@@ -115,7 +125,7 @@ export const getBrainIdeas = (filters = {}) => {
   const params = new URLSearchParams();
   if (filters?.status) params.set('status', filters.status);
   if (filters?.search) params.set('search', filters.search);
-  if (filters?.cursor !== undefined && filters?.cursor !== null) params.set('cursor', filters.cursor);
+  setEntityCursor(params, filters?.cursor);
   if (filters?.limit) params.set('limit', filters.limit);
   if (filters?.offset) params.set('offset', filters.offset);
   const qs = params.toString();
@@ -174,7 +184,7 @@ export const getBrainAdmin = (filters = {}) => {
   const params = new URLSearchParams();
   if (filters?.status) params.set('status', filters.status);
   if (filters?.search) params.set('search', filters.search);
-  if (filters?.cursor !== undefined && filters?.cursor !== null) params.set('cursor', filters.cursor);
+  setEntityCursor(params, filters?.cursor);
   if (filters?.limit) params.set('limit', filters.limit);
   if (filters?.offset) params.set('offset', filters.offset);
   const qs = params.toString();
@@ -201,7 +211,7 @@ export const getBrainMemories = (options = {}) => {
   const params = new URLSearchParams();
   if (options.status) params.set('status', options.status);
   if (options.search) params.set('search', options.search);
-  if (options.cursor !== undefined && options.cursor !== null) params.set('cursor', options.cursor);
+  setEntityCursor(params, options.cursor);
   if (options.limit) params.set('limit', options.limit);
   if (options.offset) params.set('offset', options.offset);
   const qs = params.toString();

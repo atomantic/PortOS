@@ -916,6 +916,46 @@ describe('persistent mind supervisor', () => {
     expect(mock.root.persistentMind.status).toBe('interrupted');
   });
 
+  it('watchdog restarts the stale window after a host suspend instead of killing the in-flight turn', async () => {
+    const run = vi.fn(({ signal }) => new Promise((resolve, reject) => {
+      signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+    }));
+    await supervisor.registerPersistentMindTurnAdapter({
+      prepare: vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud' } })),
+      run,
+    });
+    await supervisor.setPersistentMindEnabled(true);
+    await supervisor.startPersistentMind();
+    await supervisor.enqueuePersistentMindMessage({ id: 'message-1', text: 'Survive a host suspend.' });
+    const drain = supervisor.drainPersistentMind();
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+
+    const beforeSuspend = Date.now();
+    await expect(supervisor.checkPersistentMindWatchdog(beforeSuspend)).resolves.toEqual({ interrupted: false });
+    // The host (and this process with it) froze for 20 minutes mid-call: the
+    // heartbeat is far past the stale window only because nothing ran.
+    const resumedAt = beforeSuspend + 20 * 60_000;
+    mock.root.persistentMind.activeTurn.heartbeatAt = new Date(beforeSuspend).toISOString();
+    await expect(supervisor.checkPersistentMindWatchdog(resumedAt)).resolves.toEqual({ interrupted: false, resumeGrace: true });
+    expect(mock.root.persistentMind.activeTurn).not.toBeNull();
+    // Still inside the grace window on the next regular tick.
+    await expect(supervisor.checkPersistentMindWatchdog(resumedAt + supervisor.PERSISTENT_MIND_WATCHDOG_INTERVAL_MS))
+      .resolves.toEqual({ interrupted: false, resumeGrace: true });
+
+    // A turn that truly stops beating after the resume is still interrupted
+    // once a full stale window of running time has passed.
+    let tick = resumedAt;
+    while (tick < resumedAt + PERSISTENT_MIND_LIMITS.WATCHDOG_STALE_MS - supervisor.PERSISTENT_MIND_WATCHDOG_INTERVAL_MS) {
+      tick += supervisor.PERSISTENT_MIND_WATCHDOG_INTERVAL_MS;
+      await supervisor.checkPersistentMindWatchdog(tick);
+    }
+    await expect(supervisor.checkPersistentMindWatchdog(resumedAt + PERSISTENT_MIND_LIMITS.WATCHDOG_STALE_MS))
+      .resolves.toEqual({ interrupted: true });
+    await drain;
+    expect(mock.root.persistentMind.activeTurn).toBeNull();
+    expect(mock.root.persistentMind.status).toBe('interrupted');
+  });
+
   it('does not interrupt a replacement turn when a stale watchdog snapshot loses the race', async () => {
     mock.root.persistentMind = {
       ...createDefaultPersistentMindState(),

@@ -384,7 +384,7 @@ export default function MediaLightbox({
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); onClose(); }}
-            className="absolute top-2 left-2 z-30 p-2 rounded-full bg-white text-black hover:bg-white/85 shadow-lg focus:outline-none focus:ring-2 focus:ring-port-accent min-h-[44px] min-w-[44px] flex items-center justify-center"
+            className="absolute top-2 left-2 z-30 min-h-[44px] min-w-[44px] flex items-center justify-center p-2 rounded-full bg-white text-black hover:bg-white/85 shadow-lg focus:outline-none focus:ring-2 focus:ring-port-accent"
             aria-label="Close"
             title="Close (Esc)"
           >
@@ -423,7 +423,7 @@ export default function MediaLightbox({
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); setFullScreen((v) => !v); }}
-            className="absolute top-2 right-2 z-30 p-2 rounded-full bg-white text-black hover:bg-white/85 shadow-lg focus:outline-none focus:ring-2 focus:ring-port-accent"
+            className="absolute top-2 right-2 z-30 min-h-[44px] min-w-[44px] flex items-center justify-center p-2 rounded-full bg-white text-black hover:bg-white/85 shadow-lg focus:outline-none focus:ring-2 focus:ring-port-accent"
             aria-label={fullScreen ? 'Exit full screen' : 'Full screen'}
             title={fullScreen ? 'Exit full screen (Esc, F)' : 'Full screen (F)'}
           >
@@ -689,7 +689,7 @@ function SettingsPane({
               placeholder="Add the prompt used to create this media" rows={5} maxLength={8000}
               className="w-full bg-port-bg border border-port-border rounded p-2 text-xs text-gray-200 placeholder:text-gray-600 focus:outline-none focus:border-port-accent resize-y" />
             <div className="flex justify-end mt-1">
-              <button type="button" onClick={savePrompt} disabled={promptSaving || promptDraft === (item.prompt === '(no prompt)' ? '' : (item.prompt || ''))} className="px-2 py-1 rounded bg-port-accent text-white disabled:opacity-40">Save prompt</button>
+              <button type="button" onClick={savePrompt} disabled={promptSaving || promptDraft === (item.prompt === '(no prompt)' ? '' : (item.prompt || ''))} className="min-h-[44px] min-w-[44px] px-2 py-1 rounded bg-port-accent text-white disabled:opacity-40">Save prompt</button>
             </div>
           </div>
         ) : item.prompt ? (
@@ -811,7 +811,7 @@ function SettingsPane({
           <button
             type="button"
             onClick={onRefine}
-            className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-accent/80 text-white hover:opacity-90 rounded"
+            className="flex-1 min-h-[44px] min-w-[80px] flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-accent/80 text-white hover:opacity-90 rounded"
           >
             <Sparkles className="w-3.5 h-3.5" /> Refine Prompt
           </button>
@@ -821,7 +821,7 @@ function SettingsPane({
             type="button"
             onClick={onPromptFrom}
             title="Ask a vision model to write the image and/or video prompt that would recreate this"
-            className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-accent/80 text-white hover:opacity-90 rounded"
+            className="flex-1 min-h-[44px] min-w-[80px] flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-accent/80 text-white hover:opacity-90 rounded"
           >
             <ScanEye className="w-3.5 h-3.5" /> {item.prompt && item.prompt !== '(no prompt)' ? 'Prompt from this' : 'Analyze prompt'}
           </button>
@@ -830,7 +830,7 @@ function SettingsPane({
           <button
             type="button"
             onClick={() => closeThenRun(onRemix)}
-            className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-accent text-white hover:opacity-90 rounded"
+            className="flex-1 min-h-[44px] min-w-[80px] flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-accent text-white hover:opacity-90 rounded"
           >
             <Sparkles className="w-3.5 h-3.5" /> Remix
           </button>
@@ -840,7 +840,7 @@ function SettingsPane({
             type="button"
             onClick={() => closeThenRun(onSendToImage)}
             title="Open this image in Image Gen as the image-to-image source"
-            className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-accent/80 text-white hover:opacity-90 rounded"
+            className="flex-1 min-h-[44px] min-w-[80px] flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-accent/80 text-white hover:opacity-90 rounded"
           >
             <Wand2 className="w-3.5 h-3.5" /> Send to i2i
           </button>
@@ -849,7 +849,7 @@ function SettingsPane({
           <button
             type="button"
             onClick={() => closeThenRun(onSendToVideo)}
-            className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-success text-white hover:opacity-90 rounded"
+            className="flex-1 min-h-[44px] min-w-[80px] flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-success text-white hover:opacity-90 rounded"
           >
             <Film className="w-3.5 h-3.5" /> Send to Video
           </button>
@@ -858,7 +858,7 @@ function SettingsPane({
           <button
             type="button"
             onClick={() => closeThenRun(onSendTo3d)}
-            className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-accent-2 text-port-on-accent-2 hover:opacity-90 rounded"
+            className="flex-1 min-h-[44px] min-w-[80px] flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-accent-2 text-port-on-accent-2 hover:opacity-90 rounded"
           >
             <Box className="w-3.5 h-3.5" /> Send to 3D
           </button>
@@ -870,7 +870,7 @@ function SettingsPane({
             onClick={runBusyAction(cleaning, setCleaning, onClean)}
             title={CLEAN_TOOLTIP}
             aria-label="Clean image"
-            className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-warning/80 text-white hover:opacity-90 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex-1 min-h-[44px] min-w-[80px] flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-warning/80 text-white hover:opacity-90 rounded disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Eraser className="w-3.5 h-3.5" /> {cleaning ? 'Cleaning…' : 'Clean'}
           </button>
@@ -882,7 +882,7 @@ function SettingsPane({
             onClick={runBusyAction(removingWatermark, setRemovingWatermark, onRemoveWatermark)}
             title="Erase the visible Gemini / Nano-Banana ✦ sparkle from the bottom-right corner. Reconstructs just that corner from its surroundings — the rest of the image is untouched. Creates a new variant; the original is kept."
             aria-label="Remove Gemini watermark sparkle"
-            className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-warning/80 text-white hover:opacity-90 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex-1 min-h-[44px] min-w-[80px] flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-warning/80 text-white hover:opacity-90 rounded disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Sparkles className="w-3.5 h-3.5" /> {removingWatermark ? 'Removing…' : 'Remove ✦'}
           </button>
@@ -894,7 +894,7 @@ function SettingsPane({
             aria-expanded={regenOpen}
             title="Regenerate through a local FLUX model (img2img) to overwrite SynthID watermarking. Creates a new variant; the original is kept."
             aria-label="Regenerate image to defeat SynthID watermark"
-            className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs text-white hover:opacity-90 rounded ${regenOpen ? 'bg-port-accent' : 'bg-port-accent/80'}`}
+            className={`flex-1 min-h-[44px] min-w-[80px] flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs text-white hover:opacity-90 rounded ${regenOpen ? 'bg-port-accent' : 'bg-port-accent/80'}`}
           >
             <Wand2 className="w-3.5 h-3.5" /> Regenerate
           </button>
@@ -964,7 +964,7 @@ function SettingsPane({
             onClick={runBusyAction(lightRegenerating, setLightRegenerating, (it) => onRegenerate(it, { method: 'light' }))}
             title="CPU-only spatial pass to disrupt SynthID watermarking (no GPU required). Less reliable than a FLUX round-trip; install a local FLUX runner for the stronger pass. Creates a new variant; the original is kept."
             aria-label="Light CPU regen to disrupt SynthID watermark"
-            className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs text-white hover:opacity-90 rounded bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex-1 min-h-[44px] min-w-[80px] flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs text-white hover:opacity-90 rounded bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Wand2 className="w-3.5 h-3.5" /> {lightRegenerating ? 'Processing…' : 'Regen (light)'}
           </button>
@@ -973,7 +973,7 @@ function SettingsPane({
           <button
             type="button"
             onClick={() => closeThenRun(onContinue)}
-            className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-accent text-white hover:opacity-90 rounded"
+            className="flex-1 min-h-[44px] min-w-[80px] flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-accent text-white hover:opacity-90 rounded"
           >
             <ImageIcon className="w-3.5 h-3.5" /> Continue
           </button>
@@ -997,7 +997,7 @@ function SettingsPane({
           href={item.downloadUrl}
           download
           aria-label="Download"
-          className="flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-border hover:bg-port-border/70 text-white rounded"
+          className="min-h-[44px] min-w-[44px] flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-border hover:bg-port-border/70 text-white rounded"
         >
           <Download className="w-3.5 h-3.5" />
         </a>

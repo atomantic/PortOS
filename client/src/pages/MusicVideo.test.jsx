@@ -44,6 +44,8 @@ vi.mock('../hooks/useMusicVideoProductionReview.js', () => ({ default: ({ projec
 }) }));
 
 vi.mock('../services/apiMusicVideo.js', () => ({
+  // Never settles: the create drawer's character-style list is covered in TrackSelectors.test.jsx.
+  listMusicVideoCharacterStyles: vi.fn(() => new Promise(() => {})),
   getMusicVideoMakingOfCatalog: vi.fn(async id => ({ project: { id, name: 'Example making-of project', version: 1 }, snapshot: 'a'.repeat(64), assets: [] })),
   previewMusicVideoMakingOf: vi.fn(),
   exportMusicVideoMakingOf: vi.fn(),

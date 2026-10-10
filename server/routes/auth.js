@@ -16,6 +16,7 @@ import {
   recordLoginFailure,
   revokeSession,
   revokeSessionById,
+  revokeSessionsByLabel,
   sessionCookieNameFor,
   setPassword,
   verifyPassword,
@@ -35,6 +36,9 @@ const setPasswordSchema = z.object({
   currentPassword: z.string().max(256).optional(),
 }).strict();
 const clearPasswordSchema = z.object({ currentPassword: z.string().min(1).max(256) }).strict();
+// Batch revoke is label-scoped so it can only ever drop non-interactive
+// credentials (never the caller's browser session, which carries no label).
+const revokeSessionsQuerySchema = z.object({ label: z.literal('agent') }).strict();
 const sessionIdParamSchema = z.object({ id: z.string().min(1).max(64).regex(/^[a-f0-9]+$/) }).strict();
 
 // Whether the request reached us over HTTPS (so the cookie should carry the
@@ -192,6 +196,16 @@ router.delete('/password', asyncHandler(async (req, res) => {
 router.get('/sessions', asyncHandler(async (_req, res) => {
   const sessions = await listSessions();
   res.json({ sessions, count: sessions.length });
+}));
+
+// DELETE /api/auth/sessions?label=agent — revoke every agent-labelled session
+// in one call (Settings → Security "Revoke all"). Leaves unlabelled browser
+// sessions, including the caller's, untouched.
+router.delete('/sessions', asyncHandler(async (req, res) => {
+  const { label } = validateRequest(revokeSessionsQuerySchema, req.query);
+  const revoked = await revokeSessionsByLabel(label);
+  logSecurityEvent('sessions.revoked', { ip: sourceOf(req), note: `${revoked} ${label} session(s)` });
+  res.json({ ok: true, revoked });
 }));
 
 // DELETE /api/auth/sessions/:id — revoke exactly one session (e.g. the

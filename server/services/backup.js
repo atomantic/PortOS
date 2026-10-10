@@ -9,7 +9,7 @@
 import { dashboardEvents } from './dashboardEvents.js';
 import { spawn } from '../lib/childProcess.js';
 import { killWithEscalation } from '../lib/killWithEscalation.js';
-import { access, lstat, mkdir, mkdtemp, readdir, rm, stat, unlink, writeFile } from 'fs/promises';
+import { access, lstat, mkdir, mkdtemp, readdir, realpath, rm, stat, unlink, writeFile } from 'fs/promises';
 import { randomUUID } from 'node:crypto';
 import { PassThrough } from 'node:stream';
 import { hostname, tmpdir } from 'os';
@@ -137,6 +137,75 @@ async function assertSnapshotRestorable(snapshotDir, snapshotId, currentSource) 
       status: 409,
       code: 'SNAPSHOT_FAILED',
     });
+  }
+}
+
+// Snapshot source lifetime (#10898). Verifying snapshot bytes proves nothing if
+// the snapshot can be deleted while a consumer is still reading it, so every
+// consumer holds a READ lease from before its preflight until its last read
+// settles (file restore/preview through rsync's close and reconciliation,
+// database restore through dump admission, a download through tar's close),
+// and every deletion — explicit or retention — needs the snapshot EXCLUSIVELY.
+// Readers share; a deletion refuses while any reader holds it, and a reader
+// refuses while a deletion holds it. Keyed by the canonical path (realpath
+// folds the omitted-vs-explicit current source, destination symlinks and, on a
+// case-insensitive volume, letter case into one owner); a path that does not
+// exist keeps its resolved form, which every alias of it shares too. This
+// coordinates this server's own callers — it is not a cross-machine lock.
+const snapshotLeases = new Map();
+
+const SNAPSHOT_LEASE_REFUSALS = Object.freeze({
+  SNAPSHOT_DELETING: (snapshotId) => `Snapshot is being deleted: ${snapshotId}`,
+  SNAPSHOT_IN_USE: (snapshotId) => `Snapshot is in use by a restore or download: ${snapshotId}. Retry when it finishes.`,
+});
+
+/**
+ * Claim `snapshotDir` for `mode` ('read' | 'delete'). Resolves `{ release }`,
+ * or `{ refusal }` naming the conflicting owner; never throws. The check and
+ * the claim run in one synchronous step after the key is resolved, so two
+ * claimants cannot both win.
+ */
+async function claimSnapshotLease(snapshotDir, mode) {
+  // snapshotDir comes from resolveSnapshotPath, so it is already resolved.
+  const key = await realpath(snapshotDir).catch(() => snapshotDir);
+  const lease = snapshotLeases.get(key) ?? { readers: 0, deleting: false };
+  if (lease.deleting) return { refusal: 'SNAPSHOT_DELETING' };
+  if (mode === 'delete' && lease.readers > 0) return { refusal: 'SNAPSHOT_IN_USE' };
+  if (mode === 'delete') lease.deleting = true;
+  else lease.readers += 1;
+  snapshotLeases.set(key, lease);
+  let held = true;
+  return {
+    release: () => {
+      if (!held) return;
+      held = false;
+      if (mode === 'delete') lease.deleting = false;
+      else lease.readers -= 1;
+      if (!lease.deleting && lease.readers === 0) snapshotLeases.delete(key);
+    },
+  };
+}
+
+/** Claim a snapshot lease or throw the structured 409 naming the conflict. */
+async function acquireSnapshotLease(snapshotDir, snapshotId, mode) {
+  const { release, refusal } = await claimSnapshotLease(snapshotDir, mode);
+  if (refusal) {
+    throw new ServerError(SNAPSHOT_LEASE_REFUSALS[refusal](snapshotId), {
+      status: 409,
+      code: refusal,
+      context: { snapshotId },
+    });
+  }
+  return release;
+}
+
+/** Hold a read lease on `snapshotDir` for exactly as long as `operation` runs. */
+async function withSnapshotRead(snapshotDir, snapshotId, operation) {
+  const release = await acquireSnapshotLease(snapshotDir, snapshotId, 'read');
+  try {
+    return await operation();
+  } finally {
+    release();
   }
 }
 
@@ -418,7 +487,8 @@ function watchBackupProcess(proc, { label, progressPath = null, idleTimeoutMs } 
 
 /**
  * Run rsync from srcDir to destDir with optional flags.
- * Resolves with array of changed file lines. Rejects on non-zero exit (except 24).
+ * Resolves with array of changed file lines. Rejects on non-zero exit (24 only
+ * when the caller opts in — see `allowVanishedSources`).
  */
 export function resolveRsyncBinary(env = process.env) {
   const override = typeof env.PORTOS_RSYNC === 'string' ? env.PORTOS_RSYNC.trim() : '';
@@ -428,7 +498,13 @@ export function resolveRsyncBinary(env = process.env) {
   return override || 'rsync';
 }
 
-function runRsync(srcDir, destDir, flags = [], { idleTimeoutMs } = {}) {
+// `allowVanishedSources` is the per-operation exit policy (#10898). A backup
+// reads the LIVE data tree, where a file deleted mid-scan (exit 24) is normal
+// and the snapshot is still a usable point-in-time copy. A restore reads a
+// snapshot that must not change under it: exit 24 means part of its source
+// disappeared, so live data may now mix restored and old files. Restore keeps
+// the strict default and treats 24 like every other nonzero exit.
+function runRsync(srcDir, destDir, flags = [], { idleTimeoutMs, allowVanishedSources = false } = {}) {
   return new Promise((resolve, reject) => {
     // `--itemize-changes` emits only after each file finishes. `--progress` is
     // also supported by macOS's bundled rsync 2.6.9 and emits within a large
@@ -467,12 +543,13 @@ function runRsync(srcDir, destDir, flags = [], { idleTimeoutMs } = {}) {
         reject(timeoutError);
         return;
       }
-      // Exit code 24 = some files vanished mid-transfer (normal for active system)
-      if (code === 0 || code === 24) {
+      // Exit code 24 = some source files vanished mid-transfer.
+      if (code === 0 || (code === 24 && allowVanishedSources)) {
         stdoutReader.flush();
         resolve(changed);
       } else {
-        reject(new Error(`rsync exited with code ${code}: ${stderr.trim()}`));
+        const detail = code === 24 ? ' (source files vanished during transfer)' : '';
+        reject(new Error(`rsync exited with code ${code}${detail}: ${stderr.trim()}`));
       }
     });
 
@@ -643,7 +720,7 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
     let pgResult;
     try {
       const excludeFlags = effectiveExcludes.flatMap(p => ['--exclude', p]);
-      changedFiles = await runRsync(PATHS.data, dataDestDir, excludeFlags);
+      changedFiles = await runRsync(PATHS.data, dataDestDir, excludeFlags, { allowVanishedSources: true });
       console.log(`💾 Backup rsync complete: ${changedFiles.length} files changed (exit 0)`);
 
       // A configured-but-failed dump degrades the backup and alerts the user.
@@ -1054,14 +1131,25 @@ async function pruneOldSnapshots(destPath, retentionCount) {
   });
 
   const toDelete = descriptors.slice(retentionCount);
+  let pruned = 0;
   for (const { snapshotDir, id } of toDelete) {
-    await rm(snapshotDir, { recursive: true, force: true }).catch(err =>
-      console.error(`❌ Backup retention: failed to remove snapshot ${id}: ${err.message}`));
+    // A snapshot a restore or download is reading stays; a later run prunes it
+    // once the reader finishes (#10898).
+    const { release, refusal } = await claimSnapshotLease(snapshotDir, 'delete');
+    if (refusal) {
+      console.warn(`⚠️ Backup retention: skipped snapshot ${id} (${refusal})`);
+      continue;
+    }
+    await rm(snapshotDir, { recursive: true, force: true }).then(
+      () => { pruned += 1; },
+      err => console.error(`❌ Backup retention: failed to remove snapshot ${id}: ${err.message}`),
+    );
+    release();
   }
-  if (toDelete.length) {
-    console.log(`💾 Backup retention: pruned ${toDelete.length} snapshot(s), keeping ${retentionCount}`);
+  if (pruned) {
+    console.log(`💾 Backup retention: pruned ${pruned} snapshot(s), keeping ${retentionCount}`);
   }
-  return { pruned: toDelete.length };
+  return { pruned };
 }
 
 function resolveSnapshotPath(destPath, snapshotId, source) {
@@ -1144,7 +1232,8 @@ async function assertExplicitSnapshotSourceSafe({
  * (`.in-progress`), matching the guard that blocks restore and download,
  * because the partial directory may still be owned by an in-flight
  * `runBackup()`. A `.failed` snapshot IS deletable — unlike restore, deletion
- * has no reason to require a successful backup.
+ * has no reason to require a successful backup. A snapshot a restore or
+ * download is still reading is refused with `SNAPSHOT_IN_USE`.
  * @param {string} destPath - Path to external drive backup root
  * @param {string} snapshotId - Snapshot ID to delete
  * @param {{ source?: string }} [options]
@@ -1154,18 +1243,26 @@ export async function deleteSnapshot(destPath, snapshotId, { source } = {}) {
   const resolved = resolveSnapshotPath(destPath, snapshotId, source);
   const { snapshotDir, currentSource, resolvedSource } = resolved;
   await assertExplicitSnapshotSourceSafe(resolved, snapshotId);
-  const info = await stat(snapshotDir).catch(() => null);
-  if (!info?.isDirectory?.()) {
-    throw new ServerError(`Snapshot not found: ${snapshotId}`, { status: 404, code: 'NOT_FOUND' });
+  // Own the snapshot BEFORE the final existence and in-progress checks: an
+  // active reader refuses this deletion (SNAPSHOT_IN_USE), and once admitted no
+  // new reader can start until the directory is gone (#10898).
+  const release = await acquireSnapshotLease(snapshotDir, snapshotId, 'delete');
+  try {
+    const info = await stat(snapshotDir).catch(() => null);
+    if (!info?.isDirectory?.()) {
+      throw new ServerError(`Snapshot not found: ${snapshotId}`, { status: 404, code: 'NOT_FOUND' });
+    }
+    const { incomplete } = await snapshotState(snapshotDir, snapshotId, currentSource);
+    if (incomplete) {
+      throw new ServerError(`Snapshot is still being written: ${snapshotId}`, {
+        status: 409,
+        code: 'SNAPSHOT_INCOMPLETE',
+      });
+    }
+    await rm(snapshotDir, { recursive: true, force: true });
+  } finally {
+    release();
   }
-  const { incomplete } = await snapshotState(snapshotDir, snapshotId, currentSource);
-  if (incomplete) {
-    throw new ServerError(`Snapshot is still being written: ${snapshotId}`, {
-      status: 409,
-      code: 'SNAPSHOT_INCOMPLETE',
-    });
-  }
-  await rm(snapshotDir, { recursive: true, force: true });
   dashboardEvents.emit('backup:changed');
   console.log(`💾 Backup snapshot deleted: ${resolvedSource}/${snapshotId}`);
   return { deleted: true, snapshotId, source: resolvedSource };
@@ -1181,18 +1278,31 @@ export async function openSnapshotStream(destPath, snapshotId, { source } = {}) 
   const resolved = resolveSnapshotPath(destPath, snapshotId, source);
   const { snapshotsRoot, snapshotDir, currentSource } = resolved;
   await assertExplicitSnapshotSourceSafe(resolved, snapshotId);
-  const info = await stat(snapshotDir).catch(() => null);
-  if (!info?.isDirectory?.()) {
-    throw new ServerError(`Snapshot not found: ${snapshotId}`, { status: 404, code: 'NOT_FOUND' });
-  }
-  await assertSnapshotComplete(snapshotDir, snapshotId, currentSource);
+  // The read lease outlives this call: tar reads the snapshot until its child
+  // closes, however the download ends (#10898).
+  const releaseRead = await acquireSnapshotLease(snapshotDir, snapshotId, 'read');
+  let proc;
+  try {
+    const info = await stat(snapshotDir).catch(() => null);
+    if (!info?.isDirectory?.()) {
+      throw new ServerError(`Snapshot not found: ${snapshotId}`, { status: 404, code: 'NOT_FOUND' });
+    }
+    await assertSnapshotComplete(snapshotDir, snapshotId, currentSource);
 
-  // tar's stderr is a pipe (spawn's default) and MUST be drained: left unread
-  // it fills its ~64KB buffer on a tree that warns a lot — files changing under
-  // the archiver, unreadable modes — and tar then blocks on the write forever,
-  // hanging the download with the process still alive. Keep the tail so a
-  // non-zero exit can say why rather than just reporting the code.
-  const proc = spawn('tar', ['-czf', '-', '-C', snapshotsRoot, snapshotId], { shell: false });
+    // tar's stderr is a pipe (spawn's default) and MUST be drained: left unread
+    // it fills its ~64KB buffer on a tree that warns a lot — files changing under
+    // the archiver, unreadable modes — and tar then blocks on the write forever,
+    // hanging the download with the process still alive. Keep the tail so a
+    // non-zero exit can say why rather than just reporting the code.
+    proc = spawn('tar', ['-czf', '-', '-C', snapshotsRoot, snapshotId], { shell: false });
+  } catch (err) {
+    releaseRead();
+    throw err;
+  }
+  proc.on('close', releaseRead);
+  // A child that never spawned has no pid and nothing reading the snapshot.
+  // Any other error (a failed kill) leaves the child alive until `close`.
+  proc.on('error', () => { if (proc.pid === undefined) releaseRead(); });
   const archive = new PassThrough();
   let stderrTail = '';
   proc.stderr?.on('data', (chunk) => { stderrTail = (stderrTail + chunk).slice(-500); });
@@ -1503,10 +1613,7 @@ function restoreIdleTimeoutMs(largestFileBytes = 0) {
  */
 export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, subdirFilter = null, source } = {}) {
   const resolved = resolveSnapshotPath(destPath, snapshotId, source);
-  const { snapshotDir, currentSource } = resolved;
   await assertExplicitSnapshotSourceSafe(resolved, snapshotId);
-  await assertSnapshotRestorable(snapshotDir, snapshotId, currentSource);
-  const srcDir = join(snapshotDir, 'data');
 
   // Defense-in-depth for non-route callers (the route already validates via
   // subdirFilterSchema). subdirFilter is interpolated into an rsync include arg,
@@ -1524,6 +1631,18 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
       { status: 400, code: 'BACKUP_RESTORE_MACHINE_LOCAL' },
     );
   }
+
+  // Hold the source from before the restorability and integrity preflight
+  // until rsync has closed (and, for execution, caches are reconciled), so
+  // neither explicit deletion nor retention can remove verified bytes while
+  // rsync still reads them (#10898).
+  return withSnapshotRead(resolved.snapshotDir, snapshotId,
+    () => restoreHeldSnapshot(resolved, snapshotId, { dryRun, subdirFilter }));
+}
+
+async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, { dryRun, subdirFilter }) {
+  await assertSnapshotRestorable(snapshotDir, snapshotId, currentSource);
+  const srcDir = join(snapshotDir, 'data');
 
   // Run the preflight independently for preview and execution. A preview is an
   // aid to confirmation, not an integrity lease: snapshot bytes may change
@@ -1609,8 +1728,11 @@ const COS_RESTORE_SCOPES = ['cos', 'cos/config.json', 'cos/state.json', 'cos/age
  * - The settings queue stays held through CoS reconciliation.
  * - CoS acquires config then runtime internally (`withLiveCosRestore`) and
  *   refuses a busy daemon/mind/agent with `COS_RESTORE_BUSY`.
- * - The media registry refuses edits for the whole hold and is acquired last,
- *   so its write fence never outlives a refused CoS restore.
+ * - The media registry refuses edits for the whole hold and is acquired after
+ *   CoS, so its write fence never outlives a refused CoS restore.
+ * - Apple Health admission is acquired last, for the same reason: it closes
+ *   import/archive admission and drains admitted day cycles (which wait on no
+ *   other owner) before the transfer, then reopens after cache invalidation.
  */
 const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
   {
@@ -1652,6 +1774,14 @@ const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
     hold: async (inner) => {
       const { withLiveMediaModelsRestore } = await import('../lib/mediaModels.js');
       return withLiveMediaModelsRestore(inner);
+    },
+  },
+  {
+    name: 'Apple Health day files',
+    appliesTo: scope => !scope || scope === 'health' || scope.startsWith('health/'),
+    hold: async (inner) => {
+      const { withLiveHealthRestore } = await import('./appleHealthIngest.js');
+      return withLiveHealthRestore(inner);
     },
   },
 ]);
@@ -1716,7 +1846,7 @@ const DUMP_UNREADABLE = Object.freeze({ status: 'failed', reason: 'dump_unreadab
  *   { status: 'skipped', reason: 'not_configured' }    (real restore, PG unreachable)
  *   { status: 'failed', reason: 'manifest_unreadable'|'manifest_mismatch'|'dump_unreadable'|'dump_incomplete'|'restore_compatibility'|'restore_preflight'|'restore_journal'|'backup_snapshot_busy'|'restore_error'|'timeout', error? }
  *     (nothing changed; a failed replay is reported only once proven rolled back)
- *   { status: 'failed', reason: 'restore_recovery_pending'|'restore_commit_unknown'|'restore_schema_reconciliation'|'restore_sync_resync'|'restore_recovery_release', error, recovery }
+ *   { status: 'failed', reason: 'restore_recovery_pending'|'restore_commit_unknown'|'restore_schema_reconciliation'|'restore_catalog_reconciliation'|'restore_sync_resync'|'restore_recovery_release', error, recovery }
  *     (a restore awaits recovery: ordinary database work stays fenced until
  *     resumeDatabaseRestore finishes it — see backupRestoreRecovery.js, #9725)
  * A successful real restore also carries `syncCursorsRewound` (peer count).
@@ -1726,8 +1856,16 @@ const DUMP_UNREADABLE = Object.freeze({ status: 'failed', reason: 'dump_unreadab
  */
 export async function restorePostgres(destPath, snapshotId, { dryRun = true, source } = {}) {
   const resolved = resolveSnapshotPath(destPath, snapshotId, source);
-  const { snapshotDir, currentSource } = resolved;
   await assertExplicitSnapshotSourceSafe(resolved, snapshotId);
+  // Held for the whole call, which spans every read of snapshot bytes: the
+  // restorability check, the manifest and the dump admission/spool read. (The
+  // replay itself reads only the private spool copy.) Neither deletion nor
+  // retention can remove the dump while it is being admitted (#10898).
+  return withSnapshotRead(resolved.snapshotDir, snapshotId,
+    () => restoreHeldDatabase(resolved, snapshotId, { dryRun }));
+}
+
+async function restoreHeldDatabase({ snapshotDir, currentSource }, snapshotId, { dryRun }) {
   await assertSnapshotRestorable(snapshotDir, snapshotId, currentSource);
   // A committed restore awaiting repair fences the database; neither a preview
   // nor another replay may start until it is resolved (#9725).

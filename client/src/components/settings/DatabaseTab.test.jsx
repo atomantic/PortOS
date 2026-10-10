@@ -181,6 +181,26 @@ describe('DatabaseTab sync and replacement', () => {
     await waitFor(() => expect(destroyDatabase).toHaveBeenCalledWith('native'));
   });
 
+  it('shows an error, never a success toast, for a legacy resolved success:false', async () => {
+    getDatabaseStatus.mockResolvedValue({
+      ...dbStatus,
+      docker: { containerRunning: true, installed: true, daemonRunning: true },
+      native: { configured: true, installed: true, running: true },
+      mode: 'docker',
+    });
+    destroyDatabase.mockResolvedValue({ success: false, output: 'volume busy' });
+    render(<DatabaseTab />);
+    await waitFor(() => expect(getDatabaseStatus).toHaveBeenCalled());
+    const callsBefore = getDatabaseStatus.mock.calls.length;
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete Native database…' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Native database' }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('volume busy'));
+    expect(toast.success).not.toHaveBeenCalled();
+    await waitFor(() => expect(getDatabaseStatus.mock.calls.length).toBeGreaterThan(callsBefore));
+  });
+
   it('does not offer Native deletion when it is active, stopped, or unconfigured', async () => {
     const statuses = [
       { ...dbStatus, mode: 'native', native: { configured: true, installed: true, running: true } },

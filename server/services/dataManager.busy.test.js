@@ -46,7 +46,7 @@ beforeEach(() => {
   seed('image-clean-tmp', 'init-0000.png');
   seed('training-runs', 'run-0001');
   seed('update-detached', 'pid');
-  seed('messages', 'index.json');
+  seed('screenshots', 'shot.png');
   imageCleanTmpBusy.mockReset().mockImplementation(idle);
   trainingRunsBusy.mockReset().mockImplementation(idle);
   updateDetachedBusy.mockReset().mockImplementation(idle);
@@ -82,9 +82,9 @@ describe('purgeCategory — CATEGORY_BUSY refusal', () => {
   });
 
   it('leaves a category with no busyCheck completely unaffected', async () => {
-    expect(CATEGORIES.messages.busyCheck).toBeUndefined();
-    await purgeCategory('messages');
-    expect(existsSync(dataPath('messages', 'index.json'))).toBe(false);
+    expect(CATEGORIES.screenshots.busyCheck).toBeUndefined();
+    await purgeCategory('screenshots');
+    expect(existsSync(dataPath('screenshots', 'shot.png'))).toBe(false);
   });
 
   // "Could not verify" and "nothing is running" must not collapse into the same
@@ -113,7 +113,7 @@ describe('busy state on the read paths', () => {
     const { categories } = await getDataOverview();
     const training = categories.find(c => c.key === 'training-runs');
     expect(training).toMatchObject({ busy: true, busyReason: '2 LoRA training run(s) queued or running' });
-    expect(categories.find(c => c.key === 'messages')).toMatchObject({ busy: false, busyReason: null });
+    expect(categories.find(c => c.key === 'screenshots')).toMatchObject({ busy: false, busyReason: null });
   });
 
   it('never leaks the busyCheck function into the payload', async () => {

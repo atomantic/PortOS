@@ -31,12 +31,13 @@
  * posture) nested inside the record's walk write tail.
  */
 
-import { dirname, join, relative, resolve, sep } from 'path';
-import { lstat, mkdir, readFile, realpath, stat } from 'fs/promises';
+import { dirname, join, resolve } from 'path';
+import { mkdir, readFile, realpath, stat } from 'fs/promises';
 import {
   atomicWrite, isPathInsideDir, readJSONFile, safeJSONParse, sha256File, pathExists,
 } from '../../lib/fileUtils.js';
 import { isPathAtOrInsideDir } from '../../lib/pathContainment.js';
+import { isSymlinkFreeRepoPath } from '../../lib/repoPublishPath.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { getAppById } from '../apps.js';
@@ -79,25 +80,9 @@ async function anchorRepoPath(repoRoot, relPath, label) {
   if (abs === resolve(repoRoot) || !isPathInsideDir(repoRoot, abs)) {
     throw bindingError(`${label} escapes the app repository: ${relPath}`, 'INVALID_PUBLISH_PATH');
   }
-  const invalid = () => bindingError(`${label} must stay inside the app repository without symlinks: ${relPath}`, 'INVALID_PUBLISH_PATH');
-  // Walk from the real root so even dangling or contained symlinks are refused,
-  // rather than mistaken for a missing destination or silently followed.
-  const rootStat = await lstat(repoRoot);
-  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) throw invalid();
-  let existing = repoRoot;
-  const parts = relative(repoRoot, abs).split(sep);
-  for (const [index, part] of parts.entries()) {
-    const next = join(existing, part);
-    const info = await lstat(next).catch((err) => {
-      if (err.code === 'ENOENT') return null;
-      throw err;
-    });
-    if (!info) break;
-    if (info.isSymbolicLink()
-      || (index < parts.length - 1 ? !info.isDirectory() : !info.isFile())) throw invalid();
-    existing = next;
+  if (!(await isSymlinkFreeRepoPath(repoRoot, abs, { leaf: 'file' }))) {
+    throw bindingError(`${label} must stay inside the app repository without symlinks: ${relPath}`, 'INVALID_PUBLISH_PATH');
   }
-  if (!isPathAtOrInsideDir(repoRoot, await realpath(existing))) throw invalid();
   return abs;
 }
 

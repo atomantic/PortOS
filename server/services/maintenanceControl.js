@@ -5,16 +5,34 @@ import { assertNotRealDataWrite } from '../lib/testDataIsolation.js';
 let watcher;
 let timer;
 let boundIo;
+let lastReadiness = null;
+
+// Coarse banner projection: state, plus the blocker count only while draining
+// (the one state that displays it). Operation-list/revision churn in a stable
+// state leaves it unchanged. Carries no hold capability, resource, owner or PID.
+function readinessProjection(status = maintenance.status()) {
+  return { state: status.state, blockerCount: status.state === 'draining' ? status.blockers.length : 0 };
+}
+
+function emitChanges() {
+  boundIo?.emit('maintenance:changed');
+  const next = readinessProjection();
+  if (lastReadiness && lastReadiness.state === next.state && lastReadiness.blockerCount === next.blockerCount) return;
+  lastReadiness = next;
+  boundIo?.emit('maintenance:readiness', next);
+}
+
 export function bindMaintenanceIo(io) {
   boundIo = io;
   if (watcher) return;
+  lastReadiness = readinessProjection();
   assertNotRealDataWrite(maintenance.directory, 'maintenance notifications');
   mkdirSync(maintenance.directory, { recursive: true, mode: 0o700 });
   // Cross-process runner settlements also invalidate the UI. Payload contains
   // no operation capability or private resource identity; GET remains auth gated.
   watcher = watch(maintenance.directory, () => {
     if (timer) clearTimeout(timer);
-    timer = setTimeout(() => { timer = null; boundIo?.emit('maintenance:changed'); }, 100);
+    timer = setTimeout(() => { timer = null; emitChanges(); }, 100);
     timer.unref?.();
   });
   watcher.unref?.();

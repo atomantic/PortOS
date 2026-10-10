@@ -14,7 +14,7 @@
  * before posting; submit() posts, then adds the optional first comment.
  */
 import { ServerError } from '../../../lib/errorHandler.js';
-import { PUBLISH_STEP_TIMEOUT_MS as T, loginRequired, step } from './browser.js';
+import { PUBLISH_STEP_TIMEOUT_MS as T, landedOnPost, loginRequired, step } from './browser.js';
 
 const BASE = 'https://old.reddit.com';
 const WWW = 'https://www.reddit.com';
@@ -107,6 +107,8 @@ export const redditAdapter = {
     if (!info.user) throw loginRequired(label, `${BASE}/login`);
     return { account: info.user, subreddit: payload.subreddit, kind: payload.kind, title: payload.title, flairText: payload.flairText, rules: info.rules, flairs: info.flairs };
   },
+  findPost: (page, payload) => landedOnPost(page, /^https:\/\/(?:www|old)\.reddit\.com\/r\/[^/]+\/comments\/[a-z0-9]+(?:\/[^/?#]*)?/i, payload.title,
+    ([url]) => url.replace('://old.reddit.com', '://www.reddit.com')),
   async submit(page, payload) {
     if (payload.kind === 'video') return submitVideo(page, payload);
     const result = await step(label, 'post', () => page.evaluate(async (p) => {

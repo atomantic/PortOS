@@ -8,7 +8,7 @@
 
 import { createReadStream } from 'fs';
 import { unlink } from 'fs/promises';
-import { extractDateStr, readDayFile, writeDayFile, upsertPoints, queueDayWrite } from './appleHealthIngest.js';
+import { extractDateStr, readDayFile, writeDayFile, upsertPoints, queueHealthDayMutation } from './appleHealthIngest.js';
 import { createAppleHealthRecordStream } from './appleHealthXmlParser.js';
 
 // === Mapping Tables ===
@@ -248,7 +248,9 @@ async function flushDayBuckets(dayBuckets) {
   const allDates = Object.keys(dayBuckets);
 
   for (const dateStr of allDates) {
-    await queueDayWrite(dateStr, async () => {
+    // Admission is per day, so a live health restore can run between days and
+    // every later day re-reads the restored file rather than a stale one.
+    await queueHealthDayMutation(dateStr, async () => {
       const metrics = dayBuckets[dateStr];
 
       // Aggregate step_count: sum all qty values into single daily total

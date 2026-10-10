@@ -487,6 +487,8 @@ Key behaviors, accurate to the code:
 
 Restore is two independent operations — restoring files and restoring the DB are separate decisions. Both are **dry-run by default** and validate `snapshotId` and an optional source namespace against path traversal before touching anything. Explicit source selections also reject symbolic-link aliases for the snapshots root, source namespace, or selected snapshot before archive or restore reads begin.
 
+**Snapshot source lifetime (#10898).** A consumer that reads snapshot bytes holds a read lease on that snapshot for as long as it reads: a file restore or preview from before its restorability and integrity preflight until rsync's child closes (and, for execution, caches are reconciled); a database restore from its restorability check through dump admission and spooling; a download until the `tar` child closes — including after the client disconnects, since `tar` may still be reading. The lease is released on every exit path: success, refusal, failure, timeout and abort. Deletion needs the snapshot exclusively: explicit deletion of a snapshot in use is refused with `409 SNAPSHOT_IN_USE`, automatic retention skips it (logged, and pruned by a later run), and a reader that arrives while a deletion is in progress is refused with `409 SNAPSHOT_DELETING`. Deletion takes ownership *before* its final existence and in-progress checks, so a deletion that was admitted first cannot race a new reader. Ownership is keyed by the snapshot's canonical path, so aliases — an omitted versus an explicit current-machine source, a symlinked destination, a different letter case on a case-insensitive volume — share one owner. The lease coordinates this server's own requests and scheduled jobs; it is not a lock between machines that share a destination.
+
 A backup run that fails after creating its snapshot directory records a durable `.failed` marker before releasing its `.in-progress` guards. Failed snapshots are never eligible for file or database restore (`SNAPSHOT_FAILED`); they remain downloadable so their partial files can be inspected or recovered manually. If PortOS cannot write the failed marker, it keeps the existing incomplete markers instead, which also block restore. Snapshots created by older PortOS versions without a manifest or failure marker retain their legacy behavior because an unmarked historical failure cannot be distinguished reliably from a genuine pre-manifest snapshot.
 
 ### Files — `restoreSnapshot()`
@@ -496,6 +498,8 @@ Before rsync can read or overwrite live data, PortOS strictly reads `manifest.js
 Snapshots from PortOS versions that predate `manifest.json` remain restorable as an explicit compatibility case. Restore responses report `verification.status` as `verified` (with `checkedFiles`) or `unverified` with reason `manifest_absent`; the confirmation panel warns when a legacy restore cannot be verified. An existing manifest that is malformed or unreadable fails closed and is never treated as legacy absence.
 
 After the preflight, rsync copies `<snapshot>/data/` back to `./data/`. Restore always passes `--checksum`, so rsync compares file contents even when the live file has the same size and modification time as the snapshot; equal-content files remain skippable, while differing bytes appear in previews and are restored. This applies to dry-run and live restores, including selective subdirectory restores and legacy snapshots without a manifest. `dryRun: true` (the default) reports what would change without writing; an optional `subdirFilter` limits the restore to one subdirectory.
+
+**Every nonzero rsync exit fails a restore, including 24.** A backup tolerates exit 24 ("some source files vanished") because it reads the live data tree, where a file deleted mid-scan is normal. A restore reads a snapshot that must not change under it, so a vanished source file means live data may now mix restored and older files: preview and execution both reject it. An execution failure is reported as a partial restore — the error says some files may already have been overwritten because file restore is not transactional — and caches (settings, Brain, media index) are reconciled before the error is returned, exactly as for any other failed transfer.
 
 #### Database authority is not restored
 
@@ -524,6 +528,7 @@ Replays the snapshot's `portos-db.sql` into the live database via `psql -v ON_ER
 | `{ status: 'failed', reason: 'restore_error' \| 'timeout', error }` | `psql` replay failed (stderr captured) and was **proven rolled back** from its receipt (below) |
 | `{ status: 'failed', reason: 'restore_commit_unknown', error, recovery }` | `psql` did not report success and the receipt could not settle whether the replay committed — recovery pending |
 | `{ status: 'failed', reason: 'restore_schema_reconciliation', error, recovery }` | The dump committed, but current schema recovery failed; **not rolled back**, recovery pending |
+| `{ status: 'failed', reason: 'restore_catalog_reconciliation', error, recovery }` | The dump committed and the schema recovered, but forced catalog payload migration or universe-tag repair failed — recovery pending |
 | `{ status: 'failed', reason: 'restore_sync_resync', error, recovery }` | The dump committed and the schema recovered, but peer sync could not be repaired (below) — recovery pending |
 | `{ status: 'failed', reason: 'restore_recovery_release', error, recovery }` | Repair finished but the journal could not be cleared — recovery pending |
 | `{ status: 'failed', reason: 'restore_recovery_pending', error, recovery }` | An earlier restore is still awaiting recovery; preview and replay are refused |
@@ -554,8 +559,8 @@ Left unbounded, `snapshots/<hostname>/` grows forever — every prior full DB du
 - **New installs default to 30 completed snapshots per source.** The default ships as `backup.retentionCount: 30` in `data.reference/settings.json`, copied only into an install that has no `data/settings.json` yet — see the comment on `resolveRetentionCount()` for why this, not a migration, is what keeps an existing install from silently losing its archive. Operators choose 1–365, or Unlimited, from the Backup settings tab.
 - **`retentionCount` absent or explicitly `null` both mean unlimited** — no pruning runs. This is why an install that predates this setting keeps every snapshot until the operator saves a choice: it has no stored value, and absence resolves to unlimited, not to the new-install default.
 - **Pruning runs only after a run reaches a completed snapshot with a usable database dump** (`pg_dump` succeeded, or was explicitly skipped by the file-backend escape hatch). A degraded run whose database dump failed keeps older snapshots and reports zero pruned snapshots; retention resumes after a later successful dump. A run that fails before completion never prunes, and a prune failure is logged without failing an otherwise-successful backup.
-- **Pruning is scoped to the CURRENT machine's namespace** (`snapshots/<hostname>/`) and only ever deletes snapshots whose `snapshotState()` reports neither `incomplete` nor `failed`. It never touches another machine's namespace in a shared destination, the legacy pre-namespace root, or an in-progress/failed snapshot — those stay until the operator deletes them explicitly.
-- **`DELETE /api/backup/snapshots/:snapshotId?source=<source>`** (`backup.deleteSnapshot()`) permanently removes exactly the selected source/ID pair, immediately — there is no undo and it is never automatic. It shares `resolveSnapshotPath()`'s path-traversal and symlink guards with restore/download, and refuses a snapshot that is still being written (`SNAPSHOT_INCOMPLETE`); unlike restore, a `.failed` snapshot **is** deletable. The Backup settings tab's snapshot history exposes this as a per-row delete action behind a confirmation dialog.
+- **Pruning is scoped to the CURRENT machine's namespace** (`snapshots/<hostname>/`) and only ever deletes snapshots whose `snapshotState()` reports neither `incomplete` nor `failed`. It never touches another machine's namespace in a shared destination, the legacy pre-namespace root, or an in-progress/failed snapshot — those stay until the operator deletes them explicitly. It also skips a snapshot that a restore or download is still reading (see [Snapshot source lifetime](#how-restore-works)); the skipped snapshot is not counted as pruned and becomes a candidate again on a later run.
+- **`DELETE /api/backup/snapshots/:snapshotId?source=<source>`** (`backup.deleteSnapshot()`) permanently removes exactly the selected source/ID pair, immediately — there is no undo and it is never automatic. It shares `resolveSnapshotPath()`'s path-traversal and symlink guards with restore/download, and refuses a snapshot that is still being written (`SNAPSHOT_INCOMPLETE`) or that a restore or download is still reading (`SNAPSHOT_IN_USE`); unlike restore, a `.failed` snapshot **is** deletable. The Backup settings tab's snapshot history exposes this as a per-row delete action behind a confirmation dialog.
 
 ## Scheduling & status
 
@@ -612,8 +617,9 @@ Dry runs and unrelated selective restores do not acquire this settings boundary.
 
 A full live restore acquires boundaries in this order: shared snapshot cut
 (asset publications drained), task schedule, settings, CoS configuration, CoS
-runtime state, media model registry. A selective restore acquires the same order
-minus the boundaries its scope does not touch; the snapshot cut is always held.
+runtime state, media model registry, Apple Health day-file admission. A
+selective restore acquires the same order minus the boundaries its scope does
+not touch; the snapshot cut is always held.
 Each boundary stays held until everything inside it — transfer and cache
 reconciliation, including after a partial transfer failure — has settled, so the
 settings queue remains held through CoS reconciliation. The order is declared once
@@ -659,6 +665,27 @@ failure. Subsequent partial settings saves preserve restored fields. Transfer
 errors still report that files may have been overwritten; a cache-reload failure
 requires restarting PortOS before using CoS. Dry runs and selective restores
 outside the CoS state/config scope do not acquire this boundary.
+
+### Restoring Apple Health day files in a running server
+
+Full live file restores, `health` restores, and single-day `health/...` restores
+own Apple Health mutation admission (`withLiveHealthRestore` in
+`server/services/appleHealthIngest.js`). JSON ingest, XML import batch flushes,
+and health archive capture and removal each take admission before their day's
+write queue and hold it until that day's read-modify-write (or capture/removal)
+settles, so no cycle can carry a pre-restore read across the transfer.
+
+From the moment the restore is requested, new day cycles wait. Cycles already
+admitted finish first; then rsync runs; then health caches are invalidated and
+admission reopens — on success, partial transfer failure, or reconciliation
+failure alike. Waiting imports then read the restored day files, so points the
+snapshot recovered are preserved. An XML import takes admission per day, so a
+restore can land between two of its days. Archival releases admission while
+`tar` encodes; its hash-conditional removal retains any day whose bytes the
+restore changed. Outside a restore, different days still import concurrently.
+Health admission is acquired last, so a restore refused earlier (for example by
+`COS_RESTORE_BUSY`) never pauses imports. Dry runs and unrelated selective
+restores do not acquire it.
 
 ## Database maintenance admission
 

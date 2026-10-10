@@ -1,4 +1,5 @@
 import MediaModePicker from './MediaModePicker.jsx';
+import CharacterStyleSelect from './CharacterStyleSelect.jsx';
 import { Bot, Clapperboard, Plus, Music, Sparkles, FileText, CheckCircle2 } from 'lucide-react';
 import Drawer from '../Drawer.jsx';
 import YoutubeImportControls from './YoutubeImportControls.jsx';
@@ -18,7 +19,7 @@ const MODES = [
  * "New music video" drawer — track-first workflow:
  * 1. Select the music track (or import a Suno song or YouTube audio) — audio source for the video.
  * 2. Lyrics, concept, and style info are automatically read from the chosen track.
- * 3. Name, mode, universe/moodboard, and brief settings.
+ * 3. Name, mode, character style, universe/moodboard, and brief settings.
  */
 export default function CreateProjectDrawer({ open, onClose, form, onFormChange, tracks, universes, trackName, youtube, onSubmit, submitting }) {
   const autopilot = form.mode === 'autonomous';
@@ -157,8 +158,9 @@ export default function CreateProjectDrawer({ open, onClose, form, onFormChange,
           ))}
         </div>
 
-        {/* 4. Universe & Mood Board */}
+        {/* 4. Character style, Universe & Mood Board */}
         <div className="grid grid-cols-1 gap-3">
+          <CharacterStyleSelect id="mv-character-style" value={form.characterStyleId} onChange={(characterStyleId) => onFormChange({ characterStyleId })} />
           <div className="min-w-0">
             <label htmlFor="mv-universe" className="block text-xs text-port-text-muted mb-1">Universe</label>
             <select

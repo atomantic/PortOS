@@ -37,6 +37,8 @@ app.use('/api/brain', brainRoutes);
 
 const TOTAL_INBOX = 1200;
 const TOTAL_MEMORIES = 1500;
+const TOTAL_ENTITIES = 60;
+const ENTITY_TYPES = ['people', 'projects', 'ideas', 'admin'];
 const BASE_TIME = Date.parse('2026-08-01T00:00:00.000Z');
 
 async function seedRecord(type, id, record) {
@@ -92,6 +94,19 @@ describe('Brain collection pagination (synthetic thousands-record fixtures)', ()
         updatedAt
       };
     });
+
+    for (const type of ENTITY_TYPES) {
+      await seedRecords(type, TOTAL_ENTITIES, (i) => {
+        const updatedAt = new Date(BASE_TIME + i * 60000).toISOString();
+        return {
+          name: `Example ${type} ${i}`,
+          title: `Example ${type} ${i}`,
+          status: i % 2 === 0 ? 'active' : 'done',
+          createdAt: updatedAt,
+          updatedAt
+        };
+      });
+    }
 
     brainStorage.invalidateAllCaches();
   });
@@ -260,6 +275,128 @@ describe('Brain collection pagination (synthetic thousands-record fixtures)', ()
       });
       expect(res.body.memories).toHaveLength(10);
       expect(res.body.nextCursor).toBeUndefined();
+    });
+  });
+  // The client wrappers (client/src/services/apiBrain.test.js) send `cursor=` on a
+  // collection's first request; this pins what the router does with that URL.
+  describe('First-page request from the Brain collection views (empty initial cursor)', () => {
+    it.each([...ENTITY_TYPES, 'memories'])('%s: cursor mode returns a continuation that reaches every record', async (type) => {
+      const total = type === 'memories' ? 1350 : TOTAL_ENTITIES;
+      const first = await request(app).get(`/api/brain/${type}?cursor=&limit=25`);
+      expect(first.status).toBe(200);
+      expect(first.body.items).toHaveLength(25);
+      expect(first.body.total).toBe(total);
+      expect(first.body.nextCursor).toBeTruthy();
+      expect(first.body.offset).toBeUndefined();
+
+      let seen = first.body.items.map(item => item.id);
+      let cursor = first.body.nextCursor;
+      while (cursor) {
+        const next = await request(app).get(`/api/brain/${type}?cursor=${encodeURIComponent(cursor)}&limit=25`);
+        seen = seen.concat(next.body.items.map(item => item.id));
+        cursor = next.body.nextCursor;
+      }
+      expect(new Set(seen).size).toBe(total);
+    });
+
+    it.each(ENTITY_TYPES)('%s: a request without cursor keeps the legacy offset envelope', async (type) => {
+      const res = await request(app).get(`/api/brain/${type}?limit=25`);
+      expect(res.body).toMatchObject({ total: TOTAL_ENTITIES, limit: 25, offset: 0 });
+      expect(res.body.nextCursor).toBeUndefined();
+    });
+
+    it('combines the empty cursor with a status filter', async () => {
+      const res = await request(app).get('/api/brain/projects?cursor=&limit=25&status=active');
+      expect(res.body.total).toBe(TOTAL_ENTITIES / 2);
+      expect(res.body.items.every(item => item.status === 'active')).toBe(true);
+    });
+  });
+
+  // Bulk captures/imports share one timestamp. Rows sort newest-first with the id
+  // ascending as tiebreak, so a cursor must continue with the ids AFTER its own at
+  // the same timestamp. These fixtures are isolated by a search token and removed
+  // afterwards so the whole-collection counts above are unaffected.
+  describe('Cursor continuation across same-timestamp ties', () => {
+    const TIE_TOKEN = 'tiefixture';
+    const TIE_BASE = BASE_TIME - 24 * 60 * 60 * 1000;
+    // Three timestamp groups of 7 records, so ties cross every page boundary of size 5.
+    const GROUPS = [2, 1, 0].map((n) => TIE_BASE + n * 60000); // newest first
+    const PER_GROUP = 7;
+    const tieIds = {};
+
+    const seedTies = async (type, prefix, createRecord) => {
+      tieIds[type] = [];
+      for (const [rank, ms] of GROUPS.entries()) {
+        for (let i = 0; i < PER_GROUP; i++) {
+          // Newer groups get HIGHER ids, so ids are not monotonic with the timestamp
+          // order (a plain key comparison would pick the wrong side of each tie).
+          const id = `${prefix}-tie-${String((GROUPS.length - rank) * 10 + i).padStart(3, '0')}`;
+          await seedRecord(type, id, createRecord(id, new Date(ms).toISOString()));
+          tieIds[type].push({ id, rank });
+        }
+      }
+      brainStorage.invalidateAllCaches();
+    };
+
+    // Newest timestamp first; within a timestamp, ids ascending.
+    const expectedOrder = (type) => [...tieIds[type]]
+      .sort((a, b) => (a.rank - b.rank) || a.id.localeCompare(b.id))
+      .map(({ id }) => id);
+
+    const walk = async (type, { limit = 5, onFirstPage } = {}) => {
+      const url = `/api/brain/${type}?search=${TIE_TOKEN}&limit=${limit}`;
+      const ids = [];
+      let cursor = '';
+      let pages = 0;
+      let deleted = 0;
+      do {
+        const res = await request(app).get(`${url}&cursor=${encodeURIComponent(cursor)}`);
+        expect(res.status).toBe(200);
+        expect(res.body.total).toBe(GROUPS.length * PER_GROUP - deleted);
+        ids.push(...res.body.items.map((item) => item.id));
+        cursor = res.body.nextCursor;
+        pages += 1;
+        if (pages === 1 && onFirstPage) deleted = await onFirstPage(res.body);
+        expect(pages).toBeLessThan(20);
+      } while (cursor);
+      return ids;
+    };
+
+    beforeAll(async () => {
+      await seedTies('inbox', 'inbox', (id, at) => ({
+        capturedText: `${TIE_TOKEN} note`, title: id, status: 'filed', capturedAt: at, createdAt: at, updatedAt: at
+      }));
+      await seedTies('projects', 'mem', (id, at) => ({
+        name: `${TIE_TOKEN} ${id}`, title: `${TIE_TOKEN} ${id}`, status: 'active', createdAt: at, updatedAt: at
+      }));
+    });
+
+    afterAll(async () => {
+      for (const [type, rows] of Object.entries(tieIds)) {
+        for (const { id } of rows) rmSync(join(getTempRoot(), 'brain', type, id), { recursive: true, force: true });
+      }
+      brainStorage.invalidateAllCaches();
+    });
+
+    it.each(['inbox', 'projects'])('%s: walking tied timestamps returns every record exactly once in sort order', async (type) => {
+      const ids = await walk(type);
+      expect(ids).toEqual(expectedOrder(type));
+    });
+
+    it.each(['inbox', 'projects'])('%s: deleting the boundary row does not strand the remaining records', async (type) => {
+      const expected = expectedOrder(type);
+      let removed = null;
+      const ids = await walk(type, {
+        onFirstPage: async (body) => {
+          removed = body.items[body.items.length - 1].id;
+          rmSync(join(getTempRoot(), 'brain', type, removed), { recursive: true, force: true });
+          brainStorage.invalidateAllCaches();
+          return 1;
+        }
+      });
+      expect(removed).toBe(expected[4]);
+      // The boundary row was served on page one; everything after it still arrives.
+      expect(ids).toEqual(expected);
     });
   });
 });

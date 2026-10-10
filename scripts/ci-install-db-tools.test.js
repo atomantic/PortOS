@@ -21,18 +21,27 @@ Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
 `;
 
 // Runs the real script against a fake filesystem root and a fake sudo/curl/
-// apt-get on PATH; nothing touches the host's package manager or network.
+// apt-get/timeout on PATH; nothing touches the host's package manager or network.
 // `mirror` decides how the fake apt-get behaves:
 //   ok         — every source answers promptly
-//   slowRunner — anything while the runner's Azure mirror is configured stalls
-//   dead       — every download stalls
-function run(mirror, { primaryBudget = '1', totalBudget = '3' } = {}) {
+//   slowRunner — the watchdog expires while the Azure mirror is configured
+//   dead       — the watchdog expires for every download
+// Inject a Bash clock and watchdog instead of sleeping against 1–3 second
+// budgets: startup/source rewriting consumed those budgets under load, and
+// macOS does not ship GNU timeout. The real script still computes deadlines.
+function run(mirror) {
   const dir = mkdtempSync(join(tmpdir(), 'ci-db-tools-'));
   const bin = join(dir, 'bin');
   const root = join(dir, 'root');
   const sourcesFile = join(root, 'etc/apt/sources.list.d/ubuntu.sources');
   const log = join(dir, 'calls');
   const githubPath = join(dir, 'github_path');
+  const clock = join(dir, 'clock');
+  const bashEnv = join(dir, 'bash-env');
+  writeFileSync(clock, '0\n');
+  // Unsetting Bash's special SECONDS turns it into an ordinary variable.
+  // DEBUG/functrace refresh it before commands inside bounded() too.
+  writeFileSync(bashEnv, `unset SECONDS\nSECONDS=0\nset -T\ntrap 'read -r SECONDS < "$TEST_CLOCK"' DEBUG\n`);
   mkdirSync(bin);
   mkdirSync(join(root, 'etc/apt/sources.list.d'), { recursive: true });
   writeFileSync(join(root, 'etc/os-release'), 'VERSION_CODENAME=noble\n');
@@ -44,15 +53,29 @@ function run(mirror, { primaryBudget = '1', totalBudget = '3' } = {}) {
   fake('sed', 'if [ "$(uname -s)" = Darwin ]; then\n  [ "$1" = "-i" ] && [ "$2" = "-E" ] || exit 2\n  shift 2\n  exec /usr/bin/sed -i "" -E "$@"\nfi\nexec /usr/bin/sed -i -E "$@"');
   fake('curl', 'while [ $# -gt 0 ]; do [ "$1" = -o ] && echo key > "$2"; shift; done');
   const stall = { ok: 'false', slowRunner: `grep -q azure '${sourcesFile}'`, dead: 'true' }[mirror];
-  fake('apt-get', `echo "apt-get $*" >> '${log}'\nif ${stall}; then exec sleep 30; fi`);
+  fake('timeout', `
+[ "$1" = --kill-after=10 ] || exit 2
+shift
+budget="$1"
+echo "timeout $budget" >> '${log}'
+[ "$1" -gt 0 ] || exit 2
+shift
+"$@"
+status=$?
+if [ "$status" = 124 ]; then
+  read -r elapsed < "$TEST_CLOCK"
+  echo "$((elapsed + budget))" > "$TEST_CLOCK"
+fi
+exit "$status"`);
+  fake('apt-get', `echo "apt-get $*" >> '${log}'\nif ${stall}; then exit 124; fi`);
 
   const result = spawnSync('/bin/bash', [script], {
     encoding: 'utf8',
     env: {
       PATH: `${bin}:${process.env.PATH}`,
       APT_ROOT: root,
-      APT_PRIMARY_BUDGET_SECONDS: primaryBudget,
-      APT_TOTAL_BUDGET_SECONDS: totalBudget,
+      BASH_ENV: bashEnv,
+      TEST_CLOCK: clock,
       PG_MAJOR: '17',
       GITHUB_PATH: githubPath,
     },
@@ -60,7 +83,8 @@ function run(mirror, { primaryBudget = '1', totalBudget = '3' } = {}) {
   const read = (file) => readFileSync(file, { encoding: 'utf8', flag: 'a+' });
   const out = {
     ...result,
-    calls: read(log).split('\n').filter(Boolean).map((line) => line.replace(/ -o \S+/g, '')),
+    budgets: read(log).split('\n').filter((line) => line.startsWith('timeout ')).map((line) => Number(line.split(' ')[1])),
+    calls: read(log).split('\n').filter((line) => line.startsWith('apt-get ')).map((line) => line.replace(/ -o \S+/g, '')),
     sources: read(sourcesFile),
     pgdg: read(join(root, 'etc/apt/sources.list.d/pgdg.list')),
     githubPath: read(githubPath),
@@ -73,9 +97,8 @@ const INSTALL_FROM_CACHE = 'apt-get install -y --no-download postgresql-client-1
 
 describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
   it('installs the service-major client from the signed PostgreSQL repository', () => {
-    // Leave room for loaded runners; only the stall cases need tiny budgets.
-    const result = run('ok', { primaryBudget: '60', totalBudget: '120' });
-    expect(result.status).toBe(0);
+    const result = run('ok');
+    expect(result.status, result.stderr).toBe(0);
     expect(result.pgdg).toBe('deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main\n');
     expect(result.calls).toEqual([
       'apt-get update',
@@ -88,17 +111,18 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
 
   it('recovers from a stalled runner mirror through the official archive, keeping signing', () => {
     const result = run('slowRunner');
-    expect(result.status).toBe(0);
+    expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain('switching to http://archive.ubuntu.com/ubuntu/');
     expect(result.sources).toBe(RUNNER_SOURCES.replace('azure.archive.ubuntu.com', 'archive.ubuntu.com'));
-    // The stalled first update is killed on a 1s budget, so on a loaded host it
-    // may die before the fake logs its call: allow zero or one leading attempt.
-    expect(result.calls.slice(-3)).toEqual([
+    expect(result.calls).toEqual([
+      'apt-get update',
       'apt-get update',
       'apt-get install -y --download-only postgresql-client-17 ffmpeg',
       INSTALL_FROM_CACHE,
     ]);
-    expect(result.calls.slice(0, -3)).toSatisfy((stalled) => stalled.length <= 1 && stalled.every((c) => c === 'apt-get update'));
+    // The primary stall spends 180s of fake time, leaving 210s of the one
+    // total deadline for BOTH fallback commands (no per-command reset).
+    expect(result.budgets).toEqual([180, 210, 210]);
     expect(result.githubPath).toBe('/usr/lib/postgresql/17/bin\n');
   });
 
@@ -106,7 +130,8 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
     const result = run('dead');
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('::error title=DB tool installation failed::');
-    expect(result.stderr).toContain('within 3s');
+    expect(result.stderr).toContain('within 390s');
+    expect(result.budgets).toEqual([180, 210]);
     expect(result.calls).not.toContain(INSTALL_FROM_CACHE);
     expect(result.githubPath).toBe('');
   });

@@ -37,9 +37,9 @@ describe('DELETE /api/data/:category', () => {
   });
 
   it('treats a bodiless request as a whole-category purge', async () => {
-    const res = await request(makeApp()).delete('/api/data/messages').send({});
+    const res = await request(makeApp()).delete('/api/data/screenshots').send({});
     expect(res.status).toBe(200);
-    expect(purgeCategory).toHaveBeenCalledWith('messages', { subPath: undefined });
+    expect(purgeCategory).toHaveBeenCalledWith('screenshots', { subPath: undefined });
   });
 
   it('rejects a malformed subPath before the service is reached', async () => {

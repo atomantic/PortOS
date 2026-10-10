@@ -139,6 +139,13 @@ this deployment, AI alignment is a solved problem and human alignment is not.* T
 here have been more reliably aligned with the user's interests than most external parties
 would be, and the architecture reflects that rather than pretending otherwise.
 
+Trusted agents still consume untrusted material. Third-party source and dependencies, public issues,
+pull requests and reviews, retrieved pages and files, and model responses can carry malicious code
+or prompt injections. Being read on the local machine does not make that content authoritative.
+Keep it within the existing ingestion/review boundary; it cannot broaden a capability grant or
+turn a remote caller into an operator. Security work should demonstrate that crossing and repair
+it while preserving the delegated workflow, rather than adding human-only approval steps.
+
 This is a deployment posture, not a universal one. It is defensible **because** of the
 boundary: one owner, private networking, local data, explicit host authority, and hardware
 under direct custody. Password-free deployment still admits anonymous requests on other

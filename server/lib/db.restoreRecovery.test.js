@@ -39,6 +39,8 @@ vi.mock('../services/syncOrchestrator.js', () => ({
 }));
 // This suite isolates generic DB admission/release with a statement-free pg
 // pool. Real execution-ledger SQL/capture/retry lives in the two DB fixtures.
+vi.mock('../scripts/migrateCatalogPayload.js', () => ({ migrateCatalogPayload: vi.fn(async () => ({ skipped: false })) }));
+vi.mock('../scripts/repairUniverseTags.js', () => ({ repairUniverseTags: vi.fn(async () => ({ skipped: false })) }));
 vi.mock('../services/mediaAssetIndex/db.js', () => ({ reconcileMediaAssets: vi.fn(async () => ({ ok: true })) }));
 vi.mock('../services/peerExecutionRestore.js', () => ({
   finishPeerExecutionRestore: vi.fn(async () => {

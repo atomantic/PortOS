@@ -29,6 +29,7 @@ import { MUSIC_VIDEO_MEDIA_MODES, musicVideoMediaMode } from './musicVideoMediaP
 
 import { MUSIC_VIDEO_AUTOMATION_TOOL_IDS, normalizeMusicVideoEffort, normalizeMusicVideoLlm, normalizeMusicVideoLlmStages } from './musicVideoAutomation.js';
 import { isStr, trimTo } from './textUtils.js';
+import { getMusicVideoCharacterStyle } from './musicVideoCharacterStyles.js';
 
 export const AUTONOMOUS_STAGES = Object.freeze([
   Object.freeze({ id: 'brief', label: 'Creative brief' }),
@@ -90,8 +91,8 @@ export const AUTONOMOUS_NAME_MAX = 200;
 export const AUTONOMOUS_ORIGINS = Object.freeze(['manual', 'schedule']);
 
 // The Production review stages a run may approve by itself once the operator
-// grants it (`brief.autoApprove`, set with the instance password on start or
-// resume). In review order; readiness checks still gate every one.
+// grants it (`brief.autoApprove`, set by an authenticated browser or agent
+// session on start/resume). In review order; readiness checks still gate every one.
 export const AUTONOMOUS_AUTO_APPROVE_STAGES = Object.freeze(['art', 'storyboard', 'proof']);
 
 /** Known auto-approve stages, de-duplicated, in review order. */
@@ -225,6 +226,8 @@ function normalizeAutonomousSettings(raw = {}) {
     checkpoints,
     // An existing mood board to reuse instead of generating one (blank = generate).
     moodBoardId: clean(raw.moodBoardId, 64) || null,
+    // A built-in character style cast as protagonist (null = none).
+    characterStyleId: getMusicVideoCharacterStyle(raw.characterStyleId)?.id || null,
     llm: llm ? { providerId: llm.providerId, model: llm.model, ...(llm.effort ? { effort: llm.effort } : {}) } : null,
     authoring: authoringProvider && authoringModel
       ? { providerId: authoringProvider, model: authoringModel, ...(authoringEffort ? { effort: authoringEffort } : {}) } : null,

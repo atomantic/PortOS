@@ -145,7 +145,11 @@ export const CATEGORIES = {
   'meatspace': { label: 'MeatSpace', description: 'Body metrics, blood tests, eyes', archivable: true, deletable: false },
   'media-collections': { label: 'Media Collections', description: 'Media collection records', archivable: true, deletable: false },
   'media-sketches': { label: 'Media Sketches', description: 'Saved sketch canvases used as render inputs', archivable: true, deletable: false },
-  'messages': { label: 'Messages', description: 'Email and messaging data', archivable: true, deletable: true, purgeScope: 'category' },
+  // Not deletable: drafts, the send-attempt audit (`delivery_unknown` records
+  // that stop a possibly-sent message being resent), triage rules and account
+  // configuration are user-authored and not regenerable. Only the mail cache is
+  // reproducible, and it is bounded per account, so no cache-only purge is offered.
+  'messages': { label: 'Messages', description: 'Message accounts, drafts, triage rules and cached mail — drafts and rules are not regenerable', archivable: true, deletable: false },
   'model-personality': { label: 'Model Personality', description: 'Model personality probe results and settings', archivable: true, deletable: false },
   'model-tests': { label: 'Model Capability Tests', description: 'Throwaway agent sandboxes from the capability test suite — recreated per run, safe to purge', archivable: false, deletable: true, purgeScope: 'category' },
   'music': { label: 'Music', description: 'Uploaded and generated background tracks', archivable: true, deletable: false },
@@ -169,7 +173,9 @@ export const CATEGORIES = {
   // cache of anything re-fetchable, so it is neither archivable nor deletable.
   'rapid-reader-library': { label: 'Rapid Reader Shelf', description: 'Saved books for Rapid Reader — pasted and URL-imported prose kept on this machine, not regenerable', archivable: false, deletable: false },
   'repos': { label: 'Cloned Repos', description: 'Git repositories cloned by agents', archivable: false, deletable: true, purgeScope: 'category' },
-  'review': { label: 'Review', description: 'Review hub items', archivable: true, deletable: true, purgeScope: 'category' },
+  // Not deletable: user todos, pending CoS action requests and private security
+  // assessment reports live here and have no other copy.
+  'review': { label: 'Review', description: 'Review Hub todos, action requests and assessment reports', archivable: true, deletable: false },
   'rigging': { label: 'Rigging Clip Library', description: 'User-dropped animation-bearing GLB source files for retargeting — the only copy of assets you supplied', archivable: false, deletable: false },
   'runs': { label: 'AI Runs', description: 'Agent run logs and outputs', archivable: true, deletable: true, purgeScope: 'category' },
   'screenshots': { label: 'Screenshots', description: 'Task screenshots and images dropped into shell sessions — shell drops auto-delete after 7 days, others after 30 days unless an open task still uses them', archivable: true, deletable: true, purgeScope: 'category' },
@@ -420,7 +426,7 @@ export async function archiveCategory(categoryKey, options = {}) {
 
   try {
     const capturedDays = [];
-    let queueDayWrite;
+    let queueHealthDayMutation;
     if (categoryKey === 'health') {
       const daysToKeep = options.daysToKeep ?? 365;
       const cutoff = new Date();
@@ -431,13 +437,14 @@ export async function archiveCategory(categoryKey, options = {}) {
       const oldFiles = files.filter(f => /^\d{4}-\d{2}-\d{2}\.json$/.test(f) && f.slice(0, 10) < cutoffStr);
       if (oldFiles.length === 0) return { archived: 0, removed: 0, retained: 0, alreadyAbsent: 0, archivePath: null, message: 'No old files to archive' };
 
-      // Share the importers' queue for capture and removal, but release it
-      // during tar so a large archive does not block a historical backfill.
-      ({ queueDayWrite } = await import('./appleHealthIngest.js'));
+      // Share the importers' admission and day queue for capture and removal,
+      // but release both during tar so a large archive blocks neither a
+      // historical backfill nor a live health restore (#10899).
+      ({ queueHealthDayMutation } = await import('./appleHealthIngest.js'));
       const stagedDays = join(operationDir, 'days');
       await ensureDir(stagedDays);
       for (const file of oldFiles) {
-        await queueDayWrite(file.slice(0, 10), async () => {
+        await queueHealthDayMutation(file.slice(0, 10), async () => {
           const bytes = await readFile(join(dirPath, file));
           await writeFileGuarded(join(stagedDays, file), bytes, { flag: 'wx' });
           capturedDays.push({ file, hash: sha256Text(bytes) });
@@ -468,7 +475,7 @@ export async function archiveCategory(categoryKey, options = {}) {
     let retained = 0;
     let alreadyAbsent = 0;
     for (const { file, hash } of capturedDays) {
-      await queueDayWrite(file.slice(0, 10), async () => {
+      await queueHealthDayMutation(file.slice(0, 10), async () => {
         const livePath = join(dirPath, file);
         const bytes = await readFile(livePath).catch(error => {
           // Another archive may already have removed this exact day.

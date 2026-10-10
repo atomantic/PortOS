@@ -109,6 +109,22 @@ describe('Brain memory reader', () => {
   });
 });
 
+describe('Brain memory collection paging', () => {
+  it('requests the first page with a null cursor and follows the first-page envelope continuation to the rest', async () => {
+    // Shapes mirror GET /api/brain/memories?cursor=&limit=25 (cursor mode): rows plus total and nextCursor.
+    const row = i => ({ id: `mem-${i}`, title: `Example memory ${i}`, content: 'Short', contentTruncated: false });
+    api.getBrainMemories
+      .mockResolvedValueOnce({ memories: [row(1), row(2)], items: [row(1), row(2)], total: 3, nextCursor: 'cursor-after-2' })
+      .mockResolvedValueOnce({ memories: [row(3)], items: [row(3)], total: 3, nextCursor: null });
+    mount();
+    expect(await screen.findByText('Example memory 3')).toBeTruthy();
+    expect(screen.getByText('Example memory 1')).toBeTruthy();
+    expect(api.getBrainMemories).toHaveBeenCalledTimes(2);
+    expect(api.getBrainMemories.mock.calls[0][0]).toMatchObject({ cursor: null, limit: 25 });
+    expect(api.getBrainMemories.mock.calls[1][0]).toMatchObject({ cursor: 'cursor-after-2', limit: 25 });
+  });
+});
+
 
 describe('Brain deletion preserves the list', () => {
   it('waits for success, collapses only the deleted row and keeps search and siblings mounted', async () => {

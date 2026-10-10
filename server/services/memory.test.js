@@ -1564,6 +1564,59 @@ describe('memory service', () => {
 
       expect(result.nodes).toHaveLength(1);
     });
+
+    // #10953: a scoped read equals the full graph filtered to scoped endpoints,
+    // ranking similarity against every vector. m1's global top three are
+    // m2, m3, m5 (m3/m5 out of scope); the in-scope m4 is fourth. A scope applied
+    // BEFORE the top-K would promote m4 and invent an m1–m4 edge.
+    it('scopes to sourceIds without promoting a lower-ranked in-scope neighbour', async () => {
+      const { findTopK: realFindTopK } = await vi.importActual('../lib/vectorMath.js');
+      findTopK.mockImplementation(realFindTopK);
+      try {
+      const meta = (id, status = 'active') => ({ id, type: 'fact', category: 'other', summary: id, importance: 0.5, status });
+      const ids = ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8'];
+      const mockIndex = { version: 1, lastUpdated: '', count: 9, memories: [...ids.map(id => meta(id)), meta('m9', 'archived')] };
+      const vectors = {
+        m1: [1, 0, 0, 0], m2: [1, 0.1, 0, 0], m3: [1, 0.15, 0, 0], m5: [1, 0, 0.2, 0],
+        m4: [1, 0, 0, 0.45], m6: [1, 0, 0, 0.5], m7: [1, 0, 0, 0.55], m8: [1, 0, 0, 0.6]
+      };
+      const files = {
+        m2: { id: 'm2', relatedMemories: ['m4'], typedLinks: [{ id: 'l1', targetId: 'm4', linkType: 'supersedes' }] },
+        m4: { id: 'm4', relatedMemories: ['m2', 'm6', 'm9'] }
+      };
+      readJSONFile.mockImplementation((path, def) => {
+        if (path.includes('index.json')) return Promise.resolve(mockIndex);
+        if (path.includes('embeddings.json')) return Promise.resolve({ model: 'test', dimension: 4, vectors });
+        const id = path.match(/[\\/](m\d)[\\/]memory\.json$/)?.[1];
+        if (id) return Promise.resolve(files[id] ?? { id, relatedMemories: [] });
+        return Promise.resolve(def);
+      });
+
+      const scope = new Set(['m1', 'm2', 'm4', 'm9', 'not-a-memory']);
+      const full = await getGraphData();
+      const scoped = await getGraphData({ sourceIds: [...scope] });
+
+      expect(full.edges.length).toBeGreaterThan(scoped.edges.length);
+      expect(scoped).toEqual({
+        nodes: full.nodes.filter(n => scope.has(n.id)),
+        edges: full.edges.filter(e => scope.has(e.source) && scope.has(e.target))
+      });
+      const pairs = scoped.edges.map(e => `${[e.source, e.target].sort().join('-')}:${e.type}`);
+      expect(pairs).toContain('m1-m2:similar');
+      expect(pairs).not.toContain('m1-m4:similar');
+      // The archived m9 is linked from m4 in BOTH modes (the full graph does not
+      // gate relatedMemories targets on status); scoping must not change that.
+      expect(pairs).toContain('m4-m9:linked');
+
+      // Empty scope stays empty (no file reads); absent scope stays the full graph.
+      readJSONFile.mockClear();
+      expect(await getGraphData({ sourceIds: [] })).toEqual({ nodes: [], edges: [] });
+      expect(readJSONFile).not.toHaveBeenCalled();
+      expect(await getGraphData({})).toEqual(full);
+      } finally {
+        findTopK.mockReturnValue([]);
+      }
+    });
   });
 
   // ===========================================================================

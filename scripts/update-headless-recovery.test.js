@@ -36,7 +36,7 @@ const STUB_SCRIPTS = [
  */
 async function makeSandbox({
   origin = true, failAfterDelete = true, npmShim = 'ok',
-  forceClean = false, pm2OnPath = false, healthy = true, stallDelete = false
+  forceClean = false, pm2OnPath = false, healthy = true, stallDelete = false, nodeVersion = null
 } = {}) {
   const { scratch, repo } = await makeGitSandbox({ origin, prefix: 'portos-update-guard-' });
   const bin = join(scratch, 'bin');
@@ -72,6 +72,19 @@ if (${stallDelete} && args.startsWith('delete')) {
 }
 `
   );
+
+  // The REAL runtime gate (the pulled target's own copy), so the preflight
+  // exercises the shared requirement rather than a stub with a copied floor.
+  mkdirSync(join(repo, 'scripts', 'lib'), { recursive: true });
+  copyFileSync(join(REPO_ROOT, 'scripts', 'checkNodeVersion.js'), join(repo, 'scripts', 'checkNodeVersion.js'));
+  copyFileSync(join(REPO_ROOT, 'scripts', 'lib', 'directInvocation.js'), join(repo, 'scripts', 'lib', 'directInvocation.js'));
+  // Make the interpreter report an older runtime to that gate (and only to it).
+  let nodeOptions = '';
+  if (nodeVersion) {
+    const preload = join(scratch, 'fake-node-version.mjs');
+    writeFileSync(preload, `Object.defineProperty(process.versions, 'node', { value: ${JSON.stringify(nodeVersion)} });\n`);
+    nodeOptions = `--import=${preload}`;
+  }
 
   writeFileSync(join(repo, 'scripts', 'SLASHDO_VERSION'), '0.0.0\n');
   writeFileSync(join(repo, 'scripts', 'trusted-rebuilds.js'), `process.exit(${failAfterDelete ? 1 : 0});\n`);
@@ -116,7 +129,7 @@ if (${stallDelete} && args.startsWith('delete')) {
   execFileSync('git', ['add', '.'], { cwd: repo });
   execFileSync('git', ['commit', '-m', 'fixture'], { cwd: repo, stdio: 'ignore' });
 
-  return { scratch, repo, bin, calls, forceClean, releaseFile };
+  return { scratch, repo, bin, calls, forceClean, releaseFile, nodeOptions };
 }
 
 // The three runs share no state, so they go out concurrently rather than
@@ -125,6 +138,7 @@ function runUpdate(sandbox, { onStart } = {}) {
   return new Promise((resolve) => {
     const env = { ...process.env, PATH: `${sandbox.bin}:${process.env.PATH}` };
     if (sandbox.forceClean) env.PORTOS_FORCE_CLEAN_WORKSPACES = '.';
+    if (sandbox.nodeOptions) env.NODE_OPTIONS = sandbox.nodeOptions;
     const child = spawn('bash', [join(sandbox.repo, 'update.sh')], { cwd: sandbox.repo, env });
     let stdout = '';
     child.stdout.on('data', (d) => { stdout += d; });
@@ -161,6 +175,8 @@ describe.skipIf(process.platform === 'win32' || SKIP_HEAVY_INTEGRATION)('update.
       clean: { failAfterDelete: false },
       preDelete: { origin: false },
       unhealthy: { healthy: false },
+      // A target whose Node requirement the installed runtime no longer meets.
+      oldNode: { nodeVersion: '22.12.0' },
       // The failure the guard's own comment names: both npm installs fail, and
       // safe_install wiped root node_modules — pm2 included — on the way.
       pm2Wiped: { npmShim: 'fail', forceClean: true, pm2OnPath: true }
@@ -242,6 +258,22 @@ describe.skipIf(process.platform === 'win32' || SKIP_HEAVY_INTEGRATION)('update.
     }
   }, 120000);
 
+  it('refuses an unsupported Node runtime before stopping apps or installing', () => {
+    const { status, stdout } = results.oldNode;
+    expect(status).toBe(1);
+    expect(stdout).toContain('STEP:runtime-preflight:failed:');
+    expect(stdout).toContain('Node.js ^22.22.2');
+    expect(stdout).not.toContain('STEP:pm2-stop:');
+    expect(stdout).not.toContain('STEP:npm-install:');
+    expect(pm2Calls(sandboxes.oldNode)).toEqual([]);
+  });
+
+  it('passes the runtime preflight on a supported runtime without changing the flow', () => {
+    expect(results.clean.stdout).toContain('STEP:runtime-preflight:done:');
+    expect(results.clean.stdout.indexOf('STEP:runtime-preflight:done:'))
+      .toBeLessThan(results.clean.stdout.indexOf('STEP:pm2-stop:running:'));
+  });
+
   it('does not touch PM2 when the update aborts before the delete', () => {
     expect(results.preDelete.status).not.toBe(0);
     expect(pm2Calls(sandboxes.preDelete)).toEqual([]);
@@ -292,6 +324,14 @@ describe('update.ps1 headless-install guard', () => {
     expect(returns.length).toBeGreaterThan(2);
     expect(returns.filter(line => /return\s*,/.test(line)), 'a ,@() return nests instead of flattening').toEqual([]);
     expect(returns.every(line => /^return\s+@\(/.test(line))).toBe(true);
+  });
+
+  it('runs the target Node gate before the PM2 delete and any install', () => {
+    const gate = lineOf('node scripts/checkNodeVersion.js');
+    expect(gate).toBeGreaterThan(-1);
+    expect(gate).toBeLessThan(lineOf('pm2 delete ecosystem.config.cjs --silent'));
+    expect(gate).toBeLessThan(lineOf('Safe-Install -Dir "."'));
+    expect(ps1.slice(gate, gate + 8).join('\n')).toContain('Stop-UpdateScript 1');
   });
 
   it('arms the latch before the delete, not after', () => {

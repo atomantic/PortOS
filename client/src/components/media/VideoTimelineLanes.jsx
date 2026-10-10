@@ -303,7 +303,7 @@ export const AudioRow = memo(function AudioRow({ track, onAdd }) {
  * unambiguous, so this is where a removed bed gets paused; a detached but still
  * playing `<audio>` keeps producing sound in some browsers.
  */
-export function BedAudio({ trackKey, src, registry }) {
+export function BedAudio({ trackKey, assetId, src, registry, onDuration }) {
   const elRef = useRef(null);
   useEffect(() => {
     const el = elRef.current;
@@ -313,7 +313,31 @@ export function BedAudio({ trackKey, src, registry }) {
       el.pause();
       registry.delete(trackKey);
     };
-  }, [trackKey, registry]);
+  }, [trackKey, registry, src]);
+
+  // Report the file's real length so the preview can resolve this placement the
+  // way the export's probe does (see `resolvePlaybackLanes`). Only a finite,
+  // positive duration counts — a stream reports Infinity and a failed load
+  // never fires `loadedmetadata`, and both must leave the authored span alone.
+  // The listener belongs to this effect run: a changed asset or an unmount
+  // disarms it, so a late load can't attribute its length to another file.
+  useEffect(() => {
+    const el = elRef.current;
+    if (!el || !onDuration) return undefined;
+    let current = true;
+    const report = () => {
+      if (current && Number.isFinite(el.duration) && el.duration > 0) onDuration(assetId, el.duration);
+    };
+    if (el.readyState >= 1) report();
+    el.addEventListener('loadedmetadata', report);
+    return () => {
+      current = false;
+      el.removeEventListener('loadedmetadata', report);
+    };
+  }, [assetId, src, onDuration]);
+
   if (!src) return null;
-  return <audio ref={elRef} src={src} preload="auto" className="hidden" />;
+  // Keyed by `src` so a different file always mounts a fresh element: its
+  // readyState/duration can never be read back as the previous file's.
+  return <audio key={src} ref={elRef} src={src} preload="auto" className="hidden" />;
 }

@@ -58253,6 +58253,271 @@
         }
       },
       "notes": "Publisher result for the base checkpoint; local quantization and hardware are unmeasured. Keep this harness-specific score separate from the AA intelligence index."
+    },
+    {
+      "id": "aa-v4.3.2-anthropic-claude-haiku-5.5-low",
+      "provider": "Anthropic",
+      "model": "claude-haiku-5.5",
+      "effort": "low",
+      "configuration": "Published API model; Reasoning, Low Effort, Default Fallback",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v4.3.2",
+      "quality": {
+        "value": 29,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5-low",
+          "retrievedAt": "2026-10-10T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2 composite score (published as a whole number)."
+        }
+      },
+      "costPerTask": {
+        "value": 0.02,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5-low",
+          "retrievedAt": "2026-10-10T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2; cost per task evaluation (published rounded to the cent)."
+        }
+      },
+      "inputPerMillion": {
+        "value": 0.1,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5-low",
+          "retrievedAt": "2026-10-10T00:00:00.000Z",
+          "methodology": "Published USD per million uncached input tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0.5,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5-low",
+          "retrievedAt": "2026-10-10T00:00:00.000Z",
+          "methodology": "Published USD per million output tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": {
+        "value": 181.4,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5-low",
+          "retrievedAt": "2026-10-10T00:00:00.000Z",
+          "methodology": "Artificial Analysis output tokens per second on the first-party Anthropic API."
+        }
+      },
+      "quota": null,
+      "notes": "Sourced from Artificial Analysis (Claude Haiku 5.5 (Low)). Independent measurement; supersedes the publisher-launch-eval calibration for this effort. End-to-end response time is not published for this model."
+    },
+    {
+      "id": "aa-v4.3.2-anthropic-claude-haiku-5.5-medium",
+      "provider": "Anthropic",
+      "model": "claude-haiku-5.5",
+      "effort": "medium",
+      "configuration": "Published API model; Reasoning, Medium Effort, Default Fallback",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v4.3.2",
+      "quality": {
+        "value": 34,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5-medium",
+          "retrievedAt": "2026-10-10T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2 composite score (published as a whole number)."
+        }
+      },
+      "costPerTask": {
+        "value": 0.05,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5-medium",
+          "retrievedAt": "2026-10-10T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2; cost per task evaluation (published rounded to the cent)."
+        }
+      },
+      "inputPerMillion": {
+        "value": 0.1,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5-medium",
+          "retrievedAt": "2026-10-10T00:00:00.000Z",
+          "methodology": "Published USD per million uncached input tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0.5,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5-medium",
+          "retrievedAt": "2026-10-10T00:00:00.000Z",
+          "methodology": "Published USD per million output tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": {
+        "value": 170.4,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5-medium",
+          "retrievedAt": "2026-10-10T00:00:00.000Z",
+          "methodology": "Artificial Analysis output tokens per second on the first-party Anthropic API."
+        }
+      },
+      "quota": null,
+      "notes": "Sourced from Artificial Analysis (Claude Haiku 5.5 (Medium)). Independent measurement; supersedes the publisher-launch-eval calibration for this effort. End-to-end response time is not published for this model."
+    },
+    {
+      "id": "aa-v4.3.2-anthropic-claude-haiku-5.5-high",
+      "provider": "Anthropic",
+      "model": "claude-haiku-5.5",
+      "effort": "high",
+      "configuration": "Published API model; Reasoning, High Effort, Default Fallback",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v4.3.2",
+      "quality": {
+        "value": 38,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5-high",
+          "retrievedAt": "2026-10-10T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2 composite score (published as a whole number)."
+        }
+      },
+      "costPerTask": {
+        "value": 0.08,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5-high",
+          "retrievedAt": "2026-10-10T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2; cost per task evaluation (published rounded to the cent)."
+        }
+      },
+      "inputPerMillion": {
+        "value": 0.1,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5-high",
+          "retrievedAt": "2026-10-10T00:00:00.000Z",
+          "methodology": "Published USD per million uncached input tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0.5,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5-high",
+          "retrievedAt": "2026-10-10T00:00:00.000Z",
+          "methodology": "Published USD per million output tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": {
+        "value": 184.4,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5-high",
+          "retrievedAt": "2026-10-10T00:00:00.000Z",
+          "methodology": "Artificial Analysis output tokens per second on the first-party Anthropic API."
+        }
+      },
+      "quota": null,
+      "notes": "Sourced from Artificial Analysis (Claude Haiku 5.5 (High)). Independent measurement; supersedes the publisher-launch-eval calibration for this effort. End-to-end response time is not published for this model."
+    },
+    {
+      "id": "aa-v4.3.2-anthropic-claude-haiku-5.5-xhigh",
+      "provider": "Anthropic",
+      "model": "claude-haiku-5.5",
+      "effort": "xhigh",
+      "configuration": "Published API model; Reasoning, Xhigh Effort, Default Fallback",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v4.3.2",
+      "quality": {
+        "value": 41,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5-xhigh",
+          "retrievedAt": "2026-10-10T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2 composite score (published as a whole number)."
+        }
+      },
+      "costPerTask": {
+        "value": 0.12,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5-xhigh",
+          "retrievedAt": "2026-10-10T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2; cost per task evaluation (published rounded to the cent)."
+        }
+      },
+      "inputPerMillion": {
+        "value": 0.1,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5-xhigh",
+          "retrievedAt": "2026-10-10T00:00:00.000Z",
+          "methodology": "Published USD per million uncached input tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0.5,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5-xhigh",
+          "retrievedAt": "2026-10-10T00:00:00.000Z",
+          "methodology": "Published USD per million output tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": {
+        "value": 188.3,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5-xhigh",
+          "retrievedAt": "2026-10-10T00:00:00.000Z",
+          "methodology": "Artificial Analysis output tokens per second on the first-party Anthropic API."
+        }
+      },
+      "quota": null,
+      "notes": "Sourced from Artificial Analysis (Claude Haiku 5.5 (Xhigh)). Independent measurement; supersedes the publisher-launch-eval calibration for this effort. End-to-end response time is not published for this model."
+    },
+    {
+      "id": "aa-v4.3.2-anthropic-claude-haiku-5.5-max",
+      "provider": "Anthropic",
+      "model": "claude-haiku-5.5",
+      "effort": "max",
+      "configuration": "Published API model; Reasoning, Max Effort, Default Fallback",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v4.3.2",
+      "quality": {
+        "value": 43,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5",
+          "retrievedAt": "2026-10-10T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2 composite score (published as a whole number)."
+        }
+      },
+      "costPerTask": {
+        "value": 0.21,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5",
+          "retrievedAt": "2026-10-10T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2; cost per task evaluation (published rounded to the cent)."
+        }
+      },
+      "inputPerMillion": {
+        "value": 0.1,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5",
+          "retrievedAt": "2026-10-10T00:00:00.000Z",
+          "methodology": "Published USD per million uncached input tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0.5,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5",
+          "retrievedAt": "2026-10-10T00:00:00.000Z",
+          "methodology": "Published USD per million output tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": {
+        "value": 240.1,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5",
+          "retrievedAt": "2026-10-10T00:00:00.000Z",
+          "methodology": "Artificial Analysis output tokens per second on the first-party Anthropic API."
+        }
+      },
+      "quota": null,
+      "notes": "Sourced from Artificial Analysis (Claude Haiku 5.5 (Max)). Independent measurement; supersedes the publisher-launch-eval calibration for this effort. End-to-end response time is not published for this model."
     }
   ]
 }

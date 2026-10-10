@@ -149,6 +149,45 @@ describe('MediaCard', () => {
     expect(screen.queryByRole('button', { name: /Remix/i })).toBeNull();
   });
 
+  it('gives creative actions equal labeled cells, apart from the file toolbar', () => {
+    render(
+      <MediaCard
+        item={imageItem}
+        onRemix={vi.fn()}
+        onSendToImage={vi.fn()}
+        onSendToVideo={vi.fn()}
+        onSendTo3d={vi.fn()}
+        onDelete={vi.fn()}
+        onToggleHidden={vi.fn()}
+      />
+    );
+
+    const remix = screen.getByRole('button', { name: 'Remix' });
+    const i2i = screen.getByRole('button', { name: 'Send to image-to-image' });
+    const video = screen.getByRole('button', { name: 'Send to Video' });
+    const to3d = screen.getByRole('button', { name: 'Send to 3D' });
+    const remove = screen.getByTitle('Delete');
+
+    expect(i2i).toHaveTextContent('i2i');
+    expect(video).toHaveTextContent('Video');
+    expect(to3d).toHaveTextContent('3D');
+
+    const create = screen.getByRole('group', { name: 'Create from this render' });
+    expect(create).toHaveClass('grid-cols-2');
+    expect(create).toContainElement(remix);
+    expect(create).toContainElement(to3d);
+    expect(create).not.toContainElement(remove);
+    for (const button of [remix, i2i, video, to3d]) {
+      expect(button.className).not.toMatch(/\bflex-1\b/);
+      expect(button).toHaveClass('w-full');
+    }
+
+    const files = screen.getByRole('group', { name: 'File actions' });
+    expect(files).toContainElement(remove);
+    expect(files).toHaveClass('grid-cols-3', '@min-[11rem]:grid-cols-5');
+    expect(files).not.toContainElement(remix);
+  });
+
   it('offers the image-to-Three.js handoff only when its handler is provided', () => {
     const onSendTo3d = vi.fn();
     const { rerender } = render(

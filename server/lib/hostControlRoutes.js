@@ -16,8 +16,10 @@
  *   - apps: delete/archive/unarchive, scope-adherence — they
  *     change only PortOS's own records or read files; nothing runs.
  *   - CoS: stop/pause/kill/terminate/delete and feedback — they reduce or
- *     annotate execution, never start it; task reorder/refresh/enhance,
- *     templates and challenge — records and LLM text only. Goal-fidelity false-
+ *     annotate execution, never start it; task reorder/refresh, templates and
+ *     challenge — records and LLM text only. Task enhance is NOT in that
+ *     group: it hands caller text to a stage-configured provider that may be a
+ *     CLI/TUI agent (#10908). Goal-fidelity false-
  *     positive reports are gated because they can queue investigation agents.
  *   - tools (#9014): create/edit set trusted agent prompt text; DELETE only
  *     removes a tool from that context and stays open.
@@ -44,11 +46,28 @@
  *   - pipeline and FableLoom: autopilot start is gated — with gap filing or
  *     self-improvement on it queues CoS agents — and so are the Pipeline
  *     text/visual generation operations listed under "Pipeline authoring"
- *     below (#10068) and FableLoom authoring/production (#10668): callers
- *     choose the provider, and the staged runner can
- *     fall back to a CLI/TUI one, so they can launch a tool-capable agent
- *     against stored creative text. Ordinary record CRUD, reads and
- *     cancellation stay open.
+ *     and "Pipeline authoring, remainder" below (#10068, #10907) and
+ *     FableLoom authoring/production (#10668): callers choose the provider,
+ *     and the staged runner can fall back to a CLI/TUI one, so they can
+ *     launch a tool-capable agent against stored creative text. Ordinary
+ *     record CRUD, reads, cancellation and SSE progress stay open, as do the
+ *     deterministic Pipeline routes (series merge preview/apply, arc
+ *     derive-from-manuscript/commit, manuscript cuts preview/apply, comic
+ *     extract-pages, audio extract-lines, scene video, TTS and music
+ *     rendering): none reaches the staged runner.
+ *   - Caller-prompted AI outside Pipeline (#10908): game feedback, rounds
+ *     generate/evaluate/derive-parts, personality generate, system-resource
+ *     triage, mood-board style synthesis/compose/analyze and CoS task enhance
+ *     take caller text and/or a caller-chosen provider; gated whole-operation.
+ *   - Creative Director and Creative Commissions (#10867): project create/edit
+ *     choose agent instructions and provider pins; start/resume/directive/
+ *     replan/plan-step/auto-cast/smoke-test/review enqueue or re-arm writable
+ *     treatment, planner and scene agents, and the plan/treatment/scene PATCHes
+ *     are the agents' callbacks (authorized by their delegated
+ *     PORTOS_API_TOKEN session). Commission create/edit/run/feedback steer and
+ *     arm unattended agents. Left open: Creative Director pause, stop, delete
+ *     and catalog-only auto-cast/suggest, and commission delete — they only
+ *     reduce execution or remove records.
  *   - notes (#9007): vault add/repoint gated (chooses the host directory
  *     note CRUD reads/writes); note CRUD itself stays open.
  *   - browser: navigate uses the configured browser with its URL/IP guards;
@@ -113,6 +132,15 @@ import { isPlainObject } from './objects.js';
 import { escapeRegExp } from './textUtils.js';
 
 export const HOST_CONTROL_ROUTES = Object.freeze([
+  // Rigging and retargeting spawn Blender/Python workers on the host for up to
+  // 20 minutes each (#10922).
+  'POST /api/rigging/models/:id',
+  'POST /api/rigging/models/:id/retarget',
+
+  // A remote desktop session token proxies interactive mouse/keyboard/screen
+  // control of the host desktop; a peer's Basic credential must not mint one (#10923).
+  'POST /api/remote-desktop/sessions',
+
   // Universe Builder authoring (#10669) can dispatch tool-capable text/vision
   // providers or image agents, including API-first CLI/TUI fallback. Authorize
   // the whole operation before image resolution, stores, runs or queue writes.
@@ -141,6 +169,29 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/story-builder/:id/steps/:stepId/generate',
   'POST /api/story-builder/:id/steps/:stepId/refine',
   'POST /api/story-builder/:id/issues/generate',
+
+  // Creative Director and Creative Commissions (#10867): the legacy flow
+  // enqueues writable, auto-approved treatment/planner/scene agents, and
+  // commissions arm the same sink on a schedule or via Run Now. Authorize
+  // before any store write, starter, queue or schedule effect. Pause, stop,
+  // delete, catalog-only /auto-cast/suggest and commission delete stay open.
+  'POST /api/creative-director',
+  'PATCH /api/creative-director/:id',
+  'POST /api/creative-director/:id/start',
+  'POST /api/creative-director/:id/resume',
+  'POST /api/creative-director/:id/directive',
+  'POST /api/creative-director/:id/replan',
+  'POST /api/creative-director/:id/plan/step/:stepId',
+  'POST /api/creative-director/:id/auto-cast',
+  'POST /api/creative-director/smoke-test',
+  'POST /api/creative-director/:id/review',
+  'PATCH /api/creative-director/:id/plan',
+  'PATCH /api/creative-director/:id/treatment',
+  'PATCH /api/creative-director/:id/scene/:sceneId',
+  'POST /api/creative-commission',
+  'PATCH /api/creative-commission/:id',
+  'POST /api/creative-commission/:id/run',
+  'POST /api/creative-commission/:id/feedback',
 
   // Database cutover stops/restarts PortOS under PM2 and rewrites .env (#8851).
   'POST /api/database/maintenance/cutover',
@@ -422,6 +473,18 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'PUT /api/sprites/:id/publish-binding',
   'POST /api/sprites/:id/atlas/publish',
 
+  // Deck authoring/rendering and chiptune generation hand editable text to a
+  // provider that may fall back to a CLI/TUI, or enqueue an agent-backed image
+  // job; chiptune publication writes into a managed app repo (#10893). Gate the
+  // whole operation, API-first variants included. Deck/track CRUD, progress
+  // reads and the deterministic chiptune library render stay open.
+  'POST /api/decks/:id/analyze-sample',
+  'POST /api/decks/:id/generate-prompts',
+  'POST /api/decks/:id/render',
+  'POST /api/decks/:id/cards/:cardId/render',
+  'POST /api/tracks/:id/chiptune/generate',
+  'POST /api/tracks/:id/chiptune/publish',
+
   // Auxiliary media entry points reach the same tool-capable agents (#9672):
   // prompt refinement and image-to-prompt hand caller text/images to a provider
   // that may fall back to a CLI/TUI; retry and run-now (re)dispatch an
@@ -514,6 +577,69 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/pipeline/issues/:id/stages/comicPages/pages/:pageIndex/refine-render',
   'POST /api/pipeline/issues/:id/stages/storyboards/scenes/:sceneIndex/shots/:shotIndex/render',
 
+  // Pipeline authoring, remainder (#10907): series/arc planning, analysis,
+  // manuscript, editorial and cover generation. Every entry below reaches
+  // `runStagedLLM` (or the cover render queue) with a caller-chosen
+  // providerId/model and no tool-free restriction, so a CLI/TUI provider or
+  // runtime fallback runs as an approval-bypass agent over stored prose. Gate
+  // the whole operation, including API-first requests, before any run, store
+  // write, checkpoint, SSE attach or queue effect. Autopilot, resume and retry
+  // reach the same services directly (not over HTTP) and are unaffected.
+  'POST /api/pipeline/series/generate-concept',
+  'POST /api/pipeline/series/merge/ai-resolve',
+  'POST /api/pipeline/series/:id/discover-voice',
+  'POST /api/pipeline/series/:id/arc/generate',
+  'POST /api/pipeline/series/:id/arc/verify',
+  'POST /api/pipeline/series/:id/arc/resolve-issues',
+  'POST /api/pipeline/series/:id/arc/derive-from-manuscript',
+  'POST /api/pipeline/series/:id/seasons/:seasonId/episodes/generate',
+  'POST /api/pipeline/series/:id/seasons/:seasonId/verify',
+  'POST /api/pipeline/series/:id/seasons/:seasonId/generate-beats',
+  'POST /api/pipeline/series/:id/seasons/:seasonId/cover-concepts/generate',
+  'POST /api/pipeline/series/:id/seasons/:seasonId/cover/render',
+  'POST /api/pipeline/series/:id/seasons/:seasonId/back-cover/render',
+  'POST /api/pipeline/series/:id/reverse-outline/generate',
+  'POST /api/pipeline/series/:id/continuity-bible/generate',
+  'POST /api/pipeline/issues/:id/pov-rewrites',
+  'POST /api/pipeline/series/:id/manuscript/completeness',
+  'POST /api/pipeline/series/:id/manuscript/completeness/stream',
+  'POST /api/pipeline/series/:id/manuscript/review/comments/:commentId/fix',
+  'POST /api/pipeline/series/:id/manuscript/reformat',
+  'POST /api/pipeline/issues/:id/editorial/analyze',
+  'POST /api/pipeline/series/:id/editorial/analyze',
+  'POST /api/pipeline/issues/:id/judge',
+  'POST /api/pipeline/series/:id/editorial/panel/run',
+  'POST /api/pipeline/series/:id/editorial/rank',
+  'POST /api/pipeline/series/:id/review',
+  'POST /api/pipeline/series/:id/review/fix',
+  'POST /api/pipeline/series/:id/editorial/checks/run',
+  'POST /api/pipeline/series/:id/editorial/custom-checks/preview',
+  'POST /api/pipeline/issues/:id/cover-concepts/generate',
+  'POST /api/pipeline/issues/:id/stages/comicPages/cover/render',
+  'POST /api/pipeline/issues/:id/stages/comicPages/back-cover/render',
+  'POST /api/pipeline/issues/:id/stages/storyboards/extract-scenes',
+  'POST /api/pipeline/issues/:id/stages/:stageId/extract-canon',
+  'POST /api/pipeline/issues/:id/stages/:stageId/describe-canon',
+  'POST /api/pipeline/issues/:id/stages/audio/cues/generate',
+
+  // Caller-prompted AI outside Pipeline (#10908): each route hands free text
+  // and/or a caller-chosen provider to `runPromptThroughProvider` with no
+  // tool-free restriction, so a CLI/TUI provider (or a fallback to one) runs as
+  // an approval-bypass agent. Gate the whole operation, before any provider
+  // call, run record or file read. Record CRUD and reads in these families stay
+  // open, and the neighbouring tool-free API-only routes are unaffected.
+  'POST /api/games/:id/feedback',
+  'POST /api/rounds/generate',
+  'POST /api/rounds/:id/generate',
+  'POST /api/rounds/:id/evaluate',
+  'POST /api/rounds/:id/derive-parts',
+  'POST /api/agents/personalities/generate',
+  'POST /api/system-resources/triage',
+  'POST /api/mood-boards/:id/synthesize-style',
+  'POST /api/mood-boards/:id/compose-prompt',
+  'POST /api/mood-boards/:id/analyze',
+  'POST /api/cos/tasks/enhance',
+
   // Writers Room authoring reaches the staged runner, including CLI/TUI
   // fallback. Stored prose and live cursor text are caller-controlled; a
   // configured provider or live-mode budget does not grant host authority.
@@ -550,6 +676,18 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/fableloom/:id/episodes/:episodeId/reformat',
   'POST /api/fableloom/:id/episodes/:episodeId/production/batch',
   'POST /api/fableloom/:id/episodes/:episodeId/production/batch/:runId/resume',
+
+  // Catalog generation (#10891): extraction, pruning and URL/file/voice/Brain
+  // ingest hand caller-supplied text to a caller-chosen provider, which may be
+  // a tool-capable CLI/TUI harness. Authorize the whole operation before the
+  // scrap write, STT/network fetch, run creation or provider dispatch. Scrap and
+  // ingredient CRUD, draft commit and reads stay open (data-only).
+  'POST /api/catalog/scraps/:id/extract',
+  'POST /api/catalog/scraps/:id/prune',
+  'POST /api/catalog/ingest/url',
+  'POST /api/catalog/ingest/file',
+  'POST /api/catalog/ingest/voice',
+  'POST /api/catalog/ingest/brain',
 
   // Eidoverse: clone and install a caller-named repo, or repoint it.
   'POST /api/settings/features/eidoverse/install',
@@ -679,6 +817,12 @@ const COMPILED_BODY_ROUTES = [
   ['PUT /api/settings', (body) => bodyKeys(body).filter((key) => HOST_CONTROL_SETTINGS_SLICES.includes(key)
     || (key === 'instanceFeatures' && body.instanceFeatures?.eidoverse !== undefined))],
   ['PUT /api/cos/config', (body) => bodyKeys(body).filter((key) => !HOST_CONTROL_OPEN_COS_CONFIG_KEYS.includes(key))],
+  // Review facade (#10890): the `cos:` source approves a CoS task under any
+  // operation spelling, including the omitted legacy default; Ask promotion to
+  // `task` queues a user task. Both match their gated direct routes. Other
+  // sources, triage and Brain/Goal promotion stay data-only and open.
+  ['POST /api/review/queue/resolve', (body) => /^\s*cos:/i.test(body?.id) ? ['id'] : []],
+  ['POST /api/review/queue/promote-ask', (body) => body?.target === 'task' ? ['target'] : []],
 ].map(([route, pick]) => ({ ...compileRoute(route), pick }));
 
 /** The host-control keys a request body names, for `method path` of a policy store; [] elsewhere. */

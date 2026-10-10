@@ -6,6 +6,8 @@
  * the Music Designer code engine's browser-recorded takes.
  */
 
+import { randomUUID } from 'crypto';
+import { rename } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, unlinkGuarded } from './fileUtils.js';
 import { findFfmpeg, runFfmpegProcess } from './ffmpeg.js';
@@ -23,10 +25,19 @@ export async function writeWavAudioFile(wav, dir, basename) {
     await unlinkGuarded(oggPath).catch(() => {});
     return `${basename}.wav`;
   }
-  const result = await runFfmpegProcess({ bin, args: ['-y', '-i', wavPath, '-c:a', 'libvorbis', '-q:a', '5', oggPath] });
-  if (!result.ok) {
-    console.error(`❌ OGG encode failed (keeping WAV): ${result.reason}`);
-    await unlinkGuarded(oggPath).catch(() => {}); // stale or partial encode output
+  // Encode to a sibling temp file and rename over the destination: ffmpeg
+  // truncates and writes THROUGH a leaf symlink at `oggPath`, a rename replaces
+  // the link itself (#10894).
+  const stagedOgg = `${oggPath}.${randomUUID()}.tmp`;
+  const result = await runFfmpegProcess({ bin, args: ['-y', '-i', wavPath, '-c:a', 'libvorbis', '-q:a', '5', '-f', 'ogg', stagedOgg] });
+  const landed = result.ok && await rename(stagedOgg, oggPath).then(() => true, (err) => {
+    console.error(`❌ OGG rename failed (keeping WAV): ${err.message}`);
+    return false;
+  });
+  if (!landed) {
+    if (!result.ok) console.error(`❌ OGG encode failed (keeping WAV): ${result.reason}`);
+    await unlinkGuarded(stagedOgg).catch(() => {}); // partial encode output
+    await unlinkGuarded(oggPath).catch(() => {}); // stale output from an earlier write
     return `${basename}.wav`;
   }
   await unlinkGuarded(wavPath).catch(() => {});

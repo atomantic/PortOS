@@ -294,6 +294,9 @@ export const musicVideoCoverFontUrl = (id) => `/api/music-video/publish/cover-fo
 // summary, screenshot }. Manual posting is handled outside this wrapper.
 export const prepareMusicVideoPublishDraft = (id, target, options = {}, reqOptions = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/publish/${encodeURIComponent(target)}/prepare`, { method: 'POST', body: JSON.stringify(options || {}), ...reqOptions });
+// What Fill draft would post, read-only → { ready, parts: [{ label, text }] } or { ready: false, problem }.
+export const previewMusicVideoPublishPost = (id, target, options = {}, reqOptions = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish/${encodeURIComponent(target)}/preview`, { method: 'POST', body: JSON.stringify(options || {}), ...reqOptions });
 // A project's live drafts (state 'open' | 'closed') so a reloaded card rehydrates → { drafts }.
 export const getMusicVideoPublishDrafts = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/publish/drafts`, options);
@@ -309,6 +312,13 @@ export const recordMusicVideoPublishPost = (id, target, body, options = {}) =>
 // Undo a platform's "done" (PortOS's record only) → { project }.
 export const removeMusicVideoPublishPost = (id, target, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/publish/posts/${encodeURIComponent(target)}`, { method: 'DELETE', ...options });
+// Cross-links between the release's posts: whether new drafts list the others
+// → { project }, and filling a posted platform's edit with the links it lacks
+// → { target, links, summary, screenshot } (the director saves it there).
+export const setMusicVideoPublishCrossLinks = (id, enabled, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish/cross-links`, { method: 'PUT', body: JSON.stringify({ enabled }), ...options });
+export const prepareMusicVideoCrossLinkEdit = (id, target, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish/${encodeURIComponent(target)}/cross-links`, { method: 'POST', body: '{}', ...options });
 export const musicVideoExcerptRenderEventsUrl = (jobId) =>
   `/api/music-video/excerpt/${encodeURIComponent(jobId)}/events`;
 export const cancelMusicVideoExcerptRender = (jobId, options = {}) =>

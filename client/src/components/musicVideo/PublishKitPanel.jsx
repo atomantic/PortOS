@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Package, Download, Copy, Sparkles, Image as ImageIcon, Captions, ListOrdered } from 'lucide-react';
 import useProviderModels from '../../hooks/useProviderModels.js';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
@@ -22,6 +22,8 @@ export const PUBLISH_FIELDS = [
   ] },
   { platform: 'shorts', label: 'YouTube Shorts', fields: [{ key: 'title', label: 'Title', max: 100 }, { key: 'description', label: 'Description', multiline: true }] },
   { platform: 'x', label: 'X', fields: [{ key: 'hook', label: 'Hook post (no links)', max: 280, multiline: true }, { key: 'story', label: 'Story reply', multiline: true }] },
+  { platform: 'linkedin', label: 'LinkedIn', fields: [{ key: 'post', label: 'Post (no links: they go in the first comment)', max: 3000, multiline: true }] },
+  { platform: 'facebook', label: 'Facebook', fields: [{ key: 'post', label: 'Post (no links: they go in the first comment)', max: 63206, multiline: true }] },
   { platform: 'tiktok', label: 'TikTok', fields: [{ key: 'caption', label: 'Caption', max: 2200, multiline: true }] },
   { platform: 'instagram', label: 'Instagram Reels', fields: [{ key: 'caption', label: 'Caption', max: 2200, multiline: true }] },
   { platform: 'reddit', label: 'Reddit', fields: [{ key: 'title', label: 'Title', max: 300 }, { key: 'body', label: 'Body (markdown)', multiline: true }] },
@@ -85,6 +87,9 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
   const [notes, setNotes] = useState(kit.notes || '');
   const [youtubeUrl, setYoutubeUrl] = useState(kit.links?.youtube || '');
   const [songUrl, setSongUrl] = useState(kit.links?.song || '');
+  // The server saves a Suno share link as the song page it opens; show what was saved.
+  const savedSongUrl = kit.links?.song || '';
+  useEffect(() => { setSongUrl(savedSongUrl); }, [savedSongUrl]);
   const [include, setInclude] = useState({ ...DEFAULT_INCLUDE, ...(kit.draftOptions?.include || {}) });
   const [length, setLength] = useState(kit.draftOptions?.length === 'full' ? 'full' : 'short');
   // Same filter as the server's timedLines: only cues with text and a start time reach the writer.
@@ -101,6 +106,7 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
     // Only the newest save reports, so an earlier one landing late can't claim "saved" over it.
     return publishKit.saveCopy(patch).then((saved) => { if (seq === saveSeq.current) setSaveState(saved ? 'saved' : 'failed'); });
   };
+  const badLink = (value) => !!value.trim() && !/^https?:\/\//.test(value.trim());
   const saveLink = (key, value) => {
     const url = value.trim();
     if (url === (kit.links?.[key] || '') || (url && !/^https?:\/\//.test(url))) return;
@@ -231,11 +237,13 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
             <label htmlFor={idFor('youtube-url')} className="block text-[11px] text-port-text-muted">Full video URL (optional)</label>
             <input id={idFor('youtube-url')} value={youtubeUrl} onChange={(e) => setYoutubeUrl(e.target.value)} onBlur={() => saveLink('youtube', youtubeUrl)} placeholder="https://…"
               className="w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0" />
+            {badLink(youtubeUrl) && <p className="text-[11px] text-port-warning">Not saved: a link starts with https://</p>}
           </div>
           <div>
             <label htmlFor={idFor('song-url')} className="block text-[11px] text-port-text-muted">Song URL (optional)</label>
             <input id={idFor('song-url')} value={songUrl} onChange={(e) => setSongUrl(e.target.value)} onBlur={() => saveLink('song', songUrl)} placeholder="https://…"
               className="w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0" />
+            {badLink(songUrl) && <p className="text-[11px] text-port-warning">Not saved: a link starts with https://</p>}
           </div>
         </div>
         <fieldset className="space-y-1 rounded border border-port-border p-2">

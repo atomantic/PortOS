@@ -3,7 +3,7 @@
  * director's per-platform options, or a 422 naming the missing piece.
  */
 import { describe, expect, it } from 'vitest';
-import { buildPublishPayload } from './payloads.js';
+import { buildPublishPayload, publishPreviewParts } from './payloads.js';
 import { captureMusicVideoEvidence } from '../../../lib/musicVideoDependencies.js';
 
 const kit = (over = {}) => ({
@@ -17,6 +17,7 @@ const kit = (over = {}) => ({
     youtube: { title: 'Song — Music Video', description: 'The story.\n\nMore.', tags: ['ai music', ' '] },
     shorts: { title: 'Song #Shorts', description: 'Hook' },
     x: { hook: 'Watch this', story: 'How it was made' },
+    linkedin: { post: 'I made a music video.' },
     tiktok: { caption: 'tt caption' },
     instagram: { caption: 'made with @portos and @suno' },
     reddit: { title: '[Electropop] Song', body: 'Body' },
@@ -44,6 +45,33 @@ describe('buildPublishPayload (#9282)', () => {
     }
     const fresh = { ...project({ master: { filename: 'master.mp4', renderHistoryId: 'new' } }), renderHistoryId: 'new' };
     expect(buildPublishPayload('youtube', fresh).video.name).toBe('master.mp4');
+  });
+
+  it('uploads the 1080p encode to LinkedIn with the links in the first comment, never in the post', () => {
+    const p = buildPublishPayload('linkedin', project());
+    expect(p).toEqual({
+      video: { dir: 'videos', name: 'x.mp4' }, text: 'I made a music video.',
+      firstComment: 'Full video: https://youtu.be/abc\nThe song: https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc',
+      crossLinks: ['youtube', 'suno'],
+    });
+    expect(publishPreviewParts('linkedin', project(), p).map((r) => r.label)).toEqual(['Video', 'Post', 'First comment (you press Comment)']);
+    expect(buildPublishPayload('linkedin', project(), { linksComment: false }).firstComment).toBeNull();
+    expect(() => buildPublishPayload('linkedin', project({ copy: {} }))).toThrow(/LinkedIn post/);
+    expect(() => buildPublishPayload('linkedin', project({ copy: { linkedin: { post: 'x'.repeat(3001) } } }))).toThrow(/limit is 3000/);
+    expect(() => buildPublishPayload('linkedin', { ...project(), audioAnalysis: { durationSec: 16 * 60 } })).toThrow(/up to 15 minutes/);
+  });
+
+  it('uploads the 1080p encode to Facebook with the full video, song and other posts in the first comment', () => {
+    const posted = project({ copy: { facebook: { post: 'I made a music video.' } }, posts: { x: { url: 'https://x.com/example/status/42' }, facebook: { url: 'https://www.facebook.com/reel/1' } } });
+    const p = buildPublishPayload('facebook', posted);
+    expect(p).toEqual({
+      video: { dir: 'videos', name: 'x.mp4' }, text: 'I made a music video.', aiLabel: true,
+      firstComment: 'Full video: https://youtu.be/abc\nThe song: https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc\nX: https://x.com/example/status/42',
+      crossLinks: ['youtube', 'suno', 'x'],
+    });
+    expect(publishPreviewParts('facebook', posted, p).map((r) => r.label)).toEqual(['Video', 'Post', 'AI label', 'First comment (you press Enter)']);
+    expect(buildPublishPayload('facebook', posted, { linksComment: false, aiLabel: false })).toMatchObject({ firstComment: null, crossLinks: [], aiLabel: false });
+    expect(() => buildPublishPayload('facebook', project())).toThrow(/Facebook post/);
   });
 
   it('does not repeat chapters the description already has', () => {
@@ -112,7 +140,7 @@ describe('buildPublishPayload (#9282)', () => {
     expect(() => host('https://substack.com/@example')).toThrow(/Substack publication/);
     expect(() => host('www.substack.com')).toThrow(/Substack publication/);
     expect(buildPublishPayload('substack', project({ copy }), { publication: 'example' }))
-      .toEqual({ publication: 'example.substack.com', videoUrl: 'https://youtu.be/abc', title: 'Song', subtitle: '', body: 'Body' });
+      .toEqual({ publication: 'example.substack.com', videoUrl: 'https://youtu.be/abc', title: 'Song', subtitle: '', body: 'Body\n\nSong: https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc', crossLinks: ['youtube', 'suno'] });
     expect(() => buildPublishPayload('substack', project({ copy, links: {} }), { publication: 'example' })).toThrow(/publish to YouTube first/);
     expect(() => buildPublishPayload('substack', project(), { publication: 'example' })).toThrow(/substack title/);
   });
@@ -135,6 +163,37 @@ describe('buildPublishPayload (#9282)', () => {
     expect(() => buildPublishPayload('suno', project({ links: {} }))).toThrow(/Suno song URL/);
     // The adapter needs the song's id to find its menu, so an id-less song URL is refused up front.
     expect(() => buildPublishPayload('suno', project({ links: {} }), { songUrl: 'https://suno.com/song/example' })).toThrow(/Suno song URL/);
+  });
+
+  it('lists the release posts already made in later drafts, never cutting a link, and none when turned off', () => {
+    const posts = {
+      suno: { url: 'https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc', postedAt: '2026-01-01T00:00:00Z' },
+      x: { url: 'https://x.com/example/status/1', postedAt: '2026-01-01T00:01:00Z' },
+      stackerNews: { url: 'https://stacker.news/items/1', postedAt: '2026-01-01T00:02:00Z' },
+    };
+    const yt = buildPublishPayload('youtube', project({ posts }));
+    expect(yt.description).toContain('The story.\n\nMore.\n\nSong: https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc\nX: https://x.com/example/status/1\nStacker News: https://stacker.news/items/1\n\nChapters');
+    expect(yt.crossLinks).toEqual(['suno', 'x', 'stackerNews']);
+    // X keeps the full video last (its link card) with the others between.
+    const x = buildPublishPayload('x', project({ posts }));
+    expect(x.posts.at(-1).text).toBe('The song: https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc\nStacker News: https://stacker.news/items/1\nFull video: https://youtu.be/abc');
+    expect(x.crossLinks).toEqual(['suno', 'stackerNews', 'youtube']);
+    const suno = buildPublishPayload('suno', project({ posts }));
+    expect(suno.caption).toBe('The story. Music video: https://youtu.be/abc\nX: https://x.com/example/status/1\nStacker News: https://stacker.news/items/1');
+    expect(suno.crossLinks).toEqual(['youtube', 'x', 'stackerNews']);
+    const sn = buildPublishPayload('stackerNews', project({ posts }));
+    expect(sn.body).toBe('SN body\n\nSong: https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc\nX: https://x.com/example/status/1');
+    // A link the copy already shows is not repeated.
+    const typed = buildPublishPayload('stackerNews', project({ posts, copy: { ...kit().copy, stackerNews: { title: 'Song', body: 'On X: https://x.com/example/status/1' } } }));
+    expect(typed.body).toBe('On X: https://x.com/example/status/1\n\nSong: https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc');
+    expect(typed.crossLinks).toEqual(['youtube', 'x', 'suno']);
+    // A long caption keeps whole links: the video always, the rest while they fit.
+    const long = buildPublishPayload('suno', project({ posts, copy: { youtube: { description: 'w'.repeat(600) } } }));
+    expect(long.caption.length).toBeLessThanOrEqual(500);
+    expect(long.caption.endsWith('Music video: https://youtu.be/abc')).toBe(true);
+    expect(long.crossLinks).toEqual(['youtube']);
+    const off = buildPublishPayload('youtube', project({ posts, crossLinks: false }));
+    expect(off.description).not.toContain('x.com');
   });
 
   it('rejects an unknown target', () => {
@@ -167,5 +226,16 @@ describe('buildPublishPayload (#9282)', () => {
     expect(buildPublishPayload('distrokid', withCover, who).cover).toEqual({ dir: 'videoThumbnails', name: 'cover-1.jpg', square: true });
     expect(buildPublishPayload('distrokid', { ...withCover, publishKit: kit({ thumbnail: null, coverArt: { filename: 'cover-1.jpg' } }) }, who).cover.name).toBe('cover-1.jpg');
     expect(buildPublishPayload('suno', withCover, { songUrl: 'https://suno.com/song/87654321-dcba-4cba-8cba-cba987654321' }).cover.name).toBe('cover-1.jpg');
+  });
+
+  it('previews every word a post carries, including what PortOS adds (chapters, links, the Suno caption)', () => {
+    const rows = (target, p = project(), options = {}) => Object.fromEntries(publishPreviewParts(target, p, buildPublishPayload(target, p, options)).map((r) => [r.label, r.text]));
+    expect(rows('youtube').Description).toContain('Chapters\n0:00 Intro');
+    const x = rows('x');
+    expect(x['Post · with the 1080p video']).toBe('Watch this');
+    expect(x['Reply 1']).toBe('How it was made');
+    expect(x['Reply 2']).toBe('The song: https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc\nFull video: https://youtu.be/abc');
+    expect(rows('suno').Caption).toBe('The story. Music video: https://youtu.be/abc');
+    expect(rows('tiktok')).toMatchObject({ Video: '9:16 cut 0:10–0:30', Caption: 'tt caption' });
   });
 });

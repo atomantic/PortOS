@@ -111,9 +111,9 @@ export function buildSrt(project) {
 
 // ---- per-platform copy (one user-triggered LLM call) ----
 
-export const PUBLISH_PLATFORMS = Object.freeze(['youtube', 'shorts', 'x', 'tiktok', 'instagram', 'reddit', 'stackerNews', 'substack']);
+export const PUBLISH_PLATFORMS = Object.freeze(['youtube', 'shorts', 'x', 'linkedin', 'facebook', 'tiktok', 'instagram', 'reddit', 'stackerNews', 'substack']);
 // Each platform's own title ceiling; the parser clips rather than rejecting.
-const LIMITS = { youtubeTitle: 100, shortsTitle: 100, xHook: 280, redditTitle: 300, stackerNewsTitle: 80, substackTitle: 100, substackSubtitle: 250, caption: 2200 };
+const LIMITS = { youtubeTitle: 100, shortsTitle: 100, xHook: 280, linkedinPost: 3000, facebookPost: 63206, redditTitle: 300, stackerNewsTitle: 80, substackTitle: 100, substackSubtitle: 250, caption: 2200 };
 
 const str = (v, max) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : '');
 
@@ -141,6 +141,8 @@ function copySpecs({ include, length }) {
     youtube: `"youtube":{"title":"<=100 chars","description":"${body('2 short paragraphs')} + the links given"${tags ? ',"tags":["8-15 lowercase tags"]' : ''}}`,
     shorts: `"shorts":{"title":"<=100 chars${tags ? ', ends with #shorts' : ''}","description":"1-2 sentences + the full video URL if given"}`,
     x: `"x":{"hook":"<=280 chars, ${short ? 'one or two sentences' : 'one surprising claim'}, no links","story":"${short ? 'empty string' : 'the making-of as a long post'}"}`,
+    linkedin: `"linkedin":{"post":"${short ? '1-2 sentences' : '2-4 short sentences'}, no links${tags ? ', may end with 2-3 hashtags' : ''}"}`,
+    facebook: `"facebook":{"post":"${short ? '1-2 sentences' : '2-4 short sentences'}, no links"}`,
     tiktok: `"tiktok":{"caption":"1-2 sentences${tags ? ' + 4-6 hashtags' : ''}"}`,
     instagram: `"instagram":{"caption":"1-2 sentences${tags ? ' + 4-6 hashtags' : ''}"}`,
     reddit: `"reddit":{"title":"<=300 chars","body":"${body('markdown: what it is and how it was made')}"}`,
@@ -243,6 +245,8 @@ export function parsePublishCopy(text, platforms = PUBLISH_PLATFORMS, { hashtags
     }),
     shorts: () => ({ title: str(v('shorts').title, LIMITS.shortsTitle), description: str(v('shorts').description, 5000) }),
     x: () => ({ hook: str(v('x').hook, LIMITS.xHook), story: str(v('x').story, 25000) }),
+    linkedin: () => ({ post: str(v('linkedin').post, LIMITS.linkedinPost) }),
+    facebook: () => ({ post: str(v('facebook').post, LIMITS.facebookPost) }),
     tiktok: () => ({ caption: str(v('tiktok').caption, LIMITS.caption) }),
     instagram: () => ({ caption: str(v('instagram').caption, LIMITS.caption) }),
     reddit: () => ({ title: str(v('reddit').title, LIMITS.redditTitle), body: str(v('reddit').body, 40000) }),

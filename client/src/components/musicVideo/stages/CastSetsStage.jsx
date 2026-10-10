@@ -9,7 +9,10 @@ import { formatCount } from '../../../utils/formatters.js';
 
 const directionSummary = (project) => {
   const refs = (project.visualSpec?.references || []).length + (project.styleReferences || []).length;
+  const characterStyle = project.concept?.characterStyleId
+    ? (project.concept.characterStyle?.split(':')[0] || project.concept.characterStyleId) : '';
   return [
+    characterStyle ? `Character style: ${characterStyle}` : 'No character style',
     project.concept?.prompt?.trim() ? 'Concept written' : 'No concept yet',
     project.concept?.style?.trim() ? 'Style set' : 'No style yet',
     refs ? `${formatCount(refs)} look ${refs === 1 ? 'reference' : 'references'}` : 'No look references',

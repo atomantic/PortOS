@@ -11,6 +11,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { PERSISTENT_MIND_MEMORY_PROTECTION_TAGS } from '../lib/persistentMindMemory.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { query, withTransaction, pgvectorToArray, arrayToPgvector } from '../lib/db.js';
+import { UUID_RE } from '../lib/fileCore.js';
 import { cosEvents } from './cosEvents.js';
 import * as notifications from './notifications.js';
 import { DEFAULT_MEMORY_CONFIG, generateSummary, decrementAgentPendingApproval } from './memoryConfig.js';
@@ -789,10 +790,31 @@ export async function getRelatedMemories(id, limit = 10) {
   return related.slice(0, limit);
 }
 
+// Optional caller scope for getGraphData: absent (undefined/null) means the
+// whole CoS graph; an array — even an empty one — restricts output to edges
+// whose BOTH endpoints are in it. A non-UUID id can never name a memory row, so
+// dropping it before the ::uuid[] cast changes no result and avoids a cast error.
+function graphScope(sourceIds) {
+  if (sourceIds === undefined || sourceIds === null) return null;
+  if (!Array.isArray(sourceIds)) throw new TypeError('getGraphData: sourceIds must be an array');
+  return [...new Set(sourceIds.filter(id => typeof id === 'string' && UUID_RE.test(id)))];
+}
+
 /**
- * Get graph data for visualization
+ * Get graph data for visualization.
+ *
+ * `sourceIds` (internal, optional) scopes the read to the records a caller can
+ * actually display (#10953): nodes and explicit links are restricted to the
+ * scope, and only scoped memories are scored as similarity SOURCES. The target
+ * population, the global top-three cutoff, the threshold and the active-record
+ * rules are unchanged, so an out-of-scope nearest neighbour still occupies its
+ * slot — the scoped edges are exactly the full graph's edges with both
+ * endpoints in scope. Omitted, the full graph is returned unchanged.
  */
-export async function getGraphData() {
+export async function getGraphData({ sourceIds } = {}) {
+  const scope = graphScope(sourceIds);
+  if (scope && scope.length === 0) return { nodes: [], edges: [] };
+  const scopeParams = scope ? [scope] : [];
   return withTransaction(async (client) => {
     // Admission and all graph reads must share a snapshot: a concurrent insert
     // cannot grow the optimized projection beyond the node count checked here.
@@ -800,8 +822,8 @@ export async function getGraphData() {
     // Build nodes
     const nodesResult = await client.query(`
       SELECT id, type, category, summary, importance
-      FROM memories WHERE status = 'active'
-    `);
+      FROM memories WHERE status = 'active'${scope ? ' AND id = ANY($1::uuid[])' : ''}
+    `, scopeParams);
 
     const nodes = nodesResult.rows.map(r => ({
       id: r.id,
@@ -811,6 +833,12 @@ export async function getGraphData() {
       importance: r.importance
     }));
 
+    // The materialization bound counts EVERY active record, scoped or not: the
+    // CTE below still projects the whole active embedding population.
+    const activeCount = scope
+      ? (await client.query("SELECT count(*)::int AS count FROM memories WHERE status = 'active'")).rows[0].count
+      : nodes.length;
+
     // Build edges from explicit links
     // A symmetric 'related' pair is stored twice; keep one row per pair. Directed
     // types are one row each and keep their source -> target orientation.
@@ -819,8 +847,9 @@ export async function getGraphData() {
       FROM memory_links ml
       JOIN memories ms ON ms.id = ml.source_id AND ms.status = 'active'
       JOIN memories mt ON mt.id = ml.target_id AND mt.status = 'active'
-      WHERE ml.link_type <> 'related' OR ml.source_id < ml.target_id
-    `);
+      WHERE (ml.link_type <> 'related' OR ml.source_id < ml.target_id)
+        ${scope ? 'AND ml.source_id = ANY($1::uuid[]) AND ml.target_id = ANY($1::uuid[])' : ''}
+    `, scopeParams);
 
     const edges = linksResult.rows.map(r => ({
       source: r.source,
@@ -835,11 +864,15 @@ export async function getGraphData() {
     // unpack each stored vector once, avoiding repeated TOAST reads per candidate.
     // A bare materialized embedding retains its external storage pointer; the
     // real[] round trip forces an inline vector without changing its float values.
-    const materialize = nodes.length <= 2048;
+    const materialize = activeCount <= 2048;
     if (materialize) await client.query("SET LOCAL work_mem = '32MB'");
     const relation = materialize ? 'active_embeddings' : 'memories';
     const seenEdges = new Set(edges.map(e => [e.source, e.target].sort().join('-')));
 
+    // A scope restricts the OUTER sources before the lateral loop (so only M
+    // sources are scored against all N candidates) and filters targets only
+    // AFTER the LIMIT 3 — filtering candidates first would promote a fourth-
+    // ranked in-scope memory into a slot an out-of-scope neighbour holds.
     const simResult = await client.query(`
       ${materialize ? `WITH active_embeddings AS MATERIALIZED (
         SELECT id, embedding::real[]::vector AS embedding
@@ -858,7 +891,8 @@ export async function getGraphData() {
       ) b
       WHERE 1 - (a.embedding <=> b.embedding) >= 0.8
         ${materialize ? '' : "AND a.embedding IS NOT NULL AND a.status = 'active'"}
-    `);
+        ${scope ? 'AND a.id = ANY($1::uuid[]) AND b.id = ANY($1::uuid[])' : ''}
+    `, scopeParams);
 
     for (const row of simResult.rows) {
       const edgeKey = [row.source_id, row.target_id].sort().join('-');

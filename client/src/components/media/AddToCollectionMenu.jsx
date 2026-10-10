@@ -16,8 +16,11 @@ import { addMediaCollectionItem, removeMediaCollectionItem } from '../../service
 
 // Only the trigger button varies by size — popover styling is fixed.
 const SIZES = {
-  sm: { button: 'px-1.5 py-1 text-[10px]', icon: 'w-3 h-3' },
-  md: { button: 'px-2 py-1.5 text-xs', icon: 'w-3.5 h-3.5' },
+  sm: { button: 'shrink-0 min-h-[44px] min-w-[44px] px-1.5 py-1 text-[10px]', icon: 'w-3 h-3' },
+  md: { button: 'shrink-0 min-h-[44px] min-w-[44px] px-2 py-1.5 text-xs', icon: 'w-3.5 h-3.5' },
+  // MediaCard's file row sizes the trigger to its grid cell. A 44px min-width
+  // here is what pushed Delete onto its own line on a five-up render card.
+  fill: { button: 'h-full w-full min-w-0 min-h-[44px] px-0 py-1 text-[10px]', icon: 'w-3.5 h-3.5' },
 };
 
 export default function AddToCollectionMenu({ item, size = 'sm' }) {
@@ -58,7 +61,7 @@ export default function AddToCollectionMenu({ item, size = 'sm' }) {
         type="button"
         disabled={busyId === c.id}
         onClick={() => handleToggleMembership(c, updateCollections)}
-        className="w-full flex items-center justify-between gap-2 px-2 py-1.5 text-left text-[12px] text-gray-200 hover:bg-port-border rounded disabled:opacity-50"
+        className="w-full min-h-[44px] flex items-center justify-between gap-2 px-2 py-1.5 text-left text-[12px] text-gray-200 hover:bg-port-border rounded disabled:opacity-50"
         aria-pressed={inIt}
       >
         <CollectionRowLabel name={c.name} />
@@ -93,7 +96,7 @@ export default function AddToCollectionMenu({ item, size = 'sm' }) {
         ref={triggerRef}
         type="button"
         onClick={handleToggleOpen}
-        className={`shrink-0 ${sizeCls.button} bg-port-border hover:bg-port-border/70 text-white rounded flex items-center justify-center`}
+        className={`${sizeCls.button} bg-port-border hover:bg-port-border/70 text-white rounded flex items-center justify-center`}
         title="Add to collection" aria-label="Add to collection"
         aria-expanded={open}
       >

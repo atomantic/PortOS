@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, within, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, within, waitFor } from '@testing-library/react';
 import CreateProjectDrawer from './CreateProjectDrawer.jsx';
 import TrackPanel from './TrackPanel.jsx';
 import AudioTimingPanel from './AudioTimingPanel.jsx';
@@ -11,6 +11,7 @@ vi.mock('../../services/apiMusicVideo.js', () => ({
   previewMusicVideoAudioTiming: vi.fn(),
   applyMusicVideoAudioTiming: vi.fn(),
   updateMusicVideoProject: vi.fn(),
+  listMusicVideoCharacterStyles: vi.fn(() => Promise.resolve([])),
 }));
 vi.mock('../moodBoard/MoodBoardReferenceStrip.jsx', () => ({ default: () => null }));
 vi.mock('./VocalStemControl.jsx', () => ({ default: () => null }));
@@ -35,7 +36,7 @@ beforeEach(() => vi.clearAllMocks());
 // Uniquely catches inaccessible duplicate choices, wrong-record selection,
 // and eligibility drift at the rendered selectors rather than helper internals.
 describe('Music Video track choices', () => {
-  it('distinguishes colliding records and shows metadata for the chosen ID without submitting or importing', () => {
+  it('distinguishes colliding records and shows metadata for the chosen ID without submitting or importing', async () => {
     const onSubmit = vi.fn();
     function NewProject() {
       const [form, setForm] = useState({ mode: 'director', mediaMode: 'code-images-video', name: '', trackId: '', universeId: '' });
@@ -59,6 +60,28 @@ describe('Music Video track choices', () => {
     expect(screen.queryByText('Suno')).not.toBeInTheDocument();
     expect(onSubmit).not.toHaveBeenCalled();
     expect(youtube.startCreate).not.toHaveBeenCalled();
+    await act(async () => {});
+  });
+
+  // Uniquely catches the character style dropping out of the New music video drawer.
+  it('offers built-in character styles on a new project and says who is cast', async () => {
+    api.listMusicVideoCharacterStyles.mockResolvedValueOnce([
+      { id: 'example-style', label: 'Example style', characterName: 'Example Performer', referenceImageId: null },
+    ]);
+    let latest = null;
+    function NewProject() {
+      const [form, setForm] = useState({ mode: 'director', mediaMode: 'code-images-video', name: '', trackId: '', universeId: '' });
+      latest = form;
+      return <CreateProjectDrawer open form={form} onFormChange={(patch) => setForm((current) => ({ ...current, ...patch }))}
+        tracks={tracks} universes={[]} trackName={trackName} youtube={youtube} onSubmit={vi.fn()} onClose={vi.fn()} />;
+    }
+    render(<NewProject />);
+    const select = screen.getByRole('combobox', { name: 'Character style' });
+    await waitFor(() => expect(within(select).getByRole('option', { name: 'Example style' })).toBeInTheDocument());
+    fireEvent.change(select, { target: { value: 'example-style' } });
+    expect(latest.characterStyleId).toBe('example-style');
+    expect(screen.getByText(/Example Performer is cast as protagonist/)).toBeInTheDocument();
+    expect(screen.getByText(/No character sheet on this install yet/)).toBeInTheDocument();
   });
 
   it('uses the same stable labels after reordering and relinks the exact ID while preserving render locks', () => {

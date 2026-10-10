@@ -26,6 +26,7 @@ import { suggestSocialCuts } from './socialCuts.js';
 import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
 import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
 import { buildChapters, buildSrt, buildPublishCopyPrompt, parsePublishCopy, normalizeCopyOptions, PUBLISH_PLATFORMS } from './publishKitText.js';
+import { canonicalizeSunoUrl, isSunoShareLink } from '../sunoShareLink.js';
 
 const jobs = new Map();
 const projectBuilds = new Map();
@@ -164,6 +165,7 @@ async function beginPublishKitBuild(projectId, jobId) {
     // cancels and leaves no partial file behind.
     const renderNative = async (encode, out) => {
       if (!matchesMaster) {
+        encode.fitReason = 'changed';
         console.log(`📐 ${encode.label} [${tag}]: the composition changed since the final render (or was never recorded), fitting the master`);
         return false;
       }
@@ -171,11 +173,13 @@ async function beginPublishKitBuild(projectId, jobId) {
         const slot = done;
         const progress = (fraction) => broadcastSse(job, { type: 'progress', progress: Math.min(0.99, (slot + Math.max(0, Math.min(1, fraction))) / total) });
         if (await encode.native(out, progress)) { encode.layout = 'native'; return true; }
+        encode.fitReason = 'footage';
       } catch (error) {
         if (job.abort.signal.aborted) {
           await unlink(out).catch(() => {});
           throw error;
         }
+        encode.fitReason = 'unavailable';
         console.warn(`⚠️ Native ${encode.label} unavailable [${tag}], fitting the master instead: ${error.message}`);
       }
       await unlink(out).catch(() => {});
@@ -213,7 +217,7 @@ async function beginPublishKitBuild(projectId, jobId) {
         ...kit,
         builtAt: new Date().toISOString(),
         master: { filename: entry.filename, renderHistoryId: project.renderHistoryId },
-        exports: encodes.map(({ kind, label, filename, window, layout }) => ({ kind, label, filename, ...(window ? { startSec: window.startSec, endSec: window.endSec } : {}), ...(layout ? { layout } : {}) })),
+        exports: encodes.map(({ kind, label, filename, window, layout, fitReason }) => ({ kind, label, filename, ...(window ? { startSec: window.startSec, endSec: window.endSec } : {}), ...(layout ? { layout } : {}), ...(layout === 'fit' && fitReason ? { fitReason } : {}) })),
         thumbnails,
         thumbnail: thumbnails.includes(kit.thumbnail) ? kit.thumbnail : (thumbnails[0] || null),
         captionsFilename,
@@ -260,8 +264,13 @@ export async function selectPublishKitThumbnail(projectId, filename) {
 }
 
 /** Merge edited copy fields per platform (only known platforms and string/array fields). */
-export async function updatePublishKitCopy(projectId, patch) {
+export async function updatePublishKitCopy(projectId, patch, deps = {}) {
   await requireProject(projectId);
+  // Keep the song page, not a Suno share link: the Suno posts find the song by the id in its URL.
+  // A link that can't be followed now is kept as typed; publishing follows it again.
+  if (isSunoShareLink(patch?.links?.song)) {
+    patch = { ...patch, links: { ...patch.links, song: await canonicalizeSunoUrl(patch.links.song, deps).catch(() => patch.links.song) } };
+  }
   return mutateProjectRecord(projectId, (current) => {
     const kit = projectPublishKit(current);
     const copy = { ...(kit.copy || {}) };

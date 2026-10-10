@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
-import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage.js';
-import { ExternalLink, X as XIcon, LogIn, Link as LinkIcon, Check, ChevronDown, ChevronRight, Undo2 } from 'lucide-react';
+import { safeReadJsonStorage, safeRemoveStorage } from '../../lib/safeStorage.js';
+import { ExternalLink, X as XIcon, LogIn, Link as LinkIcon, Check, ChevronDown, ChevronRight, ImageOff, Undo2 } from 'lucide-react';
 import PublishCard from './PublishCard.jsx';
-import { DISTROKID_GENRES, suggestDistrokidGenres } from '../../../../server/lib/distrokidGenres.js';
+import { DISTROKID_GENRES, DISTROKID_REMEMBERED_OPTIONS, suggestDistrokidGenres } from '../../../../server/lib/distrokidGenres.js';
 import { publishRowAnchor } from '../../lib/musicVideoStages.js';
 
 // Where the release goes, in posting order: the full video first so every
@@ -13,6 +13,14 @@ export const PUBLISH_TARGETS = [
   { target: 'suno', label: 'Suno', note: 'Publishes the song with the cover and a link to the video' },
   { target: 'sunoHook', label: 'Suno Hook', note: 'A 9:16 cut (the newest by default) set to its window of the song. You press Post' },
   { target: 'x', label: 'X thread', note: 'Hook with the 1080p video, then the story, prompt and links' },
+  {
+    target: 'linkedin', label: 'LinkedIn', accountPlaceholder: 'Your name',
+    note: 'Your short post with the 1080p video uploaded, and the links in a first comment. You press Post, then View post: PortOS records the link and types the comment for you to send',
+  },
+  {
+    target: 'facebook', label: 'Facebook', accountPlaceholder: 'Your name or Page',
+    note: 'Your short post with the 1080p video uploaded (Facebook shares it as a reel) and its AI label on, and the links in a first comment. Posts as the profile or Page active in the PortOS Browser. You press Post, then open the post: PortOS records the link and types the comment for you to send',
+  },
   { target: 'shorts', label: 'YouTube Shorts', note: 'A 9:16 cut (the newest by default)' },
   { target: 'tiktok', label: 'TikTok', note: 'A 9:16 cut (the newest by default), labelled AI-generated' },
   { target: 'instagram', label: 'Instagram Reels', note: 'A 9:16 cut (the newest by default), with the AI label' },
@@ -26,15 +34,20 @@ export const PUBLISH_TARGETS = [
     // `accountPlaceholder` marks an account that is a name, not an @handle.
     target: 'distrokid', label: 'DistroKid', accountPlaceholder: 'Artist name',
     note: 'The song as a single to Spotify, Apple Music, YouTube Music and the other stores, with a square cover and the AI disclosure. You tick the agreements and press Upload',
-    linkPlaceholder: 'Release or store link (optional): Mark done works without one',
+    linkPlaceholder: 'Store link, if you have one',
   },
 ];
 
 // The DistroKid answers the director gives once (songwriter legal name and
-// role, language, Apple performer role), remembered on this device only. The
-// store-profile answer is never remembered: new profiles are per first release.
+// role, language, Apple credits) are kept in settings with the platform, so
+// every project on every device refills them. The store-profile answer is
+// never kept: new profiles are per first release. Older installs kept a few
+// on this device only (SONGWRITER_KEY); those seed the settings once.
 const SONGWRITER_KEY = 'portos.musicVideo.distrokidSongwriter';
-const DISTROKID_REMEMBERED = { songwriterFirst: 'first', songwriterLast: 'last', songwriterRole: 'role', language: 'language', performerRole: 'performerRole' };
+const LEGACY_REMEMBERED = { songwriterFirst: 'first', songwriterLast: 'last', songwriterRole: 'role', language: 'language', performerRole: 'performerRole' };
+// Options that ARE the account named under Where you post: editing one here updates it there.
+const ACCOUNT_OPTION = { distrokid: 'artistName', substack: 'publication' };
+const REMEMBERED_OPTIONS = { distrokid: DISTROKID_REMEMBERED_OPTIONS };
 
 const inputCls = 'w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
 
@@ -45,20 +58,91 @@ const summaryRows = (summary) => Object.entries(summary || {})
 const VERTICAL_TARGETS = ['shorts', 'tiktok', 'instagram'];
 const fmtSec = (n) => `${Math.floor(n / 60)}:${String(Math.floor(n % 60)).padStart(2, '0')}`;
 
-/** Postable 9:16 cuts, oldest first (mirrors the server's pick; it still refuses a stale one). */
+/**
+ * Postable 9:16 cuts, oldest first (mirrors the server's list and pick in publish/payloads.js).
+ * The server refuses any excerpt with a dependency change, which the record presents as a
+ * dependencyState other than 'current' ('stale' or 'unknown').
+ */
 function verticalCutChoices(project) {
   const kit = project?.publishKit || {};
   const cuts = (project?.excerpts || [])
     .filter((e) => e?.status === 'complete' && e.aspect === '9:16' && e.filename)
-    .map((e) => ({ id: e.id, label: `Social cut ${fmtSec(e.startSec ?? 0)}-${fmtSec(e.endSec ?? 0)}` }));
+    .map((e) => ({ id: e.id, layout: 'native', stale: e.dependencyState?.status !== 'current', label: `Social cut ${fmtSec(e.startSec ?? 0)}-${fmtSec(e.endSec ?? 0)}` }));
   const crop = (kit.exports || []).find((e) => e.kind === 'vertical-9x16' && e.filename);
   if (crop && (kit.master?.renderHistoryId ?? null) === (project?.renderHistoryId ?? null)) {
-    cuts.unshift({ id: 'kit-vertical', label: `Kit vertical (fit) ${fmtSec(crop.startSec ?? 0)}-${fmtSec(crop.endSec ?? 0)}` });
+    const layout = crop.layout === 'native' ? 'native' : 'fit';
+    cuts.unshift({ id: 'kit-vertical', layout, stale: false, fitReason: crop.fitReason, startSec: crop.startSec ?? 0, endSec: crop.endSec ?? 0,
+      label: `Kit vertical (${layout}) ${fmtSec(crop.startSec ?? 0)}-${fmtSec(crop.endSec ?? 0)}` });
   }
   return cuts;
 }
 
-function TargetOptions({ target, kit, project, options, setOption, flairs, idFor, account }) {
+/** The cut a fill posts: the director's pick, else the newest fresh one. */
+const postedCut = (cuts, cutId) => (cutId ? cuts.find((c) => c.id === cutId) : cuts.filter((c) => !c.stale).at(-1)) || null;
+
+const FIT_REASONS = {
+  changed: 'the composition changed after the final render',
+  unavailable: 'the composition has no 9:16 layout, or its 9:16 render failed',
+  footage: 'a footage edit has no 9:16 layout of its own',
+};
+const SEEKED_MODES = ['document', 'code', 'eidoverse'];
+
+/**
+ * A fitted cut (the 16:9 master over a blurred fill of itself) reads as a square on a phone
+ * (#10860). Say so, and for a composition that can lay itself out at 9:16, offer a native render
+ * of the same window: it becomes the newest cut, so the next fill posts it.
+ */
+function FittedCutNotice({ project, cut, excerpts }) {
+  const canRender = SEEKED_MODES.includes(project?.composition?.mode) && excerpts?.startExcerpt;
+  const failed = (project?.excerpts || []).filter((e) => e?.aspect === '9:16' && e.status === 'error' && e.error).at(-1);
+  return (
+    <div role="status" className="sm:col-span-2 rounded border border-port-warning/40 bg-port-warning/10 p-2 text-xs space-y-1.5">
+      <p>
+        This cut is fitted: the 16:9 frame over a blurred copy of itself, so it reads as a square on a phone
+        {FIT_REASONS[cut.fitReason] ? ` (${FIT_REASONS[cut.fitReason]})` : ''}.
+      </p>
+      {canRender && (
+        excerpts.rendering ? (
+          <p className="text-port-text-muted">Rendering a native 9:16 cut… {Math.round(excerpts.progress || 0)}%</p>
+        ) : (
+          <button type="button" disabled={excerpts.occupied}
+            onClick={() => excerpts.startExcerpt(cut.startSec, cut.endSec, { aspect: '9:16', fade: true })}
+            className="border border-port-border disabled:opacity-50 rounded px-2 py-1.5 min-h-[44px] sm:min-h-0">
+            Render a native 9:16 cut of {fmtSec(cut.startSec)}-{fmtSec(cut.endSec)}
+          </button>
+        )
+      )}
+      {canRender && !excerpts.rendering && failed && <p className="text-port-error break-words">The last 9:16 render failed: {failed.error}</p>}
+    </div>
+  );
+}
+
+/** The story reply's image, picked by sight: a tile per video frame plus "No image". */
+function StoryImagePicker({ idFor, thumbnails, value, onChange }) {
+  const tile = (selected) => `relative rounded overflow-hidden border-2 aspect-video min-h-[44px] ${selected ? 'border-port-accent ring-2 ring-port-accent/40' : 'border-port-border'}`;
+  const mark = <span className="absolute top-1 right-1 rounded-full bg-port-accent text-white p-0.5" aria-hidden="true"><Check size={12} /></span>;
+  return (
+    <div className="space-y-0.5 min-w-0">
+      <span id={idFor('storyImage')} className="block text-[11px] text-port-text-muted">Image on the story reply (optional)</span>
+      <div role="radiogroup" aria-labelledby={idFor('storyImage')} className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+        <button type="button" role="radio" aria-checked={!value} onClick={() => onChange('')}
+          className={`${tile(!value)} flex items-center justify-center gap-1 bg-port-bg text-xs text-port-text-muted`}>
+          <ImageOff size={14} aria-hidden="true" /> No image
+          {!value && mark}
+        </button>
+        {thumbnails.map((name, i) => (
+          <button key={name} type="button" role="radio" aria-checked={value === name} aria-label={`Video frame ${i + 1}`} title={name}
+            onClick={() => onChange(name)} className={tile(value === name)}>
+            <img src={`/data/video-thumbnails/${encodeURIComponent(name)}`} alt="" loading="lazy" className="w-full h-full object-cover" />
+            {value === name && mark}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TargetOptions({ target, kit, project, options, setOption, commitOption, flairs, idFor, account, excerpts }) {
   const field = (key, label, input) => (
     <div key={key} className="space-y-0.5 min-w-0">
       <label htmlFor={idFor(key)} className="block text-[11px] text-port-text-muted">{label}</label>
@@ -66,12 +150,15 @@ function TargetOptions({ target, kit, project, options, setOption, flairs, idFor
     </div>
   );
   const text = (key, label, placeholder) => field(key, label,
-    <input id={idFor(key)} value={options[key] || ''} placeholder={placeholder} onChange={(e) => setOption(key, e.target.value)} className={inputCls} />);
+    <input id={idFor(key)} value={options[key] || ''} placeholder={placeholder} onChange={(e) => setOption(key, e.target.value)}
+      onBlur={(e) => commitOption(key, e.target.value)} className={inputCls} />);
   const area = (key, label) => field(key, label,
     <textarea id={idFor(key)} value={options[key] || ''} rows={3} onChange={(e) => setOption(key, e.target.value)} className={inputCls} />);
 
+  const cuts = verticalCutChoices(project);
+  const cut = postedCut(cuts, options.cutId);
+  const fitted = cut?.layout === 'fit' ? <FittedCutNotice key="fitted" project={project} cut={cut} excerpts={excerpts} /> : null;
   const cutPicker = () => {
-    const cuts = verticalCutChoices(project);
     if (cuts.length < 2) return null;
     return field('cutId', 'Vertical cut to post', (
       <select id={idFor('cutId')} aria-label="Vertical cut to post" value={options.cutId || ''} onChange={(e) => setOption('cutId', e.target.value)} className={inputCls}>
@@ -79,7 +166,7 @@ function TargetOptions({ target, kit, project, options, setOption, flairs, idFor
         {[...cuts].reverse().map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
       </select>));
   };
-  if (VERTICAL_TARGETS.includes(target)) return cutPicker();
+  if (VERTICAL_TARGETS.includes(target)) return <div className="grid sm:grid-cols-2 gap-2 items-end">{cutPicker()}{fitted}</div>;
   if (target === 'sunoHook') {
     return (
       <div className="grid sm:grid-cols-2 gap-2 items-end">
@@ -88,6 +175,7 @@ function TargetOptions({ target, kit, project, options, setOption, flairs, idFor
         <label className="flex items-center gap-1.5 text-xs min-h-[44px] sm:min-h-0">
           <input type="checkbox" checked={options.showLyrics === true} onChange={(e) => setOption('showLyrics', e.target.checked)} /> Show Suno's lyrics (off when the cut has its own)
         </label>
+        {fitted}
       </div>
     );
   }
@@ -107,6 +195,19 @@ function TargetOptions({ target, kit, project, options, setOption, flairs, idFor
             {flairs.map((f) => <option key={f.id} value={f.id}>{f.text}</option>)}
           </select>)}
         <div className="sm:col-span-2">{area('firstComment', 'First comment (optional)')}</div>
+      </div>
+    );
+  }
+  if (target === 'linkedin' || target === 'facebook') {
+    const check = (key, text) => (
+      <label key={key} className="flex items-center gap-1.5 text-xs min-h-[44px] sm:min-h-0">
+        <input type="checkbox" checked={options[key] !== false} onChange={(e) => setOption(key, e.target.checked)} /> {text}
+      </label>
+    );
+    return (
+      <div className="flex flex-wrap gap-x-4">
+        {check('linksComment', 'Put the links (full video, song, other posts) in a first comment')}
+        {target === 'facebook' && check('aiLabel', "Add Facebook's AI label")}
       </div>
     );
   }
@@ -145,6 +246,7 @@ function TargetOptions({ target, kit, project, options, setOption, flairs, idFor
       </select>);
     return (
       <div className="space-y-2">
+        <p className="text-[11px] text-port-text-muted">Your name, role, language and credits are kept for the next release, on any device.</p>
         <div className="grid sm:grid-cols-2 gap-2">
           {text('artistName', 'Artist name', account || 'Your artist name')}
           {field('releaseDate', 'Release date (blank = as soon as possible)',
@@ -152,7 +254,7 @@ function TargetOptions({ target, kit, project, options, setOption, flairs, idFor
           {text('songwriterFirst', 'Songwriter legal first name', 'First')}
           {text('songwriterLast', 'Songwriter legal last name', 'Last')}
           {field('songwriterRole', 'Songwriter wrote',
-            <select id={idFor('songwriterRole')} aria-label="Songwriter wrote" value={options.songwriterRole || (instrumental ? 'music' : 'both')} onChange={(e) => setOption('songwriterRole', e.target.value)} className={inputCls}>
+            <select id={idFor('songwriterRole')} aria-label="Songwriter wrote" value={options.songwriterRole || (instrumental ? 'music' : 'both')} onChange={(e) => { setOption('songwriterRole', e.target.value); commitOption('songwriterRole', e.target.value); }} className={inputCls}>
               <option value="both">Music and lyrics</option>
               <option value="music">Music</option>
               <option value="lyrics">Lyrics</option>
@@ -167,9 +269,9 @@ function TargetOptions({ target, kit, project, options, setOption, flairs, idFor
           {check('newArtistProfile', 'First release as this artist (new store profiles)', false)}
         </div>
         <div role="group" aria-label="Apple Music credits" className="grid sm:grid-cols-3 gap-2">
-          {text('performerName', 'Apple performer (real name)', fullName)}
+          {text('performerName', 'Apple performer (real name)', fullName === 'Songwriter legal name' ? 'Same as the songwriter' : fullName)}
           {text('performerRole', 'Performer role (optional)', 'e.g. Vocals')}
-          {text('producerName', 'Apple producer (real name)', fullName)}
+          {text('producerName', 'Apple producer (real name)', fullName === 'Songwriter legal name' ? 'Same as the songwriter' : fullName)}
         </div>
         <div role="group" aria-label="Parts made with AI" className="flex flex-wrap gap-x-4">
           <span className="text-[11px] text-port-text-muted self-center">Made with AI:</span>
@@ -184,11 +286,7 @@ function TargetOptions({ target, kit, project, options, setOption, flairs, idFor
     return (
       <div className="space-y-2">
         {area('prompt', 'Prompt reply (optional, e.g. the prompt that started it)')}
-        {kit.thumbnails?.length > 0 && field('storyImage', 'Image on the story reply (optional)',
-          <select id={idFor('storyImage')} aria-label="Image on the story reply" value={options.storyImage || ''} onChange={(e) => setOption('storyImage', e.target.value)} className={inputCls}>
-            <option value="">None</option>
-            {kit.thumbnails.map((name) => <option key={name} value={name}>{name}</option>)}
-          </select>)}
+        {kit.thumbnails?.length > 0 && <StoryImagePicker idFor={idFor} thumbnails={kit.thumbnails} value={options.storyImage || ''} onChange={(name) => setOption('storyImage', name)} />}
       </div>
     );
   }
@@ -231,8 +329,8 @@ function ManualLink({ idFor, label, placeholder, onSave, hideMarkDone = false })
   const valid = /^https?:\/\/\S+$/.test(url.trim());
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <input id={idFor('manual-url')} aria-label={`Link to a ${label} post made by hand`} value={url} placeholder={placeholder || 'Posted by hand? Paste the link'}
-        onChange={(e) => setUrl(e.target.value)} className={`${inputCls} flex-1 min-w-0`} />
+      <input id={idFor('manual-url')} aria-label={`Link to the ${label} post`} value={url} placeholder={placeholder || 'Posted it? Paste the link to the post'}
+        onChange={(e) => setUrl(e.target.value)} className={`${inputCls} basis-full sm:basis-auto sm:flex-1 min-w-0`} />
       <button type="button" disabled={!valid} onClick={() => onSave({ url: url.trim() }).then((post) => { if (post) setUrl(''); })}
         className="flex items-center gap-1 border border-port-border disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
         <LinkIcon size={12} /> Record
@@ -268,9 +366,64 @@ function UndoDone({ label, onUndo }) {
   );
 }
 
+/** The DistroKid answers kept in settings, else (older installs) the ones this device remembered. */
+function rememberedDistrokid(platform) {
+  const kept = platform?.defaults || {};
+  return Object.keys(kept).length ? { ...kept } : legacyDistrokid();
+}
+function legacyDistrokid() {
+  const saved = safeReadJsonStorage(SONGWRITER_KEY, {}) || {};
+  return Object.fromEntries(Object.entries(LEGACY_REMEMBERED).filter(([, k]) => typeof saved[k] === 'string' && saved[k].trim()).map(([opt, k]) => [opt, saved[k].trim()]));
+}
+
+// The kit fields a post is built from: a change to any of them refreshes the preview.
+const kitStamp = (project) => {
+  const kit = project?.publishKit || {};
+  return JSON.stringify([project?.name, project?.renderHistoryId, kit.copy, kit.links, kit.posts, kit.thumbnail, kit.coverArt?.filename, kit.master, kit.exports, kit.chapters, project?.excerpts?.length]);
+};
+
+/** What Fill draft would post for this row, re-read (briefly debounced) when its options or the kit change. */
+function usePostPreview({ open, target, options, project, publishing }) {
+  const [preview, setPreview] = useState(null);
+  const optionsKey = JSON.stringify(options);
+  const stamp = kitStamp(project);
+  useEffect(() => {
+    if (!open || !publishing.preview) return undefined;
+    let active = true;
+    const timer = setTimeout(() => {
+      publishing.preview(target, options).then((res) => { if (active) setPreview(res); });
+    }, 400);
+    return () => { active = false; clearTimeout(timer); };
+    // `options` is keyed by its JSON; the hook's functions are stable enough per project.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, target, optionsKey, stamp, project?.id]);
+  return preview;
+}
+
+/** "What gets posted": every word and file Fill draft will put in the post, or what is still missing. */
+function PostPreview({ label, preview }) {
+  if (!preview) return null;
+  if (!preview.ready) {
+    return <p role="status" className="text-[11px] text-port-warning">Not ready to fill: {preview.problem}</p>;
+  }
+  return (
+    <details className="rounded border border-port-border bg-port-bg/50 p-2 text-[11px]" open>
+      <summary className="cursor-pointer font-medium min-h-[44px] sm:min-h-0 flex items-center">What gets posted to {label}</summary>
+      <dl className="mt-1 space-y-1">
+        {(preview.parts || []).map(({ label: rowLabel, text }, i) => (
+          <div key={`${rowLabel}-${i}`}>
+            <dt className="text-port-text-muted">{rowLabel}</dt>
+            <dd className="min-w-0 break-words whitespace-pre-wrap">{text}</dd>
+          </div>
+        ))}
+      </dl>
+    </details>
+  );
+}
+
 const STATUS = { posted: ['Done', 'text-port-success border-port-success/40'], draft: ['Draft open', 'text-port-warning border-port-warning/40'], none: ['To do', 'text-port-text-muted border-port-border'] };
 
-function TargetRow({ project, kit, entry, publishing }) {
+function TargetRow({ project, kit, entry, publishing, excerpts }) {
   const { target, label, note, linkPlaceholder } = entry;
   const idFor = (key) => `mv-post-${project.id}-${target}-${key}`;
   const [options, setOptions] = useState(() => {
@@ -280,17 +433,44 @@ function TargetRow({ project, kit, entry, publishing }) {
       return { songUrl: `https://suno.com/song/${encodeURIComponent(songId)}` };
     }
     if (target === 'distrokid') {
-      const saved = safeReadJsonStorage(SONGWRITER_KEY, {}) || {};
-      const remembered = Object.fromEntries(Object.entries(DISTROKID_REMEMBERED).filter(([, k]) => saved[k] != null && saved[k] !== '').map(([opt, k]) => [opt, saved[k]]));
       // A song whose lyrics an LLM wrote in the autonomous run discloses AI lyrics by default.
-      return { songwriterFirst: '', songwriterLast: '', ...remembered, aiLyrics: !!project?.autonomousRun?.output?.lyrics };
+      return { songwriterFirst: '', songwriterLast: '', ...rememberedDistrokid(publishing.platforms?.distrokid), aiLyrics: !!project?.autonomousRun?.output?.lyrics };
     }
     return {};
   });
   const setOption = (key, value) => setOptions((prev) => ({ ...prev, [key]: value }));
+  // Keep an answer that repeats across releases (or the account it names) in settings when the director leaves the field.
+  const commitOption = (key, raw) => {
+    const value = typeof raw === 'string' ? raw.trim() : raw;
+    const platform = publishing.platforms?.[target] || {};
+    if (ACCOUNT_OPTION[target] === key) {
+      if (value && value !== (platform.account || '')) publishing.setPlatform(target, { account: value });
+      return;
+    }
+    if (!REMEMBERED_OPTIONS[target]?.includes(key) || value === (platform.defaults?.[key] || '')) return;
+    publishing.setPlatform(target, { defaults: { [key]: value || null } });
+  };
+  // A device that remembered answers before settings kept them hands them over once.
+  useEffect(() => {
+    if (target !== 'distrokid' || !publishing.platforms?.distrokid) return;
+    const kept = publishing.platforms.distrokid.defaults || {};
+    if (Object.keys(kept).length) return;
+    const legacy = legacyDistrokid();
+    if (!Object.keys(legacy).length) return;
+    publishing.setPlatform('distrokid', { defaults: legacy }).then((saved) => { if (saved) safeRemoveStorage(SONGWRITER_KEY); });
+    // Once the platforms have loaded (rows only render after that, since they
+    // come from enabledTargets); the settings answer wins from then on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target, !!publishing.platforms?.distrokid]);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [confirmAgain, setConfirmAgain] = useState(false);
   const draft = publishing.drafts[target];
+  // A Suno share link the draft followed: show the song page it opened instead.
+  const draftSongUrl = draft?.songUrl;
+  useEffect(() => {
+    if (!draftSongUrl) return;
+    setOptions((prev) => (prev.songUrl && prev.songUrl !== draftSongUrl ? { ...prev, songUrl: draftSongUrl } : prev));
+  }, [draftSongUrl]);
   // A done platform folds to its header so the ones still to do are easy to reach.
   const [open, setOpen] = useState(() => !kit.posts?.[target]);
   const busy = publishing.busy[target];
@@ -301,12 +481,8 @@ function TargetRow({ project, kit, entry, publishing }) {
   const status = posted ? 'posted' : draft ? 'draft' : 'none';
   const Chevron = open ? ChevronDown : ChevronRight;
   const clean = Object.fromEntries(Object.entries(options).filter(([, v]) => v !== '' && v != null));
-  const fill = (extra) => {
-    if (target === 'distrokid' && clean.songwriterFirst && clean.songwriterLast) {
-      safeWriteJsonStorage(SONGWRITER_KEY, Object.fromEntries(Object.entries(DISTROKID_REMEMBERED).filter(([opt]) => clean[opt] != null).map(([opt, k]) => [k, clean[opt]])));
-    }
-    publishing.prepare(target, { ...clean, ...extra });
-  };
+  const fill = (extra) => publishing.prepare(target, { ...clean, ...extra });
+  const preview = usePostPreview({ open, target, options: clean, project, publishing });
 
   return (
     <li id={publishRowAnchor(target)} data-fold className="rounded border border-port-border p-2 space-y-2 scroll-mt-4">
@@ -357,16 +533,16 @@ function TargetRow({ project, kit, entry, publishing }) {
         )}
       </div>
       {open && <div id={idFor('body')} className="space-y-2">
-      {posted
-        ? (
-          <>
-            <PostFeedback key={posted.url || 'post'} idFor={idFor} label={label} post={posted} onSave={(body) => publishing.recordPost(target, body)} />
-            {!posted.url && <ManualLink idFor={idFor} label={label} placeholder={linkPlaceholder} onSave={(body) => publishing.recordPost(target, body)} hideMarkDone />}
-            <UndoDone label={label} onUndo={() => publishing.removePost?.(target)} />
-          </>
-        )
-        : <ManualLink idFor={idFor} label={label} placeholder={linkPlaceholder} onSave={(body) => publishing.recordPost(target, body)} />}
-      <TargetOptions target={target} kit={kit} project={project} options={options} setOption={setOption} flairs={flairs} idFor={idFor} account={account} />
+      {posted && (
+        <>
+          <PostFeedback key={posted.url || 'post'} idFor={idFor} label={label} post={posted} onSave={(body) => publishing.recordPost(target, body)} />
+          {!posted.url && <ManualLink idFor={idFor} label={label} placeholder={linkPlaceholder} onSave={(body) => publishing.recordPost(target, body)} hideMarkDone />}
+          <UndoDone label={label} onUndo={() => publishing.removePost?.(target)} />
+        </>
+      )}
+      <TargetOptions target={target} kit={kit} project={project} options={options} setOption={setOption} commitOption={commitOption} flairs={flairs} idFor={idFor} account={account} excerpts={excerpts} />
+      <PostPreview label={label} preview={preview} />
+      {!posted && <ManualLink idFor={idFor} label={label} placeholder={linkPlaceholder} onSave={(body) => publishing.recordPost(target, body)} />}
       {error && (
         <div role="alert" className="text-[11px] text-port-error space-y-0.5">
           <div className="flex items-center gap-1">{error.code === 'PUBLISH_LOGIN_REQUIRED' && <LogIn size={11} />}{error.message}</div>
@@ -411,7 +587,7 @@ function TargetRow({ project, kit, entry, publishing }) {
  * a new tab, with the director's signed-in sessions) and shown back here as
  * a screenshot and summary. Publication is performed manually on the platform.
  */
-export default function PublishPostingPanel({ project, publishing }) {
+export default function PublishPostingPanel({ project, publishing, excerpts = null }) {
   const kit = project?.publishKit || {};
   if (!kit.builtAt) return null;
   // Only the platforms the director turned on (#9287), in posting order.
@@ -420,10 +596,10 @@ export default function PublishPostingPanel({ project, publishing }) {
   return (
     <PublishCard projectId={project.id} cardId="posting" label="Publish manually" icon={ExternalLink}
       summary={targets.length ? `${done} of ${targets.length} done` : ''} defaultOpen={!targets.length || done < targets.length}>
-      <p className="text-port-text-muted">Sign in to each platform in the PortOS Browser first. Fill draft opens a new tab there and fills the post from the kit and copy above; review and publish yourself on the platform. PortOS cannot submit posts.</p>
+      <p className="text-port-text-muted">Each platform shows what gets posted. Fill draft opens a tab in the PortOS Browser on the computer running PortOS (sign in there first), fills the post and shows a screenshot here. You press Post there. Then paste the post&apos;s link and press Record, or press Mark done when there is no link yet.</p>
       {!targets.length && <p className="text-port-text-muted">Turn on the platforms you use under Where you post to prepare drafts. Final publication happens on each platform.</p>}
       <ul className="space-y-2">
-        {targets.map((entry) => <TargetRow key={`${project.id}-${entry.target}`} project={project} kit={kit} entry={entry} publishing={publishing} />)}
+        {targets.map((entry) => <TargetRow key={`${project.id}-${entry.target}`} project={project} kit={kit} entry={entry} publishing={publishing} excerpts={excerpts} />)}
       </ul>
     </PublishCard>
   );

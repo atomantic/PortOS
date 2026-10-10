@@ -121,7 +121,7 @@ Write-Host "===================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "Start PortOS:"
 Write-Host "  Development:  " -NoNewline; Write-Host "npm run dev" -ForegroundColor Cyan
-Write-Host "  Production:   " -NoNewline; Write-Host "npm start" -ForegroundColor Cyan; Write-Host " (or npm run pm2:start)" -NoNewline -ForegroundColor Gray; Write-Host ""
+Write-Host "  Production:   " -NoNewline; Write-Host "npm start" -ForegroundColor Cyan
 Write-Host "  Stop:         " -NoNewline; Write-Host "npm run pm2:stop" -ForegroundColor Cyan
 Write-Host "  Logs:         " -NoNewline; Write-Host "npm run pm2:logs" -ForegroundColor Cyan
 Write-Host ""

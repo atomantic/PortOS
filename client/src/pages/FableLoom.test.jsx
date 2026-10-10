@@ -79,6 +79,17 @@ describe('FableLoom index', () => {
     await waitFor(() => expect(screen.getByText(/No branching narratives yet/)).toBeInTheDocument());
   });
 
+  it('opens the creation form from the empty-state action', async () => {
+    api.listLooms.mockResolvedValue([]);
+    const user = userEvent.setup();
+    await renderPage();
+    await waitFor(() => expect(screen.getByText(/No branching narratives yet/)).toBeInTheDocument());
+
+    expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Create your first loom/ }));
+    expect(screen.getByLabelText('Name')).toBeInTheDocument();
+  });
+
   it('creates a loom and navigates to its editor', async () => {
     api.createLoom.mockResolvedValue({ id: 'loom-9' });
     const user = userEvent.setup();

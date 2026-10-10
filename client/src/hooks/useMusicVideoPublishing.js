@@ -3,11 +3,14 @@ import socket from '../services/socket';
 import {
   getMusicVideoPublishDrafts,
   prepareMusicVideoPublishDraft,
+  previewMusicVideoPublishPost,
   discardMusicVideoPublishDraft,
   getMusicVideoPublishPlatforms,
   updateMusicVideoPublishPlatforms,
   recordMusicVideoPublishPost,
   removeMusicVideoPublishPost,
+  setMusicVideoPublishCrossLinks,
+  prepareMusicVideoCrossLinkEdit,
 } from '../services/apiMusicVideo.js';
 
 const EMPTY_POSTING = { drafts: {}, busy: {}, errors: {} };
@@ -22,7 +25,8 @@ const EMPTY_POSTING = { drafts: {}, busy: {}, errors: {} };
  * where they post (with an optional account each), `history` their posts and
  * ratings per platform across projects. `recordPost` saves a post made by hand
  * (a link, or `{ posted: true }` to mark it done without one) or rates one;
- * `removePost` undoes the done mark.
+ * `removePost` undoes the done mark. `preview` reads what Fill draft would
+ * post, without opening anything.
  */
 export default function useMusicVideoPublishing({ project, replaceProject } = {}) {
   const projectId = project?.id || null;
@@ -35,6 +39,9 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
   const { drafts, busy, errors } = posting.scope === scope ? posting : EMPTY_POSTING;
   const [platforms, setPlatforms] = useState(null);
   const [history, setHistory] = useState({});
+  // The socket handler below outlives renders; it reads the latest callback.
+  const replaceProjectRef = useRef(replaceProject);
+  replaceProjectRef.current = replaceProject;
 
   const loadPlatforms = useCallback(() => getMusicVideoPublishPlatforms({ silent: true })
     .then((res) => { setPlatforms(res?.platforms || {}); setHistory(res?.history || {}); })
@@ -54,7 +61,8 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
   };
 
   // Rehydrate from the server after a reload, and follow its draft events
-  // (a tab filled elsewhere, closed by hand, or discarded).
+  // (a tab filled elsewhere, closed by hand, discarded, or posted from by the
+  // director, in which case the server has already recorded the post's link).
   useEffect(() => {
     if (!projectId) return undefined;
     let cancelled = false;
@@ -62,7 +70,11 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
     getMusicVideoPublishDrafts(projectId, { silent: true }).then((res) => apply(res?.drafts || [])).catch(() => {});
     const onDraft = (e) => {
       if (e?.projectId !== projectId) return;
-      if (e.state === 'discarded') {
+      if (e.state === 'posted') {
+        if (e.project) replaceProjectRef.current?.(e.project);
+        loadPlatforms();
+      }
+      if (e.state === 'discarded' || e.state === 'posted') {
         setPosting((prev) => {
           const current = prev.scope === scope ? prev.drafts[e.target] : null;
           if (!current || current.draftId !== e.draftId) return prev;
@@ -81,7 +93,7 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
     socket.on('music-video:publish-draft', onDraft);
     return () => { cancelled = true; socket.off('music-video:publish-draft', onDraft); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, scope]);
+  }, [projectId, scope, loadPlatforms]);
 
   const prepare = (target, options = {}) => {
     setFor('busy', target, 'prepare');
@@ -92,6 +104,9 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
       .finally(() => setFor('busy', target, null));
   };
 
+  // What Fill draft would post with these options; null when the preview itself failed.
+  const preview = (target, options = {}) => previewMusicVideoPublishPost(projectId, target, options, { silent: true }).catch(() => null);
+
   const discard = (target) => {
     const draft = drafts[target];
     setFor('drafts', target, null);
@@ -100,7 +115,16 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
 
   const setPlatform = (target, change) => {
     // Optimistic: the toggle flips at once and settles to the server's answer.
-    setPlatforms((prev) => ({ ...(prev || {}), [target]: { ...(prev?.[target] || {}), ...change } }));
+    // `defaults` merges per answer (null forgets one), as the server does.
+    setPlatforms((prev) => {
+      const current = prev?.[target] || {};
+      const next = { ...current, ...change };
+      if (change.defaults) {
+        next.defaults = { ...(current.defaults || {}) };
+        for (const [k, v] of Object.entries(change.defaults)) { if (v == null || v === '') delete next.defaults[k]; else next.defaults[k] = v; }
+      }
+      return { ...(prev || {}), [target]: next };
+    });
     return updateMusicVideoPublishPlatforms({ [target]: change })
       .then((res) => { if (res?.platforms) setPlatforms(res.platforms); return res?.platforms || null; })
       .catch(() => { loadPlatforms(); return null; });
@@ -114,7 +138,14 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
     .then((res) => { if (res?.project) replaceProject?.(res.project); loadPlatforms(); return true; })
     .catch(() => false);
 
+  // Cross-links: whether new drafts list the release's other posts.
+  const setCrossLinks = (enabled) => setMusicVideoPublishCrossLinks(projectId, enabled)
+    .then((res) => { if (res?.project) replaceProject?.(res.project); return true; })
+    .catch(() => false);
+  // Fill a posted platform's edit (or a reply under it) with the links it lacks; errors stay with the caller.
+  const prepareCrossLinks = (target) => prepareMusicVideoCrossLinkEdit(projectId, target, { silent: true });
+
   const enabledTargets = Object.entries(platforms || {}).filter(([, p]) => p?.enabled).map(([t]) => t);
 
-  return { drafts, busy, errors, prepare, discard, platforms, history, enabledTargets, setPlatform, recordPost, removePost };
+  return { drafts, busy, errors, prepare, preview, discard, platforms, history, enabledTargets, setPlatform, recordPost, removePost, setCrossLinks, prepareCrossLinks };
 }

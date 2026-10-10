@@ -14,6 +14,8 @@ import { MUSIC_VIDEO_PUBLISH_TARGETS } from '../../../lib/musicVideoValidation.j
 import { ServerError } from '../../../lib/errorHandler.js';
 import { getSettings, updateSettingsWith } from '../../settings.js';
 import { listProjects } from '../projects.js';
+import { DISTROKID_REMEMBERED_OPTIONS } from '../../../lib/distrokidGenres.js';
+import { mergeCarriedLinks } from '../../../lib/musicVideoCrossLinks.js';
 
 const SETTINGS_KEY = 'musicVideoPublishing';
 const RECEPTIONS = ['good', 'mixed', 'poor'];
@@ -21,12 +23,29 @@ const RECENT_NOTES = 5;
 
 const cleanAccount = (v) => (typeof v === 'string' ? v.trim().replace(/^@/, '').slice(0, 100) : '') || null;
 
-/** Every target's `{ enabled, account }`, defaulting to off. */
+// Release answers that repeat on every project, kept with the platform so any device refills them.
+const REMEMBERED = { distrokid: DISTROKID_REMEMBERED_OPTIONS };
+const SONGWRITER_ROLES = ['music', 'lyrics', 'both'];
+function cleanDefaults(target, stored) {
+  const keys = REMEMBERED[target] || [];
+  const source = stored && typeof stored === 'object' ? stored : {};
+  const out = {};
+  for (const key of keys) {
+    const v = typeof source[key] === 'string' ? source[key].trim().slice(0, 100) : '';
+    if (!v || (key === 'songwriterRole' && !SONGWRITER_ROLES.includes(v))) continue;
+    out[key] = v;
+  }
+  return out;
+}
+
+/** Every target's `{ enabled, account }` (plus `defaults` where answers repeat), defaulting to off. */
 function normalizePlatforms(stored) {
   const source = stored && typeof stored === 'object' ? stored : {};
   return Object.fromEntries(MUSIC_VIDEO_PUBLISH_TARGETS.map((target) => {
     const entry = source[target] && typeof source[target] === 'object' ? source[target] : {};
-    return [target, { enabled: entry.enabled === true, account: cleanAccount(entry.account) }];
+    const platform = { enabled: entry.enabled === true, account: cleanAccount(entry.account) };
+    if (REMEMBERED[target]) platform.defaults = cleanDefaults(target, entry.defaults);
+    return [target, platform];
   }));
 }
 
@@ -35,7 +54,7 @@ export async function getPublishPlatforms() {
   return normalizePlatforms(settings?.[SETTINGS_KEY]?.platforms);
 }
 
-/** Merge `{ [target]: { enabled?, account? } }` into the saved platforms; resolves the full set. */
+/** Merge `{ [target]: { enabled?, account?, defaults? } }` into the saved platforms; resolves the full set. */
 export async function updatePublishPlatforms(patch = {}) {
   let next = null;
   await updateSettingsWith((current) => {
@@ -45,6 +64,16 @@ export async function updatePublishPlatforms(patch = {}) {
       if (!platforms[target] || !change || typeof change !== 'object') continue;
       if (typeof change.enabled === 'boolean') platforms[target].enabled = change.enabled;
       if ('account' in change) platforms[target].account = cleanAccount(change.account);
+      // Per key: a value saves it, an empty one forgets it.
+      if (REMEMBERED[target] && change.defaults && typeof change.defaults === 'object') {
+        const merged = { ...platforms[target].defaults };
+        for (const [key, value] of Object.entries(change.defaults)) {
+          if (!REMEMBERED[target].includes(key)) continue;
+          if (value == null || value === '') delete merged[key];
+          else merged[key] = value;
+        }
+        platforms[target].defaults = cleanDefaults(target, merged);
+      }
     }
     next = platforms;
     return { ...current, [SETTINGS_KEY]: { ...section, platforms } };
@@ -75,6 +104,8 @@ export function normalizePost(existing = {}, input = {}) {
   const post = { ...(existing && typeof existing === 'object' ? existing : {}) };
   if ('url' in input) post.url = typeof input.url === 'string' && input.url.trim() ? input.url.trim() : null;
   if ('reception' in input) post.reception = RECEPTIONS.includes(input.reception) ? input.reception : null;
+  // The release's other posts this one links to (cross-links).
+  if (Array.isArray(input.links)) post.links = mergeCarriedLinks([], input.links);
   if ('notes' in input) post.notes = typeof input.notes === 'string' && input.notes.trim() ? input.notes.trim().slice(0, 2000) : null;
   if (!post.postedAt && (post.url || input.posted === true)) post.postedAt = new Date().toISOString();
   if ('reception' in input || 'notes' in input) post.ratedAt = new Date().toISOString();

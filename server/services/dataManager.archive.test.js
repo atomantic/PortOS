@@ -20,9 +20,9 @@ vi.mock('fs/promises', async (importOriginal) => {
 });
 vi.mock('./appleHealthIngest.js', async (importOriginal) => {
   const actual = await importOriginal();
-  return { ...actual, queueDayWrite: (...args) => {
+  return { ...actual, queueHealthDayMutation: (...args) => {
     controls.queued?.(...args);
-    return actual.queueDayWrite(...args);
+    return actual.queueHealthDayMutation(...args);
   } };
 });
 vi.mock('crypto', async (importOriginal) => {

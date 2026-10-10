@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {Check, X, ChevronLeft, ChevronRight, Clock, Target, AlertTriangle, CalendarDays} from 'lucide-react';
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
@@ -6,25 +6,49 @@ import { formatCount, formatDurationMin, formatTimeOfDay } from '../../utils/for
 import BrailleSpinner from '../BrailleSpinner';
 import EmptyState from '../EmptyState';
 import { localDateStr } from '../meatspace/constants';
+import { usePagedCollection } from '../../hooks/usePagedCollection';
+
+const PAGE_SIZE = 200;
+
+const reviewEventId = event => event.id || event.externalId;
 
 export default function ReviewTab({ accounts = [] }) {
   const [date, setDate] = useState(localDateStr());
-  const [review, setReview] = useState(null);
-  const [loading, setLoading] = useState(true);
   const [confirming, setConfirming] = useState(null);
   const [editingEvent, setEditingEvent] = useState(null);
   const [editForm, setEditForm] = useState({ durationMinutes: '', note: '', goalId: '' });
 
-  const fetchReview = useCallback(async () => {
-    setLoading(true);
-    const data = await api.getDailyReview(date).catch(() => null);
-    setReview(data);
-    setLoading(false);
+  // The server pages the day's events but summarizes the whole day on every
+  // page, so each page's response replaces `meta` while rows accumulate.
+  const fetchPage = useCallback(async ({ cursor, signal }) => {
+    const offset = cursor ?? 0;
+    const data = await api.getDailyReview(date, { limit: PAGE_SIZE, offset }, { signal, silent: true });
+    const nextOffset = data?.nextOffset ?? null;
+    if (!Array.isArray(data?.events) || !Number.isSafeInteger(data.total) || data.total < 0
+      || data.events.length > PAGE_SIZE || !data.summary
+      || (nextOffset !== null && (!Number.isSafeInteger(nextOffset) || nextOffset <= offset))) {
+      throw new Error('Calendar returned an incomplete review page');
+    }
+    return {
+      items: data.events.map((event, index) => ({ id: reviewEventId(event) ?? `${offset}:${index}`, event })),
+      total: data.total,
+      meta: { ...data, date, events: undefined },
+      nextCursor: nextOffset,
+    };
   }, [date]);
+  const { items, meta, loaded, loading: pageLoading, error, hasMore, loadMore, refreshFirst } = usePagedCollection(fetchPage);
 
+  // Review needs the whole day before "to review" is trustworthy; stop on
+  // failure and let Retry resume from the same cursor without losing rows.
   useEffect(() => {
-    fetchReview();
-  }, [fetchReview]);
+    if (loaded && hasMore && !pageLoading && !error) loadMore();
+  }, [loaded, hasMore, pageLoading, error, loadMore]);
+
+  // A superseded day's rows can render for one commit before the hook resets.
+  const review = meta?.date === date ? meta : null;
+  const events = useMemo(() => (review ? items.map(item => item.event) : []), [review, items]);
+  const loading = !error && !(loaded && review);
+  const complete = loaded && !hasMore && !error;
 
   const changeDate = (delta) => {
     const d = new Date(date + 'T12:00:00');
@@ -70,7 +94,7 @@ export default function ReviewTab({ accounts = [] }) {
     } else {
       toast.success(happened ? 'Event confirmed' : 'Event skipped');
     }
-    fetchReview();
+    refreshFirst();
   };
 
   const handleConfirmWithEdit = async (event) => {
@@ -91,21 +115,13 @@ export default function ReviewTab({ accounts = [] }) {
 
     if (!result) return toast.error('Failed to confirm event');
     toast.success(result.progressEntry ? 'Event confirmed & progress logged' : 'Event confirmed');
-    fetchReview();
+    refreshFirst();
   };
 
   const isToday = date === localDateStr();
   const isSyncStale = review?.lastSyncAt
     ? (Date.now() - new Date(review.lastSyncAt).getTime()) > 12 * 60 * 60 * 1000
     : true;
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-12">
-        <BrailleSpinner text="Loading" />
-      </div>
-    );
-  }
 
   return (
     <div className="space-y-4 max-w-3xl">
@@ -134,7 +150,7 @@ export default function ReviewTab({ accounts = [] }) {
             </button>
           )}
         </div>
-        {isSyncStale && (
+        {!loading && isSyncStale && (
           <div className="flex items-center gap-1.5 text-xs text-port-warning">
             <AlertTriangle size={14} />
             <span>{review?.lastSyncAt ? 'Sync data may be stale' : 'No sync data'}</span>
@@ -143,7 +159,7 @@ export default function ReviewTab({ accounts = [] }) {
       </div>
 
       {/* Summary */}
-      {review && (
+      {review && !loading && (
         <div className="flex gap-4 text-xs">
           <span className="text-gray-500">{formatCount(review.summary.totalEvents)} events</span>
           {review.summary.confirmed > 0 && (
@@ -163,9 +179,31 @@ export default function ReviewTab({ accounts = [] }) {
         </div>
       )}
 
+      {/* The date controls stay live while a day loads so a slow day can be abandoned. */}
+      {loading && (
+        <div className="flex items-center justify-center py-12">
+          <BrailleSpinner text="Loading" />
+        </div>
+      )}
+
       {/* Events */}
-      {(!review?.events?.length) ? (
-        accounts.length === 0 ? (
+      {!loading && !complete && (
+        <div role={error ? 'alert' : 'status'} className="flex flex-wrap items-center gap-3 rounded border border-port-border bg-port-card p-3 text-sm text-gray-400">
+          <p>{error
+            ? (review
+              ? `Showing ${formatCount(events.length)} of ${formatCount(review.total)} events. The rest could not be loaded, so the review is incomplete.`
+              : 'The daily review could not be loaded.')
+            : `Loading events… showing ${formatCount(events.length)} of ${formatCount(review.total)}.`}</p>
+          {error && (
+            <button type="button" onClick={loadMore} className="min-h-[44px] rounded px-3 py-2 text-port-accent hover:bg-port-border">
+              Retry
+            </button>
+          )}
+        </div>
+      )}
+
+      {loading ? null : (!events.length) ? (
+        !complete ? null : accounts.length === 0 ? (
           <EmptyState
             icon={CalendarDays}
             title="No calendar connected"
@@ -180,7 +218,7 @@ export default function ReviewTab({ accounts = [] }) {
         )
       ) : (
         <div className="space-y-2">
-          {[...review.events]
+          {[...events]
             .sort((a, b) => {
               if (a.isAllDay && !b.isAllDay) return -1;
               if (!a.isAllDay && b.isAllDay) return 1;
@@ -188,8 +226,10 @@ export default function ReviewTab({ accounts = [] }) {
             })
             .map(event => {
               const eventId = event.id || event.externalId;
-              const isConfirmed = event.confirmation?.happened === true;
-              const isSkipped = event.confirmation?.happened === false;
+              // The response's day-wide map is fresher than a row loaded on an earlier page.
+              const confirmation = review.confirmations?.[eventId] ?? event.confirmation;
+              const isConfirmed = confirmation?.happened === true;
+              const isSkipped = confirmation?.happened === false;
               const isReviewed = isConfirmed || isSkipped;
               const isEditing = editingEvent === eventId;
 
@@ -343,7 +383,7 @@ export default function ReviewTab({ accounts = [] }) {
       )}
 
       {/* Progress Entries */}
-      {review?.progressEntries?.length > 0 && (
+      {!loading && review?.progressEntries?.length > 0 && (
         <div>
           <h3 className="text-sm font-medium text-gray-400 mb-2">Progress Logged Today</h3>
           <div className="space-y-1">

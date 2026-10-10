@@ -297,6 +297,19 @@ describe('backup routes', () => {
       expect(backup.deleteSnapshot).not.toHaveBeenCalled();
     });
 
+    it('surfaces the structured conflict when a restore or download is reading the snapshot (#10898)', async () => {
+      getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });
+      backup.deleteSnapshot.mockRejectedValueOnce(new ServerError(
+        'Snapshot is in use by a restore or download: snap-1. Retry when it finishes.',
+        { status: 409, code: 'SNAPSHOT_IN_USE', context: { snapshotId: 'snap-1' } },
+      ));
+
+      const res = await request(buildApp()).delete('/api/backup/snapshots/snap-1');
+
+      expect(res.status).toBe(409);
+      expect(res.body).toMatchObject({ code: 'SNAPSHOT_IN_USE', context: { snapshotId: 'snap-1' } });
+    });
+
     it('returns 400 when the backup destination is not configured', async () => {
       getSettings.mockResolvedValue({ backup: {} });
       const res = await request(buildApp()).delete('/api/backup/snapshots/snap-1');
@@ -336,6 +349,21 @@ describe('backup routes', () => {
         'snap-1',
         { dryRun: false, subdirFilter: 'data' }
       );
+    });
+
+    it('refuses a restore of a snapshot whose deletion is in progress with a structured conflict (#10898)', async () => {
+      getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });
+      backup.restoreSnapshot.mockRejectedValueOnce(new ServerError(
+        'Snapshot is being deleted: snap-1',
+        { status: 409, code: 'SNAPSHOT_DELETING', context: { snapshotId: 'snap-1' } },
+      ));
+
+      const res = await request(buildApp())
+        .post('/api/backup/restore')
+        .send({ snapshotId: 'snap-1', dryRun: false });
+
+      expect(res.status).toBe(409);
+      expect(res.body).toMatchObject({ code: 'SNAPSHOT_DELETING', context: { snapshotId: 'snap-1' } });
     });
 
     it('forwards source with file restore preview and execution requests', async () => {

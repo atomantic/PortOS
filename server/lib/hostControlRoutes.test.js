@@ -340,6 +340,126 @@ describe('Pipeline authoring policy (#10068)', () => {
   });
 });
 
+describe('Pipeline authoring remainder policy (#10907)', () => {
+  // Operations that reach runStagedLLM (or the cover render queue) with a
+  // caller-chosen provider; the whole operation needs operator authority.
+  const protectedRoutes = [
+    'POST /api/pipeline/series/generate-concept',
+    'POST /api/pipeline/series/merge/ai-resolve',
+    'POST /api/pipeline/series/:id/discover-voice',
+    'POST /api/pipeline/series/:id/arc/generate',
+    'POST /api/pipeline/series/:id/arc/verify',
+    'POST /api/pipeline/series/:id/arc/resolve-issues',
+    'POST /api/pipeline/series/:id/arc/derive-from-manuscript',
+    'POST /api/pipeline/series/:id/seasons/:seasonId/episodes/generate',
+    'POST /api/pipeline/series/:id/seasons/:seasonId/verify',
+    'POST /api/pipeline/series/:id/seasons/:seasonId/generate-beats',
+    'POST /api/pipeline/series/:id/seasons/:seasonId/cover-concepts/generate',
+    'POST /api/pipeline/series/:id/seasons/:seasonId/cover/render',
+    'POST /api/pipeline/series/:id/seasons/:seasonId/back-cover/render',
+    'POST /api/pipeline/series/:id/reverse-outline/generate',
+    'POST /api/pipeline/series/:id/continuity-bible/generate',
+    'POST /api/pipeline/issues/:id/pov-rewrites',
+    'POST /api/pipeline/series/:id/manuscript/completeness',
+    'POST /api/pipeline/series/:id/manuscript/completeness/stream',
+    'POST /api/pipeline/series/:id/manuscript/review/comments/:commentId/fix',
+    'POST /api/pipeline/series/:id/manuscript/reformat',
+    'POST /api/pipeline/issues/:id/editorial/analyze',
+    'POST /api/pipeline/series/:id/editorial/analyze',
+    'POST /api/pipeline/issues/:id/judge',
+    'POST /api/pipeline/series/:id/editorial/panel/run',
+    'POST /api/pipeline/series/:id/editorial/rank',
+    'POST /api/pipeline/series/:id/review',
+    'POST /api/pipeline/series/:id/review/fix',
+    'POST /api/pipeline/series/:id/editorial/checks/run',
+    'POST /api/pipeline/series/:id/editorial/custom-checks/preview',
+    'POST /api/pipeline/issues/:id/cover-concepts/generate',
+    'POST /api/pipeline/issues/:id/stages/comicPages/cover/render',
+    'POST /api/pipeline/issues/:id/stages/comicPages/back-cover/render',
+    'POST /api/pipeline/issues/:id/stages/storyboards/extract-scenes',
+    'POST /api/pipeline/issues/:id/stages/:stageId/extract-canon',
+    'POST /api/pipeline/issues/:id/stages/:stageId/describe-canon',
+    'POST /api/pipeline/issues/:id/stages/audio/cues/generate',
+  ];
+  // Reviewed Pipeline mutations that never reach the staged runner: record
+  // CRUD, cancellation, deterministic transforms and local-sidecar media.
+  const recordOrContained = [
+    'DELETE /api/pipeline/audio/music-library/:filename',
+    'DELETE /api/pipeline/issues/:id',
+    'DELETE /api/pipeline/issues/:id/pov-rewrites/:rewriteId',
+    'DELETE /api/pipeline/issues/:id/stages/audio/music',
+    'DELETE /api/pipeline/series/:id',
+    'DELETE /api/pipeline/series/:id/seasons/:seasonId',
+    'DELETE /api/pipeline/editorial/custom-checks/:id',
+    'PATCH /api/pipeline/editorial/checks/:id',
+    'PATCH /api/pipeline/editorial/custom-checks/:id',
+    'PATCH /api/pipeline/editorial/readiness-gate',
+    'PATCH /api/pipeline/issues/:id',
+    'PATCH /api/pipeline/issues/:id/stages/audio/lines/:lineIdx',
+    'PATCH /api/pipeline/issues/:id/stages/comicPages/pages/:pageIndex',
+    'PATCH /api/pipeline/series/:id',
+    'PATCH /api/pipeline/series/:id/arc-fields/:field/lock',
+    'PATCH /api/pipeline/series/:id/manuscript/review/comments/:commentId',
+    'PATCH /api/pipeline/series/:id/seasons/:seasonId',
+    'PATCH /api/pipeline/tts/narrate/segment',
+    'POST /api/pipeline/editorial/custom-checks',
+    'POST /api/pipeline/issues/:id/auto-run-text/cancel',
+    'POST /api/pipeline/issues/:id/stages/:stageId/restore',
+    'POST /api/pipeline/issues/:id/stages/audio/cues/:cueIdx/render',
+    'POST /api/pipeline/issues/:id/stages/audio/extract-lines',
+    'POST /api/pipeline/issues/:id/stages/audio/lines/:lineIdx/render',
+    'POST /api/pipeline/issues/:id/stages/audio/music/attach',
+    'POST /api/pipeline/issues/:id/stages/audio/music/generate',
+    'POST /api/pipeline/issues/:id/stages/audio/music/upload',
+    'POST /api/pipeline/issues/:id/stages/comicPages/extract-pages',
+    'POST /api/pipeline/issues/:id/stages/storyboards/scenes/:index/video',
+    'POST /api/pipeline/series',
+    'POST /api/pipeline/series/:id/arc/derive-from-manuscript/commit',
+    'POST /api/pipeline/series/:id/autopilot/cancel',
+    'POST /api/pipeline/series/:id/autopilot/model-outcomes',
+    'POST /api/pipeline/series/:id/autopilot/pause',
+    'POST /api/pipeline/series/:id/continuity-bible/generate/cancel',
+    'POST /api/pipeline/series/:id/editorial/analyze/cancel',
+    'POST /api/pipeline/series/:id/editorial/checks/run/cancel',
+    'POST /api/pipeline/series/:id/editorial/panel/run/cancel',
+    'POST /api/pipeline/series/:id/issues',
+    'POST /api/pipeline/series/:id/manuscript/completeness/cancel',
+    'POST /api/pipeline/series/:id/manuscript/cuts/apply',
+    'POST /api/pipeline/series/:id/manuscript/cuts/preview',
+    'POST /api/pipeline/series/:id/manuscript/review/comments/:commentId/accept',
+    'POST /api/pipeline/series/:id/manuscript/review/comments/:commentId/undo',
+    'POST /api/pipeline/series/:id/reverse-outline/generate/cancel',
+    'POST /api/pipeline/series/:id/review/cancel',
+    'POST /api/pipeline/series/:id/review/fix/cancel',
+    'POST /api/pipeline/series/:id/seasons',
+    'POST /api/pipeline/series/:id/seasons/:seasonId/generate-beats/cancel',
+    'POST /api/pipeline/series/merge',
+    'POST /api/pipeline/series/merge/preview',
+    'POST /api/pipeline/tts/narrate',
+    'POST /api/pipeline/tts/narrate/segment',
+    'POST /api/pipeline/tts/preview',
+    'POST /api/pipeline/tts/synthesize',
+    'PUT /api/pipeline/series/:id/manuscript/sections/:issueId',
+  ];
+
+  it('gates each audited operation and maps every entry to a mounted route', () => {
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => method + ' ' + path));
+    for (const route of protectedRoutes) {
+      const [method, path] = route.split(' ');
+      expect(mounted.has(route), route).toBe(true);
+      expect(hostControlRouteFor(method, path), route).toBe(route);
+    }
+  });
+
+  it('classifies every mounted Pipeline mutation: gated, or reviewed as non-agent', () => {
+    const open = getApiRouteCatalog().routes
+      .filter(({ method, path }) => /^(POST|PUT|PATCH|DELETE)$/.test(method) && /^\/api\/pipeline(\/|$)/.test(path))
+      .filter(({ method, path }) => !isHostControlRoute(method, path))
+      .map(({ method, path }) => `${method} ${path}`);
+    expect([...new Set(open)].sort()).toEqual([...recordOrContained].sort());
+  });
+});
+
 describe('Music Video agent workflow policy (#9869)', () => {
   it('gates mounted agent workflows and keeps record, cancellation and contained rendering contracts', () => {
     const protectedRoutes = [
@@ -422,5 +542,111 @@ describe('FableLoom mutation inventory (#10668)', () => {
     const open = mutations.filter(({ method, path }) => !isHostControlRoute(method, path))
       .map(({ method, path }) => `${method} ${path}`);
     expect([...new Set(open)].sort()).toEqual([...recordOrContained].sort());
+  });
+});
+
+describe('Creative Director and Creative Commissions mutation inventory (#10867)', () => {
+  // Reviewed operations that only reduce execution or remove records. Every
+  // other mutation steers, enqueues or arms writable agents and needs host
+  // control; a new route must be classified here or in HOST_CONTROL_ROUTES.
+  const reduceOrRemove = [
+    'POST /api/creative-director/:id/pause',
+    'POST /api/creative-director/:id/stop',
+    'DELETE /api/creative-director/:id',
+    'POST /api/creative-director/auto-cast/suggest',
+    'DELETE /api/creative-commission/:id',
+  ];
+
+  const mutations = () => getApiRouteCatalog().routes.filter(({ method, path }) =>
+    /^(POST|PUT|PATCH|DELETE)$/.test(method) && /^\/api\/creative-(director|commission)(\/|$)/.test(path));
+
+  it('gates every execution or steering mutation and explicitly preserves the harmless five', () => {
+    const open = mutations().filter(({ method, path }) => !isHostControlRoute(method, path))
+      .map(({ method, path }) => `${method} ${path}`);
+    expect([...new Set(open)].sort()).toEqual([...reduceOrRemove].sort());
+    expect(new Set(mutations().map(({ method, path }) => `${method} ${path}`)).size).toBe(22);
+  });
+});
+
+describe('Caller-prompted AI outside Pipeline policy (#10908)', () => {
+  // Free caller text and/or a caller-chosen provider reach the prompt runner
+  // with no tool-free restriction, so a CLI/TUI provider runs as an agent.
+  const protectedRoutes = [
+    'POST /api/games/:id/feedback',
+    'POST /api/rounds/generate',
+    'POST /api/rounds/:id/generate',
+    'POST /api/rounds/:id/evaluate',
+    'POST /api/rounds/:id/derive-parts',
+    'POST /api/agents/personalities/generate',
+    'POST /api/system-resources/triage',
+    'POST /api/mood-boards/:id/synthesize-style',
+    'POST /api/mood-boards/:id/compose-prompt',
+    'POST /api/mood-boards/:id/analyze',
+    'POST /api/cos/tasks/enhance',
+  ];
+
+  it('gates each audited operation and maps every entry to a mounted route', () => {
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => method + ' ' + path));
+    for (const route of protectedRoutes) {
+      const [method, path] = route.split(' ');
+      expect(mounted.has(route), route).toBe(true);
+      expect(hostControlRouteFor(method, path), route).toBe(route);
+    }
+  });
+
+  it('keeps record CRUD and reads in those families open', () => {
+    for (const [method, path] of [
+      ['POST', '/api/games'],
+      ['PATCH', '/api/games/:id'],
+      ['POST', '/api/rounds'],
+      ['PATCH', '/api/rounds/:id'],
+      ['PUT', '/api/agents/personalities/:id'],
+      ['GET', '/api/system-resources/models/manifest'],
+      ['PATCH', '/api/mood-boards/:id'],
+      ['GET', '/api/mood-boards/:id/analyze'],
+    ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
+  });
+});
+
+describe('3D model rigging host-workers (#10922)', () => {
+  const protectedRoutes = [
+    'POST /api/rigging/models/:id',
+    'POST /api/rigging/models/:id/retarget',
+  ];
+
+  it('gates each route and maps every entry to a mounted route', () => {
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => method + ' ' + path));
+    for (const route of protectedRoutes) {
+      const [method, path] = route.split(' ');
+      expect(mounted.has(route), route).toBe(true);
+      expect(hostControlRouteFor(method, path), route).toBe(route);
+    }
+  });
+
+  it('keeps reads open', () => {
+    for (const [method, path] of [
+      ['GET', '/api/rigging/models/:id'],
+    ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
+  });
+});
+
+describe('Remote desktop session policy (#10923)', () => {
+  const protectedRoutes = [
+    'POST /api/remote-desktop/sessions',
+  ];
+
+  it('gates each route and maps every entry to a mounted route', () => {
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => method + ' ' + path));
+    for (const route of protectedRoutes) {
+      const [method, path] = route.split(' ');
+      expect(mounted.has(route), route).toBe(true);
+      expect(hostControlRouteFor(method, path), route).toBe(route);
+    }
+  });
+
+  it('keeps reads open', () => {
+    for (const [method, path] of [
+      ['GET', '/api/remote-desktop/status'],
+    ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
   });
 });

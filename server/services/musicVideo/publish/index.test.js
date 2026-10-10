@@ -14,8 +14,9 @@ vi.mock('../../../lib/paths.js', async (importOriginal) => makePathsProxy(await 
 
 const { PATHS } = await import('../../../lib/paths.js');
 const projects = await import('../projects.js');
-const { preparePublishDraft, discardPublishDraft, listPublishDrafts, recordPublishPost, removePublishPost } = await import('./index.js');
+const { preparePublishDraft, discardPublishDraft, listPublishDrafts, recordPublishPost, removePublishPost, prepareCrossLinkEdit, setPublishCrossLinks } = await import('./index.js');
 const { musicVideoEvents } = await import('../events.js');
+const { stackerNewsAdapter } = await import('./stackerNews.js');
 
 const platforms = { stackerNews: { enabled: true, account: null }, youtube: { enabled: true, account: null }, x: { enabled: true, account: 'antic' } };
 
@@ -33,10 +34,18 @@ function fakeBrowser() {
         pages: () => pages.filter((page) => !page.closed),
         newPage: async () => {
           const handlers = [];
+          const navigated = [];
+          const frame = {};
           const page = {
             closed: false, bringToFront: vi.fn(async () => {}), screenshot: vi.fn(async () => Buffer.from('jpg')),
-            url: () => `https://example.com/post/${pages.indexOf(page)}`,
+            href: null, text: '',
+            url: () => page.href || `https://example.com/post/${pages.indexOf(page)}`,
             once: (_event, fn) => handlers.push(fn),
+            on: (event, fn) => { if (event === 'framenavigated') navigated.push(fn); },
+            mainFrame: () => frame,
+            // The director moves the tab on (by posting, or browsing away).
+            navigate: async (href, text = '') => { page.href = href; page.text = text; navigated.forEach((fn) => fn(frame)); await new Promise((r) => setTimeout(r, 0)); },
+            waitForFunction: vi.fn(async (_fn, want) => { if (!page.text.includes(want)) throw new Error('timed out'); }),
             isClosed() { return this.closed; },
             close: vi.fn(async function close() { page.closed = true; handlers.forEach((fn) => fn()); }),
           };
@@ -73,9 +82,29 @@ describe('publish drafts (#9282)', () => {
     const { connect } = fakeBrowser();
     const substack = adapter({ label: 'Substack' });
     await preparePublishDraft(id, 'substack', {}, { connect, adapters: { substack }, platforms: { substack: { enabled: true, account: 'example' } } });
-    expect(substack.prepare).toHaveBeenCalledWith(expect.anything(), { publication: 'example.substack.com', videoUrl: 'https://youtu.be/abc', title: 'Song', subtitle: 'Sub', body: 'b' });
+    expect(substack.prepare).toHaveBeenCalledWith(expect.anything(), { publication: 'example.substack.com', videoUrl: 'https://youtu.be/abc', title: 'Song', subtitle: 'Sub', body: 'b', crossLinks: ['youtube'] });
     await expect(preparePublishDraft(id, 'substack', { again: true }, { connect, adapters: { substack }, platforms: { substack: { enabled: true, account: null } } }))
       .rejects.toMatchObject({ status: 422, message: expect.stringMatching(/publication/) });
+  });
+
+  it('follows a Suno share link to its song page for the Suno post, and records the song page', async () => {
+    const songId = '0a1b2c3d-1111-4222-8333-444455556666';
+    const { id } = await projects.createProject({ name: 'Release' });
+    const { connect } = fakeBrowser();
+    const suno = adapter({ label: 'Suno' });
+    const resolveUrl = vi.fn(async () => `https://suno.com/song/${songId}?sh=abc`);
+    const deps = { connect, adapters: { suno }, platforms: { suno: { enabled: true, account: null } }, resolveUrl };
+    const draft = await preparePublishDraft(id, 'suno', { songUrl: 'https://suno.com/s/AbCdEf123' }, deps);
+    expect(resolveUrl).toHaveBeenCalledWith('https://suno.com/s/AbCdEf123', expect.objectContaining({ allowUrl: expect.any(Function) }));
+    expect(suno.prepare).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ songUrl: `https://suno.com/song/${songId}` }));
+    expect(draft.songUrl).toBe(`https://suno.com/song/${songId}`);
+
+    const dead = { ...deps, resolveUrl: vi.fn(async () => null) };
+    await expect(preparePublishDraft(id, 'suno', { songUrl: 'https://suno.com/s/Gone1234' }, dead))
+      .rejects.toMatchObject({ status: 422, message: expect.stringMatching(/suno\.com\/song/) });
+
+    const { post } = await recordPublishPost(id, 'suno', { url: 'https://suno.com/s/AbCdEf123' }, { resolveUrl });
+    expect(post.url).toBe(`https://suno.com/song/${songId}`);
   });
 
   it('fills a reviewable draft but never submits it; records a manually published link', async () => {
@@ -90,6 +119,41 @@ describe('publish drafts (#9282)', () => {
     const { project, post } = await recordPublishPost(id, 'stackerNews', { url: 'https://stacker.news/items/1' });
     expect(post.url).toBe('https://stacker.news/items/1');
     expect(project.publishKit.posts.stackerNews.url).toBe(post.url);
+  });
+
+  it('starts a replaced post over with only the links its replacement carries, and unlinks it from the others', async () => {
+    const id = await readyProject();
+    await recordPublishPost(id, 'youtube', { url: 'https://youtu.be/old' });
+    await recordPublishPost(id, 'x', { url: 'https://x.com/a/status/1', links: ['youtube'] });
+    const { post, project } = await recordPublishPost(id, 'youtube', { url: 'https://youtu.be/new', links: [] });
+    expect(post.links).toEqual([]);
+    expect(project.publishKit.posts.x.links).toEqual([]);
+  });
+
+  it('records the post the director makes by hand in the filled tab, and nothing else they browse to', async () => {
+    const id = await readyProject();
+    const { connect, pages } = fakeBrowser();
+    const events = [];
+    const onEvent = (e) => events.push(e);
+    musicVideoEvents.on('publish-draft', onEvent);
+    try {
+      const adapters = { stackerNews: adapter({ findPost: stackerNewsAdapter.findPost }) };
+      const draft = await preparePublishDraft(id, 'stackerNews', { territory: 'art' }, { connect, adapters, platforms });
+      // Another item's page, or a page without this post's title, is not this post.
+      await pages[0].navigate('https://stacker.news/~art', 'Song');
+      await pages[0].navigate('https://stacker.news/items/99', 'Someone else\'s post');
+      expect((await projects.getProject(id)).publishKit.posts?.stackerNews).toBeUndefined();
+
+      await pages[0].navigate('https://stacker.news/items/123', 'Song \\ stacker news');
+      await vi.waitFor(() => expect(events.at(-1)).toMatchObject({ draftId: draft.draftId, state: 'posted', url: 'https://stacker.news/items/123' }));
+      expect(events.at(-1).project.publishKit.posts.stackerNews.url).toBe('https://stacker.news/items/123');
+      expect((await projects.getProject(id)).publishKit.posts.stackerNews).toMatchObject({ url: 'https://stacker.news/items/123', postedAt: expect.any(String) });
+      expect(adapters.stackerNews.submit).not.toHaveBeenCalled();
+      expect(pages[0].closed).toBe(false); // the tab now shows their post
+      expect(await listPublishDrafts(id, { connect })).toEqual([]);
+    } finally {
+      musicVideoEvents.off('publish-draft', onEvent);
+    }
   });
 
   it('closes the earlier draft when the same target is filled again, and discards on request', async () => {
@@ -266,5 +330,41 @@ describe('publish drafts (#9282)', () => {
     await projects.mutateProjectRecord(id, (current) => ({ project: { ...current, uploadedAudioFilename: 'gone.wav' } }));
     await expect(preparePublishDraft(id, 'distrokid', options, deps)).rejects.toMatchObject({ status: 422, code: 'PUBLISH_ASSET_MISSING', message: expect.stringMatching(/missing on disk/) });
     expect(connect).not.toHaveBeenCalled();
+  });
+
+  it('records the links a filled draft carried when its link is pasted', async () => {
+    const id = await readyProject();
+    const { connect } = fakeBrowser();
+    await preparePublishDraft(id, 'stackerNews', { territory: 'art' }, { connect, adapters: { stackerNews: adapter() }, platforms });
+    const { post } = await recordPublishPost(id, 'stackerNews', { url: 'https://stacker.news/items/5' });
+    expect(post.links).toEqual(['youtube']);
+  });
+
+  it('backfills a post made before the others: fills the missing links, leaves the tab for the director, then counts them once Saved', async () => {
+    const id = await readyProject();
+    await projects.mutateProjectRecord(id, (current) => ({ project: { ...current, publishKit: { ...current.publishKit, posts: {
+      // Posted before YouTube existed, and before posts recorded their links.
+      x: { url: 'https://x.com/example/status/42', postedAt: '2026-01-01T00:00:00Z' },
+      youtube: { url: 'https://youtu.be/abc', postedAt: '2026-01-01T01:00:00Z', links: [] },
+      stackerNews: { url: 'https://stacker.news/items/7', postedAt: '2026-01-01T02:00:00Z', links: ['youtube'] },
+    } } } }));
+    const { connect, pages, browsers } = fakeBrowser();
+    const x = { label: 'X', prepare: vi.fn(async () => ({ leftForYou: ['Reply'] })) };
+    const filled = await prepareCrossLinkEdit(id, 'x', { connect, crossLinkAdapters: { x } });
+    expect(x.prepare.mock.calls[0][1]).toMatchObject({ target: 'x', url: 'https://x.com/example/status/42', text: 'Music video: https://youtu.be/abc\nStacker News: https://stacker.news/items/7' });
+    expect(filled).toMatchObject({ target: 'x', links: ['youtube', 'stackerNews'], summary: { leftForYou: ['Reply'] }, screenshot: expect.stringMatching(/^data:image\/jpeg/) });
+    expect(pages[0].closed).toBe(false);
+    expect(browsers[0].close).toHaveBeenCalled();
+
+    const { post } = await recordPublishPost(id, 'x', { links: filled.links });
+    expect(post.links).toEqual(['youtube', 'stackerNews']);
+    await expect(prepareCrossLinkEdit(id, 'x', { connect, crossLinkAdapters: { x } })).rejects.toMatchObject({ status: 409, code: 'PUBLISH_CROSS_LINKS_CURRENT' });
+    await expect(prepareCrossLinkEdit(id, 'suno', { connect, crossLinkAdapters: { suno: x } })).rejects.toMatchObject({ status: 422 });
+  });
+
+  it('turns cross-links in new drafts off and on', async () => {
+    const id = await readyProject();
+    expect((await setPublishCrossLinks(id, false)).project.publishKit).toMatchObject({ crossLinks: false, copy: { stackerNews: { title: 'Song' } } });
+    expect((await setPublishCrossLinks(id, true)).project.publishKit.crossLinks).toBe(true);
   });
 });

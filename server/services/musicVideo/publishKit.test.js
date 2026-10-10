@@ -228,7 +228,7 @@ describe('publishing kit build (#9281)', () => {
       await kit.startPublishKitBuild(id);
       await vi.waitFor(async () => expect((await projects.getProject(id)).publishKit?.builtAt).toBeTruthy(), { timeout: 90000, interval: 250 });
       const vertical = (await projects.getProject(id)).publishKit.exports.find((e) => e.kind === 'vertical-9x16');
-      expect(vertical.layout).toBe('fit');
+      expect(vertical).toMatchObject({ layout: 'fit', fitReason: 'unavailable' });
       const probed = await runFfmpegProcess({ bin: ffmpeg, args: ['-hide_banner', '-i', join(PATHS.videos, vertical.filename), '-f', 'null', '-'] });
       expect(probed.ok).toBe(true);
       expect(warn.mock.calls.some(([m]) => /fitting the master/.test(m))).toBe(true);
@@ -245,7 +245,7 @@ describe('publishing kit build (#9281)', () => {
     try {
       await kit.startPublishKitBuild(id);
       await vi.waitFor(async () => expect((await projects.getProject(id)).publishKit?.builtAt).toBeTruthy(), { timeout: 90000, interval: 250 });
-      expect((await projects.getProject(id)).publishKit.exports.find((e) => e.kind === 'vertical-9x16').layout).toBe('fit');
+      expect((await projects.getProject(id)).publishKit.exports.find((e) => e.kind === 'vertical-9x16')).toMatchObject({ layout: 'fit', fitReason: 'changed' });
       expect(native).not.toHaveBeenCalled();
     } finally {
       native.mockRestore();
@@ -347,6 +347,16 @@ describe('publishing kit copy (#9281)', () => {
     expect(project.publishKit.links).not.toHaveProperty('song');
     // Notes, links and options are draft inputs, not posts: a draft still runs without the replace confirmation.
     expect(project.publishKit).not.toHaveProperty('copyEditedAt');
+  });
+
+  it('saves a Suno share link as the song page it opens, and keeps it as typed when it cannot be followed', async () => {
+    const { id } = await projects.createProject({ name: 'Example Song' });
+    const songId = '0a1b2c3d-1111-4222-8333-444455556666';
+    const resolveUrl = async () => `https://suno.com/song/${songId}`;
+    let { project } = await kit.updatePublishKitCopy(id, { links: { song: 'https://suno.com/s/AbCdEf123' } }, { resolveUrl });
+    expect(project.publishKit.links.song).toBe(`https://suno.com/song/${songId}`);
+    ({ project } = await kit.updatePublishKitCopy(id, { links: { song: 'https://suno.com/s/Gone1234' } }, { resolveUrl: async () => null }));
+    expect(project.publishKit.links.song).toBe('https://suno.com/s/Gone1234');
   });
 
   it('clears tags an earlier draft wrote once hashtags are unticked', async () => {

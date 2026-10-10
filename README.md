@@ -332,7 +332,7 @@ After that, `https://<machine>.<tailnet>.ts.net:5555` is the user-facing URL on 
 
 The same walkthrough is always available in **Settings → Setup**. It verifies one runnable AI provider as well as secure remote access, and links directly to every action PortOS cannot perform at the account level. The Dashboard and Instances page surface the same network state; Unix and Windows update scripts retry certificate provisioning and print the guide after every update. See the [complete setup guide](./docs/SETUP.md).
 
-PM2 keeps PortOS running in the background. To configure startup after a reboot, run `npm run pm2:startup` from the repository root and follow the platform-specific instructions it prints, then run `npm run pm2:save` to save the process list. `npm start`, `npm run pm2:start`, and `npm run pm2:restart` save the selected app set, but do not install the startup service.
+PM2 keeps PortOS running in the background. To configure startup after a reboot, run `npm run pm2:startup` from the repository root and follow the platform-specific instructions it prints, then run `npm run pm2:save` to save the process list. `npm start`, `npm run pm2:start`, and `npm run pm2:restart` save the selected app set, but do not install the startup service. `npm start` is the production entry point: it builds the client first. `npm run pm2:start` and `npm run pm2:restart` only manage the PM2 processes, so they require an already-built client (`client/dist`) and a prepared database; on a fresh checkout run `npm start` once instead.
 
 ### Development Mode
 

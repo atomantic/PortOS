@@ -953,3 +953,12 @@ describe('unrepresentable status/priority never drops a task (#7239)', () => {
       .toEqual(['CRITICAL', 'HIGH', 'LOW', 'MEDIUM']);
   });
 });
+
+describe('self-improve task ids survive a read round-trip', () => {
+  it('keeps the generator-minted id instead of rewriting it to task-<id> (double-spawn regression)', () => {
+    const id = 'self-improve-model-comparison-refresh-abc123';
+    const md = generateTasksMarkdown(addTask([], { id, description: 'Research models' }));
+    const [parsed] = parseTasksMarkdown(md);
+    expect(parsed.id).toBe(id);
+  });
+});

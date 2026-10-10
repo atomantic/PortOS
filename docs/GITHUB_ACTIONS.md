@@ -903,6 +903,18 @@ Everything else fails closed and runs the complete suite again: a direct push to
 `release`, a hotfix committed on `release` that changes the merge tree, a
 missing, failed, or merely impact-scoped gate, or an unreachable checks API.
 
+### Pinning the release tag to the verified tree
+
+The release action creates a missing tag at the repository default branch
+unless told otherwise, and main may have advanced since CI verified the release
+push. `release.yml` therefore passes `target_commitish: ${{ github.sha }}`, and
+`scripts/verify-release-tag.js` covers the case the input cannot: a tag that
+already exists is peeled (annotated tags included) and its commit's tree must
+equal the released tree. A different tree, a non-commit target, or any lookup
+GitHub does not answer fails the job; the script is read-only and never moves
+or deletes a tag. It runs again after publication to confirm the new tag landed
+on the verified tree.
+
 ## Working with CI
 
 ### Skip CI

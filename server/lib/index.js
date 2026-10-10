@@ -322,6 +322,7 @@ export * from './settingsStore.js';
 export * from './mimeTypes.js';
 export * from './motionSkills.js';
 export * from './pathContainment.js';
+export * from './repoPublishPath.js';
 export * from './paths.js';
 export * from './pathSafety.js';
 export * from './uploads.js';
@@ -755,6 +756,7 @@ export * from './creativeDirectorVideoCompiler.js';
 export * from './providerTypes.js';
 export * from './notificationTypes.js';
 export * from './videoTimelineFades.js';
+export * from './videoTimelineSourceSpans.js';
 // `tokenize` collides with `bm25.js`'s own tokenizer — namespaced like `runners`.
 export * as voiceEcho from './voiceEcho.js';
 export * from './voiceEngines.js';
@@ -832,6 +834,7 @@ export * from './imageLimits.js';
 export * from './musicVideoActionContract.js';
 export * from './musicVideoGrade.js';
 export * from './musicVideoDependencies.js';
+export * from './musicVideoCrossLinks.js';
 export * from './musicVideoExcerptRange.js';
 
 export * from './musicVideoPlateEvidence.js';

@@ -10,6 +10,7 @@ vi.mock('../../services/api', () => ({
   clearAuthPassword: vi.fn(),
   listAuthSessions: vi.fn(),
   revokeAuthSession: vi.fn(),
+  revokeAllAgentSessions: vi.fn(),
   getAgentKeyStatus: vi.fn(),
   setAgentKeyEnabled: vi.fn(),
   rotateAgentKey: vi.fn(),
@@ -166,6 +167,32 @@ describe('SecurityTab', () => {
     await waitFor(() => expect(api.revokeAuthSession).toHaveBeenCalledWith('agent-1'));
     await waitFor(() => expect(screen.queryByText('1 agent session')).not.toBeInTheDocument());
     // Revoking is scoped to that one session — the password form stays intact.
+    expect(screen.getByText('Login password enabled')).toBeInTheDocument();
+  });
+
+  it('bounds the session list and revokes all agent sessions only after confirmation', async () => {
+    api.getAuthStatus.mockResolvedValue({ enabled: true });
+    api.listAuthSessions.mockResolvedValue({
+      sessions: [
+        { id: 'agent-1', label: 'agent', expiresAt: Date.parse('2026-10-01T00:00:00Z') },
+        { id: 'agent-2', label: 'agent', expiresAt: Date.parse('2026-10-01T00:00:00Z') },
+      ],
+    });
+    api.revokeAllAgentSessions.mockResolvedValue({ ok: true, revoked: 2 });
+
+    render(<SecurityTab />);
+
+    const list = await screen.findByRole('list', { name: 'Agent sessions' });
+    expect(list.className).toContain('max-h-72');
+    expect(list.className).toContain('overflow-y-auto');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke all agent sessions' }));
+    // First click only asks for confirmation.
+    expect(api.revokeAllAgentSessions).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm revoke all' }));
+
+    await waitFor(() => expect(api.revokeAllAgentSessions).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByText('2 agent sessions')).not.toBeInTheDocument());
     expect(screen.getByText('Login password enabled')).toBeInTheDocument();
   });
 
