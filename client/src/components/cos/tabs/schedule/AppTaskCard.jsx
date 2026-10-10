@@ -48,9 +48,12 @@ export default function AppTaskCard({ taskType, config, apps, onTrigger, onConfi
       {/* `flex flex-col items-stretch` is load-bearing: a stretched <button> centers its
           content box vertically, which floats a short card's body to the middle of the
           card and breaks the top alignment across a row. */}
+      {/* The card body is the single configure affordance (a native button, so it stays
+          keyboard-operable). The app-scoped variant also exposes its expanded state here. */}
       <button
         type="button"
         onClick={() => onConfigure(taskType)}
+        aria-expanded={appContext ? appContext.expanded : undefined}
         className="flex-1 flex flex-col items-stretch gap-3 text-left p-4 rounded-t-lg hover:bg-port-card/60 transition-colors"
       >
         <TaskHeader taskType={taskType} config={displayConfig} orderStep={orderStep} />
@@ -121,14 +124,10 @@ export default function AppTaskCard({ taskType, config, apps, onTrigger, onConfi
 
       {/* Quick model pins — the drawer's Global defaults, inline */}
       {!appContext && userInvokable && onUpdate && (stageCount > 0 ? (
-        <button
-          type="button"
-          onClick={() => onConfigure(taskType)}
-          className="flex items-center gap-1.5 px-4 py-2.5 text-xs text-left text-gray-500 border-t border-port-border hover:text-gray-300 transition-colors"
-        >
+        <div className="flex items-center gap-1.5 px-4 py-2.5 text-xs text-gray-500 border-t border-port-border">
           <GitMerge size={12} className="shrink-0" />
-          Provider/model is set per stage ({stageCount}) — configure
-        </button>
+          Provider/model is set per stage ({stageCount})
+        </div>
       ) : (
         <TaskModelQuickControls pins={pins} providers={providers} loading={!providersLoaded} />
       ))}
@@ -145,16 +144,18 @@ export default function AppTaskCard({ taskType, config, apps, onTrigger, onConfi
               programmatic={config.programmatic}
               disabledReason={appContext?.saving ? SAVING_TITLE : appContext && !appContext.enabled ? 'Enable this task for this app first' : improvementDisabled ? IMPROVEMENT_DISABLED_TITLE : (pins.saving ? SAVING_TITLE : '')}
             />
-            <button
-              type="button"
-              onClick={() => onConfigure(taskType)}
-              aria-expanded={appContext?.expanded}
-              aria-label={appContext ? `${appContext.expanded ? 'Hide' : 'Show'} provider and model options for ${taskType}` : undefined}
-              className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-sm rounded text-gray-300 hover:text-white hover:bg-port-border/50 transition-colors"
-            >
-              <SlidersHorizontal size={13} />
-              Configure
-            </button>
+            {appContext && (
+              <button
+                type="button"
+                onClick={() => onConfigure(taskType)}
+                aria-expanded={appContext.expanded}
+                aria-label={`${appContext.expanded ? 'Hide' : 'Show'} provider and model options for ${taskType}`}
+                className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-sm rounded text-gray-300 hover:text-white hover:bg-port-border/50 transition-colors"
+              >
+                <SlidersHorizontal size={13} />
+                Configure
+              </button>
+            )}
           </>
         ) : (
           <span className="text-xs text-port-warning/80" title={invocationDescription}>
