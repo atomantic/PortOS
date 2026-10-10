@@ -9,6 +9,7 @@ import useProviderModels from '../../hooks/useProviderModels';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { FormField } from '../ui/FormField';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
+import { useGoogleAutoConfigProgress } from '../../hooks/useGoogleAutoConfigProgress';
 
 const TYPE_ICONS = { gmail: Mail, outlook: Globe, teams: MessageSquare };
 const TYPE_LABELS = { gmail: 'Gmail (API)', outlook: 'Outlook (Playwright)', teams: 'Teams (Playwright)' };
@@ -40,6 +41,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
   const [oauthForm, setOauthForm] = useState({ clientId: '', clientSecret: '' });
   const [savingOAuth, setSavingOAuth] = useState(false);
   const [reauthorizing, setReauthorizing] = useState(false);
+  const { progress: autoConfigProgress, run: runAutoConfig, mounted: autoConfigMounted } = useGoogleAutoConfigProgress();
   const [autoConfigStep, setAutoConfigStep] = useState(null);
 
   // AI config
@@ -149,7 +151,8 @@ export default function ConfigTab({ accounts, setAccounts }) {
   const handleAutoConfigContinue = async () => {
     setAutoConfigStep('running');
     const email = accounts.find(a => a.type === 'gmail')?.email || '';
-    const result = await api.runGoogleAutoConfig(email, { silent: true }).catch(() => null);
+    const result = await runAutoConfig(email);
+    if (!autoConfigMounted.current) return;
     if (!result || result.error) {
       setAutoConfigStep('login');
       return toast.error(result?.error || 'Automated setup failed. Try manual setup instead.');
@@ -338,8 +341,8 @@ export default function ConfigTab({ accounts, setAccounts }) {
                   ) : autoConfigStep === 'running' ? (
                     <div className="flex items-center gap-2 rounded border border-port-border bg-port-bg/80 p-3">
                       <RefreshCw size={14} className="shrink-0 animate-spin text-port-accent" />
-                      <p className="text-xs text-gray-400">
-                        Enabling Google APIs, configuring OAuth consent, and creating credentials. This may take up to a minute.
+                      <p className="text-xs text-gray-400" role="status" aria-live="polite">
+                        {autoConfigProgress?.message || 'Automating Google Cloud setup... This may take up to a minute.'}
                       </p>
                     </div>
                   ) : autoConfigStep === 'login' ? (
