@@ -13,7 +13,7 @@ vi.mock('../lib/fileUtils.js', async () => {
   return { ...actual, tryReadFile };
 });
 
-const { testSelectors, syncPlaywright, sendPlaywright } = await import('./messagePlaywrightSync.js');
+const { testSelectors, syncPlaywright, sendPlaywright, refreshMessageDetail } = await import('./messagePlaywrightSync.js');
 
 const OPEN_PAGE = { url: 'https://outlook.office.com/mail/', webSocketDebuggerUrl: 'ws://x' };
 
@@ -127,6 +127,140 @@ it('records Teams read state as unknown for both sync modes', async () => {
     for (const message of result.messages) expect(message).toMatchObject({ isRead: null, isUnread: null });
   }
   expect(scripts[0]).toBe(scripts[1]);
+});
+
+// These fixtures expose only the configured document selector, run the actual
+// production row reader and browser scripts, and model virtualized paints/clicks.
+describe('Outlook configured row extraction', () => {
+  const account = { id: 'example-account', type: 'outlook' };
+  const defaultSelector = "[role='listbox'] [role='option']";
+  const customSelector = '.example-mail[data-label="quoted\\value"]';
+  const record = (id, isUnread = true) => ({ providerRowId: id, isUnread,
+    from: 'Example Sender', subject: 'Example subject', date: '2026-10-10', preview: 'Example preview' });
+
+  function mailbox(paints, { selector = customSelector, container = 'region' } = {}) {
+    let paint = 0;
+    let opened = false;
+    const clicked = [];
+    const attr = values => ({ getAttribute: name => values[name] ?? null });
+    const span = (text, title) => ({ ...attr({ title }), textContent: text });
+    const scroll = {
+      scrollHeight: 1000, clientHeight: 100,
+      contains: () => true,
+      scrollBy: vi.fn(() => { paint = Math.min(paint + 1, paints.length - 1); }),
+      scrollTo: vi.fn(() => { paint = 0; })
+    };
+    const list = { parentElement: scroll };
+    const rows = paints.map(records => records.map(data => ({
+      ...attr({ 'data-itemid': data.providerRowId }), parentElement: container === 'overflow' ? scroll : null,
+      closest: sel => container === 'region' && sel === '[role="region"]' ? scroll
+        : container === 'list' && sel.includes('[role="listbox"]') ? list : null,
+      scrollIntoView() {},
+      click() { clicked.push(data.providerRowId); opened = true; },
+      querySelector(sel) {
+        if (sel === 'button[aria-label="Mark as read"]') return data.isUnread ? {} : null;
+        if (sel === 'div[aria-label="Select a conversation"] > span[aria-label]') return attr({ 'aria-label': data.from });
+        if (sel === 'div[aria-label="Select a conversation"]') return { parentElement: { nextElementSibling: { children: [
+          { querySelector: () => attr({ title: 'sender@example.com' }) },
+          { querySelectorAll: () => [span(data.subject), span(data.date, data.date)] }, span(data.preview)
+        ] } } };
+        return null;
+      }
+    })));
+    const body = { innerText: 'Example full body' };
+    const pane = {
+      innerText: 'Example subject', querySelector: () => body,
+      querySelectorAll: sel => sel === '[aria-label="Email message"]' ? [] : [body]
+    };
+    const document = {
+      querySelector: sel => opened && sel === 'main[aria-label="Reading Pane"]' ? pane : null,
+      querySelectorAll(sel) {
+        if (sel === '[' || sel === '') throw new SyntaxError('Invalid selector');
+        return sel === selector ? rows[paint] : [];
+      }
+    };
+    evaluateOnPage.mockImplementation((_page, script) => vm.runInNewContext(script, {
+      document, location: { href: 'https://example.com/mail/' },
+      getComputedStyle: () => ({ overflowY: 'auto' }), setTimeout: callback => callback()
+    }));
+    return { clicked, scroll };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    evaluateOnPage.mockReset();
+    findOrOpenPage.mockResolvedValue(OPEN_PAGE);
+    listCdpPages.mockResolvedValue([OPEN_PAGE]);
+    isAuthPage.mockReturnValue(false);
+    tryReadFile.mockResolvedValue(JSON.stringify({ outlook: { messageRow: customSelector } }));
+  });
+
+  it('uses the tested override for sync detail and refresh, preserving the exact provider row ID', async () => {
+    // Identical subject/sender/date must not pull the other conversation's detail.
+    const { clicked } = mailbox([[record('first'), record('second')]]);
+    expect(await testSelectors('outlook')).toMatchObject({ status: 'ok', results: { messageRow: { matches: 2 } } });
+    const result = await syncPlaywright(account, { messages: [] });
+    expect(result).toMatchObject({ status: 'success', inboxComplete: false });
+    expect(result.messages.map(m => m.providerRowId)).toEqual(['first', 'second']);
+    expect(result.messages.every(m => m.bodyFull && m.bodyText === 'Example full body')).toBe(true);
+    expect(clicked).toEqual(['first', 'second']);
+    expect(await refreshMessageDetail(account, result.messages[1])).toEqual([
+      expect.objectContaining({ body: 'Example full body' })
+    ]);
+    expect(clicked).toEqual(['first', 'second', 'second']);
+  });
+
+  it.each(['region', 'list', 'overflow'])('retains bounded full/unread virtualized scrolling with a %s container', async container => {
+    for (const selector of [defaultSelector, customSelector]) {
+      tryReadFile.mockResolvedValue(selector === defaultSelector ? '{}' : JSON.stringify({ outlook: { messageRow: selector } }));
+      for (const mode of ['unread', 'full']) {
+        mailbox([[record('unread')], [record('read', false)]], { selector, container });
+        // First get IDs at the service boundary, then use that cache to isolate list scrolling.
+        const cache = { messages: [] };
+        const first = await syncPlaywright(account, cache, null, { mode });
+        cache.messages = first.messages;
+        const { scroll } = mailbox([[record('unread')], [record('read', false)]], { selector, container });
+        const result = await syncPlaywright(account, cache, null, { mode });
+        expect(result).toMatchObject({ status: 'success', inboxComplete: false });
+        expect(result.messages.map(m => m.providerRowId)).toEqual(mode === 'full' ? ['unread', 'read'] : ['unread']);
+        expect(result.messages.map(m => m.isRead)).toEqual(mode === 'full' ? [false, true] : [false]);
+        expect(scroll.scrollBy).toHaveBeenCalledTimes(mode === 'full' ? 21 : 10);
+        expect(scroll.scrollTo).toHaveBeenLastCalledWith(0, 0);
+      }
+    }
+  });
+
+  it('caps full/unread extraction even when more rows are visible', async () => {
+    for (const [mode, cap] of [['unread', 100], ['full', 200]]) {
+      const { scroll } = mailbox([Array.from({ length: 210 }, (_, i) => record(`row-${i}`))]);
+      const result = await syncPlaywright(account, { messages: [] }, null, { mode });
+      expect(result.messages).toHaveLength(cap);
+      expect(result.inboxComplete).toBe(false);
+      expect(scroll.scrollBy).not.toHaveBeenCalled();
+    }
+  });
+
+  it('reports invalid selectors in Test, sync and refresh instead of using default rows', async () => {
+    mailbox([[record('unrelated')]], { selector: defaultSelector });
+    tryReadFile.mockResolvedValue(JSON.stringify({ outlook: { messageRow: '[' } }));
+    expect(await testSelectors('outlook')).toMatchObject({ status: 'partial', results: { messageRow: { matches: 0, error: expect.stringContaining('Invalid Outlook') } } });
+    expect(await syncPlaywright(account, { messages: [] })).toMatchObject({ status: 'extraction-failed', messages: [], error: expect.stringContaining('Messages > Sync') });
+    expect(await refreshMessageDetail(account, { providerRowId: 'unrelated' })).toMatchObject({ error: 'invalid-selector' });
+  });
+
+  it('reports unusable containers rather than reporting a successful empty inbox', async () => {
+    const { clicked } = mailbox([[record('first')]], { container: 'none' });
+    expect(await syncPlaywright(account, { messages: [] })).toMatchObject({ status: 'extraction-failed', error: expect.stringContaining('scrollable list') });
+    expect(await refreshMessageDetail(account, { providerRowId: 'first' })).toMatchObject({ error: 'invalid-container' });
+    expect(clicked).toEqual([]);
+  });
+
+  it('refuses ambiguous detail immediately even if scrolling would leave a unique target', async () => {
+    const { clicked, scroll } = mailbox([[record('duplicate'), record('duplicate')], [record('duplicate')]]);
+    expect(await refreshMessageDetail(account, { providerRowId: 'duplicate' })).toBeNull();
+    expect(clicked).toEqual([]);
+    expect(scroll.scrollBy).not.toHaveBeenCalled();
+  });
 });
 
 // Browser-delivered drafts. evaluateOnPage is scripted per compose phase, so the
