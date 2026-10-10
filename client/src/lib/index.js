@@ -273,4 +273,5 @@ export * from './styleSourceChoice.js';
 export * from './trackProvenance.js';
 
 export * from './musicVideoGrade.js';
+export * from './filmLook.js';
 export * from './musicVideoNarrativeEvents.js';

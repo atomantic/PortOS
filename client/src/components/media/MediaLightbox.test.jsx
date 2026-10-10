@@ -10,6 +10,9 @@ vi.mock('./AddToCollectionMenu', () => ({ default: () => null }));
 vi.mock('./PromptRefineModal', () => ({
   default: ({ open }) => open ? <div data-testid="refine-modal" /> : null,
 }));
+vi.mock('./FilmLookEditor.jsx', () => ({
+  default: ({ open }) => open ? <div data-testid="film-look-editor" /> : null,
+}));
 vi.mock('./PromptFromMedia', () => ({
   default: () => null,
   PromptFromMediaModal: ({ open }) => open ? <div data-testid="prompt-from-modal" /> : null,
@@ -211,6 +214,20 @@ describe('MediaLightbox Escape cascade', () => {
 
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.queryByTestId('prompt-from-modal')).toBeNull();
+    expect(screen.getByRole('dialog')).toBeTruthy();
+  });
+
+  it('opens the film look editor from the image actions and closes it without closing the lightbox', () => {
+    const onClose = vi.fn();
+    render(<MediaLightbox item={imageItem} onClose={onClose} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Film look' }));
+    const editor = screen.getByTestId('film-look-editor');
+
+    fireEvent.keyDown(editor, { key: 'Escape' });
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('film-look-editor')).toBeNull();
     expect(screen.getByRole('dialog')).toBeTruthy();
   });
 

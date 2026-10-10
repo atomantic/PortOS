@@ -28,7 +28,7 @@ vi.mock('../../lib/ffmpeg.js', async (importOriginal) => ({
 }));
 // Capture the frozen job folder the page would open, then stop the render.
 vi.mock('../htmlComposition/browser.js', () => ({
-  openComposition: async (directory) => {
+  openComposition: async (directory, options) => {
     const { readFile: read, readdir: list } = await import('node:fs/promises');
     const { join: joinPath } = await import('node:path');
     const { PATHS: paths } = await import('../../lib/paths.js');
@@ -37,7 +37,7 @@ vi.mock('../htmlComposition/browser.js', () => ({
     for (const name of await list(joinPath(dir, 'media'))) media[name] = await read(joinPath(dir, 'media', name), 'utf8');
     const window = {};
     new Function('window', await read(joinPath(dir, 'portos-mv.js'), 'utf8'))(window);
-    browser.seen = { directory, data: window.PORTOS_MV, media, song: JSON.parse(await read(joinPath(dir, 'song.json'), 'utf8')) };
+    browser.seen = { directory, data: window.PORTOS_MV, media, song: JSON.parse(await read(joinPath(dir, 'song.json'), 'utf8')), initScripts: options?.initScripts ?? [] };
     return {
       async evaluate(expression) {
         if (expression.includes('reviewFootage')) { browser.sampleTimes.push(Number(/c.seek\(([^,]+)/.exec(expression)[1])); return browser.visibility; }
@@ -167,5 +167,18 @@ it('carries measured footage samples and explicit missing hooks from the staged 
   })));
   expect(result.footageVisibility.slice(3)).toEqual(expect.arrayContaining([expect.objectContaining({ sceneId: 'd', status: 'unverified' })]));
   expect(browser.sampleTimes.every(at => at >= 1 && at < 10)).toBe(true);
+  expect(await scratchEntries()).toEqual([]);
+});
+
+// Uniquely catches the render page opening without the film look the live preview showed.
+it('installs the project film look in the render page before the document runs, and nothing when the look is neutral', async () => {
+  const { project, plan } = await fixture();
+  await expect(encode(project, plan, 'job-plain')).rejects.toThrow('stop after staging');
+  expect(browser.seen.initScripts).toEqual([]);
+  const graded = { ...project, filmLook: { preset: 'super8', grain: 0.6, halation: 0.4 } };
+  await expect(encode(graded, plan, 'job-look')).rejects.toThrow('stop after staging');
+  expect(browser.seen.initScripts).toHaveLength(1);
+  expect(browser.seen.initScripts[0]).toContain('__portosFilmLook');
+  expect(browser.seen.initScripts[0]).toContain('"grain":0.6');
   expect(await scratchEntries()).toEqual([]);
 });

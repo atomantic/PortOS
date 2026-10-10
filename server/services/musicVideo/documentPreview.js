@@ -1,5 +1,6 @@
 import { PREVIEW_DOCUMENT_BASE, inlineDocumentModule, previewDocumentPath } from './documentModules.js';
 import { musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
+import { filmLookRuntimeSource } from '../../lib/filmLook.js';
 /**
  * Music Video — the in-app live preview of a composition document.
  *
@@ -186,6 +187,9 @@ const BOOTSTRAP = `(() => {
       const entry = map.get(key) || null;
       for (const callback of callbacks) callback(entry);
       sweep();
+    } else if (message.type === 'portos-mv:film-look') {
+      // The finishing look, live from the panel's sliders: applied to the page root, re-seeded per seek.
+      if (globalThis.__portosFilmLook) globalThis.__portosFilmLook.apply(message.look && typeof message.look === 'object' ? message.look : null);
     } else if (message.type === 'portos-mv:seek') {
       const t = Number(message.t) || 0;
       seeking = seeking.then(() => globalThis.portosComposition?.seek(t)).then(
@@ -280,7 +284,8 @@ export async function buildDocumentPreview(project, { draft = false, files: give
   }
   const mode = musicVideoMediaMode(project);
   const csp = PREVIEW_CSP.replace('img-src data: blob:', mode === 'code-only' ? "img-src 'none'" : 'img-src data: blob:').replace('media-src data: blob:', mode !== 'code-images-video' ? "media-src 'none'" : 'media-src data: blob:');
-  const head = `<meta http-equiv="Content-Security-Policy" content="${csp}"><script>${BOOTSTRAP}</script><script>window.PORTOS_MV = ${scriptJson(data)};window.PORTOS_MV_EVENT_STATE = ${narrativeFrameState.toString()};</script>`;
+  // The film look runtime always ships (the panel posts live changes); the project's saved look is its start.
+  const head = `<meta http-equiv="Content-Security-Policy" content="${csp}"><script>${BOOTSTRAP}</script><script>${filmLookRuntimeSource(project.filmLook)}</script><script>window.PORTOS_MV = ${scriptJson(data)};window.PORTOS_MV_EVENT_STATE = ${narrativeFrameState.toString()};</script>`;
   const at = html.match(/<head[^>]*>/i);
   html = at ? `${html.slice(0, at.index + at[0].length)}${head}${html.slice(at.index + at[0].length)}` : `${head}${html}`;
 

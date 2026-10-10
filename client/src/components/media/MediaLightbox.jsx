@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   X, Copy, Sparkles, Film, Image as ImageIcon, Download, Eraser, Wand2,
-  ChevronLeft, ChevronRight, Maximize2, Minimize2, Star, Box, ScanEye,
+  ChevronLeft, ChevronRight, Maximize2, Minimize2, Star, Box, ScanEye, Aperture,
 } from 'lucide-react';
 import PromptRefineModal from './PromptRefineModal';
 import { PromptFromMediaModal } from './PromptFromMedia';
 import AddToCollectionMenu from './AddToCollectionMenu';
 import PinToMoodBoardMenu from './PinToMoodBoardMenu';
+import FilmLookEditor from './FilmLookEditor.jsx';
 import MediaImage from '../MediaImage';
 import { useScrollLock } from '../../hooks/useScrollLock';
 import { useSwipeNav } from '../../hooks/useSwipeNav';
@@ -75,6 +76,11 @@ function describeCleanedLineage(item) {
   if (item.watermarkRemoved && item.cleanedFrom) {
     return `Watermark removed from ${item.cleanedFrom}`;
   }
+  // A film-look bake (lib/filmLook.js) names the image it was rendered from.
+  if (item.filmLookFrom) {
+    const preset = item.filmLook?.preset;
+    return `Film look${preset && preset !== 'custom' ? ` (${preset})` : ''} from ${item.filmLookFrom}`;
+  }
   if (item.cleanedFrom) {
     return `${item.cleanLevel ? `Cleaned (${item.cleanLevel}) ` : 'Cleaned '}from ${item.cleanedFrom}`;
   }
@@ -92,6 +98,12 @@ function describeImageExecution(item) {
 
 // onClean(item) — optional. Returning a rejected promise keeps the lightbox
 // open (e.g. on error) so the user can retry.
+//
+// Film look (lib/filmLook.js) is offered on every gallery image: the editor
+// bakes a filtered copy and reports it through `onFilmLookComplete(variant)`
+// (the host splices it in like a clean). `filmLookProject` — optional
+// `{ look, onSave, name }` — lets the editor read and write the hosting music
+// video project's finishing look.
 //
 // variantGroup — optional `{ active, group: [{ label, item }, ...] }` shape
 // from `computeImageVariantGroup` (in `./variants.js`). When present, the
@@ -122,10 +134,13 @@ export default function MediaLightbox({
   onPosterChange,
   variantGroup = null,
   onSelectVariant,
+  onFilmLookComplete,
+  filmLookProject = null,
 }) {
   const [fullScreen, setFullScreen] = useState(false);
   const [refineOpen, setRefineOpen] = useState(false);
   const [promptFromOpen, setPromptFromOpen] = useState(false);
+  const [filmLookOpen, setFilmLookOpen] = useState(false);
   useScrollLock(!!item);
   // Read callbacks + frequently-changing values from refs so the keydown
   // listener and the note-save debounce don't tear down on every parent
@@ -169,6 +184,7 @@ export default function MediaLightbox({
       if (e.key === 'Escape') {
         if (refineOpen) { setRefineOpen(false); return; }
         if (promptFromOpen) { setPromptFromOpen(false); return; }
+        if (filmLookOpen) { setFilmLookOpen(false); return; }
         if (fullScreen) { setFullScreen(false); return; }
         cb.onClose();
         return;
@@ -198,10 +214,10 @@ export default function MediaLightbox({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [item, hasPrevious, hasNext, fullScreen, refineOpen, promptFromOpen]);
+  }, [item, hasPrevious, hasNext, fullScreen, refineOpen, promptFromOpen, filmLookOpen]);
 
   // Reset refine modal when the previewed item changes.
-  useEffect(() => { setRefineOpen(false); setPromptFromOpen(false); }, [item?.key]);
+  useEffect(() => { setRefineOpen(false); setPromptFromOpen(false); setFilmLookOpen(false); }, [item?.key]);
 
   const { onTouchStart, onTouchEnd, onTouchCancel } = useSwipeNav({ onPrevious, onNext, hasPrevious, hasNext });
 
@@ -279,6 +295,7 @@ export default function MediaLightbox({
     ['Seed', item.seed ?? (isCodex ? 'n/a (gpt-image-2)' : null)],
     ['Codex session', item.codexSessionId],
     ['Cleaned', cleanedLabel],
+    ['Look words', item.filmLookWords],
     ['Execution', executionLabel],
     ['Frames', item.numFrames],
     ['FPS', item.fps],
@@ -465,10 +482,14 @@ export default function MediaLightbox({
             getPlayhead={() => videoRef.current?.currentTime ?? 0}
             variantGroup={variantGroup}
             onSelectVariant={onSelectVariant}
+            onFilmLook={!isVideo && item.filename ? () => setFilmLookOpen(true) : undefined}
           />
         )}
       </div>
       <PromptRefineModal item={item} open={refineOpen} onClose={() => setRefineOpen(false)} />
+      {!isVideo && item.filename && (
+        <FilmLookEditor item={item} open={filmLookOpen} onClose={() => setFilmLookOpen(false)} onComplete={onFilmLookComplete} projectLook={filmLookProject} />
+      )}
       <PromptFromMediaModal item={item} open={promptFromOpen} onClose={() => setPromptFromOpen(false)} onResult={onPromptAnalysis} />
     </div>,
     document.body
@@ -505,7 +526,7 @@ function SettingsPane({
   onClose, onRemix, onSendToImage, onSendToVideo, onSendTo3d, onContinue, onClean, onRegenerate, onRemoveWatermark, regenAvailable, regenBounds,
   copy, onRefine, onPromptFrom,
   annotation, onAnnotationChange, onPromptChange, onPosterChange, getPlayhead,
-  variantGroup, onSelectVariant,
+  variantGroup, onSelectVariant, onFilmLook,
 }) {
   const asideClasses = 'md:w-80 lg:w-96 shrink-0 flex flex-col border-t md:border-t-0 md:border-l border-port-border min-h-0 max-h-dvh-cap [--dvh-cap:40vh] [--dvh-cap-dynamic:40dvh] md:[--dvh-cap:92vh] md:[--dvh-cap-dynamic:92dvh] [--dvh-inset:2rem]';
   const [posterSaving, setPosterSaving] = useState(false);
@@ -861,6 +882,17 @@ function SettingsPane({
             className="flex-1 min-h-[44px] min-w-[80px] flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-accent-2 text-port-on-accent-2 hover:opacity-90 rounded"
           >
             <Box className="w-3.5 h-3.5" /> Send to 3D
+          </button>
+        )}
+        {onFilmLook && (
+          <button
+            type="button"
+            onClick={onFilmLook}
+            title="Tune an analog film look on this image — soft focus, halation, grain, fade, vignette, light leaks — and save the result as a new copy. The original is kept."
+            aria-label="Film look"
+            className="flex-1 min-h-[44px] min-w-[80px] flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-accent/80 text-white hover:opacity-90 rounded"
+          >
+            <Aperture className="w-3.5 h-3.5" /> Film look
           </button>
         )}
         {!isVideo && onClean && (

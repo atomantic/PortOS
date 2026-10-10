@@ -29,6 +29,8 @@ import { startHfDownloadStream } from '../services/hfDownloadStream.js';
 import { PATHS, ensureDir, resolveGalleryImage, unlinkGuarded, copyFileGuarded } from '../lib/fileUtils.js';
 import { prepareGenerateParams, resolveLocalImageModel, selectLocalImageModelFromSettings } from '../services/imageGen/prepareParams.js';
 import { applyImageClean, applyWatermarkRemoval, applyLightRegenVariant } from '../services/imageGen/variants.js';
+import { applyFilmLookBake } from '../services/imageGen/filmLookBake.js';
+import { filmLookBakeSchema } from '../lib/filmLookValidation.js';
 import { join, basename } from 'node:path';
 import { STYLE_PRESETS } from '../lib/writersRoomStylePresets.js';
 import {
@@ -350,6 +352,19 @@ const regenerateSchema = z.object({
   // init image); defaults to a higher denoise so the strokes take effect.
   annotated: z.boolean().optional(),
 });
+
+// Film look (lib/filmLook.js) baked into a new copy of a gallery still — the
+// same SVG filter the music-video preview and final render apply, rendered in
+// the composition browser at the image's own size. Synchronous like Clean:
+// writes a `_look-<preset>-<id>.png` variant + sidecar beside the untouched
+// source, files it into the source's collections, and returns it.
+router.post('/:filename/film-look', asyncHandler(async (req, res) => {
+  const filename = req.params.filename;
+  local.assertGalleryFilename(filename);
+  const { look } = validateRequest(filmLookBakeSchema, req.body ?? {});
+  const { metadata: sourceMeta } = await local.readImageSidecar(filename);
+  res.json(await applyFilmLookBake({ filename, sourceMeta, look }));
+}));
 
 // Visible-watermark removal — erases the Gemini / Nano-Banana bottom-right ✦.
 // Body is optional: with no fields the corner box is auto-sized to the

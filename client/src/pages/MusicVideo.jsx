@@ -779,6 +779,12 @@ export default function MusicVideo() {
   // older snapshot of the list overwrite a newer one.
   const timedTextSaveChain = useRef(Promise.resolve());
   const editProjectLocal = (patch) => patchProject(selected.id, patch);
+  // The finishing film look, saved whole from the image viewer's editor ("Use on project").
+  const saveFilmLook = (filmLook) => {
+    const projectId = selected.id;
+    return updateMusicVideoProject(projectId, { filmLook }, { silent: true })
+      .then((saved) => patchProject(projectId, { filmLook: saved.filmLook ?? null }));
+  };
   const saveProjectFields = (patch, { applyComposition = false } = {}) => {
     const projectId = selected.id;
     setCompositionSavePending((count) => count + 1);
@@ -1274,7 +1280,8 @@ export default function MusicVideo() {
     <div id={MUSIC_VIDEO_PAGE_ID} className="flex h-full flex-col max-md:overflow-auto">
       <MidiInstallModal {...midi.installGate} />
       <MidiGatedModal {...midi.gatedGate} />
-      <MediaPreview preview={preview} setPreview={setPreview} items={previewItems} />
+      <MediaPreview preview={preview} setPreview={setPreview} items={previewItems}
+        filmLookProject={selected ? { look: selected.filmLook, name: selected.name, onSave: saveFilmLook } : null} />
       {pickerTarget && pickerTarget.type !== 'clip' && (
         <GalleryImagePicker
           open

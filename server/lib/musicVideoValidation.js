@@ -1,5 +1,6 @@
 import { MUSIC_VIDEO_MEDIA_MODES } from './musicVideoMediaPolicy.js';
 import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicVideoGrade.js';
+import { filmLookSchema } from './filmLookValidation.js';
 import { COVER_DESIGN_OPTIONS } from './musicVideoCoverOverlay.js';
 import { DISTROKID_REMEMBERED_OPTIONS } from './distrokidGenres.js';
 import { CROSS_LINK_EDIT_TARGETS } from './musicVideoCrossLinks.js';
@@ -1221,6 +1222,8 @@ export const musicVideoProjectCreateSchema = z.object({
   pacing: musicVideoPacingSchema.nullable().optional(),
   composition: musicVideoCompositionSchema.nullable().optional(),
   soundBed: musicVideoSoundBedSchema.nullable().optional(),
+  // The finishing film look (lib/filmLook.js); null = none.
+  filmLook: filmLookSchema.nullable().optional(),
 }).strict();
 
 export const musicVideoProjectUpdateSchema = z.object({
@@ -1245,6 +1248,8 @@ export const musicVideoProjectUpdateSchema = z.object({
   pacing: musicVideoPacingSchema.nullable().optional(),
   composition: musicVideoCompositionSchema.nullable().optional(),
   soundBed: musicVideoSoundBedSchema.nullable().optional(),
+  // The finishing film look (lib/filmLook.js); null = none.
+  filmLook: filmLookSchema.nullable().optional(),
 }).strict();
 
 // Mark a project finished outside PortOS (or clear the marker). The server
