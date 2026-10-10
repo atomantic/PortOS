@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { Boxes, CheckCircle2, AlertTriangle, Loader2, ImagePlus, Sparkles, Settings2, ChevronDown } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
+import EmptyState from '../components/EmptyState';
 import { createImageTo3dModel, getImageTo3dModel, listImageTo3dModels } from '../services/api';
 import { useModelLifecycle } from '../hooks/useModelLifecycle';
 import { useImageTo3dTargets } from '../hooks/useImageTo3dTargets';
@@ -50,15 +51,23 @@ export default function Media3D() {
   // Existing image-to-3D records (newest-first) so the page doubles as a library:
   // each links to its `/3d/:id` detail view.
   const [records, setRecords] = useState([]);
+  const [recordsLoading, setRecordsLoading] = useState(true);
+  const [recordsError, setRecordsError] = useState(false);
   // Central HF-token status (stored / env / cli) for the gated-model notice. `present`
   // is tri-state — see useHfTokenStatus; `null` means unknown, not absent.
   const { present: hfTokenPresent, source: hfTokenSource, refresh: refreshHfToken } = useHfTokenStatus();
   const mountedRef = useMounted(); // gate setState after the create awaits
 
   const loadRecords = useCallback(() => {
+    setRecordsLoading(true);
+    setRecordsError(false);
     listImageTo3dModels({ silent: true })
-      .then((data) => { if (mountedRef.current) setRecords(Array.isArray(data) ? data : []); })
-      .catch(() => { /* the library section just stays empty on a transient failure */ });
+      .then((data) => {
+        if (!Array.isArray(data)) throw new Error('Invalid model list');
+        if (mountedRef.current) setRecords(data);
+      })
+      .catch(() => { if (mountedRef.current) setRecordsError(true); })
+      .finally(() => { if (mountedRef.current) setRecordsLoading(false); });
   }, [mountedRef]);
 
   // Reactively fold a created/updated record into the library instead of
@@ -320,45 +329,67 @@ export default function Media3D() {
         {/* Library of existing renders — each opens its `/3d/:id` detail
             view (GLB viewer + download). URL is the source of truth for what's
             open, so every card is a deep link. */}
-        {records.length > 0 && (
-          <section className="mb-6">
+        <section className="mb-6">
             <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">Your 3D models</h2>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
-              {records.map((record) => {
-                const status = imageTo3dStatusMeta(record.status);
-                return (
-                  <Link
-                    key={record.id}
-                    to={`/3d/${record.id}`}
-                    className="group overflow-hidden rounded-lg border border-port-border bg-port-card hover:border-port-accent"
-                  >
-                    <div className="relative aspect-square bg-port-bg">
-                      {record.sourceImage?.path && (
-                        <MediaImage
-                          src={record.sourceImage.path}
-                          alt={record.name || 'Source image'}
-                          className="h-full w-full object-cover opacity-90 group-hover:opacity-100"
-                        />
-                      )}
-                      {record.status === 'ready' && (
-                        <span className="port-media-overlay-strong absolute right-1.5 top-1.5 rounded p-1 text-port-success">
-                          <Boxes className="h-3.5 w-3.5" />
-                        </span>
-                      )}
-                    </div>
-                    <div className="p-2">
-                      <p className="truncate text-xs font-medium text-white" title={record.name}>{record.name || 'Untitled'}</p>
-                      <div className="mt-0.5 flex items-center justify-between gap-1">
-                        <span className={`text-[11px] ${status.className}`}>{status.label}</span>
-                        <span className="text-[11px] text-gray-500">{timeAgo(record.updatedAt)}</span>
+            {recordsLoading ? (
+              <p role="status" className="py-4 text-sm text-gray-400">Loading your 3D models…</p>
+            ) : recordsError ? (
+              <EmptyState
+                icon={AlertTriangle}
+                headingLevel={3}
+                title="Could not load your 3D models"
+                message="Retry to load your model collection."
+                actionLabel="Retry loading models"
+                onAction={loadRecords}
+              />
+            ) : records.length === 0 ? (
+              <div className="rounded-xl border border-port-border bg-port-card">
+                <EmptyState
+                  icon={Boxes}
+                  headingLevel={3}
+                  title="No 3D models yet"
+                  message="Your generated models will appear here. Select a source image above and click Generate 3D to create your first model."
+                  actionLabel="Select a source image"
+                  onAction={() => setPickerOpen(true)}
+                />
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+                {records.map((record) => {
+                  const status = imageTo3dStatusMeta(record.status);
+                  return (
+                    <Link
+                      key={record.id}
+                      to={`/3d/${record.id}`}
+                      className="group overflow-hidden rounded-lg border border-port-border bg-port-card hover:border-port-accent"
+                    >
+                      <div className="relative aspect-square bg-port-bg">
+                        {record.sourceImage?.path && (
+                          <MediaImage
+                            src={record.sourceImage.path}
+                            alt={record.name || 'Source image'}
+                            className="h-full w-full object-cover opacity-90 group-hover:opacity-100"
+                          />
+                        )}
+                        {record.status === 'ready' && (
+                          <span className="port-media-overlay-strong absolute right-1.5 top-1.5 rounded p-1 text-port-success">
+                            <Boxes className="h-3.5 w-3.5" />
+                          </span>
+                        )}
                       </div>
-                    </div>
-                  </Link>
-                );
-              })}
-            </div>
-          </section>
-        )}
+                      <div className="p-2">
+                        <p className="truncate text-xs font-medium text-white" title={record.name}>{record.name || 'Untitled'}</p>
+                        <div className="mt-0.5 flex items-center justify-between gap-1">
+                          <span className={`text-[11px] ${status.className}`}>{status.label}</span>
+                          <span className="text-[11px] text-gray-500">{timeAgo(record.updatedAt)}</span>
+                        </div>
+                      </div>
+                    </Link>
+                  );
+                })}
+              </div>
+            )}
+        </section>
 
         {/* Install/repair lives under Models → 3D — these are on-device runtimes, not
             renders — so the generate flow just names the state and links there (#4728). */}
