@@ -153,10 +153,24 @@ describe('dataManager purge scope (#3327)', () => {
     // Uploads and renders that other records point at: reclaimable one at a time.
     expect(CATEGORIES.images.purgeScope).toBe('items');
     expect(CATEGORIES.videos.purgeScope).toBe('items');
-    // Drafts live in Postgres; screenshots are task scratch — still wipeable whole.
-    expect(CATEGORIES.messages.purgeScope).toBe('category');
+    // Screenshots are task scratch — still wipeable whole.
     expect(CATEGORIES.screenshots.purgeScope).toBe('category');
   });
+
+  // Issue #10912: these directories hold user-authored state with no other copy
+  // (drafts and the send-attempt audit, todos and assessment reports). Each entry
+  // records why it is protected; the table is the audit trail, not an inference.
+  const USER_STATE_CATEGORIES = {
+    messages: 'drafts, the delivery_unknown send audit, triage rules and account config',
+    review: 'Review Hub todos, pending CoS action requests and security assessment reports',
+  };
+  it.each(Object.entries(USER_STATE_CATEGORIES))(
+    'never offers a purge for %s, which holds %s',
+    (key) => {
+      expect(CATEGORIES[key]).toMatchObject({ archivable: true, deletable: false });
+      expect(CATEGORIES[key].purgeScope).toBeUndefined();
+    }
+  );
 
   it('protects durable backup admission authority from archive and both purge forms', async () => {
     expect(CATEGORIES['backup-admission']).toMatchObject({ archivable: false, deletable: false });
@@ -187,12 +201,16 @@ describe('dataManager purge scope (#3327)', () => {
     await expect(purgeCategory('beeper', { subPath: 'attachments' })).rejects.toThrow(/is not purgeable/);
     await expect(purgeCategory('peer-execution')).rejects.toThrow(/is not purgeable/);
     await expect(purgeCategory('peer-execution', { subPath: 'fixture-operation/evidence.json' })).rejects.toThrow(/is not purgeable/);
+    for (const options of [undefined, { subPath: 'account' }]) {
+      await expect(purgeCategory('messages', options)).rejects.toMatchObject({ status: 403, code: 'CATEGORY_NOT_PURGEABLE' });
+      await expect(purgeCategory('review', options)).rejects.toMatchObject({ status: 403, code: 'CATEGORY_NOT_PURGEABLE' });
+    }
   });
 
   it('fails closed when a deletable category has no recognized purgeScope', async () => {
-    const original = CATEGORIES.messages.purgeScope;
-    CATEGORIES.messages.purgeScope = 'typo';
-    await expect(purgeCategory('messages')).rejects.toThrow(/only supports per-item purge/);
-    CATEGORIES.messages.purgeScope = original;
+    const original = CATEGORIES.screenshots.purgeScope;
+    CATEGORIES.screenshots.purgeScope = 'typo';
+    await expect(purgeCategory('screenshots')).rejects.toThrow(/only supports per-item purge/);
+    CATEGORIES.screenshots.purgeScope = original;
   });
 });
