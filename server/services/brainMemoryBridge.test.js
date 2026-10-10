@@ -41,6 +41,13 @@ vi.mock('../lib/fileUtils.js', () => ({
 }));
 vi.mock('./memoryBackend.js', () => ({
   createMemory, updateMemory, updateMemoryEmbedding, purgeMemory, getMemoryIdsMissingEmbedding,
+  getBrainMemoryLinks: vi.fn(async legacyMap => legacyMap),
+  upsertBrainMemory: vi.fn(async (_key, data, embedding, legacyId) => {
+    const updated = legacyId && await updateMemory(legacyId, { ...data, status: 'active' });
+    if (!updated) return createMemory(data, embedding);
+    if (embedding) await updateMemoryEmbedding(legacyId, embedding);
+    return { ...updated, id: legacyId };
+  }),
 }));
 vi.mock('./memoryEmbeddings.js', () => ({ generateMemoryEmbedding }));
 vi.mock('./brainStorage.js', () => {
@@ -753,5 +760,112 @@ describe('brainMemoryBridge — SongBook enrollment (issue #4105)', () => {
 
     expect(updateMemory).toHaveBeenCalledWith('mem-orphan', { status: 'archived' });
     expect(refreshed.archived).toBe(1);
+  });
+});
+
+describe('brain bridge durable identity (#11007)', () => {
+  it('recovers after the memory commit succeeds but the cache save fails', async () => {
+    const backend = await import('./memoryBackend.js');
+    const durable = {};
+    let inserted = 0;
+    await backend.upsertBrainMemory.withImplementation(async key => {
+      durable[key] ??= `durable-${++inserted}`;
+      return { id: durable[key] };
+    }, async () => {
+      await backend.getBrainMemoryLinks.withImplementation(async () => ({ ...durable }), async () => {
+        const first = await loadBridge();
+        atomicWrite.mockRejectedValueOnce(new Error('simulated lost cache save'));
+        await expect(first.syncBrainRecord('people', { id: 'example', name: 'Example' }))
+          .rejects.toThrow('simulated lost cache save');
+        // Reset only process state; the durable backend survived the crash.
+        const restarted = await loadBridge();
+        expect(await restarted.syncBrainRecord('people', { id: 'example', name: 'Updated example' }))
+          .toBe('durable-1');
+        expect(inserted).toBe(1);
+        expect(await restarted.loadBridgeMap()).toEqual({ 'people:example': 'durable-1' });
+      });
+    });
+  });
+
+  it('rebuilds a corrupt cache from durable links before updating the record', async () => {
+    const backend = await import('./memoryBackend.js');
+    bridgeFileContents = '{broken';
+    await backend.getBrainMemoryLinks.withImplementation(async () => ({ 'people:example': 'durable-1' }), async () => {
+      const bridge = await loadBridge();
+      await bridge.syncBrainRecord('people', { id: 'example', name: 'Example' });
+      expect(createMemory).not.toHaveBeenCalled();
+      expect(updateMemory).toHaveBeenCalledWith('durable-1', expect.objectContaining({ status: 'active' }));
+      expect(JSON.parse(bridgeFileContents)).toEqual({ 'people:example': 'durable-1' });
+    });
+  });
+
+  it('keeps a cold dry run write-free and still imports links on the subsequent write', async () => {
+    const backend = await import('./memoryBackend.js');
+    bridgeFileContents = JSON.stringify({ 'people:example': 'legacy-1' });
+    const bridge = await loadBridge();
+    await bridge.syncAllBrainData({ dryRun: true });
+    expect(backend.getBrainMemoryLinks).toHaveBeenLastCalledWith(
+      { 'people:example': 'legacy-1' }, { readOnly: true });
+    expect(atomicWrite).not.toHaveBeenCalled();
+    await bridge.syncBrainRecord('people', { id: 'example', name: 'Example' });
+    expect(backend.getBrainMemoryLinks).toHaveBeenLastCalledWith(
+      { 'people:example': 'legacy-1' }, { readOnly: false });
+  });
+
+  it('Embed missing heals a purged row even when the process already cached its old id', async () => {
+    const backend = await import('./memoryBackend.js');
+    bridgeFileContents = JSON.stringify({ 'people:example': 'purged-1' });
+    const bridge = await loadBridge();
+    await bridge.loadBridgeMap();
+    getAll.mockImplementation(async type => type === 'people'
+      ? [{ id: 'example', name: 'Example' }] : []);
+    backend.getBrainMemoryLinks.mockResolvedValueOnce({});
+    updateMemory.mockResolvedValueOnce(null);
+    const stats = await bridge.syncAllBrainData({ onlyMissing: true });
+    expect(stats.synced).toBe(1);
+    expect(createMemory).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(bridgeFileContents)['people:example']).not.toBe('purged-1');
+    expect(atomicWrite).toHaveBeenCalledTimes(1);
+  });
+
+  it('drains overlapping JSONL adds through the in-flight resync and preserves every cache key', async () => {
+    const backend = await import('./memoryBackend.js');
+    const { brainEvents } = await import('./brainStorage.js');
+    const bridge = await loadBridge();
+    bridge.initBridge();
+    getById.mockResolvedValue({ id: 'example', name: 'Example' });
+    getDigests.mockResolvedValue([
+      { id: 'digest-one', digestText: 'First example digest' },
+      { id: 'digest-two', digestText: 'Second example digest' },
+    ]);
+    let releaseWrite;
+    let enteredWrite;
+    const entered = new Promise(resolve => { enteredWrite = resolve; });
+    const held = new Promise(resolve => { releaseWrite = resolve; });
+    atomicWrite.mockImplementationOnce(async (_path, data) => {
+      const snapshot = JSON.stringify(data);
+      enteredWrite();
+      await held;
+      bridgeFileContents = snapshot;
+    });
+    await createMemory.withImplementation(async data => ({ id: `memory-${data.content}` }), async () => {
+      bridge.queueResync([{ type: 'people', id: 'example' }]);
+      const flush = bridge.flushPendingResync();
+      await entered;
+      try {
+        brainEvents.emit('digests:added', { id: 'digest-one' });
+        brainEvents.emit('digests:added', { id: 'digest-two' });
+        brainEvents.emit('digests:added', { id: 'digest-one' });
+        await bridge.flushPendingResync();
+        expect(backend.upsertBrainMemory).toHaveBeenCalledTimes(1);
+      } finally {
+        releaseWrite();
+        await flush;
+      }
+      expect(backend.upsertBrainMemory).toHaveBeenCalledTimes(3);
+      expect(Object.keys(JSON.parse(bridgeFileContents)).sort()).toEqual([
+        'digests:digest-one', 'digests:digest-two', 'people:example',
+      ]);
+    });
   });
 });

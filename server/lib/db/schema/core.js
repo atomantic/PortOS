@@ -79,6 +79,11 @@ END$$`,
 ];
 
 export const coreDdl = [
+    // Deliberately no FK: the bridge repairs a purged target on its next sync.
+    `CREATE TABLE IF NOT EXISTS brain_memory_links (
+      bridge_key TEXT PRIMARY KEY,
+      memory_id UUID NOT NULL
+    )`,
     `CREATE TABLE IF NOT EXISTS deep_audit_ledgers (
       id TEXT PRIMARY KEY,
       app_id TEXT NOT NULL,

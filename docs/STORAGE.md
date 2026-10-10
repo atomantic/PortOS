@@ -522,6 +522,23 @@ Received counters never replace local counters: a peer replacement snapshots thi
 machine's prior text and advances its own revision. Rejection now archives with a
 reason; explicit purge deletes the memory and its history.
 
+### Brain-to-memory identity
+
+`brain_memory_links` is machine-local `db-primary` identity keyed by brain
+`type:id`. Its memory UUID is committed in the same transaction as the memory
+write. The link intentionally survives a memory purge so the next sync can heal
+it; live-map reads exclude missing targets. It does not federate: each machine
+builds its own bridge using its own memory ids. Existing memory federation stays
+unchanged. PostgreSQL backups include the table.
+
+Boot DDL and migration 421 install the additive table. The bridge idempotently
+imports valid legacy `data/brain/memory-bridge-map.json` links on first use,
+without overriding DB links, and rebuilds corrupt caches from the table. If a
+legacy cache is already corrupt before any links have been imported and brain
+memories exist, sync refuses to guess their identities: restore that cache from
+backup. No seed is shipped. The JSON map remains a compatibility cache with one flush per
+bulk sync; it is no longer the production identity authority.
+
 ## Adding a new data store? Answer these
 
 Apply this checklist to **every new feature that persists data**, and require it in PR review. A new `data/*.json` store must *justify* itself against these questions — the default for app-native records is PostgreSQL.
