@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { formatTimecode } from '../../utils/formatters.js';
 import { lyricSetupState } from '../../lib/musicVideoStages.js';
 import CompositionPreviewPlayer from './CompositionPreviewPlayer.jsx';
 
@@ -24,6 +25,7 @@ export default function LyricTimingCheck({ project, review, planning = null, dis
   const saved = { ...EMPTY_DRAFT, ...(project.productionReview?.draft || {}) };
   const lyrics = lyricSetupState(project, review.readiness);
   const [mode, setMode] = useState(saved.lyricsMode === 'instrumental' ? 'instrumental' : 'vocal');
+  const [seekRequest, setSeekRequest] = useState(null);
   const [notes, setNotes] = useState(saved.timingNotes || '');
   const stale = lyrics.alignment === 'stale';
   const busy = disabled || review.busy || !review.current;
@@ -42,6 +44,7 @@ export default function LyricTimingCheck({ project, review, planning = null, dis
 
   const verified = mode === 'vocal' ? lyrics.verified && !lyrics.instrumental : lyrics.instrumental && lyrics.verified;
   const timed = (project.lyricCues || []).some((cue) => typeof cue.startSec === 'number' && cue.text?.trim());
+  const suspectCues = (project.lyricCues || []).filter((cue) => cue.suspect);
   const playable = mode === 'vocal' && timed && !!project.audioAnalysis && !!audioUrl && !aligning;
   return (
     <div className="space-y-2" id="mv-lyric-timing">
@@ -56,6 +59,26 @@ export default function LyricTimingCheck({ project, review, planning = null, dis
           Instrumental
         </label>
       </fieldset>
+      {playable && (!verified || suspectCues.length > 0) && (
+        <>
+          <p className="text-sm text-port-text-muted">Play the lyrics through with the song and watch each word land on the vocal.</p>
+          {suspectCues.length > 0 && (
+            <div className="space-y-1 text-sm">
+              <p className="text-port-warning">These lines may play too quickly. Jump to each one and check it against the vocal.</p>
+              <ul className="space-y-1">
+                {suspectCues.map((cue) => {
+                  const t = cue.words?.[0]?.startSec ?? cue.startSec ?? 0;
+                  return <li key={cue.id}><button type="button" className={buttonClass}
+                    onClick={() => setSeekRequest((previous) => ({ t, n: (previous?.n ?? 0) + 1, play: true }))}>
+                    {formatTimecode(t)} — {cue.text}
+                  </button></li>;
+                })}
+              </ul>
+            </div>
+          )}
+          <CompositionPreviewPlayer project={project} audioUrl={audioUrl} lyrics scrubId={`mv-lyrics-check-scrub-${project.id}`} seekRequest={seekRequest} />
+        </>
+      )}
       {verified ? (
         <p role="status" className="text-sm text-port-success">
           {mode === 'vocal' ? 'Word timing verified against the current master.' : 'Marked instrumental.'}
@@ -68,12 +91,6 @@ export default function LyricTimingCheck({ project, review, planning = null, dis
                 : !project.audioAnalysis ? 'Analyzing the song. The playthrough appears here once the words are placed.'
                   : 'Align the words to play them through with the song.'}
             </p>
-          )}
-          {playable && (
-            <>
-              <p className="text-sm text-port-text-muted">Play the lyrics through with the song and watch each word land on the vocal.</p>
-              <CompositionPreviewPlayer project={project} audioUrl={audioUrl} lyrics scrubId={`mv-lyrics-check-scrub-${project.id}`} />
-            </>
           )}
           <label htmlFor={notesId} className="block text-xs text-port-text-muted">
             Notes (optional)

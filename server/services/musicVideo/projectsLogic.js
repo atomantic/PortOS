@@ -342,7 +342,10 @@ export function applyProjectPatch(project, patch) {
     } : {}),
     ...(Array.isArray(patch.lyricCues) ? { lyricCues: normalizeLyricCues(patch.lyricCues).map((cue) => {
       const previous = project.lyricCues?.find((entry) => entry.id === cue.id);
-      if (previous && previous.text !== cue.text) delete cue.matched;
+      if (previous && previous.text !== cue.text) {
+        delete cue.matched;
+        delete cue.suspect;
+      }
       return cue;
     }) } : {}),
     ...(Array.isArray(patch.lyricMarkers) ? { lyricMarkers: normalizeLyricMarkers(patch.lyricMarkers) } : {}),
