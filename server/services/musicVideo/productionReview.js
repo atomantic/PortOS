@@ -227,13 +227,19 @@ function castAndSetsApproval(project) {
   return { approved, stale: changedFields.length ? withRevertible({ approvedAt: stage.approvedAt || null, changedFields }, stage.approvedValues) : null };
 }
 
+// A treatment's per-shot entry and exit (scene.direction, treatment.js), as one storyboard transition line.
+const sceneTransition = direction => [direction?.transitionIn && `Entry: ${direction.transitionIn}`, direction?.transitionOut && `Exit: ${direction.transitionOut}`]
+  .filter(part => text(part)).join('. ');
+
 /**
  * The storyboard row a Board scene with no draft shot of its own stands for:
- * its planned action, staging and camera, the Cast & Sets world's camera and
- * transition language where the scene has none (unless the sheet was skipped),
- * and the lyric lines it overlaps. Planning shots after the art approval
- * writes scenes without draft rows, so the storyboard reads them this way
- * until a director edits a shot; preparing the review writes the same rows.
+ * its planned action, staging and camera, its treatment entry and exit as the
+ * transition, the Cast & Sets world's camera and transition language where the
+ * scene has none (unless the sheet was skipped; a photographic direction has
+ * no world), else a plain cut, and the lyric lines it overlaps. Planning shots
+ * after the art approval writes scenes without draft rows, so the storyboard
+ * reads them this way until a director edits a shot; preparing the review
+ * writes the same rows.
  */
 function boardShotFromScene(project, scene) {
   const world = (project.castAndSets?.status !== 'skipped' && project.castAndSets?.direction?.world) || {};
@@ -241,7 +247,7 @@ function boardShotFromScene(project, scene) {
     sceneId: scene.sceneId,
     lyricCueIds: (project.lyricCues || []).filter(c => c.startSec < scene.endSec && c.endSec > scene.startSec).map(c => c.id),
     action: scene.visualIntent || scene.prompt || '', staging: scene.framePrompt || '',
-    camera: shotCameraLabel(scene.camera) || scene.direction?.camera || world.camera || '', transition: world.transitions || '',
+    camera: shotCameraLabel(scene.camera) || scene.direction?.camera || world.camera || '', transition: sceneTransition(scene.direction) || world.transitions || 'Cut',
   };
 }
 

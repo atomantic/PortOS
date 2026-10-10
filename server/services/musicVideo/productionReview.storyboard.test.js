@@ -66,3 +66,15 @@ describe('approving a Board storyboard of derived shots', () => {
     expect(productionReadiness(approved).storyboard.approved).toBe(true);
   });
 });
+
+describe('derived shot transitions', () => {
+  it('takes the treatment entry and exit, else a plain cut, when the direction has no world', () => {
+    const base = project();
+    const photographic = { ...base, castAndSets: { status: 'approved', direction: { look: 'Analog film' } },
+      scenes: [{ ...base.scenes[0], camera: { move: 'locked-off' }, direction: { transitionIn: 'match cut from the monitor glow', transitionOut: 'whip to the reel' } },
+        { ...base.scenes[1], camera: { move: 'locked-off' } }] };
+    const { storyboard } = productionReadiness(photographic);
+    expect(storyboard.shots.map(s => s.transition)).toEqual(['Entry: match cut from the monitor glow. Exit: whip to the reel', 'Cut']);
+    expect(storyboard.problems.filter(p => SHOT_PROBLEM.test(p))).toEqual([]);
+  });
+});
