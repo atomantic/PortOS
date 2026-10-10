@@ -301,6 +301,23 @@ describe('Media3D — generation workspace', () => {
     expect(await screen.findByTestId('glb-viewer')).toHaveTextContent('/data/models3d/robot.glb');
   });
 
+  it('distinguishes a pending or failed library from empty and lets users recover and select an image', async () => {
+    let rejectList;
+    listImageTo3dModels.mockReturnValueOnce(new Promise((_resolve, reject) => { rejectList = reject; }));
+    renderAt();
+    expect(screen.getByText('Loading your 3D models…')).toBeInTheDocument();
+    expect(screen.queryByText('No 3D models yet')).not.toBeInTheDocument();
+    await act(async () => rejectList(new Error('offline')));
+    expect(await screen.findByText('Could not load your 3D models')).toBeInTheDocument();
+    expect(screen.queryByText('No 3D models yet')).not.toBeInTheDocument();
+
+    listImageTo3dModels.mockResolvedValueOnce([]);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry loading models' }));
+    expect(await screen.findByText('No 3D models yet')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Select a source image' }));
+    expect(screen.getByRole('button', { name: 'Pick hero' })).toBeInTheDocument();
+  });
+
   it('lists existing 3D records as deep links to their detail route', async () => {
     listImageTo3dModels.mockResolvedValue([
       { id: 'image3d-abc', name: 'Example Beacon', status: 'ready', updatedAt: new Date(0).toISOString(), sourceImage: { path: '/data/images/beacon.png' } },

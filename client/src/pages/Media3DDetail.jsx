@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { ArrowLeft, Boxes, AlertTriangle, Loader2, RefreshCw, Trash2 } from 'lucide-react';
+import { ArrowLeft, Boxes, AlertTriangle, Loader2, RefreshCw, Trash2, ChevronDown } from 'lucide-react';
 import { getImageTo3dModel, generateImageTo3dModel, deleteImageTo3dModel, imageTo3dAssetUrl, imageTo3dFullMeshUrl } from '../services/api';
 import useMounted from '../hooks/useMounted';
 import { useModelLifecycle } from '../hooks/useModelLifecycle';
@@ -207,30 +207,36 @@ export default function Media3DDetail() {
         </p>
       </header>
 
-      <div className="mb-4 rounded-lg border border-port-border bg-port-card p-3">
-        <ImageTo3dRenderOptions
-          stepsSupported={record.supportsRenderOptions?.steps !== false}
-          detailSupported={record.supportsRenderOptions?.detail !== false}
-          alphaModeSupported={record.supportsRenderOptions?.alphaMode !== false}
-          steps={steps}
-          onStepsChange={setSteps}
-          seed={seed}
-          onSeedChange={setSeed}
-          keyBackground={keyBackground}
-          onKeyBackgroundChange={setKeyBackground}
-          detail={detail}
-          onDetailChange={setDetail}
-          alphaMode={alphaMode}
-          onAlphaModeChange={setAlphaMode}
-          normalMapSupported={record.supportsRenderOptions?.normalMap !== false}
-          normalMap={normalMap}
-          onNormalMapChange={setNormalMap}
-          subjectScale={subjectScale}
-          onSubjectScaleChange={setSubjectScale}
-          sourcePreviewUrl={record.sourceImage?.path || null}
-          disabled={busy || isGenerating}
-        />
-      </div>
+      <details className="group mb-4 rounded-lg border border-port-border bg-port-card p-3">
+        <summary className="flex min-h-[44px] cursor-pointer list-none items-center justify-between text-sm font-medium text-gray-300">
+          Re-render options
+          <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" aria-hidden="true" />
+        </summary>
+        <div className="mt-3">
+          <ImageTo3dRenderOptions
+            stepsSupported={record.supportsRenderOptions?.steps !== false}
+            detailSupported={record.supportsRenderOptions?.detail !== false}
+            alphaModeSupported={record.supportsRenderOptions?.alphaMode !== false}
+            steps={steps}
+            onStepsChange={setSteps}
+            seed={seed}
+            onSeedChange={setSeed}
+            keyBackground={keyBackground}
+            onKeyBackgroundChange={setKeyBackground}
+            detail={detail}
+            onDetailChange={setDetail}
+            alphaMode={alphaMode}
+            onAlphaModeChange={setAlphaMode}
+            normalMapSupported={record.supportsRenderOptions?.normalMap !== false}
+            normalMap={normalMap}
+            onNormalMapChange={setNormalMap}
+            subjectScale={subjectScale}
+            onSubjectScaleChange={setSubjectScale}
+            sourcePreviewUrl={record.sourceImage?.path || null}
+            disabled={busy || isGenerating}
+          />
+        </div>
+      </details>
 
       {confirmingDelete && (
         <InlineConfirmRow
