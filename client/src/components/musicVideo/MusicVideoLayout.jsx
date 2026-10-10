@@ -171,6 +171,8 @@ export default function MusicVideoLayout({
             {renameForm || (
               <div className="flex min-w-0 items-center gap-1">
                 <h2 className="truncate text-lg font-semibold max-sm:whitespace-normal max-sm:break-words" title={project.name}>{project.name}</h2>
+                {/* The version rides beside the name as a tag, so it costs no line of its own. */}
+                <span className="ml-1 shrink-0 rounded border border-port-border px-1.5 text-xs leading-5 text-port-text-muted">v{project.version || 1}</span>
                 {onRename && (
                   <button
                     type="button"
@@ -184,17 +186,13 @@ export default function MusicVideoLayout({
                 )}
               </div>
             )}
-            <p className="flex min-w-0 items-center gap-1 text-xs text-port-text-muted">
-              <span>v{project.version || 1}</span>
-              {/* The song usually shares the project's name; say it once. */}
-              {trackLabel && trackLabel !== project.name && (
-                <>
-                  <span aria-hidden="true">·</span>
-                  <Music size={12} className="shrink-0" aria-hidden="true" />
-                  <span className="truncate">{trackLabel}</span>
-                </>
-              )}
-            </p>
+            {/* The song usually shares the project's name; name it only when it differs. */}
+            {trackLabel && trackLabel !== project.name && (
+              <p className="flex min-w-0 items-center gap-1 text-xs text-port-text-muted">
+                <Music size={12} className="shrink-0" aria-hidden="true" />
+                <span className="truncate">{trackLabel}</span>
+              </p>
+            )}
           </div>
           {status && (
             <p role="status" aria-label="Project status" className={`flex min-h-[36px] min-w-0 items-center rounded-lg border px-2.5 text-xs font-medium sm:text-sm ${TONE_CLASSES[status.tone] || TONE_CLASSES.muted}`}>
