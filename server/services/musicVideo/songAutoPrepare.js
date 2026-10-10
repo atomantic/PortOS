@@ -27,7 +27,7 @@ const autonomousRunActive = (project) => {
 };
 
 /** Whether the project's lyric lines are waiting for their first word alignment. */
-export function needsAutoAlignment(project) {
+function needsAutoAlignment(project) {
   if (project?.productionReview?.draft?.lyricsMode === 'instrumental') return false;
   const cues = (project?.lyricCues || []).filter((cue) => isNonBlankStr(cue?.text));
   return cues.length > 0 && !cues.some((cue) => Array.isArray(cue.words) && cue.words.length > 0);

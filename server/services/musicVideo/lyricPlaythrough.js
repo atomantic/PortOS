@@ -34,7 +34,7 @@ const timedShots = (scenes) => (Array.isArray(scenes) ? scenes : [])
  * scene runs from its first timed line to the next scene, the first from 0 and the
  * last to the end of the song.
  */
-export function lyricScenes(cues, markers, durationSec) {
+function lyricScenes(cues, markers, durationSec) {
   const lines = Array.isArray(cues) ? cues : [];
   const sections = (Array.isArray(markers) ? markers : [])
     .filter((marker) => marker?.type === 'section' && Number.isInteger(marker.line) && marker.line < lines.length)

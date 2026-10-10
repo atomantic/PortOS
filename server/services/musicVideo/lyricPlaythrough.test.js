@@ -5,15 +5,19 @@ vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await imp
   dataRoot: () => lazyTempDataRoot('portos-mv-lyric-playthrough-'),
 }));
 
-const { lyricScenes, buildLyricPlaythroughPreview } = await import('./lyricPlaythrough.js');
+const { buildLyricPlaythroughPreview } = await import('./lyricPlaythrough.js');
 
 afterAll(() => cleanupTempDataRoots());
 
 const cue = (text, startSec, endSec = startSec == null ? null : startSec + 2) => ({ id: `c-${text}`, text, startSec, endSec });
 const portosData = (html) => JSON.parse(/window\.PORTOS_MV = (\{.*?\});window\.PORTOS_MV_EVENT_STATE/s.exec(html)[1]);
+// The scenes the playthrough lays out for these lyrics, as [label, startSec, endSec].
+const lyricScenes = async (lyricCues, lyricMarkers, durationSec) => portosData((await buildLyricPlaythroughPreview({
+  id: 'mv-example', name: 'Example Song', audioAnalysis: { durationSec }, lyricCues, lyricMarkers, scenes: [],
+})).html).scenes.map(({ label, startSec, endSec }) => [label, startSec, endSec]);
 
 describe('lyric scenes', () => {
-  it('opens a scene at each sheet section, from 0 to the end of the song', () => {
+  it('opens a scene at each sheet section, from 0 to the end of the song', async () => {
     const cues = [cue('a', 5), cue('b', 8), cue('c', 20), cue('d', 24), cue('e', 40)];
     const markers = [
       { type: 'section', label: 'Verse 1', line: 1 },
@@ -21,14 +25,14 @@ describe('lyric scenes', () => {
       { type: 'section', label: 'Chorus', line: 2 },
       { type: 'section', label: 'Outro', line: 5 },
     ];
-    expect(lyricScenes(cues, markers, 60).map(({ label, startSec, endSec }) => [label, startSec, endSec])).toEqual([
+    expect(await lyricScenes(cues, markers, 60)).toEqual([
       ['Intro', 0, 8], ['Verse 1', 8, 20], ['Chorus', 20, 60],
     ]);
   });
 
-  it('groups four lines a scene without headers and skips a group with no timed line', () => {
+  it('groups four lines a scene without headers and skips a group with no timed line', async () => {
     const cues = [cue('a', 2), cue('b', 4), cue('c', 6), cue('d', 8), cue('e', null), cue('f', null), cue('g', 30)];
-    expect(lyricScenes(cues, [], 50).map(({ label, startSec, endSec }) => [label, startSec, endSec])).toEqual([
+    expect(await lyricScenes(cues, [], 50)).toEqual([
       ['Lines 1–4', 0, 30], ['Lines 5–7', 30, 50],
     ]);
   });
