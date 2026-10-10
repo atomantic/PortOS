@@ -726,9 +726,7 @@ export default function MusicVideo() {
     if (selectedTrack?.concept && !selected.concept?.prompt) {
       patch.concept = { ...(selected.concept || {}), prompt: selectedTrack.concept };
     }
-    if (selectedTrack?.prompt && !selected.concept?.style) {
-      patch.concept = { ...(patch.concept || selected.concept || {}), style: selectedTrack.prompt };
-    }
+    // The track's Suno style becomes the project's song style on the server.
     // Fork first so the original keeps its analysis/alignment; the new track is
     // applied to the fork only.
     const base = fork
@@ -857,13 +855,14 @@ export default function MusicVideo() {
   // and a focus-without-edit blur doesn't re-PATCH an unchanged value.
   const conceptDraft = useFieldDraft(selected?.concept?.prompt, (v) => commitConcept({ prompt: v }));
   const styleDraft = useFieldDraft(selected?.concept?.style, (v) => commitConcept({ style: v }));
+  const songStyleDraft = useFieldDraft(selected?.concept?.songStyle, (v) => commitConcept({ songStyle: v }));
   // The route (not a remount) drives which project is "selected" here, so a
   // still-focused, unblurred draft survives a project switch (deep link,
   // browser Back, future ⌘K/voice jump) with the OLD project's typed text.
   // Without this, the next incidental blur would commit that leftover draft
   // onto the NEW project via commitConcept's captured `selected`. Discard
   // (never auto-commit) any pending edit the instant the selection changes.
-  useEffect(() => { conceptDraft.reset(); styleDraft.reset(); }, [selectedId]);
+  useEffect(() => { conceptDraft.reset(); styleDraft.reset(); songStyleDraft.reset(); }, [selectedId]);
   // BeatTimeline drag commit — same optimistic-local + silent-PATCH pattern as
   // the other scene field editors (#1854).
   const commitSceneTiming = (sceneId, patch) => {
@@ -1168,6 +1167,7 @@ export default function MusicVideo() {
     kickoff,
     conceptDraft,
     styleDraft,
+    songStyleDraft,
     importingLyrics,
     aligningLyrics,
     alignStatus,

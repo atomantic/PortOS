@@ -131,6 +131,18 @@ const isSunoUrl = (value) => {
 };
 
 /**
+ * Suno keeps "Exclude styles" apart from the style tags. Fold them into the
+ * style as minus-prefixed terms (Suno's own inline spelling) so the song's
+ * style text carries what it avoids; a term already excluded inline is kept once.
+ */
+function withExcludedStyles(tags, negativeTags) {
+  const dash = /^[-\u2010-\u2013\u2212]\s*/;
+  const present = new Set(tags.split(',').map((t) => t.trim()).filter((t) => dash.test(t)).map((t) => t.replace(dash, '').toLowerCase()));
+  const excluded = negativeTags.split(',').map((t) => t.trim().replace(dash, '')).filter((t) => t && !present.has(t.toLowerCase()));
+  return [tags, ...excluded.map((t) => `-${t}`)].filter(Boolean).join(', ');
+}
+
+/**
  * Read what a Suno song page says about `songId`. Every field is best effort:
  * '' (or null for a URL) when the page doesn't carry it, so a page Suno
  * restyles still imports the audio. URLs are kept only when they point at Suno.
@@ -154,7 +166,7 @@ export function parseSunoSongPage(html, songId) {
   return {
     title,
     lyrics: text(song.metadata?.prompt),
-    style: text(song.metadata?.tags),
+    style: withExcludedStyles(text(song.metadata?.tags), text(song.metadata?.negative_tags)),
     audioUrl,
     imageUrl,
   };

@@ -53,6 +53,18 @@ describe('Cast & Sets direction', () => {
     expect(prompt).not.toContain('This is a REVISION');
   });
 
+  it('designs from the song\'s Suno style, falling back to the track, and keeps it apart from the visual style', () => {
+    const songStyle = '1980s synth-pop, gated snare, \u2011cutesy, -musical theater';
+    const prompt = buildCastAndSetsPrompt({ ...project, concept: { ...project.concept, songStyle } });
+    expect(prompt).toContain('SONG STYLE');
+    expect(prompt).toContain('Sound: 1980s synth-pop, gated snare');
+    expect(prompt).toContain('The song deliberately avoids: cutesy, musical theater.');
+    expect(prompt).toContain("Director's visual style: raw flash");
+    // A project made before songStyle existed still reads its track's prompt.
+    expect(buildCastAndSetsPrompt(project, { track: { prompt: 'dark wave' } })).toContain('Sound: dark wave');
+    expect(buildCastAndSetsPrompt(project)).not.toContain('SONG STYLE');
+  });
+
   it('fixes the protagonist to a loaded character style, stating it once with its wardrobe', () => {
     const characterStyle = 'Claudia slopcore: Claudia.\nWardrobe options: Look 00: a white shirt\nNever: a second streak';
     const prompt = buildCastAndSetsPrompt({ ...project, concept: { ...project.concept, characterStyle } });

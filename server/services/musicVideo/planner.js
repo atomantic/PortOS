@@ -1,4 +1,4 @@
-import { musicVideoCreativeContext, musicVideoDirectionContext } from '../../lib/musicVideoCreativeContext.js';
+import { musicVideoCreativeContext, musicVideoDirectionContext, musicVideoSongStyleContext } from '../../lib/musicVideoCreativeContext.js';
 /**
  * Music Video — autonomous shot planner (#1855; multi-shot + lyrics #8964).
  *
@@ -179,6 +179,7 @@ export function buildScenePlanPrompt(project, shots) {
   return `You are directing a music video for "${project.name}".
 ${conceptLine}
 ${styleLine}
+${musicVideoSongStyleContext(concept)}
 ${musicVideoCreativeContext(concept)}
 ${musicVideoDirectionContext(direction)}
 ${briefLines}

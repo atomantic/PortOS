@@ -93,6 +93,8 @@ async function seedVideoBackendDefault(input) {
 
 // Automatically read lyrics and creative context from the linked music track
 // in the music creation system when creating a project.
+const trackSongStyle = (track) => (typeof track?.prompt === 'string' ? track.prompt.trim().slice(0, 2000) : '');
+
 async function seedTrackMetadata(input) {
   if (!input?.trackId) return input;
   const track = await getTrack(input.trackId).catch(() => null);
@@ -111,11 +113,13 @@ async function seedTrackMetadata(input) {
     name = track.title;
   }
   let concept = input.concept;
+  // The track's prompt is the song's Suno style: it seeds `songStyle`, which
+  // the planners translate into design. It is not the visual style.
   if (track.concept || track.prompt) {
     concept = {
       ...(concept || {}),
       ...(track.concept && !concept?.prompt ? { prompt: track.concept } : {}),
-      ...(track.prompt && !concept?.style ? { style: track.prompt } : {}),
+      ...(track.prompt && !concept?.songStyle ? { songStyle: trackSongStyle(track) } : {}),
     };
   }
   return {
@@ -144,12 +148,14 @@ async function seedTrackMetadataOnUpdate(id, patch) {
     }
   }
   let concept = patch.concept;
-  if ((track.concept && !project.concept?.prompt) || (track.prompt && !project.concept?.style)) {
+  // A different song brings its own style, so the snapshot follows the track.
+  const songStyle = typeof concept?.songStyle === 'string' ? concept.songStyle : trackSongStyle(track);
+  if ((track.concept && !project.concept?.prompt) || songStyle !== (project.concept?.songStyle || '')) {
     concept = {
       ...(project.concept || {}),
       ...(concept || {}),
       ...(track.concept && !project.concept?.prompt && !concept?.prompt ? { prompt: track.concept } : {}),
-      ...(track.prompt && !project.concept?.style && !concept?.style ? { style: track.prompt } : {}),
+      songStyle,
     };
   }
   return {

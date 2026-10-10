@@ -40,6 +40,37 @@ export function musicVideoCreativeContext(concept, { moodBoard = true } = {}) {
   return [...styles, ...(lines.length ? [BIBLE_HEADER, ...lines] : [])].join('\n').slice(0, CONTEXT_MAX);
 }
 
+// Suno writes an excluded style as a leading minus; people type it as a
+// hyphen, a non-breaking hyphen (U+2011), an en dash or a minus sign.
+const EXCLUDED_STYLE = /^[-\u2010\u2011\u2012\u2013\u2212]\s*/;
+
+/**
+ * Split a Suno style prompt into what the song sounds like and the styles it
+ * excludes (`-bubblegum pop`). Terms are comma separated; '' and [] when unset.
+ */
+function parseSongStyle(text) {
+  const terms = String(text || '').split(',').map((t) => t.trim()).filter(Boolean);
+  const sound = terms.filter((t) => !EXCLUDED_STYLE.test(t));
+  const avoid = terms.filter((t) => EXCLUDED_STYLE.test(t)).map((t) => t.replace(EXCLUDED_STYLE, '').trim()).filter(Boolean);
+  return { sound: sound.join(', '), avoid };
+}
+
+/**
+ * The song's own style (the Suno prompt it was made from) as direction for an
+ * LLM that designs the picture. Music words are translated, never pasted into
+ * an image prompt; the excluded styles name what the picture must not feel
+ * like. '' when the project has no song style.
+ */
+export function musicVideoSongStyleContext(concept) {
+  const { sound, avoid } = parseSongStyle(concept?.songStyle);
+  if (!sound && !avoid.length) return '';
+  return [
+    'SONG STYLE (the Suno style prompt this song was made from). Let it shape the design of the world, the cast and the scenes together with the lyrics and the director\'s direction: translate its era, genre, energy, instrumentation and vocal character into period, wardrobe, locations, palette, lighting, camera movement and performance. Never copy these music words into an image or video prompt. A fixed character style still decides who the protagonist is; the song style only informs the protagonist\'s looks and the world around them.',
+    sound && `Sound: ${trimTo(sound, 1500)}`,
+    avoid.length && `The song deliberately avoids: ${trimTo(avoid.join(', '), 800)}. Keep the picture clear of their visual equivalents too: a song that avoids "cutesy" gets no cute design.`,
+  ].filter(Boolean).join('\n');
+}
+
 /** Bounded Cast & Sets bible; mood-board subjects are never location authority. */
 export function musicVideoDirectionContext(direction) {
   if (!direction) return '';

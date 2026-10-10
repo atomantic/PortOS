@@ -53,6 +53,12 @@ describe('parseSunoSongPage', () => {
     });
   });
 
+  it('folds Suno\'s excluded styles into the style as minus terms, once each', () => {
+    const metadata = { prompt: 'words', tags: 'synth-pop, \u2011bubblegum pop', negative_tags: 'Bubblegum Pop, metal' };
+    const html = page([`4:${JSON.stringify({ song: { id: ID, title: 'Full', metadata } })}\n`]);
+    expect(parseSunoSongPage(html, ID).style).toBe('synth-pop, \u2011bubblegum pop, -metal');
+  });
+
   it('prefers the full record over a slimmer listing of the same song', () => {
     const html = page([`4:${JSON.stringify({ playbar: { id: ID, title: 'Short' }, song: { id: ID, title: 'Full', metadata: { prompt: 'words', tags: 'rock' } } })}\n`]);
     expect(parseSunoSongPage(html, ID)).toMatchObject({ title: 'Full', lyrics: 'words', style: 'rock' });
