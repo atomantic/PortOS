@@ -160,16 +160,18 @@ export function parseSunoSongPage(html, songId) {
     const ref = /^\$([0-9a-f]+)$/i.exec(value)?.[1];
     return (ref ? texts.get(ref.toLowerCase()) ?? '' : value).trim();
   };
+  // Suno files the excluded styles under `metadata`; read them beside it too.
+  const negativeTags = [song.metadata?.negative_tags, song.negative_tags].find((v) => typeof v === 'string');
   const title = text(song.title) || metaContent(page, 'og:title').replace(/\s*\|\s*Suno\s*$/i, '').trim();
   const audioUrl = [song.audio_url, metaContent(page, 'og:audio')].find(isSunoCdnUrl) || null;
   const imageUrl = [song.image_large_url, song.image_url, metaContent(page, 'og:image')].find(isSunoUrl) || null;
   return {
     title,
     lyrics: text(song.metadata?.prompt),
-    style: withExcludedStyles(text(song.metadata?.tags), text(song.metadata?.negative_tags)),
+    style: withExcludedStyles(text(song.metadata?.tags), text(negativeTags)),
     // Whether the page said anything about excluded styles. An anonymous page
     // can leave the field out, which is not the same as a song excluding none.
-    excludedStylesKnown: typeof song.metadata?.negative_tags === 'string',
+    excludedStylesKnown: typeof negativeTags === 'string',
     audioUrl,
     imageUrl,
   };
