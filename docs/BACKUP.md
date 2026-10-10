@@ -528,6 +528,7 @@ Replays the snapshot's `portos-db.sql` into the live database via `psql -v ON_ER
 | `{ status: 'failed', reason: 'restore_error' \| 'timeout', error }` | `psql` replay failed (stderr captured) and was **proven rolled back** from its receipt (below) |
 | `{ status: 'failed', reason: 'restore_commit_unknown', error, recovery }` | `psql` did not report success and the receipt could not settle whether the replay committed — recovery pending |
 | `{ status: 'failed', reason: 'restore_schema_reconciliation', error, recovery }` | The dump committed, but current schema recovery failed; **not rolled back**, recovery pending |
+| `{ status: 'failed', reason: 'restore_catalog_reconciliation', error, recovery }` | The dump committed and the schema recovered, but forced catalog payload migration or universe-tag repair failed — recovery pending |
 | `{ status: 'failed', reason: 'restore_sync_resync', error, recovery }` | The dump committed and the schema recovered, but peer sync could not be repaired (below) — recovery pending |
 | `{ status: 'failed', reason: 'restore_recovery_release', error, recovery }` | Repair finished but the journal could not be cleared — recovery pending |
 | `{ status: 'failed', reason: 'restore_recovery_pending', error, recovery }` | An earlier restore is still awaiting recovery; preview and replay are refused |
