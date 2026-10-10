@@ -7,7 +7,7 @@ import { castAndSetsPreviewItems } from './CastAndSetsReferenceProgress.jsx';
 
 const { listeners, api, getMediaJob } = vi.hoisted(() => ({
   listeners: new Map(),
-  api: { getMusicVideoProject: vi.fn(), startMusicVideoCastAndSets: vi.fn(), regenerateMusicVideoCastAndSets: vi.fn(), editMusicVideoCastAndSetsDirection: vi.fn(), resumeMusicVideoCastAndSets: vi.fn(), approveMusicVideoCastAndSets: vi.fn(), reconfirmMusicVideoCastAndSets: vi.fn(), revertMusicVideoProductionInput: vi.fn(), skipMusicVideoCastAndSets: vi.fn() },
+  api: { getMusicVideoProject: vi.fn(), startMusicVideoCastAndSets: vi.fn(), regenerateMusicVideoCastAndSets: vi.fn(), editMusicVideoCastAndSetsDirection: vi.fn(), resumeMusicVideoCastAndSets: vi.fn(), approveMusicVideoCastAndSets: vi.fn(), reconfirmMusicVideoCastAndSets: vi.fn(), revertMusicVideoProductionInput: vi.fn(), skipMusicVideoCastAndSets: vi.fn(), applyMusicVideoCastAndSetsFeedback: vi.fn(), removeMusicVideoCastAndSetsFeedback: vi.fn() },
   getMediaJob: vi.fn(),
 }));
 vi.mock('../../services/socket', () => ({ default: {
@@ -200,6 +200,49 @@ describe('Cast & Sets direction editing', () => {
     fireEvent.change(screen.getByLabelText('Camera'), { target: { value: 'locked off' } });
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Save direction/ })); });
     expect(screen.getByLabelText('Camera').value).toBe('locked off');
+  });
+});
+
+describe('Cast & Sets sheet feedback', () => {
+  const direction = { protagonist: { name: 'Keeper' }, sets: [{ id: 'harbor', name: 'Harbor', description: 'a wet quay' }] };
+  const sheet = (extra = {}) => ({ id: 'example-project', castAndSets: {
+    revision: 1, status: 'review', direction, images: {},
+    plan: { 'set:harbor': { key: 'set:harbor', label: 'Harbor', prompt: 'Empty set plate', deps: [], refKeys: [] } },
+    ...extra,
+  } });
+
+  it('sends whole-sheet feedback, clears the box, and shows what the revision changed', async () => {
+    const note = 'Fewer light sources, eighties analog film';
+    api.applyMusicVideoCastAndSetsFeedback.mockResolvedValue({ project: sheet({ revision: 2, status: 'directing', feedback: [{ id: 'fb-1', text: note }] }) });
+    const view = render(<Harness initial={sheet()} locked={false} />);
+    const apply = screen.getByRole('button', { name: 'Apply feedback' });
+    expect(apply).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('What should change?'), { target: { value: note } });
+    await act(async () => { fireEvent.click(apply); });
+    expect(api.applyMusicVideoCastAndSetsFeedback).toHaveBeenCalledWith('example-project', { text: note }, { silent: true });
+    // Working again: the box waits for the new sheet.
+    expect(screen.queryByLabelText('What should change?')).toBeNull();
+
+    await stage(sheet({ revision: 2, feedback: [{ id: 'fb-1', text: note }], changeSummary: { revision: 2, changes: ['Look rewritten for every image', 'Lighting: Harbor'], rerendered: 1 } }));
+    expect(screen.getByLabelText('What should change?').value).toBe('');
+    expect(screen.getByText(/Revision 2: Look rewritten for every image · Lighting: Harbor · 1 image re-rendered/)).toBeInTheDocument();
+    expect(screen.getByText('Standing feedback (1)')).toBeInTheDocument();
+
+    api.removeMusicVideoCastAndSetsFeedback.mockResolvedValue({ project: sheet({ revision: 2, feedback: [] }) });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: `Stop applying: ${note}` })); });
+    expect(api.removeMusicVideoCastAndSetsFeedback).toHaveBeenCalledWith('example-project', 'fb-1', { silent: true });
+    expect(screen.queryByText(/Standing feedback/)).toBeNull();
+    view.unmount();
+  });
+
+  it('aims feedback at one image and keeps the text when the request fails', async () => {
+    api.applyMusicVideoCastAndSetsFeedback.mockRejectedValue(new Error('No provider'));
+    render(<Harness initial={sheet()} locked={false} />);
+    fireEvent.change(screen.getByLabelText('What should change?'), { target: { value: 'One lamp only' } });
+    fireEvent.change(screen.getByLabelText('Applies to'), { target: { value: 'set:harbor' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Apply feedback' })); });
+    expect(api.applyMusicVideoCastAndSetsFeedback).toHaveBeenCalledWith('example-project', { text: 'One lamp only', target: 'set:harbor' }, { silent: true });
+    expect(screen.getByLabelText('What should change?').value).toBe('One lamp only');
   });
 });
 

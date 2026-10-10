@@ -1164,6 +1164,16 @@ export const musicVideoCastAndSetsRegenerateSchema = z.object({
   effort: z.enum(EFFORT_LEVELS).optional(),
 }).strict();
 
+// Plain-text feedback on a Cast & Sets sheet. No target = the whole sheet
+// (standing feedback the direction keeps honoring); a target names one image.
+export const musicVideoCastAndSetsFeedbackSchema = z.object({
+  text: devArtifactNoteText,
+  target: devArtifactNoteTarget,
+  providerId: z.string().min(1).max(64).optional(),
+  model: z.string().min(1).max(200).optional(),
+  effort: z.enum(EFFORT_LEVELS).optional(),
+}).strict();
+
 // Direct edits to a procedural direction. A present text field replaces the
 // current value (empty clears it); an absent one keeps it.
 const castSetsText = (max) => z.string().max(max);

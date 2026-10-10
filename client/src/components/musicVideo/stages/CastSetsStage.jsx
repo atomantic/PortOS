@@ -151,6 +151,8 @@ export default function CastSetsStage({ board }) {
           onApprove={board.approveCastAndSets}
           onRegenerate={() => castSets.regenerate()}
           onEditDirection={castSets.editDirection}
+          onApplyFeedback={castSets.applyFeedback}
+          onRemoveFeedback={castSets.removeFeedback}
           onResume={() => castSets.resume()}
           onRebuild={() => castSets.start()}
           onReconfirm={() => castSets.reconfirm()}
