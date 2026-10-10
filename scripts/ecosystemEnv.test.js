@@ -269,3 +269,35 @@ describe('ecosystem.config.cjs loopback HTTP mirror port (#10950)', () => {
     expect(mirrorOf(`PORTOS_HTTP_PORT=${bad}\n`, {}).port).toBe(5553);
   });
 });
+
+describe('ecosystem.config.cjs server bind HOST (#10946)', () => {
+  const hostOf = (envContent, overrides = {}) => {
+    const apps = loadConfig(envContent, { HOST: undefined, ...overrides }).apps;
+    return Object.fromEntries(apps.map((a) => [a.name, a.env]));
+  };
+
+  it('defaults to all interfaces', () => {
+    expect(hostOf(null)['portos-server'].HOST).toBe('0.0.0.0');
+  });
+
+  it('honors a loopback HOST saved only in .env', () => {
+    expect(hostOf('HOST=127.0.0.1\n')['portos-server'].HOST).toBe('127.0.0.1');
+  });
+
+  it('lets a nonempty exported HOST win over .env', () => {
+    expect(hostOf('HOST=127.0.0.1\n', { HOST: '192.0.2.10' })['portos-server'].HOST).toBe('192.0.2.10');
+  });
+
+  it('treats an empty export or empty .env value as unset', () => {
+    expect(hostOf(null, { HOST: '' })['portos-server'].HOST).toBe('0.0.0.0');
+    expect(hostOf('HOST=\n')['portos-server'].HOST).toBe('0.0.0.0');
+    expect(hostOf('HOST=127.0.0.1\n', { HOST: '' })['portos-server'].HOST).toBe('127.0.0.1');
+  });
+
+  it('keeps CoS and CDP loopback bindings independent of the override', () => {
+    const envs = hostOf('HOST=192.0.2.10\n', { HOST: '192.0.2.11' });
+    expect(envs['portos-cos'].HOST).toBe('127.0.0.1');
+    expect(envs['portos-browser'].CDP_HOST).toBe('127.0.0.1');
+    expect(envs['portos-browser'].HOST).not.toBe('192.0.2.11');
+  });
+});

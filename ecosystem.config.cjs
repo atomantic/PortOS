@@ -44,6 +44,8 @@ const PG_USER = process.env.PGUSER || envPgUser || 'portos';
 const PG_DATABASE = process.env.PGDATABASE || envPgDatabase || 'portos';
 const PG_PASSWORD = process.env.PGPASSWORD || envPgPassword || 'portos';
 const PG_HOST = process.env.PGHOST || envPgHost || 'localhost';
+// Express bind for portos-server only: nonempty exported HOST → .env → all interfaces (#10946).
+const SERVER_HOST = process.env.HOST || envValue('HOST') || '0.0.0.0';
 
 // pm2 restarts portos-server when its RSS crosses this — originally a memory-leak
 // safety valve. The committed default stays modest so the guard still fires on a
@@ -208,7 +210,7 @@ module.exports = {
         UV_THREADPOOL_SIZE: '16',
         PORT: PORTS.API,
         PORTOS_HTTP_PORT: resolveHttpMirrorPort({ dotenv }), // exported > .env > PORTS.API_LOCAL (#10950); Loopback HTTP mirror when HTTPS is active
-        HOST: '0.0.0.0',
+        HOST: SERVER_HOST,
         PGHOST: PG_HOST,
         PGPORT: PG_PORT,
         PORTOS_NATIVE_PGPORT: DATABASE_ENDPOINTS.native.port,
