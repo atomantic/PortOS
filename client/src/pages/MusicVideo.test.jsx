@@ -3095,26 +3095,25 @@ describe('direct production review navigation', () => {
         storyboard: { approved: false, problems: ['Approve art first'] }, proof: { approved: false, problems: ['Approve storyboard first'] } } };
     listMusicVideoProjects.mockResolvedValue([project]);
     render(<MemoryRouter initialEntries={['/music-video/mv-3/review']}><LocationProbe /><NavTo to={-1} /><NavTo to={1} />{MV_ROUTES}</MemoryRouter>);
-    const action = await screen.findByRole('button', { name: 'Review art direction' });
+    // A skipped sheet left nothing written, so the header sends the director to write it, not to approve it.
+    const action = await screen.findByRole('button', { name: 'Write art direction' });
     expect(screen.getByLabelText('Project').querySelector(`option[value="${project.id}"]`).textContent).toBe(project.name);
     fireEvent.click(action);
-    // The art approval mounts at the bottom of the Look step, so it only exists once the jump lands.
-    await waitFor(() => expect(document.getElementById('mv-review-art')).toHaveFocus());
+    // The editor mounts folded at the bottom of the Look step; the jump unfolds it and focuses its first field.
+    await waitFor(() => expect(screen.getByLabelText('Cast guide')).toHaveFocus());
+    expect(screen.getByLabelText('Cast guide').closest('details').open).toBe(true);
+    expect(screen.getByTestId('loc')).toHaveTextContent('/cast-sets#mv-art-direction-editor');
+    // With nothing to review the approval is one quiet line, not instructions and a disabled button.
     const art = document.getElementById('mv-review-art');
-    // On its step the approval is an always-open box, never folded away.
     expect(art).toHaveAccessibleName('Approve: Art direction');
-    expect(art.closest('details')).toBeNull();
-    expect(art).toContainElement(screen.getByRole('button', { name: 'Approve art direction' }));
-    expect(screen.getByTestId('loc')).toHaveTextContent('/cast-sets#mv-review-art');
-    fireEvent.click(screen.getByRole('button', { name: 'Review art direction' }));
-    expect(art).toHaveFocus();
-    expect(screen.getByRole('button', { name: 'Approve art direction' })).toBeDisabled();
-    expect(screen.getByText('No current visual guide selected. Choose a Development file in the planning editor below.')).toBeInTheDocument();
+    expect(art).toHaveTextContent('Opens once the art direction is written and a visual guide is chosen.');
+    expect(within(art).queryByRole('button', { name: 'Approve art direction' })).toBeNull();
+    expect(art.className).not.toContain('border-port-accent');
     expect(screen.queryByLabelText('Instance password for this approval')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'go--1' }));
     expect(screen.getByTestId('loc')).toHaveTextContent('/review');
     fireEvent.click(screen.getByRole('button', { name: 'go-1' }));
-    await waitFor(() => expect(document.getElementById('mv-review-art')).toHaveFocus());
+    await waitFor(() => expect(screen.getByLabelText('Cast guide')).toHaveFocus());
   });
 });
 
@@ -3131,9 +3130,29 @@ describe('stage checklist and project options', () => {
     await openProject(project, 'cast-sets');
     const checklist = screen.getByRole('region', { name: 'What this step needs' });
     expect(checklist).toHaveTextContent('1 of 3 done');
-    expect(checklist).toHaveTextContent('Pick a Cast & Sets sheet as the visual guide in the art direction editor below.');
+    expect(checklist).toHaveTextContent('Pick a file below with Use as visual guide, or import one.');
     expect(checklist).toHaveTextContent('Art direction approved');
-    expect(checklist).toHaveTextContent('Approving a sheet file does not approve the art direction');
+    expect(checklist).toHaveTextContent('Opens once the art direction is written and a guide is chosen.');
+    // The guide row lands on the files, where each sheet has Use as visual guide.
+    fireEvent.click(within(checklist).getByRole('button', { name: 'Choose a guide' }));
+    await waitFor(() => expect(document.getElementById('mv-look-guides')).toHaveFocus());
+    expect(within(document.getElementById('mv-look-guides')).getByRole('button', { name: 'Use Cast sheet as visual guide' })).toBeInTheDocument();
+  });
+
+  it('builds the cast & sets from the Look checklist when nothing is written yet', async () => {
+    const project = { ...PROJECT_ANALYZED, scenes: [], castAndSets: undefined, devArtifacts: [],
+      productionReadiness: { readyForProduction: false, basis: {}, art: { approved: false, problems: ['Cast guide needs editable direction.'] },
+        storyboard: { approved: false, problems: [] }, proof: { approved: false, problems: [] } } };
+    startMusicVideoCastAndSets.mockResolvedValue({ project, stage: null });
+    await openProject(project, 'cast-sets');
+    const checklist = screen.getByRole('region', { name: 'What this step needs' });
+    expect(checklist).toHaveTextContent('Build the cast & sets to draft it from your creative direction, song style and mood board.');
+    expect(checklist).toHaveTextContent('Comes with the cast & sets sheet, or use a file of your own.');
+    expect(checklist).not.toHaveTextContent('needs editable direction');
+    fireEvent.click(within(checklist).getByRole('button', { name: 'Build cast & sets' }));
+    await waitFor(() => expect(startMusicVideoCastAndSets).toHaveBeenCalledWith(project.id, {}, { silent: true }));
+    fireEvent.click(within(checklist).getByRole('button', { name: 'Write it yourself' }));
+    await waitFor(() => expect(screen.getByLabelText('Cast guide')).toHaveFocus());
   });
 
   it('shows the project options in Project settings and saves a media mode and an autopilot tool change', async () => {

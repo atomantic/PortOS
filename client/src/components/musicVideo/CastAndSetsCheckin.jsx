@@ -37,7 +37,7 @@ function statusLine(stage) {
  * concept, style, subjects or song changed since (`stale`, from the server's
  * readiness) says what changed and offers Keep approved beside Rebuild (#10141).
  */
-export default function CastAndSetsCheckin({ project, stale = null, busy, onOpenSheet, onApprove, onRegenerate, onEditDirection, onResume, onRebuild, onReconfirm, onRevert, onSkip }) {
+export default function CastAndSetsCheckin({ id, project, stale = null, busy, onOpenSheet, onApprove, onRegenerate, onEditDirection, onResume, onRebuild, onReconfirm, onRevert, onSkip }) {
   const stage = project.castAndSets;
   if (!stage) return null;
   const working = WORKING.has(stage.status) && !stage.interrupted;
@@ -46,7 +46,7 @@ export default function CastAndSetsCheckin({ project, stale = null, busy, onOpen
   const staleText = stage.status === 'approved' ? staleApprovalText(stale) : null;
   const tone = stage.status === 'review' || staleText ? 'warning' : stage.status === 'approved' ? 'success' : stage.status === 'failed' ? 'error' : 'muted';
   return (
-    <div className={`rounded-lg border bg-port-card p-3 space-y-2 ${stage.status === 'review' ? 'border-port-warning/60' : 'border-port-border'}`} aria-label="Cast & Sets check-in">
+    <div id={id} tabIndex={-1} style={{ scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' }} className={`rounded-lg border bg-port-card p-3 space-y-2 ${stage.status === 'review' ? 'border-port-warning/60' : 'border-port-border'}`} aria-label="Cast & Sets check-in">
       <div className="flex flex-wrap items-center gap-2">
         <Users size={14} className="text-port-accent shrink-0" aria-hidden="true" />
         <span className="text-sm font-medium">Cast &amp; Sets check-in</span>

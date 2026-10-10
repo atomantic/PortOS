@@ -395,7 +395,11 @@ export function deriveNextAction(project, {
   // The approval panel only opens once the stage's own work exists: a stage with
   // nothing built yet (no check-in, no shots) offers Start / Plan, and an open
   // or interrupted check-in offers Approve / Resume — those come from the stage switch below.
-  const castNeedsOwnAction = art && ((!cast && scenes.length === 0) || (cast && (cast.status === 'review' || cast.interrupted || cast.status === 'failed')));
+  // With no art direction written yet there is nothing to review either: a project
+  // whose sheet was never built (planned from a treatment, say) builds it first.
+  const artUnwritten = art && !artDirectionGaps(project).ready;
+  const castNeedsOwnAction = art && ((!cast && (scenes.length === 0 || (artUnwritten && !project.automation)))
+    || (cast && (cast.status === 'review' || cast.interrupted || cast.status === 'failed')));
   // A document storyboard brings its shots from the authored source, so it has nothing to plan on the board.
   const draftReview = project.productionReview?.draft || {};
   const documentShots = draftReview.storyboardSource === 'document' && (draftReview.storyboard || []).length > 0;
@@ -406,6 +410,8 @@ export function deriveNextAction(project, {
   if (!finishedOutside(project) && projectHasAudio(project) && project.audioAnalysis && !CAST_WORKING.has(cast?.status) && (art || board || pilotParked)
     && run?.status !== 'running' && !renderActive && !kickoffRunning
     && !castNeedsOwnAction && !boardNeedsOwnAction) {
+    // Unwritten art direction (a skipped sheet, or fields someone cleared) is written on the step, not approved.
+    if (artUnwritten) return { id: 'review-production', kind: 'goto', stage: 'cast-sets', anchor: ART_DIRECTION_ANCHOR, label: 'Write art direction', shortLabel: 'Write art' };
     return { id: 'review-production', kind: 'goto', stage: art ? 'cast-sets' : board ? 'board' : 'produce',
       anchor: art ? 'mv-review-art' : board ? 'mv-review-storyboard' : 'mv-review-proof',
       label: art ? 'Review art direction' : board ? 'Review timed storyboard' : 'Review pilot proof',
@@ -506,6 +512,22 @@ export function deriveNextAction(project, {
 
 // The editable art-direction fields the art approval needs before art can be approved.
 const ART_DIRECTION_FIELDS = [['cast', 'cast'], ['environments', 'sets'], ['visualLanguage', 'visual language'], ['motionLanguage', 'motion']];
+/** Where the Look step's art-direction fields and its visual-guide files are on the page. */
+export const ART_DIRECTION_ANCHOR = 'mv-art-direction-editor';
+export const LOOK_GUIDES_ANCHOR = 'mv-look-guides';
+export const CAST_CHECKIN_ANCHOR = 'mv-cast-checkin';
+/**
+ * What the art approval is still waiting on before there is anything to
+ * approve: the unwritten art-direction fields (`missing`, by label) and the
+ * chosen visual guide (null when none is chosen or it was deleted). `ready`
+ * is true once both exist; until then the approval has nothing to show.
+ */
+export function artDirectionGaps(project) {
+  const draft = project?.productionReview?.draft || {};
+  const missing = ART_DIRECTION_FIELDS.filter(([key]) => !isNonBlankStr(draft[key])).map(([, label]) => label);
+  const guide = (project?.devArtifacts || []).find((a) => a.id === draft.guideArtifactId && !a.deleted) || null;
+  return { missing, guide, ready: missing.length === 0 && !!guide };
+}
 /** "Approved earlier — changed since: concept, scene 3 prompt" for an approval whose inputs moved; null otherwise. */
 export function staleApprovalText(stale) {
   if (!stale) return null;
@@ -627,15 +649,41 @@ export function stageChecklist(stageId, project, readiness = project?.production
       ];
     }
     case 'cast-sets': {
-      const missing = ART_DIRECTION_FIELDS.filter(([key]) => !isNonBlankStr(draft[key])).map(([, label]) => label);
-      const guide = (project.devArtifacts || []).find((a) => a.id === draft.guideArtifactId && !a.deleted) || null;
+      // The art direction and guide come from the Cast & Sets sheet (approving its
+      // check-in writes them in), so each row offers the step that produces it:
+      // build or resume the sheet, open its check-in, or fill from an approved one.
+      // A director who skipped the sheet writes the direction and picks a guide by hand.
+      const { missing, guide } = artDirectionGaps(project);
+      const cast = project.castAndSets || null;
+      const building = !!cast && CAST_WORKING.has(cast.status) && !cast.interrupted;
+      const stopped = !!cast && (cast.interrupted || cast.status === 'failed');
+      const fromSheet = cast?.status === 'approved' && !!cast.direction;
+      const stillMissing = missing.length && missing.length < ART_DIRECTION_FIELDS.length ? `Still missing: ${missing.join(', ')}. ` : '';
+      const write = { label: 'Write it yourself', anchor: ART_DIRECTION_ANCHOR };
+      const direction = missing.length === 0 ? { detail: null, action: null }
+        : !cast ? { detail: `${stillMissing}Build the cast & sets to draft it from your creative direction, song style and mood board.`,
+          action: { label: 'Build cast & sets', run: 'start-cast-sets', disabled: !project.audioAnalysis, reason: project.audioAnalysis ? undefined : 'Analyze the track first' }, secondary: write }
+          : building ? { detail: 'The cast & sets sheet is being built. Its art direction fills in when you approve it.', action: null }
+            : stopped ? { detail: 'The cast & sets sheet stopped before it finished.', action: { label: 'Resume cast & sets', run: 'resume-cast-sets' }, secondary: write }
+              : cast.status === 'review' ? { detail: 'Approve the cast & sets sheet and its art direction fills in here.', action: { label: 'Review cast & sets', anchor: CAST_CHECKIN_ANCHOR } }
+                : fromSheet ? { detail: `Still missing: ${missing.join(', ')}.`, action: { label: 'Fill in from cast & sets', run: 'prepare-art' }, secondary: write }
+                  : { detail: `Still missing: ${missing.join(', ')}.`, action: { label: 'Write art direction', anchor: ART_DIRECTION_ANCHOR } };
+      const sheetPending = !cast || building || stopped || cast.status === 'review';
+      const files = (project.devArtifacts || []).some((a) => !a.deleted);
+      const pick = { label: files ? 'Choose a guide' : 'Import a guide', anchor: LOOK_GUIDES_ANCHOR };
+      const guideRow = guide ? { detail: null, action: null }
+        : fromSheet && !project.productionReview?.draft?.guideArtifactId && cast.artifactId
+          ? { detail: 'Use the cast & sets sheet as the guide, or pick another file.', action: { label: 'Use the sheet', run: 'prepare-art' }, secondary: pick }
+          : sheetPending ? { detail: 'Comes with the cast & sets sheet, or use a file of your own.', action: files ? pick : null, secondary: files ? null : pick }
+            : { detail: 'Pick a file below with Use as visual guide, or import one.', action: pick };
+      const approve = approval('art', 'Art direction', 'Ready for your review. Approving a sheet file does not approve the art direction; approve it below.');
+      // Until there is direction and a guide there is nothing to review, so the row sends nowhere
+      // (a stale approval keeps its row: it names what changed and offers the reverts).
+      const waiting = !approve.done && !approve.stale && (missing.length > 0 || !guide);
       return [
-        { id: 'direction', label: 'Art direction written', done: missing.length === 0, detail: missing.length ? `Still missing: ${missing.join(', ')}.` : null,
-          action: missing.length ? { label: 'Write art direction', anchor: APPROVAL_ANCHORS.art } : null },
-        { id: 'guide', label: guide ? `Visual guide chosen: ${guide.title || guide.filename || 'sheet'}` : 'Visual guide chosen', done: !!guide,
-          detail: guide ? null : 'Pick a Cast & Sets sheet as the visual guide in the art direction editor below.',
-          action: guide ? null : { label: 'Choose a guide', anchor: APPROVAL_ANCHORS.art } },
-        approval('art', 'Art direction', 'Ready for your review. Approving a sheet file does not approve the art direction; approve it below.'),
+        { id: 'direction', label: 'Art direction written', done: missing.length === 0, ...direction },
+        { id: 'guide', label: guide ? `Visual guide chosen: ${guide.title || guide.filename || 'sheet'}` : 'Visual guide chosen', done: !!guide, ...guideRow },
+        waiting ? { ...approve, detail: 'Opens once the art direction is written and a guide is chosen.', action: null } : approve,
       ];
     }
     case 'board': {

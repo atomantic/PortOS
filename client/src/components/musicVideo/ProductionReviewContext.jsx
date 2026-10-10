@@ -18,17 +18,20 @@ export default function ProductionReviewContext({ stage, project, onOpenArtifact
   const document = draft.storyboardSource === 'document';
   const shots = draft.storyboard || [];
   const sheets = (project.devArtifacts || []).filter(a => !a.deleted && a.kind === 'storyboard');
+  const written = [['Cast', draft.cast], ['Environments', draft.environments], ['Visual language', draft.visualLanguage], ['Motion and energy', draft.motionLanguage]]
+    .filter(([, value]) => typeof value === 'string' && value.trim());
   return <section aria-label={`${stage === 'art' ? 'Art direction' : 'Storyboard'} review content`} className="min-w-0 space-y-3 py-3">
     {stage === 'art' ? <>
       {guide ? <figure className="min-w-0 space-y-2">
         <figcaption className="text-sm font-medium">Selected visual guide: {guide.title} · v{guide.version || 1}</figcaption>
         <DevArtifactPreview key={`${guide.id}:${guide.version}`} projectId={project.id} artifact={guide} onReady={onArtReady} />
         <button type="button" className="min-h-[44px] text-sm text-port-accent" onClick={() => onOpenArtifact(guide.id)}>Open guide and version history</button>
-      </figure> : <p role="status">No current visual guide selected. Choose a Development file in the planning editor below.</p>}
-      <details>
+      </figure> : null}
+      {/* Only what is written: the step's checklist says what is still missing and how to get it. */}
+      {written.length > 0 && <details>
         <summary className={FOLD}>Written art direction</summary>
-        <dl className="space-y-2 text-sm">{[['Cast', draft.cast], ['Environments', draft.environments], ['Visual language', draft.visualLanguage], ['Motion and energy', draft.motionLanguage]].map(([label, value]) => <div key={label}><dt className="font-medium">{label}</dt><dd className="whitespace-pre-wrap break-words">{value || 'Missing — complete this in the planning editor.'}</dd></div>)}</dl>
-      </details>
+        <dl className="space-y-2 text-sm">{written.map(([label, value]) => <div key={label}><dt className="font-medium">{label}</dt><dd className="whitespace-pre-wrap break-words">{value}</dd></div>)}</dl>
+      </details>}
     </> : <>
       <p className="text-sm">
         Watch the storyboard in the player, then approve. {formatCount(shots.length)} {document ? 'document shots' : 'storyboard shots'}
