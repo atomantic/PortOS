@@ -3,6 +3,7 @@ import LlmRouteNote from './LlmRouteNote.jsx';
 import Pill from '../ui/Pill.jsx';
 import { staleApprovalText } from '../../lib/musicVideoStages.js';
 import CastAndSetsDirectionEditor from './CastAndSetsDirectionEditor.jsx';
+import CastAndSetsFeedback from './CastAndSetsFeedback.jsx';
 import CastAndSetsReferenceProgress from './CastAndSetsReferenceProgress.jsx';
 
 const WORKING = new Set(['directing', 'imaging', 'assembling']);
@@ -36,8 +37,9 @@ function statusLine(stage) {
  * Edit direction on a procedural sheet, Resume, Skip). An approved sheet whose
  * concept, style, subjects or song changed since (`stale`, from the server's
  * readiness) says what changed and offers Keep approved beside Rebuild (#10141).
+ * A sheet in review (or approved) takes plain-text feedback below the actions.
  */
-export default function CastAndSetsCheckin({ id, project, stale = null, busy, onOpenSheet, onOpenPreview, onApprove, onRegenerate, onEditDirection, onResume, onRebuild, onReconfirm, onRevert, onSkip }) {
+export default function CastAndSetsCheckin({ id, project, stale = null, busy, onOpenSheet, onOpenPreview, onApprove, onRegenerate, onEditDirection, onApplyFeedback, onRemoveFeedback, onResume, onRebuild, onReconfirm, onRevert, onSkip }) {
   const stage = project.castAndSets;
   if (!stage) return null;
   const working = WORKING.has(stage.status) && !stage.interrupted;
@@ -114,6 +116,9 @@ export default function CastAndSetsCheckin({ id, project, stale = null, busy, on
           </button>
         )}
       </div>
+      {onApplyFeedback && stage.direction && !working && ['review', 'approved'].includes(stage.status) && (
+        <CastAndSetsFeedback stage={stage} busy={busy} onApply={onApplyFeedback} onRemove={onRemoveFeedback} />
+      )}
     </div>
   );
 }

@@ -469,6 +469,7 @@ describe('Music Video agent workflow policy (#9869)', () => {
       'POST /api/music-video/:id/cast-and-sets',
       'POST /api/music-video/:id/cast-and-sets/regenerate',
       'PATCH /api/music-video/:id/cast-and-sets/direction',
+      'POST /api/music-video/:id/cast-and-sets/feedback',
       'POST /api/music-video/:id/cast-and-sets/resume',
       'POST /api/music-video/:id/code/generate',
       'POST /api/music-video/:id/code/sections/:sectionId/regenerate',

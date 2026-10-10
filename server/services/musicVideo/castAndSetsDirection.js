@@ -199,7 +199,7 @@ const PROCEDURAL_OUTPUT_SHAPE = `{
  * (all optional). With `previous` + `notes` it becomes a revision request.
  * `medium` defaults to the previous direction's, else the project's.
  */
-export function buildCastAndSetsPrompt(project, { moodImages = [], board = null, track = null, previous = null, notes = [], medium = null } = {}) {
+export function buildCastAndSetsPrompt(project, { moodImages = [], board = null, track = null, previous = null, notes = [], medium = null, feedback = [] } = {}) {
   // A saved direction without a medium predates the procedural one: photographic.
   const procedural = (medium || (previous ? (previous.medium || 'photographic') : castAndSetsMedium(project))) === 'procedural';
   const concept = project?.concept || {};
@@ -271,6 +271,16 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
   ].join('\n');
   const rules = procedural ? proceduralRules : photographicRules;
 
+  // The director's standing sheet feedback: every direction call honors it,
+  // a fresh rebuild included, and it rewrites the look line every image
+  // prompt carries (`look` in the answer) instead of being pasted onto prompts.
+  const standing = (Array.isArray(feedback) ? feedback : []).map((f) => trimTo(f?.text, FEEDBACK_TEXT)).filter(Boolean);
+  const standingBlock = standing.length ? [
+    'DIRECTOR FEEDBACK ON EARLIER SHEETS (always honor it; where it disagrees with the mood board or visual style, the feedback wins):',
+    ...standing.map((t) => `- ${t}`),
+    'Carry it into every field it touches (each set\'s description and lighting, the looks, the protagonist), and write "look": one line, under 400 characters, of the look every image prompt carries (film stock, light quality and sources, grain, color), rewritten so it agrees with this feedback.',
+  ].join('\n') : '';
+
   const revision = previous ? [
     'This is a REVISION. The current direction is:',
     JSON.stringify(previous),
@@ -287,10 +297,17 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
     sectionLines.length ? `Song sections (index. label start–end):\n${sectionLines.join('\n')}` : 'The song has not been sectioned.',
     board_,
     rules,
+    standingBlock,
     revision,
-    `Respond with ONLY one JSON object in this shape (replace every <…> with real content; do NOT output the angle-bracket text), no other text:\n${procedural ? PROCEDURAL_OUTPUT_SHAPE : OUTPUT_SHAPE}`,
+    `Respond with ONLY one JSON object in this shape (replace every <…> with real content; do NOT output the angle-bracket text), no other text:\n${withLookField(procedural ? PROCEDURAL_OUTPUT_SHAPE : OUTPUT_SHAPE, standing.length > 0)}`,
   ].filter(Boolean).join('\n\n');
 }
+
+const FEEDBACK_TEXT = 2000;
+// Only a direction call carrying standing feedback is asked for its own look line.
+const withLookField = (shape, wanted) => (wanted
+  ? shape.replace('"logline":', '"look": "<one line: film stock, light quality and sources, grain, color, agreeing with the director feedback>",\n  "logline":')
+  : shape);
 
 // ---- parsing ----------------------------------------------------------------
 
@@ -367,6 +384,7 @@ const overlaySchema = z.union([
 // One lenient parser per field: a field that does not fit its shape counts as
 // absent (the merge keeps the current value) rather than failing the answer.
 const FIELD_PARSERS = {
+  look: text(500),
   logline: text(TEXT),
   interpretation: text(2000),
   protagonist: protagonistSchema,
@@ -581,4 +599,44 @@ export function applyCastAndSetsDirectionEdits(previous, edits, { sections = [] 
     ...direction.sets.filter((set) => differs(previous.sets.find((s) => s.id === set.id)?.imageRole, set.imageRole)).map((set) => `${set.name} image role`),
   ];
   return { direction: { ...direction, look: previous.look || '' }, changed };
+}
+
+// ---- what a revision changed -------------------------------------------------
+
+const MAX_CHANGE_LINES = 8;
+const nameList = (names) => (names.length > 3 ? `${names.slice(0, 3).join(', ')} and ${names.length - 3} more` : names.join(', '));
+
+/**
+ * A short, plain-language list of what a revised direction changed, for the
+ * director to read after feedback is applied: the look line, the protagonist,
+ * the wardrobe, and per-set lighting/description. Empty when nothing the
+ * images are built from changed.
+ */
+export function describeDirectionChanges(previous, next) {
+  if (!previous || !next) return [];
+  const same = (a, b) => JSON.stringify(a ?? '') === JSON.stringify(b ?? '');
+  const out = [];
+  if (!same(previous.look, next.look)) out.push('Look rewritten for every image');
+  const p0 = previous.protagonist || {};
+  const p1 = next.protagonist || {};
+  const protagonistFields = Object.keys({ ...p0, ...p1 }).filter((k) => !same(p0[k], p1[k]));
+  if (protagonistFields.length) out.push(`Protagonist: ${nameList(protagonistFields)}`);
+  if (!same(previous.looks, next.looks)) out.push('Wardrobe looks revised');
+  if (!same(previous.world?.lighting, next.world?.lighting)) out.push('World lighting revised');
+  const before = new Map((previous.sets || []).map((s) => [s.id, s]));
+  const lit = [];
+  const described = [];
+  for (const set of next.sets || []) {
+    const old = before.get(set.id);
+    if (!old) continue;
+    if (!same(old.lighting, set.lighting)) lit.push(set.name);
+    if (!same(old.description, set.description)) described.push(set.name);
+  }
+  if (lit.length) out.push(`Lighting: ${nameList(lit)}`);
+  if (described.length) out.push(`Set descriptions: ${nameList(described)}`);
+  const added = (next.sets || []).filter((s) => !before.has(s.id)).map((s) => s.name);
+  const removed = (previous.sets || []).filter((s) => !(next.sets || []).some((n) => n.id === s.id)).map((s) => s.name);
+  if (added.length) out.push(`New sets: ${nameList(added)}`);
+  if (removed.length) out.push(`Sets dropped: ${nameList(removed)}`);
+  return out.slice(0, MAX_CHANGE_LINES);
 }

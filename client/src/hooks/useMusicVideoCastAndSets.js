@@ -7,6 +7,8 @@ import {
   startMusicVideoCastAndSets,
   regenerateMusicVideoCastAndSets,
   editMusicVideoCastAndSetsDirection,
+  applyMusicVideoCastAndSetsFeedback,
+  removeMusicVideoCastAndSetsFeedback,
   resumeMusicVideoCastAndSets,
   approveMusicVideoCastAndSets,
   reconfirmMusicVideoCastAndSets,
@@ -34,7 +36,7 @@ const reachedCheckpoint = (stage) => CHECKPOINTS.has(stage?.status) || stage?.in
  * `interrupted` by a restart), or null when it could not start or the wait was
  * abandoned with `cancelWait()` (the kickoff's Cancel).
  *
- * Returns `{ busy, start, regenerate, editDirection, resume, approve, reconfirm, skip, runToCheckpoint, cancelWait }`.
+ * Returns `{ busy, start, regenerate, editDirection, applyFeedback, removeFeedback, resume, approve, reconfirm, skip, runToCheckpoint, cancelWait }`.
  */
 export default function useMusicVideoCastAndSets({ project, replaceProject } = {}) {
   const projectId = project?.id || null;
@@ -117,6 +119,8 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
   const start = () => call(() => startMusicVideoCastAndSets(projectId, {}, { silent: true }));
   const regenerate = (notes) => call(() => regenerateMusicVideoCastAndSets(projectId, notes ? { notes } : {}, { silent: true }), 'Regenerating with your notes');
   const editDirection = (edits) => call(() => editMusicVideoCastAndSetsDirection(projectId, edits, { silent: true }), 'Direction saved — re-rendering what changed');
+  const applyFeedback = ({ text, target = null }) => call(() => applyMusicVideoCastAndSetsFeedback(projectId, { text, ...(target ? { target } : {}) }, { silent: true }), 'Applying your feedback');
+  const removeFeedback = (feedbackId) => call(() => removeMusicVideoCastAndSetsFeedback(projectId, feedbackId, { silent: true }));
   const resume = () => call(() => resumeMusicVideoCastAndSets(projectId, { silent: true }));
   const approve = () => call(() => approveMusicVideoCastAndSets(projectId, { silent: true }), 'Cast & Sets approved');
   const reconfirm = () => call(() => reconfirmMusicVideoCastAndSets(projectId, { silent: true }), 'Cast & Sets kept approved');
@@ -149,5 +153,5 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
     w.resolve(null);
   };
 
-  return { busy, start, regenerate, editDirection, resume, approve, reconfirm, skip, runToCheckpoint, cancelWait };
+  return { busy, start, regenerate, editDirection, applyFeedback, removeFeedback, resume, approve, reconfirm, skip, runToCheckpoint, cancelWait };
 }
