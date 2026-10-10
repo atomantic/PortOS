@@ -334,10 +334,10 @@ describe.each([
     expect(chipFor('Example current event')).toBeInTheDocument();
   });
 
-  it('keeps the latest socket refresh and disposes its listener with pending work', async () => {
+  it.each(['calendar:sync:completed', 'calendar:changed', 'connect'])('keeps the latest %s refresh and disposes its listener with pending work', async (socketEvent) => {
     const mounted = render(<MemoryRouter><View accounts={ACCOUNTS} /></MemoryRouter>);
     await resolveEvents(requests[0], 'Example initial event');
-    const refresh = socketMock.on.mock.calls.find(([event]) => event === 'calendar:sync:completed')[1];
+    const refresh = socketMock.on.mock.calls.find(([event]) => event === socketEvent)[1];
     act(() => { refresh(); refresh(); });
     expect(requests).toHaveLength(3);
 
@@ -348,7 +348,7 @@ describe.each([
 
     act(() => { refresh(); });
     mounted.unmount();
-    expect(socketMock.off).toHaveBeenCalledWith('calendar:sync:completed', refresh);
+    expect(socketMock.off).toHaveBeenCalledWith(socketEvent, refresh);
     await resolveEvents(requests[3], 'Example late event');
     expect(screen.queryByRole('button', { name: /Example late event/ })).not.toBeInTheDocument();
   });

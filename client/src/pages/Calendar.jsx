@@ -2,6 +2,7 @@ import { useNavigate } from 'react-router';
 import { CalendarDays, Calendar as CalendarIcon, ClipboardList, Clock, Columns, LayoutGrid, RefreshCw, Settings } from 'lucide-react';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import * as api from '../services/api';
+import socket from '../services/socket';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
@@ -68,6 +69,22 @@ export default function Calendar() {
     return () => { requestGeneration.current += 1; };
   }, [fetchAccounts]);
 
+  // Mutation responses supersede any older configuration read.
+  const updateAccounts = useCallback(updater => {
+    requestGeneration.current += 1;
+    setLoading(false);
+    setAccounts(updater);
+  }, []);
+
+  useEffect(() => {
+    socket.on('calendar:changed', fetchAccounts);
+    socket.on('connect', fetchAccounts);
+    return () => {
+      socket.off('calendar:changed', fetchAccounts);
+      socket.off('connect', fetchAccounts);
+    };
+  }, [fetchAccounts]);
+
   const accountsReady = accounts !== null && !accountsError;
 
   const handleTabChange = (tabId) => {
@@ -90,7 +107,7 @@ export default function Calendar() {
       case 'review':
         return <ReviewTab accounts={accounts} />;
       case 'config':
-        return <ConfigTab accounts={accounts} setAccounts={setAccounts} />;
+        return <ConfigTab accounts={accounts} setAccounts={updateAccounts} />;
       case 'sync':
         return <SyncTab accounts={accounts} onRefresh={fetchAccounts} />;
       default:
