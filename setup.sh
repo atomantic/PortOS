@@ -213,7 +213,7 @@ else
     echo ""
     echo "Start PortOS:"
     echo "  Development:  npm run dev"
-    echo "  Production:   npm start (or npm run pm2:start)"
+    echo "  Production:   npm start"
     echo "  Stop:         npm run pm2:stop"
     echo "  Logs:         npm run pm2:logs"
     echo ""
