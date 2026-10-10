@@ -10,7 +10,7 @@ let lastReadiness = null;
 // Coarse banner projection: state, plus the blocker count only while draining
 // (the one state that displays it). Operation-list/revision churn in a stable
 // state leaves it unchanged. Carries no hold capability, resource, owner or PID.
-export function readinessProjection(status = maintenance.status()) {
+function readinessProjection(status = maintenance.status()) {
   return { state: status.state, blockerCount: status.state === 'draining' ? status.blockers.length : 0 };
 }
 

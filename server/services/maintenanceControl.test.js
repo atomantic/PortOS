@@ -11,7 +11,7 @@ vi.mock('../lib/maintenanceAdmission.js', async () => {
   gate.admission = actual.createMaintenanceAdmission(gate.root);
   return { ...actual, maintenance: gate.admission };
 });
-import { bindMaintenanceIo, readinessProjection } from './maintenanceControl.js';
+import { bindMaintenanceIo } from './maintenanceControl.js';
 
 afterAll(() => rmSync(gate.root, { recursive: true, force: true }));
 
@@ -49,6 +49,5 @@ describe('maintenance notifications', () => {
 
     // Nothing private is broadcast.
     expect(JSON.stringify(sent)).not.toMatch(/resource-that-must-not-leak|pid|owner|hold/i);
-    expect(readinessProjection()).toEqual({ state: 'normal', blockerCount: 0 });
   });
 });
