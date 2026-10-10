@@ -202,20 +202,17 @@ async function runDirection(projectId, { providerId, model, effort, notes = [], 
   const parsed = parseCastAndSetsResponse(text);
   if (!parsed) return fail(projectId, 'The creative direction answer had no usable JSON');
   const sections = songSections(project);
-  const { direction, missing } = mergeCastAndSetsDirection(notes.length ? previous : null, parsed, { sections, moodImageCount: moodImages.length, medium });
+  const { direction, missing } = mergeCastAndSetsDirection(notes.length ? previous : null, parsed, { sections, medium });
   if (missing.length) return fail(projectId, `The creative direction answer is missing: ${missing.join(', ')}`);
   // The photographic look every image prompt carries: the mood board's composed
   // style, else the project's visual style (never the board's literal places).
   direction.look = trimTo(board?.style?.prompt, 500) || trimTo(project.concept?.style, 500) || previous?.look || '';
-  // The model picks the mood-board references; with none picked, the first
-  // images of the board stand in so the character sheet still has a look.
-  const picked = direction.moodRefs.length ? direction.moodRefs : moodImages.map((_, i) => i).slice(0, 3);
-  const chosen = picked.map((i) => moodImages[i]).filter(Boolean).map(({ kind, filename }) => ({ kind, filename }));
-  return writePlan(projectId, { direction, moodImages: chosen, forceKeys });
+  // Mood board images inform the direction as text only, never as image references.
+  return writePlan(projectId, { direction, forceKeys });
 }
 
 /** (Re)build the plan from the stage's direction + accumulated per-image notes, then dispatch. */
-async function writePlan(projectId, { direction = null, moodImages = null, forceKeys = [] } = {}) {
+async function writePlan(projectId, { direction = null, forceKeys = [] } = {}) {
   const project = await requireProject(projectId);
   const stage = project.castAndSets;
   const nextDirection = direction || stage.direction;
@@ -230,7 +227,7 @@ async function writePlan(projectId, { direction = null, moodImages = null, force
   const route = codeOnly ? (stage.route || null) : await chooseCastAndSetsRoute(project, { preferred, settings });
   if (!route && !codeOnly) return fail(projectId, 'No enabled image backend is allowed for the Cast & Sets images — enable Codex (or another image tool in the brief) and resume');
   const out = await mutateProjectRecord(projectId, (current) => setCastAndSetsDirection(current, {
-    direction: nextDirection, plan, moodImages, route, renderKeys,
+    direction: nextDirection, plan, route, renderKeys,
   }));
   console.log(`🎭 Music Video Cast & Sets ${short(projectId)} r${out.stage.revision}: ${renderKeys.length} image(s) to render${route ? ` on ${route.mode}` : ' (code-only, no image backend)'}`);
   publish(projectId, out.project);
@@ -247,13 +244,6 @@ function referencePaths(stage, item) {
     const id = stage.images?.[key]?.imageId;
     const path = id ? resolveGalleryImage(id, { mustExist: false }) : null;
     if (path) paths.push(path);
-  }
-  if (item.moodRefs) {
-    for (const ref of stage.moodImages || []) {
-      if (paths.length >= 4) break;
-      const path = ref.kind === 'image-ref' ? resolveImageRef(ref.filename, { mustExist: false }) : resolveGalleryImage(ref.filename, { mustExist: false });
-      if (path) paths.push(path);
-    }
   }
   return paths.slice(0, 4);
 }

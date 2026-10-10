@@ -319,11 +319,12 @@ describe('Cast & Sets check-in', () => {
     expect(prompt).toContain('0. a steamy kitchen — flash photo, brass and steam');
     expect(runPrompt.mock.calls[0][0].source).toBe('music-video-cast-sets');
 
-    // First pass: the character sheet (conditioned on the mood image the
-    // direction picked) and the empty plates, which depend on nothing.
+    // First pass: the character sheet and the empty plates, which depend on
+    // nothing. Mood board images are outside inspiration: the direction reads
+    // them as text, and no image job is ever conditioned on one.
     expect(jobs.map(keyOf).sort()).toEqual(['character', 'set:harbor', 'set:lab', 'set:roof']);
     const character = jobs.find((j) => keyOf(j) === 'character');
-    expect(character.params.referenceImagePaths.map((p) => p.split(/[\\/]/).pop())).toEqual(['board-b.jpg']);
+    for (const job of jobs) expect(job.params.referenceImagePaths).toBeUndefined();
     expect(character.params).toMatchObject({ width: 1536, height: 1024, mode: 'codex', musicVideo: { projectId: project.id } });
     expect(character.params.prompt).toMatch(/FRONT, 3\/4, PROFILE, BACK/);
 

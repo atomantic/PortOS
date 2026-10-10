@@ -14,8 +14,7 @@
  *     productionRunId,      // the production run that started it, if any
  *     route: { mode, model },
  *     direction,            // castAndSetsDirection.js shape (`medium`: absent = photographic)
- *     moodImages: [{ kind, filename }],
- *     plan:   { [key]: { key, kind, label, prompt, deps, refKeys, moodRefs?, setId?, testIndex? } },
+ *     plan:   { [key]: { key, kind, label, prompt, deps, refKeys, setId?, testIndex? } },
  *     images: { [key]: { status, jobId, imageId, history, failures, error, updatedAt,
  *       submittedPrompt?, submittedPromptTruncated?, submittedReferences?, submittedRevision? } },
  *     artifactId, artifactVersion, notesApplied,
@@ -96,7 +95,6 @@ export function startCastAndSetsOnProject(project, { processId, productionRunId 
     productionRunId,
     route: current?.route || null,
     direction: current?.direction || null,
-    moodImages: current?.moodImages || [],
     plan: current?.plan || {},
     images: current?.images || {},
     artifactId: current?.artifactId || null,
@@ -151,8 +149,10 @@ export function resumeCastAndSetsOnProject(project, { processId }, now = new Dat
  * (re)render; every other key keeps its image. Keys no longer in the plan are
  * dropped. Returns `{ project, stage }`.
  */
-export function setCastAndSetsDirection(project, { direction, plan, moodImages, route, renderKeys }, now = new Date().toISOString()) {
-  const stage = requireStage(project);
+export function setCastAndSetsDirection(project, { direction, plan, route, renderKeys }, now = new Date().toISOString()) {
+  // `moodImages` (mood board images once sent as references) is dropped from a
+  // pre-fix stage: outside images never condition generation.
+  const { moodImages: _legacyMoodImages, ...stage } = requireStage(project);
   const rerender = new Set(renderKeys);
   const images = {};
   for (const key of Object.keys(plan)) {
@@ -166,7 +166,6 @@ export function setCastAndSetsDirection(project, { direction, plan, moodImages, 
     status: 'imaging',
     direction,
     plan,
-    moodImages: moodImages ?? stage.moodImages ?? [],
     route: route ?? stage.route ?? null,
     images,
   }, now);

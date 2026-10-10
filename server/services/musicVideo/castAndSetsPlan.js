@@ -102,7 +102,6 @@ function buildProceduralImagePlan(direction, { revisionNotes = {} } = {}) {
       setId: set.id,
       deps: [],
       refKeys: [],
-      moodRefs: true,
       prompt: join(
         (PROCEDURAL_ROLE_PROMPTS[role] || PROCEDURAL_ROLE_PROMPTS.background)(set),
         set.lighting && `Lighting: ${set.lighting}`,
@@ -118,8 +117,9 @@ function buildProceduralImagePlan(direction, { revisionNotes = {} } = {}) {
 /**
  * Build the full image plan for a direction: `{ [key]: { key, kind, label,
  * prompt, deps, refKeys, setId?, testIndex? } }`. `refKeys` name other plan
- * keys whose image is passed as a reference (in order); `moodRefs` adds the
- * chosen mood-board images. A revision note for a key is appended to its prompt.
+ * keys whose image is passed as a reference (in order): only this project's
+ * own generated images, never mood board images. A revision note for a key is
+ * appended to its prompt.
  */
 export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = {} } = {}) {
   if (direction.medium === 'procedural') return buildProceduralImagePlan(direction, { revisionNotes });
@@ -137,7 +137,6 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
     label: 'Character sheet',
     deps: [],
     refKeys: [],
-    moodRefs: true,
     prompt: join(
       `Photographic character reference sheet of ONE consistent person, ${p.name || 'the protagonist'}: ${p.description || ''}`,
       identity(p),
@@ -196,7 +195,6 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
       setId: set.id,
       deps: [],
       refKeys: [],
-      moodRefs: true,
       prompt: join(
         'Empty set plate, no people',
         set.description,
