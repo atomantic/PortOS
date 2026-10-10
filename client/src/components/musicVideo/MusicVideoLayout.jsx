@@ -186,7 +186,8 @@ export default function MusicVideoLayout({
             )}
             <p className="flex min-w-0 items-center gap-1 text-xs text-port-text-muted">
               <span>v{project.version || 1}</span>
-              {trackLabel && (
+              {/* The song usually shares the project's name; say it once. */}
+              {trackLabel && trackLabel !== project.name && (
                 <>
                   <span aria-hidden="true">·</span>
                   <Music size={12} className="shrink-0" aria-hidden="true" />

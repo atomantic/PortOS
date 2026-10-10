@@ -394,7 +394,7 @@ const openCreateForm = clickNewProject;
 // Mocked useSseProgress mutates shared state without re-rendering; toggling the
 // rename form is a harmless page-level state change that forces a render.
 const forceRerender = () => {
-  fireEvent.click(screen.getByRole('button', { name: 'Rename project' }));
+  fireEvent.click(screen.getByRole('button', { name: /^Rename v\d+$/ }));
   fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 };
 
@@ -595,15 +595,17 @@ describe('MusicVideo bounded summary index and project isolation (#10169)', () =
 });
 
 describe('MusicVideo project header', () => {
-  it('hides New project / Autonomous inside a project and renames it from the header', async () => {
+  it('keeps only the picker beside the page title inside a project; fork and delete live in Project settings', async () => {
     await openProject(PROJECT_WITH_CLIP);
     expect(screen.queryByRole('button', { name: /New project/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /Autonomous/i })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Rename project' }));
-    fireEvent.change(screen.getByLabelText('Project title'), { target: { value: 'Renamed Video' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(PROJECT_WITH_CLIP.id, { name: 'Renamed Video' }));
-    await screen.findByRole('heading', { level: 2, name: 'Renamed Video' });
+    expect(screen.queryByText(/^Project actions/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Delete project' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Fork/ })).toBeNull();
+    await openSettings('Project');
+    expect(screen.getByRole('button', { name: 'Delete project' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Fork v2' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Fork for video generation' })).toBeTruthy();
   });
 });
 
@@ -1393,6 +1395,7 @@ describe('MusicVideo project versions', () => {
   it('forks for video generation without rendering or modifying the source', async () => {
     cloneMusicVideoProject.mockResolvedValue({ ...PROJECT_WITH_CLIP, id: 'mv-footage', name: 'Footage Variant', version: 2, composition: { mode: 'composed' } });
     await openProject({ ...PROJECT_WITH_CLIP, composition: { mode: 'document' } });
+    await openSettings('Project');
     fireEvent.click(await screen.findByRole('button', { name: 'Fork for video generation' }));
     await waitFor(() => expect(cloneMusicVideoProject).toHaveBeenCalledWith('mv-1', { variant: 'video-generation' }, { silent: true }));
     await screen.findByRole('heading', { level: 2, name: 'Footage Variant' });
@@ -1410,15 +1413,16 @@ describe('MusicVideo project versions', () => {
       renderHistoryId: null,
     });
     await openProject(PROJECT_WITH_CLIP);
+    await openSettings('Project');
 
     fireEvent.click(await screen.findByRole('button', { name: /^Fork v2$/ }));
 
     await waitFor(() => expect(cloneMusicVideoProject).toHaveBeenCalledWith('mv-1', {}, { silent: true }));
     await screen.findByRole('heading', { level: 2, name: 'Neon Run v2' });
-    expect(screen.getByText('Project actions · v2')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Rename v2' })).toBeTruthy();
   });
 
-  it('omits media type parenthetical in the project picker options and compacts actions padding', async () => {
+  it('omits media type parenthetical in the project picker options', async () => {
     const parentheticalProject = {
       ...PROJECT_WITH_CLIP,
       id: 'mv-exp',
@@ -1430,11 +1434,6 @@ describe('MusicVideo project versions', () => {
     const option = Array.from(picker.options).find((opt) => opt.value === 'mv-exp');
     expect(option).toBeDefined();
     expect(option?.textContent).toBe('You Are the Room - Blueprint v7');
-
-    const actionsSummary = screen.getByText(/^Project actions ·/);
-    const actionsContent = actionsSummary.parentElement?.querySelector('div');
-    expect(actionsContent).toHaveClass('pt-1.5');
-    expect(actionsContent).toHaveClass('pb-0');
   });
 });
 
@@ -1990,6 +1989,7 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     fireEvent.click(within(editInput.closest('div')).getByRole('button', { name: /Import/i }));
     await waitFor(() => expect(importTrackFromYoutube).toHaveBeenCalled());
 
+    await openSettings('Project');
     fireEvent.click(screen.getByTitle('Delete project'));
     expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/before deleting this project/i));
     expect(deleteMusicVideoProject).not.toHaveBeenCalled();
@@ -1998,6 +1998,7 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
   it('asks for confirmation before deleting a project and allows cancelling or confirming', async () => {
     deleteMusicVideoProject.mockResolvedValue({});
     await openProject(PROJECT_NO_CLIP, 'setup');
+    await openSettings('Project');
 
     fireEvent.click(screen.getByTitle('Delete project'));
     expect(deleteMusicVideoProject).not.toHaveBeenCalled();

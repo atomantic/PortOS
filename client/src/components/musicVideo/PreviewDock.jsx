@@ -61,7 +61,9 @@ export default function PreviewDock({ project, sources, audioUrl, seekRequest, c
   const Chevron = collapsed ? ChevronDown : ChevronUp;
   const pickerId = `mv-preview-source-${project.id}`;
   return (
-    <aside aria-label="Preview" className="space-y-2 rounded-lg border border-port-border bg-port-card p-2">
+    // A flex gap, not space-y: space-y puts a margin under the header row even
+    // when everything after it is hidden, so the folded dock sat off-center.
+    <aside aria-label="Preview" className="flex flex-col gap-2 rounded-lg border border-port-border bg-port-card p-2">
       <div className="flex min-w-0 items-center gap-2 text-xs text-port-text-muted">
         <MonitorPlay size={14} className="shrink-0 text-port-accent" aria-hidden="true" />
         <span className="text-sm font-medium text-port-text">Preview</span>

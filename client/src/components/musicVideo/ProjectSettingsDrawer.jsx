@@ -26,8 +26,9 @@ export const SETTINGS_TAB_IDS = SETTINGS_TABS.map((tab) => tab.id);
  * (Audio), the automation brief, production runs and the autonomous run log
  * (Autopilot), and every development file, the external handoff and the
  * making-of export (Files). `tab` is the open tab, held in the page URL.
+ * `manageActions` (fork and delete) leads the Project tab.
  */
-export default function ProjectSettingsDrawer({ open, tab, onTabChange, onClose, board }) {
+export default function ProjectSettingsDrawer({ open, tab, onTabChange, onClose, board, manageActions = null }) {
   if (!board) return null;
   const { project, locked, tracks, renderBound, midiBound, separation, midi, takes } = board;
   return (
@@ -42,6 +43,7 @@ export default function ProjectSettingsDrawer({ open, tab, onTabChange, onClose,
       onTabChange={onTabChange}
       closeLabel="Close project settings"
     >
+      {tab === 'project' && manageActions}
       {tab === 'project' && (
         <ProjectOptionsPanel
           project={project}
