@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { Boxes, CheckCircle2, AlertTriangle, Loader2, ImagePlus, Sparkles, Settings2, ChevronDown } from 'lucide-react';
+import PageHeader from '../components/PageHeader';
 import { createImageTo3dModel, getImageTo3dModel, listImageTo3dModels } from '../services/api';
 import { useModelLifecycle } from '../hooks/useModelLifecycle';
 import { useImageTo3dTargets } from '../hooks/useImageTo3dTargets';
@@ -177,226 +178,223 @@ export default function Media3D() {
   const gatedHfModels = selectedTarget?.available ? selectedTarget.gatedRepos : null;
 
   return (
-    <div className="mx-auto max-w-4xl">
-      <header className="mb-5">
-        <div className="flex items-center gap-2">
-          <Boxes className="h-5 w-5 text-port-accent" />
-          <h1 className="text-lg font-semibold text-white">3D</h1>
-        </div>
-        <p className="mt-1 text-sm text-gray-400">
-          Turn a rendered image into a 3D mesh. Pick a source image and model, then render on-device.
-        </p>
-      </header>
-
-      {/* Generation workspace — source image + target selection → on-device render. */}
-      <section className="mb-6 grid gap-4 rounded-xl border border-port-border bg-port-card p-4 sm:grid-cols-[200px_1fr]">
-        <button
-          type="button"
-          onClick={() => setPickerOpen(true)}
-          className="group relative aspect-square overflow-hidden rounded-lg border border-dashed border-port-border bg-port-bg hover:border-port-accent"
-        >
-          {selectedImage ? (
-            <MediaImage
-              src={selectedImage.previewUrl}
-              alt="Selected source image"
-              className="h-full w-full object-cover"
-            />
-          ) : (
-            <span className="flex h-full flex-col items-center justify-center gap-2 text-sm text-gray-500 group-hover:text-port-accent">
-              <ImagePlus className="h-7 w-7" /> Pick source image
-            </span>
-          )}
-          {selectedImage && (
-            <span className="port-media-overlay-strong absolute inset-x-2 bottom-2 rounded px-2 py-1 text-center text-xs font-medium">
-              Change image
-            </span>
-          )}
-        </button>
-
-        <div className="flex flex-col gap-3">
-          <div>
-            <span className="mb-1 block text-xs text-gray-400">Model</span>
-            {loading ? (
-              <span className="text-xs text-gray-500">Loading models…</span>
-            ) : targets.length === 0 ? (
-              <span className="text-xs text-gray-500">No image-to-3D models registered.</span>
-            ) : (
-              <div className="flex flex-wrap gap-2">
-                {targets.map((t) => {
-                  const active = selectedTarget?.id === t.id;
-                  return (
-                    <button
-                      key={t.id}
-                      type="button"
-                      onClick={() => updateParams({ target: t.id })}
-                      className={`rounded-lg border px-3 py-1.5 text-xs ${active
-                        ? 'border-port-accent bg-port-accent/10 text-white'
-                        : 'border-port-border bg-port-bg text-gray-300 hover:border-port-accent'}`}
-                    >
-                      {t.label}
-                      {isTargetReady(t) && <CheckCircle2 className="ml-1.5 inline h-3 w-3 text-port-success" />}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          <div className="flex flex-col items-start gap-2">
-            <button
-              type="button"
-              onClick={handleGenerate}
-              disabled={!!generateGatedReason || generating}
-              title={generateGatedReason || undefined}
-              className="inline-flex items-center gap-2 rounded-lg bg-port-accent px-4 py-2 text-sm text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              {generating
-                ? <><Loader2 className="h-4 w-4 animate-spin" /> Generating{Number.isFinite(genPercent) ? ` ${Math.round(genPercent)}%` : '…'}</>
-                : <><Sparkles className="h-4 w-4" /> Generate 3D</>}
-            </button>
-            {genError ? (
-              <p className="flex items-start gap-1.5 text-xs text-port-error">
-                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> {genError}
-              </p>
-            ) : (
-              <p className="text-xs text-gray-500">
-                {generating ? 'Rendering on-device — this takes a few minutes.' : (generateGatedReason || 'Ready to render on-device.')}
-              </p>
-            )}
-          </div>
-
-          {gatedHfModels?.length > 0 && (
-            <Image3dHfAccessNotice
-              models={gatedHfModels}
-              tokenPresent={hfTokenPresent}
-              tokenSource={hfTokenSource}
-              onSaved={refreshHfToken}
-            />
-          )}
-
-          <details
-            open={optionsOpen}
-            onToggle={(event) => setOptionsOpen(event.currentTarget.open)}
-            className="group min-w-0"
+    <div className="flex h-full min-h-0 flex-col">
+      <PageHeader
+        icon={Boxes}
+        title="3D"
+        subtitle="Turn a rendered image into a 3D mesh. Pick a source image and model, then render on-device."
+      />
+      <div className="flex-1 min-h-0 overflow-auto p-4">
+        {/* Generation workspace — source image + target selection → on-device render. */}
+        <section className="mb-6 grid gap-4 rounded-xl border border-port-border bg-port-card p-4 sm:grid-cols-[200px_1fr]">
+          <button
+            type="button"
+            onClick={() => setPickerOpen(true)}
+            className="group relative aspect-square overflow-hidden rounded-lg border border-dashed border-port-border bg-port-bg hover:border-port-accent"
           >
-            <summary className="flex min-h-[44px] cursor-pointer list-none items-center justify-between rounded-lg border border-port-border px-3 py-2 text-sm font-medium text-gray-300 hover:bg-port-border/30 lg:hidden">
-              Render options
-              <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" aria-hidden="true" />
-            </summary>
-            <div className="mt-3 min-w-0 lg:mt-0">
-              <ImageTo3dRenderOptions
-                stepsSupported={selectedTarget?.supportsRenderOptions?.steps !== false}
-                detailSupported={selectedTarget?.supportsRenderOptions?.detail !== false}
-                alphaModeSupported={selectedTarget?.supportsRenderOptions?.alphaMode !== false}
-                detail={detail}
-                onDetailChange={setDetail}
-                alphaMode={alphaMode}
-                onAlphaModeChange={setAlphaMode}
-                normalMapSupported={selectedTarget?.supportsRenderOptions?.normalMap !== false}
-                normalMap={normalMap}
-                onNormalMapChange={setNormalMap}
-                steps={steps}
-                onStepsChange={setSteps}
-                seed={seed}
-                onSeedChange={setSeed}
-                keyBackground={keyBackground}
-                onKeyBackgroundChange={setKeyBackground}
-                subjectScale={subjectScale}
-                onSubjectScaleChange={setSubjectScale}
-                sourcePreviewUrl={selectedImage?.previewUrl || null}
-                disabled={generating}
+            {selectedImage ? (
+              <MediaImage
+                src={selectedImage.previewUrl}
+                alt="Selected source image"
+                className="h-full w-full object-cover"
               />
+            ) : (
+              <span className="flex h-full flex-col items-center justify-center gap-2 text-sm text-gray-500 group-hover:text-port-accent">
+                <ImagePlus className="h-7 w-7" /> Pick source image
+              </span>
+            )}
+            {selectedImage && (
+              <span className="port-media-overlay-strong absolute inset-x-2 bottom-2 rounded px-2 py-1 text-center text-xs font-medium">
+                Change image
+              </span>
+            )}
+          </button>
+
+          <div className="flex flex-col gap-3">
+            <div>
+              <span className="mb-1 block text-xs text-gray-400">Model</span>
+              {loading ? (
+                <span className="text-xs text-gray-500">Loading models…</span>
+              ) : targets.length === 0 ? (
+                <span className="text-xs text-gray-500">No image-to-3D models registered.</span>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {targets.map((t) => {
+                    const active = selectedTarget?.id === t.id;
+                    return (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => updateParams({ target: t.id })}
+                        className={`rounded-lg border px-3 py-1.5 text-xs ${active
+                          ? 'border-port-accent bg-port-accent/10 text-white'
+                          : 'border-port-border bg-port-bg text-gray-300 hover:border-port-accent'}`}
+                      >
+                        {t.label}
+                        {isTargetReady(t) && <CheckCircle2 className="ml-1.5 inline h-3 w-3 text-port-success" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
-          </details>
-        </div>
-      </section>
 
-      {/* Generated-mesh preview. Driven by `?glb=` so a finished render is a
-          shareable, reload-safe deep link; empty until one lands. */}
-      {glbFromRoute && (
-        <section className="mb-6">
-          <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">Mesh preview</h2>
-          <GlbViewer src={glbFromRoute} />
-        </section>
-      )}
-
-      {/* Library of existing renders — each opens its `/3d/:id` detail
-          view (GLB viewer + download). URL is the source of truth for what's
-          open, so every card is a deep link. */}
-      {records.length > 0 && (
-        <section className="mb-6">
-          <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">Your 3D models</h2>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
-            {records.map((record) => {
-              const status = imageTo3dStatusMeta(record.status);
-              return (
-                <Link
-                  key={record.id}
-                  to={`/3d/${record.id}`}
-                  className="group overflow-hidden rounded-lg border border-port-border bg-port-card hover:border-port-accent"
-                >
-                  <div className="relative aspect-square bg-port-bg">
-                    {record.sourceImage?.path && (
-                      <MediaImage
-                        src={record.sourceImage.path}
-                        alt={record.name || 'Source image'}
-                        className="h-full w-full object-cover opacity-90 group-hover:opacity-100"
-                      />
-                    )}
-                    {record.status === 'ready' && (
-                      <span className="port-media-overlay-strong absolute right-1.5 top-1.5 rounded p-1 text-port-success">
-                        <Boxes className="h-3.5 w-3.5" />
-                      </span>
-                    )}
-                  </div>
-                  <div className="p-2">
-                    <p className="truncate text-xs font-medium text-white" title={record.name}>{record.name || 'Untitled'}</p>
-                    <div className="mt-0.5 flex items-center justify-between gap-1">
-                      <span className={`text-[11px] ${status.className}`}>{status.label}</span>
-                      <span className="text-[11px] text-gray-500">{timeAgo(record.updatedAt)}</span>
-                    </div>
-                  </div>
-                </Link>
-              );
-            })}
-          </div>
-        </section>
-      )}
-
-      {/* Install/repair lives under Models → 3D — these are on-device runtimes, not
-          renders — so the generate flow just names the state and links there (#4728). */}
-      <section className="rounded-xl border border-port-border bg-port-card p-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="min-w-0">
-            <h2 className="text-sm font-semibold text-white">Runtimes</h2>
-            <p className={`mt-1 text-xs ${error ? 'text-port-error' : 'text-gray-400'}`}>{runtimeSummary}</p>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            {/* A failed registry read also gates Generate (no target resolves), so
-                the recovery has to be reachable from here — not only by reloading
-                the page. */}
-            {error && !loading && (
+            <div className="flex flex-col items-start gap-2">
               <button
                 type="button"
-                onClick={reloadTargets}
-                className="rounded-md border border-port-error/50 px-3 py-1.5 text-xs text-port-error hover:bg-port-error/20"
+                onClick={handleGenerate}
+                disabled={!!generateGatedReason || generating}
+                title={generateGatedReason || undefined}
+                className="inline-flex items-center gap-2 rounded-lg bg-port-accent px-4 py-2 text-sm text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
               >
-                Retry
+                {generating
+                  ? <><Loader2 className="h-4 w-4 animate-spin" /> Generating{Number.isFinite(genPercent) ? ` ${Math.round(genPercent)}%` : '…'}</>
+                  : <><Sparkles className="h-4 w-4" /> Generate 3D</>}
               </button>
-            )}
-            <Link
-              to="/models/3d"
-              className="inline-flex items-center gap-1.5 rounded-md border border-port-border px-3 py-1.5 text-xs text-gray-300 hover:border-port-accent hover:text-white"
-            >
-              <Settings2 className="h-3.5 w-3.5" /> Manage runtimes
-            </Link>
-          </div>
-        </div>
-      </section>
+              {genError ? (
+                <p className="flex items-start gap-1.5 text-xs text-port-error">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> {genError}
+                </p>
+              ) : (
+                <p className="text-xs text-gray-500">
+                  {generating ? 'Rendering on-device — this takes a few minutes.' : (generateGatedReason || 'Ready to render on-device.')}
+                </p>
+              )}
+            </div>
 
-      {/* Searchable render-history picker (reused from Image Gen). Selecting an
-          image drives `?image=` so the choice is deep-linkable. */}
-      <GalleryImagePicker open={pickerOpen} onClose={() => setPickerOpen(false)} onSelect={handlePick} allowUpload />
+            {gatedHfModels?.length > 0 && (
+              <Image3dHfAccessNotice
+                models={gatedHfModels}
+                tokenPresent={hfTokenPresent}
+                tokenSource={hfTokenSource}
+                onSaved={refreshHfToken}
+              />
+            )}
+
+            <details
+              open={optionsOpen}
+              onToggle={(event) => setOptionsOpen(event.currentTarget.open)}
+              className="group min-w-0"
+            >
+              <summary className="flex min-h-[44px] cursor-pointer list-none items-center justify-between rounded-lg border border-port-border px-3 py-2 text-sm font-medium text-gray-300 hover:bg-port-border/30 lg:hidden">
+                Render options
+                <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" aria-hidden="true" />
+              </summary>
+              <div className="mt-3 min-w-0 lg:mt-0">
+                <ImageTo3dRenderOptions
+                  stepsSupported={selectedTarget?.supportsRenderOptions?.steps !== false}
+                  detailSupported={selectedTarget?.supportsRenderOptions?.detail !== false}
+                  alphaModeSupported={selectedTarget?.supportsRenderOptions?.alphaMode !== false}
+                  detail={detail}
+                  onDetailChange={setDetail}
+                  alphaMode={alphaMode}
+                  onAlphaModeChange={setAlphaMode}
+                  normalMapSupported={selectedTarget?.supportsRenderOptions?.normalMap !== false}
+                  normalMap={normalMap}
+                  onNormalMapChange={setNormalMap}
+                  steps={steps}
+                  onStepsChange={setSteps}
+                  seed={seed}
+                  onSeedChange={setSeed}
+                  keyBackground={keyBackground}
+                  onKeyBackgroundChange={setKeyBackground}
+                  subjectScale={subjectScale}
+                  onSubjectScaleChange={setSubjectScale}
+                  sourcePreviewUrl={selectedImage?.previewUrl || null}
+                  disabled={generating}
+                />
+              </div>
+            </details>
+          </div>
+        </section>
+
+        {/* Generated-mesh preview. Driven by `?glb=` so a finished render is a
+            shareable, reload-safe deep link; empty until one lands. */}
+        {glbFromRoute && (
+          <section className="mb-6">
+            <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">Mesh preview</h2>
+            <GlbViewer src={glbFromRoute} />
+          </section>
+        )}
+
+        {/* Library of existing renders — each opens its `/3d/:id` detail
+            view (GLB viewer + download). URL is the source of truth for what's
+            open, so every card is a deep link. */}
+        {records.length > 0 && (
+          <section className="mb-6">
+            <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">Your 3D models</h2>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+              {records.map((record) => {
+                const status = imageTo3dStatusMeta(record.status);
+                return (
+                  <Link
+                    key={record.id}
+                    to={`/3d/${record.id}`}
+                    className="group overflow-hidden rounded-lg border border-port-border bg-port-card hover:border-port-accent"
+                  >
+                    <div className="relative aspect-square bg-port-bg">
+                      {record.sourceImage?.path && (
+                        <MediaImage
+                          src={record.sourceImage.path}
+                          alt={record.name || 'Source image'}
+                          className="h-full w-full object-cover opacity-90 group-hover:opacity-100"
+                        />
+                      )}
+                      {record.status === 'ready' && (
+                        <span className="port-media-overlay-strong absolute right-1.5 top-1.5 rounded p-1 text-port-success">
+                          <Boxes className="h-3.5 w-3.5" />
+                        </span>
+                      )}
+                    </div>
+                    <div className="p-2">
+                      <p className="truncate text-xs font-medium text-white" title={record.name}>{record.name || 'Untitled'}</p>
+                      <div className="mt-0.5 flex items-center justify-between gap-1">
+                        <span className={`text-[11px] ${status.className}`}>{status.label}</span>
+                        <span className="text-[11px] text-gray-500">{timeAgo(record.updatedAt)}</span>
+                      </div>
+                    </div>
+                  </Link>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
+        {/* Install/repair lives under Models → 3D — these are on-device runtimes, not
+            renders — so the generate flow just names the state and links there (#4728). */}
+        <section className="rounded-xl border border-port-border bg-port-card p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0">
+              <h2 className="text-sm font-semibold text-white">Runtimes</h2>
+              <p className={`mt-1 text-xs ${error ? 'text-port-error' : 'text-gray-400'}`}>{runtimeSummary}</p>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              {/* A failed registry read also gates Generate (no target resolves), so
+                  the recovery has to be reachable from here — not only by reloading
+                  the page. */}
+              {error && !loading && (
+                <button
+                  type="button"
+                  onClick={reloadTargets}
+                  className="rounded-md border border-port-error/50 px-3 py-1.5 text-xs text-port-error hover:bg-port-error/20"
+                >
+                  Retry
+                </button>
+              )}
+              <Link
+                to="/models/3d"
+                className="inline-flex items-center gap-1.5 rounded-md border border-port-border px-3 py-1.5 text-xs text-gray-300 hover:border-port-accent hover:text-white"
+              >
+                <Settings2 className="h-3.5 w-3.5" /> Manage runtimes
+              </Link>
+            </div>
+          </div>
+        </section>
+
+        {/* Searchable render-history picker (reused from Image Gen). Selecting an
+            image drives `?image=` so the choice is deep-linkable. */}
+        <GalleryImagePicker open={pickerOpen} onClose={() => setPickerOpen(false)} onSelect={handlePick} allowUpload />
+      </div>
     </div>
   );
 }

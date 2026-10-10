@@ -21,6 +21,7 @@ import EditorialFindingsTriage from '../components/pipeline/editorial/EditorialF
 import EditorialHealthPanel from '../components/pipeline/editorial/EditorialHealthPanel';
 import SeriesSeverityConfig from '../components/pipeline/editorial/SeriesSeverityConfig';
 import ProviderModelSelector from '../components/ProviderModelSelector';
+import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
 import { groupChecksByScope, groupFindingsByCheck, normCategory, canonEntitiesFromUniverse } from '../lib/editorialChecks';
 import { usePipelineProgress } from '../hooks/usePipelineProgress';
@@ -626,61 +627,64 @@ export default function PipelineEditorialChecks() {
   const runDisabled = !seriesId || runActive || runStarting || anySaving || formSaving || savingSeriesIds.size > 0 || severitySaving;
 
   return (
-    <div className="mx-auto max-w-6xl space-y-4">
-      {/* Header */}
-      <div className="space-y-2">
-        <Link to="/pipeline" className="inline-flex items-center gap-1 text-xs text-gray-400 hover:text-gray-200">
-          <ArrowLeft size={13} /> Series Pipeline
-        </Link>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h1 className="flex items-center gap-2 text-xl font-semibold text-gray-100">
-            <ListChecks size={20} className="text-port-accent" /> Editorial Checks
-          </h1>
-          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
-            <label htmlFor="ec-series" className="sr-only">Series</label>
-            <select
-              id="ec-series"
-              value={seriesId}
-              onChange={(e) => onSeriesChange(e.target.value)}
-              className="w-full rounded border border-port-border bg-port-card px-2 py-1.5 text-sm text-gray-100 focus:border-port-accent focus:outline-none sm:w-auto"
-            >
-              <option value="">Select a series…</option>
-              {series.map((s) => (
-                <option key={s.id} value={s.id}>{s.title || s.name || s.id}</option>
-              ))}
-            </select>
-            {runActive ? (
-              <button
-                type="button"
-                onClick={cancelRun}
-                className="inline-flex flex-1 items-center justify-center gap-1.5 rounded bg-port-error/20 px-3 py-1.5 text-sm text-rose-300 hover:bg-port-error/30 sm:flex-none"
+    <div className="flex h-full min-h-0 flex-col">
+      <PageHeader
+        icon={ListChecks}
+        title="Editorial Checks"
+        actions={(
+          <>
+            <Link to="/pipeline" className="inline-flex items-center gap-1 text-xs text-gray-400 hover:text-gray-200">
+              <ArrowLeft size={13} /> Series Pipeline
+            </Link>
+            <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+              <label htmlFor="ec-series" className="sr-only">Series</label>
+              <select
+                id="ec-series"
+                value={seriesId}
+                onChange={(e) => onSeriesChange(e.target.value)}
+                className="w-full rounded border border-port-border bg-port-card px-2 py-1.5 text-sm text-gray-100 focus:border-port-accent focus:outline-none sm:w-auto"
               >
-                <Square size={14} /> Cancel
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => runChecks(null)}
-                disabled={runDisabled || enabledCount === 0}
-                title={enabledCount === 0 ? 'No checks enabled' : undefined}
-                className="inline-flex flex-1 items-center justify-center gap-1.5 rounded bg-port-accent px-3 py-1.5 text-sm text-white hover:bg-port-accent/90 disabled:cursor-not-allowed disabled:opacity-50 sm:flex-none"
-              >
-                {runStarting ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
-                Run all enabled ({enabledCount})
-              </button>
-            )}
-            {!runActive && selectedIds.size > 0 ? (
-              <button
-                type="button"
-                onClick={() => runChecks([...selectedIds])}
-                disabled={runDisabled}
-                className="inline-flex flex-1 items-center justify-center gap-1.5 rounded border border-port-accent px-3 py-1.5 text-sm text-port-accent hover:bg-port-accent/10 disabled:cursor-not-allowed disabled:opacity-50 sm:flex-none"
-              >
-                <Play size={14} /> Run selected ({selectedIds.size})
-              </button>
-            ) : null}
-          </div>
-        </div>
+                <option value="">Select a series…</option>
+                {series.map((s) => (
+                  <option key={s.id} value={s.id}>{s.title || s.name || s.id}</option>
+                ))}
+              </select>
+              {runActive ? (
+                <button
+                  type="button"
+                  onClick={cancelRun}
+                  className="inline-flex flex-1 items-center justify-center gap-1.5 rounded bg-port-error/20 px-3 py-1.5 text-sm text-rose-300 hover:bg-port-error/30 sm:flex-none"
+                >
+                  <Square size={14} /> Cancel
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => runChecks(null)}
+                  disabled={runDisabled || enabledCount === 0}
+                  title={enabledCount === 0 ? 'No checks enabled' : undefined}
+                  className="inline-flex flex-1 items-center justify-center gap-1.5 rounded bg-port-accent px-3 py-1.5 text-sm text-white hover:bg-port-accent/90 disabled:cursor-not-allowed disabled:opacity-50 sm:flex-none"
+                >
+                  {runStarting ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
+                  Run all enabled ({enabledCount})
+                </button>
+              )}
+              {!runActive && selectedIds.size > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => runChecks([...selectedIds])}
+                  disabled={runDisabled}
+                  className="inline-flex flex-1 items-center justify-center gap-1.5 rounded border border-port-accent px-3 py-1.5 text-sm text-port-accent hover:bg-port-accent/10 disabled:cursor-not-allowed disabled:opacity-50 sm:flex-none"
+                >
+                  <Play size={14} /> Run selected ({selectedIds.size})
+                </button>
+              ) : null}
+            </div>
+          </>
+        )}
+      />
+      <div className="flex-1 min-h-0 overflow-auto p-4">
+        <div className="mx-auto max-w-6xl space-y-4">
         {/* AI provider/model override for the editorial pass. Empty = use the
             active/stage provider; disabled while a run is in flight or starting. */}
         <div className="flex flex-wrap items-center gap-2">
@@ -710,7 +714,6 @@ export default function PipelineEditorialChecks() {
         {!seriesId ? (
           <p className="text-xs text-gray-500">Pick a series to run checks and triage findings. The catalog below applies to every series.</p>
         ) : null}
-      </div>
 
       {selectedSeries ? (
         <SeriesSeverityConfig
@@ -832,6 +835,8 @@ export default function PipelineEditorialChecks() {
           </div>
         </div>
       )}
+        </div>
+      </div>
     </div>
   );
 }

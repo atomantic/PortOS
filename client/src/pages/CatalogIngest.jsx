@@ -12,6 +12,7 @@ import { Sparkles, Loader2, CheckCircle2, AlertCircle, ArrowLeft, RotateCcw, Cir
 import { formatCount } from '../utils/formatters';
 import useProviderModels from '../hooks/useProviderModels';
 import ProviderModelSelector from '../components/ProviderModelSelector';
+import PageHeader from '../components/PageHeader';
 import toast from '../components/ui/Toast';
 import FilePickerButton from '../components/ui/FilePickerButton';
 import Modal from '../components/ui/Modal';
@@ -607,18 +608,14 @@ export default function CatalogIngest() {
   };
 
   return (
-    <section className="h-full overflow-y-auto p-4 md:p-6">
-      <div className="max-w-4xl mx-auto space-y-5">
-        <header className="flex items-start justify-between gap-3 flex-wrap">
-          <div className="flex items-start gap-3">
-            <Sparkles className="w-7 h-7 text-port-accent mt-1" aria-hidden="true" />
-            <div>
-              <h1 className="text-2xl font-bold text-white">{babble ? 'Babble and Prune' : 'Catalog Ingest'}</h1>
-              <p className="text-sm text-gray-400 mt-1">
-                {babble ? 'Write freely first. Then choose an AI provider to refine the useful fragments into catalog suggestions.' : 'Paste prose, notes, or a synopsis. Extract characters, places, objects, ideas, scenes, and concepts; review and commit only what you want to keep.'}
-              </p>
-            </div>
-          </div>
+    <div className="flex h-full min-h-0 flex-col">
+      <PageHeader
+        icon={Sparkles}
+        title={babble ? 'Babble and Prune' : 'Catalog Ingest'}
+        subtitle={babble
+          ? 'Write freely first. Then choose an AI provider to refine the useful fragments into catalog suggestions.'
+          : 'Paste prose, notes, or a synopsis. Extract characters, places, objects, ideas, scenes, and concepts; review and commit only what you want to keep.'}
+        actions={(
           <div className="flex items-center gap-2">
             <button type="button" onClick={() => navigate('/catalog')}
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-gray-400 hover:text-white">
@@ -640,7 +637,10 @@ export default function CatalogIngest() {
               </button>
             )}
           </div>
-        </header>
+        )}
+      />
+      <div className="flex-1 min-h-0 overflow-y-auto p-4 md:p-6">
+      <div className="max-w-4xl mx-auto space-y-5">
 
         <Modal open={confirmReset} onClose={() => setConfirmReset(false)} size="sm"
           ariaLabelledBy="catalog-reset-title">
@@ -922,7 +922,8 @@ export default function CatalogIngest() {
           );
         })()}
       </div>
-    </section>
+      </div>
+    </div>
   );
 }
 

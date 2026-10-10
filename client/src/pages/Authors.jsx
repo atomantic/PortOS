@@ -1,5 +1,6 @@
-import { FilePen } from 'lucide-react';
-import { useParams } from 'react-router';
+import { FilePen, Plus } from 'lucide-react';
+import { useNavigate, useParams } from 'react-router';
+import PageHeader from '../components/PageHeader';
 import PersonaMasterDetail from '../components/persona/PersonaMasterDetail';
 import {
   listAuthors, createAuthor, updateAuthor, deleteAuthor, generateImage,
@@ -30,6 +31,8 @@ const FIELDS = [
   },
 ];
 
+const INTRO = 'Author personas are reusable across series — the cover byline plus the writing voice, bio, and the physical description + style used to generate a book-cover author headshot. Link one to a series from the Series Pipeline.';
+
 const PORTRAIT = {
   label: 'Headshot', fieldLabel: 'Headshot image', imageKey: 'headshotImageUrl',
   descriptionKey: 'physicalDescription', styleKey: 'headshotStyle', styleLabel: 'Headshot style',
@@ -46,22 +49,43 @@ const PORTRAIT = {
 
 export default function Authors() {
   const { authorId } = useParams();
+  const navigate = useNavigate();
   return (
-    <PersonaMasterDetail
-      basePath="/authors"
-      selectedId={authorId}
-      title="Authors"
-      titleIcon={FilePen}
-      intro="Author personas are reusable across series — the cover byline plus the writing voice, bio, and the physical description + style used to generate a book-cover author headshot. Link one to a series from the Series Pipeline."
-      singular="Author"
-      plural="Authors"
-      fields={FIELDS}
-      portrait={PORTRAIT}
-      listRecords={listAuthors}
-      createRecord={createAuthor}
-      updateRecord={updateAuthor}
-      deleteRecord={deleteAuthor}
-      generateImage={generateImage}
-    />
+    <div className="flex h-full min-h-0 flex-col">
+      <PageHeader
+        icon={FilePen}
+        title="Authors"
+        subtitle={INTRO}
+        actions={(
+          <button
+            type="button"
+            onClick={() => navigate('/authors/new')}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-accent text-white text-sm"
+          >
+            <Plus size={16} aria-hidden="true" />
+            New Author
+          </button>
+        )}
+      />
+      <div className="flex-1 min-h-0 overflow-auto p-4">
+        <PersonaMasterDetail
+          hideTitle
+          basePath="/authors"
+          selectedId={authorId}
+          title="Authors"
+          titleIcon={FilePen}
+          intro={INTRO}
+          singular="Author"
+          plural="Authors"
+          fields={FIELDS}
+          portrait={PORTRAIT}
+          listRecords={listAuthors}
+          createRecord={createAuthor}
+          updateRecord={updateAuthor}
+          deleteRecord={deleteAuthor}
+          generateImage={generateImage}
+        />
+      </div>
+    </div>
   );
 }

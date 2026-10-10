@@ -15,6 +15,7 @@ const byName = (a, b) => (a.name || '').localeCompare(b.name || '');
 export default function PersonaMasterDetail({
   basePath, selectedId, title, titleIcon: TitleIcon, intro, singular, plural, fields,
   listSecondaryKey, portrait, listRecords, createRecord, updateRecord, deleteRecord, generateImage,
+  hideTitle = false,
 }) {
   const navigate = useNavigate();
   const emptyForm = useMemo(
@@ -169,7 +170,7 @@ export default function PersonaMasterDetail({
 
   return (
     <div>
-      {title ? (
+      {!hideTitle && (title ? (
         <>
           <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
             <div className="flex items-center gap-3">
@@ -185,7 +186,7 @@ export default function PersonaMasterDetail({
           {introBlock}
           <CreateButton singular={singular} onClick={() => navigate(`${basePath}/new`)} />
         </div>
-      )}
+      ))}
 
       <div className="grid grid-cols-1 md:grid-cols-[260px_1fr] gap-4">
         <div className="bg-port-card border border-port-border rounded-lg p-2">
