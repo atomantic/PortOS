@@ -63,8 +63,10 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
   const ready = review.current === false ? null : review.readiness; // approvals never act on a stale revision
   const set = (key, value) => setLocal({ ...draft, [key]: value });
   const documentShots = draft.storyboardSource === 'document';
+  // A Board scene with no draft shot shows the row the server derives for it (its planned action, camera and lyric lines).
   const shots = documentShots ? draft.storyboard : [...draft.storyboard, ...(project.scenes || []).filter(scene => !draft.storyboard.some(s => s.sceneId === scene.sceneId)).map(scene => ({
     id: scene.sceneId, sceneId: scene.sceneId, lyricCueIds: [], action: '', staging: '', camera: '', transition: '',
+    ...ready?.storyboard.shots?.find(s => s.sceneId === scene.sceneId),
   }))];
   const shotKey = shot => shot.id || shot.sceneId;
   const setShot = (shot, key, value) => set('storyboard', shots.map(s => shotKey(s) === shotKey(shot) ? { ...s, [key]: value } : s));
@@ -101,6 +103,8 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
     if (dirty) return 'Save your planning edits first.';
     if (review.busy) return 'Working…';
     const problems = shownProblems(stage);
+    // The storyboard step's checklist already lists each open item with its button, so the card only points there.
+    if (stage === 'storyboard' && problems.length) return problems.length > 1 ? `Finish the ${problems.length} open items above first.` : 'Finish the open item above first.';
     // With no current proof, the Render button already says what to do; repeating it as a warning reads as required.
     if (stage === 'proof' && proofNeedsRender) return null;
     if (problems.length) return problems.length > 1 ? `${problems[0]} (+${problems.length - 1} more below)` : problems[0];
@@ -114,7 +118,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
   // The problems listed under the help line: all of them, less the first when the help line is showing it
   // (it isn't while edits are unsaved or an action is running). A proof with nothing rendered lists none.
   const listedProblems = stage => {
-    if (!ready || ready[stage].approved || (stage === 'proof' && proofNeedsRender)) return [];
+    if (!ready || ready[stage].approved || stage === 'storyboard' || (stage === 'proof' && proofNeedsRender)) return [];
     const problems = shownProblems(stage);
     return dirty || review.busy ? problems : problems.slice(1);
   };
@@ -256,7 +260,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
         {/* The overlay text pass (document compositions): advice too, shown before the shot list. */}
         {key === 'storyboard' && ready?.storyboard.text && <OverlayTextCheck report={ready.storyboard.text} busy={review.busy}
           onCheck={() => review.checkOverlayText()} onSeek={onSeek} />}
-        {key === 'proof' ? proofContent : <ProductionReviewContext stage={key} project={project} onOpenArtifact={onOpenArtifact} onArtReady={available => setVisibleArt(available ? artIdentity : null)} onSeek={onSeek} />}
+        {key === 'proof' ? proofContent : <ProductionReviewContext stage={key} project={project} shots={shots} onOpenArtifact={onOpenArtifact} onArtReady={available => setVisibleArt(available ? artIdentity : null)} onSeek={onSeek} />}
         </>}
         {openRequests(key).length > 0 && <div role="group" aria-label={`${label} change requests`} className="mt-2 space-y-2 rounded border border-port-warning p-2">
           <p className="text-sm">Resolve these change requests to approve.</p>

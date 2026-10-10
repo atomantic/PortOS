@@ -330,26 +330,35 @@ describe('Production proof playback evidence', () => {
 
 describe('Approval problems with unsaved edits', () => {
   it.each([
-    [['Cover the master with timed shots.']],
-    [['Cover the master with timed shots.', 'Resolve storyboard feedback for shot: chorus: hold longer']],
-  ])('lists every storyboard problem while planning edits are unsaved (%j)', (problems) => {
+    [['Render and watch a current animated chorus proof with the master song.']],
+    [['Render and watch a current animated chorus proof with the master song.', 'Resolve proof feedback for chorus: hold longer']],
+  ])('lists every proof problem while planning edits are unsaved (%j)', (problems) => {
     const review = reviewFixture();
-    review.readiness.storyboard = { approved: false, problems };
+    review.readiness.proof = { ...review.readiness.proof, approved: false, problems };
     function Board() {
       const planning = useState({ ...project.productionReview.draft, cast: 'Edited cast' });
-      return <ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="storyboard" planning={planning} />;
+      return <ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="proof" planning={planning} />;
     }
     render(<Board />);
     expect(screen.getByText('Save your planning edits first.')).toBeTruthy();
     for (const problem of problems) expect(screen.getByText(problem)).toBeTruthy();
   });
 
-  it('shows the first problem once, on the help line, when nothing is unsaved', () => {
+  it('shows the first proof problem once, on the help line, when nothing is unsaved', () => {
+    const review = reviewFixture();
+    review.readiness.proof = { ...review.readiness.proof, approved: false, problems: ['Resolve proof feedback for chorus: hold longer', 'Second problem.'] };
+    render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="proof" />);
+    expect(screen.getAllByText(/Resolve proof feedback for chorus/)).toHaveLength(1);
+    expect(screen.getByText('Second problem.')).toBeTruthy();
+  });
+
+  it('points the storyboard card at the step checklist in one line instead of repeating its items', () => {
     const review = reviewFixture();
     review.readiness.storyboard = { approved: false, problems: ['Cover the master with timed shots.', 'Second problem.'] };
     render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="storyboard" />);
-    expect(screen.getAllByText(/Cover the master with timed shots\./)).toHaveLength(1);
-    expect(screen.getByText('Second problem.')).toBeTruthy();
+    expect(screen.getByText('Finish the 2 open items above first.')).toBeTruthy();
+    expect(screen.queryByText(/Cover the master with timed shots\./)).toBeNull();
+    expect(screen.queryByText('Second problem.')).toBeNull();
   });
 });
 
@@ -424,5 +433,24 @@ describe('storyboard camera notes (#10589)', () => {
     review.readiness.storyboard = { approved: false, problems: [], camera: { staticRuns: [], snaplessChoruses: [], notes: [] } };
     render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="storyboard" />);
     expect(screen.queryByRole('note', { name: 'Camera variety notes' })).toBeNull();
+  });
+});
+
+describe('Board scenes planned without draft shots', () => {
+  it('counts and lists them in the storyboard approval card with the rows the server derived', () => {
+    const planned = { ...project, scenes: [
+      { sceneId: 's1', label: 'Opening', startSec: 0, endSec: 4 },
+      { sceneId: 's2', label: 'Chorus', startSec: 4, endSec: 8 },
+    ] };
+    const review = reviewFixture();
+    review.readiness.storyboard = { approved: false, problems: [], shots: [
+      { sceneId: 's1', lyricCueIds: [], action: 'She looks up from the monitor', staging: 'Medium shot', camera: 'Handheld drift', transition: 'Cut' },
+      { sceneId: 's2', lyricCueIds: [], action: 'Film spills onto the floor', staging: 'Wide shot', camera: 'Handheld drift', transition: 'Cut' },
+    ] };
+    render(<ProductionReviewPanel project={planned} review={review} onOpenArtifact={vi.fn()} stage="storyboard" />);
+    expect(screen.getByText(/Watch the storyboard in the player, then approve\. 2 storyboard shots/)).toBeTruthy();
+    expect(screen.queryByText(/No storyboard shots to review/)).toBeNull();
+    // The card's shot list and the shot editor both start from the derived row.
+    expect(screen.getAllByText('She looks up from the monitor')).toHaveLength(2);
   });
 });

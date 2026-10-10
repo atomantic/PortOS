@@ -12,11 +12,12 @@ const FOLD = 'min-h-[44px] cursor-pointer py-2 text-sm';
  * at a time, never a wall of text above the Approve button. `onSeek(startSec)`
  * plays the docked preview from a shot.
  */
-export default function ProductionReviewContext({ stage, project, onOpenArtifact, onArtReady, onSeek = null }) {
+export default function ProductionReviewContext({ stage, project, shots: reviewedShots = null, onOpenArtifact, onArtReady, onSeek = null }) {
   const draft = project.productionReview?.draft || {};
   const guide = project.devArtifacts?.find(a => a.id === draft.guideArtifactId && !a.deleted);
   const document = draft.storyboardSource === 'document';
-  const shots = draft.storyboard || [];
+  // The panel passes the Board storyboard as reviewed: draft shots plus a row for each scene without one.
+  const shots = reviewedShots || draft.storyboard || [];
   const sheets = (project.devArtifacts || []).filter(a => !a.deleted && a.kind === 'storyboard');
   const written = [['Cast', draft.cast], ['Environments', draft.environments], ['Visual language', draft.visualLanguage], ['Motion and energy', draft.motionLanguage]]
     .filter(([, value]) => typeof value === 'string' && value.trim());

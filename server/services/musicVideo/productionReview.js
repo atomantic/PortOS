@@ -5,10 +5,11 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
 
 import { isNonBlankStr as text } from '../../lib/textUtils.js';
-import { cameraMovementFromText, getCameraMovement } from '../../lib/cameraMovements.js';
+import { cameraMovementFromText, getCameraMovement, shotCameraLabel } from '../../lib/cameraMovements.js';
 import { cameraVarietyReport } from './shotCamera.js';
 import { overlayTextReport } from './overlayText.js';
 import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
+import { lyricCueSpan } from './timedText.js';
 const artifact = (project, id) => (project.devArtifacts || []).find(a => a.id === id && !a.deleted);
 const artifactBasis = a => a ? { id: a.id, version: a.version, file: a.file } : null;
 const source = p => {
@@ -226,6 +227,30 @@ function castAndSetsApproval(project) {
   return { approved, stale: changedFields.length ? withRevertible({ approvedAt: stage.approvedAt || null, changedFields }, stage.approvedValues) : null };
 }
 
+/**
+ * The storyboard row a Board scene with no draft shot of its own stands for:
+ * its planned action, staging and camera, the Cast & Sets world's camera and
+ * transition language where the scene has none (unless the sheet was skipped),
+ * and the lyric lines it overlaps. Planning shots after the art approval
+ * writes scenes without draft rows, so the storyboard reads them this way
+ * until a director edits a shot; preparing the review writes the same rows.
+ */
+export function boardShotFromScene(project, scene) {
+  const world = (project.castAndSets?.status !== 'skipped' && project.castAndSets?.direction?.world) || {};
+  return {
+    sceneId: scene.sceneId,
+    lyricCueIds: (project.lyricCues || []).filter(c => c.startSec < scene.endSec && c.endSec > scene.startSec).map(c => c.id),
+    action: scene.visualIntent || scene.prompt || '', staging: scene.framePrompt || '',
+    camera: shotCameraLabel(scene.camera) || scene.direction?.camera || world.camera || '', transition: world.transitions || '',
+  };
+}
+
+/** The Board storyboard as reviewed: every draft shot, then a derived row for each scene that has none. */
+export function boardStoryboard(project, storyboard = project.productionReview?.draft?.storyboard || []) {
+  return [...storyboard, ...(project.scenes || []).filter(scene => !storyboard.some(shot => shot.sceneId === scene.sceneId))
+    .map(scene => boardShotFromScene(project, scene))];
+}
+
 export function productionReadiness(project) {
   const review = project.productionReview || {};
   const draft = review.draft || {};
@@ -251,9 +276,10 @@ export function productionReadiness(project) {
   } else {
     if (!cues.length) boardProblems.push('Import lyrics and align them to the current vocal; missing lyrics are not an instrumental.');
     if (draft.timingStatus !== 'verified' || review.alignmentBasis !== alignmentBasis) boardProblems.push(ALIGNMENT_UNVERIFIED_PROBLEM);
-    if (cues.some(c => !(Number.isFinite(c.startSec) && c.endSec > c.startSec && c.endSec <= duration)
-      || !c.words?.length || c.words.some(w => !(Number.isFinite(w.startSec) && w.endSec > w.startSec)
-        || w.startSec < c.startSec || w.endSec > c.endSec))) {
+    // A line is judged on the span its words give it (lyricCueSpan), the span the renderer shows:
+    // forced-aligned words may run a little past a line window taken from the song's line timestamps.
+    if (cues.some(c => !c.words?.length || c.words.some(w => !(Number.isFinite(w.startSec) && w.endSec > w.startSec))
+      || !(lyricCueSpan(c)?.endSec <= duration))) {
       boardProblems.push('Every lyric line needs bounded, positive-duration word timings; repair zero-length or missing words.');
     }
   }
@@ -277,7 +303,7 @@ export function productionReadiness(project) {
     boardProblems.push('Storyboard shots must cover the master without unintended gaps or overlaps.');
   }
   for (const scene of scenes) {
-    const shot = documentShots ? scene : draft.storyboard?.find(s => s.sceneId === scene.sceneId);
+    const shot = documentShots ? scene : draft.storyboard?.find(s => s.sceneId === scene.sceneId) || boardShotFromScene(project, scene);
     if (!(Number.isFinite(scene.startSec) && scene.endSec > scene.startSec && scene.endSec <= duration)
       || !shot || ['action', 'staging', 'camera', 'transition'].some(key => !text(shot[key]))) {
       boardProblems.push(`Complete timing, action, staging, camera and transition for ${scene.label || 'each shot'}.`);
@@ -287,7 +313,7 @@ export function productionReadiness(project) {
       || shot?.lyricCueIds?.some(id => !cues.some(c => c.id === id))) boardProblems.push(`Review lyric anchors for ${scene.label || 'each shot'}.`);
   }
   const storyboardApproved = !boardProblems.length && review.approvals?.storyboard?.basis === basis.storyboard;
-  const camera = storyboardCameraReport(scenes, documentShots ? null : draft.storyboard);
+  const camera = storyboardCameraReport(scenes, documentShots ? null : boardStoryboard(project));
   const proof = review.proof;
   const excerpt = (project.excerpts || []).find(e => e.id === proof?.excerptId);
   const proofProblems = unresolved('proof').map(f => `Resolve proof feedback for ${f.target}: ${f.text}`);
@@ -299,7 +325,9 @@ export function productionReadiness(project) {
   return { basis, inputs, alignment: { basis: alignmentBasis, status: draft.lyricsMode === 'instrumental' ? 'instrumental'
     : draft.timingStatus !== 'verified' ? 'provisional' : review.alignmentBasis === alignmentBasis ? 'verified' : 'stale' }, documentShotImport: { documentDirectory: project.composition?.document?.directory || null, audioBasis: alignmentBasis }, art: { approved: artApproved, problems: [...new Set(artProblems)], stale: artApproved ? null : staleApproval(project, 'art', basis.art, inputs) },
     // The overlay text check is advice on the storyboard, like camera variety; it never blocks approval.
-    storyboard: { approved: storyboardApproved, problems: [...new Set(boardProblems)], camera, text: overlayTextReport(project, overlayTextBasis), stale: storyboardApproved ? null : staleApproval(project, 'storyboard', basis.storyboard, inputs) },
+    storyboard: { approved: storyboardApproved, problems: [...new Set(boardProblems)], camera,
+      // Board shots as reviewed, derived rows included, so the editor and approval card show what the gate checked.
+      shots: documentShots ? null : boardStoryboard(project), text: overlayTextReport(project, overlayTextBasis), stale: storyboardApproved ? null : staleApproval(project, 'storyboard', basis.storyboard, inputs) },
     proof: { approved: proofApproved, problems: proofProblems, excerptId: excerpt?.id || null, stale: proofApproved ? null : staleApproval(project, 'proof', basis.proof, inputs) },
     castAndSets: castAndSetsApproval(project),
     // The animated proof is optional review evidence: the approved storyboard is what the final render needs.
