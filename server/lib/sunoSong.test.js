@@ -59,6 +59,12 @@ describe('parseSunoSongPage', () => {
     expect(parseSunoSongPage(html, ID)).toMatchObject({ style: 'synth-pop, \u2011bubblegum pop, -metal', excludedStylesKnown: true });
   });
 
+  it('reads excluded styles kept beside the metadata, as Suno lists them without minus signs', () => {
+    const record = { id: ID, title: 'Full', negative_tags: 'metal, cutesy', metadata: { prompt: 'words', tags: 'synth-pop' } };
+    const html = page([`4:${JSON.stringify({ song: record })}\n`]);
+    expect(parseSunoSongPage(html, ID)).toMatchObject({ style: 'synth-pop, -metal, -cutesy', excludedStylesKnown: true });
+  });
+
   it('prefers the full record over a slimmer listing of the same song', () => {
     const html = page([`4:${JSON.stringify({ playbar: { id: ID, title: 'Short' }, song: { id: ID, title: 'Full', metadata: { prompt: 'words', tags: 'rock' } } })}\n`]);
     expect(parseSunoSongPage(html, ID)).toMatchObject({ title: 'Full', lyrics: 'words', style: 'rock' });
