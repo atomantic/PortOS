@@ -3,6 +3,7 @@ import { StrictMode } from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import Calendar, { TABS } from './Calendar';
+import socket from '../services/socket';
 
 const api = vi.hoisted(() => ({
   getCalendarAccounts: vi.fn(),
@@ -173,4 +174,52 @@ describe('Calendar account availability', () => {
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.getByText('1 account')).toBeVisible();
   });
+});
+
+
+it('reconciles configuration without replacing an edited form and ignores obsolete reads', async () => {
+  let resolveOld;
+  api.getCalendarAccounts.mockResolvedValueOnce([account])
+    .mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }))
+    .mockResolvedValueOnce([{ ...account, name: 'Current calendar' }]);
+  const mounted = renderCalendar();
+  await screen.findByText(account.name);
+  fireEvent.click(screen.getByRole('button', { name: 'Add Account' }));
+  const input = screen.getByPlaceholderText('e.g. Work Calendar');
+  fireEvent.change(input, { target: { value: 'Unsaved calendar' } });
+  const changed = socket.on.mock.calls.find(([name]) => name === 'calendar:changed')[1];
+  const reconnect = socket.on.mock.calls.find(([name]) => name === 'connect')[1];
+  await act(async () => { changed(); });
+  expect(input).toHaveValue('Unsaved calendar');
+  await act(async () => { reconnect(); });
+  expect(await screen.findByText('Current calendar')).toBeVisible();
+  await act(async () => resolveOld([account]));
+  expect(screen.queryByText(account.name)).toBeNull();
+  expect(input).toHaveValue('Unsaved calendar');
+  mounted.unmount();
+  expect(socket.off).toHaveBeenCalledWith('calendar:changed', changed);
+  expect(socket.off).toHaveBeenCalledWith('connect', reconnect);
+});
+
+
+it('updates a mounted day grid color and removes events after configuration changes', async () => {
+  const configured = { ...account, subcalendars: [{ calendarId: 'example-subcalendar', color: '#ff0000' }] };
+  const now = new Date();
+  now.setHours(10, 0, 0, 0);
+  const meeting = { id: 'example-meeting', accountId: account.id, subcalendarId: 'example-subcalendar',
+    title: 'Configured meeting', startTime: now.toISOString(), endTime: new Date(now.getTime() + 3600000).toISOString(), isAllDay: false };
+  api.getCalendarAccounts.mockResolvedValue([configured]);
+  api.getCalendarEvents.mockResolvedValue({ events: [meeting], total: 1 });
+  renderCalendar('/calendar/day');
+  const chip = await screen.findByRole('button', { name: /Configured meeting/ });
+  const originalStyle = chip.getAttribute('style');
+  const handlers = socket.on.mock.calls.filter(([name]) => name === 'calendar:changed').map(([, fn]) => fn);
+  api.getCalendarAccounts.mockResolvedValue([{ ...configured, subcalendars: [{ calendarId: 'example-subcalendar', color: '#00ff00' }] }]);
+  await act(async () => { handlers.forEach(fn => fn()); });
+  expect(screen.getByRole('button', { name: /Configured meeting/ }).getAttribute('style')).not.toBe(originalStyle);
+  api.getCalendarAccounts.mockResolvedValue([]);
+  api.getCalendarEvents.mockResolvedValue({ events: [], total: 0 });
+  await act(async () => { handlers.forEach(fn => fn()); });
+  expect(screen.queryByRole('button', { name: /Configured meeting/ })).toBeNull();
+  expect(screen.getByText('0 accounts')).toBeVisible();
 });

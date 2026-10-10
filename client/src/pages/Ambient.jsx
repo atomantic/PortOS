@@ -8,7 +8,7 @@ import { formatClockTime, formatDateFull, formatTimeOfDay } from '../utils/forma
 import DeathClockCountdown from '../components/DeathClockCountdown';
 import { shouldIgnoreGlobalKey } from '../lib/a11yKeyboard';
 
-const CALENDAR_EVENTS = ['calendar:sync:completed'];
+const CALENDAR_EVENTS = ['calendar:sync:completed', 'calendar:changed'];
 const DEATH_CLOCK_EVENTS = ['meatspace:death-clock:changed'];
 const GOAL_EVENTS = ['cos:goals:changed'];
 const SUMMARY_EVENTS = ['cos:status', 'cos:status:paused', 'cos:status:resumed', 'cos:agent:spawned', 'cos:agent:updated', 'cos:agent:completed'];
@@ -55,7 +55,7 @@ export default function Ambient() {
   const { data: goals } = useSocketResource(() => api.getCosGoalProgressSummary({ silent: true }), {
     namespace: 'cos', events: GOAL_EVENTS
   });
-  const { data: calendarEvents, refetch: refreshCalendar } = useSocketResource(async () => {
+  const { data: calendarEvents, error: calendarError, refetch: refreshCalendar } = useSocketResource(async () => {
     const now = new Date();
     reconciledDays.current.calendar = now.toDateString();
     const params = {
@@ -66,7 +66,7 @@ export default function Ambient() {
     const events = [];
     let page;
     do {
-      page = await api.getCalendarEvents({ ...params, offset: events.length });
+      page = await api.getCalendarEvents({ ...params, offset: events.length }, { silent: true });
       events.push(...page.events);
     } while (page.events.length && events.length < page.total);
     return events;
@@ -183,8 +183,14 @@ export default function Ambient() {
 
         <div className="w-full max-w-5xl grid grid-cols-1 md:grid-cols-3 gap-6 mt-4">
           <AmbientPanel title="Today" count={upcomingEvents.length}>
+            {calendarError && (
+              <div role="alert" className="text-sm text-port-error mb-2">
+                Calendar unavailable; last loaded events may be stale.{' '}
+                <button onClick={refreshCalendar} className="underline">Retry calendar</button>
+              </div>
+            )}
             {upcomingEvents.length === 0 ? (
-              <div className="text-gray-600 text-sm">No upcoming events</div>
+              <div className="text-gray-600 text-sm">{calendarError ? 'Calendar unavailable' : 'No upcoming events'}</div>
             ) : (
               <div className="space-y-2">
                 {upcomingEvents.map((event, i) => (

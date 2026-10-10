@@ -31,8 +31,9 @@ export function useCalendarWindowEvents(startDate, endDate) {
   }, [loaded, hasMore, loading, error, loadMore]);
 
   useEffect(() => {
-    socket.on('calendar:sync:completed', reload);
-    return () => socket.off('calendar:sync:completed', reload);
+    const events = ['calendar:sync:completed', 'calendar:changed', 'connect'];
+    for (const event of events) socket.on(event, reload);
+    return () => { for (const event of events) socket.off(event, reload); };
   }, [reload]);
 
   return {
