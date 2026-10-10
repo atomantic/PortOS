@@ -420,7 +420,7 @@ export async function archiveCategory(categoryKey, options = {}) {
 
   try {
     const capturedDays = [];
-    let queueDayWrite;
+    let queueHealthDayMutation;
     if (categoryKey === 'health') {
       const daysToKeep = options.daysToKeep ?? 365;
       const cutoff = new Date();
@@ -431,13 +431,14 @@ export async function archiveCategory(categoryKey, options = {}) {
       const oldFiles = files.filter(f => /^\d{4}-\d{2}-\d{2}\.json$/.test(f) && f.slice(0, 10) < cutoffStr);
       if (oldFiles.length === 0) return { archived: 0, removed: 0, retained: 0, alreadyAbsent: 0, archivePath: null, message: 'No old files to archive' };
 
-      // Share the importers' queue for capture and removal, but release it
-      // during tar so a large archive does not block a historical backfill.
-      ({ queueDayWrite } = await import('./appleHealthIngest.js'));
+      // Share the importers' admission and day queue for capture and removal,
+      // but release both during tar so a large archive blocks neither a
+      // historical backfill nor a live health restore (#10899).
+      ({ queueHealthDayMutation } = await import('./appleHealthIngest.js'));
       const stagedDays = join(operationDir, 'days');
       await ensureDir(stagedDays);
       for (const file of oldFiles) {
-        await queueDayWrite(file.slice(0, 10), async () => {
+        await queueHealthDayMutation(file.slice(0, 10), async () => {
           const bytes = await readFile(join(dirPath, file));
           await writeFileGuarded(join(stagedDays, file), bytes, { flag: 'wx' });
           capturedDays.push({ file, hash: sha256Text(bytes) });
@@ -468,7 +469,7 @@ export async function archiveCategory(categoryKey, options = {}) {
     let retained = 0;
     let alreadyAbsent = 0;
     for (const { file, hash } of capturedDays) {
-      await queueDayWrite(file.slice(0, 10), async () => {
+      await queueHealthDayMutation(file.slice(0, 10), async () => {
         const livePath = join(dirPath, file);
         const bytes = await readFile(livePath).catch(error => {
           // Another archive may already have removed this exact day.

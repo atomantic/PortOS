@@ -3140,6 +3140,13 @@ vi.mock('./taskScheduleStore.js', async (importOriginal) => {
 });
 import { withLiveTaskScheduleRestore, updateSchedule } from './taskScheduleStore.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+// Passthrough spy: health admission and day persistence stay real.
+vi.mock('./appleHealthIngest.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, withLiveHealthRestore: vi.fn(actual.withLiveHealthRestore) };
+});
+import { ingestHealthData, withLiveHealthRestore } from './appleHealthIngest.js';
+import { meatspaceEvents } from './meatspaceEvents.js';
 
 describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () => {
   beforeEach(() => {
@@ -3484,6 +3491,90 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       withLiveCosRestore.mockRejectedValueOnce(Object.assign(new Error('Stop CoS before restoring'), { code: 'COS_RESTORE_BUSY' }));
       await expect(restoreSnapshot('/dest', 'snap-1', { dryRun: false })).rejects.toMatchObject({ code: 'COS_RESTORE_BUSY' });
       expect(withLiveMediaModelsRestore).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Apple Health restore ownership boundary (#10899)', () => {
+    const day = '2024-01-01';
+    const dayPath = () => join(PATHS.health, `${day}.json`);
+    const point = (hour, qty) => ({ date: `${day} ${hour}:00:00 +0000`, qty });
+    const ingest = (...points) => ingestHealthData({ data: { metrics: [{ name: 'heart_rate', data: points }] } });
+    const quantities = () => JSON.parse(readFileSync(dayPath(), 'utf8')).metrics.heart_rate.map(p => p.qty).sort();
+    beforeEach(() => { withLiveHealthRestore.mockClear(); });
+
+    it.each([undefined, 'health', 'health/', `health/${day}.json`])('holds health admission for affected live scope %s', async subdirFilter => {
+      await runRestore('/dest', 'snap-1', { dryRun: false, subdirFilter });
+      expect(withLiveHealthRestore).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([{ dryRun: true }, { dryRun: true, subdirFilter: 'health' }, { dryRun: false, subdirFilter: 'meatspace' }, { dryRun: false, subdirFilter: 'cos' }])('leaves unaffected scope alone: %j', async options => {
+      await runRestore('/dest', 'snap-1', options);
+      expect(withLiveHealthRestore).not.toHaveBeenCalled();
+    });
+
+    it('acquires health admission last and skips it when CoS refuses', async () => {
+      const order = [];
+      withLiveMediaModelsRestore.mockImplementationOnce(async fn => { order.push('media'); return fn(); });
+      withLiveHealthRestore.mockImplementationOnce(async fn => { order.push('health'); return fn(); });
+      await runRestore('/dest', 'snap-1', { dryRun: false });
+      expect(order).toEqual(['media', 'health']);
+      withLiveCosRestore.mockRejectedValueOnce(Object.assign(new Error('Stop CoS before restoring'), { code: 'COS_RESTORE_BUSY' }));
+      await expect(restoreSnapshot('/dest', 'snap-1', { dryRun: false })).rejects.toMatchObject({ code: 'COS_RESTORE_BUSY' });
+      expect(withLiveHealthRestore).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([0, 1])('drains an ingest holding a pre-image before rsync and keeps restored points (exit %s)', async exitCode => {
+      const actual = await vi.importActual('fs/promises');
+      const original = point('08', 60);
+      const recovered = point('10', 80);
+      await actual.mkdir(PATHS.health, { recursive: true });
+      writeFileSync(dayPath(), JSON.stringify({ date: day, metrics: { heart_rate: [original] } }));
+      const reading = Promise.withResolvers();
+      const release = Promise.withResolvers();
+      let held = false;
+      fs.readFile.mockImplementation(async (path, ...args) => {
+        const bytes = await actual.readFile(path, ...args);
+        if (path === dayPath() && !held) {
+          held = true;
+          reading.resolve();
+          await release.promise;
+        }
+        return bytes;
+      });
+      const invalidated = vi.fn();
+      meatspaceEvents.on('changed', invalidated);
+      const proc = fakeProc();
+      spawn.mockImplementationOnce(() => {
+        // Real destination bytes at the rsync process boundary: the snapshot
+        // still holds a point the live day lost.
+        writeFileSync(dayPath(), JSON.stringify({ date: day, metrics: { heart_rate: [original, recovered] } }));
+        setImmediate(() => proc.emit('close', exitCode));
+        return proc;
+      });
+      let restore;
+      try {
+        const stale = ingest(point('09', 72));
+        await reading.promise;
+        restore = restoreSnapshot('/dest', 'snap-1', { dryRun: false, subdirFilter: 'health' });
+        await vi.waitFor(() => expect(withLiveHealthRestore).toHaveBeenCalledTimes(1));
+        await settle();
+        expect(spawn).not.toHaveBeenCalled();
+        const later = ingest(point('11', 90));
+        release.resolve();
+        await stale;
+        if (exitCode) await expect(restore).rejects.toThrow(/Some files may already have been overwritten/);
+        else await restore;
+        await later;
+        // The admitted ingest settled before transfer; the queued one read the
+        // restored day, so the recovered point survives both.
+        expect(quantities()).toEqual([60, 80, 90]);
+        expect(invalidated).toHaveBeenCalledWith({ resources: ['healthBody'] });
+      } finally {
+        release.resolve();
+        await restore?.catch(() => {});
+        meatspaceEvents.off('changed', invalidated);
+        fs.readFile.mockImplementation(actual.readFile);
+      }
     });
   });
 

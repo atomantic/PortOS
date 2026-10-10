@@ -15,10 +15,76 @@ import { createKeyedFileWriteQueue } from '../lib/fileWriteQueue.js';
 /**
  * Per-date write queue to serialize read-modify-write cycles.
  * Keyed by date string (YYYY-MM-DD) so different days fan out in parallel
- * while writes to the same day serialize. Shared with XML import and archival
- * capture/removal so every day-file mutation sees the latest committed bytes.
+ * while writes to the same day serialize. Reached only through
+ * `queueHealthDayMutation`, so every day-file mutation is also admitted.
  */
-export const queueDayWrite = createKeyedFileWriteQueue();
+const queueDayWrite = createKeyedFileWriteQueue();
+
+/**
+ * Health mutation admission (#10899). A live file restore that reaches
+ * `data/health` closes admission, waits for every admitted day cycle to settle,
+ * transfers, and reopens. Admission is taken BEFORE a day's queue and held until
+ * its write settles, so a cycle never carries a pre-image across a restore.
+ * Ordinary cycles only count themselves: distinct days stay concurrent.
+ */
+const admission = { active: 0, restores: 0, reopen: null, drained: null };
+let restoreTail = Promise.resolve();
+
+/**
+ * Run one read-modify-write (or capture/removal) cycle for `dateStr` inside
+ * health mutation admission and that day's queue. JSON ingest, XML flushes and
+ * health archival all mutate day files through this — never around it.
+ *
+ * @param {string} dateStr - YYYY-MM-DD string
+ * @param {() => Promise<*>} mutate - Reads, then writes or removes, the day file
+ * @returns {Promise<*>} The cycle's result
+ */
+export async function queueHealthDayMutation(dateStr, mutate) {
+  // The open path admits and enqueues synchronously, before the first await.
+  while (admission.restores > 0) await admission.reopen.promise;
+  admission.active += 1;
+  try {
+    return await queueDayWrite(dateStr, mutate);
+  } finally {
+    admission.active -= 1;
+    if (admission.active === 0) admission.drained?.resolve();
+  }
+}
+
+/**
+ * Own Apple Health day files through an out-of-band live restore. Closes new
+ * mutation admission synchronously at the call, drains admitted day cycles,
+ * runs `transfer`, invalidates health caches and reopens admission on every
+ * outcome. Competing restores serialize and keep admission closed between them.
+ * Acquire after the backup snapshot cut; never call `queueHealthDayMutation`
+ * from `transfer` (it would wait on itself).
+ *
+ * @param {() => Promise<*>} transfer
+ * @returns {Promise<*>} The transfer's result
+ */
+export function withLiveHealthRestore(transfer) {
+  if (admission.restores++ === 0) admission.reopen = Promise.withResolvers();
+  const run = restoreTail.then(async () => {
+    try {
+      if (admission.active > 0) {
+        admission.drained = Promise.withResolvers();
+        await admission.drained.promise;
+      }
+      const [result] = await Promise.allSettled([Promise.resolve().then(transfer)]);
+      // A restored day can change any metric, including the body metrics the
+      // writers invalidate, and a failed rsync may already have replaced some
+      // days — so invalidate after every outcome.
+      invalidateMeatspace(['healthBody']);
+      if (result.status === 'rejected') throw result.reason;
+      return result.value;
+    } finally {
+      admission.drained = null;
+      if (--admission.restores === 0) admission.reopen.resolve();
+    }
+  });
+  restoreTail = run.catch(() => {});
+  return run;
+}
 
 // === Pure Functions ===
 
@@ -131,7 +197,7 @@ export function upsertPoints(existing, newPoints) {
  * @returns {Promise<Object>} { added, updated, totalPoints }
  */
 export async function mergeIntoDay(dateStr, metricName, newPoints) {
-  return queueDayWrite(dateStr, async () => {
+  return queueHealthDayMutation(dateStr, async () => {
     const dayData = await readDayFile(dateStr);
     const existing = dayData.metrics[metricName] || [];
 
