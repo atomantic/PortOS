@@ -367,6 +367,16 @@ export async function readTemplateDocumentFiles(templateId = 'layered') {
   return new Map((await withSharedLyricType(files)).map((file) => [file.rel, { abs: file.abs, size: file.size }]));
 }
 
+/**
+ * The storyboard animatic's lyric overlay page (documentTemplates/lyricOverlay),
+ * read like `readTemplateDocumentFiles`: the words alone on a transparent frame.
+ * It is not a template a project can pick.
+ */
+export async function readLyricOverlayDocumentFiles() {
+  const { files } = await collectTree(join(TEMPLATE_ROOT, 'lyricOverlay'), { excludeTests: true });
+  return new Map((await withSharedLyricType(files)).map((file) => [file.rel, { abs: file.abs, size: file.size }]));
+}
+
 /** Stage a host-assembled generated document for review before selection. */
 export async function stageGeneratedDocument(projectId, generatedFiles, { verifyCurrent, renderer = 'canvas' } = {}) {
   if (renderer === 'three') {

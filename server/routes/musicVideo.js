@@ -566,6 +566,12 @@ router.get('/:id/lyrics/playthrough/preview', asyncHandler(async (req, res) => {
   res.json(await buildLyricPlaythroughPreview(await requireProject(req.params.id)));
 }));
 
+// The same words alone on a transparent page, laid over the storyboard animatic's frames.
+router.get('/:id/lyrics/overlay/preview', asyncHandler(async (req, res) => {
+  const { buildLyricPlaythroughPreview } = await import('../services/musicVideo/lyricPlaythrough.js');
+  res.json(await buildLyricPlaythroughPreview(await requireProject(req.params.id), { overlay: true }));
+}));
+
 router.get('/lyrics/align/:jobId/events', (req, res) => {
   if (!attachLyricAlignSseClient(req.params.jobId, res)) {
     throw new ServerError('Alignment job not found or expired', { status: 404, code: 'NOT_FOUND' });

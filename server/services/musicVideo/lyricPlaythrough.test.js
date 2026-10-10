@@ -78,4 +78,16 @@ describe('lyric timing playthrough', () => {
     const data = portosData((await buildLyricPlaythroughPreview({ ...project, scenes })).html);
     expect(data.scenes.map(({ sceneId, textZone, media }) => [sceneId, textZone, media])).toEqual([['s1', 'upper-right', null], ['s2', 'lower', null]]);
   });
+
+  it('draws the same words alone on a transparent page for the storyboard animatic', async () => {
+    const scenes = [{ sceneId: 's1', order: 0, label: 'Wide', startSec: 0, endSec: 30, textZone: 'upper-right', referenceImageId: 'frame.png' }];
+    const preview = await buildLyricPlaythroughPreview({ ...project, scenes }, { overlay: true });
+    const data = portosData(preview.html);
+    expect(data.lyrics.map((line) => line.text)).toEqual(['hello there', 'second line']);
+    expect(data.scenes.map(({ sceneId, textZone, media }) => [sceneId, textZone, media])).toEqual([['s1', 'upper-right', null]]);
+    // The frames stay in the PortOS page: the overlay is transparent and bridges no media.
+    expect(preview.html).toMatch(/background: transparent/);
+    expect(preview.html).not.toContain('Layered music-video composition');
+    expect(preview.assets).toEqual([]);
+  });
 });

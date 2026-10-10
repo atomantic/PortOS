@@ -6,7 +6,7 @@ const buttonCls = 'flex items-center gap-1 bg-port-bg border border-port-border 
 
 // What the lyric playthrough page is built from: the song length, the word times,
 // the sheet's sections and the shots' timing and text zones. A change rebuilds it.
-const playthroughVersion = (project) => JSON.stringify([
+export const playthroughVersion = (project) => JSON.stringify([
   project.audioAnalysis?.durationSec ?? null,
   (project.lyricCues || []).map((cue) => [cue.text, cue.startSec, cue.endSec, (cue.words || []).map((w) => [w.startSec, w.endSec])]),
   (project.lyricMarkers || []).map((m) => [m.type, m.label, m.line]),
