@@ -115,6 +115,12 @@
  *     previews, inference and mind stop/pause do not arm execution.
  *   - tools create/edit supplies agent prompt hints (#9014); delete removes
  *     a tool. The mind maintainer watchdog queues remediation and is gated.
+ *   - voice config (#10990): `llm.systemPrompt`, `llm.personality`,
+ *     `llm.tools.enabled` and `llm.codeAgent` are the voice agent's
+ *     instructions or the switch that arms its coding-agent tool.
+ *     `PUT /api/voice/config` is gated only when one of those values would
+ *     change (`HOST_CONTROL_VOICE_CONFIG_PATHS`); a whole-config resend and
+ *     every other voice setting stay open.
  *
  * Patterns are `METHOD /path`, with Express-style `:param` (one segment) and
  * `*name` (the rest of the path). Matching is case-insensitive and ignores one
@@ -128,7 +134,7 @@
  * account and change external state; they require operator authority.
  */
 
-import { isPlainObject } from './objects.js';
+import { canonicalStringify, isPlainObject } from './objects.js';
 import { escapeRegExp } from './textUtils.js';
 
 export const HOST_CONTROL_ROUTES = Object.freeze([
@@ -777,6 +783,20 @@ export const HOST_CONTROL_SETTINGS_PATHS = Object.freeze([
 ]);
 
 /**
+ * `PUT /api/voice/config` fields that become the voice agent's instructions
+ * or arm its coding-agent tool (#10990). The Voice settings tab resends the
+ * whole config on every save, so these are gated per CHANGED value: a remote
+ * caller who only changes the TTS rate must still be able to save.
+ * `llm.personality` and `llm.codeAgent` compare as whole objects.
+ */
+export const HOST_CONTROL_VOICE_CONFIG_PATHS = Object.freeze([
+  'llm.systemPrompt',
+  'llm.personality',
+  'llm.tools.enabled',
+  'llm.codeAgent',
+]);
+
+/**
  * The only `PUT /api/cos/config` keys a remote caller on a password-free
  * install may change. Nearly all of CoS config is execution policy (autonomy,
  * concurrency, MCP server commands, the Persistent Mind's capabilities), so
@@ -854,6 +874,28 @@ export const hostControlSettingsPathsIn = (method, path, body) => (
 /** Of `paths`, the ones whose value in `body` differs from the stored `current` settings. */
 export const changedHostControlSettingsPaths = (paths, body, current) => (
   paths.filter((key) => !Object.is(valueAt(body, key), valueAt(current, key)))
+);
+
+const VOICE_CONFIG_WRITE = compileRoute('PUT /api/voice/config');
+const VOICE_CONFIG_DEEP_PATHS = new Set(['llm.personality', 'llm.codeAgent']);
+
+/** The HOST_CONTROL_VOICE_CONFIG_PATHS present on a `PUT /api/voice/config` body; [] elsewhere. */
+export const voiceConfigHostControlPathsIn = (method, path, body) => (
+  typeof method === 'string' && typeof path === 'string'
+  && method.toUpperCase() === VOICE_CONFIG_WRITE.method && VOICE_CONFIG_WRITE.pattern.test(path)
+    ? HOST_CONTROL_VOICE_CONFIG_PATHS.filter((key) => valueAt(body, key) !== undefined)
+    : []
+);
+
+/** Of `paths`, the ones whose voice-config value in `body` differs from stored `current`. Objects compare structurally. */
+export const changedVoiceConfigHostControlPaths = (paths, body, current) => (
+  paths.filter((key) => {
+    const next = valueAt(body, key);
+    const prev = valueAt(current, key);
+    return VOICE_CONFIG_DEEP_PATHS.has(key)
+      ? canonicalStringify(next) !== canonicalStringify(prev)
+      : !Object.is(next, prev);
+  })
 );
 
 /** The HOST_CONTROL_ROUTES entry that `method path` (an Express `req.method` / `req.path`) matches, or null. */
