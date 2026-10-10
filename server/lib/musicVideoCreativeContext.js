@@ -48,7 +48,7 @@ const EXCLUDED_STYLE = /^[-\u2010\u2011\u2012\u2013\u2212]\s*/;
  * Split a Suno style prompt into what the song sounds like and the styles it
  * excludes (`-bubblegum pop`). Terms are comma separated; '' and [] when unset.
  */
-export function parseSongStyle(text) {
+function parseSongStyle(text) {
   const terms = String(text || '').split(',').map((t) => t.trim()).filter(Boolean);
   const sound = terms.filter((t) => !EXCLUDED_STYLE.test(t));
   const avoid = terms.filter((t) => EXCLUDED_STYLE.test(t)).map((t) => t.replace(EXCLUDED_STYLE, '').trim()).filter(Boolean);
