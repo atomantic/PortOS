@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
+import { EventEmitter } from 'node:events';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
@@ -74,6 +75,7 @@ vi.mock('../services/pipeline/seriesCanon.js', async (importOriginal) => ({
 import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { createSession } from '../services/auth.js';
 import pipelineRoutes from './pipeline/index.js';
+import { attachClient, isReverseOutlineActive } from '../services/pipeline/reverseOutline.js';
 
 const operations = [
   [`/api/pipeline/series/${SERIES_ID}/reverse-outline/generate`, { providerId: cliProvider.id, force: true }],
@@ -131,12 +133,34 @@ describe('Pipeline generation never reaches a CLI provider for unauthorized call
         sink.runPromptThroughProvider.mockClear();
         const response = await post(appFor(address), operation, headers);
         expect(response.status, `${operation[0]}: ${JSON.stringify(response.body)}`).toBe(200);
-        // The run starts asynchronously after the 200; vi.waitFor's 1 s default is
-        // too tight under a loaded pregate, and a generous cap costs nothing on a pass.
-        await vi.waitFor(
-          () => expect(sink.runPromptThroughProvider, operation[0]).toHaveBeenCalledTimes(1),
-          { timeout: 10_000 },
-        );
+        if (operation[0].includes('/reverse-outline/')) {
+          // A provider call is not completion: persistence is still in flight.
+          // Await the public SSE terminal frame (including its late replay) so
+          // the next local/operator request cannot reuse the previous run.
+          const connection = new EventEmitter();
+          try {
+            const terminal = await new Promise((resolve) => {
+              expect(attachClient(SERIES_ID, {
+                req: connection,
+                writeHead() {},
+                end() {},
+                write(frame) {
+                  const payload = JSON.parse(frame.slice('data: '.length));
+                  if (['complete', 'error', 'canceled'].includes(payload.type)) resolve(payload);
+                },
+              })).toBe(true);
+            });
+            expect(terminal).toMatchObject({ type: 'complete', runId: response.body.runId });
+            // The coordinator marks the run finished after broadcasting.
+            await new Promise((resolve) => setImmediate(resolve));
+            expect(isReverseOutlineActive(SERIES_ID)).toBe(false);
+          } finally {
+            connection.emit('close');
+          }
+        }
+        // The arc route awaits generateArcOverview (including runStagedLLM)
+        // before res.json; only reverse-outline responds before dispatch.
+        expect(sink.runPromptThroughProvider, operation[0]).toHaveBeenCalledTimes(1);
         expect(sink.runPromptThroughProvider.mock.calls[0][0].provider).toEqual(cliProvider);
       }
     }
