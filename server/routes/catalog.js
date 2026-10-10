@@ -691,7 +691,7 @@ router.post('/bulk-import', asyncHandler(async (req, res) => {
           ? (await client.query('SELECT id, deleted, raw_text, title, source_kind, metadata FROM catalog_scraps WHERE id = $1 FOR UPDATE', [s.id])).rows[0]
           : entry.id
             ? (await client.query(
-              `SELECT s.id, s.deleted FROM catalog_scraps s
+              `SELECT s.id, s.deleted, s.raw_text, s.title, s.source_kind, s.metadata FROM catalog_scraps s
                JOIN catalog_ingredient_sources src ON src.scrap_id = s.id
                WHERE src.ingredient_id = $1 AND s.raw_text = $2
                  AND s.source_kind = $3 AND s.deleted = false LIMIT 1`,
@@ -703,7 +703,7 @@ router.post('/bulk-import', asyncHandler(async (req, res) => {
         }
         // Scraps can be shared by several ingredients: importing one slice
         // must neither overwrite their provenance nor silently ignore edits.
-        if (s.id && existingScrap && (
+        if (existingScrap && (
           existingScrap.raw_text !== s.rawText
           || (s.title !== undefined && existingScrap.title !== s.title)
           || (s.sourceKind !== undefined && existingScrap.source_kind !== s.sourceKind)

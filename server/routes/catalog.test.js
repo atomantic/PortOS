@@ -317,6 +317,10 @@ describe.skipIf(!runDb)('catalog export identity round trip', () => {
       scraps: [{ id: scrap.id, rawText: 'Conflicting provenance' }] }])).status).toBe(409);
     expect((await catalogDB.getIngredient(row.id)).name).toBe('Keep identity');
     expect((await catalogDB.getScrap(scrap.id)).rawText).toBe('Keep provenance');
+    await catalogDB.linkIngredientToSource(row.id, scrap.id);
+    expect((await send([{ id: row.id, type: 'idea', name: 'Changed',
+      scraps: [{ rawText: scrap.rawText, sourceKind: scrap.sourceKind, metadata: { different: true } }] }])).status).toBe(409);
+    expect((await catalogDB.getScrap(scrap.id)).metadata).toEqual({});
     await catalogDB.deleteIngredient(row.id);
     expect((await send([{ id: row.id, type: 'idea', name: 'Deleted' }])).status).toBe(409);
     expect(await catalogDB.getIngredient(row.id)).toBeNull();
