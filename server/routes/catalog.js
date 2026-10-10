@@ -2,6 +2,7 @@
 // the Catalog page, Ingest workflow, picker integrations, and peer sync.
 
 import { Router } from 'express';
+import { isDeepStrictEqual } from 'node:util';
 import * as catalogDB from '../services/catalogDB.js';
 import * as catalogSync from '../services/catalogSync.js';
 import { resolveRefs, listDanglingRefs } from '../services/catalogRefResolver.js';
@@ -687,7 +688,7 @@ router.post('/bulk-import', asyncHandler(async (req, res) => {
         if (!s.rawText.trim()) continue;
         const sourceKind = s.sourceKind || 'import';
         const existingScrap = s.id
-          ? (await client.query('SELECT id, deleted FROM catalog_scraps WHERE id = $1 FOR UPDATE', [s.id])).rows[0]
+          ? (await client.query('SELECT id, deleted, raw_text, title, source_kind, metadata FROM catalog_scraps WHERE id = $1 FOR UPDATE', [s.id])).rows[0]
           : entry.id
             ? (await client.query(
               `SELECT s.id, s.deleted FROM catalog_scraps s
@@ -699,6 +700,16 @@ router.post('/bulk-import', asyncHandler(async (req, res) => {
             : null;
         if (existingScrap?.deleted) {
           throw new ServerError('Imported scrap ID is deleted', { status: 409 });
+        }
+        // Scraps can be shared by several ingredients: importing one slice
+        // must neither overwrite their provenance nor silently ignore edits.
+        if (s.id && existingScrap && (
+          existingScrap.raw_text !== s.rawText
+          || (s.title !== undefined && existingScrap.title !== s.title)
+          || (s.sourceKind !== undefined && existingScrap.source_kind !== s.sourceKind)
+          || (s.metadata !== undefined && !isDeepStrictEqual(existingScrap.metadata, s.metadata))
+        )) {
+          throw new ServerError('Imported scrap ID has different content; use a new scrap ID for edited provenance', { status: 409 });
         }
         const scrap = existingScrap || await catalogDB.createScrap({
           ...s, sourceKind,

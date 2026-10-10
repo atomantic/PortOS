@@ -311,6 +311,12 @@ describe.skipIf(!runDb)('catalog export identity round trip', () => {
       { type: 'idea', name: 'Invalid media', media: [{ mediaKey: 'x', kind: 'invalid' }] },
     ]) expect((await send([entry])).status).toBe(400);
     expect((await send([{ id: row.id, type: 'scene', name: 'Wrong type' }])).status).toBe(409);
+    const scrap = await catalogDB.createScrap({ rawText: 'Keep provenance' });
+    createdScrapIds.add(scrap.id);
+    expect((await send([{ id: row.id, type: 'idea', name: 'Changed',
+      scraps: [{ id: scrap.id, rawText: 'Conflicting provenance' }] }])).status).toBe(409);
+    expect((await catalogDB.getIngredient(row.id)).name).toBe('Keep identity');
+    expect((await catalogDB.getScrap(scrap.id)).rawText).toBe('Keep provenance');
     await catalogDB.deleteIngredient(row.id);
     expect((await send([{ id: row.id, type: 'idea', name: 'Deleted' }])).status).toBe(409);
     expect(await catalogDB.getIngredient(row.id)).toBeNull();
