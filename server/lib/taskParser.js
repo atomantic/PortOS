@@ -36,7 +36,11 @@
 // those reads and writes are deliberately best-effort, they miss SILENTLY. That
 // is how a preflight card (`preflight-`) sat at "Waiting for a free task slot"
 // through an entire pr-reviewer run, then got reaped as interrupted.
-const INTERNAL_PREFIXES = ['sys-', 'app-improve-', 'cd-', 'preflight-'];
+//
+// `self-improve-` is minted by generateSelfImprovementTaskForType for on-demand
+// and install-wide runs. Unregistered, it re-read as `task-self-improve-…`, which
+// the queue saw as a SECOND task and spawned twice (model-comparison-refresh).
+const INTERNAL_PREFIXES = ['sys-', 'app-improve-', 'cd-', 'preflight-', 'self-improve-'];
 const ALL_KNOWN_PREFIXES = ['task-', ...INTERNAL_PREFIXES];
 
 export const hasKnownPrefix = (id) => ALL_KNOWN_PREFIXES.some(p => id?.startsWith(p));
