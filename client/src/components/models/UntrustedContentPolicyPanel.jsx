@@ -145,7 +145,7 @@ export default function UntrustedContentPolicyPanel() {
                 emptyModelOption="Provider default model"
                 alwaysShowModel
               />
-              <p className="text-xs text-gray-500">{isPrivate ? 'Only local API endpoints are eligible for private messages. Cloud APIs, CLI agents, and provider fallback are blocked.' : 'Choose an API provider for text analysis. Automatic selection uses an eligible API provider; a failed provider never falls back. Cloud APIs may receive public GitHub content.'} <a href="/ai" className="text-port-accent hover:underline">Configure providers</a></p>
+              <p className="text-xs text-gray-500">{isPrivate ? 'Only local API endpoints are eligible for private messages. Cloud APIs, CLI agents, and provider fallback are blocked.' : 'Choose an API provider for text analysis. Automatic selection uses an eligible API provider; a failed provider never falls back. Cloud APIs may receive public sources.'} <a href="/ai" className="text-port-accent hover:underline">Configure providers</a></p>
             </div>
             <details className="rounded-lg border border-port-border p-3">
               <summary className="cursor-pointer text-sm text-port-accent">Advanced screening limits</summary>

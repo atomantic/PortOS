@@ -85,6 +85,7 @@ export const CREATIVE_PREFIXES = Object.freeze([
 
 /** Creative stages/runs whose names don't carry a domain prefix. */
 export const CREATIVE_NAMES = Object.freeze([
+  'agent-content-post', // original Moltbook posts — no third-party text in the prompt
   'sandbox-delegation-creative',
   'catalog-extract',
   'catalog-extract-ideas-scenes-concepts', // pulls scenes/ideas out of a source work

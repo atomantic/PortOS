@@ -4,6 +4,7 @@ import { Cpu, Zap, MessageSquare, Eye } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import { filterSelectableModels } from '../../../utils/providers';
+import { providerModeSelectionPolicy } from '../../../utils/providerSelection';
 import BrailleSpinner from '../../BrailleSpinner';
 import { FormField } from '../../ui/FormField';
 import ProviderModelSelector from '../../ProviderModelSelector';
@@ -524,14 +525,14 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
               <h3 className="text-md font-semibold text-white">AI Providers</h3>
             </div>
             <p className="text-xs text-gray-500 mb-3">
-              Choose AI providers for each function. "System Default" uses the globally active provider.
+              Choose AI providers for each function. System Default uses the globally active provider. Content and engagement read public Moltbook text, so they offer text API providers only. A saved CLI or TUI stays listed, and the run skips instead of switching provider.
             </p>
             <div className="space-y-3">
               {[
-                { key: 'content', label: 'Content Generation', desc: 'Posts, comments, replies' },
-                { key: 'engagement', label: 'Engagement', desc: 'Autonomous voting & commenting' },
+                { key: 'content', label: 'Content Generation', desc: 'Posts, comments, replies', selectionPolicy: providerModeSelectionPolicy('direct-api') },
+                { key: 'engagement', label: 'Engagement', desc: 'Autonomous voting & commenting', selectionPolicy: providerModeSelectionPolicy('direct-api') },
                 { key: 'challenge', label: 'Challenge Solving', desc: 'Verification challenges' }
-              ].map(({ key, label, desc }) => {
+              ].map(({ key, label, desc, selectionPolicy }) => {
                 const fnConfig = formData.aiConfig?.[key] || {};
                 const fnModels = getModelsForProvider(fnConfig.providerId);
                 return (
@@ -542,6 +543,9 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                     </div>
                     <ProviderModelSelector
                       compact
+                      label={label}
+                      modelLabel={`${label} model`}
+                      selectionPolicy={selectionPolicy}
                       providers={providers}
                       selectedProviderId={fnConfig.providerId || ''}
                       selectedModel={fnConfig.model || ''}
