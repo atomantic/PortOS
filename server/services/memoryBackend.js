@@ -205,9 +205,11 @@ export async function getRelatedMemories(id, limit) {
   return b.getRelatedMemories(id, limit);
 }
 
-export async function getGraphData() {
+// `options.sourceIds` (internal): absent → the full CoS graph; an array (even
+// empty) → only nodes/edges inside that memory-id scope (#10953).
+export async function getGraphData(options) {
   const b = await getBackend();
-  return b.getGraphData();
+  return b.getGraphData(options);
 }
 
 export async function getMemoryIdsMissingEmbedding() {

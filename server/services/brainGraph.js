@@ -207,12 +207,28 @@ async function loadGraphContext() {
     reverseBridge[memId] = bKey.split(':')[1];
   }
 
+  // Only memories bridged to a CURRENT node can contribute an edge, so scope the
+  // memory graph read to them (#10953): similarity work drops from scoring every
+  // embedded memory as a source to scoring just these. The backend keeps the
+  // global candidate population, so the edges are identical to the full graph's
+  // filtered to these endpoints. Fewer than two participating nodes cannot form
+  // an edge (self-edges are dropped below), so skip the read entirely.
+  const sourceIds = [];
+  const participating = new Set();
+  for (const [memId, brainId] of Object.entries(reverseBridge)) {
+    if (!brainIdSet.has(brainId)) continue;
+    sourceIds.push(memId);
+    participating.add(brainId);
+  }
+
   // Remap CoS similar/linked edges to brain ids. ~3 similar/node + links — not
   // the explosion (that's shared_tag, computed per bounded set below).
   const remappedEdges = [];
   const seen = new Set();
   let hasEmbeddings = false;
-  const cosGraph = await memoryBackend.getGraphData().catch(() => null);
+  const cosGraph = participating.size < 2
+    ? null
+    : await memoryBackend.getGraphData({ sourceIds }).catch(() => null);
   if (cosGraph) {
     for (const edge of cosGraph.edges) {
       const source = reverseBridge[edge.source];

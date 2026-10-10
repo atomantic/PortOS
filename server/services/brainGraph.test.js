@@ -308,10 +308,52 @@ describe('getBrainGraphOverview', () => {
   });
 
   it('treats a getGraphData failure as no edges', async () => {
-    onlyType('people', [{ id: 'p1', name: 'A' }]);
+    onlyType('people', [{ id: 'p1', name: 'A' }, { id: 'p2', name: 'B' }]);
+    loadBridgeMap.mockResolvedValue({ 'people:p1': 'mem-1', 'people:p2': 'mem-2' });
     memoryBackend.getGraphData.mockRejectedValue(new Error('embeddings unavailable'));
     const result = await getBrainGraphOverview({ limit: 100 });
-    expect(result.nodes).toHaveLength(1);
+    expect(memoryBackend.getGraphData).toHaveBeenCalledTimes(1);
+    expect(result.nodes).toHaveLength(2);
+    expect(result.edges).toEqual([]);
+    expect(result.hasEmbeddings).toBe(false);
+  });
+
+  // #10953: the memory graph read is scoped to memories bridged to a node in
+  // the current set — archived records and bridge entries whose record is gone
+  // contribute nothing, so they are never submitted as similarity sources.
+  it('scopes the memory graph read to memories bridged to current nodes', async () => {
+    brainStorage.getAll.mockImplementation(async (type) => {
+      if (type === 'people') return [{ id: 'p1', name: 'A' }, { id: 'p2', name: 'B', archived: true }];
+      if (type === 'ideas') return [{ id: 'i1', title: 'Idea' }];
+      return [];
+    });
+    loadBridgeMap.mockResolvedValue({
+      'people:p1': 'mem-1',
+      'people:p2': 'mem-archived',
+      'ideas:i1': 'mem-2',
+      'projects:gone': 'mem-missing'
+    });
+    memoryBackend.getGraphData.mockResolvedValue({ nodes: [], edges: [] });
+    await getBrainGraphOverview({ limit: 100 });
+    expect(memoryBackend.getGraphData).toHaveBeenCalledTimes(1);
+    const [{ sourceIds }] = memoryBackend.getGraphData.mock.calls[0];
+    expect([...sourceIds].sort()).toEqual(['mem-1', 'mem-2']);
+
+    memoryBackend.getGraphData.mockClear();
+    await getBrainGraphNeighborhood({ focusId: 'p1' });
+    expect(memoryBackend.getGraphData).toHaveBeenCalledTimes(1);
+    expect([...memoryBackend.getGraphData.mock.calls[0][0].sourceIds].sort()).toEqual(['mem-1', 'mem-2']);
+  });
+
+  it('skips the memory graph read when fewer than two current nodes are bridged', async () => {
+    onlyType('people', [{ id: 'p1', name: 'A' }, { id: 'p2', name: 'B' }]);
+    // Zero bridged nodes.
+    await getBrainGraphOverview({ limit: 100 });
+    // One bridged node — its other mapping points at a record that is not a node.
+    loadBridgeMap.mockResolvedValue({ 'people:p1': 'mem-1', 'people:gone': 'mem-2' });
+    const result = await getBrainGraphOverview({ limit: 100 });
+    await getBrainGraphNeighborhood({ focusId: 'p1' });
+    expect(memoryBackend.getGraphData).not.toHaveBeenCalled();
     expect(result.edges).toEqual([]);
     expect(result.hasEmbeddings).toBe(false);
   });
