@@ -17,7 +17,7 @@ import * as brainStorage from './brainStorage.js';
 import * as memory from './memoryBackend.js';
 import * as embeddings from './memoryEmbeddings.js';
 import { atomicWrite, ensureDir, PATHS } from '../lib/fileUtils.js';
-import { listJournals, getJournal } from './brainJournal.js';
+import { iterateJournals, getJournal } from './brainJournal.js';
 
 const BRIDGE_MAP_PATH = join(PATHS.brain, 'memory-bridge-map.json');
 
@@ -38,10 +38,9 @@ const TYPE_MAP = {
 // their own getters rather than brainStorage.getAll.
 const JSONL_TYPES = ['digests', 'reviews'];
 
-// Whole-store read for an append-only JSONL type (the `1000` cap is "all of
-// them" — these files are small and cached by brainStorage).
+// Explicit whole-store read; UI getters retain their latest-page default.
 const readJsonlStore = (type) =>
-  (type === 'digests' ? brainStorage.getDigests : brainStorage.getReviews)(1000);
+  (type === 'digests' ? brainStorage.getDigests : brainStorage.getReviews)(Infinity);
 
 // The id-keyed entity stores the bridge mirrors. DERIVED from TYPE_MAP (minus
 // the JSONL stores and the Daily Log, both of which have their own walk) so
@@ -373,8 +372,7 @@ export async function syncAllBrainData({ dryRun = false, refresh = false, onlyMi
   // 'sync:applied' event handlers instead (see initBridge). With `refresh`,
   // already-mapped days are re-embedded to heal pre-#1080 staleness.
   {
-    const { records: journals } = await listJournals({ limit: 10000, includeContent: true });
-    for (const record of journals) {
+    for await (const record of iterateJournals()) {
       const key = bridgeKey('journals', record.id);
       // Already-mapped days are skipped in both real and dry-run modes so
       // dry-run stats match actual-run stats (rather than claiming to

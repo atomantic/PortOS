@@ -465,6 +465,16 @@ describe('brainJournal', () => {
       await journal.updateSettings({ obsidianVaultId: 'v1', autoSync: false, obsidianFolder: 'Daily Log' });
     });
 
+    it('re-mirrors the oldest day beyond 10000 entries', async () => {
+      for (let i = 0; i < 10001; i += 1) {
+        const date = isoDay(i);
+        journalRecords.set(date, { date, content: 'Day ' + i, segments: [] });
+      }
+      obsidian.upsertNote.mockResolvedValue('Daily Log/note.md');
+      expect(await journal.resyncAllToObsidian()).toEqual({ synced: 10001, skipped: 0, stoppedEarly: false });
+      expect(obsidian.upsertNote.mock.calls.some(call => JSON.stringify(call).includes(isoDay(0)))).toBe(true);
+    });
+
     it('writes all changed Obsidian locations in one sidecar save', async () => {
       for (let i = 0; i < 3; i += 1) await journal.appendJournal(isoDay(i), `day ${i}`);
       obsidian.upsertNote.mockResolvedValue('Daily Log/note.md');
