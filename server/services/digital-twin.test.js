@@ -430,9 +430,9 @@ describe('digital-twin.js', () => {
       expect(result.filename).toBe('NEW_DOC.md');
       expect(result.id).toBe('test-uuid-1');
       expect(result.content).toBe('# New Doc\n\nContent here.');
-      // writeFile for the document file; atomicWrite for the meta save
-      expect(writeFile).toHaveBeenCalledTimes(1);
-      expect(atomicWrite).toHaveBeenCalledTimes(1);
+      // Document file and meta save both go through atomicWrite (#10939)
+      expect(writeFile).not.toHaveBeenCalled();
+      expect(atomicWrite).toHaveBeenCalledTimes(2);
     });
 
     it('should throw if document already exists', async () => {
@@ -483,8 +483,9 @@ describe('digital-twin.js', () => {
       });
 
       expect(result).not.toBeNull();
-      // writeFile for content + saveMeta
-      expect(writeFile).toHaveBeenCalled();
+      // content + meta both via atomicWrite, never an in-place truncating write (#10939)
+      expect(writeFile).not.toHaveBeenCalled();
+      expect(atomicWrite).toHaveBeenCalledTimes(2);
     });
 
     it('should return null for non-existent document', async () => {

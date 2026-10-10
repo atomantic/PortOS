@@ -4,6 +4,7 @@ import { join } from 'path';
 import EventEmitter from 'events';
 import { digitalTwinMetaSchema } from '../lib/digitalTwinValidation.js';
 import { safeJSONParse, atomicWrite } from '../lib/fileUtils.js';
+import { createMutex } from '../lib/asyncMutex.js';
 import { DIGITAL_TWIN_DIR, generateId, ensureSoulDir } from './digital-twin-helpers.js';
 
 export const META_FILE = join(DIGITAL_TWIN_DIR, 'meta.json');
@@ -21,6 +22,13 @@ const cache = {
   multiTurnTests: { data: null, timestamp: 0 }
 };
 export const CACHE_TTL_MS = 5000;
+
+// One lock for every load -> mutate -> saveMeta workflow. loadMeta hands every
+// caller the same cached object, so two overlapping read-modify-write flows
+// would otherwise each push onto it and the later saveMeta would persist
+// whichever tombstone/record set it happened to hold. NOT re-entrant: never
+// call withMetaLock from inside a withMetaLock callback.
+export const withMetaLock = createMutex();
 
 // Expose cache for modules that manage test/document caches (testing.js)
 export { cache };
@@ -166,16 +174,16 @@ export async function saveMeta(meta) {
   digitalTwinEvents.emit('meta:changed', meta);
 }
 
-export async function updateMeta(updates) {
+export const updateMeta = (updates) => withMetaLock(async () => {
   const meta = await loadMeta();
   const updated = { ...meta, ...updates };
   await saveMeta(updated);
   return updated;
-}
+});
 
-export async function updateSettings(settings) {
+export const updateSettings = (settings) => withMetaLock(async () => {
   const meta = await loadMeta();
   meta.settings = { ...meta.settings, ...settings };
   await saveMeta(meta);
   return meta.settings;
-}
+});
