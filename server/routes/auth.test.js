@@ -244,6 +244,30 @@ describe('auth routes', () => {
     expect(remaining.body.count).toBe(1);
   });
 
+  it('DELETE /api/auth/sessions?label=agent revokes all agent sessions but keeps the browser session', async () => {
+    const app = await buildApp();
+    const { createSession } = await import('../services/auth.js');
+    const setupRes = await request(app).post('/api/auth/password').send({ newPassword: 'correct-horse' });
+    const cookie = setupRes.headers['set-cookie'];
+    await createSession({ label: 'agent' });
+    await createSession({ label: 'agent' });
+
+    const res = await request(app).delete('/api/auth/sessions?label=agent').set('Cookie', cookie);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, revoked: 2 });
+
+    const whoami = await request(app).get('/api/auth/whoami').set('Cookie', cookie);
+    expect(whoami.body.authenticated).toBe(true);
+    const remaining = await request(app).get('/api/auth/sessions').set('Cookie', cookie);
+    expect(remaining.body.count).toBe(1);
+  });
+
+  it('DELETE /api/auth/sessions rejects a missing or non-agent label', async () => {
+    const app = await buildApp();
+    expect((await request(app).delete('/api/auth/sessions')).status).toBe(400);
+    expect((await request(app).delete('/api/auth/sessions?label=browser')).status).toBe(400);
+  });
+
   it('DELETE /api/auth/sessions/:id 404s on an id that matches no live session', async () => {
     const app = await buildApp();
     const res = await request(app).delete('/api/auth/sessions/deadbeefdeadbeef');
