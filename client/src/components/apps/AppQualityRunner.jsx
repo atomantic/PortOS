@@ -135,17 +135,19 @@ export default function AppQualityRunner({ app, children }) {
       emptyProviderOption="Select a subscription provider" emptyModelOption="Select a model" includeDefaultModel highlightToolUse />
     <p className="text-xs text-gray-400">Batch execution: selected checks run one after another. A separately launched batch can run in parallel. {mode === 'file-issues' && 'Findings become issues; no fixes.'}</p>
     <details className="text-xs"><summary className="cursor-pointer text-port-accent">Selected checks ({taskTypes.length})</summary><p className="mt-1">{selectedCategories.map(category => category.label).join(', ') || emptySelectionMessage}</p></details>
-    <button type="button" onClick={start} disabled={busy || picker.loading || !picker.selectedProviderId || !picker.selectedModel || !taskTypes.length || app.quality?.unavailable}
-      className="px-3 py-2 rounded bg-port-accent text-port-bg text-sm font-medium disabled:opacity-50">{taskTypes.length === 1 ? 'Run now' : `Run ${taskTypes.length} checks now`}</button>
+    <div className="flex flex-wrap items-center gap-3">
+      <button type="button" onClick={start} disabled={busy || picker.loading || !picker.selectedProviderId || !picker.selectedModel || !taskTypes.length || app.quality?.unavailable}
+        className="px-3 py-2 rounded bg-port-accent text-port-bg text-sm font-medium disabled:opacity-50">{taskTypes.length === 1 ? 'Run now' : `Run ${taskTypes.length} checks now`}</button>
+      <button type="button" className="text-xs text-port-accent" onClick={() => setParams(previous => {
+        const next = new URLSearchParams(previous);
+        if (showArchived) next.delete('qualityHistory'); else next.set('qualityHistory', 'archived');
+        return next;
+      })}>{showArchived ? 'View current runs' : `View archived runs (${formatCount(runs.filter(run => run.archivedAt).length)})`}</button>
+    </div>
     {(loading || loadError) && <p className="text-xs" role="status">{loadError ? 'Runner status is unavailable.' : 'Loading runner status…'} <button type="button" className="text-port-accent" onClick={loadRuns}>Retry</button></p>}
     {error && <p role="alert" className="text-sm text-port-error">{error}</p>}
-    <button type="button" className="text-xs text-port-accent" onClick={() => setParams(previous => {
-      const next = new URLSearchParams(previous);
-      if (showArchived) next.delete('qualityHistory'); else next.set('qualityHistory', 'archived');
-      return next;
-    })}>{showArchived ? 'View current runs' : `View archived runs (${formatCount(runs.filter(run => run.archivedAt).length)})`}</button>
     {showArchived && <p className="text-xs text-gray-400">Archived history retains evidence and findings. Restoring a card does not restart its run.</p>}
-    {visibleRuns.filter((run, index) => showArchived || run.status === 'running' || run.auditDepth === 'deep' || index === 0).map(run => <div key={run.id} className="space-y-2">
+    {visibleRuns.filter((run, index) => showArchived || (run.status !== 'completed' && (run.status === 'running' || run.auditDepth === 'deep' || index === 0))).map(run => <div key={run.id} className="space-y-2">
       <MaintenanceRunStatus run={run} />
       {run.reason && !(run.auditDepth === 'deep' && !run.auditWorkflow) && <p className="text-xs break-words">{run.reason} <Link className="text-port-accent underline" to="/cos/schedule">Open runner settings</Link></p>}
       {run.auditDepth === 'deep' && !run.auditWorkflow && <p className="text-xs text-gray-400">Historical exhaustive audit — evidence retained; start a new Deep run above.</p>}

@@ -299,3 +299,14 @@ it('archives and restores history without dispatch, while keeping active runs vi
   expect(startMaintenanceRun).not.toHaveBeenCalled();
   expect(stopMaintenanceRun).not.toHaveBeenCalled();
 });
+
+it('does not show completed runs in current view, but displays running runs', async () => {
+  const completedRun = { id: 'completed-1', appId: app.id, status: 'completed', steps: [{}, {}], reason: 'maintenance sequence complete' };
+  const runningRun = { id: 'running-1', appId: app.id, status: 'running', steps: [{ id: 's1', taskRef: { taskType: 'ux' } }] };
+  getMaintenanceRuns.mockResolvedValue({ runs: [runningRun, completedRun] });
+  render(<MemoryRouter><AppQualityRunner app={app} /></MemoryRouter>);
+  await waitFor(() => expect(screen.queryByText('Loading runner status…')).not.toBeInTheDocument());
+  expect(screen.getByText(/running · 1\/1 steps · ux/)).toBeInTheDocument();
+  expect(screen.queryByText(/completed · 2\/2 steps/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/maintenance sequence complete/)).not.toBeInTheDocument();
+});
