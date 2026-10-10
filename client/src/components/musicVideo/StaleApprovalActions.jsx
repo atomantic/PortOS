@@ -8,8 +8,8 @@ const buttonClass = 'flex items-center gap-1 rounded border border-port-border p
  * whose approved value was kept (`revertible` → `onRevert(field)`). Renders
  * nothing when neither applies.
  */
-export default function StaleApprovalActions({ revertible = [], busy = false, onKeep, onRevert, keepTitle = 'Keep this approved on the current inputs' }) {
-  const reverts = onRevert ? revertible : [];
+export default function StaleApprovalActions({ revertible, busy = false, onKeep, onRevert, keepTitle = 'Keep this approved on the current inputs' }) {
+  const reverts = onRevert ? revertible || [] : [];
   if (!onKeep && !reverts.length) return null;
   return (
     <div className="flex flex-wrap gap-2">
