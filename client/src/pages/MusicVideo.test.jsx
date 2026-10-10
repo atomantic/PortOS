@@ -2340,6 +2340,26 @@ describe('MusicVideo media lightbox (#3718)', () => {
     });
   });
 
+  it('opens Cast & Sets references and their inputs in the lightbox, not the raw file', async () => {
+    const castAndSets = {
+      revision: 1, status: 'review',
+      plan: { lead: { key: 'lead', label: 'Lead', prompt: 'Lead portrait', deps: [], refKeys: [], moodRefs: true } },
+      images: { lead: { status: 'done', imageId: 'lead.png', submittedPrompt: 'Lead portrait', submittedRevision: 1, submittedReferences: [{ kind: 'image-ref', filename: 'mood.png' }] } },
+      moodImages: [{ kind: 'image-ref', filename: 'mood.png' }],
+    };
+    await openProject({ ...PROJECT_NO_CLIP, castAndSets }, 'cast-sets');
+    const card = within(await screen.findByRole('article', { name: 'Lead' }));
+    expect(card.queryByRole('link')).toBeNull();
+    fireEvent.click(card.getByRole('button', { name: 'Preview Lead' }));
+    let dialog = await screen.findByRole('dialog', { name: /Media viewer/i });
+    expect(dialog.innerHTML).toMatch(/\/data\/images\/lead\.png/);
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /Media viewer/i })).toBeNull());
+    fireEvent.click(card.getByRole('button', { name: 'Lead input: mood.png' }));
+    dialog = await screen.findByRole('dialog', { name: /Media viewer/i });
+    expect(dialog.innerHTML).toMatch(/\/data\/image-refs\/mood\.png/);
+  });
+
   it('opens the lightbox from a ?preview= deep link on mount', async () => {
     listMusicVideoProjects.mockResolvedValue([PROJECT_WITH_CLIP]);
     renderMVAt('/music-video/mv-1?preview=image%3Aimg1');
