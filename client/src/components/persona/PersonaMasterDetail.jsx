@@ -223,8 +223,14 @@ export default function PersonaMasterDetail({
             </div>
           ) : !isCreate && !selected ? (
             <div className="text-gray-500 text-sm">
-              <p>Select a {singular.toLowerCase()} to edit, or create a new one.</p>
-              <CreateButton singular={singular} onClick={() => navigate(`${basePath}/new`)} />
+              {records.length === 0 ? (
+                <>
+                  <p>Create your first {singular.toLowerCase()} to get started.</p>
+                  <CreateButton singular={singular} onClick={() => navigate(`${basePath}/new`)} />
+                </>
+              ) : (
+                <p>Select {/^[aeiou]/i.test(singular) ? 'an' : 'a'} {singular.toLowerCase()} from the list to view details, or click New {singular} above.</p>
+              )}
             </div>
           ) : (
             <div className="space-y-3">
