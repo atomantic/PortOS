@@ -1178,3 +1178,57 @@ describe.skipIf(!runDb)('memory history and stale-write contract (#10494)', () =
     expect(await memoryDB.getMemoryVersions(original.id)).toEqual([]);
   });
 });
+
+
+describe.skipIf(!runDb)('durable brain memory identity (#11007)', () => {
+  beforeEach(async () => {
+    await query('DELETE FROM brain_memory_links');
+    await resetMemories();
+  });
+
+  const data = { type: 'fact', content: 'Example brain project', sourceAppId: 'brain', category: 'project' };
+
+  it('retries after a lost map save and serializes overlapping first writes', async () => {
+    // There is deliberately no file save between these independent calls.
+    const results = await Promise.all([
+      memoryDB.upsertBrainMemory('projects:example', data, VEC_A),
+      memoryDB.upsertBrainMemory('projects:example', data, VEC_A),
+    ]);
+    expect(results[0].id).toBe(results[1].id);
+    const retry = await memoryDB.upsertBrainMemory('projects:example', { ...data, content: 'Updated example' });
+    expect(retry.id).toBe(results[0].id);
+    expect((await memoryDB.getMemories({ appId: 'brain' })).total).toBe(1);
+    expect(await memoryDB.getBrainMemoryLinks()).toEqual({ 'projects:example': retry.id });
+    expect((await memoryDB.getMemoryVersions(retry.id)).length).toBe(1);
+  });
+
+  it('reuses a legacy row, ignores a stale cache, and heals a purged target', async () => {
+    const legacy = await memoryDB.createMemory(data, VEC_A);
+    expect(await memoryDB.getBrainMemoryLinks({ 'projects:example': legacy.id }, { readOnly: true })).toEqual({
+      'projects:example': legacy.id,
+    });
+    expect((await query('SELECT * FROM brain_memory_links')).rows).toEqual([]);
+    expect(await memoryDB.getBrainMemoryLinks({ 'projects:example': legacy.id })).toEqual({
+      'projects:example': legacy.id,
+    });
+    const saved = await memoryDB.upsertBrainMemory('projects:example', data);
+    expect(saved.id).toBe(legacy.id);
+    await memoryDB.purgeMemory(saved.id);
+    expect(await memoryDB.getBrainMemoryLinks({ 'projects:example': saved.id })).toEqual({});
+    const healed = await memoryDB.upsertBrainMemory('projects:example', data, VEC_A, saved.id);
+    expect(healed.id).not.toBe(saved.id);
+    expect(await memoryDB.getBrainMemoryLinks({ 'projects:example': saved.id })).toEqual({
+      'projects:example': healed.id,
+    });
+    expect((await memoryDB.getMemories({ appId: 'brain' })).total).toBe(1);
+  });
+
+  it('rolls back the reserved link when the memory insert fails', async () => {
+    await expect(memoryDB.upsertBrainMemory('projects:example', { ...data, type: 'invalid-type-exceeding-column-length' }))
+      .rejects.toThrow();
+    expect((await query('SELECT * FROM brain_memory_links')).rows).toEqual([]);
+    expect((await memoryDB.getMemories({ appId: 'brain' })).total).toBe(0);
+  });
+
+  afterAll(async () => { await query('DELETE FROM brain_memory_links'); });
+});

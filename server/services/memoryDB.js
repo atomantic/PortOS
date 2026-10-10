@@ -92,7 +92,7 @@ function embeddingColumns(embedding) {
 /**
  * Create a new memory
  */
-export async function createMemory(data, embedding = null) {
+async function insertMemory(client, data, embedding) {
   const id = uuidv4();
   const summary = data.summary || generateSummary(data.content);
   const now = new Date().toISOString();
@@ -100,55 +100,118 @@ export async function createMemory(data, embedding = null) {
   const originInstanceId = await getInstanceId();
   const embeddingCol = embeddingColumns(embedding);
 
-  const memory = await withTransaction(async (client) => {
-    const result = await client.query(
-      `INSERT INTO memories (
-        id, type, content, summary, category, tags,
-        embedding, embedding_model, confidence, importance,
-        source_task_id, source_agent_id, source_app_id,
-        expires_at, status, created_at, updated_at, origin_instance_id
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6,
-        $7, $8, $9, $10,
-        $11, $12, $13,
-        $14, $15, $16, $17, $18
-      ) RETURNING *`,
-      [
-        id, data.type, data.content, summary, data.category || 'other', data.tags || [],
-        embeddingCol.value,
-        embeddingCol.model,
-        data.confidence ?? 0.8, data.importance ?? 0.5,
-        data.sourceTaskId || null, data.sourceAgentId || null, data.sourceAppId || null,
-        data.expiresAt || null, data.status || 'active', now, now, originInstanceId
-      ]
-    );
+  const result = await client.query(
+    `INSERT INTO memories (
+      id, type, content, summary, category, tags,
+      embedding, embedding_model, confidence, importance,
+      source_task_id, source_agent_id, source_app_id,
+      expires_at, status, created_at, updated_at, origin_instance_id
+    ) VALUES (
+      $1, $2, $3, $4, $5, $6,
+      $7, $8, $9, $10,
+      $11, $12, $13,
+      $14, $15, $16, $17, $18
+    ) RETURNING *`,
+    [
+      id, data.type, data.content, summary, data.category || 'other', data.tags || [],
+      embeddingCol.value,
+      embeddingCol.model,
+      data.confidence ?? 0.8, data.importance ?? 0.5,
+      data.sourceTaskId || null, data.sourceAgentId || null, data.sourceAppId || null,
+      data.expiresAt || null, data.status || 'active', now, now, originInstanceId
+    ]
+  );
 
-    const mem = rowToMemory(result.rows[0]);
-    // Attach the original embedding array (pgvector may return string
-    // representation) — but ONLY when it was actually stored. A
-    // wrong-dimension embedding is dropped to NULL by embeddingColumns(), and
-    // echoing the rejected array back would tell the caller the record is
-    // embedded when it isn't (embedding_model is already NULL), hiding it from
-    // re-embed logic that gates on the returned value. Mirrors
-    // updateMemoryEmbedding().
-    mem.embedding = embeddingCol.value ? embedding : null;
-    // Store related memories as links
-    if (data.relatedMemories?.length > 0) {
-      for (const relId of data.relatedMemories) {
-        await client.query(
-          'INSERT INTO memory_links (source_id, target_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
-          [id, relId]
-        );
-      }
-      mem.relatedMemories = data.relatedMemories;
+  const mem = rowToMemory(result.rows[0]);
+  // Attach the original embedding array (pgvector may return string
+  // representation) — but ONLY when it was actually stored. A
+  // wrong-dimension embedding is dropped to NULL by embeddingColumns(), and
+  // echoing the rejected array back would tell the caller the record is
+  // embedded when it isn't (embedding_model is already NULL), hiding it from
+  // re-embed logic that gates on the returned value. Mirrors
+  // updateMemoryEmbedding().
+  mem.embedding = embeddingCol.value ? embedding : null;
+  // Store related memories as links
+  if (data.relatedMemories?.length > 0) {
+    for (const relId of data.relatedMemories) {
+      await client.query(
+        'INSERT INTO memory_links (source_id, target_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+        [id, relId]
+      );
     }
+    mem.relatedMemories = data.relatedMemories;
+  }
 
-    return mem;
-  });
+  return mem;
+}
 
+export async function createMemory(data, embedding = null) {
+  const memory = await withTransaction(client => insertMemory(client, data, embedding));
   console.log(`🧠 Memory created: ${memory.type} - ${memory.summary.substring(0, 50)}...`);
-  cosEvents.emit('memory:created', { id, type: memory.type, summary: memory.summary });
+  cosEvents.emit('memory:created', { id: memory.id, type: memory.type, summary: memory.summary });
+  return memory;
+}
 
+/**
+ * Import legacy links without replacing an authoritative DB link, then return
+ * only live links. A purged row must not make bulk sync skip its brain record.
+ * The table is machine-local; memory ids differ across installs.
+ */
+export async function getBrainMemoryLinks(legacyMap = {}, { readOnly = false } = {}) {
+  return withTransaction(async client => {
+    if (!readOnly && Object.keys(legacyMap).length) {
+      await client.query(`
+        INSERT INTO brain_memory_links (bridge_key, memory_id)
+        SELECT legacy.key, m.id FROM jsonb_each_text($1::jsonb) legacy
+        JOIN memories m ON m.id::text = legacy.value AND m.source_app_id = 'brain'
+        ORDER BY legacy.key
+        ON CONFLICT (bridge_key) DO NOTHING`, [JSON.stringify(legacyMap)]);
+    }
+    const result = await client.query(`
+      SELECT l.bridge_key, l.memory_id FROM brain_memory_links l
+      JOIN memories m ON m.id = l.memory_id
+      UNION ALL
+      SELECT legacy.key, m.id FROM jsonb_each_text($1::jsonb) legacy
+      JOIN memories m ON m.id::text = legacy.value AND m.source_app_id = 'brain'
+      WHERE NOT EXISTS (SELECT 1 FROM brain_memory_links l WHERE l.bridge_key = legacy.key)`,
+    [JSON.stringify(legacyMap)]);
+    return Object.fromEntries(result.rows.map(row => [row.bridge_key, row.memory_id]));
+  });
+}
+
+/**
+ * The link row is also the per-key transaction lock, including the first insert.
+ * No FK: retaining a dangling link lets the next upsert heal a purged memory.
+ * All memory/history/feed writes and the link replacement commit together.
+ */
+export async function upsertBrainMemory(key, data, embedding = null, legacyId = null) {
+  const result = await withTransaction(async client => {
+    await client.query(
+      'INSERT INTO brain_memory_links (bridge_key, memory_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+      [key, UUID_RE.test(legacyId ?? '') ? legacyId : uuidv4()]
+    );
+    const link = await client.query(
+      'SELECT memory_id FROM brain_memory_links WHERE bridge_key = $1 FOR UPDATE', [key]
+    );
+    const id = link.rows[0].memory_id;
+    let memory = await updateMemoryWithClient(client, id, { ...data, status: 'active' });
+    const created = !memory;
+    if (created) {
+      memory = await insertMemory(client, data, embedding);
+      await client.query('UPDATE brain_memory_links SET memory_id = $2 WHERE bridge_key = $1', [key, memory.id]);
+    } else if (embedding) {
+      const columns = embeddingColumns(embedding);
+      await client.query('UPDATE memories SET embedding = $1, embedding_model = $2 WHERE id = $3',
+        [columns.value, columns.model, id]);
+      memory.embedding = columns.value ? embedding : null;
+      memory.embeddingModel = columns.model;
+    }
+    return { memory, created };
+  });
+  const { memory, created } = result;
+  cosEvents.emit(created ? 'memory:created' : 'memory:updated', created
+    ? { id: memory.id, type: memory.type, summary: memory.summary }
+    : { id: memory.id, updates: data });
   return memory;
 }
 
@@ -302,52 +365,54 @@ export async function getMemories(options = {}) {
 /**
  * Update a memory
  */
+async function updateMemoryWithClient(client, id, updates) {
+  const existing = await client.query('SELECT * FROM memories WHERE id = $1 FOR UPDATE', [id]);
+  if (!existing.rows.length) return null;
+  const row = existing.rows[0];
+  if (updates.expectedVersion !== undefined && updates.expectedVersion !== row.version) {
+    throw new ServerError('Memory changed since it was loaded. Reload before saving.', {
+      status: 409, code: 'MEMORY_VERSION_CONFLICT'
+    });
+  }
+  await client.query(
+    "SELECT set_config('portos.memory_changed_by', $1, true), set_config('portos.memory_change_reason', $2, true)",
+    [updates.changedBy ?? '', updates.changeReason ?? '']
+  );
+  const values = { ...updates };
+  if (values.status === 'archived' && values.changeReason !== undefined) values.archiveReason = values.changeReason;
+  if (typeof values.content === 'string' && values.summary === undefined) {
+    values.summary = generateSummary(values.content);
+  }
+  const fieldMap = {
+    content: 'content', summary: 'summary', type: 'type', category: 'category',
+    tags: 'tags', confidence: 'confidence', importance: 'importance', status: 'status',
+    expiresAt: 'expires_at', sourceAppId: 'source_app_id', archiveReason: 'archive_reason'
+  };
+  const params = [];
+  const fields = Object.entries(fieldMap).filter(([key]) => values[key] !== undefined)
+    .map(([key, column]) => { params.push(values[key]); return `${column} = $${params.length}`; });
+  // The row trigger saves OLD and increments version in this same transaction,
+  // including writes from sync. Operational-only writes do not create history.
+  const updated = fields.length ? (await client.query(
+    `UPDATE memories SET ${fields.join(', ')} WHERE id = $${params.length + 1} RETURNING *`,
+    [...params, id]
+  )).rows[0] : row;
+  if (updates.relatedMemories) {
+    // Legacy edits replace only the symmetric relation; preserve typed provenance.
+    await client.query("DELETE FROM memory_links WHERE source_id = $1 AND link_type = 'related'", [id]);
+    if (updates.relatedMemories.length) {
+      const slots = updates.relatedMemories.map((_, i) => `($1, $${i + 2})`).join(', ');
+      await client.query(`INSERT INTO memory_links (source_id, target_id) VALUES ${slots} ON CONFLICT DO NOTHING`,
+        [id, ...updates.relatedMemories]);
+    }
+    await client.query('UPDATE memories SET updated_at = NOW() WHERE id = $1', [id]);
+  }
+  const links = await client.query('SELECT target_id FROM memory_links WHERE source_id = $1', [id]);
+  return { ...rowToMemory(updated), relatedMemories: links.rows.map(link => link.target_id) };
+}
+
 export async function updateMemory(id, updates) {
-  const memory = await withTransaction(async (client) => {
-    const existing = await client.query('SELECT * FROM memories WHERE id = $1 FOR UPDATE', [id]);
-    if (!existing.rows.length) return null;
-    const row = existing.rows[0];
-    if (updates.expectedVersion !== undefined && updates.expectedVersion !== row.version) {
-      throw new ServerError('Memory changed since it was loaded. Reload before saving.', {
-        status: 409, code: 'MEMORY_VERSION_CONFLICT'
-      });
-    }
-    await client.query(
-      "SELECT set_config('portos.memory_changed_by', $1, true), set_config('portos.memory_change_reason', $2, true)",
-      [updates.changedBy ?? '', updates.changeReason ?? '']
-    );
-    const values = { ...updates };
-    if (values.status === 'archived' && values.changeReason !== undefined) values.archiveReason = values.changeReason;
-    if (typeof values.content === 'string' && values.summary === undefined) {
-      values.summary = generateSummary(values.content);
-    }
-    const fieldMap = {
-      content: 'content', summary: 'summary', type: 'type', category: 'category',
-      tags: 'tags', confidence: 'confidence', importance: 'importance', status: 'status',
-      expiresAt: 'expires_at', sourceAppId: 'source_app_id', archiveReason: 'archive_reason'
-    };
-    const params = [];
-    const fields = Object.entries(fieldMap).filter(([key]) => values[key] !== undefined)
-      .map(([key, column]) => { params.push(values[key]); return `${column} = $${params.length}`; });
-    // The row trigger saves OLD and increments version in this same transaction,
-    // including writes from sync. Operational-only writes do not create history.
-    const updated = fields.length ? (await client.query(
-      `UPDATE memories SET ${fields.join(', ')} WHERE id = $${params.length + 1} RETURNING *`,
-      [...params, id]
-    )).rows[0] : row;
-    if (updates.relatedMemories) {
-      // Legacy edits replace only the symmetric relation; preserve typed provenance.
-      await client.query("DELETE FROM memory_links WHERE source_id = $1 AND link_type = 'related'", [id]);
-      if (updates.relatedMemories.length) {
-        const slots = updates.relatedMemories.map((_, i) => `($1, $${i + 2})`).join(', ');
-        await client.query(`INSERT INTO memory_links (source_id, target_id) VALUES ${slots} ON CONFLICT DO NOTHING`,
-          [id, ...updates.relatedMemories]);
-      }
-      await client.query('UPDATE memories SET updated_at = NOW() WHERE id = $1', [id]);
-    }
-    const links = await client.query('SELECT target_id FROM memory_links WHERE source_id = $1', [id]);
-    return { ...rowToMemory(updated), relatedMemories: links.rows.map(link => link.target_id) };
-  });
+  const memory = await withTransaction(client => updateMemoryWithClient(client, id, updates));
   if (!memory) return null;
 
   console.log(`🧠 Memory updated: ${id}`);
