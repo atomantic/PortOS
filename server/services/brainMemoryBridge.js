@@ -92,7 +92,7 @@ export async function loadBridgeMap({ readOnly = false } = {}) {
     }
     // Backfill old installs before trusting the cache. DB links win over stale
     // file snapshots; missing rows are excluded so bulk catch-up can heal them.
-    const map = await memory.getBrainMemoryLinks(legacyMap, { readOnly });
+    const map = await memory.getBrainMemoryLinks(legacyMap, { readOnly, ...(rebuild ? { recover: true } : {}) });
     if (!readOnly) {
       bridgeMap = map;
       if (rebuild) await saveBridgeMap();
@@ -315,7 +315,10 @@ const makeEmbeddedChecker = (map, missingMemIds) => (key) => {
 };
 
 export async function syncAllBrainData({ dryRun = false, refresh = false, onlyMissing = false } = {}) {
-  const map = await loadBridgeMap({ readOnly: dryRun });
+  // Revalidate cached ids once per bulk walk: a memory can be purged after
+  // this process loaded the cache. A stale key must not count as embedded.
+  const map = await memory.getBrainMemoryLinks(
+    await loadBridgeMap({ readOnly: dryRun }), { readOnly: dryRun });
   const stats = { synced: 0, skipped: 0, errors: 0, archived: 0 };
   let bridgeMapChanged = false;
   const deferredMapSave = {
@@ -480,7 +483,8 @@ export async function syncAllBrainData({ dryRun = false, refresh = false, onlyMi
  * `listLiveIds` reads only the ids it has never resolved.
  */
 export async function getEmbeddingCoverage() {
-  const map = await loadBridgeMap({ readOnly: true });
+  const map = await memory.getBrainMemoryLinks(
+    await loadBridgeMap({ readOnly: true }), { readOnly: true });
   const missingMemIds = await memory.getMemoryIdsMissingEmbedding().catch(() => new Set());
   const isEmbedded = makeEmbeddedChecker(map, missingMemIds);
 

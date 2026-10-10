@@ -812,6 +812,22 @@ describe('brain bridge durable identity (#11007)', () => {
       { 'people:example': 'legacy-1' }, { readOnly: false });
   });
 
+  it('Embed missing heals a purged row even when the process already cached its old id', async () => {
+    const backend = await import('./memoryBackend.js');
+    bridgeFileContents = JSON.stringify({ 'people:example': 'purged-1' });
+    const bridge = await loadBridge();
+    await bridge.loadBridgeMap();
+    getAll.mockImplementation(async type => type === 'people'
+      ? [{ id: 'example', name: 'Example' }] : []);
+    backend.getBrainMemoryLinks.mockResolvedValueOnce({});
+    updateMemory.mockResolvedValueOnce(null);
+    const stats = await bridge.syncAllBrainData({ onlyMissing: true });
+    expect(stats.synced).toBe(1);
+    expect(createMemory).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(bridgeFileContents)['people:example']).not.toBe('purged-1');
+    expect(atomicWrite).toHaveBeenCalledTimes(1);
+  });
+
   it('drains overlapping JSONL adds through the in-flight resync and preserves every cache key', async () => {
     const backend = await import('./memoryBackend.js');
     const { brainEvents } = await import('./brainStorage.js');

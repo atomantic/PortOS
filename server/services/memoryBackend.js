@@ -114,7 +114,9 @@ export async function createMemory(data, embedding) {
 // delegates these operations to the transactional PostgreSQL implementation.
 export async function getBrainMemoryLinks(legacyMap = {}, options) {
   const b = await getBackend();
-  return b.getBrainMemoryLinks ? b.getBrainMemoryLinks(legacyMap, options) : legacyMap;
+  if (b.getBrainMemoryLinks) return b.getBrainMemoryLinks(legacyMap, options);
+  if (options?.recover) throw new Error('File-mode brain bridge cache is corrupt; restore it from backup');
+  return legacyMap;
 }
 
 export async function upsertBrainMemory(key, data, embedding, legacyId) {

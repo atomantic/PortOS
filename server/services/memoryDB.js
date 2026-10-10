@@ -157,8 +157,16 @@ export async function createMemory(data, embedding = null) {
  * only live links. A purged row must not make bulk sync skip its brain record.
  * The table is machine-local; memory ids differ across installs.
  */
-export async function getBrainMemoryLinks(legacyMap = {}, { readOnly = false } = {}) {
+export async function getBrainMemoryLinks(legacyMap = {}, { readOnly = false, recover = false } = {}) {
   return withTransaction(async client => {
+    if (recover) {
+      const unmigrated = await client.query(`
+        SELECT 1 WHERE EXISTS (SELECT 1 FROM memories WHERE source_app_id = 'brain')
+        AND NOT EXISTS (SELECT 1 FROM brain_memory_links)`);
+      if (unmigrated.rows.length) {
+        throw new Error('Brain bridge cache is corrupt and no durable links exist yet; restore the legacy map from backup before syncing');
+      }
+    }
     if (!readOnly && Object.keys(legacyMap).length) {
       await client.query(`
         INSERT INTO brain_memory_links (bridge_key, memory_id)

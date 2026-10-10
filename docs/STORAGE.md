@@ -533,8 +533,10 @@ unchanged. PostgreSQL backups include the table.
 
 Boot DDL and migration 421 install the additive table. The bridge idempotently
 imports valid legacy `data/brain/memory-bridge-map.json` links on first use,
-without overriding DB links, and rebuilds corrupt caches from the table. No
-seed is shipped. The JSON map remains a compatibility cache with one flush per
+without overriding DB links, and rebuilds corrupt caches from the table. If a
+legacy cache is already corrupt before any links have been imported and brain
+memories exist, sync refuses to guess their identities: restore that cache from
+backup. No seed is shipped. The JSON map remains a compatibility cache with one flush per
 bulk sync; it is no longer the production identity authority.
 
 ## Adding a new data store? Answer these

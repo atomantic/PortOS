@@ -1204,6 +1204,8 @@ describe.skipIf(!runDb)('durable brain memory identity (#11007)', () => {
 
   it('reuses a legacy row, ignores a stale cache, and heals a purged target', async () => {
     const legacy = await memoryDB.createMemory(data, VEC_A);
+    await expect(memoryDB.getBrainMemoryLinks({}, { recover: true }))
+      .rejects.toThrow('no durable links exist yet');
     expect(await memoryDB.getBrainMemoryLinks({ 'projects:example': legacy.id }, { readOnly: true })).toEqual({
       'projects:example': legacy.id,
     });
