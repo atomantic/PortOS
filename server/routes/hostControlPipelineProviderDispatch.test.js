@@ -158,6 +158,8 @@ describe('Pipeline generation never reaches a CLI provider for unauthorized call
             connection.emit('close');
           }
         }
+        // The arc route awaits generateArcOverview (including runStagedLLM)
+        // before res.json; only reverse-outline responds before dispatch.
         expect(sink.runPromptThroughProvider, operation[0]).toHaveBeenCalledTimes(1);
         expect(sink.runPromptThroughProvider.mock.calls[0][0].provider).toEqual(cliProvider);
       }
