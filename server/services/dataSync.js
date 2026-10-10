@@ -22,6 +22,7 @@ import {
   dailyLogEventLiveStamp,
   queueDailyLogWrite,
 } from './meatspaceDailyLog.js';
+import { queueConfigWrite, queueHealthWrite } from './meatspaceWriteQueues.js';
 import {
   PORTOS_SCHEMA_VERSIONS,
   RECORD_KIND_SCHEMA_CATEGORIES,
@@ -125,11 +126,20 @@ const STORY_BUILDER_DIR = join(PATHS.data, 'story-builder');
 // checksum cache.
 const STORY_BUILDER_EPOCH_KEY = '__storyBuilderEpoch';
 
+// Blood/epigenetic/eye records merge by identity-preserving union
+// (`unionPreservingRows`): `date` is NOT unique for them (two labs on one day,
+// a retest, left/right exams entered separately), so keying by date would
+// collapse same-day rows (#10910). Known limitation, intentionally not fixed
+// here: the union is add-only, so a row edited on one machine never reaches a
+// peer that already holds the old copy, and a deleted row (e.g. an eye exam
+// removed with `removeEyeExam`) is re-added by the next snapshot from any peer
+// that still has it. Propagating edits/deletes needs tombstones plus a
+// `PORTOS_SCHEMA_VERSIONS.meatspace` bump.
 const MEATSPACE_FILES = {
   'daily-log.json': { type: 'daily-log' }, // mergeDailyLogFile
-  'blood-tests.json': { arrayKey: 'tests', idField: 'date' },
-  'epigenetic-tests.json': { arrayKey: 'tests', idField: 'date' },
-  'eyes.json': { arrayKey: 'exams', idField: 'date' },
+  'blood-tests.json': { type: 'row-union', arrayKey: 'tests' },
+  'epigenetic-tests.json': { type: 'row-union', arrayKey: 'tests' },
+  'eyes.json': { type: 'row-union', arrayKey: 'exams' },
   'config.json': { type: 'object-lww' }
 };
 
@@ -397,6 +407,55 @@ function mergeArraysByKey(localArr, remoteArr, idField, timestampField, mergeRec
 }
 
 /**
+ * Union two arrays of records WITHOUT collapsing any local row: every local row
+ * is kept verbatim and in order, and a remote row is appended only when its
+ * identity is not already present locally. For records whose date (or any other
+ * field) is not unique, so `mergeArraysByKey` would silently drop one of two
+ * same-key local rows.
+ *
+ * Identity is the string `id` when the row has one, else the row's content
+ * (`canonicalStringify`, the same content-signature approach as
+ * `digital-twin-sync.js#unionKeyFor`). A row stamped with an id after the fact
+ * (legacy eye exams get one on first read) still matches its id-less copy on a
+ * peer, so a content match ignores `id` — but an id-bearing remote row is only
+ * content-matched against local rows that have no id, so two distinct records
+ * that happen to hold identical values are both kept.
+ *
+ * Same-identity rows are not reconciled: the local copy stands (see the
+ * `MEATSPACE_FILES` note on edits/deletes).
+ */
+function unionPreservingRows(localArr, remoteArr) {
+  const contentKey = (row) => {
+    const { id: _id, ...rest } = row;
+    return canonicalStringify(rest);
+  };
+  const localIds = new Set();
+  const idlessLocalContent = new Set();
+  const allLocalContent = new Set();
+  const track = (row) => {
+    const hasId = typeof row.id === 'string' && row.id !== '';
+    if (hasId) localIds.add(row.id);
+    const content = contentKey(row);
+    allLocalContent.add(content);
+    if (!hasId) idlessLocalContent.add(content);
+  };
+  for (const row of localArr) if (isPlainObject(row)) track(row);
+
+  const merged = [...localArr];
+  for (const remoteRow of remoteArr) {
+    if (!isPlainObject(remoteRow)) continue;
+    const hasId = typeof remoteRow.id === 'string' && remoteRow.id !== '';
+    const present = hasId
+      ? localIds.has(remoteRow.id) || idlessLocalContent.has(contentKey(remoteRow))
+      : allLocalContent.has(contentKey(remoteRow));
+    if (present) continue;
+    merged.push(remoteRow);
+    track(remoteRow);
+  }
+  return { merged, changed: merged.length !== localArr.length };
+}
+
+/**
  * LWW merge for single objects. Remote wins if its updatedAt is newer.
  */
 function mergeObjectLWW(local, remote, timestampField = 'updatedAt') {
@@ -550,28 +609,33 @@ async function applyMeatspaceRemote(remoteData) {
       continue;
     }
 
-    const local = await readJSONFile(filePath, null, { strict: true });
-
+    // Both branches below read-modify-write a file whose local writers run on
+    // a shared queue, so the sync apply must take the same one.
     if (config.type === 'object-lww') {
-      const { merged, changed } = mergeObjectLWW(local, remoteFile, 'updatedAt');
-      if (changed) {
+      const written = await queueConfigWrite(async () => {
+        const local = await readJSONFile(filePath, null, { strict: true });
+        const { merged, changed } = mergeObjectLWW(local, remoteFile, 'updatedAt');
+        if (!changed) return false;
         await atomicWrite(filePath, merged);
+        return true;
+      });
+      if (written) {
         if (filename === 'config.json') meatspaceEvents.emit('death-clock:changed', {});
         totalApplied++;
       }
     } else {
-      // Array merge
-      const localArr = local?.[config.arrayKey] || [];
-      const remoteArr = remoteFile[config.arrayKey] || [];
-      const { merged, changed } = mergeArraysByKey(localArr, remoteArr, config.idField);
-
-      if (changed) {
-        // Sort by idField (usually date)
-        merged.sort((a, b) => (a[config.idField] || '').localeCompare(b[config.idField] || ''));
-        const mergedFile = { ...(remoteFile || {}), ...(local || {}), [config.arrayKey]: merged };
-        await atomicWrite(filePath, mergedFile);
-        totalApplied++;
-      }
+      const written = await queueHealthWrite(async () => {
+        const local = await readJSONFile(filePath, null, { strict: true });
+        const localArr = Array.isArray(local?.[config.arrayKey]) ? local[config.arrayKey] : [];
+        const remoteArr = Array.isArray(remoteFile[config.arrayKey]) ? remoteFile[config.arrayKey] : [];
+        const { merged, changed } = unionPreservingRows(localArr, remoteArr);
+        if (!changed) return false;
+        // Stable by date; same-date rows keep local-then-remote order.
+        merged.sort((a, b) => (a?.date || '').localeCompare(b?.date || ''));
+        await atomicWrite(filePath, { ...remoteFile, ...local, [config.arrayKey]: merged });
+        return true;
+      });
+      if (written) totalApplied++;
     }
   }
 
