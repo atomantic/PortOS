@@ -95,7 +95,7 @@ describe('human-reviewed Music Video workflow', () => {
       castAndSets: { status: 'skipped', direction: { world: { camera: 'Stale chase cam', transitions: 'Stale streaks' } } } } }));
     expect((await approve('art')).status).toBe(200);
     const prepared = await request(app).post(`${base}/production-review/prepare`).send({});
-    expect(prepared.body.project.productionReview.draft.storyboard).toEqual([expect.objectContaining({ camera: '', transition: '' })]);
+    expect(prepared.body.project.productionReview.draft.storyboard).toEqual([expect.objectContaining({ camera: '', transition: 'Cut' })]);
   });
 
   it('prepares an absent code-first medium plan before human storyboard approval and real authoring admission', async () => {
