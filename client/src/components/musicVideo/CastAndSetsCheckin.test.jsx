@@ -270,13 +270,21 @@ describe('Cast & Sets tab: undo, regenerate and guide import', () => {
 });
 
 describe('Cast & Sets stage before any check-in exists', () => {
-  it('offers Build and Skip, wired to the start and skip actions', async () => {
+  it('leaves Build to the checklist and keeps only Skip, wired to the skip action', async () => {
     const start = vi.fn();
     const skip = vi.fn();
     render(<CastSetsStage board={{ project: { id: 'example-project', audioAnalysis: { sections: [{}] } }, locked: false, castSets: { busy: false, start, skip }, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(), ...DRAFTS }} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Build cast & sets' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
-    expect(start).toHaveBeenCalledTimes(1);
+    // The step's checklist and header already offer Build; a second copy here only repeated it.
+    expect(screen.queryByRole('button', { name: 'Build cast & sets' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Skip cast & sets' }));
     expect(skip).toHaveBeenCalledTimes(1);
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it('says which style is empty and counts references and style images apart', () => {
+    const project = { id: 'example-project', audioAnalysis: { sections: [{}] }, concept: { prompt: 'p', style: '', songStyle: 'synthwave' },
+      visualSpec: { references: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] }, styleReferences: Array.from({ length: 15 }, (_, i) => ({ id: `s${i}` })) };
+    render(<CastSetsStage board={{ project, locked: false, castSets: { busy: false, start: vi.fn(), skip: vi.fn() }, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(), ...DRAFTS }} />);
+    expect(screen.getByText(/No visual style yet · Song style set · 3 references · 15 style images/)).toBeInTheDocument();
   });
 });
