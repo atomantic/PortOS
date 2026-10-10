@@ -13,7 +13,7 @@
  */
 
 import { generateId, now } from './digital-twin-helpers.js';
-import { loadMeta, saveMeta } from './digital-twin-meta.js';
+import { loadMeta, saveMeta, withMetaLock } from './digital-twin-meta.js';
 import { recordTombstone } from '../lib/tombstones.js';
 
 export async function getPersonas() {
@@ -26,7 +26,9 @@ export async function getPersonaById(id) {
   return personas.find(p => p.id === id) || null;
 }
 
-export async function createPersona({ name, description, instructions, traitAdjustments }) {
+export const createPersona = (...args) => withMetaLock(() => createPersonaLocked(...args));
+
+async function createPersonaLocked({ name, description, instructions, traitAdjustments }) {
   const meta = await loadMeta();
   if (!Array.isArray(meta.personas)) meta.personas = [];
 
@@ -47,7 +49,9 @@ export async function createPersona({ name, description, instructions, traitAdju
   return persona;
 }
 
-export async function updatePersona(id, updates) {
+export const updatePersona = (...args) => withMetaLock(() => updatePersonaLocked(...args));
+
+async function updatePersonaLocked(id, updates) {
   const meta = await loadMeta();
   const persona = (meta.personas || []).find(p => p.id === id);
   if (!persona) {
@@ -74,7 +78,9 @@ export async function updatePersona(id, updates) {
   return persona;
 }
 
-export async function deletePersona(id) {
+export const deletePersona = (...args) => withMetaLock(() => deletePersonaLocked(...args));
+
+async function deletePersonaLocked(id) {
   const meta = await loadMeta();
   const before = (meta.personas || []).length;
   meta.personas = (meta.personas || []).filter(p => p.id !== id);
@@ -103,7 +109,9 @@ export async function deletePersona(id) {
  * Set (or clear, with personaId === null) the active persona. Validates the id
  * exists so the settings pointer can't dangle.
  */
-export async function setActivePersona(personaId) {
+export const setActivePersona = (...args) => withMetaLock(() => setActivePersonaLocked(...args));
+
+async function setActivePersonaLocked(personaId) {
   const meta = await loadMeta();
   if (personaId !== null && !(meta.personas || []).some(p => p.id === personaId)) {
     throw new Error(`Persona ${personaId} not found`);

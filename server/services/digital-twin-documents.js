@@ -1,8 +1,9 @@
-import { readFile, writeFile, unlink, stat } from 'fs/promises';
+import { readFile, unlink, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { DIGITAL_TWIN_DIR, generateId, ensureSoulDir } from './digital-twin-helpers.js';
-import { loadMeta, saveMeta } from './digital-twin-meta.js';
+import { loadMeta, saveMeta, withMetaLock } from './digital-twin-meta.js';
+import { atomicWrite } from '../lib/fileUtils.js';
 import { extractVersion } from './digital-twin-meta.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { recordTombstone, clearTombstone, tombstoneTimestamp, supersedingTimestamp } from '../lib/tombstones.js';
@@ -41,9 +42,9 @@ export async function getDocumentById(id) {
 // The document file and the meta row that names it are one workflow, so each
 // mutation holds the backup lease from its first byte change through the meta
 // write (#9982).
-export const createDocument = (data) => withBackupAssetPublication(() => createDocumentLeased(data));
-export const updateDocument = (id, updates) => withBackupAssetPublication(() => updateDocumentLeased(id, updates));
-export const deleteDocument = (id) => withBackupAssetPublication(() => deleteDocumentLeased(id));
+export const createDocument = (data) => withBackupAssetPublication(() => withMetaLock(() => createDocumentLeased(data)));
+export const updateDocument = (id, updates) => withBackupAssetPublication(() => withMetaLock(() => updateDocumentLeased(id, updates)));
+export const deleteDocument = (id) => withBackupAssetPublication(() => withMetaLock(() => deleteDocumentLeased(id)));
 
 async function createDocumentLeased(data) {
   await ensureSoulDir();
@@ -57,7 +58,7 @@ async function createDocumentLeased(data) {
   }
 
   // Write the file
-  await writeFile(filePath, data.content);
+  await atomicWrite(filePath, data.content);
 
   // Re-creating a filename that was previously deleted must clear its tombstone
   // and stamp a creation time that STRICTLY supersedes the deletion — otherwise
@@ -98,7 +99,7 @@ async function updateDocumentLeased(id, updates) {
 
   // Update file content if provided
   if (updates.content) {
-    await writeFile(filePath, updates.content);
+    await atomicWrite(filePath, updates.content);
     docMeta.version = extractVersion(updates.content);
   }
 
