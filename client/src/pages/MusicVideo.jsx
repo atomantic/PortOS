@@ -90,7 +90,7 @@ import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { videoPosterForJob } from '../lib/creativeDirectorPreview.js';
 import { sceneTakeList } from '../lib/musicVideoTakes.js';
 import { pluralize } from '../lib/textUtils.js';
-import { formatTimecode } from '../utils/formatters.js';
+import { formatCount, formatTimecode } from '../utils/formatters.js';
 import { deriveAttentionItems } from '../lib/musicVideoAttention.js';
 import { latestMusicVideoReviewDraft } from '../../../server/lib/musicVideoReviewDraft.js';
 import { useMusicVideoReviewDraft } from '../hooks/useMusicVideoReviewDraft.js';
@@ -1123,10 +1123,25 @@ export default function MusicVideo() {
   // A checklist row either jumps to the control that settles it or, for work
   // the page can start itself (build or resume the cast & sets, fill the art
   // direction from an approved sheet), starts it.
+  // Revising re-plans or regenerates in place; the requests stay open until the director resolves each one.
+  const reviseFromFeedback = async (stage) => {
+    const result = await productionReview.revise(stage);
+    if (!result) return;
+    const count = result.revision?.sceneIds?.length;
+    toast.success(stage === 'art' ? 'Cast & Sets is regenerating with these requests. Review the new sheet, then resolve each request.'
+      : stage === 'storyboard' ? `Revised ${formatCount(count)} shot${count === 1 ? '' : 's'}. Review them, then resolve each request.`
+        : 'A revised composition is ready. Render and review a new proof, then resolve each request.');
+  };
+  // "Keep approved" on a stale approval: the Cast & Sets check-in is re-stamped on its
+  // current inputs; a production approval is given again on the current revision.
+  const keepApproval = (stage) => (stage === 'castAndSets' ? castSets.reconfirm() : productionReview.approve(stage));
   const runChecklistAction = (action) => {
     if (action.run === 'start-cast-sets') { castSets.start(); return; }
     if (action.run === 'resume-cast-sets') { castSets.resume(); return; }
     if (action.run === 'prepare-art') { productionReview.prepare(); return; }
+    if (action.run === 'resolve-feedback') { productionReview.resolveFeedback(action.feedbackId, ''); return; }
+    if (action.run === 'revise-feedback') { reviseFromFeedback(action.stage); return; }
+    if (action.run === 'keep-approval') { keepApproval(action.stage); return; }
     goToStage(action.stage || activeStage, action.anchor, action.params);
   };
   const runNextAction = () => {
@@ -1558,6 +1573,8 @@ export default function MusicVideo() {
                   onReattachRender: () => renderJob.reattach(selected.id),
                   onResumeAutonomous: () => autonomous.resume(),
                   onResumeProduction: (runId, opts) => production.resume(runId, opts),
+                  onKeepApproval: keepApproval,
+                  onRevertApproval: productionReview.revert,
                 }}
               />
             )}
