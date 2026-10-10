@@ -48,6 +48,16 @@ describe('production scene dispatch (#9066)', () => {
     expect(params.referenceImagePaths[0]).toMatch(/ref-example\.png$/);
   });
 
+  it('never conditions a frame on a mood board import or a Pinterest pin, even when flagged', async () => {
+    const outside = { ...project, visualSpec: { references: [
+      { id: 'mvr-board-1', imageId: 'board-still.png', condition: true },
+      { id: 'picked', imageId: 'pinterest-0123456789abcdef.jpg', condition: true },
+      { id: 'own', imageId: 'ref-example.png', condition: true },
+    ] } };
+    await dispatchProductionStep({ stepKind: 'frame', project: outside, scene, route: { kind: 'image', mode: 'codex', model: null }, tag, settings });
+    expect(enqueueJob.mock.calls[0][0].params.referenceImagePaths.map((path) => basename(path))).toEqual(['ref-example.png']);
+  });
+
   it('conditions an approved check-in frame on its character and mapped plate, even beyond the global cap', async () => {
     const checkedIn = { ...project,
       castAndSets: { status: 'approved', direction: { songMap: [{ section: 0, setId: 'harbor' }, { section: 1, setId: 'roof' }] } },

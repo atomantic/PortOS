@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ImagePlus, Trash2, Sparkles, Download } from 'lucide-react';
 import useMounted from '../../hooks/useMounted.js';
-import { MAX_CONDITIONING_REFERENCES } from '../../hooks/useMusicVideoSceneMedia.js';
+import { isOutsideReference, MAX_CONDITIONING_REFERENCES } from '../../hooks/useMusicVideoSceneMedia.js';
 import { getMoodBoard } from '../../services/apiMoodBoard.js';
 import { getUniverse } from '../../services/apiUniverseBuilder.js';
 import { uploadGalleryImage } from '../../services/apiSystem.js';
@@ -47,7 +47,7 @@ export default function LookReferencesPanel({ project, onSave, onSaveSpec, onAdd
   const [dirty, setDirty] = useState(false);
   const [working, setWorking] = useState(false); // a board import / universe pull is reading
   const idFor = (suffix) => `mv-look-${project.id}-${suffix}`;
-  const flagged = references.filter((r) => r.condition).length;
+  const flagged = references.filter((r) => r.condition && !isOutsideReference(r)).length;
   const full = references.length >= MUSIC_VIDEO_MAX_REFERENCES;
 
   useEffect(() => {
@@ -188,12 +188,16 @@ export default function LookReferencesPanel({ project, onSave, onSaveSpec, onAdd
               <input id={idFor(`label-${ref.id}`)} defaultValue={ref.label || ''} maxLength={120} placeholder="Label (e.g. lead singer)"
                 onBlur={(e) => { if (e.target.value !== (ref.label || '')) updateRef(ref.id, { label: e.target.value }); }}
                 className={`w-full ${selectCls}`} />
-              <label className="flex items-center gap-1 text-[11px] min-h-[44px] sm:min-h-0">
-                <input type="checkbox" checked={!!ref.condition}
-                  disabled={!ref.condition && flagged >= MAX_CONDITIONING_REFERENCES}
-                  onChange={(e) => updateRef(ref.id, { condition: e.target.checked })} />
-                Condition frames
-              </label>
+              {isOutsideReference(ref) ? (
+                <p className="text-[11px] text-port-text-muted">Mood board image: shapes the look as text, never sent to the generator</p>
+              ) : (
+                <label className="flex items-center gap-1 text-[11px] min-h-[44px] sm:min-h-0">
+                  <input type="checkbox" checked={!!ref.condition}
+                    disabled={!ref.condition && flagged >= MAX_CONDITIONING_REFERENCES}
+                    onChange={(e) => updateRef(ref.id, { condition: e.target.checked })} />
+                  Condition frames
+                </label>
+              )}
             </div>
           </li>
         ))}

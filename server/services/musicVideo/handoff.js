@@ -2,6 +2,7 @@ import { shotActionPrompt } from '../../lib/musicVideoActionContract.js';
 import { shotCameraPrompt } from '../../lib/cameraMovements.js';
 import { musicVideoCreativeContext } from '../../lib/musicVideoCreativeContext.js';
 import { MOTION_CONTINUITY_CLAUSE } from '../../lib/musicVideoMotion.js';
+import { isOutsideMusicVideoReference } from '../../lib/musicVideoConditioning.js';
 /**
  * Music Video external-asset handoff (#8965) — provider-neutral export/import
  * for tools PortOS does not drive, such as Midjourney.
@@ -117,7 +118,8 @@ export function buildHandoffManifest(project, { now = new Date().toISOString() }
     role: ref.role,
     label: ref.label,
     note: ref.note,
-    condition: ref.condition === true,
+    // Outside (mood board / Pinterest) images never condition generation.
+    condition: ref.condition === true && !isOutsideMusicVideoReference(ref),
     use: ref.use || 'reference',
     filename: ref.imageId,
     url: `/data/images/${encodeURIComponent(ref.imageId)}`,

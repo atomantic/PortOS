@@ -38,11 +38,14 @@ import { musicVideoBriefTools as briefTools } from '../../lib/musicVideoMediumPl
 import { trimTo } from '../../lib/textUtils.js';
 import { CAST_SETS_DEFINITION_LIMITS, normalizeDefinitions } from './castAndSetsDefinitions.js';
 
+// Mood board images are outside inspiration (Pinterest pins, uploads): they
+// shape the direction as words and are never image-generation inputs.
+const MOOD_BOARD_TEXT_ONLY = 'The image generator never sees the mood board: carry what you take from it (light, color, texture, grain, wardrobe feel) into your own words in the descriptions, lighting and looks.';
+
 export const CAST_SETS_LIMITS = Object.freeze({
   looks: { min: 1, max: 4 },
   sets: { min: 3, max: 8 },
   tests: { min: 2, max: 4 },
-  moodRefs: { min: 2, max: 4 },
   rules: 6,
   expressions: 8,
   questions: 4,
@@ -146,7 +149,6 @@ const OUTPUT_SHAPE = `{
   "songMap": [{ "section": 0, "setId": "<short-slug>" }],
   "tests": [{ "setId": "<short-slug>", "look": "<SHORT NAME>", "action": "<what the protagonist does in this frame>", "caption": "<the lyric or beat it serves>" }],
   "overlayConcept": { "summary": "<one persistent graphic layer that ties every shot together>", "elements": [{ "name": "<element>", "description": "<what it shows and when it changes>" }] },
-  "moodRefs": [0, 1],
   "questions": ["<a question for the director>"]
 }`;
 
@@ -189,7 +191,6 @@ const PROCEDURAL_OUTPUT_SHAPE = `{
       "motion": [{ "name": "<motion name>", "target": "<part-slug or all>", "property": "rotate | scale | translateX | translateY | opacity", "amplitude": 4, "periodBeats": 1, "easing": "linear | ease-in-out | ease-out | bounce | step", "trigger": "idle | beat | downbeat | lyric | section" }]
     }]
   },
-  "moodRefs": [0, 1],
   "questions": ["<a question for the director>"]
 }`;
 
@@ -221,10 +222,12 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
     'Read the lyrics as a story. Interpret the song: its references, themes and subtext. The world of the video (who the protagonist is, where it happens, what the sets are) must come from that interpretation.',
     'Design the protagonist as a reusable construction: parts, shape language, materials, a fixed palette, a few named expressions and motion rules that every scene will reuse. Design the world as layered environments with a camera and transition language.',
     'The mood board is reference for LOOK, LIGHTING, COLOR and TEXTURE only. Never copy its literal locations, rooms or props into the sets.',
+    MOOD_BOARD_TEXT_ONLY,
   ].join('\n') : [
     `You are the creative director preparing the CAST & SETS check-in for a music video of "${project?.name || 'Untitled'}".`,
     'Read the lyrics as a story. Interpret the song: its references, themes and subtext, including any real events, ideas or cultural touchstones the words point at. The world of the video (who the protagonist is, where it happens, what the sets are) must come from that interpretation.',
     'The mood board is reference for LOOK, LIGHTING, COLOR and TEXTURE only. Never copy its literal locations, rooms or props into the sets: a kitchen photo on the board does not put the video in a kitchen.',
+    MOOD_BOARD_TEXT_ONLY,
   ].join('\n');
 
   const facts = [
@@ -256,7 +259,6 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
     '- Give every set ONE dominant light color or quality so a cut tells the viewer where we are.',
     '- songMap: one entry per song section index listed above, naming the set that section plays in.',
     `- definitions: one reusable code definition per recurring character (at most ${CAST_SETS_DEFINITION_LIMITS.characters}). Draw it in a 200×200 box (origin top-left, y down) from at most ${CAST_SETS_DEFINITION_LIMITS.parts} simple parts; fills and strokes name a palette entry or a #hex. Expressions and poses are per-part overrides of the base parts; motion rules say what moves, by how much, over how many beats. Keep the definition consistent with the prose above.`,
-    `- moodRefs: the ${CAST_SETS_LIMITS.moodRefs.min}–${CAST_SETS_LIMITS.moodRefs.max} mood board image indices that best show the look${moodImages.length ? '' : ' (empty: there are none)'}.`,
     '- questions: up to three things you need the director to decide.',
   ].join('\n');
   const photographicRules = [
@@ -264,7 +266,6 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
     '- Give every set ONE dominant light color or quality so a cut tells the viewer where we are.',
     '- songMap: one entry per song section index listed above, naming the set that section plays in.',
     '- tests: in-set frames of the protagonist that prove the cast works in the world; each names a set id and a look name.',
-    `- moodRefs: the ${CAST_SETS_LIMITS.moodRefs.min}–${CAST_SETS_LIMITS.moodRefs.max} mood board image indices that best show the look for the character sheet${moodImages.length ? '' : ' (empty: there are none)'}.`,
     '- Wet or revealing looks use opaque fabric so the video stays safe to post.',
     '- questions: up to three things you need the director to decide.',
   ].join('\n');
@@ -376,7 +377,6 @@ const FIELD_PARSERS = {
   songMap: z.array(songMapSchema),
   tests: z.array(testSchema),
   overlayConcept: overlaySchema,
-  moodRefs: z.array(z.number().int().min(0)),
   questions: z.array(text(400)),
 };
 
@@ -467,7 +467,7 @@ function normalizeTests(tests, sets, looks) {
  * `{ direction, missing }` — `missing` lists the required parts still absent,
  * so a first pass with an unusable answer can be refused.
  */
-export function mergeCastAndSetsDirection(previous, parsed, { sections = [], moodImageCount = 0, medium = null } = {}) {
+export function mergeCastAndSetsDirection(previous, parsed, { sections = [], medium = null } = {}) {
   const base = previous || {};
   const procedural = (medium || base.medium) === 'procedural';
   const pick = (key, fallback) => (hasOwn(parsed, key) ? parsed[key] : (hasOwn(base, key) ? base[key] : fallback));
@@ -506,7 +506,6 @@ export function mergeCastAndSetsDirection(previous, parsed, { sections = [], moo
     elements: (overlayRaw.elements || []).filter((e) => e.name && e.description).slice(0, CAST_SETS_LIMITS.overlayElements)
       .map((e) => ({ name: e.name, description: e.description })),
   };
-  const moodRefs = [...new Set(pick('moodRefs', []))].filter((i) => i < moodImageCount).slice(0, CAST_SETS_LIMITS.moodRefs.max);
   const definitions = hasOwn(parsed, 'definitions') ? parsed.definitions : (base.definitions || { characters: [] });
   const direction = {
     ...(procedural ? { medium: 'procedural', world, definitions } : {}),
@@ -518,7 +517,6 @@ export function mergeCastAndSetsDirection(previous, parsed, { sections = [], moo
     songMap,
     tests,
     overlayConcept,
-    moodRefs,
     questions: (pick('questions', [])).filter(Boolean).slice(0, CAST_SETS_LIMITS.questions),
   };
   const missing = [
@@ -573,8 +571,7 @@ export function applyCastAndSetsDirectionEdits(previous, edits, { sections = [] 
     if (unknown.length) throw new ServerError(`Unknown set: ${unknown.join(', ')}`, { status: 422, code: 'CAST_SETS_UNKNOWN_SET' });
     parsed.sets = previous.sets.map((s) => (roles.has(s.id) ? { ...s, imageRole: roles.get(s.id) } : s));
   }
-  // The mood-board indices were validated against the board when it was directed.
-  const { direction, missing } = mergeCastAndSetsDirection(previous, parsed, { sections, moodImageCount: Number.POSITIVE_INFINITY, medium: 'procedural' });
+  const { direction, missing } = mergeCastAndSetsDirection(previous, parsed, { sections, medium: 'procedural' });
   if (missing.length) throw new ServerError(`That edit would leave the direction without: ${missing.join(', ')}`, { status: 422, code: 'CAST_SETS_EDIT_INVALID' });
   const differs = (a, b) => JSON.stringify(a ?? '') !== JSON.stringify(b ?? '');
   const changed = [

@@ -1,6 +1,6 @@
 import { shotActionContractProblem, shotActionPrompt } from '../../../server/lib/musicVideoActionContract.js';
 import { shotCameraPrompt } from '../../../server/lib/cameraMovements.js';
-import { musicVideoConditioningReferences, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../server/lib/musicVideoConditioning.js';
+import { isOutsideMusicVideoReference, musicVideoConditioningReferences, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../server/lib/musicVideoConditioning.js';
 import { musicVideoCreativeContext } from '../../../server/lib/musicVideoCreativeContext.js';
 import { useEffect, useRef } from 'react';
 import socket from '../services/socket';
@@ -61,6 +61,8 @@ export function visualDirection(spec) {
 
 /** Shared scene-aware frame conditioning, with the legacy capped fallback. */
 export const conditioningReferences = musicVideoConditioningReferences;
+/** A mood board / Pinterest reference: look text only, never a conditioning image. */
+export const isOutsideReference = isOutsideMusicVideoReference;
 
 // A scene's authored span on the song, or null while it is untimed.
 const sceneSpanSec = (scene) => (typeof scene.startSec === 'number' && typeof scene.endSec === 'number' && scene.endSec > scene.startSec
