@@ -92,7 +92,9 @@ export default function PreviewDock({ project, sources, audioUrl, seekRequest, c
       </div>
       {!source && (
         <p className={`text-xs text-port-text-muted ${collapsed ? 'max-xl:hidden' : ''}`}>
-          Attach a track and plan the shots to watch a storyboard animatic here; drafts and the final render join it as you make them.
+          {project.trackId || project.uploadedAudioFilename
+            ? 'The lyric timing playthrough plays here once the song is analyzed and its words are aligned; the storyboard, drafts and final render join it as you make them.'
+            : 'Attach a track to watch the lyric timing playthrough here; the storyboard, drafts and final render join it as you make them.'}
         </p>
       )}
       {/* Folded below xl, the dock is one row: the player and its controls wait for the expand. */}
