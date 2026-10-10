@@ -145,8 +145,15 @@ describe('AppTaskCard', () => {
   it('fires a global on-demand run when the task has no managed apps', () => {
     const { onTrigger, onConfigure } = renderCard();
     fireEvent.click(screen.getByRole('button', { name: /Run Now/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Configure/ }));
     expect(onTrigger).toHaveBeenCalledWith('code-review');
+    expect(onConfigure).not.toHaveBeenCalled();
+  });
+
+  it('opens the drawer from the card body, which is the only configure control', () => {
+    const { onConfigure } = renderCard();
+    expect(screen.queryByRole('button', { name: /Configure/ })).not.toBeInTheDocument();
+    // The body is a native button, so it stays keyboard-operable.
+    fireEvent.click(screen.getByText('App coverage').closest('button'));
     expect(onConfigure).toHaveBeenCalledWith('code-review');
   });
 
@@ -290,12 +297,14 @@ describe('AppTaskCard', () => {
       await waitFor(() => expect(screen.getByLabelText('Model').value).toBe('opus'));
     });
 
-    it('points pipeline tasks at the drawer instead of a card-level pin', () => {
+    it('shows pipeline stage count as text and leaves configuring to the card body', () => {
       const { onConfigure } = renderCardWithPins({
         taskMetadata: { pipeline: { stages: [{ name: 'plan' }, { name: 'build' }] } },
       });
       expect(screen.queryByLabelText('Provider')).toBeNull();
-      fireEvent.click(screen.getByRole('button', { name: /set per stage \(2\)/ }));
+      expect(screen.getByText('Provider/model is set per stage (2)')).toBeTruthy();
+      expect(screen.queryByRole('button', { name: /per stage/ })).toBeNull();
+      fireEvent.click(screen.getByText('App coverage').closest('button'));
       expect(onConfigure).toHaveBeenCalledWith('code-review');
     });
   });
