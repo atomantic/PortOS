@@ -274,6 +274,13 @@ export default function FableLoom() {
           <p className="text-sm text-port-text-muted">
             No branching narratives yet. Create a loom, shape its series plan, then weave its episodes.
           </p>
+          <button
+            type="button"
+            onClick={() => setShowForm(true)}
+            className="mt-4 inline-flex items-center gap-1.5 px-3 py-2 rounded bg-port-accent text-white text-sm"
+          >
+            <Plus size={15} /> Create your first loom
+          </button>
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
