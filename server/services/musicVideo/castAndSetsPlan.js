@@ -11,8 +11,8 @@
  *                     outside inspiration and only reach it as text.
  *   - `expressions` — a 2×3 expression sheet including the signature gesture.
  *   - `looks`       — the wardrobe lookbook, one panel per look.
- *   - `set:<id>`    — one EMPTY plate per set: any sentence of the description
- *                     or look that puts a person in it is dropped. Plates do
+ *   - `set:<id>`    — one EMPTY plate per set: any sentence of the description,
+ *                     lighting or look that puts a person in it is dropped. Plates do
  *                     not depend on the character, so they render alongside it.
  *   - `test:<n>`    — the protagonist in a set: conditioned on that set's plate,
  *                     the character sheet and the looks sheet.
@@ -105,6 +105,9 @@ function buildProceduralImagePlan(direction, { revisionNotes = {} } = {}) {
   for (const set of direction.sets || []) {
     const key = `set:${set.id}`;
     const role = set.imageRole || 'background';
+    // Only a cutout plate is meant to hold a subject.
+    const clean = (text) => (role === 'cutout' ? text : withoutPeople(text, direction.protagonist?.name));
+    const lighting = clean(set.lighting || '');
     plan[key] = {
       key,
       kind: 'plate',
@@ -114,8 +117,8 @@ function buildProceduralImagePlan(direction, { revisionNotes = {} } = {}) {
       deps: [],
       refKeys: [],
       prompt: join(
-        (PROCEDURAL_ROLE_PROMPTS[role] || PROCEDURAL_ROLE_PROMPTS.background)(set),
-        set.lighting && `Lighting: ${set.lighting}`,
+        (PROCEDURAL_ROLE_PROMPTS[role] || PROCEDURAL_ROLE_PROMPTS.background)({ ...set, description: clean(set.description) || set.name }),
+        lighting && `Lighting: ${lighting}`,
         role === 'background' && world.depth && `Depth: ${world.depth}`,
         style && `Look: ${style}`,
         revisionNotes[key] && `Revision: ${revisionNotes[key]}`,
@@ -200,6 +203,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
   const plateStyle = withoutPeople(style, p.name);
   for (const set of direction.sets || []) {
     const key = `set:${set.id}`;
+    const plateLight = withoutPeople(set.lighting, p.name);
     plan[key] = {
       key,
       kind: 'plate',
@@ -210,7 +214,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
       prompt: join(
         'Empty set plate, no people',
         withoutPeople(set.description, p.name) || set.name,
-        set.lighting && `Lighting: ${set.lighting}`,
+        plateLight && `Lighting: ${plateLight}`,
         plateStyle && `Look: ${plateStyle}`,
         'Photorealistic music video location still',
         note(key),
