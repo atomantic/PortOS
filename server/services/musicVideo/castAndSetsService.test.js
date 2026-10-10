@@ -744,6 +744,35 @@ describe('Cast & Sets procedural check-in', () => {
 });
 
 
+it('keeps people out of set plates: no mood board person in the look, no character action in a set', async () => {
+  const personBoard = { ...board, style: { prompt: 'An adult woman with tousled curls sits alone beside a rain-speckled window. Amber haze.' } };
+  service.__setCastAndSetsDepsForTests(testDeps({ loadBoard: async () => personBoard }));
+  runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION, look: 'amber haze, 35mm grain',
+    sets: DIRECTION.sets.map((set) => (set.id === 'harbor' ? { ...set, description: 'a wet stone quay. She sits on the edge of the quay. Keeper watches the tide.' } : set)) }) });
+  const project = await seed({ concept: { prompt: 'an escape', style: 'grainy 1980s film, soft glow', subjects: [] } });
+  await service.startCastAndSets(project.id);
+  await runTo(project.id, 'review');
+  const plate = (key) => jobs.findLast((j) => keyOf(j) === key).params.prompt;
+  expect(plate('set:harbor')).toContain('a wet stone quay. Lighting');
+  expect(plate('set:harbor')).not.toMatch(/She sits|Keeper watches/);
+  expect(plate('set:lab')).toContain('Look: amber haze, 35mm grain');
+  expect(jobs.some((j) => j.params.prompt.includes('tousled curls'))).toBe(false);
+
+  // A direction saved before the fix copied the board's style verbatim: a
+  // no-notes regenerate falls back to the director's visual style.
+  await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current,
+    castAndSets: { ...current.castAndSets, direction: { ...current.castAndSets.direction, look: personBoard.style.prompt } } } }));
+  const before = jobs.length;
+  await service.regenerateCastAndSets(project.id);
+  await runTo(project.id, 'review');
+  const replated = jobs.slice(before).filter((j) => keyOf(j).startsWith('set:'));
+  expect(replated).toHaveLength(3);
+  for (const job of replated) {
+    expect(job.params.prompt).toContain('Look: grainy 1980s film, soft glow');
+    expect(job.params.prompt).not.toContain('tousled curls');
+  }
+});
+
 it('carries unresolved targeted production feedback into regeneration without resolving the human decision', async () => {
   const project = await seed();
   await service.startCastAndSets(project.id);
