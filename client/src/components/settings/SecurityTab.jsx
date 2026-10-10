@@ -5,7 +5,7 @@ import Banner from '../ui/Banner';
 import FormField from '../ui/FormField';
 import BrailleSpinner from '../BrailleSpinner';
 import AgentKeyCard from './AgentKeyCard';
-import { getAuthStatus, setAuthPassword, clearAuthPassword, listAuthSessions, revokeAuthSession } from '../../services/api';
+import { getAuthStatus, setAuthPassword, clearAuthPassword, listAuthSessions, revokeAuthSession, revokeAllAgentSessions } from '../../services/api';
 import { formatDateShort } from '../../utils/formatters';
 
 // PortOS is single-user and normally trusted because it's tailnet-only — auth
@@ -27,6 +27,8 @@ export function SecurityTab() {
   const statusRequestRef = useRef(0);
   const [agentSessions, setAgentSessions] = useState([]);
   const [revokingId, setRevokingId] = useState(null);
+  const [confirmRevokeAll, setConfirmRevokeAll] = useState(false);
+  const [revokingAll, setRevokingAll] = useState(false);
   const sessionsRequestRef = useRef(0);
 
   const loadAuthStatus = useCallback(() => {
@@ -91,6 +93,22 @@ export function SecurityTab() {
     }
     setAgentSessions((prev) => prev.filter((s) => s.id !== id));
     toast.success('Session revoked');
+  };
+
+  const handleRevokeAll = async () => {
+    if (revokingAll) return;
+    setRevokingAll(true);
+    const result = await revokeAllAgentSessions().catch((err) => err);
+    setRevokingAll(false);
+    if (result instanceof Error) {
+      toast.error(result.message || 'Revoke failed');
+      return;
+    }
+    // Invalidate any in-flight list fetch so it can't resurrect revoked rows.
+    sessionsRequestRef.current += 1;
+    setConfirmRevokeAll(false);
+    setAgentSessions([]);
+    toast.success(`Revoked ${result?.revoked ?? 0} agent session${result?.revoked === 1 ? '' : 's'}`);
   };
 
   const handleSubmit = async (event) => {
@@ -299,14 +317,47 @@ export function SecurityTab() {
 
       {enabled && agentSessions.length > 0 && (
         <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
-          <h3 className="text-md font-semibold text-white">
-            {agentSessions.length} agent session{agentSessions.length === 1 ? '' : 's'}
-          </h3>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-md font-semibold text-white">
+              {agentSessions.length} agent session{agentSessions.length === 1 ? '' : 's'}
+            </h3>
+            {confirmRevokeAll ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm text-gray-300">
+                  Revoke all {agentSessions.length}? Running agents lose API access.
+                </span>
+                <button
+                  type="button"
+                  onClick={handleRevokeAll}
+                  disabled={revokingAll}
+                  className="min-h-9 text-sm bg-port-error text-white px-3 py-1.5 rounded hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {revokingAll ? 'Revoking…' : 'Confirm revoke all'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmRevokeAll(false)}
+                  disabled={revokingAll}
+                  className="min-h-9 text-sm bg-port-bg border border-port-border text-gray-300 px-3 py-1.5 rounded hover:border-gray-400 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirmRevokeAll(true)}
+                className="min-h-9 text-sm bg-port-bg border border-port-border text-port-error px-3 py-1.5 rounded hover:border-port-error"
+              >
+                Revoke all agent sessions
+              </button>
+            )}
+          </div>
           <p className="text-sm text-gray-400">
             Loopback API credentials PortOS minted for spawned agents. Revoking one does not
             sign you out of the browser.
           </p>
-          <ul className="space-y-2">
+          <ul className="space-y-2 max-h-72 overflow-y-auto" aria-label="Agent sessions">
             {agentSessions.map((session) => (
               <li
                 key={session.id}

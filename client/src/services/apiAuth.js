@@ -35,6 +35,14 @@ export const revokeAuthSession = (id, options) => request(`/auth/sessions/${enco
   ...options,
 });
 
+// Revokes every agent-labelled session in one call; the caller's browser
+// session stays signed in. Resolves `{ ok, revoked }`.
+export const revokeAllAgentSessions = (options) => request('/auth/sessions?label=agent', {
+  method: 'DELETE',
+  silent: true,
+  ...options,
+});
+
 // Agent API key (Settings → Security): state only, never the token itself.
 export const getAgentKeyStatus = (options) => request('/auth/agent-key', options);
 
