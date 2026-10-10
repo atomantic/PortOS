@@ -9,7 +9,7 @@ import { meatspaceEvents, invalidateMeatspace } from './meatspaceEvents.js';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, PATHS, ensureDir, readJSONFile, readJSONFileStrict } from '../lib/fileUtils.js';
-import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { queueConfigWrite } from './meatspaceWriteQueues.js';
 import { isPlainObject } from '../lib/objects.js';
 import { readLocalDailyLog } from './meatspaceDailyLog.js';
 import { getSnpIndex } from './genome.js';
@@ -33,7 +33,6 @@ function pickMortalLoomLifestyle(lifestyle) {
 
 const MEATSPACE_DIR = PATHS.meatspace;
 const CONFIG_FILE = join(MEATSPACE_DIR, 'config.json');
-const queueConfigWrite = createFileWriteQueue();
 
 // Digital Twin paths (read-only)
 const LONGEVITY_FILE = join(PATHS.digitalTwin, 'longevity.json');
