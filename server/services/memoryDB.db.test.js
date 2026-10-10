@@ -749,9 +749,9 @@ describe.skipIf(!runDb)('memoryDB getGraphData (#3447)', () => {
 // Observe real graph statements on their pool connection; do not replace SQL
 // results. This also checks settings immediately after COMMIT/ROLLBACK, before
 // that same connection is released.
-function observeGraph({ afterNodes, failSimilarity = false } = {}) {
+function observeGraph({ afterNodes, failSimilarity = false, explain = false } = {}) {
   const original = pg.Client.prototype.query;
-  const observation = { statements: [], settings: null, restored: null, directed: [] };
+  const observation = { statements: [], settings: null, restored: null, directed: [], plan: null };
   let graphClient;
   const spy = vi.spyOn(pg.Client.prototype, 'query').mockImplementation(function (...args) {
     const sql = args[0];
@@ -765,6 +765,8 @@ function observeGraph({ afterNodes, failSimilarity = false } = {}) {
           current_setting('transaction_isolation') AS isolation,
           current_setting('transaction_read_only') AS read_only`)).rows[0];
         if (failSimilarity) await original.call(this, 'SELECT 1 / 0');
+        // The real statement and parameters, planned inside the same snapshot.
+        if (explain) observation.plan = (await original.call(this, 'EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ' + sql, args[1])).rows[0]['QUERY PLAN'][0].Plan;
       }
       const result = await original.apply(this, args);
       if (sql.includes('SELECT id, type, category, summary, importance')) await afterNodes?.();
@@ -990,6 +992,125 @@ describe.skipIf(!runDb)('memoryDB bounded graph snapshot (#9526)', () => {
       });
     }
   }, 60000);
+});
+
+// #10953: Brain graph reads pass the memory ids bridged to visible Brain nodes.
+// Scoped output must equal the full graph filtered to those endpoints.
+const planNodes = (node) => [node, ...(node.Plans ?? []).flatMap(planNodes)];
+const graphKey = (e) => `${[e.source, e.target].sort().join('/')}:${e.type}:${e.linkType ?? ''}:${e.weight}`;
+const filteredGraph = (graph, scope) => ({
+  nodes: graph.nodes.filter(n => scope.has(n.id)).map(n => n.id).sort(),
+  edges: graph.edges.filter(e => scope.has(e.source) && scope.has(e.target)).map(graphKey).sort(),
+});
+const graphShape = (graph) => ({ nodes: graph.nodes.map(n => n.id).sort(), edges: graph.edges.map(graphKey).sort() });
+
+describe.skipIf(!runDb)('memoryDB scoped graph sources (#10953)', () => {
+  beforeEach(resetMemories);
+
+  it('keeps an out-of-scope neighbour in its global top-three slot, link precedence and archived rules', async () => {
+    // m1's global top three are m2, m3, m5 (m3/m5 out of scope); in-scope m4 is
+    // fourth, and m4's own top three are m6–m8. Restricting candidates before
+    // LIMIT 3 would promote m4 and invent an m1–m4 edge.
+    const vec = (x, y = 0, z = 0) => { const v = axis(0); v[1] = x; v[2] = y; v[3] = z; return v; };
+    const make = (name, embedding, status) => memoryDB.createMemory({ type: 'fact', content: `Scope ${name}.`, status }, embedding);
+    const m1 = await make('m1', vec(0));
+    const m2 = await make('m2', vec(0.1));
+    const m3 = await make('m3', vec(0.15));
+    const m5 = await make('m5', vec(0, 0.2));
+    const m4 = await make('m4', vec(0, 0, 0.45));
+    const m6 = await make('m6', vec(0, 0, 0.5));
+    await make('m7', vec(0, 0, 0.55));
+    await make('m8', vec(0, 0, 0.6));
+    const gone = await make('archived', vec(0.05), 'archived');
+    const unembedded = await memoryDB.createMemory({ type: 'fact', content: 'Scope no vector.' });
+    await memoryDB.linkMemories(m1.id, m2.id);                                // precedence over similar
+    await memoryDB.linkMemories(m4.id, m2.id, { linkType: 'supersedes' });   // directed orientation
+    await memoryDB.linkMemories(m4.id, unembedded.id);                       // in-scope null vector
+    await memoryDB.linkMemories(m4.id, m6.id);                               // out-of-scope endpoint
+    await memoryDB.linkMemories(m1.id, gone.id);                             // archived endpoint
+
+    const scope = new Set([m1.id, m2.id, m4.id, unembedded.id, gone.id]);
+    const full = await memoryDB.getGraphData();
+    const scoped = await memoryDB.getGraphData({ sourceIds: [...scope, 'not-a-uuid'] });
+    expect(graphShape(scoped)).toEqual(filteredGraph(full, scope));
+    expect(scoped.nodes.some(n => n.id === gone.id)).toBe(false);
+
+    const pair = (a, b) => scoped.edges.filter(e => [e.source, e.target].sort().join('/') === [a.id, b.id].sort().join('/'));
+    expect(pair(m1, m2)).toEqual([expect.objectContaining({ type: 'linked', linkType: 'related' })]);
+    expect(pair(m1, m4)).toEqual([]);
+    expect(pair(m2, m4).find(e => e.linkType === 'supersedes')).toMatchObject({ source: m4.id, target: m2.id });
+    expect(pair(m4, unembedded)).toHaveLength(1);
+    expect(full.edges.some(e => [e.source, e.target].includes(m3.id) || [e.source, e.target].includes(m5.id))).toBe(true);
+
+    // Empty scope never reaches the database; absent scope is the full graph.
+    const probe = observeGraph();
+    try {
+      expect(await memoryDB.getGraphData({ sourceIds: [] })).toEqual({ nodes: [], edges: [] });
+      expect(await memoryDB.getGraphData({ sourceIds: ['not-a-uuid'] })).toEqual({ nodes: [], edges: [] });
+      expect(probe.observation.statements).toEqual([]);
+    } finally {
+      probe.restore();
+    }
+    expect(graphShape(await memoryDB.getGraphData({}))).toEqual(graphShape(full));
+    await expect(memoryDB.getGraphData({ sourceIds: 'nope' })).rejects.toThrow(TypeError);
+  });
+
+  it('plans fewer outer similarity loops with unchanged relevant rows and no spill', async () => {
+    await seedGraphVectors(40);
+    const scopeIds = (await query('SELECT md5(i::text)::uuid::text AS id FROM generate_series(1, 10) i')).rows.map(r => r.id);
+    const scope = new Set(scopeIds);
+    const legacy = await withTransaction(async client => {
+      await client.query('SET LOCAL enable_indexscan = off');
+      return (await client.query(legacyGraphSimilarity)).rows;
+    });
+
+    const run = async (options) => {
+      const probe = observeGraph({ explain: true });
+      try {
+        const graph = await memoryDB.getGraphData(options);
+        return { graph, ...probe.observation };
+      } finally {
+        probe.restore();
+      }
+    };
+    const full = await run();
+    const scoped = await run({ sourceIds: scopeIds });
+
+    const lateralLoops = (plan) => planNodes(plan).find(n => n['Node Type'] === 'Limit')['Actual Loops'];
+    expect(lateralLoops(full.plan)).toBe(40);
+    expect(lateralLoops(scoped.plan)).toBe(scope.size);
+    for (const plan of [full.plan, scoped.plan]) {
+      expect(plan['Temp Written Blocks']).toBe(0);
+      expect(plan['Temp Read Blocks']).toBe(0);
+    }
+    expect(scoped.settings).toEqual({ work_mem: '32MB', isolation: 'repeatable read', read_only: 'on' });
+
+    const relevant = rows => sortedDirected(rows.filter(r => scope.has(r.source_id) && scope.has(r.target_id)));
+    expect(relevant(legacy).length).toBeGreaterThan(0);
+    expect(sortedDirected(scoped.directed)).toEqual(relevant(legacy));
+    expect(graphShape(scoped.graph)).toEqual(filteredGraph(full.graph, scope));
+  });
+
+  it.each([2048, 2049])('admits a scoped read by the whole active count (%i nodes)', async count => {
+    await query(`INSERT INTO memories (id, type, content, summary, embedding)
+      SELECT md5(i::text)::uuid, 'fact', 'Boundary fixture', 'Boundary fixture',
+        CASE WHEN i <= 6 THEN $2::vector ELSE NULL END
+      FROM generate_series(1, $1::int) i`, [count, JSON.stringify(VEC_A)]);
+    await query('ANALYZE memories');
+    // Every embedded node plus two null-vector nodes: all ties stay in scope.
+    const scopeIds = (await query('SELECT md5(i::text)::uuid::text AS id FROM generate_series(1, 8) i')).rows.map(r => r.id);
+    const probe = observeGraph();
+    try {
+      const graph = await memoryDB.getGraphData({ sourceIds: scopeIds });
+      expect(graph.nodes.map(n => n.id).sort()).toEqual([...scopeIds].sort());
+      expect(probe.observation.statements.some(sql => sql.includes('AS MATERIALIZED'))).toBe(count === 2048);
+      expect(probe.observation.directed).toHaveLength(18);
+      expect(graph.edges).toHaveLength(undirected(probe.observation.directed).length);
+      expect(graph.edges.every(e => e.type === 'similar' && e.weight === 1)).toBe(true);
+    } finally {
+      probe.restore();
+    }
+  });
 });
 
 describe.skipIf(!runDb)('memory history and stale-write contract (#10494)', () => {

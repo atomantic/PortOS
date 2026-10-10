@@ -638,13 +638,26 @@ export async function getRelatedMemories(id, limit = 10) {
 }
 
 /**
- * Get graph data for visualization
+ * Get graph data for visualization.
+ *
+ * `sourceIds` mirrors the PostgreSQL backend (#10953): absent (undefined/null)
+ * returns the whole graph; an array — even an empty one — returns only the
+ * nodes in it and the edges whose BOTH endpoints are in it. Similarity is
+ * still ranked against every stored vector, so an out-of-scope nearest
+ * neighbour keeps its top-three slot.
  */
-export async function getGraphData() {
+export async function getGraphData({ sourceIds } = {}) {
+  if (sourceIds !== undefined && sourceIds !== null && !Array.isArray(sourceIds)) {
+    throw new TypeError('getGraphData: sourceIds must be an array');
+  }
+  const scope = Array.isArray(sourceIds) ? new Set(sourceIds) : null;
+  if (scope && scope.size === 0) return { nodes: [], edges: [] };
+  const inScope = (id) => !scope || scope.has(id);
+
   const index = await loadIndex();
   const embeddings = await loadEmbeddings();
 
-  const activeMemories = index.memories.filter(m => m.status === 'active');
+  const activeMemories = index.memories.filter(m => m.status === 'active' && inScope(m.id));
 
   // Build nodes
   const nodes = activeMemories.map(m => ({
@@ -675,6 +688,7 @@ export async function getGraphData() {
 
     // Explicit links
     for (const targetId of full.relatedMemories) {
+      if (!inScope(targetId)) continue;
       const edgeKey = [memory.id, targetId].sort().join('-');
       if (!seenEdges.has(edgeKey)) {
         seenEdges.add(edgeKey);
@@ -695,6 +709,9 @@ export async function getGraphData() {
     for (const item of similar) {
       if (item.id === memory.id) continue;
       if (item.similarity < 0.8) continue;
+      // Filtered only after the global top-K: an out-of-scope neighbour still
+      // consumes its slot rather than letting a lower-ranked one replace it.
+      if (!inScope(item.id)) continue;
 
       const edgeKey = [memory.id, item.id].sort().join('-');
       if (!seenEdges.has(edgeKey)) {
