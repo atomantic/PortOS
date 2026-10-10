@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 
@@ -256,16 +256,16 @@ describe('PersistentMindTools', () => {
 
   it('saves the progressive tool-exposure retention window on blur and shows its current value', async () => {
     const user = userEvent.setup();
-    renderPage();
+    // Drain the initial fetch and passive capability-sync effects before
+    // editing: finding the field alone is not a completed mount barrier.
+    await act(async () => { renderPage(); });
 
     const retentionInput = await screen.findByLabelText('Retention window (extra turns)');
     expect(retentionInput).toHaveValue(3);
-    // One change event (3 -> 5) instead of clear-then-type: a clear is its own
-    // controlled-input transition that a late capabilities sync can overwrite
-    // under CI load, leaving the field at 3.
-    fireEvent.change(retentionInput, { target: { value: '5' } });
-    await waitFor(() => expect(retentionInput).toHaveValue(5));
     await user.click(retentionInput);
+    // Replace in one event; clearing a numeric input is a separate value (0).
+    fireEvent.change(retentionInput, { target: { value: '5' } });
+    expect(retentionInput).toHaveValue(5);
     await user.tab();
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith({
