@@ -5,6 +5,7 @@ import { staleApprovalText } from '../../lib/musicVideoStages.js';
 import CastAndSetsDirectionEditor from './CastAndSetsDirectionEditor.jsx';
 import CastAndSetsFeedback from './CastAndSetsFeedback.jsx';
 import CastAndSetsReferenceProgress from './CastAndSetsReferenceProgress.jsx';
+import StaleApprovalActions from './StaleApprovalActions.jsx';
 
 const WORKING = new Set(['directing', 'imaging', 'assembling']);
 const buttonClass = 'flex items-center gap-1 rounded px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
@@ -36,7 +37,8 @@ function statusLine(stage) {
  * and the director's actions (Approve & continue, Regenerate,
  * Edit direction on a procedural sheet, Resume, Skip). An approved sheet whose
  * concept, style, subjects or song changed since (`stale`, from the server's
- * readiness) says what changed and offers Keep approved beside Rebuild (#10141).
+ * readiness) says what changed and offers Keep approved beside each Revert,
+ * right under that line (#10141).
  * A sheet in review (or approved) takes plain-text feedback below the actions.
  */
 export default function CastAndSetsCheckin({ id, project, stale = null, busy, onOpenSheet, onOpenPreview, onApprove, onRegenerate, onEditDirection, onApplyFeedback, onRemoveFeedback, onResume, onRebuild, onReconfirm, onRevert, onSkip }) {
@@ -62,15 +64,9 @@ export default function CastAndSetsCheckin({ id, project, stale = null, busy, on
           {staleText} Keep the sheet approved as it is, or rebuild it from the current inputs.
         </p>
       )}
-      {staleText && onRevert && stale?.revertible?.length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          {stale.revertible.map((field) => (
-            <button key={field} type="button" disabled={busy} onClick={() => onRevert(field)} title="Put this back to the value you approved"
-              className={`${buttonClass} border border-port-border`}>
-              <RotateCcw size={14} aria-hidden="true" /> Revert {field}
-            </button>
-          ))}
-        </div>
+      {staleText && (
+        <StaleApprovalActions revertible={stale?.revertible} busy={busy} onKeep={onReconfirm} onRevert={onRevert}
+          keepTitle="Keep this sheet approved on the current concept, style, subjects and song" />
       )}
       <CastAndSetsReferenceProgress stage={stage} onOpenPreview={onOpenPreview} />
       <div className="flex flex-wrap gap-2">
@@ -96,12 +92,6 @@ export default function CastAndSetsCheckin({ id, project, stale = null, busy, on
         {(stage.interrupted || stage.status === 'failed') && (
           <button type="button" disabled={busy} onClick={onResume} className={`${buttonClass} border border-port-border`}>
             <Play size={14} aria-hidden="true" /> Resume
-          </button>
-        )}
-        {staleText && onReconfirm && (
-          <button type="button" disabled={busy} onClick={onReconfirm} title="Keep this sheet approved on the current concept, style, subjects and song"
-            className={`${buttonClass} border border-port-border`}>
-            <CheckCircle2 size={14} aria-hidden="true" /> Keep approved
           </button>
         )}
         {onRebuild && ['approved', 'skipped'].includes(stage.status) && (

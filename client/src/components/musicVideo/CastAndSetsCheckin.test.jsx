@@ -302,6 +302,8 @@ describe('Cast & Sets tab: undo, regenerate and guide import', () => {
     const onRevertApproval = vi.fn();
     const stale = { approvedAt: '2026-01-01T00:00:00.000Z', changedFields: ['concept', 'song'], revertible: ['concept'] };
     open(withStatus('approved'), { productionReadiness: { castAndSets: { approved: true, stale } }, onRevertApproval });
+    // Keep approved sits in the same row as Revert, right under the stale note.
+    expect(screen.getByRole('button', { name: 'Keep approved' }).parentElement).toBe(screen.getByRole('button', { name: 'Revert concept' }).parentElement);
     fireEvent.click(screen.getByRole('button', { name: 'Revert concept' }));
     expect(onRevertApproval).toHaveBeenCalledWith('castAndSets', 'concept');
     expect(screen.queryByRole('button', { name: 'Revert song' })).toBeNull();
