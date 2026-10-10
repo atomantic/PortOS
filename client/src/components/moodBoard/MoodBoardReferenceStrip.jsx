@@ -129,7 +129,7 @@ export default function MoodBoardReferenceStrip({
   }, [detail]);
 
   return (
-    <div className={`bg-port-bg border border-port-border rounded ${className}`}>
+    <div className={`min-w-0 bg-port-bg border border-port-border rounded ${className}`}>
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
@@ -148,8 +148,8 @@ export default function MoodBoardReferenceStrip({
           {boards === null ? (
             <p className="text-[11px] text-gray-500">Loading boards…</p>
           ) : boards.length === 0 ? (
-            <div className="flex items-center gap-2 flex-wrap">
-              <p className="text-[11px] text-gray-500">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <p className="min-w-0 break-words text-[11px] text-gray-500">
                 No mood boards yet.{' '}
                 <a href="/mood-boards" target="_blank" rel="noopener noreferrer" className="text-port-accent hover:underline">
                   Create one
@@ -161,7 +161,7 @@ export default function MoodBoardReferenceStrip({
                   type="button"
                   onClick={handleCreate}
                   disabled={creating}
-                  className="flex items-center gap-1 px-2 py-1 text-[11px] text-port-accent border border-port-accent/40 rounded hover:bg-port-accent/15 disabled:opacity-50"
+                  className="flex max-w-full min-w-0 items-center gap-1 break-words px-2 py-1 text-left text-[11px] text-port-accent border border-port-accent/40 rounded hover:bg-port-accent/15 disabled:opacity-50"
                 >
                   {creating ? <Loader2 className="w-3 h-3 animate-spin" aria-hidden="true" /> : <Plus className="w-3 h-3" aria-hidden="true" />}
                   New board “{newBoardName}”
@@ -170,13 +170,14 @@ export default function MoodBoardReferenceStrip({
             </div>
           ) : (
             <>
-              <div className="flex items-center gap-2">
-                <label htmlFor={`mb-ref-${storageKey}`} className="text-[11px] text-gray-500 shrink-0">Board</label>
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <label htmlFor={`mb-ref-${storageKey}`} className="shrink-0 text-[11px] text-gray-500">Board</label>
                 <select
                   id={`mb-ref-${storageKey}`}
                   value={effectiveId}
+                  title={boards.find((b) => b.id === effectiveId)?.name || ''}
                   onChange={(e) => handleSelect(e.target.value)}
-                  className="flex-1 min-w-0 bg-port-card border border-port-border rounded px-2 py-1 text-[12px] text-white focus:outline-none focus:border-port-accent"
+                  className="min-w-[min(100%,12rem)] max-w-full flex-1 basis-[12rem] bg-port-card border border-port-border rounded px-2 py-1 text-[12px] text-white focus:outline-none focus:border-port-accent"
                 >
                   {controlled && <option value="">— no board linked —</option>}
                   {boards.map((b) => (
@@ -210,14 +211,16 @@ export default function MoodBoardReferenceStrip({
               </div>
 
               {thumbs.length === 0 ? (
-                <div className="flex items-center gap-1.5 text-[11px] text-gray-500 py-2">
-                  <ImageIcon className="w-3.5 h-3.5" aria-hidden="true" />
-                  {!effectiveId
-                    ? 'No board linked — pick one above to surface its references here.'
-                    : loadingDetail ? 'Loading reference images…' : 'No reference images pinned on this board yet.'}
+                <div className="flex min-w-0 items-center gap-1.5 py-2 text-[11px] text-gray-500">
+                  <ImageIcon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  <span className="min-w-0 break-words">
+                    {!effectiveId
+                      ? 'No board linked — pick one above to surface its references here.'
+                      : loadingDetail ? 'Loading reference images…' : 'No reference images pinned on this board yet.'}
+                  </span>
                 </div>
               ) : (
-                <div className="grid grid-cols-4 sm:grid-cols-6 gap-1.5">
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,4.5rem),1fr))] gap-1.5">
                   {thumbs.map((t) => (
                     <a
                       key={t.id}
