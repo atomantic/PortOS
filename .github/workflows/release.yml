@@ -125,6 +125,14 @@ jobs:
             echo "exists=false" >> $GITHUB_OUTPUT
           fi
 
+      # A tag that already exists is never retargeted by the release action, so
+      # it must already sit on the tree CI verified. Fails closed, read-only.
+      - name: Verify existing release tag matches this tree
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: v${{ steps.package-version.outputs.version }}
+        run: node scripts/verify-release-tag.js
+
       - name: Generate changelog
         id: changelog
         if: steps.release-check.outputs.exists == 'false'
@@ -211,10 +219,21 @@ jobs:
           tag_name: v${{ steps.package-version.outputs.version }}
           name: ${{ steps.changelog.outputs.release_title }}
           body_path: ${{ steps.changelog.outputs.body_path }}
+          # Create a missing tag at the exact commit CI verified. Without this
+          # GitHub resolves a new tag against main's tip, which can have moved.
+          target_commitish: ${{ github.sha }}
           draft: false
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Confirm published tag is on the verified tree
+        if: steps.release-check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: v${{ steps.package-version.outputs.version }}
+          REQUIRE_TAG: 'true'
+        run: node scripts/verify-release-tag.js
 
       - name: Archive changelog on main
         run: |
