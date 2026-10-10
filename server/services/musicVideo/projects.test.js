@@ -33,7 +33,10 @@ const getSettings = vi.fn(async () => ({}));
 vi.mock('../settings.js', () => ({ getSettings: (...a) => getSettings(...a) }));
 
 const getTrack = vi.fn(async () => null);
-vi.mock('../tracks/index.js', () => ({ getTrack: (...a) => getTrack(...a) }));
+const updateTrack = vi.fn(async () => ({}));
+vi.mock('../tracks/index.js', () => ({ getTrack: (...a) => getTrack(...a), updateTrack: (...a) => updateTrack(...a) }));
+const readSunoSongStyle = vi.fn();
+vi.mock('../trackSunoImport.js', () => ({ readSunoSongStyle: (...a) => readSunoSongStyle(...a) }));
 
 const projects = await import('./projects.js');
 
@@ -223,3 +226,15 @@ describe('track metadata and lyrics auto-reading on create and update', () => {
   });
 });
 
+
+describe('refreshSongStyleFromSuno', () => {
+  it('sets the song style read from Suno on the project and its track, leaving the visual style alone', async () => {
+    getTrack.mockResolvedValue({ id: 'track-1', title: 'Example', prompt: 'synth-pop' });
+    const project = await projects.createProject({ trackId: 'track-1', concept: { style: 'soft analog glow' } });
+    readSunoSongStyle.mockResolvedValue({ style: 'synth-pop, -metal', excludedStylesKnown: true });
+    const { project: updated, excludedStylesKnown } = await projects.refreshSongStyleFromSuno(project.id, 'https://suno.com/song/x');
+    expect(excludedStylesKnown).toBe(true);
+    expect(updated.concept).toMatchObject({ style: 'soft analog glow', songStyle: 'synth-pop, -metal' });
+    expect(updateTrack).toHaveBeenCalledWith('track-1', { prompt: 'synth-pop, -metal' });
+  });
+});

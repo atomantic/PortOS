@@ -167,6 +167,9 @@ export function parseSunoSongPage(html, songId) {
     title,
     lyrics: text(song.metadata?.prompt),
     style: withExcludedStyles(text(song.metadata?.tags), text(song.metadata?.negative_tags)),
+    // Whether the page said anything about excluded styles. An anonymous page
+    // can leave the field out, which is not the same as a song excluding none.
+    excludedStylesKnown: typeof song.metadata?.negative_tags === 'string',
     audioUrl,
     imageUrl,
   };

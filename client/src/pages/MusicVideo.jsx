@@ -29,6 +29,7 @@ import {
   reorderMusicVideoScenes,
   importMusicVideoLyrics,
   importMusicVideoTrackLyrics,
+  refreshMusicVideoSongStyleFromSuno,
   getMusicVideoActiveJobs,
   getMusicVideoProject,
 } from '../services/apiMusicVideo.js';
@@ -863,6 +864,16 @@ export default function MusicVideo() {
   // onto the NEW project via commitConcept's captured `selected`. Discard
   // (never auto-commit) any pending edit the instant the selection changes.
   useEffect(() => { conceptDraft.reset(); styleDraft.reset(); songStyleDraft.reset(); }, [selectedId]);
+  // Re-read the song style (with its excluded styles) from the song's Suno link.
+  const songStyleFromSuno = (url) => refreshMusicVideoSongStyleFromSuno(selected.id, url, { silent: true })
+    .then(({ project, excludedStylesKnown }) => {
+      songStyleDraft.reset();
+      replaceProject(project);
+      if (excludedStylesKnown) toast.success('Song style read from Suno');
+      else toast.warning('Read the style, but Suno only shows excluded styles when the PortOS Browser is signed in to Suno');
+      return true;
+    })
+    .catch((err) => { toast.error(err?.message || 'Could not read the song style from Suno'); return false; });
   // BeatTimeline drag commit — same optimistic-local + silent-PATCH pattern as
   // the other scene field editors (#1854).
   const commitSceneTiming = (sceneId, patch) => {
@@ -1168,6 +1179,7 @@ export default function MusicVideo() {
     conceptDraft,
     styleDraft,
     songStyleDraft,
+    songStyleFromSuno,
     importingLyrics,
     aligningLyrics,
     alignStatus,

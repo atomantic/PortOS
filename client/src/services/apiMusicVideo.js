@@ -83,6 +83,12 @@ export const importMusicVideoTrackLyrics = (id, body = {}, options = {}) => requ
   method: 'POST', body: JSON.stringify(body), ...options,
 });
 
+// Re-read the song's Suno style (excluded styles included) from its song link.
+// Resolves to { project, excludedStylesKnown }; also updates the linked track.
+export const refreshMusicVideoSongStyleFromSuno = (id, url, options = {}) => request(`/music-video/${encodeURIComponent(id)}/song-style/suno`, {
+  method: 'POST', body: JSON.stringify({ url }), ...options,
+});
+
 // Align director lyric lines to the vocal (#9074). Body `{}` aligns every line;
 // `{ cueId }` re-aligns one line. Kickoff resolves to { jobId, reused? } (#10155):
 // stages stream over SSE and the terminal `complete` frame carries the updated

@@ -76,8 +76,9 @@ export async function listProjectIds(options = {}) {
 // clip render (an explicit `body.backend`), so a target/install video pin can
 // only take effect HERE, at record creation — the same explicit-body seeding
 // trap the universe batch form and sprites page picker hit on the image side.
-import { getTrack } from '../tracks/index.js';
+import { getTrack, updateTrack } from '../tracks/index.js';
 import { parseLyricCues } from './timedText.js';
+import { ServerError } from '../../lib/errorHandler.js';
 
 // resolveVideoMode usability-gates the pin (a disabled grok pin seeds local);
 // an input that names a backend explicitly wins untouched.
@@ -190,6 +191,21 @@ export async function updateProject(id, patch) {
   const next = await backend.updateProject(id, resolved);
   emitRecordUpdated('musicVideoProject', id);
   return next;
+}
+
+/**
+ * Re-read the song's style from its Suno link, excluded styles included, for a
+ * song imported before they were captured. Sets the project's song style and
+ * the linked track's style prompt, so later projects on the track get it too.
+ */
+export async function refreshSongStyleFromSuno(id, url) {
+  const project = await getProject(id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const { readSunoSongStyle } = await import('../trackSunoImport.js');
+  const { style, excludedStylesKnown } = await readSunoSongStyle(url);
+  if (project.trackId) await updateTrack(project.trackId, { prompt: style });
+  const updated = await updateProject(id, { concept: { songStyle: style.slice(0, 2000) } });
+  return { project: updated, excludedStylesKnown };
 }
 
 export async function deleteProject(id) {

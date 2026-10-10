@@ -85,6 +85,9 @@ export const MUSIC_VIDEO_MODES = ['director', 'autonomous'];
 // (or `failed`). `analyzed` marks "beat map cached but not yet arranged".
 export const MUSIC_VIDEO_STATUSES = ['draft', 'analyzed', 'ready', 'rendering', 'complete', 'failed'];
 
+// Re-read a project's song style from its Suno song link.
+export const musicVideoSongStyleSunoSchema = z.object({ url: z.string().trim().min(1).max(2000) });
+
 // Optional global visual direction for the whole video.
 export const musicVideoConceptSchema = z.object({
   prompt: z.string().max(8000).optional(),
