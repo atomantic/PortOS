@@ -10,6 +10,7 @@ import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { EventEmitter } from 'events';
 import { ensureDir, PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { cosEvents } from './cosEvents.js';
 import { GOAL_FIDELITY_HOLD_EVENT, formatGoalFidelitySummary } from '../lib/goalFidelity.js';
 
@@ -57,6 +58,27 @@ const ARCHIVE_FILE = join(DATA_DIR, 'archive.json');
 
 export const reviewEvents = new EventEmitter();
 
+// One write tail for BOTH items.json and archive.json: `reopenItem` and
+// `applyRetention` mutate the pair together, and `atomicWrite` only prevents a
+// torn file — it does not stop two overlapping load -> mutate -> save turns
+// from replacing each other's change (#10911). Every mutator runs its whole
+// read-modify-write region through `runMutation`.
+const queueWrite = createFileWriteQueue();
+
+/**
+ * Run a load -> mutate -> save region serialized against every other review
+ * mutation, then emit its events AFTER the queue turn has released. The region
+ * returns `{ result, events }` where `events` is a list of `[name, payload]`.
+ * Emitting outside the critical section keeps a `reviewEvents` listener that
+ * calls a mutator synchronously from re-entering (and deadlocking on) the
+ * queue it is still holding. Regions must never await another queued mutator.
+ */
+async function runMutation(region) {
+  const { result, events = [] } = await queueWrite(region);
+  for (const [name, payload] of events) reviewEvents.emit(name, payload);
+  return result;
+}
+
 // Valid item types and statuses
 const ITEM_TYPES = ['alert', 'todo', 'briefing', 'cos'];
 const ITEM_STATUSES = ['pending', 'completed', 'dismissed'];
@@ -73,10 +95,10 @@ const ARCHIVE_ELIGIBLE_STATUSES = new Set(['completed', 'dismissed']);
 // deleted out from under this process while it runs, and a flag-based cache
 // would keep serving a since-deleted file's contents forever. `saveItems`
 // INVALIDATES the cache after every write rather than seeding it from what it
-// wrote: two saveItems calls can interleave (a route and a cosEvents handler
-// — the same window as the documented lost-update race), and a post-write
-// stat could then pin one writer's content under the other writer's identity
-// and serve it until the next write. Invalidation keeps the invariant simple —
+// wrote: writes are serialized by `runMutation`, but unqueued reads (`getItems`,
+// `getPendingCounts`) can still overlap a write, and a post-write stat could
+// pin one writer's content under another turn's identity and serve it until
+// the next write. Invalidation keeps the invariant simple —
 // the cache only ever holds content read from the file under its own identity
 // — at the cost of one re-parse per write.
 //
@@ -279,54 +301,56 @@ export async function createItem({ type, title, description = '', metadata = {} 
     throw err;
   }
 
-  const items = await loadItems();
+  return runMutation(async () => {
+    const items = await loadItems();
 
-  // Prevent duplicate alerts for same reference within 24 hours. Archive only
-  // ever holds items >=30 days old, so it can never actually match this 24h
-  // window in practice — but check it anyway rather than silently narrowing
-  // the dedup window the day an item crosses into archive.json. Only
-  // consulted when the live scan misses, so the common case (no dedup match,
-  // or a live match) never touches the archive file. A corrupt archive.json
-  // degrades to "no archived duplicate found" (`loadArchiveOrEmpty`) rather
-  // than blocking item creation entirely.
-  if (type === 'alert' && metadata?.referenceId) {
-    const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
-    const isDuplicate = (i) =>
-      i.type === 'alert' &&
-      i.metadata?.referenceId === metadata.referenceId &&
-      new Date(i.createdAt).getTime() > oneDayAgo;
-    const duplicate = items.find(isDuplicate) ?? (await loadArchiveOrEmpty('createItem duplicate check')).find(isDuplicate);
-    if (duplicate) return duplicate;
-  }
+    // Prevent duplicate alerts for same reference within 24 hours. Archive only
+    // ever holds items >=30 days old, so it can never actually match this 24h
+    // window in practice — but check it anyway rather than silently narrowing
+    // the dedup window the day an item crosses into archive.json. Only
+    // consulted when the live scan misses, so the common case (no dedup match,
+    // or a live match) never touches the archive file. A corrupt archive.json
+    // degrades to "no archived duplicate found" (`loadArchiveOrEmpty`) rather
+    // than blocking item creation entirely.
+    if (type === 'alert' && metadata?.referenceId) {
+      const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
+      const isDuplicate = (i) =>
+        i.type === 'alert' &&
+        i.metadata?.referenceId === metadata.referenceId &&
+        new Date(i.createdAt).getTime() > oneDayAgo;
+      const duplicate = items.find(isDuplicate) ?? (await loadArchiveOrEmpty('createItem duplicate check')).find(isDuplicate);
+      if (duplicate) return { result: duplicate };
+    }
 
-  const item = {
-    id: uuidv4(),
-    type,
-    title,
-    description,
-    status: 'pending',
-    metadata,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  };
+    const item = {
+      id: uuidv4(),
+      type,
+      title,
+      description,
+      status: 'pending',
+      metadata,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
 
-  items.push(item);
-  await saveItems(items);
-  console.log(`📋 Review item created: ${type} — ${title}`);
-  reviewEvents.emit('item:created', item);
-  return item;
+    items.push(item);
+    await saveItems(items);
+    console.log(`📋 Review item created: ${type} — ${title}`);
+    return { result: item, events: [['item:created', item]] };
+  });
 }
 
-/**
- * Update an item's status
- */
-async function updateItemStatus(id, status, { allowSourceOwned = false } = {}) {
+function assertItemStatus(status) {
   if (!ITEM_STATUSES.includes(status)) {
     const err = new Error(`Invalid status: ${status}`);
     err.status = 400;
     throw err;
   }
+}
 
+// Queue-free body: callers already inside `runMutation` (reopenItem) use this
+// directly; awaiting `updateItemStatus` from inside a region would deadlock.
+async function applyItemStatus(id, status, { allowSourceOwned = false } = {}) {
   const { items, save } = await loadItemCollection(id);
   const item = items.find(i => i.id === id);
   if (!item) {
@@ -346,8 +370,15 @@ async function updateItemStatus(id, status, { allowSourceOwned = false } = {}) {
   item.updatedAt = new Date().toISOString();
   await save(items);
   console.log(`📋 Review item ${status}: ${item.type} — ${item.title}`);
-  reviewEvents.emit('item:updated', item);
-  return item;
+  return { result: item, events: [['item:updated', item]] };
+}
+
+/**
+ * Update an item's status
+ */
+async function updateItemStatus(id, status, options) {
+  assertItemStatus(status);
+  return runMutation(() => applyItemStatus(id, status, options));
 }
 
 /**
@@ -363,26 +394,27 @@ export async function completeItem(id) {
  * never remains stranded in cold storage.
  */
 export async function reopenItem(id) {
-  const liveItems = await loadItems();
-  if (liveItems.some((item) => item.id === id)) {
-    return updateItemStatus(id, 'pending');
-  }
+  return runMutation(async () => {
+    const liveItems = await loadItems();
+    if (liveItems.some((item) => item.id === id)) {
+      return applyItemStatus(id, 'pending');
+    }
 
-  const archive = await loadArchive();
-  const index = archive.findIndex((item) => item.id === id);
-  if (index === -1) {
-    const err = new Error(`Review item not found: ${id}`);
-    err.status = 404;
-    throw err;
-  }
+    const archive = await loadArchive();
+    const index = archive.findIndex((item) => item.id === id);
+    if (index === -1) {
+      const err = new Error(`Review item not found: ${id}`);
+      err.status = 404;
+      throw err;
+    }
 
-  const [item] = archive.splice(index, 1);
-  const reopened = { ...item, status: 'pending', updatedAt: new Date().toISOString() };
-  await saveItems([...liveItems, reopened]);
-  await atomicWrite(ARCHIVE_FILE, archive);
-  console.log(`📋 Review item reopened: ${reopened.type} — ${reopened.title}`);
-  reviewEvents.emit('item:updated', reopened);
-  return reopened;
+    const [item] = archive.splice(index, 1);
+    const reopened = { ...item, status: 'pending', updatedAt: new Date().toISOString() };
+    await saveItems([...liveItems, reopened]);
+    await atomicWrite(ARCHIVE_FILE, archive);
+    console.log(`📋 Review item reopened: ${reopened.type} — ${reopened.title}`);
+    return { result: reopened, events: [['item:updated', reopened]] };
+  });
 }
 
 /**
@@ -394,8 +426,8 @@ export async function dismissItem(id) {
 
 /**
  * Bulk-update many items to the same status in a single read-modify-write.
- * Concurrent per-item POSTs race on saveItems and silently drop updates;
- * this endpoint handles the "Complete All" / "Dismiss All" cases atomically.
+ * One write (and one event) for the "Complete All" / "Dismiss All" cases
+ * instead of N per-item round trips; serialized with every other mutator.
  * Pass `ids` to target specific items, or omit to target every pending item.
  * Emits ONE `items:bulk-updated` event carrying every affected id rather than
  * one `item:updated` per item — "Mark all read" over N pending items used to
@@ -403,77 +435,79 @@ export async function dismissItem(id) {
  * every connected dashboard client.
  */
 export async function bulkUpdateStatus({ ids, status }) {
-  if (!ITEM_STATUSES.includes(status)) {
-    const err = new Error(`Invalid status: ${status}`);
-    err.status = 400;
-    throw err;
-  }
+  assertItemStatus(status);
 
-  const items = await loadItems();
-  const idSet = Array.isArray(ids) && ids.length > 0 ? new Set(ids) : null;
-  const updated = [];
-  const now = new Date().toISOString();
-  for (const item of items) {
-    if (item.status !== 'pending') continue;
-    if (idSet && !idSet.has(item.id)) continue;
-    if (status === 'completed' && isSourceOwnedReviewItem(item)) continue;
-    item.status = status;
-    item.updatedAt = now;
-    updated.push(item);
-  }
+  return runMutation(async () => {
+    const items = await loadItems();
+    const idSet = Array.isArray(ids) && ids.length > 0 ? new Set(ids) : null;
+    const updated = [];
+    const now = new Date().toISOString();
+    for (const item of items) {
+      if (item.status !== 'pending') continue;
+      if (idSet && !idSet.has(item.id)) continue;
+      if (status === 'completed' && isSourceOwnedReviewItem(item)) continue;
+      item.status = status;
+      item.updatedAt = now;
+      updated.push(item);
+    }
 
-  if (updated.length === 0) return [];
+    if (updated.length === 0) return { result: [] };
 
-  await saveItems(items);
-  console.log(`📋 Review items bulk-${status}: ${updated.length}`);
-  reviewEvents.emit('items:bulk-updated', { ids: updated.map(i => i.id), status, updatedAt: now });
-  return updated;
+    await saveItems(items);
+    console.log(`📋 Review items bulk-${status}: ${updated.length}`);
+    return {
+      result: updated,
+      events: [['items:bulk-updated', { ids: updated.map(i => i.id), status, updatedAt: now }]]
+    };
+  });
 }
 
 /**
  * Update an item's title and/or description
  */
 export async function updateItem(id, { title, description }) {
-  const { items, save } = await loadItemCollection(id);
-  const item = items.find(i => i.id === id);
-  if (!item) {
-    const err = new Error(`Review item not found: ${id}`);
-    err.status = 404;
-    throw err;
-  }
+  return runMutation(async () => {
+    const { items, save } = await loadItemCollection(id);
+    const item = items.find(i => i.id === id);
+    if (!item) {
+      const err = new Error(`Review item not found: ${id}`);
+      err.status = 404;
+      throw err;
+    }
 
-  if (title !== undefined) item.title = title;
-  if (description !== undefined) item.description = description;
-  item.updatedAt = new Date().toISOString();
-  await save(items);
-  reviewEvents.emit('item:updated', item);
-  return item;
+    if (title !== undefined) item.title = title;
+    if (description !== undefined) item.description = description;
+    item.updatedAt = new Date().toISOString();
+    await save(items);
+    return { result: item, events: [['item:updated', item]] };
+  });
 }
 
 /**
  * Delete a review item
  */
 export async function deleteItem(id) {
-  const { items, save } = await loadItemCollection(id);
-  const index = items.findIndex(i => i.id === id);
-  if (index === -1) {
-    const err = new Error(`Review item not found: ${id}`);
-    err.status = 404;
-    throw err;
-  }
+  return runMutation(async () => {
+    const { items, save } = await loadItemCollection(id);
+    const index = items.findIndex(i => i.id === id);
+    if (index === -1) {
+      const err = new Error(`Review item not found: ${id}`);
+      err.status = 404;
+      throw err;
+    }
 
-  if (isSourceOwnedReviewItem(items[index])) {
-    const err = new Error('Source-owned review obligations require triage or their owning action');
-    err.status = 409;
-    err.code = 'SOURCE_ACTION_REQUIRED';
-    throw err;
-  }
+    if (isSourceOwnedReviewItem(items[index])) {
+      const err = new Error('Source-owned review obligations require triage or their owning action');
+      err.status = 409;
+      err.code = 'SOURCE_ACTION_REQUIRED';
+      throw err;
+    }
 
-  const [removed] = items.splice(index, 1);
-  await save(items);
-  console.log(`📋 Review item deleted: ${removed.type} — ${removed.title}`);
-  reviewEvents.emit('item:deleted', removed);
-  return removed;
+    const [removed] = items.splice(index, 1);
+    await save(items);
+    console.log(`📋 Review item deleted: ${removed.type} — ${removed.title}`);
+    return { result: removed, events: [['item:deleted', removed]] };
+  });
 }
 
 /**
@@ -571,23 +605,20 @@ cosEvents.on(GOAL_FIDELITY_HOLD_EVENT, (data) => {
 });
 
 async function updateStatusByReferenceId(referenceId, status) {
-  if (!ITEM_STATUSES.includes(status)) {
-    const err = new Error(`Invalid status: ${status}`);
-    err.status = 400;
-    throw err;
-  }
+  assertItemStatus(status);
 
-  const items = await loadItems();
-  const matching = items.filter(i => i.metadata?.referenceId === referenceId && i.status === 'pending');
-  if (matching.length === 0) return [];
-  const now = new Date().toISOString();
-  for (const item of matching) {
-    item.status = status;
-    item.updatedAt = now;
-  }
-  await saveItems(items);
-  for (const item of matching) reviewEvents.emit('item:updated', item);
-  return matching;
+  return runMutation(async () => {
+    const items = await loadItems();
+    const matching = items.filter(i => i.metadata?.referenceId === referenceId && i.status === 'pending');
+    if (matching.length === 0) return { result: [] };
+    const now = new Date().toISOString();
+    for (const item of matching) {
+      item.status = status;
+      item.updatedAt = now;
+    }
+    await saveItems(items);
+    return { result: matching, events: matching.map(item => ['item:updated', item]) };
+  });
 }
 
 export const dismissByReferenceId = (referenceId) => updateStatusByReferenceId(referenceId, 'dismissed');
