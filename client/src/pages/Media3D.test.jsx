@@ -303,7 +303,7 @@ describe('Media3D — generation workspace', () => {
 
   it('distinguishes a pending or failed library from empty and lets users recover and select an image', async () => {
     let rejectList;
-    listImageTo3dModels.mockReturnValueOnce(new Promise((resolve, reject) => { rejectList = reject; }));
+    listImageTo3dModels.mockReturnValueOnce(new Promise((_resolve, reject) => { rejectList = reject; }));
     renderAt();
     expect(screen.getByText('Loading your 3D models…')).toBeInTheDocument();
     expect(screen.queryByText('No 3D models yet')).not.toBeInTheDocument();
