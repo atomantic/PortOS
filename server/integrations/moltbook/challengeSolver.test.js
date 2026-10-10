@@ -1,94 +1,108 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../../services/promptRunner.js', () => ({ runPromptThroughProvider: vi.fn() }));
+vi.mock('../../services/untrustedContent.js', () => ({ runUntrustedContentAnalysis: vi.fn() }));
 vi.mock('../../services/providers.js', () => ({
-  getActiveProvider: vi.fn(),
   getProviderById: vi.fn(),
 }));
 
 import { runPromptThroughProvider } from '../../services/promptRunner.js';
-import { getActiveProvider, getProviderById } from '../../services/providers.js';
+import { runUntrustedContentAnalysis } from '../../services/untrustedContent.js';
+import { getProviderById } from '../../services/providers.js';
 import { solveChallenge } from './challengeSolver.js';
 
-const provider = { id: 'p1', defaultModel: 'm', models: ['m'] };
+const apiProvider = {
+  id: 'api-1',
+  type: 'api',
+  enabled: true,
+  endpoint: 'https://api.example.com/v1',
+  defaultModel: 'example-text',
+};
+const cliProvider = { id: 'cli-1', type: 'cli', enabled: true, command: 'example-cli' };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  getActiveProvider.mockResolvedValue(provider);
   getProviderById.mockResolvedValue(null);
+  vi.spyOn(console, 'warn').mockImplementation(() => {});
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+  vi.spyOn(console, 'log').mockImplementation(() => {});
 });
 
-describe('solveChallenge — number extraction + formatting', () => {
-  it('returns a clean 2-decimal answer for a well-formed numeric reply', async () => {
-    runPromptThroughProvider.mockResolvedValue({ text: '47.00' });
+describe('solveChallenge — numeric contract', () => {
+  it('returns the screened two-decimal answer', async () => {
+    runUntrustedContentAnalysis.mockResolvedValue({ ok: true, value: '47.00' });
     expect(await solveChallenge('garbled 40 + 7')).toBe('47.00');
   });
 
-  it('extracts the first number embedded in surrounding prose', async () => {
-    runPromptThroughProvider.mockResolvedValue({ text: 'The answer is 12.5 exactly.' });
-    expect(await solveChallenge('x')).toBe('12.50');
+  it('returns null when screening rejects the challenge', async () => {
+    runUntrustedContentAnalysis.mockResolvedValue({ ok: false, code: 'untrusted-content-rejected' });
+    expect(await solveChallenge('secret challenge text')).toBeNull();
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('untrusted-content-rejected'));
+    expect(console.log).not.toHaveBeenCalled();
+    expect(console.warn.mock.calls.join(' ')).not.toContain('secret challenge text');
+    expect(console.error.mock.calls.join(' ')).not.toContain('secret challenge text');
   });
 
-  it('formats a bare integer reply to two decimals', async () => {
-    runPromptThroughProvider.mockResolvedValue({ text: '100' });
-    expect(await solveChallenge('x')).toBe('100.00');
-  });
-
-  it('trims leading whitespace before matching', async () => {
-    runPromptThroughProvider.mockResolvedValue({ text: '   8.0' });
-    expect(await solveChallenge('x')).toBe('8.00');
-  });
-
-  it('returns null when the AI reply contains no number', async () => {
-    runPromptThroughProvider.mockResolvedValue({ text: 'I cannot solve this.' });
-    expect(await solveChallenge('x')).toBeNull();
-  });
-
-  it('returns null when the AI reply text is missing', async () => {
-    runPromptThroughProvider.mockResolvedValue({ text: undefined });
+  it('returns null when the screened value is not the numeric string', async () => {
+    runUntrustedContentAnalysis.mockResolvedValue({ ok: true, value: { answer: '12.50' } });
     expect(await solveChallenge('x')).toBeNull();
   });
 });
 
-describe('solveChallenge — provider selection and failure handling', () => {
-  it('returns null and never calls the runner when no provider is available', async () => {
-    getActiveProvider.mockResolvedValue(null);
-    expect(await solveChallenge('x')).toBeNull();
+describe('solveChallenge — provider selection', () => {
+  it('sends an unpinned challenge through the moltbook boundary without an active provider', async () => {
+    runUntrustedContentAnalysis.mockResolvedValue({ ok: true, value: '8.00' });
+
+    expect(await solveChallenge('obfuscated 3 + 5')).toBe('8.00');
+
+    expect(runPromptThroughProvider).not.toHaveBeenCalled();
+    expect(getProviderById).not.toHaveBeenCalled();
+    const call = runUntrustedContentAnalysis.mock.calls[0][0];
+    expect(call.provider).toBeUndefined();
+    expect(call.source).toBe('moltbook');
+    expect(call.content).toBe('obfuscated 3 + 5');
+    expect(call.prompt).not.toContain('obfuscated 3 + 5');
+    expect(call.responseSchema.safeParse('8.00').success).toBe(true);
+    expect(call.responseSchema.safeParse('8').success).toBe(false);
+    expect(call.responseSchema.safeParse('8.0').success).toBe(false);
+  });
+
+  it('passes a pinned text API provider through and never calls the tool runner', async () => {
+    getProviderById.mockResolvedValue(apiProvider);
+    runUntrustedContentAnalysis.mockResolvedValue({ ok: true, value: '5.00' });
+
+    await solveChallenge('x', { providerId: 'api-1', model: 'custom-model' });
+
+    expect(getProviderById).toHaveBeenCalledWith('api-1');
+    expect(runPromptThroughProvider).not.toHaveBeenCalled();
+    expect(runUntrustedContentAnalysis).toHaveBeenCalledWith(expect.objectContaining({
+      provider: apiProvider,
+      model: 'custom-model',
+      source: 'moltbook',
+    }));
+  });
+
+  it('returns null for a pinned CLI provider without calling either runner', async () => {
+    getProviderById.mockResolvedValue(cliProvider);
+
+    expect(await solveChallenge('challenge body', { providerId: 'cli-1' })).toBeNull();
+
+    expect(runPromptThroughProvider).not.toHaveBeenCalled();
+    expect(runUntrustedContentAnalysis).not.toHaveBeenCalled();
+    expect(console.warn.mock.calls.join(' ')).not.toContain('challenge body');
+  });
+
+  it('fails closed when the pinned provider cannot be loaded', async () => {
+    getProviderById.mockRejectedValue(new Error('boom'));
+
+    expect(await solveChallenge('x', { providerId: 'missing' })).toBeNull();
+    expect(runUntrustedContentAnalysis).not.toHaveBeenCalled();
     expect(runPromptThroughProvider).not.toHaveBeenCalled();
   });
 
-  it('prefers an explicit providerId over the active provider', async () => {
-    const explicit = { id: 'explicit', defaultModel: 'em' };
-    getProviderById.mockResolvedValue(explicit);
-    runPromptThroughProvider.mockResolvedValue({ text: '5.00' });
-
-    await solveChallenge('x', { providerId: 'explicit' });
-
-    expect(getProviderById).toHaveBeenCalledWith('explicit');
-    expect(getActiveProvider).not.toHaveBeenCalled();
-    expect(runPromptThroughProvider).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: explicit, model: 'em' }),
-    );
-  });
-
-  it('falls back to the active provider when getProviderById rejects', async () => {
-    getProviderById.mockRejectedValue(new Error('boom'));
-    runPromptThroughProvider.mockResolvedValue({ text: '3.00' });
-
-    expect(await solveChallenge('x', { providerId: 'missing' })).toBe('3.00');
-    expect(getActiveProvider).toHaveBeenCalled();
-  });
-
-  it('swallows a runner error and returns null', async () => {
-    runPromptThroughProvider.mockRejectedValue(new Error('LLM down'));
+  it('swallows an analysis error and returns null', async () => {
+    runUntrustedContentAnalysis.mockRejectedValue(new Error('LLM down'));
     expect(await solveChallenge('x')).toBeNull();
-  });
-
-  it('uses an explicit model override when provided', async () => {
-    runPromptThroughProvider.mockResolvedValue({ text: '1.00' });
-    await solveChallenge('x', { model: 'custom-model' });
-    expect(runPromptThroughProvider).toHaveBeenCalledWith(
-      expect.objectContaining({ model: 'custom-model' }),
-    );
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('LLM down'));
   });
 });

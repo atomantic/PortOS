@@ -145,7 +145,6 @@ export const OPERATIONAL_RUN_SOURCES = Object.freeze([
   'meatspace-post-rhetoric-evaluator',
   'model-personality-alignment',
   'model-personality-profile',
-  'moltbook-challenge',
   'pm2-standardize',
   'record-merge-ai',
   'system-resource-triage',
