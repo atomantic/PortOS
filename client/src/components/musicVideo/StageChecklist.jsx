@@ -3,12 +3,14 @@ import { ArrowRight, CheckCircle2, Circle } from 'lucide-react';
 /**
  * The top of every stage tab: what this stage needs before it counts as done
  * (`stageChecklist(…)` items), each open item with what is still missing and,
- * where one exists, a button that scrolls to the control that settles it —
- * unless the header's next action already goes there (`headerAnchor`). A stale
+ * where one exists, a button that settles it: an `anchor` scrolls to the
+ * control, a `run` starts the work itself (`onAction` gets either) — unless the
+ * header's next action already goes there (`headerAnchor`). An item may add a
+ * quieter `secondary` choice beside it. Run buttons wait while `busy`. A stale
  * approval lists a Revert button per changed input whose approved value was kept.
  * An `optional` item is listed but never counted toward the step being done.
  */
-export default function StageChecklist({ items, onAction, onRevert, headerAnchor = null }) {
+export default function StageChecklist({ items, onAction, onRevert, headerAnchor = null, busy = false }) {
   if (!items?.length) return null;
   const required = items.filter((item) => !item.optional);
   const done = required.filter((item) => item.done).length;
@@ -51,14 +53,23 @@ export default function StageChecklist({ items, onAction, onRevert, headerAnchor
                 </div>
               )}
             </div>
-            {!item.done && item.action && onAction && item.action.anchor !== headerAnchor && (
-              <button
-                type="button"
-                onClick={() => onAction(item.action)}
-                className="ml-6 flex min-h-[44px] shrink-0 items-center gap-1 rounded border border-port-border px-2 py-1 text-xs text-port-accent sm:ml-0 sm:min-h-0"
-              >
-                {item.action.label} <ArrowRight size={12} aria-hidden="true" />
-              </button>
+            {!item.done && onAction && (
+              <div className="ml-6 flex shrink-0 flex-wrap items-center gap-1.5 sm:ml-0">
+                {[item.action, item.secondary].filter((action) => action && (action.run || action.anchor !== headerAnchor)).map((action) => (
+                  <button
+                    key={action.label}
+                    type="button"
+                    onClick={() => onAction(action)}
+                    disabled={action.disabled || (!!action.run && busy)}
+                    title={action.reason}
+                    className={`flex min-h-[44px] shrink-0 items-center gap-1 rounded px-2 py-1 text-xs disabled:opacity-50 sm:min-h-0 ${action === item.action
+                      ? (action.run ? 'bg-port-accent font-medium text-white' : 'border border-port-border text-port-accent')
+                      : 'text-port-text-muted hover:text-port-accent'}`}
+                  >
+                    {action.label} {!action.run && <ArrowRight size={12} aria-hidden="true" />}
+                  </button>
+                ))}
+              </div>
             )}
           </li>
         ))}

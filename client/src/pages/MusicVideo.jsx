@@ -1111,6 +1111,15 @@ export default function MusicVideo() {
     readiness: productionReview.readiness,
     headerAction: nextAction,
   }) : [];
+  // A checklist row either jumps to the control that settles it or, for work
+  // the page can start itself (build or resume the cast & sets, fill the art
+  // direction from an approved sheet), starts it.
+  const runChecklistAction = (action) => {
+    if (action.run === 'start-cast-sets') { castSets.start(); return; }
+    if (action.run === 'resume-cast-sets') { castSets.resume(); return; }
+    if (action.run === 'prepare-art') { productionReview.prepare(); return; }
+    goToStage(action.stage || activeStage, action.anchor, action.params);
+  };
   const runNextAction = () => {
     if (!selected || !nextAction || nextAction.disabled || compositionSavePending > 0) return;
     if (nextAction.id === 'review-imported') { openArtifact(reviewDraft.artifactId); return; }
@@ -1549,7 +1558,8 @@ export default function MusicVideo() {
             lead={(
               <StageChecklist
                 items={stageChecklist(activeStage, selected, productionReview.readiness, publish)}
-                onAction={(action) => goToStage(action.stage || activeStage, action.anchor, action.params)}
+                onAction={runChecklistAction}
+                busy={castSets.busy || productionReview.busy}
                 onRevert={productionReview.revert}
                 headerAnchor={nextAction?.kind === 'goto' ? nextAction.anchor : null}
               />

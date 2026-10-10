@@ -190,7 +190,11 @@ describe('deriveStages / deriveNextAction', () => {
 it('never promotes placeholder scenes or imported schematic documents to final production', () => {
   const project = { id: 'example', trackId: 'song', audioAnalysis: ANALYSIS, ...LYRICS, scenes: [scene()], composition: { mode: 'document', document: { directory: 'draft' } } };
   expect(stateOf(project)).toMatchObject({ 'cast-sets': 'active', board: 'todo', produce: 'todo' });
-  expect(deriveNextAction(project)).toMatchObject({ id: 'review-production', stage: 'cast-sets' });
+  // Planned shots with no art direction written: build the cast & sets that writes it, rather than "review" nothing.
+  expect(deriveNextAction(project)).toMatchObject({ id: 'start-cast-sets', kind: 'run' });
+  // A skipped sheet leaves the direction to the director, so the header opens its editor.
+  expect(deriveNextAction({ ...project, castAndSets: { status: 'skipped' } }))
+    .toMatchObject({ id: 'review-production', stage: 'cast-sets', anchor: 'mv-art-direction-editor', label: 'Write art direction' });
   // The proof is optional: with art and storyboard approved the header moves on to rendering.
   const planned = { ...project, productionReadiness: { ...APPROVED, proof: { approved: false }, readyForProduction: true } };
   expect(deriveNextAction(planned)).toMatchObject({ id: 'render-final' });
@@ -425,9 +429,25 @@ describe('stageChecklist', () => {
     const items = stageChecklist('cast-sets', castProject({
       productionReview: { draft: { cast: 'c', environments: ' ', visualLanguage: '', motionLanguage: 'm', guideArtifactId: 'gone' } },
     }), { ...NOT_APPROVED, art: { approved: false, problems: ['Attach a visual cast/environment sheet from Development artifacts.'] } });
-    expect(items[0]).toMatchObject({ done: false, detail: 'Still missing: sets, visual language.' });
-    expect(items[1]).toMatchObject({ done: false, label: 'Visual guide chosen' });
-    expect(items[2].detail).toBe('Attach a visual cast/environment sheet from Development artifacts.');
+    // No sheet built yet: the row builds it, or the director writes the rest by hand.
+    expect(items[0]).toMatchObject({ done: false, detail: 'Still missing: sets, visual language. Build the cast & sets to draft it from your creative direction, song style and mood board.',
+      action: { label: 'Build cast & sets', run: 'start-cast-sets' }, secondary: { label: 'Write it yourself', anchor: 'mv-art-direction-editor' } });
+    expect(items[1]).toMatchObject({ done: false, label: 'Visual guide chosen', action: { label: 'Choose a guide', anchor: 'mv-look-guides' } });
+    // With nothing to approve the approval row neither repeats the server's reasons nor sends anywhere.
+    expect(items[2]).toMatchObject({ done: false, detail: 'Opens once the art direction is written and a guide is chosen.', action: null });
+  });
+
+  it('offers the Cast & Sets step that writes the art direction at each point of its life', () => {
+    const empty = { productionReview: { draft: {} }, devArtifacts: [] };
+    const rows = (castAndSets) => stageChecklist('cast-sets', castProject({ ...empty, castAndSets }), NOT_APPROVED);
+    expect(rows({ status: 'imaging' })[0]).toMatchObject({ action: null, detail: expect.stringMatching(/being built/) });
+    expect(rows({ status: 'imaging', interrupted: true })[0].action).toEqual({ label: 'Resume cast & sets', run: 'resume-cast-sets' });
+    expect(rows({ status: 'review' })[0].action).toEqual({ label: 'Review cast & sets', anchor: 'mv-cast-checkin' });
+    const approvedSheet = { status: 'approved', direction: { look: 'x' }, artifactId: 'sheet' };
+    const filled = rows(approvedSheet);
+    expect(filled[0].action).toEqual({ label: 'Fill in from cast & sets', run: 'prepare-art' });
+    expect(filled[1].action).toEqual({ label: 'Use the sheet', run: 'prepare-art' });
+    expect(rows({ status: 'skipped' })[0].action).toEqual({ label: 'Write art direction', anchor: 'mv-art-direction-editor' });
   });
 
   it('covers Song, Storyboard and Make with the same done answers deriveStages uses', () => {

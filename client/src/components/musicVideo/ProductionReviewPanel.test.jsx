@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import ProductionReviewPanel from './ProductionReviewPanel.jsx';
 
@@ -229,18 +229,32 @@ describe('Production proof playback evidence', () => {
     expect(within(proofRequests).getByRole('button', { name: 'Revise from feedback' })).toBeTruthy();
   });
 
-  it('keeps the hash-selected art approval open and highlighted when readiness arrives, until approved', () => {
+  it('keeps the art approval to one quiet line while there is no direction or guide to review', () => {
+    const review = reviewFixture(); review.readiness.art = { approved: false, problems: ['Attach a visual cast/environment sheet from Development artifacts.'] };
+    render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="art" />);
+    const box = screen.getByRole('region', { name: 'Approve: Art direction' });
+    expect(box.textContent).toContain('Opens once the art direction is written and a visual guide is chosen.');
+    expect(within(box).queryByRole('button', { name: 'Approve art direction' })).toBeNull();
+    expect(box.textContent).not.toContain('Attach a visual cast');
+    expect(box.className).not.toContain('border-port-accent');
+  });
+
+  it('keeps the hash-selected art approval open and highlighted when readiness arrives, until approved', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true })));
     window.location.hash = '#mv-review-art';
+    const guided = { ...project, devArtifacts: [{ id: 'guide', title: 'Synthetic visual guide', version: 1, mimeType: 'image/png' }],
+      productionReview: { ...project.productionReview, draft: { ...project.productionReview.draft, guideArtifactId: 'guide' } } };
     const review = reviewFixture(); review.readiness.art.approved = false;
-    const view = render(<ProductionReviewPanel project={project} review={{ ...review, readiness: null }} onOpenArtifact={vi.fn()} stage="art" />);
-    view.rerender(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="art" />);
+    const view = render(<ProductionReviewPanel project={guided} review={{ ...review, readiness: null }} onOpenArtifact={vi.fn()} stage="art" />);
+    view.rerender(<ProductionReviewPanel project={guided} review={review} onOpenArtifact={vi.fn()} stage="art" />);
     const box = document.getElementById('mv-review-art');
     expect(box).toBe(screen.getByRole('region', { name: 'Approve: Art direction' }));
     expect(box.tagName).toBe('SECTION');
     expect(within(box).getByRole('heading', { name: 'Approve the art direction' })).toBeTruthy();
     expect(box.className).toContain('border-port-accent');
     const approved = reviewFixture();
-    view.rerender(<ProductionReviewPanel project={project} review={approved} onOpenArtifact={vi.fn()} stage="art" />);
+    view.rerender(<ProductionReviewPanel project={guided} review={approved} onOpenArtifact={vi.fn()} stage="art" />);
+    await act(async () => {});
     expect(within(box).getByRole('heading', { name: 'Art direction approved' })).toBeTruthy();
     expect(box.className).not.toContain('border-port-accent');
   });

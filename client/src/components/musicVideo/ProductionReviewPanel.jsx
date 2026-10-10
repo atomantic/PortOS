@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import ProductionReviewContext from './ProductionReviewContext.jsx';
 import OverlayTextCheck from './OverlayTextCheck.jsx';
 import { formatTimecode } from '../../utils/formatters.js';
-import { summarizeStoryboardProblems } from '../../lib/musicVideoStages.js';
+import { ART_DIRECTION_ANCHOR, artDirectionGaps, summarizeStoryboardProblems } from '../../lib/musicVideoStages.js';
 
 const EMPTY = { cast: '', environments: '', visualLanguage: '', motionLanguage: '', guideArtifactId: null,
   lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [] };
@@ -20,11 +20,12 @@ const EMPTY_PLAYBACK = { method: 'playback', timecodedNotes: '', visualReview: '
 const FOLD_STYLE = { scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' };
 /**
  * The open box that closes a step: heading, then the approval's content and
- * Approve / Request changes, highlighted until approved.
+ * Approve / Request changes, highlighted until approved. A `waiting` box has
+ * nothing to review yet, so it is not highlighted either.
  */
-function ApprovalBox({ id, label, approved, optional = false, children }) {
+function ApprovalBox({ id, label, approved, optional = false, waiting = false, children }) {
   return <section id={id} tabIndex={-1} aria-label={`Approve: ${label}`} style={FOLD_STYLE}
-    className={`rounded-lg border p-3 focus:outline focus:outline-2 focus:outline-port-accent ${approved || optional ? 'border-port-border' : 'border-port-accent bg-port-accent/5'}`}>
+    className={`rounded-lg border p-3 focus:outline focus:outline-2 focus:outline-port-accent ${approved || optional || waiting ? 'border-port-border' : 'border-port-accent bg-port-accent/5'}`}>
     {/* An optional check isn't highlighted: it never competes with the step's real next action. */}
     <h4 className="text-sm font-semibold">{approved ? `${label} approved` : optional ? label : `Approve the ${label.toLowerCase()}`}{optional && !approved && <span className="ml-2 font-normal text-port-text-muted">Optional</span>}</h4>
     {children}
@@ -222,9 +223,13 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
   </>;
   const key = stage;
   const label = labels[stage];
+  // Art with no written direction or guide has nothing to approve: the box says
+  // so in one line, and the step's checklist offers what produces them.
+  const artWaiting = key === 'art' && !!ready && !ready.art.approved && !ready.art.stale && !artDirectionGaps(project).ready;
   return <section id="mv-production-review" aria-label="Production review" className="space-y-3">
     {review.error && <p role="alert" className="text-port-error">{review.error}</p>}
-    <ApprovalBox id={`mv-review-${key}`} label={label} optional={!!OPTIONAL[key]} approved={!!ready?.[key].approved}>
+    <ApprovalBox id={`mv-review-${key}`} label={label} optional={!!OPTIONAL[key]} approved={!!ready?.[key].approved} waiting={artWaiting}>
+        {artWaiting ? <p role="status" className="mt-1 text-sm text-port-text-muted">Opens once the art direction is written and a visual guide is chosen.</p> : <>
         {/* The decision comes first, at the top of the box, with one line on what it still needs. */}
         {key === 'proof' && proofNeedsRender && !ready?.[key].approved && <div className="mt-2">{renderControls}</div>}
         <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -252,6 +257,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
         {key === 'storyboard' && ready?.storyboard.text && <OverlayTextCheck report={ready.storyboard.text} busy={review.busy}
           onCheck={() => review.checkOverlayText()} onSeek={onSeek} />}
         {key === 'proof' ? proofContent : <ProductionReviewContext stage={key} project={project} onOpenArtifact={onOpenArtifact} onArtReady={available => setVisibleArt(available ? artIdentity : null)} onSeek={onSeek} />}
+        </>}
         {openRequests(key).length > 0 && <div role="group" aria-label={`${label} change requests`} className="mt-2 space-y-2 rounded border border-port-warning p-2">
           <p className="text-sm">Resolve these change requests to approve.</p>
           <ul className="list-disc pl-5 text-sm">{openRequests(key).map(item => <li key={item.id} className="break-words"><strong>{item.target}</strong>: {item.text}</li>)}</ul>
@@ -326,7 +332,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
         {draft.sourceArtifactId && <button type="button" className={buttonClass} onClick={() => onOpenArtifact(draft.sourceArtifactId)}>Read preserved original planning draft</button>}
         <button type="button" className={buttonClass} disabled={dirty || review.busy || documentShots} onClick={review.prepare}>Draft art direction and shots</button>
         <p className="text-xs text-port-text-muted">Uses the saved authoring provider and allowed tools. Builds Cast & Sets first, then pauses for art approval before planning shots. Existing edits are retained.</p>
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div id={ART_DIRECTION_ANCHOR} className="grid gap-3 sm:grid-cols-2" style={FOLD_STYLE}>
           {Object.entries({ cast: 'Cast guide', environments: 'Environment guide', visualLanguage: 'Visual language and mood board' }).map(([key, label]) =>
             <label key={key} htmlFor={fieldId(key)} className="text-sm">{label}<textarea id={fieldId(key)} rows={4} value={draft[key]} onChange={e => set(key, e.target.value)} className={fieldClass} /></label>)}
         </div>

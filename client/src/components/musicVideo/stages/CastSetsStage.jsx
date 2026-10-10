@@ -7,6 +7,10 @@ import VisualSpecPanel from '../VisualSpecPanel.jsx';
 import AutoSizeTextarea from '../../ui/AutoSizeTextarea';
 import { useState } from 'react';
 import { formatCount } from '../../../utils/formatters.js';
+import { CAST_CHECKIN_ANCHOR, LOOK_GUIDES_ANCHOR } from '../../../lib/musicVideoStages.js';
+
+// Below the sticky project header when a checklist row scrolls here.
+const ANCHOR_STYLE = { scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' };
 
 const directionSummary = (project) => {
   const refs = (project.visualSpec?.references || []).length + (project.styleReferences || []).length;
@@ -133,6 +137,7 @@ export default function CastSetsStage({ board }) {
       </StageSection>
       {project.castAndSets ? (
         <CastAndSetsCheckin
+          id={CAST_CHECKIN_ANCHOR}
           project={project}
           stale={board.productionReadiness?.castAndSets?.stale || null}
           busy={locked || castSets.busy || kickoff.running}
@@ -147,7 +152,7 @@ export default function CastSetsStage({ board }) {
           onSkip={board.skipCastAndSets}
         />
       ) : (
-        <div className="rounded-lg border border-port-border bg-port-card p-3 space-y-3">
+        <div id={CAST_CHECKIN_ANCHOR} tabIndex={-1} style={ANCHOR_STYLE} className="rounded-lg border border-port-border bg-port-card p-3 space-y-3">
           <p className="text-sm text-port-text-muted">Build the cast and sets from your direction, or skip and add your own sheets.</p>
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={() => castSets.start()} disabled={locked || castSets.busy || kickoff.running || !project.audioAnalysis}
@@ -163,6 +168,7 @@ export default function CastSetsStage({ board }) {
         </div>
       )}
       <DevArtifactsPanel
+        id={LOOK_GUIDES_ANCHOR}
         project={project}
         busy={board.devArtifacts.busy}
         onOpen={board.openArtifact}
