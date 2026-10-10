@@ -1328,7 +1328,8 @@ describe('MusicVideo project video renderer', () => {
       expect(await screen.findByText(/Split the scene on a lyric or phrase boundary/)).toBeTruthy();
       fireEvent.click(await screen.findByRole('button', { name: /Split on lyric boundaries/ }));
       await waitFor(() => expect(splitMusicVideoScene).toHaveBeenCalledWith('mv-2', 's1', 'fal', expect.anything()));
-      expect(await screen.findByText('Verse · 2/2', { selector: ':not(option)' })).toBeTruthy();
+      // The new scene shows on the Board and in the storyboard approval's shot list.
+      expect((await screen.findAllByText('Verse · 2/2', { selector: ':not(option)' })).length).toBeGreaterThan(0);
       expect(screen.queryByRole('button', { name: /Split on lyric boundaries/ })).toBeNull();
     });
 

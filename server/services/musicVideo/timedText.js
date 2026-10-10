@@ -100,6 +100,29 @@ export const normalizeLyricCues = (cues) => normalizeList(cues, 'lc', (cue) => {
   return { text, ...(words ? { words, ...(cue.suspect === true ? { suspect: true } : {}) } : {}), ...matched };
 });
 
+const finiteSec = (n) => typeof n === 'number' && Number.isFinite(n);
+const timedWords = (cue) => {
+  const words = Array.isArray(cue?.words) ? cue.words : [];
+  return words.length && words.every((w) => finiteSec(w?.startSec) && finiteSec(w?.endSec) && w.endSec > w.startSec) ? words : null;
+};
+
+/**
+ * The time a lyric line really spans: its own window widened to cover its
+ * word timings, or null when it has neither a window nor timed words. A line's
+ * window often comes from the song's line timestamps while its words come from
+ * forced alignment on the vocal, so a word can start or end a little outside
+ * it. The lyric renderer times each line from its words, so this is the span
+ * the viewer sees.
+ */
+export function lyricCueSpan(cue) {
+  const words = timedWords(cue);
+  const own = finiteSec(cue?.startSec) && finiteSec(cue?.endSec) && cue.endSec > cue.startSec ? cue : null;
+  if (!words) return own ? { startSec: own.startSec, endSec: own.endSec } : null;
+  const first = words[0].startSec;
+  const last = Math.max(...words.map((w) => w.endSec));
+  return { startSec: Math.min(own?.startSec ?? first, first), endSec: Math.max(own?.endSec ?? last, last) };
+}
+
 /** Normalize an edited phrase list: keep ids, trim label/intent. */
 export const normalizePhrases = (phrases) => normalizeList(phrases, 'mp', (phrase) => ({
   label: trimTo(phrase.label, 120),

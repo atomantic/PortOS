@@ -3,7 +3,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { musicVideoEvents } from './events.js';
 import { shotCameraLabel } from '../../lib/cameraMovements.js';
-import { productionReadiness, seedArtDraft, productionReviewBasis, productionAlignmentBasis, documentStoryboardBasis, approveProductionStage, assertProductionApproval, recordProductionFeedback, resolveProductionFeedback, revertApprovedInput } from './productionReview.js';
+import { productionReadiness, boardStoryboard, seedArtDraft, productionReviewBasis, productionAlignmentBasis, documentStoryboardBasis, approveProductionStage, assertProductionApproval, recordProductionFeedback, resolveProductionFeedback, revertApprovedInput } from './productionReview.js';
 
 const reviewProcessId = randomUUID();
 
@@ -226,16 +226,7 @@ export async function prepareProductionReview(id, options = {}) {
   const { project: planned } = await mutateProjectRecord(id, current => {
     const latest = current.productionReview.draft;
     if (latest.storyboardSource === 'document') return { project: current };
-    // New shots borrow the Cast & Sets world's camera and transition language when the scene has
-    // none, unless the sheet was skipped (the planner ignores a skipped direction too).
-    const world = (current.castAndSets?.status !== 'skipped' && current.castAndSets?.direction?.world) || {};
-    const storyboard = [...latest.storyboard, ...current.scenes.filter(scene => !latest.storyboard.some(shot => shot.sceneId === scene.sceneId)).map(scene => ({
-      sceneId: scene.sceneId,
-      lyricCueIds: (current.lyricCues || []).filter(c => c.startSec < scene.endSec && c.endSec > scene.startSec).map(c => c.id),
-      action: scene.visualIntent || scene.prompt || '', staging: scene.framePrompt || '',
-      camera: shotCameraLabel(scene.camera) || scene.direction?.camera || world.camera || '', transition: world.transitions || '',
-    }))];
-    return { project: { ...current, productionReview: { ...current.productionReview, draft: { ...latest, storyboard } } } };
+    return { project: { ...current, productionReview: { ...current.productionReview, draft: { ...latest, storyboard: boardStoryboard(current, latest.storyboard) } } } };
   });
   return changed(planned);
 }
