@@ -37,16 +37,14 @@ function outlookRowContext(selector, requireScroll = true) {
   }
   if (!requireScroll || initialRows.length === 0) return { rows };
 
-  const first = initialRows[0];
-  const list = first.closest('[role="listbox"], [role="list"]');
-  let scrollContainer = first.closest('[role="region"]') || list?.parentElement;
-  // Custom layouts may have an ordinary overflow container instead of ARIA roles.
-  if (!scrollContainer) {
-    for (let parent = first.parentElement; parent; parent = parent.parentElement) {
-      if (parent.scrollHeight > parent.clientHeight && /auto|scroll/.test(getComputedStyle(parent).overflowY)) {
-        scrollContainer = parent;
-        break;
-      }
+  // ARIA regions can wrap a separate scrolling element. Walk from the rows
+  // outward instead of assuming the region or list parent can actually scroll.
+  let scrollContainer;
+  for (let parent = initialRows[0].parentElement; parent; parent = parent.parentElement) {
+    if (/auto|scroll|overlay|hidden/.test(getComputedStyle(parent).overflowY)
+        || (parent === document.scrollingElement && parent.scrollHeight > parent.clientHeight)) {
+      scrollContainer = parent;
+      break;
     }
   }
   if (!scrollContainer || typeof scrollContainer.scrollBy !== 'function'

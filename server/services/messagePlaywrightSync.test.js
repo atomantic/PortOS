@@ -150,10 +150,13 @@ describe('Outlook configured row extraction', () => {
       scrollBy: vi.fn(() => { paint = Math.min(paint + 1, paints.length - 1); }),
       scrollTo: vi.fn(() => { paint = 0; })
     };
+    const staticRegion = { contains: () => true, scrollBy() {}, scrollTo() {} };
+    if (container === 'nested') scroll.parentElement = staticRegion;
     const list = { parentElement: scroll };
     const rows = paints.map(records => records.map(data => ({
-      ...attr({ 'data-itemid': data.providerRowId }), parentElement: container === 'overflow' ? scroll : null,
-      closest: sel => container === 'region' && sel === '[role="region"]' ? scroll
+      ...attr({ 'data-itemid': data.providerRowId }), parentElement: container === 'none' ? null : container === 'list' ? list : scroll,
+      closest: sel => container === 'nested' && sel === '[role="region"]' ? staticRegion
+        : container === 'region' && sel === '[role="region"]' ? scroll
         : container === 'list' && sel.includes('[role="listbox"]') ? list : null,
       scrollIntoView() {},
       click() { clicked.push(data.providerRowId); opened = true; },
@@ -181,7 +184,7 @@ describe('Outlook configured row extraction', () => {
     };
     evaluateOnPage.mockImplementation((_page, script) => vm.runInNewContext(script, {
       document, location: { href: 'https://example.com/mail/' },
-      getComputedStyle: () => ({ overflowY: 'auto' }), setTimeout: callback => callback()
+      getComputedStyle: el => ({ overflowY: el === scroll ? 'auto' : 'visible' }), setTimeout: callback => callback()
     }));
     return { clicked, scroll };
   }
@@ -210,7 +213,7 @@ describe('Outlook configured row extraction', () => {
     expect(clicked).toEqual(['first', 'second', 'second']);
   });
 
-  it.each(['region', 'list', 'overflow'])('retains bounded full/unread virtualized scrolling with a %s container', async container => {
+  it.each(['region', 'list', 'overflow', 'nested'])('retains bounded full/unread virtualized scrolling with a %s container', async container => {
     for (const selector of [defaultSelector, customSelector]) {
       tryReadFile.mockResolvedValue(selector === defaultSelector ? '{}' : JSON.stringify({ outlook: { messageRow: selector } }));
       for (const mode of ['unread', 'full']) {
