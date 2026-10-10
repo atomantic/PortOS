@@ -525,7 +525,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
               <h3 className="text-md font-semibold text-white">AI Providers</h3>
             </div>
             <p className="text-xs text-gray-500 mb-3">
-              Choose AI providers for each function. System Default uses the globally active provider. Content and engagement read public Moltbook text, so they offer text API providers only. A saved CLI or TUI stays listed, and the run skips instead of switching provider.
+              Content and engagement read public Moltbook text and list text API providers only. A saved CLI or TUI stays listed, and that run skips instead of switching provider. System Default sends comments and replies to the Abuse Guard text API provider. Original posts and challenge solving use the globally active provider.
             </p>
             <div className="space-y-3">
               {[

@@ -52,6 +52,8 @@ describe('agent AI provider pickers', () => {
     expect(within(engagement).queryByRole('option', { name: 'Example CLI' })).not.toBeInTheDocument();
     expect(within(engagement).queryByRole('option', { name: 'Example TUI' })).not.toBeInTheDocument();
 
+    expect(screen.getByText(/System Default sends comments and replies to the Abuse Guard text API provider/)).toBeInTheDocument();
+
     const challenge = screen.getByRole('combobox', { name: 'Challenge Solving' });
     expect(within(challenge).getByRole('option', { name: 'Example CLI' })).toBeEnabled();
     expect(within(challenge).getByRole('option', { name: 'Example TUI' })).toBeEnabled();
