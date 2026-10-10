@@ -116,8 +116,11 @@ describe.skipIf(!runDb)('music video projects DB adapter', () => {
       await query(`INSERT INTO music_video_projects (id, status, data, created_at, updated_at)
         VALUES ($1, 'draft', $2::jsonb, $3, $3)`, [record.id, JSON.stringify(record), record.updatedAt]);
     }
+    const { up: upDb } = await import('../../scripts/db-migrations/015-music-video-media-modes.js');
     await migration.up({ rootDir });
     await migration.up({ rootDir });
+    await upDb({ query });
+    await upDb({ query });
     const expected = records.map((record, index) => ({ ...record, mediaMode: ['code-only', 'code-only', 'code-images-video', 'code-images'][index] }));
     expect(JSON.parse(await readFile(file, 'utf8'))).toEqual(expected);
     for (const record of expected) {

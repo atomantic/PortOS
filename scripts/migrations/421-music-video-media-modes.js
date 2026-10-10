@@ -15,15 +15,7 @@ export default {
       if (!Array.isArray(records)) throw new Error('Music Video project file must contain an array');
       await writeJsonAtomic(file, records.map(migrateMediaMode));
     }
-    const { query } = await import('../../server/lib/db.js');
-    const table = await query("SELECT to_regclass('public.music_video_projects') AS name");
-    if (table.rows[0]?.name) {
-      const { rows } = await query("SELECT id, data FROM music_video_projects WHERE NOT data ? 'mediaMode'");
-      for (const { id, data } of rows) {
-        await query(`UPDATE music_video_projects SET data = jsonb_set(data, '{mediaMode}', to_jsonb($2::text))
-          WHERE id = $1 AND NOT data ? 'mediaMode'`, [id, migrateMediaMode(data).mediaMode]);
-      }
-    }
+    // Postgres rows are pinned by db-migration 015, which runs under the DB runner.
     return { success: true };
   },
 };
