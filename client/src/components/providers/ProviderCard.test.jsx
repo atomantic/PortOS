@@ -411,3 +411,38 @@ describe('ProviderCard envVars rendering', () => {
   });
 });
 
+
+describe('ProviderCard shared CLI/TUI config', () => {
+  const unifiedCard = (props = {}) => {
+    const cli = wrapper({ id: 'opencode-cli', name: 'OpenCode CLI', type: 'cli' });
+    const tui = wrapper({ id: 'opencode-tui', name: 'OpenCode TUI' });
+    renderCard(
+      { ...cli, executionModes: [{ id: 'opencode-cli' }, { id: 'opencode-tui' }] },
+      null,
+      { providersById: { 'opencode-cli': cli, 'opencode-tui': tui }, ...props },
+    );
+  };
+
+  it('shows the shared-config explanation once, as a pill tooltip rather than body text', () => {
+    unifiedCard();
+    const pill = screen.getByText('Shared CLI/TUI config');
+    expect(pill).toHaveAttribute('title', expect.stringContaining('share one provider configuration'));
+    expect(screen.queryByText(/share one provider configuration/)).toBeNull();
+  });
+
+  it('keeps a benched mode notice with its retry action on a unified card', () => {
+    const onRecover = vi.fn();
+    unifiedCard({
+      statuses: { 'opencode-tui': { available: false, reason: 'missing binary', message: 'TUI binary not found' } },
+      onRecover,
+    });
+    expect(screen.getByText(/TUI benched: TUI binary not found/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry TUI' }));
+    expect(onRecover).toHaveBeenCalledWith('opencode-tui');
+  });
+
+  it('shows no shared-config pill on a single-mode card', () => {
+    renderCard(wrapper({ id: 'solo-tui', name: 'Solo TUI' }));
+    expect(screen.queryByText('Shared CLI/TUI config')).toBeNull();
+  });
+});
