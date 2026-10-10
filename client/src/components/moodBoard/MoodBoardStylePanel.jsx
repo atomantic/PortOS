@@ -10,7 +10,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import socket from '../../services/socket';
-import { ScanEye, Sparkles, ImageIcon } from 'lucide-react';
+import { ScanEye, Sparkles, ImageIcon, ChevronDown, ChevronRight } from 'lucide-react';
 import ProviderModelSelector from '../ProviderModelSelector';
 import MediaJobThumb from '../pipeline/MediaJobThumb';
 import toast from '../ui/Toast';
@@ -50,6 +50,8 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
     setNegative(savedNegative);
   }
 
+  // Collapsed once a style exists so the pinned items sit above the fold.
+  const [open, setOpen] = useState(!savedPrompt);
   const [composing, setComposing] = useState(false);
   const [job, setJob] = useState(null);
   const jobRunning = job?.status === 'running';
@@ -257,14 +259,20 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
 
   return (
     <section className="@container/board-style min-w-0 bg-port-card border border-port-border rounded-md p-3">
-      <div className="flex items-center gap-2 mb-2">
-        <ScanEye className="w-4 h-4 text-port-accent" aria-hidden="true" />
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className={`flex w-full min-w-0 items-center gap-2 text-left ${open ? 'mb-2' : ''}`}
+      >
+        {open ? <ChevronDown className="w-4 h-4 text-gray-400 shrink-0" aria-hidden="true" /> : <ChevronRight className="w-4 h-4 text-gray-400 shrink-0" aria-hidden="true" />}
+        <ScanEye className="w-4 h-4 text-port-accent shrink-0" aria-hidden="true" />
         <h2 className="text-sm font-medium text-white">Board style</h2>
         <span className="text-[11px] text-gray-500 truncate" title="Prompt from media for each gallery item, then one composite style from those prompts. The poster is this board’s canonical reference image.">
           Analyze pins → composite style → poster
         </span>
-      </div>
-      <div className="flex flex-col @xl/board-style:flex-row gap-3">
+      </button>
+      <div className={`flex-col @xl/board-style:flex-row gap-3 ${open ? 'flex' : 'hidden'}`}>
         <div className="w-full @xl/board-style:w-36 shrink-0">
           <div className="aspect-[3/2] w-full rounded-md overflow-hidden border border-port-border bg-port-bg">
             {jobId ? (
