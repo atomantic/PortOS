@@ -29,9 +29,18 @@ describe('automatic song preparation', () => {
     put({ id: 'p', audioAnalysis: { durationSec: 30 } });
     expect(await autoPrepareSong('p', { analyze, align })).toMatchObject({ analyzed: false, alignJobId: 'job-1' });
     expect(analyze).not.toHaveBeenCalled();
-    put({ id: 'p', audioAnalysis: { durationSec: 30 }, lyricCues: [{ id: 'c', text: 'hi', words }, { id: 'd', text: 'added later' }] });
+    put({ id: 'p', audioAnalysis: { durationSec: 30 }, lyricAlignSource: 'vocal-stem', lyricCues: [{ id: 'c', text: 'hi', words }, { id: 'd', text: 'added later' }] });
     expect(await autoPrepareSong('p', { analyze, align })).toMatchObject({ alignJobId: null });
     expect(align).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-aligns words that were placed against the full mix on the isolated vocal', async () => {
+    for (const lyricAlignSource of ['master', undefined]) {
+      put({ id: 'p', audioAnalysis: { durationSec: 30 }, lyricAlignSource, lyricCues: [{ id: 'c', text: 'hi', words }] });
+      expect(await autoPrepareSong('p', { analyze, align })).toMatchObject({ alignJobId: 'job-1' });
+    }
+    expect(align).toHaveBeenCalledTimes(2);
+    expect(align).toHaveBeenLastCalledWith('p', { separateVocals: true });
   });
 
   it('does nothing without audio, for an instrumental, or while an autonomous run drives the project', async () => {
