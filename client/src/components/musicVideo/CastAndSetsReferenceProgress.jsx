@@ -1,9 +1,47 @@
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
 import { formatCount } from '../../utils/formatters';
+import { normalizeImage } from '../media/normalize.js';
 
 const imageSource = ({ kind, filename }) => `/data/${kind === 'image-ref' ? 'image-refs' : 'images'}/${encodeURIComponent(filename)}`;
+// Reference sheets live under /data/image-refs, so they get their own key
+// prefix and can't collide with a same-named gallery image (usePreviewRoute).
+export const castAndSetsPreviewKey = ({ kind, filename }) => `${kind === 'image-ref' ? 'image-ref' : 'image'}:${filename}`;
 
-function ReferenceCard({ item, stage }) {
+function previewItem(ref, prompt) {
+  const item = normalizeImage({ filename: ref.filename, path: imageSource(ref), prompt });
+  return ref.kind === 'image-ref' ? { ...item, key: castAndSetsPreviewKey(ref) } : item;
+}
+
+// Submitted inputs once the job is recorded, else what the plan will send.
+function cardReferences(item, stage) {
+  const image = stage.images?.[item.key] || {};
+  if (typeof image.submittedPrompt === 'string') return image.submittedReferences || [];
+  return [
+    ...(item.refKeys || []).flatMap((key) => stage.images?.[key]?.imageId
+      ? [{ kind: 'image', filename: stage.images[key].imageId }] : []),
+    ...(item.moodRefs ? stage.moodImages || [] : []),
+  ];
+}
+
+/**
+ * Lightbox items for every image the check-in shows: each generated reference
+ * and the inputs it was (or will be) conditioned on. Taps open these in the
+ * page's MediaPreview instead of navigating to the raw file, which strands a
+ * Home Screen app with no back control.
+ */
+export function castAndSetsPreviewItems(stage) {
+  if (!stage) return [];
+  const items = [];
+  for (const item of Object.values(stage.plan || {})) {
+    const image = stage.images?.[item.key] || {};
+    const label = item.label || item.key;
+    if (image.imageId) items.push(previewItem({ kind: 'image', filename: image.imageId }, image.submittedPrompt || item.prompt || label));
+    for (const ref of cardReferences(item, stage)) if (ref?.filename) items.push(previewItem(ref, `${label} input`));
+  }
+  return items;
+}
+
+function ReferenceCard({ item, stage, onOpenPreview }) {
   const image = stage.images?.[item.key] || {};
   // Old images remain visible during regeneration, but only a persisted done
   // record can bypass the new job's subscription.
@@ -30,12 +68,7 @@ function ReferenceCard({ item, stage }) {
   else if (waiting.length) status = `Waiting for ${waiting.join(', ')}`;
 
   const submitted = typeof image.submittedPrompt === 'string';
-  const plannedReferences = [
-    ...(item.refKeys || []).flatMap((key) => stage.images?.[key]?.imageId
-      ? [{ kind: 'image', filename: stage.images[key].imageId }] : []),
-    ...(item.moodRefs ? stage.moodImages || [] : []),
-  ];
-  const references = submitted ? image.submittedReferences || [] : plannedReferences;
+  const references = cardReferences(item, stage);
   const src = filename ? imageSource({ kind: 'image', filename }) : null;
   return (
     <article className="min-w-0 rounded border border-port-border bg-port-bg p-2 space-y-2" aria-label={item.label || item.key}>
@@ -49,10 +82,11 @@ function ReferenceCard({ item, stage }) {
       </figure>}
       {src && (
         <figure className="space-y-1">
-          <a href={src} target="_blank" rel="noreferrer" className="block rounded focus-visible:outline focus-visible:outline-port-accent">
+          <button type="button" onClick={() => onOpenPreview?.(castAndSetsPreviewKey({ kind: 'image', filename }))}
+            aria-label={`Preview ${item.label || item.key}`} className="block w-full rounded focus-visible:outline focus-visible:outline-port-accent">
             <img src={src} alt={`${item.label || item.key} — ${previous ? 'previous revision' : 'generated reference'}`}
               className={`w-full ${currentImage ? 'max-h-24' : 'max-h-64'} rounded object-contain`} loading="lazy" />
-          </a>
+          </button>
           {(previous || retained) && <figcaption className="text-[11px] text-port-text-muted">{previous ? 'Previous revision — replacement pending' : `Retained from revision ${formatCount(image.submittedRevision)}`}</figcaption>}
         </figure>
       )}
@@ -70,10 +104,10 @@ function ReferenceCard({ item, stage }) {
             <p className="text-port-text-muted">{submitted ? 'Submitted image inputs' : 'Planned image inputs'}</p>
             <div className="flex flex-wrap gap-2">
               {references.map((ref, index) => (
-                <a key={`${ref.kind}:${ref.filename}:${index}`} href={imageSource(ref)} target="_blank" rel="noreferrer"
+                <button type="button" key={`${ref.kind}:${ref.filename}:${index}`} onClick={() => onOpenPreview?.(castAndSetsPreviewKey(ref))}
                   className="min-w-0 w-16 rounded focus-visible:outline focus-visible:outline-port-accent" title={ref.filename}>
                   <img src={imageSource(ref)} alt={`${item.label || item.key} input: ${ref.filename}`} className="h-16 w-16 rounded object-contain" loading="lazy" />
-                </a>
+                </button>
               ))}
             </div>
           </div>
@@ -83,12 +117,12 @@ function ReferenceCard({ item, stage }) {
   );
 }
 
-export default function CastAndSetsReferenceProgress({ stage }) {
+export default function CastAndSetsReferenceProgress({ stage, onOpenPreview }) {
   const items = Object.values(stage.plan || {});
   if (!items.length) return null;
   return (
     <div className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,15rem),1fr))] gap-2" aria-label="Cast and set references">
-      {items.map((item) => <ReferenceCard key={item.key} item={item} stage={stage} />)}
+      {items.map((item) => <ReferenceCard key={item.key} item={item} stage={stage} onOpenPreview={onOpenPreview} />)}
     </div>
   );
 }

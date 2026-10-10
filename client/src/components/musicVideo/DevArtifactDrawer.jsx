@@ -5,6 +5,7 @@ import DevArtifactPreview from './DevArtifactPreview.jsx';
 import Pill from '../ui/Pill.jsx';
 import { musicVideoDevArtifactFileUrl } from '../../services/apiMusicVideo.js';
 import { timeAgo } from '../../utils/formatters.js';
+import { isStandalonePwa } from '../../lib/standaloneDownload.js';
 import { DEV_ARTIFACT_KIND_LABELS, DEV_ARTIFACT_STATUS } from './DevArtifactsPanel.jsx';
 
 const buttonClass = 'flex items-center gap-1 rounded px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
@@ -73,10 +74,13 @@ export default function DevArtifactDrawer({
                 <option key={v.version} value={v.version}>v{v.version}{v.version === artifact.version ? ' (current)' : ''} · {timeAgo(v.createdAt)}</option>
               ))}
             </select>
-            <a href={musicVideoDevArtifactFileUrl(project.id, artifact.id, shown === artifact.version ? null : shown)} target="_blank" rel="noreferrer noopener"
-              className="flex items-center gap-1 text-port-accent min-h-[44px] sm:min-h-0">
-              <ExternalLink size={12} aria-hidden="true" /> Open in a tab
-            </a>
+            {/* A Home Screen app opens same-origin links in place with no back control. */}
+            {!isStandalonePwa() && (
+              <a href={musicVideoDevArtifactFileUrl(project.id, artifact.id, shown === artifact.version ? null : shown)} target="_blank" rel="noreferrer noopener"
+                className="flex items-center gap-1 text-port-accent min-h-[44px] sm:min-h-0">
+                <ExternalLink size={12} aria-hidden="true" /> Open in a tab
+              </a>
+            )}
           </div>
           <DevArtifactPreview projectId={project.id} artifact={artifact} version={shown} />
         </div>

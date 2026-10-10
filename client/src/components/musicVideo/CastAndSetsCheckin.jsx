@@ -37,7 +37,7 @@ function statusLine(stage) {
  * concept, style, subjects or song changed since (`stale`, from the server's
  * readiness) says what changed and offers Keep approved beside Rebuild (#10141).
  */
-export default function CastAndSetsCheckin({ id, project, stale = null, busy, onOpenSheet, onApprove, onRegenerate, onEditDirection, onResume, onRebuild, onReconfirm, onRevert, onSkip }) {
+export default function CastAndSetsCheckin({ id, project, stale = null, busy, onOpenSheet, onOpenPreview, onApprove, onRegenerate, onEditDirection, onResume, onRebuild, onReconfirm, onRevert, onSkip }) {
   const stage = project.castAndSets;
   if (!stage) return null;
   const working = WORKING.has(stage.status) && !stage.interrupted;
@@ -70,7 +70,7 @@ export default function CastAndSetsCheckin({ id, project, stale = null, busy, on
           ))}
         </div>
       )}
-      <CastAndSetsReferenceProgress stage={stage} />
+      <CastAndSetsReferenceProgress stage={stage} onOpenPreview={onOpenPreview} />
       <div className="flex flex-wrap gap-2">
         {sheet && (
           <button type="button" onClick={() => onOpenSheet(sheet.id)} className={`${buttonClass} border border-port-border`}>

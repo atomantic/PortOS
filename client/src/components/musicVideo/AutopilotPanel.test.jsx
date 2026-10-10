@@ -379,7 +379,8 @@ describe('AutopilotPanel budgeted pilot evidence (#9351)', () => {
     expect(screen.getByLabelText('Production budget')).toHaveTextContent('Expected next spend: unpriced');
     expect(screen.getByLabelText('Production pilot evidence')).toHaveTextContent('Temporal alignment: unverified');
     expect(screen.getByLabelText('Production pilot evidence')).toHaveTextContent('Repair: temporal-alignment');
-    expect(screen.getByRole('link', { name: 'Watch pilot' })).toHaveAttribute('href', '/data/videos/synthetic-pilot.mp4');
+    expect(screen.queryByRole('link', { name: 'Watch pilot' })).not.toBeInTheDocument();
+    expect(screen.getByText('Watch pilot').closest('details').querySelector('video')).toHaveAttribute('src', '/data/videos/synthetic-pilot.mp4');
     expect(api.startMusicVideoProduction).not.toHaveBeenCalled();
     expect(api.resumeMusicVideoProduction).not.toHaveBeenCalled();
   });

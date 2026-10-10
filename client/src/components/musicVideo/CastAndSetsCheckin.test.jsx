@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import CastSetsStage from './stages/CastSetsStage.jsx';
 import useMusicVideoCastAndSets from '../../hooks/useMusicVideoCastAndSets';
+import { castAndSetsPreviewItems } from './CastAndSetsReferenceProgress.jsx';
 
 const { listeners, api, getMediaJob } = vi.hoisted(() => ({
   listeners: new Map(),
@@ -34,11 +35,11 @@ const plan = {
 const project = (images = {}, extra = {}) => ({ id: 'example-project', castAndSets: { revision: 1, status: 'imaging', plan, images, moodImages: [{ kind: 'image-ref', filename: 'mood.png' }], ...extra } });
 const done = (filename, prompt) => ({ status: 'done', jobId: `job-${filename}`, imageId: filename, submittedPrompt: prompt, submittedRevision: 1, submittedReferences: [{ kind: 'image-ref', filename: 'mood.png' }] });
 let selectProject;
-function Harness({ initial, locked = true }) {
+function Harness({ initial, locked = true, openPreview = vi.fn() }) {
   const [value, setValue] = useState(initial);
   selectProject = setValue;
   const actions = useMusicVideoCastAndSets({ project: value, replaceProject: setValue });
-  return <CastSetsStage board={{ project: value, locked, castSets: actions, kickoff: { running: locked }, devArtifacts: { busy: false }, openArtifact: vi.fn(), approveCastAndSets: actions.approve, skipCastAndSets: actions.skip, ...DRAFTS }} />;
+  return <CastSetsStage board={{ project: value, locked, castSets: actions, kickoff: { running: locked }, devArtifacts: { busy: false }, openArtifact: vi.fn(), openPreview, approveCastAndSets: actions.approve, skipCastAndSets: actions.skip, ...DRAFTS }} />;
 }
 const stage = (next) => emit('music-video:cast-and-sets', { projectId: next.id, project: next });
 const card = (name) => within(screen.getByRole('article', { name }));
@@ -97,9 +98,17 @@ describe('Cast & Sets incremental references', () => {
     await stage(reloaded);
     view.unmount();
     getMediaJob.mockClear();
-    render(<Harness initial={reloaded} />);
+    const openPreview = vi.fn();
+    render(<Harness initial={reloaded} openPreview={openPreview} />);
     expect(card('Keeper').getByText('New submitted prompt')).toBeInTheDocument();
-    expect(card('Keeper').getByRole('link', { name: 'Keeper — generated reference' })).toHaveAttribute('href', '/data/images/keeper-new.png');
+    // Taps open the page lightbox, never the raw file (a Home Screen app has no back from that).
+    expect(card('Keeper').queryByRole('link')).not.toBeInTheDocument();
+    fireEvent.click(card('Keeper').getByRole('button', { name: 'Preview Keeper' }));
+    fireEvent.click(card('Keeper').getByRole('button', { name: 'Keeper input: mood.png' }));
+    expect(openPreview.mock.calls).toEqual([['image:keeper-new.png'], ['image-ref:mood.png']]);
+    const items = castAndSetsPreviewItems(reloaded.castAndSets);
+    expect(items.find((i) => i.key === 'image:keeper-new.png')).toMatchObject({ previewUrl: '/data/images/keeper-new.png', prompt: 'New submitted prompt' });
+    expect(items.find((i) => i.key === 'image-ref:mood.png')).toMatchObject({ previewUrl: '/data/image-refs/mood.png' });
     expect(card('Wardrobe').getByText('Interrupted')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Resume' })).toBeDisabled();
     expect(getMediaJob).not.toHaveBeenCalled();
