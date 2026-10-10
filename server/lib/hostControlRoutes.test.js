@@ -4,6 +4,7 @@ import {
   HOST_CONTROL_ROUTES, changedVoiceConfigHostControlPaths, hostControlBodyKeys, hostControlSettingsPathsIn,
   hostControlRouteFor, isHostControlRoute, voiceConfigHostControlPathsIn,
 } from './hostControlRoutes.js';
+import { LLM_DRILL_TYPES } from './postDrillTypes.js';
 
 describe('voice config instruction paths (#10990)', () => {
   const stored = {
@@ -668,6 +669,51 @@ describe('Caller-prompted AI outside Pipeline policy (#10908)', () => {
       ['GET', '/api/system-resources/models/manifest'],
       ['PATCH', '/api/mood-boards/:id'],
       ['GET', '/api/mood-boards/:id/analyze'],
+    ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
+  });
+});
+
+describe('Music Video cover/promotion and POST LLM drill policy (#10989)', () => {
+  const protectedRoutes = [
+    'POST /api/music-video/:id/publish-kit/cover-art/design',
+    'POST /api/music-video/:id/publish-kit/cover-art/generate',
+    'POST /api/music-video/:id/publish/promotion-plan',
+    'POST /api/meatspace/post/score-llm',
+    'POST /api/meatspace/post/rhetoric/evaluate',
+    'POST /api/meatspace/post/drill-cache/fill',
+  ];
+
+  it('gates each audited operation and maps every entry to a mounted route', () => {
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => method + ' ' + path));
+    for (const route of protectedRoutes) {
+      const [method, path] = route.split(' ');
+      expect(mounted.has(route), route).toBe(true);
+      expect(hostControlRouteFor(method, path), route).toBe(route);
+      expect(hostControlRouteFor(method, path.toUpperCase() + '/'), route).toBe(route);
+    }
+  });
+
+  it('gates an LLM drill type on the shared drill route and leaves other types open', () => {
+    expect(isHostControlRoute('POST', '/api/meatspace/post/drill')).toBe(false);
+    for (const type of LLM_DRILL_TYPES) {
+      expect(hostControlBodyKeys('POST', '/api/meatspace/post/drill', { type }), type).toEqual(['type']);
+      expect(hostControlBodyKeys('post', '/API/meatspace/post/drill/', { type }), type).toEqual(['type']);
+    }
+    for (const type of ['multiplication', 'memory-fill-blank', 'n-back', 'WORD-ASSOCIATION', '', null]) {
+      expect(hostControlBodyKeys('POST', '/api/meatspace/post/drill', { type }), String(type)).toEqual([]);
+    }
+    expect(hostControlBodyKeys('POST', '/api/meatspace/post/drill', null)).toEqual([]);
+    expect(hostControlBodyKeys('POST', '/api/meatspace/post/drill', ['word-association'])).toEqual([]);
+  });
+
+  it('keeps cover compose, lettering, promotion reads and deterministic drills open', () => {
+    for (const [method, path] of [
+      ['POST', '/api/music-video/:id/publish-kit/cover-art'],
+      ['PUT', '/api/music-video/:id/publish-kit/cover-art/design'],
+      ['PUT', '/api/music-video/:id/publish-kit/thumbnail'],
+      ['GET', '/api/music-video/:id/publish/promotion-plan'],
+      ['POST', '/api/meatspace/post/drill'],
+      ['GET', '/api/meatspace/post/drill-cache/status'],
     ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
   });
 });
