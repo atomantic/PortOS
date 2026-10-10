@@ -338,5 +338,39 @@ describe('search service', () => {
       expect(mvSource.results[0].url).toBe('/music-video/mv-1')
       expect(mvSource.results[0].type).toBe('music-video')
     })
+
+    it('should keep music-video matches when a concept is a structured object', async () => {
+      listMusicVideoProjects.mockResolvedValue([
+        { id: 'mv-1', name: 'Example project', concept: { prompt: 'Synthetic concept', style: 'Synthetic style' } },
+        { id: 'mv-2', name: 'Example legacy', concept: 'Legacy concept text' },
+        { id: 'mv-3', name: 'Example empty', concept: {} },
+        { id: 'mv-4', name: 'Example null', concept: null, description: 'Fallback description' }
+      ])
+
+      const results = await fanOutSearch('example')
+      const mvSource = results.find(s => s.id === 'musicVideo')
+      expect(mvSource).toBeDefined()
+      expect(mvSource.results).toHaveLength(4)
+      const snippets = Object.fromEntries(mvSource.results.map(r => [r.id, r.snippet]))
+      expect(snippets['mv-1']).toBe('Synthetic concept')
+      expect(snippets['mv-2']).toBe('Legacy concept text')
+      expect(snippets['mv-3']).toBe('Example empty')
+      expect(snippets['mv-4']).toBe('Fallback description')
+    })
+
+    it('should cap music-video results at five when concepts are structured', async () => {
+      listMusicVideoProjects.mockResolvedValue(
+        Array.from({ length: 7 }, (_, i) => ({
+          id: `mv-${i}`,
+          name: `Example ${i}`,
+          concept: { prompt: `Concept ${i}`, style: 'Style' }
+        }))
+      )
+
+      const results = await fanOutSearch('example')
+      const mvSource = results.find(s => s.id === 'musicVideo')
+      expect(mvSource.results).toHaveLength(5)
+      expect(mvSource.results.every(r => typeof r.snippet === 'string')).toBe(true)
+    })
   })
 })

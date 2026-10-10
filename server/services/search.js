@@ -287,6 +287,15 @@ function searchHealth(query) {
   return { id: 'health', label: 'Health', icon: 'HeartPulse', results };
 }
 
+// A music-video concept is a structured object (prompt/style/...) or a legacy string.
+// Pick a plain string for the snippet; never pass the object to extractSnippet.
+function musicVideoSnippetText(p) {
+  const concept = p.concept;
+  if (typeof concept === 'string' && concept.trim()) return concept;
+  const candidates = [concept?.prompt, concept?.style, p.description, p.name];
+  return candidates.find(v => typeof v === 'string' && v.trim()) ?? '';
+}
+
 async function searchMusicVideo(query) {
   const q = query.toLowerCase();
   const projects = await listMusicVideoProjects({ includeDeleted: false }).catch(() => []);
@@ -295,7 +304,7 @@ async function searchMusicVideo(query) {
     .map(p => ({
       id: p.id,
       title: p.name,
-      snippet: extractSnippet(p.concept || p.description || p.name, query),
+      snippet: extractSnippet(musicVideoSnippetText(p), query),
       url: `/music-video/${p.id}`,
       type: 'music-video'
     }))
