@@ -28,7 +28,7 @@ const deferred = () => { let resolve; const promise = new Promise(r => { resolve
 
 beforeEach(async () => {
   fixture.beforeDelete = null;
-  for (const folder of ['images', 'messages', 'uploads', 'attachments']) {
+  for (const folder of ['images', 'screenshots', 'uploads', 'attachments']) {
     await mkdir(join(fixture.root, folder), { recursive: true });
     await writeFile(join(fixture.root, folder, 'one.txt'), 'first');
     await writeFile(join(fixture.root, folder, 'two.txt'), 'second');
@@ -44,7 +44,7 @@ describe('operator file purges drain before a backup copies files', () => {
       if (path.endsWith('one.txt')) throw new Error('synthetic deletion failure');
       entered.resolve(); await proceed.promise;
     };
-    const operation = purgeCategory('messages');
+    const operation = purgeCategory('screenshots');
     const failed = expect(operation).rejects.toThrow('synthetic deletion failure');
     await entered.promise;
     let acquired = false;
@@ -58,13 +58,13 @@ describe('operator file purges drain before a backup copies files', () => {
       const release = await cut;
       release();
     }
-    expect(await readFile(join(fixture.root, 'messages', 'one.txt'), 'utf8')).toBe('first');
-    await expect(readFile(join(fixture.root, 'messages', 'two.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(join(fixture.root, 'screenshots', 'one.txt'), 'utf8')).toBe('first');
+    await expect(readFile(join(fixture.root, 'screenshots', 'two.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it.each([
     ['category item', 'images', false, () => purgeCategory('images', { subPath: 'one.txt' })],
-    ['category bulk', 'messages', true, () => purgeCategory('messages')],
+    ['category bulk', 'screenshots', true, () => purgeCategory('screenshots')],
     ['upload item', 'uploads', false, () => request(app).delete('/uploads/one.txt')],
     ['upload bulk', 'uploads', true, () => request(app).delete('/uploads?confirm=true')],
     ['attachment', 'attachments', false, () => request(app).delete('/attachments/one.txt')],
