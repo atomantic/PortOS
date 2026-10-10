@@ -65,6 +65,7 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   analyzeMusicVideoProject: vi.fn(),
   prepareMusicVideoSong: vi.fn((id) => Promise.resolve({ project: { id }, analyzed: false, alignJobId: null })),
   getMusicVideoLyricPlaythroughPreview: vi.fn(() => new Promise(() => {})),
+  getMusicVideoLyricOverlayPreview: vi.fn(() => new Promise(() => {})),
   planMusicVideoProject: vi.fn(),
   addMusicVideoScene: vi.fn(),
   updateMusicVideoScene: vi.fn(),
