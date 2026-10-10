@@ -17,12 +17,12 @@ import { rowToRef, rowToSource, rowToIngredient, groupRowsByIngredient } from '.
 // `{ client }` is optional — see the createIngredient comment. Passing the same
 // client used to insert the ingredient row keeps the source-link row in the
 // same transaction so a mid-batch failure rolls back both halves.
-export async function linkIngredientToSource(ingredientId, scrapId, span = null, { client } = {}) {
+export async function linkIngredientToSource(ingredientId, scrapId, span = null, { client, preserveExisting = false } = {}) {
   const exec = client ? client.query.bind(client) : query;
   await exec(
     `INSERT INTO catalog_ingredient_sources (ingredient_id, scrap_id, span)
      VALUES ($1, $2, $3::jsonb)
-     ON CONFLICT (ingredient_id, scrap_id) DO UPDATE SET span = EXCLUDED.span`,
+     ON CONFLICT (ingredient_id, scrap_id) ${preserveExisting ? 'DO NOTHING' : 'DO UPDATE SET span = EXCLUDED.span'}`,
     [ingredientId, scrapId, span ? JSON.stringify(span) : null],
   );
 }

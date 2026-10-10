@@ -518,6 +518,22 @@ export const catalogMigrationRerunSchema = z.object({
   force: z.boolean().optional(),
 }).strict();
 
+// Export rows carry identity and provenance in addition to create fields.
+// Strip export-only timestamps and source/media row bookkeeping.
+export const catalogBulkEntrySchema = catalogIngredientCreateSchema.extend({
+  id: z.string().trim().min(1).max(80).optional(),
+  scraps: z.array(z.object({
+    id: z.string().trim().min(1).max(80).optional(),
+    title: z.string().max(300).nullable().optional(),
+    rawText: z.string().min(1).max(2_000_000),
+    sourceKind: z.string().trim().min(1).max(32).optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+  })).optional(),
+  media: z.array(catalogMediaAttachSchema.strip().extend({
+    metadata: z.record(z.string(), z.unknown()).optional(),
+  })).optional(),
+}).strict();
+
 // /bulk-import — accept a structured payload in one of three formats. The
 // route parses `payload` into a list of ingredient drafts (per the format),
 // then validates each entry against catalogIngredientCreateSchema before
