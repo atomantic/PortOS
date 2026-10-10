@@ -136,6 +136,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // 20 minutes each (#10922).
   'POST /api/rigging/models/:id',
   'POST /api/rigging/models/:id/retarget',
+  // A remote desktop session token proxies interactive mouse/keyboard/screen
+  // control of the host desktop; a peer's Basic credential must not mint one (#10923).
+  'POST /api/remote-desktop/sessions',
 
   // Universe Builder authoring (#10669) can dispatch tool-capable text/vision
   // providers or image agents, including API-first CLI/TUI fallback. Authorize
