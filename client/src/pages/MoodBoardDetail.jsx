@@ -11,7 +11,7 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router';
-import { ArrowLeft, ImageIcon, FileText, Trash2, Plus, Save, Link2, Unlink, RefreshCw, Images, Film, Play, ScanEye, Copy, AtSign, Download, Sparkles, Clapperboard, Paintbrush } from 'lucide-react';
+import { ArrowLeft, ImageIcon, FileText, Trash2, Plus, Save, Link2, Unlink, RefreshCw, Images, Film, Play, ScanEye, Copy, AtSign, Download, Sparkles, Clapperboard, Paintbrush, Wand2 } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import TabPills from '../components/ui/TabPills';
@@ -46,6 +46,7 @@ import {
   moodBoardItemPrompt,
   isMoodBoardItemAnalyzed,
   moodBoardItemHasPrompt,
+  moodBoardItemSendLinks,
 } from '../lib/moodBoardAnalysis';
 import { timeAgo } from '../utils/formatters';
 import useMounted from '../hooks/useMounted';
@@ -574,6 +575,7 @@ function MoodBoardEditor({ id }) {
                 const hasPrompt = moodBoardItemHasPrompt(item);
                 const promptText = moodBoardItemPrompt(item);
                 const displayText = promptText || item.caption || '';
+                const sendLinks = moodBoardItemSendLinks(item);
                 return (
                   <div key={item.id} className="min-w-0 bg-port-card border border-port-border rounded-md overflow-hidden flex flex-col">
                     <div className="relative w-full aspect-square bg-port-bg">
@@ -765,6 +767,21 @@ function MoodBoardEditor({ id }) {
                             {item.render?.status === 'queued' ? 'Rendering…' : 'Render'}
                           </button>
                         ) : null}
+                        {[
+                          ['textToImage', ImageIcon, 'Text to image with this prompt'],
+                          ['imageToImage', Wand2, 'Send to image-to-image'],
+                          ['video', Film, sendLinks.imageToImage ? 'Send to video' : 'Text to video with this prompt'],
+                        ].map(([key, Icon, label]) => (sendLinks[key] ? (
+                          <Link
+                            key={key}
+                            to={sendLinks[key]}
+                            title={label}
+                            aria-label={label}
+                            className="min-h-[44px] min-w-[44px] shrink-0 inline-flex items-center justify-center p-1 text-gray-500 hover:text-white transition-colors"
+                          >
+                            <Icon className="w-3.5 h-3.5" aria-hidden="true" />
+                          </Link>
+                        ) : null))}
                         {analysisSource ? (
                           <button
                             type="button"
