@@ -29,8 +29,11 @@ import {
 // menu's behavior.
 
 const SIZES = {
-  sm: { button: 'min-h-[44px] min-w-[44px] px-1.5 py-1 text-[10px]', icon: 'w-3 h-3' },
-  md: { button: 'min-h-[44px] min-w-[44px] px-2 py-1.5 text-xs', icon: 'w-3.5 h-3.5' },
+  sm: { button: 'shrink-0 min-h-[44px] min-w-[44px] px-1.5 py-1 text-[10px]', icon: 'w-3 h-3' },
+  md: { button: 'shrink-0 min-h-[44px] min-w-[44px] px-2 py-1.5 text-xs', icon: 'w-3.5 h-3.5' },
+  // See AddToCollectionMenu — the card file-row stretches this trigger to the
+  // cell instead of reserving a 44px minimum that wraps the row.
+  fill: { button: 'h-full w-full min-w-0 min-h-[44px] px-0 py-1 text-[10px]', icon: 'w-3.5 h-3.5' },
 };
 
 // Minimal mirror of the server's media-key vocabulary (server/lib/mediaItemKey
@@ -38,6 +41,13 @@ const SIZES = {
 // (one predicate) rather than mirroring the whole module: the board item schema
 // rejects anything else, so we must not send a non-media key as `mediaKey`.
 const isValidMediaKey = (key) => /^(image|video):[^:]+$/.test(key || '');
+
+// Same gate the trigger uses before it renders. MediaCard counts cells from
+// this so a hidden trigger doesn't leave an empty file-row column.
+export function canPinToMoodBoard(item) {
+  if (isValidMediaKey(item?.key)) return true;
+  return typeof item?.previewUrl === 'string' && /^(https?:\/\/|\/(?!\/))/.test(item.previewUrl);
+}
 
 // Row search for the board list. The shell's default (#3312) is the media-
 // COLLECTION view, whose bucket ordering sinks auto-generated empties — that
@@ -175,7 +185,7 @@ export default function PinToMoodBoardMenu({ item, size = 'sm' }) {
         ref={triggerRef}
         type="button"
         onClick={handleToggleOpen}
-        className={`shrink-0 ${sizeCls.button} bg-port-border hover:bg-port-border/70 text-white rounded flex items-center justify-center`}
+        className={`${sizeCls.button} bg-port-border hover:bg-port-border/70 text-white rounded flex items-center justify-center`}
         title="Pin to mood board" aria-label="Pin to mood board"
         aria-expanded={open}
       >
