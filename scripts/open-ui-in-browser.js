@@ -22,6 +22,8 @@ import { hasTailscaleCert } from '../lib/tailscale-https.js';
 import { certPaths } from '../lib/certPaths.js';
 import { getCliSetupGuide } from './setup-guide.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
+import { resolveHttpMirrorPortForRoot } from './lib/envFile.js';
+
 import { navigateToUrlPinned, cdpRequest } from '../server/services/browserService.js';
 import { assertPublicHttpUrl } from '../server/lib/safeUrlFetch.js';
 import { isBlockedIngestHost } from '../server/lib/catalogValidation.js';
@@ -29,7 +31,7 @@ import { isBlockedIngestHost } from '../server/lib/catalogValidation.js';
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const { dir: CERT_DIR } = certPaths(join(ROOT, 'data'));
 const API_PORT = Number(process.env.PORT) || 5555;
-const HTTP_LOOPBACK_PORT = Number(process.env.PORTOS_HTTP_PORT) || 5553;
+const HTTP_LOOPBACK_PORT = resolveHttpMirrorPortForRoot(ROOT);
 const DEV_UI_PORT = Number(process.env.PORTOS_UI_PORT) || 5554;
 const CDP_TIMEOUT_MS = 3_000;
 
