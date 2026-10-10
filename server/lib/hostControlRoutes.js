@@ -132,6 +132,11 @@ import { isPlainObject } from './objects.js';
 import { escapeRegExp } from './textUtils.js';
 
 export const HOST_CONTROL_ROUTES = Object.freeze([
+  // Rigging and retargeting spawn Blender/Python workers on the host for up to
+  // 20 minutes each (#10922).
+  'POST /api/rigging/models/:id',
+  'POST /api/rigging/models/:id/retarget',
+
   // Universe Builder authoring (#10669) can dispatch tool-capable text/vision
   // providers or image agents, including API-first CLI/TUI fallback. Authorize
   // the whole operation before image resolution, stores, runs or queue writes.
