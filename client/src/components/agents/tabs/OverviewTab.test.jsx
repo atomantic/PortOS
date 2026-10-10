@@ -36,7 +36,10 @@ describe('agent AI provider pickers', () => {
             id: 'agent-1',
             name: 'Example Agent',
             enabled: true,
-            aiConfig: { content: { providerId: 'cli-1' } },
+            aiConfig: {
+              content: { providerId: 'cli-1' },
+              challenge: { providerId: 'cli-1' },
+            },
           }}
         />
       </MemoryRouter>,
@@ -52,10 +55,11 @@ describe('agent AI provider pickers', () => {
     expect(within(engagement).queryByRole('option', { name: 'Example CLI' })).not.toBeInTheDocument();
     expect(within(engagement).queryByRole('option', { name: 'Example TUI' })).not.toBeInTheDocument();
 
-    expect(screen.getByText(/System Default sends comments and replies to the Abuse Guard text API provider/)).toBeInTheDocument();
+    expect(screen.getByText(/System Default sends comments, replies, and verification challenges to an eligible Abuse Guard text API provider/)).toBeInTheDocument();
 
     const challenge = screen.getByRole('combobox', { name: 'Challenge Solving' });
-    expect(within(challenge).getByRole('option', { name: 'Example CLI' })).toBeEnabled();
-    expect(within(challenge).getByRole('option', { name: 'Example TUI' })).toBeEnabled();
+    expect(within(challenge).getByRole('option', { name: 'Example CLI (not permitted here)' })).toBeDisabled();
+    expect(within(challenge).getByRole('option', { name: 'Example API' })).toBeEnabled();
+    expect(within(challenge).queryByRole('option', { name: 'Example TUI' })).not.toBeInTheDocument();
   });
 });

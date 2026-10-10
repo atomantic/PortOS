@@ -525,13 +525,13 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
               <h3 className="text-md font-semibold text-white">AI Providers</h3>
             </div>
             <p className="text-xs text-gray-500 mb-3">
-              Content and engagement read public Moltbook text and list text API providers only. A saved CLI or TUI stays listed, and that run skips instead of switching provider. System Default sends comments and replies to the Abuse Guard text API provider. Original posts and challenge solving use the globally active provider.
+              Content, engagement, and challenge solving read public Moltbook text and list text API providers only. A saved CLI or TUI stays listed, and that run skips instead of switching provider. System Default sends comments, replies, and verification challenges to an eligible Abuse Guard text API provider. Original posts use the globally active provider.
             </p>
             <div className="space-y-3">
               {[
                 { key: 'content', label: 'Content Generation', desc: 'Posts, comments, replies', selectionPolicy: providerModeSelectionPolicy('direct-api') },
                 { key: 'engagement', label: 'Engagement', desc: 'Autonomous voting & commenting', selectionPolicy: providerModeSelectionPolicy('direct-api') },
-                { key: 'challenge', label: 'Challenge Solving', desc: 'Verification challenges' }
+                { key: 'challenge', label: 'Challenge Solving', desc: 'Verification challenges', selectionPolicy: providerModeSelectionPolicy('direct-api') }
               ].map(({ key, label, desc, selectionPolicy }) => {
                 const fnConfig = formData.aiConfig?.[key] || {};
                 const fnModels = getModelsForProvider(fnConfig.providerId);
