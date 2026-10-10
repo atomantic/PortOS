@@ -11,7 +11,7 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router';
-import { ArrowLeft, ImageIcon, FileText, Trash2, Plus, Save, Link2, Unlink, RefreshCw, Images, Film, Play, ScanEye, Copy, AtSign, Download, Sparkles, Clapperboard, Paintbrush, Wand2 } from 'lucide-react';
+import { ArrowLeft, ChevronDown, ImageIcon, FileText, Trash2, Plus, Save, Link2, Unlink, RefreshCw, Images, Film, Play, ScanEye, Copy, AtSign, Download, Sparkles, Clapperboard, Paintbrush, Wand2 } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import TabPills from '../components/ui/TabPills';
@@ -105,6 +105,9 @@ function MoodBoardEditor({ id }) {
   // X.com (Twitter) post import — one-shot, no persisted link.
   const [xPostUrl, setXPostUrl] = useState('');
   const [importingXPost, setImportingXPost] = useState(false);
+  // Closed on the stacked layout so Pinterest + X cost one row until asked for.
+  // Wide boards force the panels open with `@4xl/board:block` and hide this toggle.
+  const [importsOpen, setImportsOpen] = useState(false);
 
   // The keyed editor isolates board state. Also guard async continuations and
   // delayed child callbacks so the old editor cannot toast or start a mutation
@@ -553,8 +556,236 @@ function MoodBoardEditor({ id }) {
         <MoodBoardCollagePanel board={board} onBoardChange={setBoard} />
       </div>
 
-      {/* Use board width, including space lost to the app sidebar. */}
-      <div className="grid grid-cols-1 @4xl/board:grid-cols-[minmax(0,1fr)_22rem] gap-6 items-start">
+      {/* Use board width, including space lost to the app sidebar.
+          Source order is the stacked order (add, then items) so a phone
+          keyboard reaches Add item before the pin list. `@4xl/board:order-last`
+          paints the aside in the right column, and `reading-flow: grid-order`
+          makes tab order follow that visual order where the browser supports it. */}
+      <div className="grid grid-cols-1 @4xl/board:grid-cols-[minmax(0,1fr)_22rem] @4xl/board:[reading-flow:grid-order] gap-6 items-start">
+        {/* Right column on wide boards; first on a stacked board. */}
+        <aside aria-label="Add to mood board" className="@4xl/board:order-last @container/add-form min-w-0 w-full space-y-6">
+          {/* Add item */}
+          <div className="bg-port-card border border-port-border rounded-md p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Plus className="w-4 h-4 text-port-accent" aria-hidden="true" />
+              <h2 className="text-sm font-medium text-white">Add item</h2>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 mb-3">
+              {/* The shared TabPills owns the roving tabindex + arrow-key
+                  contract — never roll a tab bar (client/src/AGENTS.md). */}
+              <TabPills
+                variant="pills"
+                size="sm"
+                tabs={[
+                  { id: 'image', label: 'Image', icon: ImageIcon },
+                  { id: 'text', label: 'Note', icon: FileText },
+                ]}
+                activeTab={itemType}
+                onChange={setItemType}
+                ariaLabel="Item type"
+              />
+              {/* Gallery pins (#4188) — pick or upload, added to the board immediately. */}
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setImagePickerOpen(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-bg text-gray-400 hover:text-white transition-colors"
+                >
+                  <Images className="w-4 h-4" aria-hidden="true" /> Pick from gallery
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVideoPickerOpen(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-bg text-gray-400 hover:text-white transition-colors"
+                >
+                  <Film className="w-4 h-4" aria-hidden="true" /> Pick video
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              {itemType === 'image' ? (
+                <div>
+                  <label htmlFor="item-image-url" className="block text-xs text-gray-400 mb-1">Image URL</label>
+                  <input
+                    id="item-image-url"
+                    type="text"
+                    value={imageUrl}
+                    maxLength={2048}
+                    placeholder="https://… or /data/images/…"
+                    onChange={(e) => setImageUrl(e.target.value)}
+                    className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none"
+                  />
+                </div>
+              ) : (
+                <div>
+                  <label htmlFor="item-text" className="block text-xs text-gray-400 mb-1">Note</label>
+                  <textarea
+                    id="item-text"
+                    value={text}
+                    maxLength={10000}
+                    rows={2}
+                    onChange={(e) => setText(e.target.value)}
+                    className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none resize-y"
+                  />
+                </div>
+              )}
+              <div className="grid grid-cols-1 @sm/add-form:grid-cols-2 gap-3">
+                <div>
+                  <label htmlFor="item-caption" className="block text-xs text-gray-400 mb-1">Caption (optional)</label>
+                  <input
+                    id="item-caption"
+                    type="text"
+                    value={caption}
+                    maxLength={2000}
+                    onChange={(e) => setCaption(e.target.value)}
+                    className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="item-source" className="block text-xs text-gray-400 mb-1">Source (optional)</label>
+                  <input
+                    id="item-source"
+                    type="text"
+                    value={source}
+                    maxLength={2048}
+                    placeholder="where it came from"
+                    onChange={(e) => setSource(e.target.value)}
+                    className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none"
+                  />
+                </div>
+              </div>
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={handleAddItem}
+                  disabled={adding}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-success text-white hover:bg-port-success/80 disabled:opacity-50 transition-colors"
+                >
+                  <Plus className="w-4 h-4" aria-hidden="true" /> Pin to board
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Stacked boards hide Pinterest and X behind one tap. The wide
+              column always shows both cards; `hidden` loses to `@4xl/board:block`. */}
+          <button
+            type="button"
+            aria-expanded={importsOpen}
+            aria-controls="mood-board-import-panels"
+            onClick={() => setImportsOpen((open) => !open)}
+            className="@4xl/board:hidden flex w-full items-center gap-2 bg-port-card border border-port-border rounded-md p-4 text-left text-sm font-medium text-white"
+          >
+            <ChevronDown className={`w-4 h-4 text-port-accent shrink-0 transition-transform ${importsOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
+            Import from Pinterest or X
+          </button>
+          <div
+            id="mood-board-import-panels"
+            className={importsOpen ? 'space-y-6' : 'hidden space-y-6 @4xl/board:block'}
+          >
+          {/* Pinterest link + sync */}
+          <div className="bg-port-card border border-port-border rounded-md p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Link2 className="w-4 h-4 text-port-accent" aria-hidden="true" />
+              <h2 className="text-sm font-medium text-white">Pinterest board</h2>
+            </div>
+            {linkedFeedUrl ? (
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                  <a
+                    href={linkedBoardUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-port-accent hover:underline truncate max-w-full"
+                  >
+                    {linkedBoardUrl}
+                  </a>
+                  <span className="text-gray-500">
+                    {lastSyncedAt ? `Last synced ${timeAgo(lastSyncedAt)}` : 'Not synced yet'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-gray-500">
+                  Pinterest’s feed exposes only the most-recent ~25 pins, so a sync pulls those — not the entire board.
+                </p>
+                <p className="text-[11px] text-gray-500">
+                  Use “Import pins” below to read the full board from your signed-in PortOS browser.
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleSyncPinterest}
+                    disabled={syncing || linking || importingPinterest || pinDirty}
+                    title={pinDirty ? 'Link the new URL before syncing' : undefined}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 transition-colors"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} aria-hidden="true" />
+                    {syncing ? 'Syncing…' : 'Sync now'}
+                  </button>
+                  {confirmingUnlink ? (
+                    <InlineConfirmRow
+                      question="Unlink this board?"
+                      confirmText="Unlink"
+                      onConfirm={handleUnlinkPinterest}
+                      onCancel={() => setConfirmingUnlink(false)}
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmingUnlink(true)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-bg text-gray-400 hover:text-white transition-colors"
+                    >
+                      <Unlink className="w-4 h-4" aria-hidden="true" /> Unlink
+                    </button>
+                  )}
+                </div>
+                {renderPinUrlForm('Change board URL', 'Update')}
+              </div>
+            ) : (
+              <div>
+                {renderPinUrlForm('Board URL', 'Link')}
+                <p className="text-[11px] text-gray-500 mt-2">
+                  Link a public board to sync its newest ~25 pins. “Import pins” reads the full board from your signed-in PortOS browser and saves the images here.
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* X.com (Twitter) post import */}
+          <div className="bg-port-card border border-port-border rounded-md p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <AtSign className="w-4 h-4 text-port-accent" aria-hidden="true" />
+              <h2 className="text-sm font-medium text-white">Import from an X post</h2>
+            </div>
+            <div>
+              <label htmlFor="x-post-url" className="block text-xs text-gray-400 mb-1">Post URL</label>
+              <div className="flex flex-wrap gap-2">
+                <input
+                  id="x-post-url"
+                  type="text"
+                  value={xPostUrl}
+                  maxLength={2048}
+                  placeholder="https://x.com/user/status/1234567890"
+                  onChange={(e) => setXPostUrl(e.target.value)}
+                  className="flex-[1_1_12rem] min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={handleImportXPost}
+                  disabled={importingXPost || !xPostUrl.trim()}
+                  className="px-3 py-1.5 text-sm rounded bg-port-success text-white hover:bg-port-success/80 disabled:opacity-50 transition-colors"
+                >
+                  {importingXPost ? 'Importing…' : 'Import'}
+                </button>
+              </div>
+            </div>
+            <p className="text-[11px] text-gray-500 mt-2">
+              Paste a public x.com/twitter.com post URL. Pulls every attached photo (or its video) into this board.
+            </p>
+          </div>
+          </div>
+        </aside>
+
         {/* Left column: Mood board items */}
         <section aria-label="Mood board items" className="min-w-0 space-y-3">
           <div className="flex items-center justify-between">
@@ -818,213 +1049,6 @@ function MoodBoardEditor({ id }) {
             </div>
           )}
         </section>
-
-        {/* Right column: Add forms */}
-        <aside aria-label="Add to mood board" className="@container/add-form min-w-0 w-full space-y-6">
-          {/* Add item */}
-          <div className="bg-port-card border border-port-border rounded-md p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <Plus className="w-4 h-4 text-port-accent" aria-hidden="true" />
-              <h2 className="text-sm font-medium text-white">Add item</h2>
-            </div>
-            <div className="flex flex-wrap items-center gap-2 mb-3">
-              {/* The shared TabPills owns the roving tabindex + arrow-key
-                  contract — never roll a tab bar (client/src/AGENTS.md). */}
-              <TabPills
-                variant="pills"
-                size="sm"
-                tabs={[
-                  { id: 'image', label: 'Image', icon: ImageIcon },
-                  { id: 'text', label: 'Note', icon: FileText },
-                ]}
-                activeTab={itemType}
-                onChange={setItemType}
-                ariaLabel="Item type"
-              />
-              {/* Gallery pins (#4188) — pick or upload, added to the board immediately. */}
-              <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setImagePickerOpen(true)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-bg text-gray-400 hover:text-white transition-colors"
-                >
-                  <Images className="w-4 h-4" aria-hidden="true" /> Pick from gallery
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setVideoPickerOpen(true)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-bg text-gray-400 hover:text-white transition-colors"
-                >
-                  <Film className="w-4 h-4" aria-hidden="true" /> Pick video
-                </button>
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              {itemType === 'image' ? (
-                <div>
-                  <label htmlFor="item-image-url" className="block text-xs text-gray-400 mb-1">Image URL</label>
-                  <input
-                    id="item-image-url"
-                    type="text"
-                    value={imageUrl}
-                    maxLength={2048}
-                    placeholder="https://… or /data/images/…"
-                    onChange={(e) => setImageUrl(e.target.value)}
-                    className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none"
-                  />
-                </div>
-              ) : (
-                <div>
-                  <label htmlFor="item-text" className="block text-xs text-gray-400 mb-1">Note</label>
-                  <textarea
-                    id="item-text"
-                    value={text}
-                    maxLength={10000}
-                    rows={2}
-                    onChange={(e) => setText(e.target.value)}
-                    className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none resize-y"
-                  />
-                </div>
-              )}
-              <div className="grid grid-cols-1 @sm/add-form:grid-cols-2 gap-3">
-                <div>
-                  <label htmlFor="item-caption" className="block text-xs text-gray-400 mb-1">Caption (optional)</label>
-                  <input
-                    id="item-caption"
-                    type="text"
-                    value={caption}
-                    maxLength={2000}
-                    onChange={(e) => setCaption(e.target.value)}
-                    className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="item-source" className="block text-xs text-gray-400 mb-1">Source (optional)</label>
-                  <input
-                    id="item-source"
-                    type="text"
-                    value={source}
-                    maxLength={2048}
-                    placeholder="where it came from"
-                    onChange={(e) => setSource(e.target.value)}
-                    className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none"
-                  />
-                </div>
-              </div>
-              <div className="flex justify-end">
-                <button
-                  type="button"
-                  onClick={handleAddItem}
-                  disabled={adding}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-success text-white hover:bg-port-success/80 disabled:opacity-50 transition-colors"
-                >
-                  <Plus className="w-4 h-4" aria-hidden="true" /> Pin to board
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Pinterest link + sync */}
-          <div className="bg-port-card border border-port-border rounded-md p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <Link2 className="w-4 h-4 text-port-accent" aria-hidden="true" />
-              <h2 className="text-sm font-medium text-white">Pinterest board</h2>
-            </div>
-            {linkedFeedUrl ? (
-              <div className="space-y-3">
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-                  <a
-                    href={linkedBoardUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-port-accent hover:underline truncate max-w-full"
-                  >
-                    {linkedBoardUrl}
-                  </a>
-                  <span className="text-gray-500">
-                    {lastSyncedAt ? `Last synced ${timeAgo(lastSyncedAt)}` : 'Not synced yet'}
-                  </span>
-                </div>
-                <p className="text-[11px] text-gray-500">
-                  Pinterest’s feed exposes only the most-recent ~25 pins, so a sync pulls those — not the entire board.
-                </p>
-                <p className="text-[11px] text-gray-500">
-                  Use “Import pins” below to read the full board from your signed-in PortOS browser.
-                </p>
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={handleSyncPinterest}
-                    disabled={syncing || linking || importingPinterest || pinDirty}
-                    title={pinDirty ? 'Link the new URL before syncing' : undefined}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 transition-colors"
-                  >
-                    <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} aria-hidden="true" />
-                    {syncing ? 'Syncing…' : 'Sync now'}
-                  </button>
-                  {confirmingUnlink ? (
-                    <InlineConfirmRow
-                      question="Unlink this board?"
-                      confirmText="Unlink"
-                      onConfirm={handleUnlinkPinterest}
-                      onCancel={() => setConfirmingUnlink(false)}
-                    />
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setConfirmingUnlink(true)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-bg text-gray-400 hover:text-white transition-colors"
-                    >
-                      <Unlink className="w-4 h-4" aria-hidden="true" /> Unlink
-                    </button>
-                  )}
-                </div>
-                {renderPinUrlForm('Change board URL', 'Update')}
-              </div>
-            ) : (
-              <div>
-                {renderPinUrlForm('Board URL', 'Link')}
-                <p className="text-[11px] text-gray-500 mt-2">
-                  Link a public board to sync its newest ~25 pins. “Import pins” reads the full board from your signed-in PortOS browser and saves the images here.
-                </p>
-              </div>
-            )}
-          </div>
-
-          {/* X.com (Twitter) post import */}
-          <div className="bg-port-card border border-port-border rounded-md p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <AtSign className="w-4 h-4 text-port-accent" aria-hidden="true" />
-              <h2 className="text-sm font-medium text-white">Import from an X post</h2>
-            </div>
-            <div>
-              <label htmlFor="x-post-url" className="block text-xs text-gray-400 mb-1">Post URL</label>
-              <div className="flex flex-wrap gap-2">
-                <input
-                  id="x-post-url"
-                  type="text"
-                  value={xPostUrl}
-                  maxLength={2048}
-                  placeholder="https://x.com/user/status/1234567890"
-                  onChange={(e) => setXPostUrl(e.target.value)}
-                  className="flex-[1_1_12rem] min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none"
-                />
-                <button
-                  type="button"
-                  onClick={handleImportXPost}
-                  disabled={importingXPost || !xPostUrl.trim()}
-                  className="px-3 py-1.5 text-sm rounded bg-port-success text-white hover:bg-port-success/80 disabled:opacity-50 transition-colors"
-                >
-                  {importingXPost ? 'Importing…' : 'Import'}
-                </button>
-              </div>
-            </div>
-            <p className="text-[11px] text-gray-500 mt-2">
-              Paste a public x.com/twitter.com post URL. Pulls every attached photo (or its video) into this board.
-            </p>
-          </div>
-        </aside>
       </div>
 
       <GalleryImagePicker
