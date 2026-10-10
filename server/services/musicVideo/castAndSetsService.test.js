@@ -461,6 +461,70 @@ describe('Cast & Sets check-in', () => {
     expect(after.castAndSets.images.character.history).toHaveLength(1);
   });
 
+  it('applies sheet feedback by rewriting the direction and look, re-renders what changed, and keeps honoring it on a rebuild', async () => {
+    const project = await seed();
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
+    await runTo(project.id, 'review');
+    const before = jobs.length;
+    const look = '1980s 35mm analog film, sparse practical light, heavy grain';
+    const revised = { ...DIRECTION, look, sets: DIRECTION.sets.map((set) => (set.id === 'harbor' ? { ...set, lighting: 'one dim sodium streetlamp' } : set)) };
+    runPrompt.mockResolvedValueOnce({ text: JSON.stringify(revised) });
+    const note = 'Too many random light sources; keep them sparse and realistic, eighties analog film';
+
+    const applied = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/feedback`).send({ text: note });
+    expect(applied.status).toBe(202);
+    await runTo(project.id, 'review');
+    const revisionPrompt = runPrompt.mock.calls[1][0].prompt;
+    expect(revisionPrompt).toContain('DIRECTOR FEEDBACK ON EARLIER SHEETS');
+    expect(revisionPrompt).toContain(note);
+    expect(revisionPrompt).toContain('"look":');
+    const after = await current(project.id);
+    expect(after.castAndSets.direction.look).toBe(look);
+    // The look line changed, so every image re-renders on the rewritten prompt, never the board's look.
+    const rerendered = jobs.slice(before);
+    expect(new Set(rerendered.map(keyOf))).toEqual(new Set(Object.keys(after.castAndSets.plan)));
+    for (const job of rerendered) {
+      expect(job.params.prompt).toContain(`Look: ${look}`);
+      expect(job.params.prompt).not.toContain('raw flash, green light');
+    }
+    expect(after.castAndSets.changeSummary).toMatchObject({ revision: 2, rerendered: rerendered.length });
+    expect(after.castAndSets.changeSummary.changes).toEqual(['Look rewritten for every image', 'Lighting: Harbor']);
+    expect(after.castAndSets.feedback).toEqual([expect.objectContaining({ text: note, revision: 2 })]);
+
+    // Approve, then rebuild: the fresh direction still carries the standing feedback and its look.
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({});
+    runPrompt.mockResolvedValueOnce({ text: JSON.stringify(revised) });
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
+    await runTo(project.id, 'review');
+    expect(runPrompt.mock.calls[2][0].prompt).toContain(note);
+    expect((await current(project.id)).castAndSets.direction.look).toBe(look);
+
+    // Removing it stops it riding on later calls; nothing re-renders now.
+    const queued = jobs.length;
+    const feedbackId = (await current(project.id)).castAndSets.feedback[0].id;
+    const removed = await request(app).delete(`/api/music-video/${project.id}/cast-and-sets/feedback/${feedbackId}`);
+    expect(removed.status).toBe(200);
+    expect(removed.body.stage.feedback).toEqual([]);
+    expect(jobs.length).toBe(queued);
+  });
+
+  it('applies feedback aimed at one image as that image\'s note, and refuses an image the sheet does not have', async () => {
+    const project = await seed();
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
+    await runTo(project.id, 'review');
+    const before = jobs.length;
+    const applied = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/feedback`).send({ text: 'One lamp only', target: 'set:harbor' });
+    expect(applied.status).toBe(202);
+    await runTo(project.id, 'review');
+    expect(runPrompt).toHaveBeenCalledTimes(1);
+    expect(jobs.slice(before).map(keyOf).sort()).toEqual(['set:harbor', 'test:2']);
+    expect(jobs.find((j) => keyOf(j) === 'set:harbor' && !jobs.slice(0, before).includes(j)).params.prompt).toMatch(/Revision: One lamp only/);
+    expect((await current(project.id)).castAndSets.feedback || []).toEqual([]);
+
+    const unknown = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/feedback`).send({ text: 'Brighter', target: 'set:nowhere' });
+    expect([unknown.status, unknown.body.code]).toEqual([422, 'CAST_SETS_UNKNOWN_IMAGE']);
+  });
+
   it('approves itself in auto mode, and fails with a reason when no provider can direct', async () => {
     const auto = await seed({ automation: { tools: ['image:codex'], checkins: { castAndSets: 'auto' } } });
     await request(app).post(`/api/music-video/${auto.id}/cast-and-sets`).send({});

@@ -46,7 +46,9 @@ import {
   dispatchableImageKeys,
   linkCastAndSetsJob,
   presentCastAndSets,
+  addCastAndSetsFeedback,
   reconfirmCastAndSetsOnProject,
+  removeCastAndSetsFeedback,
   reserveCastAndSetsImage,
   resumeCastAndSetsOnProject,
   reviseCastAndSetsOnProject,
@@ -60,6 +62,7 @@ import {
   buildCastAndSetsPrompt,
   castAndSetsAllowsImages,
   castAndSetsMedium,
+  describeDirectionChanges,
   mergeCastAndSetsDirection,
   moodBoardImageList,
   parseCastAndSetsResponse,
@@ -191,7 +194,10 @@ async function runDirection(projectId, { providerId, model, effort, notes = [], 
   // silently re-cast into the other medium.
   // A saved direction without a medium predates the procedural one: photographic.
   const medium = notes.length && previous ? (previous.medium || 'photographic') : castAndSetsMedium(project);
-  const prompt = buildCastAndSetsPrompt(project, { moodImages, board, track, previous: notes.length ? previous : null, notes, medium }) + productionFeedbackContext(project);
+  // Standing sheet feedback rides on every direction call, a fresh rebuild included.
+  const feedback = stage?.feedback || [];
+  const standing = feedback.length > 0;
+  const prompt = buildCastAndSetsPrompt(project, { moodImages, board, track, previous: notes.length ? previous : null, notes, medium, feedback }) + productionFeedbackContext(project);
   let text;
   try {
     ({ text } = await deps.runPrompt({ provider, model: selectedModel, ...effortArg(route), prompt, source: 'music-video-cast-sets' }));
@@ -204,12 +210,14 @@ async function runDirection(projectId, { providerId, model, effort, notes = [], 
   const sections = songSections(project);
   const { direction, missing } = mergeCastAndSetsDirection(notes.length ? previous : null, parsed, { sections, medium });
   if (missing.length) return fail(projectId, `The creative direction answer is missing: ${missing.join(', ')}`);
-  // The look every image prompt carries: the director's palette/light/texture
-  // line, else the project's visual style. Never the board's composed style
-  // verbatim: it can describe a whole person and scene.
-  direction.look = direction.look || trimTo(project.concept?.style, 500) || '';
+  // The look every image prompt carries. While the director's sheet feedback
+  // stands, the look line rewritten to agree with it wins; otherwise the
+  // director's palette/light/texture line, else the project's visual style.
+  // Never the board's composed style verbatim: it can describe a whole person
+  // and scene, which then lands in every empty set plate.
+  direction.look = (standing && (parsed.look || previous?.look)) || direction.look || trimTo(project.concept?.style, 500) || '';
   // Mood board images inform the direction as text only, never as image references.
-  return writePlan(projectId, { direction, forceKeys });
+  return writePlan(projectId, { direction, forceKeys, changes: previous ? describeDirectionChanges(previous, direction) : null });
 }
 
 /**
@@ -226,7 +234,7 @@ async function withoutBoardLook(project, direction) {
 }
 
 /** (Re)build the plan from the stage's direction + accumulated per-image notes, then dispatch. */
-async function writePlan(projectId, { direction = null, forceKeys = [] } = {}) {
+async function writePlan(projectId, { direction = null, forceKeys = [], changes = null } = {}) {
   const project = await requireProject(projectId);
   const stage = project.castAndSets;
   const nextDirection = await withoutBoardLook(project, direction || stage.direction);
@@ -240,9 +248,14 @@ async function writePlan(projectId, { direction = null, forceKeys = [] } = {}) {
   const preferred = run?.pool?.find((r) => r.kind === 'image') || stage.route || null;
   const route = codeOnly ? (stage.route || null) : await chooseCastAndSetsRoute(project, { preferred, settings });
   if (!route && !codeOnly) return fail(projectId, 'No enabled image backend is allowed for the Cast & Sets images — enable Codex (or another image tool in the brief) and resume');
-  const out = await mutateProjectRecord(projectId, (current) => setCastAndSetsDirection(current, {
-    direction: nextDirection, plan, route, renderKeys,
-  }));
+  const out = await mutateProjectRecord(projectId, (current) => {
+    const next = setCastAndSetsDirection(current, { direction: nextDirection, plan, route, renderKeys });
+    if (!changes) return next;
+    // What this revision changed, for the director to read beside the new sheet.
+    const changeSummary = { revision: next.stage.revision, changes, rerendered: renderKeys.length, at: next.stage.updatedAt };
+    const stage = { ...next.stage, changeSummary };
+    return { project: { ...next.project, castAndSets: stage }, stage };
+  });
   console.log(`🎭 Music Video Cast & Sets ${short(projectId)} r${out.stage.revision}: ${renderKeys.length} image(s) to render${route ? ` on ${route.mode}` : ' (code-only, no image backend)'}`);
   publish(projectId, out.project);
   return advance(projectId);
@@ -659,6 +672,44 @@ export async function regenerateCastAndSets(projectId, { notes = null, providerI
   inBackground('The regeneration', projectId, () => (redirect
     ? runDirection(projectId, { providerId, model, effort, notes: directionNotes, forceKeys })
     : writePlan(projectId, { forceKeys })));
+  return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
+}
+
+/**
+ * Apply the director's plain-text feedback on the sheet. Aimed at one image
+ * (`target`: `character`, `looks`, `set:<id>`, a set's name, …) it is that
+ * image's revision note (see regenerateCastAndSets). Aimed at the whole sheet
+ * (no target) it becomes STANDING feedback: the direction is rewritten to
+ * honor it, including the look line every image prompt carries, and every
+ * later direction call (a rebuild included) keeps honoring it until the
+ * director removes it. Only images whose prompt changed re-render.
+ * Returns `{ project, stage }`.
+ */
+export async function applyCastAndSetsFeedback(projectId, { text, target = null, providerId, model, effort } = {}) {
+  const project = await requireProject(projectId);
+  const stage = project.castAndSets;
+  if (!stage?.direction) throw new ServerError('There is no Cast & Sets sheet to give feedback on yet', { status: 409, code: 'CAST_SETS_NO_DIRECTION' });
+  if (target) {
+    if (!noteImageKeys(target, stage.plan || {})) throw new ServerError(`No image on this sheet is called ${target}`, { status: 422, code: 'CAST_SETS_UNKNOWN_IMAGE' });
+    return regenerateCastAndSets(projectId, { notes: [{ target, text }], providerId, model, effort });
+  }
+  const note = { id: null, target: 'sheet', text };
+  const out = await mutateProjectRecord(projectId, (current) => {
+    const added = addCastAndSetsFeedback(current, { id: `fb-${randomUUID().slice(0, 8)}`, text });
+    return reviseCastAndSetsOnProject(added.project, { processId: PROCESS_ID, notesApplied: [note], redirect: true });
+  });
+  console.log(`🎭 Music Video Cast & Sets ${short(projectId)} applying sheet feedback r${out.stage.revision} (${out.stage.feedback.length} standing)`);
+  publish(projectId, out.project);
+  inBackground('The feedback', projectId, () => runDirection(projectId, { providerId, model, effort, notes: [note] }));
+  return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
+}
+
+/** Stop honoring one piece of standing sheet feedback. Nothing re-renders until the next revision. Returns `{ project, stage }`. */
+export async function removeCastAndSetsFeedbackEntry(projectId, feedbackId) {
+  await requireProject(projectId);
+  const out = await mutateProjectRecord(projectId, (current) => removeCastAndSetsFeedback(current, feedbackId));
+  console.log(`🎭 Music Video Cast & Sets ${short(projectId)} feedback removed (${out.stage.feedback.length} standing)`);
+  publish(projectId, out.project);
   return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
 }
 

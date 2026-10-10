@@ -478,6 +478,12 @@ export const regenerateMusicVideoCastAndSets = (id, body = {}, options = {}) =>
 // Body: { protagonist?, world?, sets?: [{ id, imageRole }] } — the director's direct edits to a procedural direction.
 export const editMusicVideoCastAndSetsDirection = (id, body, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/direction`, { method: 'PATCH', body: JSON.stringify(body), ...options });
+// Body: { text, target? } — plain-text feedback on the sheet. No target = the whole
+// sheet (standing feedback the direction keeps honoring); a target names one image.
+export const applyMusicVideoCastAndSetsFeedback = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/feedback`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const removeMusicVideoCastAndSetsFeedback = (id, feedbackId, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/feedback/${encodeURIComponent(feedbackId)}`, { method: 'DELETE', ...options });
 export const resumeMusicVideoCastAndSets = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/resume`, { method: 'POST', body: '{}', ...options });
 export const approveMusicVideoCastAndSets = (id, options = {}) =>

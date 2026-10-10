@@ -80,6 +80,7 @@ import {
   musicVideoDevArtifactFileQuerySchema,
   musicVideoCastAndSetsStartSchema,
   musicVideoCastAndSetsDirectionEditSchema,
+  musicVideoCastAndSetsFeedbackSchema,
   musicVideoCastAndSetsRegenerateSchema,
   musicVideoDocumentDirectoryImportSchema,
   musicVideoDocumentFileQuerySchema,
@@ -201,6 +202,8 @@ import { devArtifactTypeFor } from '../services/musicVideo/devArtifacts.js';
 import {
   startCastAndSets,
   editCastAndSetsDirection,
+  applyCastAndSetsFeedback,
+  removeCastAndSetsFeedbackEntry,
   regenerateCastAndSets,
   resumeCastAndSets,
   approveCastAndSets,
@@ -1417,6 +1420,15 @@ router.post('/:id/cast-and-sets/regenerate', asyncHandler(async (req, res) => {
 router.patch('/:id/cast-and-sets/direction', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoCastAndSetsDirectionEditSchema, req.body || {});
   res.status(202).json(await editCastAndSetsDirection(req.params.id, input));
+}));
+
+router.post('/:id/cast-and-sets/feedback', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoCastAndSetsFeedbackSchema, req.body || {});
+  res.status(202).json(await applyCastAndSetsFeedback(req.params.id, input));
+}));
+
+router.delete('/:id/cast-and-sets/feedback/:feedbackId', asyncHandler(async (req, res) => {
+  res.json(await removeCastAndSetsFeedbackEntry(req.params.id, req.params.feedbackId));
 }));
 
 router.post('/:id/cast-and-sets/resume', asyncHandler(async (req, res) => {
