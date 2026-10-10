@@ -215,6 +215,7 @@ export async function syncAccount(accountId, io, options = {}) {
     // Support structured result { messages, status } or plain array
     const newMessages = Array.isArray(providerResult) ? providerResult : providerResult?.messages ?? [];
     const providerStatus = Array.isArray(providerResult) ? 'success' : providerResult?.status ?? 'success';
+    const providerReason = typeof providerResult?.error === 'string' ? { reason: providerResult.error } : {};
     // Sent mail (Gmail reply-detection ingest, #2796) is activity-only: recorded to
     // the timeline but never added to the inbox cache/eval/trim. Kept separate here.
     const sentMessages = Array.isArray(providerResult) ? [] : (providerResult?.sentMessages ?? []);
@@ -357,13 +358,13 @@ export async function syncAccount(accountId, io, options = {}) {
         console.error(`🤝 Sent-ingest watermark failed for account ${accountId}: ${messageLogError(err)}`));
     }
 
-    io?.emit('messages:sync:completed', { accountId, newMessages: uniqueNew.length, pruned, status: providerStatus });
+    io?.emit('messages:sync:completed', { accountId, newMessages: uniqueNew.length, pruned, status: providerStatus, ...providerReason });
     if (providerStatus === 'success') {
       io?.emit('messages:changed', {});
     }
     console.log(`📧 Sync complete for account ${account.id}: ${uniqueNew.length} new, ${pruned} pruned, status=${providerStatus}`);
 
-    return { newMessages: uniqueNew.length, pruned, total: cache.messages.length, status: providerStatus };
+    return { newMessages: uniqueNew.length, pruned, total: cache.messages.length, status: providerStatus, ...providerReason };
   };
 
   // Serialize the load→mutate→save region against `refreshMessage` /

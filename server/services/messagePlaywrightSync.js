@@ -21,6 +21,46 @@ const SELECTORS_FILE = join(PATHS.messages, 'selectors.json');
 const OUTLOOK_URL = 'https://outlook.office.com/mail/';
 const TEAMS_URL = 'https://teams.microsoft.com/';
 
+const DEFAULT_OUTLOOK_ROW_SELECTOR = "[role='listbox'] [role='option']";
+const outlookRowSelector = sels => sels.messageRow ?? DEFAULT_OUTLOOK_ROW_SELECTOR;
+
+// Serialized into the provider page for Test, summary extraction and detail lookup.
+// Selectors always address the document, including on subsequent virtualized paints.
+function outlookRowContext(selector, requireScroll = true) {
+  const rows = () => Array.from(document.querySelectorAll(selector));
+  let initialRows;
+  try {
+    if (typeof selector !== 'string' || !selector.trim()) throw new Error('Empty selector');
+    initialRows = rows();
+  } catch {
+    return { error: 'invalid-selector', message: 'Invalid Outlook messageRow selector. Edit it in Messages > Sync and test again.' };
+  }
+  if (!requireScroll || initialRows.length === 0) return { rows };
+
+  // ARIA regions can wrap a separate scrolling element. Walk from the rows
+  // outward instead of assuming the region or list parent can actually scroll.
+  let scrollContainer;
+  let stationaryContainer;
+  for (let parent = initialRows[0].parentElement; parent; parent = parent.parentElement) {
+    const overflow = getComputedStyle(parent).overflowY;
+    const scrollable = /auto|scroll|overlay|hidden/.test(overflow) || parent === document.scrollingElement;
+    if (scrollable && parent.scrollHeight > parent.clientHeight) {
+      scrollContainer = parent;
+      break;
+    }
+    // An inbox that fits entirely still has a usable scrolling surface. Prefer
+    // any ancestor with actual overflow before accepting that stationary case.
+    if (!stationaryContainer && /auto|scroll|overlay/.test(overflow)) stationaryContainer = parent;
+  }
+  scrollContainer ||= stationaryContainer;
+  if (!scrollContainer || typeof scrollContainer.scrollBy !== 'function'
+      || typeof scrollContainer.scrollTo !== 'function'
+      || initialRows.some(row => !scrollContainer.contains(row))) {
+    return { error: 'invalid-container', message: 'Outlook messageRow must match rows in one scrollable list or region. Edit it in Messages > Sync and test again.' };
+  }
+  return { rows, scrollContainer };
+}
+
 function makeExternalId(date, sender, subject) {
   const hash = crypto.createHash('md5')
     .update(`${date}|${sender}|${subject}`)
@@ -93,6 +133,9 @@ export async function syncPlaywright(account, cache, io, options = {}) {
   const extractScript = buildExtractionScript(account.type, sels, mode);
   const extracted = await evaluateOnPage(page, extractScript);
 
+  if (extracted?.error) {
+    return { messages: [], status: 'extraction-failed', error: extracted.message };
+  }
   if (!extracted || !Array.isArray(extracted)) {
     console.log(`📧 No messages extracted from ${account.type} page`);
     io?.emit('messages:sync:progress', { accountId: account.id, current: 0, total: 0 });
@@ -153,7 +196,8 @@ export async function syncPlaywright(account, cache, io, options = {}) {
 
     // Click into conversation to get full body + thread
     if (account.type === 'outlook') {
-      const detail = await fetchOutlookConversationDetail(page, msg.subject, msg.from, msg.date, msg.providerRowId);
+      const detail = await fetchOutlookConversationDetail(page, msg.subject, msg.from, msg.date, msg.providerRowId, outlookRowSelector(sels));
+      if (detail?.error) return { messages, inboxComplete: false, status: 'extraction-failed', error: detail.message };
       if (detail && detail.length > 0) {
         detailsFetched++;
         const threadKey = `thread-${extId}`;
@@ -197,43 +241,47 @@ export async function syncPlaywright(account, cache, io, options = {}) {
  *       > h3[aria-label^="Cc:"]        (cc)
  * Returns an array of { from, fromEmail, to, cc, date, body } for each message in the thread.
  */
-async function fetchOutlookConversationDetail(page, subject, sender, date, providerRowId) {
+async function fetchOutlookConversationDetail(page, subject, sender, date, providerRowId, rowSelector) {
   // Preserve the same provider row identity when loading detail from a virtualized list.
   const safeSubject = JSON.stringify(subject || '');
   const safeSender = JSON.stringify(sender || '');
   const clickResult = await evaluateOnPage(page, `
     (async function() {
-      const listbox = document.querySelector("[role='listbox']");
-      if (!listbox) return { found: false, hasListbox: false };
+      const context = (${outlookRowContext.toString()})(${JSON.stringify(rowSelector)});
+      if (context.error) return context;
+      if (!context.scrollContainer) return { found: false };
       const targetSubject = ${safeSubject};
       const targetSender = ${safeSender};
       const targetDate = ${JSON.stringify(date || '')};
       const targetId = ${JSON.stringify(providerRowId || null)};
       const readRow = ${readOutlookMessageRow.toString()};
-      const scrollContainer = listbox.closest('[role="region"]') || listbox.parentElement;
+      const { scrollContainer } = context;
 
-      function findMatch() {
-        const matches = [...listbox.querySelectorAll('[role="option"]')].filter(row => {
+      function findMatches() {
+        return context.rows().filter(row => {
           const data = readRow(row);
           if (targetId) return data.providerRowId === targetId;
           return targetSubject && targetSender && targetDate
             && data.subject === targetSubject && data.from === targetSender && data.date === targetDate;
         });
-        return matches.length === 1 ? matches[0] : null;
       }
 
-      // Check visible rows first, then scroll to find the message
-      let matched = findMatch();
+      // Refuse ambiguity immediately; scrolling must not turn it into a unique click.
+      let matches = findMatches();
+      if (matches.length > 1) return { found: false };
+      let matched = matches[0];
       if (!matched && scrollContainer) {
         const maxScroll = 30;
         for (let i = 0; i < maxScroll; i++) {
           scrollContainer.scrollBy(0, 600);
           await new Promise(r => setTimeout(r, 300));
-          matched = findMatch();
+          matches = findMatches();
+          if (matches.length > 1) return { found: false };
+          matched = matches[0];
           if (matched) break;
         }
       }
-      if (!matched) return { found: false, hasListbox: true };
+      if (!matched) return { found: false };
       matched.scrollIntoView({ block: 'center' });
       await new Promise(r => setTimeout(r, 200));
       var urlBefore = location.href;
@@ -251,8 +299,9 @@ async function fetchOutlookConversationDetail(page, subject, sender, date, provi
     })()
   `);
 
+  if (clickResult?.error) return clickResult;
   if (clickResult && typeof clickResult === 'object' && !clickResult.found) {
-    console.log(`📧 Detail click: message not found (listbox=${clickResult.hasListbox})`);
+    console.log('📧 Detail click: message not uniquely found');
     return null;
   }
   if (!clickResult) {
@@ -361,8 +410,9 @@ function buildExtractionScript(type, sels, mode = 'unread') {
     // Scrolling extraction: scrapes visible rows, scrolls, repeats
     return `
       (async function() {
-        const listbox = document.querySelector("[role='listbox']");
-        if (!listbox) return [];
+        const context = (${outlookRowContext.toString()})(${JSON.stringify(outlookRowSelector(sels))});
+        if (context.error) return context;
+        if (!context.scrollContainer) return [];
         const seen = new Map();
         let scrollAttempts = 0;
         const maxMsg = ${maxMessages};
@@ -372,7 +422,7 @@ function buildExtractionScript(type, sels, mode = 'unread') {
         const extractRow = ${readOutlookMessageRow.toString()};
 
         function scrapeVisible() {
-          const rows = listbox.querySelectorAll('[role="option"]');
+          const rows = context.rows();
           let added = 0;
           for (const row of rows) {
             if (seen.size >= maxMsg) break;
@@ -388,7 +438,7 @@ function buildExtractionScript(type, sels, mode = 'unread') {
         }
 
         scrapeVisible();
-        const scrollContainer = listbox.closest('[role="region"]') || listbox.parentElement;
+        const { scrollContainer } = context;
         while (scrollAttempts < maxScroll && seen.size < maxMsg) {
           scrollContainer.scrollBy(0, 600);
           await new Promise(r => setTimeout(r, 500));
@@ -454,7 +504,8 @@ export async function refreshMessageDetail(account, message) {
   }
 
   console.log(`📧 Refresh: clicking into ${message.id}`);
-  const detail = await fetchOutlookConversationDetail(page, message.subject, message.from?.name, message.date, message.providerRowId);
+  const detail = await fetchOutlookConversationDetail(page, message.subject, message.from?.name, message.date, message.providerRowId, outlookRowSelector((await getSelectors()).outlook || {}));
+  if (detail?.error) return detail;
   if (!detail) {
     console.log(`📧 Refresh: click/extraction failed for ${message.id}`);
   } else {
@@ -599,10 +650,16 @@ export async function testSelectors(provider) {
   const results = {};
 
   for (const [name, selector] of Object.entries(sels)) {
-    const count = await evaluateOnPage(page,
-      `document.querySelectorAll(${JSON.stringify(selector)}).length`
-    );
-    results[name] = { selector, matches: count ?? 0 };
+    const effective = provider === 'outlook' && name === 'messageRow' ? outlookRowSelector(sels) : selector;
+    const script = provider === 'outlook' && name === 'messageRow'
+      ? `(function() {
+          const context = (${outlookRowContext.toString()})(${JSON.stringify(effective)}, false);
+          return context.error ? context : context.rows().length;
+        })()`
+      : `document.querySelectorAll(${JSON.stringify(effective)}).length`;
+    const count = await evaluateOnPage(page, script);
+    results[name] = { selector: effective, matches: typeof count === 'number' ? count : 0,
+      ...(count?.error ? { error: count.message } : {}) };
   }
 
   const entries = Object.values(results);
