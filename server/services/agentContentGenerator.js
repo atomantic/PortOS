@@ -138,7 +138,8 @@ function refuseUntrustedResult(result) {
 async function runMoltbookComment(agent, { providerId, model, content, prompt }) {
   const provider = await assertMoltbookCommentProvider(providerId);
   const result = refuseUntrustedResult(await runUntrustedContentAnalysis({
-    ...(provider ? { provider, model } : {}),
+    ...(provider ? { provider } : {}),
+    ...(model ? { model } : {}),
     content,
     prompt,
     source: 'moltbook',

@@ -105,13 +105,15 @@ describe('Moltbook content generation', () => {
     expect(body.messages[1].content).toContain('UNIQUE-COMMENT');
   });
 
-  it('lets an unpinned comment use the abuse-guard API provider', async () => {
-    const generated = await generateComment(agent, remotePost, remoteComments);
+  it('lets an unpinned comment use the abuse-guard API provider and the requested model', async () => {
+    const generated = await generateComment(agent, remotePost, remoteComments, [], null, 'requested-model');
 
     expect(generated.content).toBe('A thoughtful reply.');
     expect(mocks.getProviderById).not.toHaveBeenCalled();
     expect(mocks.getActiveProvider).not.toHaveBeenCalled();
     expect(runUntrustedContentAnalysis.mock.calls[0][0].provider).toBeUndefined();
+    expect(runUntrustedContentAnalysis.mock.calls[0][0].model).toBe('requested-model');
+    expect(JSON.parse(mocks.fetch.mock.calls[0][1].body).model).toBe('requested-model');
     expect(mocks.runPrompt).not.toHaveBeenCalled();
   });
 
