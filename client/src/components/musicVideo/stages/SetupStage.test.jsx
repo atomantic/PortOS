@@ -4,7 +4,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import SetupStage from './SetupStage.jsx';
 
 vi.mock('../../songs/MidiVisualization.jsx', () => ({ default: () => null }));
-vi.mock('../CompositionPreviewPlayer.jsx', () => ({ default: ({ lyrics }) => <div data-testid="playthrough">{lyrics ? 'lyrics' : 'document'}</div> }));
+vi.mock('../CompositionPreviewPlayer.jsx', () => ({ default: ({ lyrics, seekRequest }) => <div data-testid="playthrough" data-seek={JSON.stringify(seekRequest)}>{lyrics ? 'lyrics' : 'document'}</div> }));
 
 const review = (over = {}) => ({ readiness: null, current: true, busy: false, error: null, save: vi.fn(async () => ({})), reverifyAlignment: vi.fn(async () => ({})), ...over });
 const board = (project, extra = {}) => ({
@@ -50,6 +50,21 @@ describe('Song step', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Timing looks right' }));
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ cast: 'kept', lyricsMode: 'vocal', timingStatus: 'verified', timingNotes: 'Listened through twice' }));
     await vi.waitFor(() => expect(setPlanning).toHaveBeenCalledWith({ cast: 'edited', lyricsMode: 'vocal', timingStatus: 'verified', timingNotes: 'Listened through twice' }));
+  });
+
+  it('lists suspect lyric text and timecodes and jumps the playthrough to that line on every click', () => {
+    const project = { id: 'p', trackId: 't', audioAnalysis: {}, productionReview: { draft: { lyricsMode: 'vocal', timingStatus: 'verified' } }, lyricCues: [
+      { id: 'c', text: 'under blue skies', startSec: 60, endSec: 65, suspect: true,
+        words: [{ w: 'under', startSec: 61.2, endSec: 61.3 }] },
+      { id: 'd', text: 'walking home', startSec: 70, endSec: 72 },
+    ] };
+    render(<SetupStage board={board(project, { productionReview: review() })} />);
+    const jump = screen.getByRole('button', { name: '1:01.20 — under blue skies' });
+    expect(screen.queryByRole('button', { name: /walking home/ })).toBeNull();
+    fireEvent.click(jump);
+    expect(JSON.parse(screen.getByTestId('playthrough').dataset.seek)).toEqual({ t: 61.2, n: 1, play: true });
+    fireEvent.click(jump);
+    expect(JSON.parse(screen.getByTestId('playthrough').dataset.seek)).toEqual({ t: 61.2, n: 2, play: true });
   });
 
   it('holds the timing check until the aligned words can be played through', () => {

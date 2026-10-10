@@ -349,10 +349,57 @@ describe('alignProjectLyrics', () => {
     expect(saved.lyricAlignSource).toBe('vocal-stem');
   });
 
+  it.each([true, false])('retries only compressed whole-song cues and keeps repairs only when expanded (%s)', async (repaired) => {
+    const record = { ...project, vocalStemFilename: 'stem.wav', lyricCues: [
+      { id: 'a', text: 'walking home', startSec: null, endSec: null },
+      { id: 'b', text: 'under blue skies', startSec: null, endSec: null },
+      { id: 'c', text: 'another clear morning', startSec: null, endSec: null },
+      { id: 'd', text: 'so fast', startSec: null, endSec: null },
+    ] };
+    const words = (text, start, step) => text.split(' ').map((w, i) => ({
+      w, startSec: round3(start + i * step), endSec: round3(start + (i + 1) * step), conf: 'matched',
+    }));
+    const whole = record.lyricCues.map((cue, i) => words(cue.text, [1, 3, 7.1, 9][i], [0.5, 0.1, 0.15, 0.1][i]));
+    const retry = repaired ? words(record.lyricCues[1].text, 4, 0.6) : whole[1];
+    const forceAlign = vi.fn().mockResolvedValueOnce(whole).mockResolvedValueOnce([retry]);
+    const h = harness(vi.fn(), record, { resolveAudio: async () => ({ path: 'stem.wav', source: 'vocal-stem' }) });
+    const stem = encodePcm16Wav(16000 * 10);
+    for (let i = 0; i < 16000 * 10; i++) stem.writeInt16LE(5000, 44 + i * 2);
+    h.decodeAudio.mockResolvedValue(stem);
+    const saved = await h.run({ deps: { forceAlign } });
+    expect(forceAlign).toHaveBeenCalledTimes(2);
+    expect(forceAlign).toHaveBeenLastCalledWith(stem, [record.lyricCues[1]], expect.objectContaining({ startSec: 2, endSec: 7.1 }));
+    expect(saved.lyricCues[1]).toMatchObject({
+      id: 'b', words: retry, startSec: retry[0].startSec, endSec: retry.at(-1).endSec, suspect: !repaired,
+    });
+    for (const i of [0, 2, 3]) expect(saved.lyricCues[i].words).toEqual(whole[i]);
+    expect(h.decodeAudio).toHaveBeenCalledOnce();
+    expect(h.updateProject).toHaveBeenCalledOnce();
+  });
+
+  it.each(['cancel', 'text', 'audio'])('saves nothing when an automatic repair is interrupted by %s', async (outcome) => {
+    const record = { ...project, vocalStemFilename: 'stem.wav', lyricCues: [
+      { id: 'a', text: 'under blue skies', startSec: null, endSec: null },
+    ] };
+    const h = harness(vi.fn(), record, { resolveAudio: async () => ({ path: 'stem.wav', source: 'vocal-stem' }) });
+    let cancelled = false;
+    const collapsed = ['under', 'blue', 'skies'].map((w, i) => ({ w, startSec: i * 0.1, endSec: (i + 1) * 0.1, conf: 'matched' }));
+    const forceAlign = vi.fn().mockResolvedValueOnce([collapsed]).mockImplementationOnce(async () => {
+      if (outcome === 'cancel') cancelled = true;
+      if (outcome === 'text') record.lyricCues = [{ ...record.lyricCues[0], text: 'changed' }];
+      if (outcome === 'audio') record.trackId = 'changed';
+      return [collapsed];
+    });
+    await expect(h.run({ deps: { forceAlign }, isCancelled: () => cancelled })).rejects.toMatchObject(
+      outcome === 'cancel' ? { canceled: true } : { code: outcome === 'text' ? 'LYRIC_ALIGN_TEXT_CHANGED' : 'MUSIC_VIDEO_AUDIO_CHANGED' });
+    expect(forceAlign).toHaveBeenLastCalledWith(expect.any(Buffer), expect.any(Array), expect.objectContaining({ startSec: 0, endSec: 3 }));
+    expect(h.updateProject).not.toHaveBeenCalled();
+  });
+
   it('re-aligns one stem line preserving current director edits and the other occurrence', async () => {
     const record = { ...project, vocalStemFilename: 'stem.wav', lyricCues: [
-      { id: 'a', text: 'walking home', startSec: 1, endSec: 2 },
-      { id: 'b', text: 'walking home', startSec: 4, endSec: 5 },
+      { id: 'a', text: 'walking home', startSec: 1, endSec: 2, suspect: true },
+      { id: 'b', text: 'walking home', startSec: 4, endSec: 5, suspect: true },
     ] };
     const h = harness(vi.fn(), record, {
       resolveAudio: async () => ({ path: 'stem.wav', source: 'vocal-stem' }),
@@ -366,7 +413,7 @@ describe('alignProjectLyrics', () => {
     });
     const saved = await h.run({ cueId: 'a', deps: { forceAlign } });
     expect(forceAlign).toHaveBeenCalledWith(stem, [expect.objectContaining({ id: 'a' })], expect.objectContaining({ startSec: 1, endSec: 2 }));
-    expect(saved.lyricCues[0]).toMatchObject({ startSec: 1.2, endSec: 2.5, matched: 1 });
+    expect(saved.lyricCues[0]).toMatchObject({ startSec: 1.2, endSec: 2.5, matched: 1, suspect: false });
     expect(saved.lyricCues[1]).toEqual(record.lyricCues[1]);
     expect(saved.lyricAlignSource).toBeUndefined();
   });
