@@ -1,8 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pause, Play } from 'lucide-react';
-import { fetchMusicVideoPreviewAsset, getMusicVideoCompositionPreview } from '../../services/apiMusicVideo.js';
+import { fetchMusicVideoPreviewAsset, getMusicVideoCompositionPreview, getMusicVideoLyricPlaythroughPreview } from '../../services/apiMusicVideo.js';
 
 const buttonCls = 'flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
+
+// What the lyric playthrough page is built from: the song length, the word times,
+// the sheet's sections and the shots' timing and text zones. A change rebuilds it.
+const playthroughVersion = (project) => JSON.stringify([
+  project.audioAnalysis?.durationSec ?? null,
+  (project.lyricCues || []).map((cue) => [cue.text, cue.startSec, cue.endSec, (cue.words || []).map((w) => [w.startSec, w.endSec])]),
+  (project.lyricMarkers || []).map((m) => [m.type, m.label, m.line]),
+  (project.scenes || []).map((s) => [s.startSec, s.endSec, s.textZone, s.lyricRole]),
+]);
 
 /** The lyric line sung at song time `t`, from the project's timed cues. */
 const lyricAt = (cues, t) => {
@@ -45,10 +54,13 @@ const remember = (cache, url, blob) => {
  * time still applies. `collapsed` hides the picture (mini-player) below `lg`
  * while the transport stays usable; the iframe stays mounted so the loaded
  * media and playhead survive.
+ *
+ * `lyrics` plays the lyric timing playthrough instead of the project's document:
+ * the aligned words over a plain frame, for checking timing before any picture.
  */
-export default function CompositionPreviewPlayer({ project, audioUrl, seekRequest = null, collapsed = false, draft = false }) {
-  const doc = (draft ? project.composition?.documentDraft : project.composition?.document) || null;
-  const scrubId = draft ? 'mv-doc-draft-scrub' : 'mv-doc-scrub';
+export default function CompositionPreviewPlayer({ project, audioUrl, seekRequest = null, collapsed = false, draft = false, lyrics = false, scrubId: givenScrubId = null }) {
+  const doc = lyrics ? { playthrough: true } : (draft ? project.composition?.documentDraft : project.composition?.document) || null;
+  const scrubId = givenScrubId || (lyrics ? 'mv-lyrics-scrub' : draft ? 'mv-doc-draft-scrub' : 'mv-doc-scrub');
   const [preview, setPreview] = useState(null);
   const [previewError, setPreviewError] = useState('');
   const [status, setStatus] = useState('');
@@ -73,7 +85,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
 
   // The document's own version (its folder + save time), not the project's
   // `updatedAt`: an unrelated save must not reload a playing preview.
-  const refresh = doc ? `${doc.directory}|${doc.updatedAt || ''}` : null;
+  const refresh = lyrics ? playthroughVersion(project) : doc ? `${doc.directory}|${doc.updatedAt || ''}` : null;
   useEffect(() => {
     let active = true;
     setPreview(null);
@@ -81,11 +93,11 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
     setStatus('');
     seekState.current = { inFlight: false, pending: null, ready: false };
     if (!refresh || !wanted) return () => { active = false; };
-    getMusicVideoCompositionPreview(project.id, { silent: true, draft })
+    (lyrics ? getMusicVideoLyricPlaythroughPreview(project.id, { silent: true }) : getMusicVideoCompositionPreview(project.id, { silent: true, draft }))
       .then((next) => { if (active) setPreview(next); })
       .catch((err) => { if (active) setPreviewError(err?.message || 'Could not build the preview'); });
     return () => { active = false; };
-  }, [project.id, refresh, draft, wanted]);
+  }, [project.id, refresh, draft, lyrics, wanted]);
 
   const postSeek = useCallback((time) => {
     const frame = iframeRef.current?.contentWindow;
@@ -202,13 +214,13 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
   const aspect = preview?.width && preview?.height ? `${preview.width} / ${preview.height}` : '16 / 9';
   const lyric = lyricAt(project.lyricCues, t);
   return (
-    <div className="space-y-2" aria-label="Composition preview">
+    <div className="space-y-2" aria-label={lyrics ? 'Lyric timing playthrough' : 'Composition preview'}>
       {previewError && <p className="text-xs text-port-error" role="alert">{previewError}</p>}
       {status && <p className="text-xs text-port-text-muted">{status}</p>}
       <div className={`overflow-hidden rounded border border-port-border bg-black mx-auto ${collapsed ? 'max-xl:hidden' : ''}`}
         style={{ aspectRatio: aspect, maxHeight: '70vh', maxWidth: '100%' }}>
         {preview?.html ? (
-          <iframe ref={iframeRef} title={draft ? 'Composition candidate preview' : 'Composition document preview'} sandbox="allow-scripts" srcDoc={preview.html} className="h-full w-full" />
+          <iframe ref={iframeRef} title={lyrics ? 'Lyric timing playthrough' : draft ? 'Composition candidate preview' : 'Composition document preview'} sandbox="allow-scripts" srcDoc={preview.html} className="h-full w-full" />
         ) : (
           <p className="p-3 text-xs text-port-text-muted">{previewError ? '' : 'Building the preview…'}</p>
         )}
@@ -217,13 +229,13 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
         <button type="button" className={buttonCls} onClick={togglePlay} disabled={!preview || !audioUrl || (!!previewError && !playing)}>
           {playing ? <Pause size={14} /> : <Play size={14} />} {playing ? 'Pause' : 'Play'}
         </button>
-        <label htmlFor={scrubId} className="sr-only">{draft ? 'Scrub the composition candidate' : 'Scrub the composition preview'}</label>
+        <label htmlFor={scrubId} className="sr-only">{lyrics ? 'Scrub the lyric playthrough' : draft ? 'Scrub the composition candidate' : 'Scrub the composition preview'}</label>
         <input disabled={!preview || !!previewError} id={scrubId} type="range" min={0} max={duration || 0} step={1 / fps} value={Math.min(t, duration || 0)}
           onChange={(e) => { audioRef.current?.pause(); setPlaying(false); seek(Number(e.target.value)); }}
           className="min-w-0 flex-1" />
         <span className="text-xs text-port-text-muted tabular-nums">{previewError ? 'Preview unavailable' : preview ? `${t.toFixed(2)}s / ${duration.toFixed(1)}s` : !wanted ? 'Expand to load preview' : 'Loading preview…'}</span>
       </div>
-      {lyric && <p className="text-xs italic break-words" aria-live="off" data-testid="preview-lyric">♪ {lyric}</p>}
+      {lyric && !lyrics && <p className="text-xs italic break-words" aria-live="off" data-testid="preview-lyric">♪ {lyric}</p>}
       {audioUrl && <audio ref={audioRef} src={audioUrl} preload="none" className="hidden" onEnded={() => setPlaying(false)} />}
     </div>
   );

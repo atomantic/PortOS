@@ -91,6 +91,13 @@ export const importMusicVideoTrackLyrics = (id, body = {}, options = {}) => requ
 export const alignMusicVideoLyrics = (id, body = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/lyrics/align`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
+// Analyze a newly attached song and start aligning never-aligned lyrics.
+// Resolves `{ project, analyzed, alignJobId }`; follow the job with the align events URL.
+export const prepareMusicVideoSong = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/song/prepare`, {
+  method: 'POST', ...options,
+});
+// The lyric timing playthrough page: the aligned words over a plain frame (same shape as the composition preview).
+export const getMusicVideoLyricPlaythroughPreview = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/lyrics/playthrough/preview`, options);
 export const musicVideoLyricAlignEventsUrl = (jobId) =>
   `/api/music-video/lyrics/align/${encodeURIComponent(jobId)}/events`;
 export const cancelMusicVideoLyricAlign = (jobId, options = {}) =>

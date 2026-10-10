@@ -97,6 +97,7 @@ export default function PreviewDock({ project, sources, audioUrl, seekRequest, c
       )}
       {/* Folded below xl, the dock is one row: the player and its controls wait for the expand. */}
       {source?.kind === 'document' && <div className={collapsed ? 'max-xl:hidden' : ''}><CompositionPreviewPlayer project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} /></div>}
+      {source?.kind === 'lyrics' && <div className={collapsed ? 'max-xl:hidden' : ''}><CompositionPreviewPlayer project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} lyrics /></div>}
       {source?.kind === 'animatic' && <StoryboardAnimatic project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} />}
       {source?.kind === 'video' && <VideoPreview key={source.id} source={source} seekRequest={seekRequest} collapsed={collapsed} />}
     </aside>

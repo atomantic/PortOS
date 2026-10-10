@@ -356,6 +356,17 @@ export async function importDocumentTemplate(projectId, templateId = 'layered') 
   return storeVersion(projectId, files, { kind: 'template', name: templateId });
 }
 
+/**
+ * A shipped template's files as `readDocumentFiles` returns them, read in place
+ * with the shared lyric-type module beside them, for a preview no project owns
+ * (the lyric timing playthrough). Nothing is copied into the project.
+ */
+export async function readTemplateDocumentFiles(templateId = 'layered') {
+  if (!MUSIC_VIDEO_DOCUMENT_TEMPLATES.includes(templateId)) throw refuse('Unknown composition template', 'VALIDATION_ERROR', 400);
+  const { files } = await collectTree(join(TEMPLATE_ROOT, templateId), { excludeTests: true });
+  return new Map((await withSharedLyricType(files)).map((file) => [file.rel, { abs: file.abs, size: file.size }]));
+}
+
 /** Stage a host-assembled generated document for review before selection. */
 export async function stageGeneratedDocument(projectId, generatedFiles, { verifyCurrent, renderer = 'canvas' } = {}) {
   if (renderer === 'three') {
