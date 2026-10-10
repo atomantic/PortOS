@@ -235,7 +235,7 @@ function castAndSetsApproval(project) {
  * writes scenes without draft rows, so the storyboard reads them this way
  * until a director edits a shot; preparing the review writes the same rows.
  */
-export function boardShotFromScene(project, scene) {
+function boardShotFromScene(project, scene) {
   const world = (project.castAndSets?.status !== 'skipped' && project.castAndSets?.direction?.world) || {};
   return {
     sceneId: scene.sceneId,
