@@ -9,6 +9,8 @@ import { ArrowRight, CheckCircle2, Circle } from 'lucide-react';
  * quieter `secondary` choice beside it. Run buttons wait while `busy`. A stale
  * approval lists a Revert button per changed input whose approved value was kept.
  * An `optional` item is listed but never counted toward the step being done.
+ * An item's `notes` (open change requests) each get a Mark resolved button,
+ * which calls `onAction({ run: 'resolve-feedback', feedbackId })`.
  */
 export default function StageChecklist({ items, onAction, onRevert, headerAnchor = null, busy = false }) {
   if (!items?.length) return null;
@@ -39,6 +41,23 @@ export default function StageChecklist({ items, onAction, onRevert, headerAnchor
               {!item.done && item.details?.length > 0 && (
                 <ul className="list-disc space-y-0.5 pl-4 text-xs text-port-text-muted">
                   {item.details.map((text) => <li key={text} className="break-words">{text}</li>)}
+                </ul>
+              )}
+              {/* Open change requests: each note names its target and settles with its own button. */}
+              {!item.done && item.notes?.length > 0 && (
+                <ul aria-label="Open change requests" className="mt-1 space-y-1">
+                  {item.notes.map((note) => (
+                    <li key={note.id} className="flex min-w-0 flex-wrap items-start gap-x-2 gap-y-1 text-xs">
+                      <span className="min-w-0 flex-1 basis-40 break-words"><strong>{note.target}</strong>: {note.text}</span>
+                      {onAction && (
+                        <button type="button" disabled={busy} aria-label={`Mark resolved: ${note.target}`}
+                          onClick={() => onAction({ label: 'Mark resolved', run: 'resolve-feedback', feedbackId: note.id })}
+                          className="min-h-[44px] shrink-0 rounded border border-port-border px-2 py-1 text-xs text-port-accent disabled:opacity-50 sm:min-h-0">
+                          Mark resolved
+                        </button>
+                      )}
+                    </li>
+                  ))}
                 </ul>
               )}
               {!item.done && item.revert && onRevert && (

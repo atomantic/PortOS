@@ -157,9 +157,15 @@ function staleApprovalItem(project, readiness) {
     kind: 'stale-approvals',
     tone: 'warn',
     title: stale.length === 1 ? `${stale[0][1]} was approved earlier and has changed since` : `${stale.length} approvals were given before later changes`,
-    detail: `${stale.map(describe).join('. ')}. Re-approve, or undo the change.`,
+    detail: `${stale.map(describe).join('. ')}. Keep the approval, or undo the change.`,
     projectId: project.id,
     openTo: stale[0][2],
+    // Each approval settles right here: keep it on the current inputs (the Cast & Sets
+    // check-in is re-stamped; a production approval is re-given when nothing else blocks it),
+    // or put back a changed input whose approved value was kept.
+    approvals: stale.map(([key, label]) => ({ stage: key, label,
+      canKeep: key === 'castAndSets' || !(readiness[key].problems || []).length,
+      revertible: readiness[key].stale.revertible || [] })),
   };
 }
 

@@ -38,7 +38,9 @@ const { sseState, ytSseStates, getYtSseState } = vi.hoisted(() => {
 
 // This page suite exercises existing controls with production approvals already granted.
 // ProductionReviewPanel and route integration suites exercise the real approval refusals.
+const feedbackCalls = vi.hoisted(() => ({ resolveFeedback: vi.fn(async () => null), revise: vi.fn(async () => ({ revision: { sceneIds: ['s-a'] } })) }));
 vi.mock('../hooks/useMusicVideoProductionReview.js', () => ({ default: ({ project }) => ({
+  ...feedbackCalls,
   readiness: project?.productionReadiness || { readyForProduction: true, basis: {}, art: { approved: true, problems: [] }, storyboard: { approved: true, problems: [] }, proof: { approved: true, problems: [] } },
   busy: false, error: null, proof: { active: false }, save: vi.fn(), prepare: vi.fn(), approve: vi.fn(), renderProof: vi.fn(),
 }) }));
@@ -3160,6 +3162,25 @@ describe('stage checklist and project options', () => {
     fireEvent.click(within(checklist).getByRole('button', { name: 'Choose a guide' }));
     await waitFor(() => expect(document.getElementById('mv-look-guides')).toHaveFocus());
     expect(within(document.getElementById('mv-look-guides')).getByRole('button', { name: 'Use Cast sheet as visual guide' })).toBeInTheDocument();
+  });
+
+  it('lists open storyboard feedback on its own Feedback row, settled with buttons there, never under Lyrics', async () => {
+    const note = { id: 'fb-a', stage: 'storyboard', target: 'Chorus', text: 'Put the lyrics on the wall, not the screen', decision: 'request-changes', basis: 'board' };
+    const project = { ...PROJECT_ANALYZED, scenes: [{ sceneId: 's-a', label: 'Chorus', startSec: 0, endSec: 4 }],
+      productionReview: { draft: { storyboard: [] }, feedback: [note] },
+      productionReadiness: { readyForProduction: false, basis: { storyboard: 'board' }, art: { approved: true, problems: [] },
+        storyboard: { approved: false, problems: [`Resolve storyboard feedback for ${note.target}: ${note.text}`] }, proof: { approved: false, problems: [] } } };
+    await openProject(project, 'board');
+    const checklist = screen.getByRole('region', { name: 'What this step needs' });
+    expect(within(checklist).queryByText('Lyrics')).toBeNull();
+    expect(within(checklist).queryByRole('button', { name: /Import lyrics/ })).toBeNull();
+    const requests = within(checklist).getByRole('list', { name: 'Open change requests' });
+    expect(requests).toHaveTextContent('Chorus: Put the lyrics on the wall, not the screen');
+    expect(screen.getByRole('region', { name: 'Approve: Lyric-timed storyboard' })).toHaveTextContent('Resolve the change request on Chorus first.');
+    fireEvent.click(within(checklist).getByRole('button', { name: /Revise from feedback/ }));
+    await waitFor(() => expect(feedbackCalls.revise).toHaveBeenCalledWith('storyboard'));
+    fireEvent.click(within(requests).getByRole('button', { name: 'Mark resolved: Chorus' }));
+    expect(feedbackCalls.resolveFeedback).toHaveBeenCalledWith('fb-a', '');
   });
 
   it('builds the cast & sets from the Look checklist when nothing is written yet', async () => {
