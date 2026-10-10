@@ -42,6 +42,18 @@ describe('PM2 startup app sets', () => {
     }
   });
 
+  it('directs fresh production installs to the build-producing npm start command', () => {
+    const setupSh = read('setup.sh');
+    const setupPs1 = read('setup.ps1');
+    const shellProduction = setupSh.match(/echo "\s*Production:\s+([^"]+)"/)?.[1];
+    const psProduction = setupPs1.match(/Write-Host "\s*Production:\s+"[^;]*;\s*Write-Host "([^"]+)"/)?.[1];
+
+    expect(shellProduction).toBe('npm start');
+    expect(psProduction).toBe('npm start');
+    expect(setupSh).not.toContain('pm2:start');
+    expect(setupPs1).not.toContain('pm2:start');
+  });
+
   it('uses only production apps in both update scripts and their recovery starts', () => {
     const expectedApps = productionApps.join(',');
     const updateSh = read('update.sh');
