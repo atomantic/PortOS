@@ -3,10 +3,9 @@ import { unfoldToAnchor } from '../lib/unfoldToAnchor.js';
 import useMusicVideoProductionReview from '../hooks/useMusicVideoProductionReview.js';
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams, useLocation } from 'react-router';
-import { Plus, Film, Copy, Trash2, Wand2, Pencil } from 'lucide-react';
+import { Plus, Film, Wand2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
-import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import PageHeader from '../components/PageHeader';
 import Banner from '../components/ui/Banner.jsx';
@@ -67,6 +66,7 @@ import AutonomousStartDrawer from '../components/musicVideo/AutonomousStartDrawe
 import { automationDraftFrom, automationFromDraft } from '../lib/musicVideoAutomation.js';
 import { listUniverseNames } from '../services/apiUniverseBuilder.js';
 import MusicVideoLayout, { MUSIC_VIDEO_PAGE_ID, MUSIC_VIDEO_SCROLL_ID } from '../components/musicVideo/MusicVideoLayout.jsx';
+import ProjectManageActions from '../components/musicVideo/ProjectManageActions.jsx';
 import ProjectSettingsDrawer, { SETTINGS_TAB_IDS } from '../components/musicVideo/ProjectSettingsDrawer.jsx';
 import MusicVideoProjectCard from '../components/musicVideo/MusicVideoProjectCard.jsx';
 import PreviewDock from '../components/musicVideo/PreviewDock.jsx';
@@ -1319,7 +1319,7 @@ export default function MusicVideo() {
       <PageHeader
         icon={Film}
         title="Music Video"
-        subtitle="Beat-aware music videos — autopilot or hands-on"
+        subtitle={selected ? null : 'Beat-aware music videos — autopilot or hands-on'}
         actions={(
           <>
             <label htmlFor="mv-project-picker" className="sr-only">Project</label>
@@ -1329,67 +1329,13 @@ export default function MusicVideo() {
               onChange={(e) => selectProject(e.target.value || null)}
               onFocus={() => setSummariesWanted(true)}
               disabled={loading || youtube.editJob.active}
-              className="min-w-0 w-full sm:w-72 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm disabled:opacity-50"
+              className="w-40 min-w-0 max-w-[45vw] sm:w-72 sm:max-w-none bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm disabled:opacity-50"
             >
               <option value="">{loading ? 'Loading projects…' : 'Select a project…'}</option>
               {sortedProjects.map((project) => (
                 <option key={project.id} value={project.id}>{formatProjectPickerLabel(project.name)}</option>
               ))}
             </select>
-            {selected && (
-              <details className="min-w-0">
-                <summary className="min-h-[44px] cursor-pointer rounded border border-port-border px-2 py-1.5 text-sm">Project actions · v{selected.version || 1}</summary>
-                <div className="flex flex-wrap items-center gap-1 pt-1.5 pb-0">
-                <button
-                  type="button"
-                  onClick={handleRename}
-                  title="Rename this version"
-                  aria-label="Rename project"
-                  className="flex min-h-[44px] items-center justify-center gap-1 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm sm:min-h-0"
-                >
-                  <Pencil size={15} aria-hidden="true" /> Rename
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleClone()}
-                  disabled={cloning}
-                  title={`Create an editable v${(selected.version || 1) + 1}; keep scene media attached and clear the final render`}
-                  className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm disabled:opacity-50 sm:min-h-0 sm:min-w-0"
-                >
-                  <Copy size={15} aria-hidden="true" /> <span className="max-sm:sr-only">{cloning ? 'Forking…' : `Fork v${(selected.version || 1) + 1}`}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleClone({ variant: 'video-generation' })}
-                  disabled={cloning}
-                  title="Keep the song and storyboard; start fresh cast, sets and mood board with footage rendering. No generation starts."
-                  className="min-h-[44px] rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm disabled:opacity-50 sm:min-h-0"
-                >
-                  Fork for video generation
-                </button>
-                {isConfirmingDelete(selected.id) ? (
-                  <ConfirmButtonPair
-                    prompt="Delete?"
-                    confirmText="Delete"
-                    ariaLabel={`Confirm delete project ${selected.name}`}
-                    confirmAriaLabel={`Confirm delete project ${selected.name}`}
-                    onConfirm={() => confirmDelete(() => handleDelete(selected.id))}
-                    onCancel={cancelDelete}
-                  />
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteRequest(selected.id)}
-                    title="Delete project"
-                    aria-label="Delete project"
-                    className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded border border-port-border px-2 py-1.5 text-sm text-port-error sm:min-h-0 sm:min-w-0"
-                  >
-                    <Trash2 size={15} />
-                  </button>
-                )}
-                </div>
-              </details>
-            )}
             {!selected && (
               <>
             <button
@@ -1535,7 +1481,20 @@ export default function MusicVideo() {
           </div>
         )}
         {selected && (
-          <ProjectSettingsDrawer open={!!settingsTab} tab={settingsTab || 'project'} onTabChange={setSettingsTab} onClose={() => setSettingsTab(null)} board={board} />
+          <ProjectSettingsDrawer open={!!settingsTab} tab={settingsTab || 'project'} onTabChange={setSettingsTab} onClose={() => setSettingsTab(null)}
+            board={board}
+            manageActions={(
+              <ProjectManageActions
+                project={selected}
+                cloning={cloning}
+                onFork={(options) => handleClone(options)}
+                confirmingDelete={isConfirmingDelete(selected.id)}
+                onDeleteRequest={() => handleDeleteRequest(selected.id)}
+                onDeleteConfirm={() => confirmDelete(() => handleDelete(selected.id))}
+                onDeleteCancel={cancelDelete}
+              />
+            )}
+          />
         )}
         {selected && (
           <MusicVideoLayout
