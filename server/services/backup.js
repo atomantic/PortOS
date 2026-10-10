@@ -1846,7 +1846,7 @@ const DUMP_UNREADABLE = Object.freeze({ status: 'failed', reason: 'dump_unreadab
  *   { status: 'skipped', reason: 'not_configured' }    (real restore, PG unreachable)
  *   { status: 'failed', reason: 'manifest_unreadable'|'manifest_mismatch'|'dump_unreadable'|'dump_incomplete'|'restore_compatibility'|'restore_preflight'|'restore_journal'|'backup_snapshot_busy'|'restore_error'|'timeout', error? }
  *     (nothing changed; a failed replay is reported only once proven rolled back)
- *   { status: 'failed', reason: 'restore_recovery_pending'|'restore_commit_unknown'|'restore_schema_reconciliation'|'restore_sync_resync'|'restore_recovery_release', error, recovery }
+ *   { status: 'failed', reason: 'restore_recovery_pending'|'restore_commit_unknown'|'restore_schema_reconciliation'|'restore_catalog_reconciliation'|'restore_sync_resync'|'restore_recovery_release', error, recovery }
  *     (a restore awaits recovery: ordinary database work stays fenced until
  *     resumeDatabaseRestore finishes it — see backupRestoreRecovery.js, #9725)
  * A successful real restore also carries `syncCursorsRewound` (peer count).

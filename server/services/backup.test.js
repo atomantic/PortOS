@@ -73,6 +73,12 @@ vi.mock('../lib/databaseMaintenanceJournal.js', () => ({
 vi.mock('../scripts/run-db-migrations.js', () => ({
   runDbMigrations: vi.fn().mockResolvedValue(0),
 }));
+const catalogRepair = vi.hoisted(() => ({
+  migrate: vi.fn().mockResolvedValue({ skipped: false }),
+  tags: vi.fn().mockResolvedValue({ skipped: false }),
+}));
+vi.mock('../scripts/migrateCatalogPayload.js', () => ({ migrateCatalogPayload: catalogRepair.migrate }));
+vi.mock('../scripts/repairUniverseTags.js', () => ({ repairUniverseTags: catalogRepair.tags }));
 const reconcileMediaAssets = vi.hoisted(() => vi.fn().mockResolvedValue({ ok: true }));
 vi.mock('./mediaAssetIndex/db.js', () => ({ reconcileMediaAssets }));
 const executionRestore = vi.hoisted(() => ({ prepare: vi.fn(), finish: vi.fn() }));
@@ -1601,6 +1607,14 @@ describe('restorePostgres', () => {
       expect(readRecoveryJournal()).toBeNull();
     });
 
+    it('forces catalog payload migration and universe-tag repair past stale disk markers', async () => {
+      catalogRepair.migrate.mockClear();
+      catalogRepair.tags.mockClear();
+      expect(await runRestore()).toMatchObject({ status: 'ok' });
+      expect(catalogRepair.migrate).toHaveBeenCalledWith({ force: true });
+      expect(catalogRepair.tags).toHaveBeenCalledWith({ force: true });
+    });
+
     it('retains the generic fence when rollback execution reconciliation fails', async () => {
       executionRestore.finish.mockRejectedValueOnce(new Error('fixture rollback evidence unavailable'));
       const result = await runRestore({ exitCode: 1 });
@@ -1613,6 +1627,8 @@ describe('restorePostgres', () => {
     it.each([
       ['schema upgrade', () => ensureSchema.mockRejectedValueOnce(new Error('ddl failed')), 'restore_schema_reconciliation'],
       ['ordered migration', () => runDbMigrations.mockRejectedValueOnce(new Error('migration failed')), 'restore_schema_reconciliation'],
+      ['catalog payload migration', () => catalogRepair.migrate.mockRejectedValueOnce(new Error('payload walk failed')), 'restore_catalog_reconciliation'],
+      ['universe tag repair', () => catalogRepair.tags.mockRejectedValueOnce(new Error('tag walk failed')), 'restore_catalog_reconciliation'],
       ['media rebuild', () => reconcileMediaAssets.mockRejectedValueOnce(new Error('media read failed')), 'restore_media_reconciliation'],
       ['cursor write', () => rewindPostgresSyncCursors.mockRejectedValueOnce(new Error('disk full')), 'restore_sync_resync'],
     ])('a %s fault after commit stays fenced, then recovery repairs from the original floors without replaying', async (_case, inject, reason) => {
