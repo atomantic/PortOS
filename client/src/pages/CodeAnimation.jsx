@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Clock3, Copy, FileCode2, Film, Globe, ImagePlus, LoaderCircle, Music2, PenLine, Sparkles, Wand2, X } from 'lucide-react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import PageHeader from '../components/PageHeader';
+import RouteTabsHeader from '../components/ui/RouteTabsHeader';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import AlbumTrackPicker from '../components/music/AlbumTrackPicker';
 import CodeAnimationPreview from '../components/codeAnimation/CodeAnimationPreview';
@@ -908,10 +909,14 @@ export default function CodeAnimation() {
         subtitle="Prompt an LLM to code an animated film, with no assets, in a universe's style, then preview it and record it to video."
       />
 
-    <nav aria-label="Animation mode" className="flex shrink-0 flex-wrap gap-2 border-b border-port-border px-4 py-2">
-      <Link to="/code-animation" className={buttonSecondary} aria-current={!production ? 'page' : undefined}>Fast HTML</Link>
-      <Link to="/code-animation/production" className={buttonSecondary} aria-current={production ? 'page' : undefined}>Production</Link>
-    </nav>
+    <RouteTabsHeader
+      ariaLabel="Animation mode"
+      activeTab={production ? 'production' : 'fast'}
+      tabs={[
+        { id: 'fast', label: 'Fast HTML', to: '/code-animation', icon: FileCode2 },
+        { id: 'production', label: 'Production', to: '/code-animation/production', icon: Film },
+      ]}
+    />
     <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6">
       <div className="mx-auto max-w-7xl">
         {production ? <ProductionProjects /> : <FastCodeAnimation />}
