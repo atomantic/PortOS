@@ -13,15 +13,20 @@ import { CAST_CHECKIN_ANCHOR, LOOK_GUIDES_ANCHOR } from '../../../lib/musicVideo
 const ANCHOR_STYLE = { scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' };
 
 const directionSummary = (project) => {
-  const refs = (project.visualSpec?.references || []).length + (project.styleReferences || []).length;
+  const specRefs = (project.visualSpec?.references || []).length;
+  const styleImages = (project.styleReferences || []).length;
   const characterStyle = project.concept?.characterStyleId
     ? (project.concept.characterStyle?.split(':')[0] || project.concept.characterStyleId) : '';
   return [
     characterStyle ? `Character style: ${characterStyle}` : 'No character style',
     project.concept?.prompt?.trim() ? 'Concept written' : 'No concept yet',
-    project.concept?.style?.trim() ? 'Style set' : 'No style yet',
+    // "Visual", so an empty frame style never reads as a missing song style.
+    project.concept?.style?.trim() ? 'Visual style set' : 'No visual style yet',
     ...(project.concept?.songStyle?.trim() ? ['Song style set'] : []),
-    refs ? `${formatCount(refs)} look ${refs === 1 ? 'reference' : 'references'}` : 'No look references',
+    // References and uploaded style images are counted apart: they are two lists in the panel.
+    ...(specRefs ? [`${formatCount(specRefs)} ${specRefs === 1 ? 'reference' : 'references'}`] : []),
+    ...(styleImages ? [`${formatCount(styleImages)} style ${styleImages === 1 ? 'image' : 'images'}`] : []),
+    ...(specRefs || styleImages ? [] : ['No look references']),
   ].join(' · ');
 };
 
@@ -152,20 +157,14 @@ export default function CastSetsStage({ board }) {
           onSkip={board.skipCastAndSets}
         />
       ) : (
-        <div id={CAST_CHECKIN_ANCHOR} tabIndex={-1} style={ANCHOR_STYLE} className="rounded-lg border border-port-border bg-port-card p-3 space-y-3">
-          <p className="text-sm text-port-text-muted">Build the cast and sets from your direction, or skip and add your own sheets.</p>
-          <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={() => castSets.start()} disabled={locked || castSets.busy || kickoff.running || !project.audioAnalysis}
-              title={project.audioAnalysis ? undefined : 'Analyze the track first'}
-              className="min-h-10 rounded-lg bg-port-accent px-3 py-2 text-sm font-medium text-white disabled:opacity-50">
-              Build cast &amp; sets
-            </button>
-            <button type="button" onClick={() => castSets.skip()} disabled={locked || castSets.busy || kickoff.running}
-              className="min-h-10 rounded-lg border border-port-border px-3 py-2 text-sm text-port-text-muted hover:text-white disabled:opacity-50">
-              Skip
-            </button>
-          </div>
-        </div>
+        // Build lives on the step's checklist (and the header); this keeps only the way out.
+        <p id={CAST_CHECKIN_ANCHOR} tabIndex={-1} style={ANCHOR_STYLE} className="px-1 text-xs text-port-text-muted">
+          Using your own sheets instead?{' '}
+          <button type="button" onClick={() => castSets.skip()} disabled={locked || castSets.busy || kickoff.running}
+            className="min-h-[44px] text-port-accent hover:underline disabled:opacity-50 sm:min-h-0">
+            Skip cast &amp; sets
+          </button>
+        </p>
       )}
       <DevArtifactsPanel
         id={LOOK_GUIDES_ANCHOR}
