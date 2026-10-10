@@ -20,7 +20,7 @@ import { mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { parseEnvFile } from './lib/envFile.js';
+import { parseEnvFile, resolveHttpMirrorPortForRoot } from './lib/envFile.js';
 
 const require = createRequire(import.meta.url);
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -233,5 +233,39 @@ describe('ecosystem.config.cjs parses .env with the setup grammar (#9471)', () =
       expect(config.DATABASE_MODE).toBe('native');
       expect(server(config).env.PGPORT).toBe(5432);
     });
+  });
+});
+
+describe('ecosystem.config.cjs loopback HTTP mirror port (#10950)', () => {
+  const mirrorOf = (envContent, env) => {
+    const { config, dir } = loadConfigIn(envContent, { PORTOS_HTTP_PORT: undefined, ...env });
+    return { port: config.apps.find((a) => a.name === 'portos-server').env.PORTOS_HTTP_PORT, dir };
+  };
+
+  it('defaults to the canonical mirror port', () => {
+    expect(mirrorOf(null, {}).port).toBe(5553);
+  });
+
+  it('honors a port saved only in .env, and advertises the same one to setup helpers', () => {
+    const { port, dir } = mirrorOf('PORTOS_HTTP_PORT=5599\n', {});
+    expect(port).toBe(5599);
+    expect(resolveHttpMirrorPortForRoot(dir)).toBe(port);
+  });
+
+  it('lets a nonempty exported value win over .env, matching setup helpers', () => {
+    const saved = { PORTOS_HTTP_PORT: '5588' };
+    const { config, dir } = loadConfigIn('PORTOS_HTTP_PORT=5599\n', saved);
+    const port = config.apps.find((a) => a.name === 'portos-server').env.PORTOS_HTTP_PORT;
+    expect(port).toBe(5588);
+    const prev = process.env.PORTOS_HTTP_PORT;
+    process.env.PORTOS_HTTP_PORT = '5588';
+    try { expect(resolveHttpMirrorPortForRoot(dir)).toBe(5588); }
+    finally { if (prev === undefined) delete process.env.PORTOS_HTTP_PORT; else process.env.PORTOS_HTTP_PORT = prev; }
+  });
+
+  it.each(['abc', '0', '70000', '55.5', ''])('skips invalid value %j and falls through to the next source', (bad) => {
+    expect(mirrorOf(null, { PORTOS_HTTP_PORT: bad }).port).toBe(5553);
+    expect(mirrorOf('PORTOS_HTTP_PORT=5599\n', { PORTOS_HTTP_PORT: bad }).port).toBe(5599);
+    expect(mirrorOf(`PORTOS_HTTP_PORT=${bad}\n`, {}).port).toBe(5553);
   });
 });

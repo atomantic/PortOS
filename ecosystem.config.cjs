@@ -22,7 +22,7 @@ const BASE_ENV = {
 const envFile = path.join(__dirname, '.env');
 // Parsed by the same dependency-free grammar setup uses (scripts/lib/envFile.cjs),
 // so quoted values resolve identically here and in setup (#9471).
-const { parseEnvFile } = require('./scripts/lib/envFile.cjs');
+const { parseEnvFile, resolveHttpMirrorPort } = require('./scripts/lib/envFile.cjs');
 const dotenv = parseEnvFile(envFile); // {} when .env is missing
 const envValue = (key) => dotenv[key] || null;
 // Same precedence as scripts/setup-db.js getMode(): a NONEMPTY exported PGMODE →
@@ -207,7 +207,7 @@ module.exports = {
         // real headroom at negligible cost — idle threads are just parked.
         UV_THREADPOOL_SIZE: '16',
         PORT: PORTS.API,
-        PORTOS_HTTP_PORT: PORTS.API_LOCAL, // Loopback HTTP mirror when HTTPS is active
+        PORTOS_HTTP_PORT: resolveHttpMirrorPort({ dotenv }), // exported > .env > PORTS.API_LOCAL (#10950); Loopback HTTP mirror when HTTPS is active
         HOST: '0.0.0.0',
         PGHOST: PG_HOST,
         PGPORT: PG_PORT,

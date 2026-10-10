@@ -32,6 +32,11 @@ import http from 'node:http';
 import https from 'node:https';
 import { PORTS } from '../server/lib/ports.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
+import { resolveHttpMirrorPortForRoot } from './lib/envFile.js';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const HEALTH_PATH = '/api/system/health';
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -151,7 +156,7 @@ export async function waitForHealthy({
 
 async function runCli() {
   const apiPort = Number(process.env.PORT) || PORTS.API;
-  const mirrorPort = Number(process.env.PORTOS_HTTP_PORT) || PORTS.API_LOCAL;
+  const mirrorPort = resolveHttpMirrorPortForRoot(ROOT);
   const timeoutMs = parseTimeoutMs(process.env.PORTOS_HEALTH_WAIT_MS);
   const urls = healthProbeUrls({ apiPort, mirrorPort });
 

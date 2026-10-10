@@ -6,11 +6,17 @@
  */
 
 import { readFileSync, writeFileSync } from 'fs';
+import { join } from 'path';
 import envFileParser from './envFile.cjs';
 
 // The grammar lives in envFile.cjs so ecosystem.config.cjs (PM2) parses `.env`
 // exactly as setup does; see that file for the supported syntax.
-export const { parseEnvContent, parseEnvFile } = envFileParser;
+export const { parseEnvContent, parseEnvFile, resolveHttpMirrorPort } = envFileParser;
+
+/** Mirror port for a repo root, from exported env then that root's saved `.env`. */
+export function resolveHttpMirrorPortForRoot(root) {
+  return resolveHttpMirrorPort({ dotenv: parseEnvFile(join(root, '.env')) });
+}
 
 /**
  * Set (or add) a single key in a .env file without touching other lines.
