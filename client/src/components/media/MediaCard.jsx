@@ -2,7 +2,7 @@ import { memo, useState } from 'react';
 import { Trash2, Download, Film, Image as ImageIcon, Sparkles, Eye, EyeOff, Maximize2, Wand2, Star, MessageSquare, Pencil, Box, Timer } from 'lucide-react';
 import MediaImage from '../MediaImage';
 import AddToCollectionMenu from './AddToCollectionMenu';
-import PinToMoodBoardMenu, { canPinToMoodBoard } from './PinToMoodBoardMenu';
+import PinToMoodBoardMenu from './PinToMoodBoardMenu';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { loraDisplayName } from './normalize';
 import { formatDurationMs } from '../../utils/formatters';
@@ -20,6 +20,15 @@ const TONE = {
   neutral: 'bg-port-border hover:bg-port-border/70 text-white',
   danger: 'bg-port-error/20 hover:bg-port-error/40 text-port-error',
 };
+
+// Mirrors PinToMoodBoardMenu's render gate (valid image/video key, or an
+// http(s)/app-path thumbnail). Kept here so a test mock of that menu does
+// not have to re-export the predicate. A hidden trigger must not reserve a
+// file-row cell.
+function moodBoardTriggerVisible(item) {
+  if (/^(image|video):[^:]+$/.test(item?.key || '')) return true;
+  return typeof item?.previewUrl === 'string' && /^(https?:\/\/|\/(?!\/))/.test(item.previewUrl);
+}
 
 // Five file actions fit one row once the card interior is ~176px (the five-up
 // recent-renders column). Narrower — two-up on a phone — keeps three columns
@@ -127,7 +136,7 @@ function MediaCard({
     },
   ].filter(Boolean);
   const fileActionCount = (showCollectionMenu ? 1 : 0)
-    + (showMoodBoardMenu && canPinToMoodBoard(item) ? 1 : 0)
+    + (showMoodBoardMenu && moodBoardTriggerVisible(item) ? 1 : 0)
     + 1
     + (onToggleHidden ? 1 : 0)
     + (onDelete ? 1 : 0);

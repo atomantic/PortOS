@@ -42,13 +42,6 @@ const SIZES = {
 // rejects anything else, so we must not send a non-media key as `mediaKey`.
 const isValidMediaKey = (key) => /^(image|video):[^:]+$/.test(key || '');
 
-// Same gate the trigger uses before it renders. MediaCard counts cells from
-// this so a hidden trigger doesn't leave an empty file-row column.
-export function canPinToMoodBoard(item) {
-  if (isValidMediaKey(item?.key)) return true;
-  return typeof item?.previewUrl === 'string' && /^(https?:\/\/|\/(?!\/))/.test(item.previewUrl);
-}
-
 // Row search for the board list. The shell's default (#3312) is the media-
 // COLLECTION view, whose bucket ordering sinks auto-generated empties — that
 // classification reads collection provenance a board record simply doesn't
