@@ -521,7 +521,7 @@ function MoodBoardEditor({ id }) {
               value={name}
               maxLength={200}
               onChange={(e) => setName(e.target.value)}
-              className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none"
+              className="block w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none"
             />
           </div>
           <div className="min-w-0 flex-[2_1_20rem]">
@@ -532,7 +532,7 @@ function MoodBoardEditor({ id }) {
               maxLength={5000}
               rows={1}
               onChange={(e) => setDescription(e.target.value)}
-              className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none resize-y"
+              className="block w-full h-[34px] min-h-[34px] bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none resize-y"
             />
           </div>
           <button
@@ -546,9 +546,11 @@ function MoodBoardEditor({ id }) {
         </div>
       </div>
 
-      <MoodBoardStylePanel board={board} onBoardChange={setBoard} />
-
-      <MoodBoardCollagePanel board={board} onBoardChange={setBoard} />
+      {/* Style + collage share a row on wide boards so pinned items stay above the fold */}
+      <div className="grid grid-cols-1 @4xl/board:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-4 items-start">
+        <MoodBoardStylePanel board={board} onBoardChange={setBoard} />
+        <MoodBoardCollagePanel board={board} onBoardChange={setBoard} />
+      </div>
 
       {/* Use board width, including space lost to the app sidebar. */}
       <div className="grid grid-cols-1 @4xl/board:grid-cols-[minmax(0,1fr)_22rem] gap-6 items-start">
