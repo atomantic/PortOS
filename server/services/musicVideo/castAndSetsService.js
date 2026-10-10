@@ -272,6 +272,10 @@ function referencePaths(stage, item) {
     const path = id ? resolveGalleryImage(id, { mustExist: false }) : null;
     if (path) paths.push(path);
   }
+  for (const id of item.refImages || []) {
+    const path = resolveGalleryImage(id, { mustExist: false });
+    if (path && !paths.includes(path)) paths.push(path);
+  }
   return paths.slice(0, 4);
 }
 

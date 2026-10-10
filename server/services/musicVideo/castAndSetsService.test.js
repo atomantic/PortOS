@@ -808,17 +808,37 @@ describe('Cast & Sets procedural check-in', () => {
 });
 
 
+it('conditions the character, expressions and looks sheets on the director\'s own character references only', async () => {
+  const project = await seed({ visualSpec: { moodBoardId: 'mb-1', references: [
+    { id: 'own-upload', imageId: 'upload-face.png', role: 'character', condition: true },
+    { id: 'own-render', imageId: 'rendered-face.png', role: 'character', condition: true },
+    { id: 'mvr-board-1', imageId: 'board-face.png', role: 'character', condition: true },
+    { id: 'pinned', imageId: 'pinterest-0123456789abcdef.jpg', role: 'character', condition: true },
+    { id: 'mvr-cs-character', imageId: 'old-sheet.png', role: 'character', condition: true },
+    { id: 'unflagged', imageId: 'spare-face.png', role: 'character', condition: false },
+  ] } });
+  await service.startCastAndSets(project.id);
+  await runTo(project.id, 'review');
+  const refs = (key) => jobs.findLast((j) => keyOf(j) === key).params.referenceImagePaths?.map((p) => p.split(/[\\/]/).pop());
+  const character = jobs.find((j) => keyOf(j) === 'character');
+  expect(refs('character')).toEqual(['upload-face.png', 'rendered-face.png']);
+  expect(character.params.prompt).toContain('SAME person as the identity reference images');
+  expect(refs('expressions')).toEqual([`${character.id}.png`, 'upload-face.png', 'rendered-face.png']);
+  expect(refs('looks')).toEqual([`${character.id}.png`, 'upload-face.png', 'rendered-face.png']);
+  expect(refs('set:lab')).toBeUndefined();
+});
+
 it('keeps people out of set plates: no mood board person in the look, no character action in a set', async () => {
   const personBoard = { ...board, style: { prompt: 'An adult woman with tousled curls sits alone beside a rain-speckled window. Amber haze.' } };
   service.__setCastAndSetsDepsForTests(testDeps({ loadBoard: async () => personBoard }));
   runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION, look: 'amber haze, 35mm grain',
-    sets: DIRECTION.sets.map((set) => (set.id === 'harbor' ? { ...set, description: 'a wet stone quay. She sits on the edge of the quay. Keeper watches the tide.' } : set)) }) });
+    sets: DIRECTION.sets.map((set) => (set.id === 'harbor' ? { ...set, description: 'a wet stone quay. She sits on the edge of the quay. Keeper watches the tide.', lighting: 'sodium orange. She is lit from the lamp, then looks up into the lens.' } : set)) }) });
   const project = await seed({ concept: { prompt: 'an escape', style: 'grainy 1980s film, soft glow', subjects: [] } });
   await service.startCastAndSets(project.id);
   await runTo(project.id, 'review');
   const plate = (key) => jobs.findLast((j) => keyOf(j) === key).params.prompt;
-  expect(plate('set:harbor')).toContain('a wet stone quay. Lighting');
-  expect(plate('set:harbor')).not.toMatch(/She sits|Keeper watches/);
+  expect(plate('set:harbor')).toContain('a wet stone quay. Lighting: sodium orange.');
+  expect(plate('set:harbor')).not.toMatch(/She sits|Keeper watches|She is lit/);
   expect(plate('set:lab')).toContain('Look: amber haze, 35mm grain');
   expect(jobs.some((j) => j.params.prompt.includes('tousled curls'))).toBe(false);
 
