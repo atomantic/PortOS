@@ -50,6 +50,9 @@ import ProviderVisionTest from './ProviderVisionTest';
 // The editor states the same thing in its own inline banner, in prose.
 const RUNNER_NOT_ALLOWED_HINT = 'This command is not on the CoS Agent Runner’s allowlist, so /spawn and /spawn-tui will refuse it. The provider still works everywhere else (direct spawn, chat, pipeline). The allowlist is curated in the PortOS source, not in this form.';
 
+// Shown once per unified card as a pill's tooltip rather than as body text.
+const SHARED_CONFIG_TITLE = 'CLI and TUI share one provider configuration, including the catalog, model defaults, tier pins, effort, fallback, and generation settings. Edit either mode to update it. Arguments, timeouts, TUI timing, and CLI transport consent stay specific to their mode.';
+
 // Card presentation per card state. Exactly ONE border-color utility is
 // emitted per card — Tailwind resolves same-specificity color utilities by
 // stylesheet order, not by the order they appear in `className` — so the
@@ -417,7 +420,14 @@ export default function ProviderCard({
         )}
         {unified && (
           <div className="text-xs text-gray-400 space-y-1">
-            <p>CLI and TUI share one provider configuration, including the catalog, model defaults, tier pins, effort, fallback, and generation settings. Edit either mode to update it. Arguments, timeouts, TUI timing, and CLI transport consent stay specific to their mode.</p>
+            <span
+              tabIndex={0}
+              title={SHARED_CONFIG_TITLE}
+              aria-label={`Shared CLI/TUI config. ${SHARED_CONFIG_TITLE}`}
+              className="inline-block px-2 py-0.5 rounded-full border border-port-border text-gray-300 cursor-help"
+            >
+              Shared CLI/TUI config
+            </span>
             {modes.filter(mode => mode.id !== provider.id && statuses[mode.id]?.available === false).map(mode => (
               <p key={mode.id} className="text-port-warning">
                 {mode.type.toUpperCase()} benched: {statuses[mode.id].message || statuses[mode.id].reason}{' '}
