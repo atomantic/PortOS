@@ -142,6 +142,7 @@ export default function CastSetsStage({ board }) {
           stale={board.productionReadiness?.castAndSets?.stale || null}
           busy={locked || castSets.busy || kickoff.running}
           onOpenSheet={board.openArtifact}
+          onOpenPreview={board.openPreview}
           onApprove={board.approveCastAndSets}
           onRegenerate={() => castSets.regenerate()}
           onEditDirection={castSets.editDirection}

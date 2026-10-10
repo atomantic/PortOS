@@ -57,6 +57,7 @@ import useMusicVideoTakes from '../hooks/useMusicVideoTakes.js';
 import useMusicVideoTreatment, { aiSkipLabel } from '../hooks/useMusicVideoTreatment.js';
 import useHydratedPreviewRoute from '../hooks/useHydratedPreviewRoute.js';
 import { normalizeImage, normalizeVideo } from '../components/media/normalize.js';
+import { castAndSetsPreviewItems } from '../components/musicVideo/CastAndSetsReferenceProgress.jsx';
 import { useVideoFileSrc } from '../hooks/useVideoFileSrc.js';
 import MediaPreview from '../components/media/MediaPreview.jsx';
 import MidiInstallModal from '../components/install/MidiInstallModal.jsx';
@@ -1011,6 +1012,8 @@ export default function MusicVideo() {
         items.push(videoItem(take.assetId, `${take.assetId}.mp4`, take.prompt || scene.prompt || ''));
       }
     }
+    // Cast & sets references and their inputs open here too, never as a raw file.
+    items.push(...castAndSetsPreviewItems(selected.castAndSets));
     // Scenes can reuse the same frame/clip (Make's generation controls surface a
     // "Repetition: N unique frames" badge). Dedupe by key so prev/next and
     // openPreview's .find() land on a single item rather than the first of

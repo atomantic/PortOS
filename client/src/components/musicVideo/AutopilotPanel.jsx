@@ -115,9 +115,12 @@ function RunView({ run, production, codeFirst, project, readiness }) {
         {(run.pilot.scenes || []).map((pilot) => {
           const excerpt = project.excerpts?.find((e) => e.id === pilot.excerptId);
           return <div key={pilot.sceneId} className="space-y-0.5">
-            <p>{pilot.operation}: {pilot.sceneId} · {pilot.status || 'pending'}
-              {excerpt?.filename && <> · <a href={`/data/videos/${excerpt.filename}`} target="_blank" rel="noreferrer" className="text-port-accent underline">Watch pilot</a></>}
-            </p>
+            <p>{pilot.operation}: {pilot.sceneId} · {pilot.status || 'pending'}</p>
+            {/* Inline, not a raw-file link: a Home Screen app opens that in place with no way back. */}
+            {excerpt?.filename && <details>
+              <summary className="cursor-pointer text-port-accent min-h-[44px] sm:min-h-0 py-1">Watch pilot</summary>
+              <video src={`/data/videos/${encodeURIComponent(excerpt.filename)}`} controls playsInline preload="metadata" className="mt-1 w-full max-h-64 rounded bg-black" />
+            </details>}
             {pilot.evidence && <p className="text-port-text-muted">Continuous analysis: {pilot.evidence.continuous ? 'verified' : 'unverified'} · Sampled frames: {formatCount(pilot.evidence.continuousFrames)} · Temporal alignment: {pilot.evidence.temporal?.status || 'unverified'}</p>}
             {pilot.repair && <p className="text-port-warning">Repair: {pilot.repair.category} · {pilot.repair.reason} Replacement generation spend for this repair stage: {formatUsd(pilot.repair.expectedGenerationSpendUsd)}.</p>}
           </div>;
