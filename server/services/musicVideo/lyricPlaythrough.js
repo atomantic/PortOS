@@ -80,7 +80,9 @@ export async function buildLyricPlaythroughPreview(project, { overlay = false } 
   }
   const shots = timedShots(project.scenes);
   const scenes = shots.length ? shots : lyricScenes(cues, project.lyricMarkers, durationSec);
-  // Only the song and the words: no composition, overlay text or narrative events of the project's own.
-  const playthrough = { ...project, scenes, composition: { mode: 'document', textCues: [] } };
+  // Only the song and the words: no composition, overlay text, narrative events or film look of the
+  // project's own. The look would filter the whole page, and on the transparent overlay that dims the
+  // storyboard frames under the words.
+  const playthrough = { ...project, scenes, composition: { mode: 'document', textCues: [] }, filmLook: null };
   return buildDocumentPreview(playthrough, { files: overlay ? await readLyricOverlayDocumentFiles() : await readTemplateDocumentFiles('layered') });
 }
