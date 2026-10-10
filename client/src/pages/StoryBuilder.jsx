@@ -1363,7 +1363,7 @@ function StoryBuilderDetail({ storyId, stepParam }) {
         icon={Wand2}
         title={session.title}
         actions={(
-          <Link to="/story-builder" aria-label="All stories" className="inline-flex min-h-[44px] items-center text-xs text-gray-500 hover:text-port-accent">
+          <Link to="/story-builder" aria-label="All stories" className="inline-flex items-center py-2 text-xs text-gray-500 hover:text-port-accent">
             ← All stories
           </Link>
         )}
