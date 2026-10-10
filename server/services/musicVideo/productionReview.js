@@ -279,7 +279,7 @@ export function productionReadiness(project) {
     // A line is judged on the span its words give it (lyricCueSpan), the span the renderer shows:
     // forced-aligned words may run a little past a line window taken from the song's line timestamps.
     if (cues.some(c => !c.words?.length || c.words.some(w => !(Number.isFinite(w.startSec) && w.endSec > w.startSec))
-      || !(lyricCueSpan(c)?.endSec <= duration))) {
+      || !(lyricCueSpan(c)?.startSec >= 0 && lyricCueSpan(c).endSec <= duration))) {
       boardProblems.push('Every lyric line needs bounded, positive-duration word timings; repair zero-length or missing words.');
     }
   }
@@ -410,7 +410,7 @@ export function assertProductionApproval(project, stage = 'proof') {
  * claims human playback; rendering alone is not a review. */
 export function approveProductionStage(project, { stage, basis, proofReview, approvedBy, reviewer }) {
   const readiness = productionReadiness(project);
-  const expected = stage === 'proof'
+  let expected = stage === 'proof'
     ? hash({ basis: readiness.basis.proof, excerptId: project.productionReview?.proof?.excerptId,
       filename: project.excerpts?.find(e => e.id === project.productionReview?.proof?.excerptId)?.filename })
     : readiness.basis[stage];
@@ -424,6 +424,13 @@ export function approveProductionStage(project, { stage, basis, proofReview, app
     if (proofReview.excerptId !== excerpt?.id || proofReview.filename !== excerpt?.filename || !excerpt?.filename) {
       throw new ServerError('The rendered proof changed. Play and review the new excerpt before approving.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });
     }
+  }
+  // Approving a Board storyboard writes the derived rows it was judged on (boardStoryboard) into the
+  // draft, so code, renders and the making-of read the approved shots. The approval binds to that revision.
+  if (stage === 'storyboard' && project.productionReview?.draft?.storyboardSource !== 'document' && (project.scenes || []).length) {
+    project = { ...project, productionReview: { ...project.productionReview,
+      draft: { ...project.productionReview?.draft, storyboard: boardStoryboard(project) } } };
+    expected = productionReviewBasis(project).storyboard;
   }
   const decision = { stage, basis: expected, inputs: productionApprovalInputs(project)[stage], values: productionApprovalValues(project, stage), approvedAt: new Date().toISOString(),
     ...(approvedBy ? { approvedBy } : {}), ...(reviewer ? { reviewer: structuredClone(reviewer) } : {}),

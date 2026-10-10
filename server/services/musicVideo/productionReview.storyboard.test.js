@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { productionReadiness, productionAlignmentBasis } from './productionReview.js';
+import { productionReadiness, productionAlignmentBasis, approveProductionStage } from './productionReview.js';
 
 const WORD_PROBLEM = /bounded, positive-duration word timings/;
 const SHOT_PROBLEM = /^Complete timing, action, staging, camera and transition/;
@@ -48,5 +48,21 @@ describe('storyboard readiness after verified lyric timing', () => {
     const { storyboard } = productionReadiness(project({ draftShots: [edited] }));
     expect(storyboard.shots[0]).toEqual(edited);
     expect(storyboard.problems).toContain('Complete timing, action, staging, camera and transition for Verse.');
+  });
+});
+
+describe('approving a Board storyboard of derived shots', () => {
+  it('writes the derived rows into the draft and stays approved on that revision', () => {
+    const planned = project();
+    const draft = { ...planned.productionReview.draft, cast: 'The director', environments: 'Edit room', visualLanguage: 'Analog grain',
+      motionLanguage: 'Slow push-ins', guideArtifactId: 'g1' };
+    const ready = { ...planned, devArtifacts: [{ id: 'g1', mimeType: 'image/png', file: 'guide.png', version: 1 }],
+      productionReview: { ...planned.productionReview, draft } };
+    const art = approveProductionStage(ready, { stage: 'art', basis: productionReadiness(ready).basis.art });
+    const before = productionReadiness(art);
+    expect(before.storyboard.problems).toEqual([]);
+    const approved = approveProductionStage(art, { stage: 'storyboard', basis: before.basis.storyboard });
+    expect(approved.productionReview.draft.storyboard).toEqual(before.storyboard.shots);
+    expect(productionReadiness(approved).storyboard.approved).toBe(true);
   });
 });
