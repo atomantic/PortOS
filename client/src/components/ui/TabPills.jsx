@@ -239,6 +239,7 @@ export default function TabPills({
                   type="button"
                   role={isFilter ? undefined : 'tab'}
                   aria-selected={isFilter ? undefined : active}
+                  aria-current={!isFilter && active && t.to ? 'page' : undefined}
                   aria-pressed={isFilter ? active : undefined}
                   aria-controls={!isFilter && active && controlsIdPrefix ? `${controlsIdPrefix}-${t.id}` : undefined}
                   id={!isFilter && controlsIdPrefix ? `tab-${t.id}` : undefined}
@@ -294,6 +295,7 @@ export default function TabPills({
                 type="button"
                 role="tab"
                 aria-selected={active}
+                aria-current={active && t.to ? 'page' : undefined}
                 aria-controls={active && controlsIdPrefix ? `${controlsIdPrefix}-${t.id}` : undefined}
                 id={controlsIdPrefix ? `tab-${t.id}` : undefined}
                 ref={(node) => { tabRefs.current[index] = node; }}
