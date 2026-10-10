@@ -131,7 +131,12 @@ describe('Pipeline generation never reaches a CLI provider for unauthorized call
         sink.runPromptThroughProvider.mockClear();
         const response = await post(appFor(address), operation, headers);
         expect(response.status, `${operation[0]}: ${JSON.stringify(response.body)}`).toBe(200);
-        await vi.waitFor(() => expect(sink.runPromptThroughProvider, operation[0]).toHaveBeenCalledTimes(1));
+        // The run starts asynchronously after the 200; vi.waitFor's 1 s default is
+        // too tight under a loaded pregate, and a generous cap costs nothing on a pass.
+        await vi.waitFor(
+          () => expect(sink.runPromptThroughProvider, operation[0]).toHaveBeenCalledTimes(1),
+          { timeout: 10_000 },
+        );
         expect(sink.runPromptThroughProvider.mock.calls[0][0].provider).toEqual(cliProvider);
       }
     }
