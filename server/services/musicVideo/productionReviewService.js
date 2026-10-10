@@ -22,10 +22,16 @@ function changed(project) {
 
 export const getProductionReview = async id => present(await requireProject(id));
 
-export async function assertMusicVideoSceneReview(tag) {
+/**
+ * The approval a scene's media job needs. A still is how the director reviews
+ * the storyboard, so a still for a planned shot needs only the art direction;
+ * clips, and anything a production run submits, wait for the storyboard.
+ */
+export async function assertMusicVideoSceneReview(tag, kind = null) {
   if (!tag?.projectId || !tag.sceneId) return;
   const project = await requireProject(tag.projectId);
-  assertProductionApproval(project, 'storyboard');
+  const boardStill = kind === 'image' && !tag.productionRunId && (project.scenes || []).some(scene => scene.sceneId === tag.sceneId);
+  assertProductionApproval(project, boardStill ? 'art' : 'storyboard');
   if (tag.productionRunId) {
     const run = project.productionRuns?.find(r => r.id === tag.productionRunId);
     if (!run?.pilot?.scenes?.some(scene => scene.sceneId === tag.sceneId)) assertProductionApproval(project, 'proof');
