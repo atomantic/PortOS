@@ -5,6 +5,7 @@ import CreativeSetupPanel from '../CreativeSetupPanel.jsx';
 import LookReferencesPanel from '../LookReferencesPanel.jsx';
 import VisualSpecPanel from '../VisualSpecPanel.jsx';
 import AutoSizeTextarea from '../../ui/AutoSizeTextarea';
+import { useState } from 'react';
 import { formatCount } from '../../../utils/formatters.js';
 
 const directionSummary = (project) => {
@@ -20,9 +21,37 @@ const directionSummary = (project) => {
   ].join(' · ');
 };
 
+/** Re-read the song style from its Suno link, for a song imported before excluded styles were kept. */
+function SongStyleFromSuno({ onRead, disabled }) {
+  const [open, setOpen] = useState(false);
+  const [url, setUrl] = useState('');
+  const [reading, setReading] = useState(false);
+  if (!open) {
+    return (
+      <button type="button" disabled={disabled} onClick={() => setOpen(true)}
+        className="text-xs text-port-accent hover:underline disabled:opacity-50">Read from Suno</button>
+    );
+  }
+  const read = () => {
+    setReading(true);
+    onRead(url.trim()).then((ok) => { setReading(false); if (ok) { setOpen(false); setUrl(''); } });
+  };
+  return (
+    <div className="flex min-w-0 basis-full flex-wrap items-center gap-2">
+      <label htmlFor="mv-song-style-suno" className="sr-only">Suno song link</label>
+      <input id="mv-song-style-suno" type="url" value={url} onChange={(e) => setUrl(e.target.value)}
+        placeholder="https://suno.com/song/…"
+        className="min-w-0 flex-1 rounded border border-port-border bg-port-bg px-2 py-1 text-sm" />
+      <button type="button" disabled={disabled || reading || !url.trim()} onClick={read}
+        className="rounded bg-port-accent px-3 py-1 text-xs text-white disabled:opacity-50">{reading ? 'Reading…' : 'Read'}</button>
+      <button type="button" onClick={() => setOpen(false)} className="text-xs text-port-text-muted hover:underline">Cancel</button>
+    </div>
+  );
+}
+
 /** Concept, style, universe and look references: what the cast and sets are built from. */
 function CreativeDirection({ board }) {
-  const { project, locked, conceptDraft, styleDraft, songStyleDraft } = board;
+  const { project, locked, conceptDraft, styleDraft, songStyleDraft, songStyleFromSuno } = board;
   return (
     <>
       <CreativeSetupPanel
@@ -64,7 +93,10 @@ function CreativeDirection({ board }) {
           </div>
           {songStyleDraft && (
             <div className="sm:col-span-2">
-              <label htmlFor="mv-song-style" className="mb-1 block text-xs text-port-text-muted">Song style</label>
+              <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+                <label htmlFor="mv-song-style" className="block text-xs text-port-text-muted">Song style</label>
+                {songStyleFromSuno && <SongStyleFromSuno onRead={songStyleFromSuno} disabled={locked} />}
+              </div>
               <AutoSizeTextarea
                 id="mv-song-style"
                 value={songStyleDraft.value}

@@ -12,7 +12,7 @@ import { existsSync } from 'fs';
 import { unlink } from 'fs/promises';
 import { pipeline } from 'stream/promises';
 import { Router } from 'express';
-import { musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
+import { musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
 import { productionReadiness } from '../services/musicVideo/productionReview.js';
 import { finishedOutsideBlocker } from '../lib/musicVideoFinishedOutside.js';
 import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, reviseProductionFromFeedback, revertProductionInput } from '../services/musicVideo/productionReviewService.js';
@@ -115,6 +115,7 @@ import {
   appendTakesAcrossScenes,
   selectSceneTake,
   reviewSceneTake,
+  refreshSongStyleFromSuno,
 } from '../services/musicVideo/projects.js';
 import { buildHandoffManifest, buildHandoffBundle, matchSceneByFileTag } from '../services/musicVideo/handoff.js';
 import { getHistoryItem } from '../services/videoGen/history.js';
@@ -538,6 +539,13 @@ router.post('/:id/lyrics/import-track', asyncHandler(async (req, res) => {
 router.post('/:id/lyrics/align', asyncHandler(async (req, res) => {
   const { cueId, separateVocals, retimeSong } = validateRequest(musicVideoLyricsAlignSchema, req.body || {});
   res.status(202).json(await startLyricAlign(req.params.id, { cueId, separateVocals, retimeSong }));
+}));
+
+// Re-read the song's Suno style (excluded styles included) from its song link,
+// for a song imported before they were captured. Updates the linked track too.
+router.post('/:id/song-style/suno', asyncHandler(async (req, res) => {
+  const { url } = validateRequest(musicVideoSongStyleSunoSchema, req.body ?? {});
+  res.json(await refreshSongStyleFromSuno(req.params.id, url));
 }));
 
 // After a track is attached or lyrics are imported (the director's own action),
