@@ -17,6 +17,9 @@ export function shotAt(scenes, t) {
   return current;
 }
 
+// How long a seek may wait for its `portos-mv:seeked` reply before the next one goes anyway.
+const SEEK_REPLY_MS = 1000;
+
 // The overlay page needs the song's analysis and at least one timed line (else the server answers 409).
 const hasTimedLyrics = (project) => Number(project.audioAnalysis?.durationSec) > 0
   && (project.lyricCues || []).some((cue) => Number.isFinite(cue?.startSec) && String(cue?.text || '').trim());
@@ -34,14 +37,14 @@ function useLyricOverlay({ project, enabled, audioRef, time }) {
   const [preview, setPreview] = useState(null);
   const [failed, setFailed] = useState(false);
   const iframeRef = useRef(null);
-  const seekState = useRef({ inFlight: false, pending: null, ready: false });
+  const seekState = useRef({ inFlight: false, pending: null, ready: false, sentAt: 0 });
   const version = enabled ? playthroughVersion(project) : null;
 
   useEffect(() => {
     let active = true;
     setPreview(null);
     setFailed(false);
-    seekState.current = { inFlight: false, pending: null, ready: false };
+    seekState.current = { inFlight: false, pending: null, ready: false, sentAt: 0 };
     if (!version) return () => { active = false; };
     getMusicVideoLyricOverlayPreview(project.id, { silent: true })
       .then((next) => { if (active) setPreview(next); })
@@ -53,8 +56,10 @@ function useLyricOverlay({ project, enabled, audioRef, time }) {
     const frame = iframeRef.current?.contentWindow;
     const state = seekState.current;
     if (!frame || !state.ready) return;
-    if (state.inFlight) { state.pending = t; return; }
+    // A seek the page never answered stops holding the queue after a second.
+    if (state.inFlight && performance.now() - state.sentAt < SEEK_REPLY_MS) { state.pending = t; return; }
     state.inFlight = true;
+    state.sentAt = performance.now();
     frame.postMessage({ type: 'portos-mv:seek', t }, '*');
   }, []);
 
