@@ -33,7 +33,7 @@ import { musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
 import { z } from 'zod';
 import { ServerError } from '../../lib/errorHandler.js';
 import { extractJson } from '../../lib/jsonExtract.js';
-import { musicVideoCreativeContext, musicVideoSongStyleContext } from '../../lib/musicVideoCreativeContext.js';
+import { musicVideoCreativeContext, musicVideoSongStyleContext, withoutPeople } from '../../lib/musicVideoCreativeContext.js';
 import { musicVideoBriefTools as briefTools } from '../../lib/musicVideoMediumPlan.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { CAST_SETS_DEFINITION_LIMITS, normalizeDefinitions } from './castAndSetsDefinitions.js';
@@ -219,7 +219,8 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
   // The song's Suno style shapes the design; the director's visual style is the look.
   const songStyle = musicVideoSongStyleContext({ songStyle: concept.songStyle || track?.prompt });
   const visualStyle = trimTo(concept.style, 1500);
-  const boardStyle = trimTo(board?.style?.prompt, 1500) || trimTo(concept.moodBoardStyle, 1500);
+  // The board's pictured people are never design input (#10982).
+  const boardStyle = withoutPeople(trimTo(board?.style?.prompt, 1500) || trimTo(concept.moodBoardStyle, 1500));
   const boardNegative = trimTo(board?.style?.negativePrompt, 600);
   const moodLines = moodImages.map((img, i) => `${i}. ${[img.caption, img.analysis].filter(Boolean).join(' — ') || '(no caption or analysis)'}`);
   const sectionLines = sections.map((s) => `${s.index}. ${s.label} ${fmtTime(s.startSec)}–${fmtTime(s.endSec)}`);
