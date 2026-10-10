@@ -281,6 +281,45 @@ Saving the selection gates rendering until the server has accepted it.
 
 See the [synthetic visual validation and remaining acceptance](validation/9302-music-video-grade.md).
 
+## Music-video film look
+
+A finishing filter for the analog, imperfect feel image and video models rarely
+give on their own: soft focus, halation, color bleed, grain, fade, a color cast,
+split toning, vignette, light leaks, gate weave and flicker. One definition in
+`server/lib/filmLook.js` (`FILM_LOOK_CONTROLS`, `FILM_LOOK_PRESETS`,
+`filmLookFilterMarkup`) serves three surfaces, so what is tuned on a still is
+what the preview shows and what the render bakes:
+
+- **Compose → Film look** stores the look on the project (`project.filmLook`,
+  validated by `filmLookValidation.js`, normalized by `normalizeFilmLook`).
+  Every slider move reaches the docked live preview at once; releasing a
+  control saves. `null` is the bypass.
+- **The image viewer (Film look)** on any gallery image, Cast & sets plate or
+  mood-board still previews the same filter in the browser and **Save filtered
+  copy** bakes it server-side (`POST /api/image-gen/:filename/film-look`,
+  `services/imageGen/filmLookBake.js`) into a new image beside the untouched
+  original, grouped with it like a cleaned copy. Inside a music video project
+  the editor also offers **Use on project**.
+- **The final render** installs the same runtime in every worker browser
+  (`documentRenderInitScripts` → `openComposition({ initScripts })`), so the
+  split render (#10365) and the overlay text probe see the filtered page.
+
+The filter is an SVG `<filter>` applied to the document root (or to the
+`<img>` for a still). Radii and offsets scale with the filtered element's
+width, so a 390px phone preview, the 1920-wide render and a 4K still read
+alike. Every time-varying effect (grain seed, gate weave, flicker, light-leak
+drift) is a pure function of the song frame, so the four render workers agree
+and a still is one bake. `filmLookRuntimeSource()` inlines the markup function
+by `toString()` into sandboxed pages, which is why `filmLookFilterMarkup` must
+stay self-contained; the runtime wraps `portosComposition.seek()` to advance
+the frame before the page paints. A neutral look emits no filter at all.
+
+Each control names its effect in photography terms, and the **In a prompt**
+box rewrites the current settings as the words that ask a model for the same
+qualities (`describeFilmLook`), so tuning a look also teaches the vocabulary
+for the next generation prompt. The look works on composition-document
+projects; the composed render style keeps its own render grade above.
+
 ## Music-video composition documents
 
 A Music Video project can own its whole edit as a composition document: set

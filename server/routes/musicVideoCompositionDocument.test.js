@@ -161,6 +161,19 @@ describe('music-video composition documents', () => {
     expect(invalidRevision.status).toBe(400);
   });
 
+  it('persists a normalized film look through the project route, refuses an unknown control, and clears it with null', async () => {
+    const saved = await request(app).patch(`/api/music-video/${project.id}`).send({ filmLook: { preset: 'polaroid', grain: 0.5, exposure: 0.123 } });
+    expect(saved.status).toBe(200);
+    expect(saved.body.filmLook).toMatchObject({ version: 1, preset: 'polaroid', grain: 0.5, exposure: 0.12, defocus: expect.any(Number) });
+    expect((await request(app).patch(`/api/music-video/${project.id}`).send({ filmLook: { exposure: 3 } })).status).toBe(400);
+    expect((await projects.getProject(project.id)).filmLook).toEqual(saved.body.filmLook);
+    expect((await request(app).patch(`/api/music-video/${project.id}`).send({ filmLook: { grain: 0.5, sharpen: 1 } })).status).toBe(400);
+    const cleared = await request(app).patch(`/api/music-video/${project.id}`).send({ filmLook: null });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.filmLook).toBeNull();
+    expect((await projects.getProject(project.id)).filmLook).toBeNull();
+  });
+
   it('imports a zip (one top folder), switches the render style, lists, exports, previews and serves its files inert', async () => {
     const zip = createZip(Object.entries(FILES).map(([name, data]) => ({ name: `my-video/${name}`, data })), { compress: true });
     const created = await uploadZip(project.id, zip, 'my-video.zip');
@@ -188,6 +201,7 @@ describe('music-video composition documents', () => {
     // Self-contained: no network, the stylesheet/script/asset inlined, PORTOS_MV injected, portos-mv.js dropped.
     expect(preview.body.html).toContain("default-src 'none'");
     expect(preview.body.html).toContain('window.PORTOS_MV = ');
+    expect(preview.body.html).toContain('__portosFilmLook');
     expect(preview.body.html).toContain(FILES['app.js']);
     expect(preview.body.html).toContain('url("data:image/png;base64,');
     expect(preview.body.html).not.toContain('src="portos-mv.js"');

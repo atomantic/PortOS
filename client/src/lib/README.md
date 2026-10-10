@@ -313,4 +313,5 @@ grep -i "what you want to do" client/src/lib/README.md
 | `navPresentation.js` | Sidebar icon presentation and section ordering, separate from the Layout React refresh boundary. |
 
 | `musicVideoGrade.js` | Shared Music Video grade preset and grain bounds for the composition controls. |
+| `filmLook.js` | Shared film look controls, presets, normalizer, prompt vocabulary and the SVG filter markup the editor previews with (server `lib/filmLook.js`). |
 | `musicVideoNarrativeEvents.js` | Named narrative event kinds, absolute onset/word/frame resolution and deterministic silence/reactive state for composition documents. |

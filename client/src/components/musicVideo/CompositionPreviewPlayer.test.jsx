@@ -91,6 +91,31 @@ describe('CompositionPreviewPlayer', () => {
     expect(fetched()).toEqual(['/preview/a', '/preview/b', '/preview/c', '/preview/b', '/preview/c']);
   });
 
+  it('hands the project film look to the loaded document and again when it changes, without rebuilding the preview', async () => {
+    const look = { version: 1, preset: 'custom', grain: 0.4 };
+    const { rerender } = render(<CompositionPreviewPlayer project={{ ...project, filmLook: look }} audioUrl={null} />);
+    const frame = await screen.findByTitle('Composition document preview');
+    const post = vi.spyOn(frame.contentWindow, 'postMessage');
+    const send = (data) => act(async () => { window.dispatchEvent(new MessageEvent('message', { source: frame.contentWindow, data })); });
+    await waitFor(async () => {
+      await send({ type: 'portos-mv:loaded' });
+      expect(post).toHaveBeenCalledWith({ type: 'portos-mv:film-look', look }, '*');
+      expect(post).toHaveBeenCalledWith(expect.objectContaining({ type: 'portos-mv:manifest' }), '*');
+    });
+    // The look lands before the first seek so the document's first frame is already filtered.
+    const seekAt = post.mock.calls.findIndex(([data]) => data.type === 'portos-mv:seek');
+    const lookAt = post.mock.calls.findIndex(([data]) => data.type === 'portos-mv:film-look');
+    expect(seekAt).toBeGreaterThan(-1);
+    expect(lookAt).toBeLessThan(seekAt);
+
+    const next = { ...look, grain: 0.9 };
+    rerender(<CompositionPreviewPlayer project={{ ...project, filmLook: next }} audioUrl={null} />);
+    await waitFor(() => expect(post).toHaveBeenCalledWith({ type: 'portos-mv:film-look', look: next }, '*'));
+    rerender(<CompositionPreviewPlayer project={{ ...project, filmLook: null }} audioUrl={null} />);
+    await waitFor(() => expect(post).toHaveBeenCalledWith({ type: 'portos-mv:film-look', look: null }, '*'));
+    expect(api.getMusicVideoCompositionPreview).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps the loaded preview through an unrelated project save and rebuilds when the document version changes', async () => {
     const { rerender } = render(<CompositionPreviewPlayer project={project} audioUrl={null} />);
     const frame = await screen.findByTitle('Composition document preview');

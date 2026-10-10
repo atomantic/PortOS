@@ -82,6 +82,15 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
   const blobCache = useRef(new Map());
   const seekState = useRef({ inFlight: false, pending: null, ready: false });
   const appliedSeek = useRef(null);
+  // The project's finishing film look (lib/filmLook.js) is posted into the
+  // page, never baked into it: a slider move reaches the picture without a
+  // rebuild, and the page re-seeds it for every frame it draws.
+  const filmLook = lyrics ? null : (project.filmLook ?? null);
+  const filmLookRef = useRef(filmLook);
+  useEffect(() => {
+    filmLookRef.current = filmLook;
+    if (seekState.current.ready) iframeRef.current?.contentWindow?.postMessage({ type: 'portos-mv:film-look', look: filmLook }, '*');
+  }, [filmLook]);
 
   // The document's own version (its folder + save time), not the project's
   // `updatedAt`: an unrelated save must not reload a playing preview.
@@ -142,6 +151,8 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
         // The manifest only: each file is fetched when the document first asks for it, so the first
         // frame waits on the media near the playhead rather than on every take in the project.
         event.source.postMessage({ type: 'portos-mv:manifest', keys: [...byKey.keys()] }, '*');
+        // The page starts from the look saved when it was built; the board may have moved the sliders since.
+        event.source.postMessage({ type: 'portos-mv:film-look', look: filmLookRef.current }, '*');
         showStatus();
         state.ready = true;
         postSeek(t);

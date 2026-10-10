@@ -72,6 +72,12 @@ export const updateImagePrompt = (filename, prompt, options = {}) => request(`/i
 // the variant toggle without hydrating that whole list. Returns `{ items }`.
 export const listImageVariants = (filename, options = {}) =>
   request(`/image-gen/${encodeURIComponent(filename)}/variants`, { silent: true, ...options });
+// Bake a film look (lib/filmLook.js) into a new copy of a gallery image; resolves the variant record.
+export const applyImageFilmLook = (filename, look, options = {}) => request(`/image-gen/${encodeURIComponent(filename)}/film-look`, {
+  method: 'POST',
+  body: JSON.stringify({ look }),
+  ...options,
+});
 export const cleanGalleryImage = (filename, options = {}) => request(`/image-gen/${encodeURIComponent(filename)}/clean`, {
   method: 'POST',
   body: JSON.stringify({}),

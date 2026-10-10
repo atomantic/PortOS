@@ -115,7 +115,7 @@ export default function MediaHistory() {
     setItems((prev) => [normalized, ...prev.filter((x) => x.key !== normalized.key)]);
     refresh();
   }, [setItems, refresh]);
-  const { handleRemix, handleSendToImage, handleSendToVideo, handleSendTo3d, handleContinue, handleClean, handleRemoveWatermark } = useMediaPreviewActions({
+  const { handleRemix, handleSendToImage, handleSendToVideo, handleSendTo3d, handleContinue, handleClean, handleRemoveWatermark, handleFilmLookComplete } = useMediaPreviewActions({
     onCleanComplete: handleCleanComplete,
   });
 
@@ -273,6 +273,7 @@ export default function MediaHistory() {
         onContinue={handleContinue}
         onClean={(item) => handleClean(item?.raw)}
         onRemoveWatermark={(item) => handleRemoveWatermark(item?.raw)}
+        onFilmLookComplete={handleFilmLookComplete}
       />
 
       <VideoUpscaleDrawer
