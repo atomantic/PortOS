@@ -40,13 +40,19 @@ function outlookRowContext(selector, requireScroll = true) {
   // ARIA regions can wrap a separate scrolling element. Walk from the rows
   // outward instead of assuming the region or list parent can actually scroll.
   let scrollContainer;
+  let stationaryContainer;
   for (let parent = initialRows[0].parentElement; parent; parent = parent.parentElement) {
-    if (/auto|scroll|overlay|hidden/.test(getComputedStyle(parent).overflowY)
-        || (parent === document.scrollingElement && parent.scrollHeight > parent.clientHeight)) {
+    const overflow = getComputedStyle(parent).overflowY;
+    const scrollable = /auto|scroll|overlay|hidden/.test(overflow) || parent === document.scrollingElement;
+    if (scrollable && parent.scrollHeight > parent.clientHeight) {
       scrollContainer = parent;
       break;
     }
+    // An inbox that fits entirely still has a usable scrolling surface. Prefer
+    // any ancestor with actual overflow before accepting that stationary case.
+    if (!stationaryContainer && /auto|scroll|overlay/.test(overflow)) stationaryContainer = parent;
   }
+  scrollContainer ||= stationaryContainer;
   if (!scrollContainer || typeof scrollContainer.scrollBy !== 'function'
       || typeof scrollContainer.scrollTo !== 'function'
       || initialRows.some(row => !scrollContainer.contains(row))) {

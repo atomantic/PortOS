@@ -152,9 +152,10 @@ describe('Outlook configured row extraction', () => {
     };
     const staticRegion = { contains: () => true, scrollBy() {}, scrollTo() {} };
     if (container === 'nested') scroll.parentElement = staticRegion;
+    const wrapper = { parentElement: scroll, scrollHeight: 100, clientHeight: 100, scrollBy() {}, scrollTo() {}, contains: () => true };
     const list = { parentElement: scroll };
     const rows = paints.map(records => records.map(data => ({
-      ...attr({ 'data-itemid': data.providerRowId }), parentElement: container === 'none' ? null : container === 'list' ? list : scroll,
+      ...attr({ 'data-itemid': data.providerRowId }), parentElement: container === 'none' ? null : container === 'wrapper' ? wrapper : container === 'list' ? list : scroll,
       closest: sel => container === 'nested' && sel === '[role="region"]' ? staticRegion
         : container === 'region' && sel === '[role="region"]' ? scroll
         : container === 'list' && sel.includes('[role="listbox"]') ? list : null,
@@ -184,7 +185,7 @@ describe('Outlook configured row extraction', () => {
     };
     evaluateOnPage.mockImplementation((_page, script) => vm.runInNewContext(script, {
       document, location: { href: 'https://example.com/mail/' },
-      getComputedStyle: el => ({ overflowY: el === scroll ? 'auto' : 'visible' }), setTimeout: callback => callback()
+      getComputedStyle: el => ({ overflowY: el === scroll || el === wrapper ? 'auto' : 'visible' }), setTimeout: callback => callback()
     }));
     return { clicked, scroll };
   }
@@ -213,7 +214,7 @@ describe('Outlook configured row extraction', () => {
     expect(clicked).toEqual(['first', 'second', 'second']);
   });
 
-  it.each(['region', 'list', 'overflow', 'nested'])('retains bounded full/unread virtualized scrolling with a %s container', async container => {
+  it.each(['region', 'list', 'overflow', 'nested', 'wrapper'])('retains bounded full/unread virtualized scrolling with a %s container', async container => {
     for (const selector of [defaultSelector, customSelector]) {
       tryReadFile.mockResolvedValue(selector === defaultSelector ? '{}' : JSON.stringify({ outlook: { messageRow: selector } }));
       for (const mode of ['unread', 'full']) {
@@ -231,6 +232,14 @@ describe('Outlook configured row extraction', () => {
         expect(scroll.scrollTo).toHaveBeenLastCalledWith(0, 0);
       }
     }
+  });
+
+  it('extracts an inbox that fits entirely in its scrolling surface', async () => {
+    const { scroll } = mailbox([[record('only-row')]]);
+    scroll.scrollHeight = scroll.clientHeight;
+    expect(await syncPlaywright(account, { messages: [] })).toMatchObject({
+      status: 'success', inboxComplete: false, messages: [expect.objectContaining({ providerRowId: 'only-row', bodyFull: true })]
+    });
   });
 
   it('caps full/unread extraction even when more rows are visible', async () => {
