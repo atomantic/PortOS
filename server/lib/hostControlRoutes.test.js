@@ -612,6 +612,23 @@ describe('3D model rigging host-workers (#10922)', () => {
   const protectedRoutes = [
     'POST /api/rigging/models/:id',
     'POST /api/rigging/models/:id/retarget',
+  ];
+
+  it('gates each route and maps every entry to a mounted route', () => {
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => method + ' ' + path));
+    for (const route of protectedRoutes) {
+      const [method, path] = route.split(' ');
+      expect(mounted.has(route), route).toBe(true);
+      expect(hostControlRouteFor(method, path), route).toBe(route);
+    }
+  });
+
+  it('keeps reads open', () => {
+    for (const [method, path] of [
+      ['GET', '/api/rigging/models/:id'],
+    ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
+  });
+});
 
 describe('Remote desktop session policy (#10923)', () => {
   const protectedRoutes = [
@@ -629,8 +646,6 @@ describe('Remote desktop session policy (#10923)', () => {
 
   it('keeps reads open', () => {
     for (const [method, path] of [
-      ['GET', '/api/rigging/models/:id'],
-
       ['GET', '/api/remote-desktop/status'],
     ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
   });
