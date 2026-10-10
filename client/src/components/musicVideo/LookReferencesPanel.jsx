@@ -21,8 +21,17 @@ const ROLES = [
 const USES = [['reference', 'Look reference'], ['final-visible', 'Final visible'], ['motion-reference', 'Motion reference only']];
 const MAX_UPLOADS = 8;
 
-const selectCls = 'bg-port-bg border border-port-border rounded px-1 py-0.5 text-[11px] min-h-[44px] sm:min-h-0';
-const actionCls = 'flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1 text-xs min-h-[44px] sm:min-h-0';
+const controlCls = 'min-w-0 max-w-full rounded border border-port-border bg-port-bg px-1.5 py-0.5 text-[11px] min-h-[44px] sm:min-h-0';
+const fieldCls = `block w-full ${controlCls}`;
+const actionCls = 'flex max-w-full items-center gap-1 rounded bg-port-border px-2 py-1 text-xs min-h-[44px] hover:bg-port-border/70 disabled:opacity-50 sm:min-h-0';
+// Column count follows this panel. On Look, the preview dock leaves a narrow
+// center column at xl, and a viewport 3-up grid clips the role, use and label.
+const cardListCls = 'grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,18rem),1fr))] gap-2';
+const cardCls = '@container/look-ref min-w-0 rounded border border-port-border';
+const cardBodyCls = 'flex min-w-0 flex-col gap-2 p-1.5 @min-[16rem]:flex-row @min-[16rem]:items-start';
+const thumbCls = 'h-20 w-full rounded bg-black object-cover @min-[16rem]:h-16 @min-[16rem]:w-16 @min-[16rem]:shrink-0';
+
+const optionLabel = (options, value) => options.find(([id]) => id === value)?.[1] || '';
 
 /**
  * The one list of look references for a Music Video project (#10223), in
@@ -136,9 +145,9 @@ export default function LookReferencesPanel({ project, onSave, onSaveSpec, onAdd
 
   return (
     <section aria-label="Look references" className="rounded-lg border border-port-border bg-port-card p-3 space-y-2 min-w-0">
-      <div className="flex flex-wrap items-center justify-between gap-2">
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-medium">Look references</h3>
-        <div className="flex items-center gap-1.5 flex-wrap">
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           {spec.moodBoardId && (
             <button type="button" onClick={importBoard} disabled={working || full} className={actionCls}
               title="Add the linked mood board's gallery images as references">
@@ -164,55 +173,69 @@ export default function LookReferencesPanel({ project, onSave, onSaveSpec, onAdd
       {references.length === 0 && uploads.length === 0 && (
         <p className="text-[11px] text-port-text-muted">No look references yet. Import a mood board, add gallery images or upload style images below.</p>
       )}
-      <ul className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2">
-        {references.map((ref) => (
-          <li key={ref.id} className="flex gap-2 rounded border border-port-border p-1.5 min-w-0">
-            <img src={`/data/images/${encodeURIComponent(ref.imageId)}`} alt="" loading="lazy" className="w-16 h-16 object-cover rounded shrink-0 bg-black" />
-            <div className="min-w-0 flex-1 space-y-1">
-              <div className="flex gap-1">
-                <label htmlFor={idFor(`role-${ref.id}`)} className="sr-only">Reference role</label>
-                <select id={idFor(`role-${ref.id}`)} value={ref.role || 'mood'} onChange={(e) => updateRef(ref.id, { role: e.target.value })} className={selectCls}>
-                  {ROLES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                </select>
-                <button type="button" onClick={() => saveReferences(references.filter((r) => r.id !== ref.id))}
-                  aria-label="Remove reference" title="Remove reference"
-                  className="ml-auto min-h-[32px] min-w-[32px] inline-flex items-center justify-center text-port-error">
-                  <Trash2 size={12} />
-                </button>
+      <ul className={cardListCls}>
+        {references.map((ref) => {
+          const roleLabel = optionLabel(ROLES, ref.role || 'mood');
+          const useLabel = optionLabel(USES, ref.use || 'reference');
+          return (
+            <li key={ref.id} className={cardCls}>
+              <div className={cardBodyCls}>
+                <img src={`/data/images/${encodeURIComponent(ref.imageId)}`} alt="" loading="lazy" className={thumbCls} />
+                <div className="min-w-0 flex-1 space-y-1">
+                  <div className="flex min-w-0 items-center gap-1">
+                    <label htmlFor={idFor(`role-${ref.id}`)} className="sr-only">Reference role</label>
+                    {/* The wrapper, not the select, is the flex item. A native select
+                        will not shrink below its option text, which pushed Remove
+                        outside the card. */}
+                    <div className="min-w-0 flex-1">
+                      <select id={idFor(`role-${ref.id}`)} value={ref.role || 'mood'} title={roleLabel} onChange={(e) => updateRef(ref.id, { role: e.target.value })} className={fieldCls}>
+                        {ROLES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                      </select>
+                    </div>
+                    <button type="button" onClick={() => saveReferences(references.filter((r) => r.id !== ref.id))}
+                      aria-label="Remove reference" title="Remove reference"
+                      className="inline-flex min-h-[32px] min-w-[32px] shrink-0 items-center justify-center text-port-error">
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                  <label htmlFor={idFor(`use-${ref.id}`)} className="sr-only">Reference use</label>
+                  <select id={idFor(`use-${ref.id}`)} value={ref.use || 'reference'} title={useLabel} onChange={(e) => updateRef(ref.id, { use: e.target.value })} className={fieldCls}>
+                    {USES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                  </select>
+                  <label htmlFor={idFor(`label-${ref.id}`)} className="sr-only">Reference label</label>
+                  <input id={idFor(`label-${ref.id}`)} defaultValue={ref.label || ''} maxLength={120} placeholder="Label (e.g. lead singer)"
+                    title={ref.label || 'Label (e.g. lead singer)'}
+                    onBlur={(e) => { if (e.target.value !== (ref.label || '')) updateRef(ref.id, { label: e.target.value }); }}
+                    className={fieldCls} />
+                  {isOutsideReference(ref) ? (
+                    <p className="break-words text-[11px] text-port-text-muted">Mood board image: shapes the look as text, never sent to the generator</p>
+                  ) : (
+                    <label className="flex min-h-[44px] min-w-0 items-start gap-1.5 text-[11px] sm:min-h-0">
+                      <input type="checkbox" className="mt-0.5 shrink-0" checked={!!ref.condition}
+                        disabled={!ref.condition && flagged >= MAX_CONDITIONING_REFERENCES}
+                        onChange={(e) => updateRef(ref.id, { condition: e.target.checked })} />
+                      <span className="break-words">Condition frames</span>
+                    </label>
+                  )}
+                </div>
               </div>
-              <label htmlFor={idFor(`use-${ref.id}`)} className="sr-only">Reference use</label>
-              <select id={idFor(`use-${ref.id}`)} value={ref.use || 'reference'} onChange={(e) => updateRef(ref.id, { use: e.target.value })} className={`w-full ${selectCls}`}>
-                {USES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-              </select>
-              <label htmlFor={idFor(`label-${ref.id}`)} className="sr-only">Reference label</label>
-              <input id={idFor(`label-${ref.id}`)} defaultValue={ref.label || ''} maxLength={120} placeholder="Label (e.g. lead singer)"
-                onBlur={(e) => { if (e.target.value !== (ref.label || '')) updateRef(ref.id, { label: e.target.value }); }}
-                className={`w-full ${selectCls}`} />
-              {isOutsideReference(ref) ? (
-                <p className="text-[11px] text-port-text-muted">Mood board image: shapes the look as text, never sent to the generator</p>
-              ) : (
-                <label className="flex items-center gap-1 text-[11px] min-h-[44px] sm:min-h-0">
-                  <input type="checkbox" checked={!!ref.condition}
-                    disabled={!ref.condition && flagged >= MAX_CONDITIONING_REFERENCES}
-                    onChange={(e) => updateRef(ref.id, { condition: e.target.checked })} />
-                  Condition frames
-                </label>
-              )}
-            </div>
-          </li>
-        ))}
+            </li>
+          );
+        })}
         {uploads.map((ref, index) => (
-          <li key={ref.imageId} className="flex gap-2 rounded border border-port-border p-1.5 min-w-0">
-            <img src={`/data/images/${encodeURIComponent(ref.imageId)}`} alt={`Style upload ${index + 1}`} className="w-16 h-16 object-cover rounded shrink-0 bg-black" />
-            <div className="min-w-0 flex-1 space-y-1">
-              <span className="block text-[11px] text-port-text-muted">Style upload</span>
-              <label htmlFor={idFor(`caption-${index}`)} className="sr-only">Style caption {index + 1}</label>
-              <textarea id={idFor(`caption-${index}`)} value={ref.caption || ''} maxLength={500} rows={2}
-                placeholder="Palette, lighting, lens, grain"
-                onChange={(e) => changeUploads(uploads.map((item, i) => (i === index ? { ...item, caption: e.target.value } : item)))}
-                className="block w-full rounded border border-port-border bg-port-bg p-1 text-sm" />
-              <button type="button" aria-label={`Remove style upload ${index + 1}`} onClick={() => changeUploads(uploads.filter((_, i) => i !== index))}
-                className="min-h-[44px] sm:min-h-0 text-xs text-port-error">Remove</button>
+          <li key={ref.imageId} className={cardCls}>
+            <div className={cardBodyCls}>
+              <img src={`/data/images/${encodeURIComponent(ref.imageId)}`} alt={`Style upload ${index + 1}`} className={thumbCls} />
+              <div className="min-w-0 flex-1 space-y-1">
+                <span className="block text-[11px] text-port-text-muted">Style upload</span>
+                <label htmlFor={idFor(`caption-${index}`)} className="sr-only">Style caption {index + 1}</label>
+                <textarea id={idFor(`caption-${index}`)} value={ref.caption || ''} maxLength={500} rows={2}
+                  placeholder="Palette, lighting, lens, grain"
+                  onChange={(e) => changeUploads(uploads.map((item, i) => (i === index ? { ...item, caption: e.target.value } : item)))}
+                  className="block w-full min-w-0 max-w-full rounded border border-port-border bg-port-bg p-1 text-sm" />
+                <button type="button" aria-label={`Remove style upload ${index + 1}`} onClick={() => changeUploads(uploads.filter((_, i) => i !== index))}
+                  className="min-h-[44px] text-xs text-port-error sm:min-h-0">Remove</button>
+              </div>
             </div>
           </li>
         ))}
@@ -226,7 +249,7 @@ export default function LookReferencesPanel({ project, onSave, onSaveSpec, onAdd
         <label htmlFor={idFor('upload')} className="block text-xs">Upload style images
           <input id={idFor('upload')} type="file" aria-label="Upload style images" accept={IMAGE_ACCEPT} multiple disabled={uploads.length >= MAX_UPLOADS || busy}
             onChange={(e) => { const files = Array.from(e.target.files || []); e.target.value = ''; upload(files); }}
-            className="block w-full text-sm min-h-[44px]" />
+            className="block w-full min-w-0 max-w-full text-sm min-h-[44px]" />
         </label>
         <button type="button" disabled={!dirty || busy} onClick={saveUploads} className="min-h-[44px] rounded bg-port-accent px-3 text-sm text-white disabled:opacity-50">{busy ? 'Saving…' : 'Save style uploads'}</button>
       </fieldset>
