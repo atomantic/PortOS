@@ -54,7 +54,7 @@ vi.mock('./brainStorage.js', () => {
   const { EventEmitter } = require('events');
   return { brainEvents: new EventEmitter(), getById, getAll, listLiveIds, getDigests, getReviews };
 });
-vi.mock('./brainJournal.js', () => ({ listJournals, getJournal }));
+vi.mock('./brainJournal.js', () => ({ listJournals, getJournal, iterateJournals: async function* () { const { records } = await listJournals(); yield* records; } }));
 
 // Re-import a fresh bridge module (clears the cached bridge map).
 async function loadBridge() {
@@ -867,5 +867,39 @@ describe('brain bridge durable identity (#11007)', () => {
         'digests:digest-one', 'digests:digest-two', 'people:example',
       ]);
     });
+  });
+});
+
+describe('brain catch-up beyond old caps', () => {
+  it('embeds the oldest journal beyond 10000 days', async () => {
+    const bridge = await loadBridge();
+    getAll.mockResolvedValue([]);
+    getDigests.mockResolvedValue([]);
+    getReviews.mockResolvedValue([]);
+    const records = Array.from({ length: 10001 }, (_, i) => ({
+      id: new Date(Date.UTC(2000, 0, i + 1)).toISOString().slice(0, 10),
+      date: new Date(Date.UTC(2000, 0, i + 1)).toISOString().slice(0, 10),
+      content: 'Journal day ' + i
+    })).reverse();
+    listJournals.mockResolvedValue({ records });
+    expect((await bridge.syncAllBrainData({ onlyMissing: true })).synced).toBe(10001);
+    // A second pass skips every mapped day, including the oldest.
+    expect((await bridge.syncAllBrainData({ onlyMissing: true })).skipped).toBe(10001);
+  });
+
+  it('counts and embeds the oldest of 1001 digests and reviews', async () => {
+    const bridge = await loadBridge();
+    getAll.mockResolvedValue([]);
+    listJournals.mockResolvedValue({ records: [] });
+    listLiveIds.mockResolvedValue([]);
+    const records = Array.from({ length: 1001 }, (_, i) => ({ id: 'record-' + i, digestText: 'Digest', reviewText: 'Review' }));
+    getDigests.mockImplementation(async (limit = 10) => records.slice(0, limit));
+    getReviews.mockImplementation(async (limit = 10) => records.slice(0, limit));
+    expect(await bridge.getEmbeddingCoverage()).toEqual({ total: 2002, missing: 2002 });
+    const stats = await bridge.syncAllBrainData({ onlyMissing: true });
+    expect(stats.synced).toBe(2002);
+    expect(getDigests).toHaveBeenCalledWith(Infinity);
+    expect(getReviews).toHaveBeenCalledWith(Infinity);
+    expect(await bridge.getEmbeddingCoverage()).toEqual({ total: 2002, missing: 0 });
   });
 });
