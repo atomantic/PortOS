@@ -527,9 +527,9 @@ router.post('/:id/lyrics/import-track', asyncHandler(async (req, res) => {
   res.json(await importTrackLyrics(req.params.id, { mode }));
 }));
 
-// Word-level alignment (#9074) as a job (#10155). Nothing here runs until the
-// director clicks Align words or a line's Re-align (or starts an autopilot
-// run). Kickoff returns 202 + a jobId; stages (model download %, decoding,
+// Word-level alignment (#9074) as a job (#10155). It runs when the director
+// clicks Align words or a line's Re-align, when an autopilot run starts, and
+// when the song is prepared after a track or lyrics arrive (song/prepare below). Kickoff returns 202 + a jobId; stages (model download %, decoding,
 // transcribing window n/m) stream over SSE with cancel, and the terminal
 // `complete` frame carries the updated project. One job per project: a second
 // request returns the running job (`reused: true`). The first alignment
@@ -538,6 +538,21 @@ router.post('/:id/lyrics/import-track', asyncHandler(async (req, res) => {
 router.post('/:id/lyrics/align', asyncHandler(async (req, res) => {
   const { cueId, separateVocals, retimeSong } = validateRequest(musicVideoLyricsAlignSchema, req.body || {});
   res.status(202).json(await startLyricAlign(req.params.id, { cueId, separateVocals, retimeSong }));
+}));
+
+// After a track is attached or lyrics are imported (the director's own action),
+// analyze the song if it has no analysis and start word alignment when the
+// lines were never aligned. Returns the project and the alignment job to follow.
+router.post('/:id/song/prepare', asyncHandler(async (req, res) => {
+  const { autoPrepareSong } = await import('../services/musicVideo/songAutoPrepare.js');
+  res.json(await autoPrepareSong(req.params.id));
+}));
+
+// The lyric timing playthrough: the aligned words drawn by the shipped template over a
+// plain frame, laid out as scenes, for checking word timing before any picture exists.
+router.get('/:id/lyrics/playthrough/preview', asyncHandler(async (req, res) => {
+  const { buildLyricPlaythroughPreview } = await import('../services/musicVideo/lyricPlaythrough.js');
+  res.json(await buildLyricPlaythroughPreview(await requireProject(req.params.id)));
 }));
 
 router.get('/lyrics/align/:jobId/events', (req, res) => {

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { lyricSetupState } from '../../lib/musicVideoStages.js';
+import CompositionPreviewPlayer from './CompositionPreviewPlayer.jsx';
 
 const EMPTY_DRAFT = { cast: '', environments: '', visualLanguage: '', motionLanguage: '', guideArtifactId: null,
   lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [] };
@@ -14,8 +15,12 @@ const buttonClass = 'min-h-[44px] rounded border border-port-border bg-port-bg p
  * changed) is re-verified through the server's alignment route. Notes are
  * optional. `planning` is the page's unsaved planning draft pair; its copy of these
  * fields is kept in step so a later planning save cannot undo this one.
+ *
+ * Timing is judged by watching, so a vocal song's check carries the lyric
+ * playthrough: the aligned words drawn with the render's own type over a plain
+ * frame, played with the song (`audioUrl`). `aligning` says alignment is running.
  */
-export default function LyricTimingCheck({ project, review, planning = null, disabled = false }) {
+export default function LyricTimingCheck({ project, review, planning = null, disabled = false, audioUrl = null, aligning = false }) {
   const saved = { ...EMPTY_DRAFT, ...(project.productionReview?.draft || {}) };
   const lyrics = lyricSetupState(project, review.readiness);
   const [mode, setMode] = useState(saved.lyricsMode === 'instrumental' ? 'instrumental' : 'vocal');
@@ -36,6 +41,8 @@ export default function LyricTimingCheck({ project, review, planning = null, dis
   };
 
   const verified = mode === 'vocal' ? lyrics.verified && !lyrics.instrumental : lyrics.instrumental && lyrics.verified;
+  const timed = (project.lyricCues || []).some((cue) => typeof cue.startSec === 'number' && cue.text?.trim());
+  const playable = mode === 'vocal' && timed && !!project.audioAnalysis && !!audioUrl && !aligning;
   return (
     <div className="space-y-2" id="mv-lyric-timing">
       <fieldset className="flex flex-wrap gap-3 text-sm">
@@ -55,6 +62,19 @@ export default function LyricTimingCheck({ project, review, planning = null, dis
         </p>
       ) : (
         <>
+          {mode === 'vocal' && !playable && (
+            <p role="status" className="text-sm text-port-text-muted">
+              {aligning ? 'Aligning the words to the vocal. The playthrough appears here when they are placed.'
+                : !project.audioAnalysis ? 'Analyzing the song. The playthrough appears here once the words are placed.'
+                  : 'Align the words to play them through with the song.'}
+            </p>
+          )}
+          {playable && (
+            <>
+              <p className="text-sm text-port-text-muted">Play the lyrics through with the song and watch each word land on the vocal.</p>
+              <CompositionPreviewPlayer project={project} audioUrl={audioUrl} lyrics scrubId={`mv-lyrics-check-scrub-${project.id}`} />
+            </>
+          )}
           <label htmlFor={notesId} className="block text-xs text-port-text-muted">
             Notes (optional)
           </label>
@@ -65,9 +85,9 @@ export default function LyricTimingCheck({ project, review, planning = null, dis
           )}
           {mode === 'vocal' ? (
             <button type="button" className={buttonClass}
-              disabled={busy || lyrics.lines === 0}
+              disabled={busy || lyrics.lines === 0 || !playable}
               onClick={() => (stale ? reverify() : write({ lyricsMode: 'vocal', timingStatus: 'verified', timingNotes: notes.trim() }))}>
-              {stale ? 'Re-verify timing' : 'Mark timing verified'}
+              {stale ? 'Timing still looks right' : 'Timing looks right'}
             </button>
           ) : (
             <button type="button" className={buttonClass} disabled={busy}

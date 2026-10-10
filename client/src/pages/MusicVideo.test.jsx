@@ -63,6 +63,8 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   })),
   deleteMusicVideoProject: vi.fn(),
   analyzeMusicVideoProject: vi.fn(),
+  prepareMusicVideoSong: vi.fn((id) => Promise.resolve({ project: { id }, analyzed: false, alignJobId: null })),
+  getMusicVideoLyricPlaythroughPreview: vi.fn(() => new Promise(() => {})),
   planMusicVideoProject: vi.fn(),
   addMusicVideoScene: vi.fn(),
   updateMusicVideoScene: vi.fn(),
@@ -264,7 +266,7 @@ vi.mock('../components/PageHeader', () => ({ default: ({ title, actions }) => <d
 import MusicVideo from './MusicVideo.jsx';
 import {
   listMusicVideoProjects, listMusicVideoProjectSummaries, createMusicVideoProject, cloneMusicVideoProject, renderMusicVideoProject, planMusicVideoProject, updateMusicVideoProject,
-  deleteMusicVideoProject, transcribeMusicVideoMidi, cancelMusicVideoRender, analyzeMusicVideoProject,
+  deleteMusicVideoProject, transcribeMusicVideoMidi, cancelMusicVideoRender, analyzeMusicVideoProject, prepareMusicVideoSong,
   importMusicVideoLyrics, importMusicVideoTrackLyrics, separateMusicVideoVocals, alignMusicVideoLyrics, updateMusicVideoScene, splitMusicVideoScene,
   selectMusicVideoSceneTake, reviewMusicVideoSceneTake, importMusicVideoHandoff,
   addMusicVideoSceneTake, getMusicVideoHandoffBundle,
@@ -1630,7 +1632,19 @@ describe('MusicVideo lyrics and shot coverage (#8964)', () => {
     ));
   });
 
-  it('aligns words only after the button click and shows the returned timings', async () => {
+  it('aligns imported lyrics on its own and follows the alignment it started', async () => {
+    const cues = [{ id: 'lc-1', text: 'first line', startSec: null, endSec: null }];
+    importMusicVideoLyrics.mockResolvedValue({ project: { ...PROJECT_ANALYZED, lyricCues: cues }, imported: 1, format: 'text' });
+    prepareMusicVideoSong.mockResolvedValueOnce({ project: { ...PROJECT_ANALYZED, lyricCues: cues }, analyzed: false, alignJobId: 'align-auto' });
+    await openProject(PROJECT_ANALYZED, 'setup');
+    fireEvent.change(screen.getByLabelText('Lyrics to import'), { target: { value: 'first line' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Import lyrics$/ }));
+    await waitFor(() => expect(prepareMusicVideoSong).toHaveBeenCalledWith('mv-3', { silent: true }));
+    expect((await screen.findAllByRole('button', { name: 'Aligning…' })).length).toBeGreaterThan(0);
+    expect(alignMusicVideoLyrics).not.toHaveBeenCalled();
+  });
+
+  it('re-aligns words from the button and shows the returned timings', async () => {
     const cues = [{
       id: 'lc-1', text: 'walking home', startSec: 0.5, endSec: 1.5,
       words: [
@@ -2104,7 +2118,7 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
       prompt: 'Cyberpunk neon aesthetics',
       durationSec: 180,
     }]);
-    createMusicVideoProject.mockResolvedValue({ ...PROJECT_NO_CLIP, id: 'mv-cool', name: 'Neon Horizon' });
+    createMusicVideoProject.mockResolvedValue({ ...PROJECT_NO_CLIP, id: 'mv-cool', name: 'Neon Horizon', trackId: 'track-cool' });
     renderMV();
     await openCreateForm();
 
@@ -2125,6 +2139,8 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
       name: 'Neon Horizon',
       trackId: 'track-cool',
     });
+    // The new song is analyzed and its lyrics aligned without another click.
+    await waitFor(() => expect(prepareMusicVideoSong).toHaveBeenCalledWith('mv-cool', { silent: true }));
   });
 
   it('changing a track in the edit view auto-seeds track concept and style if not set', async () => {

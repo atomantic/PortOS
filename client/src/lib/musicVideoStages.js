@@ -146,7 +146,8 @@ export function boardJobEstimate(project) {
  * old final render is not what the user sees by default. A final render whose
  * inputs changed is labelled out of date. Last comes the storyboard animatic —
  * the song under each shot's frame or card — so a project with a track and
- * shots always has something to watch. Each entry has a stable `id` (the
+ * shots always has something to watch — and after it the lyric timing
+ * playthrough once the words are aligned. Each entry has a stable `id` (the
  * `?play=` value) and a `label` for the source picker.
  */
 export function listPreviewSources(project, { finalVideoSrc = null, liveFirst = false, draftsFirst = false, storyboardFirst = false } = {}) {
@@ -171,6 +172,11 @@ export function listPreviewSources(project, { finalVideoSrc = null, liveFirst = 
     // clip covers only its own range, so most shots could not be played from it.
     if (storyboardFirst) sources.splice(live ? 1 : 0, 0, animatic);
     else sources.push(animatic);
+  }
+  // The aligned words over a plain frame, for checking timing before there is any picture.
+  if (projectHasAudio(project) && project.audioAnalysis
+    && (project.lyricCues || []).some((cue) => typeof cue.startSec === 'number' && isNonBlankStr(cue.text))) {
+    sources.push({ id: 'lyrics', kind: 'lyrics', label: 'Lyric timing' });
   }
   return sources;
 }
@@ -616,7 +622,7 @@ export function stageChecklist(stageId, project, readiness = project?.production
         { id: 'timing', label: lyrics.instrumental ? 'Instrumental confirmed' : 'Lyric timing verified', done: lyrics.verified || lyrics.ok,
           detail: lyrics.alignment === 'stale' ? 'Word timings or the master changed since you verified them; verify again.'
             : lyrics.instrumental ? 'Confirm the song is instrumental under Time and verify.'
-              : 'Align the words, listen back, then mark the timing verified under Time and verify.',
+              : 'Watch the lyric playthrough under Time and verify, then confirm the timing looks right.',
           action: autoSong ? null : { label: 'Verify timing', anchor: 'mv-lyric-timing' } },
       ];
     }

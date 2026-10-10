@@ -209,8 +209,9 @@ const BOOTSTRAP = `(() => {
  * The preview page and the assets to post into it:
  * `{ html, assets: [{ key, url, bytes }], width, height, fps, durationSec }`.
  */
-export async function buildDocumentPreview(project, { draft = false } = {}) {
-  const files = await readDocumentFiles(project);
+export async function buildDocumentPreview(project, { draft = false, files: givenFiles = null } = {}) {
+  // `files` stands in a shipped template for the project's own document (it has no file route).
+  const files = givenFiles || await readDocumentFiles(project);
   const songDurationSec = documentSongDuration(project) || 0;
   const clock = documentRenderClock(songDurationSec);
   const frame = DOCUMENT_FRAME_SIZES[documentAspect(project)];
@@ -290,7 +291,7 @@ export async function buildDocumentPreview(project, { draft = false } = {}) {
     const name = m.path.split(/[\\/]/).pop();
     assets.push({ key: scene.media.src, url: `/data/${m.kind === 'video' ? 'videos' : 'images'}/${encodeURIComponent(name)}`, bytes: null });
   }
-  for (const [rel, file] of files) {
+  for (const [rel, file] of givenFiles ? [] : files) {
     // Media is posted even when CSS or an <img> tag already inlined it as data:, because document code
     // can also reach the same file through a relative src or a bundler URL (new URL(…, import.meta.url)).
     if (!BRIDGED.has(extname(rel).toLowerCase())) continue;

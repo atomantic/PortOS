@@ -19,6 +19,7 @@ import {
   updateMusicVideoProject,
   deleteMusicVideoProject,
   analyzeMusicVideoProject,
+  prepareMusicVideoSong,
   planMusicVideoProject,
   addMusicVideoScene,
   updateMusicVideoScene,
@@ -349,7 +350,7 @@ export default function MusicVideo() {
       trackId: track.id,
       ...(!f.name || tracks.some((t) => t.title === f.name) ? { name: track.title || '' } : {}),
     })),
-    onProjectUpdated: replaceProject,
+    onProjectUpdated: (proj) => { replaceProject(proj); prepareSong(proj.id); },
   });
   // "Separate vocals" (demucs) — one slot shared by the stem control and the
   // autopilot kickoff; the terminal frame carries the project with its stem.
@@ -359,6 +360,18 @@ export default function MusicVideo() {
   const lyricAlign = useMusicVideoLyricAlign({
     onAligned: (projectId, project) => patchProject(projectId, { lyricCues: project.lyricCues, audioAnalysis: project.audioAnalysis, updatedAt: project.updatedAt }),
   });
+  // A track attached or lyrics imported: analyze the song and align never-aligned
+  // lines on the server, then follow the alignment here (the Song step shows it).
+  const prepareSong = (projectId) => {
+    setAnalyzing(true);
+    return prepareMusicVideoSong(projectId, { silent: true })
+      .then(({ project, analyzed, alignJobId }) => {
+        if (analyzed) patchProject(projectId, { audioAnalysis: project.audioAnalysis, updatedAt: project.updatedAt });
+        if (alignJobId) lyricAlign.attach(alignJobId, projectId);
+      })
+      .catch((err) => toast.error(err?.message || 'Could not analyze the song'))
+      .finally(() => setAnalyzing(false));
+  };
   const midi = useMusicVideoMidiJob({
     onTranscribed: (projectId, midiTranscription) => patchProject(projectId, { midiTranscription }),
   });
@@ -517,6 +530,7 @@ export default function MusicVideo() {
         setForm(emptyCreateForm());
         setCreateOpen(false);
         toast.success('Project created');
+        if (proj.trackId) prepareSong(proj.id);
       })
       .catch((err) => toast.error(err?.message || 'Failed to create project'))
       .finally(() => setCreating(false));
@@ -701,7 +715,7 @@ export default function MusicVideo() {
   // Re-point the selected project at a different library track (the detail
   // view's "Change track" picker — previously there was no way to relink a
   // project's audio after creation at all).
-  const handleChangeTrack = (trackId, { fork = false, cleared = [] } = {}) => {
+  const handleChangeTrack = (trackId, { fork = false } = {}) => {
     if (!selected) return;
     if (renderTargetsSelected) {
       toast.error('Wait for the current render to finish before changing the track');
@@ -727,7 +741,7 @@ export default function MusicVideo() {
           openProject(proj);
           navigate(`/music-video/${proj.id}/setup`);
         } else replaceProject(proj);
-        if (cleared.length > 0) toast.success('Track changed — re-run Analyze and Align words');
+        prepareSong(proj.id);
       })
       .catch((err) => toast.error(err?.message || 'Failed to change track'));
   };
@@ -785,6 +799,7 @@ export default function MusicVideo() {
         patchProject(projectId, { lyricCues: project.lyricCues, updatedAt: project.updatedAt });
         onDone?.();
         toast.success(`Imported ${imported} lyric line${imported === 1 ? '' : 's'} (${format})`);
+        prepareSong(projectId);
       })
       .catch((err) => toast.error(err?.message || 'Lyric import failed'))
       .finally(() => setImportingLyrics(false));
@@ -797,12 +812,13 @@ export default function MusicVideo() {
       .then(({ project, imported, markers }) => {
         patchProject(projectId, { lyricCues: project.lyricCues, lyricMarkers: project.lyricMarkers, updatedAt: project.updatedAt });
         toast.success(`Imported ${imported} lyric line${imported === 1 ? '' : 's'}${markers ? ` and ${markers} section/direction marker${markers === 1 ? '' : 's'}` : ''} from the track`);
+        prepareSong(projectId);
       })
       .catch((err) => toast.error(err?.message || 'Could not import the track lyrics'))
       .finally(() => setImportingLyrics(false));
   };
-  // Alignment is a click, never an import side effect. The panel shows the
-  // whisper setup error itself, so this request stays silent.
+  // A re-align is a click (imports align through prepareSong). The panel shows
+  // the alignment setup error itself, so this request stays silent.
   const handleAlignLyrics = (cueId, options) => lyricAlign.run(selected.id, cueId, options);
   // Revise song: open the new version on its Song step and follow its re-time job there.
   const handleSongRevised = ({ project, retimeJobId }) => {
