@@ -217,6 +217,21 @@ run git submodule update --init --recursive
 step "submodules" "done" "Submodules updated"
 log ""
 
+# Runtime preflight: the pulled target owns its Node support range (it may have
+# just been raised), and npm's engines field only warns. Ask the target's own
+# gate — the same one `npm start`/`npm run setup` run — BEFORE deleting any app
+# or touching dependencies, so an unsupported runtime refuses while PortOS is
+# still up instead of mid-downtime. The checkout stays on the pulled revision.
+step "runtime-preflight" "running" "Checking Node.js against the updated requirements..."
+if [ -f scripts/checkNodeVersion.js ] && ! node_gate_output=$(node scripts/checkNodeVersion.js 2>&1); then
+  log "$node_gate_output"
+  log "❌ Update stopped before changing running apps: upgrade Node.js, then re-run the update. The checkout is already on the pulled revision."
+  step "runtime-preflight" "failed" "Unsupported Node.js runtime; PortOS apps were left running"
+  exit 1
+fi
+step "runtime-preflight" "done" "Node.js runtime supported"
+log ""
+
 # Headless-install guard. From the `pm2-stop` step below until the closing
 # `pm2 start` succeeds, PortOS's PM2 entries are DELETED — the install has no
 # server. Every step in between (npm install, setup-db, migrations, the client

@@ -102,6 +102,8 @@ Certificate provisioning and the PortOS restart are one-click actions in the UI 
 
 `update.sh`, `update.ps1`, and the in-app updater retry the safe certificate provisioning step on every update, report the current network prerequisite in update progress, and print the full walkthrough afterward. An update does not fail merely because Tailscale is absent or an account toggle still needs you.
 
+Updates check the pulled version's Node.js requirement (the same `scripts/checkNodeVersion.js` gate that `npm start` uses) before stopping any app or installing dependencies. If your Node.js is too old, the update stops with the required range and leaves PortOS running; the checkout is already on the new revision, so upgrade Node.js (for example `nvm install` using `.nvmrc`) and re-run the update.
+
 Useful checks:
 
 ```bash

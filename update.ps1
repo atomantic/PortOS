@@ -375,6 +375,21 @@ if ($LASTEXITCODE -ne 0) { Stop-UpdateScript $LASTEXITCODE }
 Step "submodules" "done" "Submodules updated"
 Write-SafeHost ""
 
+# Runtime preflight (see update.sh): run the pulled target's own Node gate before
+# any PM2 delete or dependency change. The checkout stays on the pulled revision.
+Step "runtime-preflight" "running" "Checking Node.js against the updated requirements..."
+if (Test-Path "scripts/checkNodeVersion.js") {
+    $nodeGateOutput = (node scripts/checkNodeVersion.js 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) {
+        Write-SafeHost $nodeGateOutput
+        Write-SafeHost "❌ Update stopped before changing running apps: upgrade Node.js, then re-run the update. The checkout is already on the pulled revision." -ForegroundColor Red
+        Step "runtime-preflight" "failed" "Unsupported Node.js runtime; PortOS apps were left running"
+        Stop-UpdateScript 1
+    }
+}
+Step "runtime-preflight" "done" "Node.js runtime supported"
+Write-SafeHost ""
+
 # Remove ONLY PortOS's apps from the shared PM2 daemon — never `pm2 kill`, which
 # tears down the daemon and stops EVERY other project's apps on this machine.
 # The daemon itself is left alone here; whether it also needs an in-place reload
