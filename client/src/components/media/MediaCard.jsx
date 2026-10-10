@@ -8,6 +8,56 @@ import { loraDisplayName } from './normalize';
 import { formatDurationMs } from '../../utils/formatters';
 import { assetDownloadUrl } from '../../lib/standaloneDownload.js';
 
+// Equal cells. `flex-1` on Remix used to eat the first row, which pushed
+// "Send to 3D" onto the file-action line and left Delete alone under it.
+const CREATE_BTN = 'min-h-[44px] min-w-0 w-full px-1.5 rounded-md text-[11px] font-medium flex items-center justify-center gap-1';
+const FILE_BTN = 'h-full w-full min-w-0 min-h-[44px] px-0 rounded flex items-center justify-center';
+
+const TONE = {
+  accent: 'bg-port-accent/20 hover:bg-port-accent/40 text-port-accent',
+  success: 'bg-port-success/20 hover:bg-port-success/40 text-port-success',
+  purple: 'bg-purple-600/20 hover:bg-purple-600/40 text-purple-300',
+  neutral: 'bg-port-border hover:bg-port-border/70 text-white',
+  danger: 'bg-port-error/20 hover:bg-port-error/40 text-port-error',
+};
+
+// Mirrors PinToMoodBoardMenu's render gate (valid image/video key, or an
+// http(s)/app-path thumbnail). Kept here so a test mock of that menu does
+// not have to re-export the predicate. A hidden trigger must not reserve a
+// file-row cell.
+function moodBoardTriggerVisible(item) {
+  if (/^(image|video):[^:]+$/.test(item?.key || '')) return true;
+  return typeof item?.previewUrl === 'string' && /^(https?:\/\/|\/(?!\/))/.test(item.previewUrl);
+}
+
+// Five file actions fit one row once the card interior is ~176px (the five-up
+// recent-renders column). Narrower — two-up on a phone — keeps three columns
+// so a cell stays near 40px instead of shrinking to ~20px. A hard 44px
+// min-width cannot fit five controls in that column, which is the wrap the
+// card used to show.
+function fileActionGridClass(count) {
+  if (count <= 1) return 'grid-cols-1';
+  if (count === 2) return 'grid-cols-2';
+  if (count === 3) return 'grid-cols-3';
+  if (count === 4) return 'grid-cols-2 @min-[11rem]:grid-cols-4';
+  return 'grid-cols-3 @min-[11rem]:grid-cols-5';
+}
+
+function CreateAction({ tone, icon: Icon, label, title, ariaLabel, onClick, className = '' }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      aria-label={ariaLabel}
+      className={`${CREATE_BTN} ${tone} ${className}`}
+    >
+      <Icon className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+      <span className="truncate">{label}</span>
+    </button>
+  );
+}
+
 // Single card used everywhere a generated image/video appears in a grid:
 // the Image Gen page's recent gallery, the Video Gen page's recent renders,
 // and the Media History tab. Action visibility is opt-in — pass only the
@@ -46,9 +96,53 @@ function MediaCard({
   const isVideo = kind === 'video';
   const handleTileClick = onClick || (() => onPreview?.(item));
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  // Send actions come before Draw so the image-gen card (no annotate handler)
+  // stays a 2×2: Remix, i2i, Video, 3D. Draw wraps under that set when present.
+  const createActions = [
+    onRemix && {
+      key: 'remix', tone: TONE.accent, icon: Sparkles, label: 'Remix',
+      title: 'Reuse prompt and settings', onClick: () => onRemix(item),
+    },
+    !isVideo && onSendToImage && {
+      key: 'i2i', tone: TONE.accent, icon: Wand2, label: 'i2i',
+      title: 'Open this image in Image Gen as the image-to-image source',
+      ariaLabel: 'Send to image-to-image', onClick: () => onSendToImage(item),
+    },
+    !isVideo && onSendToVideo && {
+      key: 'video', tone: TONE.success, icon: Film, label: 'Video',
+      title: 'Send to Video', ariaLabel: 'Send to Video', onClick: () => onSendToVideo(item),
+    },
+    !isVideo && onSendTo3d && {
+      key: '3d', tone: TONE.purple, icon: Box, label: '3D',
+      title: 'Send this image to the 3D page to generate a mesh',
+      ariaLabel: 'Send to 3D', onClick: () => onSendTo3d(item),
+    },
+    !isVideo && onAnnotate && {
+      key: 'draw', tone: TONE.accent, icon: Pencil, label: 'Draw',
+      title: 'Annotate (draw over this image)', ariaLabel: 'Annotate image',
+      onClick: () => onAnnotate(item),
+    },
+    isVideo && onContinue && {
+      key: 'continue', tone: TONE.accent, icon: ImageIcon, label: 'Continue',
+      title: 'Use last frame as Image Gen source', onClick: () => onContinue(item),
+    },
+    isVideo && onFinish && {
+      key: 'finish', tone: TONE.success, icon: Sparkles, label: 'Finish',
+      title: finishTitle, onClick: () => onFinish(item),
+    },
+    isVideo && onUpscale && !item.upscaledFrom && {
+      key: 'upscale', tone: TONE.neutral, icon: Maximize2, label: '2×',
+      title: 'Upscale 2×', ariaLabel: 'Upscale 2×', onClick: () => onUpscale(item),
+    },
+  ].filter(Boolean);
+  const fileActionCount = (showCollectionMenu ? 1 : 0)
+    + (showMoodBoardMenu && moodBoardTriggerVisible(item) ? 1 : 0)
+    + 1
+    + (onToggleHidden ? 1 : 0)
+    + (onDelete ? 1 : 0);
 
   return (
-    <div className={`bg-port-card border rounded-xl ${selected ? 'border-port-accent' : 'border-port-border'}`}>
+    <div className={`min-w-0 bg-port-card border rounded-xl ${selected ? 'border-port-accent' : 'border-port-border'}`}>
       {/* The tile is a button, so the star toggle cannot live inside it — a
           <button> nested in a <button> is invalid HTML and keeps the inner
           control out of the tab order. Tile and overlays are siblings in this
@@ -81,11 +175,16 @@ function MediaCard({
               <button
                 type="button"
                 onClick={() => onToggleStar(item)}
-                className={`pointer-events-auto min-h-[44px] min-w-[44px] flex items-center justify-center p-1 rounded-full ${starred ? 'bg-port-warning/90 text-black' : 'bg-black/50 text-white/70 hover:text-white'}`}
+                className="pointer-events-auto min-h-[44px] min-w-[44px] flex items-center justify-center rounded-full"
                 title={starred ? 'Unfavorite' : 'Favorite'}
                 aria-label={starred ? 'Unfavorite' : 'Favorite'}
+                aria-pressed={starred}
               >
-                <Star className={`w-3.5 h-3.5 ${starred ? 'fill-current' : ''}`} />
+                {/* The hit target stays 44px; the disc is smaller so a favorite
+                    doesn't cover the render the way a full circle did. */}
+                <span className={`w-7 h-7 rounded-full flex items-center justify-center port-media-overlay-item ${starred ? 'bg-port-warning/90 text-black' : 'port-media-overlay-strong text-port-text-muted'}`}>
+                  <Star className={`w-3.5 h-3.5 ${starred ? 'fill-current' : ''}`} />
+                </span>
               </button>
             )}
             {hasNote && (
@@ -156,123 +255,57 @@ function MediaCard({
           />
         )}
         {!hideActions && !confirmingDelete && (
-          <div className="flex flex-wrap gap-1">
-            {onRemix && (
-              <button
-                type="button"
-                onClick={() => onRemix(item)}
-                className="flex-1 min-w-[80px] min-h-[44px] px-1.5 py-1 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent text-[10px] rounded flex items-center justify-center gap-1"
-                title="Reuse prompt and settings"
-              >
-                <Sparkles className="w-3 h-3 shrink-0" /> <span className="truncate">Remix</span>
-              </button>
+          <div className="@container space-y-1.5">
+            {createActions.length > 0 && (
+              <div role="group" aria-label="Create from this render" className="grid grid-cols-2 gap-1">
+                {createActions.map(({ key, ...action }) => (
+                  <CreateAction
+                    key={key}
+                    {...action}
+                    className={createActions.length === 1 ? 'col-span-2' : ''}
+                  />
+                ))}
+              </div>
             )}
-            {!isVideo && onSendToImage && (
-              <button
-                type="button"
-                onClick={() => onSendToImage(item)}
-                className="shrink-0 min-h-[44px] min-w-[44px] px-1.5 py-1 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent text-[10px] rounded flex items-center justify-center"
-                title="Send to image-to-image"
-                aria-label="Send to image-to-image"
-              >
-                <Wand2 className="w-3 h-3" />
-              </button>
-            )}
-            {!isVideo && onAnnotate && (
-              <button
-                type="button"
-                onClick={() => onAnnotate(item)}
-                className="shrink-0 min-h-[44px] min-w-[44px] px-1.5 py-1 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent text-[10px] rounded flex items-center justify-center"
-                title="Annotate (draw over this image)"
-                aria-label="Annotate image"
-              >
-                <Pencil className="w-3 h-3" />
-              </button>
-            )}
-            {!isVideo && onSendToVideo && (
-              <button
-                type="button"
-                onClick={() => onSendToVideo(item)}
-                className="shrink-0 min-h-[44px] min-w-[44px] px-1.5 py-1 bg-port-success/20 hover:bg-port-success/40 text-port-success text-[10px] rounded flex items-center justify-center"
-                title="Send to Video" aria-label="Send to Video"
-              >
-                <Film className="w-3 h-3" />
-              </button>
-            )}
-            {!isVideo && onSendTo3d && (
-              <button
-                type="button"
-                onClick={() => onSendTo3d(item)}
-                className="shrink-0 min-h-[44px] min-w-[44px] px-1.5 py-1 bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 text-[10px] rounded flex items-center justify-center"
-                title="Send this image to the 3D page to generate a mesh"
-                aria-label="Send to 3D"
-              >
-                <Box className="w-3 h-3" />
-              </button>
-            )}
-            {isVideo && onContinue && (
-              <button
-                type="button"
-                onClick={() => onContinue(item)}
-                className="flex-1 min-w-[80px] min-h-[44px] px-1.5 py-1 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent text-[10px] rounded flex items-center justify-center gap-1"
-                title="Use last frame as Image Gen source"
-              >
-                <ImageIcon className="w-3 h-3 shrink-0" /> <span className="truncate">Continue</span>
-              </button>
-            )}
-            {isVideo && onFinish && (
-              <button
-                type="button"
-                onClick={() => onFinish(item)}
-                className="shrink-0 min-h-[44px] min-w-[44px] px-1.5 py-1 bg-port-success/20 hover:bg-port-success/40 text-port-success text-[10px] rounded flex items-center justify-center gap-1"
-                title={finishTitle}
-              >
-                <Sparkles className="w-3 h-3 shrink-0" /> <span className="truncate">Finish</span>
-              </button>
-            )}
-            {isVideo && onUpscale && !item.upscaledFrom && (
-              <button
-                type="button"
-                onClick={() => onUpscale(item)}
-                className="shrink-0 min-h-[44px] min-w-[44px] px-1.5 py-1 bg-port-border hover:bg-port-border/70 text-white text-[10px] rounded flex items-center justify-center"
-                title="Upscale 2×" aria-label="Upscale 2×"
-              >
-                <Maximize2 className="w-3 h-3" />
-              </button>
-            )}
-            {showCollectionMenu && <AddToCollectionMenu item={item} />}
-            {showMoodBoardMenu && <PinToMoodBoardMenu item={item} />}
-            <a
-              href={assetDownloadUrl(downloadUrl)}
-              download
-              className="shrink-0 min-h-[44px] min-w-[44px] px-1.5 py-1 bg-port-border hover:bg-port-border/70 text-white text-[10px] rounded flex items-center justify-center"
-              title="Download"
-              aria-label="Download"
+            <div
+              role="group"
+              aria-label="File actions"
+              className={`grid gap-1 border-t border-port-border/70 pt-1.5 ${fileActionGridClass(fileActionCount)}`}
             >
-              <Download className="w-3 h-3" />
-            </a>
-            {onToggleHidden && (
-              <button
-                type="button"
-                onClick={() => onToggleHidden(item)}
-                className="shrink-0 min-h-[44px] min-w-[44px] px-1.5 py-1 bg-port-border hover:bg-port-border/70 text-white text-[10px] rounded flex items-center justify-center"
-                aria-label={item.hidden ? 'Unhide (move out of hidden section)' : 'Hide (move to hidden section)'}
-                title={item.hidden ? 'Unhide (move out of hidden section)' : 'Hide (move to hidden section)'}
+              {showCollectionMenu && <AddToCollectionMenu item={item} size="fill" />}
+              {showMoodBoardMenu && <PinToMoodBoardMenu item={item} size="fill" />}
+              <a
+                href={assetDownloadUrl(downloadUrl)}
+                download
+                className={`${FILE_BTN} ${TONE.neutral}`}
+                title="Download"
+                aria-label="Download"
               >
-                {item.hidden ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
-              </button>
-            )}
-            {onDelete && (
-              <button
-                type="button"
-                onClick={() => setConfirmingDelete(true)}
-                className="shrink-0 min-h-[44px] min-w-[44px] px-1.5 py-1 bg-port-error/20 hover:bg-port-error/40 text-port-error text-[10px] rounded flex items-center justify-center"
-                aria-label="Delete"
-                title="Delete"
-              >
-                <Trash2 className="w-3 h-3" />
-              </button>
-            )}
+                <Download className="w-3.5 h-3.5" />
+              </a>
+              {onToggleHidden && (
+                <button
+                  type="button"
+                  onClick={() => onToggleHidden(item)}
+                  className={`${FILE_BTN} ${TONE.neutral}`}
+                  aria-label={item.hidden ? 'Unhide (move out of hidden section)' : 'Hide (move to hidden section)'}
+                  title={item.hidden ? 'Unhide (move out of hidden section)' : 'Hide (move to hidden section)'}
+                >
+                  {item.hidden ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                </button>
+              )}
+              {onDelete && (
+                <button
+                  type="button"
+                  onClick={() => setConfirmingDelete(true)}
+                  className={`${FILE_BTN} ${TONE.danger}`}
+                  aria-label="Delete"
+                  title="Delete"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
           </div>
         )}
       </div>
