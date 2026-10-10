@@ -14,6 +14,7 @@ export const UNTRUSTED_CONTENT_SOURCE_LABELS = Object.freeze({
   'github-issue': 'GitHub issues',
   'github-pr': 'GitHub pull requests',
   'stacker-news': 'Stacker News',
+  moltbook: 'Moltbook',
   messages: 'Messages',
   email: 'Email',
   imessage: 'iMessage',
