@@ -163,8 +163,10 @@ describe('track metadata and lyrics auto-reading on create and update', () => {
     expect(project.lyricCues[1].text).toBe('Shining like a spark');
     expect(project.concept).toMatchObject({
       prompt: 'A cyberpunk nocturnal story',
-      style: 'Neon noir 80s anime style',
+      songStyle: 'Neon noir 80s anime style',
     });
+    // The Suno style is the song's sound, never the visual style appended to frame prompts.
+    expect(project.concept.style).toBeUndefined();
   });
 
   it('preserves explicitly authored project fields over track defaults at creation', async () => {
@@ -189,6 +191,7 @@ describe('track metadata and lyrics auto-reading on create and update', () => {
     expect(project.concept).toMatchObject({
       prompt: 'Custom concept',
       style: 'Custom style',
+      songStyle: 'Track style',
     });
   });
 
@@ -214,8 +217,9 @@ describe('track metadata and lyrics auto-reading on create and update', () => {
     expect(updated.lyricCues[0].text).toBe('Golden light breaks through');
     expect(updated.concept).toMatchObject({
       prompt: 'Dawn over the horizon',
-      style: 'Impressionist pastel colors',
+      songStyle: 'Impressionist pastel colors',
     });
+    expect(updated.concept.style).toBeUndefined();
   });
 });
 

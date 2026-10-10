@@ -2127,7 +2127,7 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     });
   });
 
-  it('changing a track in the edit view auto-seeds track concept and style if not set', async () => {
+  it('changing a track in the edit view auto-seeds the track concept, leaving the song style to the server', async () => {
     const project = { ...PROJECT_NO_CLIP, trackId: null, concept: null };
     listTracks.mockResolvedValue([{
       id: 'track-new',
@@ -2135,7 +2135,7 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
       concept: 'Space journey',
       prompt: 'Cosmic sci-fi',
     }]);
-    updateMusicVideoProject.mockResolvedValue({ ...project, trackId: 'track-new', concept: { prompt: 'Space journey', style: 'Cosmic sci-fi' } });
+    updateMusicVideoProject.mockResolvedValue({ ...project, trackId: 'track-new', concept: { prompt: 'Space journey', songStyle: 'Cosmic sci-fi' } });
     await openProject(project, 'setup');
 
     const changeTrackSelect = screen.getByLabelText('Change track');
@@ -2145,7 +2145,8 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
       project.id,
       {
         trackId: 'track-new',
-        concept: { prompt: 'Space journey', style: 'Cosmic sci-fi' },
+        // The Suno style is the song's sound, not the visual style on every frame prompt.
+        concept: { prompt: 'Space journey' },
       },
       { silent: true },
     ));

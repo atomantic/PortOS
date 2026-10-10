@@ -33,7 +33,7 @@ import { musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
 import { z } from 'zod';
 import { ServerError } from '../../lib/errorHandler.js';
 import { extractJson } from '../../lib/jsonExtract.js';
-import { musicVideoCreativeContext } from '../../lib/musicVideoCreativeContext.js';
+import { musicVideoCreativeContext, musicVideoSongStyleContext } from '../../lib/musicVideoCreativeContext.js';
 import { musicVideoBriefTools as briefTools } from '../../lib/musicVideoMediumPlan.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { CAST_SETS_DEFINITION_LIMITS, normalizeDefinitions } from './castAndSetsDefinitions.js';
@@ -206,7 +206,9 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
   const sections = songSections(project);
   const lyrics = lyricSheetText(project);
   const guidance = trimTo(project?.automation?.guidance, 2000);
-  const trackStyle = trimTo(track?.prompt, 1500) || trimTo(concept.style, 1500);
+  // The song's Suno style shapes the design; the director's visual style is the look.
+  const songStyle = musicVideoSongStyleContext({ songStyle: concept.songStyle || track?.prompt });
+  const visualStyle = trimTo(concept.style, 1500);
   const boardStyle = trimTo(board?.style?.prompt, 1500) || trimTo(concept.moodBoardStyle, 1500);
   const boardNegative = trimTo(board?.style?.negativePrompt, 600);
   const moodLines = moodImages.map((img, i) => `${i}. ${[img.caption, img.analysis].filter(Boolean).join(' — ') || '(no caption or analysis)'}`);
@@ -227,8 +229,8 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
 
   const facts = [
     `Duration: ${fmtTime(analysis.durationSec)}${analysis.bpm ? ` · ${Math.round(analysis.bpm)} BPM` : ''}`,
-    trackStyle && `Track style prompt: ${trackStyle}`,
     concept.prompt && `Concept: ${trimTo(concept.prompt, 2000)}`,
+    visualStyle && `Director's visual style: ${visualStyle}`,
     guidance && `Director guidance: ${guidance}`,
     bible && bible,
   ].filter(Boolean).join('\n');
@@ -279,6 +281,7 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
     header,
     facts,
     characterStyle,
+    songStyle,
     `Lyrics (section headers and delivery directions in brackets):\n${lyrics || '(instrumental — no lyrics)'}`,
     sectionLines.length ? `Song sections (index. label start–end):\n${sectionLines.join('\n')}` : 'The song has not been sectioned.',
     board_,

@@ -88,7 +88,12 @@ export const MUSIC_VIDEO_STATUSES = ['draft', 'analyzed', 'ready', 'rendering', 
 // Optional global visual direction for the whole video.
 export const musicVideoConceptSchema = z.object({
   prompt: z.string().max(8000).optional(),
+  // The director's visual style, appended to every frame and shot prompt.
   style: z.string().max(2000).optional(),
+  // The song's own style (the Suno style prompt, excluded styles included),
+  // snapshotted from the track. Planning LLMs translate it into design; it
+  // never reaches an image or video prompt verbatim.
+  songStyle: z.string().max(2000).optional(),
   universeId: z.string().max(64).nullable().optional(),
   // Authored snapshots keep the production stable when source canon changes.
   universeStyle: z.string().max(4000).optional(),

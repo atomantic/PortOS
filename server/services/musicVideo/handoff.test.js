@@ -91,7 +91,8 @@ describe('buildHandoffManifest typography (#8992)', () => {
   it('keeps typography prose out of the exported frame/shot prompts but leaves it in visualSpec', () => {
     const project = {
       id: 'mv-typo', name: 'Typo Project', version: 1,
-      concept: { prompt: '', style: 'grainy 16mm' },
+      // The song's Suno style shapes planning only; it never reaches a generation prompt.
+      concept: { prompt: '', style: 'grainy 16mm', songStyle: 'synth-pop, -metal' },
       visualSpec: {
         palette: ['#112233'],
         cameraRules: 'locked-off wides',

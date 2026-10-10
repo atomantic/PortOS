@@ -159,7 +159,8 @@ export async function selectSongRevision(projectId, revisionId, songId) {
     if (!candidate) fail('Import and listen to a candidate before selecting it');
     const applied = applyRevisedMaster(project, { uploadedAudioFilename: candidate.filename,
       lyrics: revision.fields.lyrics, instrumental: revision.fields.instrumental });
-    return { project: { ...applied.project, songRevision: { ...revision, ...applied.revision,
+    const songStyle = String(revision.fields?.style || '').trim().slice(0, 2000);
+    return { project: { ...applied.project, concept: { ...applied.project.concept, songStyle }, songRevision: { ...revision, ...applied.revision,
       status: 'selected', selectedSongId: songId, selectedAt: new Date().toISOString() } } };
   }));
 }
@@ -183,7 +184,9 @@ export async function reviseSongFromTrack(projectId, { trackId }) {
   return startRetime(await mutate(fork.id, (project) => {
     const applied = applyRevisedMaster(project, { trackId: track.id, lyrics: lyrics.trim() ? lyrics : null });
     const now = new Date().toISOString();
-    return { project: { ...applied.project, songRevision: { id: `mvsr-${randomUUID()}`, source: 'track', trackId: track.id,
+    // The new song brings its own Suno style for the planners to design from.
+    const songStyle = typeof track.prompt === 'string' ? track.prompt.trim().slice(0, 2000) : '';
+    return { project: { ...applied.project, concept: { ...applied.project.concept, songStyle }, songRevision: { id: `mvsr-${randomUUID()}`, source: 'track', trackId: track.id,
       fields: { title: String(track.title || project.name || 'Song').slice(0, 80), style: String(track.prompt || '').slice(0, 1000),
         lyrics: (lyrics.trim() ? lyrics : (project.lyricCues || []).map((c) => c.text).join('\n')).slice(0, 5000), instrumental: false },
       status: 'selected', songIds: [], candidates: [], createdAt: now, selectedAt: now, ...applied.revision } } };

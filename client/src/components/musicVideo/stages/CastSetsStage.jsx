@@ -15,13 +15,14 @@ const directionSummary = (project) => {
     characterStyle ? `Character style: ${characterStyle}` : 'No character style',
     project.concept?.prompt?.trim() ? 'Concept written' : 'No concept yet',
     project.concept?.style?.trim() ? 'Style set' : 'No style yet',
+    ...(project.concept?.songStyle?.trim() ? ['Song style set'] : []),
     refs ? `${formatCount(refs)} look ${refs === 1 ? 'reference' : 'references'}` : 'No look references',
   ].join(' · ');
 };
 
 /** Concept, style, universe and look references: what the cast and sets are built from. */
 function CreativeDirection({ board }) {
-  const { project, locked, conceptDraft, styleDraft } = board;
+  const { project, locked, conceptDraft, styleDraft, songStyleDraft } = board;
   return (
     <>
       <CreativeSetupPanel
@@ -61,6 +62,22 @@ function CreativeDirection({ board }) {
               className="min-h-[44px] w-full rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm"
             />
           </div>
+          {songStyleDraft && (
+            <div className="sm:col-span-2">
+              <label htmlFor="mv-song-style" className="mb-1 block text-xs text-port-text-muted">Song style</label>
+              <AutoSizeTextarea
+                id="mv-song-style"
+                value={songStyleDraft.value}
+                rows={2}
+                maxLength={2000}
+                onChange={songStyleDraft.onChange}
+                onBlur={songStyleDraft.onBlur}
+                placeholder="The song's Suno style. Excluded styles start with a minus."
+                className="min-h-[44px] w-full rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm"
+              />
+              <p className="mt-1 text-xs text-port-text-muted">With the lyrics, it shapes the world, cast and scenes. It is never added to frame prompts.</p>
+            </div>
+          )}
         </div>
         <VisualSpecPanel key={project.id} project={project} onSave={board.saveVisualSpec} />
       </fieldset>
