@@ -916,7 +916,7 @@ function MoodBoardEditor({ id }) {
                       )}
                     </div>
                     <div className="min-w-0 p-3 flex flex-col gap-2">
-                      <div className="min-w-0 flex flex-wrap items-center justify-between gap-1">
+                      <div className="min-w-0 flex items-center gap-2">
                         <span className="text-[10px] font-medium text-gray-400 flex items-center gap-1">
                           {isAnalyzed ? (
                             <span className="text-port-accent flex items-center gap-0.5">
@@ -938,6 +938,15 @@ function MoodBoardEditor({ id }) {
                             {item.caption}
                           </span>
                         ) : null}
+                        <button
+                          type="button"
+                          onClick={() => setConfirmingItemId(item.id)}
+                          title="Remove item"
+                          aria-label="Remove item"
+                          className="min-h-[44px] min-w-[44px] shrink-0 ml-auto -my-2.5 inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                        </button>
                       </div>
                       <input
                         type="text"
@@ -1024,15 +1033,6 @@ function MoodBoardEditor({ id }) {
                             <ScanEye className="w-3.5 h-3.5" aria-hidden="true" />
                           </button>
                         ) : null}
-                        <button
-                          type="button"
-                          onClick={() => setConfirmingItemId(item.id)}
-                          title="Remove item"
-                          aria-label="Remove item"
-                          className="min-h-[44px] min-w-[44px] shrink-0 inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                        </button>
                       </div>
                       {confirmingItemId === item.id ? (
                         <InlineConfirmRow
