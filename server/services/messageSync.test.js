@@ -1155,6 +1155,24 @@ describe('browser ingestion identity across sync, cache, and activity (#11150)',
     expect([...f.events.keys()]).toEqual([`msg:${VALID_UUID}:pw-legacy`]);
   });
 
+  it('adopts a newly available child ID by unique canonical evidence and retains it if the provider later omits it', async () => {
+    const legacy = { id: 'legacy-member', externalId: 'pw-old-display', providerRowId: 'row-a',
+      threadId: 'legacy-thread', bodyFull: true, bodyText: 'old body', date: summary.date,
+      from: { name: summary.from, email: summary.fromEmail }, subject: summary.subject, evaluation: { score: 8 } };
+    const f = await fixture([legacy]);
+    const details = [{ providerMessageId: 'child-a', from: 'Renamed', fromEmail: summary.fromEmail,
+      date: '2026-01-01T07:00:00-05:00', body: 'new body' }];
+    scrape([{ ...summary, providerRowId: 'row-a' }], details);
+    await syncAccount(VALID_UUID);
+    expect(f.stored().messages).toHaveLength(1);
+    expect(f.stored().messages[0]).toMatchObject({ id: legacy.id, providerMessageId: 'child-a', evaluation: { score: 8 }, bodyText: 'new body' });
+    expect(f.events.size).toBe(1);
+    refreshMessageDetail.mockResolvedValue(details.map(({ providerMessageId, ...detail }) => detail));
+    await refreshMessage(VALID_UUID, legacy.id);
+    expect(f.stored().messages).toHaveLength(1);
+    expect(f.stored().messages[0].providerMessageId).toBe('child-a');
+  });
+
   it('upgrades a summary to its unambiguous child without adding a second activity event', async () => {
     const f = await fixture();
     scrape([{ ...summary, providerRowId: 'row-a' }]);

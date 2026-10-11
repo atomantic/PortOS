@@ -205,15 +205,17 @@ export function matchBrowserMessage(messages, incoming, batch = [incoming]) {
   if (exact.length === 1 && batch.filter(message => messageIngestionIdentity(message) === key).length === 1) return exact[0];
   if (exact.length) return null;
   const compatible = (message, candidate) => {
-    const summaryBecomesMember = message.providerRowId && message.providerRowId === candidate.providerRowId
-      && candidate.browserMessageKind === 'member' && !message.bodyFull
+    const memberEvidence = message.providerRowId && message.providerRowId === candidate.providerRowId
+      && candidate.browserMessageKind === 'member'
+      && (!message.providerMessageId || !candidate.providerMessageId)
       && Number.isFinite(Date.parse(message.date)) && Date.parse(message.date) === Date.parse(candidate.date)
       && (message.from?.email && candidate.from?.email
         ? message.from.email.trim().toLowerCase() === candidate.from.email.trim().toLowerCase()
         : message.from?.name && message.from.name === candidate.from?.name);
-    return (message.externalId === candidate.externalId || summaryBecomesMember)
+    return (message.externalId === candidate.externalId || memberEvidence)
       && !(candidate.browserMessageKind === 'row' && (message.browserMessageKind === 'member' || (message.bodyFull && message.threadId)))
       && (!message.providerRowId || !candidate.providerRowId || message.providerRowId === candidate.providerRowId)
+      && (!message.providerMessageId || !candidate.providerMessageId || message.providerMessageId === candidate.providerMessageId)
       && !message.browserMemberDisambiguator && !candidate.browserMemberDisambiguator;
   };
   const fallback = messages.filter(message => compatible(message, incoming));

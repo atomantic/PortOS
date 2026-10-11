@@ -240,7 +240,7 @@ export async function syncAccount(accountId, io, options = {}) {
         existing.activityIdentity ||= messageIngestionIdentity(existing);
         // Adopt canonical identity without replacing local ID or evaluation.
         for (const key of ['externalId', 'browserMessageKind', 'providerMessageId', 'browserMemberDisambiguator', 'browserSummaryExternalId', 'from', 'date', 'subject']) {
-          if (msg[key] !== undefined) existing[key] = msg[key];
+          if (msg[key] !== undefined && (key !== 'providerMessageId' || msg[key])) existing[key] = msg[key];
         }
         // Update flags and provider identity on existing message
         if (msg.providerRowId) existing.providerRowId = msg.providerRowId;
@@ -385,6 +385,7 @@ function mergeRefreshedMessage(cache, accountId, source, message, detail) {
       || (!message.providerRowId && identities.length === 1
         && browserSummaryId(message.date || '', message.from?.name || '', message.subject || '') === identity.externalId
         ? message : null);
+    if (existing?.providerMessageId) identity.providerMessageId ||= existing.providerMessageId;
     // API IDs remain authoritative; a browser refresh supplies content only.
     if (existing?.externalId && !existing.providerRowId && !identity.providerRowId) identity.externalId = existing.externalId;
     const updated = existing || {
