@@ -50,12 +50,34 @@ export const pilotInputBasis = (project, sceneId) => {
     style: project.visualSpec, references: project.styleReferences });
 };
 
+/**
+ * A pilot passes on its current review of its current inputs and media: a pass
+ * verdict, or a take the run's orchestrator accepted on that same review once
+ * its repairs were spent (`pilot.accepted`).
+ */
 export function currentPilotPass(project, pilot) {
   const review = project.autoReviews?.find((r) => r.id === pilot.reviewRunId);
   const result = review?.attempts?.at(-1)?.review;
-  return review?.status === 'passed' && result?.verdict === 'pass'
-    && pilot.inputBasis === pilotInputBasis(project, pilot.sceneId)
-    && !musicVideoDependencyChanges(project, result.dependencies).length;
+  if (!result || pilot.inputBasis !== pilotInputBasis(project, pilot.sceneId)
+    || musicVideoDependencyChanges(project, result.dependencies).length) return false;
+  return (review.status === 'passed' && result.verdict === 'pass') || (!!pilot.accepted && pilot.accepted.reviewRunId === pilot.reviewRunId);
+}
+
+/**
+ * The media slot a pilot must make again: its inputs changed after its review
+ * (a prompt edit, a repair) while the reviewed take is still the selected one.
+ * Reviewing that take again would judge what the old inputs made. Null when
+ * nothing is stale.
+ */
+export function stalePilotSlot(project, pilot) {
+  const result = project.autoReviews?.find((r) => r.id === pilot.reviewRunId)?.attempts?.at(-1)?.review;
+  if (!result || pilot.inputBasis === pilotInputBasis(project, pilot.sceneId)) return null;
+  const scene = project.scenes?.find((s) => s.sceneId === pilot.sceneId);
+  if (!scene) return null;
+  const [slot, role] = pilotClass(scene, project) === 'still' ? ['referenceImageId', 'plate'] : ['videoHistoryId', 'clip'];
+  const reviewed = result.dependencies?.references?.find((ref) => ref.sceneId === scene.sceneId && ref.role === role);
+  if (!scene[slot] || !reviewed) return null;
+  return musicVideoDependencyChanges(project, { ...result.dependencies, references: [reviewed] }).length ? null : slot;
 }
 
 /** Prefer an edit/reuse before charging for replacement media. No identical retries. */

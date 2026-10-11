@@ -49,7 +49,7 @@ import { projectAutoReviews } from './autoReview.js';
 import { projectRevisions } from './revision.js';
 import { castAndSetsSettled } from './castAndSets.js';
 import { assertProductionApproval } from './productionReview.js';
-import { currentPilotPass, pilotClass, pilotInputBasis, pilotRepair, selectProductionPilots } from './productionPilot.js';
+import { currentPilotPass, pilotClass, pilotInputBasis, pilotRepair, selectProductionPilots, stalePilotSlot } from './productionPilot.js';
 
 const PRODUCTION_LIMIT_BOUNDS = Object.freeze({
   maxGenerations: Object.freeze({ min: 1, max: 500 }),
@@ -486,6 +486,8 @@ function nextOpenGeneration(project, run, jobs, { pendingPilots, targets }) {
  *   `author-document` / `revise-document` — author the approved document or
  *                just the failed song sections, without changing its assets;
  *   `render-document` — encode the chosen document after continuous review;
+ *   `refresh-pilot` — a pilot's inputs changed after its review: clear the
+ *                reviewed take so the pilot is generated again from them;
  *   `review`   — every scene holds its media: hand the continuous excerpt
  *                `[startSec, endSec)` to an auto-review run;
  *   `wait`     — work in flight (generation jobs, or the review run);
@@ -519,6 +521,8 @@ export function nextProductionStep(project, run, { jobs = [], processId = null }
   const pendingPilots = pilots.filter((pilot) => !currentPilotPass(project, pilot));
   const blocking = blockingPilotReview(project, run, pendingPilots);
   if (blocking) return blocking;
+  const stale = pendingPilots.find((pilot) => stalePilotSlot(project, pilot));
+  if (stale) return { type: 'refresh-pilot', sceneId: stale.sceneId };
   if (run.authoring && targets.frame.some((scene) => scene.shotMode === 'performance')) {
     const gate = castAndSetsGate(project, run);
     if (gate) return { type: 'halt', status: 'blocked', reason: 'This selected performance shot needs the reviewed Cast & Sets references. Build and approve that check-in, then resume; production will not start an unbudgeted image batch.' };
@@ -757,6 +761,28 @@ export const attachProductionReview = (project, runId, reviewRunId, now = new Da
 
 export const planProductionPilots = (project, runId, now = new Date().toISOString()) =>
   mutateRun(project, runId, () => ({ pilot: { scenes: selectProductionPilots(project) } }), now);
+
+/** Clear a stale pilot take (see stalePilotSlot); the take stays in the scene's history. */
+export function refreshProductionPilot(project, runId, sceneId, now = new Date().toISOString()) {
+  const run = findProductionRun(project, runId);
+  const pilot = run.pilot?.scenes?.find((p) => p.sceneId === sceneId);
+  const slot = pilot && stalePilotSlot(project, pilot);
+  if (!slot) return { project, run };
+  return mutateRun({ ...project, scenes: project.scenes.map((scene) => (scene.sceneId === sceneId ? { ...scene, [slot]: null } : scene)) },
+    runId, () => ({}), now);
+}
+
+/**
+ * The run's orchestrator accepts a pilot's last reviewed take once its repairs
+ * are spent. Bound to that review, so new media or inputs need a new review.
+ */
+export const acceptProductionPilot = (project, runId, sceneId, { by, note }, now = new Date().toISOString()) =>
+  mutateRun(project, runId, (run) => {
+    const pilot = run.pilot?.scenes?.find((p) => p.sceneId === sceneId);
+    if (!pilot?.reviewRunId) throw productionError(409, 'PRODUCTION_PILOT_REQUIRED', 'This pilot has no review to accept');
+    return { pilot: { ...run.pilot, scenes: run.pilot.scenes.map((p) => (p.sceneId === sceneId
+      ? { ...p, accepted: { reviewRunId: p.reviewRunId, by, note: note || null, at: now } } : p)) } };
+  }, now);
 
 export const attachProductionPilotReview = (project, runId, sceneId, reviewRunId, now = new Date().toISOString()) =>
   mutateRun(project, runId, (run) => ({ pilot: { ...run.pilot, scenes: run.pilot.scenes.map((pilot) =>

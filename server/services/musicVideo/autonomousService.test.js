@@ -1,13 +1,13 @@
 // Existing engine cases isolate the creative review boundary; explicit approval-flow
 // cases below switch to the real model and verify pause/resume without providers.
-const creativeReview = vi.hoisted(() => ({ real: false }));
+const creativeReview = vi.hoisted(() => ({ real: false, readiness: {} }));
 vi.mock('./productionReview.js', async (load) => {
   const actual = await load();
   return { ...actual,
     assertProductionApproval: (...args) => creativeReview.real ? actual.assertProductionApproval(...args) : undefined,
     productionReadiness: (...args) => creativeReview.real ? actual.productionReadiness(...args) : {
       art: { approved: true }, storyboard: { approved: true }, proof: { approved: true }, basis: { proof: 'test-proof' }, readyForProduction: true,
-      alignment: { status: 'verified' },
+      alignment: { status: 'verified' }, ...creativeReview.readiness,
     },
   };
 });
@@ -67,6 +67,7 @@ const stub = (name, impl) => vi.fn(async (...args) => { calls.push(name); return
 
 beforeEach(() => {
   creativeReview.real = false;
+  creativeReview.readiness = {};
   store.clear();
   calls = [];
   doubles = {
@@ -202,6 +203,20 @@ describe('startAutonomousVideo', () => {
       resolve.mockRestore();
       production.__setProductionDepsForTests({});
     }
+  });
+
+  // Uniquely catches a footage project left in document mode with no document failing its final render.
+  it('composes a footage project that has no composition document before its final render', async () => {
+    await service.startAutonomousVideo({ prompt: 'p' });
+    await vi.waitFor(() => expect(runOf()?.output.productionRunId).toBe('mvpr-1'));
+    Object.assign(store.get('mv-auto'), { composition: { mode: 'document', textCues: [{ id: 'cue' }] }, productionPolicy: { strategy: 'legacy' } });
+    doubles.renderVideo.mockImplementationOnce(async (id) => {
+      expect(store.get(id).composition).toEqual({ mode: 'composed', textCues: [{ id: 'cue' }] });
+      return { jobId: 'render-1' };
+    });
+    await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'completed' } });
+    expect(doubles.renderVideo).toHaveBeenCalledOnce();
+    expect(runOf().output).toMatchObject({ renderJobId: 'render-1' });
   });
 
   it('finishes — and starts the final render — when the delegated production run completes', async () => {
@@ -1340,6 +1355,23 @@ describe('autopilot clears the gates it was granted on its own', () => {
     expect(doubles.verifyAlignment).toHaveBeenCalledWith('mv-auto', expect.objectContaining({ notes: expect.stringContaining('source project') }));
   });
 
+  // Uniquely catches a run granted the storyboard parking for the director when a prompt edit stales that approval mid-production.
+  it('approves a storyboard a prompt edit staled again and resumes production', async () => {
+    analyzed({ productionReview: { draft: { ...GUIDE, lyricsMode: 'instrumental', timingNotes: 'Synthetic instrumental master checked.', storyboard: [shot] } } });
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], ...GRANT[0] }, GRANT[1]);
+    await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
+    const project = store.get('mv-auto');
+    project.scenes[0].prompt = 'the dancer turns toward the light';
+    project.productionRuns = [{ id: 'mvpr-1', status: 'blocked', createdAt: new Date().toISOString() }];
+    expect(actual.productionReadiness(project).storyboard.approved).toBe(false);
+    doubles.approveProductionReview.mockClear();
+    await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'blocked', stopReason: 'Production review needs human approval' } });
+    expect(doubles.approveProductionReview).toHaveBeenCalledWith('mv-auto', expect.objectContaining({ stage: 'storyboard', approvedBy: 'autopilot' }));
+    expect(actual.productionReadiness(store.get('mv-auto')).storyboard.approved).toBe(true);
+    expect(doubles.resumeProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-1', { acceptBasis: true });
+    expect(runOf().status).toBe('running');
+  });
+
   it('marks an instrumental song as one instead of asking for lyrics', async () => {
     analyzed({ productionReview: { draft: { ...GUIDE, lyricsMode: 'vocal', storyboard: [shot] } } });
     await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], instrumental: true, ...GRANT[0] }, GRANT[1]);
@@ -1511,6 +1543,67 @@ describe('orchestrated mode (brief.orchestrator)', () => {
     await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: limited });
     expect(doubles.resumeProduction).not.toHaveBeenCalled();
     expect(runOf()).toMatchObject({ status: 'needs-human', errorCode: 'PRODUCTION_PARKED' });
+  });
+
+  describe('a production run blocked on its pilot', () => {
+    let pilotInputBasis;
+    let pilotDependencies;
+    beforeEach(async () => {
+      ({ pilotInputBasis, pilotDependencies } = await import('./productionPilot.js'));
+      doubles.approveProductionReview = stub('approve', async () => {});
+      service.__setAutonomousDepsForTests(doubles);
+    });
+    const pilotFixture = async (limits) => {
+      await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local', 'video:local'], orchestrator: ORCHESTRATOR, ...(limits ? { limits } : {}) }, { autoApproveAuthorized: true });
+      await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
+      store.get('mv-auto').scenes = [{ sceneId: 'mvs-a', label: 'Skate park', startSec: 0, endSec: 4, prompt: 'a skater carves the bowl', referenceImageId: 'a1.png', videoHistoryId: 'clip-1', takes: [] }];
+      store.get('mv-auto').productionRuns = [{ id: 'mvpr-1', status: 'blocked', createdAt: new Date().toISOString(), pilot: { scenes: [] } }];
+    };
+    // A pilot review of the scene as it stands now, with the given verdict.
+    const reviewPilot = (id, result) => {
+      const project = store.get('mv-auto');
+      project.autoReviews = [...(project.autoReviews || []), { id, status: result.verdict === 'pass' ? 'passed' : 'needs-human',
+        attempts: [{ n: 1, excerptId: 'test-proof', review: { checks: {}, findings: [], ...result, dependencies: pilotDependencies(project, 'mvs-a') } }] }];
+      project.productionRuns[0].pilot = { scenes: [{ sceneId: 'mvs-a', operation: 'cutaway', reviewRunId: id, inputBasis: pilotInputBasis(project, 'mvs-a') }] };
+    };
+    const blocked = () => service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'blocked', stopReason: 'Pilot mvs-a: revise.' } });
+
+    // Uniquely catches a failed pilot parking an orchestrated run, or a repair the next take never sees.
+    it('repairs a failed pilot within the review limit, then accepts its last take with the findings noted', async () => {
+      await pilotFixture({ maxReviewAttempts: 1 });
+      reviewPilot('rev-1', { verdict: 'revise', reason: 'The skater floats above the ramp.', checks: { motion: 'fail' },
+        findings: [{ severity: 'blocking', note: 'Wheels never touch the coping.' }] });
+      await blocked();
+      expect(store.get('mv-auto').scenes[0]).toMatchObject({ videoHistoryId: 'clip-1',
+        clipFixes: { text: 'The skater floats above the ramp. Wheels never touch the coping.' } });
+      expect(reviews()).toContain('pilot:revise');
+      expect(doubles.resumeProduction).toHaveBeenLastCalledWith('mv-auto', 'mvpr-1', { acceptBasis: true });
+      expect(runOf().status).toBe('running');
+
+      // Production made the shot again from the fix, and that take failed too: the repair is spent.
+      store.get('mv-auto').scenes[0].videoHistoryId = 'clip-2';
+      reviewPilot('rev-2', { verdict: 'revise', reason: 'The landing is still soft.' });
+      doubles.resumeProduction.mockClear();
+      await blocked();
+      expect(store.get('mv-auto').productionRuns[0].pilot.scenes[0].accepted).toMatchObject({ reviewRunId: 'rev-2', by: 'orchestrator',
+        note: expect.stringContaining('The landing is still soft.') });
+      expect(reviews().filter((r) => r.startsWith('pilot'))).toEqual(['pilot:revise', 'pilot:approve']);
+      expect(doubles.resumeProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-1', { acceptBasis: true });
+      expect(runOf().status).toBe('running');
+    });
+
+    // Uniquely catches an orchestrated run parking on the proof gate after its pilot passed.
+    it('approves the passing pilot as the proof from its machine review', async () => {
+      await pilotFixture();
+      reviewPilot('rev-1', { verdict: 'pass', reason: 'The carve lands on the downbeat.', checks: { motion: 'pass', audioSync: 'pass' } });
+      creativeReview.readiness = { proof: { approved: false, problems: [] } };
+      await blocked();
+      expect(doubles.approveProductionReview).toHaveBeenCalledWith('mv-auto', expect.objectContaining({ stage: 'proof', basis: 'test-proof', approvedBy: 'orchestrator',
+        proofReview: expect.objectContaining({ method: 'machine', watchedWithAudio: false, excerptId: 'test-proof', filename: 'test-proof.mp4',
+          machineEvidence: expect.objectContaining({ audioReview: expect.stringContaining('audioSync pass') }) }) }));
+      expect(reviews()).toContain('proof:approve');
+      expect(doubles.resumeProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-1', { acceptBasis: true });
+    });
   });
 
   // Uniquely catches an unviewable still being recorded as an approved review while the run still waits for the director.
