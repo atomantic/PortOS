@@ -454,6 +454,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/music/lyrics',
   'POST /api/music/waveform',
   'POST /api/music/code',
+  // Local music generation spawns neural-audio Python on the host (#11077).
+  'POST /api/music/generate',
   'POST /api/tracks/:id/waveform/draw',
   'POST /api/music-video/autonomous',
   'POST /api/music-video/:id/autonomous/resume',
