@@ -1466,6 +1466,32 @@ describe('orchestrated mode (brief.orchestrator)', () => {
     expect(doubles.resumeProduction.mock.calls[0][2].stopBefore).toBeUndefined();
   });
 
+  // Uniquely catches the orchestrator approving art or a storyboard it still wants changed once its revisions run out.
+  it('parks for the director with the open changes named when a production gate runs out of revisions', async () => {
+    creativeReview.real = true;
+    const actual = await vi.importActual('./productionReview.js');
+    doubles.approveProductionReview = stub('approve', async (id, input) => { store.set(id, clone(actual.approveProductionStage(clone(store.get(id)), input))); });
+    service.__setAutonomousDepsForTests(doubles);
+    doubles.analyzeSong.mockImplementation(async () => {
+      Object.assign(store.get('mv-auto'), {
+        audioAnalysis: { durationSec: 20, sections: [{ id: 'chorus', label: 'Chorus', startSec: 0, endSec: 20 }] },
+        scenes: [{ sceneId: 'shot', startSec: 0, endSec: 20, label: 'Chorus' }],
+        devArtifacts: [{ id: 'guide', version: 1, file: 'guide.html', mimeType: 'text/html' }],
+        productionReview: { draft: { cast: 'A dancer', environments: 'Theatre', visualLanguage: 'Ink', motionLanguage: 'Orbit', guideArtifactId: 'guide',
+          lyricsMode: 'instrumental', timingNotes: '', storyboard: [{ sceneId: 'shot', lyricCueIds: [], action: 'Dancer unfolds', staging: 'Wide', camera: 'Orbit', transition: 'Fade' }] } },
+      });
+    });
+    const vague = { verdict: 'revise', notes: 'Still vague.', changes: [{ field: 'cast', text: 'A dancer in a red scarf' }] };
+    answers.art = [vague, vague];
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['code:render'], authoring: { providerId: 'example', model: 'example-code' },
+      limits: { maxReviewAttempts: 1 }, orchestrator: ORCHESTRATOR }, { autoApproveAuthorized: true });
+    await settled('needs-human');
+    expect(runOf()).toMatchObject({ errorCode: 'MUSIC_VIDEO_APPROVAL_REQUIRED', error: expect.stringContaining('cast: A dancer in a red scarf') });
+    expect(reviews().filter((r) => r.startsWith('art'))).toEqual(['art:revise', 'art:revise']);
+    expect(store.get('mv-auto').productionReview.approvals?.art).toBeFalsy();
+    expect(doubles.renderVideo).not.toHaveBeenCalled();
+  });
+
   it('stops revising at the review limit and keeps a Suno song rather than spend credits on a retake', async () => {
     answers.lyrics = Array.from({ length: 5 }, (_, i) => ({ verdict: 'revise', notes: 'Again.', lyrics: `take ${i + 1}` }));
     answers.song = [{ verdict: 'retake', notes: 'Muddy mix.' }];

@@ -261,8 +261,10 @@ async function autoApproveStage(project, run, stage) {
 // ---- orchestrated mode (brief.orchestrator) --------------------------------------
 // The orchestrator stands in for the director at each review point. A review is
 // one provider call; a revision is applied and judged again until it approves or
-// `limits.maxReviewAttempts` revisions of that checkpoint are spent — then the
-// last version is accepted and the log says so. Revisions are counted from the
+// `limits.maxReviewAttempts` revisions of that checkpoint are spent — then a
+// text checkpoint accepts the last version and the log says so, while an art or
+// storyboard gate with changes still asked for parks for the director with them
+// named. Revisions are counted from the
 // persisted log, so a retried stage cannot buy itself a fresh allowance.
 
 const reviewLimit = (run) => run.brief.limits?.maxReviewAttempts || AUTONOMOUS_DEFAULT_LIMITS.maxReviewAttempts;
@@ -666,8 +668,15 @@ async function orchestrateProductionStage(project, run, stage) {
       continue;
     }
     project = await getProject(project.id);
+    // Out of revisions with changes still asked for: the director decides, never a silent approval.
+    if (review.verdict === 'revise' && spent >= reviewLimit(run) && review.changes.length) {
+      const open = review.changes.map((c) => `${c.field || c.sceneId}: ${c.text}`);
+      await recordReview(project.id, reviewEntry(stage, review, { verdict: 'revise',
+        notes: `Revision limit reached; left for the director. ${review.notes || ''}`.trim(), changes: open.map((line) => trimTo(line, 300)) }));
+      throw runError(409, 'MUSIC_VIDEO_APPROVAL_REQUIRED', trimTo(`The orchestrator still wants changes to the ${stage} after ${spent} revision${spent === 1 ? '' : 's'}: ${open.join(' · ')} Approve the ${stage} yourself, or resume with more revisions per step.`, 500));
+    }
     const readiness = productionReadiness(project);
-    const why = review.verdict !== 'revise' ? '' : spent >= reviewLimit(run) ? 'Revision limit reached; accepted the latest version. ' : 'Nothing to revise was supplied; accepted as is. ';
+    const why = review.verdict === 'revise' ? 'Nothing to revise was supplied; accepted as is. ' : '';
     const problem = readiness[stage].problems[0] || stageBlockers(project, run, stage)[0];
     if (problem) {
       await recordReview(project.id, reviewEntry(stage, review, { verdict: 'revise', notes: `Could not approve: ${trimTo(problem, 300)} ${review.notes || ''}`.trim() }));
