@@ -12,6 +12,7 @@ const script = join(dirname(fileURLToPath(import.meta.url)), 'generate_ltx2.py')
 // failing. Every helper exercised here is import-free by design (stdlib only),
 // so no mlx/ltx wheel is needed.
 const pyBin = resolveTestPython();
+const hasFfmpeg = (() => { try { execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' }); return true; } catch { return false; } })();
 const runPython = (source) => execFileSync(pyBin, ['-c', source, script], { encoding: 'utf8' });
 
 const importRunner = [
@@ -1708,5 +1709,36 @@ describe.skipIf(!pyBin)('generate_ltx2.py block streaming (#6499)', () => {
       'print(runner.parse_args().streaming_mode)',
     ].join('\n')}`);
     expect(out.trim().split(/\r?\n/).map((l) => l.trimEnd())).toEqual(['auto', 'stream', 'resident']);
+  });
+});
+
+// A Music Video supplied-audio window is cut to (numFrames - 1) / fps on the
+// federated wire, one frame short of the num_frames / fps the A2V pipeline
+// slices tokens for. Unpadded, LTX dies in RoPE with a broadcast error.
+describe.skipIf(!pyBin || !hasFfmpeg)('generate_ltx2.py a2v audio coverage', () => {
+  it('re-cuts the window from its offset and pads it past the clip with silence', () => {
+    const out = runPython(`${importRunner}
+import subprocess, tempfile, wave, os
+tmp = tempfile.mkdtemp()
+src = os.path.join(tmp, "song.wav")
+subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=6",
+                "-ac", "2", "-c:a", "pcm_s16le", "-y", src], check=True)
+# The window starts 2s in and holds (97 - 1) / 24 = 4.0s of audio in the song.
+path, start, temp = runner.a2v_audio_covering_clip(src, 2.0, 97, 24.0, tmp)
+with wave.open(path) as w:
+    print(round(w.getnframes() / w.getframerate(), 4), start, temp == path)
+# The tail is silence once the song runs out (a 1s source, a 97-frame clip).
+short = os.path.join(tmp, "short.wav")
+subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=1",
+                "-ac", "2", "-c:a", "pcm_s16le", "-y", short], check=True)
+path, _, _ = runner.a2v_audio_covering_clip(short, 0.0, 97, 24.0, tmp)
+with wave.open(path) as w:
+    w.setpos(w.getnframes() - 1)
+    print(round(w.getnframes() / w.getframerate(), 4), w.readframes(1) == b"\\x00" * 4)
+import shutil
+shutil.rmtree(tmp)
+`);
+    // 97 / 24 + 0.25s of tail, offset consumed into the cut.
+    expect(out.trim().split(/\r?\n/)).toEqual(['4.2917 0.0 True', '4.2917 True']);
   });
 });

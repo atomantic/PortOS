@@ -1776,6 +1776,47 @@ def run_extend(args: argparse.Namespace) -> str:
     return pipe._decode_and_save_video(video_latent, audio_latent, args.output)
 
 
+# Trailing silence added past the clip, so the audio VAE always has more source
+# than the `num_frames / fps * 25` tokens the pipeline slices and positions.
+A2V_AUDIO_TAIL_PAD_SEC = 0.25
+
+
+def a2v_audio_covering_clip(audio_path: str, start_sec: float, num_frames: int, fps: float,
+                            out_dir: str) -> tuple[str, float, str | None]:
+    """Return (audio path, start offset, temp path to delete) whose audio covers the clip.
+
+    A2VidPipelineTwoStage reads at most `num_frames / fps` seconds, encodes it,
+    and slices `round(num_frames / fps * 25)` audio tokens while sizing RoPE
+    positions for exactly that count. Audio that ends at (or a frame before)
+    the clip's end encodes to fewer tokens, and the render dies in
+    `apply_rope_split` with a broadcast error. A Music Video window is cut to
+    `(num_frames - 1) / fps` (the federated wire contract), so it is always a
+    frame short. Re-cut it from `start_sec` and pad with silence to the clip
+    plus `A2V_AUDIO_TAIL_PAD_SEC`; the pipeline discards tokens past the clip.
+    Without ffmpeg the original audio is returned unchanged.
+    """
+    import shutil
+    import subprocess
+    import tempfile
+    if not shutil.which("ffmpeg"):
+        emit_status("ffmpeg not on PATH — passing a2v audio unpadded")
+        return audio_path, start_sec, None
+    cover_sec = num_frames / fps + A2V_AUDIO_TAIL_PAD_SEC
+    fd, padded = tempfile.mkstemp(prefix="a2v-audio-", suffix=".wav", dir=out_dir)
+    os.close(fd)
+    proc = subprocess.run(
+        ["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{max(0.0, start_sec):.6f}", "-i", audio_path, "-vn",
+         "-af", f"apad=whole_dur={cover_sec:.6f}", "-t", f"{cover_sec:.6f}",
+         "-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", padded],
+        check=False,
+    )
+    if proc.returncode != 0 or Path(padded).stat().st_size == 0:
+        Path(padded).unlink(missing_ok=True)
+        emit_status(f"a2v audio padding failed (exit {proc.returncode}); passing audio unpadded")
+        return audio_path, start_sec, None
+    return padded, 0.0, padded
+
+
 def run_a2v(args: argparse.Namespace) -> str:
     """Audio-to-video — generate a clip whose motion + audio track sync to an
     input WAV/MP3. Two-stage pipeline (dev model + CFG at half-res, then
@@ -1809,12 +1850,14 @@ def run_a2v(args: argparse.Namespace) -> str:
                                       args.teacache_thresh)
     if _A2V_TC_CONFIG["enable"]:
         emit_status(f"TeaCache active on A2V Stage 1 (thresh={_teacache_thresh_label(args.teacache_thresh)})")
+    audio_path, audio_start, padded_audio = a2v_audio_covering_clip(
+        args.audio, args.audio_start, args.num_frames, args.fps, str(Path(args.output).parent))
     restore_image_rate = _patch_a2v_image_conditioning_rate(args.fps)
     try:
         return _run_with_ltx_stepwise_preview(pipe, args, lambda: pipe.generate_and_save(
             prompt=args.prompt,
             output_path=args.output,
-            audio_path=args.audio,
+            audio_path=audio_path,
             image=args.image,
             height=args.height,
             width=args.width,
@@ -1823,12 +1866,14 @@ def run_a2v(args: argparse.Namespace) -> str:
             stage1_steps=stage1_steps,
             stage2_steps=args.stage2_steps,
             cfg_scale=args.cfg_scale if args.cfg_scale is not None else 3.0,
-            audio_start_time=args.audio_start,
+            audio_start_time=audio_start,
             **_rate_kwargs(pipe.generate_and_save, args.fps),
         ))
     finally:
         restore_image_rate()
         _A2V_TC_CONFIG = None
+        if padded_audio:
+            Path(padded_audio).unlink(missing_ok=True)
 
 
 def run_ic_lora(args: argparse.Namespace) -> str:
