@@ -870,6 +870,15 @@ describe('composition document (render style `document`)', () => {
     expect(applyProjectPatch(project, { composition: null }).composition).toBeNull();
   });
 
+  // Uniquely catches a style-only PATCH resetting mode to concat and dropping cutting (staling the approvals).
+  it('merges a composition patch without a mode over the stored manifest, and replaces one that carries it', () => {
+    const project = { ...withDocument(), composition: { ...withDocument().composition, mode: 'composed', cutting: 'intercut' } };
+    const styled = applyProjectPatch(project, { composition: { style: { color: '#ff0000', font: 'serif' } } }).composition;
+    expect(styled).toMatchObject({ mode: 'composed', cutting: 'intercut', overlay: { titleLines: ['EXAMPLE'] }, style: { color: '#ff0000', font: 'serif' } });
+    const { cutting: _drop, ...full } = project.composition;
+    expect(applyProjectPatch(project, { composition: full }).composition).not.toHaveProperty('cutting');
+  });
+
   it('carries the pointer to a clone (versions are immutable folders)', () => {
     const clone = cloneProjectRecord(withDocument(), { id: 'mv-2', now: '2026-01-03T00:00:00.000Z' });
     expect(clone.composition.document).toEqual(pointer);

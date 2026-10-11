@@ -362,10 +362,15 @@ export function applyProjectPatch(project, patch) {
     }) } : {}),
     ...(Array.isArray(patch.lyricMarkers) ? { lyricMarkers: normalizeLyricMarkers(patch.lyricMarkers) } : {}),
     ...(Array.isArray(patch.phrases) ? { phrases: normalizePhrases(patch.phrases) } : {}),
-    // #8984 — the composition manifest is replaced whole; null clears it.
+    // #8984 — a manifest carrying its `mode` replaces the stored one whole
+    // (the editors send the full manifest, so an omitted key clears it); null
+    // clears it all. One without `mode` is a partial patch and merges over the
+    // stored manifest, so `{ style }` cannot silently reset mode and cutting.
     // The composition document pointer is owned by the import routes: a PATCH
     // that echoes (or omits, or forges) it keeps the stored one.
-    ...('composition' in patch ? { composition: withStoredCompositionDocument(normalizeComposition(patch.composition), project.composition) } : {}),
+    ...('composition' in patch ? { composition: withStoredCompositionDocument(normalizeComposition(
+      patch.composition && typeof patch.composition === 'object' && !('mode' in patch.composition) && project.composition
+        ? { ...project.composition, ...patch.composition } : patch.composition), project.composition) } : {}),
     // #8988 — an explicitly chosen sound-design bed; null clears it.
     ...('soundBed' in patch ? { soundBed: normalizeSoundBed(patch.soundBed) } : {}),
     // The film look is replaced whole (one bounded record); null clears it.
