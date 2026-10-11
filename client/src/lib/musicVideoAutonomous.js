@@ -39,6 +39,7 @@ export {
 export const AUTONOMOUS_CHECKPOINT_LABELS = Object.freeze({
   ...Object.fromEntries(AUTONOMOUS_STAGES.map((stage) => [stage.id, stage.label])),
   cast: 'Cast & Sets',
+  stills: 'Stills',
 });
 
 // Production review stages the run may approve itself (`brief.autoApprove`).
@@ -83,6 +84,8 @@ export const emptyAutonomousDraft = () => ({
   llmStages: {},
   // Review & revise the lyric draft with a second pass.
   lyricsReview: false,
+  // Make (and, when orchestrated, check) every still, then wait for me before any video.
+  stopBeforeVideo: false,
   runMode: 'checkpoints',
   orchestrator: { providerId: '', model: '', effort: '' },
   maxReviewAttempts: String(AUTONOMOUS_DEFAULT_LIMITS.maxReviewAttempts),
@@ -155,6 +158,7 @@ export function autonomousRequestFromDraft(draft, { providerId, model, effort } 
     ...(draft.characterStyleId ? { characterStyleId: draft.characterStyleId } : {}),
     ...(llmStages ? { llmStages } : {}),
     ...(draft.lyricsReview === true ? { lyricsReview: true } : {}),
+    ...(draft.stopBeforeVideo === true ? { stopBeforeVideo: true } : {}),
     ...(providerId ? { providerId, ...(model ? { model } : {}), ...(effort ? { effort } : {}) } : {}),
   };
 }

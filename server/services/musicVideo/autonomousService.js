@@ -4,6 +4,7 @@ import { ALIGNMENT_UNVERIFIED_PROBLEM, assertProductionApproval, productionAlign
 import { CAST_SETS_WORKING } from './castAndSets.js';
 import { applyTreatmentPatch, applyTreatmentToProject } from './treatment.js';
 import { codeFirstProductionAssets, normalizeMusicVideoProductionPolicy } from '../../lib/musicVideoMediumPlan.js';
+import { MUSIC_VIDEO_AUTOMATION_TOOL_IDS } from '../../lib/musicVideoAutomation.js';
 
 /**
  * Fully-autonomous Music Video — the run orchestrator.
@@ -144,6 +145,8 @@ const defaults = {
   closeFeedback: async (...args) => (await import('./productionReviewService.js')).closeProductionFeedback(...args),
   reviseFromFeedback: async (...args) => (await import('./productionReviewService.js')).reviseProductionFromFeedback(...args),
   guideImagePath: async (artifact) => (await import('./devArtifactStore.js')).resolveDevArtifactFile(artifact.file),
+  // A gallery image (a Cast & Sets plate, a production still) the orchestrator looks at.
+  galleryImagePath: async (filename) => (await import('../../lib/pathSafety.js')).resolveGalleryImage(filename),
   finalReviewFrames: async (jobId) => (await import('./orchestratorReview.js')).captureFinalReviewFrames(jobId),
   // The overlay text pass before a final render: resolves the finished check.
   checkOverlayText: async (projectId) => (await import('./overlayTextService.js')).startOverlayTextCheck(projectId).then((started) => started.done),
@@ -568,14 +571,31 @@ async function fillStoryboard(projectId, fill = []) {
   });
 }
 
+const ART_REVIEW_PLATES = 6;
+
+/** The Cast & Sets renders the art review looks at: the character sheet first, then the plates in plan order. */
+async function castAndSetsImagePaths(project) {
+  const stage = project.castAndSets || {};
+  const keys = Object.keys(stage.images || {}).filter((key) => stage.images[key]?.status === 'done' && stage.images[key].imageId)
+    .sort((a, b) => Number(stage.plan?.[b]?.kind === 'character') - Number(stage.plan?.[a]?.kind === 'character'));
+  const paths = [];
+  for (const key of keys) {
+    if (paths.length >= ART_REVIEW_PLATES) break;
+    const path = await deps.galleryImagePath(stage.images[key].imageId).catch(() => null);
+    if (path) paths.push(path);
+  }
+  return paths;
+}
+
 async function reviewArt(run, project) {
   const { buildArtReviewPrompt } = await reviewModule();
   const draft = project.productionReview?.draft || {};
   const guide = project.devArtifacts?.find((a) => a.id === draft.guideArtifactId && !a.deleted);
   const image = guide?.mimeType?.startsWith('image/') ? await deps.guideImagePath(guide).catch(() => null) : null;
-  // The guide sheet is not redrawn after a text revision, so a re-review is told it shows the earlier text.
-  const sheetPredatesEdits = !!image && revisionsSpent(await latestRun(project.id), 'art') > 0;
-  return askReview(run, 'art', buildArtReviewPrompt({ ...ideaOf(run), concept: project.concept, draft, hasImage: !!image, sheetPredatesEdits }), image ? [image] : []);
+  const images = [...(image ? [image] : []), ...await castAndSetsImagePaths(project)];
+  // The sheet and plates are not redrawn after a text revision, so a re-review is told they show the earlier text.
+  const sheetPredatesEdits = images.length > 0 && revisionsSpent(await latestRun(project.id), 'art') > 0;
+  return askReview(run, 'art', buildArtReviewPrompt({ ...ideaOf(run), concept: project.concept, draft, hasImage: images.length > 0, sheetPredatesEdits }), images);
 }
 
 async function reviewStoryboard(run, project) {
@@ -1168,9 +1188,11 @@ const STAGES = {
       // The run is not finished until the MP4 exists: stay on produce and let the render's own event settle it.
       return { output: { renderJobId: render?.jobId || null }, wait: true, step: RENDER_STEP };
     }
+    const pool = briefProductionPool(run.brief, project);
     const started = await deps.startProduction(project.id, {
       directive: trimTo([run.brief.prompt, run.brief.guidance].filter(Boolean).join('\n\n'), 4000),
-      pool: briefProductionPool(run.brief, project),
+      pool,
+      ...(stopsBeforeClips(project, run, pool) ? { stopBefore: 'clips' } : {}),
       limits: { ...run.brief.limits, ...(run.brief.budgetUsd != null ? { spendCapUsd: run.brief.budgetUsd } : {}) },
       // The orchestrator also judges production's plates and drafts when the run has one.
       reviewer: isOrchestratedRun(run)
@@ -1181,6 +1203,99 @@ const STAGES = {
     return { output: { productionRunId: started.run.id }, wait: true };
   },
 };
+
+// ---- stills before video -----------------------------------------------------------
+// A run that asked to stop before video, or whose tools make no video, has
+// production make every still and stop before the first clip. The orchestrator
+// then checks the stills and has the ones it flags regenerated, up to
+// `limits.maxReviewAttempts` rounds; the run then waits on `stills` for the
+// director, whose approval goes on to the clips.
+
+const STILLS_BATCH = 6;
+const STILL_FIXES_MAX = 1000;
+
+/** Production stops before its clips: the plan needs clips, and the run asked to stop or has no video route. */
+function stopsBeforeClips(project, run, pool) {
+  const needsClips = codeFirstProductionAssets(project)?.requiredRoutes.video ?? true;
+  return needsClips && (run.brief.stopBeforeVideo === true || !pool.some((route) => route.kind === 'video'));
+}
+
+/**
+ * One review round over every still. Returns the flagged shots that will be
+ * regenerated (none once the rounds are spent, or when the reviewer could
+ * not see the images).
+ */
+async function reviewStills(projectId, run) {
+  const { buildStillsReviewPrompt } = await reviewModule();
+  const project = await getProject(projectId);
+  const shots = (project.scenes || []).filter((scene) => scene.referenceImageId);
+  const issues = [];
+  const reviews = [];
+  for (let i = 0; i < shots.length; i += STILLS_BATCH) {
+    const listed = [];
+    const images = [];
+    for (const scene of shots.slice(i, i + STILLS_BATCH)) {
+      const path = await deps.galleryImagePath(scene.referenceImageId).catch(() => null);
+      if (path) { listed.push(scene); images.push(path); }
+    }
+    if (!listed.length) continue;
+    const review = await askReview(run, 'stills', buildStillsReviewPrompt({ ...ideaOf(run), concept: project.concept,
+      cast: project.productionReview?.draft?.cast || '',
+      shots: listed.map((scene, n) => ({ image: n + 1, sceneId: scene.sceneId, label: scene.label || '', still: trimTo(scene.framePrompt || scene.prompt, 400) })) }), images);
+    reviews.push(review);
+    // A review that could not see the stills cannot judge them.
+    const known = new Set(listed.map((scene) => scene.sceneId));
+    if (review.visual && review.verdict === 'revise') issues.push(...review.issues.filter((issue) => known.has(issue.sceneId)));
+  }
+  const spent = revisionsSpent(await latestRun(projectId), 'stills');
+  const regenerate = spent < reviewLimit(run) ? issues : [];
+  const scored = reviews.map((r) => r.score).filter((n) => n != null);
+  const why = !reviews.length ? 'No still could be shown to the reviewer. '
+    : reviews.some((r) => !r.visual) ? 'The reviewer could not see every still. '
+      : issues.length && !regenerate.length ? 'Revision limit reached; accepted the latest stills. ' : '';
+  await recordReview(projectId, { checkpoint: 'stills', verdict: regenerate.length ? 'revise' : 'approve',
+    score: scored.length ? Math.min(...scored) : null, route: reviews.at(-1)?.route || null, visual: reviews.length > 0 && reviews.every((r) => r.visual),
+    notes: trimTo(`${why}${regenerate.length ? `Regenerating ${regenerate.length} still${regenerate.length === 1 ? '' : 's'}. ` : ''}${reviews.map((r) => r.notes).filter(Boolean).join(' ')}`, 1500),
+    ...(regenerate.length ? { changes: regenerate.map((issue) => trimTo(`${issue.sceneId}: ${issue.text}`, 300)) } : {}) });
+  return regenerate;
+}
+
+/**
+ * Production made every still. An orchestrated run reviews them and sends the
+ * flagged ones back to production; otherwise (or once they pass) the run waits
+ * on `stills` for the director.
+ */
+const settlingStills = new Set();
+
+async function settleStills(projectId, run, productionRunId) {
+  // Production announces the stop more than once; one review round answers it.
+  if (settlingStills.has(productionRunId)) return;
+  settlingStills.add(productionRunId);
+  try {
+    await reviewOrPark(projectId, run, productionRunId);
+  } catch (err) {
+    await park(projectId, 'needs-human', { error: trimTo(`The stills review failed: ${err.message}`, 500), errorCode: err.code || 'STILLS_REVIEW_FAILED' });
+  } finally {
+    settlingStills.delete(productionRunId);
+  }
+}
+
+async function reviewOrPark(projectId, run, productionRunId) {
+  if (isOrchestratedRun(run)) {
+    const regenerate = await reviewStills(projectId, run);
+    if (regenerate.length) {
+      const fixes = new Map();
+      for (const issue of regenerate) fixes.set(issue.sceneId, [fixes.get(issue.sceneId), issue.text].filter(Boolean).join(' '));
+      const at = new Date().toISOString();
+      // Clearing the still is what makes production generate it again; the fixes ride its next prompt.
+      await mutateProjectRecord(projectId, (current) => ({ project: { ...current, scenes: (current.scenes || []).map((scene) => (fixes.has(scene.sceneId)
+        ? { ...scene, referenceImageId: null, stillFixes: { text: trimTo(fixes.get(scene.sceneId), STILL_FIXES_MAX), at } } : scene)) } }));
+      await deps.resumeProduction(projectId, productionRunId, { acceptBasis: true, stopBefore: 'clips' });
+      return;
+    }
+  }
+  await park(projectId, 'awaiting-approval', { awaiting: 'stills' });
+}
 
 // ---- the advance loop ------------------------------------------------------------
 
@@ -1459,16 +1574,22 @@ function produceContinuation(run) {
 
 export async function resumeAutonomousVideo(projectId, edits = {}, { autoApproveAuthorized = false } = {}) {
   const { run } = await requireRun(projectId);
+  // Tools are only ever added (a video tool once the stills are approved, say); the pool follows.
+  const added = (edits.addTools || []).filter((id) => !run.brief.tools.includes(id));
+  const toolsPatch = added.length ? MUSIC_VIDEO_AUTOMATION_TOOL_IDS.filter((id) => run.brief.tools.includes(id) || added.includes(id)) : null;
+  const tools = toolsPatch || run.brief.tools;
   // A model swap is validated like Start, then replaces the parked production run's pool (#10473).
-  const modelsPatch = briefModelsPatch(run.brief, edits.models);
+  const modelsPatch = briefModelsPatch({ ...run.brief, tools }, edits.models);
   assertResumable(run);
-  if (modelsPatch) await assertBriefVideoModelsCapable(run.brief.tools, modelsPatch);
+  if (modelsPatch || toolsPatch) await assertBriefVideoModelsCapable(tools, modelsPatch || run.brief.models || {});
   // "Auto-approve the rest": replaces the brief's grant (an empty list clears it).
   const grant = edits.autoApprove !== undefined ? autoApproveGrant(edits.autoApprove, autoApproveAuthorized) : null;
   const retake = edits.retakeSong === true;
   if (retake && run.brief.songFrom) throw runError(409, 'SONG_REUSED', 'This run reuses an existing song, so it has no song to retake');
   if (retake) assertAtSongCheckpoint(run);
-  const modelsChanged = modelsPatch !== null && JSON.stringify(modelsPatch) !== JSON.stringify(run.brief.models || {});
+  const modelsChanged = toolsPatch !== null || (modelsPatch !== null && JSON.stringify(modelsPatch) !== JSON.stringify(run.brief.models || {}));
+  // Approving the stills goes on to the clips, including in any new production run.
+  const stillsApproved = run.status === 'awaiting-approval' && run.awaiting === 'stills';
   const limitsPatch = edits.limits ? { ...run.brief.limits, ...edits.limits } : null;
   // A production run only takes raised limits; refuse a lower one before anything changes.
   if (edits.limits && run.stage === 'produce' && Object.entries(edits.limits).some(([key, value]) => value != null && value < (run.brief.limits?.[key] ?? 0))) {
@@ -1491,8 +1612,10 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
     const stage = retake ? 'song' : r.stage;
     return {
       status: 'running', awaiting: null, error: null, errorCode: null, processId: PROCESS_ID,
-      ...(edits.suno || edits.localMusic !== undefined || grant || modelsPatch || limitsPatch ? { brief: {
+      ...(edits.suno || edits.localMusic !== undefined || grant || modelsPatch || toolsPatch || limitsPatch || stillsApproved ? { brief: {
         ...r.brief,
+        ...(toolsPatch ? { tools: toolsPatch } : {}),
+        ...(stillsApproved ? { stopBeforeVideo: false } : {}),
         ...(modelsPatch ? { models: modelsPatch } : {}),
         ...(limitsPatch ? { limits: limitsPatch } : {}),
         ...(edits.suno ? { suno: normalizeSunoOptions({ ...r.brief.suno, ...edits.suno }) } : {}),
@@ -1510,6 +1633,11 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
     };
   });
   if (retakenTrackId) await unlinkRunTrack(projectId, out.run.id, retakenTrackId);
+  // The project's brief tools gate what production may submit (a video tool for clips), so they follow too.
+  if (toolsPatch) {
+    await mutateProjectRecord(projectId, (current) => ({ project: { ...current,
+      automation: { ...current.automation, tools: [...new Set([...(current.automation?.tools || []), ...added])] } } }));
+  }
   const { resume } = produceContinuation(out.run);
   if (resume.kind === 'final-revision') {
     // The orchestrator's footage revision picks up where it stopped. One that
@@ -1542,7 +1670,7 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
     return { project: presentProjectAutonomousRun(latest), run: presentAutonomousRun(projectAutonomousRun(latest)) };
   }
   if (resume.kind === 'production') {
-    return resumeDelegatedProduction(projectId, out.run, { swapModels: modelsChanged, limits: edits.limits });
+    return resumeDelegatedProduction(projectId, out.run, { swapModels: modelsChanged, limits: edits.limits, stillsApproved });
   }
   advanceInBackground(projectId);
   return { project: out.project, run: presentAutonomousRun(out.run) };
@@ -1564,8 +1692,8 @@ function briefModelsPatch(brief, models) {
 }
 
 // Production runs that can still deliver the footage: live, parked or finished.
-const ADOPTABLE_PRODUCTION = new Set(['running', 'completed', 'limit-reached', 'blocked', 'needs-replan', 'needs-human', 'stopped']);
-const PRODUCTION_LIVE = new Set(['running', 'limit-reached', 'blocked', 'needs-replan', 'needs-human', 'stopped']);
+const ADOPTABLE_PRODUCTION = new Set(['running', 'completed', 'limit-reached', 'blocked', 'needs-replan', 'needs-human', 'stopped', 'awaiting-video']);
+const PRODUCTION_LIVE = new Set(['running', 'limit-reached', 'blocked', 'needs-replan', 'needs-human', 'stopped', 'awaiting-video']);
 
 /**
  * Hand a resumed run back to production. It follows the newest production run started
@@ -1574,7 +1702,7 @@ const PRODUCTION_LIVE = new Set(['running', 'limit-reached', 'blocked', 'needs-r
  * when that run is already complete. No production run left to follow — or a model
  * swap on one that cannot resume — starts a new one from the brief by re-entering `produce`.
  */
-async function resumeDelegatedProduction(projectId, run, { swapModels = false, limits } = {}) {
+async function resumeDelegatedProduction(projectId, run, { swapModels = false, limits, stillsApproved = false } = {}) {
   const project = await getProject(projectId);
   const runs = Array.isArray(project.productionRuns) ? project.productionRuns : [];
   const current = runs.find((r) => r.id === run.output.productionRunId) || null;
@@ -1596,6 +1724,9 @@ async function resumeDelegatedProduction(projectId, run, { swapModels = false, l
   }
   if (adopt.status === 'completed') {
     await finishFromProduction(projectId, adopt.id);
+  } else if (adopt.status === 'awaiting-video' && !stillsApproved) {
+    // Only approving the stills goes on to the clips; any other resume reviews them (again).
+    settleStills(projectId, run, adopt.id).catch((err) => console.error(`❌ Autonomous music video ${short(run.id)} stills review: ${err.message}`));
   } else {
     // Resuming a "running" run is safe and re-pins one left by a previous server process.
     const productionLimits = limits ? Object.fromEntries(Object.entries(limits).filter(([, v]) => v != null)) : undefined;
@@ -1658,7 +1789,7 @@ const PRODUCTION_PARKED = new Set(['limit-reached', 'blocked', 'needs-replan', '
 async function onProductionEvent({ projectId, runId, run: production }) {
   // Production emits on every step; only a terminal or parked state concerns us, and
   // the project is read only once one arrives.
-  if (!projectId || !(['completed', 'failed', 'canceled'].includes(production?.status) || PRODUCTION_PARKED.has(production?.status))) return;
+  if (!projectId || !(['completed', 'failed', 'canceled', 'awaiting-video'].includes(production?.status) || PRODUCTION_PARKED.has(production?.status))) return;
   const project = await getProject(projectId).catch(() => null);
   const run = projectAutonomousRun(project);
   if (!run || run.stage !== 'produce' || run.output.productionRunId !== runId) return;
@@ -1674,6 +1805,8 @@ async function onProductionEvent({ projectId, runId, run: production }) {
     // Production canceled on its own (not by canceling this run): park, so Resume can adopt
     // the director's replacement run or start a new one.
     await park(projectId, 'needs-human', { error: reason || 'Production was canceled', errorCode: 'PRODUCTION_CANCELED' });
+  } else if (production.status === 'awaiting-video') {
+    if (run.status === 'running') await settleStills(projectId, run, runId);
   } else if (PRODUCTION_PARKED.has(production.status) && run.status === 'running') {
     await park(projectId, 'needs-human', { error: reason || `Production is ${production.status}`, errorCode: 'PRODUCTION_PARKED' });
   }

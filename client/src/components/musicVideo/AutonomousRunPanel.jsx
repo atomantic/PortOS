@@ -10,6 +10,7 @@ import { VideoModelField } from './ToolPicker.jsx';
 import { productionReviewStopGuidance } from '../../lib/musicVideoStages.js';
 import { formatCount, formatUsd } from '../../utils/formatters.js';
 import AutoApproveFields from './AutoApproveFields.jsx';
+import ToggleChip from '../ui/ToggleChip.jsx';
 import OrchestratorReviewLog from './OrchestratorReviewLog.jsx';
 
 // The stages that report a sub-step while they run (the server's `stages[id].step`).
@@ -71,6 +72,8 @@ export default function AutonomousRunPanel({ project, auto, readiness, selectedS
   const [grantError, setGrantError] = useState(null);
   // The video model swaps the director picked for a parked production stage: { runId, value: { 'video:<mode>': id } }.
   const [videoSwapEdit, setVideoSwapEdit] = useState(null);
+  // Video tools the director adds while approving the stills: { runId, value: ['video:<mode>'] }.
+  const [addToolsEdit, setAddToolsEdit] = useState(null);
   if (!run) return null;
   const guidance = productionReviewStopGuidance(run, readiness);
   const rows = autonomousStageRows(run);
@@ -90,6 +93,10 @@ export default function AutonomousRunPanel({ project, auto, readiness, selectedS
     ? MUSIC_VIDEO_AUTOMATION_TOOLS.filter((tool) => tool.id.startsWith('video:') && (run.brief?.tools || []).includes(tool.id))
     : [];
   const videoSwaps = videoSwapEdit && videoSwapEdit.runId === run.id ? videoSwapEdit.value : {};
+  // Stills approved on a run with no video tool: offer one, or the clips have no route.
+  const missingVideoTools = awaiting === 'stills' && !(run.brief?.tools || []).some((id) => id.startsWith('video:'))
+    ? MUSIC_VIDEO_AUTOMATION_TOOLS.filter((tool) => tool.id.startsWith('video:')) : [];
+  const addTools = addToolsEdit && addToolsEdit.runId === run.id ? addToolsEdit.value : [];
   const modelsSwap = Object.fromEntries(Object.entries(videoSwaps).filter(([tool, id]) => id !== (run.brief?.models?.[tool] || '')).map(([tool, id]) => [tool, id || null]));
   const orchestrator = isOrchestratedRun(run) ? run.brief.orchestrator : null;
   const tone = STATUS_TONES[run.status] || '';
@@ -206,7 +213,23 @@ export default function AutonomousRunPanel({ project, auto, readiness, selectedS
             </div>
           )}
           <div className="flex flex-wrap gap-2">
-            <button type="button" disabled={auto.busy} onClick={() => resume(changed ? { [editable.key]: draft } : {})} className={`${buttonClass} bg-port-accent text-white border-port-accent`}>
+            {missingVideoTools.length > 0 && (
+              <fieldset className="w-full min-w-0" aria-label="Video tool for the clips">
+                <span className="block text-xs text-port-text-muted mb-1">Make the clips with</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {missingVideoTools.map((tool) => (
+                    <ToggleChip
+                      key={tool.id}
+                      id={`mv-run-add-${tool.id}`}
+                      label={tool.label}
+                      checked={addTools.includes(tool.id)}
+                      onToggle={() => setAddToolsEdit({ runId: run.id, value: addTools.includes(tool.id) ? addTools.filter((id) => id !== tool.id) : [...addTools, tool.id] })}
+                    />
+                  ))}
+                </div>
+              </fieldset>
+            )}
+            <button type="button" disabled={auto.busy} onClick={() => resume({ ...(changed ? { [editable.key]: draft } : {}), ...(addTools.length ? { addTools } : {}) })} className={`${buttonClass} bg-port-accent text-white border-port-accent`}>
               <Play size={14} aria-hidden="true" /> {changed ? 'Save edit & approve' : 'Approve & continue'}
             </button>
             {awaiting === 'song' && (

@@ -172,6 +172,9 @@ describe('Cast & Sets procedural medium', () => {
   const procedural = { ...project, productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 } };
   it('resolves the medium from the production policy and the brief tools together', () => {
     expect(castAndSetsMedium(procedural)).toBe('procedural');
+    // Code-first with a generated-footage allowance needs a character sheet for that footage.
+    expect(castAndSetsMedium({ ...project, productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 20 } })).toBe('photographic');
+    expect(castAndSetsMedium({ ...project, mediaMode: 'code-images', productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 20 } })).toBe('procedural');
     expect(castAndSetsMedium({ automation: { tools: ['image:codex', 'code:render'] } })).toBe('procedural');
     // A video tool, an image-only brief and an untouched project stay photographic.
     expect(castAndSetsMedium({ automation: { tools: ['image:codex', 'code:render', 'video:local'] } })).toBe('photographic');

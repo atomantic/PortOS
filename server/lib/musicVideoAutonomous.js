@@ -260,6 +260,8 @@ export function normalizeAutonomousBrief(raw = {}) {
     // The orchestrator clears every review point itself, so it parks at none.
     ...(orchestrator ? { checkpoints: [] } : {}),
     orchestrator,
+    // Production makes every still, then the run waits on `stills` before any clip.
+    stopBeforeVideo: raw.stopBeforeVideo === true,
     origin: {
       kind: AUTONOMOUS_ORIGINS.includes(origin.kind) ? origin.kind : 'manual',
       ideaId: clean(origin.ideaId, 80) || null,

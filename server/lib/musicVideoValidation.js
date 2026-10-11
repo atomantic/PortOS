@@ -949,6 +949,8 @@ export const musicVideoProductionStartSchema = z.object({
   authoring: musicVideoAuthoringSchema.optional(),
   providerId: z.string().min(1).max(200).nullable().optional(),
   model: z.string().min(1).max(200).nullable().optional(),
+  // 'clips': make every still, then stop as `awaiting-video` before any clip.
+  stopBefore: z.enum(['clips']).nullable().optional(),
 }).strict();
 
 // Resume may RAISE a limit; `acceptBasis` continues against a changed creative setup;
@@ -957,6 +959,8 @@ export const musicVideoProductionResumeSchema = z.object({
   limits: musicVideoProductionLimitsSchema.partial().optional(),
   acceptBasis: z.boolean().optional(),
   pool: z.array(musicVideoProductionRouteSchema).max(12).optional(),
+  // null goes on to the clips; omitted keeps a running stills-only stop (a finished one goes on).
+  stopBefore: z.enum(['clips']).nullable().optional(),
 }).strict();
 
 // ---- Fully-autonomous run: one prompt → lyrics → Suno song → video --------------
@@ -1044,6 +1048,8 @@ export const musicVideoAutonomousStartSchema = z.object({
   // director would (no checkpoints). Approval authority — the route requires a
   // signed-in session for it.
   orchestrator: musicVideoLlmSchema.optional(),
+  // Make and review every still, then wait for the director before any clip.
+  stopBeforeVideo: z.boolean().optional(),
   origin: z.object({
     kind: z.enum(AUTONOMOUS_ORIGINS).optional(),
     ideaId: z.string().max(80).nullable().optional(),
@@ -1071,6 +1077,8 @@ export const musicVideoAutonomousResumeSchema = z.object({
     maxGenerations: z.number().int().min(AUTONOMOUS_LIMIT_BOUNDS.maxGenerations.min).max(AUTONOMOUS_LIMIT_BOUNDS.maxGenerations.max).optional(),
     maxReviewAttempts: z.number().int().min(AUTONOMOUS_LIMIT_BOUNDS.maxReviewAttempts.min).max(AUTONOMOUS_LIMIT_BOUNDS.maxReviewAttempts.max).optional(),
   }).strict().optional(),
+  // Add tools to the brief (e.g. a video tool once the stills are approved); the production pool follows.
+  addTools: z.array(z.enum(MUSIC_VIDEO_AUTOMATION_TOOL_IDS)).max(MUSIC_VIDEO_AUTOMATION_TOOL_IDS.length).optional(),
   // Replace the brief's auto-approve grant ("auto-approve the rest").
   ...musicVideoAutoApproveFields,
 }).strict();

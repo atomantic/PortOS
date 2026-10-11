@@ -176,7 +176,7 @@ function staleApprovalItem(project, readiness, stage) {
 // Auto-review states that wait on the director (#10156): a limit, an unverifiable
 // review, or a halted run. `running` is live work, not a request for the user.
 const AUTO_REVIEW_PARKED = new Set(['needs-human', 'limit-reached', 'stopped']);
-const PRODUCTION_PARKED = new Set(['limit-reached', 'needs-human', 'blocked', 'needs-replan']);
+const PRODUCTION_PARKED = new Set(['limit-reached', 'needs-human', 'blocked', 'needs-replan', 'awaiting-video']);
 // The header next-action ids that resume the autonomous run (see deriveNextAction).
 const RESUME_AUTONOMOUS_IDS = new Set(['resume-autonomous', 'retry-autonomous']);
 const AUTONOMOUS_PARKED = new Set(['awaiting-approval', 'needs-human', 'stopped', 'failed']);

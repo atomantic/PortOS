@@ -50,7 +50,10 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
   const basePrompt = sceneFramePrompt(project, scene);
   const repairing = project.productionRuns?.find((run) => run.id === tag.productionRunId)?.steps?.find((step) => step.key === tag.productionStepKey)?.plateRepairBasis;
   const unmet = repairing ? (scene.takes || []).flatMap((take) => currentPlateEvidence(scene, take)?.checks.filter((check) => check.status === 'fail').map((check) => `${check.requirement}: ${check.note}`) || []) : [];
-  const prompt = basePrompt && [basePrompt, unmet.length ? `Repair these visible plate mismatches while preserving the shot intent:\n${[...new Set(unmet)].join('\n')}` : ''].filter(Boolean).join('\n');
+  // The autonomous run's stills review names what the last still got wrong (autonomousService.js).
+  const fixes = typeof scene.stillFixes?.text === 'string' ? scene.stillFixes.text : '';
+  const prompt = basePrompt && [basePrompt, unmet.length ? `Repair these visible plate mismatches while preserving the shot intent:\n${[...new Set(unmet)].join('\n')}` : '',
+    fixes ? `Fix these visible problems from the previous still while preserving the shot intent:\n${fixes}` : ''].filter(Boolean).join('\n');
   if (!prompt) throw unprompted(scene, 'frame');
   const referenceImagePaths = conditioningReferences(project, scene)
     .map((ref) => resolveGalleryImage(ref.imageId, { mustExist: false })).filter(Boolean);

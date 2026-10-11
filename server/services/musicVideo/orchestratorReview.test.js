@@ -29,11 +29,11 @@ describe('parseOrchestratorVerdict', () => {
 // After a text revision the guide sheet is not redrawn, so a re-review must not
 // keep asking the text to match a sheet drawn from the earlier text.
 describe('buildArtReviewPrompt', () => {
-  it('tells a re-review that the sheet predates its text revisions', () => {
+  it('tells a re-review that the renders predate its text revisions', () => {
     const base = { prompt: 'p', concept: {}, draft: { cast: 'A dancer' }, hasImage: true };
-    expect(buildArtReviewPrompt(base)).toContain('does the sheet match the text');
+    expect(buildArtReviewPrompt(base)).toContain('do the renders match the text');
     const again = buildArtReviewPrompt({ ...base, sheetPredatesEdits: true });
     expect(again).toContain('drawn before your earlier text revisions');
-    expect(again).not.toContain('does the sheet match the text');
+    expect(again).not.toContain('do the renders match the text');
   });
 });

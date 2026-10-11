@@ -184,6 +184,8 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
           </select>
         </div>
 
+        <ToggleChip id="mv-auto-stop-before-video" label="Stop before video: stills first" checked={draft.stopBeforeVideo} onToggle={() => patch({ stopBeforeVideo: !draft.stopBeforeVideo })} />
+
         {orchestrated ? (
           <fieldset className="min-w-0 space-y-2" aria-labelledby="mv-auto-orchestrator-label">
             <span id="mv-auto-orchestrator-label" className="block text-xs text-port-text-muted">Orchestrator</span>
