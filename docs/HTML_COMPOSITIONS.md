@@ -457,8 +457,14 @@ least 0.8s, and sung type stays at least 56px at 1080p. Palette tokens
 options. Upgrading a pre-module layered engine adds the module's two tags in
 front of the template's engine tag.
 
-The in-app preview is a self-contained `srcdoc` in an opaque-origin sandbox
-with no network: the server inlines the document's scripts, stylesheets and
+The in-app preview nests its self-contained `srcdoc` in an opaque-origin sandbox
+inside a trusted wrapper. The wrapper's immutable `frame-src 'none'` policy
+blocks generated-page URL navigation and CSP-controlled network subresources.
+This is not complete network isolation: descendant srcdoc realms can regain
+WebRTC capabilities outside the original page guards (tracked in #11157).
+Only preview generated content you trust with the media made available to it. It relays only
+the preview protocol from its one child, stamped with the current preview revision;
+replacements retire the old bridge and pending media responses. The server inlines the document's scripts, stylesheets and
 small assets, and the scrubber posts `portos-mv:seek` messages. Larger media
 is bridged on demand: the PortOS page posts only the list of files
 (`window.PORTOS_MV_ASSETS` resolves to `{ src: src }`), and the first time a

@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { uuidv4 } from '../../lib/uuid.js';
+import { buildGeneratedPreviewSandbox } from '../../../../server/lib/generatedPreviewSandbox.js';
 import { Circle, Clapperboard, Download, FileCode2, LoaderCircle, Save } from 'lucide-react';
 import { Link } from 'react-router';
 import toast from '../ui/Toast';
@@ -75,8 +77,8 @@ const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
  * Runs a generated code animation in an opaque-origin sandboxed iframe. Its
  * CSP permits the inline code and local media the film needs, while blocking
  * network-backed subresources, fetch/websocket, and form submissions. Browser
- * sandboxing still permits the frame to navigate itself, so this is not a
- * complete network isolation boundary for arbitrary hostile HTML. It also drives
+ * navigation is restricted by a trusted outer document that relays only the
+ * recording protocol for this revision. It also drives
  * the prompt's recording handshake: Record posts `messages.record`, the page
  * answers with the WebM Blob, which can be downloaded or saved to the shared
  * video gallery.
@@ -185,6 +187,15 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
     return prepareAnimationHtml(html, audioGlobal, audio.dataUrl, vendorFiles);
   }, [html, audioGlobal, audioChoice, audio, needsThree, vendorFiles]);
 
+  const sandbox = useMemo(() => {
+    if (!srcDoc || !messages) return null;
+    const revision = uuidv4();
+    return { revision, html: buildGeneratedPreviewSandbox(srcDoc, { revision,
+      fromChild: [messages.ready, messages.progress, messages.recorded, messages.error],
+      toChild: [messages.record],
+    }) };
+  }, [srcDoc, messages]);
+
   useEffect(() => {
     clearTimeout(recordTimerRef.current);
     setMeta(null);
@@ -204,7 +215,7 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
   useEffect(() => {
     if (!messages) return undefined;
     const onMessage = (event) => {
-      if (!iframeRef.current || event.source !== iframeRef.current.contentWindow) return;
+      if (!iframeRef.current || event.source !== iframeRef.current.contentWindow || event.data?.previewRevision !== sandbox?.revision) return;
       const data = event.data;
       if (!data || typeof data !== 'object') return;
       if (data.type === messages.ready) setMeta(data.meta && typeof data.meta === 'object' ? data.meta : {});
@@ -222,7 +233,7 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [messages]);
+  }, [messages, sandbox]);
 
   const duration = Number(meta?.duration) || frame?.durationSeconds || 0;
   const fileBase = slug(title);
@@ -295,15 +306,17 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
   return (
     <section className="space-y-3" aria-label="Animation preview">
       <div className="overflow-hidden rounded-lg border border-port-border bg-black" style={{ aspectRatio: aspect, maxHeight: '70vh' }}>
-        {srcDoc ? (
+        {sandbox ? (
           <iframe
+            key={sandbox.revision}
+            data-preview-revision={sandbox.revision}
             ref={iframeRef}
             title="Code animation preview"
             // No allow-same-origin: generated code has an opaque origin. The
             // injected CSP also blocks network resource and connection APIs.
-            sandbox="allow-scripts allow-downloads"
+            sandbox="allow-scripts"
             allow="autoplay"
-            srcDoc={srcDoc}
+            srcDoc={sandbox.html}
             className="h-full w-full border-0"
           />
         ) : audioChoice == null ? (
@@ -311,7 +324,7 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
             <h3 className="text-base font-semibold text-white">Preview paused</h3>
             <p className="max-w-xl text-sm text-gray-200">
               Choose whether to run this generated animation with its selected audio track. The preview is paused until you choose.
-              The animation can navigate itself, so its code could send that track outside PortOS. Continue only if you trust it.
+              Navigation is restricted, but generated code can still use browser network capabilities to send this track outside PortOS. Continue only if you trust it.
             </p>
             <div className="flex flex-wrap justify-center gap-2">
               <button
