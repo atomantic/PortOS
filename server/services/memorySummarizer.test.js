@@ -37,6 +37,10 @@ describe('memorySummarizer — summarizeForEmbedding', () => {
     expect(prompt).not.toContain('the short truncated preview');
     // Uses the Brain default model.
     expect(runPromptThroughProvider.mock.calls[0][0].model).toBe('gpt-oss:20b');
+    expect(runPromptThroughProvider).toHaveBeenCalledWith(expect.objectContaining({
+      toolFree: true,
+      allowFallback: false,
+    }));
     expect(out).toBe('a dense summary'); // trimmed
   });
 

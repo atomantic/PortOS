@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { summarizeMusicVideoProject } from '../../../server/lib/musicVideoSummary.js';
 import {
+  changedFieldsText,
   MUSIC_VIDEO_STAGES, currentProductionRun, deriveNextAction, deriveStages, projectSpend, boardJobEstimate, listPreviewSources, describeProjectStatus, resolveStageParam, stageChecklist, stepNotes, autopilotStatus, compareMusicVideoProjectsNewestFirst,
 } from './musicVideoStages.js';
 
@@ -492,6 +493,11 @@ describe('stageChecklist', () => {
     const stale = { ...readiness, storyboard: { approved: false, problems: ['Review and approve the current art direction first.'], stale: { changedFields: ['art direction', 'cast'] } } };
     expect(stageChecklist('board', castProject({ scenes: [scene()] }), stale).at(-1).detail).toMatch(/changed since: art direction, cast/);
   });
+  it('counts per-scene changes in a stale approval instead of naming every scene', () => {
+    const prompts = Array.from({ length: 26 }, (_, i) => `scene ${i + 1} prompt`);
+    expect(changedFieldsText(['storyboard shots', ...prompts, 'scene 4 timing'])).toBe('storyboard shots, 26 scene prompts, scene 4 timing');
+  });
+
   it('offers Keep approved on a stale approval nothing else blocks, and files feedback on its own row', () => {
     const feedback = [{ id: 'fb-1', stage: 'storyboard', target: 'Chorus', text: 'More lyrics on screen', decision: 'request-changes' }];
     const stale = { ...NOT_APPROVED, storyboard: { approved: false, problems: [], stale: { changedFields: ['cast'] } } };

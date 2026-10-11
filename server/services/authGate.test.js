@@ -759,6 +759,10 @@ describe('mounted host-control trailing slashes (#8950)', () => {
       persist(req.body);
       res.json({ saved: true });
     });
+    settings.patch('/slice', (req, res) => {
+      persist(req.body);
+      res.json({ saved: true });
+    });
     app.use('/api/settings', settings);
     app.put('/api/settings/features/:featureId', (req, res) => {
       persist(req.body);
@@ -770,6 +774,8 @@ describe('mounted host-control trailing slashes (#8950)', () => {
   const protectedBodies = [
     { harnesses: {} },
     { imageGen: { codex: { codexPath: '/example/codex' } } },
+    // A PATCH-shaped extra field must not change how a legacy PUT is gated.
+    { slicePath: 'pipeline', partial: {}, imageGen: { local: { pythonPath: '/example/python3' } } },
   ];
 
   it('denies remote password-free dispatch and protected writes before either sink', async () => {
@@ -790,6 +796,44 @@ describe('mounted host-control trailing slashes (#8950)', () => {
     expect((await request(app).get('/api/runs//')).status).toBe(200);
     expect((await request(app).put('/api/settings//').send({ location: {} })).status).toBe(200);
     expect(persist).toHaveBeenCalledExactlyOnceWith({ location: {} });
+  });
+
+  it('applies the PUT authority policy to slice patches, preserving delegated agents', async () => {
+    const remote = await buildApp();
+    const protectedPatches = [
+      { slicePath: 'autoUpdate', partial: { enabled: true } },
+      { slicePath: 'seriesAutopilot', partial: { schedules: [] } },
+      { slicePath: 'imageGen.local', partial: { pythonPath: '/example/python3' } },
+    ];
+    for (const suffix of ['', '/', '//']) {
+      for (const body of protectedPatches) {
+        const response = await request(remote.app).patch('/api/settings/slice' + suffix).send(body);
+        expect(response.status).toBe(403);
+        expect(response.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+      }
+    }
+    expect(remote.persist).not.toHaveBeenCalled();
+    // The existing PUT allows data-only updates and clearing executable pins.
+    expect((await request(remote.app).patch('/api/settings/slice').send({
+      slicePath: 'localLlm.mtplx', partial: { keepLoaded: true },
+    })).status).toBe(200);
+    expect((await request(remote.app).patch('/api/settings/slice').send({
+      slicePath: 'imageGen.local', partial: { pythonPath: null },
+    })).status).toBe(200);
+    const local = await buildApp('127.0.0.1');
+    for (const body of protectedPatches) {
+      expect((await request(local.app).patch('/api/settings/slice').send(body)).status).toBe(200);
+    }
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'example-password' });
+    const { resolveAgentApiEnv } = await import('./agentApiAuth.js');
+    const { PORTOS_API_TOKEN: token } = await resolveAgentApiEnv();
+    expect(token).toBeTruthy();
+    for (const body of protectedPatches) {
+      expect((await request(local.app).patch('/api/settings/slice')
+        .set('Authorization', `Bearer ${token}`).send(body)).status).toBe(200);
+    }
+    expect(local.persist).toHaveBeenCalledTimes(6);
   });
 
   it('requires operator authority to arm Eidoverse through either settings path', async () => {
@@ -825,7 +869,7 @@ describe('mounted host-control trailing slashes (#8950)', () => {
       if (!allowed) expect(run.body.code).toBe('HOST_CONTROL_FORBIDDEN');
     }
     expect(runner.executeCliRun).toHaveBeenCalledTimes(allowed ? 3 : 0);
-    expect(persist).toHaveBeenCalledTimes(allowed ? 6 : 0);
+    expect(persist).toHaveBeenCalledTimes(allowed ? 9 : 0);
   });
 });
 

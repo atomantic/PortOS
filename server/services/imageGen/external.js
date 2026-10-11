@@ -17,7 +17,6 @@ import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { IMAGE_GEN_MODE } from './modes.js';
-import { DEFAULT_NEGATIVE_PROMPT } from './defaults.js';
 
 const PROGRESS_POLL_INTERVAL = 500;
 const IMAGE_PREVIEW_THROTTLE = 2000;
@@ -118,7 +117,7 @@ export async function generateImage({ sdapiUrl, prompt, negativePrompt, width, h
 
   const payload = {
     prompt,
-    negative_prompt: negativePrompt || DEFAULT_NEGATIVE_PROMPT,
+    negative_prompt: negativePrompt || '',
     steps: steps || (isFlux ? 15 : 25),
     width: width || (isFlux ? 832 : 512),
     height: height || (isFlux ? 1216 : 768),

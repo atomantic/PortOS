@@ -1,6 +1,26 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
+
+const settingsDataRoot = await vi.hoisted(async () => {
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  return mkdtempSync(join(tmpdir(), 'portos-settings-routes-'));
+});
+vi.mock('../lib/fileUtils.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  const { makePathsProxy } = await import('../lib/mockPathsDataRoot.js');
+  return makePathsProxy({
+    ...actual,
+    tryReadFileStrict: vi.fn(actual.tryReadFileStrict),
+    atomicWrite: vi.fn(actual.atomicWrite),
+  }, { dataRoot: settingsDataRoot });
+});
+afterAll(async () => {
+  const { rmSync } = await import('node:fs');
+  rmSync(settingsDataRoot, { recursive: true, force: true });
+});
 
 const reconcileEidoverseRuntime = vi.hoisted(() => vi.fn(async () => ({ running: true })));
 vi.mock('../services/eidoverseRuntime.js', () => ({ reconcileEidoverseRuntime }));
@@ -1455,5 +1475,148 @@ describe('autofixer settings slice', () => {
     expect(loaded.body.autofixer).toEqual({ providerId: 'example-cli', model: 'another-model', autoPromote: true, verifyCommand: 'npm test' });
     expect((await request(app).put('/api/settings').send({ autofixer: { autoPromote: 'true' } })).status).toBe(400);
     expect((await request(app).get('/api/settings')).body.autofixer).toEqual(loaded.body.autofixer);
+  });
+});
+
+
+// Real queued persistence through HTTP: a mock merge cannot prove independent
+// requests retain each other's changes or refuse corrupt on-disk snapshots.
+describe('Settings routes — atomic partial saves (#11045)', () => {
+  let actual;
+  let fs;
+  let settingsFile;
+  let fileUtils;
+  let originalMutation;
+  beforeEach(async () => {
+    actual = await vi.importActual('../services/settings.js');
+    fs = await import('node:fs');
+    settingsFile = (await import('node:path')).join(settingsDataRoot, 'settings.json');
+    fileUtils = await import('../lib/fileUtils.js');
+    originalMutation = updateSettingsWith.getMockImplementation();
+    updateSettingsWith.mockImplementation(actual.updateSettingsWith);
+    vi.clearAllMocks();
+    fs.writeFileSync(settingsFile, JSON.stringify({
+      localLlm: { ollama: { disabled: true }, mtplx: { launch: { model: 'example-model' }, idleMinutes: 20 } },
+      imageGen: { local: { pythonPath: '/example/python3', denoise: true }, codex: { enabled: true } },
+      pipeline: { videoGen: { mode: 'i2v' } },
+      secrets: { example: 'private-placeholder' },
+      timezone: 'UTC',
+    }));
+    actual.__resetSettingsCache();
+  });
+  afterEach(() => {
+    updateSettingsWith.mockImplementation(originalMutation);
+    fileUtils.tryReadFileStrict.mockRestore();
+    fileUtils.atomicWrite.mockRestore();
+  });
+  const patch = (app, slicePath, partial) => request(app).patch('/api/settings/slice').send({ slicePath, partial });
+  const persisted = () => JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+
+  it('retains sibling runtimes and keys when separate clients patch concurrently', async () => {
+    const emitted = vi.fn();
+    actual.settingsEvents.on('settings:updated', emitted);
+    try {
+      const responses = await Promise.all([
+        patch(buildApp(), 'localLlm.ollama', { disabled: false }),
+        patch(buildApp(), 'localLlm.mtplx', { idleMinutes: 5 }),
+        patch(buildApp(), 'localLlm.mtplx', { keepLoaded: true }),
+      ]);
+      expect(responses.map((response) => response.status)).toEqual([200, 200, 200]);
+      expect(persisted()).toMatchObject({
+        localLlm: { ollama: { disabled: false }, mtplx: { launch: { model: 'example-model' }, idleMinutes: 5, keepLoaded: true } },
+        timezone: 'UTC',
+      });
+      expect(emitted).toHaveBeenCalledTimes(3);
+      const { recordUserAction } = await import('../services/userActions.js');
+      expect(recordUserAction).toHaveBeenCalledWith(expect.objectContaining({ type: 'settings.update', actor: 'user' }));
+    } finally {
+      actual.settingsEvents.off('settings:updated', emitted);
+    }
+  });
+
+  it('keeps unrelated fields, permits explicit clearing, and reconciles saved settings', async () => {
+    const app = buildApp();
+    expect((await patch(app, 'imageGen.local', { pythonPath: null })).status).toBe(200);
+    expect((await patch(app, 'localLlm.mtplx', { launch: {} })).status).toBe(200);
+    expect((await patch(app, 'pipeline', { imageGen: { mode: 'external', quantize: '5', cfgScale: 7, steps: '' } })).status).toBe(200);
+    expect((await patch(app, 'pipeline', { imageGen: null })).status).toBe(200);
+    expect((await patch(app, 'seriesAutopilot', { schedules: [] })).status).toBe(200);
+    expect(persisted()).toMatchObject({
+      imageGen: { local: { pythonPath: null, denoise: true }, codex: { enabled: true } },
+      localLlm: { mtplx: { launch: {}, idleMinutes: 20 } },
+      pipeline: { imageGen: null, videoGen: { mode: 'i2v' } },
+      seriesAutopilot: { schedules: [] },
+    });
+    const { setCodexParallelLimit } = await import('../services/mediaJobQueue/index.js');
+    expect(setCodexParallelLimit).toHaveBeenCalled();
+    const saved = await actual.getSettings();
+    expect(saved.secrets.example).toBe('private-placeholder');
+  });
+
+  it('rejects invalid values, unapproved paths and credential/prototype keys without writes', async () => {
+    const before = fs.readFileSync(settingsFile, 'utf8');
+    for (const [path, partial] of [
+      ['secrets.auth', { enabled: false }],
+      ['imageGen', { hfToken: 'example-token' }],
+      ['imageGen.local', { hfToken: 'example-token' }],
+      ['imageGen.local', { pythonPath: '/example/sh' }],
+      ['localLlm.mtplx', { idleMinutes: -1 }],
+      ['localLlm.mtplx', { launch: { model: [] } }],
+      ['autoUpdate', { enabled: 'yes' }],
+      ['pipeline', { imageGen: { width: 'invalid' } }],
+      ['pipelineEditorialChecks', { enabled: 'yes' }],
+      ['seriesAutopilot', { schedules: [{ seriesId: 'example', cron: '99 99 * * *' }] }],
+      ['localLlm.__proto__', {}],
+      ['pipeline', JSON.parse('{"imageGen":{"constructor":{}}}')],
+      ['pipeline', JSON.parse('{"__proto__":{"polluted":true}}')],
+      ['pipeline', { imageGen: { steps: 'not-a-number' } }],
+    ]) {
+      expect((await patch(buildApp(), path, partial)).status, path).toBe(400);
+    }
+    expect(fs.readFileSync(settingsFile, 'utf8')).toBe(before);
+    expect(fileUtils.atomicWrite).not.toHaveBeenCalled();
+  });
+
+  it('refuses malformed or unreadable persisted settings and recovers on a later valid read', async () => {
+    const before = fs.readFileSync(settingsFile, 'utf8');
+    fs.writeFileSync(settingsFile, '{ truncated');
+    expect((await patch(buildApp(), 'localLlm.mtplx', { keepLoaded: true })).status).toBe(500);
+    expect(fs.readFileSync(settingsFile, 'utf8')).toBe('{ truncated');
+    fs.writeFileSync(settingsFile, before);
+    fileUtils.tryReadFileStrict.mockResolvedValueOnce({ ok: false, value: null });
+    expect((await patch(buildApp(), 'localLlm.mtplx', { keepLoaded: true })).status).toBe(500);
+    expect(fileUtils.atomicWrite).not.toHaveBeenCalled();
+    expect(fs.readFileSync(settingsFile, 'utf8')).toBe(before);
+    expect((await patch(buildApp(), 'localLlm.mtplx', { keepLoaded: true })).status).toBe(200);
+    expect(persisted().localLlm.mtplx.launch.model).toBe('example-model');
+  });
+
+  it('propagates persistence failures without emitting success or replacing state', async () => {
+    const before = fs.readFileSync(settingsFile, 'utf8');
+    const emitted = vi.fn();
+    actual.settingsEvents.on('settings:updated', emitted);
+    fileUtils.atomicWrite.mockRejectedValueOnce(new Error('Synthetic write failure'));
+    try {
+      expect((await patch(buildApp(), 'localLlm.mtplx', { keepLoaded: true })).status).toBe(500);
+      expect(fs.readFileSync(settingsFile, 'utf8')).toBe(before);
+      expect(emitted).not.toHaveBeenCalled();
+    } finally {
+      actual.settingsEvents.off('settings:updated', emitted);
+    }
+  });
+
+  it('creates missing slices on a fresh install without spreading malformed parent values', async () => {
+    fs.unlinkSync(settingsFile);
+    expect((await patch(buildApp(), 'localLlm.mtplx', { idleMinutes: 5 })).status).toBe(200);
+    expect(persisted().localLlm).toEqual({ mtplx: { idleMinutes: 5 } });
+    fs.writeFileSync(settingsFile, JSON.stringify({ imageGen: 'legacy-malformed-parent' }));
+    expect((await patch(buildApp(), 'imageGen.local', { pythonPath: '' })).status).toBe(200);
+    expect(persisted().imageGen).toEqual({ local: { pythonPath: '' } });
+  });
+
+  it('keeps legacy PUT slice replacement semantics', async () => {
+    const response = await request(buildApp()).put('/api/settings').send({ localLlm: { mtplx: { idleMinutes: 5 } } });
+    expect(response.status).toBe(200);
+    expect(persisted().localLlm).toEqual({ mtplx: { idleMinutes: 5 } });
   });
 });

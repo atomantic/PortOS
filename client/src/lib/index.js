@@ -56,7 +56,6 @@ export * from './imageGenBackends.js';
 // Namespace export: imageGenBackends re-exports every imageGenModes symbol
 // flat (one import site for consumers), so a flat export here would collide.
 export * as imageGenModes from './imageGenModes.js';
-export * from './imageGenDefaults.js';
 export * from './imageGenResolutions.js';
 export * from './imageTo3dReasons.js';
 export * from './imageTo3dTargetFixture.js';
@@ -75,6 +74,7 @@ export * from './musicVideoAspect.js';
 export * from './musicVideoMotion.js';
 export * from './musicVideoTakes.js';
 export * from './musicVideoSceneAttention.js';
+export * from './musicVideoSceneTiming.js';
 export * from './musicVideoCoverOverlay.js';
 export * from './musicVideoShotTiming.js';
 export * from './musicVideoStages.js';

@@ -1,6 +1,7 @@
 import { MUSIC_VIDEO_MEDIA_MODES } from './musicVideoMediaPolicy.js';
 import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicVideoGrade.js';
 import { filmLookSchema } from './filmLookValidation.js';
+import { TITLE_CARD_FONTS, TITLE_CARD_LIMITS, TITLE_CARD_POSITIONS } from './musicVideoTitleCard.js';
 import { COVER_DESIGN_OPTIONS } from './musicVideoCoverOverlay.js';
 import { DISTROKID_REMEMBERED_OPTIONS } from './distrokidGenres.js';
 import { CROSS_LINK_EDIT_TARGETS } from './musicVideoCrossLinks.js';
@@ -1206,6 +1207,25 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
   }).strict()).max(8).optional(),
 }).strict();
 
+// The opening title card (lib/musicVideoTitleCard.js): song title, artist, year
+// in a corner over the opener. Every field is optional (the normalizer fills
+// defaults); null on the project = none.
+export const musicVideoTitleCardSchema = z.object({
+  enabled: z.boolean().optional(),
+  title: z.string().max(TITLE_CARD_LIMITS.textMax).optional(),
+  artist: z.string().max(TITLE_CARD_LIMITS.textMax).optional(),
+  year: z.string().max(TITLE_CARD_LIMITS.yearMax).optional(),
+  extra: z.string().max(TITLE_CARD_LIMITS.textMax).optional(),
+  quoteTitle: z.boolean().optional(),
+  startSec: z.number().min(0).max(TITLE_CARD_LIMITS.startMax).optional(),
+  endSec: z.number().min(0).max(TITLE_CARD_LIMITS.startMax + 60).optional(),
+  fadeSec: z.number().min(0).max(TITLE_CARD_LIMITS.fadeMax).optional(),
+  position: z.enum(TITLE_CARD_POSITIONS).optional(),
+  font: z.enum(TITLE_CARD_FONTS).optional(),
+  size: z.number().min(TITLE_CARD_LIMITS.sizeMin).max(TITLE_CARD_LIMITS.sizeMax).optional(),
+  color: z.string().regex(/^#[0-9a-f]{6}$/i, 'color is #rrggbb').optional(),
+}).strict();
+
 export const musicVideoProjectCreateSchema = z.object({
   mediaMode: z.enum(MUSIC_VIDEO_MEDIA_MODES).optional(),
   productionPolicy: musicVideoProductionPolicySchema.optional(),
@@ -1230,6 +1250,8 @@ export const musicVideoProjectCreateSchema = z.object({
   soundBed: musicVideoSoundBedSchema.nullable().optional(),
   // The finishing film look (lib/filmLook.js); null = none.
   filmLook: filmLookSchema.nullable().optional(),
+  // The opening title card (lib/musicVideoTitleCard.js); null = none.
+  titleCard: musicVideoTitleCardSchema.nullable().optional(),
 }).strict();
 
 export const musicVideoProjectUpdateSchema = z.object({
@@ -1256,6 +1278,8 @@ export const musicVideoProjectUpdateSchema = z.object({
   soundBed: musicVideoSoundBedSchema.nullable().optional(),
   // The finishing film look (lib/filmLook.js); null = none.
   filmLook: filmLookSchema.nullable().optional(),
+  // The opening title card (lib/musicVideoTitleCard.js); null = none.
+  titleCard: musicVideoTitleCardSchema.nullable().optional(),
 }).strict();
 
 // Mark a project finished outside PortOS (or clear the marker). The server

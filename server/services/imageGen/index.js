@@ -29,7 +29,6 @@ import * as fal from './fal.js';
 import {
   IMAGE_GEN_MODE, IMAGE_GEN_MODES, CLOUD_IMAGE_GEN_MODES, isEditCapableMode,
 } from './modes.js';
-import { DEFAULT_NEGATIVE_PROMPT } from './defaults.js';
 import { resolveCloudProviderConfig } from './cloudProviderConfig.js';
 import { rejectDegenerateFrame } from './frameGuard.js';
 import { PATHS } from '../../lib/fileUtils.js';
@@ -237,7 +236,7 @@ export async function generateAvatar({ name, characterClass, prompt }) {
     prompt: prompt || buildAvatarPrompt({ name, characterClass }),
     width: 512,
     height: 512,
-    negativePrompt: `${DEFAULT_NEGATIVE_PROMPT}, nude, nsfw`,
+    negativePrompt: 'nude, nsfw',
   });
 }
 

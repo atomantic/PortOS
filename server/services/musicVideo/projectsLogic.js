@@ -38,6 +38,7 @@ import { ensureSceneTakes, TAKE_SLOT } from './takes.js';
 import { normalizeComposition, invalidateCompositionTiming, withStoredCompositionDocument } from './composition.js';
 import { normalizeSoundBed } from './soundBed.js';
 import { normalizeFilmLook } from '../../lib/filmLook.js';
+import { normalizeTitleCard } from '../../lib/musicVideoTitleCard.js';
 import { remapTreatmentForClone, scenesFingerprint } from './treatment.js';
 import { normalizeMusicVideoAutomation } from '../../lib/musicVideoAutomation.js';
 
@@ -164,6 +165,8 @@ export function buildProjectRecord(input, { id, now }) {
     soundBed: input.soundBed ? normalizeSoundBed(input.soundBed) : null,
     // The finishing film look every preview, render and baked still is viewed through; null = none.
     filmLook: input.filmLook ? normalizeFilmLook(input.filmLook) : null,
+    // The opening title card (song, artist, year over the opener); null = none.
+    titleCard: normalizeTitleCard(input.titleCard),
     // #8980 — optional pre-production treatment (brief, arc, shot direction,
     // proof checklist); null until the director starts one. See treatment.js.
     treatment: null,
@@ -363,6 +366,8 @@ export function applyProjectPatch(project, patch) {
     ...('soundBed' in patch ? { soundBed: normalizeSoundBed(patch.soundBed) } : {}),
     // The film look is replaced whole (one bounded record); null clears it.
     ...('filmLook' in patch ? { filmLook: normalizeFilmLook(patch.filmLook) } : {}),
+    // The title card is replaced whole (one bounded record); null clears it.
+    ...('titleCard' in patch ? { titleCard: normalizeTitleCard(patch.titleCard) } : {}),
   };
   // #8988: a bed is mixed UNDER the song — the song itself can't be its bed.
   const masterTrackId = 'trackId' in patch ? patch.trackId : project.trackId;

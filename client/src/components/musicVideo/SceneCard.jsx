@@ -3,8 +3,8 @@ import ShotActionInspector from './ShotActionInspector.jsx';
 import SceneCameraControls from './SceneCameraControls.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { useEffect, useRef, useState } from 'react';
-import { Trash2, Activity, ArrowUp, ArrowDown, ChevronRight, Image as ImageIcon, Video, Maximize2, AlertTriangle, ImagePlus, Clapperboard, Merge, Scissors } from 'lucide-react';
-import { formatDurationSec, formatUsd } from '../../utils/formatters.js';
+import { Trash2, Activity, ArrowUp, ArrowDown, ChevronRight, Image as ImageIcon, Video, Maximize2, AlertTriangle, ImagePlus, Clapperboard } from 'lucide-react';
+import { formatDurationSec } from '../../utils/formatters.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 import PerformanceEvidence from './PerformanceEvidence.jsx';
 import { planPerformanceRepair } from '../../lib/musicVideoShotTiming.js';
@@ -17,16 +17,10 @@ const STILL_MOVE_LABELS = [['hold', 'Hold'], ['push', 'Push in'], ['pan', 'Pan']
 // #10583: the shared lyric type's zone and style for this shot (composition documents).
 const TEXT_ZONE_LABELS = { 'lower-left': 'Lower left', 'upper-right': 'Upper right', upper: 'Upper centre', lower: 'Lower centre', center: 'Centre', none: 'No lyrics' };
 const LYRIC_ROLE_LABELS = { line: 'Sung line', hook: 'Hook slam', stamp: 'Stamp', data: 'Data caption' };
-import {
-  falSceneTake, grokCoverage, isPerformanceScene, performanceBlockedReason, performanceCapability, planPerformanceWindow, shotSplitLimit,
-} from '../../lib/musicVideoShotTiming.js';
+import { buildSceneTimingPresentation } from '../../lib/musicVideoSceneTiming.js';
+import SceneTimingPlan from './SceneTimingPlan.jsx';
 import SceneRenderProgress from './SceneRenderProgress.jsx';
-import { getFalVideoModel } from '../../lib/falVideoModels.js';
 import { COVERAGE_TOLERANCE_SEC, SCENE_ATTENTION_LABELS, sceneAttention } from '../../lib/musicVideoSceneAttention.js';
-
-// "est. $0.81 (5.05s at 1080P)" — or null when the take cannot be priced.
-const falEstimate = (take) => (take?.costUsd == null ? null
-  : `est. ${formatUsd(take.costUsd)} (${take.seconds}s${take.resolution ? ` at ${take.resolution}` : ''})`);
 
 // The two timeline-bound scene fields rendered as identical number inputs.
 const SCENE_TIME_FIELDS = [['Start', 'startSec'], ['End', 'endSec']];
@@ -73,6 +67,20 @@ const SCENE_TIME_FIELDS = [['Start', 'startSec'], ['End', 'endSec']];
  * jumps to the scene's start.
  */
 const MOVE_DOCUMENT_TITLE = "This video's shot order comes from its composition document";
+
+// #11040: the one owner of whether a video render may start. The server reloads
+// the persisted scene (and its speaker), so an unsaved or failed speaker edit
+// must hold back every video entry point — Generate video and the failure Retry.
+// Returns the refusal reason, or null when the render may go ahead.
+function videoGenerationRefusal({ settingsSaving, speakerUnsaved, referenceImageId, generatingVideo, videoBlockedReason, performanceBlocked }) {
+  if (videoBlockedReason) return videoBlockedReason;
+  if (performanceBlocked) return performanceBlocked;
+  if (speakerUnsaved) return 'Save the speaker / singer edit first';
+  if (settingsSaving) return 'Saving settings…';
+  if (!referenceImageId) return 'Generate a reference frame first';
+  if (generatingVideo) return 'A video is already generating';
+  return null;
+}
 
 export default function SceneCard({
   scene, index, isLast, generatingFrame, generatingVideo, frameProgress = null, videoProgress = null,
@@ -122,28 +130,11 @@ export default function SceneCard({
   const fieldId = (name) => `mv-scene-${scene.sceneId}-${name}`;
   // #10297: a code shot is drawn by the composition, so it has no frame or clip to make.
   const codeShot = layered && layer === 'code';
-  const performance = isPerformanceScene(scene);
-  const capability = performance ? performanceCapability(lipSyncBackend, { scene, videoSettings: falVideoSettings }) : null;
-  const timedSpan = typeof scene.startSec === 'number' && typeof scene.endSec === 'number' && scene.endSec > scene.startSec
-    ? scene.endSec - scene.startSec
-    : null;
-  const plan = capability
-    ? planPerformanceWindow({ startSec: scene.startSec, endSec: scene.endSec, songDurationSec: songDurationSec ?? Infinity, capability })
-    : null;
-  const performanceBlocked = performance
-    ? (capability ? (plan.ok ? null : plan.message) : performanceBlockedReason(lipSyncBackend))
-    : null;
-  const grokPlan = !performance && lipSyncBackend === 'grok' && timedSpan != null ? grokCoverage(timedSpan) : null;
-  const falTake = lipSyncBackend === 'fal' && layer === 'footage'
-    ? falSceneTake({ scene, videoSettings: falVideoSettings || {}, songDurationSec })
-    : null;
-  const falCost = falEstimate(falTake);
-  const performanceCost = falTake?.performance ? (falCost || capability?.costLabel) : capability?.costLabel;
-  const splitLimit = layer === 'footage' ? shotSplitLimit(scene, lipSyncBackend, falVideoSettings) : null;
-  const canSplit = splitLimit != null && timedSpan != null && timedSpan > splitLimit + 1e-6;
-  const mergedSpan = typeof scene.startSec === 'number' && typeof nextEndSec === 'number' ? nextEndSec - scene.startSec : null;
-  const canMerge = !!onMergeNext && !isLast && !documentComposition
-    && (splitLimit == null || (mergedSpan != null && mergedSpan <= splitLimit + 1e-6));
+  const timing = buildSceneTimingPresentation({
+    scene, layer, lipSyncBackend, songDurationSec, falVideoSettings,
+    nextEndSec, isLast, documentComposition, hasMergeNext: !!onMergeNext,
+  });
+  const { performance, capability, performanceBlocked, performanceCost } = timing;
   const instruction = scene.takes?.find((take) => take.kind === 'video' && take.assetId === scene.videoHistoryId)?.shotInstruction;
   const repairPlan = planPerformanceRepair({ scene, temporal: performanceReview?.shot,
     excerptStartSec: performanceReview?.excerptStartSec, backend: lipSyncBackend, videoSettings: falVideoSettings || {} });
@@ -156,6 +147,11 @@ export default function SceneCard({
   // retry is in flight (or lands a take, which clears it server-side).
   const failure = scene.lastFailure && !(scene.lastFailure.lane === 'video' ? generatingVideo : generatingFrame)
     ? scene.lastFailure : null;
+  const videoRefusal = videoGenerationRefusal({
+    settingsSaving, speakerUnsaved: performance && (speakerDirty || speakerSaving),
+    referenceImageId: scene.referenceImageId, generatingVideo, videoBlockedReason, performanceBlocked,
+  });
+  const generateVideo = () => { if (!videoRefusal) onGenerateVideo?.(scene); };
   return (
     <div className="min-w-0">
     <details
@@ -368,44 +364,7 @@ export default function SceneCard({
             Set a start and end — a {{ card: 'title card', code: 'code-drawn shot' }[layer] || 'still'} runs for exactly its span.
           </p>
         )}
-        {performance && performanceBlocked && (
-          <div role="alert" className="flex items-start gap-2 rounded border border-port-warning/40 bg-port-warning/10 px-2 py-1.5 text-xs text-port-warning">
-            <AlertTriangle size={13} className="shrink-0 mt-0.5" />
-            <span className="min-w-0 break-words">{performanceBlocked}</span>
-          </div>
-        )}
-        {performance && !performanceBlocked && (
-          <p className="text-[11px] text-port-text-muted break-words" data-testid="performance-plan">
-            {capability.style === 'music' ? 'Music-driven' : 'Lip-sync'} via {capability.label} ({capability.modelId}) · song {formatDurationSec(plan.windowStartSec)}–{formatDurationSec(plan.windowEndSec)}
-            {plan.editInSec > 0 ? ` · shot starts ${plan.editInSec.toFixed(2)}s into the take` : ''} · {performanceCost}
-          </p>
-        )}
-        {falTake && !falTake.performance && (
-          <p className="text-[11px] text-port-text-muted break-words" data-testid="fal-cutaway-plan">
-            fal.ai renders {falTake.seconds != null ? `a ${falTake.seconds}s ` : 'a '}clip on {getFalVideoModel(falTake.modelId)?.label || falTake.modelId}
-            {' · '}{falCost || 'cost unknown — billed to your fal.ai account'}
-          </p>
-        )}
-        {grokPlan && (
-          <p className={`text-[11px] break-words ${grokPlan.needsSplit ? 'text-port-warning' : 'text-port-text-muted'}`}>
-            Grok renders a {grokPlan.requestSec}s clip for this {timedSpan.toFixed(1)}s cutaway
-            {grokPlan.needsSplit ? ` — ${grokPlan.uncoveredSec.toFixed(1)}s uncovered; split the scene rather than loop it` : ''}. Motion timing in the prompt is approximate.
-          </p>
-        )}
-        {canSplit && onSplit && (
-          <button type="button" onClick={() => onSplit(scene.sceneId, lipSyncBackend || null)}
-            className="inline-flex items-center gap-1 rounded bg-port-bg border border-port-border hover:bg-port-border/40 px-2 py-1 text-xs min-h-[44px] sm:min-h-0"
-            title={`Cut this ${timedSpan.toFixed(1)}s shot into scenes of at most ${splitLimit.toFixed(2)}s at lyric pauses or phrase boundaries — nothing is looped or stretched`}>
-            <Scissors size={13} /> Split on lyric boundaries
-          </button>
-        )}
-        {canMerge && (
-          <button type="button" onClick={() => onMergeNext(scene.sceneId, lipSyncBackend || null)}
-            className="inline-flex items-center gap-1 rounded bg-port-bg border border-port-border hover:bg-port-border/40 px-2 py-1 text-xs min-h-[44px] sm:min-h-0"
-            title="Join this shot with the next one into a single shot — the inverse of split">
-            <Merge size={13} /> Merge with next
-          </button>
-        )}
+        <SceneTimingPlan timing={timing} sceneId={scene.sceneId} lipSyncBackend={lipSyncBackend} onSplit={onSplit} onMergeNext={onMergeNext} />
         {underCovered && (
           <div role="alert" className="flex flex-wrap items-center gap-2 rounded border border-port-warning/40 bg-port-warning/10 px-2 py-1.5 text-xs text-port-warning">
             <AlertTriangle size={13} className="shrink-0" />
@@ -517,13 +476,12 @@ export default function SceneCard({
               </button>
             </div>
           )}
-          <button onClick={() => onGenerateVideo(scene)}
-            disabled={settingsSaving || (performance && (speakerDirty || speakerSaving)) || !scene.referenceImageId || !!generatingVideo || !!videoBlockedReason || !!performanceBlocked}
+          <button onClick={generateVideo}
+            disabled={!!videoRefusal}
             className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
-            title={videoBlockedReason || performanceBlocked
-              || (!scene.referenceImageId ? 'Generate a reference frame first'
-                : performance ? `${capability.style === 'music' ? "Animate this scene's frame to the song" : "Lip-sync this scene's frame to the song"} via ${capability.label} — ${performanceCost}`
-                  : "Generate this scene's video from its reference frame (i2v)")}>
+            title={videoRefusal
+              || (performance ? `${capability.style === 'music' ? "Animate this scene's frame to the song" : "Lip-sync this scene's frame to the song"} via ${capability.label} — ${performanceCost}`
+                : "Generate this scene's video from its reference frame (i2v)")}>
             {generatingVideo ? <Activity size={14} className="animate-spin" /> : <Video size={14} />}
             {generatingVideo ? 'Generating video…' : (scene.videoHistoryId ? 'New video take' : 'Generate video')}
           </button>
@@ -559,8 +517,10 @@ export default function SceneCard({
           {failure.lane === 'video' ? 'Video' : 'Frame'} failed: {failure.error}
         </span>
         <button type="button"
-          onClick={() => (failure.lane === 'video' ? onGenerateVideo?.(scene) : onGenerateFrame?.(scene))}
-          className="inline-flex min-h-[44px] shrink-0 items-center px-1 font-medium underline sm:min-h-0">
+          onClick={() => (failure.lane === 'video' ? generateVideo() : onGenerateFrame?.(scene))}
+          disabled={failure.lane === 'video' && !!videoRefusal}
+          title={failure.lane === 'video' ? videoRefusal || undefined : undefined}
+          className="inline-flex min-h-[44px] shrink-0 items-center px-1 font-medium underline disabled:opacity-50 sm:min-h-0">
           Retry
         </button>
       </div>

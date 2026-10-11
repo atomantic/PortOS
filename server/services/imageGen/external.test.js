@@ -38,6 +38,21 @@ describe('external image generation lifecycle', () => {
     expect(imageGenEvents.emit).toHaveBeenCalledWith('failed', expect.objectContaining({ error: 'malformed response' }));
   });
 
+  it('sends no negative prompt unless the caller supplies one', async () => {
+    // A built-in default ("blurry, low quality, …") used to be injected here and
+    // fought deliberately soft, grainy looks; empty means the model gets none.
+    fetchWithTimeout.mockImplementation(async (url) => {
+      if (url.endsWith('/txt2img')) throw new Error('stop after payload');
+      return response({ sd_model_checkpoint: 'example-model', progress: 0, state: {} });
+    });
+
+    await expect(generateImage({ sdapiUrl: 'http://example.com', prompt: 'a test image' }))
+      .rejects.toThrow('stop after payload');
+
+    const [, init] = fetchWithTimeout.mock.calls.find(([url]) => url.endsWith('/txt2img'));
+    expect(JSON.parse(init.body).negative_prompt).toBe('');
+  });
+
   it('clears the polling interval when an unexpected progress handler error occurs', async () => {
     vi.useFakeTimers();
     const progressError = new Error('progress handler failed');

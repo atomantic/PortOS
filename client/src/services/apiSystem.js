@@ -198,16 +198,8 @@ export const updateAiAssignment = (id, data, options) => request(`/settings/ai-a
 const isPlainObject = (v) =>
   v != null && typeof v === 'object' && !Array.isArray(v);
 
-// PUT /api/settings shallow-merges top-level keys only — patching
-// `{ imageGen: { local: { pythonPath } } }` directly clobbers the rest of
-// `imageGen`. patchSettingsSlice fetches current settings, walks to the slice
-// at a dotted path, shallow-merges `partial` into it, and PUTs the rebuilt
-// top-level key so sibling subkeys survive. `options` flows through to the
-// final updateSettings (e.g. `{ silent: true }`).
-//
-// Non-object values along the path (a hand-edited settings.json with an
-// unexpected primitive/array at a slice or parent) are treated as absent so
-// they don't spread into character-indexed or numeric-indexed keys.
+// The server merges this partial into the freshest persisted slice inside its
+// write queue. No browser-side snapshot can overwrite an independent save.
 export const patchSettingsSlice = async (slicePath, partial, options = {}) => {
   if (typeof slicePath !== 'string' || !slicePath) {
     throw new Error('patchSettingsSlice: slicePath required');
@@ -215,20 +207,14 @@ export const patchSettingsSlice = async (slicePath, partial, options = {}) => {
   if (!isPlainObject(partial)) {
     throw new Error('patchSettingsSlice: partial must be a plain object');
   }
-  const segments = slicePath.split('.');
-  if (!segments.every(Boolean)) {
+  if (!slicePath.split('.').every(Boolean)) {
     throw new Error('patchSettingsSlice: slicePath has empty segments');
   }
-  const current = await getSettings({ silent: true }).catch(() => ({}));
-  let existing = current;
-  for (const seg of segments) existing = existing?.[seg];
-  let updated = { ...(isPlainObject(existing) ? existing : {}), ...partial };
-  for (let i = segments.length - 1; i > 0; i--) {
-    let parent = current;
-    for (let j = 0; j < i; j++) parent = parent?.[segments[j]];
-    updated = { ...(isPlainObject(parent) ? parent : {}), [segments[i]]: updated };
-  }
-  return updateSettings({ [segments[0]]: updated }, options);
+  return request('/settings/slice', {
+    ...options,
+    method: 'PATCH',
+    body: JSON.stringify({ slicePath, partial }),
+  });
 };
 
 // Usage. `params` selects the cost-report window: { period } (7d|30d|90d|all)

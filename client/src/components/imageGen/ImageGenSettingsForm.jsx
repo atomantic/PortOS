@@ -171,7 +171,7 @@ export default function ImageGenSettingsForm({
           rows={2}
           value={cfg.negativePrompt || ''}
           onChange={(e) => merge({ negativePrompt: e.target.value })}
-          placeholder="blurry, low quality, watermark…"
+          placeholder="things to avoid, comma separated…"
           className={textareaCls}
           disabled={disabled}
         />

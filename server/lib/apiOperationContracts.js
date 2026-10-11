@@ -10,7 +10,7 @@ import { TTS_ENGINE_IDS } from './voiceEngines.js';
 import { cosToolCallSchema } from './cosToolContracts.js';
 import { agentContextMcpInboundSchema } from './agentContextValidation.js';
 import {
-  gitBranchBodySchema, gitBranchComparisonBodySchema, gitCommitBodySchema, gitCommitsBodySchema, gitDeleteBranchBodySchema,
+  settingsSlicePatchSchema, gitBranchBodySchema, gitBranchComparisonBodySchema, gitCommitBodySchema, gitCommitsBodySchema, gitDeleteBranchBodySchema,
   logsQuerySchema, pm2ProcessNameSchema, gitDiffBodySchema, gitOptionalBranchBodySchema, gitPathBodySchema, gitRemoteBranchesBodySchema, gitStageBodySchema,
 } from './validation.js';
 
@@ -31,6 +31,19 @@ const gitWriteOperation = (summary, schema) => ({
 });
 
 export const API_OPERATION_CONTRACTS = Object.freeze({
+  '/api/settings/slice': {
+    patch: {
+      summary: 'Atomically merge a partial settings slice',
+      description: 'Shallow merge at the allowlisted slice against the freshest persisted settings. Explicit values replace keys; legacy PUT semantics are unchanged. Executable and execution-policy changes require operator authority.',
+      requestBody: jsonBody(settingsSlicePatchSchema),
+      responses: {
+        200: { description: 'Saved settings with protected values redacted' },
+        400: { description: 'Invalid path, partial settings, or interpreter', 'x-portos-error-codes': ['VALIDATION_ERROR', 'INVALID_PYTHON_PATH'] },
+        403: { description: 'Caller lacks host authority for a protected change', 'x-portos-error-codes': ['HOST_CONTROL_FORBIDDEN'] },
+        500: { description: 'Persisted settings could not be read or written', 'x-portos-error-codes': ['INTERNAL_ERROR'] },
+      },
+    },
+  },
   '/api/logs/{processName}': {
     get: {
       summary: 'Read or follow one PM2 process log',

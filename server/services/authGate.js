@@ -285,7 +285,7 @@ export const hostControlBodyGate = async (req, res, next) => {
   if ((settingsNamed.length === 0 && voiceNamed.length === 0)
     || hasHostControl(req.portosAuthContext, isLocalConnection(req.socket?.remoteAddress, req.headers))) return next();
   if (settingsNamed.length > 0
-    && changedHostControlSettingsPaths(settingsNamed, req.body, await getSettings()).length > 0) {
+    && changedHostControlSettingsPaths(settingsNamed, req.body, await getSettings(), req.method, req.path).length > 0) {
     return requireHostControl(req, res, next);
   }
   if (voiceNamed.length > 0

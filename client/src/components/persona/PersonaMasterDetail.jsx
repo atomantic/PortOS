@@ -8,7 +8,6 @@ import Field from '../ui/FormField';
 import toast from '../ui/Toast';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
-import { DEFAULT_NEGATIVE_PROMPT } from '../../lib/imageGenDefaults';
 
 const byName = (a, b) => (a.name || '').localeCompare(b.name || '');
 
@@ -97,7 +96,7 @@ export default function PersonaMasterDetail({
     setStartingGeneration(true);
     const queued = await generateImage({
       prompt: portrait.buildPrompt(form),
-      negativePrompt: `${DEFAULT_NEGATIVE_PROMPT}, extra limbs, nsfw, nude`,
+      negativePrompt: 'extra limbs, nsfw, nude',
       width: 768,
       height: 1024,
     }, { silent: true }).catch((err) => ({ error: err }));
