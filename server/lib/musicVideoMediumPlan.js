@@ -154,7 +154,8 @@ export function codeFirstProductionAssets(project) {
       steps.push({ sceneId: scene.sceneId, medium, action: 'generate-video' });
     }
   }
-  return { steps, conflicts,
+  // Plan-level messages repeat once per shot; every caller joins them into one sentence.
+  return { steps, conflicts: [...new Set(conflicts)],
     requiredRoutes: {
       image: steps.some((step) => step.action === 'generate-image'),
       video: steps.some((step) => step.action === 'generate-video'),

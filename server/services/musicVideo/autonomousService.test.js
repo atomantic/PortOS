@@ -639,6 +639,8 @@ describe('starting on an existing project\'s song (fromProjectId)', () => {
     expect(project).toMatchObject({ name: 'Example Song (Auto)', trackId: 'track-src', status: 'analyzed',
       audioAnalysis: SONG_SOURCE.audioAnalysis, lyricCues: SONG_SOURCE.lyricCues, vocalStemFilename: 'vocals.wav', lyricAlignSource: 'vocal-stem' });
     expect(project.concept).toEqual({ prompt: 'skatepark at golden hour', songStyle: 'post-punk, driving drums, -metal' });
+    // The source has no policy of its own, so it is a legacy footage project, and so is the copy.
+    expect(project).toMatchObject({ mediaMode: 'code-images-video', productionPolicy: { strategy: 'legacy', maxGeneratedVideoPercent: 100 } });
     for (const key of ['visualSpec', 'castAndSets', 'treatment', 'filmLook']) expect(project[key]).toBeUndefined();
     expect(project.scenes).toBeUndefined();
     expect(run.brief).toMatchObject({ checkpoints: ['style'], instrumental: false, songFrom: { projectId: 'mv-src', title: 'Example Song' } });
@@ -1153,6 +1155,33 @@ describe('auto-approve the rest (brief.autoApprove)', () => {
     expect(approvals().art).toMatchObject({ approvedBy: 'autopilot' });
     expect(approvals().storyboard).toBeUndefined();
     expect(doubles.startProduction).not.toHaveBeenCalled();
+  });
+
+  // Uniquely catches a code-first plan with an unfilmable performance shot being approved and then failing production.
+  it('re-plans a performance shot with no footage as a cutaway before approving the storyboard', async () => {
+    reviewFixture();
+    const { buildTreatmentDraft } = await import('./treatmentDraft.js');
+    const { writeCompiledTreatment, applyTreatmentToProject, treatmentBasis } = await import('./treatment.js');
+    const { codeFirstProductionAssets } = await import('../../lib/musicVideoMediumPlan.js');
+    doubles.approveProductionReview.mockImplementation(async (id, input) => {
+      let project = clone(store.get(id));
+      if (input.stage === 'art' && !project.treatment) {
+        // What preparing the storyboard does for a code-first project: a deterministic plan, applied.
+        const compiled = writeCompiledTreatment(project, { baseRevision: 0, basis: treatmentBasis(project), draft: buildTreatmentDraft(project),
+          compiledWith: { source: 'deterministic', providerId: null, model: null } });
+        compiled.treatment.shotDirections = compiled.treatment.shotDirections.map((d) => ({ ...d, mode: 'performance', medium: 'procedural' }));
+        project = applyTreatmentToProject(compiled, { revision: compiled.treatment.revision }).project;
+      }
+      store.set(id, clone(actual.approveProductionStage(project, input)));
+    });
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], mediaMode: 'code-images', autoApprove: ['art', 'storyboard'] }, { autoApproveAuthorized: true });
+    await vi.waitFor(() => expect(doubles.approveProductionReview).toHaveBeenCalledTimes(2));
+    const project = store.get('mv-auto');
+    expect(project.productionPolicy).toMatchObject({ strategy: 'code-first', maxGeneratedVideoPercent: 0 });
+    expect(project.treatment.shotDirections.map((d) => d.mode)).toEqual(['cutaway']);
+    expect(project.treatment.appliedRevision).toBe(project.treatment.revision);
+    expect(codeFirstProductionAssets(project).conflicts).toEqual([]);
+    expect(approvals().storyboard).toMatchObject({ approvedBy: 'autopilot' });
   });
 
   it('ignores a legacy proof grant: code renders the final without rendering or approving a proof', async () => {

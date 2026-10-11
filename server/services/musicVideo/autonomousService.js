@@ -2,6 +2,8 @@ import { musicVideoMediaMode, musicVideoAllowsMedia } from '../../lib/musicVideo
 import { prepareProductionReview } from './productionReviewService.js';
 import { ALIGNMENT_UNVERIFIED_PROBLEM, assertProductionApproval, productionAlignmentBasis, productionReadiness, productionReviewBasis } from './productionReview.js';
 import { CAST_SETS_WORKING } from './castAndSets.js';
+import { applyTreatmentPatch, applyTreatmentToProject } from './treatment.js';
+import { codeFirstProductionAssets, normalizeMusicVideoProductionPolicy } from '../../lib/musicVideoMediumPlan.js';
 
 /**
  * Fully-autonomous Music Video — the run orchestrator.
@@ -242,6 +244,11 @@ async function autoApproveStage(project, run, stage) {
   if (!autoApproves(run, stage)) return project;
   const readiness = productionReadiness(project);
   if (readiness[stage].approved || readiness[stage].problems.length) return project;
+  const blocker = stageBlockers(project, run, stage)[0];
+  if (blocker) {
+    console.warn(`⚠️ Autonomous music video ${short(run.id)} left the ${stage} unapproved: ${trimTo(blocker, 200)}`);
+    return project;
+  }
   await deps.approveProductionReview(project.id, { stage, basis: readiness.basis[stage], approvedBy: 'autopilot',
     reviewer: { kind: 'autopilot', runId: run.id, authorizedBy: run.brief.autoApproveAuthorizedBy || null } });
   console.log(`🤖 Autonomous music video ${short(run.id)} auto-approved ${stage} (brief.autoApprove)`);
@@ -641,8 +648,9 @@ async function orchestrateProductionStage(project, run, stage) {
     project = await getProject(project.id);
     const readiness = productionReadiness(project);
     const why = review.verdict !== 'revise' ? '' : spent >= reviewLimit(run) ? 'Revision limit reached; accepted the latest version. ' : 'Nothing to revise was supplied; accepted as is. ';
-    if (readiness[stage].problems.length) {
-      await recordReview(project.id, reviewEntry(stage, review, { verdict: 'revise', notes: `Could not approve: ${trimTo(readiness[stage].problems[0], 300)} ${review.notes || ''}`.trim() }));
+    const problem = readiness[stage].problems[0] || stageBlockers(project, run, stage)[0];
+    if (problem) {
+      await recordReview(project.id, reviewEntry(stage, review, { verdict: 'revise', notes: `Could not approve: ${trimTo(problem, 300)} ${review.notes || ''}`.trim() }));
       return project;
     }
     await deps.approveProductionReview(project.id, { stage, basis: readiness.basis[stage], approvedBy: 'orchestrator', reviewer: orchestratorIdentity(run, review.route) });
@@ -651,10 +659,52 @@ async function orchestrateProductionStage(project, run, stage) {
   }
 }
 
+/** The run renders its film from code alone rather than through production. */
+const rendersFromCode = (project, run) => musicVideoMediaMode(project) === 'code-only' || autonomousMedium(run.brief.tools) === 'code';
+
+/**
+ * What would stop production of an approved storyboard: the code-first plan's
+ * medium conflicts. Approving over them only moves the failure to
+ * production, so a run that approves for the director leaves the gate closed.
+ */
+const stageBlockers = (project, run, stage) => (stage === 'storyboard' && !rendersFromCode(project, run)
+  ? codeFirstProductionAssets(project)?.conflicts || [] : []);
+
+/**
+ * A performance direction planned without footage (no video tool, or no
+ * generated-video allowance left) blocks production until the plan is revised.
+ * A run that approves the storyboard itself makes that revision as the
+ * conflict asks: those shots become cutaways, and the plan is applied again.
+ * Any other conflict is left for stageBlockers to name.
+ */
+async function reviseUnfilmablePerformances(project, run) {
+  const ready = productionReadiness(project);
+  if (ready.storyboard.approved || !ready.art.approved || !(isOrchestratedRun(run) || autoApproves(run, 'storyboard'))) return project;
+  if (!stageBlockers(project, run, 'storyboard').length) return project;
+  const sceneIds = (project.treatment?.shotDirections || [])
+    .filter((d) => d.mode === 'performance' && !['existing-footage', 'generated-footage'].includes(d.medium)).map((d) => d.sceneId);
+  if (!sceneIds.length) return project;
+  const rationale = 'No footage is planned for this shot, so it is staged as a cutaway rather than a visible performance.';
+  const revised = await mutateProjectRecord(project.id, (current) => {
+    const patched = applyTreatmentPatch(current, { baseRevision: current.treatment?.revision ?? 0,
+      shotDirections: sceneIds.map((sceneId) => ({ sceneId, mode: 'cutaway', rationale })) });
+    return applyTreatmentToProject(patched, { revision: patched.treatment.revision });
+  }).then(({ project: next }) => next, (err) => {
+    console.warn(`⚠️ Autonomous music video ${short(run.id)} could not re-plan ${sceneIds.length} performance shot(s): ${err.message}`);
+    return null;
+  });
+  if (!revised) return project;
+  const note = `Re-planned ${sceneIds.length} performance shot${sceneIds.length === 1 ? '' : 's'} as cutaways: no footage is planned for them.`;
+  if (isOrchestratedRun(run)) await recordReview(project.id, { checkpoint: 'storyboard', verdict: 'revise', notes: note });
+  console.log(`🎬 Autonomous music video ${short(run.id)}: ${note}`);
+  return revised;
+}
+
 /** Art and storyboard: the orchestrator when the run has one, else the operator's auto-approve grant. */
-const settleProductionStage = (project, run, stage) => (isOrchestratedRun(run)
-  ? orchestrateProductionStage(project, run, stage)
-  : autoApproveStage(project, run, stage));
+const settleProductionStage = async (project, run, stage) => {
+  if (stage === 'storyboard') project = await reviseUnfilmablePerformances(project, run);
+  return isOrchestratedRun(run) ? orchestrateProductionStage(project, run, stage) : autoApproveStage(project, run, stage);
+};
 
 /**
  * Watch the finished film and send flagged sections back, as a director would:
@@ -714,7 +764,7 @@ function issueWindow(project, issues) {
  */
 async function startFinalRevision(projectId, run, issues) {
   const project = await getProject(projectId);
-  const code = musicVideoMediaMode(project) === 'code-only' || autonomousMedium(run.brief.tools) === 'code';
+  const code = rendersFromCode(project, run);
   await patchRun(projectId, (r) => stagePatch(r, 'produce', { status: 'running', step: FINAL_REVISION_STEP }));
   if (code) return reauthorFinal(projectId, run, issues).then(() => 'rerender');
   const window = issueWindow(project, issues);
@@ -1057,7 +1107,7 @@ const STAGES = {
   },
 
   async produce({ project, run }) {
-    const medium = musicVideoMediaMode(project) === 'code-only' ? 'code' : autonomousMedium(run.brief.tools);
+    const medium = rendersFromCode(project, run) ? 'code' : autonomousMedium(run.brief.tools);
     if (medium === 'code' && !['code', 'document'].includes(project.composition?.mode)) {
       await deps.updateProject(project.id, { composition: { mode: 'document', authoringRenderer: 'three' } });
     }
@@ -1094,6 +1144,9 @@ const STAGES = {
       const others = storyboard.problems.filter((p) => p !== ALIGNMENT_UNVERIFIED_PROBLEM);
       throw runError(409, 'MUSIC_VIDEO_APPROVAL_REQUIRED', trimTo([timingHeld, ...others].join(' '), 500));
     }
+    // A medium conflict the run could not revise is named, so the director knows what to change.
+    const blockers = storyboard.approved ? [] : stageBlockers(project, run, 'storyboard');
+    if (blockers.length) throw runError(409, 'MUSIC_VIDEO_APPROVAL_REQUIRED', trimTo(blockers.join(' '), 500));
     assertProductionApproval(project, 'storyboard');
     // The authoring stage's pin, else the run's code-authoring pin taken as
     // given (production checks it exactly), else the direction LLM.
@@ -1279,6 +1332,8 @@ export async function startAutonomousVideo(input, { autoApproveAuthorized = fals
     // No lyrics are written and no song is made, so those checkpoints have nothing to stop on.
     Object.assign(brief, {
       name: brief.name || trimTo(`${song.title} (Auto)`, 200),
+      // The source's effective media mode carries over unless the request names its own.
+      ...(input.mediaMode === undefined ? { mediaMode: musicVideoMediaMode(song.source) } : {}),
       instrumental: !song.lyrics,
       checkpoints: brief.checkpoints.filter((id) => id !== 'lyrics' && id !== 'song'),
       songFrom: { projectId: song.source.id, title: song.title, style: song.style, verifiedAlignmentBasis: null },
@@ -1290,6 +1345,8 @@ export async function startAutonomousVideo(input, { autoApproveAuthorized = fals
     mode: 'autonomous',
     mediaMode: brief.mediaMode,
     ...(brief.mediaMode !== 'code-images-video' ? { productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 } } : {}),
+    // ...as does its production policy (a project with none is legacy), so a footage project stays one.
+    ...(song && input.mediaMode === undefined ? { productionPolicy: normalizeMusicVideoProductionPolicy(song.source.productionPolicy) } : {}),
     ...(song ? { trackId: song.source.trackId || null, uploadedAudioFilename: song.source.uploadedAudioFilename || null } : {}),
     // The style id makes createProject cast its character and attach the sheet (styleSnapshots.js).
     concept: { prompt: trimTo(brief.prompt, 8000), ...(brief.characterStyleId ? { characterStyleId: brief.characterStyleId } : {}),
