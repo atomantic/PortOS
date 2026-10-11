@@ -90,6 +90,8 @@ export const state = {
    * which is a different code path from a fresh mount on that URL.
    */
   navigate: null,
+  /** `getVideoGenRuntimeStatus` answer for a BYOV runtime probe. */
+  runtimeStatus: { installed: true, ready: true, current: true },
 };
 
 const SPIES = ['getVideoGenStatus', 'getVideoGenModelContext', 'generateVideo', 'start', 'startWhenIdle', 'repair', 'cancel', 'refresh', 'listVideoHistory', 'listLorasFull'];
@@ -116,6 +118,7 @@ export function resetVideoGenMockState() {
   state.completionRefresh = null;
   state.availableLoras = [];
   state.navigate = null;
+  state.runtimeStatus = { installed: true, ready: true, current: true };
   for (const key of SPIES) state[key].mockReset();
   state.listVideoHistory.mockResolvedValue([]);
   state.listLorasFull.mockImplementation(async () => state.availableLoras);
@@ -192,7 +195,7 @@ vi.mock('../services/api', () => ({
   patchSettingsSlice: vi.fn(async () => ({})),
   getActiveVideoJob: vi.fn(async () => ({ activeJob: state.activeJob })),
   getSettings: vi.fn(async () => state.settings ?? ({ imageGen: { grok: { enabled: false } } })),
-  getVideoGenRuntimeStatus: vi.fn(async () => ({ installed: true, ready: true, current: true })),
+  getVideoGenRuntimeStatus: vi.fn(async () => state.runtimeStatus),
   listLorasFull: (...args) => state.listLorasFull(...args),
   // The prompt-enhancement controls mount useProviderModels, which fetches the
   // provider list from a mount effect. Unmocked it throws out of a passive

@@ -95,6 +95,7 @@ export * from './runnerFamilies.js';
 export * from './selectorTestFailureTask.js';
 export * from './slashdoCatalog.js';
 export * from './videoFinish.js';
+export * from './videoGenEnqueuePolicy.js';
 export * from './videoGenParams.js';
 export * from './videoGenResolutions.js';
 export * from './videoGenSubmission.js';
