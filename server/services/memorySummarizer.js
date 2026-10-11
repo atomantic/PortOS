@@ -21,6 +21,7 @@ import { getProviderById } from './providers.js';
 import { loadMeta } from './brainStorage.js';
 import { readArchivedConversation } from './chatgptImport.js';
 import { runPromptThroughProvider } from './promptRunner.js';
+import { isToolFreeOneShotProvider } from '../lib/providerVendors.js';
 
 // Preferred summarizer model when the Brain default doesn't resolve. gpt-oss:20b
 // is the typical Brain default and has ample context for a full transcript.
@@ -85,7 +86,7 @@ async function resolveSourceText(memory, fallbackText) {
  */
 export async function summarizeForEmbedding(memory, fallbackText) {
   const summarizer = await resolveSummarizer();
-  if (!summarizer) return null;
+  if (!summarizer || !isToolFreeOneShotProvider(summarizer.provider)) return null;
 
   const sourceText = await resolveSourceText(memory, fallbackText);
   if (!sourceText?.trim()) return null;
@@ -96,6 +97,12 @@ export async function summarizeForEmbedding(memory, fallbackText) {
     provider: summarizer.provider,
     model: summarizer.model,
     prompt,
+    // Memory text is reference data, never authority to use host tools. The
+    // runner's toolFree flag only constrains supported CLI one-shots; pin the
+    // admitted provider so proactive/runtime fallback cannot switch to a TUI
+    // or a CLI without tool-disable support. Failure falls back to truncation.
+    toolFree: true,
+    allowFallback: false,
     source: 'memory-embedding-summary'
   }).catch((err) => {
     console.warn(`⚠️ Embedding summarization failed (${summarizer.model}): ${err.message}`);
