@@ -88,3 +88,19 @@ export function sceneMatchesFilter(codes, filter) {
   if (filter === 'missing') return codes.some((code) => SCENE_MISSING_CODES.includes(code));
   return true;
 }
+
+export const SCENE_MEDIA_LABELS = Object.freeze({ clip: 'Clip', image: 'Image', code: 'Code', card: 'Card' });
+
+/**
+ * What a scene's selected media is, for the Board thumbnail badge: `clip` (a
+ * rendered video is selected), `image` (only a still frame, whether the shot is
+ * a still or footage still waiting on its clip), `code` / `card` (the
+ * composition draws it), or null when nothing is selected yet.
+ */
+export function sceneMediaKind(scene, { layered = false } = {}) {
+  if (!scene) return null;
+  const layer = sceneVisualLayer(scene, { layered });
+  if (isSelfDrawnLayer(layer)) return layer;
+  if (layer === 'footage' && scene.videoHistoryId) return 'clip';
+  return scene.referenceImageId ? 'image' : null;
+}
