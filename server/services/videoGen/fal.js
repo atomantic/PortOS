@@ -189,15 +189,8 @@ export async function generateVideo({
   const audioSec = audioFilePath
     ? (shotInstruction?.audioWindow?.durationSec || await probeVideoDuration(audioFilePath).catch(() => null))
     : null;
-  // A model that takes an explicit canvas (LTX-2.3) keeps the shot's shape:
-  // with no requested size, read it off the start frame rather than assume 16:9.
-  let canvas = { width, height };
-  if (catalogModel?.resolution?.wire === 'canvas' && !(Number(width) > 0 && Number(height) > 0) && sourceImagePath) {
-    const { readImageSize } = await import('../../lib/reactorStartingFrame.js');
-    canvas = (await readImageSize(sourceImagePath)) || canvas;
-  }
   const requestSpec = {
-    modelId, prompt, negativePrompt, seconds: duration, audioSec, aspectRatio, width: canvas.width, height: canvas.height, resolution,
+    modelId, prompt, negativePrompt, seconds: duration, audioSec, aspectRatio, width, height, resolution,
     generateAudio: generateAudio === true, enableTranscription: lipSync?.enableTranscription === true,
   };
   // Dry-run the curated body with placeholder media before anything is read or

@@ -244,21 +244,26 @@ export default function VideoRenderSettings({ videoSettings, generating }) {
             />
             Transcript-guided lip-sync
           </label>
-          <label htmlFor="mv-fal-music-model" className="sr-only">fal.ai music-driven model</label>
-          <select
-            id="mv-fal-music-model"
-            value={settings.falMusicModelId || ''}
-            onChange={(e) => change({ falMusicModelId: e.target.value || null, falMusicResolution: null })}
-            disabled={locked}
-            title="Audio-to-video model for music-driven performance shots: the scene's song slice drives the whole frame's motion, not just a mouth"
-            className={`${falSelectCls} sm:max-w-[280px]`}
-          >
-            {musicModels.map((lane) => (
-              <option key={lane.modelId} value={lane.modelId === FAL_AUDIO_VIDEO_MODEL ? '' : lane.modelId}>
-                {`Music-driven · ${getFalVideoModel(lane.modelId).label} · ${describeFalVideoRate(lane.modelId, lane.defaultResolution)}${lane.modelId === FAL_AUDIO_VIDEO_MODEL ? ' (default)' : ''}`}
-              </option>
-            ))}
-          </select>
+          {/* The model picker appears once there is a choice; the resolution picker always does. */}
+          {musicModels.length > 1 && (
+            <>
+              <label htmlFor="mv-fal-music-model" className="sr-only">fal.ai music-driven model</label>
+              <select
+                id="mv-fal-music-model"
+                value={settings.falMusicModelId || ''}
+                onChange={(e) => change({ falMusicModelId: e.target.value || null, falMusicResolution: null })}
+                disabled={locked}
+                title="Audio-to-video model for music-driven performance shots: the scene's song slice drives the whole frame's motion, not just a mouth"
+                className={`${falSelectCls} sm:max-w-[280px]`}
+              >
+                {musicModels.map((lane) => (
+                  <option key={lane.modelId} value={lane.modelId === FAL_AUDIO_VIDEO_MODEL ? '' : lane.modelId}>
+                    {`Music-driven · ${getFalVideoModel(lane.modelId).label} · ${describeFalVideoRate(lane.modelId, lane.defaultResolution)}${lane.modelId === FAL_AUDIO_VIDEO_MODEL ? ' (default)' : ''}`}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
           <label htmlFor="mv-fal-music-resolution" className="sr-only">fal.ai music-driven resolution</label>
           <select
             id="mv-fal-music-resolution"

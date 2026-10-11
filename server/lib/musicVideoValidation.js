@@ -156,7 +156,7 @@ export const musicVideoVideoSettingsSchema = z.object({
   // Audio-to-video model and resolution for music-driven performance takes
   // (scene.performanceStyle 'music'). Loosely validated like falModelId: a peer
   // on a newer catalog may pin a model this install does not curate, which then
-  // falls back to the default (LTX-2.3 audio-to-video).
+  // falls back to the default (OmniHuman v1.5).
   falMusicModelId: z.string().min(1).max(200).nullable().optional(),
   falMusicResolution: z.string().min(1).max(16).nullable().optional(),
   generationMode: z.enum(['image', 'audioReactive', 'suppliedAudio']).optional(),

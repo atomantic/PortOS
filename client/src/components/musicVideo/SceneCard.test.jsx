@@ -62,7 +62,7 @@ describe('music-driven performance', () => {
     expect(onSave).toHaveBeenLastCalledWith('s1', { shotMode: 'performance', performanceStyle: 'music' });
     expect(shot.value).toBe('music');
     // The shot's own 3.5s, not lip-sync's 5s minimum window.
-    expect(screen.getByTestId('performance-plan').textContent).toMatch(/^Music-driven via fal\.ai LTX-2\.3 audio-to-video \(fal-ai\/ltx-2\.3-22b\/audio-to-video\) · song 0:10–0:13 · est\. \$0\.30 \(3\.5s at 1080p\)/);
+    expect(screen.getByTestId('performance-plan').textContent).toMatch(/^Music-driven via fal\.ai OmniHuman v1\.5 \(audio-driven person\) \(fal-ai\/bytedance\/omnihuman\/v1\.5\) · song 0:10–0:13 · est\. \$0\.56 \(3\.5s at 1080p\)/);
     fireEvent.change(shot, { target: { value: 'performance' } });
     expect(onSave).toHaveBeenLastCalledWith('s1', { shotMode: 'performance', performanceStyle: null });
     expect(screen.getByTestId('performance-plan').textContent).toMatch(/^Lip-sync via/);

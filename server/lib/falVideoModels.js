@@ -39,7 +39,7 @@ export const FAL_VIDEO_KINDS = Object.freeze(['t2v', 'i2v', 'ref2v', 'lipsync', 
 export const FAL_DEFAULT_TEXT_VIDEO_MODEL = 'fal-ai/minimax/hailuo-02/standard/text-to-video';
 export const FAL_DEFAULT_IMAGE_VIDEO_MODEL = 'fal-ai/minimax/hailuo-02/standard/image-to-video';
 export const FAL_LIPSYNC_VIDEO_MODEL = 'minimax/h3-max/lip-sync/image-to-video';
-export const FAL_AUDIO_VIDEO_MODEL = 'fal-ai/ltx-2.3-22b/audio-to-video';
+export const FAL_AUDIO_VIDEO_MODEL = 'fal-ai/bytedance/omnihuman/v1.5';
 
 const H3_RESOLUTIONS = Object.freeze(['480P', '768P', '1080P']);
 const SEEDANCE_RESOLUTIONS = Object.freeze(['480p', '720p', '1080p']);
@@ -52,9 +52,6 @@ const H3_MAX_RATES = Object.freeze({ '480P': 0.05, '768P': 0.08, '1080P': 0.16 }
 // per-second price for a 16:9 output; those published figures are used (they
 // run ~2% above the nominal-pixel formula, i.e. the provider pads the canvas).
 const SEEDANCE_PER_SEC_16X9 = Object.freeze({ '480p': 0.2205, '720p': 0.473, '1080p': 1.164 });
-// LTX-2.3 takes an explicit {width, height} canvas; PortOS names it by its
-// short side and keeps the requested aspect (see `ltxCanvas`).
-const LTX_SHORT_SIDES = Object.freeze({ '480p': 480, '720p': 720, '1080p': 1080 });
 
 const seedance = (id, kind, label, extra) => ({
   id, kind, label, family: 'seedance-2.5',
@@ -155,30 +152,9 @@ export const FAL_VIDEO_MODELS = Object.freeze([
     aspectRatio: { param: 'aspect_ratio', options: WIDE_ASPECTS, auto: 'auto' },
   }),
   {
-    // LTX-2.3 22B is a joint audio-video model: the supplied audio conditions
-    // every frame, so motion lands on the music (and a singer's mouth on the
-    // vocal) rather than being only a mouth layered over a still pose.
-    id: FAL_AUDIO_VIDEO_MODEL, kind: 'a2v', label: 'LTX-2.3 audio-to-video', family: 'ltx-2.3',
-    prompt: 'required',
-    image: { param: 'image_url', required: false },
-    endImage: { param: 'end_image_url' },
-    // num_frames is 9–481 at 24fps, i.e. up to ~20s; with match_audio_length
-    // the frame count follows the audio.
-    audioInput: { param: 'audio_url', minSec: 1, maxSec: 20 },
-    duration: { kind: 'audio' },
-    resolution: { param: 'video_size', options: Object.keys(LTX_SHORT_SIDES), default: '720p', wire: 'canvas', fps: 24 },
-    aspectRatio: null,
-    negativePrompt: 'native',
-    seed: 'seed',
-    // audio_strength 1 keeps the supplied audio unmodified in the output.
-    fixed: { match_audio_length: true, fps: 24, audio_strength: 1 },
-    // "$0.001605 per megapixel of generated video data (width × height × frames)".
-    pricing: { perMegapixel: 0.001605 },
-  },
-  {
     // Audio-driven human figure: expression, gesture and body movement follow
     // the audio, not just the mouth. Expects a person in the frame.
-    id: 'fal-ai/bytedance/omnihuman/v1.5', kind: 'a2v', label: 'OmniHuman v1.5 (audio-driven person)', family: 'omnihuman',
+    id: FAL_AUDIO_VIDEO_MODEL, kind: 'a2v', label: 'OmniHuman v1.5 (audio-driven person)', family: 'omnihuman',
     prompt: 'optional',
     image: { param: 'image_url', required: true },
     // "Audio must be under 30s long for 1080p generation and under 60s long for 720p".
@@ -282,24 +258,6 @@ const wireDuration = (rule, sec) => (
 
 const ratioOf = (r) => { const [w, h] = String(r).split(':').map(Number); return w / h; };
 
-const round32 = (n) => Math.max(32, Math.round(n / 32) * 32);
-
-/**
- * The explicit canvas a `wire: 'canvas'` model renders at `resolution`: the
- * named short side, the long side from the requested width/height (16:9 when
- * none is given), both on the 32-pixel grid the model works in.
- */
-function ltxCanvas(resolution, { width, height } = {}) {
-  const short = LTX_SHORT_SIDES[resolution];
-  if (!short) return null;
-  const w = Number(width);
-  const h = Number(height);
-  const portrait = w > 0 && h > 0 && h > w;
-  const aspect = w > 0 && h > 0 ? Math.max(w, h) / Math.min(w, h) : 16 / 9;
-  const long = round32(short * aspect);
-  return portrait ? { width: short, height: long } : { width: long, height: short };
-}
-
 function pickAspectRatio(rule, { aspectRatio, width, height }) {
   if (!rule) return null;
   if (rule.options.includes(aspectRatio)) return aspectRatio;
@@ -345,15 +303,6 @@ export function estimateFalVideoCostUsd({ modelId, seconds, resolution, width, h
   }
   const res = resolveFalVideoResolution(model, resolution);
   let perSec;
-  if (model.pricing.perMegapixel) {
-    const canvas = ltxCanvas(res, { width, height });
-    if (!canvas) return null;
-    const fps = model.resolution.fps;
-    // The frames the audio needs, rounded UP to the 8n+1 counts LTX renders,
-    // so the estimate never undershoots the bill.
-    const frames = Math.ceil(Math.ceil(billedSec * fps) / 8) * 8 + 1;
-    return round4((canvas.width * canvas.height * frames / 1e6) * model.pricing.perMegapixel);
-  }
   if (model.pricing.videoTokensPerSec16x9) {
     perSec = model.pricing.videoTokensPerSec16x9[res] ?? null;
     const w = Number(width);
@@ -373,12 +322,6 @@ export function describeFalVideoRate(modelId, resolution) {
   const model = getFalVideoModel(modelId);
   if (!model) return null;
   const res = resolveFalVideoResolution(model, resolution);
-  if (model.pricing.perMegapixel) {
-    const canvas = ltxCanvas(res);
-    if (!canvas) return null;
-    const perSec = (canvas.width * canvas.height * model.resolution.fps / 1e6) * model.pricing.perMegapixel;
-    return `≈$${perSec.toFixed(4)}/s at ${res} (16:9)`;
-  }
   if (model.pricing.videoTokensPerSec16x9) {
     const perSec = model.pricing.videoTokensPerSec16x9[res];
     return perSec == null ? null : `≈$${perSec.toFixed(4)}/s at ${res} (16:9)`;
@@ -457,7 +400,7 @@ export function buildFalVideoRequest({
   const coercedSec = coerceFalVideoSeconds(model, seconds);
   if (coercedSec != null) body.duration = wireDuration(model.duration, coercedSec);
   const res = resolveFalVideoResolution(model, resolution);
-  if (res) body[model.resolution.param] = model.resolution.wire === 'canvas' ? ltxCanvas(res, { width, height }) : res;
+  if (res) body[model.resolution.param] = res;
   const aspect = pickAspectRatio(model.aspectRatio, { aspectRatio, width, height });
   if (aspect) body[model.aspectRatio.param] = aspect;
   const wantsAudio = generateAudio === true && !!model.audio;

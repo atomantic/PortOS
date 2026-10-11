@@ -132,8 +132,10 @@ export const SOURCE_AUDIO_LIPSYNC = Object.freeze({
 });
 
 /**
- * Default output resolution of a music-driven take. Both audio-to-video
- * models offer 1080p, and LTX-2.3 bills by pixel at a few cents a second.
+ * Default output resolution of a music-driven take (OmniHuman's own default).
+ * LTX audio-to-video is deliberately not a fal lane: PortOS runs LTX-2.3 /
+ * LTX-2.5 locally, where Make › Supplied song audio conditions a cutaway on
+ * its own song slice (submitJob.js `_suppliedAudio`).
  */
 const MUSIC_VIDEO_MUSIC_DEFAULT_RESOLUTION = '1080p';
 
@@ -158,7 +160,7 @@ const musicCapability = (model) => {
 /**
  * Verified music-driven lanes, keyed by backend then model id. The project's
  * `videoSettings.falMusicModelId` picks one; absent (or a model this install
- * does not curate) = `FAL_AUDIO_VIDEO_MODEL` (LTX-2.3 audio-to-video).
+ * does not curate) = `FAL_AUDIO_VIDEO_MODEL` (OmniHuman v1.5).
  */
 export const SOURCE_AUDIO_MUSIC = Object.freeze({
   fal: Object.freeze(Object.fromEntries(FAL_AUDIO_VIDEO_MODELS.map((model) => [model.id, musicCapability(model)]))),
@@ -188,7 +190,7 @@ export function performanceBlockedReason(backend) {
     return 'Grok video is cutaway-only: it cannot synchronize a singer to the song. Pin fal.ai for performance shots, or switch this scene to Cutaway.';
   }
   if (backend === 'local') {
-    return 'Local video models cannot lip-sync to the song. Pin fal.ai for performance shots, or switch this scene to Cutaway.';
+    return 'Local video models cannot lip-sync to the song. Pin fal.ai for performance shots, or switch this scene to Cutaway — with Supplied song audio and a local LTX model, the scene\'s song slice still drives its motion.';
   }
   return 'Performance shots need a source-audio lip-sync provider — pin fal.ai as this project\'s video backend.';
 }

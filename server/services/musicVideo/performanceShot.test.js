@@ -311,9 +311,9 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     expect(si.audioWindow).toEqual({ startSec: 20, endSec: 21.5, durationSec: 1.5 });
     expect(si.edit).toEqual({ inSec: 0, outSec: 1.5, targetSec: 1.5 });
     expect(si).toMatchObject({ performanceStyle: 'music', transcription: false,
-      capability: { style: 'music', modelId: 'fal-ai/ltx-2.3-22b/audio-to-video', resolution: '1080p' } });
+      capability: { style: 'music', modelId: 'fal-ai/bytedance/omnihuman/v1.5', resolution: '1080p' } });
     expect(si.audio.conditioning).toMatchObject({ source: 'master', filename: 'song.wav', selection: 'music-driven' });
-    expect(prepared).toMatchObject({ modelId: 'fal-ai/ltx-2.3-22b/audio-to-video', resolution: '1080p', enableTranscription: false });
+    expect(prepared).toMatchObject({ modelId: 'fal-ai/bytedance/omnihuman/v1.5', resolution: '1080p', enableTranscription: false });
     const samples = pcm(await readFile(prepared.audioFilePath));
     expect(samples.readInt16LE(0)).toBe(30000);
 
@@ -340,29 +340,18 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     });
     expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'completed' });
     expect(posts).toHaveLength(1);
-    expect(posts[0].url).toBe('https://queue.fal.run/fal-ai/ltx-2.3-22b/audio-to-video');
+    expect(posts[0].url).toBe('https://queue.fal.run/fal-ai/bytedance/omnihuman/v1.5');
     expect(posts[0].body).toMatchObject({
-      prompt: 'drummer hits on the beat', video_size: { width: 1920, height: 1080 }, match_audio_length: true, fps: 24, audio_strength: 1,
+      prompt: 'drummer hits on the beat', resolution: '1080p',
     });
     expect(posts[0].body.image_url).toMatch(/^data:image\//);
     expect(posts[0].body.audio_url).toMatch(/^data:audio\/wav;base64,/);
     const { loadHistory } = await import('../videoGen/history.js');
-    // 1920×1080 × 41 frames (1.5s at 24fps, up to LTX's 8n+1 count) at $0.001605/MP.
+    // 1.5s at $0.16/s.
     expect((await loadHistory()).find((h) => h.id === job.jobId)).toMatchObject({
-      modelId: 'fal:fal-ai/ltx-2.3-22b/audio-to-video', resolution: '1080p', estimatedCostUsd: 0.1365, audioDriven: true,
+      modelId: 'fal:fal-ai/bytedance/omnihuman/v1.5', resolution: '1080p', estimatedCostUsd: 0.24, audioDriven: true,
     });
 
-    // With no requested size the canvas follows the start frame's shape (a portrait plate stays portrait).
-    execFileSync(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'color=gray:s=540x960', '-frames:v', '1', '-y', join(PATHS.images, 'portrait.png')]);
-    const again = await preparePerformanceShot({
-      musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1' }, backend: 'fal', sourceImagePath: join(PATHS.images, 'portrait.png'), mode: 'image',
-    });
-    const portraitJob = await fal.generateVideo({
-      apiKey: 'test-key', modelId: again.modelId, resolution: again.resolution, prompt: 'drummer hits on the beat',
-      sourceImagePath: join(PATHS.images, 'portrait.png'), audioFilePath: again.audioFilePath, shotInstruction: again.shotInstruction,
-    });
-    expect(await waitForTerminal(portraitJob.jobId)).toMatchObject({ type: 'completed' });
-    expect(posts[1].body.video_size).toEqual({ width: 1080, height: 1920 });
   }, 60_000);
 
   it('uses the full span of a long shot in one take, at the project\'s lip-sync resolution pin', async () => {

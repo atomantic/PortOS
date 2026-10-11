@@ -95,8 +95,7 @@ describe('music-driven performance takes', () => {
 
   it('render on the audio-to-video model for the shot itself, without lip-sync\'s 5s padding', () => {
     const take = falSceneTake({ scene: drummer, videoSettings: {}, songDurationSec: 240 });
-    expect(take).toMatchObject({ performance: true, modelId: 'fal-ai/ltx-2.3-22b/audio-to-video', seconds: 3.735, resolution: '1080p' });
-    expect(take.costUsd).toBeGreaterThan(0);
+    expect(take).toMatchObject({ performance: true, modelId: 'fal-ai/bytedance/omnihuman/v1.5', seconds: 3.735, resolution: '1080p', costUsd: 0.5976 });
     expect(falTakeRequestFields(take)).toEqual({ falResolution: '1080p' });
     // The same shot as lip-sync pads to the route's 5s minimum.
     expect(falSceneTake({ scene: { ...drummer, performanceStyle: null }, songDurationSec: 240 }).seconds).toBeCloseTo(5.05, 6);
@@ -105,10 +104,10 @@ describe('music-driven performance takes', () => {
   it('follow the project pin (model and resolution) and fall back to the default for an uncurated pin', () => {
     const pinned = falSceneTake({ scene: drummer, videoSettings: { falMusicModelId: 'fal-ai/bytedance/omnihuman/v1.5', falMusicResolution: '720p' }, songDurationSec: 240 });
     expect(pinned).toMatchObject({ modelId: 'fal-ai/bytedance/omnihuman/v1.5', resolution: '720p', costUsd: 0.5976 });
-    expect(falSceneTake({ scene: drummer, videoSettings: { falMusicModelId: 'example/newer-model' }, songDurationSec: 240 }).modelId)
-      .toBe('fal-ai/ltx-2.3-22b/audio-to-video');
-    expect(shotSplitLimit(drummer, 'fal')).toBeCloseTo(20 - PERFORMANCE_WINDOW_MARGIN_SEC, 6);
-    expect(shotSplitLimit(drummer, 'fal', { falMusicModelId: 'fal-ai/bytedance/omnihuman/v1.5' })).toBeCloseTo(30 - PERFORMANCE_WINDOW_MARGIN_SEC, 6);
+    // A pin this install no longer curates (fal LTX-2.3, removed) falls back to the default.
+    expect(falSceneTake({ scene: drummer, videoSettings: { falMusicModelId: 'fal-ai/ltx-2.3-22b/audio-to-video' }, songDurationSec: 240 }).modelId)
+      .toBe('fal-ai/bytedance/omnihuman/v1.5');
+    expect(shotSplitLimit(drummer, 'fal')).toBeCloseTo(30 - PERFORMANCE_WINDOW_MARGIN_SEC, 6);
   });
 });
 
