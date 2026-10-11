@@ -59,9 +59,11 @@ const PRODUCTION_LIMIT_BOUNDS = Object.freeze({
 const PRODUCTION_DIRECTIVE_MAX = 4000;
 const PRODUCTION_POOL_MAX = 12;
 const PRODUCTION_STATUSES = Object.freeze([
-  'running', 'stopped', 'limit-reached', 'blocked', 'needs-replan', 'completed', 'needs-human', 'failed', 'canceled',
+  'running', 'stopped', 'limit-reached', 'blocked', 'needs-replan', 'awaiting-video', 'completed', 'needs-human', 'failed', 'canceled',
 ]);
-const RESUMABLE = new Set(['running', 'stopped', 'limit-reached', 'blocked', 'needs-replan']);
+// `awaiting-video`: a stills-only run (`stopBefore: 'clips'`) made every frame; Resume goes on to the clips.
+const RESUMABLE = new Set(['running', 'stopped', 'limit-reached', 'blocked', 'needs-replan', 'awaiting-video']);
+const STOP_BEFORE = new Set(['clips']);
 /** Statuses Resume accepts. */
 export const PRODUCTION_RESUMABLE_STATUSES = RESUMABLE;
 const LIVE_STEP = new Set(['reserved', 'queued']);
@@ -204,7 +206,7 @@ export const poolHasRoute = (run, route) => !!route && run.pool.some((r) => rout
  * when unknown); a dollar cap requires every route to have a known price.
  */
 export function startProductionOnProject(project, {
-  directive = '', pool, limits, reviewer = {}, authoring = null, processId, pricing = {},
+  directive = '', pool, limits, reviewer = {}, authoring = null, processId, pricing = {}, stopBefore = null,
 }, now = new Date().toISOString()) {
   const live = activeProductionRun(project);
   if (live) throw productionError(409, 'PRODUCTION_IN_PROGRESS', 'Finish, cancel or resume the existing production run first', { runId: live.id });
@@ -246,7 +248,9 @@ export function startProductionOnProject(project, {
     usage: { generations: 0, spentUsd: 0 },
     planned: false,
     reviewRunId: null,
-    pilot: { scenes: null },
+    // A stills-only run makes no clip, so it has no clip pilot to prove first.
+    stopBefore: STOP_BEFORE.has(stopBefore) ? stopBefore : null,
+    pilot: STOP_BEFORE.has(stopBefore) ? null : { scenes: null },
     steps: [],
     processId: processId || null,
     stopReason: null,
@@ -451,7 +455,7 @@ function blockingPilotReview(project, run, pendingPilots) {
  */
 function nextOpenGeneration(project, run, jobs, { pendingPilots, targets }) {
   let waiting = false;
-  for (const stepKind of ['frame', 'clip']) {
+  for (const stepKind of run.stopBefore === 'clips' ? ['frame'] : ['frame', 'clip']) {
     for (const scene of targets[stepKind]) {
       if (pendingPilots.length && !pendingPilots.some((pilot) => pilot.sceneId === scene.sceneId)) continue;
       if (scene[SLOT[stepKind]]) continue;
@@ -520,6 +524,7 @@ export function nextProductionStep(project, run, { jobs = [], processId = null }
   const generation = nextOpenGeneration(project, run, jobs, { pendingPilots, targets });
   if (generation?.waiting) return { type: 'wait', on: 'generation' };
   if (generation) return generation;
+  if (run.stopBefore === 'clips') return { type: 'halt', status: 'awaiting-video', reason: 'Every shot has its still. Resume to make the clips.' };
   if (pendingPilots.length) {
     const pilot = pendingPilots[0];
     const scene = scenes.find((s) => s.sceneId === pilot.sceneId);
@@ -795,7 +800,7 @@ export function stopProductionOnProject(project, runId, now = new Date().toISOSt
  * budget. A run halted on a changed creative setup continues only when the
  * director accepts the new basis (`acceptBasis`), which re-snapshots it.
  */
-export function resumeProductionOnProject(project, runId, { limits, acceptBasis = false, processId, pool = null, pricing = {} } = {}, now = new Date().toISOString()) {
+export function resumeProductionOnProject(project, runId, { limits, acceptBasis = false, processId, pool = null, pricing = {}, stopBefore } = {}, now = new Date().toISOString()) {
   return mutateRun(project, runId, (run) => {
     if (!RESUMABLE.has(run.status)) throw productionError(409, 'PRODUCTION_CLOSED', `This production run is ${run.status} — start a new run instead`);
     if (normalizeMusicVideoProductionPolicy(project?.productionPolicy).strategy === 'code-first' && !run.authoring) throw productionError(409, 'PRODUCTION_AUTHORING_REQUIRED', 'Cancel this legacy run and start a code-first run with an authoring model');
@@ -816,6 +821,9 @@ export function resumeProductionOnProject(project, runId, { limits, acceptBasis 
     // A replacement pool (a swapped model, #10473) is checked like Start; the
     // caller has already proven every route eligible on this install.
     const nextPool = pool ? normalizeProductionPool(pool, { allowEmpty: !!run.authoring }) : null;
+    // Resuming a finished stills-only run goes on to the clips unless the caller keeps the stop.
+    const nextStop = stopBefore !== undefined ? (STOP_BEFORE.has(stopBefore) ? stopBefore : null)
+      : run.status === 'awaiting-video' ? null : run.stopBefore || null;
     return {
       status: 'running',
       limits: nextLimits,
@@ -823,7 +831,9 @@ export function resumeProductionOnProject(project, runId, { limits, acceptBasis 
       processId,
       resumedAt: now,
       retryAcknowledged: run.steps.filter((step) => step.status === 'failed').map((step) => step.key),
-      ...(!run.pilot && !run.reviewRunId ? { pilot: { scenes: null } } : {}),
+      stopBefore: nextStop,
+      // A stills-only run makes no clip, so it drops any pending clip pilot.
+      ...(nextStop ? { pilot: null } : !run.pilot && !run.reviewRunId ? { pilot: { scenes: null } } : {}),
       stopReason: null,
       error: null,
       ...(run.finalRender?.status === 'failed' || (run.finalRender && run.processId !== processId) ? { finalRender: null } : {}),

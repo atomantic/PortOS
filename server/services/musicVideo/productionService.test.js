@@ -255,6 +255,44 @@ describe('music video production run (#9066)', () => {
     expect(theRun().status).toBe('completed');
   });
 
+  // Uniquely catches a stills-only run spending on a clip (pilot or bulk) or stopping before every still exists.
+  it('makes every still and stops before any clip when told to, then goes on to the clips on Resume', async () => {
+    seedProject();
+    await start({ pool: POOL.filter((route) => route.kind === 'image'), stopBefore: 'clips' });
+    expect(dispatch.mock.calls.map(([a]) => [a.stepKind, a.scene.sceneId])).toEqual([['frame', 'mvs-a'], ['frame', 'mvs-b']]);
+    completeJob('job-1');
+    completeJob('job-2');
+    await settle();
+    expect(theRun()).toMatchObject({ status: 'awaiting-video', stopBefore: 'clips', pilot: null, stopReason: expect.stringContaining('still') });
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(startAutoReview).not.toHaveBeenCalled();
+
+    // A resume that keeps the stop makes only missing stills.
+    await service.resumeProduction('mv-example', theRun().id, { stopBefore: 'clips' });
+    await settle();
+    expect(theRun().status).toBe('awaiting-video');
+    expect(dispatch).toHaveBeenCalledTimes(2);
+
+    await service.resumeProduction('mv-example', theRun().id, { pool: POOL });
+    await settle();
+    expect(theRun()).toMatchObject({ status: 'running', stopBefore: null });
+    expect(dispatch.mock.calls.slice(2).every(([a]) => a.stepKind === 'clip')).toBe(true);
+    expect(dispatch.mock.calls.length).toBeGreaterThan(2);
+  });
+
+  // Uniquely catches a resumed run keeping its pending clip pilot, which would filter stills to the pilot scenes and park early.
+  it('drops a pending clip pilot when a normal run is resumed as stills-only', async () => {
+    seedProject();
+    await start();
+    await service.stopProduction('mv-example', theRun().id);
+    expect(theRun().pilot).not.toBeNull();
+    await service.resumeProduction('mv-example', theRun().id, { stopBefore: 'clips' });
+    await settle();
+    expect(theRun()).toMatchObject({ stopBefore: 'clips', pilot: null });
+    expect(dispatch.mock.calls.every(([a]) => a.stepKind === 'frame')).toBe(true);
+    expect(new Set(dispatch.mock.calls.map(([a]) => a.scene.sceneId))).toEqual(new Set(['mvs-a', 'mvs-b']));
+  });
+
   it('in a composition document, skips frames for card scenes and clips for still/card scenes', async () => {
     seedProject({
       composition: { mode: 'document' },

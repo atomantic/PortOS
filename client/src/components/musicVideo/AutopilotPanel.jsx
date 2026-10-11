@@ -21,11 +21,11 @@ const POOL_TOOL_IDS = new Set(POOL_TOOLS.map((t) => t.id));
 
 const STATUS_LABELS = {
   running: 'Running', stopped: 'Paused', 'limit-reached': 'Stopped at a limit', blocked: 'Blocked',
-  'needs-replan': 'Setup changed', completed: 'Finished', 'needs-human': 'Needs you', failed: 'Failed', canceled: 'Cancelled',
+  'needs-replan': 'Setup changed', 'awaiting-video': 'Stills done', completed: 'Finished', 'needs-human': 'Needs you', failed: 'Failed', canceled: 'Cancelled',
 };
 const STATUS_TONES = {
   running: 'text-port-accent', stopped: 'text-port-warning', 'limit-reached': 'text-port-warning', blocked: 'text-port-warning',
-  'needs-replan': 'text-port-warning', completed: 'text-port-success', 'needs-human': 'text-port-warning',
+  'needs-replan': 'text-port-warning', 'awaiting-video': 'text-port-warning', completed: 'text-port-success', 'needs-human': 'text-port-warning',
   failed: 'text-port-error', canceled: 'text-port-text-muted',
 };
 const STEP_TONES = { completed: 'text-port-success', failed: 'text-port-error', canceled: 'text-port-text-muted', refused: 'text-port-text-muted' };

@@ -123,6 +123,16 @@ describe('AutonomousRunPanel', () => {
     await waitFor(() => expect(api.resumeAutonomousMusicVideo).toHaveBeenCalledWith('mv-1', { lyrics: '[verse]\nedited' }, { silent: true }));
   });
 
+  // Uniquely catches approving the stills of a run with no video tool, which leaves the clips with no route.
+  it('offers a video tool when approving the stills of a run that has none', async () => {
+    api.resumeAutonomousMusicVideo.mockResolvedValue({ project: { id: 'mv-1', autonomousRun: baseRun() }, run: baseRun() });
+    render(<Harness initial={baseRun({ status: 'awaiting-approval', awaiting: 'stills', stage: 'produce', brief: { ...baseRun().brief, tools: ['image:codex'] } })} />);
+    expect(screen.getByText(/paused after/i).textContent).toMatch(/Stills/);
+    fireEvent.click(screen.getByLabelText(/fal\.ai video/i));
+    fireEvent.click(screen.getByRole('button', { name: /approve & continue/i }));
+    await waitFor(() => expect(api.resumeAutonomousMusicVideo).toHaveBeenCalledWith('mv-1', { addTools: ['video:fal'] }, { silent: true }));
+  });
+
   it('offers the Suno style line to edit at the style checkpoint (the last stop before Suno is used)', async () => {
     render(<Harness initial={baseRun({ status: 'awaiting-approval', awaiting: 'style' })} />);
     expect(screen.getByLabelText(/suno style \(edit before continuing\)/i).value).toBe('synthwave');

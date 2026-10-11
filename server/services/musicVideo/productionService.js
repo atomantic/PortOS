@@ -637,7 +637,7 @@ async function cancelOwnedJobs(runId, { includeRunning = false, jobIds = null } 
  * Start a run (explicit director request). Every pool route must be eligible
  * now. Returns `{ project, run }`; the run advances in the background.
  */
-export async function startProduction(projectId, { directive, pool: requested, limits, reviewer, authoring: requestedAuthoring }) {
+export async function startProduction(projectId, { directive, pool: requested, limits, reviewer, authoring: requestedAuthoring, stopBefore }) {
   const project = await requireProject(projectId);
   if (project.videoSettings?.renderPool && project.videoSettings.renderPool.mode !== 'local') {
     throw new ServerError('Production runs require This Mac until immutable run pools support peer placement', { status: 409, code: 'MUSIC_VIDEO_RENDER_POOL_UNAVAILABLE' });
@@ -652,7 +652,7 @@ export async function startProduction(projectId, { directive, pool: requested, l
   // The autopilot cuts on the song (#9290) unless the director chose how it
   // cuts — set before the run captures its creative-setup basis.
   const out = await mutateProjectRecord(projectId, (current) => startProductionOnProject(withAutopilotCutting(current), {
-    directive, pool, limits, reviewer, authoring, processId: PROCESS_ID, pricing: poolPricing(pool, current),
+    directive, pool, limits, reviewer, authoring, processId: PROCESS_ID, pricing: poolPricing(pool, current), stopBefore,
   }));
   console.log(`🎬 Music Video production ${short(out.run.id)} started: ${out.run.pool.length} allowed route(s), ≤${out.run.limits.maxGenerations} generations, ≤${out.run.limits.maxReviewAttempts} reviews`);
   advanceInBackground(projectId, out.run.id);
@@ -666,7 +666,7 @@ export async function startProduction(projectId, { directive, pool: requested, l
  * continue. A replacement pool is validated exactly like Start's.
  * Returns `{ project, run }`.
  */
-export async function resumeProduction(projectId, runId, { limits, acceptBasis = false, pool: requested } = {}) {
+export async function resumeProduction(projectId, runId, { limits, acceptBasis = false, pool: requested, stopBefore } = {}) {
   const before = await requireProject(projectId);
   const prior = findProductionRun(before, runId);
   const priorReviewId = prior.reviewRunId;
@@ -675,7 +675,7 @@ export async function resumeProduction(projectId, runId, { limits, acceptBasis =
   const jobs = await liveJobs();
   await mutateProjectRecord(projectId, (current) => reconcileProductionSteps(current, runId, jobs));
   const out = await mutateProjectRecord(projectId, (current) => resumeProductionOnProject(current, runId, {
-    limits, acceptBasis, processId: PROCESS_ID, ...(pool ? { pool, pricing: poolPricing(pool, current) } : {}),
+    limits, acceptBasis, processId: PROCESS_ID, stopBefore, ...(pool ? { pool, pricing: poolPricing(pool, current) } : {}),
   }));
   if (pool) console.log(`🎬 Music Video production ${short(runId)} resumed with a replaced pool: ${pool.length} allowed route(s)`);
   if (priorReviewId && !out.run.reviewRunId) {

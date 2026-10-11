@@ -16,6 +16,7 @@ const OUTCOME_TOASTS = {
   'limit-reached': (run) => toast.info(`Production stopped at its limit: ${run.stopReason || ''}`),
   blocked: (run) => toast.info(`Production is blocked: ${run.stopReason || 'no allowed route can continue'}`),
   'needs-replan': () => toast.info('The creative setup changed — resume to continue against the new setup'),
+  'awaiting-video': () => toast.info('Every shot has its still. Resume production to make the clips'),
   failed: (run) => toast.error(`Production failed: ${run.stopReason || run.error || 'unknown error'}`),
 };
 

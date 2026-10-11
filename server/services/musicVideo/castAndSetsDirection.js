@@ -68,14 +68,16 @@ const MOOD_ITEM_TEXT = 280;
 // ---- medium ------------------------------------------------------------------
 
 /**
- * The medium the check-in is directed in. A code-first production policy, or a
- * brief that selected code tools and no video tool, is procedural; everything
- * else (an image-only brief included) stays photographic. Tools and policy are
- * read together because either can be saved without the other.
+ * The medium the check-in is directed in. A code-first production policy with
+ * no generated footage, or a brief that selected code tools and no video tool,
+ * is procedural; everything else (an image-only brief included) stays
+ * photographic, so footage always has a character sheet to hold identity.
+ * Tools and policy are read together because either can be saved without the other.
  */
 export function castAndSetsMedium(project) {
   if (!musicVideoAllowsMedia(project, 'image')) return 'procedural';
-  if (project?.productionPolicy?.strategy === 'code-first') return 'procedural';
+  const policy = project?.productionPolicy;
+  if (policy?.strategy === 'code-first' && !(policy.maxGeneratedVideoPercent > 0 && musicVideoAllowsMedia(project, 'video'))) return 'procedural';
   const tools = briefTools(project);
   return tools.some((t) => t.startsWith('code:')) && !tools.some((t) => t.startsWith('video:')) ? 'procedural' : 'photographic';
 }

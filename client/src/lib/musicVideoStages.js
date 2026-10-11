@@ -39,7 +39,7 @@ const LEGACY_STAGE_IDS = { compose: 'produce' };
 export const isStageId = (value) => MUSIC_VIDEO_STAGES.some((stage) => stage.id === value);
 
 /** A production run in one of these states can still be resumed (or is live). */
-export const RESUMABLE_RUN_STATUSES = new Set(['running', 'stopped', 'limit-reached', 'blocked', 'needs-replan']);
+export const RESUMABLE_RUN_STATUSES = new Set(['running', 'stopped', 'limit-reached', 'blocked', 'needs-replan', 'awaiting-video']);
 // A stopped run that needs the director's attention rather than a click on Resume.
 const RUN_BLOCKED_STATUSES = new Set(['limit-reached', 'blocked', 'needs-replan', 'needs-human', 'failed']);
 const CAST_WORKING = new Set(['directing', 'imaging', 'assembling']);
@@ -184,7 +184,7 @@ export function listPreviewSources(project, { finalVideoSrc = null, liveFirst = 
 // A stopped run can be resumed as is; the others need the director first.
 const PRODUCTION_RUN_LABELS = {
   running: 'Production running', stopped: 'Production paused', blocked: 'Production blocked',
-  'limit-reached': 'Production at its limit', 'needs-replan': 'Production needs a replan',
+  'limit-reached': 'Production at its limit', 'needs-replan': 'Production needs a replan', 'awaiting-video': 'Production stills done',
 };
 
 /**
@@ -428,7 +428,7 @@ function reviewProductionAction({ art, board, artUnwritten }) {
 function productionRunAction(run) {
   if (run.status === 'running' && !run.interrupted) return { id: 'stop-production', kind: 'run', label: 'Stop production', shortLabel: 'Stop', runId: run.id };
   const replan = run.status === 'needs-replan';
-  return { id: 'resume-production', kind: 'run', runId: run.id, acceptBasis: replan, label: replan ? 'Resume with new setup' : 'Resume production', shortLabel: 'Resume' };
+  return { id: 'resume-production', kind: 'run', runId: run.id, acceptBasis: replan, label: replan ? 'Resume with new setup' : run.status === 'awaiting-video' ? 'Make the clips' : 'Resume production', shortLabel: 'Resume' };
 }
 
 // The header action for an autonomous run that still owns the project, or null once it is finished or cancelled.
