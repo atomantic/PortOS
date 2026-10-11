@@ -23,18 +23,17 @@ import { atomicWrite } from '../../lib/fileUtils.js';
 
 // 2% — 1672x941 (1.7768) is Codex's own 16:9 and must pass untouched against a
 // 1.7778 request; the nearest wrong shape it returns (3:2, 1.5) is ~16% off.
-export const ASPECT_TOLERANCE = 0.02;
+const ASPECT_TOLERANCE = 0.02;
 
 const positive = (n) => Number.isFinite(Number(n)) && Number(n) > 0;
 
 /**
  * The crop box that conforms a `srcW`x`srcH` frame to `targetW:targetH`, or
  * `null` when the frame is already within tolerance (or the input is unusable).
- * Pure — exported for the unit test.
  *
  * @returns {{ width: number, height: number }|null}
  */
-export function aspectCropSize(srcW, srcH, targetW, targetH, tolerance = ASPECT_TOLERANCE) {
+function aspectCropSize(srcW, srcH, targetW, targetH, tolerance = ASPECT_TOLERANCE) {
   if (![srcW, srcH, targetW, targetH].every(positive)) return null;
   const target = targetW / targetH;
   const actual = srcW / srcH;
