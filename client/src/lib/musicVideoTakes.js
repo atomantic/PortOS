@@ -8,7 +8,8 @@
  * `legacy` take rather than hiding it.
  */
 
-export const TAKE_SLOT = Object.freeze({ image: 'referenceImageId', video: 'videoHistoryId' });
+// `endImage` (#11173): the optional style-break end frame a fal clip ends on.
+export const TAKE_SLOT = Object.freeze({ image: 'referenceImageId', video: 'videoHistoryId', endImage: 'endImageId' });
 
 /** The takes of one kind for a scene, with an un-materialized selection appended. */
 export function sceneTakeList(scene, kind) {
@@ -20,11 +21,11 @@ export function sceneTakeList(scene, kind) {
   return takes;
 }
 
-/** Preview/lightbox key for a take (`image:<filename>` / `video:<historyId>`). */
-export const takePreviewKey = (take) => `${take.kind}:${take.assetId}`;
+/** Preview/lightbox key for a take (`image:<filename>` / `video:<historyId>`); an end frame is a gallery image. */
+export const takePreviewKey = (take) => `${take.kind === 'video' ? 'video' : 'image'}:${take.assetId}`;
 
 /** Thumbnail URL for a take: the gallery still, or the clip's generated poster. */
-export const takeThumbUrl = (take) => (take.kind === 'image'
+export const takeThumbUrl = (take) => (take.kind !== 'video'
   ? `/data/images/${encodeURIComponent(take.assetId)}`
   : `/data/video-thumbnails/${encodeURIComponent(take.assetId)}.jpg`);
 
@@ -33,7 +34,7 @@ export const takeClipUrl = (take) => `/data/videos/${encodeURIComponent(take.ass
 
 /** Scenes whose slot still has an undecided candidate (a candidate that is not the selection). */
 export function sceneHasPendingDecision(scene) {
-  return ['image', 'video'].some((kind) => {
+  return Object.keys(TAKE_SLOT).some((kind) => {
     const selected = scene?.[TAKE_SLOT[kind]] || null;
     return sceneTakeList(scene, kind).some((t) => t.takeId && t.status === 'candidate' && t.assetId !== selected);
   });

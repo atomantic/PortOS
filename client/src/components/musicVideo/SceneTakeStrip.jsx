@@ -4,7 +4,7 @@ import { sceneTakeList, takePreviewKey, takeThumbUrl, takeClipUrl, takeProvenanc
 import { plateVerdict } from './PlateComparison.jsx';
 
 const VERDICT_TONE = { pass: 'bg-port-success/20 text-port-success', fail: 'bg-port-error/20 text-port-error', unverified: 'bg-port-warning/20 text-port-warning' };
-const KIND_LABEL = { image: 'Frame takes', video: 'Clip takes' };
+const KIND_LABEL = { image: 'Frame takes', video: 'Clip takes', endImage: 'End frame takes' };
 
 /**
  * Side-by-side review of one scene slot's takes (#8965): every render or
@@ -56,7 +56,7 @@ export default function SceneTakeStrip({
                 onMouseLeave={() => setPlayingId(null)}
                 onFocus={() => setPlayingId(playKey)}
                 onBlur={() => setPlayingId(null)}
-                aria-label={`View ${kind === 'image' ? 'frame' : 'clip'} take full size`}
+                aria-label={`View ${kind === 'video' ? 'clip' : 'frame'} take full size`}
                 className={`relative block w-full rounded overflow-hidden border focus:outline-none focus:ring-2 focus:ring-port-accent ${isSelected ? 'border-port-accent ring-2 ring-port-accent' : 'border-port-border'} ${rejected ? 'opacity-40' : ''}`}
               >
                 <img src={takeThumbUrl(take)} alt="" loading="lazy" className="w-full aspect-video object-cover block bg-black" />

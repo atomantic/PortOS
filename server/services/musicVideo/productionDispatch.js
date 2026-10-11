@@ -31,6 +31,7 @@ import { resolveGalleryImage } from '../../lib/pathSafety.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { approximateMotionCues, falSceneTake, falTakeRequestFields, grokCoverage } from '../../lib/musicVideoShotTiming.js';
 import { sceneFramePrompt, sceneShotPrompt } from './handoff.js';
+import { sceneEndFrameRequestFields } from '../../lib/musicVideoEndFrame.js';
 import { conditioningReferences, falRouteVideoSettings } from './productionPool.js';
 import { musicVideoFrameGenSize } from '../../lib/musicVideoAspect.js';
 
@@ -133,6 +134,8 @@ async function dispatchClip({ project, scene, route, tag }) {
     mode: 'image',
     sourceImageFile: scene.referenceImageId,
     ...(byBackend[route.mode] || {}),
+    // A style-break end frame (#11173), when this fal model takes one.
+    ...sceneEndFrameRequestFields(scene, { backend: route.mode, falModelId: byBackend.fal?.falModelId }),
     musicVideo: tag,
   }, {});
   return { jobId };

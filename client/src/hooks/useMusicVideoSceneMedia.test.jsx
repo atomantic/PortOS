@@ -1,11 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act, cleanup, waitFor } from '@testing-library/react';
 
-const handlers = new Map();
+// Every listener per event, like the real socket: the frame and end-frame
+// lanes both listen on music-video:scene-image (#11173).
+const listeners = new Map();
+const handlers = {
+  get: (event) => (data) => [...(listeners.get(event) || [])].forEach((fn) => fn(data)),
+  clear: () => listeners.clear(),
+};
 vi.mock('../services/socket', () => ({
   default: {
-    on: (event, fn) => { handlers.set(event, fn); },
-    off: (event, fn) => { if (handlers.get(event) === fn) handlers.delete(event); },
+    on: (event, fn) => { listeners.set(event, new Set([...(listeners.get(event) || []), fn])); },
+    off: (event, fn) => { listeners.get(event)?.delete(fn); },
     emit: () => {},
   },
 }));

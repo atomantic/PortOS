@@ -51,8 +51,10 @@ const hook = createMediaJobImageHook({
   // older render is a candidate rather than something to drop.
   describe: ({ projectId, sceneId }) => `${projectId}/${sceneId}`,
   // A deleted project/scene 404s here, so a late completion can't resurrect it.
+  // A render tagged `slot: 'end'` (#11173) is a candidate for the scene's
+  // style-break end frame, never its start frame.
   attach: ({ projectId, sceneId, filename, job }) => appendSceneTakes(projectId, sceneId, [{
-    kind: 'image',
+    kind: job.params?.musicVideo?.slot === 'end' ? 'endImage' : 'image',
     assetId: filename,
     source: 'generated',
     provider: 'portos',
@@ -64,6 +66,7 @@ const hook = createMediaJobImageHook({
       projectId,
       sceneId,
       referenceImageId: scene.referenceImageId ?? null,
+      endImageId: scene.endImageId ?? null,
       takes: scene.takes,
       // A landed frame retires this lane's recorded failure (takes.js).
       lastFailure: scene.lastFailure ?? null,
@@ -73,7 +76,9 @@ const hook = createMediaJobImageHook({
   },
   // A render that FAILED (a cancel is not a failure) is recorded on the scene
   // so the board can say which scene failed and why, including after a reload.
-  onTerminal: (ctx, status, job) => recordSceneLastFailure(ctx, status, job, 'image'),
+  // An end-frame render's failure is only toasted: the scene's failure chip
+  // retries the start frame, which is not what failed.
+  onTerminal: (ctx, status, job) => (job?.params?.musicVideo?.slot === 'end' ? undefined : recordSceneLastFailure(ctx, status, job, 'image')),
 });
 
 export function initMusicVideoSceneImageHook() {

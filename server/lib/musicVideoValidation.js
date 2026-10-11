@@ -283,7 +283,8 @@ export const musicVideoVisualSpecSchema = z.object({
   { message: `at most ${MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES} references can condition frames`, path: ['references'] },
 );
 
-export const MUSIC_VIDEO_TAKE_KINDS = ['image', 'video'];
+// `endImage` (#11173): a candidate for the scene's optional style-break end frame.
+export const MUSIC_VIDEO_TAKE_KINDS = ['image', 'video', 'endImage'];
 export const MUSIC_VIDEO_TAKE_STATUSES = ['candidate', 'rejected'];
 // A take's intended use (#8980). A `motion-reference` take is scaffolding (e.g.
 // generated footage to trace a hand-drawn pass over): it is kept as a candidate
@@ -308,7 +309,7 @@ export const musicVideoTakeInputSchema = z.object({
   inputAssets: z.array(z.object({ role: z.enum(['crop', 'mask']), assetId: galleryImageName, revision: z.number().int().min(1).max(1000000) }).strict()).max(4).optional(),
   use: z.enum(MUSIC_VIDEO_TAKE_USES).optional(),
 }).strict().superRefine((take, ctx) => {
-  const check = take.kind === 'image' ? galleryImageName : videoHistoryIdSchema;
+  const check = take.kind === 'video' ? videoHistoryIdSchema : galleryImageName;
   const parsed = check.safeParse(take.assetId);
   if (!parsed.success) ctx.addIssue({ code: 'custom', path: ['assetId'], message: parsed.error.issues[0].message });
 });
@@ -1434,6 +1435,10 @@ export const musicVideoSceneUpdateSchema = z.object({
   performanceStyle: z.enum(MUSIC_VIDEO_PERFORMANCE_STYLES).nullable().optional(),
   referenceImageId: z.string().max(256).nullable().optional(),
   videoHistoryId: z.string().max(64).nullable().optional(),
+  // #11173: an optional style-break end frame (the selected `endImage` take)
+  // and the prompt that renders it from the start frame.
+  endImageId: z.string().max(256).nullable().optional(),
+  endFramePrompt: z.string().max(8000).nullable().optional(),
   // #10154: the last generation failure the render hooks persisted. The board
   // may send `null` to dismiss it; a full object is accepted so a client that
   // round-trips the scene doesn't 400.

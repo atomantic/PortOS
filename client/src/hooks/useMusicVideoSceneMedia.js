@@ -2,6 +2,7 @@ import { shotActionContractProblem, shotActionPrompt } from '../../../server/lib
 import { shotCameraPrompt } from '../../../server/lib/cameraMovements.js';
 import { isOutsideMusicVideoReference, musicVideoConditioningReferences, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../server/lib/musicVideoConditioning.js';
 import { musicVideoCreativeContext, musicVideoDirectorLook } from '../../../server/lib/musicVideoCreativeContext.js';
+import { sceneEndFrameRequestFields } from '../../../server/lib/musicVideoEndFrame.js';
 import { useEffect, useRef } from 'react';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';
@@ -111,9 +112,22 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     startedEvent: 'image-gen:started',
     progressEvent: 'image-gen:progress',
     onSettled: frameBatch.settled,
-    apply: ({ projectId, sceneId, referenceImageId, takes, lastFailure }) =>
-      applyScenePatch?.(projectId, sceneId, { referenceImageId, ...(Array.isArray(takes) ? { takes } : {}), ...(lastFailure !== undefined ? { lastFailure } : {}) }),
+    // The same event lands start and end frames (#11173), so it folds in both slots.
+    apply: ({ projectId, sceneId, referenceImageId, endImageId, takes, lastFailure }) =>
+      applyScenePatch?.(projectId, sceneId, { referenceImageId, ...(endImageId !== undefined ? { endImageId } : {}), ...(Array.isArray(takes) ? { takes } : {}), ...(lastFailure !== undefined ? { lastFailure } : {}) }),
     failMessage: 'Frame render failed',
+    sceneLabel,
+  });
+  // Style-break end frames (#11173): their own spinners, so a scene can render
+  // its start and end frame at once. The frame lane above applies the landed
+  // still (both ride music-video:scene-image), so this lane only tracks jobs.
+  const endFrameLane = useSceneRenderLifecycle({
+    attachEvent: 'music-video:scene-image',
+    completedEvent: 'image-gen:completed',
+    failedEvent: 'image-gen:failed',
+    canceledEvent: 'image-gen:canceled',
+    apply: () => {},
+    failMessage: 'End frame render failed',
     sceneLabel,
   });
   const videoLane = useSceneRenderLifecycle({
@@ -146,6 +160,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   const projectId = project?.id;
   const { restoreJobs: restoreFrameJobs } = frameLane;
   const { restoreJobs: restoreVideoJobs } = videoLane;
+  const { restoreJobs: restoreEndFrameJobs } = endFrameLane;
   useEffect(() => {
     if (!projectId) return undefined;
     let live = true;
@@ -154,10 +169,11 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         if (!live || !Array.isArray(jobs)) return;
         restoreFrameJobs(jobs.filter((j) => j.lane === 'image'));
         restoreVideoJobs(jobs.filter((j) => j.lane === 'video'));
+        restoreEndFrameJobs(jobs.filter((j) => j.lane === 'endImage'));
       })
       .catch(() => {}); // best-effort: a failed lookup just means no restored spinners
     return () => { live = false; };
-  }, [projectId, restoreFrameJobs, restoreVideoJobs]);
+  }, [projectId, restoreFrameJobs, restoreVideoJobs, restoreEndFrameJobs]);
   const genScenes = frameLane.genScenes;
   const genVideoScenes = videoLane.genScenes;
   const failedScenes = { frame: frameLane.failedScenes, video: videoLane.failedScenes };
@@ -254,6 +270,52 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       });
   };
 
+  /**
+   * Render a style-break end frame (#11173): the scene's end-frame prompt
+   * (e.g. "the same frame as a pencil-sketch rotoscope") conditioned on its
+   * selected start frame, so the composition carries over and only the look
+   * changes. It lands as an `endImage` take (musicVideoSceneImageHook files the
+   * `slot: 'end'` tag); a fal clip on a model that takes an end frame then ends
+   * on it. Resolves `{ ok }` like generateFrame.
+   */
+  const generateEndFrame = (scene) => {
+    if (!scene.referenceImageId) { toast.error('Generate a reference frame first'); return Promise.resolve({ ok: false }); }
+    const endPrompt = scene.endFramePrompt?.trim();
+    if (!endPrompt) { toast.error('Describe the end frame first'); return Promise.resolve({ ok: false }); }
+    const projectId = project.id;
+    endFrameLane.startScene(scene.sceneId);
+    return generateImage({
+      prompt: `${endPrompt}. Keep the reference image's composition, subject, pose and framing; change only the visual style.`,
+      ...musicVideoFrameGenSize(project),
+      referenceImageFiles: [scene.referenceImageId],
+      musicVideo: { projectId, sceneId: scene.sceneId, slot: 'end' },
+    }, { silent: true })
+      .then((res) => {
+        if (res?.status === 'queued' || res?.status === 'running') {
+          const jobId = res?.jobId || res?.generationId;
+          if (!jobId) { endFrameLane.clearScene(scene.sceneId); return { ok: false }; }
+          endFrameLane.trackJob(jobId, scene.sceneId);
+          return { ok: true, jobId };
+        }
+        if (res?.filename) {
+          addMusicVideoSceneTake(projectId, scene.sceneId, { kind: 'endImage', assetId: res.filename, source: 'generated' }, { silent: true })
+            .then(({ scene: updated }) => applyScenePatch?.(projectId, scene.sceneId, {
+              endImageId: updated.endImageId ?? null, takes: updated.takes,
+            }))
+            .catch((err) => toast.error(err?.message || 'Failed to attach end frame'));
+        }
+        endFrameLane.clearScene(scene.sceneId);
+        return { ok: true };
+      })
+      .catch((err) => {
+        toast.error(REFERENCE_CAPABILITY_CODES.has(err?.code)
+          ? `The current image backend can't render from the start frame: ${err.message}. Switch the image backend to one that takes a reference image.`
+          : err?.message || 'End frame generation failed');
+        endFrameLane.clearScene(scene.sceneId);
+        return { ok: false };
+      });
+  };
+
   // Correlate a kicked-off video job with its scene, or clear the spinner when
   // the response carried no id to track. trackJob reconciles a terminal event
   // that raced ahead of this .then. Resolves `{ ok }` — see generateFrame's
@@ -307,6 +369,10 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     const prompt = audioReactiveSelected
       ? `${basePrompt}. ${AUDIO_REACTIVE_PERFORMANCE_GUARD}`
       : [basePrompt, motionCues].filter(Boolean).join('. ');
+    const mode = audioReactiveSelected || settings.generationMode === 'suppliedAudio' ? 'a2v' : 'image';
+    const falFields = settings.backend === 'fal'
+      ? falTakeRequestFields(falSceneTake({ scene, videoSettings: settings, songDurationSec: project?.audioAnalysis?.durationSec ?? null }))
+      : null;
     videoLane.startScene(scene.sceneId);
     return generateVideo({
       prompt,
@@ -321,16 +387,18 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         // pinned length) and its resolution; a performance clip's length
         // follows its song slice (server-side), so it sends only the lip-sync
         // resolution.
-        : settings.backend === 'fal'
-          ? falTakeRequestFields(falSceneTake({ scene, videoSettings: settings, songDurationSec: project?.audioAnalysis?.durationSec ?? null }))
+        : falFields
+          ? falFields
           : settings.backend === 'local'
             ? { modelId: settings.modelId || undefined, disableAudio: true }
             // A named model is local-only machinery at the server boundary and
             // would force the resolver off a Grok install default. Keep the
             // shared pin saved, but omit it until this peer chooses Local.
             : { grokDuration: settings.grokDuration, disableAudio: true }),
-      mode: audioReactiveSelected || settings.generationMode === 'suppliedAudio' ? 'a2v' : 'image',
+      mode,
       sourceImageFile: scene.referenceImageId,
+      // A style-break end frame (#11173), when this fal model takes one.
+      ...sceneEndFrameRequestFields(scene, { backend: settings.backend, falModelId: falFields?.falModelId, mode }),
       ...(audioReactiveSelected ? {
         audioStartSec: scene.startSec || 0,
         loraFilenames: [detectedAudioReactiveLora.filename],
@@ -430,6 +498,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     genScenes,
     genVideoScenes,
     failedScenes,
+    genEndFrameScenes: endFrameLane.genScenes,
     sceneProgress: frameLane.sceneProgress,
     videoSceneProgress: videoLane.sceneProgress,
     frameBatch,
@@ -438,6 +507,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     buildFramePrompt,
     buildShotPrompt,
     generateFrame,
+    generateEndFrame,
     generateSceneVideo,
     continueSceneVideo,
     planMissingFrames,

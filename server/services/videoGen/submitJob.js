@@ -290,7 +290,9 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
         }
         const { basename } = await import('path');
         if (scene) {
-          params.musicVideoDependencies = captureTakeDependencies(scene, prepared.sourceImagePath ? basename(prepared.sourceImagePath) : null);
+          // A style-break end frame (#11173) is a dependency too, so changing it stales the clip.
+          const endImageId = body.lastImageFile && body.lastImageFile === scene.endImageId ? scene.endImageId : null;
+          params.musicVideoDependencies = captureTakeDependencies(scene, prepared.sourceImagePath ? basename(prepared.sourceImagePath) : null, endImageId);
           if (prepared.audio) params.musicVideoDependencies.references.push(...prepared.audio.audioDependencies.references);
         }
         // #10157: a board-started (manual or auto-review) fal clip records the

@@ -27,7 +27,8 @@ import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
 
-export const TAKE_SLOT = Object.freeze({ image: 'referenceImageId', video: 'videoHistoryId' });
+// `endImage` (#11173): an optional style-break end frame a fal clip ends on.
+export const TAKE_SLOT = Object.freeze({ image: 'referenceImageId', video: 'videoHistoryId', endImage: 'endImageId' });
 
 // Per-scene cap. Takes are small pointer records, but an unattended "regenerate
 // until it looks right" loop must not grow one project row without bound. When
