@@ -748,8 +748,8 @@ export function IntakeForm({
       </div>
       </div>
 
-      <div className="shrink-0 flex items-center justify-between gap-3 border-t border-port-border bg-port-card px-4 py-3">
-        <p className="min-w-0 text-xs text-port-text-muted break-words">
+      <div className="shrink-0 flex flex-wrap items-center justify-between gap-3 border-t border-port-border bg-port-card px-4 py-3">
+        <p className="min-w-0 flex-1 basis-32 text-xs text-port-text-muted break-words">
           {llmProvider
             ? <>{providers.find((provider) => provider.id === llmProvider)?.name || llmProvider} · {llmModel || 'Default model'}</>
             : 'AI: configured stage providers'}
