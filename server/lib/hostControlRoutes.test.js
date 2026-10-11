@@ -879,6 +879,27 @@ describe('Calendar MCP execution policy (#11051)', () => {
   });
 });
 
+describe('Local music generation policy (#11077)', () => {
+  const protectedRoutes = [
+    'POST /api/music/generate',
+  ];
+
+  it('gates each route and maps every entry to a mounted route', () => {
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => method + ' ' + path));
+    for (const route of protectedRoutes) {
+      const [method, path] = route.split(' ');
+      expect(mounted.has(route), route).toBe(true);
+      expect(hostControlRouteFor(method, path), route).toBe(route);
+    }
+  });
+
+  it('keeps reads open', () => {
+    for (const [method, path] of [
+      ['GET', '/api/music/models/:engine'],
+    ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
+  });
+});
+
 describe('Importer, Brain and analytics AI policy (#11036)', () => {
   const protectedRoutes = [
     'POST /api/importer/classify',
