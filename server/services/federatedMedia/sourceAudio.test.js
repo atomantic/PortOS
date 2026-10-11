@@ -2,6 +2,7 @@ vi.mock('../../lib/maintenanceAdmission.js', () => ({ maintenance: { run: (_kind
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { PATHS, sha256Text } from '../../lib/fileUtils.js';
 import { federatedMediaVideoJobSubmissionSchema } from '../../lib/validation.js';
@@ -12,6 +13,8 @@ import { applyRemoteInputAssets } from './inputAssets.js';
 const mocks = vi.hoisted(() => ({ master: '', run: vi.fn() }));
 vi.mock('../musicVideo/render.js', () => ({ resolveMasterAudioPath: async () => mocks.master }));
 vi.mock('../../lib/ffmpeg.js', () => ({ findFfmpeg: async () => 'fixture-ffmpeg', runFfmpegProcess: mocks.run }));
+
+const hasFfmpeg = (() => { try { execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' }); return true; } catch { return false; } })();
 
 function wav(samples = 48000) {
   const bytes = Buffer.alloc(44 + samples * 4);
@@ -70,7 +73,7 @@ describe('supplied-audio transport boundary', () => {
 
   it('cuts the requested sample window and refuses a short decode before enqueue', async () => {
     const audio = await prepareSourceAudioWindow({ project: {}, scene: { startSec: 2 }, numFrames: 25, fps: 24 });
-    expect(mocks.run.mock.calls[0][0].args).toContain('aresample=48000,atrim=start_sample=96000:end_sample=144000,asetpts=PTS-STARTPTS');
+    expect(mocks.run.mock.calls[0][0].args).toContain('aresample=48000,atrim=start_sample=96000:end_sample=144000,asetpts=PTS-STARTPTS,apad=whole_len=48000');
     expect(audio.audioConditioning).toEqual({ ...provenance(await readFile(audio.audioFilePath)), sourceSha256: sha256Text(wav()) });
     // The recording fixture hashes to the same bytes as the one-second slice.
     expect(audio.audioConditioning.sourceSha256).toBe(sha256Text(wav()));
@@ -98,5 +101,22 @@ describe('supplied-audio transport boundary', () => {
     mocks.master = join(root, 'another-take.wav');
     await writeFile(mocks.master, wav(96000));
     await expect(assertCurrentSourceAudioWindow(project, audio.audioConditioning)).rejects.toMatchObject({ code: 'MUSIC_VIDEO_AUDIO_SOURCE_CHANGED' });
+  });
+
+  it.skipIf(!hasFfmpeg)('pads a window that runs past the end of the recording to its exact length', async () => {
+    // A tone of 1.5 s, sliced from 1 s for a 25-frame (1 s) window: the last
+    // 0.5 s lies past the recording, as on a song's final shot.
+    const tone = wav(72000);
+    for (let i = 0; i < 72000; i += 1) { tone.writeInt16LE(8000, 44 + i * 4); tone.writeInt16LE(8000, 46 + i * 4); }
+    await writeFile(mocks.master, tone);
+    const { runFfmpegProcess } = await vi.importActual('../../lib/ffmpeg.js');
+    mocks.run.mockImplementation((opts) => runFfmpegProcess({ ...opts, bin: 'ffmpeg' }));
+    const audio = await prepareSourceAudioWindow({ project: {}, scene: { startSec: 1, endSec: 2 }, numFrames: 25, fps: 24 });
+    const clip = await readFile(audio.audioFilePath);
+    expect(audio.audioConditioning).toMatchObject({ sampleCount: 48000, startSample: 48000, endSample: 96000 });
+    // ffmpeg may write metadata chunks first, so find the PCM after 'data'.
+    const data = clip.indexOf('data') + 8;
+    expect(clip.readInt16LE(data)).toBe(8000);
+    expect(clip.readInt16LE(data + 47999 * 4)).toBe(0);
   });
 });
