@@ -48,6 +48,55 @@ describe('performance speaker save boundary', () => {
   });
 });
 
+describe('failed video retry behind the speaker save gate (#11040)', () => {
+  function Harness({ onSave, onGenerateVideo, onGenerateFrame = vi.fn(), lastFailure }) {
+    const [scene, setScene] = useState({ sceneId: 's1', shotMode: 'performance', startSec: 0, endSec: 5, referenceImageId: 'frame.png', takes: [], lastFailure });
+    return <SceneCard scene={scene} index={0} lipSyncBackend="fal" songDurationSec={30}
+      onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave}
+      onGenerateVideo={onGenerateVideo} onGenerateFrame={onGenerateFrame} />;
+  }
+  const videoFailure = { lane: 'video', error: 'Example failure', at: '2026-10-05T00:00:00.000Z' };
+
+  it('refuses the video Retry while the speaker edit is dirty, saving, or failed to save, then recovers', async () => {
+    let settle;
+    const onSave = vi.fn(() => new Promise((resolve) => { settle = resolve; }));
+    const onGenerateVideo = vi.fn();
+    render(<Harness onSave={onSave} onGenerateVideo={onGenerateVideo} lastFailure={videoFailure} />);
+    const input = screen.getByLabelText('Speaker / singer');
+    const retry = screen.getByRole('button', { name: 'Retry' });
+    const generate = screen.getByRole('button', { name: 'Generate video' });
+    expect(retry.disabled).toBe(false);
+    fireEvent.change(input, { target: { value: 'Example Singer' } });
+    expect([generate.disabled, retry.disabled]).toEqual([true, true]);
+    fireEvent.click(retry);
+    fireEvent.blur(input);
+    expect([generate.disabled, retry.disabled]).toEqual([true, true]);
+    fireEvent.click(retry);
+    settle(false);
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect([generate.disabled, retry.disabled]).toEqual([true, true]);
+    fireEvent.click(retry);
+    expect(retry.title).toBe(generate.title);
+    expect(onGenerateVideo).not.toHaveBeenCalled();
+    fireEvent.blur(input);
+    settle(true);
+    await waitFor(() => expect(retry.disabled).toBe(false));
+    fireEvent.click(retry);
+    expect(onGenerateVideo).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the frame Retry available while the speaker edit is unsaved', () => {
+    const onGenerateFrame = vi.fn();
+    const onGenerateVideo = vi.fn();
+    render(<Harness onSave={vi.fn()} onGenerateVideo={onGenerateVideo} onGenerateFrame={onGenerateFrame}
+      lastFailure={{ ...videoFailure, lane: 'image' }} />);
+    fireEvent.change(screen.getByLabelText('Speaker / singer'), { target: { value: 'Example Singer' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onGenerateFrame).toHaveBeenCalledTimes(1);
+    expect(onGenerateVideo).not.toHaveBeenCalled();
+  });
+});
+
 describe('persisted render failure chip (#10154)', () => {
   const failedScene = (lane) => ({ sceneId: 's1', startSec: 0, endSec: 5, referenceImageId: 'frame.png', takes: [],
     lastFailure: { lane, error: 'CUDA out of memory', at: '2026-10-05T00:00:00.000Z' } });

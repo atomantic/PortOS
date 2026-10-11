@@ -74,6 +74,20 @@ const SCENE_TIME_FIELDS = [['Start', 'startSec'], ['End', 'endSec']];
  */
 const MOVE_DOCUMENT_TITLE = "This video's shot order comes from its composition document";
 
+// #11040: the one owner of whether a video render may start. The server reloads
+// the persisted scene (and its speaker), so an unsaved or failed speaker edit
+// must hold back every video entry point — Generate video and the failure Retry.
+// Returns the refusal reason, or null when the render may go ahead.
+function videoGenerationRefusal({ settingsSaving, speakerUnsaved, referenceImageId, generatingVideo, videoBlockedReason, performanceBlocked }) {
+  if (videoBlockedReason) return videoBlockedReason;
+  if (performanceBlocked) return performanceBlocked;
+  if (speakerUnsaved) return 'Save the speaker / singer edit first';
+  if (settingsSaving) return 'Saving settings…';
+  if (!referenceImageId) return 'Generate a reference frame first';
+  if (generatingVideo) return 'A video is already generating';
+  return null;
+}
+
 export default function SceneCard({
   scene, index, isLast, generatingFrame, generatingVideo, frameProgress = null, videoProgress = null,
   settingsSaving, videoBlockedReason, canContinueShot,
@@ -156,6 +170,11 @@ export default function SceneCard({
   // retry is in flight (or lands a take, which clears it server-side).
   const failure = scene.lastFailure && !(scene.lastFailure.lane === 'video' ? generatingVideo : generatingFrame)
     ? scene.lastFailure : null;
+  const videoRefusal = videoGenerationRefusal({
+    settingsSaving, speakerUnsaved: performance && (speakerDirty || speakerSaving),
+    referenceImageId: scene.referenceImageId, generatingVideo, videoBlockedReason, performanceBlocked,
+  });
+  const generateVideo = () => { if (!videoRefusal) onGenerateVideo?.(scene); };
   return (
     <div className="min-w-0">
     <details
@@ -512,13 +531,12 @@ export default function SceneCard({
               </button>
             </div>
           )}
-          <button onClick={() => onGenerateVideo(scene)}
-            disabled={settingsSaving || (performance && (speakerDirty || speakerSaving)) || !scene.referenceImageId || !!generatingVideo || !!videoBlockedReason || !!performanceBlocked}
+          <button onClick={generateVideo}
+            disabled={!!videoRefusal}
             className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
-            title={videoBlockedReason || performanceBlocked
-              || (!scene.referenceImageId ? 'Generate a reference frame first'
-                : performance ? `Lip-sync this scene's frame to the song via ${capability.label} — ${performanceCost}`
-                  : "Generate this scene's video from its reference frame (i2v)")}>
+            title={videoRefusal
+              || (performance ? `Lip-sync this scene's frame to the song via ${capability.label} — ${performanceCost}`
+                : "Generate this scene's video from its reference frame (i2v)")}>
             {generatingVideo ? <Activity size={14} className="animate-spin" /> : <Video size={14} />}
             {generatingVideo ? 'Generating video…' : (scene.videoHistoryId ? 'New video take' : 'Generate video')}
           </button>
@@ -554,8 +572,10 @@ export default function SceneCard({
           {failure.lane === 'video' ? 'Video' : 'Frame'} failed: {failure.error}
         </span>
         <button type="button"
-          onClick={() => (failure.lane === 'video' ? onGenerateVideo?.(scene) : onGenerateFrame?.(scene))}
-          className="inline-flex min-h-[44px] shrink-0 items-center px-1 font-medium underline sm:min-h-0">
+          onClick={() => (failure.lane === 'video' ? generateVideo() : onGenerateFrame?.(scene))}
+          disabled={failure.lane === 'video' && !!videoRefusal}
+          title={failure.lane === 'video' ? videoRefusal || undefined : undefined}
+          className="inline-flex min-h-[44px] shrink-0 items-center px-1 font-medium underline disabled:opacity-50 sm:min-h-0">
           Retry
         </button>
       </div>
