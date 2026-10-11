@@ -77,6 +77,7 @@ import {
   resolveVideoDraftDecoder,
 } from '../../lib/videoDraftDecoders.js';
 import { isDefaultVideoStreamingMode } from '../../lib/videoStreamingMode.js';
+import { extendLatentFrames, supportsContextWindow } from '../../lib/videoContinuity.js';
 // Re-export the extracted runtime + history surface so existing deep imports
 // (`from '../videoGen/local.js'`) keep resolving every symbol they used to.
 export * from './runtimes.js';
@@ -735,6 +736,12 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
       ...(await getSettings())?.videoGen,
       ...(displaySleep != null ? { displaySleep } : {}),
     },
+    // A plain native Extend delivers the original source, not the model's
+    // re-decode of it. Chain chunks (`hidden`) are skipped: the chain trims the
+    // echoed context itself, and a window hop's "source" is a temp tail clip.
+    extendSplice: mode === 'extend' && extendFromVideoPath && !hidden && !batch && supportsContextWindow(model)
+      ? { sourcePath: extendFromVideoPath, extendLatents: extendLatentFrames(parsedNumFrames) }
+      : null,
   });
 
   return { jobId, generationId: jobId, filename, mode: 'local', model: modelId };
