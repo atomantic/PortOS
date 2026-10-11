@@ -113,7 +113,10 @@ async function dispatchClip({ project, scene, route, tag }) {
   const spanSec = typeof scene.startSec === 'number' && typeof scene.endSec === 'number' && scene.endSec > scene.startSec
     ? scene.endSec - scene.startSec : null;
   const isGrok = route.mode === 'grok';
-  const prompt = [base, isGrok ? approximateMotionCues(project.phrases, scene.startSec, scene.endSec) : ''].filter(Boolean).join('. ');
+  // The autonomous run's pilot repair names what the last clip got wrong (autonomousService.js).
+  const fixes = typeof scene.clipFixes?.text === 'string' ? scene.clipFixes.text : '';
+  const prompt = [base, isGrok ? approximateMotionCues(project.phrases, scene.startSec, scene.endSec) : '',
+    fixes ? `Fix these problems from the previous take while preserving the shot intent: ${fixes}` : ''].filter(Boolean).join('. ');
   const byBackend = {
     // A supplied-audio route animates the frame from its shot's own song window.
     local: route.audio === 'supplied' ? { modelId: route.model, mode: 'a2v', _suppliedAudio: true } : { modelId: route.model, disableAudio: true },

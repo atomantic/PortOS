@@ -317,6 +317,19 @@ describe('resolveSceneClips', () => {
     expect(clips).toEqual([expect.objectContaining({ sceneId: 's1', layer: 'card', cardText: '', cardColor: '#000000', duration: 3 })]);
   });
 
+  // Uniquely catches a draft dropping a footage shot that has a still but no clip yet, or a final render padding with stills.
+  it('shows a clipless footage shot as its still in a layered draft only', async () => {
+    loadHistory.mockResolvedValue([{ id: 'h1', filename: 'a.mp4', width: 768, height: 512, fps: 24, numFrames: 48 }]);
+    const project = { scenes: [
+      { sceneId: 's1', order: 0, videoHistoryId: 'h1', startSec: 0, endSec: 2 },
+      { sceneId: 's2', order: 1, videoHistoryId: null, referenceImageId: 'still.png', startSec: 2, endSec: 5 },
+    ] };
+    const draft = await resolveSceneClips(project, { layered: true, stillForMissingClip: true });
+    expect(draft.map((c) => [c.sceneId, c.layer || 'footage'])).toEqual([['s1', 'footage'], ['s2', 'still']]);
+    expect(draft[1]).toMatchObject({ duration: 3, imagePath: expect.stringContaining('still.png') });
+    expect((await resolveSceneClips(project, { layered: true })).map((c) => c.sceneId)).toEqual(['s1']);
+  });
+
   it('throws NO_SCENE_CLIPS when no scene has a clip', async () => {
     loadHistory.mockResolvedValue([]);
     await expect(resolveSceneClips({ scenes: [{ sceneId: 's1', order: 0, videoHistoryId: null }] }))

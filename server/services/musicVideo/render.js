@@ -209,11 +209,13 @@ const authoredSpan = (scene) => (sceneHasAuthoredSpan(scene) ? round3(scene.endS
 // in scene order. Neither needs footage: a still needs its selected reference
 // frame (404 MISSING_STILLS when it is gone), and both need an authored span
 // (422 UNTIMED_SECTIONS), since there is no clip to take a length from.
-export async function resolveSceneClips(project, { layered = false } = {}) {
+export async function resolveSceneClips(project, { layered = false, stillForMissingClip = false } = {}) {
+  // A draft shows a footage shot that has no clip yet as its still (layered renders only).
+  const standIn = (s) => stillForMissingClip && layered && !s.videoHistoryId && s.referenceImageId && sceneVisualLayer(s, { layered }) === 'footage';
   const scenes = (Array.isArray(project.scenes) ? project.scenes : [])
     .slice()
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-    .filter((s) => s && (s.videoHistoryId || sceneVisualLayer(s, { layered }) !== 'footage'));
+    .filter((s) => s && (s.videoHistoryId || sceneVisualLayer(s, { layered }) !== 'footage' || standIn(s)));
   if (scenes.length === 0) {
     throw new ServerError('No scene videos to render — generate at least one scene clip first', {
       status: 400, code: 'NO_SCENE_CLIPS',
@@ -226,7 +228,7 @@ export async function resolveSceneClips(project, { layered = false } = {}) {
   const untimed = [];
   const clips = [];
   for (const scene of scenes) {
-    const layer = sceneVisualLayer(scene, { layered });
+    const layer = standIn(scene) ? 'still' : sceneVisualLayer(scene, { layered });
     if (layer !== 'footage') {
       const spanSec = authoredSpan(scene);
       if (spanSec == null) { untimed.push(scene.sceneId); continue; }
@@ -603,7 +605,7 @@ export function assertCurrentClipDependencies(project) {
     { status: 422, code: 'STALE_CLIP_DEPENDENCIES', context: { sceneIds: stale.map((scene) => scene.sceneId) } });
 }
 
-export async function planMusicVideoRender(project) {
+export async function planMusicVideoRender(project, { draft = false } = {}) {
   assertMusicVideoMediaSelections(project);
   assertCurrentClipDependencies(project);
   const ffmpeg = await findFfmpeg();
@@ -616,7 +618,7 @@ export async function planMusicVideoRender(project) {
   // #8985: a composed render cuts still and card sections into the same
   // timebase as the footage; plain concat renders footage only, as before.
   const composed = project.composition?.mode === 'composed';
-  const rawClips = await resolveSceneClips(project, { layered: composed });
+  const rawClips = await resolveSceneClips(project, { layered: composed, stillForMissingClip: draft });
   const audioDurationSec = await probeVideoDuration(audioPath).catch(() => null);
   const beats = project.audioAnalysis?.beats;
   const snapped = beatSnapClips(rawClips, beats, { scenes: project.scenes });

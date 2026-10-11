@@ -19,6 +19,14 @@ import {
 const baseProject = () => buildProjectRecord({ name: 'Test MV' }, { id: 'mv-1', now: '2026-01-01T00:00:00.000Z' });
 
 describe('buildProjectRecord', () => {
+  // Uniquely catches a footage project created in document mode with no document, which no render can use.
+  it('composes a footage project and leaves a code-first one to its document', () => {
+    const footage = buildProjectRecord({ name: 'A', mediaMode: 'code-images-video', productionPolicy: { strategy: 'legacy' } }, { id: 'mv-f', now: 'n' });
+    expect(footage.composition).toMatchObject({ mode: 'composed' });
+    expect(footage.composition.document ?? null).toBeNull();
+    expect(buildProjectRecord({ name: 'B', mediaMode: 'code-images-video' }, { id: 'mv-c', now: 'n' }).composition).toMatchObject({ mode: 'document' });
+  });
+
   it('builds a draft director project with sensible defaults', () => {
     const p = buildProjectRecord({ name: 'Neon Nights', trackId: 'track-9' }, { id: 'mv-x', now: '2026-01-01T00:00:00.000Z' });
     expect(p).toMatchObject({

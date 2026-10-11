@@ -41,6 +41,7 @@ import {
   attachProductionReview,
   attachProductionPilotReview,
   planProductionPilots,
+  refreshProductionPilot,
   reserveProductionReview,
   quoteProductionSpend,
   attachProductionDocument,
@@ -454,6 +455,11 @@ async function takeSteps(projectId, runId) {
     if (step.type === 'idle' || step.type === 'wait') return { project, run, action: step };
     if (step.type === 'plan-pilots') {
       await mutateProjectRecord(projectId, (current) => planProductionPilots(current, runId));
+      continue;
+    }
+    if (step.type === 'refresh-pilot') {
+      await mutateProjectRecord(projectId, (current) => refreshProductionPilot(current, runId, step.sceneId));
+      console.log(`🔁 Music Video production ${short(runId)} makes pilot ${step.sceneId} again from its changed inputs`);
       continue;
     }
 

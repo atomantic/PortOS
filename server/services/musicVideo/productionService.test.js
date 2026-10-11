@@ -1279,6 +1279,28 @@ describe('budgeted production pilots (#9351)', () => {
       .toMatchObject({ category, expectedGenerationSpendUsd: 0 });
   });
 
+  // Uniquely catches a pilot re-reviewing the take its old prompt made, or staying halted on that review.
+  it('makes the pilot again when its prompt changes after a failed review', async () => {
+    board(); pendingPilot(); await reachPilot();
+    verdict({ verdict: 'revise', checks: { motion: 'fail' }, reason: 'Synthetic failed evidence' }); await settle();
+    expect(theRun().status).toBe('blocked');
+    store.get('mv-example').scenes[0].prompt = 'lights sweep left';
+    await service.resumeProduction('mv-example', theRun().id, { acceptBasis: true }); await settle();
+    expect(dispatch.mock.calls[2][0]).toMatchObject({ stepKind: 'clip', scene: expect.objectContaining({ sceneId: 'shot-0', prompt: 'lights sweep left' }) });
+    expect(startAutoReview).toHaveBeenCalledTimes(1);
+  });
+
+  // Uniquely catches an orchestrator-accepted pilot still holding the bulk wave, or an acceptance surviving new media.
+  it('lets an accepted pilot release the bulk wave while its reviewed take stays selected', async () => {
+    const { acceptProductionPilot } = await import('./production.js');
+    board(); pendingPilot(); await reachPilot();
+    verdict({ verdict: 'revise', checks: { motion: 'fail' }, reason: 'Synthetic failed evidence' }); await settle();
+    store.set('mv-example', acceptProductionPilot(current(), theRun().id, 'shot-0', { by: 'orchestrator', note: 'Accepted at the limit' }).project);
+    await service.resumeProduction('mv-example', theRun().id); await settle();
+    expect(dispatch.mock.calls.map(([a]) => a.scene.sceneId)).toEqual(expect.arrayContaining(['shot-1', 'shot-2', 'shot-3']));
+    expect((await service.getProduction('mv-example', theRun().id)).run.pilot.scenes[0].status).toBe('accepted');
+  });
+
   it('never treats missing provenance as an accepted pilot', async () => {
     board(); pendingPilot(); await reachPilot();
     verdict({ verdict: 'pass' }, null); await settle();

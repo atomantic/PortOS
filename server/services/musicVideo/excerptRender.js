@@ -276,7 +276,7 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
         status: 422, code: 'EXCERPT_ASPECT_UNSUPPORTED',
       });
     }
-    const { ffmpeg, audioPath, composed, clips, audioDurationSec, soundBed } = await planMusicVideoRender(project);
+    const { ffmpeg, audioPath, composed, clips, audioDurationSec, soundBed } = await planMusicVideoRender(project, { draft: true });
     await ensureDir(PATHS.videos);
     await ensureDir(PATHS.videoThumbnails);
 

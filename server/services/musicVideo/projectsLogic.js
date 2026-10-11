@@ -100,6 +100,7 @@ function normalizeVisualSpec(patch, base = null) {
 
 /** Build a fresh project record from validated create input. */
 export function buildProjectRecord(input, { id, now }) {
+  const productionPolicy = normalizeMusicVideoProductionPolicy(input.productionPolicy || (input.mediaMode ? { strategy: 'code-first', maxGeneratedVideoPercent: input.mediaMode === 'code-images-video' ? 100 : 0 } : null));
   const {
     name, mode = 'director', trackId = null,
     uploadedAudioFilename = null, concept = null,
@@ -160,7 +161,9 @@ export function buildProjectRecord(input, { id, now }) {
     pacing: input.pacing ?? null,
     // #8984 — composition manifest (null = plain concatenation render).
     // The document pointer is set only by the import routes, never on create.
-    composition: input.composition || input.mediaMode ? withStoredCompositionDocument(normalizeComposition(input.composition || { mode: 'document' }), null) : null,
+    // A code-first project authors a document; a footage project composes its shots.
+    composition: input.composition || input.mediaMode ? withStoredCompositionDocument(normalizeComposition(input.composition
+      || { mode: productionPolicy.strategy === 'code-first' ? 'document' : 'composed' }), null) : null,
     // #8988 — optional sound-design bed mixed under the song.
     soundBed: input.soundBed ? normalizeSoundBed(input.soundBed) : null,
     // The finishing film look every preview, render and baked still is viewed through; null = none.
@@ -171,7 +174,7 @@ export function buildProjectRecord(input, { id, now }) {
     // proof checklist); null until the director starts one. See treatment.js.
     treatment: null,
     mediaMode: musicVideoMediaMode(input),
-    productionPolicy: normalizeMusicVideoProductionPolicy(input.productionPolicy || (input.mediaMode ? { strategy: 'code-first', maxGeneratedVideoPercent: input.mediaMode === 'code-images-video' ? 100 : 0 } : null)),
+    productionPolicy,
     scenes: [],
     renderHistoryId: null,
     renderError: null,
