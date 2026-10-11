@@ -9,6 +9,11 @@ describe('normalizeTitleCard', () => {
     expect(card).toMatchObject({ title: 'Example Song Title', startSec: 5, endSec: 5.5, fadeSec: 3, size: 200, position: 'lower-left', font: 'display', color: '#abcdef' });
   });
 
+  it('keeps a known look and its colours, and drops unknown ones to the look\'s own', () => {
+    expect(normalizeTitleCard({ style: 'mtv', titleColor: '#F5D33A', accentColor: '#1fc2e5' })).toMatchObject({ style: 'mtv', titleColor: '#f5d33a', accentColor: '#1fc2e5' });
+    expect(normalizeTitleCard({ style: 'neon', titleColor: 'yellow', accentColor: 3 })).toMatchObject({ style: 'outline', titleColor: '', accentColor: '' });
+  });
+
   it('counts a card as visible only when enabled with some text', () => {
     expect(titleCardVisible(normalizeTitleCard({ title: 'Song' }))).toBe(true);
     expect(titleCardVisible(normalizeTitleCard({ title: 'Song', enabled: false }))).toBe(false);

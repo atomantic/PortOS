@@ -88,6 +88,29 @@ describe.skipIf(!canRun)('title card runtime in Chrome', () => {
     expect(long).toBeLessThanOrEqual(W * 0.62 + 0.5);
   }, 30000);
 
+  it('draws the classic MTV lower third: artist in caps over a yellow title, on a dark plate with a coloured bar', async () => {
+    await page.evaluate(() => globalThis.__portosTitleCard.apply({ ...globalThis.__portosTitleCard.card, style: 'mtv', position: 'lower-left', titleColor: '', accentColor: '#00ff00' }));
+    const lines = await page.evaluate(() => globalThis.__portosTitleCard.layout());
+    expect(lines.map((l) => l.text)).toEqual(['EXAMPLE ARTIST', '“Example Song”', '2026']);
+    expect(lines[1].fill).toBe('#f5d33a');
+    expect(lines.every((l) => l.outline === 0)).toBe(true);
+    const shot = await shotAt(5);
+    const { data, info } = await sharp(shot).raw().toBuffer({ resolveWithObject: true });
+    let bar = 0;
+    let yellow = 0;
+    for (let i = 0; i < data.length; i += info.channels) {
+      const [r, g, b] = [data[i], data[i + 1], data[i + 2]];
+      if (g > 200 && r < 60 && b < 60) bar += 1;
+      if (r > 200 && g > 170 && b < 110) yellow += 1;
+    }
+    expect(bar).toBeGreaterThan(100);
+    expect(yellow).toBeGreaterThan(50);
+    // The plate stays inside the frame and in the lower-left quarter.
+    expect(await brightIn(shot, upperRight)).toBe(0);
+    await page.evaluate(() => globalThis.__portosTitleCard.apply({ ...globalThis.__portosTitleCard.card, style: 'outline' }));
+    expect(errors).toEqual([]);
+  }, 30000);
+
   it('takes a live change from the panel and redraws the paused frame, and clears on null', async () => {
     await shotAt(5);
     await page.evaluate(() => globalThis.__portosTitleCard.apply({ ...globalThis.__portosTitleCard.card, position: 'upper-right' }));

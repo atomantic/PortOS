@@ -1,7 +1,7 @@
 import { MUSIC_VIDEO_MEDIA_MODES } from './musicVideoMediaPolicy.js';
 import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicVideoGrade.js';
 import { filmLookSchema } from './filmLookValidation.js';
-import { TITLE_CARD_FONTS, TITLE_CARD_LIMITS, TITLE_CARD_POSITIONS } from './musicVideoTitleCard.js';
+import { TITLE_CARD_FONTS, TITLE_CARD_LIMITS, TITLE_CARD_POSITIONS, TITLE_CARD_STYLES } from './musicVideoTitleCard.js';
 import { COVER_DESIGN_OPTIONS } from './musicVideoCoverOverlay.js';
 import { DISTROKID_REMEMBERED_OPTIONS } from './distrokidGenres.js';
 import { CROSS_LINK_EDIT_TARGETS } from './musicVideoCrossLinks.js';
@@ -1239,6 +1239,10 @@ export const musicVideoTitleCardSchema = z.object({
   font: z.enum(TITLE_CARD_FONTS).optional(),
   size: z.number().min(TITLE_CARD_LIMITS.sizeMin).max(TITLE_CARD_LIMITS.sizeMax).optional(),
   color: z.string().regex(/^#[0-9a-f]{6}$/i, 'color is #rrggbb').optional(),
+  style: z.enum(TITLE_CARD_STYLES).optional(),
+  // '' = the look's own colour.
+  titleColor: z.union([z.literal(''), z.string().regex(/^#[0-9a-f]{6}$/i, 'titleColor is #rrggbb')]).optional(),
+  accentColor: z.union([z.literal(''), z.string().regex(/^#[0-9a-f]{6}$/i, 'accentColor is #rrggbb')]).optional(),
 }).strict();
 
 export const musicVideoProjectCreateSchema = z.object({

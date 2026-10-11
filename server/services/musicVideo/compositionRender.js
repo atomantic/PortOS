@@ -143,7 +143,7 @@ export async function renderTypographyOverlays({ jobId, cues, style, width, heig
   const root = scratchPath(jobId);
   await mkdir(join(root, 'doc'), { recursive: true });
   await writeFile(join(root, 'doc', 'index.html'), buildTypographyDocument({ cues, style, width, height, durationSec, fps }));
-  if (cues.some((c) => c.card)) await copyFile(LYRIC_FONT_SOURCE, join(root, 'doc', LYRIC_FONT_FILE));
+  if (cues.some((c) => c.card || c.titleCard)) await copyFile(LYRIC_FONT_SOURCE, join(root, 'doc', LYRIC_FONT_FILE));
   signal?.throwIfAborted();
   // Lazy: the composition browser drags in browserService, which only a
   // composed render needs — not every suite that reaches render.js.
