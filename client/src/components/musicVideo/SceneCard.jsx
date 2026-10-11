@@ -280,7 +280,9 @@ export default function SceneCard({
               <label htmlFor={shotModeId} className="flex items-center gap-1">Shot</label>
               <select id={shotModeId} value={performance ? (scene.performanceStyle === 'music' ? 'music' : 'performance') : 'cutaway'}
                 onChange={(e) => applyPatch(e.target.value === 'cutaway' ? { shotMode: 'cutaway' }
-                  : { shotMode: 'performance', performanceStyle: e.target.value === 'music' ? 'music' : null })}
+                  : e.target.value === 'music' ? { shotMode: 'performance', performanceStyle: 'music' }
+                    // Clear the style only when one is stored, so a plain lip-sync switch stays one field.
+                    : { shotMode: 'performance', ...(scene.performanceStyle ? { performanceStyle: null } : {}) })}
                 className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0"
                 title="Cutaway: any video lane animates the frame under the song. Lip-sync: a singer's mouth follows the song. Music-driven: the song slice drives the whole frame's motion (a drummer on the beat). Both need a source-audio provider.">
                 <option value="cutaway">Cutaway</option>
