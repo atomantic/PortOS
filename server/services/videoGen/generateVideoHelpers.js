@@ -539,6 +539,35 @@ export function planPromptEncodingRetry({ signal = null, stderr = '', promptEnco
 }
 
 /**
+ * Per-command-buffer caps MLX reads at startup (`MLX_MAX_OPS_PER_BUFFER` /
+ * `MLX_MAX_MB_PER_BUFFER`). Smaller values only move command-buffer boundaries —
+ * same kernels, same output, slightly slower — so each buffer finishes inside the
+ * macOS GPU watchdog window. Applied reactively on a retry, never by default.
+ */
+export const METAL_BUFFER_RETRY_ENV = Object.freeze({
+  MLX_MAX_OPS_PER_BUFFER: '4',
+  MLX_MAX_MB_PER_BUFFER: '16',
+});
+
+/**
+ * Decide whether a render may be relaunched once with tiny MLX command buffers
+ * after a Metal watchdog abort ANYWHERE in the render (the prompt-encode case has
+ * its own plan, planPromptEncodingRetry). Pure — returns the plan, never acts.
+ * Apple-silicon MLX runtimes only; OutOfMemory / InnocentVictim aborts never
+ * qualify (smaller buffers do not fix them). One retry per job.
+ *
+ * @returns {{ env: Record<string, string> }|null}
+ */
+export function planMetalBufferRetry({ signal = null, stderr = '', retriesUsed = 0, platform = process.platform, arch = process.arch, mlxRuntime = false } = {}) {
+  if (platform !== 'darwin' || arch !== 'arm64' || !mlxRuntime) return null;
+  if (!Number.isInteger(retriesUsed) || retriesUsed > 0) return null;
+  if (signal !== 'SIGABRT') return null;
+  const text = typeof stderr === 'string' ? stderr : '';
+  if (METAL_WATCHDOG_VETO_RE.test(text) || !METAL_WATCHDOG_RE.test(text)) return null;
+  return { env: { ...METAL_BUFFER_RETRY_ENV } };
+}
+
+/**
  * Whether a PortOS-fired completion-watchdog SIGKILL should be treated as
  * success rather than a failure. The watchdog is armed after a completion
  * marker and only guards a post-completion teardown hang. It is a SUCCESS when

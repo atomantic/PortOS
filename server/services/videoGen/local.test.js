@@ -5158,6 +5158,7 @@ describe('generateVideo — Gemma prompt-encode watchdog relaunch', () => {
   };
 
   let restorePlatform = () => {};
+  let restoreArch = () => {};
   let failures;
   let onFailed;
 
@@ -5167,8 +5168,9 @@ describe('generateVideo — Gemma prompt-encode watchdog relaunch', () => {
     // describe would silently assert "never relaunches" on Windows CI.
     // Pinned inside the hook, never at module scope: local.js is already
     // imported by then.
-    const { pinPlatform } = await import('../../lib/testHelper.js');
+    const { pinPlatform, pinArch } = await import('../../lib/testHelper.js');
     restorePlatform = pinPlatform('darwin');
+    restoreArch = pinArch('arm64');
     failures = [];
     onFailed = (payload) => failures.push(payload);
     videoGenEvents.on('failed', onFailed);
@@ -5177,6 +5179,7 @@ describe('generateVideo — Gemma prompt-encode watchdog relaunch', () => {
   afterEach(() => {
     videoGenEvents.off('failed', onFailed);
     restorePlatform();
+    restoreArch();
   });
 
   const startRender = async (jobId, children) => {
@@ -5233,20 +5236,77 @@ describe('generateVideo — Gemma prompt-encode watchdog relaunch', () => {
     await second.finish();
   });
 
-  // The bypass probe for the phase gate: identical abort, identical signal, one
-  // extra marker line. If the gate were dropped this case would relaunch too.
-  it('does not relaunch once the prompt encode has finished', async () => {
+  // After the encode finished, a shorter prompt cannot help — but smaller MLX
+  // command buffers can. Same abort, one extra marker line: the relaunch carries
+  // the buffer caps in its env and NOT the Gemma flag.
+  it('relaunches once with smaller MLX command buffers when the abort lands after the prompt encode', async () => {
     const first = makeDrivenProc(103);
-    const spawnMock = await startRender('pe-after-encode', [first]);
+    const second = makeDrivenProc(109);
+    const spawnMock = await startRender('pe-after-encode', [first, second]);
 
     first.stderr('STAGE:encode-prompt');
     first.stderr('STAGE:encode-prompt-done');
     first.stderr(TIMEOUT_ABORT);
     await first.abort();
 
-    expect(ltx2Calls(spawnMock)).toHaveLength(1);
+    const calls = ltx2Calls(spawnMock);
+    expect(calls).toHaveLength(2);
+    expect(calls[1][1]).not.toContain('--gemma-max-length');
+    expect(calls[0][2].env.MLX_MAX_OPS_PER_BUFFER).toBeUndefined();
+    expect(calls[1][2].env).toMatchObject({ MLX_MAX_OPS_PER_BUFFER: '4', MLX_MAX_MB_PER_BUFFER: '16' });
+    expect(failures).toHaveLength(0);
+
+    // A second abort at the short setting surfaces the normal error.
+    second.stderr(TIMEOUT_ABORT);
+    await second.abort();
+    expect(ltx2Calls(spawnMock)).toHaveLength(2);
     expect(failures).toHaveLength(1);
     expect(failures[0].error).toMatch(/SIGABRT/);
+  });
+
+  it('spends one relaunch per job — a buffer retry is not followed by a prompt-encode retry', async () => {
+    const first = makeDrivenProc(112);
+    const second = makeDrivenProc(113);
+    const spawnMock = await startRender('pe-buffer-then-encode', [first, second]);
+
+    first.stderr('STAGE:encode-prompt-done');
+    first.stderr(TIMEOUT_ABORT);
+    await first.abort();
+    expect(ltx2Calls(spawnMock)).toHaveLength(2);
+
+    second.stderr('STAGE:encode-prompt');
+    second.stderr(TIMEOUT_ABORT);
+    await second.abort();
+
+    expect(ltx2Calls(spawnMock)).toHaveLength(2);
+    expect(failures).toHaveLength(1);
+  });
+
+  it('does not use smaller command buffers off Apple silicon', async () => {
+    restoreArch();
+    const { pinArch } = await import('../../lib/testHelper.js');
+    restoreArch = pinArch('x64');
+    const first = makeDrivenProc(110);
+    const spawnMock = await startRender('pe-x64', [first]);
+
+    first.stderr('STAGE:encode-prompt-done');
+    first.stderr(TIMEOUT_ABORT);
+    await first.abort();
+
+    expect(ltx2Calls(spawnMock)).toHaveLength(1);
+    expect(failures).toHaveLength(1);
+  });
+
+  it('does not use smaller command buffers on an out-of-memory abort after the encode', async () => {
+    const first = makeDrivenProc(111);
+    const spawnMock = await startRender('pe-oom-after-encode', [first]);
+
+    first.stderr('STAGE:encode-prompt-done');
+    first.stderr(OOM_ABORT);
+    await first.abort();
+
+    expect(ltx2Calls(spawnMock)).toHaveLength(1);
+    expect(failures).toHaveLength(1);
   });
 
   // An OOM abort is not a watchdog timeout: a shorter prompt does not fix it,
