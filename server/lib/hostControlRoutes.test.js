@@ -784,6 +784,29 @@ describe('3D model rigging host-workers (#10922)', () => {
   });
 });
 
+describe('3D model generation policy (#11075)', () => {
+  const protectedRoutes = [
+    'POST /api/image-to-3d/models',
+    'POST /api/image-to-3d/models/:id/generate',
+  ];
+
+  it('gates each route and maps every entry to a mounted route', () => {
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => method + ' ' + path));
+    for (const route of protectedRoutes) {
+      const [method, path] = route.split(' ');
+      expect(mounted.has(route), route).toBe(true);
+      expect(hostControlRouteFor(method, path), route).toBe(route);
+    }
+  });
+
+  it('keeps reads open', () => {
+    for (const [method, path] of [
+      ['GET', '/api/image-to-3d/models'],
+      ['GET', '/api/image-to-3d/models/:id'],
+    ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
+  });
+});
+
 describe('Remote desktop session policy (#10923)', () => {
   const protectedRoutes = [
     'POST /api/remote-desktop/sessions',

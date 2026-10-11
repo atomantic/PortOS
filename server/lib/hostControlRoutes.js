@@ -443,6 +443,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // stay open.
   'POST /api/image-to-3d/targets/:targetId/install',
   'POST /api/image-to-3d/trellis2/install',
+  // 3D generation and re-generation run host Python/GPU adapters (#11075).
+  'POST /api/image-to-3d/models',
+  'POST /api/image-to-3d/models/:id/generate',
   'POST /api/midi-runtime/install',
   'POST /api/devtools/video-download/yt-dlp/update',
 
