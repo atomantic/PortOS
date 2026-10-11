@@ -237,5 +237,12 @@ export default function useMediaPreviewActions({ onCleanComplete = null } = {}) 
     return variant;
   }, [onCleanComplete]);
 
-  return { handleRemix, handleSendToImage, handleSendToVideo, handleSendTo3d, handleContinue, handleClean, handleRemoveWatermark };
+  // Film look: the lightbox's editor bakes the copy itself (FilmLookEditor) and
+  // hands the variant here, so it lands in the consumer's local state the way a
+  // clean does.
+  const handleFilmLookComplete = useCallback(async (variant) => {
+    if (onCleanComplete && variant) await onCleanComplete(variant);
+  }, [onCleanComplete]);
+
+  return { handleRemix, handleSendToImage, handleSendToVideo, handleSendTo3d, handleContinue, handleClean, handleRemoveWatermark, handleFilmLookComplete };
 }

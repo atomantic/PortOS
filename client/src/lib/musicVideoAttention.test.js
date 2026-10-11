@@ -181,7 +181,13 @@ describe('stale approvals in Needs attention (#10141)', () => {
   it('names what changed per approval and opens the earliest one', () => {
     const [item] = deriveAttentionItems(project(), { readiness });
     expect(item).toMatchObject({ kind: 'stale-approvals', openTo: 'cast-sets', title: '2 approvals were given before later changes' });
-    expect(item.detail).toBe('Cast & Sets check-in — changed since: concept. Art direction — changed since: concept, cast, environments +1 more. Re-approve, or undo the change.');
+    expect(item.detail).toBe('Cast & Sets check-in — changed since: concept. Art direction — changed since: concept, cast, environments +1 more. Keep the approval, or undo the change.');
+  });
+
+  it('leaves out an approval the open step already shows with its own controls', () => {
+    const [onBoard] = deriveAttentionItems(project(), { readiness, stage: 'board' });
+    expect(onBoard.approvals.map((a) => a.stage)).toEqual(['castAndSets', 'art']);
+    expect(deriveAttentionItems(project(), { readiness, stage: 'cast-sets' })).toEqual([]);
   });
 
   it('stays quiet with no stale approval, and while a production run is replacing takes', () => {

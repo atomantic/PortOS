@@ -12,7 +12,7 @@ import { existsSync } from 'fs';
 import { unlink } from 'fs/promises';
 import { pipeline } from 'stream/promises';
 import { Router } from 'express';
-import { musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
+import { musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
 import { productionReadiness } from '../services/musicVideo/productionReview.js';
 import { finishedOutsideBlocker } from '../lib/musicVideoFinishedOutside.js';
 import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, reviseProductionFromFeedback, revertProductionInput } from '../services/musicVideo/productionReviewService.js';
@@ -80,6 +80,7 @@ import {
   musicVideoDevArtifactFileQuerySchema,
   musicVideoCastAndSetsStartSchema,
   musicVideoCastAndSetsDirectionEditSchema,
+  musicVideoCastAndSetsFeedbackSchema,
   musicVideoCastAndSetsRegenerateSchema,
   musicVideoDocumentDirectoryImportSchema,
   musicVideoDocumentFileQuerySchema,
@@ -115,6 +116,7 @@ import {
   appendTakesAcrossScenes,
   selectSceneTake,
   reviewSceneTake,
+  refreshSongStyleFromSuno,
 } from '../services/musicVideo/projects.js';
 import { buildHandoffManifest, buildHandoffBundle, matchSceneByFileTag } from '../services/musicVideo/handoff.js';
 import { getHistoryItem } from '../services/videoGen/history.js';
@@ -200,6 +202,8 @@ import { devArtifactTypeFor } from '../services/musicVideo/devArtifacts.js';
 import {
   startCastAndSets,
   editCastAndSetsDirection,
+  applyCastAndSetsFeedback,
+  removeCastAndSetsFeedbackEntry,
   regenerateCastAndSets,
   resumeCastAndSets,
   approveCastAndSets,
@@ -527,9 +531,9 @@ router.post('/:id/lyrics/import-track', asyncHandler(async (req, res) => {
   res.json(await importTrackLyrics(req.params.id, { mode }));
 }));
 
-// Word-level alignment (#9074) as a job (#10155). Nothing here runs until the
-// director clicks Align words or a line's Re-align (or starts an autopilot
-// run). Kickoff returns 202 + a jobId; stages (model download %, decoding,
+// Word-level alignment (#9074) as a job (#10155). It runs when the director
+// clicks Align words or a line's Re-align, when an autopilot run starts, and
+// when the song is prepared after a track or lyrics arrive (song/prepare below). Kickoff returns 202 + a jobId; stages (model download %, decoding,
 // transcribing window n/m) stream over SSE with cancel, and the terminal
 // `complete` frame carries the updated project. One job per project: a second
 // request returns the running job (`reused: true`). The first alignment
@@ -538,6 +542,34 @@ router.post('/:id/lyrics/import-track', asyncHandler(async (req, res) => {
 router.post('/:id/lyrics/align', asyncHandler(async (req, res) => {
   const { cueId, separateVocals, retimeSong } = validateRequest(musicVideoLyricsAlignSchema, req.body || {});
   res.status(202).json(await startLyricAlign(req.params.id, { cueId, separateVocals, retimeSong }));
+}));
+
+// Re-read the song's Suno style (excluded styles included) from its song link,
+// for a song imported before they were captured. Updates the linked track too.
+router.post('/:id/song-style/suno', asyncHandler(async (req, res) => {
+  const { url } = validateRequest(musicVideoSongStyleSunoSchema, req.body ?? {});
+  res.json(await refreshSongStyleFromSuno(req.params.id, url));
+}));
+
+// After a track is attached or lyrics are imported (the director's own action),
+// analyze the song if it has no analysis and start word alignment when the
+// lines were never aligned. Returns the project and the alignment job to follow.
+router.post('/:id/song/prepare', asyncHandler(async (req, res) => {
+  const { autoPrepareSong } = await import('../services/musicVideo/songAutoPrepare.js');
+  res.json(await autoPrepareSong(req.params.id));
+}));
+
+// The lyric timing playthrough: the aligned words drawn by the shipped template over a
+// plain frame, laid out as scenes, for checking word timing before any picture exists.
+router.get('/:id/lyrics/playthrough/preview', asyncHandler(async (req, res) => {
+  const { buildLyricPlaythroughPreview } = await import('../services/musicVideo/lyricPlaythrough.js');
+  res.json(await buildLyricPlaythroughPreview(await requireProject(req.params.id)));
+}));
+
+// The same words alone on a transparent page, laid over the storyboard animatic's frames.
+router.get('/:id/lyrics/overlay/preview', asyncHandler(async (req, res) => {
+  const { buildLyricPlaythroughPreview } = await import('../services/musicVideo/lyricPlaythrough.js');
+  res.json(await buildLyricPlaythroughPreview(await requireProject(req.params.id), { overlay: true }));
 }));
 
 router.get('/lyrics/align/:jobId/events', (req, res) => {
@@ -1394,6 +1426,15 @@ router.post('/:id/cast-and-sets/regenerate', asyncHandler(async (req, res) => {
 router.patch('/:id/cast-and-sets/direction', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoCastAndSetsDirectionEditSchema, req.body || {});
   res.status(202).json(await editCastAndSetsDirection(req.params.id, input));
+}));
+
+router.post('/:id/cast-and-sets/feedback', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoCastAndSetsFeedbackSchema, req.body || {});
+  res.status(202).json(await applyCastAndSetsFeedback(req.params.id, input));
+}));
+
+router.delete('/:id/cast-and-sets/feedback/:feedbackId', asyncHandler(async (req, res) => {
+  res.json(await removeCastAndSetsFeedbackEntry(req.params.id, req.params.feedbackId));
 }));
 
 router.post('/:id/cast-and-sets/resume', asyncHandler(async (req, res) => {

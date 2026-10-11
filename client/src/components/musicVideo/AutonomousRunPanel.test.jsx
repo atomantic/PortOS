@@ -20,6 +20,7 @@ vi.mock('../../services/apiMusicVideo.js', () => ({
   resumeAutonomousMusicVideo: vi.fn(),
   stopAutonomousMusicVideo: vi.fn(),
   cancelAutonomousMusicVideo: vi.fn(),
+  listMusicVideoProjectSummaries: vi.fn(async () => ({ items: [{ id: 'mv-src', name: 'Example Song', trackId: 'track-src' }, { id: 'mv-silent', name: 'No audio yet', trackId: null }] })),
   listMusicVideoCharacterStyles: vi.fn(async () => [{ id: 'example-style', label: 'Example style', characterName: 'Example Performer', referenceImageId: null }]),
 }));
 vi.mock('../../services/apiMoodBoard.js', () => ({ listMoodBoardNames: vi.fn(async () => [{ id: 'mb-1', name: 'Neon Rain' }]) }));
@@ -120,6 +121,16 @@ describe('AutonomousRunPanel', () => {
     fireEvent.change(screen.getByLabelText(/lyrics \(edit before continuing\)/i), { target: { value: '[verse]\nedited' } });
     fireEvent.click(screen.getByRole('button', { name: /save edit & approve/i }));
     await waitFor(() => expect(api.resumeAutonomousMusicVideo).toHaveBeenCalledWith('mv-1', { lyrics: '[verse]\nedited' }, { silent: true }));
+  });
+
+  // Uniquely catches approving the stills of a run with no video tool, which leaves the clips with no route.
+  it('offers a video tool when approving the stills of a run that has none', async () => {
+    api.resumeAutonomousMusicVideo.mockResolvedValue({ project: { id: 'mv-1', autonomousRun: baseRun() }, run: baseRun() });
+    render(<Harness initial={baseRun({ status: 'awaiting-approval', awaiting: 'stills', stage: 'produce', brief: { ...baseRun().brief, tools: ['image:codex'] } })} />);
+    expect(screen.getByText(/paused after/i).textContent).toMatch(/Stills/);
+    fireEvent.click(screen.getByLabelText(/fal\.ai video/i));
+    fireEvent.click(screen.getByRole('button', { name: /approve & continue/i }));
+    await waitFor(() => expect(api.resumeAutonomousMusicVideo).toHaveBeenCalledWith('mv-1', { addTools: ['video:fal'] }, { silent: true }));
   });
 
   it('offers the Suno style line to edit at the style checkpoint (the last stop before Suno is used)', async () => {
@@ -327,6 +338,24 @@ describe('AutonomousStartDrawer', () => {
     expect(api.startAutonomousMusicVideo.mock.calls[0][0]).toMatchObject({
       checkpoints: ['lyrics'], models: { 'image:local': 'example-image' }, budgetUsd: 12, moodBoardId: 'mb-1', characterStyleId: 'example-style',
     });
+  });
+
+  // Uniquely catches the reuse choice not reaching the request, or song-making options still showing for it.
+  it('starts on another project\'s song: sends its id, hides the song-making options and their checkpoints', async () => {
+    api.startAutonomousMusicVideo.mockResolvedValue({ project: { id: 'mv-new' }, run: baseRun() });
+    render(<AutonomousStartDrawer open onClose={() => {}} onStarted={() => {}} />);
+    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'p' } });
+    fireEvent.click(screen.getByLabelText('Lyrics', { selector: '#mv-auto-checkpoint-lyrics' }));
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Use the song from Example Song' })).toBeTruthy());
+    expect(screen.queryByRole('option', { name: 'Use the song from No audio yet' })).toBeNull();
+    fireEvent.change(screen.getByLabelText('Song to use'), { target: { value: 'mv-src' } });
+    expect(screen.queryByLabelText('Song source')).toBeNull();
+    expect(screen.queryByLabelText('Instrumental (no vocals)')).toBeNull();
+    expect(document.querySelector('#mv-auto-checkpoint-lyrics')).toBeNull();
+    fireEvent.change(screen.getByLabelText('Code authoring provider'), { target: { value: 'fixture-api' } });
+    fireEvent.click(screen.getByRole('button', { name: /start autonomous video/i }));
+    await waitFor(() => expect(api.startAutonomousMusicVideo).toHaveBeenCalled());
+    expect(api.startAutonomousMusicVideo.mock.calls[0][0]).toMatchObject({ fromProjectId: 'mv-src', checkpoints: [] });
   });
 
   it('sends the Suno form options only when set, and blocks an unrecognizable model version', async () => {

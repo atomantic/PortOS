@@ -38,6 +38,7 @@ const execution = (overrides = {}) => ({
   lanes: { browser: { mechanism: 'chromium-cdp-sandbox' }, blender: { ready: false, reason: 'Blender: Not configured.' } },
   ...overrides,
 });
+const executionPanel = () => screen.getByText('Blender execution', { selector: 'summary', exact: false }).closest('details');
 const renderPage = (entry = '/code-animation/production/' + project.id) => render(
   <MemoryRouter initialEntries={[entry]}><Routes>
     <Route path="/code-animation/production" element={<ProductionProjects />} />
@@ -220,5 +221,36 @@ describe('Production project rendered interactions', () => {
     await user.click(screen.getByRole('button', { name: 'Run execution check' }));
     expect(await screen.findByText(/Ready for production rendering/)).toBeInTheDocument();
     expect(screen.getByText('Cycles / CPU test scene rendered.')).toBeInTheDocument();
+  });
+
+  it('shows an empty state on the index and focuses the create form', async () => {
+    const user = userEvent.setup();
+    api.listCodeAnimationProjects.mockResolvedValue(page([]));
+    renderPage('/code-animation/production');
+    expect(await screen.findByText('No production projects yet.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create painterly Blender starter' })).toBeEnabled();
+    expect(screen.queryByText('All results loaded')).toBeNull();
+    expect(screen.queryByRole('link', { name: 'New Production project' })).toBeNull();
+    expect(screen.getByRole('heading', { name: 'New Production project' })).toBeInTheDocument();
+    await user.click(screen.getByRole('link', { name: 'Go to the create form' }));
+    expect(screen.getByLabelText('Title')).toHaveFocus();
+    expect(executionPanel().open).toBe(false);
+  });
+
+  it('keeps a switch-to-new link on an open project and collapses Blender execution for the browser renderer', async () => {
+    renderPage();
+    expect(await screen.findByRole('link', { name: 'New Production project' })).toHaveAttribute('href', '/code-animation/production');
+    expect(screen.getAllByText('New Production project')).toHaveLength(1);
+    expect(executionPanel().open).toBe(false);
+  });
+
+  it('opens Blender execution when the selected project renders with Blender and the lane is not ready', async () => {
+    const blender = { ...project, manifest: { ...project.manifest, renderer: { kind: 'blender', version: '4.2.0', engine: 'CYCLES' } } };
+    api.listCodeAnimationProjects.mockResolvedValue(page([blender]));
+    api.getCodeAnimationProject.mockResolvedValue(blender);
+    renderPage(`/code-animation/production/${blender.id}`);
+    expect(await screen.findByLabelText('Execution mode')).toBeInTheDocument();
+    expect(executionPanel().open).toBe(true);
+    expect(screen.getByText('Blender: Not configured.')).toBeInTheDocument();
   });
 });

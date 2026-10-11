@@ -30,6 +30,7 @@ export default function ProduceStage({ board }) {
                 songDurationSec: project.audioAnalysis?.durationSec ?? null,
                 failed: sceneMedia.failedScenes,
                 songReview: project.songRevision?.sceneReview || null,
+                videoSettings: videoSettings.settings,
               }} />
             )}
             <div className="flex justify-end"><ContactSheetButton onOpen={board.openContactSheet} /></div>

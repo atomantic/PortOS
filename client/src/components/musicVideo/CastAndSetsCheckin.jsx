@@ -3,7 +3,9 @@ import LlmRouteNote from './LlmRouteNote.jsx';
 import Pill from '../ui/Pill.jsx';
 import { staleApprovalText } from '../../lib/musicVideoStages.js';
 import CastAndSetsDirectionEditor from './CastAndSetsDirectionEditor.jsx';
+import CastAndSetsFeedback from './CastAndSetsFeedback.jsx';
 import CastAndSetsReferenceProgress from './CastAndSetsReferenceProgress.jsx';
+import StaleApprovalActions from './StaleApprovalActions.jsx';
 
 const WORKING = new Set(['directing', 'imaging', 'assembling']);
 const buttonClass = 'flex items-center gap-1 rounded px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
@@ -35,9 +37,11 @@ function statusLine(stage) {
  * and the director's actions (Approve & continue, Regenerate,
  * Edit direction on a procedural sheet, Resume, Skip). An approved sheet whose
  * concept, style, subjects or song changed since (`stale`, from the server's
- * readiness) says what changed and offers Keep approved beside Rebuild (#10141).
+ * readiness) says what changed and offers Keep approved beside each Revert,
+ * right under that line (#10141).
+ * A sheet in review (or approved) takes plain-text feedback below the actions.
  */
-export default function CastAndSetsCheckin({ project, stale = null, busy, onOpenSheet, onApprove, onRegenerate, onEditDirection, onResume, onRebuild, onReconfirm, onRevert, onSkip }) {
+export default function CastAndSetsCheckin({ id, project, stale = null, busy, onOpenSheet, onOpenPreview, onApprove, onRegenerate, onEditDirection, onApplyFeedback, onRemoveFeedback, onResume, onRebuild, onReconfirm, onRevert, onSkip }) {
   const stage = project.castAndSets;
   if (!stage) return null;
   const working = WORKING.has(stage.status) && !stage.interrupted;
@@ -46,7 +50,7 @@ export default function CastAndSetsCheckin({ project, stale = null, busy, onOpen
   const staleText = stage.status === 'approved' ? staleApprovalText(stale) : null;
   const tone = stage.status === 'review' || staleText ? 'warning' : stage.status === 'approved' ? 'success' : stage.status === 'failed' ? 'error' : 'muted';
   return (
-    <div className={`rounded-lg border bg-port-card p-3 space-y-2 ${stage.status === 'review' ? 'border-port-warning/60' : 'border-port-border'}`} aria-label="Cast & Sets check-in">
+    <div id={id} tabIndex={-1} style={{ scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' }} className={`rounded-lg border bg-port-card p-3 space-y-2 ${stage.status === 'review' ? 'border-port-warning/60' : 'border-port-border'}`} aria-label="Cast & Sets check-in">
       <div className="flex flex-wrap items-center gap-2">
         <Users size={14} className="text-port-accent shrink-0" aria-hidden="true" />
         <span className="text-sm font-medium">Cast &amp; Sets check-in</span>
@@ -60,17 +64,11 @@ export default function CastAndSetsCheckin({ project, stale = null, busy, onOpen
           {staleText} Keep the sheet approved as it is, or rebuild it from the current inputs.
         </p>
       )}
-      {staleText && onRevert && stale?.revertible?.length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          {stale.revertible.map((field) => (
-            <button key={field} type="button" disabled={busy} onClick={() => onRevert(field)} title="Put this back to the value you approved"
-              className={`${buttonClass} border border-port-border`}>
-              <RotateCcw size={14} aria-hidden="true" /> Revert {field}
-            </button>
-          ))}
-        </div>
+      {staleText && (
+        <StaleApprovalActions revertible={stale?.revertible} busy={busy} onKeep={onReconfirm} onRevert={onRevert}
+          keepTitle="Keep this sheet approved on the current concept, style, subjects and song" />
       )}
-      <CastAndSetsReferenceProgress stage={stage} />
+      <CastAndSetsReferenceProgress stage={stage} onOpenPreview={onOpenPreview} />
       <div className="flex flex-wrap gap-2">
         {sheet && (
           <button type="button" onClick={() => onOpenSheet(sheet.id)} className={`${buttonClass} border border-port-border`}>
@@ -96,12 +94,6 @@ export default function CastAndSetsCheckin({ project, stale = null, busy, onOpen
             <Play size={14} aria-hidden="true" /> Resume
           </button>
         )}
-        {staleText && onReconfirm && (
-          <button type="button" disabled={busy} onClick={onReconfirm} title="Keep this sheet approved on the current concept, style, subjects and song"
-            className={`${buttonClass} border border-port-border`}>
-            <CheckCircle2 size={14} aria-hidden="true" /> Keep approved
-          </button>
-        )}
         {onRebuild && ['approved', 'skipped'].includes(stage.status) && (
           <button type="button" disabled={busy} onClick={onRebuild} title="Build a new sheet; the earlier one stays in the sheet's version history"
             className={`${buttonClass} border border-port-border`}>
@@ -114,6 +106,9 @@ export default function CastAndSetsCheckin({ project, stale = null, busy, onOpen
           </button>
         )}
       </div>
+      {onApplyFeedback && stage.direction && !working && ['review', 'approved'].includes(stage.status) && (
+        <CastAndSetsFeedback stage={stage} busy={busy} onApply={onApplyFeedback} onRemove={onRemoveFeedback} />
+      )}
     </div>
   );
 }

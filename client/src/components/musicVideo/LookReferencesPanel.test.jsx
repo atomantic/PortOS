@@ -35,6 +35,15 @@ describe('look references', () => {
     expect(onSaveSpec).toHaveBeenCalledWith({ references: [{ id: 'r1', imageId: 'face.png', role: 'character', label: 'Singer', condition: true }] });
   });
 
+  it('offers no condition toggle for a mood board import or a Pinterest pin', () => {
+    mount({ visualSpec: { references: [
+      { id: 'mvr-board-1', imageId: 'board.png', role: 'mood', condition: false },
+      { id: 'r2', imageId: 'pinterest-0123456789abcdef.jpg', role: 'mood', condition: false },
+    ] } });
+    expect(screen.queryByLabelText('Condition frames')).toBeNull();
+    expect(screen.getAllByText(/never sent to the generator/)).toHaveLength(2);
+  });
+
   it('imports the linked mood board gallery images once, skipping text, remote pins and duplicates', async () => {
     getMoodBoard.mockResolvedValue({ id: 'b1', name: 'Example Board', items: [
       { id: 'i1', type: 'image', mediaKey: 'image:pin.png' },

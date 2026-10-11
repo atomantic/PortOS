@@ -1306,6 +1306,47 @@ describe('codeReview helpers', () => {
       expect(prompt).toContain('added duplicate whose old copy remains')
     })
 
+    it('credits data-driven send-link buttons rendered from a mapped tuple array, but not a helper with no JSX consumer', async () => {
+      const objective = 'I want a button to send an image from a mood board to image-to-image, video or text-to-image.'
+      const helperDiff = [
+        'diff --git a/client/src/lib/moodBoardAnalysis.js b/client/src/lib/moodBoardAnalysis.js',
+        '+export function moodBoardItemSendLinks(item) {',
+        "+  return { textToImage: '/media/image?prompt=x', imageToImage: '/media/image?source=y', video: '/media/video?prompt=x' };",
+        '+}',
+      ].join('\n')
+      const jsxDiff = [
+        'diff --git a/client/src/pages/MoodBoardDetail.jsx b/client/src/pages/MoodBoardDetail.jsx',
+        '+                const sendLinks = moodBoardItemSendLinks(item);',
+        '+                        {[',
+        "+                          ['textToImage', ImageIcon, 'Text to image with this prompt'],",
+        "+                          ['imageToImage', Wand2, 'Send to image-to-image'],",
+        "+                          ['video', Film, 'Send to video'],",
+        '+                        ].map(([key, Icon, label]) => (sendLinks[key] ? (',
+        '+                          <Link key={key} to={sendLinks[key]} title={label} aria-label={label}><Icon /></Link>',
+        '+                        ) : null))}',
+      ].join('\n')
+
+      global.fetch = vi.fn(async (_url, init) => {
+        const request = JSON.parse(init.body)
+        const rubric = request.messages[0].content
+        const evidence = request.messages[1].content
+        const rubricCreditsMappedLinks = rubric.includes('mapped to one <Link to={links[key]}> per entry')
+          && rubric.includes('a helper with no added JSX consumer')
+        const hasJsxConsumer = evidence.includes('].map(([key, Icon, label])') && evidence.includes('to={sendLinks[key]}')
+        return mockJsonResponse({
+          choices: [{ message: { content: JSON.stringify(rubricCreditsMappedLinks && hasJsxConsumer
+            ? { verdict: 'ship', missing: [], unrequested: [], evidence: 'Mapped Link buttons render all three destinations; a unit test covers the helper.' }
+            : { verdict: 'fix-first', missing: ['rendered send buttons'], unrequested: [], evidence: 'Only a helper was added.' }) } }],
+        })
+      })
+
+      const withJsx = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective, diff: helperDiff + '\n' + jsxDiff })
+      const helperOnly = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective, diff: helperDiff })
+
+      expect(withJsx).toMatchObject({ ok: true, verdict: 'ship', missing: [], unrequested: [] })
+      expect(helperOnly).toMatchObject({ ok: true, verdict: 'fix-first', missing: ['rendered send buttons'] })
+    })
+
     // Transport/contract regression; the opt-in real-model test below checks judgement.
     it.each(manifestCases)('preserves the bounded manifest calibration and verdict: %s', async (_name, diff, verdict) => {
       global.fetch = vi.fn().mockImplementationOnce(async (_url, init) => {

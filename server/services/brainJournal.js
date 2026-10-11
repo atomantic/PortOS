@@ -527,17 +527,28 @@ async function removeFromObsidian(entry) {
 // Sized so an ordinary transient blip cannot trip it but a systemic outage does.
 const MAX_CONSECUTIVE_RESYNC_SKIPS = 25;
 
+// Hydrate only one page at a time during whole-store catch-up.
+export async function* iterateJournals() {
+  const limit = 100;
+  let offset = 0;
+  while (true) {
+    const { records, total } = await listJournals({ offset, limit, includeContent: true });
+    for (const record of records) yield record;
+    offset += records.length;
+    if (offset >= total || records.length === 0) return;
+  }
+}
+
 export async function resyncAllToObsidian() {
   const settings = await getSettings();
   if (!settings.obsidianVaultId) return { synced: 0, skipped: 0 };
 
-  const { records } = await listJournals({ limit: 10000, includeContent: true });
   let synced = 0;
   let skipped = 0;
   let consecutiveSkips = 0;
   let stoppedEarly = false;
   const locationUpdates = new Map();
-  for (const entry of records) {
+  for await (const entry of iterateJournals()) {
     // force:true so this bulk resync still writes even when the user has
     // turned off the per-write autoSync — they explicitly clicked "Re-sync
     // all entries now", which is the manual-sync escape hatch.
@@ -549,7 +560,7 @@ export async function resyncAllToObsidian() {
     }
     skipped += 1;
     consecutiveSkips += 1;
-    // Circuit breaker. This is a FOREGROUND request over up to 10,000 entries,
+    // Circuit breaker. This is a FOREGROUND request over all entries,
     // and an evicted note now costs up to MATERIALIZE_TIMEOUT_MS (20s) before it
     // is refused (#3706) — so a wedged iCloud or an unplugged vault would turn
     // "Re-sync all entries now" into a multi-hour request the user cannot cancel.

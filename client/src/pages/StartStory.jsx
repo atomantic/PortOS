@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Rocket, Lightbulb, FileInput, NotebookPen } from 'lucide-react';
+import PageHeader from '../components/PageHeader';
 import { listUniverseNames } from '../services/api';
 import toast from '../components/ui/Toast';
 
@@ -80,92 +81,91 @@ export default function StartStory() {
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
-      <header>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <Rocket className="w-6 h-6 text-port-accent" /> Start a Story
-        </h1>
-        <p className="text-gray-400 mt-1">
-          How do you want to begin? Every path lands in the same place — a universe, a series, and the
-          production pipeline — so pick whichever door fits where your story is today.
-        </p>
-      </header>
+    <div className="flex h-full min-h-0 flex-col">
+      <PageHeader
+        icon={Rocket}
+        title="Start a Story"
+        subtitle="How do you want to begin? Every path lands in the same place — a universe, a series, and the production pipeline — so pick whichever door fits where your story is today."
+      />
+      <div className="flex-1 min-h-0 overflow-auto p-4">
+        <div className="max-w-4xl mx-auto space-y-6">
+          {/* Universe choice, asked up front for all three modes. */}
+          <section className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
+            <h2 className="text-sm font-semibold text-gray-200">Which universe?</h2>
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+              <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                <input
+                  type="radio"
+                  name="universe-choice"
+                  checked={!useExisting}
+                  onChange={() => { setUseExisting(false); setUniverseId(''); }}
+                  className="accent-port-accent"
+                />
+                Start fresh
+              </label>
+              <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                <input
+                  type="radio"
+                  name="universe-choice"
+                  checked={useExisting}
+                  onChange={() => setUseExisting(true)}
+                  className="accent-port-accent"
+                  disabled={namedUniverses.length === 0}
+                />
+                Use an existing universe
+              </label>
+              {useExisting && (
+                <select
+                  id="start-story-universe"
+                  aria-label="Existing universe"
+                  value={universeId}
+                  onChange={(e) => setUniverseId(e.target.value)}
+                  className="bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-gray-200 sm:ml-auto"
+                >
+                  <option value="">Select a universe…</option>
+                  {namedUniverses.map((u) => (
+                    <option key={u.id} value={u.id}>{u.name}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+            {needsUniversePick && (
+              <p className="text-xs text-port-warning">Pick a universe above to continue, or switch to “Start fresh.”</p>
+            )}
+          </section>
 
-      {/* Universe choice, asked up front for all three modes. */}
-      <section className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
-        <h2 className="text-sm font-semibold text-gray-200">Which universe?</h2>
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-          <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
-            <input
-              type="radio"
-              name="universe-choice"
-              checked={!useExisting}
-              onChange={() => { setUseExisting(false); setUniverseId(''); }}
-              className="accent-port-accent"
-            />
-            Start fresh
-          </label>
-          <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
-            <input
-              type="radio"
-              name="universe-choice"
-              checked={useExisting}
-              onChange={() => setUseExisting(true)}
-              className="accent-port-accent"
-              disabled={namedUniverses.length === 0}
-            />
-            Use an existing universe
-          </label>
-          {useExisting && (
-            <select
-              id="start-story-universe"
-              aria-label="Existing universe"
-              value={universeId}
-              onChange={(e) => setUniverseId(e.target.value)}
-              className="bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-gray-200 sm:ml-auto"
-            >
-              <option value="">Select a universe…</option>
-              {namedUniverses.map((u) => (
-                <option key={u.id} value={u.id}>{u.name}</option>
-              ))}
-            </select>
-          )}
+          {/* The three intake modes. */}
+          <section className="grid gap-4 sm:grid-cols-3">
+            {MODES.map((mode) => {
+              const Icon = mode.icon;
+              const attaches = attachUniverseId && mode.consumesUniverse;
+              return (
+                <button
+                  key={mode.id}
+                  type="button"
+                  onClick={() => go(mode)}
+                  disabled={needsUniversePick}
+                  className={`text-left bg-port-card border border-port-border rounded-lg p-4 space-y-2 transition-colors ${
+                    needsUniversePick
+                      ? 'opacity-50 cursor-not-allowed'
+                      : 'hover:border-port-accent'
+                  }`}
+                >
+                  <Icon className="w-6 h-6 text-port-accent" />
+                  <h3 className="font-semibold text-gray-100">{mode.title}</h3>
+                  <p className="text-sm text-gray-400">{mode.desc}</p>
+                  {attaches && (
+                    <p className="text-xs text-port-success">Will attach to the selected universe.</p>
+                  )}
+                  {attachUniverseId && !attaches && (
+                    <p className="text-xs text-gray-500">Universe linking for prose drafts is coming in a later phase.</p>
+                  )}
+                </button>
+              );
+            })}
+          </section>
         </div>
-        {needsUniversePick && (
-          <p className="text-xs text-port-warning">Pick a universe above to continue, or switch to “Start fresh.”</p>
-        )}
-      </section>
-
-      {/* The three intake modes. */}
-      <section className="grid gap-4 sm:grid-cols-3">
-        {MODES.map((mode) => {
-          const Icon = mode.icon;
-          const attaches = attachUniverseId && mode.consumesUniverse;
-          return (
-            <button
-              key={mode.id}
-              type="button"
-              onClick={() => go(mode)}
-              disabled={needsUniversePick}
-              className={`text-left bg-port-card border border-port-border rounded-lg p-4 space-y-2 transition-colors ${
-                needsUniversePick
-                  ? 'opacity-50 cursor-not-allowed'
-                  : 'hover:border-port-accent'
-              }`}
-            >
-              <Icon className="w-6 h-6 text-port-accent" />
-              <h3 className="font-semibold text-gray-100">{mode.title}</h3>
-              <p className="text-sm text-gray-400">{mode.desc}</p>
-              {attaches && (
-                <p className="text-xs text-port-success">Will attach to the selected universe.</p>
-              )}
-              {attachUniverseId && !attaches && (
-                <p className="text-xs text-gray-500">Universe linking for prose drafts is coming in a later phase.</p>
-              )}
-            </button>
-          );
-        })}
-      </section>
+      </div>
     </div>
   );
 }

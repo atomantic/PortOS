@@ -8,22 +8,55 @@ const BIBLE_HEADER = 'Production bible (use the subjects relevant to this shot; 
 // street or a bathroom), so it is labelled look-only wherever it is included.
 export const MOOD_BOARD_LOOK_LABEL = 'Mood board look (palette, lighting and texture only; never its locations, objects or poses)';
 
+const PERSON = /\b(she|he|her|hers|him|his|they|them|their|woman|women|man|men|girl|boy|person|people|figure|figures|silhouette|someone|somebody|protagonist|character|singer|drummer|dancer)\b/i;
+
+/**
+ * `text` without the sentences or `;` clauses that describe a person (or
+ * `name`). A mood board's pictured people (an image caption, a synthesized
+ * style that poses a woman at a window) never reach a prompt as a subject.
+ * `Avoid:` lines are kept: naming people there only keeps them out.
+ */
+export function withoutPeople(text, name = '') {
+  const who = String(name || '').trim().toLowerCase();
+  const keep = (part) => part.trim() && !PERSON.test(part) && !(who.length >= 3 && part.toLowerCase().includes(who));
+  return String(text || '').split('\n')
+    .map((line) => (/^\s*avoid:/i.test(line) ? line.trim() : line.split(/;\s*/)
+      .map((clause) => clause.split(/(?<=[.!?])\s+/).filter(keep).join(' ').trim())
+      .filter(Boolean).join('; ')))
+    .filter(Boolean).join('\n');
+}
+
+/**
+ * The director-written look (palette, light, film stock, texture) from the
+ * project's Cast & Sets direction; '' when Cast & Sets was skipped or has none.
+ */
+export function musicVideoDirectorLook(project) {
+  if (project?.castAndSets?.status === 'skipped') return '';
+  return trimTo(project?.castAndSets?.direction?.look, 500) || '';
+}
+
 // A shot needs the character's identity, look, rules and never-list; the
 // wardrobe catalogue is for Cast & Sets, which reads the full snapshot.
 const characterStyleForShots = (snapshot) => snapshot.split('\n').filter((line) => !line.startsWith('Wardrobe options:')).join('\n');
 
 /**
  * Shared, bounded creative bible for planning, media generation and handoff.
- * `moodBoard: false` leaves the mood-board look out — a motion prompt is
- * conditioned on a reference frame that already carries the look, and the
- * board's pictured places and subjects only fight the shot there.
+ * `moodBoard: false` leaves the look out — a motion prompt is conditioned on a
+ * reference frame that already carries the look, and the board's pictured
+ * places and subjects only fight the shot there. `look` is the director-written
+ * look (musicVideoDirectorLook); when set it replaces the mood board snapshot.
+ * Either way, sentences that picture a person are dropped.
  */
-export function musicVideoCreativeContext(concept, { moodBoard = true } = {}) {
+export function musicVideoCreativeContext(concept, { moodBoard = true, look = '' } = {}) {
   if (!concept) return '';
+  const directorLook = withoutPeople(look);
+  const boardLook = directorLook ? '' : withoutPeople(trimTo(concept.moodBoardStyle, 800));
+  const sameAsStyle = directorLook && directorLook === withoutPeople(trimTo(concept.style, 500));
   const styles = [
     concept.characterStyle && `Character style (fixed identity; use the identity text verbatim): ${trimTo(characterStyleForShots(concept.characterStyle), 1900)}`,
     concept.universeStyle && `Universe style: ${trimTo(concept.universeStyle, 800)}`,
-    moodBoard && concept.moodBoardStyle && `${MOOD_BOARD_LOOK_LABEL}: ${trimTo(concept.moodBoardStyle, 800)}`,
+    moodBoard && directorLook && !sameAsStyle && `Look (palette, light and texture only): ${directorLook}`,
+    moodBoard && boardLook && `${MOOD_BOARD_LOOK_LABEL}: ${boardLook}`,
   ].filter(Boolean);
   const subjects = (concept.subjects || []).slice(0, 24);
   const identities = subjects.map((s) =>
@@ -38,6 +71,37 @@ export function musicVideoCreativeContext(concept, { moodBoard = true } = {}) {
     return `${identities[i]}${description ? ` — ${description}` : ''}`;
   });
   return [...styles, ...(lines.length ? [BIBLE_HEADER, ...lines] : [])].join('\n').slice(0, CONTEXT_MAX);
+}
+
+// Suno writes an excluded style as a leading minus; people type it as a
+// hyphen, a non-breaking hyphen (U+2011), an en dash or a minus sign.
+const EXCLUDED_STYLE = /^[-\u2010\u2011\u2012\u2013\u2212]\s*/;
+
+/**
+ * Split a Suno style prompt into what the song sounds like and the styles it
+ * excludes (`-bubblegum pop`). Terms are comma separated; '' and [] when unset.
+ */
+function parseSongStyle(text) {
+  const terms = String(text || '').split(',').map((t) => t.trim()).filter(Boolean);
+  const sound = terms.filter((t) => !EXCLUDED_STYLE.test(t));
+  const avoid = terms.filter((t) => EXCLUDED_STYLE.test(t)).map((t) => t.replace(EXCLUDED_STYLE, '').trim()).filter(Boolean);
+  return { sound: sound.join(', '), avoid };
+}
+
+/**
+ * The song's own style (the Suno prompt it was made from) as direction for an
+ * LLM that designs the picture. Music words are translated, never pasted into
+ * an image prompt; the excluded styles name what the picture must not feel
+ * like. '' when the project has no song style.
+ */
+export function musicVideoSongStyleContext(concept) {
+  const { sound, avoid } = parseSongStyle(concept?.songStyle);
+  if (!sound && !avoid.length) return '';
+  return [
+    'SONG STYLE (the Suno style prompt this song was made from). Let it shape the design of the world, the cast and the scenes together with the lyrics and the director\'s direction: translate its era, genre, energy, instrumentation and vocal character into period, wardrobe, locations, palette, lighting, camera movement and performance. Never copy these music words into an image or video prompt. A fixed character style still decides who the protagonist is; the song style only informs the protagonist\'s looks and the world around them.',
+    sound && `Sound: ${trimTo(sound, 1500)}`,
+    avoid.length && `The song deliberately avoids: ${trimTo(avoid.join(', '), 800)}. Keep the picture clear of their visual equivalents too: a song that avoids "cutesy" gets no cute design.`,
+  ].filter(Boolean).join('\n');
 }
 
 /** Bounded Cast & Sets bible; mood-board subjects are never location authority. */

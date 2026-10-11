@@ -8,13 +8,13 @@ import Field from '../ui/FormField';
 import toast from '../ui/Toast';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
-import { DEFAULT_NEGATIVE_PROMPT } from '../../lib/imageGenDefaults';
 
 const byName = (a, b) => (a.name || '').localeCompare(b.name || '');
 
 export default function PersonaMasterDetail({
   basePath, selectedId, title, titleIcon: TitleIcon, intro, singular, plural, fields,
   listSecondaryKey, portrait, listRecords, createRecord, updateRecord, deleteRecord, generateImage,
+  hideTitle = false,
 }) {
   const navigate = useNavigate();
   const emptyForm = useMemo(
@@ -96,7 +96,7 @@ export default function PersonaMasterDetail({
     setStartingGeneration(true);
     const queued = await generateImage({
       prompt: portrait.buildPrompt(form),
-      negativePrompt: `${DEFAULT_NEGATIVE_PROMPT}, extra limbs, nsfw, nude`,
+      negativePrompt: 'extra limbs, nsfw, nude',
       width: 768,
       height: 1024,
     }, { silent: true }).catch((err) => ({ error: err }));
@@ -169,7 +169,7 @@ export default function PersonaMasterDetail({
 
   return (
     <div>
-      {title ? (
+      {!hideTitle && (title ? (
         <>
           <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
             <div className="flex items-center gap-3">
@@ -185,7 +185,7 @@ export default function PersonaMasterDetail({
           {introBlock}
           <CreateButton singular={singular} onClick={() => navigate(`${basePath}/new`)} />
         </div>
-      )}
+      ))}
 
       <div className="grid grid-cols-1 md:grid-cols-[260px_1fr] gap-4">
         <div className="bg-port-card border border-port-border rounded-lg p-2">
@@ -222,8 +222,14 @@ export default function PersonaMasterDetail({
             </div>
           ) : !isCreate && !selected ? (
             <div className="text-gray-500 text-sm">
-              <p>Select a {singular.toLowerCase()} to edit, or create a new one.</p>
-              <CreateButton singular={singular} onClick={() => navigate(`${basePath}/new`)} />
+              {records.length === 0 ? (
+                <>
+                  <p>Create your first {singular.toLowerCase()} to get started.</p>
+                  <CreateButton singular={singular} onClick={() => navigate(`${basePath}/new`)} />
+                </>
+              ) : (
+                <p>Select {/^[aeiou]/i.test(singular) ? 'an' : 'a'} {singular.toLowerCase()} from the list to view details, or click New {singular} above.</p>
+              )}
             </div>
           ) : (
             <div className="space-y-3">

@@ -46,6 +46,14 @@ describe('music-video step navigation', () => {
     expect(screen.getByText(/\$3\.00 \/ \$10\.00/)).toBeInTheDocument();
   });
 
+  it('drops the "Done when" line when the step checklist already lists what done means', () => {
+    render(<MusicVideoLayout project={{ id: 'example-project', name: 'Example Project' }} stage="cast-sets"
+      onStageChange={vi.fn()} progress={progressFor('cast-sets')} spend={{ spentUsd: 0, capUsd: 0 }}
+      lead={<section aria-label="What this step needs">Art direction written</section>} />);
+    expect(screen.getByRole('heading', { level: 3, name: 'Look' })).toBeInTheDocument();
+    expect(screen.queryByText(MUSIC_VIDEO_STAGES[1].doneWhen)).toBeNull();
+  });
+
   it('says where the project stands in one line, and a status error marks no step as needing you', () => {
     render(<MusicVideoLayout project={{ id: 'example-project', name: 'Example Project' }} stage="cast-sets"
       onStageChange={() => {}} progress={progressFor('cast-sets')} spend={{ spentUsd: 0 }}

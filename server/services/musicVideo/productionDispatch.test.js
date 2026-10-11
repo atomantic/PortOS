@@ -48,6 +48,16 @@ describe('production scene dispatch (#9066)', () => {
     expect(params.referenceImagePaths[0]).toMatch(/ref-example\.png$/);
   });
 
+  it('never conditions a frame on a mood board import or a Pinterest pin, even when flagged', async () => {
+    const outside = { ...project, visualSpec: { references: [
+      { id: 'mvr-board-1', imageId: 'board-still.png', condition: true },
+      { id: 'picked', imageId: 'pinterest-0123456789abcdef.jpg', condition: true },
+      { id: 'own', imageId: 'ref-example.png', condition: true },
+    ] } };
+    await dispatchProductionStep({ stepKind: 'frame', project: outside, scene, route: { kind: 'image', mode: 'codex', model: null }, tag, settings });
+    expect(enqueueJob.mock.calls[0][0].params.referenceImagePaths.map((path) => basename(path))).toEqual(['ref-example.png']);
+  });
+
   it('conditions an approved check-in frame on its character and mapped plate, even beyond the global cap', async () => {
     const checkedIn = { ...project,
       castAndSets: { status: 'approved', direction: { songMap: [{ section: 0, setId: 'harbor' }, { section: 1, setId: 'roof' }] } },
@@ -117,6 +127,14 @@ describe('production scene dispatch (#9066)', () => {
     expect(submitVideoGenJob).toHaveBeenCalledWith(expect.objectContaining({
       backend: 'grok', mode: 'image', sourceImageFile: 'frame-example.png', grokDuration: 6, musicVideo: clipTag,
     }), {});
+  });
+
+  // Uniquely catches a supplied-audio route rendering prompt motion instead of its shot's song window.
+  it('submits a supplied-audio local clip as audio-to-video from its song window', async () => {
+    const clipTag = { ...tag, productionStepKey: 'clip:mvs-a:base:1' };
+    await dispatchProductionStep({ stepKind: 'clip', project, scene, route: { kind: 'video', mode: 'local', model: 'example-ltx', audio: 'supplied' }, tag: clipTag, settings });
+    expect(submitVideoGenJob.mock.calls[0][0]).toMatchObject({ backend: 'local', mode: 'a2v', _suppliedAudio: true, modelId: 'example-ltx', sourceImageFile: 'frame-example.png' });
+    expect(submitVideoGenJob.mock.calls[0][0].disableAudio).toBeUndefined();
   });
 
   it('submits a fal clip as exactly the take the step was priced for (falSceneTake)', async () => {

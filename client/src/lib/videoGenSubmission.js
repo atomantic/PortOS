@@ -44,127 +44,161 @@ export function envelopVideoPrompt(text, {
     : composed.prompt;
 }
 
-export function buildVideoGenSubmission({
-  isGrok, grokDuration, isFal, falDuration, falModelId, falResolution, falGenerateAudio,
-  isReactor, reactorClipId, reactorSeconds, reactorSeed, reactorAspect, remoteSubmissionFields,
-  displaySleepEnabled,
-  prompt, negativePrompt, stylePreset, selectedUniverse,
-  width, height, mode, sourceImageFile, sourceImageUpload,
-  numFrames, fps, steps, guidanceScale, seed, batchSize = 1,
-  currentModel, models, modelId, tiling, textEncoderId, speedProfileId, draftDecode, streamingMode,
-  disableAudio, noMusic, imageStrength, i2vReferenceMode,
-  keyframesActive, keyframes, loraFamily, selectedLoras,
-  lastImageFile, lastImageUpload, extendFromVideoId, audioFile,
-  icModeActive, icImageKind, icReferenceFile, icReferenceVideoId,
-  icReferenceImageFiles, icStrength, icSkipStage2,
-  chainingActive, chunks, chunkPrompts, contextFrames,
+// Hosted lanes (Grok, fal, reactor) take only text or image mode, and the
+// source pair is meaningful only in image mode. '' is the wire value otherwise.
+const hostedImageFields = (mode, sourceImageFile, sourceImageUpload) => {
+  const isImage = mode === 'image';
+  return {
+    mode: isImage ? 'image' : 'text',
+    sourceImageFile: isImage ? (sourceImageFile || '') : '',
+    sourceImage: isImage ? (sourceImageUpload || '') : '',
+  };
+};
+
+const clampedSize = (width, height, bounds = VIDEO_EDGE_BOUNDS) => ({
+  width: clampImageEdge(width, bounds),
+  height: clampImageEdge(height, bounds),
+});
+
+// A seed of 0 is a real value; only an unset seed is omitted.
+const omitReactorSeed = (reactorSeed) => (
+  reactorSeed === '' || reactorSeed === null || reactorSeed === undefined ? undefined : reactorSeed
+);
+
+function grokVideoSubmission({
+  composed, grokDuration, width, height, mode, sourceImageFile, sourceImageUpload,
 }) {
-  const composed = composeStyledPrompt(prompt, negativePrompt, stylePresetsFor(selectedUniverse, stylePreset));
-  const effectiveDisableAudio = supportsVideoAudioControls(currentModel) && disableAudio;
-  const withEnvelope = (text) => envelopVideoPrompt(text, {
-    currentModel, negativePrompt, stylePreset, selectedUniverse, noMusic, disableAudio,
-  });
-  // The backing array is deliberately not truncated as chunks change. Only
-  // slice live chunks at the wire boundary.
-  const beats = chainingActive
-    ? chunkPrompts.slice(0, chunks).map((beat) => (beat?.trim() ? withEnvelope(beat) : ''))
-    : [];
+  return {
+    backend: 'grok',
+    prompt: composed.prompt,
+    negativePrompt: composed.negativePrompt,
+    grokDuration,
+    ...clampedSize(width, height),
+    ...hostedImageFields(mode, sourceImageFile, sourceImageUpload),
+  };
+}
 
-  if (isGrok) {
-    return {
-      backend: 'grok',
-      prompt: composed.prompt,
-      negativePrompt: composed.negativePrompt,
-      grokDuration,
-      width: clampImageEdge(width, VIDEO_EDGE_BOUNDS),
-      height: clampImageEdge(height, VIDEO_EDGE_BOUNDS),
-      mode: mode === 'image' ? 'image' : 'text',
-      sourceImageFile: mode === 'image' ? (sourceImageFile || '') : '',
-      sourceImage: mode === 'image' ? (sourceImageUpload || '') : '',
-    };
-  }
+function falVideoSubmission({
+  composed, falDuration, falModelId, falResolution, falGenerateAudio,
+  width, height, mode, sourceImageFile, sourceImageUpload,
+}) {
+  return {
+    backend: 'fal',
+    prompt: composed.prompt,
+    // No negativePrompt: fal's buildRequestBody never sends one, so posting it
+    // only stamped a promise on the history record that nothing honored.
+    falDuration,
+    falModelId: falModelId || undefined,
+    ...(falResolution ? { falResolution } : {}),
+    ...(falGenerateAudio ? { falGenerateAudio: true } : {}),
+    ...clampedSize(width, height),
+    ...hostedImageFields(mode, sourceImageFile, sourceImageUpload),
+  };
+}
 
-  if (isFal) {
-    return {
-      backend: 'fal',
-      prompt: composed.prompt,
-      // No negativePrompt: fal's buildRequestBody never sends one, so posting it
-      // only stamped a promise on the history record that nothing honored.
-      falDuration,
-      falModelId: falModelId || undefined,
-      ...(falResolution ? { falResolution } : {}),
-      ...(falGenerateAudio ? { falGenerateAudio: true } : {}),
-      width: clampImageEdge(width, VIDEO_EDGE_BOUNDS),
-      height: clampImageEdge(height, VIDEO_EDGE_BOUNDS),
-      mode: mode === 'image' ? 'image' : 'text',
-      sourceImageFile: mode === 'image' ? (sourceImageFile || '') : '',
-      sourceImage: mode === 'image' ? (sourceImageUpload || '') : '',
-    };
-  }
+function reactorVideoSubmission({
+  composed, reactorClipId, reactorSeconds, reactorSeed, reactorAspect,
+  mode, sourceImageFile, sourceImageUpload,
+}) {
+  return {
+    backend: 'reactor',
+    prompt: composed.prompt,
+    // No negativePrompt: fast-h3's enqueue command has no such field (same as
+    // the fal lane above).
+    // The clip id chains this render onto a previous reactor clip via
+    // continue_from_clip_id; the picker only offers ids off completed reactor
+    // history records. Dropped in Image mode because continuation and a
+    // starting frame are exclusive — the service rejects a request carrying
+    // both, and the picker is already disabled there.
+    reactorClipId: (mode === 'image' ? '' : reactorClipId) || undefined,
+    reactorSeconds: reactorSeconds || undefined,
+    // Unlike falDuration/falModelId, a seed of 0 is a real, meaningful
+    // value — `|| undefined` would silently drop it.
+    reactorSeed: omitReactorSeed(reactorSeed),
+    // No width/height: fast-h3's resolution is its session CANVAS, and every
+    // canvas holds a 768px short edge, so the aspect string is the whole
+    // choice. '' is the picker's Auto entry — sending nothing asks the server
+    // to derive the canvas from the starting frame instead of opening the
+    // 16:9 session that squeezed a portrait image into a landscape render.
+    reactorAspect: reactorAspect || undefined,
+    ...hostedImageFields(mode, sourceImageFile, sourceImageUpload),
+  };
+}
 
-  if (isReactor) {
-    return {
-      backend: 'reactor',
-      prompt: composed.prompt,
-      // No negativePrompt: fast-h3's enqueue command has no such field (same as
-      // the fal lane above).
-      // The clip id chains this render onto a previous reactor clip via
-      // continue_from_clip_id; the picker only offers ids off completed reactor
-      // history records. Dropped in Image mode because continuation and a
-      // starting frame are exclusive — the service rejects a request carrying
-      // both, and the picker is already disabled there.
-      reactorClipId: (mode === 'image' ? '' : reactorClipId) || undefined,
-      reactorSeconds: reactorSeconds || undefined,
-      // Unlike falDuration/falModelId, a seed of 0 is a real, meaningful
-      // value — `|| undefined` would silently drop it (the reactor route
-      // and reactor.js's own buildRequestBody already preserve 0 correctly,
-      // so only the client-side send needs the nullish check).
-      reactorSeed: reactorSeed === '' || reactorSeed === null || reactorSeed === undefined ? undefined : reactorSeed,
-      // No width/height: fast-h3's resolution is its session CANVAS, and every
-      // canvas holds a 768px short edge, so the aspect string is the whole
-      // choice. '' is the picker's Auto entry — sending nothing asks the server
-      // to derive the canvas from the starting frame instead of opening the
-      // 16:9 session that squeezed a portrait image into a landscape render.
-      reactorAspect: reactorAspect || undefined,
-      mode: mode === 'image' ? 'image' : 'text',
-      sourceImageFile: mode === 'image' ? (sourceImageFile || '') : '',
-      sourceImage: mode === 'image' ? (sourceImageUpload || '') : '',
-    };
-  }
-
-  if (remoteSubmissionFields) {
-    return {
-      backend: 'local',
-      mode: 'text',
-      prompt: composed.prompt,
-      negativePrompt: composed.negativePrompt,
-      width: clampImageEdge(width, VIDEO_EDGE_BOUNDS),
-      height: clampImageEdge(height, VIDEO_EDGE_BOUNDS),
-      numFrames,
-      fps,
-      steps: steps || '',
-      guidanceScale: guidanceScale || '',
-      seed: seed ?? '',
-      ...remoteSubmissionFields,
-    };
-  }
-
-  const legacyFflf = mode === 'fflf' && !keyframesActive;
-  const localEdgeBounds = videoEdgeBoundsForModel(currentModel);
+function remoteVideoSubmission({
+  composed, remoteSubmissionFields, width, height, numFrames, fps, steps, guidanceScale, seed,
+}) {
   return {
     backend: 'local',
-    prompt: withEnvelope(prompt),
-    negativePrompt: currentModel?.supportsNegativePrompt === false ? '' : composed.negativePrompt,
-    modelId,
-    width: clampImageEdge(width, localEdgeBounds),
-    height: clampImageEdge(height, localEdgeBounds),
+    mode: 'text',
+    prompt: composed.prompt,
+    negativePrompt: composed.negativePrompt,
+    ...clampedSize(width, height),
     numFrames,
     fps,
     steps: steps || '',
     guidanceScale: guidanceScale || '',
     seed: seed ?? '',
-    ...(currentModel?.supportsWarmBatch && !chainingActive && batchSize > 1 ? { batchSize } : {}),
-    tiling: currentModel?.supportsTiling === false ? 'auto' : tiling,
+    ...remoteSubmissionFields,
+  };
+}
+
+const attachesStartFrame = (mode, runtime, legacyFflf) => (
+  mode === 'image' || mode === 'a2v' || legacyFflf
+  || (mode === 'extend' && !isLtx2FamilyRuntime(runtime))
+);
+
+// The inline-upload half of the start frame: an extend on a non-LTX-2 runtime
+// reuses a stored file only, so it never carries an upload.
+const attachesStartUpload = (mode, legacyFflf) => mode === 'image' || mode === 'a2v' || legacyFflf;
+
+// LTX-2 extends continue a prior render by id instead of a start frame.
+const attachesExtendSource = (mode, runtime) => mode === 'extend' && isLtx2FamilyRuntime(runtime);
+
+function frameSourceFields({
+  mode, runtime, legacyFflf, sourceImageFile, sourceImageUpload,
+  lastImageFile, lastImageUpload, extendFromVideoId, audioFile,
+}) {
+  return {
+    sourceImageFile: attachesStartFrame(mode, runtime, legacyFflf) ? (sourceImageFile || '') : '',
+    sourceImage: attachesStartUpload(mode, legacyFflf) ? (sourceImageUpload || '') : '',
+    lastImageFile: legacyFflf ? (lastImageFile || '') : '',
+    lastImage: legacyFflf ? (lastImageUpload || '') : '',
+    extendFromVideoId: attachesExtendSource(mode, runtime) ? (extendFromVideoId || '') : '',
+    audioFile: mode === 'a2v' ? (audioFile || '') : '',
+  };
+}
+
+// IC-LoRA references: a video reference (file wins over a stored video id) and
+// image references are mutually exclusive by `icImageKind`.
+function icReferenceFields({
+  icModeActive, icImageKind, icReferenceFile, icReferenceVideoId,
+  icReferenceImageFiles, icStrength, icSkipStage2,
+}) {
+  const videoKind = icModeActive && !icImageKind;
+  return {
+    icReference: videoKind ? (icReferenceFile || '') : '',
+    icReferenceVideoIds: (videoKind && !icReferenceFile) ? (icReferenceVideoId || '') : '',
+    icReferenceImageFiles: icImageKind ? icReferenceImageFiles.filter(Boolean) : undefined,
+    icStrength: icModeActive ? icStrength : '',
+    icSkipStage2: icModeActive && icSkipStage2 ? 'true' : '',
+  };
+}
+
+function chunkFields({ chainingActive, chunks, beats, contextFrames }) {
+  return {
+    chunks: chainingActive ? chunks : '',
+    chunkPrompts: beats.some((beat) => beat.trim()) ? JSON.stringify(beats) : '',
+    contextFrames: chainingActive ? String(contextFrames) : '',
+  };
+}
+
+// Request-only knobs whose absence (undefined) means "server default".
+function localOptionalFields({
+  currentModel, models, textEncoderId, speedProfileId, draftDecode, streamingMode,
+  mode, chainingActive, contextFrames,
+}) {
+  return {
     textEncoderId: normalizeTextEncoderForModel(textEncoderId, currentModel) === STOCK_TEXT_ENCODER_ID
       ? undefined
       : textEncoderId,
@@ -188,34 +222,88 @@ export function buildVideoGenSubmission({
     streamingMode: (isLtx2FamilyRuntime(currentModel?.runtime) && !isDefaultVideoStreamingMode(streamingMode))
       ? streamingMode
       : undefined,
-    disableAudio: effectiveDisableAudio ? 'true' : 'false',
-    // Only meaningful on a runtime the GPU-watchdog mitigation applies to —
-    // absent otherwise so an unrelated model's render never carries a stale
-    // choice. The grok/fal/reactor/remote branches above already returned, so
-    // reaching here already means none of those apply.
-    ...(currentModel?.sleepsDisplayDuringRender ? { displaySleep: displaySleepEnabled ? 'true' : 'false' } : {}),
+  };
+}
+
+function loraFields({ loraFamily, selectedLoras }) {
+  const hasLoras = loraFamily && selectedLoras.length;
+  return {
+    loraFilenames: hasLoras ? selectedLoras.map((lora) => lora.filename) : undefined,
+    loraScales: hasLoras ? selectedLoras.map((lora) => lora.scale) : undefined,
+  };
+}
+
+function conditioningFields({ mode, imageStrength, i2vReferenceMode, keyframesActive, keyframes }) {
+  return {
     mode,
     imageStrength: imageStrength || '',
     i2vReferenceMode: isDefaultI2vReferenceMode(i2vReferenceMode) ? '' : i2vReferenceMode,
     keyframes: keyframesActive ? JSON.stringify(keyframes) : '',
-    loraFilenames: (loraFamily && selectedLoras.length) ? selectedLoras.map((lora) => lora.filename) : undefined,
-    loraScales: (loraFamily && selectedLoras.length) ? selectedLoras.map((lora) => lora.scale) : undefined,
-    sourceImageFile: (mode === 'image' || mode === 'a2v' || legacyFflf
-      || (mode === 'extend' && !isLtx2FamilyRuntime(currentModel?.runtime)))
-      ? (sourceImageFile || '') : '',
-    sourceImage: (mode === 'image' || mode === 'a2v' || legacyFflf) ? (sourceImageUpload || '') : '',
-    lastImageFile: legacyFflf ? (lastImageFile || '') : '',
-    lastImage: legacyFflf ? (lastImageUpload || '') : '',
-    extendFromVideoId: (mode === 'extend' && isLtx2FamilyRuntime(currentModel?.runtime))
-      ? (extendFromVideoId || '') : '',
-    audioFile: mode === 'a2v' ? (audioFile || '') : '',
-    icReference: (icModeActive && !icImageKind) ? (icReferenceFile || '') : '',
-    icReferenceVideoIds: (icModeActive && !icImageKind && !icReferenceFile) ? (icReferenceVideoId || '') : '',
-    icReferenceImageFiles: icImageKind ? icReferenceImageFiles.filter(Boolean) : undefined,
-    icStrength: icModeActive ? icStrength : '',
-    icSkipStage2: icModeActive && icSkipStage2 ? 'true' : '',
-    chunks: chainingActive ? chunks : '',
-    chunkPrompts: beats.some((beat) => beat.trim()) ? JSON.stringify(beats) : '',
-    contextFrames: chainingActive ? String(contextFrames) : '',
   };
+}
+
+function localVideoSubmission(args, { composed, withEnvelope, effectiveDisableAudio, beats }) {
+  const {
+    prompt, width, height, mode, numFrames, fps, steps, guidanceScale, seed, batchSize = 1,
+    currentModel, modelId, tiling, displaySleepEnabled, keyframesActive,
+    chainingActive, chunks, contextFrames,
+  } = args;
+  const legacyFflf = mode === 'fflf' && !keyframesActive;
+  return {
+    backend: 'local',
+    prompt: withEnvelope(prompt),
+    negativePrompt: currentModel?.supportsNegativePrompt === false ? '' : composed.negativePrompt,
+    modelId,
+    ...clampedSize(width, height, videoEdgeBoundsForModel(currentModel)),
+    numFrames,
+    fps,
+    steps: steps || '',
+    guidanceScale: guidanceScale || '',
+    seed: seed ?? '',
+    ...(currentModel?.supportsWarmBatch && !chainingActive && batchSize > 1 ? { batchSize } : {}),
+    tiling: currentModel?.supportsTiling === false ? 'auto' : tiling,
+    ...localOptionalFields(args),
+    disableAudio: effectiveDisableAudio ? 'true' : 'false',
+    // Only meaningful on a runtime the GPU-watchdog mitigation applies to —
+    // absent otherwise so an unrelated model's render never carries a stale
+    // choice.
+    ...(currentModel?.sleepsDisplayDuringRender ? { displaySleep: displaySleepEnabled ? 'true' : 'false' } : {}),
+    ...conditioningFields(args),
+    ...loraFields(args),
+    ...frameSourceFields({ ...args, runtime: currentModel?.runtime, legacyFflf }),
+    ...icReferenceFields(args),
+    ...chunkFields({ chainingActive, chunks, beats, contextFrames }),
+  };
+}
+
+// The backing array is deliberately not truncated as chunks change. Only
+// slice live chunks at the wire boundary.
+const liveBeats = (chainingActive, chunkPrompts, chunks, withEnvelope) => (
+  chainingActive
+    ? chunkPrompts.slice(0, chunks).map((beat) => (beat?.trim() ? withEnvelope(beat) : ''))
+    : []
+);
+
+export function buildVideoGenSubmission(args) {
+  const {
+    isGrok, isFal, isReactor, remoteSubmissionFields,
+    prompt, negativePrompt, stylePreset, selectedUniverse,
+    currentModel, disableAudio, noMusic, chainingActive, chunks, chunkPrompts,
+  } = args;
+  const composed = composeStyledPrompt(prompt, negativePrompt, stylePresetsFor(selectedUniverse, stylePreset));
+  const withEnvelope = (text) => envelopVideoPrompt(text, {
+    currentModel, negativePrompt, stylePreset, selectedUniverse, noMusic, disableAudio,
+  });
+  const shared = { ...args, composed };
+
+  if (isGrok) return grokVideoSubmission(shared);
+  if (isFal) return falVideoSubmission(shared);
+  if (isReactor) return reactorVideoSubmission(shared);
+  if (remoteSubmissionFields) return remoteVideoSubmission(shared);
+  return localVideoSubmission(args, {
+    composed,
+    withEnvelope,
+    effectiveDisableAudio: supportsVideoAudioControls(currentModel) && disableAudio,
+    beats: liveBeats(chainingActive, chunkPrompts, chunks, withEnvelope),
+  });
 }

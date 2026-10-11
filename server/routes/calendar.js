@@ -381,8 +381,8 @@ router.post('/google/auto-configure/capture', asyncHandler(async (req, res) => {
 
 router.post('/google/auto-configure/run', asyncHandler(async (req, res) => {
   const io = req.app.get('io');
-  const { email = '' } = validateRequest(calendarAutoConfigureBodySchema, req.body ?? {});
-  const result = await googleOAuthAutoConfig.runAutomatedSetup(email, io);
+  const { email = '', requestId } = validateRequest(calendarAutoConfigureBodySchema, req.body ?? {});
+  const result = await googleOAuthAutoConfig.runAutomatedSetup(email, io, requestId);
   res.json(result);
 }));
 

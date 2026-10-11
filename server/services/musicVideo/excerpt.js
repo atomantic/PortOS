@@ -22,7 +22,7 @@
  * `mutateProjectRecord`'s write serialization without duplicating validation.
  */
 
-import { isPerformanceScene, selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
+import { isLipSyncScene, selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
 import { captureMusicVideoEvidence } from '../../lib/musicVideoDependencies.js';
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -81,7 +81,7 @@ export function startExcerptOnProject(project, { startSec, endSec, sections = nu
     sections: Array.isArray(sections) ? sections.map((section) => {
       const scene = performanceProject.scenes?.find((s) => s.sceneId === section.sceneId);
       const instruction = selectedPerformanceInstruction(scene);
-      return { ...section, performance: isPerformanceScene(scene) && (!section.layer || section.layer === 'footage')
+      return { ...section, performance: isLipSyncScene(scene) && (!section.layer || section.layer === 'footage')
         ? { takeId: scene.videoHistoryId || null, speaker: instruction?.speaker || null, conditioning: instruction?.audio?.conditioning || null } : null };
     }) : null,
     // #9280: a social cut's frame (the project's own unless re-framed) and

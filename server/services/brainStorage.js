@@ -949,7 +949,7 @@ export async function getInboxLogCounts() {
 export async function getDigests(limit = 10) {
   let records = await loadJsonlStore('digests');
   records = records.sort((a, b) => new Date(b.generatedAt) - new Date(a.generatedAt));
-  return records.slice(0, limit);
+  return limit === Infinity ? records : records.slice(0, limit);
 }
 
 /**
@@ -989,7 +989,7 @@ export async function createDigest(digest) {
 export async function getReviews(limit = 10) {
   let records = await loadJsonlStore('reviews');
   records = records.sort((a, b) => new Date(b.generatedAt) - new Date(a.generatedAt));
-  return records.slice(0, limit);
+  return limit === Infinity ? records : records.slice(0, limit);
 }
 
 /**

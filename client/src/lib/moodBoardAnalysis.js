@@ -121,3 +121,29 @@ export function boardPosterRenderCfg(imageCfg, mode) {
     height: BOARD_POSTER_SIZE.height,
   };
 }
+
+/**
+ * Generator handoff links for a board item's card: text-to-image and
+ * text-to-video need a prompt (the analyzed one, else caption); image-to-image
+ * and image-to-video also need the item to be a local gallery image. Each key
+ * is null when that handoff doesn't apply. The negative prompt rides along only
+ * when the analysis saved one.
+ */
+export function moodBoardItemSendLinks(item) {
+  const prompt = moodBoardItemPrompt(item);
+  const negative = typeof item?.analysis?.negativePrompt === 'string' ? item.analysis.negativePrompt.trim() : '';
+  const source = moodBoardItemAnalysisSource(item);
+  const imageFile = item?.type === 'image' && source?.kind !== 'video' ? source?.filename : null;
+  const build = (path, extra = {}) => {
+    const params = new URLSearchParams();
+    if (prompt) params.set('prompt', prompt);
+    if (negative) params.set('negativePrompt', negative);
+    for (const [k, v] of Object.entries(extra)) params.set(k, v);
+    return `${path}?${params}`;
+  };
+  return {
+    textToImage: prompt ? build('/media/image') : null,
+    imageToImage: imageFile ? build('/media/image', { initImageFile: imageFile }) : null,
+    video: imageFile ? build('/media/video', { sourceImageFile: imageFile }) : (prompt ? build('/media/video') : null),
+  };
+}

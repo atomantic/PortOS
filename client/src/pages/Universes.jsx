@@ -11,6 +11,7 @@
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { Plus, Globe, Trash2, Users, Workflow as WorkflowIcon, Copy, BadgeCheck } from 'lucide-react';
+import PageHeader from '../components/PageHeader';
 import toast from '../components/ui/Toast';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import ImageThumb from '../components/ui/ImageThumb';
@@ -218,25 +219,22 @@ export default function Universes() {
   });
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
-        <div className="flex items-center gap-3">
-          <Globe className="w-6 h-6 text-port-accent" />
-          <h1 className="text-2xl font-bold text-white">Universes</h1>
-        </div>
-        <Link
-          to="/universes/new"
-          className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-accent hover:bg-port-accent/90 text-white text-sm font-medium"
-        >
-          <Plus size={16} aria-hidden="true" />
-          New Universe
-        </Link>
-      </div>
-
-      <p className="text-sm text-gray-400 mb-6">
-        A universe holds the shared style, influences, and canon (characters, places, objects) that every
-        pipeline series and batch render inherits. Build one here, then link series to it from the Series Pipeline.
-      </p>
+    <div className="flex h-full min-h-0 flex-col">
+      <PageHeader
+        icon={Globe}
+        title="Universes"
+        subtitle="A universe holds the shared style, influences, and canon (characters, places, objects) that every pipeline series and batch render inherits. Build one here, then link series to it from the Series Pipeline."
+        actions={(
+          <Link
+            to="/universes/new"
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-accent hover:bg-port-accent/90 text-white text-sm font-medium"
+          >
+            <Plus size={16} aria-hidden="true" />
+            New Universe
+          </Link>
+        )}
+      />
+      <div className="flex-1 min-h-0 overflow-auto p-4">
 
       {visibleDupes.length > 0 && (
         <div className="mb-6 border border-port-warning/40 bg-port-warning/10 rounded-lg p-4 space-y-3">
@@ -363,6 +361,7 @@ export default function Universes() {
           onAIMerge={runAIMerge} onUpdateOverride={updateOverride}
         />
       )}
+      </div>
     </div>
   );
 }

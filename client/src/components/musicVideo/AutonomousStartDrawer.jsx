@@ -9,13 +9,14 @@ import ToolPicker from './ToolPicker.jsx';
 import MoodBoardPicker from './MoodBoardPicker.jsx';
 import CharacterStyleSelect from './CharacterStyleSelect.jsx';
 import SongSourcePicker from './SongSourcePicker.jsx';
+import ExistingSongSelect from './ExistingSongSelect.jsx';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import MusicVideoLlmStagesPicker from './MusicVideoLlmStagesPicker.jsx';
 import toast from '../ui/Toast';
 import useProviderModels from '../../hooks/useProviderModels.js';
 import { startAutonomousMusicVideo } from '../../services/apiMusicVideo.js';
 import {
-  AUTONOMOUS_CHECKPOINT_IDS, AUTONOMOUS_CHECKPOINT_LABELS, AUTONOMOUS_LIMIT_BOUNDS, ORCHESTRATOR_CHECKPOINTS, SUNO_LIMITS, SUNO_VOCAL_GENDERS, autonomousRequestFromDraft, emptyAutonomousDraft,
+  AUTONOMOUS_CHECKPOINT_IDS, AUTONOMOUS_CHECKPOINT_LABELS, AUTONOMOUS_LIMIT_BOUNDS, ORCHESTRATOR_CHECKPOINTS, REUSED_SONG_SKIPPED_CHECKPOINTS, SUNO_LIMITS, SUNO_VOCAL_GENDERS, autonomousRequestFromDraft, emptyAutonomousDraft,
   isSunoModelValid,
 } from '../../lib/musicVideoAutonomous.js';
 
@@ -46,7 +47,9 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
     checkpoints: AUTONOMOUS_CHECKPOINT_IDS.filter((c) => (c === id ? !draft.checkpoints.includes(c) : draft.checkpoints.includes(c))),
   });
   const patchSuno = (next) => setDraft((d) => ({ ...d, suno: { ...d.suno, ...next } }));
-  const sunoModelValid = draft.songSource !== 'suno' || isSunoModelValid(draft.suno.model);
+  const reusingSong = !!draft.fromProjectId;
+  const checkpointIds = reusingSong ? AUTONOMOUS_CHECKPOINT_IDS.filter((id) => !REUSED_SONG_SKIPPED_CHECKPOINTS.includes(id)) : AUTONOMOUS_CHECKPOINT_IDS;
+  const sunoModelValid = reusingSong || draft.songSource !== 'suno' || isSunoModelValid(draft.suno.model);
   const valid = draft.prompt.trim().length > 0 && authoringReady && sunoModelValid && (!orchestrated || !!orchestratorLlm.selectedProviderId);
 
   const handleSubmit = (e) => {
@@ -104,9 +107,11 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
           </p>
         </div>
 
-        <SongSourcePicker idPrefix="mv-auto" songSource={draft.songSource} localFallback={draft.localFallback} localMusic={draft.localMusic} onChange={patch} />
+        <ExistingSongSelect id="mv-auto-from-project" value={draft.fromProjectId} onChange={(fromProjectId) => patch({ fromProjectId })} />
 
-        {draft.songSource === 'suno' && (
+        {!reusingSong && <SongSourcePicker idPrefix="mv-auto" songSource={draft.songSource} localFallback={draft.localFallback} localMusic={draft.localMusic} onChange={patch} />}
+
+        {!reusingSong && draft.songSource === 'suno' && (
           <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,10rem),16rem))] gap-3">
             <div>
               <label htmlFor="mv-auto-suno-exclude" className="block text-xs text-port-text-muted mb-1">Exclude styles</label>
@@ -137,7 +142,7 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
           </div>
         )}
 
-        <ToggleChip id="mv-auto-instrumental" label="Instrumental (no vocals)" checked={draft.instrumental} onToggle={() => patch({ instrumental: !draft.instrumental })} />
+        {!reusingSong && <ToggleChip id="mv-auto-instrumental" label="Instrumental (no vocals)" checked={draft.instrumental} onToggle={() => patch({ instrumental: !draft.instrumental })} />}
 
         <MediaModePicker id="mv-auto-media-mode" value={draft.mediaMode} onChange={(mediaMode) => patch({ mediaMode })} />
         <CodeAuthoringPicker value={draft.authoring} onChange={(authoring) => patch({ authoring })} onValidityChange={setAuthoringReady} disabled={submitting} />
@@ -178,6 +183,8 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
             <option value="orchestrated">Orchestrator: an AI director reviews every step</option>
           </select>
         </div>
+
+        <ToggleChip id="mv-auto-stop-before-video" label="Stop before video: stills first" checked={draft.stopBeforeVideo} onToggle={() => patch({ stopBeforeVideo: !draft.stopBeforeVideo })} />
 
         {orchestrated ? (
           <fieldset className="min-w-0 space-y-2" aria-labelledby="mv-auto-orchestrator-label">
@@ -220,7 +227,7 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
             <fieldset className="min-w-0" aria-labelledby="mv-auto-checkpoints-label">
               <span id="mv-auto-checkpoints-label" className="block text-xs text-port-text-muted mb-1">Pause for my approval after (optional)</span>
               <div className="flex flex-wrap gap-1.5">
-                {AUTONOMOUS_CHECKPOINT_IDS.map((id) => (
+                {checkpointIds.map((id) => (
                   <ToggleChip
                     key={id}
                     id={`mv-auto-checkpoint-${id}`}

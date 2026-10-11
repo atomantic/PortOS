@@ -217,11 +217,14 @@ describe('music video production run (#9066)', () => {
     expect(current().productionRuns).toBeUndefined();
   });
 
-  it('refuses unbound supplied-audio windows before starting or spending a production budget', async () => {
+  // Uniquely catches a Supplied song audio project refused by production, or its clips losing the song window.
+  it('binds supplied song audio into the run\'s local video routes, and refuses it with a remote video route', async () => {
     seedProject({ videoSettings: { generationMode: 'suppliedAudio', renderPool: { mode: 'local', peers: [] } } });
-    await expect(start()).rejects.toMatchObject({ code: 'MUSIC_VIDEO_RENDER_POOL_UNAVAILABLE' });
-    expect(dispatch).not.toHaveBeenCalled();
+    await expect(start({ pool: [...POOL, { kind: 'video', mode: 'fal' }] })).rejects.toMatchObject({ code: 'MUSIC_VIDEO_RENDER_POOL_UNAVAILABLE' });
     expect(current().productionRuns).toBeUndefined();
+    await start();
+    expect(theRun().pool.filter((route) => route.kind === 'video').every((route) => route.audio === 'supplied')).toBe(true);
+    expect(theRun().pool.filter((route) => route.kind === 'image').some((route) => 'audio' in route)).toBe(false);
   });
 
   it('produces a reviewed draft from one Start: frames, then clips, then the continuous-excerpt review', async () => {
@@ -253,6 +256,44 @@ describe('music video production run (#9066)', () => {
     musicVideoEvents.emit('auto-review', { projectId: 'mv-example', run: { ...store.get('mv-example').autoReviews[0] }, action: { type: 'idle' } });
     await settle();
     expect(theRun().status).toBe('completed');
+  });
+
+  // Uniquely catches a stills-only run spending on a clip (pilot or bulk) or stopping before every still exists.
+  it('makes every still and stops before any clip when told to, then goes on to the clips on Resume', async () => {
+    seedProject();
+    await start({ pool: POOL.filter((route) => route.kind === 'image'), stopBefore: 'clips' });
+    expect(dispatch.mock.calls.map(([a]) => [a.stepKind, a.scene.sceneId])).toEqual([['frame', 'mvs-a'], ['frame', 'mvs-b']]);
+    completeJob('job-1');
+    completeJob('job-2');
+    await settle();
+    expect(theRun()).toMatchObject({ status: 'awaiting-video', stopBefore: 'clips', pilot: null, stopReason: expect.stringContaining('still') });
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(startAutoReview).not.toHaveBeenCalled();
+
+    // A resume that keeps the stop makes only missing stills.
+    await service.resumeProduction('mv-example', theRun().id, { stopBefore: 'clips' });
+    await settle();
+    expect(theRun().status).toBe('awaiting-video');
+    expect(dispatch).toHaveBeenCalledTimes(2);
+
+    await service.resumeProduction('mv-example', theRun().id, { pool: POOL });
+    await settle();
+    expect(theRun()).toMatchObject({ status: 'running', stopBefore: null });
+    expect(dispatch.mock.calls.slice(2).every(([a]) => a.stepKind === 'clip')).toBe(true);
+    expect(dispatch.mock.calls.length).toBeGreaterThan(2);
+  });
+
+  // Uniquely catches a resumed run keeping its pending clip pilot, which would filter stills to the pilot scenes and park early.
+  it('drops a pending clip pilot when a normal run is resumed as stills-only', async () => {
+    seedProject();
+    await start();
+    await service.stopProduction('mv-example', theRun().id);
+    expect(theRun().pilot).not.toBeNull();
+    await service.resumeProduction('mv-example', theRun().id, { stopBefore: 'clips' });
+    await settle();
+    expect(theRun()).toMatchObject({ stopBefore: 'clips', pilot: null });
+    expect(dispatch.mock.calls.every(([a]) => a.stepKind === 'frame')).toBe(true);
+    expect(new Set(dispatch.mock.calls.map(([a]) => a.scene.sceneId))).toEqual(new Set(['mvs-a', 'mvs-b']));
   });
 
   it('in a composition document, skips frames for card scenes and clips for still/card scenes', async () => {
@@ -1236,6 +1277,28 @@ describe('budgeted production pilots (#9351)', () => {
     expect(startAutoReview).toHaveBeenCalledTimes(1);
     expect((await service.getProduction('mv-example', theRun().id)).run.pilot.scenes[0].repair)
       .toMatchObject({ category, expectedGenerationSpendUsd: 0 });
+  });
+
+  // Uniquely catches a pilot re-reviewing the take its old prompt made, or staying halted on that review.
+  it('makes the pilot again when its prompt changes after a failed review', async () => {
+    board(); pendingPilot(); await reachPilot();
+    verdict({ verdict: 'revise', checks: { motion: 'fail' }, reason: 'Synthetic failed evidence' }); await settle();
+    expect(theRun().status).toBe('blocked');
+    store.get('mv-example').scenes[0].prompt = 'lights sweep left';
+    await service.resumeProduction('mv-example', theRun().id, { acceptBasis: true }); await settle();
+    expect(dispatch.mock.calls[2][0]).toMatchObject({ stepKind: 'clip', scene: expect.objectContaining({ sceneId: 'shot-0', prompt: 'lights sweep left' }) });
+    expect(startAutoReview).toHaveBeenCalledTimes(1);
+  });
+
+  // Uniquely catches an orchestrator-accepted pilot still holding the bulk wave, or an acceptance surviving new media.
+  it('lets an accepted pilot release the bulk wave while its reviewed take stays selected', async () => {
+    const { acceptProductionPilot } = await import('./production.js');
+    board(); pendingPilot(); await reachPilot();
+    verdict({ verdict: 'revise', checks: { motion: 'fail' }, reason: 'Synthetic failed evidence' }); await settle();
+    store.set('mv-example', acceptProductionPilot(current(), theRun().id, 'shot-0', { by: 'orchestrator', note: 'Accepted at the limit' }).project);
+    await service.resumeProduction('mv-example', theRun().id); await settle();
+    expect(dispatch.mock.calls.map(([a]) => a.scene.sceneId)).toEqual(expect.arrayContaining(['shot-1', 'shot-2', 'shot-3']));
+    expect((await service.getProduction('mv-example', theRun().id)).run.pilot.scenes[0].status).toBe('accepted');
   });
 
   it('never treats missing provenance as an accepted pilot', async () => {

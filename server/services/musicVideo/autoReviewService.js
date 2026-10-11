@@ -22,7 +22,7 @@
  * so an event arriving mid-step can never start a second review.
  */
 
-import { isPerformanceScene, selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
+import { isLipSyncScene, selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
 import { analyzeTemporalPerformance } from './temporalPerformance.js';
 import { unlink } from 'fs/promises';
 import { existsSync } from 'fs';
@@ -211,11 +211,11 @@ async function reviewDraft(project, run, excerpt) {
   const shots = sections.flatMap((section) => {
     const scene = project.scenes?.find((s) => s.sceneId === section.sceneId);
     const instruction = selectedPerformanceInstruction(scene);
-    const performance = 'performance' in section ? section.performance : (isPerformanceScene(scene)
+    const performance = 'performance' in section ? section.performance : (isLipSyncScene(scene)
       ? { takeId: scene.videoHistoryId, speaker: instruction?.speaker || null, conditioning: instruction?.audio?.conditioning || null } : null);
     return performance ? [{ sceneId: section.sceneId, ...performance, startSec: section.startSec, endSec: section.endSec }] : [];
   });
-  const temporal = !sections.length && project.scenes?.some(isPerformanceScene)
+  const temporal = !sections.length && project.scenes?.some(isLipSyncScene)
     ? { version: 1, status: 'unverified', analyzer: null, reason: 'The draft has no performance-section provenance', shots: [] }
     : await analyzeTemporalPerformance({ excerptPath, shots });
   const evidence = { boundaryFrames: hasSheet ? 1 : 0, continuousFrames: frameTimes.length, temporal, ...(excerpt.footageVisibility ? { footageVisibility: excerpt.footageVisibility } : {}), excerptStartSec: excerpt.startSec };

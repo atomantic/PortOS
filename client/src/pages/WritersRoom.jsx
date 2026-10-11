@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router';
 import { NotebookPen, PanelLeftOpen, BookOpen, ChevronUp, ChevronDown } from 'lucide-react';
+import PageHeader from '../components/PageHeader';
 import LibraryPane from '../components/writers-room/LibraryPane';
 import WorkEditor from '../components/writers-room/WorkEditor';
 import ExercisePanel from '../components/writers-room/ExercisePanel';
@@ -127,44 +128,48 @@ export default function WritersRoom() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-port-border bg-port-card shrink-0">
-        {libraryCollapsed && (
-          <button
-            onClick={toggleLibrary}
-            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-white transition-colors"
-            title="Show library"
-            aria-label="Show library"
-          >
-            <PanelLeftOpen size={16} />
-          </button>
+      <PageHeader
+        icon={NotebookPen}
+        title="Writers Room"
+        actions={(
+          <>
+            {libraryCollapsed && (
+              <button
+                onClick={toggleLibrary}
+                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-white transition-colors"
+                title="Show library"
+                aria-label="Show library"
+              >
+                <PanelLeftOpen size={16} />
+              </button>
+            )}
+            <Link
+              to="/writers-room/guide"
+              className="min-h-[44px] min-w-[44px] flex items-center justify-center gap-1 text-xs text-gray-400 hover:text-port-accent transition-colors"
+              title="Writing guide: length targets & craft rules"
+              aria-label="Writing guide"
+            >
+              <BookOpen size={14} />
+              <span className="hidden sm:inline">Guide</span>
+            </Link>
+            {activeWork && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (!headerCollapsed) setLibraryCollapsed(true);
+                  toggleHeader();
+                }}
+                aria-expanded={!headerCollapsed}
+                aria-label={headerCollapsed ? 'Expand writing header' : 'Collapse writing header'}
+                title={headerCollapsed ? 'Expand writing header' : 'Collapse writing header'}
+                className="shrink-0 min-h-[44px] min-w-[44px] flex items-center justify-center text-gray-400 hover:text-white"
+              >
+                {headerCollapsed ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
+              </button>
+            )}
+          </>
         )}
-        <NotebookPen className="w-4 h-4 shrink-0 text-port-accent" />
-        <h1 className="text-sm font-semibold text-white">Writers Room</h1>
-        <Link
-          to="/writers-room/guide"
-          className="ml-auto min-h-[44px] min-w-[44px] flex items-center justify-center gap-1 text-xs text-gray-400 hover:text-port-accent transition-colors"
-          title="Writing guide: length targets & craft rules"
-          aria-label="Writing guide"
-        >
-          <BookOpen size={14} />
-          <span className="hidden sm:inline">Guide</span>
-        </Link>
-        {activeWork && (
-          <button
-            type="button"
-            onClick={() => {
-              if (!headerCollapsed) setLibraryCollapsed(true);
-              toggleHeader();
-            }}
-            aria-expanded={!headerCollapsed}
-            aria-label={headerCollapsed ? 'Expand writing header' : 'Collapse writing header'}
-            title={headerCollapsed ? 'Expand writing header' : 'Collapse writing header'}
-            className="shrink-0 min-h-[44px] min-w-[44px] flex items-center justify-center text-gray-400 hover:text-white"
-          >
-            {headerCollapsed ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
-          </button>
-        )}
-      </div>
+      />
 
       <div
         className="flex-1 flex flex-col md:grid min-h-0 transition-[grid-template-columns] duration-200"

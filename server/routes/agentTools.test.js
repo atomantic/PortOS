@@ -25,7 +25,7 @@ vi.mock('../services/agentDrafts.js', () => fnMap([
   'listDrafts', 'createDraft', 'updateDraft', 'deleteDraft',
 ]));
 vi.mock('../services/agentContentGenerator.js', () => fnMap([
-  'generatePost', 'generateComment', 'generateReply',
+  'generatePost', 'generateComment', 'generateReply', 'assertMoltbookCommentProvider',
 ]));
 vi.mock('../services/agentFeedFilter.js', () => fnMap([
   'findRelevantPosts', 'findReplyOpportunities',
@@ -49,7 +49,8 @@ vi.mock('../integrations/moltbook/index.js', () => ({
 import agentToolsRoutes from './agentTools.js';
 import * as platformAccounts from '../services/platformAccounts.js';
 import * as agentPersonalities from '../services/agentPersonalities.js';
-import { generatePost, generateComment } from '../services/agentContentGenerator.js';
+import { generatePost, generateComment, assertMoltbookCommentProvider } from '../services/agentContentGenerator.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { findRelevantPosts, findReplyOpportunities } from '../services/agentFeedFilter.js';
 
 const ACTIVE_ACCOUNT = { id: 'acc-1', status: 'active', credentials: { apiKey: 'key-123' } };
@@ -63,6 +64,7 @@ describe('Agent Tools Routes', () => {
     app.use(express.json());
     app.use('/api/agents/tools', agentToolsRoutes);
     vi.clearAllMocks();
+    assertMoltbookCommentProvider.mockResolvedValue(undefined);
   });
 
   describe('POST /generate-post', () => {
@@ -159,6 +161,30 @@ describe('Agent Tools Routes', () => {
       expect(res.status).toBe(200);
       expect(res.body.votes).toHaveLength(0);
       expect(moltbookClient.upvote).not.toHaveBeenCalled();
+    });
+
+    it('refuses an ineligible engagement provider before any vote or comment', async () => {
+      platformAccounts.getAccountWithCredentials.mockResolvedValue(ACTIVE_ACCOUNT);
+      agentPersonalities.getAgentById.mockResolvedValue({
+        ...AGENT,
+        aiConfig: { engagement: { providerId: 'cli-1' } },
+      });
+      assertMoltbookCommentProvider.mockRejectedValue(new ServerError(
+        'Provider "Example CLI" cannot read Moltbook posts.',
+        { status: 422, code: 'untrusted-content-provider-unavailable' },
+      ));
+
+      const res = await request(app)
+        .post('/api/agents/tools/engage')
+        .send({ agentId: 'agent-1', accountId: 'acc-1', maxVotes: 3, maxComments: 1 });
+
+      expect(res.status).toBe(422);
+      expect(res.body.code).toBe('untrusted-content-provider-unavailable');
+      expect(assertMoltbookCommentProvider).toHaveBeenCalledWith('cli-1');
+      expect(findRelevantPosts).not.toHaveBeenCalled();
+      expect(generateComment).not.toHaveBeenCalled();
+      expect(moltbookClient.upvote).not.toHaveBeenCalled();
+      expect(moltbookClient.createComment).not.toHaveBeenCalled();
     });
   });
 });

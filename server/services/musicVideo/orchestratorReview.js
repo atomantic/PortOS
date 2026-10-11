@@ -78,13 +78,13 @@ Return JSON only:
 }
 
 export function buildArtReviewPrompt({ prompt, guidance, concept, draft, hasImage, sheetPredatesEdits = false }) {
-  return `You are the director reviewing the ART DIRECTION for a music video before any shot is planned or rendered. ${UNTRUSTED}${hasImage ? ` The attached image is the cast and environment sheet.${sheetPredatesEdits ? ' It was drawn before your earlier text revisions, so judge the text on its own and do not ask it to match the sheet.' : ''}` : ''}
+  return `You are the director reviewing the ART DIRECTION for a music video before any shot is planned or rendered. ${UNTRUSTED}${hasImage ? ` The attached images are the cast and environment renders: the character sheet and set plates.${sheetPredatesEdits ? ' They were drawn before your earlier text revisions, so judge the text on its own and do not ask it to match them.' : ''}` : ''}
 
 ${ideaBlock({ prompt, guidance })}
 ${block('VISUAL CONCEPT', [concept?.prompt, concept?.style].filter(Boolean).join('\n'))}
 ${ORCHESTRATOR_ART_FIELDS.map((key) => block(key.toUpperCase(), draft?.[key])).join('\n')}
 
-Judge: is the cast specific and consistent enough to draw the same subject in every shot, do environments, visual language and motion language fit the concept and each other${hasImage && !sheetPredatesEdits ? ', and does the sheet match the text' : ''}? ${RULES}
+Judge: is the cast specific and consistent enough to draw the same subject in every shot, do environments, visual language and motion language fit the concept and each other${hasImage && !sheetPredatesEdits ? ', do the renders match the text, and are they free of anatomy errors and stray text' : ''}? ${RULES}
 Return JSON only:
 {"verdict":"approve|revise","score":1-10,"notes":"why","changes":[{"field":"cast|environments|visualLanguage|motionLanguage","text":"the COMPLETE replacement text for that field"}]}
 List changes only when verdict is revise.`;
@@ -101,6 +101,24 @@ Judge: does the sequence tell the concept's story across the song, does each sho
 ${incomplete.length ? `These shots have blank fields that must be filled: ${incomplete.join(', ')}. Fill them in "fill".\n` : ''}Return JSON only:
 {"verdict":"approve|revise","score":1-10,"notes":"why","changes":[{"sceneId":"a shot id","text":"what must change in that shot"}],"fill":[{"sceneId":"a shot id","action":"","staging":"","camera":"","transition":""}]}
 List changes only when verdict is revise; "fill" only for blank fields.`;
+}
+
+/**
+ * Production's stills, a batch at a time, before any clip is made. Image N is
+ * shot N in SHOTS; the reviewer flags only stills a regeneration should fix.
+ */
+export function buildStillsReviewPrompt({ prompt, guidance, concept, cast, shots }) {
+  return `You are the director checking the STILLS for a music video before any of them is animated. The attached images are shown in order: image 1 is the first shot in SHOTS, image 2 the second, and so on. ${UNTRUSTED}
+
+${ideaBlock({ prompt, guidance })}
+${block('VISUAL CONCEPT', [concept?.prompt, concept?.style].filter(Boolean).join('\n'))}
+${block('CAST', cast)}
+${block('SHOTS', JSON.stringify(shots, null, 2))}
+
+Judge each still: correct anatomy (hands, limbs, faces), the same recognizable person wherever a cast member appears (face, hair, wardrobe as the cast describes them, and consistent across these stills), no stray or garbled text in frame, the shot it was asked for, and one consistent look that fits the concept. ${RULES}
+Return JSON only:
+{"verdict":"approve|revise","score":1-10,"notes":"why","issues":[{"sceneId":"a shot id","text":"the visible problem and what the regenerated still must show instead"}]}
+List issues only when verdict is revise, one per still that must be regenerated.`;
 }
 
 export function buildFinalReviewPrompt({ prompt, guidance, concept, facts, frameTimes }) {
@@ -154,6 +172,10 @@ export function parseOrchestratorVerdict(raw, checkpoint) {
         fill: (Array.isArray(parsed.fill) ? parsed.fill : []).filter((f) => text(f?.sceneId, 200)).slice(0, 200)
           .map((f) => ({ sceneId: text(f.sceneId, 200),
             ...Object.fromEntries(STORYBOARD_FILL_FIELDS.map((k) => [k, text(f[k], CHANGE_MAX)]).filter(([, v]) => v)) })) };
+    case 'stills':
+      return { ...out, issues: (Array.isArray(parsed.issues) ? parsed.issues : []).slice(0, CHANGES_MAX)
+        .filter((i) => text(i?.sceneId, 200) && text(i?.text, CHANGE_MAX))
+        .map((i) => ({ sceneId: text(i.sceneId, 200), text: text(i.text, 500) })) };
     case 'final':
       return { ...out, issues: (Array.isArray(parsed.issues) ? parsed.issues : []).slice(0, CHANGES_MAX)
         .filter((i) => text(i?.text, 500))

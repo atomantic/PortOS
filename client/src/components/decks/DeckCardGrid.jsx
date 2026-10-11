@@ -110,9 +110,8 @@ export default function DeckCardGrid({
                     onPreview={() => onPreview(card, viewedFilename)}
                     onComplete={(filename) => handleRenderComplete(card.id, filename)}
                     onTerminalStatus={(s, error) => onRenderTerminal(card.id, s, error)}
-                    // The slot is the bigger of the card's two render
-                    // affordances, so a dead runtime has to stand it down too
-                    // or the button below stands down alone and reads broken.
+                    // An empty slot is the card's render action, so a dead
+                    // runtime must stand it down.
                     // A promptless slot is exempt: it opens the editor, which
                     // works whatever the runtime is doing.
                     canRender={needsPrompt || !runtimeBlocked}
@@ -203,16 +202,18 @@ export default function DeckCardGrid({
                   </button>
                   <div className="mt-auto flex w-full flex-wrap items-center justify-center gap-1">
                     <Pill tone={meta.tone} size="xs" icon={meta.icon}>{meta.label}</Pill>
-                    <button
-                      type="button"
-                      onClick={() => onRenderCard(card)}
-                      disabled={needsPrompt || !!inFlight || runtimeBlocked}
-                      title={reRenderHint}
-                      aria-label={reRenderHint}
-                      className="min-h-[32px] min-w-[32px] inline-flex shrink-0 items-center justify-center rounded text-gray-500 hover:text-port-accent hover:bg-port-accent/10 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-gray-500"
-                    >
-                      <RefreshCw size={13} aria-hidden="true" />
-                    </button>
+                    {refs.length > 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => onRenderCard(card)}
+                        disabled={needsPrompt || !!inFlight || runtimeBlocked}
+                        title={reRenderHint}
+                        aria-label={reRenderHint}
+                        className="min-h-[32px] min-w-[32px] inline-flex shrink-0 items-center justify-center rounded text-gray-500 hover:text-port-accent hover:bg-port-accent/10 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-gray-500"
+                      >
+                        <RefreshCw size={13} aria-hidden="true" />
+                      </button>
+                    ) : null}
                   </div>
                   {/* Why it failed. The slot clears itself on a terminal
                       failure (so the card stays re-renderable), taking the
@@ -220,7 +221,7 @@ export default function DeckCardGrid({
                       place a deck can show it. The fix button for a broken
                       runtime lives in the render bar above. */}
                   {status === CARD_STATUS.FAILED && card.render?.error ? (
-                    <p className="w-full text-center text-[10px] leading-snug text-port-error line-clamp-3" title={card.render.error}>
+                    <p className="w-full text-center text-[10px] leading-snug text-port-error [overflow-wrap:anywhere]">
                       {card.render.error}
                     </p>
                   ) : null}

@@ -11,6 +11,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { Plus, Palette, Trash2, ImageIcon, FileText, Film } from 'lucide-react';
+import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
@@ -217,51 +218,49 @@ export default function MoodBoards() {
   };
 
   return (
-    <div className="max-w-6xl mx-auto space-y-4">
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-2">
-          <Palette className="w-6 h-6 text-port-accent" aria-hidden="true" />
-          <h1 className="text-xl font-semibold text-white">Mood Boards</h1>
-        </div>
-        <button
-          type="button"
-          onClick={handleCreate}
-          disabled={creating}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 transition-colors"
-        >
-          <Plus className="w-4 h-4" aria-hidden="true" />
-          New Board
-        </button>
+    <div className="flex h-full min-h-0 flex-col">
+      <PageHeader
+        icon={Palette}
+        title="Mood Boards"
+        subtitle="Collect visual and textual references for your universes, scenes, and treatments."
+        actions={(
+          <button
+            type="button"
+            onClick={handleCreate}
+            disabled={creating}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 transition-colors"
+          >
+            <Plus className="w-4 h-4" aria-hidden="true" />
+            New Board
+          </button>
+        )}
+      />
+      <div className="flex-1 min-h-0 overflow-auto p-4">
+        {loading ? (
+          <PageSkeleton header="none" label="Loading mood boards" cards={4} sidebar={false} />
+        ) : boards.length === 0 ? (
+          <EmptyState
+            icon={Palette}
+            title="No mood boards yet"
+            message="A board is a canvas of image and text references that feeds the Create suite. Make one to start pinning."
+            actionLabel="Create your first board"
+            onAction={handleCreate}
+          />
+        ) : (
+          <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {boards.map((board) => (
+              <MoodBoardCard
+                key={board.id}
+                board={board}
+                onDelete={(id) => setConfirmingId(id)}
+                isConfirming={confirmingId === board.id}
+                onConfirmDelete={handleDelete}
+                onCancelDelete={() => setConfirmingId(null)}
+              />
+            ))}
+          </ul>
+        )}
       </div>
-
-      <p className="text-sm text-gray-400 mb-4">
-        Collect visual and textual references for your universes, scenes, and treatments.
-      </p>
-
-      {loading ? (
-        <PageSkeleton header="none" label="Loading mood boards" cards={4} sidebar={false} />
-      ) : boards.length === 0 ? (
-        <EmptyState
-          icon={Palette}
-          title="No mood boards yet"
-          message="A board is a canvas of image and text references that feeds the Create suite. Make one to start pinning."
-          actionLabel="Create your first board"
-          onAction={handleCreate}
-        />
-      ) : (
-        <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {boards.map((board) => (
-            <MoodBoardCard
-              key={board.id}
-              board={board}
-              onDelete={(id) => setConfirmingId(id)}
-              isConfirming={confirmingId === board.id}
-              onConfirmDelete={handleDelete}
-              onCancelDelete={() => setConfirmingId(null)}
-            />
-          ))}
-        </ul>
-      )}
     </div>
   );
 }

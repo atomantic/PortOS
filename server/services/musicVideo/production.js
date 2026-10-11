@@ -49,7 +49,7 @@ import { projectAutoReviews } from './autoReview.js';
 import { projectRevisions } from './revision.js';
 import { castAndSetsSettled } from './castAndSets.js';
 import { assertProductionApproval } from './productionReview.js';
-import { currentPilotPass, pilotClass, pilotInputBasis, pilotRepair, selectProductionPilots } from './productionPilot.js';
+import { currentPilotPass, pilotClass, pilotInputBasis, pilotRepair, selectProductionPilots, stalePilotSlot } from './productionPilot.js';
 
 const PRODUCTION_LIMIT_BOUNDS = Object.freeze({
   maxGenerations: Object.freeze({ min: 1, max: 500 }),
@@ -59,9 +59,11 @@ const PRODUCTION_LIMIT_BOUNDS = Object.freeze({
 const PRODUCTION_DIRECTIVE_MAX = 4000;
 const PRODUCTION_POOL_MAX = 12;
 const PRODUCTION_STATUSES = Object.freeze([
-  'running', 'stopped', 'limit-reached', 'blocked', 'needs-replan', 'completed', 'needs-human', 'failed', 'canceled',
+  'running', 'stopped', 'limit-reached', 'blocked', 'needs-replan', 'awaiting-video', 'completed', 'needs-human', 'failed', 'canceled',
 ]);
-const RESUMABLE = new Set(['running', 'stopped', 'limit-reached', 'blocked', 'needs-replan']);
+// `awaiting-video`: a stills-only run (`stopBefore: 'clips'`) made every frame; Resume goes on to the clips.
+const RESUMABLE = new Set(['running', 'stopped', 'limit-reached', 'blocked', 'needs-replan', 'awaiting-video']);
+const STOP_BEFORE = new Set(['clips']);
 /** Statuses Resume accepts. */
 export const PRODUCTION_RESUMABLE_STATUSES = RESUMABLE;
 const LIVE_STEP = new Set(['reserved', 'queued']);
@@ -175,6 +177,8 @@ export function normalizeProductionPool(pool, { allowEmpty = false } = {}) {
   for (const entry of Array.isArray(pool) ? pool : []) {
     if (!entry || (entry.kind !== 'image' && entry.kind !== 'video') || !isNonBlankStr(entry.mode)) continue;
     const route = { kind: entry.kind, mode: entry.mode.trim(), model: isNonBlankStr(entry.model) ? entry.model.trim() : null };
+    // A local video route may carry each shot's song window (Supplied song audio).
+    if (route.kind === 'video' && route.mode === 'local' && entry.audio === 'supplied') route.audio = 'supplied';
     if (seen.has(routeKey(route))) continue;
     seen.add(routeKey(route));
     out.push(route);
@@ -204,7 +208,7 @@ export const poolHasRoute = (run, route) => !!route && run.pool.some((r) => rout
  * when unknown); a dollar cap requires every route to have a known price.
  */
 export function startProductionOnProject(project, {
-  directive = '', pool, limits, reviewer = {}, authoring = null, processId, pricing = {},
+  directive = '', pool, limits, reviewer = {}, authoring = null, processId, pricing = {}, stopBefore = null,
 }, now = new Date().toISOString()) {
   const live = activeProductionRun(project);
   if (live) throw productionError(409, 'PRODUCTION_IN_PROGRESS', 'Finish, cancel or resume the existing production run first', { runId: live.id });
@@ -246,7 +250,9 @@ export function startProductionOnProject(project, {
     usage: { generations: 0, spentUsd: 0 },
     planned: false,
     reviewRunId: null,
-    pilot: { scenes: null },
+    // A stills-only run makes no clip, so it has no clip pilot to prove first.
+    stopBefore: STOP_BEFORE.has(stopBefore) ? stopBefore : null,
+    pilot: STOP_BEFORE.has(stopBefore) ? null : { scenes: null },
     steps: [],
     processId: processId || null,
     stopReason: null,
@@ -364,7 +370,7 @@ export function assertProductionActive(project, runId, processId) {
 }
 
 /** The scenes that need a still frame and a clip, per the project's render mode. */
-function productionTargets(project) {
+export function productionTargets(project) {
   const assets = codeFirstProductionAssets(project);
   if (assets) {
     const ids = (action) => new Set(assets.steps.filter((step) => step.action === action).map((step) => step.sceneId));
@@ -390,6 +396,88 @@ const slotSteps = (run, sceneId, stepKind, revisionId = null) => run.steps
   .filter((s) => s.sceneId === sceneId && s.kind === stepKind && (s.revisionId || null) === revisionId);
 
 /**
+ * The attached full-song review's verdict on the run, or null when no review
+ * is attached. A passing review still needs its dependencies unchanged; a
+ * code-first run then renders the reviewed document before completing.
+ */
+function reviewRunDisposition(project, run) {
+  if (!run.reviewRunId) return null;
+  const review = projectAutoReviews(project).find((r) => r.id === run.reviewRunId);
+  if (!review) return { type: 'halt', status: 'needs-human', reason: 'The review run is gone — watch the draft yourself' };
+  if (review.status === 'running') {
+    const attempt = review.attempts?.[review.attempts.length - 1];
+    if (run.authoring && attempt?.review?.verdict === 'revise') return { type: 'revise-document', reviewRunId: review.id, attemptN: attempt.n };
+    return { type: 'wait', on: 'review' };
+  }
+  if (review.status === 'passed') {
+    const evidence = review.attempts?.at(-1)?.review?.dependencies;
+    if (musicVideoDependencyChanges(project, evidence).length) return { type: 'halt', status: 'needs-human', reason: 'The passing review has changed or unrecorded dependencies — rebuild and review the current draft' };
+    if (!run.authoring) return { type: 'halt', status: 'completed', reason: null };
+    if (run.documentCheckpoint?.directory !== project.composition?.document?.directory) return { type: 'halt', status: 'needs-replan', reason: 'The selected document changed after review — start a fresh run' };
+    if (!run.finalRender) return { type: 'render-document' };
+    if (run.finalRender.status === 'completed') return { type: 'halt', status: 'completed', reason: null };
+    if (run.finalRender.status === 'failed') return { type: 'halt', status: 'blocked', reason: run.finalRender.error || 'The final document render failed — resume to retry' };
+    return { type: 'wait', on: 'final-render' };
+  }
+  if (review.status === 'stopped' || review.status === 'limit-reached') {
+    return { type: 'halt', status: review.status === 'limit-reached' ? 'limit-reached' : 'stopped', reason: `The review paused: ${review.stopReason || review.status}` };
+  }
+  return { type: 'halt', status: 'needs-human', reason: review.stopReason || `The review ended ${review.status}` };
+}
+
+/**
+ * A pilot review that must hold the run before any more generation: one still
+ * running, paused, or a current failing verdict. Returns null when none blocks.
+ * Opening a pilot's review is NOT decided here — that waits until its media
+ * exists, after generation (see nextProductionStep).
+ */
+function blockingPilotReview(project, run, pendingPilots) {
+  for (const pilot of pendingPilots) {
+    const review = projectAutoReviews(project).find((r) => r.id === pilot.reviewRunId);
+    if (review?.status === 'running') return { type: 'wait', on: 'pilot-review' };
+    if (review && ['stopped', 'limit-reached'].includes(review.status)) return { type: 'halt', status: review.status, reason: review.stopReason || 'Pilot review paused; resume to continue' };
+    const result = review?.attempts?.at(-1)?.review;
+    const changes = result && musicVideoDependencyChanges(project, result.dependencies);
+    if (result && (changes.some((change) => change.role === 'unknown')
+      || (pilot.inputBasis === pilotInputBasis(project, pilot.sceneId) && !changes.length))) {
+      if (result.verdict === 'inconclusive' && result.reviewedAt < run.resumedAt) continue;
+      const exhausted = ['PRODUCTION_REVIEW_LIMIT', 'PRODUCTION_BUDGET_EXHAUSTED'].includes(result.providerErrorCode);
+      const scene = (project.scenes || []).find((s) => s.sceneId === pilot.sceneId);
+      return { type: 'halt', status: exhausted ? 'limit-reached' : 'blocked', reason: `Pilot ${pilot.sceneId}: ${result.reason || result.verdict}. ${pilotRepair(result, scene, project).reason}` };
+    }
+  }
+  return null;
+}
+
+/**
+ * The next frame/clip slot to generate (`dispatch`), a `halt` before a charge
+ * that should not repeat, `{ waiting: true }` while slots are in flight, or
+ * null when every target slot is filled. While pilots are pending, only their
+ * scenes are considered.
+ */
+function nextOpenGeneration(project, run, jobs, { pendingPilots, targets }) {
+  let waiting = false;
+  for (const stepKind of run.stopBefore === 'clips' ? ['frame'] : ['frame', 'clip']) {
+    for (const scene of targets[stepKind]) {
+      if (pendingPilots.length && !pendingPilots.some((pilot) => pilot.sceneId === scene.sceneId)) continue;
+      if (scene[SLOT[stepKind]]) continue;
+      // A clip is generated from the scene's frame; wait for it.
+      if (stepKind === 'clip' && !scene.referenceImageId) { waiting = true; continue; }
+      const steps = slotSteps(run, scene.sceneId, stepKind);
+      if (steps.some((s) => LIVE_STEP.has(s.status)) || liveSlotJob(jobs, project.id, scene.sceneId, stepKind)) { waiting = true; continue; }
+      const refused = terminalRefusal(project, run, scene.sceneId, stepKind);
+      if (refused) return { type: 'halt', status: 'blocked', reason: `"${scene.label || scene.sceneId}" has a terminal ${stepKind} refusal (${refused.errorCode}). Change its inputs or resume with another supported route; Resume will not repeat it.` };
+      // A paid failure is not evidence that the same operation will work next
+      // time. Pause before another charge; explicit Resume permits a transient retry.
+      const failed = steps.find((s) => s.status === 'failed' && !(run.retryAcknowledged || []).includes(s.key));
+      if (failed) return { type: 'halt', status: 'blocked', reason: `"${scene.label || scene.sceneId}" failed to generate its ${stepKind}. Inspect the failure and repair its inputs, or resume explicitly to retry.` };
+      return { type: 'dispatch', kind: stepKind, sceneId: scene.sceneId };
+    }
+  }
+  return waiting ? { waiting: true } : null;
+}
+
+/**
  * Pure: what the run should do next, from the record and the queue alone:
  *   `cast-and-sets` — the board is empty and no Cast & Sets check-in exists:
  *                start one (it runs before the plan; see castAndSetsService.js);
@@ -398,6 +486,8 @@ const slotSteps = (run, sceneId, stepKind, revisionId = null) => run.steps
  *   `author-document` / `revise-document` — author the approved document or
  *                just the failed song sections, without changing its assets;
  *   `render-document` — encode the chosen document after continuous review;
+ *   `refresh-pilot` — a pilot's inputs changed after its review: clear the
+ *                reviewed take so the pilot is generated again from them;
  *   `review`   — every scene holds its media: hand the continuous excerpt
  *                `[startSec, endSec)` to an auto-review run;
  *   `wait`     — work in flight (generation jobs, or the review run);
@@ -416,29 +506,8 @@ export function nextProductionStep(project, run, { jobs = [], processId = null }
     if (run.documentCheckpoint && (run.documentCheckpoint.directory !== project.composition?.document?.directory
       || run.documentCheckpoint.scenesRevision !== canonicalSnapshotChecksum(project.scenes || []))) return { type: 'halt', status: 'needs-replan', reason: 'The selected document changed — review and resume against the new setup' };
   }
-  if (run.reviewRunId) {
-    const review = projectAutoReviews(project).find((r) => r.id === run.reviewRunId);
-    if (!review) return { type: 'halt', status: 'needs-human', reason: 'The review run is gone — watch the draft yourself' };
-    if (review.status === 'running') {
-      const attempt = review.attempts?.[review.attempts.length - 1];
-      if (run.authoring && attempt?.review?.verdict === 'revise') return { type: 'revise-document', reviewRunId: review.id, attemptN: attempt.n };
-      return { type: 'wait', on: 'review' };
-    }
-    if (review.status === 'passed') {
-      const evidence = review.attempts?.at(-1)?.review?.dependencies;
-      if (musicVideoDependencyChanges(project, evidence).length) return { type: 'halt', status: 'needs-human', reason: 'The passing review has changed or unrecorded dependencies — rebuild and review the current draft' };
-      if (!run.authoring) return { type: 'halt', status: 'completed', reason: null };
-      if (run.documentCheckpoint?.directory !== project.composition?.document?.directory) return { type: 'halt', status: 'needs-replan', reason: 'The selected document changed after review — start a fresh run' };
-      if (!run.finalRender) return { type: 'render-document' };
-      if (run.finalRender.status === 'completed') return { type: 'halt', status: 'completed', reason: null };
-      if (run.finalRender.status === 'failed') return { type: 'halt', status: 'blocked', reason: run.finalRender.error || 'The final document render failed — resume to retry' };
-      return { type: 'wait', on: 'final-render' };
-    }
-    if (review.status === 'stopped' || review.status === 'limit-reached') {
-      return { type: 'halt', status: review.status === 'limit-reached' ? 'limit-reached' : 'stopped', reason: `The review paused: ${review.stopReason || review.status}` };
-    }
-    return { type: 'halt', status: 'needs-human', reason: review.stopReason || `The review ended ${review.status}` };
-  }
+  const disposition = reviewRunDisposition(project, run);
+  if (disposition) return disposition;
   const scenes = Array.isArray(project.scenes) ? project.scenes : [];
   if (!scenes.length) {
     if (run.planned) return { type: 'halt', status: 'blocked', reason: 'Planning produced no scenes — check the song analysis' };
@@ -450,42 +519,18 @@ export function nextProductionStep(project, run, { jobs = [], processId = null }
   if (run.pilot && !run.pilot.scenes) return { type: 'plan-pilots' };
   const pilots = run.pilot?.scenes || [];
   const pendingPilots = pilots.filter((pilot) => !currentPilotPass(project, pilot));
-  for (const pilot of pendingPilots) {
-    const review = projectAutoReviews(project).find((r) => r.id === pilot.reviewRunId);
-    if (review?.status === 'running') return { type: 'wait', on: 'pilot-review' };
-    if (review && ['stopped', 'limit-reached'].includes(review.status)) return { type: 'halt', status: review.status, reason: review.stopReason || 'Pilot review paused; resume to continue' };
-    const result = review?.attempts?.at(-1)?.review;
-    const changes = result && musicVideoDependencyChanges(project, result.dependencies);
-    if (result && (changes.some((change) => change.role === 'unknown')
-      || (pilot.inputBasis === pilotInputBasis(project, pilot.sceneId) && !changes.length))) {
-      if (result.verdict === 'inconclusive' && result.reviewedAt < run.resumedAt) continue;
-      const exhausted = ['PRODUCTION_REVIEW_LIMIT', 'PRODUCTION_BUDGET_EXHAUSTED'].includes(result.providerErrorCode);
-      return { type: 'halt', status: exhausted ? 'limit-reached' : 'blocked', reason: `Pilot ${pilot.sceneId}: ${result.reason || result.verdict}. ${pilotRepair(result, scenes.find((s) => s.sceneId === pilot.sceneId), project).reason}` };
-    }
-  }
+  const blocking = blockingPilotReview(project, run, pendingPilots);
+  if (blocking) return blocking;
+  const stale = pendingPilots.find((pilot) => stalePilotSlot(project, pilot));
+  if (stale) return { type: 'refresh-pilot', sceneId: stale.sceneId };
   if (run.authoring && targets.frame.some((scene) => scene.shotMode === 'performance')) {
     const gate = castAndSetsGate(project, run);
     if (gate) return { type: 'halt', status: 'blocked', reason: 'This selected performance shot needs the reviewed Cast & Sets references. Build and approve that check-in, then resume; production will not start an unbudgeted image batch.' };
   }
-  let waiting = false;
-  for (const stepKind of ['frame', 'clip']) {
-    for (const scene of targets[stepKind]) {
-      if (pendingPilots.length && !pendingPilots.some((pilot) => pilot.sceneId === scene.sceneId)) continue;
-      if (scene[SLOT[stepKind]]) continue;
-      // A clip is generated from the scene's frame; wait for it.
-      if (stepKind === 'clip' && !scene.referenceImageId) { waiting = true; continue; }
-      const steps = slotSteps(run, scene.sceneId, stepKind);
-      if (steps.some((s) => LIVE_STEP.has(s.status)) || liveSlotJob(jobs, project.id, scene.sceneId, stepKind)) { waiting = true; continue; }
-      const refused = terminalRefusal(project, run, scene.sceneId, stepKind);
-      if (refused) return { type: 'halt', status: 'blocked', reason: `"${scene.label || scene.sceneId}" has a terminal ${stepKind} refusal (${refused.errorCode}). Change its inputs or resume with another supported route; Resume will not repeat it.` };
-      // A paid failure is not evidence that the same operation will work next
-      // time. Pause before another charge; explicit Resume permits a transient retry.
-      const failed = steps.find((s) => s.status === 'failed' && !(run.retryAcknowledged || []).includes(s.key));
-      if (failed) return { type: 'halt', status: 'blocked', reason: `"${scene.label || scene.sceneId}" failed to generate its ${stepKind}. Inspect the failure and repair its inputs, or resume explicitly to retry.` };
-      return { type: 'dispatch', kind: stepKind, sceneId: scene.sceneId };
-    }
-  }
-  if (waiting) return { type: 'wait', on: 'generation' };
+  const generation = nextOpenGeneration(project, run, jobs, { pendingPilots, targets });
+  if (generation?.waiting) return { type: 'wait', on: 'generation' };
+  if (generation) return generation;
+  if (run.stopBefore === 'clips') return { type: 'halt', status: 'awaiting-video', reason: 'Every shot has its still. Resume to make the clips.' };
   if (pendingPilots.length) {
     const pilot = pendingPilots[0];
     const scene = scenes.find((s) => s.sceneId === pilot.sceneId);
@@ -717,6 +762,28 @@ export const attachProductionReview = (project, runId, reviewRunId, now = new Da
 export const planProductionPilots = (project, runId, now = new Date().toISOString()) =>
   mutateRun(project, runId, () => ({ pilot: { scenes: selectProductionPilots(project) } }), now);
 
+/** Clear a stale pilot take (see stalePilotSlot); the take stays in the scene's history. */
+export function refreshProductionPilot(project, runId, sceneId, now = new Date().toISOString()) {
+  const run = findProductionRun(project, runId);
+  const pilot = run.pilot?.scenes?.find((p) => p.sceneId === sceneId);
+  const slot = pilot && stalePilotSlot(project, pilot);
+  if (!slot) return { project, run };
+  return mutateRun({ ...project, scenes: project.scenes.map((scene) => (scene.sceneId === sceneId ? { ...scene, [slot]: null } : scene)) },
+    runId, () => ({}), now);
+}
+
+/**
+ * The run's orchestrator accepts a pilot's last reviewed take once its repairs
+ * are spent. Bound to that review, so new media or inputs need a new review.
+ */
+export const acceptProductionPilot = (project, runId, sceneId, { by, note }, now = new Date().toISOString()) =>
+  mutateRun(project, runId, (run) => {
+    const pilot = run.pilot?.scenes?.find((p) => p.sceneId === sceneId);
+    if (!pilot?.reviewRunId) throw productionError(409, 'PRODUCTION_PILOT_REQUIRED', 'This pilot has no review to accept');
+    return { pilot: { ...run.pilot, scenes: run.pilot.scenes.map((p) => (p.sceneId === sceneId
+      ? { ...p, accepted: { reviewRunId: p.reviewRunId, by, note: note || null, at: now } } : p)) } };
+  }, now);
+
 export const attachProductionPilotReview = (project, runId, sceneId, reviewRunId, now = new Date().toISOString()) =>
   mutateRun(project, runId, (run) => ({ pilot: { ...run.pilot, scenes: run.pilot.scenes.map((pilot) =>
     pilot.sceneId === sceneId ? { ...pilot, reviewRunId, inputBasis: pilotInputBasis(project, sceneId) } : pilot) } }), now);
@@ -761,7 +828,7 @@ export function stopProductionOnProject(project, runId, now = new Date().toISOSt
  * budget. A run halted on a changed creative setup continues only when the
  * director accepts the new basis (`acceptBasis`), which re-snapshots it.
  */
-export function resumeProductionOnProject(project, runId, { limits, acceptBasis = false, processId, pool = null, pricing = {} } = {}, now = new Date().toISOString()) {
+export function resumeProductionOnProject(project, runId, { limits, acceptBasis = false, processId, pool = null, pricing = {}, stopBefore } = {}, now = new Date().toISOString()) {
   return mutateRun(project, runId, (run) => {
     if (!RESUMABLE.has(run.status)) throw productionError(409, 'PRODUCTION_CLOSED', `This production run is ${run.status} — start a new run instead`);
     if (normalizeMusicVideoProductionPolicy(project?.productionPolicy).strategy === 'code-first' && !run.authoring) throw productionError(409, 'PRODUCTION_AUTHORING_REQUIRED', 'Cancel this legacy run and start a code-first run with an authoring model');
@@ -782,6 +849,9 @@ export function resumeProductionOnProject(project, runId, { limits, acceptBasis 
     // A replacement pool (a swapped model, #10473) is checked like Start; the
     // caller has already proven every route eligible on this install.
     const nextPool = pool ? normalizeProductionPool(pool, { allowEmpty: !!run.authoring }) : null;
+    // Resuming a finished stills-only run goes on to the clips unless the caller keeps the stop.
+    const nextStop = stopBefore !== undefined ? (STOP_BEFORE.has(stopBefore) ? stopBefore : null)
+      : run.status === 'awaiting-video' ? null : run.stopBefore || null;
     return {
       status: 'running',
       limits: nextLimits,
@@ -789,7 +859,9 @@ export function resumeProductionOnProject(project, runId, { limits, acceptBasis 
       processId,
       resumedAt: now,
       retryAcknowledged: run.steps.filter((step) => step.status === 'failed').map((step) => step.key),
-      ...(!run.pilot && !run.reviewRunId ? { pilot: { scenes: null } } : {}),
+      stopBefore: nextStop,
+      // A stills-only run makes no clip, so it drops any pending clip pilot.
+      ...(nextStop ? { pilot: null } : !run.pilot && !run.reviewRunId ? { pilot: { scenes: null } } : {}),
       stopReason: null,
       error: null,
       ...(run.finalRender?.status === 'failed' || (run.finalRender && run.processId !== processId) ? { finalRender: null } : {}),

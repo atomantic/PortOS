@@ -775,6 +775,60 @@ async function runAdmittedPersistentMindTurn() {
   }
 }
 
+// The one place a failed turn is classified. `usageLimit`, `contextBudget` and
+// a call denial are mutually exclusive causes, and the park message, status,
+// retire/retry flags, usage-limit probe and log line all follow from which one
+// applies — so they are decided together here and the `catch` only acts on the
+// result.
+//
+// Persistent Mind has no automatic provider fallback pool. A hard usage-limit /
+// quota exhaustion would otherwise climb failureCount and keep burning
+// scheduled wakes; it autopauses and probes for recovery (transient
+// rate-limits / network blips stay on the interrupted + backoff path).
+// Local context-budget / known-window-below-request failures are not
+// transient either: retrying the same wake only climbs failureCount, so they
+// autopause with an actionable reason until the operator raises the window or
+// shrinks mind context. A refusal already named its own cause and the status it
+// belongs under; only a revoked temporary route retires the wake, exactly as
+// the pre-turn resolution does.
+function classifyPersistentMindTurnFailure(error, { signal, runStartedAt }) {
+  const denied = isPersistentMindCallDenial(error);
+  const aborted = signal.aborted;
+  const detail = aborted
+    ? String(signal.reason || 'Persistent mind turn interrupted')
+    : errorMessage(error);
+  const nonDeniedFault = !denied && !aborted;
+  const usageLimit = nonDeniedFault && isHardProviderUsageLimitError(error);
+  const contextBudget = nonDeniedFault && !usageLimit && isContextBudgetFitnessError(error);
+  const held = denied && error.retryDisposition === 'hold' && error.requiresResubmission !== true;
+  const base = {
+    message: detail,
+    status: held ? 'paused' : ((denied && error.deniedStatus) || 'interrupted'),
+    consumedAttempt: runStartedAt != null,
+    retireWake: denied && error.requiresResubmission === true,
+    retryAt: denied && error.retryDisposition === 'reset-wait' ? error.retryAt : null,
+    markUsageLimit: usageLimit,
+    logMessage: `Persistent mind turn ${denied ? 'refused a further provider call' : 'interrupted'}: ${detail}`,
+  };
+  if (usageLimit) {
+    return {
+      ...base,
+      message: PROVIDER_USAGE_LIMIT_PAUSE_REASON,
+      status: 'paused',
+      logMessage: `Persistent mind autopaused on provider usage limit: ${detail}`,
+    };
+  }
+  if (contextBudget) {
+    return {
+      ...base,
+      message: contextBudgetPauseReasonFrom(error),
+      status: 'paused',
+      logMessage: `Persistent mind autopaused on local context budget: ${detail}`,
+    };
+  }
+  return base;
+}
+
 // Admission owns the global/action reservations until the claimed turn's
 // provider work, error handling, and endpoint cleanup have all settled — with
 // one exception: once a LOCAL-model turn has secured its endpoint-scoped slot
@@ -1019,56 +1073,23 @@ async function runClaimedPersistentMindTurn(turn, mind, globalSlot) {
     }, generation);
   } catch (error) {
     if (generation === runtimeGeneration) {
-      const denied = isPersistentMindCallDenial(error);
-      const message = controller.signal.aborted
-        ? String(controller.signal.reason || 'Persistent mind turn interrupted')
-        : errorMessage(error);
-      // Persistent Mind has no automatic provider fallback pool. A hard
-      // usage-limit / quota exhaustion would otherwise climb failureCount and
-      // keep burning scheduled wakes; autopause, then probe for recovery.
-      // Transient rate-limits / network blips stay on the interrupted +
-      // backoff path below.
-      const usageLimit = !denied && !controller.signal.aborted && isHardProviderUsageLimitError(error);
-      // Local context-budget / known-window-below-request failures are not
-      // transient: retrying the same wake only climbs failureCount. Autopause
-      // with an actionable reason (token counts + numCtx hint) and wait for
-      // the operator to raise the window or shrink mind context.
-      const contextBudget = !denied && !controller.signal.aborted && !usageLimit
-        && isContextBudgetFitnessError(error);
-      // A refusal already named its own cause and the status it belongs
-      // under; only a revoked temporary route retires the wake, exactly as
-      // the pre-turn resolution does.
-      await parkActiveTurn(
-        turn.id,
-        usageLimit
-          ? PROVIDER_USAGE_LIMIT_PAUSE_REASON
-          : (contextBudget ? contextBudgetPauseReasonFrom(error) : message),
-        (usageLimit || contextBudget || (denied && error.retryDisposition === 'hold' && error.requiresResubmission !== true)) ? 'paused' : ((denied && error.deniedStatus) || 'interrupted'),
-        {
-          consumedAttempt: runStartedAt != null,
-          retireWake: denied && error.requiresResubmission === true,
-          retryAt: denied && error.retryDisposition === 'reset-wait' ? error.retryAt : null,
-        },
-      );
-      if (usageLimit) {
+      const failure = classifyPersistentMindTurnFailure(error, { signal: controller.signal, runStartedAt });
+      await parkActiveTurn(turn.id, failure.message, failure.status, {
+        consumedAttempt: failure.consumedAttempt,
+        retireWake: failure.retireWake,
+        retryAt: failure.retryAt,
+      });
+      if (failure.markUsageLimit) {
         const providerId = (await loadState()).config?.persistentMindProfile?.providerId
           || null;
         if (typeof providerId === 'string' && providerId) {
-          await markProviderUsageLimit(providerId, { message }).catch((markError) => {
+          await markProviderUsageLimit(providerId, { message: errorMessage(error) }).catch((markError) => {
             console.error(`❌ Failed to mark provider usage limit for mind probe: ${markError.message}`);
           });
         }
         scheduleUsageLimitProbe(0);
       }
-      emitLog(
-        'warn',
-        usageLimit
-          ? `Persistent mind autopaused on provider usage limit: ${message}`
-          : contextBudget
-            ? `Persistent mind autopaused on local context budget: ${message}`
-            : `Persistent mind turn ${denied ? 'refused a further provider call' : 'interrupted'}: ${message}`,
-        { turnId: turn.id },
-      );
+      emitLog('warn', failure.logMessage, { turnId: turn.id });
     }
   } finally {
     release();

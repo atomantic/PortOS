@@ -1,7 +1,7 @@
 import { shotActionContractProblem, shotActionPrompt } from '../../../server/lib/musicVideoActionContract.js';
 import { shotCameraPrompt } from '../../../server/lib/cameraMovements.js';
-import { musicVideoConditioningReferences, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../server/lib/musicVideoConditioning.js';
-import { musicVideoCreativeContext } from '../../../server/lib/musicVideoCreativeContext.js';
+import { isOutsideMusicVideoReference, musicVideoConditioningReferences, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../server/lib/musicVideoConditioning.js';
+import { musicVideoCreativeContext, musicVideoDirectorLook } from '../../../server/lib/musicVideoCreativeContext.js';
 import { useEffect, useRef } from 'react';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';
@@ -61,6 +61,8 @@ export function visualDirection(spec) {
 
 /** Shared scene-aware frame conditioning, with the legacy capped fallback. */
 export const conditioningReferences = musicVideoConditioningReferences;
+/** A mood board / Pinterest reference: look text only, never a conditioning image. */
+export const isOutsideReference = isOutsideMusicVideoReference;
 
 // A scene's authored span on the song, or null while it is untimed.
 const sceneSpanSec = (scene) => (typeof scene.startSec === 'number' && typeof scene.endSec === 'number' && scene.endSec > scene.startSec
@@ -161,7 +163,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   const failedScenes = { frame: frameLane.failedScenes, video: videoLane.failedScenes };
 
   const style = project?.concept?.style?.trim();
-  const direction = [musicVideoCreativeContext(project?.concept), visualDirection(project?.visualSpec)].filter(Boolean).join('; ');
+  const direction = [musicVideoCreativeContext(project?.concept, { look: musicVideoDirectorLook(project) }), visualDirection(project?.visualSpec)].filter(Boolean).join('; ');
   // The i2v prompt leaves the mood-board look out (handoff.js composePrompt): the frame already carries it.
   const motionDirection = [musicVideoCreativeContext(project?.concept, { moodBoard: false }), visualDirection(project?.visualSpec)].filter(Boolean).join('; ');
   const conditioning = conditioningReferences(project);

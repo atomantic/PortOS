@@ -213,6 +213,120 @@ describe.skipIf(!runDb)('POST /api/catalog/bulk-import — export-bundle ref rec
   });
 });
 
+
+describe.skipIf(!runDb)('catalog export identity round trip', () => {
+  const send = (bundle) => request(makeApp()).post('/api/catalog/bulk-import')
+    .send({ format: 'json', payload: JSON.stringify(bundle) });
+
+  it('imports an exported slice twice and reuses IDs, shared scraps and media while applying edits', async () => {
+    const refId = `roundtrip-${NONCE}`;
+    const original = await catalogDB.createIngredient({ type: 'idea', name: 'Export original' });
+    const scrap = await catalogDB.createScrap({ rawText: 'Original provenance' });
+    createdIngredientIds.add(original.id);
+    createdScrapIds.add(scrap.id);
+    await catalogDB.linkIngredientToSource(original.id, scrap.id);
+    await catalogDB.linkIngredientToRef(original.id, 'series', refId, 'cast');
+    await catalogDB.attachMedia(original.id, 'example.png', 'portrait', { caption: 'Example', metadata: { prompt: 'Example prompt' } });
+    await catalogDB.attachMedia(original.id, 'reference.png', 'reference');
+    const bundle = await catalogDB.exportSliceForRef('series', refId);
+    // Simulate a receiving catalog without either exported record.
+    await catalogDB.deleteIngredient(original.id, { hard: true });
+    await catalogDB.deleteScrap(scrap.id, { hard: true });
+    bundle.ingredients[0].name = 'Edited export';
+    bundle.ingredients[0].scraps.push({ rawText: 'New notes', sourceKind: 'import' });
+    const first = await send(bundle);
+    await catalogDB.linkIngredientToSource(original.id, scrap.id, { start: 2, end: 8 });
+    const results = [first, await send(bundle)];
+    expect(results.map((r) => r.status)).toEqual([201, 201]);
+    expect(results.map((r) => r.body.scrapsCreated)).toEqual([2, 0]);
+    expect(results.map((r) => r.body.created[0].id)).toEqual([original.id, original.id]);
+    const exported = await catalogDB.exportSliceForRef('series', refId);
+    expect(exported.ingredients).toHaveLength(1);
+    const row = exported.ingredients[0];
+    for (const item of row.scraps) createdScrapIds.add(item.id);
+    expect(row.name).toBe('Edited export');
+    expect(row.scraps).toHaveLength(2);
+    expect((await catalogDB.listSourcesForIngredient(original.id)).find((source) => source.scrapId === scrap.id).span)
+      .toEqual({ start: 2, end: 8 });
+    expect(row.scraps.some((item) => item.id === scrap.id)).toBe(true);
+    expect(row.media.map((item) => item.mediaKey).sort()).toEqual(['example.png', 'reference.png']);
+    expect(row.media.find((item) => item.kind === 'portrait').metadata).toMatchObject({ prompt: 'Example prompt' });
+    const storedMedia = await query('SELECT * FROM catalog_ingredient_media WHERE ingredient_id = $1', [original.id]);
+    expect(storedMedia.rows).toHaveLength(2);
+    // Overlapping retries use the same transaction guard, including new IDs.
+    const concurrentId = `cat-idea-concurrent-${NONCE}`;
+    createdIngredientIds.add(concurrentId);
+    bundle.ingredients[0].id = concurrentId;
+    bundle.ingredients[0].scraps = [scrap];
+    const concurrent = await Promise.all([send(bundle), send(bundle)]);
+    expect(concurrent.map((r) => r.status)).toEqual([201, 201]);
+    expect(await catalogDB.listSourcesForIngredient(concurrentId)).toHaveLength(1);
+  });
+
+  it.each(['json', 'csv'])('keeps ID-less %s imports as new creates', async (format) => {
+    const payload = format === 'json'
+      ? JSON.stringify([{ type: 'idea', name: 'No identity' }])
+      : 'type,name\nidea,No identity';
+    const ids = [];
+    for (let i = 0; i < 2; i++) {
+      const response = await request(makeApp()).post('/api/catalog/bulk-import').send({ format, payload });
+      expect(response.status).toBe(201);
+      ids.push(response.body.created[0].id);
+      createdIngredientIds.add(ids.at(-1));
+    }
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  it('rolls back ingredient updates, new ingredients, refs, scraps and media on a later SQL failure', async () => {
+    const old = await catalogDB.createIngredient({ type: 'idea', name: 'Before import' });
+    createdIngredientIds.add(old.id);
+    await catalogDB.attachMedia(old.id, 'before.png', 'portrait');
+    const freshId = `cat-idea-bulk-rollback-${NONCE}`;
+    const scrapId = `cat-scrap-bulk-rollback-${NONCE}`;
+    createdIngredientIds.add(freshId);
+    createdScrapIds.add(scrapId);
+    const bundle = {
+      ref: { kind: 'series', id: `rollback-${NONCE}` },
+      ingredients: [
+        { id: old.id, type: 'idea', name: 'After import', media: [{ mediaKey: 'after.png', kind: 'portrait' }] },
+        { id: freshId, type: 'idea', name: 'New import', scraps: [{ id: scrapId, rawText: 'Rollback notes' }],
+          media: [{ mediaKey: 'new.png', kind: 'reference' }] },
+      ],
+    };
+    const response = await withRevisionFailure(/^INSERT INTO catalog_ingredient_sources/i, () => send(bundle));
+    expect(response.status).toBe(500);
+    expect((await catalogDB.getIngredient(old.id)).name).toBe('Before import');
+    expect(await catalogDB.getIngredient(freshId)).toBeNull();
+    expect(await catalogDB.getScrap(scrapId)).toBeNull();
+    expect((await catalogDB.listMediaForIngredient(old.id)).map((row) => row.mediaKey)).toEqual(['before.png']);
+    expect(await catalogDB.listRefsForIngredient(old.id)).toHaveLength(0);
+    expect((await query('SELECT * FROM catalog_ingredient_media WHERE ingredient_id = ANY($1)', [[old.id, freshId]])).rows).toHaveLength(1);
+  });
+
+  it('rejects malformed identity and media before writes, and refuses deleted or conflicting IDs', async () => {
+    const row = await catalogDB.createIngredient({ type: 'idea', name: 'Keep identity' });
+    createdIngredientIds.add(row.id);
+    for (const entry of [
+      { id: 123, type: 'idea', name: 'Invalid ID' },
+      { type: 'idea', name: 'Invalid media', media: [{ mediaKey: 'x', kind: 'invalid' }] },
+    ]) expect((await send([entry])).status).toBe(400);
+    expect((await send([{ id: row.id, type: 'scene', name: 'Wrong type' }])).status).toBe(409);
+    const scrap = await catalogDB.createScrap({ rawText: 'Keep provenance' });
+    createdScrapIds.add(scrap.id);
+    expect((await send([{ id: row.id, type: 'idea', name: 'Changed',
+      scraps: [{ id: scrap.id, rawText: 'Conflicting provenance' }] }])).status).toBe(409);
+    expect((await catalogDB.getIngredient(row.id)).name).toBe('Keep identity');
+    expect((await catalogDB.getScrap(scrap.id)).rawText).toBe('Keep provenance');
+    await catalogDB.linkIngredientToSource(row.id, scrap.id);
+    expect((await send([{ id: row.id, type: 'idea', name: 'Changed',
+      scraps: [{ rawText: scrap.rawText, sourceKind: scrap.sourceKind, metadata: { different: true } }] }])).status).toBe(409);
+    expect((await catalogDB.getScrap(scrap.id)).metadata).toEqual({});
+    await catalogDB.deleteIngredient(row.id);
+    expect((await send([{ id: row.id, type: 'idea', name: 'Deleted' }])).status).toBe(409);
+    expect(await catalogDB.getIngredient(row.id)).toBeNull();
+  });
+});
+
 // Inject a real SQL error at the pg transport, retaining its promise/callback
 // interface. All other statements (including rollback) still reach portos_test.
 async function withRevisionFailure(statement, operation, matchesParams = () => true) {

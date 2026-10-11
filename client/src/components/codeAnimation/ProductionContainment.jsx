@@ -6,13 +6,22 @@ import { formatCount } from '../../utils/formatters';
 const buttonClass = 'rounded border border-port-border px-3 py-2 text-sm hover:border-port-accent disabled:opacity-50';
 
 /** Machine-level contained-execution status: fail-closed readiness, operator tool path, on-demand check. */
-export default function ProductionContainment() {
+export default function ProductionContainment({ rendererKind = null }) {
   const [execution, setExecution] = useState(null);
+  const [open, setOpen] = useState(false);
   const [blenderPath, setBlenderPath] = useState('');
   const [savedPath, setSavedPath] = useState('');
   const [mode, setMode] = useState('contained');
   const [engine, setEngine] = useState('CYCLES');
   const [acknowledged, setAcknowledged] = useState(false);
+  const blenderReady = execution?.lanes?.blender?.ready;
+  const blocking = rendererKind === 'blender' && blenderReady === false;
+  useEffect(() => {
+    if (rendererKind !== 'blender') setOpen(false);
+  }, [rendererKind]);
+  useEffect(() => {
+    if (blocking) setOpen(true);
+  }, [blocking]);
   const apply = (next) => {
     if (!next) return;
     setExecution(next);
@@ -33,13 +42,14 @@ export default function ProductionContainment() {
   if (!execution) return null;
   const { mechanism, lanes, probe: result } = execution;
   const dirty = blenderPath.trim() !== savedPath || mode !== (execution.executionMode || 'contained') || engine !== (execution.tools.blender.engine || 'CYCLES') || acknowledged !== (execution.executionMode === 'trusted-local');
-  return <section className="space-y-3 rounded-xl border border-port-border bg-port-card p-4">
-    <h2 className="text-base font-semibold">Blender execution</h2>
-    <p className="text-sm text-gray-400">Contained mode is the default and refuses execution when its sandbox cannot run Blender. Trusted-local mode requires your explicit acknowledgement and runs only source you trust. No automatic fallback occurs.</p>
+  const shown = open || blocking;
+  return <details open={shown} onToggle={event => { if (blocking) { event.currentTarget.open = true; return; } setOpen(event.currentTarget.open); }} className="space-y-3 rounded-xl border border-port-border bg-port-card p-4">
+    <summary className="cursor-pointer text-base font-semibold">Blender execution <span className={lanes.blender.ready ? 'text-sm font-normal text-gray-400' : 'text-sm font-normal text-port-warning'}>{lanes.blender.ready ? 'Ready' : lanes.blender.reason}</span></summary>
+    <p className="text-sm text-gray-400">Contained mode refuses execution when its sandbox cannot run Blender.</p>
     <div className="grid grid-cols-1 gap-2 text-sm md:grid-cols-3">
       <p>Sandbox: {mechanism.supported ? mechanism.id : <span className="text-port-warning">{mechanism.reason}</span>}</p>
       <p>Browser lane: {lanes.browser.mechanism}</p>
-      <p>Blender lane: {lanes.blender.ready ? 'Ready for production rendering' : <span className="text-port-warning">{lanes.blender.reason}</span>}</p>
+      <p>Blender lane: {lanes.blender.ready ? 'Ready for production rendering' : <span className="text-port-warning">Not ready</span>}</p>
     </div>
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
       <div><label htmlFor="cap-blender-mode" className="mb-1 block text-sm">Execution mode</label>
@@ -55,7 +65,12 @@ export default function ProductionContainment() {
       <p>{execution.trustedLocalWarning || 'Trusted-local Blender can access this account’s host filesystem, network and processes. Environment scrubbing and process supervision are not containment.'}</p>
       <label htmlFor="cap-blender-ack" className="flex items-start gap-2"><input id="cap-blender-ack" type="checkbox" checked={acknowledged} disabled={saving || probing} onChange={event => setAcknowledged(event.target.checked)} />I understand the host access and trust the source I will run.</label>
     </div>}
-    <p className="text-xs text-gray-400">Cycles CPU can take substantial time for a full sequence. EEVEE needs a successful GPU check and disables motion blur to preserve stepped holds. Project version and engine must match the checked runtime.</p>
+    <p className="text-xs text-gray-400">Cycles CPU can take substantial time for a full sequence.</p>
+    <details className="text-xs text-gray-400">
+      <summary className="cursor-pointer">Execution notes</summary>
+      <p className="mt-1">Trusted-local mode requires your explicit acknowledgement and runs only source you trust. No automatic fallback occurs.</p>
+      <p className="mt-1">EEVEE needs a successful GPU check and disables motion blur to preserve stepped holds. Project version and engine must match the checked runtime.</p>
+    </details>
     <div className="flex flex-wrap items-end gap-2">
       <div className="min-w-0 flex-1 basis-72">
         <label htmlFor="cap-blender-path" className="mb-1 block text-sm">Blender executable (operator-owned)</label>
@@ -72,5 +87,5 @@ export default function ProductionContainment() {
         {result.tools?.blender && <li className={result.tools.blender.passed ? 'text-gray-400' : 'text-port-warning'}>{result.tools.blender.detail}</li>}
       </ul>
     </div>}
-  </section>;
+  </details>;
 }

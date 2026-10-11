@@ -1,13 +1,13 @@
 // Existing engine cases isolate the creative review boundary; explicit approval-flow
 // cases below switch to the real model and verify pause/resume without providers.
-const creativeReview = vi.hoisted(() => ({ real: false }));
+const creativeReview = vi.hoisted(() => ({ real: false, readiness: {} }));
 vi.mock('./productionReview.js', async (load) => {
   const actual = await load();
   return { ...actual,
     assertProductionApproval: (...args) => creativeReview.real ? actual.assertProductionApproval(...args) : undefined,
     productionReadiness: (...args) => creativeReview.real ? actual.productionReadiness(...args) : {
       art: { approved: true }, storyboard: { approved: true }, proof: { approved: true }, basis: { proof: 'test-proof' }, readyForProduction: true,
-      alignment: { status: 'verified' },
+      alignment: { status: 'verified' }, ...creativeReview.readiness,
     },
   };
 });
@@ -67,9 +67,11 @@ const stub = (name, impl) => vi.fn(async (...args) => { calls.push(name); return
 
 beforeEach(() => {
   creativeReview.real = false;
+  creativeReview.readiness = {};
   store.clear();
   calls = [];
   doubles = {
+    localVideoTakesSongAudio: vi.fn(async () => false),
     createProject: stub('createProject', async (input) => {
       const project = { id: 'mv-auto', productionReview: { proof: { basis: 'test-proof', excerptId: 'test-proof' } }, excerpts: [{ id: 'test-proof', status: 'complete', filename: 'test-proof.mp4' }], ...input };
       store.set(project.id, clone(project));
@@ -201,6 +203,20 @@ describe('startAutonomousVideo', () => {
       resolve.mockRestore();
       production.__setProductionDepsForTests({});
     }
+  });
+
+  // Uniquely catches a footage project left in document mode with no document failing its final render.
+  it('composes a footage project that has no composition document before its final render', async () => {
+    await service.startAutonomousVideo({ prompt: 'p' });
+    await vi.waitFor(() => expect(runOf()?.output.productionRunId).toBe('mvpr-1'));
+    Object.assign(store.get('mv-auto'), { composition: { mode: 'document', textCues: [{ id: 'cue' }] }, productionPolicy: { strategy: 'legacy' } });
+    doubles.renderVideo.mockImplementationOnce(async (id) => {
+      expect(store.get(id).composition).toEqual({ mode: 'composed', textCues: [{ id: 'cue' }] });
+      return { jobId: 'render-1' };
+    });
+    await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'completed' } });
+    expect(doubles.renderVideo).toHaveBeenCalledOnce();
+    expect(runOf().output).toMatchObject({ renderJobId: 'render-1' });
   });
 
   it('finishes — and starts the final render — when the delegated production run completes', async () => {
@@ -603,6 +619,88 @@ describe('startAutonomousVideo', () => {
 
   it('rejects a blank prompt', async () => {
     await expect(service.startAutonomousVideo({ prompt: '   ' })).rejects.toMatchObject({ status: 400 });
+    expect(calls).toEqual([]);
+  });
+});
+
+// A finished project whose song a new run reuses; everything but the song is its own look.
+const SONG_SOURCE = {
+  id: 'mv-src', name: 'Example Song', trackId: 'track-src', uploadedAudioFilename: null, status: 'ready',
+  concept: { prompt: 'Its own concept', songStyle: 'post-punk, driving drums, -metal' },
+  visualSpec: { moodBoardId: 'board-src', references: [{ id: 'ref-1', imageId: 'img-1' }] },
+  audioAnalysis: { durationSec: 20, bpm: 120, sections: [{ id: 'chorus', label: 'Chorus', startSec: 0, endSec: 20 }] },
+  midiTranscription: { filename: 'song.mid' },
+  lyricCues: [{ id: 'c1', text: 'rain on glass', startSec: 1, endSec: 4, words: [
+    { w: 'rain', startSec: 1, endSec: 2, conf: 'interpolated' }, { w: 'on', startSec: 2, endSec: 3, conf: 'interpolated' }, { w: 'glass', startSec: 3, endSec: 4, conf: 'interpolated' }] }],
+  lyricMarkers: [{ cueIndex: 0, kind: 'section', text: 'Chorus' }],
+  phrases: [{ id: 'mp-1', label: 'hook', intent: 'lift', startSec: 1, endSec: 4 }],
+  vocalStemFilename: 'vocals.wav', performanceConditioningSource: 'vocal-stem', lyricAlignSource: 'vocal-stem', lyricAlignSilentWords: 0,
+  scenes: [{ sceneId: 'mvs-src', startSec: 0, endSec: 20 }],
+  castAndSets: { status: 'complete', cast: 'Its own lead' },
+  treatment: { brief: 'Its own treatment' },
+  filmLook: { preset: 'example' },
+  productionReview: { draft: { lyricsMode: 'vocal', timingStatus: 'verified', storyboard: [{ sceneId: 'mvs-src' }] } },
+};
+
+describe('starting on an existing project\'s song (fromProjectId)', () => {
+  beforeEach(() => {
+    store.set('mv-src', clone(SONG_SOURCE));
+    doubles.getTrack = vi.fn(async () => ({ id: 'track-src', title: 'Example Song', prompt: 'track style', lyrics: 'rain on glass' }));
+    service.__setAutonomousDepsForTests(doubles);
+  });
+
+  // Uniquely catches a reused footage song turning code-first when the request names the footage mode itself.
+  it('keeps the source song\'s production policy when the request names a footage media mode, but not a code-only one', async () => {
+    const { project } = await service.startAutonomousVideo({ prompt: 'p', fromProjectId: 'mv-src', mediaMode: 'code-images-video' });
+    expect(project.productionPolicy).toMatchObject({ strategy: 'legacy', maxGeneratedVideoPercent: 100 });
+    store.delete('mv-auto');
+    const { project: codeOnly } = await service.startAutonomousVideo({ prompt: 'p', fromProjectId: 'mv-src', mediaMode: 'code-only' });
+    expect(codeOnly.productionPolicy).toMatchObject({ strategy: 'code-first', maxGeneratedVideoPercent: 0 });
+  });
+
+  // Uniquely catches the install's video pin (fal, say) planning lip-sync shots the run's own video tool cannot render.
+  it('sets the project\'s video settings from the run\'s own video tool', async () => {
+    doubles.localVideoTakesSongAudio.mockResolvedValue(true);
+    const { project } = await service.startAutonomousVideo({ prompt: 'p', fromProjectId: 'mv-src', tools: ['image:local', 'video:local'], models: { 'video:local': 'example-ltx' } });
+    expect(project.videoSettings).toEqual({ backend: 'local', modelId: 'example-ltx', generationMode: 'suppliedAudio' });
+    expect(doubles.localVideoTakesSongAudio).toHaveBeenCalledWith('example-ltx');
+    store.delete('mv-auto');
+    const { project: stills } = await service.startAutonomousVideo({ prompt: 'p', fromProjectId: 'mv-src', tools: ['image:local'] });
+    expect(stills.videoSettings).toEqual({ backend: 'local', generationMode: 'image' });
+  });
+
+  // Uniquely catches a reused song re-running lyrics/Suno/analysis or the new project inheriting the source's look.
+  it('copies only the song, writes no lyrics, makes no song, skips analysis, and leaves the source untouched', async () => {
+    const { project, run } = await service.startAutonomousVideo({ prompt: 'skatepark at golden hour', fromProjectId: 'mv-src', checkpoints: ['lyrics', 'song', 'style'] });
+    expect(project).toMatchObject({ name: 'Example Song (Auto)', trackId: 'track-src', status: 'analyzed',
+      audioAnalysis: SONG_SOURCE.audioAnalysis, lyricCues: SONG_SOURCE.lyricCues, vocalStemFilename: 'vocals.wav', lyricAlignSource: 'vocal-stem' });
+    expect(project.concept).toEqual({ prompt: 'skatepark at golden hour', songStyle: 'post-punk, driving drums, -metal' });
+    // The source has no policy of its own, so it is a legacy footage project, and so is the copy.
+    expect(project).toMatchObject({ mediaMode: 'code-images-video', productionPolicy: { strategy: 'legacy', maxGeneratedVideoPercent: 100 } });
+    for (const key of ['visualSpec', 'castAndSets', 'treatment', 'filmLook']) expect(project[key]).toBeUndefined();
+    expect(project.scenes).toBeUndefined();
+    expect(run.brief).toMatchObject({ checkpoints: ['style'], instrumental: false, songFrom: { projectId: 'mv-src', title: 'Example Song' } });
+    expect(run.output).toMatchObject({ trackId: 'track-src', lyrics: 'rain on glass', songSource: 'reused' });
+
+    await settled('awaiting-approval');
+    await service.resumeAutonomousVideo('mv-auto');
+    await vi.waitFor(() => expect(calls).toContain('production'));
+    expect(calls).toEqual(['createProject', 'brief', 'board', 'updateProject', 'production']);
+    expect(doubles.draftCreativeBrief).toHaveBeenCalledWith(expect.objectContaining({
+      song: { title: 'Example Song', style: 'post-punk, driving drums, -metal', lyrics: 'rain on glass' },
+    }));
+    // The brief designs the video; the song keeps its own title and style.
+    expect(runOf().output).toMatchObject({ title: 'Example Song', sunoStyle: 'post-punk, driving drums, -metal' });
+    expect(runOf().stages).toMatchObject({ lyrics: { status: 'done' }, song: { status: 'done' }, analyze: { status: 'done' } });
+    expect(store.get('mv-auto').name).toBe('Example Song (Auto)');
+    expect(store.get('mv-src')).toEqual(SONG_SOURCE);
+    await expect(service.resumeAutonomousVideo('mv-auto', { retakeSong: true })).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('refuses a missing source or one with no song before creating anything', async () => {
+    await expect(service.startAutonomousVideo({ prompt: 'p', fromProjectId: 'mv-missing' })).rejects.toMatchObject({ status: 404 });
+    store.set('mv-src', { ...clone(SONG_SOURCE), trackId: null });
+    await expect(service.startAutonomousVideo({ prompt: 'p', fromProjectId: 'mv-src' })).rejects.toMatchObject({ status: 409, code: 'NO_SONG' });
     expect(calls).toEqual([]);
   });
 });
@@ -1095,6 +1193,33 @@ describe('auto-approve the rest (brief.autoApprove)', () => {
     expect(doubles.startProduction).not.toHaveBeenCalled();
   });
 
+  // Uniquely catches a code-first plan with an unfilmable performance shot being approved and then failing production.
+  it('re-plans a performance shot with no footage as a cutaway before approving the storyboard', async () => {
+    reviewFixture();
+    const { buildTreatmentDraft } = await import('./treatmentDraft.js');
+    const { writeCompiledTreatment, applyTreatmentToProject, treatmentBasis } = await import('./treatment.js');
+    const { codeFirstProductionAssets } = await import('../../lib/musicVideoMediumPlan.js');
+    doubles.approveProductionReview.mockImplementation(async (id, input) => {
+      let project = clone(store.get(id));
+      if (input.stage === 'art' && !project.treatment) {
+        // What preparing the storyboard does for a code-first project: a deterministic plan, applied.
+        const compiled = writeCompiledTreatment(project, { baseRevision: 0, basis: treatmentBasis(project), draft: buildTreatmentDraft(project),
+          compiledWith: { source: 'deterministic', providerId: null, model: null } });
+        compiled.treatment.shotDirections = compiled.treatment.shotDirections.map((d) => ({ ...d, mode: 'performance', medium: 'procedural' }));
+        project = applyTreatmentToProject(compiled, { revision: compiled.treatment.revision }).project;
+      }
+      store.set(id, clone(actual.approveProductionStage(project, input)));
+    });
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], mediaMode: 'code-images', autoApprove: ['art', 'storyboard'] }, { autoApproveAuthorized: true });
+    await vi.waitFor(() => expect(doubles.approveProductionReview).toHaveBeenCalledTimes(2));
+    const project = store.get('mv-auto');
+    expect(project.productionPolicy).toMatchObject({ strategy: 'code-first', maxGeneratedVideoPercent: 0 });
+    expect(project.treatment.shotDirections.map((d) => d.mode)).toEqual(['cutaway']);
+    expect(project.treatment.appliedRevision).toBe(project.treatment.revision);
+    expect(codeFirstProductionAssets(project).conflicts).toEqual([]);
+    expect(approvals().storyboard).toMatchObject({ approvedBy: 'autopilot' });
+  });
+
   it('ignores a legacy proof grant: code renders the final without rendering or approving a proof', async () => {
     reviewFixture();
     const { renderProductionProof } = await import('./productionReviewService.js');
@@ -1207,6 +1332,46 @@ describe('autopilot clears the gates it was granted on its own', () => {
     expect(project.productionReview.approvals).toMatchObject({ art: { approvedBy: 'autopilot' }, storyboard: { approvedBy: 'autopilot' } });
   });
 
+  // Uniquely catches verified timing on the source being re-judged (and held) on the copy.
+  it('carries a source\'s verified lyric timing over unchanged, without re-aligning', async () => {
+    const source = clone(SONG_SOURCE);
+    source.productionReview.alignmentBasis = actual.productionAlignmentBasis(source);
+    store.set('mv-src', source);
+    doubles.getTrack = vi.fn(async () => null);
+    service.__setAutonomousDepsForTests(doubles);
+    prepare.mockImplementation(async (id) => {
+      const project = store.get(id);
+      if (project.productionReview?.draft?.storyboard) return;
+      Object.assign(project, {
+        scenes: [{ sceneId: 'shot', startSec: 0, endSec: 20, label: 'Chorus' }],
+        devArtifacts: [{ id: 'guide', version: 1, file: 'guide.html', mimeType: 'text/html' }],
+        productionReview: { ...project.productionReview, draft: { ...GUIDE, lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [shot] } },
+      });
+    });
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], fromProjectId: 'mv-src', ...GRANT[0] }, GRANT[1]);
+    await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
+    expect(doubles.alignLyrics).not.toHaveBeenCalled();
+    expect(doubles.analyzeSong).not.toHaveBeenCalled();
+    expect(doubles.verifyAlignment).toHaveBeenCalledWith('mv-auto', expect.objectContaining({ notes: expect.stringContaining('source project') }));
+  });
+
+  // Uniquely catches a run granted the storyboard parking for the director when a prompt edit stales that approval mid-production.
+  it('approves a storyboard a prompt edit staled again and resumes production', async () => {
+    analyzed({ productionReview: { draft: { ...GUIDE, lyricsMode: 'instrumental', timingNotes: 'Synthetic instrumental master checked.', storyboard: [shot] } } });
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], ...GRANT[0] }, GRANT[1]);
+    await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
+    const project = store.get('mv-auto');
+    project.scenes[0].prompt = 'the dancer turns toward the light';
+    project.productionRuns = [{ id: 'mvpr-1', status: 'blocked', createdAt: new Date().toISOString() }];
+    expect(actual.productionReadiness(project).storyboard.approved).toBe(false);
+    doubles.approveProductionReview.mockClear();
+    await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'blocked', stopReason: 'Production review needs human approval' } });
+    expect(doubles.approveProductionReview).toHaveBeenCalledWith('mv-auto', expect.objectContaining({ stage: 'storyboard', approvedBy: 'autopilot' }));
+    expect(actual.productionReadiness(store.get('mv-auto')).storyboard.approved).toBe(true);
+    expect(doubles.resumeProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-1', { acceptBasis: true });
+    expect(runOf().status).toBe('running');
+  });
+
   it('marks an instrumental song as one instead of asking for lyrics', async () => {
     analyzed({ productionReview: { draft: { ...GUIDE, lyricsMode: 'vocal', storyboard: [shot] } } });
     await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], instrumental: true, ...GRANT[0] }, GRANT[1]);
@@ -1278,17 +1443,19 @@ describe('orchestrated mode (brief.orchestrator)', () => {
   const ORCHESTRATOR = { providerId: 'orch', model: 'judge', effort: 'high' };
   let answers;
   const checkpointOf = (prompt) => (prompt.includes('the LYRICS') ? 'lyrics' : prompt.includes('SOUND AND LOOK') ? 'style'
-    : prompt.includes('finished SONG') ? 'song' : prompt.includes('ART DIRECTION') ? 'art' : prompt.includes('STORYBOARD') ? 'storyboard' : 'final');
+    : prompt.includes('finished SONG') ? 'song' : prompt.includes('ART DIRECTION') ? 'art' : prompt.includes('STORYBOARD') ? 'storyboard'
+      : prompt.includes('the STILLS') ? 'stills' : 'final');
   const reviews = () => (runOf().orchestration?.reviews || []).map((r) => `${r.checkpoint}:${r.verdict}`);
 
   beforeEach(() => {
     answers = {};
-    doubles.orchestrate = vi.fn(async ({ prompt }) => {
+    doubles.orchestrate = vi.fn(async ({ prompt, images = [] }) => {
       const checkpoint = checkpointOf(prompt);
       const answer = (answers[checkpoint] || []).shift() || { verdict: 'approve', score: 8, notes: 'Ready.' };
       if (answer instanceof Error) throw answer;
-      return { text: `Here is my call:\n${JSON.stringify(answer)}`, route: { providerId: 'orch', model: 'judge' }, visual: false };
+      return { text: `Here is my call:\n${JSON.stringify(answer)}`, route: { providerId: 'orch', model: 'judge' }, visual: images.length > 0 };
     });
+    doubles.galleryImagePath = vi.fn(async (filename) => `/gallery/${filename}`);
     doubles.alignLyrics = stub('align', async () => {});
     doubles.finalReviewFrames = vi.fn(async () => ({ images: [], frameTimes: [], facts: { error: 'no file in tests' }, cleanup: async () => {} }));
     service.__setAutonomousDepsForTests(doubles);
@@ -1317,6 +1484,184 @@ describe('orchestrated mode (brief.orchestrator)', () => {
     // The orchestrator also judges production's plates and drafts.
     expect(doubles.startProduction).toHaveBeenCalledWith('mv-auto', expect.objectContaining({ reviewer: { providerId: 'orch', model: 'judge' } }));
     expect(doubles.orchestrate).toHaveBeenCalledWith(expect.objectContaining({ orchestrator: ORCHESTRATOR }));
+  });
+
+  // Uniquely catches a run with no video tool spending on clips, the orchestrator approving stills it never saw,
+  // or a flagged still not going back to production with the fix.
+  it('stops production after the stills, regenerates the ones the orchestrator flags, then waits for the director', async () => {
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], orchestrator: ORCHESTRATOR }, { autoApproveAuthorized: true });
+    await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
+    expect(doubles.startProduction).toHaveBeenCalledWith('mv-auto', expect.objectContaining({ stopBefore: 'clips' }));
+    store.get('mv-auto').scenes = [
+      { sceneId: 'mvs-a', label: 'Intro', framePrompt: 'a skater at dusk', referenceImageId: 'a1.png' },
+      { sceneId: 'mvs-b', label: 'Verse', framePrompt: 'a boardroom', referenceImageId: 'b1.png' },
+    ];
+    answers.stills = [{ verdict: 'revise', score: 5, notes: 'One extra hand.', issues: [{ sceneId: 'mvs-b', text: 'The chair has three hands on it.' }, { sceneId: 'mvs-x', text: 'not a shot' }] }];
+    await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'awaiting-video' } });
+    expect(doubles.orchestrate).toHaveBeenLastCalledWith(expect.objectContaining({ images: ['/gallery/a1.png', '/gallery/b1.png'] }));
+    expect(store.get('mv-auto').scenes[1]).toMatchObject({ referenceImageId: null, stillFixes: { text: 'The chair has three hands on it.' } });
+    expect(store.get('mv-auto').scenes[0].referenceImageId).toBe('a1.png');
+    expect(doubles.resumeProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-1', { acceptBasis: true, stopBefore: 'clips' });
+    expect(runOf().status).toBe('running');
+
+    // The regenerated still passes: the run waits for the director, and approving goes on to the clips with the added video tool.
+    store.get('mv-auto').scenes[1].referenceImageId = 'b2.png';
+    await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'awaiting-video' } });
+    expect(reviews().filter((r) => r.startsWith('stills'))).toEqual(['stills:revise', 'stills:approve']);
+    expect(runOf()).toMatchObject({ status: 'awaiting-approval', awaiting: 'stills' });
+    store.get('mv-auto').productionRuns = [{ id: 'mvpr-1', status: 'awaiting-video', createdAt: new Date().toISOString() }];
+    store.get('mv-auto').scenes[0].shotMode = 'performance';
+    doubles.resumeProduction.mockClear();
+    doubles.localVideoTakesSongAudio.mockResolvedValue(true);
+    await service.resumeAutonomousVideo('mv-auto', { addTools: ['video:local'] });
+    expect(runOf().brief).toMatchObject({ tools: ['image:local', 'video:local'], stopBeforeVideo: false });
+    expect(store.get('mv-auto').automation.tools).toEqual(['image:local', 'video:local']);
+    // The added local video tool sets the project's renderer, and a performance shot it cannot lip-sync plays as a cutaway.
+    expect(store.get('mv-auto').videoSettings).toMatchObject({ backend: 'local', generationMode: 'suppliedAudio' });
+    expect(store.get('mv-auto').scenes[0].shotMode).toBe('cutaway');
+    expect(doubles.resumeProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-1', expect.objectContaining({
+      pool: expect.arrayContaining([expect.objectContaining({ kind: 'video', mode: 'local' })]) }));
+    expect(doubles.resumeProduction.mock.calls[0][2].stopBefore).toBeUndefined();
+  });
+
+  // Uniquely catches a 69-shot run parking at the default 40 generations before every shot has a still.
+  it('grows a default generation limit to the shots left, but parks at a limit the director chose', async () => {
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], orchestrator: ORCHESTRATOR }, { autoApproveAuthorized: true });
+    await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
+    store.get('mv-auto').scenes = Array.from({ length: 30 }, (_, i) => ({ sceneId: `mvs-${i}`, label: `Shot ${i}`, framePrompt: 'a skater', ...(i < 5 ? { referenceImageId: `s${i}.png` } : {}) }));
+    const limited = { status: 'limit-reached', stopBefore: 'clips', limits: { maxGenerations: 40 }, usage: { generations: 40 } };
+    await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: limited });
+    expect(doubles.resumeProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-1', { acceptBasis: true, limits: { maxGenerations: 90 } });
+    expect(runOf().status).toBe('running');
+
+    store.delete('mv-auto');
+    doubles.startProduction.mockClear();
+    doubles.resumeProduction.mockClear();
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], orchestrator: ORCHESTRATOR, limits: { maxGenerations: 40 } }, { autoApproveAuthorized: true });
+    await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
+    store.get('mv-auto').scenes = [{ sceneId: 'mvs-a', label: 'Intro', framePrompt: 'a skater' }];
+    await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: limited });
+    expect(doubles.resumeProduction).not.toHaveBeenCalled();
+    expect(runOf()).toMatchObject({ status: 'needs-human', errorCode: 'PRODUCTION_PARKED' });
+  });
+
+  describe('a production run blocked on its pilot', () => {
+    let pilotInputBasis;
+    let pilotDependencies;
+    beforeEach(async () => {
+      ({ pilotInputBasis, pilotDependencies } = await import('./productionPilot.js'));
+      doubles.approveProductionReview = stub('approve', async () => {});
+      service.__setAutonomousDepsForTests(doubles);
+    });
+    const pilotFixture = async (limits) => {
+      await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local', 'video:local'], orchestrator: ORCHESTRATOR, ...(limits ? { limits } : {}) }, { autoApproveAuthorized: true });
+      await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
+      store.get('mv-auto').scenes = [{ sceneId: 'mvs-a', label: 'Skate park', startSec: 0, endSec: 4, prompt: 'a skater carves the bowl', referenceImageId: 'a1.png', videoHistoryId: 'clip-1', takes: [] }];
+      store.get('mv-auto').productionRuns = [{ id: 'mvpr-1', status: 'blocked', createdAt: new Date().toISOString(), pilot: { scenes: [] } }];
+    };
+    // A pilot review of the scene as it stands now, with the given verdict.
+    const reviewPilot = (id, result) => {
+      const project = store.get('mv-auto');
+      project.autoReviews = [...(project.autoReviews || []), { id, status: result.verdict === 'pass' ? 'passed' : 'needs-human',
+        attempts: [{ n: 1, excerptId: 'test-proof', review: { checks: {}, findings: [], ...result, dependencies: pilotDependencies(project, 'mvs-a') } }] }];
+      project.productionRuns[0].pilot = { scenes: [{ sceneId: 'mvs-a', operation: 'cutaway', reviewRunId: id, inputBasis: pilotInputBasis(project, 'mvs-a') }] };
+    };
+    const blocked = () => service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'blocked', stopReason: 'Pilot mvs-a: revise.' } });
+
+    // Uniquely catches a failed pilot parking an orchestrated run, or a repair the next take never sees.
+    it('repairs a failed pilot within the review limit, then accepts its last take with the findings noted', async () => {
+      await pilotFixture({ maxReviewAttempts: 1 });
+      reviewPilot('rev-1', { verdict: 'revise', reason: 'The skater floats above the ramp.', checks: { motion: 'fail' },
+        findings: [{ severity: 'blocking', note: 'Wheels never touch the coping.' }] });
+      await blocked();
+      expect(store.get('mv-auto').scenes[0]).toMatchObject({ videoHistoryId: 'clip-1',
+        clipFixes: { text: 'The skater floats above the ramp. Wheels never touch the coping.' } });
+      expect(reviews()).toContain('pilot:revise');
+      expect(doubles.resumeProduction).toHaveBeenLastCalledWith('mv-auto', 'mvpr-1', { acceptBasis: true });
+      expect(runOf().status).toBe('running');
+
+      // Production made the shot again from the fix, and that take failed too: the repair is spent.
+      store.get('mv-auto').scenes[0].videoHistoryId = 'clip-2';
+      reviewPilot('rev-2', { verdict: 'revise', reason: 'The landing is still soft.' });
+      doubles.resumeProduction.mockClear();
+      await blocked();
+      expect(store.get('mv-auto').productionRuns[0].pilot.scenes[0].accepted).toMatchObject({ reviewRunId: 'rev-2', by: 'orchestrator',
+        note: expect.stringContaining('The landing is still soft.') });
+      expect(reviews().filter((r) => r.startsWith('pilot'))).toEqual(['pilot:revise', 'pilot:approve']);
+      expect(doubles.resumeProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-1', { acceptBasis: true });
+      expect(runOf().status).toBe('running');
+    });
+
+    // Uniquely catches an orchestrated run parking on the proof gate after its pilot passed.
+    it('approves the passing pilot as the proof from its machine review', async () => {
+      await pilotFixture();
+      reviewPilot('rev-1', { verdict: 'pass', reason: 'The carve lands on the downbeat.', checks: { motion: 'pass', audioSync: 'pass' } });
+      creativeReview.readiness = { proof: { approved: false, problems: [] } };
+      await blocked();
+      expect(doubles.approveProductionReview).toHaveBeenCalledWith('mv-auto', expect.objectContaining({ stage: 'proof', basis: 'test-proof', approvedBy: 'orchestrator',
+        proofReview: expect.objectContaining({ method: 'machine', watchedWithAudio: false, excerptId: 'test-proof', filename: 'test-proof.mp4',
+          machineEvidence: expect.objectContaining({ audioReview: expect.stringContaining('audioSync pass') }) }) }));
+      expect(reviews()).toContain('proof:approve');
+      expect(doubles.resumeProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-1', { acceptBasis: true });
+    });
+  });
+
+  // Uniquely catches an unviewable still being recorded as an approved review while the run still waits for the director.
+  it('does not record approval for stills the reviewer could not see', async () => {
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], orchestrator: ORCHESTRATOR }, { autoApproveAuthorized: true });
+    await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
+    store.get('mv-auto').scenes = [{ sceneId: 'mvs-a', label: 'Intro', framePrompt: 'a skater', referenceImageId: 'a1.png' }];
+    doubles.galleryImagePath.mockRejectedValue(new Error('missing'));
+    await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'awaiting-video' } });
+    expect(reviews().filter((r) => r.startsWith('stills'))).toEqual(['stills:revise']);
+    expect(runOf()).toMatchObject({ status: 'awaiting-approval', awaiting: 'stills' });
+  });
+
+  // Uniquely catches a cancel during the pending stills review being undone by its verdict (clearing stills, resuming production, spending).
+  it('ignores a stills verdict that lands after the run was cancelled', async () => {
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], orchestrator: ORCHESTRATOR }, { autoApproveAuthorized: true });
+    await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
+    store.get('mv-auto').scenes = [{ sceneId: 'mvs-a', label: 'Intro', framePrompt: 'a skater', referenceImageId: 'a1.png' }];
+    let release;
+    doubles.orchestrate.mockImplementation(() => new Promise((resolve) => { release = () => resolve({
+      text: JSON.stringify({ verdict: 'revise', score: 4, notes: 'Bad.', issues: [{ sceneId: 'mvs-a', text: 'wrong' }] }),
+      route: { providerId: 'orch', model: 'judge' }, visual: true }); }));
+    doubles.resumeProduction.mockClear();
+    doubles.orchestrate.mockClear();
+    const settling = service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'awaiting-video' } });
+    await vi.waitFor(() => expect(doubles.orchestrate).toHaveBeenCalled());
+    await service.cancelAutonomousVideo('mv-auto');
+    release();
+    await settling;
+    expect(runOf().status).toBe('canceled');
+    expect(doubles.resumeProduction).not.toHaveBeenCalled();
+    expect(store.get('mv-auto').scenes[0].referenceImageId).toBe('a1.png');
+  });
+
+  // Uniquely catches the orchestrator approving art or a storyboard it still wants changed once its revisions run out.
+  it('parks for the director with the open changes named when a production gate runs out of revisions', async () => {
+    creativeReview.real = true;
+    const actual = await vi.importActual('./productionReview.js');
+    doubles.approveProductionReview = stub('approve', async (id, input) => { store.set(id, clone(actual.approveProductionStage(clone(store.get(id)), input))); });
+    service.__setAutonomousDepsForTests(doubles);
+    doubles.analyzeSong.mockImplementation(async () => {
+      Object.assign(store.get('mv-auto'), {
+        audioAnalysis: { durationSec: 20, sections: [{ id: 'chorus', label: 'Chorus', startSec: 0, endSec: 20 }] },
+        scenes: [{ sceneId: 'shot', startSec: 0, endSec: 20, label: 'Chorus' }],
+        devArtifacts: [{ id: 'guide', version: 1, file: 'guide.html', mimeType: 'text/html' }],
+        productionReview: { draft: { cast: 'A dancer', environments: 'Theatre', visualLanguage: 'Ink', motionLanguage: 'Orbit', guideArtifactId: 'guide',
+          lyricsMode: 'instrumental', timingNotes: '', storyboard: [{ sceneId: 'shot', lyricCueIds: [], action: 'Dancer unfolds', staging: 'Wide', camera: 'Orbit', transition: 'Fade' }] } },
+      });
+    });
+    const vague = { verdict: 'revise', notes: 'Still vague.', changes: [{ field: 'cast', text: 'A dancer in a red scarf' }] };
+    answers.art = [vague, vague];
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['code:render'], authoring: { providerId: 'example', model: 'example-code' },
+      limits: { maxReviewAttempts: 1 }, orchestrator: ORCHESTRATOR }, { autoApproveAuthorized: true });
+    await settled('needs-human');
+    expect(runOf()).toMatchObject({ errorCode: 'MUSIC_VIDEO_APPROVAL_REQUIRED', error: expect.stringContaining('cast: A dancer in a red scarf') });
+    expect(reviews().filter((r) => r.startsWith('art'))).toEqual(['art:revise', 'art:revise']);
+    expect(store.get('mv-auto').productionReview.approvals?.art).toBeFalsy();
+    expect(doubles.renderVideo).not.toHaveBeenCalled();
   });
 
   it('stops revising at the review limit and keeps a Suno song rather than spend credits on a retake', async () => {
@@ -1386,6 +1731,9 @@ describe('orchestrated mode (brief.orchestrator)', () => {
         ],
         scenes: [{ sceneId: 'shot', startSec: 0, endSec: 20, label: 'Chorus' }],
         devArtifacts: [{ id: 'guide', version: 1, file: 'guide.html', mimeType: 'text/html' }],
+        // The art review looks at the renders, character sheet first.
+        castAndSets: { status: 'approved', plan: { stage: { kind: 'set' }, lead: { kind: 'character' } },
+          images: { stage: { status: 'done', imageId: 'stage.png' }, lead: { status: 'done', imageId: 'lead.png' }, broken: { status: 'failed', imageId: null } } },
         productionReview: { draft: {
           cast: 'A dancer', environments: 'Theatre', visualLanguage: 'Ink silhouettes', motionLanguage: 'Slow orbit',
           guideArtifactId: 'guide', lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '',
@@ -1432,6 +1780,9 @@ describe('orchestrated mode (brief.orchestrator)', () => {
     expect(reviews()).toEqual(['lyrics:approve', 'style:approve', 'song:approve', 'art:revise', 'art:approve', 'alignment:approve', 'storyboard:revise', 'storyboard:approve', 'text:approve', 'final:revise', 'text:approve', 'final:approve']);
     expect(runOf().orchestration.reviews.at(-3)).toMatchObject({ issues: [{ atSec: 18, text: 'Static hold' }], notes: expect.stringContaining('Judged without frames') });
     expect(doubles.finalReviewFrames.mock.calls.map(([jobId]) => jobId)).toEqual(['render-1', 'render-2']);
+    const artCalls = doubles.orchestrate.mock.calls.filter(([{ prompt }]) => prompt.includes('ART DIRECTION'));
+    expect(artCalls[0][0].images).toEqual(['/gallery/lead.png', '/gallery/stage.png']);
+    expect(runOf().orchestration.reviews.find((r) => r.checkpoint === 'art')).toMatchObject({ visual: true });
   });
 
   describe('final-video revision of footage', () => {

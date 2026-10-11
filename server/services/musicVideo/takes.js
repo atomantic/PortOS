@@ -124,11 +124,14 @@ function replaceScene(project, idx, scene) {
  * or a re-import is a no-op for the list). A slot is filled only while it is
  * empty, by the first appended take of that kind; an existing selection is
  * never replaced, and a motion-reference take (#8980) never fills a slot — it
- * becomes final picture only by an explicit select. Returns
+ * becomes final picture only by an explicit select. A take already stale
+ * against the whole PROJECT (its plate, timing, or for a supplied-audio take
+ * the song master/lyrics) does not fill either; the check needs the real
+ * project, since a song reference reads the project's song fields. Returns
  * `{ scene, appended }` — `appended` lists the take for every input, whether
  * newly created or already present.
  */
-function appendToScene(scene, inputs, now) {
+function appendToScene(project, scene, inputs, now) {
   let takes = ensureSceneTakes(scene, now);
   const next = { ...scene };
   const appended = [];
@@ -139,7 +142,7 @@ function appendToScene(scene, inputs, now) {
     if (!existing) takes = [...takes, take];
     appended.push(take);
     const field = TAKE_SLOT[input.kind];
-    if (!isNonBlankStr(next[field]) && take.status !== 'rejected' && take.use !== 'motion-reference' && !musicVideoTakeChanges({ scenes: [scene] }, scene, take).length) next[field] = take.assetId;
+    if (!isNonBlankStr(next[field]) && take.status !== 'rejected' && take.use !== 'motion-reference' && !musicVideoTakeChanges(project, scene, take).length) next[field] = take.assetId;
   }
   next.takes = pruneTakes(takes, next);
   // A take landing for the lane a failure was recorded against is the retry
@@ -172,7 +175,7 @@ export function setSceneLastFailure(project, sceneId, failure) {
 export function appendSceneTakes(project, sceneId, inputs) {
   for (const input of inputs) assertMusicVideoMedia(project, input.kind, 'take import');
   const idx = findSceneIndex(project, sceneId);
-  const { scene, appended } = appendToScene(project.scenes[idx], inputs, new Date().toISOString());
+  const { scene, appended } = appendToScene(project, project.scenes[idx], inputs, new Date().toISOString());
   return { project: replaceScene(project, idx, scene), scene, appended };
 }
 
@@ -196,7 +199,7 @@ export function appendTakesAcrossScenes(project, items) {
   const scenes = project.scenes.map((scene) => {
     const entries = bySceneId.get(scene.sceneId);
     if (!entries) return scene;
-    const result = appendToScene(scene, entries.map((e) => e.item), now);
+    const result = appendToScene(project, scene, entries.map((e) => e.item), now);
     entries.forEach((e, i) => { appended[e.index] = { sceneId: scene.sceneId, take: result.appended[i] }; });
     return result.scene;
   });

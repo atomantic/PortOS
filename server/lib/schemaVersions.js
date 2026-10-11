@@ -683,7 +683,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v19 pins whole-workflow media policy; older peers cannot enforce it.
   // v20 adds the Eidoverse render mode and scene source. Older normalizers
   // would collapse the mode to footage and discard the authored scene.
-  musicVideoProjects: 20,
+  // v21 adds compressed lyric timing warnings (`lyricCues[].suspect`). Older
+  // normalizers drop the warning on edits. Absent remains legacy; no backfill.
+  musicVideoProjects: 21,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

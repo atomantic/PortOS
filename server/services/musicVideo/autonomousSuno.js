@@ -459,4 +459,26 @@ export async function generateSunoSong(fields, deps = {}) {
   }
 }
 
+/**
+ * Read a song's page in the signed-in PortOS Browser, where Suno shows the
+ * owner everything it records about the song (its excluded styles among them).
+ * Resolves the page HTML; rejects when the browser is unavailable or signed out.
+ */
+export async function readSunoSongPage(songId, deps = {}) {
+  const connect = deps.connect || connectPortosBrowser;
+  return serialize(async () => {
+    deps.signal?.throwIfAborted();
+    const { browser, context } = await connect();
+    let page;
+    try {
+      page = await context.newPage();
+      await page.goto(sunoSongUrl(songId), { waitUntil: 'domcontentloaded', timeout: T });
+      if (/sign-?in|login|accounts\./i.test(page.url())) throw loginRequired(LABEL, SUNO_CREATE_URL);
+      return await page.content();
+    } finally {
+      await closeSunoBrowser(page, browser);
+    }
+  });
+}
+
 export const __testing = { submitSunoSong, downloadSunoAudio };

@@ -131,6 +131,18 @@ const isSunoUrl = (value) => {
 };
 
 /**
+ * Suno keeps "Exclude styles" apart from the style tags. Fold them into the
+ * style as minus-prefixed terms (Suno's own inline spelling) so the song's
+ * style text carries what it avoids; a term already excluded inline is kept once.
+ */
+function withExcludedStyles(tags, negativeTags) {
+  const dash = /^[-\u2010-\u2013\u2212]\s*/;
+  const present = new Set(tags.split(',').map((t) => t.trim()).filter((t) => dash.test(t)).map((t) => t.replace(dash, '').toLowerCase()));
+  const excluded = negativeTags.split(',').map((t) => t.trim().replace(dash, '')).filter((t) => t && !present.has(t.toLowerCase()));
+  return [tags, ...excluded.map((t) => `-${t}`)].filter(Boolean).join(', ');
+}
+
+/**
  * Read what a Suno song page says about `songId`. Every field is best effort:
  * '' (or null for a URL) when the page doesn't carry it, so a page Suno
  * restyles still imports the audio. URLs are kept only when they point at Suno.
@@ -148,13 +160,18 @@ export function parseSunoSongPage(html, songId) {
     const ref = /^\$([0-9a-f]+)$/i.exec(value)?.[1];
     return (ref ? texts.get(ref.toLowerCase()) ?? '' : value).trim();
   };
+  // Suno files the excluded styles under `metadata`; read them beside it too.
+  const negativeTags = [song.metadata?.negative_tags, song.negative_tags].find((v) => typeof v === 'string');
   const title = text(song.title) || metaContent(page, 'og:title').replace(/\s*\|\s*Suno\s*$/i, '').trim();
   const audioUrl = [song.audio_url, metaContent(page, 'og:audio')].find(isSunoCdnUrl) || null;
   const imageUrl = [song.image_large_url, song.image_url, metaContent(page, 'og:image')].find(isSunoUrl) || null;
   return {
     title,
     lyrics: text(song.metadata?.prompt),
-    style: text(song.metadata?.tags),
+    style: withExcludedStyles(text(song.metadata?.tags), text(negativeTags)),
+    // Whether the page said anything about excluded styles. An anonymous page
+    // can leave the field out, which is not the same as a song excluding none.
+    excludedStylesKnown: typeof negativeTags === 'string',
     audioUrl,
     imageUrl,
   };

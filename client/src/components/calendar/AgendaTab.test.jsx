@@ -292,3 +292,23 @@ describe('Agenda provider sync', () => {
     expect(api.getCalendarEvents).toHaveBeenCalledTimes(1);
   });
 });
+
+
+it('reconciles configuration and reconnect without resurrecting a superseded event page', async () => {
+  vi.clearAllMocks();
+  const oldEvent = event('old', new Date().toISOString(), undefined, { title: 'Old meeting' });
+  api.getCalendarEvents.mockResolvedValueOnce({ events: [oldEvent], total: 1 });
+  await renderAgenda(accounts);
+  expect(screen.getByText('Old meeting')).toBeTruthy();
+  let resolveOld;
+  api.getCalendarEvents.mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }))
+    .mockResolvedValueOnce({ events: [], total: 0 });
+  const changed = socketMock.on.mock.calls.find(([name]) => name === 'calendar:changed')[1];
+  const reconnect = socketMock.on.mock.calls.find(([name]) => name === 'connect')[1];
+  await act(async () => { changed(); });
+  expect(screen.getByText('Old meeting')).toBeTruthy();
+  await act(async () => { reconnect(); });
+  expect(screen.queryByText('Old meeting')).toBeNull();
+  await act(async () => resolveOld({ events: [oldEvent], total: 1 }));
+  expect(screen.queryByText('Old meeting')).toBeNull();
+});

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDefaultPersistentMindState, normalizePersistentMindState, PERSISTENT_MIND_LIMITS } from '../lib/persistentMind.js';
+import { buildPersistentMindCallDenial } from '../lib/persistentMindTrajectory.js';
 import { PROVIDER_USAGE_LIMIT_PAUSE_REASON } from '../lib/persistentMindUsageLimit.js';
 import { contextBudgetPauseReasonFrom } from '../lib/persistentMindContextBudget.js';
 import {
@@ -1750,6 +1751,48 @@ it('does not auto-resume pauses that are not usage-limit autopauses', async () =
 
       await supervisor.drainPersistentMind();
       expect(run).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('refused provider call parking', () => {
+    const echoProfileAdapter = () => vi.fn(async ({ profile }) => ({ ok: true, provider: profile.provider }));
+    const drainDeniedTurn = async (denial) => {
+      const run = vi.fn(async () => { throw denial; });
+      await supervisor.registerPersistentMindTurnAdapter({ prepare: echoProfileAdapter(), run });
+      await supervisor.setPersistentMindEnabled(true);
+      await supervisor.startPersistentMind();
+      await supervisor.enqueuePersistentMindMessage({ id: 'message-denied', text: 'Think.' });
+      await supervisor.drainPersistentMind();
+      return run;
+    };
+
+    it('pauses a held refusal until an operator resumes it, with no backoff gate', async () => {
+      const run = await drainDeniedTurn(buildPersistentMindCallDenial({
+        reason: 'Maintenance hold is active', status: 'waiting', disposition: 'hold',
+      }));
+
+      expect(mock.root.persistentMind).toMatchObject({
+        status: 'paused',
+        pauseReason: 'Maintenance hold is active',
+        nextEligibleWakeAt: null,
+        activeTurn: null,
+      });
+      await supervisor.drainPersistentMind();
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it('parks a reset-wait refusal under its own status and wakes at the reset time', async () => {
+      const retryAt = new Date(Date.now() + 3_600_000).toISOString();
+      await drainDeniedTurn(buildPersistentMindCallDenial({
+        reason: 'Daily allowance exhausted', status: 'waiting', disposition: 'reset-wait', retryAt,
+      }));
+
+      expect(mock.root.persistentMind).toMatchObject({
+        status: 'waiting',
+        pauseReason: 'Daily allowance exhausted',
+        nextEligibleWakeAt: retryAt,
+        activeTurn: null,
+      });
     });
   });
 

@@ -32,10 +32,11 @@ const GUIDE_MIME_TYPES = ['text/html', 'image/png', 'image/jpeg'];
  * `kinds` narrows the list to those artifact kinds (the Look step shows
  * only its own sheets); without `onUpload` the import control is left out.
  * With `onUseAsGuide(artifactId)` each usable sheet or image gets a
- * "Use as visual guide" action; `guideId` marks the one already chosen.
+ * "Use as visual guide" action; `guideId` marks the one already chosen. `id`
+ * makes the panel a scroll target.
  */
 export default function DevArtifactsPanel({
-  project, busy, onOpen, onUpload = null, onUseAsGuide = null, guideId = null, kinds = null, title = 'Development',
+  id = undefined, project, busy, onOpen, onUpload = null, onUseAsGuide = null, guideId = null, kinds = null, title = 'Development',
   emptyText = 'Check-in sheets, animatics and other working files',
 }) {
   const artifacts = (project.devArtifacts || [])
@@ -51,7 +52,8 @@ export default function DevArtifactsPanel({
   };
 
   return (
-    <section className="bg-port-card border border-port-border rounded-lg p-3 space-y-2 min-w-0" aria-labelledby={`${idPrefix}-title`}>
+    <section id={id} tabIndex={id ? -1 : undefined} style={id ? { scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' } : undefined}
+      className="bg-port-card border border-port-border rounded-lg p-3 space-y-2 min-w-0" aria-labelledby={`${idPrefix}-title`}>
       <div className="flex flex-wrap items-center gap-2">
         <FolderOpen size={16} className="text-port-accent shrink-0" aria-hidden="true" />
         <h3 id={`${idPrefix}-title`} className="text-sm font-medium">{title}</h3>

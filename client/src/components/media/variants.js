@@ -59,6 +59,11 @@ export function computeImageVariantGroup(item, items) {
       group.push({ label: 'Watermark removed', item: c });
       continue;
     }
+    // A film-look bake (lib/filmLook.js) is a finishing pass, not a clean.
+    if (c.filmLookFrom) {
+      group.push({ label: 'Film look', item: c });
+      continue;
+    }
     const levelTag = c.cleanLevel ? ` (${c.cleanLevel})` : '';
     group.push({ label: `Cleaned${levelTag}`, item: c });
   }

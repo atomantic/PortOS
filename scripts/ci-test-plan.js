@@ -38,9 +38,11 @@ const MAX_TARGETED_TEST_FILES = 125;
 // registry test (browser-suite-registry.test.js) fails when a suite importing
 // the gate is left out.
 export const BROWSER_SUITES = [
+  'server/lib/musicVideoTitleCard.browser.test.js',
   'server/routes/musicVideoProductionReview.browser.test.js',
   'server/routes/musicVideoRichAuthoring.browser.test.js',
   'server/routes/musicVideoSongRevision.browser.test.js',
+  'server/services/federatedMedia/sourceAudio.browser.test.js',
   'server/services/musicVideo/documentRender.browser.test.js',
   'server/services/musicVideo/documentTemplates/shared/toonWorld.browser.test.js',
 ];

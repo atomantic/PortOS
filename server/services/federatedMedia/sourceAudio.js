@@ -111,8 +111,12 @@ async function prepareWindow({ project, scene, numFrames, fps }) {
   const audioFilePath = join(PATHS.uploads, `mv-source-audio-${randomUUID()}.wav`);
   try {
     const endSample = startSample + sampleCount;
+    // The frame canvas rounds up to the model's stride, so the last shot's
+    // window can run a few ms past the end of the recording. Pad that tail
+    // with silence (apad) so the clip still has exactly sampleCount samples,
+    // the length the wire contract and the frame count both depend on.
     const result = await runFfmpegProcess({ bin, args: ['-v', 'error', '-i', source, '-vn',
-      '-af', `aresample=48000,atrim=start_sample=${startSample}:end_sample=${endSample},asetpts=PTS-STARTPTS`,
+      '-af', `aresample=48000,atrim=start_sample=${startSample}:end_sample=${endSample},asetpts=PTS-STARTPTS,apad=whole_len=${sampleCount}`,
       '-ar', '48000', '-ac', '2', '-c:a', 'pcm_s16le', '-y', audioFilePath] });
     const info = result.ok ? pcmAudioInfo(await readFile(audioFilePath)) : null;
     if (info?.sampleCount !== sampleCount || await sha256File(source) !== sourceSha256) {

@@ -1,6 +1,9 @@
 import { useCallback, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { AudioLines, Plus, Loader2, ArrowLeft, Check } from 'lucide-react';
+import PageHeader from '../components/PageHeader';
+import Drawer from '../components/Drawer';
+import useContainerWidth from '../hooks/useContainerWidth';
 import { usePagedCollection } from '../hooks/usePagedCollection';
 import InfiniteScrollFooter from '../components/ui/InfiniteScrollFooter';
 import { useSocketResource } from '../hooks/useSocketResource';
@@ -88,6 +91,9 @@ function VoiceAssignment({ profile, universeId, character, onAssigned }) {
 export default function VoiceStudio() {
   const { profileId } = useParams();
   const navigate = useNavigate();
+  const [containerRef, containerWidth] = useContainerWidth();
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const compactLibrary = Boolean(profileId) && containerWidth < 760;
   const [params, setParams] = useSearchParams();
   const universeId = params.get('universeId') || '';
   const characterId = params.get('characterId') || '';
@@ -126,14 +132,57 @@ export default function VoiceStudio() {
     if (key === 'universeId') next.delete('characterId');
     setParams(next);
   };
-  return <div className="@container space-y-4 min-w-0">
-    <header className="flex flex-wrap items-center justify-between gap-3">
-      <h1 className="flex items-center gap-2 text-2xl font-semibold"><AudioLines /> Voice Studio</h1>
-      <Link to={`/voices/new?${newVoiceParams}`} className={buttonClass}><Plus size={16} /> Create voice</Link>
-    </header>
-    <p className="text-sm text-gray-400">Create voices once, audition them, and cast characters across your universes and stories.</p>
+  const libraryPane = (
+      <section aria-label="Voice library" className="min-w-0 rounded border border-port-border p-3 space-y-2 @[760px]:col-start-1 @[760px]:row-start-1">
+        {library.loading && <p role="status">Loading voice library…</p>}
+        <h2 className="font-semibold">Library <span className="text-gray-500">({formatCount(library.total ?? profiles.length)})</span></h2>
+        {!library.loading && !library.error && !profiles.length && <p className="text-sm text-gray-400">No voices yet. Create a voice, listen to the preview, then assign it to a character.</p>}
+        {profiles.map(profile => <Link key={profile.id} to={`/voices/${encodeURIComponent(profile.id)}${context}`} onClick={() => {
+          setLibraryOpen(false);
+          containerRef.current?.scrollTo({ top: 0 });
+        }}
+          aria-current={profile.id === profileId ? 'page' : undefined}
+          className={`block rounded border p-3 break-words ${profile.id === profileId ? 'border-port-accent bg-port-accent/10' : 'border-port-border hover:border-port-accent/50'}`}>
+          <span className="block text-sm font-medium">{profile.label || profile.voiceId}</span>
+          <span className="text-xs text-gray-500">{profile.engine} · {profile.library ? 'Library voice' : 'Character snapshot'}</span>
+        </Link>)}
+        <InfiniteScrollFooter hasMore={library.hasMore} loading={library.loading} error={library.error} onLoadMore={library.loadMore} autoLoad={false} label="Load more voices" />
+      </section>
+  );
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <PageHeader
+        icon={AudioLines}
+        title="Voice Studio"
+        subtitle="Create voices once, audition them, and cast characters across your universes and stories."
+        actions={<Link to={`/voices/new?${newVoiceParams}`} className={buttonClass}><Plus size={16} /> Create voice</Link>}
+      />
+      <div ref={containerRef} className="@container min-w-0 flex-1 min-h-0 overflow-auto p-4">
+      <div className="flex flex-col gap-4">
     {engine.error && <p role="alert" className="text-port-error">{engine.error.message} <button onClick={engine.refetch} className="underline">Retry</button></p>}
-    {library.loading && <p role="status">Loading voice library…</p>}
+    <div className="order-first grid grid-cols-1 @[760px]:order-last @[760px]:grid-cols-[minmax(15rem,1fr)_minmax(0,2fr)] gap-4">
+      {!profileId && libraryPane}
+      <section aria-label="Voice workspace" className="min-w-0 rounded border border-port-border p-4 @[760px]:col-start-2 @[760px]:row-start-1">
+        {compactLibrary && <button type="button" className={`${buttonClass} mb-3`} aria-haspopup="dialog" aria-expanded={libraryOpen} onClick={() => setLibraryOpen(true)}>Choose voice</button>}
+        {detailId && detail.error ? <p role="alert">Voice not found or unavailable. Select another voice from the library.</p> : detailId && detail.loading ? <p>Loading voice…</p> : profileId === 'new' ? ((universeId && universe.loading) || (detailId && detail.loading) ? <p>Loading voice direction…</p> :
+          <VoiceDesignForm key={`${universeId}:${characterId}:${variation?.id || ""}`} character={character} source={variation} ready={status?.ready && !status.busy && status.state !== 'running'} onCreated={profile => {
+            putProfile(profile); navigate(`/voices/${profile.id}${context}`);
+          }} />) : selected ? <div className="space-y-4">
+            <h2 className="text-lg font-semibold break-words">{selected.label || selected.voiceId}</h2>
+            {selected.sourceAssets?.[0] && <div className="space-y-2">
+              <audio controls preload="none" aria-label="Voice preview" className="w-full" src={audioUrl(`voice-profiles/${selected.id}/source/${selected.sourceAssets[0].filename}`)}><track kind="captions" /></audio>
+              <p className="text-sm break-words">{selected.sourceAssets[0].transcript}</p>
+            </div>}
+            {!selected.sourceAssets?.length && <p className="text-sm text-gray-400">This legacy profile has no saved reference preview.</p>}
+            <p className="text-sm text-gray-400 whitespace-pre-wrap break-words">{selected.inference?.instructions || 'Preset voice'}</p>
+            <p className="text-xs text-gray-500">Seed {selected.inference?.seed} · Pitch {selected.inference?.pitchSemitones || 0} semitones · Preview pace {selected.inference?.rate || 1}×</p>
+            <Link className="inline-flex text-sm text-port-accent" to={`/voices/new?${new URLSearchParams({ ...Object.fromEntries(params), from: selected.id })}`}>Adjust this voice as a new candidate</Link>
+            <VoiceAssignment key={`${selected.id}:${universeId}:${characterId}`} profile={selected} universeId={universeId} character={character} onAssigned={putProfile} />
+          </div> : profileId && !library.loading && !library.error ? <p role="alert">Voice not found. Select another voice from the library.</p> :
+            <p className="text-sm text-gray-400">Select a voice to listen and assign, or create a new character voice.</p>}
+      </section>
+      {profileId && !compactLibrary && libraryPane}
+    </div>
     {status && <section aria-label="Voice engine" className="rounded border border-port-border p-3 flex flex-wrap items-center gap-3">
       <div className="flex-1 min-w-0 text-sm">
         <strong>AuK-Flash</strong> · {status.state === 'running' ? status.stage : status.busy ? 'Rendering voice…' : status.ready ? 'Ready on this Mac' : 'Setup required'}
@@ -159,36 +208,11 @@ export default function VoiceStudio() {
       {universeId && !universe.loading && characterId && !character && <p role="alert">This character is no longer available. Choose another character.</p>}
       {universeId && <Link className="inline-flex items-center gap-1 text-sm text-port-accent" to={`/universes/${encodeURIComponent(universeId)}?tab=cast`}><ArrowLeft size={14} /> Back to universe cast</Link>}
     </section>
-    <div className="grid grid-cols-1 @[760px]:grid-cols-[minmax(15rem,1fr)_minmax(0,2fr)] gap-4">
-      <section aria-label="Voice library" className="min-w-0 rounded border border-port-border p-3 space-y-2">
-        <h2 className="font-semibold">Library <span className="text-gray-500">({formatCount(library.total ?? profiles.length)})</span></h2>
-        {!library.loading && !library.error && !profiles.length && <p className="text-sm text-gray-400">No voices yet. Create a voice, listen to the preview, then assign it to a character.</p>}
-        {profiles.map(profile => <Link key={profile.id} to={`/voices/${encodeURIComponent(profile.id)}${context}`}
-          aria-current={profile.id === profileId ? 'page' : undefined}
-          className={`block rounded border p-3 break-words ${profile.id === profileId ? 'border-port-accent bg-port-accent/10' : 'border-port-border hover:border-port-accent/50'}`}>
-          <span className="block text-sm font-medium">{profile.label || profile.voiceId}</span>
-          <span className="text-xs text-gray-500">{profile.engine} · {profile.library ? 'Library voice' : 'Character snapshot'}</span>
-        </Link>)}
-        <InfiniteScrollFooter hasMore={library.hasMore} loading={library.loading} error={library.error} onLoadMore={library.loadMore} autoLoad={false} label="Load more voices" />
-      </section>
-      <section className="min-w-0 rounded border border-port-border p-4">
-        {detailId && detail.error ? <p role="alert">Voice not found or unavailable. Select another voice from the library.</p> : detailId && detail.loading ? <p>Loading voice…</p> : profileId === 'new' ? ((universeId && universe.loading) || (detailId && detail.loading) ? <p>Loading voice direction…</p> :
-          <VoiceDesignForm key={`${universeId}:${characterId}:${variation?.id || ""}`} character={character} source={variation} ready={status?.ready && !status.busy && status.state !== 'running'} onCreated={profile => {
-            putProfile(profile); navigate(`/voices/${profile.id}${context}`);
-          }} />) : selected ? <div className="space-y-4">
-            <h2 className="text-lg font-semibold break-words">{selected.label || selected.voiceId}</h2>
-            <p className="text-sm text-gray-400 whitespace-pre-wrap break-words">{selected.inference?.instructions || 'Preset voice'}</p>
-            {selected.sourceAssets?.[0] && <div className="space-y-2">
-              <p className="text-sm">{selected.sourceAssets[0].transcript}</p>
-              <audio controls preload="none" aria-label="Voice preview" className="w-full" src={audioUrl(`voice-profiles/${selected.id}/source/${selected.sourceAssets[0].filename}`)}><track kind="captions" /></audio>
-            </div>}
-            {!selected.sourceAssets?.length && <p className="text-sm text-gray-400">This legacy profile has no saved reference preview.</p>}
-            <p className="text-xs text-gray-500">Seed {selected.inference?.seed} · Pitch {selected.inference?.pitchSemitones || 0} semitones · Preview pace {selected.inference?.rate || 1}×</p>
-            <Link className="inline-flex text-sm text-port-accent" to={`/voices/new?${new URLSearchParams({ ...Object.fromEntries(params), from: selected.id })}`}>Adjust this voice as a new candidate</Link>
-            <VoiceAssignment key={`${selected.id}:${universeId}:${characterId}`} profile={selected} universeId={universeId} character={character} onAssigned={putProfile} />
-          </div> : profileId && !library.loading && !library.error ? <p role="alert">Voice not found. Select another voice from the library.</p> :
-            <p className="text-sm text-gray-400">Select a voice to listen and assign, or create a new character voice.</p>}
-      </section>
+      </div>
+      </div>
+      <Drawer open={compactLibrary && libraryOpen} onClose={() => setLibraryOpen(false)} title="Choose voice" closeLabel="Close voice library">
+        {libraryPane}
+      </Drawer>
     </div>
-  </div>;
+  );
 }

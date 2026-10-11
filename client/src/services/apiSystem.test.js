@@ -1,141 +1,44 @@
+// @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { request } from './apiCore.js';
+import { patchSettingsSlice } from './apiSystem.js';
 
-vi.mock('./apiCore.js', () => ({
-  request: vi.fn(),
-}));
-
-let request;
-let patchSettingsSlice;
-
-beforeEach(async () => {
-  vi.resetModules();
-  ({ request } = await import('./apiCore.js'));
-  ({ patchSettingsSlice } = await import('./apiSystem.js'));
-  request.mockReset();
-});
-
-const mockSettings = (settings) => {
-  request.mockImplementation((path, opts) => {
-    if (path === '/settings' && (!opts || opts.method !== 'PUT')) {
-      return Promise.resolve(settings);
-    }
-    return Promise.resolve({ ok: true });
-  });
-};
+vi.mock('./apiCore.js', () => ({ request: vi.fn() }));
+beforeEach(() => { request.mockReset(); });
 
 describe('patchSettingsSlice', () => {
-  it('preserves sibling subkeys when patching a deep slice', async () => {
-    mockSettings({
-      imageGen: {
-        mode: 'codex',
-        external: { sdapiUrl: 'http://x' },
-        local: { pythonPath: '/old', denoise: true },
-        codex: { enabled: true },
-      },
+  it('sends only the partial mutation without reading or replacing settings', async () => {
+    request.mockResolvedValue({ localLlm: { mtplx: { keepLoaded: true } } });
+    const saved = await patchSettingsSlice('localLlm.mtplx', { keepLoaded: true }, { silent: true });
+    expect(request).toHaveBeenCalledExactlyOnceWith('/settings/slice', {
+      method: 'PATCH',
+      body: JSON.stringify({ slicePath: 'localLlm.mtplx', partial: { keepLoaded: true } }),
+      silent: true,
     });
-    await patchSettingsSlice('imageGen.local', { pythonPath: '/new' });
-    const putCall = request.mock.calls.find(([, opts]) => opts?.method === 'PUT');
-    expect(putCall).toBeDefined();
-    const body = JSON.parse(putCall[1].body);
-    expect(body).toEqual({
-      imageGen: {
-        mode: 'codex',
-        external: { sdapiUrl: 'http://x' },
-        local: { pythonPath: '/new', denoise: true },
-        codex: { enabled: true },
-      },
-    });
+    expect(saved.localLlm.mtplx.keepLoaded).toBe(true);
   });
 
-  it('preserves sibling top-level subkeys when patching a one-level slice', async () => {
-    mockSettings({
-      pipeline: {
-        imageGen: { provider: 'old' },
-        videoGen: { mode: 'i2v' },
-      },
-      unrelated: { keep: true },
-    });
-    await patchSettingsSlice('pipeline', { imageGen: { provider: 'new' } });
-    const putCall = request.mock.calls.find(([, opts]) => opts?.method === 'PUT');
-    const body = JSON.parse(putCall[1].body);
-    expect(body).toEqual({
-      pipeline: {
-        imageGen: { provider: 'new' },
-        videoGen: { mode: 'i2v' },
-      },
-    });
-    // Top-level `unrelated` is never in the PUT body — the server merges by
-    // top-level key, so omitting it leaves it untouched on disk.
-    expect(body.unrelated).toBeUndefined();
+  it('propagates failed server reads/writes without attempting a fallback PUT', async () => {
+    request.mockRejectedValue(new Error('Settings unavailable'));
+    await expect(patchSettingsSlice('imageGen.local', { pythonPath: null })).rejects.toThrow('Settings unavailable');
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls[0][1].method).toBe('PATCH');
   });
 
-  it('creates the slice path when it does not exist yet', async () => {
-    mockSettings({});
-    await patchSettingsSlice('writersRoom.imageGen', { foo: 'bar' });
-    const putCall = request.mock.calls.find(([, opts]) => opts?.method === 'PUT');
-    const body = JSON.parse(putCall[1].body);
-    expect(body).toEqual({ writersRoom: { imageGen: { foo: 'bar' } } });
+  it('preserves explicit empty and null clearing in the request', async () => {
+    request.mockResolvedValue({});
+    await patchSettingsSlice('imageGen.local', { pythonPath: null });
+    expect(JSON.parse(request.mock.calls[0][1].body).partial).toEqual({ pythonPath: null });
+    await patchSettingsSlice('localLlm.mtplx', { launch: {} });
+    expect(JSON.parse(request.mock.calls[1][1].body).partial).toEqual({ launch: {} });
   });
 
-  it('falls back to an empty slice when getSettings rejects', async () => {
-    request.mockImplementation((path, opts) => {
-      if (path === '/settings' && (!opts || opts.method !== 'PUT')) {
-        return Promise.reject(new Error('boom'));
-      }
-      return Promise.resolve({ ok: true });
-    });
-    await patchSettingsSlice('imageGen.local', { pythonPath: '/x' });
-    const putCall = request.mock.calls.find(([, opts]) => opts?.method === 'PUT');
-    const body = JSON.parse(putCall[1].body);
-    expect(body).toEqual({ imageGen: { local: { pythonPath: '/x' } } });
-  });
-
-  it('passes options through to updateSettings', async () => {
-    mockSettings({});
-    await patchSettingsSlice('backup', { destPath: '/tmp' }, { silent: true });
-    const putCall = request.mock.calls.find(([, opts]) => opts?.method === 'PUT');
-    expect(putCall[1].silent).toBe(true);
-  });
-
-  it('throws on missing slicePath', async () => {
+  it('rejects malformed arguments before sending a mutation', async () => {
     await expect(patchSettingsSlice('', {})).rejects.toThrow(/slicePath required/);
-  });
-
-  it('throws on non-object partial', async () => {
-    await expect(patchSettingsSlice('imageGen', null)).rejects.toThrow(/plain object/);
-    await expect(patchSettingsSlice('imageGen', [])).rejects.toThrow(/plain object/);
-    await expect(patchSettingsSlice('imageGen', 'foo')).rejects.toThrow(/plain object/);
-  });
-
-  it('throws on empty path segments', async () => {
-    await expect(patchSettingsSlice('imageGen..local', { x: 1 })).rejects.toThrow(/empty segments/);
-    await expect(patchSettingsSlice('imageGen.', { x: 1 })).rejects.toThrow(/empty segments/);
-    await expect(patchSettingsSlice('.imageGen', { x: 1 })).rejects.toThrow(/empty segments/);
-  });
-
-  it('treats a non-object slice value as absent (does not spread strings into chars)', async () => {
-    mockSettings({ imageGen: { local: 'oops-not-an-object' } });
-    await patchSettingsSlice('imageGen.local', { pythonPath: '/x' });
-    const putCall = request.mock.calls.find(([, opts]) => opts?.method === 'PUT');
-    const body = JSON.parse(putCall[1].body);
-    expect(body).toEqual({ imageGen: { local: { pythonPath: '/x' } } });
-  });
-
-  it('treats a non-object parent as absent', async () => {
-    mockSettings({ imageGen: 'oops' });
-    await patchSettingsSlice('imageGen.local', { pythonPath: '/x' });
-    const putCall = request.mock.calls.find(([, opts]) => opts?.method === 'PUT');
-    const body = JSON.parse(putCall[1].body);
-    expect(body).toEqual({ imageGen: { local: { pythonPath: '/x' } } });
-  });
-
-  it('treats an array at the slice as absent', async () => {
-    mockSettings({ imageGen: { local: [1, 2, 3] } });
-    await patchSettingsSlice('imageGen.local', { pythonPath: '/x' });
-    const putCall = request.mock.calls.find(([, opts]) => opts?.method === 'PUT');
-    const body = JSON.parse(putCall[1].body);
-    expect(body).toEqual({ imageGen: { local: { pythonPath: '/x' } } });
+    await expect(patchSettingsSlice('imageGen..local', {})).rejects.toThrow(/empty segments/);
+    for (const partial of [null, [], 'invalid']) {
+      await expect(patchSettingsSlice('imageGen.local', partial)).rejects.toThrow(/plain object/);
+    }
+    expect(request).not.toHaveBeenCalled();
   });
 });
-
-// @vitest-environment node

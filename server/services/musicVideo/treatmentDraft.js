@@ -1,7 +1,7 @@
 import { musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
 import { shotActionContractProblem } from '../../lib/musicVideoActionContract.js';
 import { musicVideoStyleBasis, musicVideoStylePrompt } from '../../lib/musicVideoConditioning.js';
-import { musicVideoCreativeContext } from '../../lib/musicVideoCreativeContext.js';
+import { musicVideoCreativeContext, musicVideoSongStyleContext } from '../../lib/musicVideoCreativeContext.js';
 /**
  * Music Video — treatment compiler (#8980).
  *
@@ -383,6 +383,7 @@ export function buildTreatmentPrompt(project, draft) {
     musicVideoCreativeContext(concept),
     concept.prompt && `Concept: ${quote(concept.prompt, 600)}`,
     concept.style && `Visual style: ${quote(concept.style)}`,
+    musicVideoSongStyleContext(concept),
     spec.palette?.length && `Palette: ${spec.palette.join(' ')}`,
     spec.cameraRules && `Camera rules: ${quote(spec.cameraRules)}`,
   ].filter(Boolean);

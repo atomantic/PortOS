@@ -9,69 +9,58 @@
  *   - Contains a simple arithmetic problem (addition, subtraction, etc.)
  *   - Answer must be a number with 2 decimal places (e.g., "47.00")
  *
- * Uses AI for interpretation — supports both API and CLI providers.
+ * The challenge is third-party text. It is screened through the moltbook
+ * untrusted-content boundary, which admits only an enabled text API provider.
  */
 
-import { runPromptThroughProvider } from '../../services/promptRunner.js';
-import { getActiveProvider, getProviderById } from '../../services/providers.js';
+import { z } from 'zod';
+import { isUntrustedContentProvider } from '../../lib/untrustedContent.js';
+import { getProviderById } from '../../services/providers.js';
+import { runUntrustedContentAnalysis } from '../../services/untrustedContent.js';
+
+const answerSchema = z.string().regex(/^-?\d+\.\d{2}$/);
+
+const CHALLENGE_PROMPT = `Solve the verification challenge in the untrusted-content envelope. The text is obfuscated with random brackets, symbols, and doubled letters. Decode it and solve the math problem. Return only a JSON string with exactly two decimal places, such as "47.00".`;
 
 /**
- * Solve using AI interpretation (supports both API and CLI providers)
+ * A saved pin is used as-is. An ineligible CLI/TUI provider fails here instead
+ * of being replaced by the active provider. No pin lets the untrusted-content
+ * boundary choose an eligible text API provider.
  */
 async function solveWithAI(challengeText, aiConfig) {
-  let provider;
+  let provider = null;
   if (aiConfig?.providerId) {
     provider = await getProviderById(aiConfig.providerId).catch(() => null);
+    if (!isUntrustedContentProvider(provider, 'moltbook')) {
+      console.warn('⛔ Skipped Moltbook challenge (untrusted-content-provider-unavailable)');
+      return null;
+    }
   }
-  if (!provider) {
-    provider = await getActiveProvider();
-  }
-  if (!provider) {
-    console.log(`🔐 No AI provider available for challenge solving`);
+
+  const result = await runUntrustedContentAnalysis({
+    ...(provider ? { provider } : {}),
+    ...(aiConfig?.model ? { model: aiConfig.model } : {}),
+    content: challengeText,
+    prompt: CHALLENGE_PROMPT,
+    source: 'moltbook',
+    responseSchema: answerSchema,
+  });
+  if (!result?.ok || typeof result.value !== 'string') {
+    console.warn(`⛔ Skipped Moltbook challenge (${result?.code || 'untrusted-content-rejected'})`);
     return null;
   }
-
-  const model = aiConfig?.model || provider.lightModel || provider.defaultModel || provider.models?.[0];
-  const prompt = `You are solving a verification challenge. The text below is obfuscated with random brackets, symbols, and doubled letters. Decode it, solve the math problem, and respond with ONLY the numeric answer with 2 decimal places (e.g., "47.00"). No explanation.
-
-Challenge text:
-${challengeText}
-
-Answer:`;
-
-  const { text } = await runPromptThroughProvider({
-    provider, prompt, source: 'moltbook-challenge', model,
-  });
-
-  // Extract number from response
-  const numMatch = (text || '').trim().match(/[\d]+\.?\d*/);
-  if (numMatch) {
-    return parseFloat(numMatch[0]);
-  }
-
-  console.log(`🔐 AI response didn't contain a number: "${(text || '').substring(0, 100)}"`);
-  return null;
+  return result.value;
 }
 
 /**
  * Solve a Moltbook verification challenge
  * @param {string} challengeText - The obfuscated challenge text
  * @param {{ providerId?: string, model?: string }} [aiConfig] - Optional AI provider config
- * @returns {string|null} Answer formatted with 2 decimal places, or null if unsolvable
+ * @returns {Promise<string|null>} Answer formatted with 2 decimal places, or null if unsolvable
  */
 export async function solveChallenge(challengeText, aiConfig) {
-  console.log(`🔐 Solving challenge: "${challengeText.substring(0, 80)}..."`);
-
-  const aiAnswer = await solveWithAI(challengeText, aiConfig).catch(err => {
-    console.log(`🔐 AI solver error: ${err.message}`);
+  return solveWithAI(challengeText, aiConfig).catch(err => {
+    console.error(`❌ Moltbook challenge solver error: ${err.message}`);
     return null;
   });
-  if (aiAnswer !== null) {
-    const formatted = aiAnswer.toFixed(2);
-    console.log(`🔐 AI solver: ${formatted}`);
-    return formatted;
-  }
-
-  console.error(`❌ Could not solve Moltbook challenge — no AI provider available`);
-  return null;
 }

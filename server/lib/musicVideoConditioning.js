@@ -4,6 +4,14 @@ import { RUNNER_FAMILIES } from './runners.js';
 /** Browser-safe reference selection shared by the board and production lanes. */
 export const MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES = 4;
 
+/**
+ * A reference pulled in from outside inspiration: imported from a mood board
+ * ("Import board images") or a synced Pinterest pin. Outside images inform the
+ * look as text and are never sent to a generator as a conditioning image.
+ */
+export const isOutsideMusicVideoReference = (ref) => String(ref?.id || '').startsWith('mvr-board-')
+  || String(ref?.imageId || '').startsWith('pinterest-');
+
 export function musicVideoConditioningReferences(project, scene) {
   const references = project?.visualSpec?.references || [];
   const stage = project?.castAndSets;
@@ -16,7 +24,7 @@ export function musicVideoConditioningReferences(project, scene) {
     if (character && plate) return [character, plate];
   }
   // Legacy projects and incomplete check-ins retain the authored reference set.
-  return references.filter((ref) => ref?.condition && ref.imageId)
+  return references.filter((ref) => ref?.condition && ref.imageId && !isOutsideMusicVideoReference(ref))
     .slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
 }
 

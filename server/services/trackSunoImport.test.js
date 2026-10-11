@@ -11,16 +11,16 @@ vi.mock('./pipeline/musicLibrary.js', () => ({
 }));
 vi.mock('./tracks/index.js', () => ({ createTrack: vi.fn(async (input) => ({ id: 'track-new', ...input })) }));
 vi.mock('../lib/sseUtils.js', () => ({ broadcastSse: vi.fn(), attachSseClient: vi.fn(() => true), closeJobAfterDelay: vi.fn() }));
-vi.mock('./musicVideo/autonomousSuno.js', () => ({ generateSunoSong: vi.fn() }));
+vi.mock('./musicVideo/autonomousSuno.js', () => ({ generateSunoSong: vi.fn(), readSunoSongPage: vi.fn() }));
 vi.mock('../lib/safeUrlFetch.js', () => ({ fetchPublicText: vi.fn(), fetchPublicBinary: vi.fn(), resolvePublicUrl: vi.fn() }));
 
 const { broadcastSse } = await import('../lib/sseUtils.js');
 const { probeVideoDuration, runFfmpegProcess } = await import('../lib/ffmpeg.js');
 const { fetchPublicText, fetchPublicBinary, resolvePublicUrl } = await import('../lib/safeUrlFetch.js');
 const { importUploadedTrack } = await import('./pipeline/musicLibrary.js');
-const { generateSunoSong } = await import('./musicVideo/autonomousSuno.js');
+const { generateSunoSong, readSunoSongPage } = await import('./musicVideo/autonomousSuno.js');
 const { createTrack } = await import('./tracks/index.js');
-const { startSunoImport, cancelSunoImport, __testing } = await import('./trackSunoImport.js');
+const { startSunoImport, cancelSunoImport, readSunoSongStyle, __testing } = await import('./trackSunoImport.js');
 
 const ID = '11111111-2222-4333-8444-555555555555';
 const songPage = (record) => `<script>self.__next_f.push([1,${JSON.stringify(`5:${JSON.stringify(record)}\n`)}])</script>`;
@@ -47,6 +47,7 @@ beforeEach(() => {
   probeVideoDuration.mockResolvedValue(200);
   runFfmpegProcess.mockResolvedValue({ ok: true });
   generateSunoSong.mockRejectedValue(new Error('Sign in to Suno in the PortOS Browser'));
+  readSunoSongPage.mockRejectedValue(new Error('Sign in to Suno in the PortOS Browser'));
   fetchPublicBinary.mockResolvedValue({ buffer: Buffer.from('ID3audio'), contentType: 'audio/mpeg' });
 });
 
@@ -64,6 +65,27 @@ describe('startSunoImport', () => {
       title: 'Airplane Mode', lyrics: '[Verse]\nno signal', prompt: 'dream pop', durationSec: 200,
       renders: [expect.objectContaining({ source: 'suno', lyrics: '[Verse]\nno signal', prompt: 'dream pop' })],
     }));
+  });
+
+  it('reads the excluded styles from the signed-in page when the public page leaves them out', async () => {
+    fetchPublicText.mockResolvedValue(songPage({
+      id: ID, title: 'Cutting', audio_url: `https://cdn1.suno.ai/${ID}.mp3`, metadata: { prompt: 'words', tags: 'synth-pop' },
+    }));
+    readSunoSongPage.mockResolvedValue(songPage({ id: ID, title: 'Cutting', metadata: { prompt: 'words', tags: 'synth-pop', negative_tags: 'metal, cutesy' } }));
+    await startSunoImport(`https://suno.com/song/${ID}`);
+    expect(await terminal()).toMatchObject({ type: 'complete' });
+    expect(readSunoSongPage).toHaveBeenCalledWith(ID, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(createTrack).toHaveBeenCalledWith(expect.objectContaining({ prompt: 'synth-pop, -metal, -cutesy' }));
+  });
+
+  it('skips the signed-in read when the public page states the excluded styles', async () => {
+    fetchPublicText.mockResolvedValue(songPage({
+      id: ID, title: 'Cutting', audio_url: `https://cdn1.suno.ai/${ID}.mp3`, metadata: { tags: 'synth-pop', negative_tags: '' },
+    }));
+    await startSunoImport(`https://suno.com/song/${ID}`);
+    expect(await terminal()).toMatchObject({ type: 'complete' });
+    expect(readSunoSongPage).not.toHaveBeenCalled();
+    expect(createTrack).toHaveBeenCalledWith(expect.objectContaining({ prompt: 'synth-pop' }));
   });
 
   it('still imports the audio from Suno\'s CDN when the page cannot be read', async () => {
@@ -233,5 +255,20 @@ describe('startSunoImport', () => {
 
   it('refuses a link that is not a Suno song', async () => {
     await expect(startSunoImport('https://example.com/song/x')).rejects.toMatchObject({ status: 400, code: 'SUNO_URL_INVALID' });
+  });
+});
+
+describe('readSunoSongStyle', () => {
+  it('returns the full style of an earlier import, and keeps the public one when the browser is signed out', async () => {
+    fetchPublicText.mockResolvedValue(songPage({ id: ID, title: 'Cutting', metadata: { tags: 'synth-pop' } }));
+    readSunoSongPage.mockResolvedValueOnce(songPage({ id: ID, metadata: { tags: 'synth-pop', negative_tags: 'metal' } }));
+    await expect(readSunoSongStyle(`https://suno.com/song/${ID}`)).resolves.toEqual({ style: 'synth-pop, -metal', excludedStylesKnown: true });
+    await expect(readSunoSongStyle(`https://suno.com/song/${ID}`)).resolves.toEqual({ style: 'synth-pop', excludedStylesKnown: false });
+  });
+
+  it('refuses a link that is not a Suno song, or a song with no style', async () => {
+    await expect(readSunoSongStyle('https://example.com/song/x')).rejects.toMatchObject({ status: 400 });
+    fetchPublicText.mockResolvedValue(null);
+    await expect(readSunoSongStyle(`https://suno.com/song/${ID}`)).rejects.toMatchObject({ status: 404 });
   });
 });

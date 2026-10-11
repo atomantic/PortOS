@@ -4,6 +4,7 @@ import { isAuthEnabled, verifyPassword, verifyRequestSession } from './auth.js';
 // on :5560 applies byte-identical credential extraction and CSRF rules.
 import { browserRequestRefusal, isLocalConnection, extractBasicPassword } from '../../lib/portosAuthCore.js';
 import { getSettings, settingsEvents } from './settings.js';
+import { getVoiceConfig } from './voice/config.js';
 import { isRegistryPublic } from '../lib/apiRegistry.js';
 import {
   GATED_NON_API_PREFIXES,
@@ -14,7 +15,8 @@ import {
 import { sendErrorResponse, ServerError } from '../lib/errorHandler.js';
 import { logSecurityEvent } from '../lib/securityAuditLog.js';
 import {
-  changedHostControlSettingsPaths, hostControlBodyKeys, hostControlSettingsPathsIn, isHostControlRoute,
+  changedHostControlSettingsPaths, changedVoiceConfigHostControlPaths, hostControlBodyKeys,
+  hostControlSettingsPathsIn, isHostControlRoute, voiceConfigHostControlPathsIn,
 } from '../lib/hostControlRoutes.js';
 import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 import { loadData as loadInstances } from './instanceIdentity.js';
@@ -250,13 +252,25 @@ export const socketHasCurrentHostControl = async (socket) => {
   return socketHasHostControl(socket);
 };
 
+const hostControlRefusal = (req) => {
+  logSecurityEvent('host-control.refused', { refused: true, ip: req.ip, method: req.method, path: req.originalUrl?.split('?')[0] ?? req.path, auth: req.portosAuthContext?.method ?? 'none' });
+  return new ServerError(HOST_CONTROL_FORBIDDEN_MESSAGE, {
+    status: 403, code: 'HOST_CONTROL_FORBIDDEN',
+  });
+};
+
 // Mount after authGate: missing context fails closed.
 export const requireHostControl = (req, res, next) => {
   if (requestHasHostControl(req)) return next();
-  logSecurityEvent('host-control.refused', { refused: true, ip: req.ip, method: req.method, path: req.originalUrl?.split('?')[0] ?? req.path, auth: req.portosAuthContext?.method ?? 'none' });
-  sendErrorResponse(res, new ServerError(HOST_CONTROL_FORBIDDEN_MESSAGE, {
-    status: 403, code: 'HOST_CONTROL_FORBIDDEN',
-  }));
+  sendErrorResponse(res, hostControlRefusal(req));
+};
+
+// The in-handler twin of requireHostControl, for a route that is open for
+// plain records and needs operator authority only when the validated request
+// would start host work (e.g. a repository link that auto-clones). Throws the
+// same 403 so the route's error middleware answers it.
+export const assertHostControl = (req) => {
+  if (!requestHasHostControl(req)) throw hostControlRefusal(req);
 };
 
 // Applies requireHostControl to every route in the audited
@@ -271,15 +285,26 @@ export const hostControlRouteGate = (req, res, next) => (
 // polymorphic policy stores (PUT /api/settings, PUT /api/cos/config) are
 // gated only when the body names a key that changes execution policy, or
 // changes the stored value of a nested settings key that picks an executable
-// (HOST_CONTROL_SETTINGS_PATHS). The settings read is skipped when the caller
-// already holds host control, since the answer could not change.
+// (HOST_CONTROL_SETTINGS_PATHS). PUT /api/voice/config is gated the same way
+// when the body would change the voice agent's instructions or coding-agent
+// tool (HOST_CONTROL_VOICE_CONFIG_PATHS). Those stored-value reads are
+// skipped when the caller already holds host control, since the answer
+// could not change.
 export const hostControlBodyGate = async (req, res, next) => {
   if (hostControlBodyKeys(req.method, req.path, req.body).length > 0) return requireHostControl(req, res, next);
-  const named = hostControlSettingsPathsIn(req.method, req.path, req.body);
-  if (named.length === 0
+  const settingsNamed = hostControlSettingsPathsIn(req.method, req.path, req.body);
+  const voiceNamed = voiceConfigHostControlPathsIn(req.method, req.path, req.body);
+  if ((settingsNamed.length === 0 && voiceNamed.length === 0)
     || hasHostControl(req.portosAuthContext, isLocalConnection(req.socket?.remoteAddress, req.headers))) return next();
-  const changed = changedHostControlSettingsPaths(named, req.body, await getSettings());
-  return changed.length > 0 ? requireHostControl(req, res, next) : next();
+  if (settingsNamed.length > 0
+    && changedHostControlSettingsPaths(settingsNamed, req.body, await getSettings(), req.method, req.path).length > 0) {
+    return requireHostControl(req, res, next);
+  }
+  if (voiceNamed.length > 0
+    && changedVoiceConfigHostControlPaths(voiceNamed, req.body, await getVoiceConfig()).length > 0) {
+    return requireHostControl(req, res, next);
+  }
+  return next();
 };
 
 // The socket twin of requireHostControl on a password-free install, for the

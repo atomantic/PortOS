@@ -50,7 +50,10 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
   const basePrompt = sceneFramePrompt(project, scene);
   const repairing = project.productionRuns?.find((run) => run.id === tag.productionRunId)?.steps?.find((step) => step.key === tag.productionStepKey)?.plateRepairBasis;
   const unmet = repairing ? (scene.takes || []).flatMap((take) => currentPlateEvidence(scene, take)?.checks.filter((check) => check.status === 'fail').map((check) => `${check.requirement}: ${check.note}`) || []) : [];
-  const prompt = basePrompt && [basePrompt, unmet.length ? `Repair these visible plate mismatches while preserving the shot intent:\n${[...new Set(unmet)].join('\n')}` : ''].filter(Boolean).join('\n');
+  // The autonomous run's stills review names what the last still got wrong (autonomousService.js).
+  const fixes = typeof scene.stillFixes?.text === 'string' ? scene.stillFixes.text : '';
+  const prompt = basePrompt && [basePrompt, unmet.length ? `Repair these visible plate mismatches while preserving the shot intent:\n${[...new Set(unmet)].join('\n')}` : '',
+    fixes ? `Fix these visible problems from the previous still while preserving the shot intent:\n${fixes}` : ''].filter(Boolean).join('\n');
   if (!prompt) throw unprompted(scene, 'frame');
   const referenceImagePaths = conditioningReferences(project, scene)
     .map((ref) => resolveGalleryImage(ref.imageId, { mustExist: false })).filter(Boolean);
@@ -110,9 +113,13 @@ async function dispatchClip({ project, scene, route, tag }) {
   const spanSec = typeof scene.startSec === 'number' && typeof scene.endSec === 'number' && scene.endSec > scene.startSec
     ? scene.endSec - scene.startSec : null;
   const isGrok = route.mode === 'grok';
-  const prompt = [base, isGrok ? approximateMotionCues(project.phrases, scene.startSec, scene.endSec) : ''].filter(Boolean).join('. ');
+  // The autonomous run's pilot repair names what the last clip got wrong (autonomousService.js).
+  const fixes = typeof scene.clipFixes?.text === 'string' ? scene.clipFixes.text : '';
+  const prompt = [base, isGrok ? approximateMotionCues(project.phrases, scene.startSec, scene.endSec) : '',
+    fixes ? `Fix these problems from the previous take while preserving the shot intent: ${fixes}` : ''].filter(Boolean).join('. ');
   const byBackend = {
-    local: { modelId: route.model, disableAudio: true },
+    // A supplied-audio route animates the frame from its shot's own song window.
+    local: route.audio === 'supplied' ? { modelId: route.model, mode: 'a2v', _suppliedAudio: true } : { modelId: route.model, disableAudio: true },
     grok: { grokDuration: spanSec != null ? grokCoverage(spanSec).requestSec : (project.videoSettings?.grokDuration || 10), disableAudio: true },
     fal: falClipParams(project, scene, route),
     reactor: { disableAudio: true },

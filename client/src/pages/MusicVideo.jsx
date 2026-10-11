@@ -3,10 +3,9 @@ import { unfoldToAnchor } from '../lib/unfoldToAnchor.js';
 import useMusicVideoProductionReview from '../hooks/useMusicVideoProductionReview.js';
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams, useLocation } from 'react-router';
-import { Plus, Film, Copy, Trash2, Wand2, Pencil } from 'lucide-react';
+import { Plus, Film, Wand2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
-import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import PageHeader from '../components/PageHeader';
 import Banner from '../components/ui/Banner.jsx';
@@ -19,6 +18,7 @@ import {
   updateMusicVideoProject,
   deleteMusicVideoProject,
   analyzeMusicVideoProject,
+  prepareMusicVideoSong,
   planMusicVideoProject,
   addMusicVideoScene,
   updateMusicVideoScene,
@@ -28,6 +28,7 @@ import {
   reorderMusicVideoScenes,
   importMusicVideoLyrics,
   importMusicVideoTrackLyrics,
+  refreshMusicVideoSongStyleFromSuno,
   getMusicVideoActiveJobs,
   getMusicVideoProject,
 } from '../services/apiMusicVideo.js';
@@ -55,6 +56,7 @@ import useMusicVideoTakes from '../hooks/useMusicVideoTakes.js';
 import useMusicVideoTreatment, { aiSkipLabel } from '../hooks/useMusicVideoTreatment.js';
 import useHydratedPreviewRoute from '../hooks/useHydratedPreviewRoute.js';
 import { normalizeImage, normalizeVideo } from '../components/media/normalize.js';
+import { castAndSetsPreviewItems } from '../components/musicVideo/CastAndSetsReferenceProgress.jsx';
 import { useVideoFileSrc } from '../hooks/useVideoFileSrc.js';
 import MediaPreview from '../components/media/MediaPreview.jsx';
 import MidiInstallModal from '../components/install/MidiInstallModal.jsx';
@@ -65,6 +67,7 @@ import AutonomousStartDrawer from '../components/musicVideo/AutonomousStartDrawe
 import { automationDraftFrom, automationFromDraft } from '../lib/musicVideoAutomation.js';
 import { listUniverseNames } from '../services/apiUniverseBuilder.js';
 import MusicVideoLayout, { MUSIC_VIDEO_PAGE_ID, MUSIC_VIDEO_SCROLL_ID } from '../components/musicVideo/MusicVideoLayout.jsx';
+import ProjectManageActions from '../components/musicVideo/ProjectManageActions.jsx';
 import ProjectSettingsDrawer, { SETTINGS_TAB_IDS } from '../components/musicVideo/ProjectSettingsDrawer.jsx';
 import MusicVideoProjectCard from '../components/musicVideo/MusicVideoProjectCard.jsx';
 import PreviewDock from '../components/musicVideo/PreviewDock.jsx';
@@ -87,7 +90,7 @@ import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { videoPosterForJob } from '../lib/creativeDirectorPreview.js';
 import { sceneTakeList } from '../lib/musicVideoTakes.js';
 import { pluralize } from '../lib/textUtils.js';
-import { formatTimecode } from '../utils/formatters.js';
+import { formatCount, formatTimecode } from '../utils/formatters.js';
 import { deriveAttentionItems } from '../lib/musicVideoAttention.js';
 import { latestMusicVideoReviewDraft } from '../../../server/lib/musicVideoReviewDraft.js';
 import { useMusicVideoReviewDraft } from '../hooks/useMusicVideoReviewDraft.js';
@@ -349,7 +352,7 @@ export default function MusicVideo() {
       trackId: track.id,
       ...(!f.name || tracks.some((t) => t.title === f.name) ? { name: track.title || '' } : {}),
     })),
-    onProjectUpdated: replaceProject,
+    onProjectUpdated: (proj) => { replaceProject(proj); prepareSong(proj.id); },
   });
   // "Separate vocals" (demucs) — one slot shared by the stem control and the
   // autopilot kickoff; the terminal frame carries the project with its stem.
@@ -359,6 +362,18 @@ export default function MusicVideo() {
   const lyricAlign = useMusicVideoLyricAlign({
     onAligned: (projectId, project) => patchProject(projectId, { lyricCues: project.lyricCues, audioAnalysis: project.audioAnalysis, updatedAt: project.updatedAt }),
   });
+  // A track attached or lyrics imported: analyze the song and align never-aligned
+  // lines on the server, then follow the alignment here (the Song step shows it).
+  const prepareSong = (projectId) => {
+    setAnalyzing(true);
+    return prepareMusicVideoSong(projectId, { silent: true })
+      .then(({ project, analyzed, alignJobId }) => {
+        if (analyzed) patchProject(projectId, { audioAnalysis: project.audioAnalysis, updatedAt: project.updatedAt });
+        if (alignJobId) lyricAlign.attach(alignJobId, projectId);
+      })
+      .catch((err) => toast.error(err?.message || 'Could not analyze the song'))
+      .finally(() => setAnalyzing(false));
+  };
   const midi = useMusicVideoMidiJob({
     onTranscribed: (projectId, midiTranscription) => patchProject(projectId, { midiTranscription }),
   });
@@ -517,6 +532,7 @@ export default function MusicVideo() {
         setForm(emptyCreateForm());
         setCreateOpen(false);
         toast.success('Project created');
+        if (proj.trackId) prepareSong(proj.id);
       })
       .catch((err) => toast.error(err?.message || 'Failed to create project'))
       .finally(() => setCreating(false));
@@ -701,7 +717,7 @@ export default function MusicVideo() {
   // Re-point the selected project at a different library track (the detail
   // view's "Change track" picker — previously there was no way to relink a
   // project's audio after creation at all).
-  const handleChangeTrack = (trackId, { fork = false, cleared = [] } = {}) => {
+  const handleChangeTrack = (trackId, { fork = false } = {}) => {
     if (!selected) return;
     if (renderTargetsSelected) {
       toast.error('Wait for the current render to finish before changing the track');
@@ -712,9 +728,7 @@ export default function MusicVideo() {
     if (selectedTrack?.concept && !selected.concept?.prompt) {
       patch.concept = { ...(selected.concept || {}), prompt: selectedTrack.concept };
     }
-    if (selectedTrack?.prompt && !selected.concept?.style) {
-      patch.concept = { ...(patch.concept || selected.concept || {}), style: selectedTrack.prompt };
-    }
+    // The track's Suno style becomes the project's song style on the server.
     // Fork first so the original keeps its analysis/alignment; the new track is
     // applied to the fork only.
     const base = fork
@@ -727,7 +741,7 @@ export default function MusicVideo() {
           openProject(proj);
           navigate(`/music-video/${proj.id}/setup`);
         } else replaceProject(proj);
-        if (cleared.length > 0) toast.success('Track changed — re-run Analyze and Align words');
+        prepareSong(proj.id);
       })
       .catch((err) => toast.error(err?.message || 'Failed to change track'));
   };
@@ -765,6 +779,12 @@ export default function MusicVideo() {
   // older snapshot of the list overwrite a newer one.
   const timedTextSaveChain = useRef(Promise.resolve());
   const editProjectLocal = (patch) => patchProject(selected.id, patch);
+  // The finishing film look, saved whole from the image viewer's editor ("Use on project").
+  const saveFilmLook = (filmLook) => {
+    const projectId = selected.id;
+    return updateMusicVideoProject(projectId, { filmLook }, { silent: true })
+      .then((saved) => patchProject(projectId, { filmLook: saved.filmLook ?? null }));
+  };
   const saveProjectFields = (patch, { applyComposition = false } = {}) => {
     const projectId = selected.id;
     setCompositionSavePending((count) => count + 1);
@@ -785,6 +805,7 @@ export default function MusicVideo() {
         patchProject(projectId, { lyricCues: project.lyricCues, updatedAt: project.updatedAt });
         onDone?.();
         toast.success(`Imported ${imported} lyric line${imported === 1 ? '' : 's'} (${format})`);
+        prepareSong(projectId);
       })
       .catch((err) => toast.error(err?.message || 'Lyric import failed'))
       .finally(() => setImportingLyrics(false));
@@ -797,12 +818,13 @@ export default function MusicVideo() {
       .then(({ project, imported, markers }) => {
         patchProject(projectId, { lyricCues: project.lyricCues, lyricMarkers: project.lyricMarkers, updatedAt: project.updatedAt });
         toast.success(`Imported ${imported} lyric line${imported === 1 ? '' : 's'}${markers ? ` and ${markers} section/direction marker${markers === 1 ? '' : 's'}` : ''} from the track`);
+        prepareSong(projectId);
       })
       .catch((err) => toast.error(err?.message || 'Could not import the track lyrics'))
       .finally(() => setImportingLyrics(false));
   };
-  // Alignment is a click, never an import side effect. The panel shows the
-  // whisper setup error itself, so this request stays silent.
+  // A re-align is a click (imports align through prepareSong). The panel shows
+  // the alignment setup error itself, so this request stays silent.
   const handleAlignLyrics = (cueId, options) => lyricAlign.run(selected.id, cueId, options);
   // Revise song: open the new version on its Song step and follow its re-time job there.
   const handleSongRevised = ({ project, retimeJobId }) => {
@@ -841,13 +863,24 @@ export default function MusicVideo() {
   // and a focus-without-edit blur doesn't re-PATCH an unchanged value.
   const conceptDraft = useFieldDraft(selected?.concept?.prompt, (v) => commitConcept({ prompt: v }));
   const styleDraft = useFieldDraft(selected?.concept?.style, (v) => commitConcept({ style: v }));
+  const songStyleDraft = useFieldDraft(selected?.concept?.songStyle, (v) => commitConcept({ songStyle: v }));
   // The route (not a remount) drives which project is "selected" here, so a
   // still-focused, unblurred draft survives a project switch (deep link,
   // browser Back, future ⌘K/voice jump) with the OLD project's typed text.
   // Without this, the next incidental blur would commit that leftover draft
   // onto the NEW project via commitConcept's captured `selected`. Discard
   // (never auto-commit) any pending edit the instant the selection changes.
-  useEffect(() => { conceptDraft.reset(); styleDraft.reset(); }, [selectedId]);
+  useEffect(() => { conceptDraft.reset(); styleDraft.reset(); songStyleDraft.reset(); }, [selectedId]);
+  // Re-read the song style (with its excluded styles) from the song's Suno link.
+  const songStyleFromSuno = (url) => refreshMusicVideoSongStyleFromSuno(selected.id, url, { silent: true })
+    .then(({ project, excludedStylesKnown }) => {
+      songStyleDraft.reset();
+      replaceProject(project);
+      if (excludedStylesKnown) toast.success('Song style read from Suno');
+      else toast.warning('Read the style, but Suno only shows excluded styles when the PortOS Browser is signed in to Suno');
+      return true;
+    })
+    .catch((err) => { toast.error(err?.message || 'Could not read the song style from Suno'); return false; });
   // BeatTimeline drag commit — same optimistic-local + silent-PATCH pattern as
   // the other scene field editors (#1854).
   const commitSceneTiming = (sceneId, patch) => {
@@ -985,6 +1018,8 @@ export default function MusicVideo() {
         items.push(videoItem(take.assetId, `${take.assetId}.mp4`, take.prompt || scene.prompt || ''));
       }
     }
+    // Cast & sets references and their inputs open here too, never as a raw file.
+    items.push(...castAndSetsPreviewItems(selected.castAndSets));
     // Scenes can reuse the same frame/clip (Make's generation controls surface a
     // "Repetition: N unique frames" badge). Dedupe by key so prev/next and
     // openPreview's .find() land on a single item rather than the first of
@@ -1084,7 +1119,32 @@ export default function MusicVideo() {
     finalRenderAttached: renderTargetsSelected,
     readiness: productionReview.readiness,
     headerAction: nextAction,
+    stage: activeStage,
   }) : [];
+  // A checklist row either jumps to the control that settles it or, for work
+  // the page can start itself (build or resume the cast & sets, fill the art
+  // direction from an approved sheet), starts it.
+  // Revising re-plans or regenerates in place; the requests stay open until the director resolves each one.
+  const reviseFromFeedback = async (stage) => {
+    const result = await productionReview.revise(stage);
+    if (!result) return;
+    const count = result.revision?.sceneIds?.length;
+    toast.success(stage === 'art' ? 'Cast & Sets is regenerating with these requests. Review the new sheet, then resolve each request.'
+      : stage === 'storyboard' ? `Revised ${formatCount(count)} shot${count === 1 ? '' : 's'}. Review them, then resolve each request.`
+        : 'A revised composition is ready. Render and review a new proof, then resolve each request.');
+  };
+  // "Keep approved" on a stale approval: the Cast & Sets check-in is re-stamped on its
+  // current inputs; a production approval is given again on the current revision.
+  const keepApproval = (stage) => (stage === 'castAndSets' ? castSets.reconfirm() : productionReview.approve(stage));
+  const runChecklistAction = (action) => {
+    if (action.run === 'start-cast-sets') { castSets.start(); return; }
+    if (action.run === 'resume-cast-sets') { castSets.resume(); return; }
+    if (action.run === 'prepare-art') { productionReview.prepare(); return; }
+    if (action.run === 'resolve-feedback') { productionReview.resolveFeedback(action.feedbackId, ''); return; }
+    if (action.run === 'revise-feedback') { reviseFromFeedback(action.stage); return; }
+    if (action.run === 'keep-approval') { keepApproval(action.stage); return; }
+    goToStage(action.stage || activeStage, action.anchor, action.params);
+  };
   const runNextAction = () => {
     if (!selected || !nextAction || nextAction.disabled || compositionSavePending > 0) return;
     if (nextAction.id === 'review-imported') { openArtifact(reviewDraft.artifactId); return; }
@@ -1152,6 +1212,8 @@ export default function MusicVideo() {
     kickoff,
     conceptDraft,
     styleDraft,
+    songStyleDraft,
+    songStyleFromSuno,
     importingLyrics,
     aligningLyrics,
     alignStatus,
@@ -1234,7 +1296,8 @@ export default function MusicVideo() {
     <div id={MUSIC_VIDEO_PAGE_ID} className="flex h-full flex-col max-md:overflow-auto">
       <MidiInstallModal {...midi.installGate} />
       <MidiGatedModal {...midi.gatedGate} />
-      <MediaPreview preview={preview} setPreview={setPreview} items={previewItems} />
+      <MediaPreview preview={preview} setPreview={setPreview} items={previewItems}
+        filmLookProject={selected ? { look: selected.filmLook, name: selected.name, onSave: saveFilmLook } : null} />
       {pickerTarget && pickerTarget.type !== 'clip' && (
         <GalleryImagePicker
           open
@@ -1282,7 +1345,7 @@ export default function MusicVideo() {
       <PageHeader
         icon={Film}
         title="Music Video"
-        subtitle="Beat-aware music videos — autopilot or hands-on"
+        subtitle={selected ? null : 'Beat-aware music videos — autopilot or hands-on'}
         actions={(
           <>
             <label htmlFor="mv-project-picker" className="sr-only">Project</label>
@@ -1292,67 +1355,13 @@ export default function MusicVideo() {
               onChange={(e) => selectProject(e.target.value || null)}
               onFocus={() => setSummariesWanted(true)}
               disabled={loading || youtube.editJob.active}
-              className="min-w-0 w-full sm:w-72 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm disabled:opacity-50"
+              className="w-40 min-w-0 max-w-[45vw] sm:w-72 sm:max-w-none bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm disabled:opacity-50"
             >
               <option value="">{loading ? 'Loading projects…' : 'Select a project…'}</option>
               {sortedProjects.map((project) => (
                 <option key={project.id} value={project.id}>{formatProjectPickerLabel(project.name)}</option>
               ))}
             </select>
-            {selected && (
-              <details className="min-w-0">
-                <summary className="min-h-[44px] cursor-pointer rounded border border-port-border px-2 py-1.5 text-sm">Project actions · v{selected.version || 1}</summary>
-                <div className="flex flex-wrap items-center gap-1 pt-1.5 pb-0">
-                <button
-                  type="button"
-                  onClick={handleRename}
-                  title="Rename this version"
-                  aria-label="Rename project"
-                  className="flex min-h-[44px] items-center justify-center gap-1 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm sm:min-h-0"
-                >
-                  <Pencil size={15} aria-hidden="true" /> Rename
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleClone()}
-                  disabled={cloning}
-                  title={`Create an editable v${(selected.version || 1) + 1}; keep scene media attached and clear the final render`}
-                  className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm disabled:opacity-50 sm:min-h-0 sm:min-w-0"
-                >
-                  <Copy size={15} aria-hidden="true" /> <span className="max-sm:sr-only">{cloning ? 'Forking…' : `Fork v${(selected.version || 1) + 1}`}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleClone({ variant: 'video-generation' })}
-                  disabled={cloning}
-                  title="Keep the song and storyboard; start fresh cast, sets and mood board with footage rendering. No generation starts."
-                  className="min-h-[44px] rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm disabled:opacity-50 sm:min-h-0"
-                >
-                  Fork for video generation
-                </button>
-                {isConfirmingDelete(selected.id) ? (
-                  <ConfirmButtonPair
-                    prompt="Delete?"
-                    confirmText="Delete"
-                    ariaLabel={`Confirm delete project ${selected.name}`}
-                    confirmAriaLabel={`Confirm delete project ${selected.name}`}
-                    onConfirm={() => confirmDelete(() => handleDelete(selected.id))}
-                    onCancel={cancelDelete}
-                  />
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteRequest(selected.id)}
-                    title="Delete project"
-                    aria-label="Delete project"
-                    className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded border border-port-border px-2 py-1.5 text-sm text-port-error sm:min-h-0 sm:min-w-0"
-                  >
-                    <Trash2 size={15} />
-                  </button>
-                )}
-                </div>
-              </details>
-            )}
             {!selected && (
               <>
             <button
@@ -1498,7 +1507,20 @@ export default function MusicVideo() {
           </div>
         )}
         {selected && (
-          <ProjectSettingsDrawer open={!!settingsTab} tab={settingsTab || 'project'} onTabChange={setSettingsTab} onClose={() => setSettingsTab(null)} board={board} />
+          <ProjectSettingsDrawer open={!!settingsTab} tab={settingsTab || 'project'} onTabChange={setSettingsTab} onClose={() => setSettingsTab(null)}
+            board={board}
+            manageActions={(
+              <ProjectManageActions
+                project={selected}
+                cloning={cloning}
+                onFork={(options) => handleClone(options)}
+                confirmingDelete={isConfirmingDelete(selected.id)}
+                onDeleteRequest={() => handleDeleteRequest(selected.id)}
+                onDeleteConfirm={() => confirmDelete(() => handleDelete(selected.id))}
+                onDeleteCancel={cancelDelete}
+              />
+            )}
+          />
         )}
         {selected && (
           <MusicVideoLayout
@@ -1521,7 +1543,8 @@ export default function MusicVideo() {
             lead={(
               <StageChecklist
                 items={stageChecklist(activeStage, selected, productionReview.readiness, publish)}
-                onAction={(action) => goToStage(action.stage || activeStage, action.anchor, action.params)}
+                onAction={runChecklistAction}
+                busy={castSets.busy || productionReview.busy}
                 onRevert={productionReview.revert}
                 headerAnchor={nextAction?.kind === 'goto' ? nextAction.anchor : null}
               />
@@ -1551,6 +1574,8 @@ export default function MusicVideo() {
                   onReattachRender: () => renderJob.reattach(selected.id),
                   onResumeAutonomous: () => autonomous.resume(),
                   onResumeProduction: (runId, opts) => production.resume(runId, opts),
+                  onKeepApproval: keepApproval,
+                  onRevertApproval: productionReview.revert,
                 }}
               />
             )}

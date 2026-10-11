@@ -131,6 +131,7 @@ vi.mock('../services/musicVideo/castAndSetsService.js', () => ({
   regenerateCastAndSets: vi.fn(async () => ({ status: 'running' })),
   editCastAndSetsDirection: vi.fn(async () => ({ status: 'running' })),
   resumeCastAndSets: vi.fn(async () => ({ status: 'running' })),
+  applyCastAndSetsFeedback: vi.fn(async () => ({ status: 'running' })),
 }));
 
 import { authGate, hostControlRouteGate } from '../services/authGate.js';
@@ -153,7 +154,7 @@ import { generateMusicVideoCode, regenerateMusicVideoCodeSection } from '../serv
 import { generateMixedMediaDocument, reviseMixedMediaEvents, regenerateMixedMediaSection } from '../services/musicVideo/documentGeneration.js';
 import { startAutoReview, resumeAutoReview } from '../services/musicVideo/autoReviewService.js';
 import { startProduction, resumeProduction } from '../services/musicVideo/productionService.js';
-import { startCastAndSets, regenerateCastAndSets, editCastAndSetsDirection, resumeCastAndSets } from '../services/musicVideo/castAndSetsService.js';
+import { startCastAndSets, regenerateCastAndSets, editCastAndSetsDirection, resumeCastAndSets, applyCastAndSetsFeedback } from '../services/musicVideo/castAndSetsService.js';
 
 let ownerSession;
 const id = '00000000-0000-4000-8000-000000000001';
@@ -178,6 +179,7 @@ const musicVideoAuthoring = [
   [`/api/music-video/${id}/cast-and-sets/regenerate`, { ...picker }, regenerateCastAndSets, 202, 'post'],
   [`/api/music-video/${id}/cast-and-sets/direction`, { protagonist: { movement: 'Example movement' } }, editCastAndSetsDirection, 202, 'patch'],
   [`/api/music-video/${id}/cast-and-sets/resume`, { ...picker }, resumeCastAndSets, 202, 'post'],
+  [`/api/music-video/${id}/cast-and-sets/feedback`, { text: 'Fewer light sources', ...picker }, applyCastAndSetsFeedback, 202, 'post'],
   [`/api/music-video/${id}/code/generate`, { ...picker }, generateMusicVideoCode, 200, 'post'],
   [`/api/music-video/${id}/code/sections/example-section/regenerate`, { ...picker }, regenerateMusicVideoCodeSection, 200, 'post'],
   [`/api/music-video/${id}/composition/document/generate`, { ...picker }, generateMixedMediaDocument, 201, 'post'],

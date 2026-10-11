@@ -730,6 +730,36 @@ describe('prepareVideoGenParams — i2v reference mode (#4874)', () => {
   });
 });
 
+describe('prepareVideoGenParams — fal end frame catalog check (#10700)', () => {
+  const falSettings = () => ({ imageGen: { local: { pythonPath: '/usr/bin/python3' } }, videoGen: { fal: { apiKey: 'test-key' } } });
+  beforeEach(() => { copyFileMock.mockClear(); unlinkMock.mockClear(); });
+
+  it('refuses an end frame for a fal model whose catalog entry takes none, and removes the temp upload', async () => {
+    getSettings.mockResolvedValueOnce(falSettings());
+    const lastImage = upload('lastImage', 'end.png');
+    await expect(prepare(
+      { backend: 'fal', falModelId: 'fal-ai/veo3.1/fast/image-to-video', mode: 'image', sourceImageFile: 'face.png' },
+      { lastImage },
+    )).rejects.toMatchObject({
+      status: 400,
+      code: 'VALIDATION_ERROR',
+      message: expect.stringContaining('takes no end frame'),
+    });
+    expect(unlinkMock).toHaveBeenCalledWith(lastImage.path);
+    expect(copyFileMock).not.toHaveBeenCalled();
+  });
+
+  it('stages a catalogued end frame durably and hands it to the hosted job', async () => {
+    getSettings.mockResolvedValueOnce(falSettings());
+    const prepared = await prepare(
+      { backend: 'fal', mode: 'image', sourceImageFile: 'face.png' },
+      { lastImage: upload('lastImage', 'end.png') },
+    );
+    expect(posix(prepared.lastImagePath)).toMatch(/^\/mock\/uploads\/video-last-.+\.png$/);
+    expect(prepared.uploadedTempPaths).toEqual([prepared.lastImagePath]);
+  });
+});
+
 describe('prepareVideoGenParams — standalone fal lip sync', () => {
   const LIPSYNC = 'minimax/h3-max/lip-sync/image-to-video';
   const falSettings = () => ({ imageGen: { local: { pythonPath: '/usr/bin/python3' } }, videoGen: { fal: { apiKey: 'test-key' } } });

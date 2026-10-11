@@ -20,6 +20,7 @@ import { Link, useNavigate, useLocation } from 'react-router';
 import { Sparkles, Plus, Search, FileInput, Loader2, RefreshCw, Wand2, X, LayoutGrid, Library, FolderPlus, Settings as SettingsIcon } from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
 import Drawer from '../components/Drawer';
+import PageHeader from '../components/PageHeader';
 import toast from '../components/ui/Toast';
 import {
   listCatalogIngredients,
@@ -549,24 +550,27 @@ export default function Catalog() {
   );
 
   return (
-    <>
+    <div className="flex h-full min-h-0 flex-col">
       {settingsDrawer}
-      {/* Header. The toolbar wraps to its own rows on a phone because the five
-          controls together need ~350px and a 320px viewport gives 288px.
-          A label too long to survive that (Sync's, at `lg`; the action bar's, at
-          `sm`) hides its tail and keeps the full wording in aria-label, so the
+      {/* Toolbar wraps to its own rows on a phone because the five controls
+          together need ~350px and a 320px viewport gives 288px. A label too
+          long to survive that (Sync's, at `lg`; the action bar's, at `sm`)
+          hides its tail and keeps the full wording in aria-label, so the
           accessible name never depends on viewport width — the visible text is
           always a prefix of it, per WCAG 2.5.3 label-in-name. The reveal
           breakpoint differs per button; only the prefix relationship is
           invariant (asserted in Catalog.test.jsx). */}
-      <div className="flex items-center justify-between mb-4 sm:mb-6 flex-wrap gap-3">
-        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-          <Sparkles className="w-6 h-6 shrink-0 text-port-accent" aria-hidden="true" />
-          <h1 className="text-xl sm:text-2xl font-bold text-white">Catalog</h1>
-          <span className="text-sm text-gray-500 whitespace-nowrap">
-            {totalCount} ingredient{totalCount === 1 ? '' : 's'}
+      <PageHeader
+        icon={Sparkles}
+        title={(
+          <span className="inline-flex items-baseline gap-2">
+            Catalog
+            <span className="text-sm font-normal text-gray-500 whitespace-nowrap">
+              {totalCount} ingredient{totalCount === 1 ? '' : 's'}
+            </span>
           </span>
-        </div>
+        )}
+        actions={(
         <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
           {/* View toggle (Grid ↔ Albums), persisted in the URL. */}
           <div className="inline-flex w-full sm:w-auto rounded-lg border border-port-border overflow-hidden" role="group" aria-label="Catalog view">
@@ -628,8 +632,9 @@ export default function Catalog() {
             New
           </button>
         </div>
-      </div>
-
+        )}
+      />
+      <div className="flex-1 min-h-0 overflow-auto p-4">
       {/* Search sits directly under the header so the primary way to find an
           ingredient stays above the fold on a phone, ahead of the filters. */}
       <div className="relative mb-4">
@@ -889,7 +894,7 @@ export default function Catalog() {
           making the compositor re-sample the area behind the bar on every scroll
           frame over a 60-card grid. */}
       {selectedIds.size > 0 && (
-        <div className="sticky bottom-0 left-0 right-0 mt-4 -mx-4 md:-mx-6 px-4 md:px-6 py-3 bg-port-card/95 sm:backdrop-blur border-t border-port-border flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3 z-20">
+        <div className="sticky bottom-0 left-0 right-0 mt-4 -mx-4 px-4 py-3 bg-port-card/95 sm:backdrop-blur border-t border-port-border flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3 z-20">
           <span className="text-sm text-white font-medium">
             {selectedIds.size} selected
           </span>
@@ -1011,7 +1016,8 @@ export default function Catalog() {
           </div>
         </div>
       )}
-    </>
+      </div>
+    </div>
   );
 }
 

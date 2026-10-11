@@ -114,21 +114,25 @@ describe('composition-document render plan', () => {
     }
   });
 
-  it('refuses a full render and an excerpt over a stale performance take, like a footage render (#9266)', async () => {
+  // Uniquely catches a draft blocked by a stale lip-sync take, or a final render drawing one.
+  it('refuses a full render over a stale performance take (#9266), while a draft draws it as a cutaway', async () => {
     const id = await documentProject();
     await importDocumentTemplate(id);
     await projects.mutateProjectRecord(id, (current) => ({ project: {
       ...current,
-      scenes: [{ sceneId: 'mvs-1', order: 0, shotMode: 'performance', startSec: 1, endSec: 3, videoHistoryId: 'clip-1', takes: [] }],
+      scenes: [{ sceneId: 'mvs-1', order: 0, shotMode: 'performance', startSec: 1, endSec: 3, videoHistoryId: 'clip-1', referenceImageId: 'still.png', takes: [] }],
     } }));
     encodeDocumentComposition.mockClear();
     for (let attempt = 0; attempt < 2; attempt++) {
       await expect(renderMusicVideo(id)).rejects.toMatchObject({
         status: 422, code: 'STALE_PERFORMANCE_TAKES', context: { stale: [{ sceneId: 'mvs-1', reason: 'not-lip-synced' }] },
       });
-      await expect(startExcerptRender(id, { startSec: 1, endSec: 3 })).rejects.toMatchObject({ status: 422, code: 'STALE_PERFORMANCE_TAKES' });
     }
     expect(encodeDocumentComposition).not.toHaveBeenCalled();
+    await startExcerptRender(id, { startSec: 1, endSec: 3 });
+    await vi.waitFor(() => expect(encodeDocumentComposition).toHaveBeenCalledOnce());
+    expect(encodeDocumentComposition.mock.calls[0][0].project.scenes[0]).toMatchObject({ shotMode: 'cutaway', videoHistoryId: null, referenceImageId: 'still.png' });
+    expect((await projects.getProject(id)).scenes[0]).toMatchObject({ shotMode: 'performance', videoHistoryId: 'clip-1' });
   });
 });
 

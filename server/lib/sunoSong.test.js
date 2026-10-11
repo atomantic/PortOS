@@ -47,10 +47,22 @@ describe('parseSunoSongPage', () => {
     expect(parseSunoSongPage(html, ID)).toEqual({
       title: 'You Are the Room',
       lyrics,
-      style: 'industrial, glitch',
+      style: 'industrial, glitch', excludedStylesKnown: false,
       audioUrl: `https://cdn1.suno.ai/${ID}.mp3`,
       imageUrl: `https://cdn2.suno.ai/image_large_${ID}.jpeg`,
     });
+  });
+
+  it('folds Suno\'s excluded styles into the style as minus terms, once each', () => {
+    const metadata = { prompt: 'words', tags: 'synth-pop, \u2011bubblegum pop', negative_tags: 'Bubblegum Pop, metal' };
+    const html = page([`4:${JSON.stringify({ song: { id: ID, title: 'Full', metadata } })}\n`]);
+    expect(parseSunoSongPage(html, ID)).toMatchObject({ style: 'synth-pop, \u2011bubblegum pop, -metal', excludedStylesKnown: true });
+  });
+
+  it('reads excluded styles kept beside the metadata, as Suno lists them without minus signs', () => {
+    const record = { id: ID, title: 'Full', negative_tags: 'metal, cutesy', metadata: { prompt: 'words', tags: 'synth-pop' } };
+    const html = page([`4:${JSON.stringify({ song: record })}\n`]);
+    expect(parseSunoSongPage(html, ID)).toMatchObject({ style: 'synth-pop, -metal, -cutesy', excludedStylesKnown: true });
   });
 
   it('prefers the full record over a slimmer listing of the same song', () => {
@@ -67,11 +79,11 @@ describe('parseSunoSongPage', () => {
     const head = '<meta property="og:title" content="Rock &amp; Roll | Suno"><meta property="og:image" content="https://evil.example/x.jpg">'
       + `<meta property="og:audio" content="https://cdn1.suno.ai/${ID}.mp3">`;
     expect(parseSunoSongPage(page([], head), ID)).toEqual({
-      title: 'Rock & Roll', lyrics: '', style: '', audioUrl: `https://cdn1.suno.ai/${ID}.mp3`, imageUrl: null,
+      title: 'Rock & Roll', lyrics: '', style: '', excludedStylesKnown: false, audioUrl: `https://cdn1.suno.ai/${ID}.mp3`, imageUrl: null,
     });
   });
 
   it('returns empty fields for a page that carries nothing (a challenge page)', () => {
-    expect(parseSunoSongPage('<html>Just a moment…</html>', ID)).toEqual({ title: '', lyrics: '', style: '', audioUrl: null, imageUrl: null });
+    expect(parseSunoSongPage('<html>Just a moment…</html>', ID)).toEqual({ title: '', lyrics: '', style: '', excludedStylesKnown: false, audioUrl: null, imageUrl: null });
   });
 });

@@ -19,7 +19,6 @@ import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import Field from '../ui/FormField';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
-import { DEFAULT_NEGATIVE_PROMPT } from '../../lib/imageGenDefaults';
 import { formatTimecode } from '../../utils/formatters';
 import ArtistPicker from './ArtistPicker';
 import AlbumTrackPicker from './AlbumTrackPicker';
@@ -144,7 +143,6 @@ export default function AlbumsManager() {
     setStartingGen(true);
     const queued = await generateImage({
       prompt: buildCoverPrompt(form),
-      negativePrompt: DEFAULT_NEGATIVE_PROMPT,
       width: 1024,
       height: 1024,
     }, { silent: true }).catch((err) => ({ error: err }));

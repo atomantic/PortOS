@@ -45,6 +45,9 @@ export function useSocketResource(fetchFn, { namespace, events, resourceKey = nu
       if (invalidation) invalidations.push(invalidation);
       else reconcile = true;
       if (disposed) return Promise.resolve();
+      // A newer invalidation makes the active read obsolete, even while its
+      // trailing reconciliation waits for that request to settle.
+      revision += 1;
       if (pending) {
         dirty = true;
         return pending;

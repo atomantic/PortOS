@@ -16,7 +16,8 @@
 
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router';
-import { Plus, Sparkles, Trash2, Clock, Cpu, Pause, Play, Zap } from 'lucide-react';
+import { CalendarClock, Plus, Sparkles, Trash2, Clock, Cpu, Pause, Play, Zap } from 'lucide-react';
+import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import EmptyState from '../components/EmptyState';
 import toast from '../components/ui/Toast';
@@ -128,118 +129,117 @@ export default function CreativeCommissions() {
   );
 
   return (
-    <div className="max-w-5xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-3">
-          <Sparkles className="w-6 h-6 text-port-accent" />
-          <div>
-            <h1 className="text-xl font-semibold text-gray-100">Creative Commissions</h1>
-            <p className="text-sm text-gray-500">Standing briefs that create on a schedule and steer by your taste</p>
-          </div>
-        </div>
-        <button
-          onClick={() => navigate('/creative-commission/new')}
-          className="flex items-center gap-2 bg-port-accent hover:bg-blue-600 text-white px-3 py-2 rounded text-sm font-medium"
-        >
-          <Plus className="w-4 h-4" /> New Commission
-        </button>
-      </div>
-
-      {loading ? (
-        <PageSkeleton header="none" label="Loading commissions" cards={3} sidebar={false} />
-      ) : sorted.length === 0 ? (
-        <EmptyState
-          icon={Sparkles}
-          title="No commissions yet"
-          message="Create a standing brief like “every night at 2am, make me something surreal” and it runs unattended."
-          actionTo="/creative-commission/new"
-          actionLabel="Create your first commission"
-        />
-      ) : (
-        <div className="space-y-2">
-          {sorted.map((c) => (
-            <div
-              key={c.id}
-              className="flex items-center gap-3 bg-port-card border border-port-border rounded-lg p-3 hover:border-port-accent/50 transition-colors"
-            >
-              <button
-                className="flex-1 text-left min-w-0"
-                onClick={() => navigate(`/creative-commission/${encodeURIComponent(c.id)}`)}
+    <div className="flex h-full min-h-0 flex-col">
+      <PageHeader
+        icon={CalendarClock}
+        title="Creative Commissions"
+        subtitle="Standing briefs that create on a schedule and steer by your taste"
+        actions={(
+          <button
+            onClick={() => navigate('/creative-commission/new')}
+            className="flex items-center gap-2 bg-port-accent hover:bg-blue-600 text-white px-3 py-2 rounded text-sm font-medium"
+          >
+            <Plus className="w-4 h-4" /> New Commission
+          </button>
+        )}
+      />
+      <div className="flex-1 min-h-0 overflow-auto p-4">
+        {loading ? (
+          <PageSkeleton header="none" label="Loading commissions" cards={3} sidebar={false} />
+        ) : sorted.length === 0 ? (
+          <EmptyState
+            icon={Sparkles}
+            title="No commissions yet"
+            message="Create a standing brief like “every night at 2am, make me something surreal” and it runs unattended."
+            actionTo="/creative-commission/new"
+            actionLabel="Create your first commission"
+          />
+        ) : (
+          <div className="space-y-2">
+            {sorted.map((c) => (
+              <div
+                key={c.id}
+                className="flex items-center gap-3 bg-port-card border border-port-border rounded-lg p-3 hover:border-port-accent/50 transition-colors"
               >
-                <div className="flex items-center gap-2">
-                  <span className="text-gray-100 font-medium truncate">{c.name}</span>
-                  <span className={`text-[10px] uppercase px-1.5 py-0.5 rounded ${c.enabled ? 'bg-port-success/20 text-port-success' : 'bg-gray-700 text-gray-400'}`}>
-                    {c.enabled ? 'Active' : 'Paused'}
-                  </span>
-                  <span className="text-[10px] uppercase px-1.5 py-0.5 rounded bg-port-accent/20 text-port-accent">{c.targetAbility}</span>
-                </div>
-                <div className="flex items-center gap-3 mt-1 text-xs text-gray-500">
-                  <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> {describeSchedule(c.schedule)}</span>
-                  <span className="flex items-center gap-1" title="AI provider that writes the treatment & plan">
-                    <Cpu className="w-3 h-3" /> {describeAssignment(c.assignment)}
-                  </span>
-                  {Array.isArray(c.runs) && c.runs.length > 0 && (
-                    <span>Last run {timeAgo(c.runs[c.runs.length - 1].ranAt)}</span>
-                  )}
-                </div>
-              </button>
-              <button
-                onClick={() => handleRunNow(c)}
-                disabled={runningIds.has(c.id)}
-                title="Run now (ignores schedule)"
-                aria-label={`Run commission ${c.name} now`}
-                className="p-2 text-gray-400 hover:text-port-accent disabled:opacity-50"
-              >
-                <Zap className={`w-4 h-4 ${runningIds.has(c.id) ? 'animate-pulse text-port-accent' : ''}`} />
-              </button>
-              <button
-                onClick={() => toggleEnabled(c)}
-                title={c.enabled ? COMMISSION_STOP_COPY.pauseTitle : COMMISSION_STOP_COPY.resumeTitle}
-                aria-label={c.enabled ? 'Pause' : 'Resume'}
-                className="p-2 text-gray-400 hover:text-gray-100"
-              >
-                {c.enabled ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-              </button>
-              {isConfirming(c.id) ? (
-                <ConfirmButtonPair
-                  prompt="Delete?"
-                  ariaLabel={`Confirm delete commission ${c.name}`}
-                  onConfirm={() => confirmDelete(() => handleDelete(c))}
-                  onCancel={cancelDelete}
-                />
-              ) : (
                 <button
-                  type="button"
-                  onClick={() => requestDelete(c.id)}
-                  title={COMMISSION_STOP_COPY.deleteTitle}
-                  aria-label={`Delete commission ${c.name}`}
-                  className="p-2 text-gray-400 hover:text-port-error"
+                  className="flex-1 text-left min-w-0"
+                  onClick={() => navigate(`/creative-commission/${encodeURIComponent(c.id)}`)}
                 >
-                  <Trash2 className="w-4 h-4" />
+                  <div className="flex items-center gap-2">
+                    <span className="text-gray-100 font-medium truncate">{c.name}</span>
+                    <span className={`text-[10px] uppercase px-1.5 py-0.5 rounded ${c.enabled ? 'bg-port-success/20 text-port-success' : 'bg-gray-700 text-gray-400'}`}>
+                      {c.enabled ? 'Active' : 'Paused'}
+                    </span>
+                    <span className="text-[10px] uppercase px-1.5 py-0.5 rounded bg-port-accent/20 text-port-accent">{c.targetAbility}</span>
+                  </div>
+                  <div className="flex items-center gap-3 mt-1 text-xs text-gray-500">
+                    <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> {describeSchedule(c.schedule)}</span>
+                    <span className="flex items-center gap-1" title="AI provider that writes the treatment & plan">
+                      <Cpu className="w-3 h-3" /> {describeAssignment(c.assignment)}
+                    </span>
+                    {Array.isArray(c.runs) && c.runs.length > 0 && (
+                      <span>Last run {timeAgo(c.runs[c.runs.length - 1].ranAt)}</span>
+                    )}
+                  </div>
                 </button>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
+                <button
+                  onClick={() => handleRunNow(c)}
+                  disabled={runningIds.has(c.id)}
+                  title="Run now (ignores schedule)"
+                  aria-label={`Run commission ${c.name} now`}
+                  className="p-2 text-gray-400 hover:text-port-accent disabled:opacity-50"
+                >
+                  <Zap className={`w-4 h-4 ${runningIds.has(c.id) ? 'animate-pulse text-port-accent' : ''}`} />
+                </button>
+                <button
+                  onClick={() => toggleEnabled(c)}
+                  title={c.enabled ? COMMISSION_STOP_COPY.pauseTitle : COMMISSION_STOP_COPY.resumeTitle}
+                  aria-label={c.enabled ? 'Pause' : 'Resume'}
+                  className="p-2 text-gray-400 hover:text-gray-100"
+                >
+                  {c.enabled ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                </button>
+                {isConfirming(c.id) ? (
+                  <ConfirmButtonPair
+                    prompt="Delete?"
+                    ariaLabel={`Confirm delete commission ${c.name}`}
+                    onConfirm={() => confirmDelete(() => handleDelete(c))}
+                    onCancel={cancelDelete}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => requestDelete(c.id)}
+                    title={COMMISSION_STOP_COPY.deleteTitle}
+                    aria-label={`Delete commission ${c.name}`}
+                    className="p-2 text-gray-400 hover:text-port-error"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
 
-      <Drawer
-        open={creating}
-        onClose={closeDrawer}
-        title="New Commission"
-        size="md"
-        closeOnEsc={false}
-        closeOnBackdrop={false}
-      >
-        <CommissionConfigForm
-          form={form}
-          patchForm={patchForm}
-          saving={saving}
-          onSave={handleCreate}
-          onCancel={closeDrawer}
-          saveLabel="Create"
-        />
-      </Drawer>
+        <Drawer
+          open={creating}
+          onClose={closeDrawer}
+          title="New Commission"
+          size="md"
+          closeOnEsc={false}
+          closeOnBackdrop={false}
+        >
+          <CommissionConfigForm
+            form={form}
+            patchForm={patchForm}
+            saving={saving}
+            onSave={handleCreate}
+            onCancel={closeDrawer}
+            saveLabel="Create"
+          />
+        </Drawer>
+      </div>
     </div>
   );
 }

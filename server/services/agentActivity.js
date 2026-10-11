@@ -73,6 +73,7 @@ export async function logActivity(activity) {
     status,
     result,
     error,
+    code,
     timestamp
   } = activity;
 
@@ -90,6 +91,7 @@ export async function logActivity(activity) {
     status,
     result,
     error,
+    ...(typeof code === 'string' && code ? { code } : {}),
     timestamp: timestamp || date.toISOString()
   };
 

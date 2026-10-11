@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import ProductionReviewPanel from './ProductionReviewPanel.jsx';
 
@@ -203,44 +203,46 @@ describe('Production proof playback evidence', () => {
     await waitFor(() => expect(screen.getByLabelText('Requested change').value).toBe(''));
   });
 
-  it('offers a stage revision for open change requests and explains the blocked approval', async () => {
-    const review = { ...reviewFixture(), revise: vi.fn(async () => ({ revision: { stage: 'storyboard', sceneIds: ['scene-a', 'scene-b'] } })) };
+  it('names the open change request that blocks approval in one line, leaving its controls to the step checklist', () => {
+    const review = reviewFixture();
     review.readiness.storyboard = { approved: false, problems: ['Resolve storyboard feedback for shot: Chorus: Land the leap on the downbeat'] };
     const withRequests = { ...project, scenes: [{ sceneId: 'scene-a', label: 'Chorus', startSec: 0, endSec: 10 }],
       productionReview: { ...project.productionReview, feedback: [
         { id: 'fb-open', stage: 'storyboard', target: 'shot: Chorus', text: 'Land the leap on the downbeat', decision: 'request-changes', basis: 'board' },
         { id: 'fb-done', stage: 'storyboard', target: 'shot: Intro', text: 'Already handled', decision: 'request-changes', basis: 'board', resolvedAt: '2026-01-01T00:00:00.000Z' },
-        { id: 'fb-proof', stage: 'proof', target: 'frame: 0:04', text: 'Prop lands late', decision: 'request-changes', basis: 'same-creative-basis' },
       ] } };
-    const board = render(<ProductionReviewPanel project={withRequests} review={review} onOpenArtifact={vi.fn()} stage="storyboard" />);
-    expect(screen.queryByRole('group', { name: 'Animated proof change requests' })).toBeNull();
-    const requests = screen.getByRole('group', { name: 'Lyric-timed storyboard change requests' });
-    expect(requests.textContent).toContain('Resolve these change requests to approve.');
-    expect(requests.textContent).toContain('Land the leap on the downbeat');
-    expect(requests.textContent).not.toContain('Already handled');
-    fireEvent.click(within(requests).getByRole('button', { name: 'Revise from feedback' }));
-    expect(review.revise).toHaveBeenCalledWith('storyboard');
-    await waitFor(() => expect(requests.textContent).toContain('Revised 2 shots. Review them, then resolve each request.'));
-    // A document-mode proof with no imported source can be re-authored as a generated candidate.
-    board.unmount();
-    render(<ProductionReviewPanel project={withRequests} review={review} onOpenArtifact={vi.fn()} stage="proof" />);
-    expect(screen.queryByRole('group', { name: 'Lyric-timed storyboard change requests' })).toBeNull();
-    const proofRequests = screen.getByRole('group', { name: 'Animated proof change requests' });
-    expect(within(proofRequests).getByRole('button', { name: 'Revise from feedback' })).toBeTruthy();
+    render(<ProductionReviewPanel project={withRequests} review={review} onOpenArtifact={vi.fn()} stage="storyboard" />);
+    const box = screen.getByRole('region', { name: 'Approve: Lyric-timed storyboard' });
+    expect(within(box).getByRole('status').textContent).toBe('Resolve the change request on shot: Chorus first.');
+    expect(within(box).queryByRole('button', { name: 'Revise from feedback' })).toBeNull();
   });
 
-  it('keeps the hash-selected art approval open and highlighted when readiness arrives, until approved', () => {
+  it('keeps the art approval to one quiet line while there is no direction or guide to review', () => {
+    const review = reviewFixture(); review.readiness.art = { approved: false, problems: ['Attach a visual cast/environment sheet from Development artifacts.'] };
+    render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="art" />);
+    const box = screen.getByRole('region', { name: 'Approve: Art direction' });
+    expect(box.textContent).toContain('Opens once the art direction is written and a visual guide is chosen.');
+    expect(within(box).queryByRole('button', { name: 'Approve art direction' })).toBeNull();
+    expect(box.textContent).not.toContain('Attach a visual cast');
+    expect(box.className).not.toContain('border-port-accent');
+  });
+
+  it('keeps the hash-selected art approval open and highlighted when readiness arrives, until approved', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true })));
     window.location.hash = '#mv-review-art';
+    const guided = { ...project, devArtifacts: [{ id: 'guide', title: 'Synthetic visual guide', version: 1, mimeType: 'image/png' }],
+      productionReview: { ...project.productionReview, draft: { ...project.productionReview.draft, guideArtifactId: 'guide' } } };
     const review = reviewFixture(); review.readiness.art.approved = false;
-    const view = render(<ProductionReviewPanel project={project} review={{ ...review, readiness: null }} onOpenArtifact={vi.fn()} stage="art" />);
-    view.rerender(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="art" />);
+    const view = render(<ProductionReviewPanel project={guided} review={{ ...review, readiness: null }} onOpenArtifact={vi.fn()} stage="art" />);
+    view.rerender(<ProductionReviewPanel project={guided} review={review} onOpenArtifact={vi.fn()} stage="art" />);
     const box = document.getElementById('mv-review-art');
     expect(box).toBe(screen.getByRole('region', { name: 'Approve: Art direction' }));
     expect(box.tagName).toBe('SECTION');
     expect(within(box).getByRole('heading', { name: 'Approve the art direction' })).toBeTruthy();
     expect(box.className).toContain('border-port-accent');
     const approved = reviewFixture();
-    view.rerender(<ProductionReviewPanel project={project} review={approved} onOpenArtifact={vi.fn()} stage="art" />);
+    view.rerender(<ProductionReviewPanel project={guided} review={approved} onOpenArtifact={vi.fn()} stage="art" />);
+    await act(async () => {});
     expect(within(box).getByRole('heading', { name: 'Art direction approved' })).toBeTruthy();
     expect(box.className).not.toContain('border-port-accent');
   });
@@ -316,26 +318,43 @@ describe('Production proof playback evidence', () => {
 
 describe('Approval problems with unsaved edits', () => {
   it.each([
-    [['Cover the master with timed shots.']],
-    [['Cover the master with timed shots.', 'Resolve storyboard feedback for shot: chorus: hold longer']],
-  ])('lists every storyboard problem while planning edits are unsaved (%j)', (problems) => {
+    [['Render and watch a current animated chorus proof with the master song.']],
+    [['Render and watch a current animated chorus proof with the master song.', 'Second problem.']],
+  ])('lists every proof problem while planning edits are unsaved (%j)', (problems) => {
     const review = reviewFixture();
-    review.readiness.storyboard = { approved: false, problems };
+    review.readiness.proof = { ...review.readiness.proof, approved: false, problems };
     function Board() {
       const planning = useState({ ...project.productionReview.draft, cast: 'Edited cast' });
-      return <ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="storyboard" planning={planning} />;
+      return <ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="proof" planning={planning} />;
     }
     render(<Board />);
     expect(screen.getByText('Save your planning edits first.')).toBeTruthy();
     for (const problem of problems) expect(screen.getByText(problem)).toBeTruthy();
   });
 
-  it('shows the first problem once, on the help line, when nothing is unsaved', () => {
+  it('shows the first proof problem once, on the help line, and names an open change request ahead of it', () => {
+    const review = reviewFixture();
+    review.readiness.proof = { ...review.readiness.proof, approved: false, problems: ['First problem.', 'Second problem.', 'Resolve proof feedback for chorus: hold longer'] };
+    const { unmount } = render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="proof" />);
+    expect(screen.getAllByText(/First problem\./)).toHaveLength(1);
+    expect(screen.getByText('Second problem.')).toBeTruthy();
+    expect(screen.queryByText(/hold longer/)).toBeNull();
+    unmount();
+    const withRequest = { ...project, productionReview: { ...project.productionReview, feedback: [
+      { id: 'fb-proof', stage: 'proof', target: 'chorus', text: 'hold longer', decision: 'request-changes', basis: 'same-creative-basis' }] } };
+    render(<ProductionReviewPanel project={withRequest} review={review} onOpenArtifact={vi.fn()} stage="proof" />);
+    expect(screen.getByText('Resolve the change request on chorus first.')).toBeTruthy();
+    expect(screen.getByText('First problem.')).toBeTruthy();
+    expect(screen.getByText('Second problem.')).toBeTruthy();
+  });
+
+  it('points the storyboard card at the step checklist in one line instead of repeating its items', () => {
     const review = reviewFixture();
     review.readiness.storyboard = { approved: false, problems: ['Cover the master with timed shots.', 'Second problem.'] };
     render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="storyboard" />);
-    expect(screen.getAllByText(/Cover the master with timed shots\./)).toHaveLength(1);
-    expect(screen.getByText('Second problem.')).toBeTruthy();
+    expect(screen.getByText('Finish the 2 open items above first.')).toBeTruthy();
+    expect(screen.queryByText(/Cover the master with timed shots\./)).toBeNull();
+    expect(screen.queryByText('Second problem.')).toBeNull();
   });
 });
 
@@ -410,5 +429,24 @@ describe('storyboard camera notes (#10589)', () => {
     review.readiness.storyboard = { approved: false, problems: [], camera: { staticRuns: [], snaplessChoruses: [], notes: [] } };
     render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="storyboard" />);
     expect(screen.queryByRole('note', { name: 'Camera variety notes' })).toBeNull();
+  });
+});
+
+describe('Board scenes planned without draft shots', () => {
+  it('counts and lists them in the storyboard approval card with the rows the server derived', () => {
+    const planned = { ...project, scenes: [
+      { sceneId: 's1', label: 'Opening', startSec: 0, endSec: 4 },
+      { sceneId: 's2', label: 'Chorus', startSec: 4, endSec: 8 },
+    ] };
+    const review = reviewFixture();
+    review.readiness.storyboard = { approved: false, problems: [], shots: [
+      { sceneId: 's1', lyricCueIds: [], action: 'She looks up from the monitor', staging: 'Medium shot', camera: 'Handheld drift', transition: 'Cut' },
+      { sceneId: 's2', lyricCueIds: [], action: 'Film spills onto the floor', staging: 'Wide shot', camera: 'Handheld drift', transition: 'Cut' },
+    ] };
+    render(<ProductionReviewPanel project={planned} review={review} onOpenArtifact={vi.fn()} stage="storyboard" />);
+    expect(screen.getByText(/Watch the storyboard in the player, then approve\. 2 storyboard shots/)).toBeTruthy();
+    expect(screen.queryByText(/No storyboard shots to review/)).toBeNull();
+    // The card's shot list and the shot editor both start from the derived row.
+    expect(screen.getAllByText('She looks up from the monitor')).toHaveLength(2);
   });
 });

@@ -48,6 +48,78 @@ describe('performance speaker save boundary', () => {
   });
 });
 
+describe('music-driven performance', () => {
+  it('switches a shot between cutaway, lip-sync and music-driven, and plans the music-driven take on the audio-to-video model', () => {
+    const onSave = vi.fn();
+    function Harness() {
+      const [scene, setScene] = useState({ sceneId: 's1', shotMode: 'cutaway', startSec: 10, endSec: 13.5, referenceImageId: 'frame.png', takes: [] });
+      return <SceneCard scene={scene} index={0} lipSyncBackend="fal" songDurationSec={60} falVideoSettings={{}}
+        onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
+    }
+    render(<Harness />);
+    const shot = screen.getByLabelText('Shot');
+    fireEvent.change(shot, { target: { value: 'music' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { shotMode: 'performance', performanceStyle: 'music' });
+    expect(shot.value).toBe('music');
+    // The shot's own 3.5s, not lip-sync's 5s minimum window.
+    expect(screen.getByTestId('performance-plan').textContent).toMatch(/^Music-driven via fal\.ai OmniHuman v1\.5 \(audio-driven person\) \(fal-ai\/bytedance\/omnihuman\/v1\.5\) · song 0:10–0:13 · est\. \$0\.56 \(3\.5s at 1080p\)/);
+    fireEvent.change(shot, { target: { value: 'performance' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { shotMode: 'performance', performanceStyle: null });
+    expect(screen.getByTestId('performance-plan').textContent).toMatch(/^Lip-sync via/);
+    fireEvent.change(shot, { target: { value: 'cutaway' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { shotMode: 'cutaway' });
+  });
+});
+
+describe('failed video retry behind the speaker save gate (#11040)', () => {
+  function Harness({ onSave, onGenerateVideo, onGenerateFrame = vi.fn(), lastFailure }) {
+    const [scene, setScene] = useState({ sceneId: 's1', shotMode: 'performance', startSec: 0, endSec: 5, referenceImageId: 'frame.png', takes: [], lastFailure });
+    return <SceneCard scene={scene} index={0} lipSyncBackend="fal" songDurationSec={30}
+      onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave}
+      onGenerateVideo={onGenerateVideo} onGenerateFrame={onGenerateFrame} />;
+  }
+  const videoFailure = { lane: 'video', error: 'Example failure', at: '2026-10-05T00:00:00.000Z' };
+
+  it('refuses the video Retry while the speaker edit is dirty, saving, or failed to save, then recovers', async () => {
+    let settle;
+    const onSave = vi.fn(() => new Promise((resolve) => { settle = resolve; }));
+    const onGenerateVideo = vi.fn();
+    render(<Harness onSave={onSave} onGenerateVideo={onGenerateVideo} lastFailure={videoFailure} />);
+    const input = screen.getByLabelText('Speaker / singer');
+    const retry = screen.getByRole('button', { name: 'Retry' });
+    const generate = screen.getByRole('button', { name: 'Generate video' });
+    expect(retry.disabled).toBe(false);
+    fireEvent.change(input, { target: { value: 'Example Singer' } });
+    expect([generate.disabled, retry.disabled]).toEqual([true, true]);
+    fireEvent.click(retry);
+    fireEvent.blur(input);
+    expect([generate.disabled, retry.disabled]).toEqual([true, true]);
+    fireEvent.click(retry);
+    settle(false);
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect([generate.disabled, retry.disabled]).toEqual([true, true]);
+    fireEvent.click(retry);
+    expect(retry.title).toBe(generate.title);
+    expect(onGenerateVideo).not.toHaveBeenCalled();
+    fireEvent.blur(input);
+    settle(true);
+    await waitFor(() => expect(retry.disabled).toBe(false));
+    fireEvent.click(retry);
+    expect(onGenerateVideo).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the frame Retry available while the speaker edit is unsaved', () => {
+    const onGenerateFrame = vi.fn();
+    const onGenerateVideo = vi.fn();
+    render(<Harness onSave={vi.fn()} onGenerateVideo={onGenerateVideo} onGenerateFrame={onGenerateFrame}
+      lastFailure={{ ...videoFailure, lane: 'image' }} />);
+    fireEvent.change(screen.getByLabelText('Speaker / singer'), { target: { value: 'Example Singer' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onGenerateFrame).toHaveBeenCalledTimes(1);
+    expect(onGenerateVideo).not.toHaveBeenCalled();
+  });
+});
+
 describe('persisted render failure chip (#10154)', () => {
   const failedScene = (lane) => ({ sceneId: 's1', startSec: 0, endSec: 5, referenceImageId: 'frame.png', takes: [],
     lastFailure: { lane, error: 'CUDA out of memory', at: '2026-10-05T00:00:00.000Z' } });
@@ -159,5 +231,87 @@ describe('Merge with next (#10810)', () => {
     expect(screen.queryByRole('button', { name: /Merge with next/ })).toBeNull();
     rerender(<SceneCard scene={scene} {...props} onMergeNext={onMergeNext} nextEndSec={8} documentComposition />);
     expect(screen.queryByRole('button', { name: /Merge with next/ })).toBeNull();
+  });
+});
+
+describe('scene timing and provider presentation (#11046)', () => {
+  const scene = { sceneId: 'timing', startSec: 10, endSec: 12, referenceImageId: 'frame.png', takes: [] };
+  const props = { index: 0, expanded: true, onEditLocal: vi.fn(), onSave: vi.fn() };
+
+  it('shows the supported song window, edit offset and saved resolution cost, including a zero offset and unknown song duration', () => {
+    const performance = { ...scene, shotMode: 'performance' };
+    const { rerender } = render(<SceneCard {...props} scene={performance} lipSyncBackend="fal" songDurationSec={30} />);
+    const plan = () => screen.getByTestId('performance-plan').textContent;
+    expect(plan()).toContain('Lip-sync via fal.ai MiniMax H3 lip-sync (minimax/h3-max/lip-sync/image-to-video)');
+    expect(plan()).toContain('song 0:08–0:13');
+    expect(plan()).toContain('shot starts 1.52s into the take');
+    expect(plan()).toContain('est. $0.81 (5.05s at 1080P)');
+    expect(screen.getByRole('button', { name: 'Generate video' }).title).toContain('est. $0.81');
+    rerender(<SceneCard {...props} scene={{ ...performance, startSec: 0, endSec: 6 }} lipSyncBackend="fal"
+      falVideoSettings={{ falLipSyncResolution: '768P' }} songDurationSec={null} />);
+    expect(plan()).toContain('song 0:00–0:06');
+    expect(plan()).not.toContain('shot starts');
+    expect(plan()).toContain('est. $0.48 (6s at 768P)');
+    expect(screen.getByRole('button', { name: 'Generate video' }).disabled).toBe(false);
+    rerender(<SceneCard {...props} scene={{ ...performance, startSec: 0, endSec: 6 }} lipSyncBackend="fal" />);
+    expect(screen.getByRole('button', { name: 'Generate video' }).disabled).toBe(false);
+    rerender(<SceneCard {...props} scene={performance} lipSyncBackend="fal" songDurationSec={11} />);
+    expect(screen.getByText('The performance shot runs past the end of the song.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Generate video' }).disabled).toBe(true);
+  });
+
+  it('blocks unsupported performance generation and keeps the blocker on the generation control', () => {
+    render(<SceneCard {...props} scene={{ ...scene, shotMode: 'performance' }} lipSyncBackend="grok" />);
+    const blocker = screen.getByText(/Grok video is cutaway-only/);
+    expect(blocker.closest('[role="alert"]')).toBeTruthy();
+    expect(screen.queryByTestId('performance-plan')).toBeNull();
+    const generate = screen.getByRole('button', { name: 'Generate video' });
+    expect(generate.disabled).toBe(true);
+    expect(generate.title).toBe(blocker.textContent);
+  });
+
+  it('shows the fal cutaway model and cost, preserves unknown model pricing, and distinguishes layer from render mode', () => {
+    const { rerender } = render(<SceneCard {...props} scene={scene} lipSyncBackend="fal" />);
+    expect(screen.getByTestId('fal-cutaway-plan').textContent).toContain('fal.ai renders a 6s clip on MiniMax Hailuo-02 Standard (image)');
+    expect(screen.getByTestId('fal-cutaway-plan').textContent).toContain('est. $0.27 (6s at 768P)');
+    rerender(<SceneCard {...props} scene={scene} lipSyncBackend="fal" falVideoSettings={{ falModelId: 'example/unpriced' }} />);
+    expect(screen.getByTestId('fal-cutaway-plan').textContent).toContain('fal.ai renders a clip on example/unpriced');
+    expect(screen.getByTestId('fal-cutaway-plan').textContent).toContain('cost unknown — billed to your fal.ai account');
+    rerender(<SceneCard {...props} scene={{ ...scene, visualLayer: 'still', shotMode: 'performance' }} lipSyncBackend="fal" layered />);
+    expect(screen.queryByTestId('fal-cutaway-plan')).toBeNull();
+    expect(screen.queryByTestId('performance-plan')).toBeNull();
+    rerender(<SceneCard {...props} scene={{ ...scene, visualLayer: 'still', shotMode: 'performance' }} lipSyncBackend="fal" />);
+    expect(screen.queryByTestId('fal-cutaway-plan')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Generate video' }).disabled).toBe(false);
+  });
+
+  it('warns about uncovered Grok time and splits with the original scene/backend arguments only beyond the epsilon', () => {
+    const onSplit = vi.fn();
+    const { rerender } = render(<SceneCard {...props} scene={{ ...scene, startSec: 0, endSec: 13 }} lipSyncBackend="grok" onSplit={onSplit} />);
+    expect(screen.getByText(/Grok renders a 10s clip for this 13.0s cutaway/).textContent).toContain('3.0s uncovered; split the scene rather than loop it');
+    fireEvent.click(screen.getByRole('button', { name: 'Split on lyric boundaries' }));
+    expect(onSplit).toHaveBeenCalledWith('timing', 'grok');
+    rerender(<SceneCard {...props} scene={{ ...scene, startSec: 0, endSec: 10 + 1e-6 }} lipSyncBackend="grok" onSplit={onSplit} />);
+    expect(screen.queryByRole('button', { name: 'Split on lyric boundaries' })).toBeNull();
+    rerender(<SceneCard {...props} scene={{ ...scene, startSec: 0, endSec: 10 + 2e-6 }} lipSyncBackend="grok" onSplit={onSplit} />);
+    expect(screen.getByRole('button', { name: 'Split on lyric boundaries' })).toBeTruthy();
+    rerender(<SceneCard {...props} scene={{ ...scene, endSec: null }} lipSyncBackend="grok" onSplit={onSplit} />);
+    expect(screen.queryByText(/Grok renders/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Split on lyric boundaries' })).toBeNull();
+  });
+
+  it('merges at the provider limit including its epsilon, requires the next span for bounded providers, and preserves default-backend arguments', () => {
+    const onMergeNext = vi.fn();
+    const current = { ...scene, startSec: 0, endSec: 4 };
+    const { rerender } = render(<SceneCard {...props} scene={current} lipSyncBackend="grok" nextEndSec={10 + 1e-6} onMergeNext={onMergeNext} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Merge with next' }));
+    expect(onMergeNext).toHaveBeenLastCalledWith('timing', 'grok');
+    rerender(<SceneCard {...props} scene={current} lipSyncBackend="grok" nextEndSec={10 + 2e-6} onMergeNext={onMergeNext} />);
+    expect(screen.queryByRole('button', { name: 'Merge with next' })).toBeNull();
+    rerender(<SceneCard {...props} scene={current} lipSyncBackend="grok" onMergeNext={onMergeNext} />);
+    expect(screen.queryByRole('button', { name: 'Merge with next' })).toBeNull();
+    rerender(<SceneCard {...props} scene={current} onMergeNext={onMergeNext} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Merge with next' }));
+    expect(onMergeNext).toHaveBeenLastCalledWith('timing', null);
   });
 });

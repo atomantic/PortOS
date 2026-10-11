@@ -9,6 +9,7 @@
 export {
   MUSIC_VIDEO_SHOT_MODES,
   SOURCE_AUDIO_LIPSYNC,
+  SOURCE_AUDIO_MUSIC,
   approximateMotionCues,
   falSceneTake,
   falTakeRequestFields,

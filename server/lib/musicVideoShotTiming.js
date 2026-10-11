@@ -15,6 +15,10 @@
  *     it is cutaway-only here until an actual adapter proves exact-source-audio
  *     conditioning — REST documentation for a different Grok surface is not that
  *     proof. Local runtimes are absent for the same reason.
+ *   - `SOURCE_AUDIO_MUSIC` — the music-driven performance lanes: fal.ai
+ *     audio-to-video models (kind `a2v`) where the song slice drives the whole
+ *     picture's motion rather than only a singer's mouth. A scene opts in with
+ *     `performanceStyle: 'music'`; it shares the window planning below.
  *   - `planPerformanceWindow` — the audio window a performance shot submits:
  *     inside the provider's limits (never relying on its silent truncation), a
  *     short shot padded to a supported contextual window with an explicit edit
@@ -38,6 +42,8 @@
 
 import { GROK_VIDEO_DURATIONS, nearestGrokDuration } from './grokVideoClip.js';
 import {
+  FAL_AUDIO_VIDEO_MODEL,
+  FAL_AUDIO_VIDEO_MODELS,
   FAL_DEFAULT_IMAGE_VIDEO_MODEL,
   FAL_LIPSYNC_VIDEO_MODEL,
   coerceFalVideoSeconds,
@@ -57,6 +63,17 @@ export const MUSIC_VIDEO_SHOT_MODES = Object.freeze(['cutaway', 'performance']);
  */
 export const isPerformanceScene = (scene) => scene?.shotMode === 'performance'
   && (scene.visualLayer == null || scene.visualLayer === 'footage');
+
+/**
+ * How a performance shot follows the song: `lipsync` (absent on every older
+ * record) syncs a singer's mouth to the vocal; `music` lets the song slice
+ * drive the whole picture's motion — a drummer hitting on the beat, a dancer,
+ * a crowd — on an audio-to-video model (lib/falVideoModels.js kind `a2v`).
+ */
+export const MUSIC_VIDEO_PERFORMANCE_STYLES = Object.freeze(['lipsync', 'music']);
+
+/** A performance shot a singer lip-syncs (the only kind whose mouth sync is measured). */
+export const isLipSyncScene = (scene) => isPerformanceScene(scene) && scene.performanceStyle !== 'music';
 
 /**
  * The shot instruction of a performance scene's SELECTED video take, or null —
@@ -100,6 +117,7 @@ export const MUSIC_VIDEO_LIPSYNC_DEFAULT_RESOLUTION = '1080P';
 export const SOURCE_AUDIO_LIPSYNC = Object.freeze({
   fal: Object.freeze({
     provider: 'fal',
+    style: 'lipsync',
     label: 'fal.ai MiniMax H3 lip-sync',
     modelId: FAL_LIPSYNC_VIDEO_MODEL,
     minAudioSec: 5,
@@ -113,10 +131,53 @@ export const SOURCE_AUDIO_LIPSYNC = Object.freeze({
   }),
 });
 
-/** The lip-sync capability a backend offers, or null. */
-export const performanceCapability = (backend) => (
-  Object.prototype.hasOwnProperty.call(SOURCE_AUDIO_LIPSYNC, backend || '') ? SOURCE_AUDIO_LIPSYNC[backend] : null
-);
+/**
+ * Default output resolution of a music-driven take (OmniHuman's own default).
+ * LTX audio-to-video is deliberately not a fal lane: PortOS runs LTX-2.3 /
+ * LTX-2.5 locally, where Make › Supplied song audio conditions a cutaway on
+ * its own song slice (submitJob.js `_suppliedAudio`).
+ */
+const MUSIC_VIDEO_MUSIC_DEFAULT_RESOLUTION = '1080p';
+
+const musicCapability = (model) => {
+  const resolutions = falVideoResolutions(model);
+  const defaultResolution = resolutions.includes(MUSIC_VIDEO_MUSIC_DEFAULT_RESOLUTION) ? MUSIC_VIDEO_MUSIC_DEFAULT_RESOLUTION : model.resolution.default;
+  return Object.freeze({
+    provider: 'fal',
+    style: 'music',
+    label: `fal.ai ${model.label}`,
+    modelId: model.id,
+    minAudioSec: model.audioInput.minSec,
+    // The same one-phrase per-take ceiling as lip-sync (see above).
+    maxAudioSec: Math.min(model.audioInput.maxSec, 30),
+    transcription: false,
+    resolutions: Object.freeze(resolutions),
+    defaultResolution,
+    costLabel: `${describeFalVideoRate(model.id, defaultResolution)} — billed to your fal.ai account`,
+  });
+};
+
+/**
+ * Verified music-driven lanes, keyed by backend then model id. The project's
+ * `videoSettings.falMusicModelId` picks one; absent (or a model this install
+ * does not curate) = `FAL_AUDIO_VIDEO_MODEL` (OmniHuman v1.5).
+ */
+export const SOURCE_AUDIO_MUSIC = Object.freeze({
+  fal: Object.freeze(Object.fromEntries(FAL_AUDIO_VIDEO_MODELS.map((model) => [model.id, musicCapability(model)]))),
+});
+
+/**
+ * The source-audio capability a backend offers a performance shot, or null.
+ * Without a scene (or for a lip-sync scene) it is the lip-sync lane; a
+ * music-driven scene gets the audio-to-video model `videoSettings` pins.
+ */
+export function performanceCapability(backend, { scene = null, videoSettings = null } = {}) {
+  if (!Object.prototype.hasOwnProperty.call(SOURCE_AUDIO_LIPSYNC, backend || '')) return null;
+  if (scene?.performanceStyle !== 'music') return SOURCE_AUDIO_LIPSYNC[backend];
+  const lanes = SOURCE_AUDIO_MUSIC[backend];
+  const pinned = videoSettings?.falMusicModelId;
+  return (pinned && Object.prototype.hasOwnProperty.call(lanes, pinned) ? lanes[pinned] : null) || lanes[FAL_AUDIO_VIDEO_MODEL];
+}
 
 /**
  * Why a performance shot cannot render on `backend`, or null when it can.
@@ -129,7 +190,7 @@ export function performanceBlockedReason(backend) {
     return 'Grok video is cutaway-only: it cannot synchronize a singer to the song. Pin fal.ai for performance shots, or switch this scene to Cutaway.';
   }
   if (backend === 'local') {
-    return 'Local video models cannot lip-sync to the song. Pin fal.ai for performance shots, or switch this scene to Cutaway.';
+    return 'Local video models cannot lip-sync to the song. Pin fal.ai for performance shots, or switch this scene to Cutaway — with Supplied song audio and a local LTX model, the scene\'s song slice still drives its motion.';
   }
   return 'Performance shots need a source-audio lip-sync provider — pin fal.ai as this project\'s video backend.';
 }
@@ -259,9 +320,9 @@ export function approximateMotionCues(phrases, startSec, endSec) {
  * performance shot on a lane that cannot lip-sync at all, which is blocked
  * outright rather than split — have no limit here.
  */
-export function shotSplitLimit(scene, backend) {
+export function shotSplitLimit(scene, backend, videoSettings = null) {
   if (isPerformanceScene(scene)) {
-    const capability = performanceCapability(backend);
+    const capability = performanceCapability(backend, { scene, videoSettings });
     return capability ? round6(capability.maxAudioSec - PERFORMANCE_WINDOW_MARGIN_SEC) : null;
   }
   const footage = scene?.visualLayer == null || scene.visualLayer === 'footage';
@@ -396,9 +457,10 @@ export function planShotSplit({ startSec, endSec, maxSec, lyricCues, phrases, be
 export function falSceneTake({ scene, videoSettings = {}, songDurationSec = null } = {}) {
   const settings = videoSettings || {};
   if (isPerformanceScene(scene)) {
-    const capability = SOURCE_AUDIO_LIPSYNC.fal;
+    const capability = performanceCapability('fal', { scene, videoSettings: settings });
     const model = getFalVideoModel(capability.modelId);
-    const resolution = resolveFalVideoResolution(model, settings.falLipSyncResolution || capability.defaultResolution);
+    const pinned = capability.style === 'music' ? settings.falMusicResolution : settings.falLipSyncResolution;
+    const resolution = resolveFalVideoResolution(model, pinned || capability.defaultResolution);
     const plan = planPerformanceWindow({
       startSec: scene.startSec, endSec: scene.endSec, songDurationSec: songDurationSec ?? Infinity, capability,
     });
@@ -445,7 +507,7 @@ export const falTakeRequestFields = (take) => (take.performance
 export function planPerformanceRepair({ scene, temporal, excerptStartSec, backend, videoSettings = {} }) {
   const no = (message) => ({ ok: false, message });
   const instruction = selectedPerformanceInstruction(scene);
-  const capability = performanceCapability(backend);
+  const capability = performanceCapability(backend, { scene, videoSettings });
   if (!capability) return no(performanceBlockedReason(backend));
   if (!instruction || instruction.songInterval?.startSec !== scene.startSec || instruction.songInterval?.endSec !== scene.endSec) return no('Review needed: the selected take no longer matches this shot');
   if (scene.direction?.actionContract || scene.performanceRepair) return no('Review needed: edit the shot contract or review the existing continuation before repairing again');

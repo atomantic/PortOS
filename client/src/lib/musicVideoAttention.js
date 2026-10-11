@@ -42,6 +42,8 @@ function sectionProgress(project, revision) {
  * - `finalRenderAttached` — this tab already shows the final render's progress
  * - `readiness` — the server's production readiness, for approvals given on
  *   inputs that have changed since (#10141)
+ * - `stage` — the step on screen; a stale approval that step already shows
+ *   with its own controls is left out of the banner
  * - `headerAction` — the header's next action (`{ id, runId }`); a parked run
  *   it already resumes drops its own Resume so one screen never offers two
  *   controls for the same run
@@ -49,7 +51,7 @@ function sectionProgress(project, revision) {
  * Row shape: `{ id, kind, tone, title, detail, … }` plus the ids the action
  * needs — `revisionId` + `canResume` (revision), `runId` (auto-review).
  */
-export function deriveAttentionItems(project, { generatingSceneIds = null, draftRendering = false, finalRenderAttached = false, readiness = project?.productionReadiness, headerAction = null } = {}) {
+export function deriveAttentionItems(project, { generatingSceneIds = null, draftRendering = false, finalRenderAttached = false, readiness = project?.productionReadiness, headerAction = null, stage = null } = {}) {
   if (!project) return [];
   const items = [];
   const spinning = (sceneId) => !!generatingSceneIds?.has?.(sceneId);
@@ -129,7 +131,7 @@ export function deriveAttentionItems(project, { generatingSceneIds = null, draft
       detail: 'Reattach to watch its progress or cancel it.',
     });
   }
-  const stale = staleApprovalItem(project, readiness);
+  const stale = staleApprovalItem(project, readiness, stage);
   return [...items, ...parkedRunItems(project, headerAction), ...(stale ? [stale] : [])];
 }
 
@@ -144,9 +146,11 @@ const STALE_APPROVALS = [
 // One row for every approval given on inputs that have changed since (#10141),
 // naming what changed per approval and opening the earliest one. A running
 // production replaces takes as its job, so it does not flag its own progress.
-function staleApprovalItem(project, readiness) {
+// An approval the open step already shows (its checklist row, or the Cast & Sets
+// check-in card) is not repeated here.
+function staleApprovalItem(project, readiness, stage) {
   if (currentProductionRun(project)?.status === 'running') return null;
-  const stale = STALE_APPROVALS.filter(([key]) => readiness?.[key]?.stale);
+  const stale = STALE_APPROVALS.filter(([key, , openTo]) => readiness?.[key]?.stale && openTo.split('#')[0] !== stage);
   if (!stale.length) return null;
   const describe = ([key, label]) => {
     const fields = readiness[key].stale.changedFields || [];
@@ -157,16 +161,22 @@ function staleApprovalItem(project, readiness) {
     kind: 'stale-approvals',
     tone: 'warn',
     title: stale.length === 1 ? `${stale[0][1]} was approved earlier and has changed since` : `${stale.length} approvals were given before later changes`,
-    detail: `${stale.map(describe).join('. ')}. Re-approve, or undo the change.`,
+    detail: `${stale.map(describe).join('. ')}. Keep the approval, or undo the change.`,
     projectId: project.id,
     openTo: stale[0][2],
+    // Each approval settles right here: keep it on the current inputs (the Cast & Sets
+    // check-in is re-stamped; a production approval is re-given when nothing else blocks it),
+    // or put back a changed input whose approved value was kept.
+    approvals: stale.map(([key, label]) => ({ stage: key, label,
+      canKeep: key === 'castAndSets' || !(readiness[key].problems || []).length,
+      revertible: readiness[key].stale.revertible || [] })),
   };
 }
 
 // Auto-review states that wait on the director (#10156): a limit, an unverifiable
 // review, or a halted run. `running` is live work, not a request for the user.
 const AUTO_REVIEW_PARKED = new Set(['needs-human', 'limit-reached', 'stopped']);
-const PRODUCTION_PARKED = new Set(['limit-reached', 'needs-human', 'blocked', 'needs-replan']);
+const PRODUCTION_PARKED = new Set(['limit-reached', 'needs-human', 'blocked', 'needs-replan', 'awaiting-video']);
 // The header next-action ids that resume the autonomous run (see deriveNextAction).
 const RESUME_AUTONOMOUS_IDS = new Set(['resume-autonomous', 'retry-autonomous']);
 const AUTONOMOUS_PARKED = new Set(['awaiting-approval', 'needs-human', 'stopped', 'failed']);

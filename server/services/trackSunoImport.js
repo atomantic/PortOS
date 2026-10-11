@@ -74,7 +74,7 @@ const BROWSER_EXPORT_TIMEOUT_MS = 90_000;
 // The whole browser leg, including its wait in the shared browser queue
 // (behind an autopilot song or a publish draft), which the export's own
 // budget doesn't count. Mutable for tests.
-const limits = { browserWaitMs: 2 * 60 * 1000 };
+const limits = { browserWaitMs: 2 * 60 * 1000, styleReadMs: 60 * 1000 };
 
 // Export the song through the signed-in PortOS Browser, the same export the
 // autopilot uses, so a private or unpublished song in the user's own Suno
@@ -114,6 +114,59 @@ async function exportThroughBrowser(songId, outPath, signal) {
     signal.removeEventListener('abort', stop);
   }
   return html;
+}
+
+// Read the song's page the way an anonymous visitor sees it; null when Suno won't serve it.
+const fetchSongPage = (songId) => fetchPublicText(`https://suno.com/song/${songId}`, {
+  timeoutMs: PAGE_TIMEOUT_MS, headers: HEADERS, maxBytes: PAGE_MAX_BYTES, throwOnUnsafe: false,
+}).catch(() => null);
+
+// Prefer the signed-in page's style when it states the excluded styles.
+const mergeStyle = (song, signedIn) => (signedIn.excludedStylesKnown
+  ? signedIn.style || song.style : song.style || signedIn.style);
+
+/**
+ * Fill in what the anonymous page left out about a song's style. Suno keeps a
+ * song's excluded styles out of the page it serves to anonymous visitors, so
+ * when the page says nothing about them the signed-in PortOS Browser reads the
+ * owner's view. Best effort: a signed-out or busy browser keeps the anonymous
+ * style.
+ */
+async function withSignedInStyle(song, songId, signal) {
+  if (song.excludedStylesKnown) return song;
+  const abort = new AbortController();
+  const stop = () => abort.abort();
+  signal?.addEventListener('abort', stop, { once: true });
+  const timer = setTimeout(stop, limits.styleReadMs);
+  try {
+    const { readSunoSongPage } = await import('./musicVideo/autonomousSuno.js');
+    const read = readSunoSongPage(songId, { signal: abort.signal });
+    read.catch(() => {});
+    const html = await Promise.race([read, new Promise((_, reject) => {
+      abort.signal.addEventListener('abort', () => reject(new Error('the PortOS Browser did not read the song page in time')), { once: true });
+    })]);
+    const signedIn = parseSunoSongPage(html, songId);
+    return { ...song, style: mergeStyle(song, signedIn), excludedStylesKnown: signedIn.excludedStylesKnown };
+  } catch (err) {
+    console.warn(`⚠️ Suno style ${songId.slice(0, 8)}: kept the public style (${err?.message || err})`);
+    return song;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', stop);
+  }
+}
+
+/**
+ * The full Suno style of a song link, excluded styles included, for refreshing
+ * a song that was imported before they were captured. Throws 400 for a link
+ * that isn't a Suno song and 404 when Suno shows no style for it.
+ */
+export async function readSunoSongStyle(url) {
+  if (!isSunoSongUrl(url)) throw new ServerError(SUNO_URL_INVALID_MESSAGE, { status: 400, code: 'SUNO_URL_INVALID' });
+  const songId = await resolveSunoSongId(url.trim());
+  const song = await withSignedInStyle(parseSunoSongPage(await fetchSongPage(songId) || '', songId), songId);
+  if (!song.style) throw new ServerError('Suno shows no style for that song', { status: 404, code: 'SUNO_STYLE_NOT_FOUND' });
+  return { style: song.style, excludedStylesKnown: song.excludedStylesKnown };
 }
 
 // Take the audio from the song's public video, which stays downloadable
@@ -170,9 +223,7 @@ export async function startSunoImport(url) {
       broadcastSse(job, { type: 'progress', percent: 5, stage: 'reading' });
       const songId = await resolveSunoSongId(url.trim());
       // The page only adds metadata; a page Suno won't serve still imports the audio.
-      const html = await fetchPublicText(`https://suno.com/song/${songId}`, {
-        timeoutMs: PAGE_TIMEOUT_MS, headers: HEADERS, maxBytes: PAGE_MAX_BYTES, throwOnUnsafe: false,
-      }).catch(() => null);
+      const html = await fetchSongPage(songId);
       if (abortIfCanceled()) return;
 
       broadcastSse(job, { type: 'progress', percent: 20, stage: 'downloading' });
@@ -201,7 +252,9 @@ export async function startSunoImport(url) {
           broadcastSse(job, { type: 'progress', percent, stage: 'exporting' });
           const signedIn = parseSunoSongPage(await exportThroughBrowser(songId, tempPath, job.abort.signal), songId);
           // Fill only what the anonymous page lacked.
-          song = { ...song, title: song.title || signedIn.title, lyrics: song.lyrics || signedIn.lyrics, style: song.style || signedIn.style };
+          // The signed-in page is the owner's full view: nothing more to read after it.
+          song = { ...song, title: song.title || signedIn.title, lyrics: song.lyrics || signedIn.lyrics,
+            style: mergeStyle(song, signedIn), excludedStylesKnown: song.excludedStylesKnown || Boolean(signedIn.title || signedIn.style) };
         };
         const routes = song.title ? [viaVideo, viaBrowser] : [viaBrowser, viaVideo];
         const failures = [];
@@ -217,6 +270,9 @@ export async function startSunoImport(url) {
         }
       }
 
+      // The audio came without the signed-in page: read it for the excluded styles.
+      song = await withSignedInStyle(song, songId, job.abort.signal);
+      if (abortIfCanceled()) return;
       broadcastSse(job, { type: 'progress', percent: 90, stage: 'importing' });
       const title = song.title || 'Suno song';
       const ext = tempPath.endsWith('.m4a') ? 'm4a' : 'mp3';

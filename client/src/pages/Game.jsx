@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, Boxes, Gamepad2, Images, MessageSquare, Plus } from 'lucide-react';
 import { Link, useNavigate, useParams } from 'react-router';
+import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import AppContextPicker from '../components/AppContextPicker.jsx';
@@ -260,9 +261,10 @@ export default function Game() {
   };
 
   if (loading) {
-    // The detail workspace is a full-bleed h-full shell with its own bordered
-    // bar; the index is a plain padded page. `id` is known before the fetch
-    // settles, so each reserves the chrome its own loaded state renders.
+    // Detail and index are both full-bleed PageHeader shells. `id` is known
+    // before the fetch settles, so each reserves the chrome its loaded state
+    // renders. The index passes fullHeight so it is not clipped in the
+    // overflow-hidden main.
     return id ? (
       <PageSkeleton
         header="bar"
@@ -279,6 +281,8 @@ export default function Game() {
     ) : (
       <PageSkeleton
         label="Loading Game studio"
+        fullHeight
+        padded
         titleWidthClass="w-32"
         showSubtitle
         showAction={false}
@@ -290,27 +294,33 @@ export default function Game() {
 
   if (id && !game) {
     return (
-      <div className="mx-auto max-w-3xl rounded-xl border border-port-border bg-port-card p-8 text-center">
-        <h1 className="text-xl font-semibold text-white">Game not found</h1>
-        <p className="mt-2 text-sm text-gray-400">This Game record may have been deleted.</p>
-        <Link to="/game" className="mt-4 inline-flex min-h-[44px] items-center text-port-accent hover:underline">
-          Back to Games
-        </Link>
+      <div className="flex h-full min-h-0 flex-col">
+        <PageHeader
+          icon={Gamepad2}
+          title="Game"
+          subtitle="This Game record may have been deleted."
+          actions={(
+            <Link to="/game" className="inline-flex min-h-[44px] items-center text-port-accent hover:underline">
+              Back to Games
+            </Link>
+          )}
+        />
+        <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4">
+          <p className="text-center text-sm text-gray-400">This Game record may have been deleted.</p>
+        </div>
       </div>
     );
   }
 
   if (!game) {
     return (
-      <div className="mx-auto max-w-5xl">
-        <div className="mb-5 flex items-center gap-3">
-          <Gamepad2 className="h-7 w-7 text-port-accent" aria-hidden="true" />
-          <div>
-            <h1 className="text-2xl font-bold text-white">Game</h1>
-            <p className="text-sm text-gray-400">Bind reusable art and music to a managed app.</p>
-          </div>
-        </div>
-
+      <div className="flex h-full min-h-0 flex-col">
+        <PageHeader
+          icon={Gamepad2}
+          title="Game"
+          subtitle="Bind reusable art and music to a managed app."
+        />
+        <div className="flex-1 min-h-0 overflow-auto p-4">
         <form onSubmit={create} className="mb-6 rounded-xl border border-port-border bg-port-card p-4">
           <h2 className="mb-3 font-semibold text-white">Create a Game workspace</h2>
           <div className="grid gap-3 md:grid-cols-2">
@@ -370,6 +380,7 @@ export default function Game() {
             No Game workspaces yet.
           </div>
         )}
+        </div>
       </div>
     );
   }
@@ -379,30 +390,28 @@ export default function Game() {
   const bindingBusy = /^(un)?bind-|^artwork-|^music-/.test(busy);
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex shrink-0 flex-col justify-between gap-2 border-b border-port-border px-4 py-3 sm:flex-row sm:items-center">
-        <div className="flex min-w-0 items-center gap-3">
-          <Link
-            to="/game"
-            className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-gray-400 hover:bg-port-card hover:text-white"
-            aria-label="All Games"
-            title="All Games"
-          >
-            <ArrowLeft className="h-4 w-4" aria-hidden="true" />
-          </Link>
-          <Gamepad2 className="h-6 w-6 shrink-0 text-port-accent" aria-hidden="true" />
-          <div className="min-w-0">
-            <h1 className="line-clamp-2 break-words text-xl font-bold text-white" title={game.name}>{game.name}</h1>
-            <p className="truncate text-xs text-gray-400">{app?.name || 'Managed app unavailable'}</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 text-xs text-gray-400">
-          <span>{game.spriteBindings.length} sprites</span>
-          <span aria-hidden="true">·</span>
-          <span>{game.musicBindings.length} {game.musicBindings.length === 1 ? 'music track' : 'music tracks'}</span>
-          <span aria-hidden="true">·</span>
-          <span>{game.artworkBindings?.length || 0} artwork</span>
-        </div>
-      </header>
+      <PageHeader
+        icon={Gamepad2}
+        title={game.name}
+        subtitle={app?.name || 'Managed app unavailable'}
+        actions={(
+          <>
+            <Link
+              to="/game"
+              className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-gray-400 hover:bg-port-card hover:text-white"
+              aria-label="All Games"
+              title="All Games"
+            >
+              <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+            </Link>
+            <span className="text-xs text-gray-400">{game.spriteBindings.length} sprites</span>
+            <span aria-hidden="true" className="text-xs text-gray-400">·</span>
+            <span className="text-xs text-gray-400">{game.musicBindings.length} {game.musicBindings.length === 1 ? 'music track' : 'music tracks'}</span>
+            <span aria-hidden="true" className="text-xs text-gray-400">·</span>
+            <span className="text-xs text-gray-400">{game.artworkBindings?.length || 0} artwork</span>
+          </>
+        )}
+      />
 
       <TabPills
         tabs={DETAIL_TABS.map((tab) => ({ ...tab, count: tab.count?.(game) }))}
@@ -415,7 +424,6 @@ export default function Game() {
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        <div className="mx-auto max-w-6xl">
           {activeTab === 'bundle' && (
             <div id="game-panel-bundle" role="tabpanel" aria-labelledby="tab-bundle">
               <GameCompilePanel
@@ -478,7 +486,6 @@ export default function Game() {
               <GameFeedback history={game.feedbackHistory} submitting={busy === 'feedback'} onSubmit={feedback} />
             </div>
           )}
-        </div>
       </div>
     </div>
   );

@@ -12,5 +12,5 @@
  */
 
 // Channel names identify ingress, never a trust decision made by a model.
-export const UNTRUSTED_CONTENT_SOURCES = Object.freeze(['github-issue', 'github-pr', 'stacker-news', 'messages', 'email', 'imessage', 'signal']);
+export const UNTRUSTED_CONTENT_SOURCES = Object.freeze(['github-issue', 'github-pr', 'stacker-news', 'moltbook', 'messages', 'email', 'imessage', 'signal']);
 export const PRIVATE_UNTRUSTED_CONTENT_SOURCES = Object.freeze(['messages', 'email', 'imessage', 'signal']);

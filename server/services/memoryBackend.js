@@ -110,6 +110,24 @@ export async function createMemory(data, embedding) {
   return b.createMemory(data, embedding);
 }
 
+// File mode is a development/test-only compatibility path. Production always
+// delegates these operations to the transactional PostgreSQL implementation.
+export async function getBrainMemoryLinks(legacyMap = {}, options) {
+  const b = await getBackend();
+  if (b.getBrainMemoryLinks) return b.getBrainMemoryLinks(legacyMap, options);
+  if (options?.recover) throw new Error('File-mode brain bridge cache is corrupt; restore it from backup');
+  return legacyMap;
+}
+
+export async function upsertBrainMemory(key, data, embedding, legacyId) {
+  const b = await getBackend();
+  if (b.upsertBrainMemory) return b.upsertBrainMemory(key, data, embedding, legacyId);
+  const updated = legacyId && await b.updateMemory(legacyId, { ...data, status: 'active' });
+  if (!updated) return b.createMemory(data, embedding);
+  if (embedding) await b.updateMemoryEmbedding(legacyId, embedding);
+  return updated;
+}
+
 export async function peekMemory(id) {
   const b = await getBackend();
   return b.peekMemory(id);

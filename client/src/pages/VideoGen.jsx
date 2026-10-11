@@ -37,7 +37,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router';
-import { isAudioToVideoRuntime, isMiniMaxH3Runtime } from '../lib/runnerFamilies';
+import { isMiniMaxH3Runtime } from '../lib/runnerFamilies';
 import { appendTriggerWords } from '../lib/loraTriggers';
 import Drawer from '../components/Drawer';
 import { ImageGenTab } from '../components/settings/ImageGenTab';
@@ -101,6 +101,7 @@ import {
   FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_DEFAULT_TEXT_VIDEO_MODEL, FAL_VIDEO_MODELS, getFalVideoModel, falVideoResolutions, estimateFalVideoCostUsd,
 } from '../lib/falVideoModels.js';
 import { REACTOR_MAX_PROMPT_LENGTH } from '../lib/reactorVideoClip.js';
+import { videoGenEnqueuePolicy } from '../lib/videoGenEnqueuePolicy.js';
 import { styledVideoPrompt } from '../lib/videoGenSubmission.js';
 import ReactorPanel from '../components/videoGen/ReactorPanel';
 import { formatCount, formatUsd, timeAgo } from '../utils/formatters';
@@ -729,7 +730,7 @@ export default function VideoGen() {
   }, []);
 
   const handleSavePythonPath = useCallback(async (path) => {
-    await patchSettingsSlice('imageGen.local', { pythonPath: path || undefined }, { silent: true })
+    await patchSettingsSlice('imageGen.local', { pythonPath: path || null }, { silent: true })
       .then(() => refreshStatus())
       .catch((err) => toast.error(`Failed to save: ${err.message}`));
   }, [refreshStatus]);
@@ -832,7 +833,6 @@ export default function VideoGen() {
   ], { loading: modelDownload.loading, downloading: modelDownload.downloading, enabled: !rendersOffMachine });
   const sharedEncoderAsset = assets.find(asset => asset.key === 'shared-encoder');
   const blockedAsset = assets.find(asset => asset.blocked);
-  const weightsGateBlocked = !!blockedAsset;
   const activeWeightErrorIds = assets.filter(asset => asset.applies).map(asset => asset.id).filter(Boolean);
   const activeWeightError = activeWeightErrorIds.includes(modelDownload.lastError?.modelId)
     ? modelDownload.lastError
@@ -997,35 +997,28 @@ export default function VideoGen() {
   const effectiveBatchSize = rendersOnThisMachine
     && currentModel?.supportsWarmBatch && !chainingActive ? batchSize : 1;
 
-  const a2vBlockReason = a2vModeBlocked ? (a2vDurationError || (!isAudioToVideoRuntime(currentModel?.runtime)
-    ? 'a2v mode requires an audio-to-video model — pick one from the Model dropdown'
-    : !audioFile ? 'Pick an audio file before generating'
-      : 'Pick a reference image before generating with this model')) : null;
-  const generateBlockedReason = remoteBlocked
-    || (byovRuntimeMissing ? `${byovStatus?.label || byovRuntime} runtime is not installed — use the install banner above` : null)
-    || (byovGateBlocked ? `Checking ${byovRuntime} runtime status…` : null)
-    || (blockedAsset ? `Download the ${blockedAsset.label} before generating` : null)
-    || (extendModeBlocked ? 'Pick a prior render and wait for the last frame to extract before generating' : null)
-    || a2vBlockReason
-    || (icLoraModeBlocked ? 'Add the reference media required by this mode before generating' : null)
-    || (keyframesBlocked ? keyframesError : null);
-  const optionsBlockReason = blockedAsset
-    ? `Open Options to download the ${blockedAsset.label}`
-    : extendModeBlocked
-      ? 'Open Options to pick a prior render and wait for its last frame'
-      : a2vBlockReason
-        ? `Open Options: ${a2vBlockReason}`
-        : icLoraModeBlocked
-          ? 'Open Options to add the reference media required by this mode'
-          : keyframesBlocked
-            ? `Open Options: ${keyframesError}`
-            : null;
-
-  const canEnqueue = prompt.trim() && !remixHandoffPending && !promptOverLimit && (remoteTarget.isRemote
-    ? remoteBlocked === null
-    : (rendersOffMachine || (!notConnected && !extendModeBlocked
-      && !a2vModeBlocked && !icLoraModeBlocked && !byovGateBlocked
-      && !weightsGateBlocked && !keyframesBlocked)));
+  const { canEnqueue, generateTitle, queueTitle, optionsHint } = videoGenEnqueuePolicy({
+    prompt,
+    remixHandoffPending,
+    promptOverLimit,
+    isRemote: remoteTarget.isRemote,
+    remoteBlocked,
+    rendersOffMachine,
+    notConnected,
+    byovRuntime,
+    byovLabel: byovStatus?.label,
+    byovGateBlocked,
+    byovRuntimeMissing,
+    blockedAsset,
+    extendModeBlocked,
+    a2vModeBlocked,
+    a2vDurationError,
+    modelRuntime: currentModel?.runtime,
+    audioFile,
+    icLoraModeBlocked,
+    keyframesBlocked,
+    keyframesError,
+  });
 
   return (
     <div className="space-y-3">
@@ -1289,7 +1282,7 @@ export default function VideoGen() {
                 type="submit"
                 disabled={!canEnqueue}
                 className="flex min-h-[44px] items-center gap-2 rounded-lg bg-port-accent px-4 py-2 text-sm font-medium text-white hover:bg-port-accent/80 disabled:cursor-not-allowed disabled:opacity-50"
-                title={generateBlockedReason || undefined}
+                title={generateTitle}
               >
                 <Sparkles className="w-4 h-4" /> {effectiveBatchSize > 1 ? `Generate ${effectiveBatchSize} videos` : 'Generate'}
               </button>
@@ -1299,14 +1292,12 @@ export default function VideoGen() {
               onClick={handleEnqueue}
               disabled={!canEnqueue}
               className="flex min-h-[44px] items-center gap-2 rounded-lg border border-port-border px-4 py-2 text-sm font-medium text-gray-200 hover:bg-port-border/40 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-              title={canEnqueue ? 'Submit this configuration to its server queue; local, Grok, and remote lanes run independently'
-                : blockedAsset ? `Download the ${blockedAsset.label} before queueing`
-                  : 'Complete the required inputs before queueing'}
+              title={queueTitle}
             >
               <ListPlus className="w-4 h-4" /> {effectiveBatchSize > 1 ? `Add ${effectiveBatchSize} videos to queue` : 'Add to queue'}
             </button>
-            {optionsBlockReason && (
-              <span className="basis-full text-xs text-port-warning" role="status">{optionsBlockReason}</span>
+            {optionsHint && (
+              <span className="basis-full text-xs text-port-warning" role="status">{optionsHint}</span>
             )}
             {/* Said BEFORE the button is pressed, not after the screen is already
                 dark. A user who first learns about the sleep by watching their

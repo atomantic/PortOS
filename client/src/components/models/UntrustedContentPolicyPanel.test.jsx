@@ -93,6 +93,15 @@ describe('content safety policy configuration', () => {
     } }));
   });
 
+  it('lists Moltbook as a public source and still offers a cloud API provider', async () => {
+    render(<UntrustedContentPolicyPanel />);
+    const source = await screen.findByLabelText('Source');
+    expect(within(source).getByRole('option', { name: 'Moltbook' })).toBeInTheDocument();
+    fireEvent.change(source, { target: { value: 'moltbook' } });
+    expect(within(screen.getByLabelText('Analysis API provider')).getByRole('option', { name: 'Cloud example' })).toBeEnabled();
+    expect(screen.getByText(/Cloud APIs may receive public sources/)).toBeInTheDocument();
+  });
+
   it('drops a cleared scorer field instead of pinning an empty value', async () => {
     getSettings.mockResolvedValueOnce({ untrustedContent: {
       defaults: { jevMode: 'prefer' },

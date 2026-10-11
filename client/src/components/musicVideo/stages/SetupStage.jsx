@@ -29,12 +29,14 @@ function AlignWords({ disabled, aligning, status, aligned, onAlign }) {
   const [error, setError] = useState('');
   const run = () => {
     setError('');
-    Promise.resolve(onAlign()).catch((err) => setError(err?.message || 'Could not align the words to the vocal. Try again.'));
+    // The isolated vocal is the default alignment source; a missing stem is separated first.
+    Promise.resolve(onAlign(null, { separateVocals: true })).catch((err) => setError(err?.message || 'Could not align the words to the vocal. Try again.'));
   };
   return (
     <>
       <p className="text-xs text-port-text-muted">
-        {aligned ? 'Every word is placed. Listen back, fine-tune any line in step 3, then verify.' : 'Place each word on the vocal, then listen back.'}
+        {aligned ? 'Every word is placed. Watch the playthrough below, fine-tune any line in step 3, then confirm.'
+          : 'The words are placed on the isolated vocal on their own once the song has lyrics.'}
       </p>
       <button type="button" onClick={run} disabled={aligning || disabled}
         className="min-h-[44px] rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm text-port-accent disabled:opacity-50 sm:min-h-0">
@@ -129,7 +131,8 @@ export default function SetupStage({ board }) {
             />
           )}
           {board.productionReview && (
-            <LyricTimingCheck project={project} review={board.productionReview} planning={board.planningDraft} disabled={locked} />
+            <LyricTimingCheck project={project} review={board.productionReview} planning={board.planningDraft} disabled={locked}
+              audioUrl={board.audioUrl} aligning={aligningLyrics} />
           )}
         </SongStep>
       </div>

@@ -28,9 +28,13 @@ describe('RouteTabsHeader', () => {
   });
 
   it('leaves a short bar\'s labels visible at every width', () => {
-    renderAt(settingsTabs.slice(0, 3), 'general');
+    renderAt(settingsTabs.slice(0, 3), settingsTabs[0].id);
 
     const bar = screen.getByRole('tablist', { name: 'Demo sections' });
     expect(within(bar).getAllByRole('tab')[0].querySelector('.max-sm\\:sr-only')).toBeNull();
+    expect(screen.getByRole('tab', { selected: true }).getAttribute('aria-current')).toBe('page');
+    for (const tab of screen.getAllByRole('tab', { selected: false })) {
+      expect(tab.hasAttribute('aria-current')).toBe(false);
+    }
   });
 });

@@ -74,4 +74,28 @@ describe('Stacker News reviewed actions', () => {
     };
     await expect(executeApprovedAction('action')).rejects.toThrow('External account or destination changed after review');
   });
+
+  it('fails a stale executing action so it cannot wedge the idempotency key', async () => {
+    const stale = { id: 'zombie', state: 'executing', updated_at: new Date(Date.now() - 2 * 60 * 60 * 1000) };
+    transactionQuery.mockImplementationOnce(async () => ({ rows: [stale] }));
+    const action = await createAction({
+      accountId: account.id, itemId: item.id, kind: 'publish_comment', payload: { body: 'Retry after crash.' },
+    });
+    expect(action.state).toBe('pending_review');
+    expect(action.id).not.toBe('zombie');
+    const calls = transactionQuery.mock.calls.map(([sql, params]) => ({ sql, params }));
+    const fail = calls.find(({ sql }) => sql.includes("state='failed'"));
+    expect(fail.params).toEqual(['zombie']);
+    const event = calls.find(({ sql, params }) => sql.includes('stacker_news_action_events') && params?.includes('failed'));
+    expect(event.params).toContain('zombie');
+  });
+
+  it('keeps returning a recently started executing action', async () => {
+    const fresh = { id: 'running', account_id: account.id, state: 'executing', updated_at: new Date() };
+    transactionQuery.mockImplementationOnce(async () => ({ rows: [fresh] }));
+    const action = await createAction({
+      accountId: account.id, itemId: item.id, kind: 'publish_comment', payload: { body: 'In flight.' },
+    });
+    expect(action.id).toBe('running');
+  });
 });

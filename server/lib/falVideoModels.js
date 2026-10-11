@@ -26,14 +26,20 @@
  */
 
 /** Date the schemas and prices below were last verified against fal.ai. */
-export const FAL_VIDEO_PRICING_VERIFIED_AT = '2026-09-29';
+export const FAL_VIDEO_PRICING_VERIFIED_AT = '2026-10-11';
 
-/** What an entry renders from: text, a start frame, reference assets, or a frame + source audio. */
-export const FAL_VIDEO_KINDS = Object.freeze(['t2v', 'i2v', 'ref2v', 'lipsync']);
+/**
+ * What an entry renders from: text, a start frame, reference assets, a frame +
+ * source audio it lip-syncs to (`lipsync`), or a frame + source audio that
+ * drives the whole picture's motion (`a2v` — a drummer hitting on the beat, a
+ * dancer, a crowd), steered by a prompt.
+ */
+export const FAL_VIDEO_KINDS = Object.freeze(['t2v', 'i2v', 'ref2v', 'lipsync', 'a2v']);
 
 export const FAL_DEFAULT_TEXT_VIDEO_MODEL = 'fal-ai/minimax/hailuo-02/standard/text-to-video';
 export const FAL_DEFAULT_IMAGE_VIDEO_MODEL = 'fal-ai/minimax/hailuo-02/standard/image-to-video';
 export const FAL_LIPSYNC_VIDEO_MODEL = 'minimax/h3-max/lip-sync/image-to-video';
+export const FAL_AUDIO_VIDEO_MODEL = 'fal-ai/bytedance/omnihuman/v1.5';
 
 const H3_RESOLUTIONS = Object.freeze(['480P', '768P', '1080P']);
 const SEEDANCE_RESOLUTIONS = Object.freeze(['480p', '720p', '1080p']);
@@ -145,6 +151,20 @@ export const FAL_VIDEO_MODELS = Object.freeze([
   seedance('bytedance/seedance-2.5/text-to-video', 't2v', 'Seedance 2.5 (text)', {
     aspectRatio: { param: 'aspect_ratio', options: WIDE_ASPECTS, auto: 'auto' },
   }),
+  {
+    // Audio-driven human figure: expression, gesture and body movement follow
+    // the audio, not just the mouth. Expects a person in the frame.
+    id: FAL_AUDIO_VIDEO_MODEL, kind: 'a2v', label: 'OmniHuman v1.5 (audio-driven person)', family: 'omnihuman',
+    prompt: 'optional',
+    image: { param: 'image_url', required: true },
+    // "Audio must be under 30s long for 1080p generation and under 60s long for 720p".
+    audioInput: { param: 'audio_url', minSec: 1, maxSec: 30 },
+    duration: { kind: 'audio' },
+    resolution: { param: 'resolution', options: ['720p', '1080p'], default: '1080p' },
+    aspectRatio: null,
+    negativePrompt: 'fold',
+    pricing: { perSecond: 0.16 },
+  },
   seedance('bytedance/seedance-2.5/reference-to-video', 'ref2v', 'Seedance 2.5 (reference)', {
     // Referenced in the prompt as @Image1 / @Audio1. Audio references let a
     // singer follow supplied audio, but each clip is capped at 30.2s.
@@ -196,6 +216,9 @@ export const getFalVideoModel = (modelId) => (typeof modelId === 'string' ? BY_I
  */
 export const FAL_IMAGE_VIDEO_MODELS = Object.freeze(FAL_VIDEO_MODELS.filter((m) => m.kind === 'i2v'));
 
+/** Models that animate a frame to supplied audio across the whole picture (the music-driven performance lane). */
+export const FAL_AUDIO_VIDEO_MODELS = Object.freeze(FAL_VIDEO_MODELS.filter((m) => m.kind === 'a2v'));
+
 /** Resolution choices a model offers (empty when it has no resolution parameter). */
 export const falVideoResolutions = (model) => (model?.resolution?.options ? [...model.resolution.options] : []);
 
@@ -215,7 +238,7 @@ export function resolveFalVideoResolution(model, requested) {
  * shortest supported length that still COVERS it, else the longest — a Music
  * Video shot must not be under-covered (the renderer refuses a clip more than a
  * frame short) and nothing loops or stretches footage. An absent / invalid
- * request gets the model's default. Null for a lip-sync model, whose length
+ * request gets the model's default. Null for a source-audio model, whose length
  * follows its audio.
  */
 export function coerceFalVideoSeconds(model, seconds) {
@@ -313,7 +336,7 @@ export function describeFalVideoRate(modelId, resolution) {
  * Build the fal queue request body for a curated model, or return null for an
  * uncurated id (the caller keeps its legacy body). Returns `{ body, model,
  * seconds, resolution, generateAudio, estimatedCostUsd }` — `seconds` is the
- * coerced clip length (null for lip-sync, whose length is `audioSec`).
+ * coerced clip length (null for a source-audio model, whose length is `audioSec`).
  *
  * Inputs a model cannot take are dropped rather than sent (fal ignores unknown
  * keys, which would bill a render that silently disregarded them); a missing
@@ -367,7 +390,7 @@ export function buildFalVideoRequest({
     body[model.referenceAudio.param] = audioRefs;
   }
   if (model.audioInput) {
-    if (!audioUrl) throw refuse(`${model.label} needs the source audio to synchronize to`);
+    if (!audioUrl) throw refuse(`${model.label} needs the source audio to ${model.kind === 'a2v' ? 'drive its motion' : 'synchronize to'}`);
     body[model.audioInput.param] = audioUrl;
     if (model.transcription && enableTranscription) body[model.transcription] = true;
   } else if (audioUrl) {

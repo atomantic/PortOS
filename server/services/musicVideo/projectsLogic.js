@@ -37,6 +37,8 @@ import { normalizeLyricMarkers } from './lyricMarkers.js';
 import { ensureSceneTakes, TAKE_SLOT } from './takes.js';
 import { normalizeComposition, invalidateCompositionTiming, withStoredCompositionDocument } from './composition.js';
 import { normalizeSoundBed } from './soundBed.js';
+import { normalizeFilmLook } from '../../lib/filmLook.js';
+import { normalizeTitleCard } from '../../lib/musicVideoTitleCard.js';
 import { remapTreatmentForClone, scenesFingerprint } from './treatment.js';
 import { normalizeMusicVideoAutomation } from '../../lib/musicVideoAutomation.js';
 
@@ -98,6 +100,7 @@ function normalizeVisualSpec(patch, base = null) {
 
 /** Build a fresh project record from validated create input. */
 export function buildProjectRecord(input, { id, now }) {
+  const productionPolicy = normalizeMusicVideoProductionPolicy(input.productionPolicy || (input.mediaMode ? { strategy: 'code-first', maxGeneratedVideoPercent: input.mediaMode === 'code-images-video' ? 100 : 0 } : null));
   const {
     name, mode = 'director', trackId = null,
     uploadedAudioFilename = null, concept = null,
@@ -130,6 +133,8 @@ export function buildProjectRecord(input, { id, now }) {
       falModelId: videoSettings.falModelId ?? null,
       falResolution: videoSettings.falResolution ?? null,
       falLipSyncResolution: videoSettings.falLipSyncResolution ?? null,
+      falMusicModelId: videoSettings.falMusicModelId ?? null,
+      falMusicResolution: videoSettings.falMusicResolution ?? null,
       generationMode: videoSettings.generationMode ?? 'image',
       audioReactiveLora: videoSettings.audioReactiveLora ?? null,
       audioReactiveScale: videoSettings.audioReactiveScale ?? 1.2,
@@ -156,14 +161,20 @@ export function buildProjectRecord(input, { id, now }) {
     pacing: input.pacing ?? null,
     // #8984 — composition manifest (null = plain concatenation render).
     // The document pointer is set only by the import routes, never on create.
-    composition: input.composition || input.mediaMode ? withStoredCompositionDocument(normalizeComposition(input.composition || { mode: 'document' }), null) : null,
+    // A code-first project authors a document; a footage project composes its shots.
+    composition: input.composition || input.mediaMode ? withStoredCompositionDocument(normalizeComposition(input.composition
+      || { mode: productionPolicy.strategy === 'code-first' ? 'document' : 'composed' }), null) : null,
     // #8988 — optional sound-design bed mixed under the song.
     soundBed: input.soundBed ? normalizeSoundBed(input.soundBed) : null,
+    // The finishing film look every preview, render and baked still is viewed through; null = none.
+    filmLook: input.filmLook ? normalizeFilmLook(input.filmLook) : null,
+    // The opening title card (song, artist, year over the opener); null = none.
+    titleCard: normalizeTitleCard(input.titleCard),
     // #8980 — optional pre-production treatment (brief, arc, shot direction,
     // proof checklist); null until the director starts one. See treatment.js.
     treatment: null,
     mediaMode: musicVideoMediaMode(input),
-    productionPolicy: normalizeMusicVideoProductionPolicy(input.productionPolicy || (input.mediaMode ? { strategy: 'code-first', maxGeneratedVideoPercent: input.mediaMode === 'code-images-video' ? 100 : 0 } : null)),
+    productionPolicy,
     scenes: [],
     renderHistoryId: null,
     renderError: null,
@@ -342,7 +353,10 @@ export function applyProjectPatch(project, patch) {
     } : {}),
     ...(Array.isArray(patch.lyricCues) ? { lyricCues: normalizeLyricCues(patch.lyricCues).map((cue) => {
       const previous = project.lyricCues?.find((entry) => entry.id === cue.id);
-      if (previous && previous.text !== cue.text) delete cue.matched;
+      if (previous && previous.text !== cue.text) {
+        delete cue.matched;
+        delete cue.suspect;
+      }
       return cue;
     }) } : {}),
     ...(Array.isArray(patch.lyricMarkers) ? { lyricMarkers: normalizeLyricMarkers(patch.lyricMarkers) } : {}),
@@ -353,6 +367,10 @@ export function applyProjectPatch(project, patch) {
     ...('composition' in patch ? { composition: withStoredCompositionDocument(normalizeComposition(patch.composition), project.composition) } : {}),
     // #8988 — an explicitly chosen sound-design bed; null clears it.
     ...('soundBed' in patch ? { soundBed: normalizeSoundBed(patch.soundBed) } : {}),
+    // The film look is replaced whole (one bounded record); null clears it.
+    ...('filmLook' in patch ? { filmLook: normalizeFilmLook(patch.filmLook) } : {}),
+    // The title card is replaced whole (one bounded record); null clears it.
+    ...('titleCard' in patch ? { titleCard: normalizeTitleCard(patch.titleCard) } : {}),
   };
   // #8988: a bed is mixed UNDER the song — the song itself can't be its bed.
   const masterTrackId = 'trackId' in patch ? patch.trackId : project.trackId;
@@ -375,6 +393,8 @@ export function applyProjectPatch(project, patch) {
         falModelId: null,
         falResolution: null,
         falLipSyncResolution: null,
+        falMusicModelId: null,
+        falMusicResolution: null,
         generationMode: 'image',
         audioReactiveLora: null,
         audioReactiveScale: 1.2,
@@ -489,6 +509,7 @@ function buildScene(input, { order }) {
     // lip-synced performance shot, which only a source-audio provider renders.
     shotMode: input.shotMode ?? 'cutaway',
     ...(input.performanceSpeaker ? { performanceSpeaker: input.performanceSpeaker } : {}),
+    ...(input.performanceStyle === 'music' ? { performanceStyle: 'music' } : {}),
     referenceImageId: null,
     videoHistoryId: null,
     // #8965 — immutable candidate takes; the two slot fields above are the
@@ -690,7 +711,7 @@ export function splitScene(project, sceneId, { backend = null } = {}) {
   if (idx < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
   const scene = scenes[idx];
   const lane = backend || project.videoSettings?.backend || null;
-  const maxSec = shotSplitLimit(scene, lane);
+  const maxSec = shotSplitLimit(scene, lane, project.videoSettings);
   if (maxSec == null) {
     throw new ServerError('This backend renders the shot at any length — there is nothing to split.', { status: 400, code: 'MUSIC_VIDEO_SPLIT_NOT_NEEDED' });
   }
@@ -739,6 +760,7 @@ export function splitScene(project, sceneId, { backend = null } = {}) {
         visualLayer: scene.visualLayer ?? 'footage',
         shotMode: scene.shotMode ?? 'cutaway',
         performanceSpeaker: scene.performanceSpeaker ?? null,
+        performanceStyle: scene.performanceStyle ?? null,
         ...(scene.camera ? { camera: scene.camera } : {}),
         ...timing,
       }),
@@ -788,7 +810,7 @@ export function mergeNextScene(project, sceneId, { backend = null } = {}) {
   if (timedSec(startSec) && timedSec(endSec) && (endSec <= startSec || (timedSec(scene.endSec) && endSec < scene.endSec))) {
     throw new ServerError('The next scene ends before this one does — put the scenes in song order before merging them.', { status: 400, code: 'MUSIC_VIDEO_MERGE_OUT_OF_ORDER' });
   }
-  const maxSec = shotSplitLimit(scene, lane);
+  const maxSec = shotSplitLimit(scene, lane, project.videoSettings);
   if (maxSec != null) {
     if (!timedSec(startSec) || !timedSec(endSec)) {
       throw new ServerError('Both scenes need a start and end time before they can be merged on this backend.', { status: 400, code: 'MUSIC_VIDEO_MERGE_UNTIMED' });

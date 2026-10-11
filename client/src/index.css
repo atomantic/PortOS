@@ -1846,6 +1846,18 @@ input[type="color"],
    `justify-center` buttons are excluded because there the centering is the
    intent. Deliberately NOT a blanket `button { text-align: left }` — non-flex
    full-width buttons rely on the centered default and would visibly shift. */
+/* A <summary> given a touch-target height (`min-h-[44px]`, `min-h-11`) is a
+   block list-item, so its one line of text sat at the top of the box with the
+   spare height below it — a disclosure that looked oversized and off-center.
+   `align-content: center` centers it in a block container without changing
+   `display` (which would drop the disclosure marker). In `base` so a page's own
+   `content-*` utility still wins. */
+@layer base {
+  summary {
+    align-content: center;
+  }
+}
+
 @layer base {
   button:where(.flex, .inline-flex):not(
     :where([class*="justify-center"], [class*="justify-around"], [class*="justify-evenly"])

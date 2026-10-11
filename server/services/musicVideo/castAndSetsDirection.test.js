@@ -48,9 +48,23 @@ describe('Cast & Sets direction', () => {
     expect(prompt).toContain('Interpret the song');
     expect(prompt).toMatch(/LOOK, LIGHTING, COLOR and TEXTURE only/);
     expect(prompt).toContain('0. a kitchen — steam and brass');
+    expect(prompt).toContain('The image generator never sees the mood board');
+    expect(prompt).not.toContain('moodRefs');
     expect(prompt).toContain('Director guidance: keep it night-lit');
     expect(prompt).toContain('1. Chorus 0:20–1:00');
     expect(prompt).not.toContain('This is a REVISION');
+  });
+
+  it('designs from the song\'s Suno style, falling back to the track, and keeps it apart from the visual style', () => {
+    const songStyle = '1980s synth-pop, gated snare, \u2011cutesy, -musical theater';
+    const prompt = buildCastAndSetsPrompt({ ...project, concept: { ...project.concept, songStyle } });
+    expect(prompt).toContain('SONG STYLE');
+    expect(prompt).toContain('Sound: 1980s synth-pop, gated snare');
+    expect(prompt).toContain('The song deliberately avoids: cutesy, musical theater.');
+    expect(prompt).toContain("Director's visual style: raw flash");
+    // A project made before songStyle existed still reads its track's prompt.
+    expect(buildCastAndSetsPrompt(project, { track: { prompt: 'dark wave' } })).toContain('Sound: dark wave');
+    expect(buildCastAndSetsPrompt(project)).not.toContain('SONG STYLE');
   });
 
   it('fixes the protagonist to a loaded character style, stating it once with its wardrobe', () => {
@@ -66,7 +80,7 @@ describe('Cast & Sets direction', () => {
     const echoed = buildCastAndSetsPrompt(project).split('no other text:\n')[1];
     const parsed = parseCastAndSetsResponse(`${echoed}\n\nSure:\n\`\`\`json\n${JSON.stringify(ANSWER)}\n\`\`\``);
     expect(parsed.logline).toBe('She escapes.');
-    const { direction, missing } = mergeCastAndSetsDirection(null, parsed, { sections, moodImageCount: 4 });
+    const { direction, missing } = mergeCastAndSetsDirection(null, parsed, { sections });
     expect(missing).toEqual([]);
     expect(direction.sets.map((s) => s.id)).toEqual(['lab-room', 'harbor', 'roof']);
     expect(direction.sets[0].sections).toEqual(['Intro']);
@@ -74,7 +88,8 @@ describe('Cast & Sets direction', () => {
     expect(direction.songMap).toEqual([{ section: 0, setId: 'harbor' }, { section: 1, setId: 'roof' }]);
     expect(direction.tests).toEqual([{ setId: 'lab-room', look: 'Lab', action: 'climbing', caption: '' }]);
     expect(direction.overlayConcept).toEqual({ summary: 'A falling meter.', elements: [] });
-    expect(direction.moodRefs).toEqual([2]);
+    // Mood board images are never image references, so a stray pick is dropped.
+    expect(direction).not.toHaveProperty('moodRefs');
   });
 
   it('refuses a first pass missing the protagonist or enough sets', () => {
@@ -110,15 +125,15 @@ describe('Cast & Sets direction', () => {
 
   it('treats a null field in a revision as no change, and an empty one as a clear', () => {
     const { direction: previous } = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify({ ...ANSWER,
-      protagonist: { ...ANSWER.protagonist, gesture: 'wave', rules: ['r1'] }, world: { camera: 'slow dolly' } })), { sections, moodImageCount: 4, medium: 'procedural' });
+      protagonist: { ...ANSWER.protagonist, gesture: 'wave', rules: ['r1'] }, world: { camera: 'slow dolly' } })), { sections, medium: 'procedural' });
     const revision = parseCastAndSetsResponse(JSON.stringify({ protagonist: { hair: 'red', gesture: null, rules: null }, world: { camera: null, layout: '' } }));
-    const { direction } = mergeCastAndSetsDirection(previous, revision, { sections, moodImageCount: 4, medium: 'procedural' });
+    const { direction } = mergeCastAndSetsDirection(previous, revision, { sections, medium: 'procedural' });
     expect(direction.protagonist).toMatchObject({ hair: 'red', gesture: 'wave', rules: ['r1'] });
     expect(direction.world).toMatchObject({ camera: 'slow dolly', layout: '' });
   });
 
   it('on a revision keeps absent keys, applies present ones, and treats an empty value as a clear', () => {
-    const { direction: previous } = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify({ ...ANSWER, questions: ['Is she right?'], interpretation: 'agents' })), { sections, moodImageCount: 4 });
+    const { direction: previous } = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify({ ...ANSWER, questions: ['Is she right?'], interpretation: 'agents' })), { sections });
     const revision = parseCastAndSetsResponse(JSON.stringify({
       protagonist: { hair: 'silver crop' },
       questions: [],
@@ -127,7 +142,7 @@ describe('Cast & Sets direction', () => {
       looks: 'not a list',
     }));
     expect(revision).not.toHaveProperty('looks');
-    const { direction, missing } = mergeCastAndSetsDirection(previous, revision, { sections, moodImageCount: 4 });
+    const { direction, missing } = mergeCastAndSetsDirection(previous, revision, { sections });
     expect(missing).toEqual([]);
     expect(direction.protagonist).toMatchObject({ name: 'Nova', hair: 'silver crop', face: 'weathered', rules: ['No hats'] });
     expect(direction.looks).toEqual(previous.looks);
@@ -157,6 +172,9 @@ describe('Cast & Sets procedural medium', () => {
   const procedural = { ...project, productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 } };
   it('resolves the medium from the production policy and the brief tools together', () => {
     expect(castAndSetsMedium(procedural)).toBe('procedural');
+    // Code-first with a generated-footage allowance needs a character sheet for that footage.
+    expect(castAndSetsMedium({ ...project, productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 20 } })).toBe('photographic');
+    expect(castAndSetsMedium({ ...project, mediaMode: 'code-images', productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 20 } })).toBe('procedural');
     expect(castAndSetsMedium({ automation: { tools: ['image:codex', 'code:render'] } })).toBe('procedural');
     // A video tool, an image-only brief and an untouched project stay photographic.
     expect(castAndSetsMedium({ automation: { tools: ['image:codex', 'code:render', 'video:local'] } })).toBe('photographic');
@@ -235,7 +253,7 @@ describe('Cast & Sets reusable definitions', () => {
 
 describe('Cast & Sets direct edits', () => {
   const saved = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify(PROCEDURAL_ANSWER)), { sections, medium: 'procedural' }).direction;
-  const direction = { ...saved, look: 'flat fills', moodRefs: [0, 2] };
+  const direction = { ...saved, look: 'flat fills' };
 
   it('replaces present fields, keeps absent ones, clears on empty, and reports what changed', () => {
     const edited = applyCastAndSetsDirectionEdits(direction, {
@@ -247,8 +265,8 @@ describe('Cast & Sets direct edits', () => {
     expect(edited.direction.world).toMatchObject({ camera: 'locked off', layout: direction.world.layout });
     expect(edited.direction.sets[0].imageRole).toBe('texture');
     expect(edited.direction.sets.slice(1)).toEqual(direction.sets.slice(1));
-    // The mood-board picks and photographic look are not touched by an edit.
-    expect(edited.direction).toMatchObject({ look: 'flat fills', moodRefs: [0, 2], songMap: direction.songMap });
+    // The photographic look and song map are not touched by an edit.
+    expect(edited.direction).toMatchObject({ look: 'flat fills', songMap: direction.songMap });
     expect(edited.changed).toEqual(['palette', 'movement', 'expressions', 'world camera', `${direction.sets[0].name} image role`]);
     // Re-saving the same values is no change at all.
     expect(applyCastAndSetsDirectionEdits(direction, { world: { camera: direction.world.camera } }, { sections }).changed).toEqual([]);

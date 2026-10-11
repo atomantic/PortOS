@@ -19,7 +19,6 @@ import {
 import { clampImageDimensions } from '../lib/imageGenResolutions';
 import { peerModelRequiresInput } from '../lib/federatedMediaReadiness.js';
 import { isHardwareCompatible } from '../utils/systemCapabilities';
-import { DEFAULT_NEGATIVE_PROMPT } from '../lib/imageGenDefaults';
 import { resolveCleanersFromConfig } from '../lib/imageCleaners';
 import useMounted from './useMounted';
 import toast from '../components/ui/Toast';
@@ -69,7 +68,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
   const remixLookupSequenceRef = useRef(0);
   const remixHandoffPending = remixHandoff?.status === 'loading' || remixHandoff?.status === 'restoring';
   const [prompt, setPrompt] = useState('');
-  const [negativePrompt, setNegativePrompt] = useState(DEFAULT_NEGATIVE_PROMPT);
+  const [negativePrompt, setNegativePrompt] = useState('');
   const [optionsOpen, setOptionsOpen] = useState(() => (
     window.matchMedia?.('(min-width: 1024px)').matches ?? false
   ));

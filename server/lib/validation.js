@@ -4,6 +4,8 @@ export { MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from './imageLimits.js';
 import { CREDENTIALS } from './credentialRegistry.js';
 import { DEFAULT_BACKUP_CRON, MIN_RETENTION_COUNT, MAX_RETENTION_COUNT } from './backupConfig.js';
 import { z } from 'zod';
+import { POLLUTING_KEYS } from './objects.js';
+import { pipelineEditorialChecksSettingsSchema } from './pipelineValidation.js';
 import { ServerError } from './errorHandler.js';
 import { isSafeGitRef } from './gitArgs.js';
 import { partialWithoutDefaults, emptyToUndefined, emptyToNull, optionalBooleanMap, presetProviderIdSchema, providerRefSchema } from './zodCompat.js';
@@ -13,7 +15,7 @@ import { PROVIDER_FAMILY_IDS } from './providerFamilies.js';
 import { APP_FEATURE_IDS, INSTANCE_FEATURE_IDS, INSTANCE_FEATURE_GROUP_IDS } from './instanceFeatureRegistry.js';
 import { MAX_MONTHLY_COST } from './subscriptionSavings.js';
 import { MAX_PLAN_TIER_LENGTH } from './subscriptionPlanTiers.js';
-import { QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from './generationModes.js';
+import { IMAGE_GEN_MODES, QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from './generationModes.js';
 import { FAL_IMAGE_MODEL_IDS } from './falImageModels.js';
 import { RENDER_TARGETS, RENDER_TARGET_BACKEND_AUTO } from './renderTargets.js';
 import {
@@ -2198,6 +2200,62 @@ export const localLlmSettingsSchema = z.object({
   }).strict().optional(),
 }).strict();
 
+// Only slices written by patchSettingsSlice callers belong on this mutation
+// surface. Credentials/auth and executable-policy parents have dedicated APIs.
+const renderFormNumberSchema = z.union([
+  z.number().finite(),
+  z.string().max(30).refine((value) => value === '' || Number.isFinite(Number(value)), 'Must be numeric or empty'),
+]);
+const renderFormSettingsSchema = z.object({
+  mode: z.enum(IMAGE_GEN_MODES).optional(),
+  modelId: z.string().max(300).nullable().optional(),
+  cloudModel: z.string().max(300).nullable().optional(),
+  width: z.number().int().positive().max(MAX_IMAGE_EDGE).optional(),
+  height: z.number().int().positive().max(MAX_IMAGE_EDGE).optional(),
+  steps: renderFormNumberSchema.optional(),
+  guidance: renderFormNumberSchema.optional(),
+  cfgScale: renderFormNumberSchema.optional(),
+  quantize: z.enum(['3', '4', '5', '6', '8']).optional(),
+  seed: renderFormNumberSchema.optional(),
+  negativePrompt: z.string().max(4000).optional(),
+  extraStyle: z.string().max(4000).optional(),
+}).strict();
+
+export const settingsSlicePartialSchemas = Object.freeze({
+  ...Object.fromEntries(Object.entries(localLlmSettingsSchema.shape)
+    .map(([runtime, schema]) => [`localLlm.${runtime}`, schema.unwrap()])),
+  'imageGen.local': z.object({
+    pythonPath: z.string().max(500).nullable().optional(),
+  }).strict(),
+  pipeline: z.object({ imageGen: renderFormSettingsSchema.nullable().optional() }).strict(),
+  writersRoom: z.object({ imageGen: renderFormSettingsSchema.nullable().optional() }).strict(),
+  seriesAutopilot: seriesAutopilotSettingsSchema.partial(),
+  pipelineEditorialChecks: pipelineEditorialChecksSettingsSchema.partial(),
+  autoUpdate: autoUpdateSettingsSchema,
+});
+
+// Check raw JSON before Zod can strip a dangerous key. Arrays can contain
+// nested objects too; none may smuggle prototype-related property names.
+const hasPollutingKey = (value) => value !== null && typeof value === 'object'
+  && Object.entries(value).some(([key, child]) => POLLUTING_KEYS.has(key) || hasPollutingKey(child));
+
+export const settingsSlicePatchSchema = z.preprocess((value, ctx) => {
+  if (hasPollutingKey(value)) {
+    ctx.addIssue({ code: 'custom', message: 'Prototype-related keys are forbidden' });
+  }
+  return value;
+}, z.object({
+  slicePath: z.enum(Object.keys(settingsSlicePartialSchemas)),
+  partial: z.record(z.unknown()),
+}).strict().superRefine(({ slicePath, partial }, ctx) => {
+  const result = settingsSlicePartialSchemas[slicePath].safeParse(partial);
+  if (!result.success) {
+    for (const issue of result.error.issues) {
+      ctx.addIssue({ ...issue, path: ['partial', ...issue.path] });
+    }
+  }
+}));
+
 // =============================================================================
 // LM STUDIO (server/routes/lmstudio.js)
 // =============================================================================
@@ -2765,7 +2823,10 @@ export const dailyReviewQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).default(0),
 });
 
-export const calendarAutoConfigureBodySchema = z.object({ email: optionalString });
+export const calendarAutoConfigureBodySchema = z.object({
+  email: optionalString,
+  requestId: z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/).optional(),
+});
 export const commandExecuteBodySchema = z.object({ command: nonEmptyString, workspacePath: nullishString });
 export const dataArchiveBodySchema = z.object({
   daysToKeep: z.preprocess((value) => (value == null ? undefined : value), z.coerce.number().finite().min(0).optional()),

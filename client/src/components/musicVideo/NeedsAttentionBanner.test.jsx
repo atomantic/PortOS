@@ -28,6 +28,35 @@ describe('NeedsAttentionBanner (#9940)', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it('settles each stale approval in place: Keep approved, or Revert a kept input', () => {
+    const handlers = { onKeepApproval: vi.fn(), onRevertApproval: vi.fn() };
+    const readiness = {
+      castAndSets: { approved: true, stale: { changedFields: ['style'], revertible: ['style'] } },
+      art: { approved: false, problems: [], stale: { changedFields: ['cast'] } },
+      storyboard: { approved: false, problems: ['Cover the master with timed shots.'], stale: { changedFields: ['concept'], revertible: ['concept'] } },
+    };
+    renderWithRouter(<NeedsAttentionBanner items={deriveAttentionItems({ id: 'mv-example', scenes: [] }, { readiness })} actions={handlers} />);
+    const banner = screen.getByRole('region', { name: 'Needs attention' });
+    fireEvent.click(within(banner).getByRole('button', { name: 'Keep Cast & Sets check-in approved' }));
+    expect(handlers.onKeepApproval).toHaveBeenCalledWith('castAndSets');
+    fireEvent.click(within(banner).getByRole('button', { name: 'Keep Art direction approved' }));
+    expect(handlers.onKeepApproval).toHaveBeenCalledWith('art');
+    // A storyboard with other open problems can't simply be kept; its changed input can still be put back.
+    expect(within(banner).queryByRole('button', { name: 'Keep Timed storyboard approved' })).toBeNull();
+    fireEvent.click(within(banner).getByRole('button', { name: 'Revert concept on Timed storyboard' }));
+    expect(handlers.onRevertApproval).toHaveBeenCalledWith('storyboard', 'concept');
+  });
+
+  it('folds many reverts behind one toggle so Keep approved stays the obvious choice', () => {
+    const revertible = Array.from({ length: 26 }, (_, i) => `scene ${i + 1} prompt`);
+    const readiness = { storyboard: { approved: false, problems: [], stale: { changedFields: ['storyboard shots', ...revertible], revertible } } };
+    renderWithRouter(<NeedsAttentionBanner items={deriveAttentionItems({ id: 'mv-example', scenes: [] }, { readiness })} actions={{ onKeepApproval: vi.fn(), onRevertApproval: vi.fn() }} />);
+    const banner = screen.getByRole('region', { name: 'Needs attention' });
+    expect(banner).toHaveTextContent('changed since: storyboard shots, 26 scene prompts.');
+    expect(within(banner).getByText('See 26 changes to Timed storyboard you can undo').closest('details').open).toBe(false);
+    expect(within(banner).getByRole('button', { name: 'Keep Timed storyboard approved' })).toBeVisible();
+  });
+
   it('offers Resume and Cancel for an open revision, wired to the id the project holds', () => {
     const handlers = actions();
     renderWithRouter(<NeedsAttentionBanner items={deriveAttentionItems({ ...stranded, status: 'complete', castAndSets: null })} actions={handlers} />);

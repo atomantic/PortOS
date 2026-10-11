@@ -22,7 +22,7 @@ import * as platformAccounts from '../services/platformAccounts.js';
 import * as agentPersonalities from '../services/agentPersonalities.js';
 import * as agentActivity from '../services/agentActivity.js';
 import * as agentDrafts from '../services/agentDrafts.js';
-import { generatePost, generateComment, generateReply } from '../services/agentContentGenerator.js';
+import { generatePost, generateComment, generateReply, assertMoltbookCommentProvider } from '../services/agentContentGenerator.js';
 import { findRelevantPosts } from '../services/agentFeedFilter.js';
 import { createMoltbookClient } from '../integrations/moltbook/index.js';
 import { collectPublishedPosts } from '../services/agentPublished.js';
@@ -73,6 +73,7 @@ router.post('/generate-comment', asyncHandler(async (req, res) => {
   console.log(`🛠️ POST /api/agents/tools/generate-comment agent=${data.agentId} post=${data.postId}`);
 
   const { client, agent } = await getClientAndAgent(data.accountId, data.agentId);
+  await assertMoltbookCommentProvider(data.providerId);
 
   const post = await client.getPost(data.postId);
   const commentsResponse = await client.getComments(data.postId);
@@ -157,6 +158,10 @@ router.post('/engage', asyncHandler(async (req, res) => {
   console.log(`🛠️ POST /api/agents/tools/engage agent=${data.agentId}`);
 
   const { client, agent } = await getClientAndAgent(data.accountId, data.agentId);
+  const engagementConfig = agent.aiConfig?.engagement || agent.aiConfig;
+  if (data.maxComments > 0) {
+    await assertMoltbookCommentProvider(engagementConfig?.providerId);
+  }
 
   // Import executeEngage pattern inline to avoid circular deps
   const { findReplyOpportunities } = await import('../services/agentFeedFilter.js');
@@ -198,7 +203,6 @@ router.post('/engage', asyncHandler(async (req, res) => {
       const rateCheck = checkRateLimit(client.apiKey, 'comment');
       if (!rateCheck.allowed) break;
 
-      const engagementConfig = agent.aiConfig?.engagement || agent.aiConfig;
       const generated = await generateComment(agent, opportunity.post, opportunity.comments, null, engagementConfig?.providerId, engagementConfig?.model);
       const result = await client.createComment(opportunity.post.id, generated.content);
 
@@ -400,6 +404,10 @@ router.post('/check-posts', asyncHandler(async (req, res) => {
   console.log(`👀 POST /api/agents/tools/check-posts agent=${data.agentId} days=${data.days}`);
 
   const { client, agent, account } = await getClientAndAgent(data.accountId, data.agentId);
+  const engagementConfig = agent.aiConfig?.engagement || agent.aiConfig;
+  if (data.maxReplies > 0) {
+    await assertMoltbookCommentProvider(engagementConfig?.providerId);
+  }
   const { checkRateLimit, isAccountSuspended } = await import('../integrations/moltbook/index.js');
 
   const agentUsername = account.credentials.username;
@@ -469,7 +477,6 @@ router.post('/check-posts', asyncHandler(async (req, res) => {
       if (!suspended && replied.length < data.maxReplies) {
         const rateCheck = checkRateLimit(client.apiKey, 'comment');
         if (rateCheck.allowed) {
-          const engagementConfig = agent.aiConfig?.engagement || agent.aiConfig;
           const generated = await generateReply(agent, post, comment, null, engagementConfig?.providerId, engagementConfig?.model);
           const replyResult = await client.replyToComment(postId, comment.id, generated.content).catch(e => {
             if (isAccountSuspended(e)) suspended = true;

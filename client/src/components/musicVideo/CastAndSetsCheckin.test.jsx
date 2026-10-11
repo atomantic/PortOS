@@ -3,10 +3,11 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import CastSetsStage from './stages/CastSetsStage.jsx';
 import useMusicVideoCastAndSets from '../../hooks/useMusicVideoCastAndSets';
+import { castAndSetsPreviewItems } from './CastAndSetsReferenceProgress.jsx';
 
 const { listeners, api, getMediaJob } = vi.hoisted(() => ({
   listeners: new Map(),
-  api: { getMusicVideoProject: vi.fn(), startMusicVideoCastAndSets: vi.fn(), regenerateMusicVideoCastAndSets: vi.fn(), editMusicVideoCastAndSetsDirection: vi.fn(), resumeMusicVideoCastAndSets: vi.fn(), approveMusicVideoCastAndSets: vi.fn(), reconfirmMusicVideoCastAndSets: vi.fn(), revertMusicVideoProductionInput: vi.fn(), skipMusicVideoCastAndSets: vi.fn() },
+  api: { getMusicVideoProject: vi.fn(), startMusicVideoCastAndSets: vi.fn(), regenerateMusicVideoCastAndSets: vi.fn(), editMusicVideoCastAndSetsDirection: vi.fn(), resumeMusicVideoCastAndSets: vi.fn(), approveMusicVideoCastAndSets: vi.fn(), reconfirmMusicVideoCastAndSets: vi.fn(), revertMusicVideoProductionInput: vi.fn(), skipMusicVideoCastAndSets: vi.fn(), applyMusicVideoCastAndSetsFeedback: vi.fn(), removeMusicVideoCastAndSetsFeedback: vi.fn() },
   getMediaJob: vi.fn(),
 }));
 vi.mock('../../services/socket', () => ({ default: {
@@ -27,18 +28,18 @@ const DRAFTS = { conceptDraft: { value: '', onChange: () => {}, onBlur: () => {}
 
 const emit = async (event, data) => act(async () => { for (const fn of listeners.get(event) || []) fn(data); });
 const plan = {
-  character: { key: 'character', label: 'Keeper', prompt: 'Planned keeper portrait', deps: [], refKeys: [], moodRefs: true },
+  character: { key: 'character', label: 'Keeper', prompt: 'Planned keeper portrait', deps: [], refKeys: [] },
   set: { key: 'set', label: 'Lamp room', prompt: 'Planned lamp room', deps: ['character'], refKeys: ['character'] },
   looks: { key: 'looks', label: 'Wardrobe', prompt: 'Planned wardrobe', deps: ['character'], refKeys: ['character'] },
 };
-const project = (images = {}, extra = {}) => ({ id: 'example-project', castAndSets: { revision: 1, status: 'imaging', plan, images, moodImages: [{ kind: 'image-ref', filename: 'mood.png' }], ...extra } });
+const project = (images = {}, extra = {}) => ({ id: 'example-project', castAndSets: { revision: 1, status: 'imaging', plan, images, ...extra } });
 const done = (filename, prompt) => ({ status: 'done', jobId: `job-${filename}`, imageId: filename, submittedPrompt: prompt, submittedRevision: 1, submittedReferences: [{ kind: 'image-ref', filename: 'mood.png' }] });
 let selectProject;
-function Harness({ initial, locked = true }) {
+function Harness({ initial, locked = true, openPreview = vi.fn() }) {
   const [value, setValue] = useState(initial);
   selectProject = setValue;
   const actions = useMusicVideoCastAndSets({ project: value, replaceProject: setValue });
-  return <CastSetsStage board={{ project: value, locked, castSets: actions, kickoff: { running: locked }, devArtifacts: { busy: false }, openArtifact: vi.fn(), approveCastAndSets: actions.approve, skipCastAndSets: actions.skip, ...DRAFTS }} />;
+  return <CastSetsStage board={{ project: value, locked, castSets: actions, kickoff: { running: locked }, devArtifacts: { busy: false }, openArtifact: vi.fn(), openPreview, approveCastAndSets: actions.approve, skipCastAndSets: actions.skip, ...DRAFTS }} />;
 }
 const stage = (next) => emit('music-video:cast-and-sets', { projectId: next.id, project: next });
 const card = (name) => within(screen.getByRole('article', { name }));
@@ -97,9 +98,17 @@ describe('Cast & Sets incremental references', () => {
     await stage(reloaded);
     view.unmount();
     getMediaJob.mockClear();
-    render(<Harness initial={reloaded} />);
+    const openPreview = vi.fn();
+    render(<Harness initial={reloaded} openPreview={openPreview} />);
     expect(card('Keeper').getByText('New submitted prompt')).toBeInTheDocument();
-    expect(card('Keeper').getByRole('link', { name: 'Keeper — generated reference' })).toHaveAttribute('href', '/data/images/keeper-new.png');
+    // Taps open the page lightbox, never the raw file (a Home Screen app has no back from that).
+    expect(card('Keeper').queryByRole('link')).not.toBeInTheDocument();
+    fireEvent.click(card('Keeper').getByRole('button', { name: 'Preview Keeper' }));
+    fireEvent.click(card('Keeper').getByRole('button', { name: 'Keeper input: mood.png' }));
+    expect(openPreview.mock.calls).toEqual([['image:keeper-new.png'], ['image-ref:mood.png']]);
+    const items = castAndSetsPreviewItems(reloaded.castAndSets);
+    expect(items.find((i) => i.key === 'image:keeper-new.png')).toMatchObject({ previewUrl: '/data/images/keeper-new.png', prompt: 'New submitted prompt' });
+    expect(items.find((i) => i.key === 'image-ref:mood.png')).toMatchObject({ previewUrl: '/data/image-refs/mood.png' });
     expect(card('Wardrobe').getByText('Interrupted')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Resume' })).toBeDisabled();
     expect(getMediaJob).not.toHaveBeenCalled();
@@ -194,6 +203,49 @@ describe('Cast & Sets direction editing', () => {
   });
 });
 
+describe('Cast & Sets sheet feedback', () => {
+  const direction = { protagonist: { name: 'Keeper' }, sets: [{ id: 'harbor', name: 'Harbor', description: 'a wet quay' }] };
+  const sheet = (extra = {}) => ({ id: 'example-project', castAndSets: {
+    revision: 1, status: 'review', direction, images: {},
+    plan: { 'set:harbor': { key: 'set:harbor', label: 'Harbor', prompt: 'Empty set plate', deps: [], refKeys: [] } },
+    ...extra,
+  } });
+
+  it('sends whole-sheet feedback, clears the box, and shows what the revision changed', async () => {
+    const note = 'Fewer light sources, eighties analog film';
+    api.applyMusicVideoCastAndSetsFeedback.mockResolvedValue({ project: sheet({ revision: 2, status: 'directing', feedback: [{ id: 'fb-1', text: note }] }) });
+    const view = render(<Harness initial={sheet()} locked={false} />);
+    const apply = screen.getByRole('button', { name: 'Apply feedback' });
+    expect(apply).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('What should change?'), { target: { value: note } });
+    await act(async () => { fireEvent.click(apply); });
+    expect(api.applyMusicVideoCastAndSetsFeedback).toHaveBeenCalledWith('example-project', { text: note }, { silent: true });
+    // Working again: the box waits for the new sheet.
+    expect(screen.queryByLabelText('What should change?')).toBeNull();
+
+    await stage(sheet({ revision: 2, feedback: [{ id: 'fb-1', text: note }], changeSummary: { revision: 2, changes: ['Look rewritten for every image', 'Lighting: Harbor'], rerendered: 1 } }));
+    expect(screen.getByLabelText('What should change?').value).toBe('');
+    expect(screen.getByText(/Revision 2: Look rewritten for every image · Lighting: Harbor · 1 image re-rendered/)).toBeInTheDocument();
+    expect(screen.getByText('Standing feedback (1)')).toBeInTheDocument();
+
+    api.removeMusicVideoCastAndSetsFeedback.mockResolvedValue({ project: sheet({ revision: 2, feedback: [] }) });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: `Stop applying: ${note}` })); });
+    expect(api.removeMusicVideoCastAndSetsFeedback).toHaveBeenCalledWith('example-project', 'fb-1', { silent: true });
+    expect(screen.queryByText(/Standing feedback/)).toBeNull();
+    view.unmount();
+  });
+
+  it('aims feedback at one image and keeps the text when the request fails', async () => {
+    api.applyMusicVideoCastAndSetsFeedback.mockRejectedValue(new Error('No provider'));
+    render(<Harness initial={sheet()} locked={false} />);
+    fireEvent.change(screen.getByLabelText('What should change?'), { target: { value: 'One lamp only' } });
+    fireEvent.change(screen.getByLabelText('Applies to'), { target: { value: 'set:harbor' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Apply feedback' })); });
+    expect(api.applyMusicVideoCastAndSetsFeedback).toHaveBeenCalledWith('example-project', { text: 'One lamp only', target: 'set:harbor' }, { silent: true });
+    expect(screen.getByLabelText('What should change?').value).toBe('One lamp only');
+  });
+});
+
 describe('Cast & Sets tab: undo, regenerate and guide import', () => {
   const sheet = { id: 'sheet-1', title: 'Check-in sheet', kind: 'cast-sets', version: 1, status: 'approved', mimeType: 'text/html', updatedAt: '2026-01-01T00:00:00Z' };
   const imported = { id: 'guide-1', title: 'My guide', kind: 'other', version: 1, status: 'pending', mimeType: 'image/png', updatedAt: '2026-01-02T00:00:00Z' };
@@ -250,6 +302,8 @@ describe('Cast & Sets tab: undo, regenerate and guide import', () => {
     const onRevertApproval = vi.fn();
     const stale = { approvedAt: '2026-01-01T00:00:00.000Z', changedFields: ['concept', 'song'], revertible: ['concept'] };
     open(withStatus('approved'), { productionReadiness: { castAndSets: { approved: true, stale } }, onRevertApproval });
+    // Keep approved sits in the same row as Revert, right under the stale note.
+    expect(screen.getByRole('button', { name: 'Keep approved' }).parentElement).toBe(screen.getByRole('button', { name: 'Revert concept' }).parentElement);
     fireEvent.click(screen.getByRole('button', { name: 'Revert concept' }));
     expect(onRevertApproval).toHaveBeenCalledWith('castAndSets', 'concept');
     expect(screen.queryByRole('button', { name: 'Revert song' })).toBeNull();
@@ -270,13 +324,21 @@ describe('Cast & Sets tab: undo, regenerate and guide import', () => {
 });
 
 describe('Cast & Sets stage before any check-in exists', () => {
-  it('offers Build and Skip, wired to the start and skip actions', async () => {
+  it('leaves Build to the checklist and keeps only Skip, wired to the skip action', async () => {
     const start = vi.fn();
     const skip = vi.fn();
     render(<CastSetsStage board={{ project: { id: 'example-project', audioAnalysis: { sections: [{}] } }, locked: false, castSets: { busy: false, start, skip }, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(), ...DRAFTS }} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Build cast & sets' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
-    expect(start).toHaveBeenCalledTimes(1);
+    // The step's checklist and header already offer Build; a second copy here only repeated it.
+    expect(screen.queryByRole('button', { name: 'Build cast & sets' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Skip cast & sets' }));
     expect(skip).toHaveBeenCalledTimes(1);
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it('says which style is empty and counts references and style images apart', () => {
+    const project = { id: 'example-project', audioAnalysis: { sections: [{}] }, concept: { prompt: 'p', style: '', songStyle: 'synthwave' },
+      visualSpec: { references: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] }, styleReferences: Array.from({ length: 15 }, (_, i) => ({ id: `s${i}` })) };
+    render(<CastSetsStage board={{ project, locked: false, castSets: { busy: false, start: vi.fn(), skip: vi.fn() }, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(), ...DRAFTS }} />);
+    expect(screen.getByText(/No visual style yet · Song style set · 3 references · 15 style images/)).toBeInTheDocument();
   });
 });

@@ -246,28 +246,35 @@ jobs:
           VERSIONED_FILE=".changelog/v${CURRENT_VERSION}.md"
 
           if [ -f "$PATTERN_FILE" ]; then
-            # Archive directly on main so release never diverges
-            git fetch origin main
-            git checkout main
+            # The archive commit lands on main ONLY. `release` stays pinned to
+            # the CI-verified commit: pushing main:release here would publish
+            # unverified main commits, or be rejected as non-fast-forward when
+            # the branches diverged. The next main -> release promotion picks
+            # this commit up through the normal verified path.
+            for attempt in 1 2 3; do
+              git fetch origin main
+              git checkout -B main origin/main
 
-            # After switching to main: re-check whether the pattern file is
-            # actually present. A prior workflow run that archived but failed
-            # before pushing back to release leaves the file present on the
-            # release branch (initial check) but absent on main (already moved).
-            # Skip cleanly in that case.
-            if [ ! -f "$PATTERN_FILE" ]; then
-              echo "Changelog already archived on main — nothing to do"
-              exit 0
-            fi
+              # Re-check on main's tree: a prior run (or a concurrent one) may
+              # already have archived the file there. Skip cleanly.
+              if [ ! -f "$PATTERN_FILE" ]; then
+                echo "Changelog already archived on main — nothing to do"
+                exit 0
+              fi
 
-            git mv "$PATTERN_FILE" "$VERSIONED_FILE"
-            sed -i.bak "s/v${MAJOR_MINOR}\.x/v${CURRENT_VERSION}/g; s/${MAJOR_MINOR}\.x/${CURRENT_VERSION}/g; s/YYYY-MM-DD/$(date +%Y-%m-%d)/g" "$VERSIONED_FILE"
-            rm "${VERSIONED_FILE}.bak"
+              git mv "$PATTERN_FILE" "$VERSIONED_FILE"
+              sed -i.bak "s/v${MAJOR_MINOR}\.x/v${CURRENT_VERSION}/g; s/${MAJOR_MINOR}\.x/${CURRENT_VERSION}/g; s/YYYY-MM-DD/$(date +%Y-%m-%d)/g" "$VERSIONED_FILE"
+              rm "${VERSIONED_FILE}.bak"
 
-            git add "$VERSIONED_FILE"
-            git commit -m "docs: archive changelog for v${CURRENT_VERSION} [skip ci]"
-            git push origin main
-
-            # Fast-forward release to match main
-            git push origin main:release
+              git add "$VERSIONED_FILE"
+              git commit -m "docs: archive changelog for v${CURRENT_VERSION} [skip ci]"
+              # Non-force push: if main moved meanwhile, refetch and redo
+              # the archive on the new tip instead of failing the release.
+              if git push origin main; then
+                exit 0
+              fi
+              echo "main moved during archive (attempt ${attempt}) — retrying"
+            done
+            echo "::error::Could not push changelog archive to main"
+            exit 1
           fi

@@ -17,7 +17,7 @@ import * as brainStorage from './brainStorage.js';
 import * as memory from './memoryBackend.js';
 import * as embeddings from './memoryEmbeddings.js';
 import { atomicWrite, ensureDir, PATHS } from '../lib/fileUtils.js';
-import { listJournals, getJournal } from './brainJournal.js';
+import { iterateJournals, getJournal } from './brainJournal.js';
 
 const BRIDGE_MAP_PATH = join(PATHS.brain, 'memory-bridge-map.json');
 
@@ -38,10 +38,9 @@ const TYPE_MAP = {
 // their own getters rather than brainStorage.getAll.
 const JSONL_TYPES = ['digests', 'reviews'];
 
-// Whole-store read for an append-only JSONL type (the `1000` cap is "all of
-// them" — these files are small and cached by brainStorage).
+// Explicit whole-store read; UI getters retain their latest-page default.
 const readJsonlStore = (type) =>
-  (type === 'digests' ? brainStorage.getDigests : brainStorage.getReviews)(1000);
+  (type === 'digests' ? brainStorage.getDigests : brainStorage.getReviews)(Infinity);
 
 // The id-keyed entity stores the bridge mirrors. DERIVED from TYPE_MAP (minus
 // the JSONL stores and the Daily Log, both of which have their own walk) so
@@ -63,27 +62,62 @@ const RECONCILABLE_TYPES = [...BRIDGED_ENTITY_TYPES, 'journals'];
 // Maps "brainType:brainId" → memoryId so updates hit the same memory entry
 
 let bridgeMap = null;
+let bridgeMapLoading = null;
+let mapWriteTail = Promise.resolve();
 
-export async function loadBridgeMap() {
+export async function loadBridgeMap({ readOnly = false } = {}) {
   if (bridgeMap) return bridgeMap;
-  if (!existsSync(BRIDGE_MAP_PATH)) {
-    bridgeMap = {};
-    return bridgeMap;
-  }
-  const raw = await readFile(BRIDGE_MAP_PATH, 'utf-8');
+  if (bridgeMapLoading) return bridgeMapLoading;
+  const load = async () => {
+    let legacyMap = {};
+    let rebuild = false;
+    const raw = await readFile(BRIDGE_MAP_PATH, 'utf-8').catch(err => {
+      if (err.code === 'ENOENT') return null;
+      throw err;
+    });
+    if (raw !== null) {
+      try {
+        legacyMap = JSON.parse(raw);
+        if (!legacyMap || Array.isArray(legacyMap) || typeof legacyMap !== 'object') {
+          throw new Error('Invalid bridge map shape');
+        }
+        legacyMap = Object.fromEntries(Object.entries(legacyMap)
+          .filter(([, id]) => typeof id === 'string' && id));
+      } catch {
+        console.warn('⚠️ Corrupt brain bridge cache; rebuilding from durable memory links');
+        legacyMap = {};
+        rebuild = true;
+      }
+    }
+    // Backfill old installs before trusting the cache. DB links win over stale
+    // file snapshots; missing rows are excluded so bulk catch-up can heal them.
+    const map = await memory.getBrainMemoryLinks(legacyMap, { readOnly, ...(rebuild ? { recover: true } : {}) });
+    if (!readOnly) {
+      bridgeMap = map;
+      if (rebuild) await saveBridgeMap();
+    }
+    return map;
+  };
+  // Read-only previews neither migrate links nor cache an unmigrated map.
+  if (readOnly) return load();
+  bridgeMapLoading = load();
   try {
-    bridgeMap = JSON.parse(raw);
-  } catch (err) {
-    console.error(`❌ Corrupt bridge map, resetting: ${err.message}`);
-    bridgeMap = {};
+    return await bridgeMapLoading;
+  } finally {
+    bridgeMapLoading = null;
   }
-  return bridgeMap;
 }
 
-async function saveBridgeMap() {
-  const dir = dirname(BRIDGE_MAP_PATH);
-  if (!existsSync(dir)) await ensureDir(dir);
-  await atomicWrite(BRIDGE_MAP_PATH, bridgeMap);
+function saveBridgeMap() {
+  // Snapshot only after the preceding rename completes. All writers, including
+  // bulk catch-up and delete handlers, share this tail.
+  const write = mapWriteTail.then(async () => {
+    const dir = dirname(BRIDGE_MAP_PATH);
+    if (!existsSync(dir)) await ensureDir(dir);
+    await atomicWrite(BRIDGE_MAP_PATH, bridgeMap);
+  });
+  mapWriteTail = write.catch(() => {});
+  return write;
 }
 
 export function bridgeKey(brainType, brainId) {
@@ -244,27 +278,14 @@ export async function syncBrainRecord(brainType, record, { deferMapSave = false,
     .generateMemoryEmbedding(memoryData, { source: record.source, sourceRef: record.sourceRef })
     .catch(() => null);
 
-  if (existingMemoryId) {
-    // Update existing memory. Force status:'active' so a record that was
-    // archived for a synced-in delete/archive and later came back live
-    // (un-deleted on a peer, or un-archived) is searchable again — memory
-    // search filters out archived rows, so without this the resurrected
-    // record would stay invisible (issue #1080 review finding).
-    const updated = await memory.updateMemory(existingMemoryId, { ...memoryData, status: 'active' });
-    if (updated && embedding) {
-      await memory.updateMemoryEmbedding(existingMemoryId, embedding);
-    }
-    console.log(`🧠🔗 Updated brain→memory: ${brainType}/${record.id} → ${existingMemoryId}`);
-    return existingMemoryId;
+  const saved = await memory.upsertBrainMemory(key, memoryData, embedding, existingMemoryId);
+  if (map[key] !== saved.id) {
+    map[key] = saved.id;
+    onMapChanged?.();
+    if (!deferMapSave) await saveBridgeMap();
   }
-
-  // Create new memory
-  const created = await memory.createMemory(memoryData, embedding);
-  map[key] = created.id;
-  onMapChanged?.();
-  if (!deferMapSave) await saveBridgeMap();
-  console.log(`🧠🔗 Created brain→memory: ${brainType}/${record.id} → ${created.id}`);
-  return created.id;
+  console.log(`🧠🔗 Synced brain→memory: ${brainType}/${record.id} → ${saved.id}`);
+  return saved.id;
 }
 
 /**
@@ -293,7 +314,10 @@ const makeEmbeddedChecker = (map, missingMemIds) => (key) => {
 };
 
 export async function syncAllBrainData({ dryRun = false, refresh = false, onlyMissing = false } = {}) {
-  const map = await loadBridgeMap();
+  // Revalidate cached ids once per bulk walk: a memory can be purged after
+  // this process loaded the cache. A stale key must not count as embedded.
+  const map = await memory.getBrainMemoryLinks(
+    await loadBridgeMap({ readOnly: dryRun }), { readOnly: dryRun });
   const stats = { synced: 0, skipped: 0, errors: 0, archived: 0 };
   let bridgeMapChanged = false;
   const deferredMapSave = {
@@ -348,8 +372,7 @@ export async function syncAllBrainData({ dryRun = false, refresh = false, onlyMi
   // 'sync:applied' event handlers instead (see initBridge). With `refresh`,
   // already-mapped days are re-embedded to heal pre-#1080 staleness.
   {
-    const { records: journals } = await listJournals({ limit: 10000, includeContent: true });
-    for (const record of journals) {
+    for await (const record of iterateJournals()) {
       const key = bridgeKey('journals', record.id);
       // Already-mapped days are skipped in both real and dry-run modes so
       // dry-run stats match actual-run stats (rather than claiming to
@@ -458,7 +481,8 @@ export async function syncAllBrainData({ dryRun = false, refresh = false, onlyMi
  * `listLiveIds` reads only the ids it has never resolved.
  */
 export async function getEmbeddingCoverage() {
-  const map = await loadBridgeMap();
+  const map = await memory.getBrainMemoryLinks(
+    await loadBridgeMap({ readOnly: true }), { readOnly: true });
   const missingMemIds = await memory.getMemoryIdsMissingEmbedding().catch(() => new Set());
   const isEmbedded = makeEmbeddedChecker(map, missingMemIds);
 
@@ -574,7 +598,9 @@ export async function resyncBrainRecord(brainType, id, { hardDelete = false } = 
   // delete naturally lands in the archive/hard-delete branch.
   const record = brainType === 'journals'
     ? await getJournal(id)
-    : await brainStorage.getById(brainType, id);
+    : JSONL_TYPES.includes(brainType)
+      ? (await readJsonlStore(brainType)).find(record => record.id === id)
+      : await brainStorage.getById(brainType, id);
   if (!record) {
     // Truly gone (tombstoned). A genuine local user delete hard-prunes the row;
     // a sync-driven delete stays soft so a peer un-delete can resurrect it.
@@ -661,9 +687,7 @@ export function queueResync(records) {
 
 function handleJsonlAdded(brainType, record) {
   if (!record?.id) return;
-  syncBrainRecord(brainType, record).catch(err => {
-    console.error(`❌ Brain bridge sync failed for ${brainType}/${record.id}: ${err.message}`);
-  });
+  queueResync([{ type: brainType, id: record.id }]);
 }
 
 // ─── Init ───────────────────────────────────────────────────────────────────

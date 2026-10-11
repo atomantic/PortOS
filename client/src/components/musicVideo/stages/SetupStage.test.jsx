@@ -4,10 +4,11 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import SetupStage from './SetupStage.jsx';
 
 vi.mock('../../songs/MidiVisualization.jsx', () => ({ default: () => null }));
+vi.mock('../CompositionPreviewPlayer.jsx', () => ({ default: ({ lyrics, seekRequest }) => <div data-testid="playthrough" data-seek={JSON.stringify(seekRequest)}>{lyrics ? 'lyrics' : 'document'}</div> }));
 
 const review = (over = {}) => ({ readiness: null, current: true, busy: false, error: null, save: vi.fn(async () => ({})), reverifyAlignment: vi.fn(async () => ({})), ...over });
 const board = (project, extra = {}) => ({
-  project, tracks: [], trackName: () => 'Song', tempo: { bpm: '', setBpm: vi.fn() }, audioFilename: 'a.wav', locked: false,
+  project, tracks: [], trackName: () => 'Song', tempo: { bpm: '', setBpm: vi.fn() }, audioFilename: 'a.wav', audioUrl: '/data/music/a.wav', locked: false,
   youtube: { editJob: {}, editUrl: '', setEditUrl: vi.fn(), startEdit: vi.fn() },
   midi: { model: 'base', active: false }, busy: {},
   onAnalyze: vi.fn(), onAlignLyrics: vi.fn(), ...extra,
@@ -40,20 +41,46 @@ describe('Song step', () => {
   it('verifies the timing on the step itself, keeping an unsaved planning draft in step', async () => {
     const save = vi.fn(async () => ({}));
     const setPlanning = vi.fn();
-    const project = { id: 'p', trackId: 't', audioAnalysis: {}, lyricCues: [{ id: 'c', text: 'hi', words: [{ w: 'hi' }] }],
+    const project = { id: 'p', trackId: 't', audioAnalysis: {}, lyricCues: [{ id: 'c', text: 'hi', startSec: 1, endSec: 2, words: [{ w: 'hi' }] }],
       productionReview: { draft: { cast: 'kept', lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '' } } };
     render(<SetupStage board={board(project, { productionReview: review({ save }), planningDraft: [{ cast: 'edited', lyricsMode: 'vocal' }, setPlanning] })} />);
     fireEvent.change(screen.getByLabelText('Notes (optional)'), { target: { value: 'Listened through twice' } });
-    await fireEvent.click(screen.getByRole('button', { name: 'Mark timing verified' }));
+    // The timing is judged on the lyric playthrough shown beside the button.
+    expect(screen.getByTestId('playthrough').textContent).toBe('lyrics');
+    await fireEvent.click(screen.getByRole('button', { name: 'Timing looks right' }));
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ cast: 'kept', lyricsMode: 'vocal', timingStatus: 'verified', timingNotes: 'Listened through twice' }));
     await vi.waitFor(() => expect(setPlanning).toHaveBeenCalledWith({ cast: 'edited', lyricsMode: 'vocal', timingStatus: 'verified', timingNotes: 'Listened through twice' }));
   });
 
+  it('lists suspect lyric text and timecodes and jumps the playthrough to that line on every click', () => {
+    const project = { id: 'p', trackId: 't', audioAnalysis: {}, productionReview: { draft: { lyricsMode: 'vocal', timingStatus: 'verified' } }, lyricCues: [
+      { id: 'c', text: 'under blue skies', startSec: 60, endSec: 65, suspect: true,
+        words: [{ w: 'under', startSec: 61.2, endSec: 61.3 }] },
+      { id: 'd', text: 'walking home', startSec: 70, endSec: 72 },
+    ] };
+    render(<SetupStage board={board(project, { productionReview: review() })} />);
+    const jump = screen.getByRole('button', { name: '1:01.20 — under blue skies' });
+    expect(screen.queryByRole('button', { name: /walking home/ })).toBeNull();
+    fireEvent.click(jump);
+    expect(JSON.parse(screen.getByTestId('playthrough').dataset.seek)).toEqual({ t: 61.2, n: 1, play: true });
+    fireEvent.click(jump);
+    expect(JSON.parse(screen.getByTestId('playthrough').dataset.seek)).toEqual({ t: 61.2, n: 2, play: true });
+  });
+
+  it('holds the timing check until the aligned words can be played through', () => {
+    const project = { id: 'p', trackId: 't', audioAnalysis: {}, lyricCues: [{ id: 'c', text: 'hi', startSec: 1, endSec: 2 }],
+      productionReview: { draft: { lyricsMode: 'vocal', timingStatus: 'provisional' } } };
+    render(<SetupStage board={board(project, { productionReview: review(), aligningLyrics: true })} />);
+    expect(screen.queryByTestId('playthrough')).toBeNull();
+    expect(screen.getByText(/Aligning the words to the vocal/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Timing looks right' })).toBeDisabled();
+  });
+
   it('re-verifies a stale timing through the alignment route without requiring a note', () => {
     const reverifyAlignment = vi.fn(async () => ({}));
-    const project = { id: 'p', trackId: 't', audioAnalysis: {}, lyricCues: [{ id: 'c', text: 'hi' }], productionReview: { draft: { lyricsMode: 'vocal', timingStatus: 'verified' } } };
+    const project = { id: 'p', trackId: 't', audioAnalysis: {}, lyricCues: [{ id: 'c', text: 'hi', startSec: 1, endSec: 2 }], productionReview: { draft: { lyricsMode: 'vocal', timingStatus: 'verified' } } };
     render(<SetupStage board={board(project, { productionReview: review({ reverifyAlignment, readiness: { alignment: { status: 'stale' } } }) })} />);
-    const button = screen.getByRole('button', { name: 'Re-verify timing' });
+    const button = screen.getByRole('button', { name: 'Timing still looks right' });
     expect(button).toBeEnabled();
     fireEvent.change(screen.getByLabelText('Notes (optional)'), { target: { value: 'New master checked' } });
     fireEvent.click(button);
@@ -62,13 +89,13 @@ describe('Song step', () => {
 
   it('keeps an unsaved planning draft in step after a re-verify', async () => {
     const setPlanning = vi.fn();
-    const project = { id: 'p', trackId: 't', audioAnalysis: {}, lyricCues: [{ id: 'c', text: 'hi' }], productionReview: { draft: { lyricsMode: 'vocal', timingStatus: 'verified', timingNotes: 'old' } } };
+    const project = { id: 'p', trackId: 't', audioAnalysis: {}, lyricCues: [{ id: 'c', text: 'hi', startSec: 1, endSec: 2 }], productionReview: { draft: { lyricsMode: 'vocal', timingStatus: 'verified', timingNotes: 'old' } } };
     render(<SetupStage board={board(project, {
       productionReview: review({ readiness: { alignment: { status: 'stale' } } }),
       planningDraft: [{ cast: 'edited', timingStatus: 'verified', timingNotes: 'old' }, setPlanning],
     })} />);
     fireEvent.change(screen.getByLabelText('Notes (optional)'), { target: { value: 'New master checked' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Re-verify timing' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Timing still looks right' }));
     await vi.waitFor(() => expect(setPlanning).toHaveBeenCalledWith({ cast: 'edited', timingStatus: 'verified', timingNotes: 'New master checked' }));
   });
 

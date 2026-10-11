@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { IMAGE_GEN_MODE } from './imageGenModes';
 import {
+  moodBoardItemSendLinks,
   BOARD_POSTER_SIZE,
   boardAnalyzePlan,
   boardPosterRenderCfg,
@@ -137,5 +138,28 @@ describe('boardPosterRenderCfg', () => {
   it('keys the poster on the saved prompt so a later compose is not pinned', () => {
     expect(posterStyleKey({ prompt: 'ink', negativePrompt: 'gloss' }))
       .not.toBe(posterStyleKey({ prompt: 'oil', negativePrompt: 'gloss' }));
+  });
+});
+
+describe('moodBoardItemSendLinks', () => {
+  it('offers all three handoffs for an analyzed gallery image', () => {
+    const links = moodBoardItemSendLinks({
+      type: 'image', mediaKey: 'image:a b.png',
+      analysis: { prompt: 'a red fox', negativePrompt: 'blurry' },
+    });
+    expect(links.textToImage).toBe('/media/image?prompt=a+red+fox&negativePrompt=blurry');
+    expect(links.imageToImage).toContain('initImageFile=a+b.png');
+    expect(links.video).toContain('/media/video?');
+    expect(links.video).toContain('sourceImageFile=a+b.png');
+  });
+
+  it('hides image-sourced handoffs for external pins and falls back to text-to-video for video items', () => {
+    const external = moodBoardItemSendLinks({ type: 'image', imageUrl: 'https://example.com/x.png', analysis: { prompt: 'p' } });
+    expect(external.imageToImage).toBeNull();
+    expect(external.video).toBe('/media/video?prompt=p');
+    const video = moodBoardItemSendLinks({ type: 'video', mediaKey: 'video:c.mp4', analysis: { prompt: 'p' } });
+    expect(video.imageToImage).toBeNull();
+    expect(video.video).toBe('/media/video?prompt=p');
+    expect(moodBoardItemSendLinks({ type: 'image', mediaKey: 'image:z.png' }).textToImage).toBeNull();
   });
 });

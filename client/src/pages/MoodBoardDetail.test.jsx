@@ -634,7 +634,7 @@ describe('MoodBoardDetail item analysis (#4188 Phase 3)', () => {
 });
 
 describe('MoodBoardDetail desktop layout', () => {
-  it('renders mood board items on the left and add forms on the right column', async () => {
+  it('puts the add panel before the items list in the single-column source order', async () => {
     mockGetMoodBoard.mockResolvedValueOnce({
       id: 'a',
       name: 'Board A',
@@ -646,19 +646,45 @@ describe('MoodBoardDetail desktop layout', () => {
     const itemsSection = screen.getByRole('region', { name: 'Mood board items' });
     const addAside = screen.getByRole('complementary', { name: 'Add to mood board' });
 
-    expect(itemsSection).toBeInTheDocument();
-    expect(addAside).toBeInTheDocument();
-
     const parentGrid = itemsSection.parentElement;
     expect(parentGrid).toBe(addAside.parentElement);
-    expect(parentGrid.className).toContain('@4xl/board:grid-cols-');
-    expect(parentGrid.firstElementChild).toBe(itemsSection);
-    expect(parentGrid.lastElementChild).toBe(addAside);
+    // Wide boards keep the 22rem side column. Source order is the stacked
+    // order; order-last plus reading-flow put the aside on the right and
+    // keep tab order with that visual column.
+    expect(parentGrid.className).toContain('@4xl/board:grid-cols-[minmax(0,1fr)_22rem]');
+    expect(parentGrid.className).toContain('[reading-flow:grid-order]');
+    expect(parentGrid.firstElementChild).toBe(addAside);
+    expect(parentGrid.lastElementChild).toBe(itemsSection);
+    expect(addAside.className).toContain('@4xl/board:order-last');
+    expect(addAside.compareDocumentPosition(itemsSection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
-    // Verify add forms are contained within the right aside
+    expect(addAside).toContainElement(screen.getByRole('heading', { name: 'Add item' }));
     expect(addAside).toContainElement(screen.getByRole('button', { name: 'Pin to board' }));
-    expect(addAside).toContainElement(screen.getByRole('button', { name: 'Import pins' }));
-    expect(addAside).toContainElement(screen.getByRole('button', { name: 'Import' }));
+
+    const disclosure = screen.getByRole('button', { name: 'Import from Pinterest or X' });
+    expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+    expect(disclosure.className).toContain('@4xl/board:hidden');
+    const imports = document.getElementById('mood-board-import-panels');
+    expect(addAside).toContainElement(imports);
+    expect(imports.className).toContain('hidden');
+    expect(imports.className).toContain('@4xl/board:block');
+    expect(imports).toContainElement(screen.getByRole('button', { name: 'Import pins' }));
+    expect(imports).toContainElement(screen.getByRole('button', { name: 'Import' }));
+    expect(disclosure.compareDocumentPosition(itemsSection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('reveals Pinterest and X import in one click on the stacked layout', async () => {
+    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [] });
+    renderPage();
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Import from Pinterest or X' }));
+    const disclosure = screen.getByRole('button', { name: 'Import from Pinterest or X' });
+    expect(disclosure).toHaveAttribute('aria-expanded', 'true');
+    const imports = document.getElementById('mood-board-import-panels');
+    expect(imports.className).not.toContain('hidden');
+    expect(screen.getByRole('heading', { name: 'Pinterest board' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Import from an X post' })).toBeInTheDocument();
   });
 });
 

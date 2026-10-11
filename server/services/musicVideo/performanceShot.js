@@ -209,6 +209,23 @@ export async function findStalePerformanceTakes(project, masterPath) {
 }
 
 /**
+ * A draft never waits on lip sync. Each performance (or supplied-audio) shot
+ * whose selected take is stale for the current song stands in as a cutaway:
+ * its newest cutaway clip (a video take with no performance or song-audio
+ * instruction), else its still. Final renders keep the strict gate below.
+ */
+export async function withDraftPerformanceFallbacks(project, masterPath) {
+  const stale = new Set((await findStalePerformanceTakes(project, masterPath)).map(({ sceneId }) => sceneId));
+  if (!stale.size) return project;
+  return { ...project, scenes: project.scenes.map((scene) => {
+    if (!stale.has(scene.sceneId)) return scene;
+    const cutaway = (scene.takes || []).filter((take) => take?.kind === 'video' && take.assetId
+      && take.shotInstruction?.shotMode !== 'performance' && !take.shotInstruction?.audioConditioning).at(-1);
+    return { ...scene, shotMode: 'cutaway', videoHistoryId: cutaway?.assetId || null };
+  }) };
+}
+
+/**
  * The one staleness gate every renderer that draws performance takes runs
  * (concat, composed, document, and their excerpts): a performance take sings
  * one stretch of one recording, so a re-timed scene or a changed sung window
@@ -264,8 +281,11 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
     if (!sourceImagePath || basename(sourceImagePath) !== scene.referenceImageId) throw refuse('Use the accepted boundary frame for this continuation', 'PERFORMANCE_REPAIR_STALE', 409);
   }
 
-  const capability = performanceCapability(backend);
+  // A music-driven scene renders on the project's audio-to-video model; a
+  // lip-sync scene on the lip-sync route.
+  const capability = performanceCapability(backend, { scene, videoSettings: project.videoSettings });
   if (!capability) throw refuse(performanceBlockedReason(backend), 'MUSIC_VIDEO_PERFORMANCE_UNSUPPORTED');
+  const musicDriven = capability.style === 'music';
   // The lip-sync route is image + source audio; any other semantic mode would
   // ask it for something it does not do.
   if (mode && mode !== 'image') {
@@ -286,12 +306,16 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
   }
   const offered = getFalVideoModel(capability.modelId)?.resolution?.options || capability.resolutions || [];
   const pick = (value) => (typeof value === 'string' ? offered.find((o) => o.toLowerCase() === value.trim().toLowerCase()) : null);
-  const takeResolution = pick(resolution) || pick(project.videoSettings?.falLipSyncResolution) || capability.defaultResolution;
+  const pinnedResolution = musicDriven ? project.videoSettings?.falMusicResolution : project.videoSettings?.falLipSyncResolution;
+  const takeResolution = pick(resolution) || pick(pinnedResolution) || capability.defaultResolution;
 
   // An optional vocal stem conditions the provider in place of the mix. It
   // is re-checked here because the file could have been replaced on disk or
   // arrived from a peer since it was attached.
-  const conditioningSource = project.performanceConditioningSource || (project.vocalStemFilename ? 'vocal-stem' : 'master');
+  // A music-driven take always hears the full mix: the drums, bass and
+  // everything else a vocal stem leaves out are what drive its motion.
+  const conditioningSource = musicDriven ? 'master'
+    : project.performanceConditioningSource || (project.vocalStemFilename ? 'vocal-stem' : 'master');
   const stemPath = conditioningSource === 'master' ? null : resolveVocalStemPath(project);
   if (conditioningSource !== 'master' && !stemPath) throw refuse('Attach the selected singer stem before rendering', 'MUSIC_VIDEO_VOCAL_STEM_MISSING');
   if (stemPath) assertVocalStemTimebase(await probeVideoDuration(stemPath), songDurationSec);
@@ -330,6 +354,7 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
     version: SHOT_INSTRUCTION_VERSION,
     ...(scene.performanceRepair ? { repair: { ...scene.performanceRepair, role: 'continuation' } } : {}),
     shotMode: 'performance',
+    performanceStyle: capability.style,
     createdAt: new Date().toISOString(),
     speaker: scene.performanceSpeaker || null,
     audio: {
@@ -343,7 +368,7 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
       // and then only when `windowFingerprint` says this window changed.
       conditioning: {
         source: conditioningSource, sha256: conditioningSha256, filename: basename(stemPath || masterPath),
-        selection: project.performanceConditioningSource ? 'user' : 'legacy-default',
+        selection: musicDriven ? 'music-driven' : project.performanceConditioningSource ? 'user' : 'legacy-default',
         voiceIsolation: 'unverified',
       },
     },
@@ -355,6 +380,7 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
     performance: (scene.visualIntent || scene.prompt || '').slice(0, 2000),
     capability: {
       provider: capability.provider,
+      style: capability.style,
       modelId: capability.modelId,
       minAudioSec: capability.minAudioSec,
       maxAudioSec: capability.maxAudioSec,

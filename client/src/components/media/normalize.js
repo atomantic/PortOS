@@ -105,6 +105,13 @@ export function normalizeImage(i) {
     // `cleanedFrom` sibling "Watermark removed" rather than "Cleaned", so it
     // MUST survive normalization (same contract as `regenerated` above).
     watermarkRemoved: i.watermarkRemoved === true,
+    // Film-look lineage — stamped by /api/image-gen/:filename/film-look on the
+    // baked copy: the source it was rendered from, the look recipe (so the
+    // editor can reopen it) and the look as prompt words. Labels the
+    // `cleanedFrom` sibling "Film look" rather than "Cleaned".
+    filmLookFrom: i.filmLookFrom || null,
+    filmLook: i.filmLook && typeof i.filmLook === 'object' ? i.filmLook : null,
+    filmLookWords: i.filmLookWords || null,
     provenance: i.provenance || null,
     // A compact gallery row (#8292) holds only a prompt preview; see
     // mediaDetail.js for the hydration every prompt consumer goes through.

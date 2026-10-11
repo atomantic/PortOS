@@ -95,7 +95,7 @@ describe('human-reviewed Music Video workflow', () => {
       castAndSets: { status: 'skipped', direction: { world: { camera: 'Stale chase cam', transitions: 'Stale streaks' } } } } }));
     expect((await approve('art')).status).toBe(200);
     const prepared = await request(app).post(`${base}/production-review/prepare`).send({});
-    expect(prepared.body.project.productionReview.draft.storyboard).toEqual([expect.objectContaining({ camera: '', transition: '' })]);
+    expect(prepared.body.project.productionReview.draft.storyboard).toEqual([expect.objectContaining({ camera: '', transition: 'Cut' })]);
   });
 
   it('prepares an absent code-first medium plan before human storyboard approval and real authoring admission', async () => {
@@ -189,6 +189,33 @@ describe('human-reviewed Music Video workflow', () => {
     await save({ ...draft, visualLanguage: 'New orange direction' });
     expect((await read()).body.readiness.readyForProduction).toBe(false);
     expect((await request(app).post(`${base}/render`).send({})).status).toBe(409);
+  });
+
+  it('lets a planned shot take stills once art is approved, keeping clips and production runs behind the storyboard', async () => {
+    const { assertMusicVideoSceneReview } = await import('../services/musicVideo/productionReviewService.js');
+    const tag = { projectId: project.id, sceneId: (await store.getProject(project.id)).scenes[0].sceneId };
+    await expect(assertMusicVideoSceneReview(tag, 'image')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
+    expect((await approve('art')).status).toBe(200);
+    await expect(assertMusicVideoSceneReview(tag, 'image')).resolves.toBeUndefined();
+    await expect(assertMusicVideoSceneReview(tag, 'video')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
+    await expect(assertMusicVideoSceneReview({ ...tag, productionRunId: 'run-example' }, 'image')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
+    await expect(assertMusicVideoSceneReview({ ...tag, sceneId: 'scene-missing' }, 'image')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
+    expect((await approve('storyboard')).status).toBe(200);
+    await expect(assertMusicVideoSceneReview(tag, 'video')).resolves.toBeUndefined();
+  });
+
+  // Uniquely catches a stills-only production run being refused on its first frame for want of a proof only clips can make.
+  it('lets a stills-only production run make every frame on the storyboard approval, keeping its clips behind the proof', async () => {
+    const { assertMusicVideoSceneReview } = await import('../services/musicVideo/productionReviewService.js');
+    await approve('art'); await approve('storyboard');
+    const sceneId = (await store.getProject(project.id)).scenes[0].sceneId;
+    await store.mutateProjectRecord(project.id, current => ({ project: { ...current, productionRuns: [
+      { id: 'run-stills', status: 'running', stopBefore: 'clips', pilot: null },
+      { id: 'run-full', status: 'running', pilot: { scenes: [] } },
+    ] } }));
+    await expect(assertMusicVideoSceneReview({ projectId: project.id, sceneId, productionRunId: 'run-stills' }, 'image')).resolves.toBeUndefined();
+    await expect(assertMusicVideoSceneReview({ projectId: project.id, sceneId, productionRunId: 'run-stills' }, 'video')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
+    await expect(assertMusicVideoSceneReview({ projectId: project.id, sceneId, productionRunId: 'run-full' }, 'image')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
   });
 
   it('records substantive machine proof evidence without claiming human playback and refuses automatic waivers', async () => {

@@ -8,6 +8,7 @@ import FeatureProviderPicker from '../FeatureProviderPicker';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { FormField } from '../ui/FormField';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
+import { useGoogleAutoConfigProgress } from '../../hooks/useGoogleAutoConfigProgress';
 import { DEFAULT_AVATAR_COLOR } from '../../themes/portosThemes';
 
 const TYPE_ICONS = { 'outlook-calendar': Globe, 'google-calendar': Calendar };
@@ -30,6 +31,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
   const [clearingGoogleAuth, setClearingGoogleAuth] = useState(false);
   const [oauthForm, setOauthForm] = useState({ clientId: '', clientSecret: '' });
   const [savingOAuth, setSavingOAuth] = useState(false);
+  const { progress: autoConfigProgress, run: runAutoConfig, mounted: autoConfigMounted } = useGoogleAutoConfigProgress();
   const [autoConfigStep, setAutoConfigStep] = useState(null); // null | 'launching' | 'login' | 'project' | 'api' | 'consent' | 'credentials' | 'capturing' | 'done'
 
   const fetchGoogleAuth = async () => {
@@ -110,7 +112,8 @@ export default function ConfigTab({ accounts, setAccounts }) {
     // Find the google account's email to pass as test user
     const googleAccount = accounts.find(a => a.type === 'google-calendar');
     const email = googleAccount?.email || '';
-    const result = await api.runGoogleAutoConfig(email, { silent: true }).catch(() => null);
+    const result = await runAutoConfig(email);
+    if (!autoConfigMounted.current) return;
     if (!result || result.error) {
       setAutoConfigStep('login');
       return toast.error(result?.error || 'Automated setup failed. Try manual setup instead.');
@@ -441,9 +444,8 @@ export default function ConfigTab({ accounts, setAccounts }) {
                               ) : autoConfigStep === 'running' ? (
                                 <div className="flex items-center gap-2 p-3 bg-port-bg/80 rounded border border-port-border">
                                   <RefreshCw size={14} className="text-port-accent animate-spin shrink-0" />
-                                  <div className="text-xs text-gray-400">
-                                    Automating Google Cloud setup... enabling Calendar API, configuring OAuth consent, creating credentials.
-                                    This may take up to a minute.
+                                  <div className="text-xs text-gray-400" role="status" aria-live="polite">
+                                    {autoConfigProgress?.message || 'Automating Google Cloud setup... This may take up to a minute.'}
                                   </div>
                                 </div>
                               ) : autoConfigStep === 'login' ? (

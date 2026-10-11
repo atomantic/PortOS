@@ -520,6 +520,20 @@ describe('syncAccount', () => {
     expect(result.newMessages).toBe(0);
   });
 
+  it('retains actionable browser selector failures in the HTTP result and socket completion', async () => {
+    getAccount.mockResolvedValue({ id: VALID_UUID, name: 'Outlook', type: 'outlook', enabled: true });
+    readFile.mockResolvedValue(JSON.stringify({ messages: [{ id: 'existing', externalId: 'existing-row' }] }));
+    const reason = 'Invalid Outlook messageRow selector. Edit it in Messages > Sync and test again.';
+    syncPlaywright.mockResolvedValue({ messages: [], status: 'extraction-failed', error: reason });
+    updateSyncStatus.mockResolvedValue();
+
+    expect(await syncAccount(VALID_UUID, mockIo, { mode: 'full' })).toMatchObject({
+      status: 'extraction-failed', reason, total: 1, pruned: 0
+    });
+    expect(mockIo.emit).toHaveBeenCalledWith('messages:sync:completed', expect.objectContaining({ status: 'extraction-failed', reason }));
+    expect(mockIo.emit).not.toHaveBeenCalledWith('messages:changed', {});
+  });
+
   it('selects the supported full mode for a Teams sync that omits the mode', async () => {
     getAccount.mockResolvedValue({ id: VALID_UUID, name: 'Teams', type: 'teams', enabled: true });
     readFile.mockResolvedValue(JSON.stringify({ syncCursor: null, messages: [] }));

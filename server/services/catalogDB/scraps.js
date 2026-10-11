@@ -16,9 +16,9 @@ import { newScrapId, rowToScrap } from './shared.js';
 // alongside the ingredients + source links (see POST /api/catalog/bulk-import).
 // Absent, falls through to the pool-level `query` as before. Mirrors the same
 // option on `createIngredient` / `linkIngredientToSource`.
-export async function createScrap({ title, rawText, sourceKind = 'paste', metadata = {}, embedding = null, embeddingModel = null, chunkIndex = 0, parentScrapId = null } = {}, { client } = {}) {
+export async function createScrap({ id: explicitId, title, rawText, sourceKind = 'paste', metadata = {}, embedding = null, embeddingModel = null, chunkIndex = 0, parentScrapId = null } = {}, { client } = {}) {
   if (!rawText) throw new Error('rawText is required');
-  const id = newScrapId();
+  const id = explicitId || newScrapId();
   const originInstanceId = await getInstanceId();
   const exec = client ? client.query.bind(client) : query;
   const result = await exec(

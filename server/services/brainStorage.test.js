@@ -1074,3 +1074,16 @@ describe('brainStorage meta strict reads (#4115)', () => {
     expect(meta.confidenceThreshold, 'ENOENT is the one errno that proves absence').toBe(0.6);
   });
 });
+
+it('keeps latest-ten defaults while allowing complete JSONL catch-up', async () => {
+  const records = Array.from({ length: 1001 }, (_, i) => ({ id: 'digest-' + i, generatedAt: new Date(Date.UTC(2020, 0, i + 1)).toISOString() }));
+  const dir = join(getTempRoot(), 'brain');
+  mkdirSync(dir, { recursive: true });
+  for (const type of ['digests', 'reviews']) {
+    writeFileSync(join(dir, type + '.jsonl'), records.map(record => JSON.stringify(record)).join('\n') + '\n');
+  }
+  brainStorage.invalidateAllCaches();
+  expect(await brainStorage.getDigests()).toHaveLength(10);
+  expect((await brainStorage.getDigests(Infinity)).at(-1).id).toBe('digest-0');
+  expect((await brainStorage.getReviews(Infinity)).at(-1).id).toBe('digest-0');
+});

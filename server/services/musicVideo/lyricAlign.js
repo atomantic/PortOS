@@ -64,6 +64,13 @@ function relabeledAnalysis(project, cues) {
   return parsed.success ? parsed.data : null;
 }
 
+// Measure the aligned word span, not an authored cue boundary that may be wider.
+function compressedWords(words) {
+  // CTC stores milliseconds; compare there so a span of exactly 0.15 s/word
+  // cannot become compressed through floating-point subtraction.
+  return words.length >= 3 && Math.round((words.at(-1).endSec - words[0].startSec) * 1000) < words.length * 150;
+}
+
 /**
  * Align one project's lyric cues. `cueId` re-aligns that line only: a timed
  * line uses its own slice; an untimed line uses full-song CTC context so a
@@ -120,9 +127,27 @@ export async function alignProjectLyrics(projectId, options = {}) {
   if (source === 'vocal-stem') {
     onProgress({ stage: 'loading-model' });
     checkCancel();
-    forcedWords = await deps.forceAlign(wav, promptCues, {
-      ...region, onProgress, isCancelled: options.isCancelled,
+    // Both explicit cue alignment and automatic repairs use the same runner,
+    // decoded stem, cancellation and progress callbacks. Save only once below.
+    const alignStemCues = (entries, window) => deps.forceAlign(wav, entries, {
+      ...window, onProgress, isCancelled: options.isCancelled,
     });
+    forcedWords = await alignStemCues(promptCues, region);
+    if (!cueId) {
+      const wholeSongWords = forcedWords;
+      forcedWords = [...wholeSongWords];
+      for (let index = 0; index < cues.length; index++) {
+        if (!compressedWords(wholeSongWords[index])) continue;
+        checkCancel();
+        const startSec = cues[index - 1]?.endSec ?? wholeSongWords[index - 1]?.at(-1)?.endSec ?? 0;
+        const endSec = cues[index + 1]?.startSec ?? wholeSongWords[index + 1]?.[0]?.startSec ?? wavDurationSec(wav);
+        // Inconsistent authored neighbors cannot supply a useful repair window.
+        if (!(endSec > startSec)) continue;
+        const [retry] = await alignStemCues([cues[index]], { startSec, endSec });
+        checkCancel();
+        if (retry.length === wholeSongWords[index].length && !compressedWords(retry)) forcedWords[index] = retry;
+      }
+    }
     kind = 'MMS_FA';
   } else {
     onProgress({ stage: 'loading-model' });
@@ -154,10 +179,10 @@ export async function alignProjectLyrics(projectId, options = {}) {
   checkCancel();
   onProgress({ stage: 'saving', percent: 100 });
   const align = (entries) => {
-    if (!forcedWords) return alignDirectorWords(entries, recognized);
+    if (!forcedWords) return alignDirectorWords(entries, recognized).map((entry) => ({ ...entry, suspect: false }));
     return entries.map((entry, index) => {
       const words = forcedWords[index];
-      return { ...entry, words, matched: words.length ? 1 : 0,
+      return { ...entry, words, matched: words.length ? 1 : 0, suspect: compressedWords(words),
         startSec: entry.startSec ?? words[0]?.startSec ?? null,
         endSec: entry.endSec ?? words.at(-1)?.endSec ?? null };
     });

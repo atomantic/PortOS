@@ -55,10 +55,25 @@
  *     derive-from-manuscript/commit, manuscript cuts preview/apply, comic
  *     extract-pages, audio extract-lines, scene video, TTS and music
  *     rendering): none reaches the staged runner.
- *   - Caller-prompted AI outside Pipeline (#10908): game feedback, rounds
- *     generate/evaluate/derive-parts, personality generate, system-resource
- *     triage, mood-board style synthesis/compose/analyze and CoS task enhance
- *     take caller text and/or a caller-chosen provider; gated whole-operation.
+ *   - Caller-prompted AI outside Pipeline (#10908, #10989): game feedback,
+ *     rounds generate/evaluate/derive-parts, personality generate,
+ *     system-resource triage, mood-board style synthesis/compose/analyze, CoS
+ *     task enhance, Music Video cover design/generation and promotion plans,
+ *     and POST LLM scoring, rhetoric evaluation and drill-cache fill take
+ *     caller text and/or a caller-chosen provider; gated whole-operation.
+ *     POST /api/meatspace/post/drill is gated only when `type` is an LLM
+ *     drill; math, memory and cognitive drills stay open. Cover compose,
+ *     lettering saves and promotion reads stay open.
+ *   - Importer, Brain and analytics AI (#11036): classify/analyze/retry-issues,
+ *     model-personality run, goal-scorecard narrative, Brain capture (it can
+ *     dispatch classification or repository intake), inbox retry, digest/review
+ *     runs and the daily-log draft hand caller text, stored reference data
+ *     and/or a caller-chosen provider to a runner that is not tool-free. Brain
+ *     daily-log digest-settings select the provider a scheduled digest uses and
+ *     arm it. Importer commit is gated only when `cleanupFormatting` is true;
+ *     the default deterministic commit stays open. Collateral restriction:
+ *     remote password-free Brain capture is refused whole. Record reads/CRUD and
+ *     the non-AI insights compute/refresh routes stay open.
  *   - Creative Director and Creative Commissions (#10867): project create/edit
  *     choose agent instructions and provider pins; start/resume/directive/
  *     replan/plan-step/auto-cast/smoke-test/review enqueue or re-arm writable
@@ -115,6 +130,12 @@
  *     previews, inference and mind stop/pause do not arm execution.
  *   - tools create/edit supplies agent prompt hints (#9014); delete removes
  *     a tool. The mind maintainer watchdog queues remediation and is gated.
+ *   - voice config (#10990): `llm.systemPrompt`, `llm.personality`,
+ *     `llm.tools.enabled` and `llm.codeAgent` are the voice agent's
+ *     instructions or the switch that arms its coding-agent tool.
+ *     `PUT /api/voice/config` is gated only when one of those values would
+ *     change (`HOST_CONTROL_VOICE_CONFIG_PATHS`); a whole-config resend and
+ *     every other voice setting stay open.
  *
  * Patterns are `METHOD /path`, with Express-style `:param` (one segment) and
  * `*name` (the rest of the path). Matching is case-insensitive and ignores one
@@ -128,7 +149,8 @@
  * account and change external state; they require operator authority.
  */
 
-import { isPlainObject } from './objects.js';
+import { canonicalStringify, isPlainObject, POLLUTING_KEYS } from './objects.js';
+import { LLM_DRILL_TYPES } from './postDrillTypes.js';
 import { escapeRegExp } from './textUtils.js';
 
 export const HOST_CONTROL_ROUTES = Object.freeze([
@@ -223,6 +245,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/system/maintenance',
   'POST /api/system/maintenance/resume',
   'POST /api/voice/studio/setup',
+  // Voice fine-tune start spawns a Python trainer on the host (#11074).
+  'POST /api/voice/profiles/:id/fine-tune/start',
 
   // Instances: runs the Tailscale CLI and writes a TLS certificate and private
   // key into the install's cert directory.
@@ -419,6 +443,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // stay open.
   'POST /api/image-to-3d/targets/:targetId/install',
   'POST /api/image-to-3d/trellis2/install',
+  // 3D generation and re-generation run host Python/GPU adapters (#11075).
+  'POST /api/image-to-3d/models',
+  'POST /api/image-to-3d/models/:id/generate',
   'POST /api/midi-runtime/install',
   'POST /api/devtools/video-download/yt-dlp/update',
 
@@ -432,6 +459,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/music/lyrics',
   'POST /api/music/waveform',
   'POST /api/music/code',
+  // Local music generation spawns neural-audio Python on the host (#11077).
+  'POST /api/music/generate',
   'POST /api/tracks/:id/waveform/draw',
   'POST /api/music-video/autonomous',
   'POST /api/music-video/:id/autonomous/resume',
@@ -445,6 +474,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/music-video/:id/cast-and-sets',
   'POST /api/music-video/:id/cast-and-sets/regenerate',
   'PATCH /api/music-video/:id/cast-and-sets/direction',
+  'POST /api/music-video/:id/cast-and-sets/feedback',
   'POST /api/music-video/:id/cast-and-sets/resume',
   'POST /api/music-video/:id/code/generate',
   'POST /api/music-video/:id/code/sections/:sectionId/regenerate',
@@ -462,6 +492,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/image-gen/generate',
   'POST /api/image-gen/avatar',
   'POST /api/video-gen',
+  // Upscale (LTX subprocess / ffmpeg) and stitch (ffmpeg) run on the host (#11076).
+  'POST /api/video-gen/upscale/:id',
+  'POST /api/video-gen/stitch',
   'POST /api/sprites/:id/reference/generate',
   // Fork creates a record and immediately queues reference generation too.
   'POST /api/sprites/:id/fork',
@@ -499,6 +532,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/lora-datasets/:id/generate',
   'POST /api/lora-datasets/:id/caption',
   'POST /api/lora-datasets/:id/slice-reference-sheet',
+  // LoRA training start/resume spawn detached trainer processes on the host GPU (#11073).
+  'POST /api/lora-training/runs',
+  'POST /api/lora-training/runs/:id/resume',
 
   // Code Animation contained execution (#9388): choosing the installed tool a
   // worker runs, and the containment check that spawns sandboxed processes.
@@ -639,6 +675,24 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/mood-boards/:id/compose-prompt',
   'POST /api/mood-boards/:id/analyze',
   'POST /api/cos/tasks/enhance',
+  // Music Video cover design/generation and promotion planning, and POST LLM
+  // drills (#10989). Each hands free text and/or a caller-chosen provider to
+  // the prompt runner (or an image job a CLI/TUI agent can run) with no
+  // tool-free restriction. Cover compose, lettering PUT, thumbnail selection
+  // and promotion GET only record or read. POST /api/meatspace/post/drill is
+  // body-gated below so deterministic drills stay open.
+  'POST /api/music-video/:id/publish-kit/cover-art/design',
+  'POST /api/music-video/:id/publish-kit/cover-art/generate',
+  'POST /api/music-video/:id/publish/promotion-plan',
+  'POST /api/meatspace/post/score-llm',
+  'POST /api/meatspace/post/rhetoric/evaluate',
+  'POST /api/meatspace/post/drill-cache/fill',
+
+  // Calendar MCP sync/discovery (#11051) can launch a tool-capable CLI with
+  // stored subcalendar text. Configuring that provider does not authorize a
+  // network caller to run it. Direct API sync, push ingestion and CRUD stay open.
+  'POST /api/calendar/sync/:accountId/google',
+  'POST /api/calendar/sync/:accountId/discover',
 
   // Writers Room authoring reaches the staged runner, including CLI/TUI
   // fallback. Stored prose and live cursor text are caller-controlled; a
@@ -689,6 +743,22 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/catalog/ingest/voice',
   'POST /api/catalog/ingest/brain',
 
+  // Importer, Brain and analytics AI (#11036): caller text, stored reference
+  // data and a caller-chosen provider reach a non-tool-free runner. Authorize
+  // before stores, run creation, queueing or dispatch. `POST /api/importer/commit`
+  // is gated per body (cleanupFormatting) in COMPILED_BODY_ROUTES.
+  'POST /api/importer/classify',
+  'POST /api/importer/analyze',
+  'POST /api/importer/retry-issues',
+  'POST /api/brain/capture',
+  'POST /api/brain/inbox/:id/retry',
+  'POST /api/brain/digest/run',
+  'POST /api/brain/review/run',
+  'POST /api/brain/daily-log/:date/draft',
+  'PUT /api/brain/daily-log/digest-settings',
+  'POST /api/model-personality/run',
+  'POST /api/insights/goal-scorecard/narrative',
+
   // Eidoverse: clone and install a caller-named repo, or repoint it.
   'POST /api/settings/features/eidoverse/install',
   'PUT /api/settings/features/eidoverse/source',
@@ -708,8 +778,14 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/update/sync-fork',
 
   // Brain links (#8742): git clone/pull in the linked repo, opening a host
-  // app, or queuing a CoS malware-scan/repo-study agent. `links`/`buckets`
-  // CRUD and `scan-report` only read or record; nothing runs.
+  // app, or queuing a CoS malware-scan/repo-study agent. `buckets` CRUD,
+  // `scan-report` and link CRUD only read or record; nothing runs. The one
+  // exception is a repository URL that auto-clones: POST /api/brain/links
+  // (unless `autoClone: false`) and a bare-repo-URL POST /api/brain/capture
+  // start a clone and may arm post-clone scan/study agents. Links are gated per
+  // request in their handler (`assertHostControl`, #11037) so a plain bookmark
+  // stays open; capture is listed below whole (#11036) because it can also
+  // dispatch classification.
   'POST /api/brain/links/:id/clone',
   'POST /api/brain/links/:id/pull',
   'POST /api/brain/links/:id/open-folder',
@@ -756,7 +832,7 @@ export const HOST_CONTROL_SETTINGS_SLICES = Object.freeze([
 ]);
 
 /**
- * Nested `PUT /api/settings` keys, as dotted paths, that choose a binary
+ * Nested settings mutation keys, as dotted paths, that choose a binary
  * PortOS spawns (the image-gen CLIs and the Python interpreter every local
  * media lane runs) or turn the Layered Intelligence `cmd` sources into a
  * full shell (#8751). Their parent slices stay open, so each is gated per
@@ -773,6 +849,20 @@ export const HOST_CONTROL_SETTINGS_PATHS = Object.freeze([
   'imageGen.grok.grokPath',
   'imageGen.local.pythonPath',
   'layeredIntelligence.trustShellSources',
+]);
+
+/**
+ * `PUT /api/voice/config` fields that become the voice agent's instructions
+ * or arm its coding-agent tool (#10990). The Voice settings tab resends the
+ * whole config on every save, so these are gated per CHANGED value: a remote
+ * caller who only changes the TTS rate must still be able to save.
+ * `llm.personality` and `llm.codeAgent` compare as whole objects.
+ */
+export const HOST_CONTROL_VOICE_CONFIG_PATHS = Object.freeze([
+  'llm.systemPrompt',
+  'llm.personality',
+  'llm.tools.enabled',
+  'llm.codeAgent',
 ]);
 
 /**
@@ -814,6 +904,7 @@ const COMPILED_BODY_ROUTES = [
   // Enabling this feature now launches its registered host executable.
   ['PUT /api/settings/features/eidoverse', (body) => bodyKeys(body)],
   ['POST /api/local-llm/capability-tests/run', (body) => body?.testId === 'sandbox-repair' ? ['testId'] : []],
+  ['PATCH /api/settings/slice', (body) => HOST_CONTROL_SETTINGS_SLICES.includes(body?.slicePath) ? [body.slicePath] : []],
   ['PUT /api/settings', (body) => bodyKeys(body).filter((key) => HOST_CONTROL_SETTINGS_SLICES.includes(key)
     || (key === 'instanceFeatures' && body.instanceFeatures?.eidoverse !== undefined))],
   ['PUT /api/cos/config', (body) => bodyKeys(body).filter((key) => !HOST_CONTROL_OPEN_COS_CONFIG_KEYS.includes(key))],
@@ -823,6 +914,12 @@ const COMPILED_BODY_ROUTES = [
   // sources, triage and Brain/Goal promotion stay data-only and open.
   ['POST /api/review/queue/resolve', (body) => /^\s*cos:/i.test(body?.id) ? ['id'] : []],
   ['POST /api/review/queue/promote-ask', (body) => body?.target === 'task' ? ['target'] : []],
+  // LLM drill types reach a caller-chosen provider (#10989). Math, memory and
+  // cognitive types stay open, including a missing or unknown type.
+  ['POST /api/meatspace/post/drill', (body) => LLM_DRILL_TYPES.includes(body?.type) ? ['type'] : []],
+  // Importer commit runs one LLM reformat call per excerpt only when asked to
+  // (#11036); the default deterministic commit stays open.
+  ['POST /api/importer/commit', (body) => body?.cleanupFormatting === true ? ['cleanupFormatting'] : []],
 ].map(([route, pick]) => ({ ...compileRoute(route), pick }));
 
 /** The host-control keys a request body names, for `method path` of a policy store; [] elsewhere. */
@@ -841,18 +938,51 @@ const valueAt = (object, path) => path.split('.').reduce(
 const isUnset = (value) => value === undefined || value === null || value === '' || value === false;
 
 const SETTINGS_WRITE = compileRoute('PUT /api/settings');
+const SETTINGS_SLICE_WRITE = compileRoute('PATCH /api/settings/slice');
 
-/** The HOST_CONTROL_SETTINGS_PATHS a `method path` body sets to a non-default value, for `PUT /api/settings`; [] elsewhere. */
+// Project the allowlisted one/two-segment slice payload into the same shape
+// the legacy PUT gate compares. Invalid paths are rejected by route validation.
+const settingsBody = (method, path, body) => {
+  if (method?.toUpperCase() !== SETTINGS_SLICE_WRITE.method || !SETTINGS_SLICE_WRITE.pattern.test(path)) return body;
+  if (typeof body?.slicePath !== 'string') return {};
+  const segments = body.slicePath.split('.');
+  if (segments.length > 2 || segments.some((key) => !key || POLLUTING_KEYS.has(key))) return {};
+  return segments.reduceRight((value, key) => ({ [key]: value }), body.partial);
+};
+
+/** The executable settings paths set by PUT or a slice PATCH; [] elsewhere. */
 export const hostControlSettingsPathsIn = (method, path, body) => (
   typeof method === 'string' && typeof path === 'string'
-  && method.toUpperCase() === SETTINGS_WRITE.method && SETTINGS_WRITE.pattern.test(path)
-    ? HOST_CONTROL_SETTINGS_PATHS.filter((key) => !isUnset(valueAt(body, key)))
+  && [SETTINGS_WRITE, SETTINGS_SLICE_WRITE].some((entry) => method.toUpperCase() === entry.method && entry.pattern.test(path))
+    ? HOST_CONTROL_SETTINGS_PATHS.filter((key) => !isUnset(valueAt(settingsBody(method, path, body), key)))
     : []
 );
 
 /** Of `paths`, the ones whose value in `body` differs from the stored `current` settings. */
-export const changedHostControlSettingsPaths = (paths, body, current) => (
-  paths.filter((key) => !Object.is(valueAt(body, key), valueAt(current, key)))
+export const changedHostControlSettingsPaths = (paths, body, current, method = 'PUT', path = '/api/settings') => (
+  paths.filter((key) => !Object.is(valueAt(settingsBody(method, path, body), key), valueAt(current, key)))
+);
+
+const VOICE_CONFIG_WRITE = compileRoute('PUT /api/voice/config');
+const VOICE_CONFIG_DEEP_PATHS = new Set(['llm.personality', 'llm.codeAgent']);
+
+/** The HOST_CONTROL_VOICE_CONFIG_PATHS present on a `PUT /api/voice/config` body; [] elsewhere. */
+export const voiceConfigHostControlPathsIn = (method, path, body) => (
+  typeof method === 'string' && typeof path === 'string'
+  && method.toUpperCase() === VOICE_CONFIG_WRITE.method && VOICE_CONFIG_WRITE.pattern.test(path)
+    ? HOST_CONTROL_VOICE_CONFIG_PATHS.filter((key) => valueAt(body, key) !== undefined)
+    : []
+);
+
+/** Of `paths`, the ones whose voice-config value in `body` differs from stored `current`. Objects compare structurally. */
+export const changedVoiceConfigHostControlPaths = (paths, body, current) => (
+  paths.filter((key) => {
+    const next = valueAt(body, key);
+    const prev = valueAt(current, key);
+    return VOICE_CONFIG_DEEP_PATHS.has(key)
+      ? canonicalStringify(next) !== canonicalStringify(prev)
+      : !Object.is(next, prev);
+  })
 );
 
 /** The HOST_CONTROL_ROUTES entry that `method path` (an Express `req.method` / `req.path`) matches, or null. */

@@ -3,7 +3,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { musicVideoEvents } from './events.js';
 import { shotCameraLabel } from '../../lib/cameraMovements.js';
-import { productionReadiness, seedArtDraft, productionReviewBasis, productionAlignmentBasis, documentStoryboardBasis, approveProductionStage, assertProductionApproval, recordProductionFeedback, resolveProductionFeedback, revertApprovedInput } from './productionReview.js';
+import { productionReadiness, boardStoryboard, seedArtDraft, productionReviewBasis, productionAlignmentBasis, documentStoryboardBasis, approveProductionStage, assertProductionApproval, recordProductionFeedback, resolveProductionFeedback, revertApprovedInput } from './productionReview.js';
 
 const reviewProcessId = randomUUID();
 
@@ -22,13 +22,22 @@ function changed(project) {
 
 export const getProductionReview = async id => present(await requireProject(id));
 
-export async function assertMusicVideoSceneReview(tag) {
+/**
+ * The approval a scene's media job needs. A still is how the director reviews
+ * the storyboard, so a still for a planned shot needs only the art direction;
+ * clips, and anything a production run submits, wait for the storyboard. A
+ * production run's bulk work also waits for the animated proof, except the
+ * stills of a run that stops before clips: the proof is made from clips.
+ */
+export async function assertMusicVideoSceneReview(tag, kind = null) {
   if (!tag?.projectId || !tag.sceneId) return;
   const project = await requireProject(tag.projectId);
-  assertProductionApproval(project, 'storyboard');
+  const boardStill = kind === 'image' && !tag.productionRunId && (project.scenes || []).some(scene => scene.sceneId === tag.sceneId);
+  assertProductionApproval(project, boardStill ? 'art' : 'storyboard');
   if (tag.productionRunId) {
     const run = project.productionRuns?.find(r => r.id === tag.productionRunId);
-    if (!run?.pilot?.scenes?.some(scene => scene.sceneId === tag.sceneId)) assertProductionApproval(project, 'proof');
+    const stillsOnly = kind === 'image' && run?.stopBefore === 'clips';
+    if (!stillsOnly && !run?.pilot?.scenes?.some(scene => scene.sceneId === tag.sceneId)) assertProductionApproval(project, 'proof');
   }
 }
 
@@ -226,16 +235,7 @@ export async function prepareProductionReview(id, options = {}) {
   const { project: planned } = await mutateProjectRecord(id, current => {
     const latest = current.productionReview.draft;
     if (latest.storyboardSource === 'document') return { project: current };
-    // New shots borrow the Cast & Sets world's camera and transition language when the scene has
-    // none, unless the sheet was skipped (the planner ignores a skipped direction too).
-    const world = (current.castAndSets?.status !== 'skipped' && current.castAndSets?.direction?.world) || {};
-    const storyboard = [...latest.storyboard, ...current.scenes.filter(scene => !latest.storyboard.some(shot => shot.sceneId === scene.sceneId)).map(scene => ({
-      sceneId: scene.sceneId,
-      lyricCueIds: (current.lyricCues || []).filter(c => c.startSec < scene.endSec && c.endSec > scene.startSec).map(c => c.id),
-      action: scene.visualIntent || scene.prompt || '', staging: scene.framePrompt || '',
-      camera: shotCameraLabel(scene.camera) || scene.direction?.camera || world.camera || '', transition: world.transitions || '',
-    }))];
-    return { project: { ...current, productionReview: { ...current.productionReview, draft: { ...latest, storyboard } } } };
+    return { project: { ...current, productionReview: { ...current.productionReview, draft: { ...latest, storyboard: boardStoryboard(current, latest.storyboard) } } } };
   });
   return changed(planned);
 }

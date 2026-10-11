@@ -93,7 +93,7 @@ export default function TrackPanel({
       {pending && (
         <div role="alertdialog" aria-label="Confirm track change" className="mt-2 rounded border border-port-warning/50 bg-port-warning/10 p-2 text-xs space-y-2">
           <p>
-            {pending.kind === 'youtube' ? 'Importing new audio' : 'Changing the track'} will clear: {clearLabels.join(', ')}. Lyric text and scenes are kept. You will need to re-run Analyze and Align words.
+            {pending.kind === 'youtube' ? 'Importing new audio' : 'Changing the track'} will clear: {clearLabels.join(', ')}. Lyric text and scenes are kept. The new song is analyzed and the words re-aligned automatically.
           </p>
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={() => runChange(pending, {})}

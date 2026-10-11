@@ -56,7 +56,8 @@ vi.mock('../integrations/moltworld/index.js', () => ({
 vi.mock('./agentContentGenerator.js', () => ({
   generatePost: vi.fn().mockResolvedValue({ title: 'AI Title', content: 'AI Content' }),
   generateComment: vi.fn().mockResolvedValue({ content: 'AI Comment' }),
-  generateReply: vi.fn().mockResolvedValue({ content: 'AI Reply' })
+  generateReply: vi.fn().mockResolvedValue({ content: 'AI Reply' }),
+  assertMoltbookCommentProvider: vi.fn().mockResolvedValue(undefined)
 }));
 
 vi.mock('./agentFeedFilter.js', () => ({
@@ -67,7 +68,7 @@ vi.mock('./agentFeedFilter.js', () => ({
 import * as agentActivity from './agentActivity.js';
 import * as platformAccounts from './platformAccounts.js';
 import * as agentPersonalities from './agentPersonalities.js';
-import { generatePost, generateComment, generateReply } from './agentContentGenerator.js';
+import { generatePost, generateComment, generateReply, assertMoltbookCommentProvider } from './agentContentGenerator.js';
 import { findRelevantPosts, findReplyOpportunities } from './agentFeedFilter.js';
 import { init } from './agentActionExecutor.js';
 
@@ -96,6 +97,12 @@ describe('agentActionExecutor', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockScheduleEvents.removeAllListeners();
+    // clearAllMocks keeps a previous mockRejectedValue. Comment paths must
+    // pass the provider check unless a case opts out.
+    assertMoltbookCommentProvider.mockResolvedValue(undefined);
+    generatePost.mockResolvedValue({ title: 'AI Title', content: 'AI Content' });
+    generateComment.mockResolvedValue({ content: 'AI Comment' });
+    generateReply.mockResolvedValue({ content: 'AI Reply' });
     init();
   });
 
@@ -462,6 +469,85 @@ describe('agentActionExecutor', () => {
         expect(generateReply).toHaveBeenCalled();
         expect(mockMoltbookClient.replyToComment).toHaveBeenCalledWith('p1', 'parent-1', 'AI Reply');
       });
+    });
+
+    it('skips a CLI content provider before reading the feed or publishing', async () => {
+      const refusal = Object.assign(new Error('Provider "Example CLI" cannot read Moltbook posts.'), {
+        code: 'untrusted-content-provider-unavailable',
+        status: 422
+      });
+      assertMoltbookCommentProvider.mockRejectedValue(refusal);
+
+      mockScheduleEvents.emit('execute', {
+        scheduleId: 's1',
+        schedule: makeSchedule('comment', {}),
+        timestamp: new Date().toISOString()
+      });
+
+      await vi.waitFor(() => {
+        expect(agentActivity.logActivity).toHaveBeenCalledWith(
+          expect.objectContaining({
+            status: 'skipped',
+            code: 'untrusted-content-provider-unavailable',
+            error: refusal.message
+          })
+        );
+      });
+      expect(assertMoltbookCommentProvider).toHaveBeenCalledWith('p1');
+      expect(findReplyOpportunities).not.toHaveBeenCalled();
+      expect(generateComment).not.toHaveBeenCalled();
+      expect(mockMoltbookClient.createComment).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('engage and monitor actions', () => {
+    beforeEach(() => {
+      platformAccounts.getAccountWithCredentials.mockResolvedValue(makeAccount());
+      agentPersonalities.getAgentById.mockResolvedValue(makeAgent());
+    });
+
+    it('skips engage before votes when the engagement provider cannot read Moltbook', async () => {
+      assertMoltbookCommentProvider.mockRejectedValue(Object.assign(new Error('blocked'), {
+        code: 'untrusted-content-provider-unavailable'
+      }));
+
+      mockScheduleEvents.emit('execute', {
+        scheduleId: 's1',
+        schedule: makeSchedule('engage', { maxComments: 1, maxVotes: 3 }),
+        timestamp: new Date().toISOString()
+      });
+
+      await vi.waitFor(() => {
+        expect(agentActivity.logActivity).toHaveBeenCalledWith(
+          expect.objectContaining({ status: 'skipped', code: 'untrusted-content-provider-unavailable' })
+        );
+      });
+      expect(findRelevantPosts).not.toHaveBeenCalled();
+      expect(generateComment).not.toHaveBeenCalled();
+      expect(mockMoltbookClient.upvote).not.toHaveBeenCalled();
+      expect(mockMoltbookClient.createComment).not.toHaveBeenCalled();
+    });
+
+    it('skips monitor before the author feed when replies would be generated', async () => {
+      assertMoltbookCommentProvider.mockRejectedValue(Object.assign(new Error('blocked'), {
+        code: 'security-guard-classified-malicious'
+      }));
+
+      mockScheduleEvents.emit('execute', {
+        scheduleId: 's1',
+        schedule: makeSchedule('monitor', { maxReplies: 2 }),
+        timestamp: new Date().toISOString()
+      });
+
+      await vi.waitFor(() => {
+        expect(agentActivity.logActivity).toHaveBeenCalledWith(
+          expect.objectContaining({ status: 'skipped', code: 'security-guard-classified-malicious' })
+        );
+      });
+      expect(mockMoltbookClient.getPostsByAuthor).not.toHaveBeenCalled();
+      expect(generateReply).not.toHaveBeenCalled();
+      expect(mockMoltbookClient.upvoteComment).not.toHaveBeenCalled();
+      expect(mockMoltbookClient.replyToComment).not.toHaveBeenCalled();
     });
   });
 

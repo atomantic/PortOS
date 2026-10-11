@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Ambient from './Ambient';
@@ -104,7 +104,7 @@ describe('Ambient resource updates', () => {
     expect(api.getCalendarEvents).toHaveBeenLastCalledWith({
       startDate: new Date(2026, 0, 16).toISOString(),
       endDate: new Date(2026, 0, 17).toISOString(), limit: 200, offset: 0
-    });
+    }, { silent: true });
     expect(screen.getByText(formatDateFull(new Date()))).toBeTruthy();
   });
 
@@ -146,4 +146,25 @@ describe('Ambient idle controls', () => {
     await flush(() => screen.getByRole('button', { name: /exit$/i }).focus());
     expect(header().className).not.toMatch(/(^|\s)opacity-0/);
   });
+});
+
+
+it('invalidates pending calendar reads, preserves stale content on failure, and retries', async () => {
+  await mount();
+  let resolveOld;
+  let rejectCurrent;
+  api.getCalendarEvents.mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }))
+    .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectCurrent = reject; }));
+  await event('calendar:changed');
+  await event('calendar:changed');
+  await flush(() => resolveOld({ events: [{ id: 'obsolete', title: 'Obsolete event', startTime: new Date(2026, 0, 15, 13).toISOString() }], total: 1 }));
+  expect(screen.queryByText('Obsolete event')).toBeNull();
+  expect(screen.getByText('Example meeting')).toBeTruthy();
+  await flush(() => rejectCurrent(new Error('Read unavailable')));
+  expect(screen.getByRole('alert')).toHaveTextContent('stale');
+  api.getCalendarEvents.mockResolvedValue({ events: [], total: 0 });
+  await flush(() => fireEvent.click(screen.getByRole('button', { name: 'Retry calendar' })));
+  expect(screen.queryByText('Example meeting')).toBeNull();
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(reads()).toEqual([1, 1, 1, 4]);
 });

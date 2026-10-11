@@ -14,11 +14,12 @@
  *     productionRunId,      // the production run that started it, if any
  *     route: { mode, model },
  *     direction,            // castAndSetsDirection.js shape (`medium`: absent = photographic)
- *     moodImages: [{ kind, filename }],
- *     plan:   { [key]: { key, kind, label, prompt, deps, refKeys, moodRefs?, setId?, testIndex? } },
+ *     plan:   { [key]: { key, kind, label, prompt, deps, refKeys, refImages?, setId?, testIndex? } },
  *     images: { [key]: { status, jobId, imageId, history, failures, error, updatedAt,
  *       submittedPrompt?, submittedPromptTruncated?, submittedReferences?, submittedRevision? } },
  *     artifactId, artifactVersion, notesApplied,
+ *     feedback,             // [{ id, text, at, revision }]: standing sheet feedback every direction call honors
+ *     changeSummary,        // { revision, changes: [string], rerendered, at }: what the last revision changed
  *     createdAt, updatedAt, approvedAt,
  *     approvedInputs,       // labeled input hashes the approval rests on (productionReview.js); absent on legacy approvals
  *     approvedValues,       // capped approved values of the revertible inputs, keyed like approvedInputs; absent = not revertible
@@ -96,12 +97,13 @@ export function startCastAndSetsOnProject(project, { processId, productionRunId 
     productionRunId,
     route: current?.route || null,
     direction: current?.direction || null,
-    moodImages: current?.moodImages || [],
     plan: current?.plan || {},
     images: current?.images || {},
     artifactId: current?.artifactId || null,
     artifactVersion: current?.artifactVersion || null,
     notesApplied: [],
+    // Standing feedback outlives a rebuild: the fresh direction still honors it.
+    feedback: current?.feedback || [],
     createdAt: current?.createdAt || now,
     approvedAt: null,
   };
@@ -133,6 +135,26 @@ export function reviseCastAndSetsOnProject(project, { processId, notesApplied = 
   }, now);
 }
 
+const MAX_FEEDBACK = 12;
+
+/**
+ * Add one piece of standing sheet feedback (newest last, capped). Returns
+ * `{ project, stage, entry }`; the caller revises the stage in the same write.
+ */
+export function addCastAndSetsFeedback(project, { id, text }, now = new Date().toISOString()) {
+  const stage = requireStage(project);
+  const entry = { id, text: trimTo(String(text || ''), 2000), at: now, revision: (stage.revision || 0) + 1 };
+  const feedback = [...(stage.feedback || []), entry].slice(-MAX_FEEDBACK);
+  return { ...write(project, { ...stage, feedback }, now), entry };
+}
+
+/** Stop honoring one piece of standing feedback. Nothing re-renders. Returns `{ project, stage }`. */
+export function removeCastAndSetsFeedback(project, feedbackId, now = new Date().toISOString()) {
+  const stage = requireStage(project);
+  if (!(stage.feedback || []).some((f) => f.id === feedbackId)) throw stageError(404, 'NOT_FOUND', 'That feedback is not on this check-in');
+  return write(project, { ...stage, feedback: stage.feedback.filter((f) => f.id !== feedbackId) }, now);
+}
+
 /** Re-pin an interrupted working stage to this process. Returns `{ project, stage }`. */
 export function resumeCastAndSetsOnProject(project, { processId }, now = new Date().toISOString()) {
   const stage = requireStage(project);
@@ -151,8 +173,10 @@ export function resumeCastAndSetsOnProject(project, { processId }, now = new Dat
  * (re)render; every other key keeps its image. Keys no longer in the plan are
  * dropped. Returns `{ project, stage }`.
  */
-export function setCastAndSetsDirection(project, { direction, plan, moodImages, route, renderKeys }, now = new Date().toISOString()) {
-  const stage = requireStage(project);
+export function setCastAndSetsDirection(project, { direction, plan, route, renderKeys }, now = new Date().toISOString()) {
+  // `moodImages` (mood board images once sent as references) is dropped from a
+  // pre-fix stage: outside images never condition generation.
+  const { moodImages: _legacyMoodImages, ...stage } = requireStage(project);
   const rerender = new Set(renderKeys);
   const images = {};
   for (const key of Object.keys(plan)) {
@@ -166,7 +190,6 @@ export function setCastAndSetsDirection(project, { direction, plan, moodImages, 
     status: 'imaging',
     direction,
     plan,
-    moodImages: moodImages ?? stage.moodImages ?? [],
     route: route ?? stage.route ?? null,
     images,
   }, now);

@@ -179,28 +179,31 @@ describe('projectsFile federation (#1770)', () => {
       { w: 'home', startSec: 1.55, endSec: 2, conf: 'matched' },
     ];
     await file.updateProject(p.id, {
-      lyricCues: [{ id: 'lc-1', text: 'walking home', startSec: 1, endSec: 2, words: nudged, matched: 0.4 }],
+      lyricCues: [{ id: 'lc-1', text: 'walking home', startSec: 1, endSec: 2, words: nudged, matched: 0.4, suspect: true }],
     });
     const saved = await file.getProject(p.id);
     expect(saved.lyricCues[0].words).toEqual(nudged);
     expect(saved.lyricCues[0].text).toBe('walking home');
     expect(saved.lyricCues[0].matched).toBe(0.4);
+    expect(saved.lyricCues[0].suspect).toBe(true);
     expect((await file.cloneProject(p.id)).lyricCues[0].words).toEqual(nudged);
 
     const retitled = await file.updateProject(p.id, {
-      lyricCues: [{ id: 'lc-1', text: 'walking house', startSec: 1, endSec: 2, words: nudged, matched: 0.4 }],
+      lyricCues: [{ id: 'lc-1', text: 'walking house', startSec: 1, endSec: 2, words: nudged, matched: 0.4, suspect: true }],
     });
     expect(retitled.lyricCues[0]).toMatchObject({ text: 'walking house', startSec: 1, endSec: 2 });
     expect(retitled.lyricCues[0].words).toBeUndefined();
     expect(retitled.lyricCues[0].matched).toBeUndefined();
+    expect(retitled.lyricCues[0].suspect).toBeUndefined();
 
     await file.updateProject(p.id, {
-      lyricCues: [{ id: 'lc-1', text: 'walking home', startSec: 1, endSec: 2, words: nudged, matched: 0.4 }],
+      lyricCues: [{ id: 'lc-1', text: 'walking home', startSec: 1, endSec: 2, words: nudged, matched: 0.4, suspect: true }],
     });
     const swapped = await file.updateProject(p.id, { trackId: 't2' });
     expect(swapped.lyricCues[0].text).toBe('walking home');
     expect(swapped.lyricCues[0].words).toBeUndefined();
     expect(swapped.lyricCues[0].matched).toBeUndefined();
+    expect(swapped.lyricCues[0].suspect).toBeUndefined();
     expect(swapped.lyricCues[0].startSec).toBeNull();
     expect(swapped.lyricCues[0].endSec).toBeNull();
   });
@@ -408,5 +411,46 @@ describe('editable code revisions and footage variants', () => {
     await file.mutateProjectRecord(fork.id, (project) => ({ project: { ...project, castAndSets: { status: 'review', direction: { protagonist: { name: 'New cast' } } } } }));
     expect((await file.getProject(fork.id)).visualSpec.moodBoardId).toBe('board-variant');
     expect(await file.getProject(source.id)).toEqual(original);
+  });
+});
+
+describe('nextProductionStep step types', () => {
+  const PROCESS = 'test-process';
+  // Pure: no queue, provider or store is used. Scenes are outside a legacy run's basis.
+  async function startedRun({ scenes, castAndSets = null } = {}) {
+    const { startProductionOnProject } = await import('./production.js');
+    const project = { id: 'mv-example', name: 'Example Song', trackId: 'example-track', composition: { mode: 'composed' },
+      audioAnalysis: { durationSec: 4, sections: [{ label: 'Verse', startSec: 0, endSec: 4 }] }, castAndSets,
+      scenes: scenes ?? [{ sceneId: 'scene-a', startSec: 0, endSec: 4, visualLayer: 'footage', prompt: 'Example shot' }] };
+    return startProductionOnProject(project, { pool: [{ kind: 'image', mode: 'local' }, { kind: 'video', mode: 'local' }], processId: PROCESS, limits: { maxGenerations: 10, maxReviewAttempts: 1 } });
+  }
+  const step = async (project, run) => (await import('./production.js')).nextProductionStep(project, run, { processId: PROCESS });
+  const withPilot = (run, pilot = {}) => ({ ...run, planned: true, pilot: { scenes: [{ sceneId: 'scene-a', operation: 'cutaway', ...pilot }] } });
+
+  it('dispatches a pending pilot that still lacks media before opening its review', async () => {
+    const { project, run } = await startedRun();
+    expect(await step(project, withPilot(run))).toEqual({ type: 'dispatch', kind: 'frame', sceneId: 'scene-a' });
+  });
+
+  it('opens the pilot review once the pilot frame and clip are ready', async () => {
+    const { project, run } = await startedRun({ scenes: [{ sceneId: 'scene-a', startSec: 0, endSec: 4, visualLayer: 'footage', prompt: 'Example shot', referenceImageId: 'frame.png', videoHistoryId: 'clip-1' }] });
+    expect(await step(project, withPilot(run))).toEqual({ type: 'pilot-review', sceneId: 'scene-a', startSec: 0, endSec: 4 });
+  });
+
+  it('waits while a pilot review is running', async () => {
+    const { project, run } = await startedRun();
+    const reviewing = { ...project, autoReviews: [{ id: 'review-pilot', status: 'running', attempts: [] }] };
+    expect(await step(reviewing, withPilot(run, { reviewRunId: 'review-pilot' }))).toEqual({ type: 'wait', on: 'pilot-review' });
+  });
+
+  it('halts for a human when the passing review has changed dependencies', async () => {
+    const { project, run } = await startedRun();
+    const reviewed = { ...project, autoReviews: [{ id: 'review-full', status: 'passed', attempts: [{ n: 1, review: { verdict: 'pass', dependencies: null } }] }] };
+    expect(await step(reviewed, { ...run, planned: true, reviewRunId: 'review-full' })).toMatchObject({ type: 'halt', status: 'needs-human' });
+  });
+
+  it('plans an empty board once Cast & Sets is settled', async () => {
+    const { project, run } = await startedRun({ scenes: [], castAndSets: { status: 'approved' } });
+    expect(await step(project, run)).toEqual({ type: 'plan' });
   });
 });

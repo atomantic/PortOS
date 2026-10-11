@@ -36,6 +36,8 @@ const OLLAMA_ENDPOINT = 'http://127.0.0.1:11434/api/chat';
 const UNTRUSTED_CONTENT_SOURCE = 'stacker-news';
 const MAX_ANALYSIS_CHARS = 8_000;
 const ACTION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+// An action stuck in `executing` this long was interrupted (crash/restart) between claim and finalize.
+const ACTION_EXECUTION_TIMEOUT_MS = 60 * 60 * 1000;
 const DEFAULT_SYNC_ITEM_LIMIT = 30;
 const MAX_SYNC_ITEM_LIMIT = 100;
 const ITEM_HANDOFF_INTENTS = new Set(['inspect', 'zap', 'moderate']);
@@ -695,7 +697,17 @@ export async function createAction({ accountId, itemId = null, territoryId = nul
     const existing = active.rows[0];
     const approvalExpired = existing?.state === 'approved'
       && (!existing.approved_at || Date.now() - new Date(existing.approved_at).getTime() > ACTION_MAX_AGE_MS);
-    if (existing && !approvalExpired) return existing;
+    const executionInterrupted = existing?.state === 'executing'
+      && (!existing.updated_at || Date.now() - new Date(existing.updated_at).getTime() > ACTION_EXECUTION_TIMEOUT_MS);
+    if (existing && !approvalExpired && !executionInterrupted) return existing;
+    if (executionInterrupted) {
+      // Release the active-idempotency unique index; the outcome is unknown, so a fresh human review is required.
+      await client.query(
+        "UPDATE stacker_news_actions SET state='failed',error='Execution interrupted before completion',updated_at=NOW() WHERE id=$1 AND state='executing'",
+        [existing.id],
+      );
+      await eventInsert(client, existing.id, 'executing', 'failed', 'Execution timed out or interrupted');
+    }
     if (approvalExpired) {
       await client.query(
         "UPDATE stacker_news_actions SET state='rejected',error='Approval expired before execution',updated_at=NOW() WHERE id=$1 AND state='approved'",

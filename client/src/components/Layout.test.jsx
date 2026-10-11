@@ -514,17 +514,18 @@ describe('Layout — nav footer', () => {
 });
 
 describe('Layout — Game workspace scroll mode', () => {
-  it('makes only the Game detail route full-bleed', async () => {
+  it('makes the Game index and detail full-bleed', async () => {
     const detail = await renderLayout('/game/example-game');
     expect(detail.container.querySelector('#main-content')?.className).toContain('overflow-clip-safe');
     detail.unmount();
 
     const index = await renderLayout('/game');
     const main = index.container.querySelector('#main-content');
-    expect(main?.className).toContain('overflow-auto');
-    expect(main?.className).toContain('p-4');
+    expect(main?.className).toContain('overflow-clip-safe');
+    expect(main?.className).not.toContain('p-4');
     index.unmount();
 
+    // A trailing slash is not the registered index path.
     const trailingSlashIndex = await renderLayout('/game/');
     const trailingSlashMain = trailingSlashIndex.container.querySelector('#main-content');
     expect(trailingSlashMain?.className).toContain('overflow-auto');
@@ -616,15 +617,17 @@ describe('Layout — isFullWidthRoute classification', () => {
     ['/code-animation', true], ['/code-animation/j1', true], ['/code-animation/production/p1', true],
     ['/code-animations', false], ['/apps', true],
     ['/eidoverse', true], ['/eidoverse/world', false],
-    // Index page stays padded+scrolling; only the DETAIL route is full-width.
-    ['/catalog', false], ['/catalog/book/1', true],
-    ['/universes', false], ['/universes/u1', true],
-    ['/rounds', false], ['/rounds/guide', true],
-    ['/story-builder', false], ['/story-builder/s1/step', true],
+    // Create indexes own a PageHeader shell (#10994). Detail routes that
+    // already owned their scroll stay full-width; a different-component
+    // detail that was padded stays padded.
+    ['/catalog', true], ['/catalog/book/1', true],
+    ['/universes', true], ['/universes/u1', true],
+    ['/rounds', true], ['/rounds/guide', true],
+    ['/story-builder', true], ['/story-builder/s1/step', true],
     // AI Providers: the index AND its editor sub-routes (a drawer over the same
     // page) are full-width, but a sibling path sharing the `/ai` prefix is not.
     ['/ai', true], ['/ai/presets', true], ['/ai/presets/codex', true], ['/ai/harnesses', true], ['/ai/services/ollama', true], ['/ai/edit/codex', true], ['/airlock', false],
-    ['/pipeline', false], ['/pipeline/series/s1', true],
+    ['/pipeline', true], ['/pipeline/series/s1', true], ['/pipeline/editorial-checks', true],
     ['/local-llm', false], ['/local-llm/m', true],
     // Music owns the same full-bleed title/tab/body shell as Media Gen; Music
     // Video has its own full-width rule, which a sibling prefix must not hit.
@@ -633,8 +636,21 @@ describe('Layout — isFullWidthRoute classification', () => {
     // Media Gen tab shell and must stay full-width with it. `/video-gen` is
     // a legacy redirect, not a page with an internal scroller.
     ['/video', true], ['/video/generate', true], ['/video-gen', false],
-    // Game: only a single-segment detail workspace.
-    ['/game', false], ['/game/', false], ['/game/g1', true], ['/game/g1/x', false],
+    // Game index is the PageHeader shell; detail stays one segment.
+    ['/game', true], ['/game/', false], ['/game/g1', true], ['/game/g1/x', false],
+    // Create indexes added with #10994. Param siblings of a different
+    // component stay on the padded main.
+    ['/3d', true], ['/3d/m1', false],
+    ['/decks', true], ['/decks/d1', false],
+    ['/fableloom', true], ['/fableloom/l1', true],
+    ['/mood-boards', true], ['/mood-boards/b1', false],
+    ['/sprites', true], ['/sprites/s1', true],
+    ['/authors', true], ['/authors/a1', true],
+    ['/sharing', true], ['/sharing/duplicates', true], ['/sharing/buckets/b1', true],
+    ['/voices', true], ['/voices/v1', true],
+    ['/creative-commission', true], ['/creative-commission/new', true], ['/creative-commission/c1', false],
+    ['/importer', true],
+    ['/start-story', true],
     // Apps: detail editor is full-width, but the Add App form is explicitly excluded
     // (it has no internal scroll container and would clip below the fold).
     ['/apps/create', false], ['/apps/create/', false], ['/apps/a1', true], ['/apps/a1/tab', true],

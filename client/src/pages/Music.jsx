@@ -11,7 +11,8 @@
  */
 
 import { useParams, useNavigate, Navigate } from 'react-router';
-import { Music as MusicIcon, Mic, Disc3, AudioLines, Wand2 } from 'lucide-react';
+import { Mic, Disc3, AudioLines, Wand2 } from 'lucide-react';
+import PageHeader from '../components/PageHeader';
 import ArtistsManager from '../components/music/ArtistsManager';
 import AlbumsManager from '../components/music/AlbumsManager';
 import TracksManager from '../components/music/TracksManager';
@@ -45,10 +46,7 @@ export default function Music() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center gap-3 border-b border-port-border p-4">
-        <MusicIcon className="w-6 h-6 text-port-accent" />
-        <h1 className="text-2xl font-bold text-white">Music</h1>
-      </div>
+      <PageHeader icon={Mic} title="Music" />
 
       {/* Selection lives in the URL (`/music/:tab`) — TabPills drives onChange
           callbacks rather than links, so we navigate() to keep the route canonical

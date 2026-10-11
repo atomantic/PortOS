@@ -281,6 +281,73 @@ Saving the selection gates rendering until the server has accepted it.
 
 See the [synthetic visual validation and remaining acceptance](validation/9302-music-video-grade.md).
 
+## Music-video film look
+
+A finishing filter for the analog, imperfect feel image and video models rarely
+give on their own: soft focus, halation, color bleed, grain, fade, a color cast,
+split toning, vignette, light leaks, gate weave and flicker. One definition in
+`server/lib/filmLook.js` (`FILM_LOOK_CONTROLS`, `FILM_LOOK_PRESETS`,
+`filmLookFilterMarkup`) serves three surfaces, so what is tuned on a still is
+what the preview shows and what the render bakes:
+
+- **Compose → Film look** stores the look on the project (`project.filmLook`,
+  validated by `filmLookValidation.js`, normalized by `normalizeFilmLook`).
+  Every slider move reaches the docked live preview at once; releasing a
+  control saves. `null` is the bypass.
+- **The image viewer (Film look)** on any gallery image, Cast & sets plate or
+  mood-board still previews the same filter in the browser and **Save filtered
+  copy** bakes it server-side (`POST /api/image-gen/:filename/film-look`,
+  `services/imageGen/filmLookBake.js`) into a new image beside the untouched
+  original, grouped with it like a cleaned copy. Inside a music video project
+  the editor also offers **Use on project**.
+- **The final render** installs the same runtime in every worker browser
+  (`documentRenderInitScripts` → `openComposition({ initScripts })`), so the
+  split render (#10365) and the overlay text probe see the filtered page.
+
+The filter is an SVG `<filter>` applied to the document root (or to the
+`<img>` for a still). Radii and offsets scale with the filtered element's
+width, so a 390px phone preview, the 1920-wide render and a 4K still read
+alike. Every time-varying effect (grain seed, gate weave, flicker, light-leak
+drift) is a pure function of the song frame, so the four render workers agree
+and a still is one bake. `filmLookRuntimeSource()` inlines the markup function
+by `toString()` into sandboxed pages, which is why `filmLookFilterMarkup` must
+stay self-contained; the runtime wraps `portosComposition.seek()` to advance
+the frame before the page paints. A neutral look emits no filter at all.
+
+Each control names its effect in photography terms, and the **In a prompt**
+box rewrites the current settings as the words that ask a model for the same
+qualities (`describeFilmLook`), so tuning a look also teaches the vocabulary
+for the next generation prompt. The look works on composition-document
+projects; the composed render style keeps its own render grade above.
+
+## Music-video opening title card
+
+The MTV-style credit block a video opens with: song title, artist, year and an
+optional extra line (album, director), fading in over the opener and out again.
+**Compose → Opening title card** stores it on the project (`project.titleCard`,
+validated by `musicVideoTitleCardSchema`, normalized by `normalizeTitleCard` in
+`server/lib/musicVideoTitleCard.js`; `null` = none, `enabled: false` keeps the
+text). Turning it on fills the song title (the project name without its version
+suffix), the artist named for DistroKid under Where you post, this year, and a
+window that ends half a second before the first sung line. Timing (in, out,
+fade), position (four corners, bottom centre, centre), font (the lyric type's
+Archivo, Helvetica, serif, Plex Mono), size and color are all editable; the
+panel flags a sung line that starts while the card is up and offers to end the
+card before it.
+
+The card is not part of the composition document. `titleCardRuntimeSource()`
+is a page script installed beside it, in the live preview's head (live edits
+arrive as `portos-mv:title-card` messages) and in every render browser
+(`documentRenderInitScripts`). It draws on its own canvas fixed over the page,
+fitted to the render's aspect, and wraps `portosComposition.seek()` (chaining
+the film look's wrapper) so the card is drawn for each frame after its faces
+load. It follows the lyric type: cream fill, ink outline, no plate, inside the
+same title-safe insets, and a block wider than its zone shrinks rather than
+running off frame. Like the lyrics it sits under the film look. It also rides
+on the lyric pages (the lyric-timing playthrough and the lyrics laid over the
+storyboard animatic, which carry no film look), so it can be checked against
+the timed words before the composition exists.
+
 ## Music-video composition documents
 
 A Music Video project can own its whole edit as a composition document: set

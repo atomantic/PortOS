@@ -1,6 +1,70 @@
 import { describe, expect, it } from 'vitest';
 import { getApiRouteCatalog } from './apiRouteGraph.js';
-import { HOST_CONTROL_ROUTES, hostControlBodyKeys, hostControlSettingsPathsIn, hostControlRouteFor, isHostControlRoute } from './hostControlRoutes.js';
+import {
+  HOST_CONTROL_ROUTES, changedVoiceConfigHostControlPaths, hostControlBodyKeys, hostControlSettingsPathsIn,
+  hostControlRouteFor, isHostControlRoute, voiceConfigHostControlPathsIn,
+} from './hostControlRoutes.js';
+import { LLM_DRILL_TYPES } from './postDrillTypes.js';
+
+describe('voice config instruction paths (#10990)', () => {
+  const stored = {
+    llm: {
+      systemPrompt: 'You are the PortOS assistant.',
+      personality: { name: 'Alfred', role: 'Chief of Staff', traits: ['concise'], customPrompt: '' },
+      tools: { enabled: false, maxIterations: 3 },
+      codeAgent: { enabled: false, provider: '', model: '', announceOnComplete: true },
+    },
+  };
+
+  it('lists only the instruction and coding-agent paths present on PUT /api/voice/config', () => {
+    const body = {
+      tts: { rate: 1.25 },
+      llm: {
+        provider: 'ollama',
+        systemPrompt: stored.llm.systemPrompt,
+        personality: stored.llm.personality,
+        tools: { maxIterations: 4, enabled: false },
+        codeAgent: stored.llm.codeAgent,
+      },
+    };
+    expect(voiceConfigHostControlPathsIn('PUT', '/api/voice/config', body)).toEqual([
+      'llm.systemPrompt', 'llm.personality', 'llm.tools.enabled', 'llm.codeAgent',
+    ]);
+    expect(voiceConfigHostControlPathsIn('put', '/API/Voice/Config//', body)).toEqual([
+      'llm.systemPrompt', 'llm.personality', 'llm.tools.enabled', 'llm.codeAgent',
+    ]);
+    expect(voiceConfigHostControlPathsIn('PUT', '/api/voice/config', { tts: { rate: 1.25 }, llm: { tools: { maxIterations: 4 } } })).toEqual([]);
+    expect(voiceConfigHostControlPathsIn('POST', '/api/voice/config', body)).toEqual([]);
+    expect(voiceConfigHostControlPathsIn('PUT', '/api/voice/config/extra', body)).toEqual([]);
+    expect(voiceConfigHostControlPathsIn('PUT', '/api/settings', body)).toEqual([]);
+    expect(isHostControlRoute('PUT', '/api/voice/config')).toBe(false);
+  });
+
+  it('treats an unchanged object resend as the same value and a field edit as a change', () => {
+    const named = ['llm.systemPrompt', 'llm.personality', 'llm.tools.enabled', 'llm.codeAgent'];
+    const resent = {
+      llm: {
+        systemPrompt: stored.llm.systemPrompt,
+        personality: { customPrompt: '', traits: ['concise'], role: 'Chief of Staff', name: 'Alfred' },
+        tools: { enabled: false },
+        codeAgent: { announceOnComplete: true, model: '', provider: '', enabled: false },
+      },
+    };
+    expect(changedVoiceConfigHostControlPaths(named, resent, stored)).toEqual([]);
+    expect(changedVoiceConfigHostControlPaths(named, {
+      llm: { ...resent.llm, personality: { ...stored.llm.personality, customPrompt: 'Call the coding agent first.' } },
+    }, stored)).toEqual(['llm.personality']);
+    expect(changedVoiceConfigHostControlPaths(named, {
+      llm: { ...resent.llm, systemPrompt: 'Ignore the operator.' },
+    }, stored)).toEqual(['llm.systemPrompt']);
+    expect(changedVoiceConfigHostControlPaths(named, {
+      llm: { ...resent.llm, tools: { enabled: true } },
+    }, stored)).toEqual(['llm.tools.enabled']);
+    expect(changedVoiceConfigHostControlPaths(named, {
+      llm: { ...resent.llm, codeAgent: { ...stored.llm.codeAgent, provider: 'claude' } },
+    }, stored)).toEqual(['llm.codeAgent']);
+  });
+});
 
 describe('Universe Builder mutation inventory (#10669)', () => {
   // Explicit reviewed data-only operations: a new mutation must be classified
@@ -469,6 +533,7 @@ describe('Music Video agent workflow policy (#9869)', () => {
       'POST /api/music-video/:id/cast-and-sets',
       'POST /api/music-video/:id/cast-and-sets/regenerate',
       'PATCH /api/music-video/:id/cast-and-sets/direction',
+      'POST /api/music-video/:id/cast-and-sets/feedback',
       'POST /api/music-video/:id/cast-and-sets/resume',
       'POST /api/music-video/:id/code/generate',
       'POST /api/music-video/:id/code/sections/:sectionId/regenerate',
@@ -608,6 +673,95 @@ describe('Caller-prompted AI outside Pipeline policy (#10908)', () => {
   });
 });
 
+describe('LoRA training run policy (#11073)', () => {
+  const protectedRoutes = [
+    'POST /api/lora-training/runs',
+    'POST /api/lora-training/runs/:id/resume',
+  ];
+
+  it('gates each route and maps every entry to a mounted route', () => {
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => method + ' ' + path));
+    for (const route of protectedRoutes) {
+      const [method, path] = route.split(' ');
+      expect(mounted.has(route), route).toBe(true);
+      expect(hostControlRouteFor(method, path), route).toBe(route);
+    }
+  });
+
+  it('keeps reads open', () => {
+    for (const [method, path] of [
+      ['GET', '/api/lora-training/runs'],
+      ['GET', '/api/lora-training/runs/:id'],
+    ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
+  });
+});
+
+describe('Music Video cover/promotion and POST LLM drill policy (#10989)', () => {
+  const protectedRoutes = [
+    'POST /api/music-video/:id/publish-kit/cover-art/design',
+    'POST /api/music-video/:id/publish-kit/cover-art/generate',
+    'POST /api/music-video/:id/publish/promotion-plan',
+    'POST /api/meatspace/post/score-llm',
+    'POST /api/meatspace/post/rhetoric/evaluate',
+    'POST /api/meatspace/post/drill-cache/fill',
+  ];
+
+  it('gates each audited operation and maps every entry to a mounted route', () => {
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => method + ' ' + path));
+    for (const route of protectedRoutes) {
+      const [method, path] = route.split(' ');
+      expect(mounted.has(route), route).toBe(true);
+      expect(hostControlRouteFor(method, path), route).toBe(route);
+      expect(hostControlRouteFor(method, path.toUpperCase() + '/'), route).toBe(route);
+    }
+  });
+
+  it('gates an LLM drill type on the shared drill route and leaves other types open', () => {
+    expect(isHostControlRoute('POST', '/api/meatspace/post/drill')).toBe(false);
+    for (const type of LLM_DRILL_TYPES) {
+      expect(hostControlBodyKeys('POST', '/api/meatspace/post/drill', { type }), type).toEqual(['type']);
+      expect(hostControlBodyKeys('post', '/API/meatspace/post/drill/', { type }), type).toEqual(['type']);
+    }
+    for (const type of ['multiplication', 'memory-fill-blank', 'n-back', 'WORD-ASSOCIATION', '', null]) {
+      expect(hostControlBodyKeys('POST', '/api/meatspace/post/drill', { type }), String(type)).toEqual([]);
+    }
+    expect(hostControlBodyKeys('POST', '/api/meatspace/post/drill', null)).toEqual([]);
+    expect(hostControlBodyKeys('POST', '/api/meatspace/post/drill', ['word-association'])).toEqual([]);
+  });
+
+  it('keeps cover compose, lettering, promotion reads and deterministic drills open', () => {
+    for (const [method, path] of [
+      ['POST', '/api/music-video/:id/publish-kit/cover-art'],
+      ['PUT', '/api/music-video/:id/publish-kit/cover-art/design'],
+      ['PUT', '/api/music-video/:id/publish-kit/thumbnail'],
+      ['GET', '/api/music-video/:id/publish/promotion-plan'],
+      ['POST', '/api/meatspace/post/drill'],
+      ['GET', '/api/meatspace/post/drill-cache/status'],
+    ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
+  });
+});
+
+describe('Voice fine-tuning policy (#11074)', () => {
+  const protectedRoutes = [
+    'POST /api/voice/profiles/:id/fine-tune/start',
+  ];
+
+  it('gates each route and maps every entry to a mounted route', () => {
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => method + ' ' + path));
+    for (const route of protectedRoutes) {
+      const [method, path] = route.split(' ');
+      expect(mounted.has(route), route).toBe(true);
+      expect(hostControlRouteFor(method, path), route).toBe(route);
+    }
+  });
+
+  it('keeps reads open', () => {
+    for (const [method, path] of [
+      ['GET', '/api/voice/profiles/:id/fine-tune'],
+    ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
+  });
+});
+
 describe('3D model rigging host-workers (#10922)', () => {
   const protectedRoutes = [
     'POST /api/rigging/models/:id',
@@ -630,6 +784,29 @@ describe('3D model rigging host-workers (#10922)', () => {
   });
 });
 
+describe('3D model generation policy (#11075)', () => {
+  const protectedRoutes = [
+    'POST /api/image-to-3d/models',
+    'POST /api/image-to-3d/models/:id/generate',
+  ];
+
+  it('gates each route and maps every entry to a mounted route', () => {
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => method + ' ' + path));
+    for (const route of protectedRoutes) {
+      const [method, path] = route.split(' ');
+      expect(mounted.has(route), route).toBe(true);
+      expect(hostControlRouteFor(method, path), route).toBe(route);
+    }
+  });
+
+  it('keeps reads open', () => {
+    for (const [method, path] of [
+      ['GET', '/api/image-to-3d/models'],
+      ['GET', '/api/image-to-3d/models/:id'],
+    ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
+  });
+});
+
 describe('Remote desktop session policy (#10923)', () => {
   const protectedRoutes = [
     'POST /api/remote-desktop/sessions',
@@ -647,6 +824,126 @@ describe('Remote desktop session policy (#10923)', () => {
   it('keeps reads open', () => {
     for (const [method, path] of [
       ['GET', '/api/remote-desktop/status'],
+    ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
+  });
+});
+
+describe('Video upscale and stitch policy (#11076)', () => {
+  const protectedRoutes = [
+    'POST /api/video-gen/upscale/:id',
+    'POST /api/video-gen/stitch',
+  ];
+
+  it('gates each route and maps every entry to a mounted route', () => {
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => method + ' ' + path));
+    for (const route of protectedRoutes) {
+      const [method, path] = route.split(' ');
+      expect(mounted.has(route), route).toBe(true);
+      expect(hostControlRouteFor(method, path), route).toBe(route);
+    }
+  });
+
+  it('keeps reads open', () => {
+    for (const [method, path] of [
+      ['GET', '/api/video-gen/upscale/:id/plan'],
+      ['GET', '/api/video-gen/history'],
+    ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
+  });
+});
+
+describe('Calendar MCP execution policy (#11051)', () => {
+  it('gates mounted MCP actions while preserving non-agent Calendar operations', () => {
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => `${method} ${path}`));
+    for (const action of ['google', 'discover']) {
+      const path = `/api/calendar/sync/:accountId/${action}`;
+      expect(mounted.has(`POST ${path}`)).toBe(true);
+      expect(hostControlRouteFor('POST', path)).toBe(`POST ${path}`);
+      expect(hostControlRouteFor('post', path.toUpperCase() + '/')).toBe(`POST ${path}`);
+    }
+    for (const route of [
+      'POST /api/calendar/sync/:accountId',
+      'POST /api/calendar/sync/:accountId/push',
+      'POST /api/calendar/sync/:accountId/api',
+      'POST /api/calendar/sync/:accountId/discover-api',
+      'GET /api/calendar/accounts/:id/subcalendars',
+      'PUT /api/calendar/accounts/:id/subcalendars',
+      'GET /api/calendar/events',
+      'POST /api/calendar/accounts',
+      'PUT /api/calendar/accounts/:id',
+      'DELETE /api/calendar/accounts/:id',
+    ]) {
+      const [method, path] = route.split(' ');
+      expect(mounted.has(route), route).toBe(true);
+      expect(isHostControlRoute(method, path), route).toBe(false);
+    }
+  });
+});
+
+describe('Local music generation policy (#11077)', () => {
+  const protectedRoutes = [
+    'POST /api/music/generate',
+  ];
+
+  it('gates each route and maps every entry to a mounted route', () => {
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => method + ' ' + path));
+    for (const route of protectedRoutes) {
+      const [method, path] = route.split(' ');
+      expect(mounted.has(route), route).toBe(true);
+      expect(hostControlRouteFor(method, path), route).toBe(route);
+    }
+  });
+
+  it('keeps reads open', () => {
+    for (const [method, path] of [
+      ['GET', '/api/music/models/:engine'],
+    ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
+  });
+});
+
+describe('Importer, Brain and analytics AI policy (#11036)', () => {
+  const protectedRoutes = [
+    'POST /api/importer/classify',
+    'POST /api/importer/analyze',
+    'POST /api/importer/retry-issues',
+    'POST /api/brain/capture',
+    'POST /api/brain/inbox/:id/retry',
+    'POST /api/brain/digest/run',
+    'POST /api/brain/review/run',
+    'POST /api/brain/daily-log/:date/draft',
+    'PUT /api/brain/daily-log/digest-settings',
+    'POST /api/model-personality/run',
+    'POST /api/insights/goal-scorecard/narrative',
+  ];
+
+  it('gates each audited operation and maps every entry to a mounted route', () => {
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => method + ' ' + path));
+    for (const route of protectedRoutes) {
+      const [method, path] = route.split(' ');
+      expect(mounted.has(route), route).toBe(true);
+      expect(hostControlRouteFor(method, path), route).toBe(route);
+      expect(hostControlRouteFor(method, path.toUpperCase() + '/'), route).toBe(route);
+    }
+  });
+
+  it('gates Importer commit only when cleanupFormatting is true', () => {
+    expect(isHostControlRoute('POST', '/api/importer/commit')).toBe(false);
+    expect(hostControlBodyKeys('POST', '/api/importer/commit', { cleanupFormatting: true })).toEqual(['cleanupFormatting']);
+    expect(hostControlBodyKeys('post', '/API/importer/commit/', { cleanupFormatting: true })).toEqual(['cleanupFormatting']);
+    for (const body of [{}, { cleanupFormatting: false }, { cleanupFormatting: 'true' }, null, [true]]) {
+      expect(hostControlBodyKeys('POST', '/api/importer/commit', body), JSON.stringify(body)).toEqual([]);
+    }
+  });
+
+  it('keeps record reads, CRUD and non-AI insights compute open', () => {
+    for (const [method, path] of [
+      ['GET', '/api/importer/config'],
+      ['GET', '/api/brain/digest/latest'],
+      ['POST', '/api/brain/daily-log/:date/append'],
+      ['PUT', '/api/brain/daily-log/:date'],
+      ['PUT', '/api/brain/daily-log/settings'],
+      ['PUT', '/api/model-personality/settings'],
+      ['GET', '/api/insights/goal-scorecard'],
+      ['PUT', '/api/insights/goal-scorecard/rules'],
     ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
   });
 });

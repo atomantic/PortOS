@@ -22,7 +22,7 @@
     "test:db:ci": "vitest run --config vitest.config.db.js --bail=1 --reporter=default --reporter=github-actions"
   },
   "dependencies": {
-    "@babel/parser": "8.0.6",
+    "@babel/parser": "8.0.7",
     "@cantoo/pdf-lib": "2.11.1",
     "@googleapis/calendar": "20.1.0",
     "@googleapis/gmail": "22.0.1",
@@ -32,7 +32,7 @@
     "express": "5.2.1",
     "node-pty": "1.2.0-beta.15",
     "pg": "8.23.1",
-    "playwright-core": "1.63.0",
+    "playwright-core": "1.64.0",
     "pm2": "7.0.4",
     "sharp": "0.35.5",
     "socket.io": "4.8.4",

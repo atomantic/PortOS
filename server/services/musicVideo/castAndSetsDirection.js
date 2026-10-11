@@ -33,16 +33,26 @@ import { musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
 import { z } from 'zod';
 import { ServerError } from '../../lib/errorHandler.js';
 import { extractJson } from '../../lib/jsonExtract.js';
-import { musicVideoCreativeContext } from '../../lib/musicVideoCreativeContext.js';
+import { musicVideoCreativeContext, musicVideoSongStyleContext, withoutPeople } from '../../lib/musicVideoCreativeContext.js';
 import { musicVideoBriefTools as briefTools } from '../../lib/musicVideoMediumPlan.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { CAST_SETS_DEFINITION_LIMITS, normalizeDefinitions } from './castAndSetsDefinitions.js';
+
+// Mood board images are outside inspiration (Pinterest pins, uploads): they
+// shape the direction as words and are never image-generation inputs.
+const MOOD_BOARD_TEXT_ONLY = 'The image generator never sees the mood board: carry what you take from it (light, color, texture, grain, wardrobe feel) into your own words in the descriptions, lighting and looks.';
+
+// The look line rides on every plate prompt, and a plate is shot empty: a person
+// in either (a mood board's composed style often describes one) lands in the plate.
+const LOOK_AND_SET_RULES = [
+  '- look: palette, light quality, film stock, grain and texture only. Never a person, place, object or pose: it is appended to every image, including the empty set plates.',
+  '- sets: describe the EMPTY place. No people, characters, figures or actions; the protagonist appears only in tests.',
+].join('\n');
 
 export const CAST_SETS_LIMITS = Object.freeze({
   looks: { min: 1, max: 4 },
   sets: { min: 3, max: 8 },
   tests: { min: 2, max: 4 },
-  moodRefs: { min: 2, max: 4 },
   rules: 6,
   expressions: 8,
   questions: 4,
@@ -58,14 +68,16 @@ const MOOD_ITEM_TEXT = 280;
 // ---- medium ------------------------------------------------------------------
 
 /**
- * The medium the check-in is directed in. A code-first production policy, or a
- * brief that selected code tools and no video tool, is procedural; everything
- * else (an image-only brief included) stays photographic. Tools and policy are
- * read together because either can be saved without the other.
+ * The medium the check-in is directed in. A code-first production policy with
+ * no generated footage, or a brief that selected code tools and no video tool,
+ * is procedural; everything else (an image-only brief included) stays
+ * photographic, so footage always has a character sheet to hold identity.
+ * Tools and policy are read together because either can be saved without the other.
  */
 export function castAndSetsMedium(project) {
   if (!musicVideoAllowsMedia(project, 'image')) return 'procedural';
-  if (project?.productionPolicy?.strategy === 'code-first') return 'procedural';
+  const policy = project?.productionPolicy;
+  if (policy?.strategy === 'code-first' && !(policy.maxGeneratedVideoPercent > 0 && musicVideoAllowsMedia(project, 'video'))) return 'procedural';
   const tools = briefTools(project);
   return tools.some((t) => t.startsWith('code:')) && !tools.some((t) => t.startsWith('video:')) ? 'procedural' : 'photographic';
 }
@@ -132,6 +144,7 @@ export function moodBoardImageList(board, resolveItem) {
 const OUTPUT_SHAPE = `{
   "logline": "<one or two sentences: who, where, what happens>",
   "interpretation": "<how the song's references and themes shape this world>",
+  "look": "<one line of photographic look: palette, light quality, film stock, grain, texture; no people, places, objects or poses>",
   "protagonist": {
     "name": "<a name or designation>",
     "description": "<who they are in the song: age, vibe, attitude>",
@@ -142,17 +155,17 @@ const OUTPUT_SHAPE = `{
     "rules": ["<continuity or safety rule>"]
   },
   "looks": [{ "name": "<SHORT NAME>", "description": "<the complete outfit>", "chapters": "<which parts of the song>" }],
-  "sets": [{ "id": "<short-slug>", "name": "<set name>", "description": "<the empty location, concrete and visual>", "lighting": "<its one dominant light>", "sections": ["<section label it serves>"] }],
+  "sets": [{ "id": "<short-slug>", "name": "<set name>", "description": "<the empty location, concrete and visual, with nobody in it>", "lighting": "<its one dominant light>", "sections": ["<section label it serves>"] }],
   "songMap": [{ "section": 0, "setId": "<short-slug>" }],
   "tests": [{ "setId": "<short-slug>", "look": "<SHORT NAME>", "action": "<what the protagonist does in this frame>", "caption": "<the lyric or beat it serves>" }],
   "overlayConcept": { "summary": "<one persistent graphic layer that ties every shot together>", "elements": [{ "name": "<element>", "description": "<what it shows and when it changes>" }] },
-  "moodRefs": [0, 1],
   "questions": ["<a question for the director>"]
 }`;
 
 const PROCEDURAL_OUTPUT_SHAPE = `{
   "logline": "<one or two sentences: who, where, what happens>",
   "interpretation": "<how the song's references and themes shape this world>",
+  "look": "<one line of photographic look: palette, light quality, film stock, grain, texture; no people, places, objects or poses>",
   "protagonist": {
     "name": "<a name or designation>",
     "description": "<who or what they are in the song: vibe, attitude>",
@@ -189,7 +202,6 @@ const PROCEDURAL_OUTPUT_SHAPE = `{
       "motion": [{ "name": "<motion name>", "target": "<part-slug or all>", "property": "rotate | scale | translateX | translateY | opacity", "amplitude": 4, "periodBeats": 1, "easing": "linear | ease-in-out | ease-out | bounce | step", "trigger": "idle | beat | downbeat | lyric | section" }]
     }]
   },
-  "moodRefs": [0, 1],
   "questions": ["<a question for the director>"]
 }`;
 
@@ -198,7 +210,7 @@ const PROCEDURAL_OUTPUT_SHAPE = `{
  * (all optional). With `previous` + `notes` it becomes a revision request.
  * `medium` defaults to the previous direction's, else the project's.
  */
-export function buildCastAndSetsPrompt(project, { moodImages = [], board = null, track = null, previous = null, notes = [], medium = null } = {}) {
+export function buildCastAndSetsPrompt(project, { moodImages = [], board = null, track = null, previous = null, notes = [], medium = null, feedback = [] } = {}) {
   // A saved direction without a medium predates the procedural one: photographic.
   const procedural = (medium || (previous ? (previous.medium || 'photographic') : castAndSetsMedium(project))) === 'procedural';
   const concept = project?.concept || {};
@@ -206,8 +218,11 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
   const sections = songSections(project);
   const lyrics = lyricSheetText(project);
   const guidance = trimTo(project?.automation?.guidance, 2000);
-  const trackStyle = trimTo(track?.prompt, 1500) || trimTo(concept.style, 1500);
-  const boardStyle = trimTo(board?.style?.prompt, 1500) || trimTo(concept.moodBoardStyle, 1500);
+  // The song's Suno style shapes the design; the director's visual style is the look.
+  const songStyle = musicVideoSongStyleContext({ songStyle: concept.songStyle || track?.prompt });
+  const visualStyle = trimTo(concept.style, 1500);
+  // The board's pictured people are never design input (#10982).
+  const boardStyle = withoutPeople(trimTo(board?.style?.prompt, 1500) || trimTo(concept.moodBoardStyle, 1500));
   const boardNegative = trimTo(board?.style?.negativePrompt, 600);
   const moodLines = moodImages.map((img, i) => `${i}. ${[img.caption, img.analysis].filter(Boolean).join(' — ') || '(no caption or analysis)'}`);
   const sectionLines = sections.map((s) => `${s.index}. ${s.label} ${fmtTime(s.startSec)}–${fmtTime(s.endSec)}`);
@@ -219,16 +234,18 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
     'Read the lyrics as a story. Interpret the song: its references, themes and subtext. The world of the video (who the protagonist is, where it happens, what the sets are) must come from that interpretation.',
     'Design the protagonist as a reusable construction: parts, shape language, materials, a fixed palette, a few named expressions and motion rules that every scene will reuse. Design the world as layered environments with a camera and transition language.',
     'The mood board is reference for LOOK, LIGHTING, COLOR and TEXTURE only. Never copy its literal locations, rooms or props into the sets.',
+    MOOD_BOARD_TEXT_ONLY,
   ].join('\n') : [
     `You are the creative director preparing the CAST & SETS check-in for a music video of "${project?.name || 'Untitled'}".`,
     'Read the lyrics as a story. Interpret the song: its references, themes and subtext, including any real events, ideas or cultural touchstones the words point at. The world of the video (who the protagonist is, where it happens, what the sets are) must come from that interpretation.',
     'The mood board is reference for LOOK, LIGHTING, COLOR and TEXTURE only. Never copy its literal locations, rooms or props into the sets: a kitchen photo on the board does not put the video in a kitchen.',
+    MOOD_BOARD_TEXT_ONLY,
   ].join('\n');
 
   const facts = [
     `Duration: ${fmtTime(analysis.durationSec)}${analysis.bpm ? ` · ${Math.round(analysis.bpm)} BPM` : ''}`,
-    trackStyle && `Track style prompt: ${trackStyle}`,
     concept.prompt && `Concept: ${trimTo(concept.prompt, 2000)}`,
+    visualStyle && `Director's visual style: ${visualStyle}`,
     guidance && `Director guidance: ${guidance}`,
     bible && bible,
   ].filter(Boolean).join('\n');
@@ -252,21 +269,31 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
     '- Never describe photographic people: no skin, pores, realistic hair, wardrobe photography or singing close-ups. A human or photo cutout is allowed ONLY as a set whose imageRole is "cutout", and only when the director guidance asks for one.',
     '- imageRole says what each planned image is FOR: "background" (a full-bleed environment layer), "texture" (a seamless surface), "decoration" (an isolated ornament) or "cutout" (an isolated subject to composite). Default to "background".',
     '- Give every set ONE dominant light color or quality so a cut tells the viewer where we are.',
+    LOOK_AND_SET_RULES,
     '- songMap: one entry per song section index listed above, naming the set that section plays in.',
     `- definitions: one reusable code definition per recurring character (at most ${CAST_SETS_DEFINITION_LIMITS.characters}). Draw it in a 200×200 box (origin top-left, y down) from at most ${CAST_SETS_DEFINITION_LIMITS.parts} simple parts; fills and strokes name a palette entry or a #hex. Expressions and poses are per-part overrides of the base parts; motion rules say what moves, by how much, over how many beats. Keep the definition consistent with the prose above.`,
-    `- moodRefs: the ${CAST_SETS_LIMITS.moodRefs.min}–${CAST_SETS_LIMITS.moodRefs.max} mood board image indices that best show the look${moodImages.length ? '' : ' (empty: there are none)'}.`,
     '- questions: up to three things you need the director to decide.',
   ].join('\n');
   const photographicRules = [
     `- ${CAST_SETS_LIMITS.looks.min}–${CAST_SETS_LIMITS.looks.max} looks, ${CAST_SETS_LIMITS.sets.min}–${CAST_SETS_LIMITS.sets.max} sets, ${CAST_SETS_LIMITS.tests.min}–${CAST_SETS_LIMITS.tests.max} tests.`,
     '- Give every set ONE dominant light color or quality so a cut tells the viewer where we are.',
+    LOOK_AND_SET_RULES,
     '- songMap: one entry per song section index listed above, naming the set that section plays in.',
     '- tests: in-set frames of the protagonist that prove the cast works in the world; each names a set id and a look name.',
-    `- moodRefs: the ${CAST_SETS_LIMITS.moodRefs.min}–${CAST_SETS_LIMITS.moodRefs.max} mood board image indices that best show the look for the character sheet${moodImages.length ? '' : ' (empty: there are none)'}.`,
     '- Wet or revealing looks use opaque fabric so the video stays safe to post.',
     '- questions: up to three things you need the director to decide.',
   ].join('\n');
   const rules = procedural ? proceduralRules : photographicRules;
+
+  // The director's standing sheet feedback: every direction call honors it,
+  // a fresh rebuild included, and it rewrites the look line every image
+  // prompt carries (`look` in the answer) instead of being pasted onto prompts.
+  const standing = (Array.isArray(feedback) ? feedback : []).map((f) => trimTo(f?.text, FEEDBACK_TEXT)).filter(Boolean);
+  const standingBlock = standing.length ? [
+    'DIRECTOR FEEDBACK ON EARLIER SHEETS (always honor it; where it disagrees with the mood board or visual style, the feedback wins):',
+    ...standing.map((t) => `- ${t}`),
+    'Carry it into every field it touches (each set\'s description and lighting, the looks, the protagonist), and write "look": one line, under 400 characters, of the look every image prompt carries (film stock, light quality and sources, grain, color), rewritten so it agrees with this feedback.',
+  ].join('\n') : '';
 
   const revision = previous ? [
     'This is a REVISION. The current direction is:',
@@ -279,14 +306,24 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
     header,
     facts,
     characterStyle,
+    songStyle,
     `Lyrics (section headers and delivery directions in brackets):\n${lyrics || '(instrumental — no lyrics)'}`,
     sectionLines.length ? `Song sections (index. label start–end):\n${sectionLines.join('\n')}` : 'The song has not been sectioned.',
     board_,
     rules,
+    standingBlock,
     revision,
-    `Respond with ONLY one JSON object in this shape (replace every <…> with real content; do NOT output the angle-bracket text), no other text:\n${procedural ? PROCEDURAL_OUTPUT_SHAPE : OUTPUT_SHAPE}`,
+    `Respond with ONLY one JSON object in this shape (replace every <…> with real content; do NOT output the angle-bracket text), no other text:\n${withLookField(procedural ? PROCEDURAL_OUTPUT_SHAPE : OUTPUT_SHAPE, standing.length > 0)}`,
   ].filter(Boolean).join('\n\n');
 }
+
+const FEEDBACK_TEXT = 2000;
+// Every direction writes its own look line (palette, light, grain, texture);
+// with standing feedback it must also agree with that feedback.
+const LOOK_FIELD = '"look": "<one line of photographic look: palette, light quality, film stock, grain, texture; no people, places, objects or poses>"';
+const withLookField = (shape, wanted) => (wanted
+  ? shape.replace(LOOK_FIELD, '"look": "<one line: film stock, light quality and sources, grain, color, agreeing with the director feedback; no people, places, objects or poses>"')
+  : shape);
 
 // ---- parsing ----------------------------------------------------------------
 
@@ -363,6 +400,7 @@ const overlaySchema = z.union([
 // One lenient parser per field: a field that does not fit its shape counts as
 // absent (the merge keeps the current value) rather than failing the answer.
 const FIELD_PARSERS = {
+  look: text(500),
   logline: text(TEXT),
   interpretation: text(2000),
   protagonist: protagonistSchema,
@@ -373,7 +411,6 @@ const FIELD_PARSERS = {
   songMap: z.array(songMapSchema),
   tests: z.array(testSchema),
   overlayConcept: overlaySchema,
-  moodRefs: z.array(z.number().int().min(0)),
   questions: z.array(text(400)),
 };
 
@@ -464,7 +501,7 @@ function normalizeTests(tests, sets, looks) {
  * `{ direction, missing }` — `missing` lists the required parts still absent,
  * so a first pass with an unusable answer can be refused.
  */
-export function mergeCastAndSetsDirection(previous, parsed, { sections = [], moodImageCount = 0, medium = null } = {}) {
+export function mergeCastAndSetsDirection(previous, parsed, { sections = [], medium = null } = {}) {
   const base = previous || {};
   const procedural = (medium || base.medium) === 'procedural';
   const pick = (key, fallback) => (hasOwn(parsed, key) ? parsed[key] : (hasOwn(base, key) ? base[key] : fallback));
@@ -503,19 +540,18 @@ export function mergeCastAndSetsDirection(previous, parsed, { sections = [], moo
     elements: (overlayRaw.elements || []).filter((e) => e.name && e.description).slice(0, CAST_SETS_LIMITS.overlayElements)
       .map((e) => ({ name: e.name, description: e.description })),
   };
-  const moodRefs = [...new Set(pick('moodRefs', []))].filter((i) => i < moodImageCount).slice(0, CAST_SETS_LIMITS.moodRefs.max);
   const definitions = hasOwn(parsed, 'definitions') ? parsed.definitions : (base.definitions || { characters: [] });
   const direction = {
     ...(procedural ? { medium: 'procedural', world, definitions } : {}),
     logline: pick('logline', ''),
     interpretation: pick('interpretation', ''),
+    look: pick('look', ''),
     protagonist,
     looks,
     sets,
     songMap,
     tests,
     overlayConcept,
-    moodRefs,
     questions: (pick('questions', [])).filter(Boolean).slice(0, CAST_SETS_LIMITS.questions),
   };
   const missing = [
@@ -570,8 +606,7 @@ export function applyCastAndSetsDirectionEdits(previous, edits, { sections = [] 
     if (unknown.length) throw new ServerError(`Unknown set: ${unknown.join(', ')}`, { status: 422, code: 'CAST_SETS_UNKNOWN_SET' });
     parsed.sets = previous.sets.map((s) => (roles.has(s.id) ? { ...s, imageRole: roles.get(s.id) } : s));
   }
-  // The mood-board indices were validated against the board when it was directed.
-  const { direction, missing } = mergeCastAndSetsDirection(previous, parsed, { sections, moodImageCount: Number.POSITIVE_INFINITY, medium: 'procedural' });
+  const { direction, missing } = mergeCastAndSetsDirection(previous, parsed, { sections, medium: 'procedural' });
   if (missing.length) throw new ServerError(`That edit would leave the direction without: ${missing.join(', ')}`, { status: 422, code: 'CAST_SETS_EDIT_INVALID' });
   const differs = (a, b) => JSON.stringify(a ?? '') !== JSON.stringify(b ?? '');
   const changed = [
@@ -581,4 +616,44 @@ export function applyCastAndSetsDirectionEdits(previous, edits, { sections = [] 
     ...direction.sets.filter((set) => differs(previous.sets.find((s) => s.id === set.id)?.imageRole, set.imageRole)).map((set) => `${set.name} image role`),
   ];
   return { direction: { ...direction, look: previous.look || '' }, changed };
+}
+
+// ---- what a revision changed -------------------------------------------------
+
+const MAX_CHANGE_LINES = 8;
+const nameList = (names) => (names.length > 3 ? `${names.slice(0, 3).join(', ')} and ${names.length - 3} more` : names.join(', '));
+
+/**
+ * A short, plain-language list of what a revised direction changed, for the
+ * director to read after feedback is applied: the look line, the protagonist,
+ * the wardrobe, and per-set lighting/description. Empty when nothing the
+ * images are built from changed.
+ */
+export function describeDirectionChanges(previous, next) {
+  if (!previous || !next) return [];
+  const same = (a, b) => JSON.stringify(a ?? '') === JSON.stringify(b ?? '');
+  const out = [];
+  if (!same(previous.look, next.look)) out.push('Look rewritten for every image');
+  const p0 = previous.protagonist || {};
+  const p1 = next.protagonist || {};
+  const protagonistFields = Object.keys({ ...p0, ...p1 }).filter((k) => !same(p0[k], p1[k]));
+  if (protagonistFields.length) out.push(`Protagonist: ${nameList(protagonistFields)}`);
+  if (!same(previous.looks, next.looks)) out.push('Wardrobe looks revised');
+  if (!same(previous.world?.lighting, next.world?.lighting)) out.push('World lighting revised');
+  const before = new Map((previous.sets || []).map((s) => [s.id, s]));
+  const lit = [];
+  const described = [];
+  for (const set of next.sets || []) {
+    const old = before.get(set.id);
+    if (!old) continue;
+    if (!same(old.lighting, set.lighting)) lit.push(set.name);
+    if (!same(old.description, set.description)) described.push(set.name);
+  }
+  if (lit.length) out.push(`Lighting: ${nameList(lit)}`);
+  if (described.length) out.push(`Set descriptions: ${nameList(described)}`);
+  const added = (next.sets || []).filter((s) => !before.has(s.id)).map((s) => s.name);
+  const removed = (previous.sets || []).filter((s) => !(next.sets || []).some((n) => n.id === s.id)).map((s) => s.name);
+  if (added.length) out.push(`New sets: ${nameList(added)}`);
+  if (removed.length) out.push(`Sets dropped: ${nameList(removed)}`);
+  return out.slice(0, MAX_CHANGE_LINES);
 }

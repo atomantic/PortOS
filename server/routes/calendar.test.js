@@ -167,6 +167,29 @@ describe('Calendar Routes — normalized error handling', () => {
     });
   });
 
+  describe('Google automation request correlation', () => {
+    it('passes optional request IDs through and preserves email-only callers and responses', async () => {
+      const io = { emit: vi.fn() };
+      app.set('io', io);
+      const result = { status: 'success', clientId: 'synthetic-client', authUrl: null };
+      googleOAuthAutoConfig.runAutomatedSetup.mockResolvedValue(result);
+      for (const requestId of ['invented-run-1', undefined]) {
+        const response = await request(app).post('/api/calendar/google/auto-configure/run')
+          .send({ email: 'example@example.com', ...(requestId ? { requestId } : {}) });
+        expect(response.status).toBe(200);
+        expect(response.body).toEqual(result);
+        expect(googleOAuthAutoConfig.runAutomatedSetup).toHaveBeenLastCalledWith('example@example.com', io, requestId);
+      }
+    });
+
+    it.each(['', 'bad id', 'x'.repeat(129), 42, null])('rejects malformed request ID %j before automation', async (requestId) => {
+      googleOAuthAutoConfig.runAutomatedSetup.mockClear();
+      const response = await request(app).post('/api/calendar/google/auto-configure/run').send({ requestId });
+      expect(response.status).toBe(400);
+      expect(googleOAuthAutoConfig.runAutomatedSetup).not.toHaveBeenCalled();
+    });
+  });
+
   describe('success passthrough', () => {
     it('POST /sync/:accountId returns the sync result as-is', async () => {
       calendarSync.syncAccount.mockResolvedValue({ newEvents: 3, pruned: 1, total: 42, status: 'success' });

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import ProductionReviewContext from './ProductionReviewContext.jsx';
 import OverlayTextCheck from './OverlayTextCheck.jsx';
 import { formatTimecode } from '../../utils/formatters.js';
-import { summarizeStoryboardProblems } from '../../lib/musicVideoStages.js';
+import { ART_DIRECTION_ANCHOR, artDirectionGaps, changeRequestBlocker, openChangeRequests, summarizeStoryboardProblems } from '../../lib/musicVideoStages.js';
 
 const EMPTY = { cast: '', environments: '', visualLanguage: '', motionLanguage: '', guideArtifactId: null,
   lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [] };
@@ -20,11 +20,12 @@ const EMPTY_PLAYBACK = { method: 'playback', timecodedNotes: '', visualReview: '
 const FOLD_STYLE = { scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' };
 /**
  * The open box that closes a step: heading, then the approval's content and
- * Approve / Request changes, highlighted until approved.
+ * Approve / Request changes, highlighted until approved. A `waiting` box has
+ * nothing to review yet, so it is not highlighted either.
  */
-function ApprovalBox({ id, label, approved, optional = false, children }) {
+function ApprovalBox({ id, label, approved, optional = false, waiting = false, children }) {
   return <section id={id} tabIndex={-1} aria-label={`Approve: ${label}`} style={FOLD_STYLE}
-    className={`rounded-lg border p-3 focus:outline focus:outline-2 focus:outline-port-accent ${approved || optional ? 'border-port-border' : 'border-port-accent bg-port-accent/5'}`}>
+    className={`rounded-lg border p-3 focus:outline focus:outline-2 focus:outline-port-accent ${approved || optional || waiting ? 'border-port-border' : 'border-port-accent bg-port-accent/5'}`}>
     {/* An optional check isn't highlighted: it never competes with the step's real next action. */}
     <h4 className="text-sm font-semibold">{approved ? `${label} approved` : optional ? label : `Approve the ${label.toLowerCase()}`}{optional && !approved && <span className="ml-2 font-normal text-port-text-muted">Optional</span>}</h4>
     {children}
@@ -54,7 +55,6 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
   const [feedback, setFeedback] = useState({ stage, target: '', text: '', decision: 'request-changes' });
   const [resolutions, setResolutions] = useState({});
   const [importError, setImportError] = useState(null);
-  const [revisionNotice, setRevisionNotice] = useState(null);
   const [savedRequestStage, setSavedRequestStage] = useState(null);
   const [playbackReview, setPlaybackReview] = useState({ ...EMPTY_PLAYBACK, identity: null });
   const [startSec, setStartSec] = useState(project.productionReview?.proof?.startSec || 0);
@@ -62,8 +62,10 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
   const ready = review.current === false ? null : review.readiness; // approvals never act on a stale revision
   const set = (key, value) => setLocal({ ...draft, [key]: value });
   const documentShots = draft.storyboardSource === 'document';
+  // A Board scene with no draft shot shows the row the server derives for it (its planned action, camera and lyric lines).
   const shots = documentShots ? draft.storyboard : [...draft.storyboard, ...(project.scenes || []).filter(scene => !draft.storyboard.some(s => s.sceneId === scene.sceneId)).map(scene => ({
     id: scene.sceneId, sceneId: scene.sceneId, lyricCueIds: [], action: '', staging: '', camera: '', transition: '',
+    ...ready?.storyboard.shots?.find(s => s.sceneId === scene.sceneId),
   }))];
   const shotKey = shot => shot.id || shot.sceneId;
   const setShot = (shot, key, value) => set('storyboard', shots.map(s => shotKey(s) === shotKey(shot) ? { ...s, [key]: value } : s));
@@ -92,7 +94,12 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
   };
 
   // Per-shot storyboard problems arrive one sentence per shot; the card counts them instead (the preview is the review).
-  const shownProblems = stage => stage === 'storyboard' ? summarizeStoryboardProblems(ready[stage].problems) : ready[stage].problems || [];
+  // Open change requests are named in one line (and settled from the step's Feedback row), never repeated as problems.
+  const feedbackSentence = /^Resolve (art|storyboard|proof) feedback for /;
+  const shownProblems = stage => {
+    const problems = (ready[stage].problems || []).filter(problem => !feedbackSentence.test(problem));
+    return stage === 'storyboard' ? summarizeStoryboardProblems(problems) : problems;
+  };
   // One line under the action buttons saying what approval still needs, or nothing when it can be given.
   const approvalHelp = stage => {
     if (!ready) return 'Loading…';
@@ -100,6 +107,13 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
     if (dirty) return 'Save your planning edits first.';
     if (review.busy) return 'Working…';
     const problems = shownProblems(stage);
+    const requests = openRequests(stage);
+    // The storyboard step's checklist already lists each open item with its button, so the card only points there.
+    if (stage === 'storyboard' && problems.length) {
+      const open = problems.length + (requests.length ? 1 : 0);
+      return open > 1 ? `Finish the ${open} open items above first.` : 'Finish the open item above first.';
+    }
+    if (requests.length) return changeRequestBlocker(requests);
     // With no current proof, the Render button already says what to do; repeating it as a warning reads as required.
     if (stage === 'proof' && proofNeedsRender) return null;
     if (problems.length) return problems.length > 1 ? `${problems[0]} (+${problems.length - 1} more below)` : problems[0];
@@ -113,9 +127,10 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
   // The problems listed under the help line: all of them, less the first when the help line is showing it
   // (it isn't while edits are unsaved or an action is running). A proof with nothing rendered lists none.
   const listedProblems = stage => {
-    if (!ready || ready[stage].approved || (stage === 'proof' && proofNeedsRender)) return [];
+    if (!ready || ready[stage].approved || stage === 'storyboard' || (stage === 'proof' && proofNeedsRender)) return [];
     const problems = shownProblems(stage);
-    return dirty || review.busy ? problems : problems.slice(1);
+    // The help line names a change request ahead of any problem, so then every problem is listed here.
+    return dirty || review.busy || openRequests(stage).length ? problems : problems.slice(1);
   };
   // A link to another step's section crosses steps through the page; within this step it just unfolds the target.
   const jump = (tab, anchor) => event => {
@@ -126,33 +141,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
     const target = document.getElementById(event.currentTarget.hash.slice(1));
     if (target) { target.open = true; target.focus({ preventScroll: true }); }
   };
-  const openRequests = stage => (project.productionReview?.feedback || []).filter(f => f.stage === stage && f.decision === 'request-changes' && !f.resolvedAt);
-  // Mirrors the server's revise routing so an unsupported stage explains itself instead of failing on click.
-  const revisionScope = stage => {
-    if (stage === 'art') return project.castAndSets?.direction
-      ? { action: 'Regenerates the Cast & Sets direction and sheet with these requests. Review the new sheet before approving.' }
-      : { unavailable: 'This art direction has no Cast & Sets direction to regenerate. Edit the guide, then resolve each request.' };
-    if (stage === 'storyboard') {
-      if (documentShots) return { unavailable: 'Document shots come from the authored source. Revise it, reimport its shot manifest, then resolve each request.' };
-      return project.scenes?.length
-        ? { action: 'Re-plans the shots these requests name (every shot when a request names none) in place, keeping their takes and selected media.' }
-        : { unavailable: 'Plan timed Board shots before revising them from feedback.' };
-    }
-    const mode = project.composition?.mode;
-    if (mode === 'code') return { action: 'Regenerates the code composition with these requests. Render a new proof afterwards.' };
-    if (mode === 'document') return ['generated', 'template', undefined].includes(project.composition?.document?.source?.kind)
-      ? { action: 'Authors a revised composition candidate with these requests. Accept it in Make, then render a new proof.' }
-      : { unavailable: 'This composition was imported from its own source. Revise that source and reimport it, then resolve each request.' };
-    return { unavailable: 'This proof is assembled from Board footage. Revise the affected storyboard shots or takes, then render a new proof.' };
-  };
-  const revise = async stage => {
-    const result = await review.revise(stage);
-    if (!result) return;
-    const count = result.revision?.sceneIds?.length;
-    setRevisionNotice({ stage, text: stage === 'art' ? 'Cast & Sets is regenerating with these requests. Review the new sheet, then resolve each request.'
-      : stage === 'storyboard' ? `Revised ${count} shot${count === 1 ? '' : 's'}. Review them, then resolve each request.`
-        : 'A revised composition is ready. Render and review a new proof, then resolve each request.' });
-  };
+  const openRequests = stage => openChangeRequests(project, stage);
   // Without a current proof the next thing to do is render one, so its controls lead the box.
   const proofNeedsRender = !excerpt || ['error', 'canceled'].includes(excerpt.status)
     || (project.productionReview?.proof?.basis && ready?.basis.proof && project.productionReview.proof.basis !== ready.basis.proof);
@@ -222,9 +211,13 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
   </>;
   const key = stage;
   const label = labels[stage];
+  // Art with no written direction or guide has nothing to approve: the box says
+  // so in one line, and the step's checklist offers what produces them.
+  const artWaiting = key === 'art' && !!ready && !ready.art.approved && !ready.art.stale && !artDirectionGaps(project).ready;
   return <section id="mv-production-review" aria-label="Production review" className="space-y-3">
     {review.error && <p role="alert" className="text-port-error">{review.error}</p>}
-    <ApprovalBox id={`mv-review-${key}`} label={label} optional={!!OPTIONAL[key]} approved={!!ready?.[key].approved}>
+    <ApprovalBox id={`mv-review-${key}`} label={label} optional={!!OPTIONAL[key]} approved={!!ready?.[key].approved} waiting={artWaiting}>
+        {artWaiting ? <p role="status" className="mt-1 text-sm text-port-text-muted">Opens once the art direction is written and a visual guide is chosen.</p> : <>
         {/* The decision comes first, at the top of the box, with one line on what it still needs. */}
         {key === 'proof' && proofNeedsRender && !ready?.[key].approved && <div className="mt-2">{renderControls}</div>}
         <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -251,16 +244,8 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
         {/* The overlay text pass (document compositions): advice too, shown before the shot list. */}
         {key === 'storyboard' && ready?.storyboard.text && <OverlayTextCheck report={ready.storyboard.text} busy={review.busy}
           onCheck={() => review.checkOverlayText()} onSeek={onSeek} />}
-        {key === 'proof' ? proofContent : <ProductionReviewContext stage={key} project={project} onOpenArtifact={onOpenArtifact} onArtReady={available => setVisibleArt(available ? artIdentity : null)} onSeek={onSeek} />}
-        {openRequests(key).length > 0 && <div role="group" aria-label={`${label} change requests`} className="mt-2 space-y-2 rounded border border-port-warning p-2">
-          <p className="text-sm">Resolve these change requests to approve.</p>
-          <ul className="list-disc pl-5 text-sm">{openRequests(key).map(item => <li key={item.id} className="break-words"><strong>{item.target}</strong>: {item.text}</li>)}</ul>
-          {revisionScope(key).unavailable ? <p className="text-xs text-port-text-muted">{revisionScope(key).unavailable}</p> : <>
-            <button type="button" className={buttonClass} disabled={blocked} aria-describedby={fieldId(`${key}-revision-help`)} onClick={() => revise(key)}>Revise from feedback</button>
-            <p id={fieldId(`${key}-revision-help`)} className="text-xs text-port-text-muted">{revisionScope(key).action}</p>
-          </>}
-          {revisionNotice?.stage === key && <p role="status" className="text-sm">{revisionNotice.text}</p>}
-        </div>}
+        {key === 'proof' ? proofContent : <ProductionReviewContext stage={key} project={project} shots={shots} onOpenArtifact={onOpenArtifact} onArtReady={available => setVisibleArt(available ? artIdentity : null)} onSeek={onSeek} />}
+        </>}
     </ApprovalBox>
     {dirty && <p role="status" className="text-sm">Save your planning edits before approving this revision.</p>}
     <details>
@@ -277,7 +262,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
         }
       }}>Save revision feedback</button>
       {savedRequestStage && openRequests(savedRequestStage).length > 0 && <p role="status" className="text-sm">
-        Approval stays blocked until these are resolved. <a href={`#mv-review-${savedRequestStage}`} onClick={openReviewSection} className="text-port-accent underline">Revise from feedback</a>, or edit and resolve manually.
+        Approval stays blocked until these are resolved. Revise from feedback or mark each one resolved from the Feedback row at the top of this step.
       </p>}
       <ul className="mt-3 space-y-3">{(project.productionReview?.feedback || []).filter(item => item.stage === stage).map(item => <li key={item.id} className="rounded border border-port-border p-2">
         <p className="text-sm"><strong>{item.target}</strong> · {item.decision} · {item.resolvedAt ? 'Resolved' : 'Open'}</p>
@@ -326,7 +311,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
         {draft.sourceArtifactId && <button type="button" className={buttonClass} onClick={() => onOpenArtifact(draft.sourceArtifactId)}>Read preserved original planning draft</button>}
         <button type="button" className={buttonClass} disabled={dirty || review.busy || documentShots} onClick={review.prepare}>Draft art direction and shots</button>
         <p className="text-xs text-port-text-muted">Uses the saved authoring provider and allowed tools. Builds Cast & Sets first, then pauses for art approval before planning shots. Existing edits are retained.</p>
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div id={ART_DIRECTION_ANCHOR} className="grid gap-3 sm:grid-cols-2" style={FOLD_STYLE}>
           {Object.entries({ cast: 'Cast guide', environments: 'Environment guide', visualLanguage: 'Visual language and mood board' }).map(([key, label]) =>
             <label key={key} htmlFor={fieldId(key)} className="text-sm">{label}<textarea id={fieldId(key)} rows={4} value={draft[key]} onChange={e => set(key, e.target.value)} className={fieldClass} /></label>)}
         </div>

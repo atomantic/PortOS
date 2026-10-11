@@ -90,24 +90,45 @@ export default function ProductionProjects() {
     downloadBlob(JSON.stringify(data, null, 2), revisionId ? `source-${revisionId}.json` : 'animation-brief.json', 'application/json');
   });
   const project = resource.data;
+  const listEmpty = projects.loaded && !projects.loading && !projects.error && projects.items.length === 0;
+  const focusTitle = event => {
+    const title = document.getElementById('cap-title');
+    if (!title) return;
+    event.preventDefault();
+    title.focus();
+  };
+  const starter = <>
+    <button type="button" className={buttonClass} disabled={busy} onClick={createBlenderStarter}>Create painterly Blender starter</button>
+    <p className="text-xs text-gray-400">Creates a 10-second 1080p24 Blender scene; no render or AI call starts.</p>
+  </>;
   return <div className="space-y-4">
     <section className="space-y-3 rounded-xl border border-port-border bg-port-card p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-base font-semibold">Production projects</h2>
-        <Link to="/code-animation/production" className={buttonClass}>New Production project</Link>
+        {projectId && <Link to="/code-animation/production" className={buttonClass}>New Production project</Link>}
       </div>
-      <p className="text-sm text-gray-400">Keep a film brief, independent budgets and immutable source revisions. Import and source acceptance stage files; rendering and evidence review are separate production stages.</p>
-      <button type="button" className={buttonClass} disabled={busy} onClick={createBlenderStarter}>Create painterly Blender starter</button>
-      <p className="text-xs text-gray-400">Creates original scene source at 1080p, 24 fps, 10 seconds. Importing starts no render or AI call. Check Blender execution before starting production.</p>
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
-        {projects.items.map(item => <Link key={item.id} to={`/code-animation/production/${item.id}`} className="min-w-0 rounded border border-port-border p-3 hover:border-port-accent" aria-current={item.id === projectId ? 'page' : undefined}>
-          <span className="block truncate font-medium">{item.title || 'Untitled production'}</span>
-          <span className="text-xs text-gray-400">{item.acceptedRevisionId ? 'Accepted source' : 'No accepted source'} · {timeAgo(item.createdAt)}</span>
-        </Link>)}
-      </div>
-      <InfiniteScrollFooter hasMore={projects.hasMore} loading={projects.loading} error={projects.error} onLoadMore={projects.loadMore} autoLoad={false} label="Load older projects" />
+      <p className="text-sm text-gray-400">Each project keeps its brief, budgets and accepted source revisions.</p>
+      <details className="text-sm text-gray-400">
+        <summary className="cursor-pointer">How production projects work</summary>
+        <p className="mt-1">Import and source acceptance stage files; rendering and evidence review are separate production stages.</p>
+        <p className="mt-1">Check Blender execution before starting a Blender production.</p>
+      </details>
+      {listEmpty ? <div className="space-y-2">
+        <p>No production projects yet.</p>
+        {starter}
+        <a href="#cap-title" className="inline-block text-sm text-port-accent underline" onClick={focusTitle}>Go to the create form</a>
+      </div> : <>
+        {starter}
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          {projects.items.map(item => <Link key={item.id} to={`/code-animation/production/${item.id}`} className="min-w-0 rounded border border-port-border p-3 hover:border-port-accent" aria-current={item.id === projectId ? 'page' : undefined}>
+            <span className="block truncate font-medium">{item.title || 'Untitled production'}</span>
+            <span className="text-xs text-gray-400">{item.acceptedRevisionId ? 'Accepted source' : 'No accepted source'} · {timeAgo(item.createdAt)}</span>
+          </Link>)}
+        </div>
+        <InfiniteScrollFooter hasMore={projects.hasMore} loading={projects.loading} error={projects.error} onLoadMore={projects.loadMore} autoLoad={false} label="Load older projects" />
+      </>}
     </section>
-    <ProductionContainment />
+    <ProductionContainment rendererKind={project?.manifest?.renderer?.kind || null} />
 
     {projectId && resource.loading && <p>Loading production project…</p>}
     {resource.error && <div role="alert" className="rounded border border-port-error p-3">

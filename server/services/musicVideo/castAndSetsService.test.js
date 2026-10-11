@@ -319,11 +319,12 @@ describe('Cast & Sets check-in', () => {
     expect(prompt).toContain('0. a steamy kitchen — flash photo, brass and steam');
     expect(runPrompt.mock.calls[0][0].source).toBe('music-video-cast-sets');
 
-    // First pass: the character sheet (conditioned on the mood image the
-    // direction picked) and the empty plates, which depend on nothing.
+    // First pass: the character sheet and the empty plates, which depend on
+    // nothing. Mood board images are outside inspiration: the direction reads
+    // them as text, and no image job is ever conditioned on one.
     expect(jobs.map(keyOf).sort()).toEqual(['character', 'set:harbor', 'set:lab', 'set:roof']);
     const character = jobs.find((j) => keyOf(j) === 'character');
-    expect(character.params.referenceImagePaths.map((p) => p.split(/[\\/]/).pop())).toEqual(['board-b.jpg']);
+    for (const job of jobs) expect(job.params.referenceImagePaths).toBeUndefined();
     expect(character.params).toMatchObject({ width: 1536, height: 1024, mode: 'codex', musicVideo: { projectId: project.id } });
     expect(character.params.prompt).toMatch(/FRONT, 3\/4, PROFILE, BACK/);
 
@@ -458,6 +459,70 @@ describe('Cast & Sets check-in', () => {
     expect(after.devArtifacts[0]).toMatchObject({ version: 2, status: 'pending' });
     expect(after.devArtifacts[0].notes[0].resolvedAt).toBeTruthy();
     expect(after.castAndSets.images.character.history).toHaveLength(1);
+  });
+
+  it('applies sheet feedback by rewriting the direction and look, re-renders what changed, and keeps honoring it on a rebuild', async () => {
+    const project = await seed();
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
+    await runTo(project.id, 'review');
+    const before = jobs.length;
+    const look = '1980s 35mm analog film, sparse practical light, heavy grain';
+    const revised = { ...DIRECTION, look, sets: DIRECTION.sets.map((set) => (set.id === 'harbor' ? { ...set, lighting: 'one dim sodium streetlamp' } : set)) };
+    runPrompt.mockResolvedValueOnce({ text: JSON.stringify(revised) });
+    const note = 'Too many random light sources; keep them sparse and realistic, eighties analog film';
+
+    const applied = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/feedback`).send({ text: note });
+    expect(applied.status).toBe(202);
+    await runTo(project.id, 'review');
+    const revisionPrompt = runPrompt.mock.calls[1][0].prompt;
+    expect(revisionPrompt).toContain('DIRECTOR FEEDBACK ON EARLIER SHEETS');
+    expect(revisionPrompt).toContain(note);
+    expect(revisionPrompt).toContain('"look":');
+    const after = await current(project.id);
+    expect(after.castAndSets.direction.look).toBe(look);
+    // The look line changed, so every image re-renders on the rewritten prompt, never the board's look.
+    const rerendered = jobs.slice(before);
+    expect(new Set(rerendered.map(keyOf))).toEqual(new Set(Object.keys(after.castAndSets.plan)));
+    for (const job of rerendered) {
+      expect(job.params.prompt).toContain(`Look: ${look}`);
+      expect(job.params.prompt).not.toContain('raw flash, green light');
+    }
+    expect(after.castAndSets.changeSummary).toMatchObject({ revision: 2, rerendered: rerendered.length });
+    expect(after.castAndSets.changeSummary.changes).toEqual(['Look rewritten for every image', 'Lighting: Harbor']);
+    expect(after.castAndSets.feedback).toEqual([expect.objectContaining({ text: note, revision: 2 })]);
+
+    // Approve, then rebuild: the fresh direction still carries the standing feedback and its look.
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({});
+    runPrompt.mockResolvedValueOnce({ text: JSON.stringify(revised) });
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
+    await runTo(project.id, 'review');
+    expect(runPrompt.mock.calls[2][0].prompt).toContain(note);
+    expect((await current(project.id)).castAndSets.direction.look).toBe(look);
+
+    // Removing it stops it riding on later calls; nothing re-renders now.
+    const queued = jobs.length;
+    const feedbackId = (await current(project.id)).castAndSets.feedback[0].id;
+    const removed = await request(app).delete(`/api/music-video/${project.id}/cast-and-sets/feedback/${feedbackId}`);
+    expect(removed.status).toBe(200);
+    expect(removed.body.stage.feedback).toEqual([]);
+    expect(jobs.length).toBe(queued);
+  });
+
+  it('applies feedback aimed at one image as that image\'s note, and refuses an image the sheet does not have', async () => {
+    const project = await seed();
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
+    await runTo(project.id, 'review');
+    const before = jobs.length;
+    const applied = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/feedback`).send({ text: 'One lamp only', target: 'set:harbor' });
+    expect(applied.status).toBe(202);
+    await runTo(project.id, 'review');
+    expect(runPrompt).toHaveBeenCalledTimes(1);
+    expect(jobs.slice(before).map(keyOf).sort()).toEqual(['set:harbor', 'test:2']);
+    expect(jobs.find((j) => keyOf(j) === 'set:harbor' && !jobs.slice(0, before).includes(j)).params.prompt).toMatch(/Revision: One lamp only/);
+    expect((await current(project.id)).castAndSets.feedback || []).toEqual([]);
+
+    const unknown = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/feedback`).send({ text: 'Brighter', target: 'set:nowhere' });
+    expect([unknown.status, unknown.body.code]).toEqual([422, 'CAST_SETS_UNKNOWN_IMAGE']);
   });
 
   it('approves itself in auto mode, and fails with a reason when no provider can direct', async () => {
@@ -742,6 +807,55 @@ describe('Cast & Sets procedural check-in', () => {
   });
 });
 
+
+it('conditions the character, expressions and looks sheets on the director\'s own character references only', async () => {
+  const project = await seed({ visualSpec: { moodBoardId: 'mb-1', references: [
+    { id: 'own-upload', imageId: 'upload-face.png', role: 'character', condition: true },
+    { id: 'own-render', imageId: 'rendered-face.png', role: 'character', condition: true },
+    { id: 'mvr-board-1', imageId: 'board-face.png', role: 'character', condition: true },
+    { id: 'pinned', imageId: 'pinterest-0123456789abcdef.jpg', role: 'character', condition: true },
+    { id: 'mvr-cs-character', imageId: 'old-sheet.png', role: 'character', condition: true },
+    { id: 'unflagged', imageId: 'spare-face.png', role: 'character', condition: false },
+  ] } });
+  await service.startCastAndSets(project.id);
+  await runTo(project.id, 'review');
+  const refs = (key) => jobs.findLast((j) => keyOf(j) === key).params.referenceImagePaths?.map((p) => p.split(/[\\/]/).pop());
+  const character = jobs.find((j) => keyOf(j) === 'character');
+  expect(refs('character')).toEqual(['upload-face.png', 'rendered-face.png']);
+  expect(character.params.prompt).toContain('SAME person as the identity reference images');
+  expect(refs('expressions')).toEqual([`${character.id}.png`, 'upload-face.png', 'rendered-face.png']);
+  expect(refs('looks')).toEqual([`${character.id}.png`, 'upload-face.png', 'rendered-face.png']);
+  expect(refs('set:lab')).toBeUndefined();
+});
+
+it('keeps people out of set plates: no mood board person in the look, no character action in a set', async () => {
+  const personBoard = { ...board, style: { prompt: 'An adult woman with tousled curls sits alone beside a rain-speckled window. Amber haze.' } };
+  service.__setCastAndSetsDepsForTests(testDeps({ loadBoard: async () => personBoard }));
+  runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION, look: 'amber haze, 35mm grain',
+    sets: DIRECTION.sets.map((set) => (set.id === 'harbor' ? { ...set, description: 'a wet stone quay. She sits on the edge of the quay. Keeper watches the tide.', lighting: 'sodium orange. She is lit from the lamp, then looks up into the lens.' } : set)) }) });
+  const project = await seed({ concept: { prompt: 'an escape', style: 'grainy 1980s film, soft glow', subjects: [] } });
+  await service.startCastAndSets(project.id);
+  await runTo(project.id, 'review');
+  const plate = (key) => jobs.findLast((j) => keyOf(j) === key).params.prompt;
+  expect(plate('set:harbor')).toContain('a wet stone quay. Lighting: sodium orange.');
+  expect(plate('set:harbor')).not.toMatch(/She sits|Keeper watches|She is lit/);
+  expect(plate('set:lab')).toContain('Look: amber haze, 35mm grain');
+  expect(jobs.some((j) => j.params.prompt.includes('tousled curls'))).toBe(false);
+
+  // A direction saved before the fix copied the board's style verbatim: a
+  // no-notes regenerate falls back to the director's visual style.
+  await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current,
+    castAndSets: { ...current.castAndSets, direction: { ...current.castAndSets.direction, look: personBoard.style.prompt } } } }));
+  const before = jobs.length;
+  await service.regenerateCastAndSets(project.id);
+  await runTo(project.id, 'review');
+  const replated = jobs.slice(before).filter((j) => keyOf(j).startsWith('set:'));
+  expect(replated).toHaveLength(3);
+  for (const job of replated) {
+    expect(job.params.prompt).toContain('Look: grainy 1980s film, soft glow');
+    expect(job.params.prompt).not.toContain('tousled curls');
+  }
+});
 
 it('carries unresolved targeted production feedback into regeneration without resolving the human decision', async () => {
   const project = await seed();

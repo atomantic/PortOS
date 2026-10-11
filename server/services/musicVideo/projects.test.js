@@ -33,7 +33,10 @@ const getSettings = vi.fn(async () => ({}));
 vi.mock('../settings.js', () => ({ getSettings: (...a) => getSettings(...a) }));
 
 const getTrack = vi.fn(async () => null);
-vi.mock('../tracks/index.js', () => ({ getTrack: (...a) => getTrack(...a) }));
+const updateTrack = vi.fn(async () => ({}));
+vi.mock('../tracks/index.js', () => ({ getTrack: (...a) => getTrack(...a), updateTrack: (...a) => updateTrack(...a) }));
+const readSunoSongStyle = vi.fn();
+vi.mock('../trackSunoImport.js', () => ({ readSunoSongStyle: (...a) => readSunoSongStyle(...a) }));
 
 const projects = await import('./projects.js');
 
@@ -163,8 +166,10 @@ describe('track metadata and lyrics auto-reading on create and update', () => {
     expect(project.lyricCues[1].text).toBe('Shining like a spark');
     expect(project.concept).toMatchObject({
       prompt: 'A cyberpunk nocturnal story',
-      style: 'Neon noir 80s anime style',
+      songStyle: 'Neon noir 80s anime style',
     });
+    // The Suno style is the song's sound, never the visual style appended to frame prompts.
+    expect(project.concept.style).toBeUndefined();
   });
 
   it('preserves explicitly authored project fields over track defaults at creation', async () => {
@@ -189,6 +194,7 @@ describe('track metadata and lyrics auto-reading on create and update', () => {
     expect(project.concept).toMatchObject({
       prompt: 'Custom concept',
       style: 'Custom style',
+      songStyle: 'Track style',
     });
   });
 
@@ -214,8 +220,21 @@ describe('track metadata and lyrics auto-reading on create and update', () => {
     expect(updated.lyricCues[0].text).toBe('Golden light breaks through');
     expect(updated.concept).toMatchObject({
       prompt: 'Dawn over the horizon',
-      style: 'Impressionist pastel colors',
+      songStyle: 'Impressionist pastel colors',
     });
+    expect(updated.concept.style).toBeUndefined();
   });
 });
 
+
+describe('refreshSongStyleFromSuno', () => {
+  it('sets the song style read from Suno on the project and its track, leaving the visual style alone', async () => {
+    getTrack.mockResolvedValue({ id: 'track-1', title: 'Example', prompt: 'synth-pop' });
+    const project = await projects.createProject({ trackId: 'track-1', concept: { style: 'soft analog glow' } });
+    readSunoSongStyle.mockResolvedValue({ style: 'synth-pop, -metal', excludedStylesKnown: true });
+    const { project: updated, excludedStylesKnown } = await projects.refreshSongStyleFromSuno(project.id, 'https://suno.com/song/x');
+    expect(excludedStylesKnown).toBe(true);
+    expect(updated.concept).toMatchObject({ style: 'soft analog glow', songStyle: 'synth-pop, -metal' });
+    expect(updateTrack).toHaveBeenCalledWith('track-1', { prompt: 'synth-pop, -metal' });
+  });
+});

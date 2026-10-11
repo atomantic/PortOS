@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  FAL_AUDIO_VIDEO_MODEL,
   FAL_LIPSYNC_VIDEO_MODEL,
   FAL_VIDEO_MODELS,
   buildFalVideoRequest,
@@ -74,6 +75,16 @@ describe('buildFalVideoRequest — per-family wire bodies', () => {
     expect(req.body).toEqual({ image_url: 'i', audio_url: 'a', enable_transcription: true, resolution: '2K' });
     expect(req.seconds).toBeNull();
     expect(req.estimatedCostUsd).toBe(3.84);
+  });
+
+  it('OmniHuman v1.5: frame + audio, an optional prompt and its own resolution enum', () => {
+    expect(FAL_AUDIO_VIDEO_MODEL).toBe('fal-ai/bytedance/omnihuman/v1.5');
+    const req = buildFalVideoRequest({ modelId: FAL_AUDIO_VIDEO_MODEL, prompt: 'drummer', imageUrl: 'i', audioUrl: 'a', audioSec: 3.735, resolution: '720P' });
+    expect(req.body).toEqual({ prompt: 'drummer', image_url: 'i', audio_url: 'a', resolution: '720p' });
+    expect(req.seconds).toBeNull();
+    expect(estimateFalVideoCostUsd({ modelId: FAL_AUDIO_VIDEO_MODEL, seconds: 4 })).toBe(0.64);
+    // LTX audio-to-video runs locally; fal never offers it.
+    expect(FAL_VIDEO_MODELS.some((m) => /ltx/i.test(m.id))).toBe(false);
   });
 
   it('refuses a request the model cannot honor before anything is paid for; an uncurated id is not built', () => {

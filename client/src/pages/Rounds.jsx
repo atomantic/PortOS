@@ -4,13 +4,14 @@
  * Lists every round the user is writing or learning and lets them create, open,
  * or delete any of them. The heavy editor lives at `/rounds/:id`; the learning
  * reference (dirge rhythm shapes, the layer ladder, notation help) lives at
- * `/rounds/guide`. Mirrors the Universes index — a plain padded+scrolling page
- * (NOT full-width), one card/row per round.
+ * `/rounds/guide`. The index is a full-width PageHeader shell that owns its
+ * scroll (the editor and guide still live at their own routes).
  */
 
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router';
 import { Music, Plus, Trash2, BookOpen, CheckCircle2, Circle, Wand2 } from 'lucide-react';
+import PageHeader from '../components/PageHeader';
 import toast from '../components/ui/Toast';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import { timeAgo } from '../utils/formatters';
@@ -77,24 +78,22 @@ export default function Rounds() {
   ), [confirmDelete]);
 
   return (
-    <div>
-      <div className="flex items-center justify-between gap-3 mb-2">
-        <div className="flex items-center gap-3">
-          <Music className="w-6 h-6 text-port-accent" />
-          <h1 className="text-2xl font-bold text-white">Rounds</h1>
-        </div>
-        <Link
-          to="/rounds/guide"
-          className="flex items-center gap-2 px-3 py-2 text-sm rounded-lg border border-port-border text-gray-300 hover:text-white hover:bg-port-border/50"
-        >
-          <BookOpen size={16} />
-          Learning Guide
-        </Link>
-      </div>
-      <p className="text-sm text-gray-400 mb-6">
-        Write and learn a cappella rounds — dirges, ballads, and harmonies. Track lyrics,
-        rhythm shapes, and the voice layers you're stacking.
-      </p>
+    <div className="flex h-full min-h-0 flex-col">
+      <PageHeader
+        icon={Music}
+        title="Rounds"
+        subtitle="Write and learn a cappella rounds — dirges, ballads, and harmonies. Track lyrics, rhythm shapes, and the voice layers you're stacking."
+        actions={(
+          <Link
+            to="/rounds/guide"
+            className="flex items-center gap-2 px-3 py-2 text-sm rounded-lg border border-port-border text-gray-300 hover:text-white hover:bg-port-border/50"
+          >
+            <BookOpen size={16} />
+            Learning Guide
+          </Link>
+        )}
+      />
+      <div className="flex-1 min-h-0 overflow-auto p-4">
 
       {/* Create form */}
       <form
@@ -205,6 +204,7 @@ export default function Rounds() {
           })}
         </ul>
       )}
+      </div>
     </div>
   );
 }

@@ -1463,8 +1463,12 @@ describe('cross-workspace browser suites (#10312)', () => {
       !/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path) || BROWSER_SUITES.includes(path));
     const plan = buildCiTestPlan(inputs.changedFiles, { ...inputs, trackedFiles });
 
+    // Server-only media suites do not mount the changed client component.
+    const runtimeOnly = ['server/lib/musicVideoTitleCard.browser.test.js',
+      'server/services/federatedMedia/sourceAudio.browser.test.js'];
     expect(plan.full).toBe(false);
-    expect(plan.browserFiles).toEqual(expect.arrayContaining(BROWSER_SUITES));
+    expect(plan.browserFiles).toEqual(expect.arrayContaining(BROWSER_SUITES.filter((suite) => !runtimeOnly.includes(suite))));
+    for (const suite of runtimeOnly) expect(plan.browserFiles).not.toContain(suite);
     expect(plan.suiteReasons.browser).toMatch(/browser suite/);
   });
 

@@ -1,5 +1,7 @@
 import { assertMusicVideoMediaSelections, musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
 import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
+import { filmLookRuntimeSource, isFilmLookNeutral } from '../../lib/filmLook.js';
+import { titleCardRuntimeSource, titleCardVisible } from '../../lib/musicVideoTitleCard.js';
 /**
  * Music Video — render a project's composition document over the song.
  *
@@ -57,6 +59,20 @@ const safeSegment = (id) => String(id || 'scene').replace(/[^A-Za-z0-9_-]+/g, '-
 
 /** The project's aspect ratio (brief), defaulting to 16:9 (lib/musicVideoAspect.js). */
 export const documentAspect = musicVideoAspect;
+
+/**
+ * The browser init scripts a document render opens its page with: the film
+ * look runtime (lib/filmLook.js) when the project has a non-neutral look, and
+ * the opening title card (lib/musicVideoTitleCard.js) when it has one to show,
+ * so every captured frame, probe sample and worker browser draws what the live
+ * preview shows. Pure.
+ */
+export function documentRenderInitScripts(project) {
+  return [
+    ...(isFilmLookNeutral(project?.filmLook) ? [] : [filmLookRuntimeSource(project.filmLook)]),
+    ...(titleCardVisible(project?.titleCard) ? [titleCardRuntimeSource(project.titleCard)] : []),
+  ];
+}
 
 const aspectOf = (width, height) => {
   const r = width / height;
@@ -339,7 +355,8 @@ export async function encodeDocumentComposition({
       prepare: (dir) => stageDocumentData(dir, data, media),
     });
     signal?.throwIfAborted();
-    const openPage = (pageSignal) => openComposition(staged.directory, { signal: pageSignal, streamMedia: true, mediaMode: musicVideoMediaMode(project), ownedBrowser: true });
+    const openPage = (pageSignal) => openComposition(staged.directory, { signal: pageSignal, streamMedia: true, mediaMode: musicVideoMediaMode(project), ownedBrowser: true,
+      initScripts: documentRenderInitScripts(project) });
     page = await openPage(signal);
     const metadata = await page.evaluate(`(() => {
       const c = globalThis.portosComposition;
@@ -476,7 +493,7 @@ export async function probeDocumentText({ project, jobId, signal, sampleTimes, o
     });
     signal?.throwIfAborted();
     page = await openComposition(staged.directory, { signal, streamMedia: true, mediaMode: musicVideoMediaMode(project), ownedBrowser: true,
-      initScripts: [OVERLAY_TEXT_PROBE_SCRIPT] });
+      initScripts: [...documentRenderInitScripts(project), OVERLAY_TEXT_PROBE_SCRIPT] });
     const metadata = await page.evaluate(`(() => {
       const c = globalThis.portosComposition;
       if (!c || typeof c.seek !== 'function') throw new Error('portosComposition.seek is required');

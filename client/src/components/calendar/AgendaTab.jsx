@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { RefreshCw, Search, MapPin, Users, Clock } from 'lucide-react';
 import * as api from '../../services/api';
+import socket from '../../services/socket';
 import { useAccountSyncStatus } from '../../hooks/useAccountSyncStatus';
 import EventDetail from './EventDetail';
 import { formatCount, formatTimeOfDay as formatTime, formatWeekdayDate, localDateKey } from '../../utils/formatters';
@@ -62,7 +63,7 @@ export default function AgendaTab({ accounts }) {
   const nextOffset = useRef(0);
   const pending = useRef(false);
 
-  const fetchEvents = useCallback(async (append = false) => {
+  const fetchEvents = useCallback(async (append = false, reconcile = false) => {
     if (append && pending.current) return;
     const generation = ++requestGeneration.current;
     pending.current = true;
@@ -70,9 +71,11 @@ export default function AgendaTab({ accounts }) {
     setLoadingMore(append);
     if (!append) {
       nextOffset.current = 0;
-      setEvents([]);
-      setTotal(0);
-      setLoading(true);
+      if (!reconcile) {
+        setEvents([]);
+        setTotal(0);
+        setLoading(true);
+      }
     }
     const offset = nextOffset.current;
     const params = {
@@ -106,6 +109,16 @@ export default function AgendaTab({ accounts }) {
     return () => {
       ++requestGeneration.current;
       pending.current = false;
+    };
+  }, [fetchEvents]);
+
+  useEffect(() => {
+    const reconcile = () => fetchEvents(false, true);
+    socket.on('calendar:changed', reconcile);
+    socket.on('connect', reconcile);
+    return () => {
+      socket.off('calendar:changed', reconcile);
+      socket.off('connect', reconcile);
     };
   }, [fetchEvents]);
 

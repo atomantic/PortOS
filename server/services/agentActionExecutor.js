@@ -12,7 +12,7 @@ import * as platformAccounts from './platformAccounts.js';
 import * as agentPersonalities from './agentPersonalities.js';
 import { createMoltbookClient, checkRateLimit, isAccountSuspended } from '../integrations/moltbook/index.js';
 import { createMoltworldClient } from '../integrations/moltworld/index.js';
-import { generatePost, generateComment, generateReply } from './agentContentGenerator.js';
+import { generatePost, generateComment, generateReply, assertMoltbookCommentProvider } from './agentContentGenerator.js';
 import { findRelevantPosts, findReplyOpportunities } from './agentFeedFilter.js';
 import { sleep as delay } from '../lib/fileUtils.js';
 
@@ -111,6 +111,13 @@ async function executePost(client, agent, params) {
  */
 async function executeComment(client, agent, params) {
   let { postId, content, parentId } = params;
+  const contentConfig = agent.aiConfig?.content || agent.aiConfig;
+
+  // A saved pin is checked before any feed read or platform write. Supplied
+  // content is published as-is and does not consult a provider.
+  if (!content) {
+    await assertMoltbookCommentProvider(contentConfig?.providerId);
+  }
 
   // Find a relevant post if no postId specified
   if (!postId) {
@@ -123,8 +130,6 @@ async function executeComment(client, agent, params) {
 
     const pick = opportunities[0];
     postId = pick.post.id;
-
-    const contentConfig = agent.aiConfig?.content || agent.aiConfig;
 
     // AI generate comment if no content
     if (!content) {
@@ -140,7 +145,6 @@ async function executeComment(client, agent, params) {
     const comments = Array.isArray(commentsResponse?.comments)
       ? commentsResponse.comments
       : Array.isArray(commentsResponse) ? commentsResponse : [];
-    const contentConfig = agent.aiConfig?.content || agent.aiConfig;
 
     if (parentId) {
       const parent = comments.find(c => c.id === parentId);
@@ -226,6 +230,12 @@ async function executeEngage(client, agent, params) {
 
   const engagementConfig = agent.aiConfig?.engagement || agent.aiConfig;
 
+  // Comment generation reads public posts. Refuse an ineligible pin before
+  // votes, so a skipped run does not publish a partial engagement.
+  if (maxComments > 0) {
+    await assertMoltbookCommentProvider(engagementConfig?.providerId);
+  }
+
   console.log(`🤝 Starting engage for "${agent.name}" (maxComments=${maxComments}, maxVotes=${maxVotes})`);
 
   const relevantPosts = await findRelevantPosts(client, agent, {
@@ -305,6 +315,12 @@ async function executeMonitor(client, agent, schedule, params) {
   const { days = 7, maxReplies = 2, maxUpvotes = 10 } = params;
 
   const engagementConfig = agent.aiConfig?.engagement || agent.aiConfig;
+
+  // Replies quote third-party comments. Refuse an ineligible pin before the
+  // author feed is read, so upvotes are not published ahead of a skipped reply.
+  if (maxReplies > 0) {
+    await assertMoltbookCommentProvider(engagementConfig?.providerId);
+  }
 
   console.log(`👀 Starting monitor for "${agent.name}" (days=${days}, maxReplies=${maxReplies}, maxUpvotes=${maxUpvotes})`);
 
@@ -645,13 +661,24 @@ export function init() {
     let result = null;
     let error = null;
 
+    let failure = null;
     try {
       result = await executeAction(schedule, account, agent);
       console.log(`✅ Action completed: ${schedule.action.type}`);
     } catch (err) {
-      error = err.message;
-      console.error(`❌ Action failed: ${err.message}`);
+      failure = err;
     }
+
+    const code = typeof failure?.code === 'string' ? failure.code : null;
+    const skipped = !!(code && (
+      code.startsWith('untrusted-content-')
+      || code.startsWith('security-guard-')
+      || code.startsWith('security-model-')
+      || code === 'PROVIDER_MODE_NOT_PERMITTED'
+    ));
+    if (failure && skipped) console.warn(`⏸️ Skipped ${schedule.action.type}: ${failure.message} (${code})`);
+    else if (failure) console.error(`❌ Action failed: ${failure.message}`);
+    error = failure ? failure.message : null;
 
     // Record activity
     await platformAccounts.recordActivity(schedule.accountId);
@@ -663,9 +690,10 @@ export function init() {
       scheduleId,
       action: schedule.action.type,
       params: schedule.action.params,
-      status: error ? 'failed' : 'completed',
+      status: failure ? (skipped ? 'skipped' : 'failed') : 'completed',
       result,
       error,
+      ...(code ? { code } : {}),
       timestamp: new Date().toISOString(),
       durationMs: Date.now() - startTime
     });

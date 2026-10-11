@@ -83,6 +83,12 @@ export const importMusicVideoTrackLyrics = (id, body = {}, options = {}) => requ
   method: 'POST', body: JSON.stringify(body), ...options,
 });
 
+// Re-read the song's Suno style (excluded styles included) from its song link.
+// Resolves to { project, excludedStylesKnown }; also updates the linked track.
+export const refreshMusicVideoSongStyleFromSuno = (id, url, options = {}) => request(`/music-video/${encodeURIComponent(id)}/song-style/suno`, {
+  method: 'POST', body: JSON.stringify({ url }), ...options,
+});
+
 // Align director lyric lines to the vocal (#9074). Body `{}` aligns every line;
 // `{ cueId }` re-aligns one line. Kickoff resolves to { jobId, reused? } (#10155):
 // stages stream over SSE and the terminal `complete` frame carries the updated
@@ -91,6 +97,14 @@ export const importMusicVideoTrackLyrics = (id, body = {}, options = {}) => requ
 export const alignMusicVideoLyrics = (id, body = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/lyrics/align`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
+// Analyze a newly attached song and start aligning never-aligned lyrics.
+// Resolves `{ project, analyzed, alignJobId }`; follow the job with the align events URL.
+export const prepareMusicVideoSong = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/song/prepare`, {
+  method: 'POST', ...options,
+});
+// The lyric timing playthrough page: the aligned words over a plain frame (same shape as the composition preview).
+export const getMusicVideoLyricPlaythroughPreview = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/lyrics/playthrough/preview`, options);
+export const getMusicVideoLyricOverlayPreview = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/lyrics/overlay/preview`, options);
 export const musicVideoLyricAlignEventsUrl = (jobId) =>
   `/api/music-video/lyrics/align/${encodeURIComponent(jobId)}/events`;
 export const cancelMusicVideoLyricAlign = (jobId, options = {}) =>
@@ -465,6 +479,12 @@ export const regenerateMusicVideoCastAndSets = (id, body = {}, options = {}) =>
 // Body: { protagonist?, world?, sets?: [{ id, imageRole }] } — the director's direct edits to a procedural direction.
 export const editMusicVideoCastAndSetsDirection = (id, body, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/direction`, { method: 'PATCH', body: JSON.stringify(body), ...options });
+// Body: { text, target? } — plain-text feedback on the sheet. No target = the whole
+// sheet (standing feedback the direction keeps honoring); a target names one image.
+export const applyMusicVideoCastAndSetsFeedback = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/feedback`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const removeMusicVideoCastAndSetsFeedback = (id, feedbackId, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/feedback/${encodeURIComponent(feedbackId)}`, { method: 'DELETE', ...options });
 export const resumeMusicVideoCastAndSets = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/resume`, { method: 'POST', body: '{}', ...options });
 export const approveMusicVideoCastAndSets = (id, options = {}) =>

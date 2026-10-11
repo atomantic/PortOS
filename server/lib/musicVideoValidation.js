@@ -1,5 +1,7 @@
 import { MUSIC_VIDEO_MEDIA_MODES } from './musicVideoMediaPolicy.js';
 import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicVideoGrade.js';
+import { filmLookSchema } from './filmLookValidation.js';
+import { TITLE_CARD_FONTS, TITLE_CARD_LIMITS, TITLE_CARD_POSITIONS } from './musicVideoTitleCard.js';
 import { COVER_DESIGN_OPTIONS } from './musicVideoCoverOverlay.js';
 import { DISTROKID_REMEMBERED_OPTIONS } from './distrokidGenres.js';
 import { CROSS_LINK_EDIT_TARGETS } from './musicVideoCrossLinks.js';
@@ -50,7 +52,7 @@ import { NARRATIVE_EVENT_KINDS } from './musicVideoNarrativeEvents.js';
 import { MUSIC_VIDEO_MEDIA } from './musicVideoMediumPlan.js';
 import { MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_STILL_MOVES, MUSIC_VIDEO_TEXT_ZONES, MUSIC_VIDEO_VISUAL_LAYERS } from './musicVideoLayers.js';
 import { CAMERA_FRAMINGS, CAMERA_MOVEMENT_VALUES, CAMERA_SPEEDS } from './cameraMovements.js';
-import { MUSIC_VIDEO_SHOT_MODES, SOURCE_AUDIO_LIPSYNC } from './musicVideoShotTiming.js';
+import { MUSIC_VIDEO_PERFORMANCE_STYLES, MUSIC_VIDEO_SHOT_MODES, SOURCE_AUDIO_LIPSYNC } from './musicVideoShotTiming.js';
 import {
   MUSIC_VIDEO_AUTOMATION_BUDGET_MAX_USD,
   MUSIC_VIDEO_AUTOMATION_GUIDANCE_MAX,
@@ -85,10 +87,18 @@ export const MUSIC_VIDEO_MODES = ['director', 'autonomous'];
 // (or `failed`). `analyzed` marks "beat map cached but not yet arranged".
 export const MUSIC_VIDEO_STATUSES = ['draft', 'analyzed', 'ready', 'rendering', 'complete', 'failed'];
 
+// Re-read a project's song style from its Suno song link.
+export const musicVideoSongStyleSunoSchema = z.object({ url: z.string().trim().min(1).max(2000) });
+
 // Optional global visual direction for the whole video.
 export const musicVideoConceptSchema = z.object({
   prompt: z.string().max(8000).optional(),
+  // The director's visual style, appended to every frame and shot prompt.
   style: z.string().max(2000).optional(),
+  // The song's own style (the Suno style prompt, excluded styles included),
+  // snapshotted from the track. Planning LLMs translate it into design; it
+  // never reaches an image or video prompt verbatim.
+  songStyle: z.string().max(2000).optional(),
   universeId: z.string().max(64).nullable().optional(),
   // Authored snapshots keep the production stable when source canon changes.
   universeStyle: z.string().max(4000).optional(),
@@ -143,6 +153,12 @@ export const musicVideoVideoSettingsSchema = z.object({
   // false = lip-sync to the audio alone, without the provider transcribing it
   // first (sung words it mishears turn into the wrong mouth shapes).
   falLipSyncTranscription: z.boolean().nullable().optional(),
+  // Audio-to-video model and resolution for music-driven performance takes
+  // (scene.performanceStyle 'music'). Loosely validated like falModelId: a peer
+  // on a newer catalog may pin a model this install does not curate, which then
+  // falls back to the default (OmniHuman v1.5).
+  falMusicModelId: z.string().min(1).max(200).nullable().optional(),
+  falMusicResolution: z.string().min(1).max(16).nullable().optional(),
   generationMode: z.enum(['image', 'audioReactive', 'suppliedAudio']).optional(),
   audioReactiveLora: z.string().max(255).regex(/^[^/\\]+\.safetensors$/i).nullable().optional(),
   audioReactiveScale: z.number().min(0).max(2).optional(),
@@ -171,6 +187,7 @@ export const musicVideoLyricCueSchema = z.object({
   endSec: timedSec,
   words: z.array(lyricWordSchema).max(400).optional(),
   matched: z.number().min(0).max(1).optional(),
+  suspect: z.boolean().optional(),
 }).strict();
 
 // A musical-phrase annotation: a span of the song with an optional visual
@@ -932,6 +949,8 @@ export const musicVideoProductionStartSchema = z.object({
   authoring: musicVideoAuthoringSchema.optional(),
   providerId: z.string().min(1).max(200).nullable().optional(),
   model: z.string().min(1).max(200).nullable().optional(),
+  // 'clips': make every still, then stop as `awaiting-video` before any clip.
+  stopBefore: z.enum(['clips']).nullable().optional(),
 }).strict();
 
 // Resume may RAISE a limit; `acceptBasis` continues against a changed creative setup;
@@ -940,6 +959,8 @@ export const musicVideoProductionResumeSchema = z.object({
   limits: musicVideoProductionLimitsSchema.partial().optional(),
   acceptBasis: z.boolean().optional(),
   pool: z.array(musicVideoProductionRouteSchema).max(12).optional(),
+  // null goes on to the clips; omitted keeps a running stills-only stop (a finished one goes on).
+  stopBefore: z.enum(['clips']).nullable().optional(),
 }).strict();
 
 // ---- Fully-autonomous run: one prompt → lyrics → Suno song → video --------------
@@ -1006,6 +1027,9 @@ export const musicVideoAutonomousStartSchema = z.object({
   checkpoints: z.array(z.enum(AUTONOMOUS_CHECKPOINT_IDS)).max(AUTONOMOUS_CHECKPOINT_IDS.length).optional(),
   // Reuse this existing mood board instead of generating one from the prompt.
   moodBoardId: z.string().trim().min(1).max(64).nullable().optional(),
+  // Start on this project's song: its audio, analysis and lyric timing are copied,
+  // so the run writes no lyrics, makes no song and skips re-analysis.
+  fromProjectId: z.string().trim().min(1).max(80).optional(),
   // A built-in character style (musicVideoCharacterStyles.js) cast as protagonist from the start.
   characterStyleId: z.enum(MUSIC_VIDEO_CHARACTER_STYLE_IDS).nullable().optional(),
   // The LLM that writes the brief and lyrics (blank = an eligible TUI provider, else the
@@ -1024,6 +1048,8 @@ export const musicVideoAutonomousStartSchema = z.object({
   // director would (no checkpoints). Approval authority — the route requires a
   // signed-in session for it.
   orchestrator: musicVideoLlmSchema.optional(),
+  // Make and review every still, then wait for the director before any clip.
+  stopBeforeVideo: z.boolean().optional(),
   origin: z.object({
     kind: z.enum(AUTONOMOUS_ORIGINS).optional(),
     ideaId: z.string().max(80).nullable().optional(),
@@ -1051,6 +1077,8 @@ export const musicVideoAutonomousResumeSchema = z.object({
     maxGenerations: z.number().int().min(AUTONOMOUS_LIMIT_BOUNDS.maxGenerations.min).max(AUTONOMOUS_LIMIT_BOUNDS.maxGenerations.max).optional(),
     maxReviewAttempts: z.number().int().min(AUTONOMOUS_LIMIT_BOUNDS.maxReviewAttempts.min).max(AUTONOMOUS_LIMIT_BOUNDS.maxReviewAttempts.max).optional(),
   }).strict().optional(),
+  // Add tools to the brief (e.g. a video tool once the stills are approved); the production pool follows.
+  addTools: z.array(z.enum(MUSIC_VIDEO_AUTOMATION_TOOL_IDS)).max(MUSIC_VIDEO_AUTOMATION_TOOL_IDS.length).optional(),
   // Replace the brief's auto-approve grant ("auto-approve the rest").
   ...musicVideoAutoApproveFields,
 }).strict();
@@ -1155,6 +1183,16 @@ export const musicVideoCastAndSetsRegenerateSchema = z.object({
   effort: z.enum(EFFORT_LEVELS).optional(),
 }).strict();
 
+// Plain-text feedback on a Cast & Sets sheet. No target = the whole sheet
+// (standing feedback the direction keeps honoring); a target names one image.
+export const musicVideoCastAndSetsFeedbackSchema = z.object({
+  text: devArtifactNoteText,
+  target: devArtifactNoteTarget,
+  providerId: z.string().min(1).max(64).optional(),
+  model: z.string().min(1).max(200).optional(),
+  effort: z.enum(EFFORT_LEVELS).optional(),
+}).strict();
+
 // Direct edits to a procedural direction. A present text field replaces the
 // current value (empty clears it); an absent one keeps it.
 const castSetsText = (max) => z.string().max(max);
@@ -1180,6 +1218,25 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
   }).strict()).max(8).optional(),
 }).strict();
 
+// The opening title card (lib/musicVideoTitleCard.js): song title, artist, year
+// in a corner over the opener. Every field is optional (the normalizer fills
+// defaults); null on the project = none.
+export const musicVideoTitleCardSchema = z.object({
+  enabled: z.boolean().optional(),
+  title: z.string().max(TITLE_CARD_LIMITS.textMax).optional(),
+  artist: z.string().max(TITLE_CARD_LIMITS.textMax).optional(),
+  year: z.string().max(TITLE_CARD_LIMITS.yearMax).optional(),
+  extra: z.string().max(TITLE_CARD_LIMITS.textMax).optional(),
+  quoteTitle: z.boolean().optional(),
+  startSec: z.number().min(0).max(TITLE_CARD_LIMITS.startMax).optional(),
+  endSec: z.number().min(0).max(TITLE_CARD_LIMITS.startMax + 60).optional(),
+  fadeSec: z.number().min(0).max(TITLE_CARD_LIMITS.fadeMax).optional(),
+  position: z.enum(TITLE_CARD_POSITIONS).optional(),
+  font: z.enum(TITLE_CARD_FONTS).optional(),
+  size: z.number().min(TITLE_CARD_LIMITS.sizeMin).max(TITLE_CARD_LIMITS.sizeMax).optional(),
+  color: z.string().regex(/^#[0-9a-f]{6}$/i, 'color is #rrggbb').optional(),
+}).strict();
+
 export const musicVideoProjectCreateSchema = z.object({
   mediaMode: z.enum(MUSIC_VIDEO_MEDIA_MODES).optional(),
   productionPolicy: musicVideoProductionPolicySchema.optional(),
@@ -1202,6 +1259,10 @@ export const musicVideoProjectCreateSchema = z.object({
   pacing: musicVideoPacingSchema.nullable().optional(),
   composition: musicVideoCompositionSchema.nullable().optional(),
   soundBed: musicVideoSoundBedSchema.nullable().optional(),
+  // The finishing film look (lib/filmLook.js); null = none.
+  filmLook: filmLookSchema.nullable().optional(),
+  // The opening title card (lib/musicVideoTitleCard.js); null = none.
+  titleCard: musicVideoTitleCardSchema.nullable().optional(),
 }).strict();
 
 export const musicVideoProjectUpdateSchema = z.object({
@@ -1226,6 +1287,10 @@ export const musicVideoProjectUpdateSchema = z.object({
   pacing: musicVideoPacingSchema.nullable().optional(),
   composition: musicVideoCompositionSchema.nullable().optional(),
   soundBed: musicVideoSoundBedSchema.nullable().optional(),
+  // The finishing film look (lib/filmLook.js); null = none.
+  filmLook: filmLookSchema.nullable().optional(),
+  // The opening title card (lib/musicVideoTitleCard.js); null = none.
+  titleCard: musicVideoTitleCardSchema.nullable().optional(),
 }).strict();
 
 // Mark a project finished outside PortOS (or clear the marker). The server
@@ -1325,6 +1390,8 @@ export const musicVideoSceneCreateSchema = z.object({
   // `cutaway` = the ordinary image-to-video shot. See lib/musicVideoShotTiming.js.
   shotMode: z.enum(MUSIC_VIDEO_SHOT_MODES).optional(),
   performanceSpeaker: z.string().trim().max(120).nullable().optional(),
+  // How a performance follows the song: lip-sync (absent/null) or music-driven motion.
+  performanceStyle: z.enum(MUSIC_VIDEO_PERFORMANCE_STYLES).nullable().optional(),
 }).strict().refine(
   (s) => s.startSec == null || s.endSec == null || s.endSec >= s.startSec,
   { message: 'endSec must be >= startSec', path: ['endSec'] },
@@ -1363,6 +1430,8 @@ export const musicVideoSceneUpdateSchema = z.object({
   // `cutaway` = the ordinary image-to-video shot. See lib/musicVideoShotTiming.js.
   shotMode: z.enum(MUSIC_VIDEO_SHOT_MODES).optional(),
   performanceSpeaker: z.string().trim().max(120).nullable().optional(),
+  // How a performance follows the song: lip-sync (absent/null) or music-driven motion.
+  performanceStyle: z.enum(MUSIC_VIDEO_PERFORMANCE_STYLES).nullable().optional(),
   referenceImageId: z.string().max(256).nullable().optional(),
   videoHistoryId: z.string().max(64).nullable().optional(),
   // #10154: the last generation failure the render hooks persisted. The board

@@ -1,5 +1,6 @@
 import { Link } from 'react-router';
 import { NotebookPen, ArrowLeft, Ruler, BookOpen, Lightbulb, Sparkles } from 'lucide-react';
+import PageHeader from '../components/PageHeader';
 import {
   WRITING_LENGTH_TARGETS,
   BOOK_LENGTH_ESTIMATES,
@@ -59,21 +60,22 @@ function PrincipleCard({ group }) {
 export default function WritersRoomGuide() {
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-port-border bg-port-card shrink-0">
-        <Link
-          to="/writers-room"
-          className="p-1 text-gray-400 hover:text-white transition-colors"
-          title="Back to Writers Room"
-          aria-label="Back to Writers Room"
-        >
-          <ArrowLeft size={18} />
-        </Link>
-        <NotebookPen className="w-5 h-5 text-port-accent" />
-        <h1 className="text-xl font-bold text-white">Writers Room Guide</h1>
-        <span className="text-xs text-gray-500 hidden md:inline ml-auto">
-          Length targets, craft principles, and the analyses we apply to your prose
-        </span>
-      </div>
+      <PageHeader
+        icon={NotebookPen}
+        title="Writers Room Guide"
+        subtitle="Length targets, craft principles, and the analyses we apply to your prose"
+        className="bg-port-card"
+        actions={(
+          <Link
+            to="/writers-room"
+            className="inline-flex items-center justify-center min-h-[44px] min-w-[44px] p-1 text-gray-400 hover:text-white transition-colors"
+            title="Back to Writers Room"
+            aria-label="Back to Writers Room"
+          >
+            <ArrowLeft size={18} />
+          </Link>
+        )}
+      />
 
       <div className="flex-1 overflow-y-auto px-4 py-5 md:px-6 md:py-6">
         <div className="max-w-5xl mx-auto space-y-10">

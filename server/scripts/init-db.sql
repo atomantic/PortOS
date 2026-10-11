@@ -2441,3 +2441,9 @@ CREATE TABLE IF NOT EXISTS deep_audit_ledgers (
       ledger JSONB NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+
+-- Machine-local brain bridge identity, retained across a memory purge for healing.
+CREATE TABLE IF NOT EXISTS brain_memory_links (
+  bridge_key TEXT PRIMARY KEY,
+  memory_id UUID NOT NULL
+);
