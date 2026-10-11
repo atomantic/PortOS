@@ -212,6 +212,30 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
     ),
   };
 
+  // Supporting cast: each recurring person gets their own photographic sheet,
+  // the same five views as the protagonist's, so shots naming them keep them.
+  for (const c of direction.cast || []) {
+    const key = `cast:${c.id}`;
+    plan[key] = {
+      key,
+      kind: 'cast',
+      label: c.name,
+      castId: c.id,
+      deps: [],
+      refKeys: [],
+      prompt: join(
+        `Photographic character reference sheet of ONE consistent person, ${c.name}${c.role ? `, the ${c.role}` : ''}: ${c.description || ''}`,
+        identity(c),
+        c.wardrobe && `Wearing ${c.wardrobe}`,
+        p.name && `A different person from ${p.name}`,
+        'Five views on a seamless dark grey backdrop: FRONT, 3/4, PROFILE, BACK full-body, plus a FACE close-up, with small typewriter captions',
+        style && `Look: ${style}`,
+        `${PHOTO}, even studio light, lookbook realism`,
+        note(key),
+      ),
+    };
+  }
+
   const plateStyle = withoutPeople(style, p.name);
   for (const set of direction.sets || []) {
     const key = `set:${set.id}`;
@@ -291,8 +315,8 @@ export function noteImageKeys(target, plan) {
   if (t === 'protagonist' || t === 'cast') return ['character'];
   if (t === 'wardrobe') return ['looks'];
   if (t === 'expression') return ['expressions'];
-  const bySetName = Object.values(plan).find((item) => item.kind === 'plate' && item.label.toLowerCase() === t);
-  return bySetName ? [bySetName.key] : null;
+  const byName = Object.values(plan).find((item) => ['plate', 'cast'].includes(item.kind) && item.label.toLowerCase() === t);
+  return byName ? [byName.key] : null;
 }
 
 // ---- applying an approved result ---------------------------------------------
@@ -301,7 +325,8 @@ export function noteImageKeys(target, plan) {
  * The visual-spec references the approved check-in contributes: the character
  * sheet (conditioning) first, then set plates by song coverage (conditioning
  * while the backend's reference cap allows, after any the director flagged
- * themselves), then the looks and expression sheets as unconditioned
+ * themselves), then the supporting cast sheets (conditioning only the shots
+ * that feature them), then the looks and expression sheets as unconditioned
  * reference. Replaces any earlier Cast & Sets references; keeps the director's.
  */
 export function castAndSetsReferences(project, stage) {
@@ -327,15 +352,19 @@ export function castAndSetsReferences(project, stage) {
     const conditions = direction.medium !== 'procedural' || (set.imageRole || 'background') === 'background';
     push({ id: `${CAST_SETS_REF_PREFIX}set-${set.id}`.slice(0, 64), imageId: images[`set:${set.id}`]?.imageId, role: 'set', label: trimTo(set.name, 120), note: trimTo([set.description, set.lighting].filter(Boolean).join(' — '), 1000) }, conditions);
   }
+  // Cast sheets condition only the shots that feature them (musicVideoConditioningReferences).
+  for (const c of direction.cast || []) {
+    push({ id: `${CAST_SETS_REF_PREFIX}cast-${c.id}`.slice(0, 64), imageId: images[`cast:${c.id}`]?.imageId, role: 'character', label: `${trimTo(c.name, 80)} — cast sheet`, note: trimTo([c.role, c.face, c.hair, c.wardrobe].filter(Boolean).join('; '), 1000) }, false);
+  }
   push({ id: `${CAST_SETS_REF_PREFIX}looks`, imageId: images.looks?.imageId, role: 'wardrobe', label: 'Looks', note: trimTo((direction.looks || []).map((l) => l.name).join(', '), 1000) }, false);
   push({ id: `${CAST_SETS_REF_PREFIX}expressions`, imageId: images.expressions?.imageId, role: 'character', label: 'Expression sheet', note: trimTo(p.gesture, 1000) }, false);
   return [...existing, ...out];
 }
 
 /**
- * The concept subjects the check-in seeds: the protagonist and one place per
- * set. A subject the director authored (any id outside the `cs-` namespace)
- * is never replaced, and a Cast & Sets subject whose name matches one of the
+ * The concept subjects the check-in seeds: the protagonist, each supporting
+ * cast member and one place per set. A subject the director authored (any id
+ * outside the `cs-` namespace) is never replaced, and a Cast & Sets subject whose name matches one of the
  * director's is left out rather than duplicated.
  */
 export function castAndSetsSubjects(project, stage) {
@@ -351,6 +380,15 @@ export function castAndSetsSubjects(project, stage) {
       name: trimTo(p.name, 120),
       description: trimTo([p.description, p.construction, p.shapeLanguage, p.materials, p.palette, p.face, p.hair, p.signature].filter(Boolean).join('; '), 1000),
       role: 'protagonist',
+    });
+  }
+  for (const c of direction.cast || []) {
+    ours.push({
+      id: `${CAST_SETS_SUBJECT_PREFIX}cast-${c.id}`.slice(0, 64),
+      kind: 'character',
+      name: trimTo(c.name, 120),
+      description: trimTo([c.role, c.description, c.face, c.hair, c.wardrobe].filter(Boolean).join('; '), 1000),
+      role: 'supporting',
     });
   }
   for (const set of direction.sets || []) {

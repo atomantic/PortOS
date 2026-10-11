@@ -77,6 +77,32 @@ describe('production scene dispatch (#9066)', () => {
     }
   });
 
+  it("adds the sheets of the supporting cast a shot names, within the cap", async () => {
+    const checkedIn = { ...project,
+      castAndSets: { status: 'approved', direction: {
+        songMap: [{ section: 0, setId: 'harbor' }],
+        cast: [{ id: 'rico', name: 'Rico', role: 'drummer' }, { id: 'mara', name: 'Mara', role: 'tattoo artist' }],
+      } },
+      visualSpec: { references: [
+        { id: 'mvr-cs-character', imageId: 'character.png', condition: true },
+        { id: 'mvr-cs-set-harbor', imageId: 'harbor.png', condition: true },
+        { id: 'mvr-cs-cast-rico', imageId: 'rico.png', condition: false },
+        { id: 'mvr-cs-cast-mara', imageId: 'mara.png', condition: false },
+        // The director's own hand-made sheet, named by its label.
+        { id: 'own-bassist', imageId: 'bassist.png', role: 'character', label: 'Lou — bassist sheet', condition: false },
+        { id: 'mvr-board-2', imageId: 'board-face.png', role: 'character', label: 'Lou', condition: false },
+      ] },
+    };
+    const paths = async (framePrompt) => {
+      await dispatchProductionStep({ stepKind: 'frame', project: checkedIn, scene: { ...scene, sectionIndex: 0, framePrompt },
+        route: { kind: 'image', mode: 'codex', model: null }, tag, settings });
+      return enqueueJob.mock.calls.at(-1)[0].params.referenceImagePaths.map((path) => basename(path));
+    };
+    expect(await paths('The drummer counts in while Lou tunes')).toEqual(['character.png', 'harbor.png', 'rico.png', 'bassist.png']);
+    expect(await paths('Rico, Mara and Lou crowd the booth')).toEqual(['character.png', 'harbor.png', 'rico.png', 'mara.png']);
+    expect(await paths('She watches the harbor alone')).toEqual(['character.png', 'harbor.png']);
+  });
+
   it('appends capped style images after identities and carries a text look', async () => {
     await dispatchProductionStep({ stepKind: 'frame', project: { ...project,
       styleReferences: Array.from({ length: 8 }, (_, i) => ({ imageId: `style-${i}.png`, caption: 'teal shadows, fine grain' })),

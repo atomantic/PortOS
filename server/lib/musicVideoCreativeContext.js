@@ -131,6 +131,8 @@ export function musicVideoDirectionContext(direction) {
     ...(procedural ? lines('World rules:', [
       ['layout', w.layout], ['depth', w.depth], ['lighting', w.lighting], ['camera', w.camera], ['transitions', w.transitions],
     ]) : []),
+    // Name a supporting cast member (or their role) in a shot that features them: that shot is conditioned on their sheet.
+    ...((direction.cast || []).slice(0, 4).map((c) => `Cast ${trimTo(c.name, 80)}${c.role ? ` (${trimTo(c.role, 60)})` : ''}: ${[c.description, c.face, c.hair, c.wardrobe].filter(Boolean).map((v) => trimTo(v, 200)).join('; ')}`)),
     ...((direction.looks || []).slice(0, 8).map((l) => `Look ${trimTo(l.name, 80)}: ${trimTo(l.description, 300)}; chapters: ${trimTo(l.chapters, 120)}`)),
     ...((direction.sets || []).slice(0, 8).map((s) => `Set ${trimTo(s.name, 80)}: ${trimTo(s.description, 300)}; lighting: ${trimTo(s.lighting, 120)}${procedural ? `; image role: ${s.imageRole || 'background'}` : ''}`)),
   ].join('\n').slice(0, 6000);

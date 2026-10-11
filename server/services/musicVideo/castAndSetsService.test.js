@@ -525,6 +525,37 @@ describe('Cast & Sets check-in', () => {
     expect([unknown.status, unknown.body.code]).toEqual([422, 'CAST_SETS_UNKNOWN_IMAGE']);
   });
 
+  it('gives each supporting cast member a photographic sheet, shows it on the sheet, and publishes it as a reference on approval', async () => {
+    const cast = [
+      { id: 'rico', name: 'Rico', role: 'drummer', description: 'sweaty, grinning', face: 'stubble, brown eyes', hair: 'wet curls', wardrobe: 'black tank top' },
+      // The protagonist is never listed again as supporting cast.
+      { name: 'Keeper', role: 'lead', face: 'weathered' },
+    ];
+    runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION, cast }) });
+    const project = await seed();
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
+    await runTo(project.id, 'review');
+    expect(runPrompt.mock.calls[0][0].prompt).toMatch(/- cast: the RECURRING supporting characters/);
+    const sheet = jobs.find((j) => keyOf(j) === 'cast:rico');
+    expect(sheet.params.prompt).toMatch(/character reference sheet of ONE consistent person, Rico, the drummer/);
+    expect(sheet.params.prompt).toMatch(/A different person from Keeper/);
+    expect(sheet.params.referenceImagePaths).toBeUndefined();
+    expect(jobs.map(keyOf)).not.toContain('cast:keeper');
+    const reviewing = await current(project.id);
+    const html = readFileSync(join(ROOT(), reviewing.devArtifacts.find((a) => a.id === reviewing.castAndSets.artifactId).file), 'utf8');
+    expect(html).toContain('Supporting cast');
+    expect(html).toContain('Rico · drummer');
+
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({})).status).toBe(200);
+    const done = await current(project.id);
+    expect(done.visualSpec.references.find((r) => r.id === 'mvr-cs-cast-rico'))
+      .toMatchObject({ imageId: `${sheet.id}.png`, role: 'character', condition: false });
+    expect(done.concept.subjects.find((s) => s.id === 'cs-cast-rico')).toMatchObject({ kind: 'character', name: 'Rico', role: 'supporting' });
+    // The planner reads the cast by name and role, so the shots it writes name who they feature.
+    const { musicVideoDirectionContext } = await import('../../lib/musicVideoCreativeContext.js');
+    expect(musicVideoDirectionContext(done.castAndSets.direction)).toContain('Cast Rico (drummer): sweaty, grinning; stubble, brown eyes');
+  });
+
   it('approves itself in auto mode, and fails with a reason when no provider can direct', async () => {
     const auto = await seed({ automation: { tools: ['image:codex'], checkins: { castAndSets: 'auto' } } });
     await request(app).post(`/api/music-video/${auto.id}/cast-and-sets`).send({});
