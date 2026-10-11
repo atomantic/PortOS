@@ -69,9 +69,10 @@ import { getMusicVideoCharacterStyle } from '../../lib/musicVideoCharacterStyles
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { IMAGE_GEN_MODE } from '../../lib/generationModes.js';
 import { assertFootageVideoModelsCapable, loadPoolEnv } from './productionPool.js';
-import { PRODUCTION_RESUMABLE_STATUSES } from './production.js';
+import { PRODUCTION_RESUMABLE_STATUSES, productionTargets } from './production.js';
 import {
   AUTONOMOUS_DEFAULT_LIMITS,
+  AUTONOMOUS_LIMIT_BOUNDS,
   AUTONOMOUS_LIVE_STATUSES,
   AUTONOMOUS_STAGE_IDS,
   autonomousLyricsReviewEnabled,
@@ -1640,6 +1641,8 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
         ...(stillsApproved ? { stopBeforeVideo: false } : {}),
         ...(modelsPatch ? { models: modelsPatch } : {}),
         ...(limitsPatch ? { limits: limitsPatch } : {}),
+        // A generation limit the director sets replaces the sized default.
+        ...(edits.limits?.maxGenerations != null ? { sizedGenerations: false } : {}),
         ...(edits.suno ? { suno: normalizeSunoOptions({ ...r.brief.suno, ...edits.suno }) } : {}),
         ...(edits.localMusic !== undefined ? { localMusic: normalizeLocalMusicOptions(edits.localMusic ? { ...r.brief.localMusic, ...edits.localMusic } : null) } : {}),
         ...(grant || {}),
@@ -1804,6 +1807,28 @@ export async function cancelAutonomousVideo(projectId) {
 const PRODUCTION_PARKED = new Set(['limit-reached', 'blocked', 'needs-replan', 'needs-human', 'stopped']);
 
 /**
+ * A run whose director chose no generation limit outgrows the default: when
+ * production stops at its generation limit with stills or clips still to make,
+ * the limit becomes what is spent plus two per shot left (a retry or
+ * regeneration each), within the bound, and production resumes. Returns
+ * whether it did; a chosen limit, or one already that high, parks as before.
+ */
+async function raiseSizedLimit(projectId, runId, run, project, production) {
+  const limit = production.limits?.maxGenerations || 0;
+  const used = production.usage?.generations || 0;
+  if (!run.brief.sizedGenerations || used < limit) return false;
+  const targets = productionTargets(project);
+  const left = targets.frame.filter((scene) => !scene.referenceImageId).length
+    + (production.stopBefore === 'clips' ? 0 : targets.clip.filter((scene) => !scene.videoHistoryId).length);
+  const raised = Math.min(used + left * 2, AUTONOMOUS_LIMIT_BOUNDS.maxGenerations.max);
+  if (raised <= limit) return false;
+  const resumed = await deps.resumeProduction(projectId, runId, { acceptBasis: true, limits: { maxGenerations: raised } })
+    .then(() => true, (err) => { console.warn(`⚠️ Autonomous music video ${short(run.id)} could not raise its generation limit: ${err.message}`); return false; });
+  if (resumed) console.log(`🎬 Autonomous music video ${short(run.id)} raised its default generation limit to ${raised} for ${left} shot${left === 1 ? '' : 's'} left`);
+  return resumed;
+}
+
+/**
  * A production run this autonomous run delegated to advanced. Mirrors its
  * terminal state onto the run: completed → kick off the final render and
  * finish; failed → failed; any parked state → needs-human (resume continues it).
@@ -1829,6 +1854,8 @@ async function onProductionEvent({ projectId, runId, run: production }) {
     await park(projectId, 'needs-human', { error: reason || 'Production was canceled', errorCode: 'PRODUCTION_CANCELED' });
   } else if (production.status === 'awaiting-video') {
     if (run.status === 'running') await settleStills(projectId, run, runId);
+  } else if (production.status === 'limit-reached' && run.status === 'running' && await raiseSizedLimit(projectId, runId, run, project, production)) {
+    // The default generation limit grew to the planned shots and production goes on.
   } else if (PRODUCTION_PARKED.has(production.status) && run.status === 'running') {
     await park(projectId, 'needs-human', { error: reason || `Production is ${production.status}`, errorCode: 'PRODUCTION_PARKED' });
   }

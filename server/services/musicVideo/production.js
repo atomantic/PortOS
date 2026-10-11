@@ -368,7 +368,7 @@ export function assertProductionActive(project, runId, processId) {
 }
 
 /** The scenes that need a still frame and a clip, per the project's render mode. */
-function productionTargets(project) {
+export function productionTargets(project) {
   const assets = codeFirstProductionAssets(project);
   if (assets) {
     const ids = (action) => new Set(assets.steps.filter((step) => step.action === action).map((step) => step.sceneId));
