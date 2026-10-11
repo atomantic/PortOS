@@ -733,8 +733,13 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/update/sync-fork',
 
   // Brain links (#8742): git clone/pull in the linked repo, opening a host
-  // app, or queuing a CoS malware-scan/repo-study agent. `links`/`buckets`
-  // CRUD and `scan-report` only read or record; nothing runs.
+  // app, or queuing a CoS malware-scan/repo-study agent. `buckets` CRUD,
+  // `scan-report` and link CRUD only read or record; nothing runs. The one
+  // exception is a repository URL that auto-clones: POST /api/brain/links
+  // (unless `autoClone: false`) and a bare-repo-URL POST /api/brain/capture
+  // start a clone and may arm post-clone scan/study agents, so those two are
+  // gated per request in their handlers (`assertHostControl`, #11037) rather
+  // than listed here — a plain bookmark stays open.
   'POST /api/brain/links/:id/clone',
   'POST /api/brain/links/:id/pull',
   'POST /api/brain/links/:id/open-folder',
