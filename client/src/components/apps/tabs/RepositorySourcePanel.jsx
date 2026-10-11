@@ -25,6 +25,8 @@ import AppOperationBanner from '../AppOperationBanner';
 import GitRecoveryAction from './GitRecoveryAction';
 import { useAppOperation } from '../../../hooks/useAppOperation';
 
+const PORTOS_APP_ID = 'portos-default';
+
 const statusTone = {
   current: 'bg-port-success/15 text-port-success',
   attention: 'bg-port-warning/15 text-port-warning',
@@ -176,9 +178,14 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
     return result;
   }, [appId]);
 
+  // Re-inspect the sources and release the "reload to update again" latch so
+  // the card redraws the post-update state without a page reload.
+  // PortOS itself restarts into a new client bundle, so it keeps the latch.
   const handleOperationComplete = useCallback(() => {
+    if (appId !== PORTOS_APP_ID) setUpdateRequested(false);
+    load();
     onUpdated?.();
-  }, [onUpdated]);
+  }, [appId, load, onUpdated]);
   const {
     steps: operationSteps,
     isOperating,
@@ -298,7 +305,7 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
             steps={operationSteps}
             error={operationError}
             completed={operationCompleted}
-            completedMessage={operationType === 'update' ? 'Reload this page before starting another update.' : undefined}
+            completedMessage={appId === PORTOS_APP_ID && operationType === 'update' ? 'Reload this page before starting another update.' : undefined}
             restarting={restarting}
           />
           {/* Refusals PortOS's shared update preflight raises (server/services/updatePreflight.js)
