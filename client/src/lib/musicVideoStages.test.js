@@ -173,6 +173,13 @@ describe('deriveStages / deriveNextAction', () => {
     expect(deriveStages(withMode({ mode: 'document' })).current).toBe('produce');
   });
 
+  it('treats an approved board with no scenes as missing footage, not vacuously done', () => {
+    const empty = { productionReadiness: APPROVED, id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, scenes: [] };
+    expect(deriveStages(empty).current).toBe('produce');
+    expect(stageChecklist('produce', empty, APPROVED)[0]).toMatchObject({ id: 'footage', done: false });
+    expect(deriveNextAction(empty)).toMatchObject({ id: 'goto-produce', label: 'Make the footage' });
+  });
+
   it('does not require scene footage for code-rendered or document projects', () => {
     const bare = { productionReadiness: APPROVED, id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, scenes: [scene({ referenceImageId: null, videoHistoryId: null })] };
     // Make lists no footage row for them; only the composition and its proof remain.
