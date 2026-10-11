@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useSearchParams } from 'react-router';
-import { FileText, Variable, RefreshCw, Save, Plus, Trash2, Eye, Briefcase, Search, X, ChevronRight, ChevronDown } from 'lucide-react';
+import { FileText, Variable, RefreshCw, Save, Plus, Trash2, Eye, Briefcase, Search, X, ChevronRight, ChevronDown, List } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import { filterSelectableModels, getProviderTimeout } from '../utils/providers';
@@ -11,7 +11,9 @@ import {
   TIMEOUT_INPUT_MAX_MS,
   TIMEOUT_INPUT_STEP_MS,
 } from '../utils/formatters';
+import useContainerWidth from '../hooks/useContainerWidth';
 import useFieldDraft from '../hooks/useFieldDraft';
+import Drawer from '../components/Drawer';
 import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import PageHeader from '../components/PageHeader';
@@ -30,6 +32,13 @@ import { buildStageGroups, stageGroupKeyFor } from '../lib/promptStageGroups';
 import { STAGE_MODEL_TIER_OPTIONS, canonicalStageModelTier } from '../lib/stageModelTiers';
 
 const VALID_PROMPT_TABS = ['stages', 'variables', 'job-skills'];
+
+// The page keeps catalogue and editor side by side only while its own content
+// box (not the viewport — the sidebar takes a variable share) leaves the
+// catalogue column a usable width. Below it the selected editor leads and the
+// catalogue moves behind a Drawer (#11142). 0 = not measured yet / no
+// ResizeObserver, which renders the side-by-side layout.
+const SPLIT_PANE_MIN_WIDTH = 720;
 
 // Shared by the loading and loaded branches so the bar doesn't change height
 // when the fetch settles.
@@ -56,6 +65,7 @@ export default function PromptManager() {
   const rawTab = searchParams.get('tab');
   const tab = VALID_PROMPT_TABS.includes(rawTab) ? rawTab : 'stages';
   const setTab = (next) => {
+    setChooserOpen(false);
     const p = new URLSearchParams(searchParams);
     if (next === 'stages') p.delete('tab');
     else p.set('tab', next);
@@ -77,6 +87,17 @@ export default function PromptManager() {
   const setSelectedStage = (name) => setParam('stage', name);
   const setSelectedVar = (key) => setParam('var', key);
   const setSelectedJobSkill = (name) => setParam('skill', name);
+  // The scroll box is measured (see SPLIT_PANE_MIN_WIDTH) and reset to the top
+  // when a record opens, so a narrow layout lands on the editor, not the
+  // scrolled-away catalogue.
+  const [pageRef, pageWidth] = useContainerWidth();
+  const splitPane = pageWidth === 0 || pageWidth >= SPLIT_PANE_MIN_WIDTH;
+  // Narrow layouts only: the catalogue Drawer. Closed by every path that moves
+  // the selection; merely opening it never touches editor state.
+  const [chooserOpen, setChooserOpen] = useState(false);
+  // Narrow layouts only: the "+" blank-variable draft has no URL param, so
+  // this is what makes it the active editor instead of the catalogue.
+  const [varDraftOpen, setVarDraftOpen] = useState(false);
   const [stages, setStages] = useState({});
   // The CURATED system-stage keys. Served by GET /api/prompts
   // (`server/lib/promptSystemStages.js`) rather than mirrored client-side, so
@@ -281,6 +302,13 @@ export default function PromptManager() {
     }));
   };
 
+  // Opening a record lands on its editor. In the narrow layout the catalogue
+  // that was scrolled through unmounts and the editor takes its place; without
+  // this the scroll offset of the old, longer content can be kept.
+  useEffect(() => {
+    pageRef.current?.scrollTo?.({ top: 0 });
+  }, [pageRef, tab, selectedStage, selectedVar, selectedJobSkill]);
+
   const loadData = async () => {
     await loadCatalogues(Object.keys(CATALOGUES));
     setLoading(false);
@@ -362,6 +390,7 @@ export default function PromptManager() {
       // Re-clicking the open stage is how a user backs out of the prompt from
       // the list side; leaving it armed would strand the row mid-question.
       setPendingStage(null);
+      setChooserOpen(false);
       return;
     }
     if (isStageDirty) {
@@ -375,6 +404,7 @@ export default function PromptManager() {
   // `selectedStage` effect — otherwise the frame between the two renders the
   // OUTGOING stage's text and dirty badges under the incoming stage's row.
   const switchStage = (name) => {
+    setChooserOpen(false);
     setPendingStage(null);
     setStageTemplate('');
     setStageConfig({});
@@ -457,7 +487,11 @@ export default function PromptManager() {
       .catch((err) => { toast.error('Failed to delete variable: ' + err.message); return false; });
     if (!ok) return;
     toast.success(`Variable "${label}" deleted`);
-    if (selectedVar === key) switchVariable(null);
+    if (selectedVar === key) {
+      switchVariable(null);
+      // A deleted record leaves the catalogue, not a blank draft, behind.
+      setVarDraftOpen(false);
+    }
     await loadData();
   };
 
@@ -469,7 +503,7 @@ export default function PromptManager() {
     // Re-clicking the open variable is how a user backs out of the prompt from
     // the list side; leaving it armed would strand the row mid-question. The
     // "+" (null key) is exempt: in create mode it still resets the draft.
-    if (key !== null && key === selectedVar) { setPendingVar(null); return; }
+    if (key !== null && key === selectedVar) { setPendingVar(null); setChooserOpen(false); return; }
     if (isVarDirty) { cancelVarDelete(); setPendingVar({ key }); return; }
     switchVariable(key);
   };
@@ -478,6 +512,8 @@ export default function PromptManager() {
   // `selectedVar` effect — otherwise the frame between the two renders the
   // OUTGOING variable's text and dirty badge under the incoming variable's row.
   const switchVariable = (key) => {
+    setChooserOpen(false);
+    setVarDraftOpen(key === null);
     setPendingVar(null);
     varHydratedRef.current = null;
     setVarForm(BLANK_VAR_FORM);
@@ -615,6 +651,7 @@ export default function PromptManager() {
       // Re-clicking the open skill is how a user backs out of the prompt from
       // the list side; leaving it armed would strand the row mid-question.
       setPendingJobSkill(null);
+      setChooserOpen(false);
       return;
     }
     if (isJobSkillDirty) {
@@ -628,6 +665,7 @@ export default function PromptManager() {
   // `selectedJobSkill` effect — otherwise the frame between the two renders the
   // OUTGOING skill's text and dirty badges under the incoming skill's row.
   const switchJobSkill = (name) => {
+    setChooserOpen(false);
     setPendingJobSkill(null);
     setJobSkillContent('');
     setSavedJobSkillContent('');
@@ -700,70 +738,22 @@ export default function PromptManager() {
       <div className="flex flex-col h-full">
         <PageHeader icon={FileText} title="Prompt Manager" subtitle={PAGE_SUBTITLE} />
         <SettingsTabsHeader activeTab="prompts" />
-        <div className="flex-1 overflow-auto p-4">
+        <div ref={pageRef} className="flex-1 overflow-auto p-4">
           <PageSkeleton header="none" label="Loading prompts" cards={3} sidebar={false} />
         </div>
       </div>
     );
   }
 
-  return (
-    <div className="flex flex-col h-full">
-      <PageHeader
-        icon={FileText}
-        title="Prompt Manager"
-        subtitle={PAGE_SUBTITLE}
-        actions={(
-          <button
-            onClick={loadData}
-            className="p-2 text-gray-400 hover:text-white"
-            title="Reload" aria-label="Reload"
-          >
-            <RefreshCw size={20} />
-          </button>
-        )}
-      />
-
-      <SettingsTabsHeader activeTab="prompts" />
-
-      <div className="flex-1 overflow-auto p-4">
-      {/* Tabs */}
-      <div className="flex flex-wrap gap-2 mb-6">
-        <button
-          onClick={() => setTab('stages')}
-          className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition-colors text-sm sm:text-base ${
-            tab === 'stages' ? 'bg-port-accent text-white' : 'bg-port-card text-gray-400 hover:text-white'
-          }`}
-        >
-          <FileText size={16} /> Stages
-        </button>
-        <button
-          onClick={() => setTab('variables')}
-          className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition-colors text-sm sm:text-base ${
-            tab === 'variables' ? 'bg-port-accent text-white' : 'bg-port-card text-gray-400 hover:text-white'
-          }`}
-        >
-          <Variable size={16} /> Variables
-        </button>
-        <button
-          onClick={() => setTab('job-skills')}
-          className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition-colors text-sm sm:text-base ${
-            tab === 'job-skills' ? 'bg-port-accent text-white' : 'bg-port-card text-gray-400 hover:text-white'
-          }`}
-        >
-          <Briefcase size={16} /> Job Skills
-        </button>
-      </div>
-
-      {/* Stages Tab */}
-      {tab === 'stages' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Stage List */}
-          <div className="bg-port-card border border-port-border rounded-xl p-4">
+  // Each tab's catalogue (record list) and editor are built once and placed by
+  // `renderWorkspace` below: side by side when the page is wide enough for both,
+  // otherwise editor-first with the catalogue behind a "Choose another…" Drawer.
+  const stageCatalogue = (
+    <>
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-medium text-gray-400">Prompt Stages</h2>
               <button
-                onClick={() => setCreatingStage(true)}
+                onClick={() => { setChooserOpen(false); setCreatingStage(true); }}
                 className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-port-accent hover:text-port-accent/80"
                 title="New Stage" aria-label="New Stage"
               >
@@ -897,10 +887,10 @@ export default function PromptManager() {
                 </div>
               )}
             </div>
-          </div>
-
-          {/* Stage Editor */}
-          <div className="lg:col-span-2 space-y-4">
+    </>
+  );
+  const stageEditor = (
+    <>
             {selectedStage && !stages[selectedStage] && !stagesFailed ? (
               <div className="bg-port-card border border-port-border rounded-xl p-12 text-center text-gray-500">
                 That stage could not be found — it may have been deleted or renamed.{' '}
@@ -1054,15 +1044,10 @@ export default function PromptManager() {
                 Select a stage to edit
               </div>
             )}
-          </div>
-        </div>
-      )}
-
-      {/* Variables Tab */}
-      {tab === 'variables' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Variable List */}
-          <div className="bg-port-card border border-port-border rounded-xl p-4">
+    </>
+  );
+  const variableCatalogue = (
+    <>
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-medium text-gray-400">Variables</h3>
               <button
@@ -1151,10 +1136,10 @@ export default function PromptManager() {
                 )
               ))}
             </div>
-          </div>
-
-          {/* Variable Editor */}
-          <div className="lg:col-span-2">
+    </>
+  );
+  const variableEditor = (
+    <>
             {selectedVar && !variables[selectedVar] && variablesFailed ? (
               <div className="bg-port-card border border-port-border rounded-xl p-12 text-center text-gray-500">
                 The variable list is unavailable, so this variable cannot be shown.{' '}
@@ -1237,15 +1222,10 @@ export default function PromptManager() {
               </div>
             </div>
             )}
-          </div>
-        </div>
-      )}
-
-      {/* Job Skills Tab */}
-      {tab === 'job-skills' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Job Skill List */}
-          <div className="bg-port-card border border-port-border rounded-xl p-4">
+    </>
+  );
+  const jobSkillCatalogue = (
+    <>
             <div className="mb-3">
               <h3 className="text-sm font-medium text-gray-400">Autonomous Job Skills</h3>
               <p className="text-xs text-gray-500 mt-1">Versioned prompt templates for recurring jobs</p>
@@ -1301,10 +1281,10 @@ export default function PromptManager() {
                 <div className="text-sm text-gray-500 px-3 py-2">No job skill templates found</div>
               )}
             </div>
-          </div>
-
-          {/* Job Skill Editor */}
-          <div className="lg:col-span-2 space-y-4">
+    </>
+  );
+  const jobSkillEditor = (
+    <>
             {selectedJobSkill ? (
               <>
                 <div className="bg-port-card border border-port-border rounded-xl p-4 @container">
@@ -1374,8 +1354,109 @@ export default function PromptManager() {
                 <p className="text-xs mt-2">These templates define how recurring autonomous jobs execute</p>
               </div>
             )}
-          </div>
+    </>
+  );
+  // Places one tab's catalogue + editor. Wide: catalogue column beside the
+  // editor. Narrow: with a record open, its editor leads (title, read state and
+  // actions at the top) and the catalogue opens in a Drawer from a "Choose
+  // another…" row; with nothing open, the catalogue is the whole view. Either
+  // way each control exists once, so Save/Preview are never duplicated.
+  const renderWorkspace = ({ catalogue, editor, active, noun, title }) => {
+    const catalogueCard = <div className="bg-port-card border border-port-border rounded-xl p-4">{catalogue}</div>;
+    if (splitPane) {
+      return (
+        <div className="grid grid-cols-3 gap-6">
+          {catalogueCard}
+          <div className="col-span-2 space-y-4">{editor}</div>
         </div>
+      );
+    }
+    if (!active) return catalogueCard;
+    return (
+      <div className="space-y-4">
+        <button
+          type="button"
+          onClick={() => setChooserOpen(true)}
+          aria-haspopup="dialog"
+          className="w-full min-h-[44px] flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-port-card border border-port-border text-sm text-gray-300 hover:text-white"
+        >
+          <List size={16} /> Choose another {noun}…
+        </button>
+        {editor}
+        <Drawer
+          open={chooserOpen}
+          onClose={() => setChooserOpen(false)}
+          title={title}
+          size="sm"
+          closeLabel={`Close ${noun} list`}
+        >
+          {catalogue}
+        </Drawer>
+      </div>
+    );
+  };
+
+  return (
+    <div className="flex flex-col h-full">
+      <PageHeader
+        icon={FileText}
+        title="Prompt Manager"
+        subtitle={PAGE_SUBTITLE}
+        actions={(
+          <button
+            onClick={loadData}
+            className="p-2 text-gray-400 hover:text-white"
+            title="Reload" aria-label="Reload"
+          >
+            <RefreshCw size={20} />
+          </button>
+        )}
+      />
+
+      <SettingsTabsHeader activeTab="prompts" />
+
+      <div ref={pageRef} className="flex-1 overflow-auto p-4">
+      {/* Tabs */}
+      <div className="flex flex-wrap gap-2 mb-6">
+        <button
+          onClick={() => setTab('stages')}
+          className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition-colors text-sm sm:text-base ${
+            tab === 'stages' ? 'bg-port-accent text-white' : 'bg-port-card text-gray-400 hover:text-white'
+          }`}
+        >
+          <FileText size={16} /> Stages
+        </button>
+        <button
+          onClick={() => setTab('variables')}
+          className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition-colors text-sm sm:text-base ${
+            tab === 'variables' ? 'bg-port-accent text-white' : 'bg-port-card text-gray-400 hover:text-white'
+          }`}
+        >
+          <Variable size={16} /> Variables
+        </button>
+        <button
+          onClick={() => setTab('job-skills')}
+          className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition-colors text-sm sm:text-base ${
+            tab === 'job-skills' ? 'bg-port-accent text-white' : 'bg-port-card text-gray-400 hover:text-white'
+          }`}
+        >
+          <Briefcase size={16} /> Job Skills
+        </button>
+      </div>
+
+      {/* Stages Tab */}
+      {tab === 'stages' && (
+        renderWorkspace({ catalogue: stageCatalogue, editor: stageEditor, active: Boolean(selectedStage), noun: 'stage', title: 'Prompt Stages' })
+      )}
+
+      {/* Variables Tab */}
+      {tab === 'variables' && (
+        renderWorkspace({ catalogue: variableCatalogue, editor: variableEditor, active: Boolean(selectedVar) || varDraftOpen || isVarDirty, noun: 'variable', title: 'Variables' })
+      )}
+
+      {/* Job Skills Tab */}
+      {tab === 'job-skills' && (
+        renderWorkspace({ catalogue: jobSkillCatalogue, editor: jobSkillEditor, active: Boolean(selectedJobSkill), noun: 'job skill', title: 'Autonomous Job Skills' })
       )}
 
       {/* Create Stage Modal */}
