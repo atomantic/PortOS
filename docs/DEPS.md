@@ -29,6 +29,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `@novnc/novnc` | 1 | KEEP | PortDeck remote desktop viewer | Mature RFB/VNC protocol implementation; replacing it would require owning multiple security types and framebuffer encodings |
 | `@googleapis/calendar` | 1 | KEEP | Calendar integration | Scoped official Google SDK (replaced monolithic `googleapis`) |
 | `@googleapis/gmail` | 1 | KEEP | Messages/Gmail integration | Scoped official Google SDK |
+| `better-sqlite3-multiple-ciphers` | 2 | KEEP | `server/services/signalSnapshot.js` — read-only SQLCipher snapshot of the local Signal Desktop database | MIT build of better-sqlite3 with SQLCipher 4 compatibility. Ships prebuilds and sets `gypfile` false, so install does not compile it. `node:sqlite` cannot open SQLCipher, and a main-file copy misses committed WAL frames (#11149). A missing prebuild fails that sync closed |
 | `chokidar` | 1 | KEEP | server file watching | Mature cross-platform file-system watcher used by server services |
 | `compression` | 1 | KEEP | server HTTP responses | Express-maintained Brotli and gzip negotiation for API and built client responses; preserves streaming and backpressure |
 | `express` | 1 | KEEP | `server/index.js` + routes | Framework |
