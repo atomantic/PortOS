@@ -38,6 +38,7 @@ import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from '.
 import { encodeDocumentComposition, prepareDocumentRender } from './documentRender.js';
 import { projectTypographyPlan } from './composition.js';
 import { renderTypographyOverlays, removeCompositionScratch } from './compositionRender.js';
+import { applyFilmLookFinish, filmLookFinishNeeded } from './filmLookFinish.js';
 import { startExcerptOnProject, applyExcerptPatch } from './excerpt.js';
 import { markRevisionRendering, settleRevisionRender } from './revision.js';
 import { ensureInstanceId } from '../instanceIdentity.js';
@@ -369,8 +370,25 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
       }
     };
 
+    // The encode's failure and cancel path, shared with the film look pass.
+    const settleFailure = async (canceled, reason) => {
+      job.status = canceled ? 'canceled' : 'error';
+      job.lastError = reason;
+      const log = canceled ? console.log : console.error;
+      log(`${canceled ? '🛑' : '❌'} Music-video excerpt render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(4, 12)}]: ${reason}`);
+      // #8986 acceptance: cancelling an excerpt removes its partial output.
+      await unlink(outputPath).catch(() => {});
+      await finalize({ status: canceled ? 'canceled' : 'error', error: canceled ? null : reason, filename: null, jobId: null });
+      broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
+    };
+
+    // A footage excerpt with a film look re-encodes its finished window through
+    // the look after ffmpeg (filmLookFinish.js), on song time so the grain
+    // matches the final render's frames.
+    const finishing = filmLookFinishNeeded(project);
     const startEncode = (encodeArgs, progressBase = 0) => {
-      const encodeProgress = (fraction) => progressBase + (1 - progressBase) * fraction;
+      const encodeTop = finishing ? progressBase + (1 - progressBase) / 2 : 1;
+      const encodeProgress = (fraction) => progressBase + (encodeTop - progressBase) * fraction;
       const proc = spawn(ffmpeg, encodeArgs, safeChildProcessOptions({ stdio: ['ignore', 'ignore', 'pipe'] }));
       job.process = proc;
 
@@ -391,7 +409,7 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
               broadcastSse(job, { type: 'progress', progress: encodeProgress(Math.min(1, (us / 1_000_000) / totalDuration)) });
             }
           } else if (key === 'progress' && val === 'end') {
-            broadcastSse(job, { type: 'progress', progress: 1 });
+            broadcastSse(job, { type: 'progress', progress: encodeTop });
           }
         }
       });
@@ -418,16 +436,20 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
           job.process = null;
           if (code !== 0) {
             const canceled = isMusicVideoRenderCanceled(job, signal);
-            job.status = canceled ? 'canceled' : 'error';
-            const reason = canceled ? 'Render cancelled' : signal ? `Killed by signal ${signal}` : `ffmpeg exit ${code}`;
-            job.lastError = reason;
-            const logClose = canceled ? console.log : console.error;
-            logClose(`${canceled ? '🛑' : '❌'} Music-video excerpt render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(4, 12)}]: ${reason}`);
-            // #8986 acceptance: cancelling an excerpt removes its partial output.
-            await unlink(outputPath).catch(() => {});
-            await finalize({ status: canceled ? 'canceled' : 'error', error: canceled ? null : reason, filename: null, jobId: null });
-            broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
+            await settleFailure(canceled, canceled ? 'Render cancelled' : signal ? `Killed by signal ${signal}` : `ffmpeg exit ${code}`);
             return;
+          }
+          if (finishing) {
+            job.overlayAbort = new AbortController();
+            const { signal: finishSignal } = job.overlayAbort;
+            try {
+              await applyFilmLookFinish({ project, path: outputPath, jobId, offsetSec: startSec, signal: finishSignal, label: 'Music-video excerpt film look',
+                onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: encodeTop + (1 - encodeTop) * fraction }) });
+            } catch (err) {
+              await settleFailure(finishSignal.aborted, finishSignal.aborted ? 'Render cancelled' : `Film look pass failed: ${err.message}`);
+              return;
+            }
+            job.overlayAbort = null;
           }
           try {
             job.status = 'complete';

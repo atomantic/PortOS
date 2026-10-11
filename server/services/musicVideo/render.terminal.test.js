@@ -600,3 +600,86 @@ describe('layered sections (#8985)', () => {
     expect(h.procs).toHaveLength(0);
   });
 });
+
+// The film look finishing pass (filmLookFinish.js) runs between a zero-exit
+// encode and publication: the job stays cancellable through it and its failure
+// settles the render like an encode failure.
+const look = vi.hoisted(() => ({ calls: [], resolve: null, reject: null }));
+vi.mock('./filmLookFinish.js', () => ({
+  filmLookFinishNeeded: (project) => !!project?.filmLook,
+  applyFilmLookFinish: (options) => new Promise((resolve, reject) => {
+    look.calls.push(options);
+    look.resolve = resolve;
+    look.reject = reject;
+    options.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+  }),
+}));
+
+describe('film look finishing pass on a footage render', () => {
+  const primeLook = (pid, status = 'ready') => {
+    prime(pid);
+    getProject.mockResolvedValue({
+      id: pid, name: 'P', trackId: 't1', status, filmLook: { preset: 'super8', grain: 0.5 },
+      scenes: [{ sceneId: 's1', order: 0, videoHistoryId: 'h1' }],
+    });
+  };
+  const encodeDone = async (proc) => {
+    proc.emit('spawn');
+    proc.stderr.emit('data', 'progress=end\n');
+    proc.emit('close', 0, null);
+    await tick();
+  };
+  beforeEach(() => { look.calls.length = 0; });
+
+  it('runs the pass over the encoded file after a zero exit, holding publication and the progress bar for it', async () => {
+    const pid = 'look-1';
+    primeLook(pid);
+    const { jobId } = await renderMusicVideo(pid);
+    await encodeDone(lastProc());
+    // The encode's end is the middle of the bar; the pass fills the rest.
+    expect(broadcastSse).toHaveBeenCalledWith(expect.anything(), { type: 'progress', progress: 0.5 });
+    expect(look.calls).toHaveLength(1);
+    expect(look.calls[0]).toMatchObject({ jobId, path: expect.stringMatching(/^\/data\/videos\/music-video-/), project: expect.objectContaining({ id: pid }) });
+    expect(getRenderJobStatus(jobId).status).toBe('running');
+    expect(updateProject).not.toHaveBeenCalledWith(pid, expect.objectContaining({ status: 'complete' }));
+    look.calls[0].onProgress(0.5);
+    expect(broadcastSse).toHaveBeenCalledWith(expect.anything(), { type: 'progress', progress: 0.75 });
+    look.resolve(true);
+    await tick();
+    await tick();
+    expect(getRenderJobStatus(jobId).status).toBe('complete');
+    expect(updateProject).toHaveBeenCalledWith(pid, expect.objectContaining({ status: 'complete', renderHistoryId: jobId }));
+    expect(broadcastSse).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ type: 'complete' }));
+  });
+
+  it('a cancel during the pass aborts it, removes the file and restores the prior status', async () => {
+    const pid = 'look-2';
+    primeLook(pid, 'complete');
+    const { jobId } = await renderMusicVideo(pid);
+    await encodeDone(lastProc());
+    expect(look.calls).toHaveLength(1);
+    expect(cancelRender(jobId)).toBe(true);
+    await tick();
+    await tick();
+    expect(look.calls[0].signal.aborted).toBe(true);
+    expect(getRenderJobStatus(jobId).status).toBe('canceled');
+    expect(unlink).toHaveBeenCalledWith(look.calls[0].path);
+    expect(updateProject).toHaveBeenCalledWith(pid, settled('complete'));
+    expect(broadcastSse).toHaveBeenCalledWith(expect.anything(), { type: 'canceled', error: 'Render cancelled' });
+    // Slot released: a new render starts.
+    expect((await renderMusicVideo(pid)).jobId).not.toBe(jobId);
+  });
+
+  it('a failed pass settles the render as failed, naming the pass', async () => {
+    const pid = 'look-3';
+    primeLook(pid);
+    const { jobId } = await renderMusicVideo(pid);
+    await encodeDone(lastProc());
+    look.reject(new Error('no browser'));
+    await tick();
+    await tick();
+    expect(getRenderJobStatus(jobId)).toEqual({ status: 'error', error: 'Film look pass failed: no browser' });
+    expect(unlink).toHaveBeenCalledWith(look.calls[0].path);
+    expect(updateProject).toHaveBeenCalledWith(pid, settled('failed'));
+  });
+});

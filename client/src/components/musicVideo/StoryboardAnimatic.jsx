@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import FilmLookFrame from '../media/FilmLookFrame.jsx';
+import { isFilmLookNeutral } from '../../lib/filmLook.js';
 import { Captions } from 'lucide-react';
 import { formatDurationSec } from '../../utils/formatters.js';
 import { getMusicVideoLyricOverlayPreview } from '../../services/apiMusicVideo.js';
@@ -161,6 +163,8 @@ export function clipTimeAt(scene, t, clipSec = null) {
 // How many shots past the one on screen get their clip loaded ahead, so a short shot is
 // ready to show the moment the song reaches it.
 const CLIP_PRELOAD_SHOTS = 2;
+// The song frame the film look's grain and drift follow; footage renders run at 24 fps.
+const ANIMATIC_FPS = 24;
 
 /**
  * A shot's selected video clip, muted under the master song and kept in step
@@ -260,6 +264,8 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   return (
     <div className={`space-y-2 ${collapsed ? 'max-xl:hidden' : ''}`}>
       <figure aria-label="Storyboard animatic" className="relative aspect-video w-full overflow-hidden rounded border border-port-border bg-black">
+        {/* The project's film look, as the final render applies it over the whole picture, lyrics included. */}
+        <FilmLookFrame look={project.filmLook} frame={Math.round(time * ANIMATIC_FPS)} className="h-full w-full">
         {shot?.referenceImageId ? (
           <img src={`/data/images/${shot.referenceImageId}`} alt="" className="h-full w-full object-contain" />
         ) : cardInFrame && !shot?.videoHistoryId ? (
@@ -272,6 +278,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
           <ShotClip key={`${scene.sceneId}:${scene.videoHistoryId}`} scene={scene} audioRef={audioRef} time={time} current={scene === shot} />
         ))}
         {overlay}
+        </FilmLookFrame>
       </figure>
       <div className="flex min-w-0 items-start gap-2">
         <div className="min-w-0 flex-1 text-[11px] text-port-text-muted">
@@ -279,6 +286,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <ShotStepper scenes={timed} time={time} onSeek={seekTo} keys />
               <span className="tabular-nums">{formatDurationSec(shot.startSec)}</span>
+              {!isFilmLookNeutral(project.filmLook) && <span className="text-port-accent">Film look</span>}
             </div>
           )}
           {!cardInFrame && shot && !shot.referenceImageId && !shot.videoHistoryId && (
