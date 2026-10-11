@@ -8,7 +8,8 @@
 
 import { execFile, spawn } from './childProcess.js';
 import { existsSync, statSync } from 'fs';
-import { unlink, rename } from 'fs/promises';
+import { unlink, rename, readFile } from 'fs/promises';
+import { tmpdir } from 'os';
 import { join, resolve as resolvePath, sep as PATH_SEP, dirname } from 'path';
 import { randomUUID } from 'crypto';
 import { promisify } from 'util';
@@ -303,6 +304,82 @@ export const probeVideoStreamInfo = async (videoPath) => {
     fps: parseRate(frameRate),
     frameCount: positiveInt(frames),
   };
+};
+
+// What a stream copy needs two clips to share before their video can be joined
+// without a decode: codec, profile/level, pixel format and the colour tags the
+// decoder reads off the stream. Joined into one comparable string, or null when
+// the probe could not read the stream. Equal strings are necessary, not
+// sufficient — callers still verify the joined result.
+export const probeVideoCodecSignature = async (videoPath) => {
+  if (typeof videoPath !== 'string' || !videoPath) return null;
+  const stdout = await runFfprobe([
+    '-v', 'error',
+    '-select_streams', 'v:0',
+    '-show_entries', 'stream=codec_name,profile,level,pix_fmt,color_range,color_space,color_transfer,color_primaries,field_order',
+    '-of', 'default=noprint_wrappers=1',
+    videoPath,
+  ]);
+  const lines = stdout.split(/\r?\n/).filter(Boolean).sort();
+  return lines.some((line) => line.startsWith('codec_name=')) ? lines.join('|') : null;
+};
+
+// Per-frame MD5 of a clip's first video stream, in decode-output order — the
+// ground truth for "these frames are bit-identical". Null when the clip cannot
+// be fully decoded (any decode error fails the run), so a caller can never read
+// a broken join as a matching one.
+export const videoFrameHashes = async (videoPath) => {
+  const ffmpeg = await findFfmpeg();
+  if (!ffmpeg || typeof videoPath !== 'string' || !videoPath) return null;
+  const hashPath = join(tmpdir(), `framemd5-${randomUUID()}.txt`);
+  try {
+    const run = await runFfmpegProcess({
+      bin: ffmpeg,
+      args: ['-v', 'error', '-xerror', '-i', videoPath, '-map', '0:v:0', '-f', 'framemd5', '-y', hashPath],
+    });
+    if (!run.ok) return null;
+    const rows = (await readFile(hashPath, 'utf8')).split(/\r?\n/).filter((line) => line && !line.startsWith('#'));
+    const hashes = rows.map((row) => row.split(',').pop().trim());
+    return hashes.length ? hashes : null;
+  } catch {
+    return null;
+  } finally {
+    await unlink(hashPath).catch(() => {});
+  }
+};
+
+// Identity of the soundtrack a clip plays: the MD5 of its decoded first audio
+// stream. Decoded rather than hashed as packets so a lossless remux (faststart)
+// keeps it, while any change to the samples — a replaced or re-muxed soundtrack,
+// even at the same length — does not. Null when the clip has no readable audio.
+export const audioFingerprint = async (mediaPath) => {
+  const ffmpeg = await findFfmpeg();
+  if (!ffmpeg || typeof mediaPath !== 'string' || !mediaPath) return null;
+  const { stdout } = await execFileAsync(
+    ffmpeg,
+    ['-v', 'error', '-i', mediaPath, '-map', '0:a:0', '-vn', '-f', 'md5', '-'],
+    safeChildProcessOptions({ timeout: 60000 }),
+  ).catch(() => ({ stdout: '' }));
+  return /^MD5=([0-9a-f]{32})/m.exec(stdout || '')?.[1] ?? null;
+};
+
+const MASTER_FINGERPRINT_TAG = 'portos_clip_audio_md5';
+
+/** Copy a lossless audio master to `outPath`, stamping the clip-audio fingerprint it was mixed for. */
+export const sealAudioMaster = async ({ inPath, outPath, fingerprint }) => {
+  const ffmpeg = await findFfmpeg();
+  if (!ffmpeg) return { ok: false, reason: 'ffmpeg not found' };
+  return runFfmpegProcess({
+    bin: ffmpeg,
+    args: ['-i', inPath, '-map', '0:a:0', '-c:a', 'copy', '-metadata', `${MASTER_FINGERPRINT_TAG}=${fingerprint}`, '-y', outPath],
+  });
+};
+
+/** The clip-audio fingerprint a master was sealed with, or null when absent or unreadable. */
+export const readAudioMasterFingerprint = async (masterPath) => {
+  const stdout = await runFfprobe(['-v', 'error', '-show_entries', 'format_tags', '-of', 'default=noprint_wrappers=1', masterPath]);
+  const line = stdout.split(/\r?\n/).find((row) => row.toLowerCase().startsWith(`tag:${MASTER_FINGERPRINT_TAG}=`));
+  return line ? line.slice(line.indexOf('=') + 1).trim() || null : null;
 };
 
 // The playable geometry of a finished clip — `{ width, height, fps, numFrames,
@@ -784,6 +861,67 @@ export const buildTrimConcatArgs = ({ inputs, outPath, width, height, fps, withA
   ];
 };
 
+// Lossless audio master kept beside an Extend output (see
+// `services/videoGen/extendSplice.js`): FLAC at 24-bit, 48 kHz, so the next
+// round's source span is decoded from PCM instead of from a prior AAC encode.
+const MASTER_AUDIO_ARGS = Object.freeze(['-c:a', 'flac', '-sample_fmt', 's32']);
+
+// The audio half of an Extend splice, shared by the re-encode and stream-copy
+// builders. `sourceIdx` is the input carrying the source span's audio (the
+// source clip, or its lossless master), `generatedIdx` the render's.
+//
+// The source span comes from `sourceIdx`, the new span from the render, joined by
+// a short LINEAR crossfade (`crossfadeSec`) so the seam doesn't click. The source
+// leg runs `crossfadeSec` past the seam so the overlap is source-vs-generated at
+// the SAME timeline position, which keeps the output exactly as long as the render.
+// Returns the filter chains plus whether a `[outm]` master pad was emitted.
+const extendSpliceAudioFilters = ({ audio, sourceIdx, generatedIdx, keep, rate, crossfadeSec, withMaster }) => {
+  if (audio !== 'splice' && audio !== 'generated') return [];
+  const canonAudio = 'aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo';
+  const seamSec = keep / rate;
+  const fade = Math.max(0.001, Number(crossfadeSec) || 0);
+  const mixed = audio === 'splice'
+    ? [
+      // apad guards a source track that ends before the seam + overlap, which
+      // acrossfade would otherwise reject as shorter than the fade.
+      `[${sourceIdx}:a]atrim=end=${(seamSec + fade).toFixed(6)},asetpts=PTS-STARTPTS,${canonAudio},apad=whole_dur=${(seamSec + fade).toFixed(6)}[a0]`,
+      `[${generatedIdx}:a]atrim=start=${seamSec.toFixed(6)},asetpts=PTS-STARTPTS,${canonAudio}[a1]`,
+      `[a0][a1]acrossfade=d=${fade.toFixed(6)}:c1=tri:c2=tri`,
+    ]
+    : [`[${generatedIdx}:a]asetpts=PTS-STARTPTS,${canonAudio}`];
+  // One decoded mix feeds both outputs, so the delivered AAC is encoded once
+  // from the same samples the master keeps.
+  const last = `${mixed.pop()}${withMaster ? ',asplit=2[outa][outm]' : '[outa]'}`;
+  return [...mixed, last];
+};
+
+const validExtendSplice = ({ keepFrames, newStartFrame, fps, width, height }) => {
+  const keep = Math.floor(Number(keepFrames));
+  const start = Math.floor(Number(newStartFrame));
+  const rate = Number(fps);
+  const canonW = Number(width);
+  const canonH = Number(height);
+  const ok = Number.isFinite(keep) && keep > 0 && Number.isFinite(start) && start > 0
+    && Number.isFinite(rate) && rate > 0 && Number.isFinite(canonW) && canonW > 0
+    && Number.isFinite(canonH) && canonH > 0;
+  return ok ? { keep, start, rate, canonW, canonH } : null;
+};
+
+const extendNormalizeFilter = ({ canonW, canonH, rate }) =>
+  `scale=${canonW}:${canonH}:force_original_aspect_ratio=decrease,pad=${canonW}:${canonH}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${rate}`;
+
+// The two outputs every Extend builder shares: the delivered mp4 (video codec
+// args vary by builder) and, when `masterOutPath` is given, the lossless master.
+const extendOutputs = ({ audio, videoLabel, videoCodecArgs, outPath, masterOutPath }) => [
+  '-map', videoLabel,
+  ...(audio === 'none' ? [] : ['-map', '[outa]']),
+  ...videoCodecArgs,
+  ...(audio === 'none' ? ['-an'] : AAC_ENCODE_ARGS),
+  '-movflags', '+faststart',
+  '-y', outPath,
+  ...(masterOutPath && audio !== 'none' ? ['-map', '[outm]', ...MASTER_AUDIO_ARGS, '-y', masterOutPath] : []),
+];
+
 // Build the argv that joins the ORIGINAL source of a native extend render to the
 // model's new frames: input 0 is the source clip (kept for frames
 // `[0, keepFrames)`), input 1 is the render (kept from `newStartFrame` on).
@@ -792,64 +930,104 @@ export const buildTrimConcatArgs = ({ inputs, outPath, width, height, fps, withA
 //
 // Video is one single encode of source + new — never a per-round compounding of
 // the model's own decode. Geometry and rate normalize to the RENDER's, which is
-// what the extension was generated at. Audio follows the same split: the source
-// span from the source's track, the new span from the generated one, joined by a
-// short LINEAR crossfade (`crossfadeSec`) so the seam doesn't click. The source
-// leg runs `crossfadeSec` past the seam so the overlap is source-vs-generated at
-// the SAME timeline position, which keeps the output exactly as long as the render.
+// what the extension was generated at. Audio follows the same split (see
+// `extendSpliceAudioFilters`).
 //
 // `audio` is 'splice' (both inputs have a track), 'generated' (only the render
 // has one — the source region has nothing to keep, so the render's track stands)
-// or 'none'. Pure, like buildTrimConcatArgs: the caller probes and passes
-// `colorTagFilter` from `bt709TagFilter()`.
+// or 'none'. `sourceAudioPath` (optional) is a lossless master standing in for
+// the source clip's own track as the source span's audio; `masterOutPath`
+// (optional, must end in an audio extension like `.flac`) also writes this
+// output's mix as a lossless master. Pure, like buildTrimConcatArgs: the caller
+// probes and passes `colorTagFilter` from `bt709TagFilter()`.
 export const buildExtendSpliceArgs = ({
   sourcePath, generatedPath, outPath, keepFrames, newStartFrame, width, height, fps,
-  audio = 'none', crossfadeSec = 0.04, colorTagFilter = null,
+  audio = 'none', crossfadeSec = 0.04, colorTagFilter = null, sourceAudioPath = null, masterOutPath = null,
 }) => {
-  const keep = Math.floor(Number(keepFrames));
-  const start = Math.floor(Number(newStartFrame));
-  const rate = Number(fps);
-  const canonW = Number(width);
-  const canonH = Number(height);
   if (!sourcePath || !generatedPath || !outPath) return null;
-  if (!Number.isFinite(keep) || keep <= 0 || !Number.isFinite(start) || start <= 0) return null;
-  if (!Number.isFinite(rate) || rate <= 0) return null;
-  if (!Number.isFinite(canonW) || canonW <= 0 || !Number.isFinite(canonH) || canonH <= 0) return null;
+  const geometry = validExtendSplice({ keepFrames, newStartFrame, fps, width, height });
+  if (!geometry) return null;
+  const { keep, start, rate } = geometry;
 
-  const normalize = `scale=${canonW}:${canonH}:force_original_aspect_ratio=decrease,pad=${canonW}:${canonH}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${rate}`;
+  const normalize = extendNormalizeFilter(geometry);
   const tag = typeof colorTagFilter === 'string' && colorTagFilter ? colorTagFilter : null;
+  const withMaster = !!masterOutPath && audio !== 'none';
   const filters = [
     `[0:v]trim=end_frame=${keep},setpts=PTS-STARTPTS,${normalize}[v0]`,
     `[1:v]trim=start_frame=${start},setpts=PTS-STARTPTS,${normalize}[v1]`,
     `[v0][v1]concat=n=2:v=1:a=0${tag ? '[cv]' : '[outv]'}`,
     ...(tag ? [`[cv]${tag}[outv]`] : []),
+    ...extendSpliceAudioFilters({ audio, sourceIdx: sourceAudioPath ? 2 : 0, generatedIdx: 1, keep, rate, crossfadeSec, withMaster }),
   ];
-
-  const canonAudio = 'aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo';
-  const seamSec = keep / rate;
-  const fade = Math.max(0.001, Number(crossfadeSec) || 0);
-  if (audio === 'splice') {
-    filters.push(
-      // apad guards a source track that ends before the seam + overlap, which
-      // acrossfade would otherwise reject as shorter than the fade.
-      `[0:a]atrim=end=${(seamSec + fade).toFixed(6)},asetpts=PTS-STARTPTS,${canonAudio},apad=whole_dur=${(seamSec + fade).toFixed(6)}[a0]`,
-      `[1:a]atrim=start=${seamSec.toFixed(6)},asetpts=PTS-STARTPTS,${canonAudio}[a1]`,
-      `[a0][a1]acrossfade=d=${fade.toFixed(6)}:c1=tri:c2=tri[outa]`,
-    );
-  } else if (audio === 'generated') {
-    filters.push(`[1:a]asetpts=PTS-STARTPTS,${canonAudio}[outa]`);
-  }
 
   return [
     '-i', sourcePath, '-i', generatedPath,
+    ...(sourceAudioPath && audio === 'splice' ? ['-i', sourceAudioPath] : []),
     '-filter_complex', filters.join(';'),
+    ...extendOutputs({
+      audio, videoLabel: '[outv]', outPath, masterOutPath,
+      videoCodecArgs: [...H264_ENCODE_ARGS, ...BT709_CONTAINER_ARGS],
+    }),
+  ];
+};
+
+// Stream-copy counterpart of buildExtendSpliceArgs, in two steps so the source's
+// frames stay bit-identical (the re-encode path rewrites them every round).
+//
+// 1. `buildExtendNewSpanArgs` encodes ONLY the render's new span (frames from
+//    `newStartFrame`) as a silent mp4 with the shared H.264 profile — a fresh
+//    GOP, so it starts on a keyframe by construction.
+// 2. `buildExtendCopyArgs` joins the source (copied, never decoded) to that span
+//    through the concat demuxer's `listPath`, pinning the source entry to
+//    `keepFrames / fps` so the seam lands on the frame boundary, not on the
+//    source file's (audio-padded) container duration. Audio is the same
+//    crossfaded mix as the re-encode path.
+//
+// The caller proves the result (frame count and per-frame hashes) before it
+// replaces anything — stream copy is only valid when both halves carry
+// compatible codec parameters, which the encode cannot promise on its own.
+export const buildExtendNewSpanArgs = ({ generatedPath, outPath, newStartFrame, width, height, fps, colorTagFilter = null }) => {
+  if (!generatedPath || !outPath) return null;
+  const geometry = validExtendSplice({ keepFrames: 1, newStartFrame, fps, width, height });
+  if (!geometry) return null;
+  const tag = typeof colorTagFilter === 'string' && colorTagFilter ? colorTagFilter : null;
+  return [
+    '-i', generatedPath,
+    '-filter_complex', `[0:v]trim=start_frame=${geometry.start},setpts=PTS-STARTPTS,${extendNormalizeFilter(geometry)}${tag ? `,${tag}` : ''}[outv]`,
     '-map', '[outv]',
-    ...(audio === 'none' ? [] : ['-map', '[outa]']),
-    ...H264_ENCODE_ARGS,
-    ...BT709_CONTAINER_ARGS,
-    ...(audio === 'none' ? ['-an'] : AAC_ENCODE_ARGS),
+    ...H264_ENCODE_ARGS, ...BT709_CONTAINER_ARGS, '-an',
     '-movflags', '+faststart',
     '-y', outPath,
+  ];
+};
+
+// One concat-demuxer list entry; single quotes inside a path are escaped per the
+// demuxer's own quoting rules.
+const concatEntry = (path) => `file '${String(path).replace(/'/g, "'\\''")}'`;
+
+/** Body of the concat-demuxer list for `buildExtendCopyArgs`. */
+export const buildExtendConcatList = ({ sourcePath, newSpanPath, keepFrames, fps }) =>
+  `${[concatEntry(sourcePath), `duration ${(Number(keepFrames) / Number(fps)).toFixed(6)}`, concatEntry(newSpanPath)].join('\n')}\n`;
+
+export const buildExtendCopyArgs = ({
+  listPath, generatedPath, outPath, keepFrames, fps, audio = 'none', crossfadeSec = 0.04,
+  sourceAudioPath = null, masterOutPath = null,
+}) => {
+  const keep = Math.floor(Number(keepFrames));
+  const rate = Number(fps);
+  if (!listPath || !generatedPath || !outPath) return null;
+  if (!Number.isFinite(keep) || keep <= 0 || !Number.isFinite(rate) || rate <= 0) return null;
+  // The concat input only carries the source's VIDEO, so a spliced mix names the
+  // clip (or its master) that supplies the source span's audio explicitly.
+  if (audio === 'splice' && !sourceAudioPath) return null;
+  const withMaster = !!masterOutPath && audio !== 'none';
+  const filters = extendSpliceAudioFilters({ audio, sourceIdx: 2, generatedIdx: 1, keep, rate, crossfadeSec, withMaster });
+  return [
+    '-f', 'concat', '-safe', '0', '-i', listPath,
+    '-i', generatedPath,
+    ...(audio === 'splice' ? ['-i', sourceAudioPath] : []),
+    ...(filters.length ? ['-filter_complex', filters.join(';')] : []),
+    ...extendOutputs({ audio, videoLabel: '0:v:0', outPath, masterOutPath, videoCodecArgs: ['-c:v', 'copy'] }),
   ];
 };
 

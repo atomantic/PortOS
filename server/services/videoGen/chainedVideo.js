@@ -275,6 +275,9 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
       uploadedTempPath: i === 0 ? rest.uploadedTempPath : null,
       uploadedTempPaths: i === 0 ? (rest.uploadedTempPaths || []) : [],
       hidden: true,
+      // Chunk 0 of an extend chain consumes the user's own clip, so its render
+      // keeps that clip instead of the model's decode of it (#11179).
+      keepExtendSource: i === 0 && firstMode === 'extend',
       mode: isWindowHop ? 'extend' : (i === 0 ? firstMode : 'image'),
       // After the first chunk, drop FFLF-style last image — chained
       // continuation conditions on one thing, the tail of the chunk before it,
