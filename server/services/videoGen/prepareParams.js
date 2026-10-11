@@ -11,8 +11,9 @@
  *   - validate modelId + local-python configuration
  *   - a2v / IC-LoRA mode↔upload pairing and reference-count bounds
  *   - stage multipart uploads into PATHS.uploads with rollback bookkeeping
- *   - hosted backend short-circuit after source-image staging
- *   - keyframe resolution + range checks
+ *   - hosted backend short-circuit after source-image staging (usability check,
+ *     then the backend's own `stageInputs` in hostedSubmission.js)
+ *   - keyframe resolution + range checks (resolveKeyframeAnchors)
  *   - render-history resolution for native extend and IC references
  *   - LoRA-array normalization and chunk-count resolution
  *
@@ -52,7 +53,7 @@ import { getSettings } from '../settings.js';
 import { getProject as getMusicVideoProject } from '../musicVideo/projects.js';
 import { getTrack } from '../tracks/index.js';
 import { VIDEO_GEN_MODE, resolveVideoMode } from './modes.js';
-import { FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_DEFAULT_TEXT_VIDEO_MODEL, getFalVideoModel } from '../../lib/falVideoModels.js';
+import { getFalVideoModel } from '../../lib/falVideoModels.js';
 import { HOSTED_VIDEO_SUBMISSIONS } from './hostedSubmission.js';
 import { isDefaultI2vReferenceMode } from '../../lib/videoReferenceModes.js';
 import {
@@ -382,6 +383,98 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
     body, uploads, settings, backend, pythonPath,
     effectiveModel, effectiveModelId, stagedDurablePaths, cleanupStaged,
   }));
+}
+
+// Ensure the durable uploads dir exists before staging. Wrapped in
+// try/catch so a permission/disk failure here still cleans up the
+// multipart temp uploads instead of leaking them in the OS temp dir.
+async function ensureUploadsDir({ uploads, cleanupStaged }) {
+  if (!(uploads.sourceImage || uploads.lastImage || uploads.audioFile || uploads.icReference)) return;
+  try {
+    await ensureDir(PATHS.uploads);
+  } catch (err) {
+    await cleanupStaged();
+    throw new ServerError(
+      `Failed to prepare uploads directory: ${err.message}`,
+      { status: 500, code: 'VIDEO_GEN_UPLOADS_DIR_FAILED' },
+    );
+  }
+}
+
+// Multi-keyframe interpolation: resolve each gallery filename to an
+// absolute path under PATHS.images via the same path-traversal guard as
+// sourceImageFile. Reject up-front when any reference can't be resolved
+// so the queue doesn't accept a doomed job. Only valid for fflf mode +
+// single-chunk renders (the chain orchestrator pins keyframes only on
+// chunk 0; chaining ≥2 chunks with N keyframes has no defined semantic).
+// Returns null when the request carries no multi-keyframe list. The checks run
+// in this order (the `body.mode` default sits between the LTX-2 and chunk
+// checks) and every throw unwinds staged files first.
+async function resolveKeyframeAnchors({
+  body, effectiveModel, effectiveModelId, sourceImagePath, lastImagePath, cleanupStaged,
+}) {
+  if (!body.keyframes || body.keyframes.length < 2) return null;
+  const reject = async (message, code) => {
+    await cleanupStaged();
+    throw new ServerError(message, { status: 400, code });
+  };
+  if (body.mode && body.mode !== 'fflf') {
+    await reject(`keyframes is only valid with mode='fflf' (got mode='${body.mode}').`, 'KEYFRAMES_MODE_MISMATCH');
+  }
+  // Reject mixing keyframes with the legacy 2-keyframe inputs — the
+  // worker would silently ignore sourceImage/lastImage when keyframes is
+  // present, but staging/resizing them anyway is wasted work and the
+  // ambiguity (which one wins?) bites callers later. Force the user to
+  // pick one shape per request. Covers both upload paths and the
+  // gallery-resolved file fields.
+  if (sourceImagePath || lastImagePath || body.sourceImageFile || body.lastImageFile) {
+    await reject(
+      'keyframes cannot be combined with sourceImage / lastImage inputs — pass each anchor frame as a keyframes[] entry instead.',
+      'KEYFRAMES_LEGACY_INPUTS_CONFLICT',
+    );
+  }
+  // Multi-keyframe FFLF is an LTX-2 primitive — the legacy mlx_video
+  // pipeline has no equivalent. Mirror the a2v guard above so a bad
+  // modelId can't enqueue a doomed job that will only fail in the
+  // worker (with KEYFRAMES_REQUIRE_LTX2).
+  if (effectiveModel && !isLtx2FamilyRuntime(effectiveModel.runtime)) {
+    await reject(
+      `keyframes mode requires an ltx2-runtime model. Model "${effectiveModelId}" runs on "${effectiveModel.runtime || 'mlx_video'}".`,
+      'KEYFRAMES_REQUIRE_LTX2',
+    );
+  }
+  // Default mode to 'fflf' when keyframes is set without an explicit mode —
+  // otherwise local.js#buildLtx2Args resolves helperMode to 'text' and the
+  // keyframes silently disappear.
+  if (!body.mode) body.mode = 'fflf';
+  if (body.chunks != null && Number(body.chunks) > 1) {
+    await reject('keyframes cannot be combined with chunks > 1 — keyframes anchor a single clip.', 'KEYFRAMES_CHUNKS_CONFLICT');
+  }
+  // Validate keyframe indices against the *effective* numFrames so a
+  // request with no explicit `numFrames` (which falls back to the
+  // generateVideo default of 121) still rejects out-of-range indices
+  // up-front instead of failing late inside the worker / Python helper.
+  // Keep this in sync with the default in services/videoGen/local.js.
+  const effectiveNumFrames = body.numFrames != null ? Number(body.numFrames) : DEFAULT_NUM_FRAMES;
+  const resolved = [];
+  let prevIndex = -1;
+  for (let i = 0; i < body.keyframes.length; i++) {
+    const kf = body.keyframes[i];
+    const path = resolveGalleryImage(kf.file);
+    if (!path) await reject(`keyframes[${i}].file not found in gallery: ${kf.file}`, 'KEYFRAME_GALLERY_MISS');
+    if (kf.index <= prevIndex) {
+      await reject(`keyframes indices must be strictly ascending; got ${prevIndex} then ${kf.index}`, 'KEYFRAME_INDICES_NOT_ASCENDING');
+    }
+    if (kf.index > effectiveNumFrames - 1) {
+      const numFramesLabel = body.numFrames != null
+        ? `numFrames ${body.numFrames}`
+        : `default numFrames ${DEFAULT_NUM_FRAMES}`;
+      await reject(`keyframes[${i}].index ${kf.index} >= ${numFramesLabel}`, 'KEYFRAME_INDEX_OUT_OF_RANGE');
+    }
+    resolved.push({ path, index: kf.index });
+    prevIndex = kf.index;
+  }
+  return resolved;
 }
 
 // Local audio is queue-owned whether supplied as an upload or copied from a
@@ -738,20 +831,7 @@ async function resolvePreparedParams({
   let icReferenceUploadPath = null;
   let uploadedTempPath = null;
   const extraUploadedTempPaths = [];
-  if (uploads.sourceImage || uploads.lastImage || uploads.audioFile || uploads.icReference) {
-    // Ensure the durable uploads dir exists before staging. Wrapped in
-    // try/catch so a permission/disk failure here still cleans up the
-    // multipart temp uploads instead of leaking them in the OS temp dir.
-    try {
-      await ensureDir(PATHS.uploads);
-    } catch (err) {
-      await cleanupStaged();
-      throw new ServerError(
-        `Failed to prepare uploads directory: ${err.message}`,
-        { status: 500, code: 'VIDEO_GEN_UPLOADS_DIR_FAILED' },
-      );
-    }
-  }
+  await ensureUploadsDir({ uploads, cleanupStaged });
   if (uploads.sourceImage) {
     sourceImagePath = await stageUploadDurable(uploads.sourceImage, 'source');
     uploadedTempPath = sourceImagePath;
@@ -819,58 +899,16 @@ async function resolvePreparedParams({
       await cleanupStaged();
       throw new ServerError(hosted.errorMessage, { status: 400, code: hosted.errorCode });
     }
-    if (backend === VIDEO_GEN_MODE.FAL && (uploads.lastImage || body.lastImageFile)) {
-      const modelId = body.falModelId || (sourceImagePath ? FAL_DEFAULT_IMAGE_VIDEO_MODEL : FAL_DEFAULT_TEXT_VIDEO_MODEL);
-      const model = getFalVideoModel(modelId);
-      if (!model?.endImage) {
-        throw new ServerError(model ? `${model.label} takes no end frame` : 'End frames require a fal.ai model with catalogued end-frame support',
-          { status: 400, code: 'VALIDATION_ERROR' });
-      }
-      if (uploads.lastImage) {
-        lastImagePath = await stageUploadDurable(uploads.lastImage, 'last');
-        extraUploadedTempPaths.push(lastImagePath);
-      } else {
-        lastImagePath = resolveGalleryImage(body.lastImageFile);
-        if (!lastImagePath) {
-          throw new ServerError('The end frame is missing or could not be resolved.', { status: 400, code: 'VALIDATION_ERROR' });
-        }
-      }
-    }
-    // A standalone fal source-audio take: stage the audio clip durably like the frame. The queue removes
-    // it if the job fails, is cancelled or is lost to a restart (uploadedTempPaths); the fal worker
-    // removes it once the take is published.
-    let hostedAudioPath = null;
-    if (falSourceAudio && uploads.audioFile) {
-      if (!sourceImagePath) {
-        await cleanupStaged();
-        throw new ServerError('A fal.ai source-audio render needs a reference frame (sourceImage or sourceImageFile).', { status: 400, code: 'VALIDATION_ERROR' });
-      }
-      hostedAudioPath = await stageUploadDurable(uploads.audioFile, 'audio');
-      // A paid route: refuse a clip fal would reject (unreadable, or outside the model's window)
-      // before anything is submitted.
-      const window = getFalVideoModel(body.falModelId)?.audioInput || {};
-      const clipSec = await probeVideoDuration(hostedAudioPath).catch(() => null);
-      if (clipSec == null) {
-        await cleanupStaged();
-        throw new ServerError('Could not read the voice clip\'s duration. Upload a valid WAV, MP3, M4A, AAC, FLAC, OGG or WebM file.',
-          { status: 400, code: 'VIDEO_GEN_AUDIO_DURATION_UNREADABLE' });
-      }
-      if ((window.minSec != null && clipSec < window.minSec) || (window.maxSec != null && clipSec > window.maxSec)) {
-        await cleanupStaged();
-        throw new ServerError(`The voice clip is ${clipSec.toFixed(2)} s; this model takes ${window.minSec}–${window.maxSec} s (pad a short line with silence).`,
-          { status: 400, code: 'VIDEO_GEN_AUDIO_LENGTH' });
-      }
-    }
+    const staged = await hosted.stageInputs({
+      body, uploads, sourceImagePath, falSourceAudio, stageUploadDurable, cleanupStaged,
+    });
     return {
       backend,
       ...extras,
       effectiveModel: { id: backend, supportedModes: ['text', 'image'] },
       sourceImagePath,
       uploadedTempPath,
-      ...(lastImagePath ? { lastImagePath } : {}),
-      ...(hostedAudioPath ? { audioFilePath: hostedAudioPath } : {}),
-      ...((extraUploadedTempPaths.length || hostedAudioPath)
-        ? { uploadedTempPaths: [...extraUploadedTempPaths, ...(hostedAudioPath ? [hostedAudioPath] : [])] } : {}),
+      ...staged,
       discardSourceImage,
       cleanupStaged,
     };
@@ -898,95 +936,9 @@ async function resolvePreparedParams({
     extraUploadedTempPaths.push(icReferenceUploadPath);
   }
 
-  // Multi-keyframe interpolation: resolve each gallery filename to an
-  // absolute path under PATHS.images via the same path-traversal guard as
-  // sourceImageFile. Reject up-front when any reference can't be resolved
-  // so the queue doesn't accept a doomed job. Only valid for fflf mode +
-  // single-chunk renders (the chain orchestrator pins keyframes only on
-  // chunk 0; chaining ≥2 chunks with N keyframes has no defined semantic).
-  let resolvedKeyframes = null;
-  if (body.keyframes && body.keyframes.length >= 2) {
-    if (body.mode && body.mode !== 'fflf') {
-      await cleanupStaged();
-      throw new ServerError(
-        `keyframes is only valid with mode='fflf' (got mode='${body.mode}').`,
-        { status: 400, code: 'KEYFRAMES_MODE_MISMATCH' },
-      );
-    }
-    // Reject mixing keyframes with the legacy 2-keyframe inputs — the
-    // worker would silently ignore sourceImage/lastImage when keyframes is
-    // present, but staging/resizing them anyway is wasted work and the
-    // ambiguity (which one wins?) bites callers later. Force the user to
-    // pick one shape per request. Covers both upload paths and the
-    // gallery-resolved file fields.
-    if (sourceImagePath || lastImagePath || body.sourceImageFile || body.lastImageFile) {
-      await cleanupStaged();
-      throw new ServerError(
-        'keyframes cannot be combined with sourceImage / lastImage inputs — pass each anchor frame as a keyframes[] entry instead.',
-        { status: 400, code: 'KEYFRAMES_LEGACY_INPUTS_CONFLICT' },
-      );
-    }
-    // Multi-keyframe FFLF is an LTX-2 primitive — the legacy mlx_video
-    // pipeline has no equivalent. Mirror the a2v guard above so a bad
-    // modelId can't enqueue a doomed job that will only fail in the
-    // worker (with KEYFRAMES_REQUIRE_LTX2).
-    if (effectiveModel && !isLtx2FamilyRuntime(effectiveModel.runtime)) {
-      await cleanupStaged();
-      throw new ServerError(
-        `keyframes mode requires an ltx2-runtime model. Model "${effectiveModelId}" runs on "${effectiveModel.runtime || 'mlx_video'}".`,
-        { status: 400, code: 'KEYFRAMES_REQUIRE_LTX2' },
-      );
-    }
-    // Default mode to 'fflf' when keyframes is set without an explicit mode —
-    // otherwise local.js#buildLtx2Args resolves helperMode to 'text' and the
-    // keyframes silently disappear.
-    if (!body.mode) body.mode = 'fflf';
-    if (body.chunks != null && Number(body.chunks) > 1) {
-      await cleanupStaged();
-      throw new ServerError(
-        'keyframes cannot be combined with chunks > 1 — keyframes anchor a single clip.',
-        { status: 400, code: 'KEYFRAMES_CHUNKS_CONFLICT' },
-      );
-    }
-    // Validate keyframe indices against the *effective* numFrames so a
-    // request with no explicit `numFrames` (which falls back to the
-    // generateVideo default of 121) still rejects out-of-range indices
-    // up-front instead of failing late inside the worker / Python helper.
-    // Keep this in sync with the default in services/videoGen/local.js.
-    const effectiveNumFrames = body.numFrames != null ? Number(body.numFrames) : DEFAULT_NUM_FRAMES;
-    resolvedKeyframes = [];
-    let prevIndex = -1;
-    for (let i = 0; i < body.keyframes.length; i++) {
-      const kf = body.keyframes[i];
-      const path = resolveGalleryImage(kf.file);
-      if (!path) {
-        await cleanupStaged();
-        throw new ServerError(
-          `keyframes[${i}].file not found in gallery: ${kf.file}`,
-          { status: 400, code: 'KEYFRAME_GALLERY_MISS' },
-        );
-      }
-      if (kf.index <= prevIndex) {
-        await cleanupStaged();
-        throw new ServerError(
-          `keyframes indices must be strictly ascending; got ${prevIndex} then ${kf.index}`,
-          { status: 400, code: 'KEYFRAME_INDICES_NOT_ASCENDING' },
-        );
-      }
-      if (kf.index > effectiveNumFrames - 1) {
-        await cleanupStaged();
-        const numFramesLabel = body.numFrames != null
-          ? `numFrames ${body.numFrames}`
-          : `default numFrames ${DEFAULT_NUM_FRAMES}`;
-        throw new ServerError(
-          `keyframes[${i}].index ${kf.index} >= ${numFramesLabel}`,
-          { status: 400, code: 'KEYFRAME_INDEX_OUT_OF_RANGE' },
-        );
-      }
-      resolvedKeyframes.push({ path, index: kf.index });
-      prevIndex = kf.index;
-    }
-  }
+  const resolvedKeyframes = await resolveKeyframeAnchors({
+    body, effectiveModel, effectiveModelId, sourceImagePath, lastImagePath, cleanupStaged,
+  });
 
   // Resolve a render-history id to its on-disk video under data/videos/.
   // Shared by native extend and the IC-LoRA reference channel: both let the
