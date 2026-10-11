@@ -3,10 +3,24 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 
-const socketHarness = vi.hoisted(() => ({ handlers: new Map() }));
+const socketHarness = vi.hoisted(() => ({ handlers: new Map(), emit: vi.fn() }));
 
 vi.mock('../services/socket', () => ({ default: {
-  emit: vi.fn(),
+  emit: (event, payload) => {
+    socketHarness.emit(event, payload);
+    if (event !== 'generated-preview:open') return;
+    const opened = {
+      requestId: payload.requestId,
+      sessionId: '11111111-1111-4111-8111-111111111111',
+      durationSec: 20, fps: 30, width: 1280, height: 720,
+      audio: payload.withAudio ? 'ready' : 'none',
+      revision: payload.revision,
+    };
+    for (const handler of socketHarness.handlers.get('generated-preview:opened') || []) handler(opened);
+    for (const handler of socketHarness.handlers.get('generated-preview:frame') || []) {
+      handler({ ...opened, generation: 0, mime: 'image/jpeg', data: btoa('frame') });
+    }
+  },
   on: vi.fn((event, handler) => {
     const handlers = socketHarness.handlers.get(event) || new Set();
     handlers.add(handler);
@@ -164,7 +178,12 @@ describe('Code Animation page', () => {
     expect(await screen.findByRole('button', { name: 'Run with audio' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Example animation/ })).toHaveTextContent('Completed');
     await userEvent.setup().click(screen.getByRole('button', { name: 'Preview without audio' }));
-    expect(await screen.findByTitle('Code animation preview')).toHaveAttribute('srcdoc', expect.stringContaining('Finished animation'));
+    const frame = await screen.findByTitle('Code animation preview');
+    expect(frame.tagName).toBe('IMG');
+    expect(document.querySelector('iframe')).toBeNull();
+    const open = socketHarness.emit.mock.calls.filter(([event]) => event === 'generated-preview:open').at(-1)[1];
+    expect(open).toEqual(expect.objectContaining({ kind: 'code-animation', jobId: 'job-1', withAudio: false }));
+    expect(open.html).toBeUndefined();
 
     // Terminal records still reconcile: a missing output can be discovered later.
     getCodeAnimationJob.mockResolvedValue({ ...completedJob, status: 'failed', error: 'Output missing', html: null });

@@ -276,6 +276,47 @@ async function stageDocumentData(compositionDir, data, media) {
 }
 
 /**
+ * Stage a document the way a render does and open it in the OS-jailed preview
+ * browser. The caller closes `page` and removes `scratchRoot`. Private media
+ * stays in the staged copy; it is not posted into the user's browser.
+ */
+export async function openIsolatedDocumentPreview({ project, jobId, signal, onEvent }) {
+  const plan = await prepareDocumentRender(project);
+  const { probeVideoGeometry } = await import('../../lib/ffmpeg.js');
+  const { stageMusicVideoComposition } = await import('../htmlComposition/index.js');
+  const { openComposition } = await import('../htmlComposition/browser.js');
+  const { loadHistory } = await import('../videoGen/history.js');
+  const generated = project.composition?.document?.source?.kind === 'generated';
+  const history = (project.scenes || []).some((scene) => scene?.videoHistoryId) ? await loadHistory() : [];
+  const media = await resolveSceneMedia(project, { history, probe: probeVideoGeometry, strictLayers: generated });
+  const data = buildDocumentData(project, {
+    media, frame: plan.frame, clock: plan.clock, songDurationSec: plan.songDurationSec, generated,
+  });
+  let staged;
+  try {
+    staged = await stageMusicVideoComposition(plan.directory, jobId, musicVideoSongDocument(project), {
+      prepare: (dir) => stageDocumentData(dir, data, media),
+    });
+    signal?.throwIfAborted();
+    const page = await openComposition(staged.directory, {
+      signal, streamMedia: true, mediaMode: musicVideoMediaMode(project), ownedBrowser: true, isolation: 'required',
+      initScripts: [filmLookRuntimeSource(project?.filmLook), titleCardRuntimeSource(project?.titleCard)],
+      previewBridge: true, refuseUnknown: 'empty', lockLoopback: true, onEvent,
+    });
+    await page.send('Emulation.setDeviceMetricsOverride', {
+      width: plan.width, height: plan.height, deviceScaleFactor: 1, mobile: false,
+    });
+    return {
+      page, scratchRoot: staged.scratchRoot,
+      width: plan.width, height: plan.height, fps: plan.fps, durationSec: plan.durationSec,
+    };
+  } catch (error) {
+    if (staged?.scratchRoot) await rm(staged.scratchRoot, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  }
+}
+
+/**
  * The window a render seeks, on the document's own frame grid: the full
  * contract, or `[startSec, endSec)` snapped down to a frame boundary.
  */

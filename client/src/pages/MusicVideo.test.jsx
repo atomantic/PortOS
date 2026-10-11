@@ -169,7 +169,15 @@ vi.mock('../services/socket', () => ({
       socketHandlers.get(event).add(fn);
     },
     off: (event, fn) => { socketHandlers.get(event)?.delete(fn); },
-    emit: () => {},
+    emit: (event, payload) => {
+      if (event !== 'generated-preview:open') return;
+      const sessionId = `00000000-0000-4000-8000-${String(socketHandlers.size + 1).padStart(12, '0')}`;
+      const opened = {
+        requestId: payload.requestId, sessionId, durationSec: 60, fps: 24, width: 1920, height: 1080, audio: 'none', revision: payload.revision,
+      };
+      for (const fn of socketHandlers.get('generated-preview:opened') || []) fn(opened);
+      for (const fn of socketHandlers.get('generated-preview:frame') || []) fn({ ...opened, generation: 0, mime: 'image/jpeg', data: btoa('frame') });
+    },
     connected: true,
   },
 }));

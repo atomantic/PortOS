@@ -34,6 +34,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `apiContractSchemas.js` | Canonical Zod request contracts for externally callable APIs plus `zodToOpenApiSchema` (plain JSON Schema — the 3.0.3 conversion happens at the OpenAPI document boundary, not here); runtime routes and OpenAPI use the same schema objects. |
 | `codeAnimationAcceptance.js` | Code Animation production acceptance: splits run evidence into technical/visual/temporal/sound (unmeasured stays unverified), decides promotability, freezes source/audio/render hashes and detects stale acceptance. Pure. |
 | `codeAnimationContainment.js` | Code Animation production worker containment contract: per-platform enforced mechanism (macOS Seatbelt or Linux bubblewrap, otherwise refusal), deny-by-default profiles and a process-denying Linux seccomp filter, from-scratch worker environment, operator tool-root rules, tool configuration and worker limit schemas. Pure; the runner is `services/codeAnimation/containedWorker.js`. |
+| `generatedPreviewSandbox.js` | OS network-isolation plan for generated preview browsers: macOS Seatbelt or Linux bubblewrap, otherwise refusal. The jail denies IP and the host DNS resolver; Chrome flags are defense in depth. Pure; the launcher is `services/htmlComposition/ownedBrowser.js`. |
 | `codeAnimationPackage.js` | Versioned data-only Code Animation package schema, byte/path/reference integrity limits, SHA-256 revision binding, `createCodeAnimationPackage` and `summarizeCodeAnimationPackage`; validation never executes or stages code. |
 | `socketEventContracts.js` | Payload contracts for modeled Socket.IO events, reusing live Zod validation for inbound events and documenting public outbound snapshots. |
 | `socketEventInventory.js` | Cached source-derived Socket.IO event inventory: event names and directions only, with no checked-in manifest or positional source metadata. |
@@ -889,5 +890,3 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `deepAudit.js` | Strict Deep audit checkpoint schema, scope invalidation, server-assigned passes and mechanical completion rules. |
 
 - `auditWorkflow.js`: versioned extended Deep execution and historical certification classification.
-
-| `generatedPreviewSandbox.js` | Browser-safe trusted wrapper for generated previews, child navigation containment and revision-bound typed media/recording relay. |

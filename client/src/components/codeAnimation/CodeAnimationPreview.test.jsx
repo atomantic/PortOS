@@ -1,8 +1,34 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 
+const socket = vi.hoisted(() => {
+  const handlers = new Map();
+  const emit = vi.fn((event, payload) => {
+    if (event !== 'generated-preview:open') return;
+    const opened = {
+      requestId: payload.requestId,
+      sessionId: '11111111-1111-4111-8111-111111111111',
+      durationSec: 5, fps: 30, width: 1920, height: 1080,
+      audio: payload.withAudio ? 'ready' : 'none',
+      revision: payload.revision,
+    };
+    for (const fn of handlers.get('generated-preview:opened') || []) fn(opened);
+    for (const fn of handlers.get('generated-preview:frame') || []) fn({ ...opened, generation: 0, mime: 'image/jpeg', data: btoa('frame') });
+  });
+  return {
+    emit,
+    on: vi.fn((event, cb) => {
+      if (!handlers.has(event)) handlers.set(event, new Set());
+      handlers.get(event).add(cb);
+    }),
+    off: vi.fn((event, cb) => { handlers.get(event)?.delete(cb); }),
+    connected: true,
+    __handlers: handlers,
+  };
+});
+vi.mock('../../services/socket', () => ({ default: socket }));
 vi.mock('../../services/api', () => ({ uploadGalleryVideo: vi.fn(), exportCodeAnimation: vi.fn(), cancelCodeAnimationExport: vi.fn(), getCodeAnimationPackage: vi.fn(), getCodeAnimationThreeVendor: vi.fn() }));
 vi.mock('../../lib/downloadBlob', () => ({ downloadBlob: vi.fn() }));
 vi.mock('../../hooks/useSseProgress', () => ({ useSseProgress: vi.fn(() => ({ latest: null })) }));
@@ -21,12 +47,7 @@ const renderPreview = ({ audioUrl = null, jobId, html = HTML } = {}) => render(
   </MemoryRouter>,
 );
 
-const childHtml = (frame) => JSON.parse(/frame.srcdoc = (.*);/.exec(frame.getAttribute('srcdoc'))[1]);
-const postFromFrame = (source, data) => act(async () => {
-  const frame = [...document.querySelectorAll('iframe')].find((el) => el.contentWindow === source);
-  data = { ...data, previewRevision: frame?.dataset.previewRevision };
-  window.dispatchEvent(new MessageEvent('message', { data, source }));
-});
+const previewOpens = () => socket.emit.mock.calls.filter(([event]) => event === 'generated-preview:open');
 
 describe('prepareAnimationHtml', () => {
   it('installs a restrictive policy before page scripts and the audio global', () => {
@@ -56,11 +77,13 @@ describe('CodeAnimationPreview', () => {
   beforeEach(() => {
     globalThis.URL.createObjectURL = vi.fn(() => 'blob:recorded');
     globalThis.URL.revokeObjectURL = vi.fn();
+    socket.emit.mockClear();
+    socket.__handlers.clear();
   });
 
   afterEach(() => vi.unstubAllGlobals());
 
-  it('inlines the vendored three.js modules for a three film, widening the policy to data: scripts only, and downloads a standalone file (#10464)', async () => {
+  it('downloads a standalone three film with the vendored modules inlined and does not execute it here (#10464)', async () => {
     const user = userEvent.setup();
     getCodeAnimationThreeVendor.mockResolvedValue({ files: [
       { path: 'three.core.js', text: 'export const REVISION = "x";' },
@@ -69,20 +92,18 @@ describe('CodeAnimationPreview', () => {
     const three = "<!DOCTYPE html><html><head></head><body><script type=\"module\">import * as THREE from 'three';</script></body></html>";
     renderPreview({ html: three });
     const frame = await screen.findByTitle('Code animation preview');
-    const srcDoc = childHtml(frame);
-    expect(srcDoc).toContain("script-src 'unsafe-inline' data:");
-    expect(srcDoc).toContain("connect-src 'none'");
-    expect(srcDoc.indexOf('Content-Security-Policy')).toBeLessThan(srcDoc.indexOf('type="importmap"'));
-    expect(srcDoc).toContain('"three":"data:text/javascript');
-
-    await user.click(screen.getByRole('button', { name: 'Download HTML' }));
+    expect(frame.tagName).toBe('IMG');
+    expect(document.querySelector('iframe')).toBeNull();
+    const download = await screen.findByRole('button', { name: 'Download HTML' });
+    await waitFor(() => expect(download).toBeEnabled());
+    await user.click(download);
     expect(downloadBlob.mock.calls.at(-1)[0]).toContain('type="importmap"');
+    expect(downloadBlob.mock.calls.at(-1)[0]).not.toContain('data:audio/');
     expect(downloadBlob.mock.calls.at(-1)[2]).toBe('text/html');
 
-    // A film that does not import three never fetches the modules or gets the wider policy.
     getCodeAnimationThreeVendor.mockClear();
     renderPreview();
-    expect(childHtml((await screen.findAllByTitle('Code animation preview')).at(-1))).toContain("script-src 'unsafe-inline'; style-src");
+    expect((await screen.findAllByTitle('Code animation preview')).at(-1).tagName).toBe('IMG');
     expect(getCodeAnimationThreeVendor).not.toHaveBeenCalled();
   });
 
@@ -97,46 +118,61 @@ describe('CodeAnimationPreview', () => {
     expect(screen.getByRole('button', { name: 'Download package' })).toBeEnabled();
   });
 
-  it('runs the page in a scripts-only sandbox and records through the postMessage handshake', async () => {
+  it('records through the isolated preview and ignores an unmatched recording', async () => {
     const user = userEvent.setup();
     renderPreview();
-    const frame = screen.getByTitle('Code animation preview');
-    expect(frame.getAttribute('sandbox')).toBe('allow-scripts');
-    expect(childHtml(frame)).toContain("connect-src 'none'");
-    const target = frame.contentWindow;
-    const postMessage = vi.spyOn(target, 'postMessage');
-
-    await postFromFrame(target, { type: MESSAGES.ready, meta: { duration: 5 } });
+    const frame = await screen.findByTitle('Code animation preview');
+    expect(frame.tagName).toBe('IMG');
+    expect(document.querySelector('iframe')).toBeNull();
+    const open = previewOpens().at(-1)[1];
+    await act(async () => {
+      for (const fn of socket.__handlers.get('generated-preview:event') || []) {
+        fn({ requestId: open.requestId, sessionId: '11111111-1111-4111-8111-111111111111', type: MESSAGES.ready, meta: { duration: 5 } });
+      }
+    });
     expect(screen.getByText('Animation ready')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /record \(real-time\)/i }));
-    expect(postMessage).toHaveBeenCalledWith({ type: MESSAGES.record }, '*');
+    expect(socket.emit).toHaveBeenCalledWith('generated-preview:command', expect.objectContaining({
+      action: 'record', message: { type: MESSAGES.record },
+    }));
 
-    // A message from any other window is ignored.
-    await postFromFrame(window, { type: MESSAGES.recorded, blob: new Blob(['x']), mimeType: 'video/webm' });
+    await act(async () => {
+      for (const fn of socket.__handlers.get('generated-preview:recording') || []) {
+        fn({ requestId: 'other', sessionId: 'other', index: 0, count: 1, mime: 'video/webm', chunk: btoa('x') });
+      }
+    });
     expect(screen.queryByLabelText('Recorded animation')).not.toBeInTheDocument();
 
-    await postFromFrame(target, { type: MESSAGES.recorded, blob: new Blob(['x'], { type: 'video/webm' }), mimeType: 'video/webm' });
+    await act(async () => {
+      for (const fn of socket.__handlers.get('generated-preview:recording') || []) {
+        fn({ requestId: open.requestId, sessionId: '11111111-1111-4111-8111-111111111111', index: 0, count: 1, mime: 'video/webm', chunk: btoa('x') });
+      }
+    });
     expect(screen.getByLabelText('Recorded animation')).toHaveAttribute('src', 'blob:recorded');
     expect(screen.getByRole('button', { name: /save to media history/i })).toBeEnabled();
   });
 
-  it('does not read or provide the selected audio until the user allows generated code to use it', async () => {
+  it('does not read the selected audio until the user allows the isolated preview to use it', async () => {
     const user = userEvent.setup();
-    const fetchMock = vi.fn(async () => ({ ok: true, blob: async () => new Blob(['audio'], { type: 'audio/wav' }) }));
+    const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
     renderPreview({ audioUrl: '/api/uploads/audio/example.wav' });
 
     expect(screen.getByRole('heading', { name: 'Preview paused' })).toBeInTheDocument();
     expect(screen.getByText(/preview is paused until you choose/i)).toBeInTheDocument();
-    expect(screen.getByText(/send this track outside PortOS/i)).toBeInTheDocument();
+    expect(screen.queryByText(/could send that track outside PortOS/i)).not.toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
     expect(screen.queryByTitle('Code animation preview')).not.toBeInTheDocument();
+    expect(previewOpens()).toHaveLength(0);
 
     await user.click(screen.getByRole('button', { name: 'Run with audio' }));
-    const frame = await screen.findByTitle('Code animation preview');
-    expect(fetchMock).toHaveBeenCalledWith('/api/uploads/audio/example.wav', { credentials: 'same-origin' });
-    expect(childHtml(frame)).toContain('window["ANIMATION_AUDIO_URL"] = "data:audio/');
+    await screen.findByTitle('Code animation preview');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(previewOpens().at(-1)[1]).toEqual(expect.objectContaining({
+      withAudio: true, audioUrl: '/api/uploads/audio/example.wav',
+    }));
+    expect(document.querySelector('iframe')).toBeNull();
   });
 
   it('lets the user preview without audio and never fetches the selected track', async () => {
@@ -146,9 +182,10 @@ describe('CodeAnimationPreview', () => {
     renderPreview({ audioUrl: '/api/uploads/audio/example.wav' });
 
     await user.click(screen.getByRole('button', { name: 'Preview without audio' }));
-    const frame = await screen.findByTitle('Code animation preview');
+    await screen.findByTitle('Code animation preview');
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(childHtml(frame)).not.toContain('ANIMATION_AUDIO_URL');
+    expect(previewOpens().at(-1)[1].withAudio).toBe(false);
+    expect(previewOpens().at(-1)[1].audioUrl).toBeUndefined();
   });
 });
 

@@ -90,18 +90,55 @@ async function readSlice(asset, start, end) {
   } finally { await handle.close(); }
 }
 
+// Forwards a bounded description of a same-window postMessage, including a
+// recording blob stashed on the page. It does not fail the composition.
+const PREVIEW_BRIDGE_SCRIPT = `(() => {
+  addEventListener('message', (event) => {
+    const data = event.data;
+    if (!data || typeof data !== 'object' || event.source !== window) return;
+    if (data.blob instanceof Blob) window.__portosLastBlob = data.blob;
+    let meta = null;
+    if (data.meta && typeof data.meta === 'object') {
+      const duration = Number(data.meta.duration);
+      meta = { duration: Number.isFinite(duration) ? duration : null };
+    }
+    const payload = JSON.stringify({
+      type: typeof data.type === 'string' ? data.type.slice(0, 80) : '',
+      t: typeof data.t === 'number' && Number.isFinite(data.t) ? data.t : null,
+      message: typeof data.message === 'string' ? data.message.slice(0, 300) : '',
+      hasBlob: data.blob instanceof Blob,
+      meta,
+    }).slice(0, 2000);
+    try { globalThis.__portosPreview(payload); } catch { /* binding attaches with the document */ }
+  });
+})();`;
+
 // `initScripts` run in every new document before its own scripts, after the
 // sandbox guards (a read-only probe such as the overlay text check).
-export async function openComposition(directory, { signal, validateAssets, streamMedia = false, mediaMode = 'code-images-video', ownedBrowser = false, initScripts = [] } = {}) {
+// `isolation: 'required'` launches the OS-jailed preview browser. Render encodes
+// keep the legacy owned browser.
+export async function openComposition(directory, {
+  signal, validateAssets, streamMedia = false, mediaMode = 'code-images-video', ownedBrowser = false, initScripts = [],
+  isolation = 'legacy', contentSecurityPolicy, freezeNetworkConstructors = true, onEvent, previewBridge = false,
+  refuseUnknown = 'fail', lockLoopback = false,
+} = {}) {
   const assets = await snapshotAssets(directory, { streamMedia });
   validateAssets?.(assets);
   signal?.throwIfAborted();
+  const connectOptions = {
+    signal, mediaMode, initScripts, contentSecurityPolicy, freezeNetworkConstructors, onEvent, previewBridge, refuseUnknown, lockLoopback,
+  };
   if (ownedBrowser) {
     const { launchCompositionBrowser } = await import('./ownedBrowser.js');
-    const owner = await launchCompositionBrowser({ signal });
+    const owner = await launchCompositionBrowser({ signal, isolation });
     try {
-      const page = await connectComposition(assets, { signal, mediaMode, initScripts,
-        version: { webSocketDebuggerUrl: owner.webSocketDebuggerUrl, 'User-Agent': 'HeadlessChrome/' } });
+      const page = await connectComposition(assets, {
+        ...connectOptions,
+        transport: owner.transport,
+        version: owner.transport
+          ? { 'User-Agent': 'HeadlessChrome/' }
+          : { webSocketDebuggerUrl: owner.webSocketDebuggerUrl, 'User-Agent': 'HeadlessChrome/' },
+      });
       return { ...page, close: async options => {
         try { await page.close(options); } finally { await owner.close(); }
       } };
@@ -113,13 +150,16 @@ export async function openComposition(directory, { signal, validateAssets, strea
   const response = await cdpRequest('/json/version');
   if (!response.ok) throw new Error('Managed browser is unavailable');
   const version = await response.json();
-  return connectComposition(assets, { signal, mediaMode, version, initScripts });
+  return connectComposition(assets, { ...connectOptions, version });
 }
 
-async function connectComposition(assets, { signal, mediaMode, version, initScripts = [] }) {
-  const { webSocketDebuggerUrl } = version;
-  if (!webSocketDebuggerUrl) throw new Error('Managed browser has no CDP endpoint');
-  const ws = new WebSocket(webSocketDebuggerUrl, { handshakeTimeout: 10000 });
+async function connectComposition(assets, {
+  signal, mediaMode, version, initScripts = [], transport, contentSecurityPolicy, freezeNetworkConstructors = true,
+  onEvent, previewBridge = false, refuseUnknown = 'fail', lockLoopback = false,
+}) {
+  const { webSocketDebuggerUrl } = version || {};
+  if (!transport && !webSocketDebuggerUrl) throw new Error('Managed browser has no CDP endpoint');
+  const ws = transport || new WebSocket(webSocketDebuggerUrl, { handshakeTimeout: 10000 });
   const pending = new Map();
   let nextId = 0;
   let failure;
@@ -145,7 +185,7 @@ async function connectComposition(assets, { signal, mediaMode, version, initScri
       });
     });
   }
-  const policyCsp = CSP.replace('img-src http: https:', mediaMode === 'code-only' ? "img-src 'none'" : 'img-src http: https:').replace("media-src 'self'", mediaMode !== 'code-images-video' ? "media-src 'none'" : "media-src 'self'");
+  const policyCsp = contentSecurityPolicy || CSP.replace('img-src http: https:', mediaMode === 'code-only' ? "img-src 'none'" : 'img-src http: https:').replace("media-src 'self'", mediaMode !== 'code-images-video' ? "media-src 'none'" : "media-src 'self'");
   // The page may cancel a paused request (a source swapped or re-requested
   // with CORS mid-load); its interception is then gone, which is not a fault.
   const fulfill = response => send('Fetch.fulfillRequest', response).catch(error => {
@@ -165,6 +205,13 @@ async function connectComposition(assets, { signal, mediaMode, version, initScri
         return;
       }
       // Do not continue even a failed request. Disconnect destroys the context.
+      // A generated preview answers unknown URLs with an empty local response
+      // so one stray image does not tear the page down; nothing is fetched.
+      if (refuseUnknown === 'empty') {
+        await fulfill({ requestId: params.requestId, responseCode: 204, body: '' });
+        onEvent?.({ method: 'Portos.refusedRequest', params: { url: String(params.request.url).slice(0, 200) } });
+        return;
+      }
       throw new Error(`Refused composition request: ${params.request.url}`);
     }
     const size = Buffer.isBuffer(asset) ? asset.length : asset.size;
@@ -205,7 +252,11 @@ async function connectComposition(assets, { signal, mediaMode, version, initScri
         fail(new Error('Composition browser target closed'));
       } else if (message.sessionId === sessionId) {
         if (message.method === 'Fetch.requestPaused') request(message.params).catch(fail);
-        if (message.method === 'Runtime.bindingCalled') {
+        if (message.method === 'Runtime.bindingCalled' && message.params.name === '__portosPreview') {
+          let payload = {};
+          try { payload = JSON.parse(String(message.params.payload).slice(0, 2000)); } catch { payload = {}; }
+          onEvent?.({ method: 'Portos.preview', params: payload });
+        } else if (message.method === 'Runtime.bindingCalled') {
           const payload = String(message.params.payload).slice(0, 300);
           fail(new Error(message.params.name === '__portosFailure'
             ? `Composition drew cross-origin pixels into a WebGL texture, which the browser refused (${payload}). Load images and video with crossOrigin = 'anonymous' before drawing them.`
@@ -213,9 +264,12 @@ async function connectComposition(assets, { signal, mediaMode, version, initScri
         }
         if (message.method === 'Runtime.exceptionThrown') {
           const details = message.params.exceptionDetails;
-          fail(new Error(`Composition script failed: ${details.exception?.description ?? details.text}`));
+          const text = `Composition script failed: ${details.exception?.description ?? details.text}`;
+          if (previewBridge) onEvent?.({ method: 'Portos.pageError', params: { message: text.slice(0, 300) } });
+          else fail(new Error(text));
         }
         if (message.method === 'Inspector.targetCrashed') fail(new Error('Composition browser target crashed'));
+        if (message.method === 'Page.screencastFrame') onEvent?.(message);
       }
     } catch (error) { fail(error); }
   });
@@ -253,7 +307,8 @@ async function connectComposition(assets, { signal, mediaMode, version, initScri
     ({ browserContextId: contextId } = await send('Target.createBrowserContext', {
       disposeOnDetach: true,
       // Defense in depth for browser-originated HTTP requests outside Fetch.
-      proxyServer: 'http://127.0.0.1:9', proxyBypassList: '<-loopback>',
+      // Previews do not bypass loopback; the OS jail is the real UDP boundary.
+      proxyServer: 'http://127.0.0.1:9', ...(lockLoopback ? {} : { proxyBypassList: '<-loopback>' }),
     }, null));
     // Headless Chrome has no tab UI to hide. Give its compositor a foreground
     // target: hidden targets can stall surface screenshots on Linux. Headed
@@ -265,11 +320,10 @@ async function connectComposition(assets, { signal, mediaMode, version, initScri
     await send('Runtime.enable');
     await send('Runtime.addBinding', { name: '__portosRefused' });
     await send('Runtime.addBinding', { name: '__portosFailure' });
-    await send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
-      const report = globalThis.__portosRefused;
-      addEventListener('securitypolicyviolation', event => report(event.blockedURI));
-      // WebRTC bypasses HTTP interception. No other realm can restore these:
-      // CSP sandbox disallows frames, workers, popups and same-origin access.
+    if (previewBridge) await send('Runtime.addBinding', { name: '__portosPreview' });
+    const networkFreeze = freezeNetworkConstructors ? `
+      // WebRTC bypasses HTTP interception. A fresh srcdoc realm does not inherit
+      // this freeze; the preview OS jail is what denies that realm's UDP.
       for (const key of ['RTCPeerConnection', 'webkitRTCPeerConnection', 'WebTransport']) {
         Object.defineProperty(globalThis, key, { configurable: false, writable: false,
           value: function() { report(key); throw new Error(key + ' is disabled in compositions'); } });
@@ -277,7 +331,11 @@ async function connectComposition(assets, { signal, mediaMode, version, initScri
       for (const key of ['Worker', 'SharedWorker', 'WebSocket']) {
         Object.defineProperty(globalThis, key, { configurable: false, writable: false,
           value: function(url) { report(String(url)); throw new Error(key + ' is disabled in compositions'); } });
-      }
+      }` : '';
+    await send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
+      const report = globalThis.__portosRefused;
+      addEventListener('securitypolicyviolation', event => report(event.blockedURI));
+      ${networkFreeze}
       // The sandbox's opaque origin makes every document asset cross-origin. A
       // no-cors image or video taints any canvas it is drawn into, and a
       // tainted canvas cannot become a WebGL texture (three.js swallows that
@@ -328,6 +386,7 @@ async function connectComposition(assets, { signal, mediaMode, version, initScri
         }
       }
     })();` });
+    if (previewBridge) await send('Page.addScriptToEvaluateOnNewDocument', { source: PREVIEW_BRIDGE_SCRIPT });
     for (const source of initScripts) await send('Page.addScriptToEvaluateOnNewDocument', { source });
     await send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] });
     const navigation = await send('Page.navigate', { url: `${ORIGIN}/index.html` });

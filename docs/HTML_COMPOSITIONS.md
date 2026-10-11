@@ -457,23 +457,42 @@ least 0.8s, and sung type stays at least 56px at 1080p. Palette tokens
 options. Upgrading a pre-module layered engine adds the module's two tags in
 front of the template's engine tag.
 
-The in-app preview nests its self-contained `srcdoc` in an opaque-origin sandbox
-inside a trusted wrapper. The wrapper's immutable `frame-src 'none'` policy
-blocks generated-page URL navigation and CSP-controlled network subresources.
-This is not complete network isolation: descendant srcdoc realms can regain
-WebRTC capabilities outside the original page guards (tracked in #11157).
-Only preview generated content you trust with the media made available to it. It relays only
-the preview protocol from its one child, stamped with the current preview revision;
-replacements retire the old bridge and pending media responses. The server inlines the document's scripts, stylesheets and
-small assets, and the scrubber posts `portos-mv:seek` messages. Larger media
-is bridged on demand: the PortOS page posts only the list of files
-(`window.PORTOS_MV_ASSETS` resolves to `{ src: src }`), and the first time a
-script sets a media element's `src` to one of them, the page fetches that file
-on the user's behalf and posts it in as a Blob (`window.PORTOS_MV_ASSET(src)`
-returns a promise of its blob: URL for other uses). The page keeps a bounded
-cache of fetched files, and object URLs idle for a few seconds are revoked
-once the preview holds more than 64 MB, unless a media element still plays
-them. So assign `src` when a frame needs the file, not every file at startup.
+The in-app composition, code-video, and code-animation previews do not run
+generated HTML in the user's browser. A private local Chromium worker executes
+the page and returns JPEG frames (and, for a recording, the finished WebM).
+The worker is wrapped in macOS Seatbelt (`/usr/bin/sandbox-exec`) or Linux
+bubblewrap (`/usr/bin/bwrap --unshare-net`). Seatbelt denies IP sockets, then
+allows the browser's own Unix sockets so Chrome can start, and denies the
+system resolver socket (`/private/var/run/mDNSResponder`) plus the DNS mach
+services. Bubblewrap's empty network namespace blocks direct UDP and TCP, and
+existing host resolver sockets are covered with `/dev/null`. Chrome's own
+process sandbox cannot initialize inside that jail (`sandbox_init` returns
+EPERM and the renderer crashes), so the worker starts with `--no-sandbox`.
+The OS jail is the egress boundary. Windows, Firefox,
+and WebKit have no such jail: the preview shows an explicit unavailable state
+and does not fall back to an iframe. Chrome's HTTP proxy is not the boundary.
+A fresh srcdoc realm can still open WebRTC; the OS deny is what stops UDP,
+HTTP, and navigation. The egress test drives a real local STUN, HTTP, and
+WebSocket collector, including a nested srcdoc, and treats a silent negative
+control (no jail) as an invalid proof. DNS is not proven by binding port 53.
+On macOS the same profile must make `getaddrinfo` fail for a name that resolves
+outside the jail, because the system resolver would send that query itself.
+
+Seek, film look, and the title card go over the private render protocol.
+Project media stays on the server (`streamMedia`); the client never fetches it
+into the page. Exact document or job revisions retire the previous worker.
+Closing the session kills the browser process group and deletes the scratch
+directory under `music-video-song-renders/`.
+
+Two limits stay explicit. The lyric-overlay animatic still mounts the shipped
+lyric template in an iframe because the storyboard has to show through it; that
+template is not given private media. Final MP4 encodes still use the existing
+owned Chromium with HTTP interception, not this OS deny. Authenticated agents
+keep the same preview authority as the signed-in user.
+
+Inside the worker the page still seeks with `portos-mv:seek`. Assign a media
+`src` when a frame needs the file. The server stages that file; the user's
+browser only receives the rendered frame.
 
 Bound your own decoded-image cache the same way. A decoded 2048×1152 frame
 costs about 9 MB however small its JPEG is, so a cache of 90 atlases can hold
