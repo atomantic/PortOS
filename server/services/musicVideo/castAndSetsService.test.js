@@ -426,20 +426,31 @@ describe('Cast & Sets check-in', () => {
     expect(draft.motionLanguage).toBe(first.motionLanguage);
   });
 
-  it('reseeds a legacy seeded draft with no seed record but keeps typed notes', async () => {
+  it('never rewrites entered text, keeps equivalent text as written, and lets it follow a newer revision', async () => {
     const project = await seed();
     await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
     await runTo(project.id, 'review');
-    // A draft seeded before the seed record existed: JSON text from an older direction.
+    // Entered by hand (no seed record): the current cast as compact JSON in another key
+    // order, and JSON that differs from the direction.
+    const { name, ...rest } = DIRECTION.protagonist;
+    const sameCast = JSON.stringify({ ...rest, name });
+    const ownSets = JSON.stringify([{ name: 'My own set' }]);
     await projects.mutateProjectRecord(project.id, (c) => ({ project: { ...c,
-      productionReview: { draft: { cast: JSON.stringify({ name: 'Old keeper' }, null, 2), environments: 'Typed set notes',
-        visualLanguage: JSON.stringify([{ name: 'Old set' }], null, 2) } } } }));
+      productionReview: { draft: { cast: sameCast, environments: ownSets } } } }));
     await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({});
-    const draft = (await current(project.id)).productionReview.draft;
-    expect(draft.cast).toContain('Keeper');
-    expect(draft.cast).not.toContain('Old keeper');
-    expect(draft.environments).toBe('Typed set notes');
-    expect(draft.visualLanguage).not.toContain('Old set');
+    // Re-preparing the review seeds again; it must not reformat anything.
+    expect((await request(app).post(`/api/music-video/${project.id}/production-review/prepare`).send({})).status).toBe(200);
+    let draft = (await current(project.id)).productionReview.draft;
+    expect(draft.cast).toBe(sameCast);
+    expect(draft.environments).toBe(ownSets);
+
+    runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION, protagonist: { ...DIRECTION.protagonist, name: 'Signalman' } }) });
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
+    await runTo(project.id, 'review');
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({});
+    draft = (await current(project.id)).productionReview.draft;
+    expect(draft.cast).toContain('Signalman');
+    expect(draft.environments).toBe(ownSets);
   });
 
   it.each(['approved', 'skipped'])('rebuilds a %s check-in as a new revision that keeps the prior sheet as an earlier version', async (end) => {
