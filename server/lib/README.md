@@ -819,7 +819,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | `launchVideoValidation.js` | `validateLaunchVideoAssets` checks frozen launch composition text, storyboard reading time, duration, and poster position before rendering. |
 
-| `messageBrowserIdentity.js` | Shared Outlook row extraction and identity-safe browser action scripts; exact unique targets and confirmed row removal. |
+| `messageBrowserIdentity.js` | Shared Outlook row extraction, canonical row/member ingestion identity, conservative legacy matching, detail mapping, and identity-safe browser action scripts; exact unique targets and confirmed row removal. |
 | `messageBrowserCompose.js` | Confirmed Outlook/Teams draft delivery through the authenticated browser tab, as pure helpers: `planDelivery` (deliverability + intended recipients/thread, run BEFORE a draft is claimed), `buildComposePhaseScript` (probe/open/fill/submit/discard CDP scripts, args as JSON), `classifySendOutcome` (confirmed only on a closed compose surface plus a fresh provider signal; anything else after the single submit click is `unknown`), `recipientsMatch`, `checkAccountIdentity`, and overridable `COMPOSE_SELECTOR_DEFAULTS`/`resolveComposeConfig`. Defaults are unvalidated against a live mailbox. |
 | `messageTransport.js` | `MESSAGE_ACCOUNT_TRANSPORT` — the one table of what each message-account type delivers (`sendVia`, email-capable): `sendViaForAccountType`, `accountTypeCanSend`, and `pickEmailSenderAccount` (privacy email lanes prefer an API transport, never pick a Teams chat). |
 
