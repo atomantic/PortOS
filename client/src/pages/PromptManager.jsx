@@ -40,6 +40,17 @@ const PAGE_SUBTITLE = 'Customize AI prompts for backend operations';
 const VAR_FORM_FIELDS = ['key', 'name', 'category', 'content'];
 const BLANK_VAR_FORM = Object.freeze({ key: '', name: '', category: '', content: '' });
 
+// Names what failed and how to recover. `stale` means rows from an earlier
+// successful read are still shown.
+function CatalogueNotice({ label, stale, onRetry }) {
+  return (
+    <div role="alert" className="mb-2 rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-2 text-xs text-port-warning">
+      <div>{stale ? `${label} may be out of date — the last refresh failed.` : `${label} are unavailable right now.`}</div>
+      <button onClick={onRetry} className="mt-1 text-port-accent hover:underline">Retry {label.toLowerCase()}</button>
+    </div>
+  );
+}
+
 export default function PromptManager() {
   const [searchParams, setSearchParams] = useSearchParams();
   const rawTab = searchParams.get('tab');
@@ -75,6 +86,17 @@ export default function PromptManager() {
   const [systemStageKeys, setSystemStageKeys] = useState([]);
   const [variables, setVariables] = useState({});
   const [loading, setLoading] = useState(true);
+  const [catalogueState, setCatalogueState] = useState({
+    stages: { failed: false, loaded: false },
+    variables: { failed: false, loaded: false },
+    skills: { failed: false, loaded: false },
+    providers: { failed: false, loaded: false },
+  });
+  const catalogueSeqRef = useRef({});
+  const stagesFailed = catalogueState.stages.failed;
+  const variablesFailed = catalogueState.variables.failed;
+  const skillsFailed = catalogueState.skills.failed;
+  const providersFailed = catalogueState.providers.failed;
 
   // Stage list search / grouping. The query is deliberately LOCAL, not a URL
   // param: it's a transient way to reach a stage, and the thing worth
@@ -219,25 +241,52 @@ export default function PromptManager() {
     loadData();
   }, []);
 
+  // Each catalogue loads, fails and retries on its own. A failed read keeps the
+  // rows already on screen (flagged stale) and never reads as an empty list, so
+  // "unavailable" can't be mistaken for "no records" or "deleted".
+  const CATALOGUES = {
+    stages: {
+      load: () => getPrompts({ silent: true }),
+      apply: (res) => {
+        setStages(res.stages || {});
+        // `Array.isArray` rather than `|| []`: an older server that predates the
+        // `systemStages` key sends nothing, which must read as "no system stages
+        // known" (no badges, empty System-only filter) — never as a crash.
+        setSystemStageKeys(Array.isArray(res.systemStages) ? res.systemStages : []);
+      },
+    },
+    variables: { load: () => getPromptVariables({ silent: true }), apply: (res) => setVariables(res.variables || {}) },
+    skills: { load: () => getJobSkills({ silent: true }), apply: (res) => setJobSkills(res.skills || []) },
+    providers: {
+      load: () => getProviders({ silent: true }),
+      apply: (res) => {
+        setProviders((res.providers || []).filter(p => p.enabled));
+        setActiveProviderId(res.activeProvider || null);
+      },
+    },
+  };
+
+  const loadCatalogues = async (keys) => {
+    await Promise.all(keys.map(async (key) => {
+      const seq = (catalogueSeqRef.current[key] || 0) + 1;
+      catalogueSeqRef.current[key] = seq;
+      const res = await CATALOGUES[key].load().catch(() => null);
+      if (catalogueSeqRef.current[key] !== seq) return;
+      if (res && typeof res === 'object') {
+        CATALOGUES[key].apply(res);
+        setCatalogueState((prev) => ({ ...prev, [key]: { failed: false, loaded: true } }));
+      } else {
+        setCatalogueState((prev) => ({ ...prev, [key]: { ...prev[key], failed: true } }));
+      }
+    }));
+  };
+
   const loadData = async () => {
-    setLoading(true);
-    const [stagesRes, varsRes, jobSkillsRes, providersRes] = await Promise.all([
-      getPrompts({ silent: true }).catch(() => ({ stages: {}, systemStages: [] })),
-      getPromptVariables({ silent: true }).catch(() => ({ variables: {} })),
-      getJobSkills({ silent: true }).catch(() => ({ skills: [] })),
-      getProviders({ silent: true }).catch(() => ({ providers: [] }))
-    ]);
-    setStages(stagesRes.stages || {});
-    // `Array.isArray` rather than `|| []`: an older server that predates the
-    // `systemStages` key sends nothing, which must read as "no system stages
-    // known" (no badges, empty System-only filter) — never as a crash.
-    setSystemStageKeys(Array.isArray(stagesRes.systemStages) ? stagesRes.systemStages : []);
-    setVariables(varsRes.variables || {});
-    setJobSkills(jobSkillsRes.skills || []);
-    setProviders((providersRes.providers || []).filter(p => p.enabled));
-    setActiveProviderId(providersRes.activeProvider || null);
+    await loadCatalogues(Object.keys(CATALOGUES));
     setLoading(false);
   };
+
+  const retryCatalogue = (key) => loadCatalogues([key]);
 
   // Fetch the URL-selected stage's template + config. Keyed on selectedStage so
   // a deep link / reload restores the open editor; a cleared param resets it.
@@ -761,10 +810,13 @@ export default function PromptManager() {
                   System only
                 </button>
                 <span className="text-xs text-gray-500">
-                  {stageFilterActive ? `${stageMatchCount} of ${stageTotalCount}` : `${stageTotalCount} stages`}
+                  {stagesFailed && !catalogueState.stages.loaded ? 'Unavailable' : stageFilterActive ? `${stageMatchCount} of ${stageTotalCount}` : `${stageTotalCount} stages`}
                 </span>
               </div>
             </div>
+            {stagesFailed && (
+              <CatalogueNotice label="Stages" stale={catalogueState.stages.loaded} onRetry={() => retryCatalogue('stages')} />
+            )}
             <div className="space-y-1">
               {stageGroups.map(({ key: groupKey, label, stages: groupStages }) => {
                 // A filter flips the default open — hits hidden behind collapsed
@@ -839,7 +891,7 @@ export default function PromptManager() {
                   </div>
                 );
               })}
-              {stageGroups.length === 0 && (
+              {stageGroups.length === 0 && !(stagesFailed && !catalogueState.stages.loaded) && (
                 <div className="text-sm text-gray-500 px-3 py-2">
                   {stageFilterActive ? 'No stages match that search' : 'No prompt stages found'}
                 </div>
@@ -849,7 +901,7 @@ export default function PromptManager() {
 
           {/* Stage Editor */}
           <div className="lg:col-span-2 space-y-4">
-            {selectedStage && !stages[selectedStage] ? (
+            {selectedStage && !stages[selectedStage] && !stagesFailed ? (
               <div className="bg-port-card border border-port-border rounded-xl p-12 text-center text-gray-500">
                 That stage could not be found — it may have been deleted or renamed.{' '}
                 <button onClick={() => setSelectedStage(null)} className="text-port-accent hover:underline">
@@ -928,6 +980,9 @@ export default function PromptManager() {
                           </button>
                         </div>
                       </div>
+                      {providersFailed && (
+                        <CatalogueNotice label="Providers" stale={catalogueState.providers.loaded} onRetry={() => retryCatalogue('providers')} />
+                      )}
                       {!stageConfig.provider ? (
                         <select
                           disabled={!stageReady}
@@ -1018,6 +1073,9 @@ export default function PromptManager() {
                 <Plus size={16} />
               </button>
             </div>
+            {variablesFailed && (
+              <CatalogueNotice label="Variables" stale={catalogueState.variables.loaded} onRetry={() => retryCatalogue('variables')} />
+            )}
             <div className="space-y-1">
               {/* The "+" has no list row of its own, so its discard question
                   takes the top of the list. The dirty check is part of the
@@ -1097,7 +1155,14 @@ export default function PromptManager() {
 
           {/* Variable Editor */}
           <div className="lg:col-span-2">
-            {selectedVar && !variables[selectedVar] ? (
+            {selectedVar && !variables[selectedVar] && variablesFailed ? (
+              <div className="bg-port-card border border-port-border rounded-xl p-12 text-center text-gray-500">
+                The variable list is unavailable, so this variable cannot be shown.{' '}
+                <button onClick={() => retryCatalogue('variables')} className="text-port-accent hover:underline">
+                  Retry variables
+                </button>
+              </div>
+            ) : selectedVar && !variables[selectedVar] ? (
               <div className="bg-port-card border border-port-border rounded-xl p-12 text-center text-gray-500">
                 That variable could not be found — it may have been deleted.{' '}
                 <button onClick={() => switchVariable(null)} className="text-port-accent hover:underline">
@@ -1185,6 +1250,9 @@ export default function PromptManager() {
               <h3 className="text-sm font-medium text-gray-400">Autonomous Job Skills</h3>
               <p className="text-xs text-gray-500 mt-1">Versioned prompt templates for recurring jobs</p>
             </div>
+            {skillsFailed && (
+              <CatalogueNotice label="Job skills" stale={catalogueState.skills.loaded} onRetry={() => retryCatalogue('skills')} />
+            )}
             <div className="space-y-1">
               {jobSkills.map((skill) => (
                 // The dirty check is part of the render condition, not just of
@@ -1229,7 +1297,7 @@ export default function PromptManager() {
                   </button>
                 )
               ))}
-              {jobSkills.length === 0 && (
+              {jobSkills.length === 0 && !skillsFailed && (
                 <div className="text-sm text-gray-500 px-3 py-2">No job skill templates found</div>
               )}
             </div>
