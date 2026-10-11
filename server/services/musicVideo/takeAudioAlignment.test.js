@@ -94,6 +94,10 @@ describe.skipIf(!ffmpeg)('alignPerformanceInstruction', () => {
     const inSync = await alignPerformanceInstruction(instruction(), await clip('sync.mp4', { padSec: 0 }));
     expect(inSync.edit).toMatchObject({ inSec: 0, outSec: 4.2 });
     expect(inSync.alignment.offsetSec).toBe(0);
+    // A clip that starts early (its first 0.2 s of the window missing) cannot be pulled before its first frame.
+    const early = await alignPerformanceInstruction(instruction(), await clip('early.mp4', { from: WINDOW.startSec + 0.2 }));
+    expect(early.alignment.measuredSec).toBeCloseTo(-0.2, 1);
+    expect(early.edit).toMatchObject({ inSec: 0, outSec: 4.2 });
     expect(await alignPerformanceInstruction(instruction(), await clip('silent.mp4', { audio: false }))).toEqual(instruction());
     expect(await alignPerformanceInstruction(instruction(), await clip('other.mp4', { padSec: 0.3, from: 7.5 }))).toEqual(instruction());
   });
