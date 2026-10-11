@@ -13,8 +13,11 @@ describe('conformImageAspect', () => {
   beforeAll(async () => { dir = await mkdtemp(join(tmpdir(), 'aspect-conform-')); });
   afterAll(async () => { await rm(dir, { recursive: true, force: true }); });
 
-  const frame = async (name, width, height) => {
-    const path = join(dir, name);
+  // Label-free file names: a test label like "near-4:3" is not a legal
+  // Windows path segment.
+  let seq = 0;
+  const frame = async (width, height) => {
+    const path = join(dir, `frame-${seq++}.png`);
     await writeFile(path, await sharp({ create: { width, height, channels: 3, background: { r: 90, g: 60, b: 30 } } }).png().toBuffer());
     return path;
   };
@@ -25,8 +28,8 @@ describe('conformImageAspect', () => {
     ['3:2 crops height', [1536, 1024, 1920, 1080], { from: '1536x1024', to: '1536x864' }],
     ['too-wide frame crops width', [2000, 800, 1920, 1080], { from: '2000x800', to: '1422x800' }],
     ['portrait request from a landscape frame', [1536, 1024, 1024, 1536], { from: '1536x1024', to: '683x1024' }],
-  ])('%s', async (label, [sw, sh, tw, th], expected) => {
-    const path = await frame(`${label}.png`, sw, sh);
+  ])('%s', async (_label, [sw, sh, tw, th], expected) => {
+    const path = await frame(sw, sh);
     expect(await conformImageAspect(path, tw, th)).toEqual(expected);
     const [w, h] = expected.to.split('x').map(Number);
     expect(await sharp(path).metadata()).toMatchObject({ width: w, height: h });
@@ -35,8 +38,8 @@ describe('conformImageAspect', () => {
   it.each([
     ['Codex 16:9 within tolerance', [1672, 941], [1920, 1080]],
     ['no requested size', [1254, 1254], [null, null]],
-  ])('leaves %s untouched', async (label, [sw, sh], [tw, th]) => {
-    const path = await frame(`${label}.png`, sw, sh);
+  ])('leaves %s untouched', async (_label, [sw, sh], [tw, th]) => {
+    const path = await frame(sw, sh);
     const before = await readFile(path);
     expect(await conformImageAspect(path, tw, th)).toBeNull();
     expect(Buffer.compare(await readFile(path), before)).toBe(0);
