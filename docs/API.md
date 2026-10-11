@@ -30,6 +30,23 @@ When adding an HTTP route, keep its request Zod schema in a reusable server libr
 
 Building a native companion client? See [COMPANION_APP_API.md](./COMPANION_APP_API.md) — the stable, pre-auth-discoverable contract (discovery/identity, HTTP Basic auth vs. operator sessions, instance management, palette actions, daily-log, POST progress, and the iCloud-sync precedent) that the PortDeck app consumes. Basic auth alone does not grant peer management or host control — those need an operator session obtained via `POST /api/auth/login`, same as this section's [Security Model](#security-model) describes for host control below.
 
+### Partial settings saves
+
+`PATCH /api/settings/slice` accepts `{ slicePath, partial }`. It shallow-merges
+the supplied keys at the selected slice inside the settings write queue, keeping
+sibling settings and concurrent independent edits. Supplied objects and arrays
+replace that key; explicit null/empty values clear fields where their schema allows.
+Unreadable/malformed persisted settings and failed writes return errors.
+
+Supported paths are `localLlm.ollama`, `localLlm.lmstudio`, `localLlm.llama`,
+`localLlm.mtplx`, `localLlm.slotstream`, `imageGen.local`, `pipeline`,
+`writersRoom`, `seriesAutopilot`, `pipelineEditorialChecks`, and `autoUpdate`.
+Only the current controls' fields are accepted; credential/auth paths and
+prototype-related keys are rejected. Execution-policy and changed executable
+fields retain the same operator authority checks as `PUT /api/settings`,
+including authorized local agents. Legacy PUT keeps its top-level replacement
+semantics.
+
 ## Security Model
 
 PortOS can execute host commands and access private files. It must remain on the user's private network; a reachable LAN or tailnet peer is not automatically trustworthy. It implements the following security measures:

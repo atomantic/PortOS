@@ -139,7 +139,7 @@
  * account and change external state; they require operator authority.
  */
 
-import { canonicalStringify, isPlainObject } from './objects.js';
+import { canonicalStringify, isPlainObject, POLLUTING_KEYS } from './objects.js';
 import { LLM_DRILL_TYPES } from './postDrillTypes.js';
 import { escapeRegExp } from './textUtils.js';
 
@@ -781,7 +781,7 @@ export const HOST_CONTROL_SETTINGS_SLICES = Object.freeze([
 ]);
 
 /**
- * Nested `PUT /api/settings` keys, as dotted paths, that choose a binary
+ * Nested settings mutation keys, as dotted paths, that choose a binary
  * PortOS spawns (the image-gen CLIs and the Python interpreter every local
  * media lane runs) or turn the Layered Intelligence `cmd` sources into a
  * full shell (#8751). Their parent slices stay open, so each is gated per
@@ -853,6 +853,7 @@ const COMPILED_BODY_ROUTES = [
   // Enabling this feature now launches its registered host executable.
   ['PUT /api/settings/features/eidoverse', (body) => bodyKeys(body)],
   ['POST /api/local-llm/capability-tests/run', (body) => body?.testId === 'sandbox-repair' ? ['testId'] : []],
+  ['PATCH /api/settings/slice', (body) => HOST_CONTROL_SETTINGS_SLICES.includes(body?.slicePath) ? [body.slicePath] : []],
   ['PUT /api/settings', (body) => bodyKeys(body).filter((key) => HOST_CONTROL_SETTINGS_SLICES.includes(key)
     || (key === 'instanceFeatures' && body.instanceFeatures?.eidoverse !== undefined))],
   ['PUT /api/cos/config', (body) => bodyKeys(body).filter((key) => !HOST_CONTROL_OPEN_COS_CONFIG_KEYS.includes(key))],
@@ -883,18 +884,29 @@ const valueAt = (object, path) => path.split('.').reduce(
 const isUnset = (value) => value === undefined || value === null || value === '' || value === false;
 
 const SETTINGS_WRITE = compileRoute('PUT /api/settings');
+const SETTINGS_SLICE_WRITE = compileRoute('PATCH /api/settings/slice');
 
-/** The HOST_CONTROL_SETTINGS_PATHS a `method path` body sets to a non-default value, for `PUT /api/settings`; [] elsewhere. */
+// Project the allowlisted one/two-segment slice payload into the same shape
+// the legacy PUT gate compares. Invalid paths are rejected by route validation.
+const settingsBody = (method, path, body) => {
+  if (method?.toUpperCase() !== SETTINGS_SLICE_WRITE.method || !SETTINGS_SLICE_WRITE.pattern.test(path)) return body;
+  if (typeof body?.slicePath !== 'string') return {};
+  const segments = body.slicePath.split('.');
+  if (segments.length > 2 || segments.some((key) => !key || POLLUTING_KEYS.has(key))) return {};
+  return segments.reduceRight((value, key) => ({ [key]: value }), body.partial);
+};
+
+/** The executable settings paths set by PUT or a slice PATCH; [] elsewhere. */
 export const hostControlSettingsPathsIn = (method, path, body) => (
   typeof method === 'string' && typeof path === 'string'
-  && method.toUpperCase() === SETTINGS_WRITE.method && SETTINGS_WRITE.pattern.test(path)
-    ? HOST_CONTROL_SETTINGS_PATHS.filter((key) => !isUnset(valueAt(body, key)))
+  && [SETTINGS_WRITE, SETTINGS_SLICE_WRITE].some((entry) => method.toUpperCase() === entry.method && entry.pattern.test(path))
+    ? HOST_CONTROL_SETTINGS_PATHS.filter((key) => !isUnset(valueAt(settingsBody(method, path, body), key)))
     : []
 );
 
 /** Of `paths`, the ones whose value in `body` differs from the stored `current` settings. */
-export const changedHostControlSettingsPaths = (paths, body, current) => (
-  paths.filter((key) => !Object.is(valueAt(body, key), valueAt(current, key)))
+export const changedHostControlSettingsPaths = (paths, body, current, method = 'PUT', path = '/api/settings') => (
+  paths.filter((key) => !Object.is(valueAt(settingsBody(method, path, body), key), valueAt(current, key)))
 );
 
 const VOICE_CONFIG_WRITE = compileRoute('PUT /api/voice/config');

@@ -729,7 +729,7 @@ export default function VideoGen() {
   }, []);
 
   const handleSavePythonPath = useCallback(async (path) => {
-    await patchSettingsSlice('imageGen.local', { pythonPath: path || undefined }, { silent: true })
+    await patchSettingsSlice('imageGen.local', { pythonPath: path || null }, { silent: true })
       .then(() => refreshStatus())
       .catch((err) => toast.error(`Failed to save: ${err.message}`));
   }, [refreshStatus]);

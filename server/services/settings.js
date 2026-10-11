@@ -241,10 +241,10 @@ const diffSettings = (prev, next) => {
  *
  * `actor` (#5594) names WHO is saving, and defaults to `'system'` — the honest
  * default, because most callers here are schedulers, sync hooks, and internal
- * feature writes. Only `PUT /api/settings` passes `'user'`. `reloadSettings` does
+ * feature writes. Settings HTTP mutations pass `'user'`. `reloadSettings` does
  * not call this at all, so a backup restore is excluded by construction.
  */
-const save = async (settings, { actor = 'system', skipUserAction = false } = {}) => {
+const save = async (settings, { actor = 'system', skipUserAction = false } = {}, previousSettings) => {
   const cleaned = stripStoreKeys(settings);
   // Stamp `timezoneUpdatedAt` whenever the effective `timezone` actually
   // changes, so timezone-dependent schedulers can gate catch-up/re-evaluation
@@ -255,7 +255,7 @@ const save = async (settings, { actor = 'system', skipUserAction = false } = {})
   // comparison is against the freshest persisted snapshot, and any prior
   // `timezoneUpdatedAt` on an unchanged-timezone save rides through untouched
   // via the merged object.
-  const prev = isPlainObject(cleaned) ? stripStoreKeys(await loadRaw()) : null;
+  const prev = isPlainObject(cleaned) ? previousSettings ?? stripStoreKeys(await loadRaw()) : null;
   // Diff BEFORE the timezoneUpdatedAt stamp below, so a timezone change reports
   // `keysChanged: ['timezone']` rather than dragging in the derived stamp.
   const change = isPlainObject(prev) ? diffSettings(prev, cleaned) : null;
@@ -382,8 +382,18 @@ export const updateSettings = (patch, options) => queueWrite(async () => {
 // between the external read and the queued write was clobbered by the caller's
 // stale pre-image. Here the read and the write share one queued turn, so the
 // mutator always sees the latest persisted snapshot.
+// Pass { requireReadable: true } to refuse unreadable/malformed snapshots rather
+// than using the legacy empty fallback; a confirmed absent file is still valid.
 export const updateSettingsWith = (mutate, options) => queueWrite(async () => {
-  const current = stripStoreKeys(await loadRaw());
+  // Partial mutations must never turn a failed read into an empty base. Keep
+  // ordinary readers/legacy writers compatible, but opt this contract into the
+  // strict reader inside the same queued turn as the mutation and write.
+  const strict = options?.requireReadable ? await readSettingsStrict() : null;
+  if (strict?.corrupt) throw new Error('Cannot update settings: persisted settings are unreadable or malformed');
+  const current = stripStoreKeys(strict
+    ? await hydratePrivateKeys(strict.settings, PATHS.data)
+    : await loadRaw());
+  const previous = strict ? structuredClone(current) : undefined;
   const next = await mutate(current);
   // Guard the mutator's return BEFORE persisting: unlike the old
   // saveSettings(objectLiteral) callers, a mutator with a missing `return`
@@ -392,5 +402,5 @@ export const updateSettingsWith = (mutate, options) => queueWrite(async () => {
   if (!isPlainObject(next)) {
     throw new TypeError('updateSettingsWith: mutate() must return a plain settings object');
   }
-  return save(next, options);
+  return save(next, options, previous);
 });

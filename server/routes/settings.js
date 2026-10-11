@@ -26,7 +26,7 @@ import { storableAutoUpdateConfig } from '../lib/sharedSchemas.js';
 import { DEFAULT_UNTRUSTED_CONTENT_POLICY, untrustedContentSettingsSchema } from '../lib/untrustedContent.js';
 import { agentContextSettingsSchema } from '../lib/agentContextValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
-import { privateCredentialParamsSchema, privateCredentialInputSchema, backupConfigSchema, autoUpdateSettingsSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, hideFirstRunCardSchema, networkSetupPreferenceSchema, settingsEmbeddingsSchema, localLlmSettingsSchema, imessageConfigSchema, signalConfigSchema, beeperSettingsSchema, beeperSavedScopesSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema, instanceFeatureGroupSettingsSchema, instanceFeatureGroupIdSchema, instanceFeatureGroupUpdateSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, federationSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, imageGenFalSettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema, subscriptionCostsMapSchema, subscriptionPlanTiersMapSchema, usageApiBilledInstanceIdsSchema, namedOrchestrationProfileSchema, orchestrationProfilesSettingsSchema, harnessSettingsSchema, credentialBootstrapsSettingsSchema, validateRequest } from '../lib/validation.js';
+import { settingsSlicePatchSchema, privateCredentialParamsSchema, privateCredentialInputSchema, backupConfigSchema, autoUpdateSettingsSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, hideFirstRunCardSchema, networkSetupPreferenceSchema, settingsEmbeddingsSchema, localLlmSettingsSchema, imessageConfigSchema, signalConfigSchema, beeperSettingsSchema, beeperSavedScopesSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema, instanceFeatureGroupSettingsSchema, instanceFeatureGroupIdSchema, instanceFeatureGroupUpdateSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, federationSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, imageGenFalSettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema, subscriptionCostsMapSchema, subscriptionPlanTiersMapSchema, usageApiBilledInstanceIdsSchema, namedOrchestrationProfileSchema, orchestrationProfilesSettingsSchema, harnessSettingsSchema, credentialBootstrapsSettingsSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -406,98 +406,98 @@ router.delete('/orchestration-profiles/:id', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// PUT /api/settings
-router.put('/', asyncHandler(async (req, res) => {
-  if (req.body?.orchestrationProfiles !== undefined) {
-    validateRequest(orchestrationProfilesSettingsSchema, req.body.orchestrationProfiles);
+// Shared validation keeps PATCH and legacy PUT on the same configuration contracts.
+const validateSettingsPatch = async (body) => {
+  if (body?.orchestrationProfiles !== undefined) {
+    validateRequest(orchestrationProfilesSettingsSchema, body.orchestrationProfiles);
   }
   // Settings is a polymorphic store but the backup sub-object has a known
   // schema. Validate that slice when it's present so a malformed Backup-tab
   // save doesn't reach disk (the runtime guards downstream are belt-and-
   // suspenders, but per project convention all inputs are validated).
-  if (req.body?.untrustedContent !== undefined) {
-    validateRequest(untrustedContentSettingsSchema, req.body.untrustedContent);
+  if (body?.untrustedContent !== undefined) {
+    validateRequest(untrustedContentSettingsSchema, body.untrustedContent);
   }
   // Per-harness enablement and the credential-bootstrap app table (#7564):
   // both are read at composite-provider resolve time, so a malformed entry
   // would surface as a run that cannot spawn rather than a 400 here.
-  if (req.body?.harnesses !== undefined) {
-    validateRequest(harnessSettingsSchema, req.body.harnesses);
+  if (body?.harnesses !== undefined) {
+    validateRequest(harnessSettingsSchema, body.harnesses);
   }
-  if (req.body?.credentialBootstraps !== undefined) {
-    validateRequest(credentialBootstrapsSettingsSchema, req.body.credentialBootstraps);
+  if (body?.credentialBootstraps !== undefined) {
+    validateRequest(credentialBootstrapsSettingsSchema, body.credentialBootstraps);
   }
-  if (req.body?.backup !== undefined) {
-    validateRequest(backupConfigSchema.partial(), req.body.backup);
+  if (body?.backup !== undefined) {
+    validateRequest(backupConfigSchema.partial(), body.backup);
   }
-  if (req.body?.autoUpdate !== undefined) {
-    validateRequest(autoUpdateSettingsSchema, req.body.autoUpdate);
+  if (body?.autoUpdate !== undefined) {
+    validateRequest(autoUpdateSettingsSchema, body.autoUpdate);
   }
-  if (req.body?.sharingDisplayName !== undefined || req.body?.sharingBio !== undefined) {
+  if (body?.sharingDisplayName !== undefined || body?.sharingBio !== undefined) {
     validateRequest(sharingSettingsPatchSchema.partial(), {
-      sharingDisplayName: req.body.sharingDisplayName,
-      sharingBio: req.body.sharingBio,
+      sharingDisplayName: body.sharingDisplayName,
+      sharingBio: body.sharingBio,
     });
   }
   // Per-feature AI provider assignments — validate each slice when present so
   // a malformed picker save can't write a non-string providerId/model to disk.
-  if (req.body?.autofixer !== undefined) {
-    validateRequest(autofixerSettingsSchema.partial(), req.body.autofixer);
+  if (body?.autofixer !== undefined) {
+    validateRequest(autofixerSettingsSchema.partial(), body.autofixer);
   }
-  if (req.body?.calendarSync !== undefined) {
-    validateRequest(featureProviderConfigSchema.partial(), req.body.calendarSync);
+  if (body?.calendarSync !== undefined) {
+    validateRequest(featureProviderConfigSchema.partial(), body.calendarSync);
   }
-  if (req.body?.codeReview !== undefined) {
-    validateRequest(codeReviewSettingsSchema.partial(), req.body.codeReview);
+  if (body?.codeReview !== undefined) {
+    validateRequest(codeReviewSettingsSchema.partial(), body.codeReview);
   }
   // Creative Director's treatment, plan, and scene-evaluation provider/model
   // pins — validate the slice when present so a malformed picker save can't
   // write a bad provider config.
-  if (req.body?.creativeDirector !== undefined) {
-    validateRequest(creativeDirectorSettingsSchema.partial(), req.body.creativeDirector);
+  if (body?.creativeDirector !== undefined) {
+    validateRequest(creativeDirectorSettingsSchema.partial(), body.creativeDirector);
   }
   // Music studio slice (#2911) — the chiptune provider pin + publish prefs.
-  if (req.body?.music !== undefined) {
-    validateRequest(musicSettingsSchema.partial(), req.body.music);
+  if (body?.music !== undefined) {
+    validateRequest(musicSettingsSchema.partial(), body.music);
   }
-  if (req.body?.federation !== undefined) {
-    validateRequest(federationSettingsSchema, req.body.federation);
+  if (body?.federation !== undefined) {
+    validateRequest(federationSettingsSchema, body.federation);
     // The schema only proves a route is well-SHAPED. A route naming a peer that
     // is unknown, switched off, not a media provider, not allowlisted for that
     // model, or outside the tailnet is well-shaped and permanently unusable —
     // and unattended work has no human at the moment it fails, so it would just
     // break every future Creative Director / Commission render in silence.
     // Refuse it here, where there IS a human. See routingPolicy.js.
-    await assertMediaRoutingConfig(req.body.federation.mediaRouting);
+    await assertMediaRoutingConfig(body.federation.mediaRouting);
   }
   // Home location ({ lat, lon }) read by the weather_now voice tool. The schema
   // already makes both fields optional + nullable (clearing falls back to the
   // tool default), and the refine enforces both-or-neither — so validate the
   // whole slice rather than .partial()ing away that pairing rule.
-  if (req.body?.location !== undefined) {
-    validateRequest(locationSettingsSchema, req.body.location);
+  if (body?.location !== undefined) {
+    validateRequest(locationSettingsSchema, body.location);
   }
-  if (req.body?.networkSetupPreference !== undefined) {
-    validateRequest(networkSetupPreferenceSchema, req.body.networkSetupPreference);
+  if (body?.networkSetupPreference !== undefined) {
+    validateRequest(networkSetupPreferenceSchema, body.networkSetupPreference);
   }
-  if (req.body?.hideFirstRunCard !== undefined) {
-    validateRequest(hideFirstRunCardSchema, req.body.hideFirstRunCard);
+  if (body?.hideFirstRunCard !== undefined) {
+    validateRequest(hideFirstRunCardSchema, body.hideFirstRunCard);
   }
-  if (req.body?.embeddings !== undefined) {
-    validateRequest(settingsEmbeddingsSchema.partial(), req.body.embeddings);
+  if (body?.embeddings !== undefined) {
+    validateRequest(settingsEmbeddingsSchema.partial(), body.embeddings);
   }
-  if (req.body?.localLlm !== undefined) {
-    validateRequest(localLlmSettingsSchema, req.body.localLlm);
+  if (body?.localLlm !== undefined) {
+    validateRequest(localLlmSettingsSchema, body.localLlm);
   }
   // iMessage ingestion config (#2151) — validate the slice when present so a
   // malformed enabled/interval can't reach disk and break the sync scheduler.
-  if (req.body?.imessage !== undefined) {
-    validateRequest(imessageConfigSchema.partial(), req.body.imessage);
+  if (body?.imessage !== undefined) {
+    validateRequest(imessageConfigSchema.partial(), body.imessage);
   }
   // Signal ingestion config (#2154) — validate the slice when present so a
   // malformed enabled/interval can't reach disk and break the sync scheduler.
-  if (req.body?.signal !== undefined) {
-    validateRequest(signalConfigSchema.partial(), req.body.signal);
+  if (body?.signal !== undefined) {
+    validateRequest(signalConfigSchema.partial(), body.signal);
   }
   // Beeper Desktop bridge ingestion + connection config (#30) — validate the
   // slice when present so a malformed enabled/interval/baseUrl/budget can't
@@ -510,84 +510,84 @@ router.put('/', asyncHandler(async (req, res) => {
   // `.partial()` was a no-op), and the schema's `superRefine` (SEC-2's
   // loopback-only `baseUrl` gate) returns a `ZodEffects`, which has no
   // `.partial()` method at all.
-  if (req.body?.beeperSavedScopes !== undefined) {
-    validateRequest(beeperSavedScopesSchema, req.body.beeperSavedScopes);
+  if (body?.beeperSavedScopes !== undefined) {
+    validateRequest(beeperSavedScopesSchema, body.beeperSavedScopes);
   }
-  if (req.body?.beeper !== undefined) {
-    validateRequest(beeperSettingsSchema, req.body.beeper);
+  if (body?.beeper !== undefined) {
+    validateRequest(beeperSettingsSchema, body.beeper);
   }
   // Spotify ingestion config (#2152) — validate the slice when present so a
   // malformed enabled/interval can't reach disk and break the sync scheduler.
-  if (req.body?.spotify !== undefined) {
-    validateRequest(spotifyConfigSchema.partial(), req.body.spotify);
+  if (body?.spotify !== undefined) {
+    validateRequest(spotifyConfigSchema.partial(), body.spotify);
   }
   // YouTube watch-history scrape config (#2153) — validate the slice when present
   // so a malformed enabled/interval can't reach disk and break the sync scheduler.
-  if (req.body?.youtube !== undefined) {
-    validateRequest(youtubeConfigSchema.partial(), req.body.youtube);
+  if (body?.youtube !== undefined) {
+    validateRequest(youtubeConfigSchema.partial(), body.youtube);
   }
   // LoRA training config (caption provider + training defaults) — validate
   // the slice when present so a malformed save can't write bad bounds the
   // trainer would then pass to the python child.
-  if (req.body?.loraTraining !== undefined) {
-    validateRequest(loraTrainingConfigSchema.partial(), req.body.loraTraining);
+  if (body?.loraTraining !== undefined) {
+    validateRequest(loraTrainingConfigSchema.partial(), body.loraTraining);
   }
   // Per-API external-access flags (voice/sdapi). Validate the slice when present
   // so a malformed toggle save can't write a non-boolean exposed/requireAuth to
   // disk (the registry would then silently treat it as its default).
-  if (req.body?.apiAccess !== undefined) {
-    validateRequest(apiAccessSettingsSchema.partial(), req.body.apiAccess);
+  if (body?.apiAccess !== undefined) {
+    validateRequest(apiAccessSettingsSchema.partial(), body.apiAccess);
   }
-  if (req.body?.instanceFeatures !== undefined) {
-    validateRequest(instanceFeatureSettingsSchema, req.body.instanceFeatures);
+  if (body?.instanceFeatures !== undefined) {
+    validateRequest(instanceFeatureSettingsSchema, body.instanceFeatures);
   }
   // Instance feature GROUP participation (#40) — same shape guard as the
   // per-feature slice above, keyed on the separate group id list.
-  if (req.body?.instanceFeatureGroups !== undefined) {
-    validateRequest(instanceFeatureGroupSettingsSchema, req.body.instanceFeatureGroups);
+  if (body?.instanceFeatureGroups !== undefined) {
+    validateRequest(instanceFeatureGroupSettingsSchema, body.instanceFeatureGroups);
   }
   // Local MCP agent-context opt-in. Validate the whole strict slice so an
   // unknown scope/profile cannot silently broaden what the server exposes.
-  if (req.body?.agentContext !== undefined) {
-    validateRequest(agentContextSettingsSchema, req.body.agentContext);
+  if (body?.agentContext !== undefined) {
+    validateRequest(agentContextSettingsSchema, body.agentContext);
   }
   // Editorial-check enable/config slice (#1284) — validate when present so a
   // malformed save can't write a non-boolean enabled / non-object config the
   // registry would then choke on.
-  if (req.body?.pipelineEditorialChecks !== undefined) {
-    validateRequest(pipelineEditorialChecksSettingsSchema.partial(), req.body.pipelineEditorialChecks);
+  if (body?.pipelineEditorialChecks !== undefined) {
+    validateRequest(pipelineEditorialChecksSettingsSchema.partial(), body.pipelineEditorialChecks);
   }
   // Privacy Center opt-out recheck config (#2145) — validate the slice when
   // present so a malformed cron / non-boolean autonomy toggle can't reach disk
   // and break the recheck scheduler. Both autonomy toggles default OFF.
-  if (req.body?.privacy !== undefined) {
-    validateRequest(privacySettingsSchema.partial(), req.body.privacy);
+  if (body?.privacy !== undefined) {
+    validateRequest(privacySettingsSchema.partial(), body.privacy);
   }
   // Scheduled Series Autopilot config (#2174) — validate the slice when present
   // so an invalid cron (rejected by the schema's isValidCronExpression refine) or
   // bad seriesId can't reach disk and leave an "enabled" schedule that never fires.
   // `.partial()` so a PUT that only carries { schedules } still validates.
-  if (req.body?.seriesAutopilot !== undefined) {
-    validateRequest(seriesAutopilotSettingsSchema.partial(), req.body.seriesAutopilot);
+  if (body?.seriesAutopilot !== undefined) {
+    validateRequest(seriesAutopilotSettingsSchema.partial(), body.seriesAutopilot);
   }
   // Grok Imagegen settings slice (#2859) — validate when present so a malformed
   // save can't write a bad aspect ratio (which lands verbatim in the grok
   // prompt) or a non-boolean enabled gate to disk. The imageGen parent stays
   // polymorphic; only the grok sub-slice has a schema here.
-  if (req.body?.imageGen?.grok !== undefined) {
-    validateRequest(imageGenGrokSettingsSchema.partial(), req.body.imageGen.grok);
+  if (body?.imageGen?.grok !== undefined) {
+    validateRequest(imageGenGrokSettingsSchema.partial(), body.imageGen.grok);
   }
-  if (req.body?.imageGen?.agy !== undefined) {
-    validateRequest(imageGenAgySettingsSchema.partial(), req.body.imageGen.agy);
+  if (body?.imageGen?.agy !== undefined) {
+    validateRequest(imageGenAgySettingsSchema.partial(), body.imageGen.agy);
   }
-  if (req.body?.imageGen?.fal !== undefined) {
-    validateRequest(imageGenFalSettingsSchema.partial(), req.body.imageGen.fal);
+  if (body?.imageGen?.fal !== undefined) {
+    validateRequest(imageGenFalSettingsSchema.partial(), body.imageGen.fal);
   }
   // Every local media lane spawns this interpreter (and image gen spawns the
   // `mflux-generate` beside it), so hold it to the guard the setup routes use:
   // a python basename, never an arbitrary binary (#8751). A cleared value
   // (`''`/`null`) falls back to interpreter discovery, so it stays allowed.
-  const localPython = req.body?.imageGen?.local?.pythonPath;
+  const localPython = body?.imageGen?.local?.pythonPath;
   if (localPython != null && localPython !== '' && !isAllowedPython(localPython)) {
     throw new ServerError('imageGen.local.pythonPath must be a python interpreter (basename python/python3/python3.NN)', {
       status: 400, code: 'INVALID_PYTHON_PATH',
@@ -597,39 +597,42 @@ router.put('/', asyncHandler(async (req, res) => {
   // target key or a non-enum backend can't persist a slice the render-target
   // resolver would then silently ignore (or worse, hand an invalid model id
   // to a cloud CLI's argv).
-  if (req.body?.renderDefaults !== undefined) {
-    validateRequest(renderDefaultsSettingsSchema, req.body.renderDefaults);
+  if (body?.renderDefaults !== undefined) {
+    validateRequest(renderDefaultsSettingsSchema, body.renderDefaults);
   }
   // Install-wide video render pin (#3231 Phase 4) — validate when present so a
   // non-enum backend can't persist a mode resolveVideoMode would choke on.
-  if (req.body?.videoGen !== undefined) {
-    validateRequest(videoGenSettingsSchema, req.body.videoGen);
+  if (body?.videoGen !== undefined) {
+    validateRequest(videoGenSettingsSchema, body.videoGen);
   }
   // Install-level Layered Intelligence settings (#2515) — validate the slice when
   // present so a malformed `trustShellSources` can't persist and silently unlock
   // full-shell custom `cmd` sources install-wide.
-  if (req.body.layeredIntelligence) {
-    validateRequest(layeredIntelligenceSettingsSchema.partial(), req.body.layeredIntelligence);
+  if (body.layeredIntelligence) {
+    validateRequest(layeredIntelligenceSettingsSchema.partial(), body.layeredIntelligence);
   }
   // Subscription plan prices — the same schema PUT /api/usage/subscriptions
   // enforces, so a legacy client or restore bundle can't write a junk family
   // key or an over-cap price through the generic settings endpoint. Without it
   // the value persists, reads back as "not priced", and is silently deleted by
   // the next save from the usage page.
-  if (req.body?.subscriptionCosts !== undefined) {
-    validateRequest(subscriptionCostsMapSchema, req.body.subscriptionCosts);
+  if (body?.subscriptionCosts !== undefined) {
+    validateRequest(subscriptionCostsMapSchema, body.subscriptionCosts);
   }
   // Plan tiers ride the same rails as the prices beside them, for the same
   // reason: an unvalidated key here would persist, read back as "no tier", and
   // be dropped by the next save from the Subscriptions page.
-  if (req.body?.subscriptionPlanTiers !== undefined) {
-    validateRequest(subscriptionPlanTiersMapSchema, req.body.subscriptionPlanTiers);
+  if (body?.subscriptionPlanTiers !== undefined) {
+    validateRequest(subscriptionPlanTiersMapSchema, body.subscriptionPlanTiers);
   }
   // Same schema PUT /api/usage/fleet-billing's store uses, so a restore dump
   // can't write an unbounded or non-string list through the generic endpoint.
-  if (req.body?.usageApiBilledInstanceIds !== undefined) {
-    validateRequest(usageApiBilledInstanceIdsSchema, req.body.usageApiBilledInstanceIds);
+  if (body?.usageApiBilledInstanceIds !== undefined) {
+    validateRequest(usageApiBilledInstanceIdsSchema, body.usageApiBilledInstanceIds);
   }
+};
+
+const saveSettingsPatch = async (body, slicePatch) => {
   // User-defined catalog types moved out of settings.json into PostgreSQL
   // (`catalog_user_types`, #1001). The `/api/catalog/types` routes are the only
   // write path; a `catalogUserTypes` key in a PUT /api/settings body (legacy
@@ -655,8 +658,8 @@ router.put('/', asyncHandler(async (req, res) => {
     subscriptionCosts: subscriptionCostsPatch,
     subscriptionPlanTiers: subscriptionPlanTiersPatch,
     usageApiBilledInstanceIds: apiBilledPatch,
-    ...settingsPatch
-  } = req.body || {};
+    ...initialSettingsPatch
+  } = body || {};
   // updateSettingsWith (not updateSettings) so the multi-owner `federation`
   // slice merges per sub-key and persisted write-only tokens the incoming patch
   // omits get re-injected — both against the freshest snapshot inside the write
@@ -664,14 +667,26 @@ router.put('/', asyncHandler(async (req, res) => {
   // `actor: 'user'` is what separates a save made HERE — a human on the Settings
   // page — from every other `save()` caller (schedulers, sync hooks, feature
   // writes), which keep the `'system'` default in the operator-action ledger (#5594).
+  let settingsPatch = initialSettingsPatch;
   let previousBeeperEnabled;
   let previousBeeperIntervalMinutes;
   let previousBeeperConnection;
   let previousBeeperGates;
-  let merged = await updateSettingsWith((current) => {
+  let merged = await updateSettingsWith(async (current) => {
     // Read inside the queue, against the freshest persisted snapshot (same
     // reasoning as `mergeFederationSlice` above) — a stale pre-image here could
     // read a no-op as a flip, or a real flip as a no-op.
+    if (slicePatch) {
+      const { slicePath, partial } = slicePatch;
+      const [root, child] = slicePath.split('.');
+      const parent = isPlainObject(current[root]) ? current[root] : {};
+      const existing = child ? parent[child] : current[root];
+      // Shallow merge at exactly the selected slice: objects/arrays/null supplied
+      // as values replace that key, including explicit clearing.
+      const updated = { ...(isPlainObject(existing) ? existing : {}), ...partial };
+      settingsPatch = { [root]: child ? { ...parent, [child]: updated } : updated };
+      await validateSettingsPatch(settingsPatch);
+    }
     previousBeeperEnabled = current?.beeper?.enabled === true;
     previousBeeperIntervalMinutes = current?.beeper?.intervalMinutes;
     previousBeeperConnection = JSON.stringify([current?.beeper?.baseUrl, current?.beeper?.allowNonLoopbackBaseUrl]);
@@ -686,7 +701,7 @@ router.put('/', asyncHandler(async (req, res) => {
       mergeFederationSlice(next, current),
       current,
     );
-  }, { actor: 'user' });
+  }, { actor: 'user', ...(slicePatch ? { requireReadable: true } : {}) });
   if (settingsPatch.instanceFeatures?.eidoverse !== undefined) {
     const { reconcileEidoverseRuntime } = await import('../services/eidoverseRuntime.js');
     await reconcileEidoverseRuntime()
@@ -753,7 +768,18 @@ router.put('/', asyncHandler(async (req, res) => {
   // already emitted it — so an added/removed/edited schedule takes effect
   // immediately without a restart, and this route stays decoupled from the
   // autopilot pipeline graph.
-  res.json(sanitizeSettingsForResponse(merged));
+  return sanitizeSettingsForResponse(merged);
+};
+
+// PUT remains a top-level replacement contract for whole-form and older callers.
+router.put('/', asyncHandler(async (req, res) => {
+  await validateSettingsPatch(req.body);
+  res.json(await saveSettingsPatch(req.body));
+}));
+
+router.patch('/slice', asyncHandler(async (req, res) => {
+  const patch = validateRequest(settingsSlicePatchSchema, req.body);
+  res.json(await saveSettingsPatch({}, patch));
 }));
 
 export default router;
