@@ -1,7 +1,7 @@
 import { PREVIEW_DOCUMENT_BASE, inlineDocumentModule, previewDocumentPath } from './documentModules.js';
 import { musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
 import { filmLookRuntimeSource } from '../../lib/filmLook.js';
-import { titleCardRuntimeSource } from '../../lib/musicVideoTitleCard.js';
+import { titleCardRuntime } from './titleCardFonts.js';
 /**
  * Music Video — HTML for a composition preview document.
  *
@@ -292,7 +292,7 @@ export async function buildDocumentPreview(project, { draft = false, files: give
   const mode = musicVideoMediaMode(project);
   const csp = PREVIEW_CSP.replace('img-src data: blob:', mode === 'code-only' ? "img-src 'none'" : 'img-src data: blob:').replace('media-src data: blob:', mode !== 'code-images-video' ? "media-src 'none'" : 'media-src data: blob:');
   // The film look and title card runtimes always ship (their panels post live changes); the saved records are their start.
-  const head = `<meta http-equiv="Content-Security-Policy" content="${csp}"><script>${BOOTSTRAP}</script><script>${filmLookRuntimeSource(project.filmLook)}</script><script>${inlineScript(titleCardRuntimeSource(project.titleCard))}</script><script>window.PORTOS_MV = ${scriptJson(data)};window.PORTOS_MV_EVENT_STATE = ${narrativeFrameState.toString()};</script>`;
+  const head = `<meta http-equiv="Content-Security-Policy" content="${csp}"><script>${BOOTSTRAP}</script><script>${filmLookRuntimeSource(project.filmLook)}</script><script>${inlineScript(titleCardRuntime(project.titleCard))}</script><script>window.PORTOS_MV = ${scriptJson(data)};window.PORTOS_MV_EVENT_STATE = ${narrativeFrameState.toString()};</script>`;
   const at = html.match(/<head[^>]*>/i);
   html = at ? `${html.slice(0, at.index + at[0].length)}${head}${html.slice(at.index + at[0].length)}` : `${head}${html}`;
 

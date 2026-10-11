@@ -330,8 +330,12 @@ validated by `musicVideoTitleCardSchema`, normalized by `normalizeTitleCard` in
 text). Turning it on fills the song title (the project name without its version
 suffix), the artist named for DistroKid under Where you post, this year, and a
 window that ends half a second before the first sung line. Timing (in, out,
-fade), position (four corners, bottom centre, centre), font (the lyric type's
-Archivo, Helvetica, serif, Plex Mono), size, look and colors are all editable;
+fade), position (four corners, bottom centre, centre), font, size, look and
+colors are all editable. Fonts are the lyric type's Archivo, Helvetica, serif,
+Plex Mono, and six bundled OFL faces (`TITLE_CARD_FONT_FACES`: Oswald,
+Audiowide, Orbitron, Righteous, Pacifico, Playfair Display, files and licences
+in `server/services/musicVideo/titleCardFonts/`), picked from swatches drawn in
+each face. Text is drawn exactly as typed;
 the panel flags a sung line that starts while the card is up and offers to end the
 card before it.
 
@@ -339,11 +343,12 @@ The card is not part of the composition document. `titleCardRuntimeSource()`
 is a page script installed beside it, in the live preview's head (live edits
 arrive as `portos-mv:title-card` messages) and in every render browser
 (`documentRenderInitScripts`). It draws on its own canvas fixed over the page,
-fitted to the render's aspect, and wraps `portosComposition.seek()` (chaining
+fitted to the render's aspect, registers the bundled faces from data URLs
+embedded in the script (`services/musicVideo/titleCardFonts.js`, so every page
+draws the same face whatever it declares itself), and wraps `portosComposition.seek()` (chaining
 the film look's wrapper) so the card is drawn for each frame after its faces
 load. It has two looks (`style`). `outline` follows the lyric type: cream fill, ink
-outline, no plate. `mtv` is the classic lower third: the artist in bold caps
-over the title, on a dark translucent plate with a colored bar on its leading
+outline, no plate. `mtv` is the classic lower third: the artist over the title, on a dark translucent plate with a colored bar on its leading
 edge (`accentColor`, cyan by default) and the title in `titleColor` (yellow by
 default). Both sit inside the same title-safe insets, and a block wider than
 its zone shrinks rather than running off frame. Like the lyrics it sits under the film look. It also rides

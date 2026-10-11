@@ -19,7 +19,8 @@ import { normalizeMusicVideoGrade } from '../../lib/musicVideoGrade.js';
 
 import { randomUUID } from 'crypto';
 import { trimTo } from '../../lib/textUtils.js';
-import { normalizeTitleCard, titleCardRuntimeSource, titleCardVisible } from '../../lib/musicVideoTitleCard.js';
+import { normalizeTitleCard, titleCardVisible } from '../../lib/musicVideoTitleCard.js';
+import { titleCardRuntime } from './titleCardFonts.js';
 import { filmStyleIdSchema } from '../../lib/filmStyleGrammarValidation.js';
 import {
   musicVideoEidoverseSceneSchema,
@@ -366,7 +367,7 @@ export function buildTypographyDocument({ cues, style = {}, width, height, durat
   const color = /^#[0-9a-f]{6}$/i.test(style.color || '') ? style.color : '#ffffff';
   const fontStack = hud ? FONT_STACKS.mono : (FONT_STACKS[style.font] || FONT_STACKS.sans);
   const accent = /^#[0-9a-f]{6}$/i.test(style.accentColor || '') ? style.accentColor : '#ff5a1f';
-  const titleCardScript = titleCard ? `<script>${titleCardRuntimeSource(titleCard)}</script>` : '';
+  const titleCardScript = titleCard ? `<script>${titleCardRuntime(titleCard)}</script>` : '';
   return `<!doctype html><html><head><meta charset="utf-8">${titleCardScript}<style>
 @font-face { font-family: "MV Archivo"; src: url(${LYRIC_FONT_FILE}) format("woff2"); font-weight: 100 900; font-stretch: 62% 125%; }
 html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }

@@ -1,7 +1,8 @@
 import { assertMusicVideoMediaSelections, musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
 import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 import { filmLookRuntimeSource, isFilmLookNeutral } from '../../lib/filmLook.js';
-import { titleCardRuntimeSource, titleCardVisible } from '../../lib/musicVideoTitleCard.js';
+import { titleCardVisible } from '../../lib/musicVideoTitleCard.js';
+import { titleCardRuntime } from './titleCardFonts.js';
 /**
  * Music Video — render a project's composition document over the song.
  *
@@ -70,7 +71,7 @@ export const documentAspect = musicVideoAspect;
 export function documentRenderInitScripts(project) {
   return [
     ...(isFilmLookNeutral(project?.filmLook) ? [] : [filmLookRuntimeSource(project.filmLook)]),
-    ...(titleCardVisible(project?.titleCard) ? [titleCardRuntimeSource(project.titleCard)] : []),
+    ...(titleCardVisible(project?.titleCard) ? [titleCardRuntime(project.titleCard)] : []),
   ];
 }
 
@@ -300,7 +301,7 @@ export async function openIsolatedDocumentPreview({ project, jobId, signal, onEv
     signal?.throwIfAborted();
     const page = await openComposition(staged.directory, {
       signal, streamMedia: true, mediaMode: musicVideoMediaMode(project), ownedBrowser: true, isolation: 'required',
-      initScripts: [filmLookRuntimeSource(project?.filmLook), titleCardRuntimeSource(project?.titleCard)],
+      initScripts: [filmLookRuntimeSource(project?.filmLook), titleCardRuntime(project?.titleCard)],
       previewBridge: true, refuseUnknown: 'empty', lockLoopback: true, onEvent,
     });
     await page.send('Emulation.setDeviceMetricsOverride', {

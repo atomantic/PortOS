@@ -73,4 +73,14 @@ describe('TitleCardPanel', () => {
     expect(onSave).toHaveBeenLastCalledWith({ titleCard: expect.objectContaining({ style: 'mtv', title: 'Example Song' }) });
     expect(screen.getByLabelText('Bar')).toBeInTheDocument();
   });
+
+  it('picks a font from swatches drawn in each face', () => {
+    const onSave = vi.fn().mockResolvedValue({});
+    render(<Harness initial={{ ...base, titleCard: { enabled: true, title: 'Example Song', startSec: 1, endSec: 5 } }} onSave={onSave} />);
+    const pacifico = screen.getByRole('radio', { name: 'Pacifico' });
+    expect(pacifico.style.fontFamily).toContain('MV Title Pacifico');
+    fireEvent.click(pacifico);
+    expect(onSave).toHaveBeenLastCalledWith({ titleCard: expect.objectContaining({ font: 'pacifico' }) });
+    expect(screen.getByRole('radio', { name: 'Pacifico' })).toHaveAttribute('aria-checked', 'true');
+  });
 });
