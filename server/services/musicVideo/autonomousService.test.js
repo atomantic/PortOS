@@ -1475,6 +1475,27 @@ describe('orchestrated mode (brief.orchestrator)', () => {
     expect(doubles.resumeProduction.mock.calls[0][2].stopBefore).toBeUndefined();
   });
 
+  // Uniquely catches a 69-shot run parking at the default 40 generations before every shot has a still.
+  it('grows a default generation limit to the shots left, but parks at a limit the director chose', async () => {
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], orchestrator: ORCHESTRATOR }, { autoApproveAuthorized: true });
+    await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
+    store.get('mv-auto').scenes = Array.from({ length: 30 }, (_, i) => ({ sceneId: `mvs-${i}`, label: `Shot ${i}`, framePrompt: 'a skater', ...(i < 5 ? { referenceImageId: `s${i}.png` } : {}) }));
+    const limited = { status: 'limit-reached', stopBefore: 'clips', limits: { maxGenerations: 40 }, usage: { generations: 40 } };
+    await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: limited });
+    expect(doubles.resumeProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-1', { acceptBasis: true, limits: { maxGenerations: 90 } });
+    expect(runOf().status).toBe('running');
+
+    store.delete('mv-auto');
+    doubles.startProduction.mockClear();
+    doubles.resumeProduction.mockClear();
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], orchestrator: ORCHESTRATOR, limits: { maxGenerations: 40 } }, { autoApproveAuthorized: true });
+    await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
+    store.get('mv-auto').scenes = [{ sceneId: 'mvs-a', label: 'Intro', framePrompt: 'a skater' }];
+    await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: limited });
+    expect(doubles.resumeProduction).not.toHaveBeenCalled();
+    expect(runOf()).toMatchObject({ status: 'needs-human', errorCode: 'PRODUCTION_PARKED' });
+  });
+
   // Uniquely catches an unviewable still being recorded as an approved review while the run still waits for the director.
   it('does not record approval for stills the reviewer could not see', async () => {
     await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], orchestrator: ORCHESTRATOR }, { autoApproveAuthorized: true });

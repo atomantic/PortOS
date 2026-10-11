@@ -223,6 +223,8 @@ function normalizeAutonomousSettings(raw = {}) {
       maxGenerations: int(raw.limits?.maxGenerations, AUTONOMOUS_LIMIT_BOUNDS.maxGenerations, AUTONOMOUS_DEFAULT_LIMITS.maxGenerations),
       maxReviewAttempts: int(raw.limits?.maxReviewAttempts, AUTONOMOUS_LIMIT_BOUNDS.maxReviewAttempts, AUTONOMOUS_DEFAULT_LIMITS.maxReviewAttempts),
     },
+    // No generation limit was chosen, so production sizes the default to the planned shots.
+    ...(raw.limits?.maxGenerations == null || raw.sizedGenerations === true ? { sizedGenerations: true } : {}),
     checkpoints,
     // An existing mood board to reuse instead of generating one (blank = generate).
     moodBoardId: clean(raw.moodBoardId, 64) || null,
