@@ -147,4 +147,13 @@ describe('MoodBoardStylePanel', () => {
     expect(screen.getByAltText('Board poster').getAttribute('src')).toBe('/data/images/poster.png');
     expect(screen.getByRole('button', { name: 'Regenerate poster' })).toBeEnabled();
   });
+
+  it('opens the poster in a preview modal when clicked', async () => {
+    render(<MoodBoardStylePanel board={{ ...analyzedBoard, posterImageRef: 'poster.png' }} onBoardChange={vi.fn()} />);
+    expect(screen.queryByAltText('Board poster preview')).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Preview board poster' }));
+    expect(screen.getByAltText('Board poster preview').getAttribute('src')).toBe('/data/images/poster.png');
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(screen.queryByAltText('Board poster preview')).toBeNull();
+  });
 });
