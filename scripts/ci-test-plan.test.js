@@ -1463,8 +1463,12 @@ describe('cross-workspace browser suites (#10312)', () => {
       !/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path) || BROWSER_SUITES.includes(path));
     const plan = buildCiTestPlan(inputs.changedFiles, { ...inputs, trackedFiles });
 
+    // The title card suite drives only the server-side runtime script, so a
+    // client component change has nothing to select it for.
+    const runtimeOnly = 'server/lib/musicVideoTitleCard.browser.test.js';
     expect(plan.full).toBe(false);
-    expect(plan.browserFiles).toEqual(expect.arrayContaining(BROWSER_SUITES));
+    expect(plan.browserFiles).toEqual(expect.arrayContaining(BROWSER_SUITES.filter((suite) => suite !== runtimeOnly)));
+    expect(plan.browserFiles).not.toContain(runtimeOnly);
     expect(plan.suiteReasons.browser).toMatch(/browser suite/);
   });
 
