@@ -1,20 +1,48 @@
-import { describe, it, expect } from 'vitest';
-import { aspectCropSize } from './aspectConform.js';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { mkdtemp, rm, writeFile, readFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import sharp from 'sharp';
+import { conformImageAspect } from './aspectConform.js';
 
-// The crop-box arithmetic, over the shapes Codex actually returned for 16:9
-// production stills. The end-to-end crop is covered in videoGen/fal.test.js;
-// this pins the tolerance boundary and both crop directions.
-describe('aspectCropSize', () => {
+// The crop over the shapes Codex actually returned for 16:9 production stills:
+// pins the tolerance boundary (its own 1672x941 must pass byte-for-byte) and
+// both crop directions. The provider wiring + sidecar is covered in codex.test.js,
+// the clip-lane use of the same crop box in videoGen/fal.test.js.
+describe('conformImageAspect', () => {
+  let dir;
+  beforeAll(async () => { dir = await mkdtemp(join(tmpdir(), 'aspect-conform-')); });
+  afterAll(async () => { await rm(dir, { recursive: true, force: true }); });
+
+  // Label-free file names: a test label like "near-4:3" is not a legal
+  // Windows path segment.
+  let seq = 0;
+  const frame = async (width, height) => {
+    const path = join(dir, `frame-${seq++}.png`);
+    await writeFile(path, await sharp({ create: { width, height, channels: 3, background: { r: 90, g: 60, b: 30 } } }).png().toBuffer());
+    return path;
+  };
+
   it.each([
-    ['Codex 16:9 passes untouched', [1672, 941, 1920, 1080], null],
-    ['square close-up crops height', [1254, 1254, 1920, 1080], { width: 1254, height: 705 }],
-    ['near-4:3 crops height', [1448, 1086, 1920, 1080], { width: 1448, height: 815 }],
-    ['3:2 crops height', [1536, 1024, 1920, 1080], { width: 1536, height: 864 }],
-    ['too-wide frame crops width', [2000, 800, 1920, 1080], { width: 1422, height: 800 }],
-    ['portrait request from a landscape frame', [1536, 1024, 1024, 1536], { width: 683, height: 1024 }],
-    ['unusable size is left alone', [0, 1024, 1920, 1080], null],
-    ['no requested size is left alone', [1254, 1254, null, null], null],
-  ])('%s', (_label, [sw, sh, tw, th], expected) => {
-    expect(aspectCropSize(sw, sh, tw, th)).toEqual(expected);
+    ['square close-up crops height', [1254, 1254, 1920, 1080], { from: '1254x1254', to: '1254x705' }],
+    ['near-4:3 crops height', [1448, 1086, 1920, 1080], { from: '1448x1086', to: '1448x815' }],
+    ['3:2 crops height', [1536, 1024, 1920, 1080], { from: '1536x1024', to: '1536x864' }],
+    ['too-wide frame crops width', [2000, 800, 1920, 1080], { from: '2000x800', to: '1422x800' }],
+    ['portrait request from a landscape frame', [1536, 1024, 1024, 1536], { from: '1536x1024', to: '683x1024' }],
+  ])('%s', async (_label, [sw, sh, tw, th], expected) => {
+    const path = await frame(sw, sh);
+    expect(await conformImageAspect(path, tw, th)).toEqual(expected);
+    const [w, h] = expected.to.split('x').map(Number);
+    expect(await sharp(path).metadata()).toMatchObject({ width: w, height: h });
+  });
+
+  it.each([
+    ['Codex 16:9 within tolerance', [1672, 941], [1920, 1080]],
+    ['no requested size', [1254, 1254], [null, null]],
+  ])('leaves %s untouched', async (_label, [sw, sh], [tw, th]) => {
+    const path = await frame(sw, sh);
+    const before = await readFile(path);
+    expect(await conformImageAspect(path, tw, th)).toBeNull();
+    expect(Buffer.compare(await readFile(path), before)).toBe(0);
   });
 });
