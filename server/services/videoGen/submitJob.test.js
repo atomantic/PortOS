@@ -246,6 +246,19 @@ describe('submitVideoGenJob', () => {
       expect(params.generateAudio).toBeUndefined();
     });
 
+    it('asks for the project aspect and crops the clip frames to it (a 9:16 project)', async () => {
+      mocks.prepareVideoGenParams.mockResolvedValue(falPrepared());
+      mocks.getMusicVideoProject.mockResolvedValue({ id: 'mv-1', scenes: [{ sceneId: 'mvs-1' }], treatment: { brief: { aspectRatio: '9:16' } } });
+      await submitVideoGenJob({ prompt: 'singer', backend: 'fal', falModelId: 'fal-ai/bytedance/omnihuman/v1.5', musicVideo, mode: 'image' }, {});
+      expect(mocks.enqueueJob.mock.calls[0][0].params).toMatchObject({ aspectRatio: '9:16', frameAspect: '9:16' });
+    });
+
+    it('leaves a clip outside a music video at its own aspect', async () => {
+      mocks.prepareVideoGenParams.mockResolvedValue(falPrepared());
+      await submitVideoGenJob({ prompt: 'a fox', backend: 'fal', mode: 'image' }, {});
+      expect(mocks.enqueueJob.mock.calls[0][0].params).not.toHaveProperty('frameAspect');
+    });
+
     it('refuses a performance shot the backend cannot render and releases what was staged', async () => {
       const prepared = { ...falPrepared(), backend: 'grok', grok: { grokPath: '/example/grok' } };
       mocks.prepareVideoGenParams.mockResolvedValue(prepared);

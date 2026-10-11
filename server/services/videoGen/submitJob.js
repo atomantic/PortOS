@@ -35,6 +35,13 @@ import {
 import { VIDEO_GEN_LOCAL_ONLY_FIELD_NAMES } from './requestFields.js';
 
 import { isTruthyMeta } from '../../lib/metadataFlags.js';
+
+const musicVideoProjectAspect = async (projectId) => {
+  const [{ getProject }, { musicVideoAspect }] = await Promise.all([
+    import('../musicVideo/projects.js'), import('../../lib/musicVideoAspect.js'),
+  ]);
+  return musicVideoAspect(await getProject(projectId));
+};
 const submitValidatedVideoGenJob = async (body, uploads) => {
   let fableLoomRenderSettings = null;
   if (body.fableLoom) {
@@ -348,6 +355,13 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
   const hosted = HOSTED_VIDEO_SUBMISSIONS[backend];
   if (hosted) {
     const { sourceImagePath, uploadedTempPath } = prepared;
+    // A Music Video fal clip renders at its project's aspect: requested where
+    // the model takes an aspect ratio, and its frames cropped to it where the
+    // output follows the start frame (falFrameAspect.js). An explicit
+    // visual-conditioning aspect (FableLoom) still wins.
+    const projectAspect = backend === VIDEO_GEN_MODE.FAL && body.musicVideo && !body.visualConditioning?.render?.parameters?.aspectRatio
+      ? await musicVideoProjectAspect(body.musicVideo.projectId).catch(async (error) => { await cleanupStaged(); throw error; })
+      : null;
     const { jobId, position, status } = await enqueue({
       // Hosted jobs use mode for queue dispatch and videoMode for text/image.
       mode: backend,
@@ -360,6 +374,7 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
       ...(body.fableLoom ? { fableLoom: body.fableLoom } : {}),
       ...(body.visualConditioning ? { visualConditioning: body.visualConditioning } : {}),
       ...hosted.buildParams(body, prepared),
+      ...(projectAspect ? { aspectRatio: projectAspect, frameAspect: projectAspect } : {}),
       // standalone fal lip sync: the uploaded voice clip (a Music Video performance shot overrides below)
       ...(prepared.audioFilePath ? { audioFilePath: prepared.audioFilePath, uploadedTempPaths: prepared.uploadedTempPaths, lipSync: { enableTranscription: false } } : {}),
       ...performanceParams,
