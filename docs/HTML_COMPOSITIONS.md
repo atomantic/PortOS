@@ -302,7 +302,17 @@ what the preview shows and what the render bakes:
   the editor also offers **Use on project**.
 - **The final render** installs the same runtime in every worker browser
   (`documentRenderInitScripts` → `openComposition({ initScripts })`), so the
-  split render (#10365) and the overlay text probe see the filtered page.
+  split render (#10365) and the overlay text probe see the filtered page. The
+  code-rendered style takes the same scripts. A **footage render** (the
+  composed or plain-cut ffmpeg encode, final or excerpt) gets the look as a
+  **finishing pass** (`services/musicVideo/filmLookFinish.js`): the finished
+  MP4 plays full-frame in a one-video page in the composition browser, the
+  shared encoder captures it frame by frame on song time, and the render's own
+  audio is copied back untouched. Paid clips are never regenerated to change
+  the feel. The pass takes the second half of the render's progress bar and a
+  cancel aborts it.
+- **The storyboard animatic** (the docked preview for footage projects) shows
+  the look live over the whole picture, lyrics included, on the song frame.
 
 The filter is an SVG `<filter>` applied to the document root (or to the
 `<img>` for a still). Radii and offsets scale with the filtered element's
@@ -317,8 +327,8 @@ the frame before the page paints. A neutral look emits no filter at all.
 Each control names its effect in photography terms, and the **In a prompt**
 box rewrites the current settings as the words that ask a model for the same
 qualities (`describeFilmLook`), so tuning a look also teaches the vocabulary
-for the next generation prompt. The look works on composition-document
-projects; the composed render style keeps its own render grade above.
+for the next generation prompt. A composed project's render grade (above)
+still applies inside the ffmpeg encode; the film look follows it.
 
 ## Music-video opening title card
 

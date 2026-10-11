@@ -143,3 +143,27 @@ describe('StoryboardAnimatic clips', () => {
     expect(clipTimeAt({ startSec: 10, loop: false }, 16, 4)).toBeCloseTo(3.95);
   });
 });
+
+describe('StoryboardAnimatic film look', () => {
+  // Uniquely catches the animatic showing footage without the look the final render will apply.
+  it('shows the project film look over the whole picture on the song frame, and nothing without one', () => {
+    const look = { preset: 'super8', grain: 0.5, halation: 0.4 };
+    const { container, rerender } = render(<StoryboardAnimatic project={{ id: 'p', scenes, filmLook: look }} audioUrl="/song.mp3" />);
+    const frame = container.querySelector('figure [data-film-look="on"]');
+    expect(frame).toBeTruthy();
+    expect(frame.style.filter).toMatch(/^url\(#portos-film-look-/);
+    expect(frame.querySelector('svg filter')).toBeTruthy();
+    expect(screen.getByText('Film look')).toBeTruthy();
+    const before = frame.querySelector('svg').innerHTML;
+    const audio = screen.getByLabelText('Song for the storyboard animatic');
+    Object.defineProperty(audio, 'currentTime', { value: 12, configurable: true });
+    fireEvent.timeUpdate(audio);
+    // The picture sits inside the filtered box, and the grain re-seeds on the new song frame.
+    const after = container.querySelector('figure [data-film-look="on"]');
+    expect(after.querySelector('img').getAttribute('src')).toBe('/data/images/frame-b.png');
+    expect(after.querySelector('svg').innerHTML).not.toBe(before);
+    rerender(<StoryboardAnimatic project={{ id: 'p', scenes, filmLook: null }} audioUrl="/song.mp3" />);
+    expect(container.querySelector('[data-film-look]')).toBeNull();
+    expect(screen.queryByText('Film look')).toBeNull();
+  });
+});

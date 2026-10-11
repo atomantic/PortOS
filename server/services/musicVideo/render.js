@@ -44,8 +44,9 @@ import { applyProjectPatch } from './projectsLogic.js';
 import { isSelfDrawnLayer, sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { projectTypographyPlan } from './composition.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
-import { encodeDocumentComposition, prepareDocumentRender, sweepDocumentScratch } from './documentRender.js';
+import { documentRenderInitScripts, encodeDocumentComposition, prepareDocumentRender, sweepDocumentScratch } from './documentRender.js';
 import { renderTypographyOverlays, removeCompositionScratch, sweepCompositionScratch } from './compositionRender.js';
+import { applyFilmLookFinish, filmLookFinishNeeded } from './filmLookFinish.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
 import { captureMusicVideoEvidence, musicVideoTakeChanges } from '../../lib/musicVideoDependencies.js';
 import { assertCurrentPerformanceTakes, withDraftPerformanceFallbacks } from './performanceShot.js';
@@ -667,9 +668,10 @@ const SEEKED_RENDERERS = Object.freeze({
     label: 'code',
     modelId: 'music-video-code',
     prepare: async (project) => prepareCodeRender(project),
-    encode: async ({ plan, projectId, jobId, audioPath, outputPath, signal, onProgress }) => {
+    encode: async ({ plan, project, projectId, jobId, audioPath, outputPath, signal, onProgress }) => {
       await encodeCodeComposition({
         ...plan, audioPath, outputPath, directory: `compositions/music-video/${projectId}/${jobId}`, signal, onProgress,
+        initScripts: documentRenderInitScripts(project),
       });
       return { width: plan.width, height: plan.height, fps: plan.fps, durationSec: plan.durationSec, boundaryTimes: plan.sectionTimes };
     },
@@ -878,10 +880,39 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
       console.warn(`⚠️ Music-video render [${jobId.slice(0, 8)}] could not remove its overlay scratch: ${err.message}`);
     }) : null);
 
+    // Terminal failure or cancel, one path for the overlay capture, the encode
+    // and the film look pass. A cancel is a user action (stdout); a failure is
+    // an error (#7945).
+    const settleFailure = async (canceled, reason) => {
+      job.status = canceled ? 'canceled' : 'error';
+      job.lastError = reason;
+      const log = canceled ? console.log : console.error;
+      log(`${canceled ? '🛑' : '❌'} Music-video render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
+      await unlink(outputPath).catch(() => {});
+      broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
+      projectRenders.delete(projectId);
+      // A cancel restores the pre-render status (so a cancelled re-render of a
+      // 'complete' project stays 'complete'); a real failure marks it 'failed'.
+      const targetStatus = canceled ? priorStatus : 'failed';
+      await updateProject(projectId, settledRender(targetStatus)).catch((updateErr) => {
+        maintenance.markCurrentUnsettled();
+        console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→${targetStatus} write failed: ${updateErr.message}`);
+      });
+      emitRenderSettled(projectId, job);
+      await releaseScratch();
+      closeJobAfterDelay(jobs, jobId);
+      permit.finish();
+    };
+
+    // A footage render with a film look re-encodes its finished cut through the
+    // look after ffmpeg (filmLookFinish.js); the pass takes the second half of
+    // whatever the encode's share of the bar is.
+    const finishing = filmLookFinishNeeded(project);
     // A composed render first captures its overlay (progress 0–50%), then
     // encodes (50–100%); a plain render encodes across the whole bar.
     const startEncode = (encodeArgs, progressBase = 0) => {
-      const encodeProgress = (fraction) => progressBase + (1 - progressBase) * fraction;
+      const encodeTop = finishing ? progressBase + (1 - progressBase) / 2 : 1;
+      const encodeProgress = (fraction) => progressBase + (encodeTop - progressBase) * fraction;
       const proc = spawn(ffmpeg, encodeArgs, safeChildProcessOptions({ stdio: ['ignore', 'ignore', 'pipe'] }));
       job.process = proc;
 
@@ -902,7 +933,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
               broadcastSse(job, { type: 'progress', progress: encodeProgress(Math.min(1, (us / 1_000_000) / totalDuration)) });
             }
           } else if (key === 'progress' && val === 'end') {
-            broadcastSse(job, { type: 'progress', progress: 1 });
+            broadcastSse(job, { type: 'progress', progress: encodeTop });
           }
         }
       });
@@ -942,27 +973,22 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
           job.process = null;
           if (code !== 0) {
             const canceled = isMusicVideoRenderCanceled(job, signal);
-            job.status = canceled ? 'canceled' : 'error';
-            const reason = canceled ? 'Render cancelled' : signal ? `Killed by signal ${signal}` : `ffmpeg exit ${code}`;
-            job.lastError = reason;
-            // A cancel is a user action (stdout); a non-zero exit is a failure (#7945).
-            const logClose = canceled ? console.log : console.error;
-            logClose(`${canceled ? '🛑' : '❌'} Music-video render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
-            await unlink(outputPath).catch(() => {});
-            broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
-            projectRenders.delete(projectId);
-            // A cancel restores the pre-render status (so a cancelled re-render of a
-            // 'complete' project stays 'complete'); a real failure marks it 'failed'.
-            const targetStatus = canceled ? priorStatus : 'failed';
-            await updateProject(projectId, settledRender(targetStatus)).catch((updateErr) => {
-              maintenance.markCurrentUnsettled();
-              console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→${targetStatus} write failed: ${updateErr.message}`);
-            });
-            emitRenderSettled(projectId, job);
-            await releaseScratch();
-            closeJobAfterDelay(jobs, jobId);
-            permit.finish();
+            await settleFailure(canceled, canceled ? 'Render cancelled' : signal ? `Killed by signal ${signal}` : `ffmpeg exit ${code}`);
             return;
+          }
+          // The cut is encoded; a film look re-encodes it in place through the
+          // look before it is published. A cancel here aborts the pass.
+          if (finishing) {
+            job.overlayAbort = new AbortController();
+            const { signal: finishSignal } = job.overlayAbort;
+            try {
+              await applyFilmLookFinish({ project, path: outputPath, jobId, signal: finishSignal,
+                onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: encodeTop + (1 - encodeTop) * fraction }) });
+            } catch (err) {
+              await settleFailure(finishSignal.aborted, finishSignal.aborted ? 'Render cancelled' : `Film look pass failed: ${err.message}`);
+              return;
+            }
+            job.overlayAbort = null;
           }
           // Success finalization runs in an event callback (no request to bubble
           // to) — a throw in thumbnailing/history I/O would otherwise leave the
@@ -1049,22 +1075,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
       startEncode(layered.args, 0.5);
     }).catch(async (err) => {
       const canceled = signal.aborted;
-      job.status = canceled ? 'canceled' : 'error';
-      const reason = canceled ? 'Render cancelled' : `Typography overlay failed: ${err.message}`;
-      job.lastError = reason;
-      const log = canceled ? console.log : console.error;
-      log(`${canceled ? '🛑' : '❌'} Music-video render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
-      broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
-      projectRenders.delete(projectId);
-      const targetStatus = canceled ? priorStatus : 'failed';
-      await updateProject(projectId, settledRender(targetStatus)).catch((updateErr) => {
-        maintenance.markCurrentUnsettled();
-        console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→${targetStatus} write failed: ${updateErr.message}`);
-      });
-      emitRenderSettled(projectId, job);
-      await releaseScratch();
-      closeJobAfterDelay(jobs, jobId);
-      permit.finish();
+      await settleFailure(canceled, canceled ? 'Render cancelled' : `Typography overlay failed: ${err.message}`);
     });
 
     return { jobId };
