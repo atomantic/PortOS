@@ -40,6 +40,7 @@ import { normalizeSoundBed } from './soundBed.js';
 import { normalizeFilmLook } from '../../lib/filmLook.js';
 import { normalizeTitleCard } from '../../lib/musicVideoTitleCard.js';
 import { remapTreatmentForClone, scenesFingerprint } from './treatment.js';
+import { carryStoryboardApproval } from './productionReview.js';
 import { normalizeMusicVideoAutomation } from '../../lib/musicVideoAutomation.js';
 
 export { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
@@ -587,6 +588,9 @@ export function replaceScenes(project, sceneInputs) {
   return { project: touch(project, { scenes }), scenes, replaced: existing.length };
 }
 
+// Scene fields a trim changes without adding new content to the shot.
+const SCENE_RETIME_FIELDS = ['startSec', 'endSec', 'beatAligned'];
+
 /**
  * Apply a patch to a single scene. Returns `{ project, updated }`. Throws if the
  * scene id is unknown.
@@ -610,7 +614,9 @@ export function applySceneUpdate(project, sceneId, patch) {
   const nextScenes = scenes.slice();
   nextScenes[idx] = updated;
   const next = touch(project, { scenes: nextScenes });
-  return { project: next, updated };
+  // A trim that only moves the shot's span keeps the storyboard approval it was judged on.
+  const retimeOnly = Object.keys(data).every((key) => SCENE_RETIME_FIELDS.includes(key));
+  return { project: retimeOnly ? carryStoryboardApproval(project, next, 'Retimed a shot') : next, updated };
 }
 
 /** Remove a scene and re-sequence the remaining scenes' `order`. Returns the next record. */
@@ -622,7 +628,15 @@ export function removeScene(project, sceneId) {
   const nextScenes = scenes
     .filter((s) => s.sceneId !== sceneId)
     .map((s, i) => ({ ...s, order: i }));
-  return touch(project, { scenes: nextScenes });
+  const extra = { scenes: nextScenes };
+  // The removed shot's storyboard row goes with it, so the board has no row bound to a missing scene.
+  const draft = project.productionReview?.draft;
+  if (Array.isArray(draft?.storyboard) && draft.storyboardSource !== 'document') {
+    extra.productionReview = { ...project.productionReview,
+      draft: { ...draft, storyboard: draft.storyboard.filter((shot) => shot?.sceneId !== sceneId) } };
+  }
+  // Cutting a shot adds nothing the approval did not cover, so a current storyboard approval stays.
+  return carryStoryboardApproval(project, touch(project, extra), 'Cut a shot');
 }
 
 // What a board position owns rather than the shot placed in it: the span of
@@ -860,7 +874,8 @@ export function mergeNextScene(project, sceneId, { backend = null } = {}) {
       });
     extra.productionReview = { ...project.productionReview, draft: { ...draft, storyboard } };
   }
-  return { project: touch(project, extra), scene: nextScenes[idx] };
+  // Joining two shots keeps their prompts and lyrics, so a current storyboard approval stays.
+  return { project: carryStoryboardApproval(project, touch(project, extra), 'Merged two shots'), scene: nextScenes[idx] };
 }
 
 // ---- peer-sync federation (#1770) -----------------------------------------

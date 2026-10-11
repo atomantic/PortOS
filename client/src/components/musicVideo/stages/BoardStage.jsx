@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router';
-import { Plus, Image as ImageIcon } from 'lucide-react';
+import { Plus, Image as ImageIcon, Film, Code2, Type, FlagTriangleRight } from 'lucide-react';
 import BeatTimeline from '../BeatTimeline.jsx';
 import ContactSheetButton from '../ContactSheetButton.jsx';
 import SceneCard from '../SceneCard.jsx';
@@ -12,11 +12,12 @@ import TitleCardPanel from '../TitleCardPanel.jsx';
 import { normalizeTitleCard } from '../../../../../server/lib/musicVideoTitleCard.js';
 import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
 import { FOOTAGE_OPTIONAL_MODES } from '../../../lib/musicVideoStages.js';
-import { parseSceneFilter, sceneAttention, sceneMatchesFilter, SCENE_ATTENTION_LABELS } from '../../../lib/musicVideoSceneAttention.js';
+import { parseSceneFilter, sceneAttention, sceneMatchesFilter, sceneMediaKind, SCENE_ATTENTION_LABELS, SCENE_MEDIA_LABELS } from '../../../lib/musicVideoSceneAttention.js';
 import { musicVideoImageSrc } from '../../../lib/musicVideoPreview.js';
 import { formatTimecode } from '../../../utils/formatters.js';
 
 const FILTER_LABELS = [['all', 'All'], ['attention', 'Needs attention'], ['missing', 'Missing footage']];
+const MEDIA_ICONS = { clip: Film, image: ImageIcon, code: Code2, card: Type };
 const isTypingTarget = (el) => !!el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName));
 
 /** One line for the folded title card section: off, or what it says and when. */
@@ -25,6 +26,19 @@ function titleCardSummary(stored) {
   if (!card?.enabled) return 'Off · the song, artist and year over the opener';
   const words = [card.title && `“${card.title}”`, card.artist].filter(Boolean).join(' · ') || 'No text yet';
   return `${words} · ${formatTimecode(card.startSec, 1)}–${formatTimecode(card.endSec, 1)}`;
+}
+
+/** Corner chips on a Board thumbnail: what the shot's selected media is, plus an end-frame mark. */
+function SceneMediaBadges({ scene, layered }) {
+  const kind = sceneMediaKind(scene, { layered });
+  if (!kind && !scene.endImageId) return null;
+  const Icon = MEDIA_ICONS[kind];
+  return (
+    <span id={`scene-media-${scene.sceneId}`} className="absolute right-1 top-1 flex gap-1">
+      {kind && <span className="port-media-overlay-strong inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-medium leading-none"><Icon size={11} aria-hidden="true" />{SCENE_MEDIA_LABELS[kind]}</span>}
+      {scene.endImageId && <span className="port-media-overlay-strong inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-medium leading-none"><FlagTriangleRight size={11} aria-hidden="true" />End frame</span>}
+    </span>
+  );
 }
 
 /**
@@ -164,9 +178,13 @@ export default function BoardStage({ board }) {
             ref={element => { if (element) thumbnailsRef.current.set(scene.sceneId, element); else thumbnailsRef.current.delete(scene.sceneId); }}
             onClick={() => { board.seekToScene?.(scene); onToggleSceneExpand?.(scene.sceneId, true); }}
             aria-label={`Open ${scene.sectionLabel || scene.label || `Scene ${scene.order + 1}`}`}
+            aria-describedby={sceneMediaKind(scene, { layered }) || scene.endImageId ? `scene-media-${scene.sceneId}` : undefined}
             className={`min-w-0 rounded border p-2 text-left ${activeSceneId === scene.sceneId ? 'border-port-accent bg-port-accent/10' : 'border-port-border bg-port-card'}`}>
-            {scene.referenceImageId ? <img src={musicVideoImageSrc(scene.referenceImageId)} alt="" loading="lazy" className="aspect-video w-full rounded object-cover" />
-              : <span className="flex aspect-video items-center justify-center rounded bg-port-bg text-port-text-muted"><ImageIcon size={22} aria-hidden="true" /></span>}
+            <span className="relative block">
+              {scene.referenceImageId ? <img src={musicVideoImageSrc(scene.referenceImageId)} alt="" loading="lazy" className="aspect-video w-full rounded object-cover" />
+                : <span className="flex aspect-video items-center justify-center rounded bg-port-bg text-port-text-muted"><ImageIcon size={22} aria-hidden="true" /></span>}
+              <SceneMediaBadges scene={scene} layered={layered} />
+            </span>
             <span className="mt-1 block truncate text-sm">{scene.sectionLabel || scene.label || `Scene ${scene.order + 1}`}</span>
             <span className="block text-xs text-port-text-muted">{formatTimecode(scene.startSec)}–{formatTimecode(scene.endSec)}</span>
             {codesById.get(scene.sceneId).length > 0 && <span className="block text-xs text-port-warning">{SCENE_ATTENTION_LABELS[codesById.get(scene.sceneId)[0]]}</span>}

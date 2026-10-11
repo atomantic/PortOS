@@ -52,3 +52,18 @@ describe('BoardStage scene filter', () => {
     expect(second.onToggleSceneExpand).toHaveBeenLastCalledWith('s1', true);
   });
 });
+
+describe('BoardStage thumbnail media badges', () => {
+  it('marks each thumbnail with what its selected media is, plus an end frame', () => {
+    const scenes = [
+      scene(1),
+      scene(2, { videoHistoryId: null, endImageId: 'end.png' }),
+      scene(3, { visualLayer: 'code', referenceImageId: null, videoHistoryId: null }),
+    ];
+    renderBoard(board(scenes, { project: { id: 'p', scenes, composition: { mode: 'composed' } } }));
+    const descriptionOf = (name) => screen.getByRole('button', { name }).getAttribute('aria-describedby');
+    expect(document.getElementById(descriptionOf('Open Shot 1')).textContent).toBe('Clip');
+    expect(document.getElementById(descriptionOf('Open Shot 2')).textContent).toBe('ImageEnd frame');
+    expect(document.getElementById(descriptionOf('Open Shot 3')).textContent).toBe('Code');
+  });
+});

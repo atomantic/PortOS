@@ -497,6 +497,23 @@ export function carryProductionApprovals(before, after, reason) {
   return { ...after, productionReview: { ...after.productionReview, approvals } };
 }
 
+/**
+ * Keep a current storyboard approval across an edit that only cuts shots or
+ * moves their timing (the director's own trims): it adds no shot, prompt or
+ * lyric the approval did not already cover, so the director is not asked to
+ * approve the same board again. The proof stays bound to its render and stales
+ * as before. Returns `after` unchanged when the storyboard was not approved on
+ * `before`'s current revision.
+ */
+export function carryStoryboardApproval(before, after, reason) {
+  const approval = before.productionReview?.approvals?.storyboard;
+  if (!approval || approval.basis !== productionReviewBasis(before).storyboard) return after;
+  const approvals = { ...after.productionReview?.approvals, storyboard: { ...approval,
+    basis: productionReviewBasis(after).storyboard, inputs: productionApprovalInputs(after).storyboard,
+    carriedOver: { reason, at: new Date().toISOString() } } };
+  return { ...after, productionReview: { ...after.productionReview, approvals } };
+}
+
 /** Comments retain the exact reviewed draft, even after a replacement import. */
 export function recordProductionFeedback(project, input) {
   const review = project.productionReview || {};
