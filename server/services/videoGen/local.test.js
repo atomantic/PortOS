@@ -1539,6 +1539,20 @@ describe('generateChainedVideo — continuation strategy (context window vs last
       .toBe(join(tmpdir(), `chaincontext-${innerJobIds[0]}.mp4`));
   });
 
+  it('delivers the user clip, not the model\'s decode of it, from chunk 0 of an extend chain only (#11179)', async () => {
+    const sourceVideoPath = join(MOCK_PATHS.videos, 'original-video.mp4');
+    const { spliceExtendSource } = await import('./extendSplice.js');
+    vi.mocked(spliceExtendSource).mockClear();
+
+    const { innerJobIds } = await runChain({ mode: 'extend', extendFromVideoPath: sourceVideoPath }, 2);
+
+    // Chunk 1's "source" is a temp tail window the stitch already holds; only
+    // chunk 0 renders from the user's own clip. A hidden chunk keeps no audio master.
+    expect(spliceExtendSource).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      sourcePath: sourceVideoPath, keepMaster: false, outputPath: join(MOCK_PATHS.videos, `${innerJobIds[0]}.mp4`),
+    }));
+  });
+
   // #4875 — a chained render is ONE clip, so a speed profile applies to every
   // chunk or to none. Chunks 1+ re-enter as `extend` on a window-continuity
   // chain (the default), and no two-stage profile is validated for that
@@ -6569,7 +6583,16 @@ describe('generateVideo — native Extend keeps the original source (#11171)', (
     const splice = await extendRender('splice-plain-extend', { mode: 'extend', extendFromVideoPath: '/mock/source.mp4' });
     // numFrames 25 → 3 latents, the same count --extend-frames carries.
     expect(splice).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-      sourcePath: '/mock/source.mp4', extendLatents: 3, outputPath: expect.stringContaining('splice-plain-extend'),
+      sourcePath: '/mock/source.mp4', extendLatents: 3, keepMaster: true, outputPath: expect.stringContaining('splice-plain-extend'),
+    }));
+  });
+
+  it('splices the first chunk of an extend chain (the user\'s own clip) without keeping an audio master', async () => {
+    const splice = await extendRender('splice-chain-first', {
+      mode: 'extend', extendFromVideoPath: '/mock/source.mp4', hidden: true, keepExtendSource: true,
+    });
+    expect(splice).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      sourcePath: '/mock/source.mp4', extendLatents: 3, keepMaster: false,
     }));
   });
 

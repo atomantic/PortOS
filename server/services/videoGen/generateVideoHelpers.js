@@ -18,6 +18,7 @@ import { formatBytes, PATHS, unlinkGuarded } from '../../lib/fileUtils.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { renderTimingFields } from '../../lib/renderTiming.js';
 import { videoGenEvents } from './events.js';
+import { extendMasterPath } from './extendMaster.js';
 
 /**
  * Parse byte size values from strings, returning bytes as a number.
@@ -780,7 +781,8 @@ export async function discardUnpublishedVideo({ jobId, outputPath }) {
   return withBackupAssetPublication(async () => {
     const results = await Promise.allSettled([
       outputPath, `${outputPath}.fs.mp4`, join(PATHS.videoThumbnails, `${jobId}.jpg`),
-    ].map(path => unlinkGuarded(path)));
+      extendMasterPath(outputPath),
+    ].filter(Boolean).map(path => unlinkGuarded(path)));
     const failed = results.find(result => result.status === 'rejected' && result.reason?.code !== 'ENOENT');
     if (failed) throw failed.reason;
   });

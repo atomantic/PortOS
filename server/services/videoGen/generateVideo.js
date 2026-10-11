@@ -153,7 +153,7 @@ export const listVideoModels = () => getVideoModels().map(decorateVideoModel);
 
 export const defaultVideoModelId = (capabilities, preferredId) => getDefaultVideoModelId(capabilities, preferredId);
 
-export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId, width = null, height = null, numFrames = null, fps = 24, steps, guidanceScale, seed, batchSize = 1, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, audioStartSec = null, audioConditioning = null, mode = null, imageStrength = null, i2vReferenceMode = null, loras = null, icReferencePaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, textEncoderId = null, speedProfileId = null, draftDecode = null, streamingMode = null, visualConditioning = null, hidden = false, displaySleep = null, jobId: providedJobId = null }) {
+export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId, width = null, height = null, numFrames = null, fps = 24, steps, guidanceScale, seed, batchSize = 1, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, audioStartSec = null, audioConditioning = null, mode = null, imageStrength = null, i2vReferenceMode = null, loras = null, icReferencePaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, textEncoderId = null, speedProfileId = null, draftDecode = null, streamingMode = null, visualConditioning = null, hidden = false, keepExtendSource = false, displaySleep = null, jobId: providedJobId = null }) {
   const sourceAudioProvenance = audioConditioning == null ? null : federatedSourceAudioSchema.parse(audioConditioning);
   uploadedTempPaths = Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [];
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
@@ -736,11 +736,15 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
       ...(await getSettings())?.videoGen,
       ...(displaySleep != null ? { displaySleep } : {}),
     },
-    // A plain native Extend delivers the original source, not the model's
-    // re-decode of it. Chain chunks (`hidden`) are skipped: the chain trims the
-    // echoed context itself, and a window hop's "source" is a temp tail clip.
-    extendSplice: mode === 'extend' && extendFromVideoPath && !hidden && !batch && supportsContextWindow(model)
-      ? { sourcePath: extendFromVideoPath, extendLatents: extendLatentFrames(parsedNumFrames) }
+    // A native Extend delivers the original source, not the model's re-decode of
+    // it. Chain chunks (`hidden`) are skipped — the chain trims the echoed context
+    // itself and a window hop's "source" is a temp tail clip — except a chain's
+    // FIRST chunk (`keepExtendSource`), whose source is the user's own clip. That
+    // chunk is spliced in place at its rendered length, so the chain's trim math
+    // and the tail window it cuts for chunk 1 are unaffected. Only a visible
+    // render keeps an audio master: a hidden chunk is never extended again.
+    extendSplice: mode === 'extend' && extendFromVideoPath && (!hidden || keepExtendSource) && !batch && supportsContextWindow(model)
+      ? { sourcePath: extendFromVideoPath, extendLatents: extendLatentFrames(parsedNumFrames), keepMaster: !hidden }
       : null,
   });
 

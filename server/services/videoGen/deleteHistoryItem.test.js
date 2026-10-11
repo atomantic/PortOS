@@ -94,6 +94,14 @@ describe('deleteHistoryItem → media asset index delete hook', () => {
     expect(unindexVideo).not.toHaveBeenCalledWith('job-1.mp4');
   });
 
+  it('removes the Extend audio master kept beside the clip', async () => {
+    await deleteHistoryItem('job-1');
+
+    const unlinked = unlink.mock.calls.map(([path]) => path);
+    expect(unlinked).toContain(join(MOCK_PATHS.videos, 'job-1.mp4'));
+    expect(unlinked).toContain(join(MOCK_PATHS.videos, 'job-1.master.flac'));
+  });
+
   it('is non-fatal: a failing index removal still removes the entry and returns ok', async () => {
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     unindexVideo.mockRejectedValueOnce(new Error('db down'));
