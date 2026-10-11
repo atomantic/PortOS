@@ -11,16 +11,35 @@
  * its own canvas above the page, re-drawn for every seek. Two looks:
  *   - `outline` follows the shared lyric type (lyricType.js): cream fill with
  *     an ink outline, no plate, title first, so it reads like the lyrics;
- *   - `mtv` is the classic 80s lower third: artist in caps over the quoted
- *     title in its own colour, then the extra line and year, on a dark plate
- *     with a coloured bar down its leading edge.
+ *   - `mtv` is the classic 80s lower third: artist over the quoted title in
+ *     its own colour, then the extra line and year, on a dark plate with a
+ *     coloured bar down its leading edge.
  * Both sit inside the same title-safe insets and shrink to fit the frame.
+ * Text is drawn exactly as typed (no forced case).
+ *
+ * Fonts: four system/lyric stacks plus bundled OFL faces (TITLE_CARD_FONT_FACES,
+ * files in services/musicVideo/titleCardFonts/). The runtime registers the
+ * bundled faces from data URLs its caller passes in, so the card draws the same
+ * face on every page it rides on, whatever that page itself declares.
  *
  * Every frame is a pure function of song time. Browser-safe, no imports.
  */
 
 export const TITLE_CARD_POSITIONS = Object.freeze(['lower-left', 'lower-right', 'upper-left', 'upper-right', 'lower-center', 'center']);
-export const TITLE_CARD_FONTS = Object.freeze(['display', 'sans', 'serif', 'mono']);
+/**
+ * Bundled title-card faces (SIL OFL 1.1, latin subsets from Fontsource): font id
+ * → the family the runtime registers and the file it is loaded from. The
+ * layout's font stacks name the same families.
+ */
+export const TITLE_CARD_FONT_FACES = Object.freeze({
+  oswald: Object.freeze({ family: 'MV Title Oswald', file: 'oswald-700.woff2' }),
+  audiowide: Object.freeze({ family: 'MV Title Audiowide', file: 'audiowide-400.woff2' }),
+  orbitron: Object.freeze({ family: 'MV Title Orbitron', file: 'orbitron-700.woff2' }),
+  righteous: Object.freeze({ family: 'MV Title Righteous', file: 'righteous-400.woff2' }),
+  pacifico: Object.freeze({ family: 'MV Title Pacifico', file: 'pacifico-400.woff2' }),
+  playfair: Object.freeze({ family: 'MV Title Playfair', file: 'playfair-display-700.woff2' }),
+});
+export const TITLE_CARD_FONTS = Object.freeze(['display', 'sans', 'serif', 'mono', ...Object.keys(TITLE_CARD_FONT_FACES)]);
 export const TITLE_CARD_STYLES = Object.freeze(['outline', 'mtv']);
 /** The `mtv` look's title and bar colours when the card names none. */
 export const TITLE_CARD_MTV_COLORS = Object.freeze({ title: '#f5d33a', accent: '#1fc2e5' });
@@ -112,7 +131,7 @@ function titleCardAlpha(card, t) {
  * The card's lines placed on a width × height frame: `[{ text, font, px, x, y,
  * align, outline, fill }]` (y is the alphabetic baseline). In the `outline`
  * look the title is the first, larger line and artist, year and the extra line
- * follow; in the `mtv` look the artist leads in caps, then the title, the extra
+ * follow; in the `mtv` look the artist leads, then the title, the extra
  * line and the year, and the block is inset by its plate's padding. A block
  * wider than its zone shrinks as a whole, so the card never runs off frame.
  * `measure(text, font)` returns a width in pixels. Pure.
@@ -123,6 +142,13 @@ function titleCardLayout(card, { width, height, measure }) {
     sans: ['"Helvetica Neue", Helvetica, Arial, sans-serif', 700, 400],
     serif: ['Georgia, "Times New Roman", serif', 700, 400],
     mono: ['"MV Mono", Menlo, Consolas, monospace', 500, 500],
+    // Bundled single-weight faces (TITLE_CARD_FONT_FACES), registered by the runtime.
+    oswald: ['"MV Title Oswald", "Arial Narrow", sans-serif', 700, 700],
+    audiowide: ['"MV Title Audiowide", "Arial Black", sans-serif', 400, 400],
+    orbitron: ['"MV Title Orbitron", "Arial Black", sans-serif', 700, 700],
+    righteous: ['"MV Title Righteous", "Arial Black", sans-serif', 400, 400],
+    pacifico: ['"MV Title Pacifico", "Brush Script MT", cursive', 400, 400],
+    playfair: ['"MV Title Playfair", Georgia, serif', 700, 700],
   };
   const [family, titleWeight, metaWeight] = stacks[card.font] || stacks.display;
   const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
@@ -132,7 +158,7 @@ function titleCardLayout(card, { width, height, measure }) {
   const title = clean(card.title);
   const titleRow = title ? { text: card.quoteTitle ? `“${title}”` : title, role: 'title' } : null;
   const meta = (key) => (clean(card[key]) ? { text: clean(card[key]), role: 'meta' } : null);
-  const artist = clean(card.artist) ? { text: mtv ? clean(card.artist).toUpperCase() : clean(card.artist), role: mtv ? 'lead' : 'meta' } : null;
+  const artist = clean(card.artist) ? { text: clean(card.artist), role: mtv ? 'lead' : 'meta' } : null;
   const rows = (mtv ? [artist, titleRow, meta('extra'), meta('year')] : [titleRow, artist, meta('year'), meta('extra')]).filter(Boolean);
   if (!rows.length) return [];
   const unit = Math.min(width, height) / 1080;
@@ -237,12 +263,21 @@ function drawTitleCard(ctx, card, t, { width, height }) {
  * for the frame before the document paints, after its faces have loaded. The
  * canvas is fixed over the viewport, fitted to the render's aspect, and sits
  * under the film look's root filter like the lyrics do.
+ *
+ * `fonts` maps a bundled family (TITLE_CARD_FONT_FACES) to its data URL; each is
+ * registered with `document.fonts` up front and loads only when the card uses it.
  */
-export function titleCardRuntimeSource(card = null) {
+export function titleCardRuntimeSource(card = null, { fonts = {} } = {}) {
+  const faces = Object.entries(fonts).filter(([family, src]) => typeof family === 'string' && /^data:font\/woff2;base64,[a-z0-9+/=]+$/i.test(src));
   return `(() => {
   ${titleCardAlpha.toString()}
   ${titleCardLayout.toString()}
   ${drawTitleCard.toString()}
+  if (typeof FontFace === 'function' && document.fonts && document.fonts.add) {
+    for (const [family, src] of ${JSON.stringify(faces).replace(/</g, '\\u003c')}) {
+      try { document.fonts.add(new FontFace(family, 'url(' + src + ')', { weight: '100 900' })); } catch { /* the stack's fallback draws instead */ }
+    }
+  }
   let card = ${JSON.stringify(normalizeTitleCard(card)).replace(/</g, '\\u003c')};
   let t = 0;
   let canvas = null;

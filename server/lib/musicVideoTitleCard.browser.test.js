@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { chromium } from 'playwright-core';
 import sharp from 'sharp';
 import { browserSuiteCanRun } from './browserSuiteGate.js';
 import { filmLookRuntimeSource } from './filmLook.js';
-import { titleCardRuntimeSource } from './musicVideoTitleCard.js';
+import { TITLE_CARD_FONT_FACES, titleCardRuntimeSource } from './musicVideoTitleCard.js';
 
 /**
  * The title card runtime in real Chrome, installed the way the preview and the
@@ -88,10 +88,10 @@ describe.skipIf(!canRun)('title card runtime in Chrome', () => {
     expect(long).toBeLessThanOrEqual(W * 0.62 + 0.5);
   }, 30000);
 
-  it('draws the classic MTV lower third: artist in caps over a yellow title, on a dark plate with a coloured bar', async () => {
+  it('draws the classic MTV lower third: the artist as typed over a yellow title, on a dark plate with a coloured bar', async () => {
     await page.evaluate(() => globalThis.__portosTitleCard.apply({ ...globalThis.__portosTitleCard.card, style: 'mtv', position: 'lower-left', titleColor: '', accentColor: '#00ff00' }));
     const lines = await page.evaluate(() => globalThis.__portosTitleCard.layout());
-    expect(lines.map((l) => l.text)).toEqual(['EXAMPLE ARTIST', '“Example Song”', '2026']);
+    expect(lines.map((l) => l.text)).toEqual(['Example Artist', '“Example Song”', '2026']);
     expect(lines[1].fill).toBe('#f5d33a');
     expect(lines.every((l) => l.outline === 0)).toBe(true);
     const shot = await shotAt(5);
@@ -109,6 +109,19 @@ describe.skipIf(!canRun)('title card runtime in Chrome', () => {
     expect(await brightIn(shot, upperRight)).toBe(0);
     await page.evaluate(() => globalThis.__portosTitleCard.apply({ ...globalThis.__portosTitleCard.card, style: 'outline' }));
     expect(errors).toEqual([]);
+  }, 30000);
+
+  it('draws a bundled face it was handed, on a page that declares none', async () => {
+    const { family, file } = TITLE_CARD_FONT_FACES.pacifico;
+    const src = `data:font/woff2;base64,${readFileSync(new URL(`../services/musicVideo/titleCardFonts/${file}`, import.meta.url)).toString('base64')}`;
+    const other = await browser.newPage({ viewport: { width: W, height: H } });
+    const card = { title: 'Example Song', artist: 'Example Artist', startSec: 0, endSec: 8, font: 'pacifico' };
+    await other.setContent(`<!doctype html><html><head><script>${titleCardRuntimeSource(card, { fonts: { [family]: src } })}</script></head><body></body></html>`);
+    await other.evaluate(() => globalThis.__portosTitleCard.apply(globalThis.__portosTitleCard.card));
+    const lines = await other.evaluate(() => globalThis.__portosTitleCard.layout());
+    expect(lines[0].font).toContain(family);
+    expect(await other.evaluate((font) => document.fonts.check(font), lines[0].font)).toBe(true);
+    await other.close();
   }, 30000);
 
   it('takes a live change from the panel and redraws the paused frame, and clears on null', async () => {

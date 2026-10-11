@@ -1,12 +1,35 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Clapperboard, Play } from 'lucide-react';
 import { getMusicVideoPublishPlatforms } from '../../services/apiMusicVideo.js';
 import {
-  TITLE_CARD_LIMITS, TITLE_CARD_MTV_COLORS, normalizeTitleCard, titleCardPrefill,
+  TITLE_CARD_FONT_FACES, TITLE_CARD_LIMITS, TITLE_CARD_MTV_COLORS, normalizeTitleCard, titleCardPrefill,
 } from '../../../../server/lib/musicVideoTitleCard.js';
 
 const POSITIONS = [['lower-left', 'Bottom left'], ['lower-right', 'Bottom right'], ['upper-left', 'Top left'], ['upper-right', 'Top right'], ['lower-center', 'Bottom centre'], ['center', 'Centre']];
-const FONTS = [['display', 'Lyric type'], ['sans', 'Helvetica'], ['serif', 'Serif'], ['mono', 'Mono']];
+
+// Each choice: [id, label, the face the card draws it in, its file under /fonts/title-card/ for the picker swatch, weight].
+// The files are copies of the server's (titleCardFonts/, documentTemplates/shared/fonts/); a server test keeps them identical.
+const FONTS = [
+  ['display', 'Lyric type', '"MV Archivo", "Arial Black", sans-serif', 'archivo-variable.woff2', 800],
+  ['sans', 'Helvetica', '"Helvetica Neue", Helvetica, Arial, sans-serif', null, 700],
+  ['serif', 'Serif', 'Georgia, "Times New Roman", serif', null, 700],
+  ['mono', 'Mono', '"MV Mono", Menlo, monospace', 'ibm-plex-mono-500.woff2', 500],
+  ['oswald', 'Oswald', `"${TITLE_CARD_FONT_FACES.oswald.family}", "Arial Narrow", sans-serif`, 'oswald-700.woff2', 700],
+  ['audiowide', 'Audiowide', `"${TITLE_CARD_FONT_FACES.audiowide.family}", sans-serif`, 'audiowide-400.woff2', 400],
+  ['orbitron', 'Orbitron', `"${TITLE_CARD_FONT_FACES.orbitron.family}", sans-serif`, 'orbitron-700.woff2', 700],
+  ['righteous', 'Righteous', `"${TITLE_CARD_FONT_FACES.righteous.family}", sans-serif`, 'righteous-400.woff2', 400],
+  ['pacifico', 'Pacifico', `"${TITLE_CARD_FONT_FACES.pacifico.family}", cursive`, 'pacifico-400.woff2', 400],
+  ['playfair', 'Playfair', `"${TITLE_CARD_FONT_FACES.playfair.family}", Georgia, serif`, 'playfair-display-700.woff2', 700],
+];
+let swatchFacesAdded = false;
+// The picker shows each choice in its own face: register the bundled files once per page.
+function addSwatchFaces() {
+  if (swatchFacesAdded || typeof FontFace !== 'function' || !document.fonts?.add) return;
+  swatchFacesAdded = true;
+  for (const [, , stack, file] of FONTS) {
+    if (file) document.fonts.add(new FontFace(stack.match(/^"([^"]+)"/)[1], `url(/fonts/title-card/${file})`, { weight: '100 900' }));
+  }
+}
 const LOOKS = [['outline', 'Outlined, like the lyrics'], ['mtv', 'Classic MTV lower third']];
 // Render styles that draw the card: the composition document and a composed cut's typography layer.
 const DRAWN_BY = ['document', 'composed'];
@@ -37,6 +60,7 @@ function lyricDuringCard(project, card) {
  */
 export default function TitleCardPanel({ project, onEditLocal, onSave, onPreview, bare = false }) {
   const [starting, setStarting] = useState(false);
+  useEffect(addSwatchFaces, []);
   const drawn = DRAWN_BY.includes(project.composition?.mode);
   const raw = project.titleCard || null;
   const card = normalizeTitleCard(raw);
@@ -129,18 +153,22 @@ export default function TitleCardPanel({ project, onEditLocal, onSave, onPreview
               {LOOKS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
           </div>
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label htmlFor="mv-title-card-position" className={labelCls}>Position</label>
-              <select id="mv-title-card-position" value={card.position} onChange={(e) => commit({ position: e.target.value })} className={inputCls}>
-                {POSITIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-              </select>
-            </div>
-            <div>
-              <label htmlFor="mv-title-card-font" className={labelCls}>Font</label>
-              <select id="mv-title-card-font" value={card.font} onChange={(e) => commit({ font: e.target.value })} className={inputCls}>
-                {FONTS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-              </select>
+          <div>
+            <label htmlFor="mv-title-card-position" className={labelCls}>Position</label>
+            <select id="mv-title-card-position" value={card.position} onChange={(e) => commit({ position: e.target.value })} className={inputCls}>
+              {POSITIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </div>
+          <div role="radiogroup" aria-labelledby="mv-title-card-font-label">
+            <span id="mv-title-card-font-label" className={labelCls}>Font</span>
+            <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-5">
+              {FONTS.map(([value, label, stack, , weight]) => (
+                <button key={value} type="button" role="radio" aria-checked={card.font === value} onClick={() => commit({ font: value })}
+                  style={{ fontFamily: stack, fontWeight: weight }}
+                  className={`min-h-[44px] truncate rounded border px-2 py-1 text-sm sm:min-h-0 ${card.font === value ? 'border-port-accent bg-port-accent/15 text-white' : 'border-port-border bg-port-bg text-port-text-muted'}`}>
+                  {label}
+                </button>
+              ))}
             </div>
           </div>
           <div className="flex flex-wrap items-end gap-x-4 gap-y-2">
