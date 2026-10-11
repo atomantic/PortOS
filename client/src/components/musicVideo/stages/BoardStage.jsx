@@ -232,6 +232,8 @@ export default function BoardStage({ board }) {
               takeBusy={takes.busy}
               onSelectTake={takes.selectTake}
               onReviewTake={takes.reviewTake}
+              onContinueFromPrevious={takes.continueFromPrevious}
+              previousHasClip={Boolean(scenes[idx - 1]?.videoHistoryId)}
               onImportTake={(target) => board.setPickerTarget({ type: 'take', sceneId: target.sceneId })}
               onImportClipTake={(target) => board.setPickerTarget({ type: 'clip', sceneId: target.sceneId })}
               layered={layered}

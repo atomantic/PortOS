@@ -12,7 +12,7 @@ import { existsSync } from 'fs';
 import { unlink } from 'fs/promises';
 import { pipeline } from 'stream/promises';
 import { Router } from 'express';
-import { musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
+import { musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoContinueShotSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
 import { productionReadiness } from '../services/musicVideo/productionReview.js';
 import { finishedOutsideBlocker } from '../lib/musicVideoFinishedOutside.js';
 import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, reviseProductionFromFeedback, revertProductionInput } from '../services/musicVideo/productionReviewService.js';
@@ -1519,6 +1519,13 @@ router.post('/:id/scenes/:sceneId/takes', asyncHandler(async (req, res) => {
     kind, assetId, source, provider: provider ?? (source === 'generated' ? 'portos' : null), originalName, use, sourceImageId, inputAssets,
   }]);
   res.status(201).json({ scene, take: appended[0] });
+}));
+
+// Continuing shot: the previous shot's last on-screen frame becomes this scene's start frame.
+router.post('/:id/scenes/:sceneId/continue-from-previous', asyncHandler(async (req, res) => {
+  const { keepStillAsEnd } = validateRequest(musicVideoContinueShotSchema, req.body ?? {});
+  const { continueFromPreviousShot } = await import('../services/musicVideo/continueShot.js');
+  res.json(await continueFromPreviousShot(req.params.id, req.params.sceneId, { keepStillAsEnd }));
 }));
 
 router.post('/:id/scenes/:sceneId/takes/:takeId/select', asyncHandler(async (req, res) => {

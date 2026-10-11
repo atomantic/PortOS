@@ -1352,6 +1352,9 @@ export const musicVideoDocumentShotsSchema = z.object({
     ids.add(shot.id);
   }
 });
+// Start a shot from the previous shot's on-screen out-frame; optionally keep
+// the current start frame as its end frame.
+export const musicVideoContinueShotSchema = z.object({ keepStillAsEnd: z.boolean().optional() }).strict();
 export const musicVideoProductionImportSchema = z.object({ source: z.string().min(2).max(250000) }).strict();
 export const musicVideoProductionApprovalSchema = z.object({
   stage: z.enum(['art', 'storyboard', 'proof']), basis: z.string().min(1).max(128),
