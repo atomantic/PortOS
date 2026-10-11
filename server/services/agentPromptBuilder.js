@@ -33,6 +33,7 @@ import { applySlashdoInvocation } from './promptSections/slashdo.js';
 import { manualForgeCli, resolveManualForgeCli } from './promptSections/forge.js';
 import { buildOrchestrationDoctrineSection } from './promptSections/orchestrationDoctrine.js';
 import { buildIssueFilingSection } from './promptSections/plannerAttribution.js';
+import { buildSecurityAuditRuntimeSection } from './promptSections/securityAudit.js';
 import { isPublicReviewNoToolProfile, isPublicReviewRestrictedProfile } from '../lib/agentExecutionProfiles.js';
 import { COMPLETION_MODES, resolveCompletionMode } from '../lib/agentCompletionMode.js';
 import {
@@ -1051,6 +1052,8 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
   contractSections.push(UNATTENDED_RUN_RULE);
   if (task.metadata?.prCompletion === PR_COMPLETIONS.DRAFT) contractSections.push(DRAFT_PR_RULE);
   if (isUiAuditTask(task)) contractSections.push(UI_AUDIT_RUNTIME_RULE);
+  const securityAuditRuntime = buildSecurityAuditRuntimeSection(task, { providerId, providerCommand });
+  if (securityAuditRuntime) contractSections.push(securityAuditRuntime);
 
   // --- Issue filing labels and planner attribution --------------------------
   // Unconditional filing rules, with planner attribution when resolvable:

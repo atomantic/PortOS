@@ -676,6 +676,57 @@ describe('claim-flow completion handoff', () => {
 });
 
 describe('buildLightContextPrompt', () => {
+  describe('Codex security audit dispatch', () => {
+    it.each(['cli', 'tui'])('routes a customized %s audit through Codex Security without changing issue-only completion', async (providerType) => {
+      const prompt = await buildAgentPrompt(makeTask({
+        metadata: {
+          analysisType: 'security',
+          noCodeOutput: true,
+          prompt: 'Custom security mission: file issues and preserve the live checkout.',
+        },
+      }), {}, '/repo', null, {
+        providerType,
+        providerId: 'custom-auditor',
+        providerCommand: '/opt/tools/Codex.exe',
+        split: true,
+      });
+
+      expect(prompt.userPrompt).toContain('Custom security mission');
+      expect(prompt.systemPrompt).toContain('## Codex Security Audit Runtime');
+      expect(prompt.systemPrompt).toContain('--auth chatgpt --headless --json');
+      expect(prompt.systemPrompt).toContain('deliver supported findings even when another probe is blocked');
+      expect(prompt.systemPrompt).toContain('## Completion (No Code Output)');
+      expect(prompt.systemPrompt).toContain('## Required audit assessment handoff');
+      expect(prompt.systemPrompt).toContain('QUALITY_AUDIT_JSON');
+    });
+
+    it.each([
+      { metadata: { taskAnalysisType: 'security' } },
+      { taskType: 'security' },
+    ])('routes legacy security task shapes when only the Codex provider id is available: %j', (shape) => {
+      const prompt = buildLightContextPrompt(makeTask(shape), '/repo', null, { providerId: 'codex-tui' });
+      expect(prompt).toContain('## Codex Security Audit Runtime');
+    });
+
+    it.each([
+      [{ metadata: { analysisType: 'security' } }, { providerId: 'claude', providerCommand: 'claude' }],
+      [{ metadata: { analysisType: 'security' } }, { providerId: 'codex', providerCommand: 'claude' }],
+      [{ metadata: { analysisType: 'performance' } }, { providerId: 'codex', providerCommand: 'codex' }],
+      [{ metadata: { analysisType: 'private-security-assessment' } }, { providerId: 'codex' }],
+      [{ metadata: { selfImprovementType: 'security' } }, { providerId: 'codex' }],
+    ])('keeps other runtimes and task contracts unchanged: %j', (shape, options) => {
+      const prompt = buildLightContextPrompt(makeTask(shape), '/repo', null, options);
+      expect(prompt).not.toContain('## Codex Security Audit Runtime');
+    });
+
+    it('does not route an API model through a native Codex scanner', async () => {
+      const prompt = await buildAgentPrompt(makeTask({ metadata: { analysisType: 'security' } }), {}, '/repo', null, {
+        providerType: 'api', providerId: 'codex', providerModel: 'gpt-6.1-sol',
+      });
+      expect(prompt).not.toContain('## Codex Security Audit Runtime');
+    });
+  });
+
   describe('UI audit runtime context', () => {
     it.each(UI_AUDIT_TASK_TYPES)('adds browser and local-system guidance to %s', (analysisType) => {
       const prompt = buildLightContextPrompt(
