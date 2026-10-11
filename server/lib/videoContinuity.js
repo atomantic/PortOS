@@ -166,3 +166,38 @@ export const tailWindowStartFrame = ({ totalFrames, frames }) => {
   if (!Number.isFinite(total) || !Number.isFinite(want)) return 0;
   return Math.max(0, Math.floor(total) - Math.floor(want));
 };
+
+/**
+ * Where to join the ORIGINAL source clip to the model's new frames in a plain
+ * (non-chained) native extend render, so the delivered file keeps the source
+ * region as shot instead of the model's VAE decode of it.
+ *
+ * `extend_from_video` returns `source + extension`; the source half has been
+ * encoded and decoded again (and its audio re-synthesised), and extending that
+ * result again repeats it over the whole accumulated clip. Conditioning is left
+ * alone — only delivery changes: frames `[0, keepFrames)` come from the source
+ * file and frames `[newStartFrame, outputFrames)` from the render.
+ *
+ * LTX only conditions on the first `1 + 8k` source frames, so a source with a
+ * ragged tail has `droppedSourceFrames` (< one latent) the model never saw. The
+ * extension continues from the last frame the model DID see, so those frames
+ * are dropped from the join exactly as they already are in the model's output.
+ *
+ * Returns `null` — the caller keeps the model output — whenever the measured
+ * numbers don't match that layout: an unprobeable clip, an echo longer than the
+ * source, or a source whose tail the model skipped by more than a latent (it
+ * truncated the context, so which frames it kept is not something to guess at).
+ */
+export const planExtendSplice = ({ sourceFrames, outputFrames, extendLatents }) => {
+  const source = Math.floor(Number(sourceFrames));
+  const total = Number(outputFrames);
+  const keepFrames = contextPrefixFrames({ totalFrames: total, extendLatents });
+  if (!Number.isFinite(source) || source <= 0 || keepFrames <= 0) return null;
+  if (keepFrames > source || source - keepFrames >= LATENT_FRAME_STRIDE) return null;
+  return {
+    keepFrames,
+    newStartFrame: keepFrames,
+    newFrames: total - keepFrames,
+    droppedSourceFrames: source - keepFrames,
+  };
+};

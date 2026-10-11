@@ -784,6 +784,75 @@ export const buildTrimConcatArgs = ({ inputs, outPath, width, height, fps, withA
   ];
 };
 
+// Build the argv that joins the ORIGINAL source of a native extend render to the
+// model's new frames: input 0 is the source clip (kept for frames
+// `[0, keepFrames)`), input 1 is the render (kept from `newStartFrame` on).
+// Lets a plain Extend deliver the source as shot instead of the model's VAE
+// decode of it; `lib/videoContinuity.js#planExtendSplice` supplies the indices.
+//
+// Video is one single encode of source + new — never a per-round compounding of
+// the model's own decode. Geometry and rate normalize to the RENDER's, which is
+// what the extension was generated at. Audio follows the same split: the source
+// span from the source's track, the new span from the generated one, joined by a
+// short LINEAR crossfade (`crossfadeSec`) so the seam doesn't click. The source
+// leg runs `crossfadeSec` past the seam so the overlap is source-vs-generated at
+// the SAME timeline position, which keeps the output exactly as long as the render.
+//
+// `audio` is 'splice' (both inputs have a track), 'generated' (only the render
+// has one — the source region has nothing to keep, so the render's track stands)
+// or 'none'. Pure, like buildTrimConcatArgs: the caller probes and passes
+// `colorTagFilter` from `bt709TagFilter()`.
+export const buildExtendSpliceArgs = ({
+  sourcePath, generatedPath, outPath, keepFrames, newStartFrame, width, height, fps,
+  audio = 'none', crossfadeSec = 0.04, colorTagFilter = null,
+}) => {
+  const keep = Math.floor(Number(keepFrames));
+  const start = Math.floor(Number(newStartFrame));
+  const rate = Number(fps);
+  const canonW = Number(width);
+  const canonH = Number(height);
+  if (!sourcePath || !generatedPath || !outPath) return null;
+  if (!Number.isFinite(keep) || keep <= 0 || !Number.isFinite(start) || start <= 0) return null;
+  if (!Number.isFinite(rate) || rate <= 0) return null;
+  if (!Number.isFinite(canonW) || canonW <= 0 || !Number.isFinite(canonH) || canonH <= 0) return null;
+
+  const normalize = `scale=${canonW}:${canonH}:force_original_aspect_ratio=decrease,pad=${canonW}:${canonH}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${rate}`;
+  const tag = typeof colorTagFilter === 'string' && colorTagFilter ? colorTagFilter : null;
+  const filters = [
+    `[0:v]trim=end_frame=${keep},setpts=PTS-STARTPTS,${normalize}[v0]`,
+    `[1:v]trim=start_frame=${start},setpts=PTS-STARTPTS,${normalize}[v1]`,
+    `[v0][v1]concat=n=2:v=1:a=0${tag ? '[cv]' : '[outv]'}`,
+    ...(tag ? [`[cv]${tag}[outv]`] : []),
+  ];
+
+  const canonAudio = 'aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo';
+  const seamSec = keep / rate;
+  const fade = Math.max(0.001, Number(crossfadeSec) || 0);
+  if (audio === 'splice') {
+    filters.push(
+      // apad guards a source track that ends before the seam + overlap, which
+      // acrossfade would otherwise reject as shorter than the fade.
+      `[0:a]atrim=end=${(seamSec + fade).toFixed(6)},asetpts=PTS-STARTPTS,${canonAudio},apad=whole_dur=${(seamSec + fade).toFixed(6)}[a0]`,
+      `[1:a]atrim=start=${seamSec.toFixed(6)},asetpts=PTS-STARTPTS,${canonAudio}[a1]`,
+      `[a0][a1]acrossfade=d=${fade.toFixed(6)}:c1=tri:c2=tri[outa]`,
+    );
+  } else if (audio === 'generated') {
+    filters.push(`[1:a]asetpts=PTS-STARTPTS,${canonAudio}[outa]`);
+  }
+
+  return [
+    '-i', sourcePath, '-i', generatedPath,
+    '-filter_complex', filters.join(';'),
+    '-map', '[outv]',
+    ...(audio === 'none' ? [] : ['-map', '[outa]']),
+    ...H264_ENCODE_ARGS,
+    ...BT709_CONTAINER_ARGS,
+    ...(audio === 'none' ? ['-an'] : AAC_ENCODE_ARGS),
+    '-movflags', '+faststart',
+    '-y', outPath,
+  ];
+};
+
 // 2× Lanczos upscale of an MP4 in place. Doubles width and height while
 // preserving the exact aspect ratio and the audio track. Used as a quick
 // post-render export option for LTX renders that come out at sub-720p

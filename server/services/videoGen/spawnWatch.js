@@ -40,6 +40,7 @@ import {
 import { isDisplaySleepEnabled, sleepDisplayForVideo, wakeDisplayForVideo } from './displayPower.js';
 import { loadHistory, mutateVideoHistory } from './history.js';
 import { estimateRenderMs } from './eta.js';
+import { spliceExtendSource } from './extendSplice.js';
 import { videoJobState } from './jobState.js';
 
 const MODULE_NOT_FOUND_RE = /ModuleNotFoundError: No module named ['"]([^'"]+)['"]/;
@@ -72,6 +73,9 @@ export async function spawnAndWatchVideo({
   numFrames: parsedNumFrames,
   steps: actualSteps,
   videoGenSettings,
+  // `{ sourcePath, extendLatents }` for a plain native Extend render, whose
+  // delivered file should keep the original source (see ./extendSplice.js).
+  extendSplice = null,
 }) {
   const retainOwnership = () => {
     // Chained renders use child job IDs; their ambient owner is the outer job.
@@ -534,6 +538,10 @@ export async function spawnAndWatchVideo({
             broadcastSse(job, { type: 'complete', result });
             videoGenEvents.emit('completed', { generationId: jobId, ...result });
           } else {
+            // Best-effort: a failed splice leaves the model's own output in place.
+            if (extendSplice && (await spliceExtendSource({ ...extendSplice, outputPath })).applied) {
+              meta.extendSourceOriginal = true;
+            }
             await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, mutateHistory: mutateVideoHistory, publication: publications.get(outputPath) });
           }
         }

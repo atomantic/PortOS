@@ -300,6 +300,12 @@ vi.mock('../../lib/ffmpeg.js', async () => ({
 // hfChildEnv() carries the resolved token over the inherited child env; mocking here
 // avoids touching the real settings layer (which would await an unmocked
 // `getSettings()` chain and hang the spawn-mock-driven tests).
+// The splice itself (real ffmpeg) is covered by extendSplice.test.js; here it is
+// a spy so the suite can pin WHICH renders ask for it.
+vi.mock('./extendSplice.js', () => ({
+  spliceExtendSource: vi.fn(async () => ({ applied: false, reason: 'mocked' })),
+}));
+
 vi.mock('../hfToken.js', () => ({
   hfChildEnv: vi.fn(async () => ({})),
   getHfToken: vi.fn(async () => null),
@@ -6481,5 +6487,44 @@ describe('generateVideo — post-completion native teardown abort', () => {
     await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
     expect(completed).not.toHaveBeenCalled();
     expect(failed.mock.calls[0][0].results).toHaveLength(1);
+  });
+});
+
+describe('generateVideo — native Extend keeps the original source (#11171)', () => {
+  const extendRender = async (jobId, request) => {
+    const { spliceExtendSource } = await import('./extendSplice.js');
+    vi.mocked(spliceExtendSource).mockClear();
+    await renderToTerminal({
+      jobId,
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'a quiet street at dusk',
+      width: 512, height: 512, numFrames: 25, fps: 24,
+      ...request,
+    });
+    return vi.mocked(spliceExtendSource);
+  };
+
+  it('splices a plain extend of a source clip, sized to the extension the helper was asked for', async () => {
+    const splice = await extendRender('splice-plain-extend', { mode: 'extend', extendFromVideoPath: '/mock/source.mp4' });
+    // numFrames 25 → 3 latents, the same count --extend-frames carries.
+    expect(splice).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      sourcePath: '/mock/source.mp4', extendLatents: 3, outputPath: expect.stringContaining('splice-plain-extend'),
+    }));
+  });
+
+  it('leaves a chain chunk alone — the chain trims its own echoed context', async () => {
+    const splice = await extendRender('splice-chain-chunk', { mode: 'extend', extendFromVideoPath: '/mock/tail-window.mp4', hidden: true });
+    expect(splice).not.toHaveBeenCalled();
+  });
+
+  it('leaves a runtime whose extend is last-frame i2v alone — its output holds no source', async () => {
+    const splice = await extendRender('splice-mlx-video', { modelId: 'ltx23_unified', mode: 'extend', extendFromVideoPath: '/mock/source.mp4' });
+    expect(splice).not.toHaveBeenCalled();
+  });
+
+  it('does not splice a render with no source clip', async () => {
+    const splice = await extendRender('splice-text', { mode: 'text' });
+    expect(splice).not.toHaveBeenCalled();
   });
 });

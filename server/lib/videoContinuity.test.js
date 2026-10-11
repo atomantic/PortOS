@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_CONTEXT_FRAMES, MIN_CONTEXT_FRAMES, MAX_CONTEXT_FRAMES, LATENT_FRAME_STRIDE,
   resolveContextFrames, resolveContinuityStrategy, supportsContextWindow,
-  extendLatentFrames, extendedPixelFrames, contextPrefixFrames, tailWindowStartFrame,
+  extendLatentFrames, extendedPixelFrames, contextPrefixFrames, tailWindowStartFrame, planExtendSplice,
 } from './videoContinuity.js';
 
 describe('resolveContextFrames', () => {
@@ -126,5 +126,31 @@ describe('tailWindowStartFrame', () => {
   it('falls back to frame 0 on unusable inputs', () => {
     expect(tailWindowStartFrame({ totalFrames: null, frames: 22 })).toBe(0);
     expect(tailWindowStartFrame({ totalFrames: 97, frames: NaN })).toBe(0);
+  });
+});
+
+describe('planExtendSplice', () => {
+  it('keeps every source frame the model saw and takes the rest from the render', () => {
+    // 121-frame source (1 + 8*15) extended by 12 latents → 121 + 96 = 217.
+    expect(planExtendSplice({ sourceFrames: 121, outputFrames: 217, extendLatents: 12 }))
+      .toEqual({ keepFrames: 121, newStartFrame: 121, newFrames: 96, droppedSourceFrames: 0 });
+  });
+
+  it('drops the ragged tail LTX never conditioned on', () => {
+    // 125 source frames → the model saw 1 + 8*15 = 121 of them.
+    expect(planExtendSplice({ sourceFrames: 125, outputFrames: 121 + 24, extendLatents: 3 }))
+      .toEqual({ keepFrames: 121, newStartFrame: 121, newFrames: 24, droppedSourceFrames: 4 });
+  });
+
+  it('declines (null = keep the model output) when the layout is not the one it assumes', () => {
+    // Echo longer than the source: the render holds frames the source lacks.
+    expect(planExtendSplice({ sourceFrames: 20, outputFrames: 25 + 24, extendLatents: 3 })).toBeNull();
+    // The model skipped more than a latent of the source tail: it truncated the
+    // context, so which frames it kept is unknown.
+    expect(planExtendSplice({ sourceFrames: 200, outputFrames: 121 + 24, extendLatents: 3 })).toBeNull();
+    // Unmeasurable clips and a nonsensical extension never read as a plan.
+    expect(planExtendSplice({ sourceFrames: null, outputFrames: 145, extendLatents: 3 })).toBeNull();
+    expect(planExtendSplice({ sourceFrames: 121, outputFrames: null, extendLatents: 3 })).toBeNull();
+    expect(planExtendSplice({ sourceFrames: 121, outputFrames: 145, extendLatents: 0 })).toBeNull();
   });
 });

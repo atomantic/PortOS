@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   closeWatcher: vi.fn(),
   rm: vi.fn(),
   optimize: vi.fn(),
+  splice: vi.fn(),
   thumbnail: vi.fn(),
   history: [],
 }));
@@ -46,6 +47,7 @@ vi.mock('./runtimes.js', () => ({
   invalidateByovReadyCache: vi.fn(),
   pickDeathFingerprint: async () => null,
 }));
+vi.mock('./extendSplice.js', () => ({ spliceExtendSource: mocks.splice }));
 vi.mock('./displayPower.js', () => ({
   isDisplaySleepEnabled: () => false,
   sleepDisplayForVideo: vi.fn(),
@@ -236,5 +238,36 @@ describe('spawnAndWatchVideo claim lifecycle', () => {
     expect(failed).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ error: 'output could not be optimized' }));
     expect(completed).not.toHaveBeenCalled();
     expect(mocks.history).toEqual([]);
+  });
+
+  describe('native Extend source splice', () => {
+    const extendSplice = { sourcePath: '/mock/videos/source.mp4', extendLatents: 3 };
+
+    it('splices the original source into the render and records that on the history row', async () => {
+      mocks.splice.mockResolvedValue({ applied: true });
+      await spawnAndWatchVideo({ ...params, extendSplice });
+      await closeChild(0);
+
+      expect(mocks.splice).toHaveBeenCalledExactlyOnceWith({ ...extendSplice, outputPath: params.outputPath });
+      expect(mocks.history).toEqual([expect.objectContaining({ id: params.jobId, extendSourceOriginal: true })]);
+    });
+
+    it('publishes the model output unflagged when the splice declines', async () => {
+      mocks.splice.mockResolvedValue({ applied: false, reason: 'frame layout does not match' });
+      await spawnAndWatchVideo({ ...params, extendSplice });
+      await closeChild(0);
+
+      expect(completed).toHaveBeenCalledTimes(1);
+      expect(mocks.history).toHaveLength(1);
+      expect(mocks.history[0]).not.toHaveProperty('extendSourceOriginal');
+    });
+
+    it('never touches a render that did not ask for it', async () => {
+      await spawnAndWatchVideo(params);
+      await closeChild(0);
+
+      expect(mocks.splice).not.toHaveBeenCalled();
+      expect(mocks.history[0]).not.toHaveProperty('extendSourceOriginal');
+    });
   });
 });
