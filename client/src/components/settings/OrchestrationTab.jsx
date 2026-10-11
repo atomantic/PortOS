@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { shortClaudeModelName } from '../../utils/formatters';
 import { Plus, Edit2, Trash2, Cpu, Check, X, Shield, Sparkles } from 'lucide-react';
 import toast from '../ui/Toast';
@@ -32,6 +32,10 @@ export default function OrchestrationTab() {
   const [profiles, setProfiles] = useState([]);
   const [providers, setProviders] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [profilesLoaded, setProfilesLoaded] = useState(false);
+  const [profileError, setProfileError] = useState(false);
+  const [providerError, setProviderError] = useState(false);
+  const loadGeneration = useRef(0);
   const [editingProfile, setEditingProfile] = useState(null);
   const [isNew, setIsNew] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -39,24 +43,29 @@ export default function OrchestrationTab() {
   const deleteConfirm = useConfirmDelete();
 
   const loadData = useCallback(async () => {
+    const generation = ++loadGeneration.current;
     setLoading(true);
-    try {
-      const [profList, provList] = await Promise.all([
-        api.getOrchestrationProfiles({ silent: true }).catch(() => []),
-        api.getProviders({ silent: true }).catch(() => ({ providers: [] })),
-      ]);
-      setProfiles(profList || []);
-      // getProviders() resolves { activeProvider, providers }, not a bare array.
-      setProviders((provList?.providers || []).filter((p) => p.enabled));
-    } catch (err) {
-      toast.error(`Failed to load orchestration data: ${err.message}`);
-    } finally {
-      setLoading(false);
+    const [profileResult, providerResult] = await Promise.allSettled([
+      api.getOrchestrationProfiles({ silent: true }),
+      api.getProviders({ silent: true, fresh: true }),
+    ]);
+    if (generation !== loadGeneration.current) return;
+    setProfileError(profileResult.status === 'rejected');
+    setProviderError(providerResult.status === 'rejected');
+    if (profileResult.status === 'fulfilled') {
+      setProfiles(profileResult.value || []);
+      setProfilesLoaded(true);
     }
+    if (providerResult.status === 'fulfilled') {
+      // getProviders() resolves { activeProvider, providers }, not a bare array.
+      setProviders((providerResult.value?.providers || []).filter((p) => p.enabled));
+    }
+    setLoading(false);
   }, []);
 
   useEffect(() => {
     loadData();
+    return () => { loadGeneration.current += 1; };
   }, [loadData]);
 
   const handleStartCreate = () => {
@@ -183,7 +192,7 @@ export default function OrchestrationTab() {
             for the Architect, Implementer, and Reviewer. Machine-local and opt-in per task.
           </p>
         </div>
-        {!editingProfile && (
+        {!editingProfile && profilesLoaded && profiles.length > 0 && (
           <button
             onClick={handleStartCreate}
             className="inline-flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg text-sm font-medium transition-colors self-start sm:self-auto"
@@ -193,6 +202,24 @@ export default function OrchestrationTab() {
           </button>
         )}
       </div>
+
+      {(profileError || providerError) && (
+        <div role="status" className="bg-port-card border border-port-border rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0 space-y-1 text-sm text-gray-400">
+            {profileError && <p>{profilesLoaded
+              ? 'Orchestration profiles could not be refreshed. Showing previously loaded profiles; they may be out of date.'
+              : 'Orchestration profiles are unavailable.'}</p>}
+            {providerError && <p>Provider metadata is unavailable. Provider IDs or previously loaded names are shown.</p>}
+          </div>
+          <button
+            onClick={loadData}
+            disabled={loading}
+            className="px-4 py-2 min-h-[44px] bg-port-border hover:bg-port-border/80 text-white rounded-lg text-sm disabled:opacity-50"
+          >
+            {loading ? 'Retrying…' : 'Retry'}
+          </button>
+        </div>
+      )}
 
       {editingProfile ? (
         <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-6">
@@ -339,9 +366,9 @@ export default function OrchestrationTab() {
         </div>
       ) : null}
 
-      {loading ? (
+      {loading && !profilesLoaded ? (
         <div className="p-8 text-center text-gray-400">Loading orchestration profiles…</div>
-      ) : profiles.length === 0 ? (
+      ) : !profilesLoaded || (profileError && profiles.length === 0) || (editingProfile && profiles.length === 0) ? null : profiles.length === 0 ? (
         <div className="bg-port-card border border-port-border rounded-xl p-8 text-center space-y-3">
           <p className="text-gray-400">No orchestration profiles configured.</p>
           <button

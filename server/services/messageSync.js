@@ -1,6 +1,6 @@
 import { messageLogError } from '../lib/messageLogError.js';
 
-import { createHash } from 'crypto';
+import { browserSummaryId, browserDetailIdentities, messageIngestionIdentity, matchBrowserMessage, retainLegacyActivityIdentities } from '../lib/messageBrowserIdentity.js';
 import { join } from 'path';
 import { atomicWrite, ensureDir, filterBySearch as genericFilterBySearch, PATHS, safeDate, safeJSONParse, UUID_RE, tryReadFile } from '../lib/fileUtils.js';
 import { getAccount, updateSyncStatus, markSentIngested, updateSendAsAliases } from './messageAccounts.js';
@@ -228,28 +228,20 @@ export async function syncAccount(accountId, io, options = {}) {
     // next sync + the outreach detector's own reads.
     const sendAsAliases = Array.isArray(providerResult) ? null : (providerResult?.sendAsAliases ?? null);
 
-    // Deduplicate by externalId; update flags and body on existing messages
-    const existingMap = new Map(cache.messages.filter(m => m.externalId).map(m => [m.providerRowId ? `${m.externalId}|${m.providerRowId}` : m.externalId, m]));
-    const uniqueByExternalId = new Map();
-    for (const message of cache.messages) {
-      uniqueByExternalId.set(message.externalId, uniqueByExternalId.has(message.externalId) ? null : message);
-    }
-    const incomingCounts = new Map();
-    for (const message of newMessages) {
-      incomingCounts.set(message.externalId, (incomingCounts.get(message.externalId) || 0) + 1);
-    }
+    // Preserve the DB identity of unambiguous pre-upgrade cache entries.
+    retainLegacyActivityIdentities(cache.messages);
     const uniqueNew = [];
     for (const msg of newMessages) {
-      const identityKey = msg.providerRowId ? `${msg.externalId}|${msg.providerRowId}` : msg.externalId;
-      // A missing row ID on either side permits a summary fallback only
-      // when both sides are unique; never overwrite a different known row ID.
-      const fallback = uniqueByExternalId.get(msg.externalId);
-      const canMatchSummary = fallback && incomingCounts.get(msg.externalId) === 1
-        && (!msg.providerRowId || !fallback.providerRowId);
-      const existing = existingMap.get(identityKey) || (canMatchSummary ? fallback : null);
+      const existing = matchBrowserMessage(cache.messages, msg, newMessages);
       if (!msg.externalId || !existing) {
         uniqueNew.push(msg);
       } else {
+        // A row that becomes one unambiguous child keeps its already-recorded event.
+        existing.activityIdentity ||= messageIngestionIdentity(existing);
+        // Adopt canonical identity without replacing local ID or evaluation.
+        for (const key of ['externalId', 'browserMessageKind', 'providerMessageId', 'browserMemberDisambiguator', 'browserSummaryExternalId', 'from', 'date', 'subject']) {
+          if (msg[key] !== undefined && (key !== 'providerMessageId' || msg[key])) existing[key] = msg[key];
+        }
         // Update flags and provider identity on existing message
         if (msg.providerRowId) existing.providerRowId = msg.providerRowId;
         if (msg.isUnread !== undefined) existing.isUnread = msg.isUnread;
@@ -383,67 +375,35 @@ export async function syncAccount(accountId, io, options = {}) {
   return result;
 }
 
-function mergeRefreshedMessage(cache, existingByExternalId, accountId, source, message, detail) {
-  function makeExternalId(date, sender, subject) {
-    return 'pw-' + createHash('md5').update(`${date}|${sender}|${subject}`).digest('hex').slice(0, 12);
-  }
-
-  const threadKey = message.threadId || `thread-${message.externalId || message.id}`;
-  const updatedMessages = [];
-
-  for (const threadMsg of detail) {
-    const extId = makeExternalId(threadMsg.date || message.date || '', threadMsg.from || message.from?.name || '', message.subject || '');
-    const existing = existingByExternalId.get(extId);
-    if (existing) {
-      // Use ?? not ||: a genuinely empty-body message (body === '') is a valid
-      // full extraction and must overwrite the old text, not collapse back to it
-      // (absent-vs-cleared, AGENTS.md). Only an absent body (null/undefined) keeps
-      // the prior text.
-      existing.bodyText = threadMsg.body ?? existing.bodyText;
-      existing.bodyFull = true;
-      if (!existing.threadId) existing.threadId = threadKey;
-      if (threadMsg.to?.length) existing.to = threadMsg.to;
-      if (threadMsg.cc?.length) existing.cc = threadMsg.cc;
-      updatedMessages.push(existing);
-    } else {
-      const newMsg = {
-        id: uuidv4(),
-        externalId: extId,
-        threadId: threadKey,
-        from: { name: threadMsg.from || message.from?.name || '', email: threadMsg.fromEmail || message.from?.email || '' },
-        to: threadMsg.to || [],
-        cc: threadMsg.cc || [],
-        subject: message.subject || '',
-        bodyText: threadMsg.body || '',
-        bodyFull: true,
-        date: threadMsg.date || message.date || new Date().toISOString(),
-        // null = read state unknown (Teams cannot measure it) — keep it null, not "read"
-        isRead: message.isRead === undefined ? true : message.isRead,
-        isUnread: message.isUnread === undefined ? false : message.isUnread,
-        isPinned: message.isPinned ?? false,
-        isFlagged: message.isFlagged ?? false,
-        isReplied: message.isReplied ?? false,
-        hasMeetingInvite: message.hasMeetingInvite ?? false,
-        labels: [],
-        source,
-        syncedAt: new Date().toISOString()
-      };
-      cache.messages.push(newMsg);
-      existingByExternalId.set(extId, newMsg);
-      updatedMessages.push(newMsg);
-    }
-  }
-
-  // Update the original message too if it wasn't matched by externalId
-  if (!updatedMessages.find(m => m.id === message.id)) {
-    // ?? not ||: an empty extracted body ('') is a valid clear, not a fall-back
-    // to the stale text (absent-vs-cleared, AGENTS.md).
-    message.bodyText = detail[0]?.body ?? message.bodyText;
-    message.bodyFull = true;
-    if (!message.threadId) message.threadId = threadKey;
-    updatedMessages.push(message);
-  }
-
+function mergeRefreshedMessage(cache, accountId, source, message, detail) {
+  retainLegacyActivityIdentities(cache.messages);
+  const identities = browserDetailIdentities(message, detail);
+  const threadKey = message.threadId || `thread-${messageIngestionIdentity(message)}`;
+  const updatedMessages = identities.map((identity, index) => {
+    const threadMsg = detail[index];
+    const existing = matchBrowserMessage(cache.messages, identity, identities)
+      || (!message.providerRowId && identities.length === 1
+        && browserSummaryId(message.date || '', message.from?.name || '', message.subject || '') === identity.externalId
+        ? message : null);
+    if (existing?.providerMessageId) identity.providerMessageId ||= existing.providerMessageId;
+    // API IDs remain authoritative; a browser refresh supplies content only.
+    if (existing?.externalId && !existing.providerRowId && !identity.providerRowId) identity.externalId = existing.externalId;
+    const updated = existing || {
+      id: uuidv4(), labels: [], source, isRead: message.isRead === undefined ? true : message.isRead,
+      isUnread: message.isUnread === undefined ? false : message.isUnread, isPinned: message.isPinned ?? false,
+      isFlagged: message.isFlagged ?? false, isReplied: message.isReplied ?? false,
+      hasMeetingInvite: message.hasMeetingInvite ?? false, subject: message.subject || ''
+    };
+    if (existing) updated.activityIdentity ||= messageIngestionIdentity(existing);
+    Object.assign(updated, identity, {
+      bodyText: threadMsg.body ?? updated.bodyText ?? '', bodyFull: true,
+      threadId: threadKey, to: threadMsg.to || updated.to || [], cc: threadMsg.cc || updated.cc || [],
+      syncedAt: new Date().toISOString()
+    });
+    if (!existing) cache.messages.push(updated);
+    return updated;
+  });
+  // Do not copy an arbitrary child's body onto an unmatched conversation row.
   return updatedMessages.map(m => ({ ...m, accountId }));
 }
 
@@ -463,7 +423,6 @@ export async function refreshMessages(accountId, messageIds) {
 
     const { refreshMessageDetail } = await import('./messagePlaywrightSync.js');
     const messagesById = new Map(cache.messages.map(message => [message.id, message]));
-    const existingByExternalId = new Map(cache.messages.filter(message => message.externalId).map(message => [message.externalId, message]));
     const results = [];
     let updated = 0;
 
@@ -488,7 +447,7 @@ export async function refreshMessages(accountId, messageIds) {
         continue;
       }
 
-      results.push(mergeRefreshedMessage(cache, existingByExternalId, accountId, account.type, message, detail));
+      results.push(mergeRefreshedMessage(cache, accountId, account.type, message, detail));
       updated++;
     }
 

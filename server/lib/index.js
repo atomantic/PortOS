@@ -870,3 +870,5 @@ export * from './deepAudit.js';
 export * from './deepAuditCoverage.js';
 
 export * from './auditWorkflow.js';
+
+export * from './generatedPreviewSandbox.js';

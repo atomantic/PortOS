@@ -1,3 +1,4 @@
+import { messageIngestionIdentity } from '../lib/messageBrowserIdentity.js';
 /**
  * Human Activity timeline (#2150) — unified, machine-local event store.
  *
@@ -162,7 +163,7 @@ export function messageActivityCandidates(account, messages = []) {
   for (const message of messages || []) {
     const when = message?.date || message?.happenedAt;
     if (!when) continue;
-    const externalId = message.externalId || message.id;
+    const externalId = message.activityIdentity || messageIngestionIdentity(message);
     if (!externalId) continue;
     const fromEmail = participantEmail(message.from);
     // Direction: prefer Gmail's authoritative SENT label when the provider supplies

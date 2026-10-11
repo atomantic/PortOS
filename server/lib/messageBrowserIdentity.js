@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 /** DOM reader shared by Outlook ingestion and destructive browser actions.
  * Self-contained so it can be serialized into a CDP evaluation. */
 export function readOutlookMessageRow(row) {
@@ -130,4 +132,104 @@ async function actOnMessageRow(provider, identity, action, readOutlookRow) {
     if (rows().filter(matches).length === 0) return { success: true, messageId: identity.id };
   }
   return { code: 'MESSAGE_ACTION_UNCONFIRMED' };
+}
+
+/** Compatibility hash: existing no-provider-ID messages keep their IDs. */
+export function browserSummaryId(date, sender, subject) {
+  return 'pw-' + createHash('md5').update(`${date}|${sender}|${subject}`).digest('hex').slice(0, 12);
+}
+
+/** A conversation row and its expanded messages are different identity domains. */
+export function messageIngestionIdentity(message) {
+  if (!message.providerRowId) return message.externalId || message.id;
+  const row = message.providerRowId;
+  const member = message.browserMessageKind === 'member'
+    || (!message.browserMessageKind && message.bodyFull && message.threadId);
+  if (!member) return `browser-row:${JSON.stringify(row)}`;
+  if (message.providerMessageId) return `browser-member:${JSON.stringify([row, message.providerMessageId])}`;
+  const parsed = Date.parse(message.date);
+  const date = Number.isFinite(parsed) ? new Date(parsed).toISOString() : message.date;
+  const sender = message.from?.email?.trim().toLowerCase() || message.from?.name || '';
+  return `browser-member:${JSON.stringify([row, date || '', sender, message.browserMemberDisambiguator || ''])}`;
+}
+
+/** Shared detail mapping for initial browser sync and explicit refresh. */
+export function browserDetailIdentities(summary, details) {
+  const members = details.map(detail => {
+    const date = detail.date || summary.date || '';
+    const name = detail.from || summary.from?.name || '';
+    return {
+      externalId: browserSummaryId(date, name, summary.subject || ''),
+      providerRowId: summary.providerRowId || null,
+      providerMessageId: detail.providerMessageId || null,
+      browserMessageKind: 'member',
+      from: { name, email: detail.fromEmail || summary.from?.email || '' },
+      date
+    };
+  });
+  const providerIdCounts = new Map();
+  for (const member of members) {
+    if (member.providerMessageId) providerIdCounts.set(member.providerMessageId, (providerIdCounts.get(member.providerMessageId) || 0) + 1);
+  }
+  // Some provider paints repeat a conversation attribute on every child. It is
+  // not a usable child ID when it fails uniqueness inside the reading pane.
+  for (const member of members) {
+    if (providerIdCounts.get(member.providerMessageId) > 1) member.providerMessageId = null;
+  }
+  const counts = new Map();
+  for (const member of members) {
+    const key = messageIngestionIdentity(member);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  // A timestamp/sender collision is not permission to overwrite a sibling.
+  // Exact body + occurrence preserves distinct observed members on replay;
+  // a changed ambiguous body gets a new record instead of stealing an old one.
+  const occurrences = new Map();
+  return members.map((member, index) => {
+    const key = messageIngestionIdentity(member);
+    if (member.providerRowId && !member.providerMessageId && counts.get(key) > 1) {
+      const body = createHash('sha256').update(details[index].body || '').digest('hex');
+      const occurrenceKey = `${key}:${body}`;
+      const occurrence = occurrences.get(occurrenceKey) || 0;
+      occurrences.set(occurrenceKey, occurrence + 1);
+      member.browserMemberDisambiguator = `${body}:${occurrence}`;
+    }
+    return member;
+  });
+}
+
+/** Match only unique identities; a summary fallback may never cross known rows. */
+export function matchBrowserMessage(messages, incoming, batch = [incoming]) {
+  const key = messageIngestionIdentity(incoming);
+  const exact = messages.filter(message => messageIngestionIdentity(message) === key);
+  if (exact.length === 1 && batch.filter(message => messageIngestionIdentity(message) === key).length === 1) return exact[0];
+  if (exact.length) return null;
+  const compatible = (message, candidate) => {
+    const memberEvidence = message.providerRowId && message.providerRowId === candidate.providerRowId
+      && candidate.browserMessageKind === 'member'
+      && (!message.providerMessageId || !candidate.providerMessageId)
+      && Number.isFinite(Date.parse(message.date)) && Date.parse(message.date) === Date.parse(candidate.date)
+      && (message.from?.email && candidate.from?.email
+        ? message.from.email.trim().toLowerCase() === candidate.from.email.trim().toLowerCase()
+        : message.from?.name && message.from.name === candidate.from?.name);
+    return (message.externalId === candidate.externalId || memberEvidence)
+      && !(candidate.browserMessageKind === 'row' && (message.browserMessageKind === 'member' || (message.bodyFull && message.threadId)))
+      && (!message.providerRowId || !candidate.providerRowId || message.providerRowId === candidate.providerRowId)
+      && (!message.providerMessageId || !candidate.providerMessageId || message.providerMessageId === candidate.providerMessageId)
+      && !message.browserMemberDisambiguator && !candidate.browserMemberDisambiguator;
+  };
+  const fallback = messages.filter(message => compatible(message, incoming));
+  return fallback.length === 1 && batch.filter(candidate => compatible(fallback[0], candidate)).length === 1 ? fallback[0] : null;
+}
+
+/** Pin unambiguous legacy activity keys before changing display-derived hashes.
+ * This additive cache alias keeps the existing DB event and its ID intact. */
+export function retainLegacyActivityIdentities(messages) {
+  const counts = new Map();
+  for (const message of messages) counts.set(message.externalId, (counts.get(message.externalId) || 0) + 1);
+  for (const message of messages) {
+    if (!message.browserMessageKind && !message.activityIdentity && message.externalId && counts.get(message.externalId) === 1) {
+      message.activityIdentity = message.externalId;
+    }
+  }
 }
