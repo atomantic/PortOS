@@ -60,24 +60,45 @@ function hasProofEvidence(review) {
 
 const describeDirection = value => typeof value === 'string' ? value : JSON.stringify(value || {}, null, 2);
 
+// What the art draft fields are seeded from. A seeded field that the user has
+// not edited follows the newest approved direction; an edited one is kept.
+const ART_SEEDS = {
+  cast: d => d.protagonist,
+  environments: d => d.sets,
+  visualLanguage: d => ({ look: d.look, palette: d.protagonist?.palette, world: d.world }),
+  motionLanguage: d => ({ movement: d.protagonist?.movement, camera: d.world?.camera, transitions: d.world?.transitions }),
+};
+// Drafts seeded before productionReview.seededDraft existed have no record of
+// what was seeded. describeDirection writes objects as JSON, which typed notes
+// never are, so a field holding a JSON object or list is treated as an untouched seed.
+const looksSeeded = value => {
+  if (!/^[[{]/.test(value.trim())) return false;
+  try { return typeof JSON.parse(value) === 'object'; } catch { return false; }
+};
+
 /**
- * Seed the empty art-direction draft fields (and the visual guide) from a
- * Cast & Sets sheet. Text the director already typed — and a guide already
- * chosen — is never overwritten, and a document-shot draft is left alone.
+ * Seed the art-direction draft fields (and the visual guide) from a Cast & Sets
+ * sheet. A field that is blank or still holds the text an earlier approval
+ * seeded follows the newest direction; text the director typed — and a guide
+ * already chosen — is never overwritten, and a document-shot draft is left alone.
  * Seeding supplies editable content only; it never records an approval.
  */
 export function seedArtDraft(project, stage = project.castAndSets) {
   const prior = project.productionReview?.draft || {};
   if (prior.storyboardSource === 'document' || !stage?.direction) return project;
-  const d = stage.direction;
-  const keep = (key, fallback) => text(prior[key]) ? prior[key] : fallback;
+  const recorded = project.productionReview?.seededDraft;
+  const untouched = key => !text(prior[key])
+    || (recorded ? recorded[key] === hash(prior[key]) : looksSeeded(prior[key]));
   const draft = { lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [], ...prior,
-    cast: keep('cast', describeDirection(d.protagonist)),
-    environments: keep('environments', describeDirection(d.sets)),
-    visualLanguage: keep('visualLanguage', describeDirection({ look: d.look, palette: d.protagonist?.palette, world: d.world })),
-    motionLanguage: keep('motionLanguage', describeDirection({ movement: d.protagonist?.movement, camera: d.world?.camera, transitions: d.world?.transitions })),
     guideArtifactId: prior.guideArtifactId || (artifact(project, stage.artifactId) ? stage.artifactId : null) };
-  return { ...project, productionReview: { ...project.productionReview, draft } };
+  // Kept outside the strict draft schema: the hash of each field as last seeded.
+  const seededDraft = {};
+  for (const [key, from] of Object.entries(ART_SEEDS)) {
+    if (!untouched(key)) continue;
+    draft[key] = describeDirection(from(stage.direction));
+    seededDraft[key] = hash(draft[key]);
+  }
+  return { ...project, productionReview: { ...project.productionReview, draft, seededDraft } };
 }
 
 export function productionReviewBasis(project) {
