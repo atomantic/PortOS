@@ -39,7 +39,7 @@
     "@testing-library/jest-dom": "7.0.1",
     "@testing-library/react": "16.3.3",
     "@testing-library/user-event": "14.6.7",
-    "@vitejs/plugin-react": "6.1.1",
+    "@vitejs/plugin-react": "6.1.2",
     "happy-dom": "20.14.5",
     "playwright-core": "1.63.0",
     "rollup-plugin-visualizer": "7.1.1",
