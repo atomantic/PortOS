@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  FAL_AUDIO_VIDEO_MODEL,
   FAL_LIPSYNC_VIDEO_MODEL,
   FAL_VIDEO_MODELS,
   buildFalVideoRequest,
@@ -74,6 +75,28 @@ describe('buildFalVideoRequest — per-family wire bodies', () => {
     expect(req.body).toEqual({ image_url: 'i', audio_url: 'a', enable_transcription: true, resolution: '2K' });
     expect(req.seconds).toBeNull();
     expect(req.estimatedCostUsd).toBe(3.84);
+  });
+
+  it('LTX-2.3 audio-to-video: prompt + frame + audio on an explicit canvas that keeps the shot aspect; length follows the audio', () => {
+    const req = buildFalVideoRequest({
+      modelId: FAL_AUDIO_VIDEO_MODEL, prompt: 'drummer', negativePrompt: 'blur', imageUrl: 'i', audioUrl: 'a', audioSec: 3.735,
+      width: 1920, height: 1080, resolution: '1080P',
+    });
+    expect(req.body).toEqual({
+      prompt: 'drummer', negative_prompt: 'blur', image_url: 'i', audio_url: 'a', video_size: { width: 1920, height: 1080 },
+      match_audio_length: true, fps: 24, audio_strength: 1,
+    });
+    expect(req.seconds).toBeNull();
+    // 1920×1080 × 97 frames (3.735s at 24fps, up to LTX's 8n+1 count) at $0.001605/MP.
+    expect(req.estimatedCostUsd).toBe(0.3228);
+    expect(buildFalVideoRequest({ modelId: FAL_AUDIO_VIDEO_MODEL, prompt: 'x', audioUrl: 'a', width: 1080, height: 1920 }).body.video_size)
+      .toEqual({ width: 720, height: 1280 });
+  });
+
+  it('OmniHuman v1.5: frame + audio, an optional prompt and its own resolution enum', () => {
+    expect(buildFalVideoRequest({ modelId: 'fal-ai/bytedance/omnihuman/v1.5', imageUrl: 'i', audioUrl: 'a', resolution: '720P' }).body)
+      .toEqual({ image_url: 'i', audio_url: 'a', resolution: '720p' });
+    expect(estimateFalVideoCostUsd({ modelId: 'fal-ai/bytedance/omnihuman/v1.5', seconds: 4 })).toBe(0.64);
   });
 
   it('refuses a request the model cannot honor before anything is paid for; an uncurated id is not built', () => {

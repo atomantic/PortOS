@@ -530,13 +530,14 @@ async function resolvePreparedParams({
       { status: 400, code: 'VIDEO_GEN_AUDIO_REQUIRED' },
     );
   }
-  // A fal lip-sync model takes the frame plus an uploaded voice clip (no Music Video scene needed).
-  const falLipSync = body.backend === VIDEO_GEN_MODE.FAL && getFalVideoModel(body.falModelId)?.kind === 'lipsync';
-  if (falLipSync && !uploads.audioFile && !body.musicVideo) {
+  // A fal source-audio model (lip-sync, or audio-to-video motion) takes the frame plus an uploaded
+  // audio clip (no Music Video scene needed).
+  const falSourceAudio = body.backend === VIDEO_GEN_MODE.FAL && !!getFalVideoModel(body.falModelId)?.audioInput;
+  if (falSourceAudio && !uploads.audioFile && !body.musicVideo) {
     await cleanupStaged();
-    throw new ServerError('A fal.ai lip-sync model needs an audioFile upload (the voice to sync to).', { status: 400, code: 'VIDEO_GEN_AUDIO_REQUIRED' });
+    throw new ServerError('A fal.ai source-audio model needs an audioFile upload (the audio it follows).', { status: 400, code: 'VIDEO_GEN_AUDIO_REQUIRED' });
   }
-  if (uploads.audioFile && body.mode !== 'a2v' && !falLipSync) {
+  if (uploads.audioFile && body.mode !== 'a2v' && !falSourceAudio) {
     await cleanupStaged();
     throw new ServerError(
       `audioFile upload is only valid with mode='a2v' (got mode='${body.mode || 'unset'}').`,
@@ -835,14 +836,14 @@ async function resolvePreparedParams({
         }
       }
     }
-    // A standalone fal lip-sync take: stage the voice clip durably like the frame. The queue removes
+    // A standalone fal source-audio take: stage the audio clip durably like the frame. The queue removes
     // it if the job fails, is cancelled or is lost to a restart (uploadedTempPaths); the fal worker
     // removes it once the take is published.
     let hostedAudioPath = null;
-    if (falLipSync && uploads.audioFile) {
+    if (falSourceAudio && uploads.audioFile) {
       if (!sourceImagePath) {
         await cleanupStaged();
-        throw new ServerError('A fal.ai lip-sync render needs a reference frame (sourceImage or sourceImageFile).', { status: 400, code: 'VALIDATION_ERROR' });
+        throw new ServerError('A fal.ai source-audio render needs a reference frame (sourceImage or sourceImageFile).', { status: 400, code: 'VALIDATION_ERROR' });
       }
       hostedAudioPath = await stageUploadDurable(uploads.audioFile, 'audio');
       // A paid route: refuse a clip fal would reject (unreadable, or outside the model's window)
@@ -856,7 +857,7 @@ async function resolvePreparedParams({
       }
       if ((window.minSec != null && clipSec < window.minSec) || (window.maxSec != null && clipSec > window.maxSec)) {
         await cleanupStaged();
-        throw new ServerError(`The voice clip is ${clipSec.toFixed(2)} s; this lip-sync model takes ${window.minSec}–${window.maxSec} s (pad a short line with silence).`,
+        throw new ServerError(`The voice clip is ${clipSec.toFixed(2)} s; this model takes ${window.minSec}–${window.maxSec} s (pad a short line with silence).`,
           { status: 400, code: 'VIDEO_GEN_AUDIO_LENGTH' });
       }
     }

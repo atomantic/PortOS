@@ -48,6 +48,29 @@ describe('performance speaker save boundary', () => {
   });
 });
 
+describe('music-driven performance', () => {
+  it('switches a shot between cutaway, lip-sync and music-driven, and plans the music-driven take on the audio-to-video model', () => {
+    const onSave = vi.fn();
+    function Harness() {
+      const [scene, setScene] = useState({ sceneId: 's1', shotMode: 'cutaway', startSec: 10, endSec: 13.5, referenceImageId: 'frame.png', takes: [] });
+      return <SceneCard scene={scene} index={0} lipSyncBackend="fal" songDurationSec={60} falVideoSettings={{}}
+        onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
+    }
+    render(<Harness />);
+    const shot = screen.getByLabelText('Shot');
+    fireEvent.change(shot, { target: { value: 'music' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { shotMode: 'performance', performanceStyle: 'music' });
+    expect(shot.value).toBe('music');
+    // The shot's own 3.5s, not lip-sync's 5s minimum window.
+    expect(screen.getByTestId('performance-plan').textContent).toMatch(/^Music-driven via fal\.ai LTX-2\.3 audio-to-video \(fal-ai\/ltx-2\.3-22b\/audio-to-video\) · song 0:10–0:13 · est\. \$0\.30 \(3\.5s at 1080p\)/);
+    fireEvent.change(shot, { target: { value: 'performance' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { shotMode: 'performance', performanceStyle: null });
+    expect(screen.getByTestId('performance-plan').textContent).toMatch(/^Lip-sync via/);
+    fireEvent.change(shot, { target: { value: 'cutaway' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { shotMode: 'cutaway' });
+  });
+});
+
 describe('persisted render failure chip (#10154)', () => {
   const failedScene = (lane) => ({ sceneId: 's1', startSec: 0, endSec: 5, referenceImageId: 'frame.png', takes: [],
     lastFailure: { lane, error: 'CUDA out of memory', at: '2026-10-05T00:00:00.000Z' } });

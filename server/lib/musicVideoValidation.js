@@ -51,7 +51,7 @@ import { NARRATIVE_EVENT_KINDS } from './musicVideoNarrativeEvents.js';
 import { MUSIC_VIDEO_MEDIA } from './musicVideoMediumPlan.js';
 import { MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_STILL_MOVES, MUSIC_VIDEO_TEXT_ZONES, MUSIC_VIDEO_VISUAL_LAYERS } from './musicVideoLayers.js';
 import { CAMERA_FRAMINGS, CAMERA_MOVEMENT_VALUES, CAMERA_SPEEDS } from './cameraMovements.js';
-import { MUSIC_VIDEO_SHOT_MODES, SOURCE_AUDIO_LIPSYNC } from './musicVideoShotTiming.js';
+import { MUSIC_VIDEO_PERFORMANCE_STYLES, MUSIC_VIDEO_SHOT_MODES, SOURCE_AUDIO_LIPSYNC } from './musicVideoShotTiming.js';
 import {
   MUSIC_VIDEO_AUTOMATION_BUDGET_MAX_USD,
   MUSIC_VIDEO_AUTOMATION_GUIDANCE_MAX,
@@ -152,6 +152,12 @@ export const musicVideoVideoSettingsSchema = z.object({
   // false = lip-sync to the audio alone, without the provider transcribing it
   // first (sung words it mishears turn into the wrong mouth shapes).
   falLipSyncTranscription: z.boolean().nullable().optional(),
+  // Audio-to-video model and resolution for music-driven performance takes
+  // (scene.performanceStyle 'music'). Loosely validated like falModelId: a peer
+  // on a newer catalog may pin a model this install does not curate, which then
+  // falls back to the default (LTX-2.3 audio-to-video).
+  falMusicModelId: z.string().min(1).max(200).nullable().optional(),
+  falMusicResolution: z.string().min(1).max(16).nullable().optional(),
   generationMode: z.enum(['image', 'audioReactive', 'suppliedAudio']).optional(),
   audioReactiveLora: z.string().max(255).regex(/^[^/\\]+\.safetensors$/i).nullable().optional(),
   audioReactiveScale: z.number().min(0).max(2).optional(),
@@ -1349,6 +1355,8 @@ export const musicVideoSceneCreateSchema = z.object({
   // `cutaway` = the ordinary image-to-video shot. See lib/musicVideoShotTiming.js.
   shotMode: z.enum(MUSIC_VIDEO_SHOT_MODES).optional(),
   performanceSpeaker: z.string().trim().max(120).nullable().optional(),
+  // How a performance follows the song: lip-sync (absent/null) or music-driven motion.
+  performanceStyle: z.enum(MUSIC_VIDEO_PERFORMANCE_STYLES).nullable().optional(),
 }).strict().refine(
   (s) => s.startSec == null || s.endSec == null || s.endSec >= s.startSec,
   { message: 'endSec must be >= startSec', path: ['endSec'] },
@@ -1387,6 +1395,8 @@ export const musicVideoSceneUpdateSchema = z.object({
   // `cutaway` = the ordinary image-to-video shot. See lib/musicVideoShotTiming.js.
   shotMode: z.enum(MUSIC_VIDEO_SHOT_MODES).optional(),
   performanceSpeaker: z.string().trim().max(120).nullable().optional(),
+  // How a performance follows the song: lip-sync (absent/null) or music-driven motion.
+  performanceStyle: z.enum(MUSIC_VIDEO_PERFORMANCE_STYLES).nullable().optional(),
   referenceImageId: z.string().max(256).nullable().optional(),
   videoHistoryId: z.string().max(64).nullable().optional(),
   // #10154: the last generation failure the render hooks persisted. The board

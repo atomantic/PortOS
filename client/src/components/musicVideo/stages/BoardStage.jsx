@@ -41,6 +41,7 @@ export default function BoardStage({ board }) {
     layered, lipSyncBackend, songDurationSec, failed: sceneMedia.failedScenes,
     footageOptional: FOOTAGE_OPTIONAL_MODES.has(project.composition?.mode || 'concat'),
     songReview: project.songRevision?.sceneReview || null,
+    videoSettings: videoSettings.settings,
   };
   const codesById = new Map(scenes.map((scene) => [scene.sceneId, sceneAttention(scene, attentionCtx)]));
   const counts = { all: scenes.length, attention: 0, missing: 0 };

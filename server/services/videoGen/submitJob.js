@@ -300,7 +300,11 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
           const { falSceneTake } = await import('../../lib/musicVideoShotTiming.js');
           const { costUsd } = falSceneTake({
             scene,
-            videoSettings: { falModelId: body.falModelId, falDuration: body.falDuration, falResolution: body.falResolution, falLipSyncResolution: body.falResolution },
+            videoSettings: {
+              falMusicModelId: project.videoSettings?.falMusicModelId ?? null,
+              falModelId: body.falModelId, falDuration: body.falDuration, falResolution: body.falResolution,
+              falLipSyncResolution: body.falResolution, falMusicResolution: body.falResolution,
+            },
             songDurationSec: project.audioAnalysis?.durationSec ?? null,
           });
           if (Number.isFinite(costUsd)) params.musicVideoCostUsd = costUsd;

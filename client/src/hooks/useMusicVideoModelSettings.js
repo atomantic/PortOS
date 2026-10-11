@@ -74,6 +74,12 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
     falModelId: project?.videoSettings?.falModelId ?? null,
     falResolution: project?.videoSettings?.falResolution ?? null,
     falLipSyncResolution: project?.videoSettings?.falLipSyncResolution ?? null,
+    // false = lip-sync without transcript guidance (null/absent = on).
+    falLipSyncTranscription: project?.videoSettings?.falLipSyncTranscription ?? null,
+    // Audio-to-video model / resolution for music-driven performance takes —
+    // null means FAL_AUDIO_VIDEO_MODEL (LTX-2.3) / 1080p, resolved by falSceneTake.
+    falMusicModelId: project?.videoSettings?.falMusicModelId ?? null,
+    falMusicResolution: project?.videoSettings?.falMusicResolution ?? null,
     generationMode: project?.videoSettings?.generationMode || 'image',
     audioReactiveLora: project?.videoSettings?.audioReactiveLora || '',
     audioReactiveScale: project?.videoSettings?.audioReactiveScale ?? 1.2,

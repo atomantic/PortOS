@@ -123,7 +123,7 @@ export default function SceneCard({
   // #10297: a code shot is drawn by the composition, so it has no frame or clip to make.
   const codeShot = layered && layer === 'code';
   const performance = isPerformanceScene(scene);
-  const capability = performance ? performanceCapability(lipSyncBackend) : null;
+  const capability = performance ? performanceCapability(lipSyncBackend, { scene, videoSettings: falVideoSettings }) : null;
   const timedSpan = typeof scene.startSec === 'number' && typeof scene.endSec === 'number' && scene.endSec > scene.startSec
     ? scene.endSec - scene.startSec
     : null;
@@ -139,7 +139,7 @@ export default function SceneCard({
     : null;
   const falCost = falEstimate(falTake);
   const performanceCost = falTake?.performance ? (falCost || capability?.costLabel) : capability?.costLabel;
-  const splitLimit = layer === 'footage' ? shotSplitLimit(scene, lipSyncBackend) : null;
+  const splitLimit = layer === 'footage' ? shotSplitLimit(scene, lipSyncBackend, falVideoSettings) : null;
   const canSplit = splitLimit != null && timedSpan != null && timedSpan > splitLimit + 1e-6;
   const mergedSpan = typeof scene.startSec === 'number' && typeof nextEndSec === 'number' ? nextEndSec - scene.startSec : null;
   const canMerge = !!onMergeNext && !isLast && !documentComposition
@@ -149,7 +149,7 @@ export default function SceneCard({
     excerptStartSec: performanceReview?.excerptStartSec, backend: lipSyncBackend, videoSettings: falVideoSettings || {} });
   const shotModeId = `mv-shot-mode-${scene.sceneId}`;
   // #10152: what needs the director's attention, visible without opening the card.
-  const attention = sceneAttention(scene, { layered, footageOptional, lipSyncBackend, songDurationSec, clipSec, failed: failedScenes || {}, songReview });
+  const attention = sceneAttention(scene, { layered, footageOptional, lipSyncBackend, songDurationSec, clipSec, failed: failedScenes || {}, songReview, videoSettings: falVideoSettings });
   const songChange = songReview?.[scene.sceneId];
   const generatingLane = generatingFrame && generatingVideo ? 'Frame + clip' : generatingFrame ? 'Frame' : generatingVideo ? 'Clip' : null;
   // #10154: the server-persisted failure of the last render, shown until a
@@ -278,17 +278,20 @@ export default function SceneCard({
           {layer === 'footage' && (
             <>
               <label htmlFor={shotModeId} className="flex items-center gap-1">Shot</label>
-              <select id={shotModeId} value={performance ? 'performance' : 'cutaway'}
-                onChange={(e) => applyPatch({ shotMode: e.target.value })}
+              <select id={shotModeId} value={performance ? (scene.performanceStyle === 'music' ? 'music' : 'performance') : 'cutaway'}
+                onChange={(e) => applyPatch(e.target.value === 'cutaway' ? { shotMode: 'cutaway' }
+                  : { shotMode: 'performance', performanceStyle: e.target.value === 'music' ? 'music' : null })}
                 className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0"
-                title="Cutaway: any video lane animates the frame under the song. Performance: a singer lip-synced to the song itself (needs a source-audio provider).">
+                title="Cutaway: any video lane animates the frame under the song. Lip-sync: a singer's mouth follows the song. Music-driven: the song slice drives the whole frame's motion (a drummer on the beat). Both need a source-audio provider.">
                 <option value="cutaway">Cutaway</option>
                 <option value="performance">Performance (lip-sync)</option>
+                <option value="music">Performance (music-driven)</option>
               </select>
             </>
           )}
         </div>
-        {performance && (
+        {/* A music-driven shot follows the whole mix, not one voice. */}
+        {performance && scene.performanceStyle !== 'music' && (
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <label htmlFor={fieldId('speaker')}>Speaker / singer</label>
             <input id={fieldId('speaker')} value={scene.performanceSpeaker || ''} maxLength={120}
@@ -371,7 +374,7 @@ export default function SceneCard({
         )}
         {performance && !performanceBlocked && (
           <p className="text-[11px] text-port-text-muted break-words" data-testid="performance-plan">
-            Lip-sync via {capability.label} ({capability.modelId}) · song {formatDurationSec(plan.windowStartSec)}–{formatDurationSec(plan.windowEndSec)}
+            {capability.style === 'music' ? 'Music-driven' : 'Lip-sync'} via {capability.label} ({capability.modelId}) · song {formatDurationSec(plan.windowStartSec)}–{formatDurationSec(plan.windowEndSec)}
             {plan.editInSec > 0 ? ` · shot starts ${plan.editInSec.toFixed(2)}s into the take` : ''} · {performanceCost}
           </p>
         )}
@@ -517,7 +520,7 @@ export default function SceneCard({
             className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
             title={videoBlockedReason || performanceBlocked
               || (!scene.referenceImageId ? 'Generate a reference frame first'
-                : performance ? `Lip-sync this scene's frame to the song via ${capability.label} — ${performanceCost}`
+                : performance ? `${capability.style === 'music' ? "Animate this scene's frame to the song" : "Lip-sync this scene's frame to the song"} via ${capability.label} — ${performanceCost}`
                   : "Generate this scene's video from its reference frame (i2v)")}>
             {generatingVideo ? <Activity size={14} className="animate-spin" /> : <Video size={14} />}
             {generatingVideo ? 'Generating video…' : (scene.videoHistoryId ? 'New video take' : 'Generate video')}

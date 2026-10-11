@@ -1,9 +1,9 @@
 import RenderPoolPicker from './RenderPoolPicker.jsx';
 import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
 import {
-  FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_IMAGE_VIDEO_MODELS, describeFalVideoRate, falVideoResolutions, getFalVideoModel,
+  FAL_AUDIO_VIDEO_MODEL, FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_IMAGE_VIDEO_MODELS, describeFalVideoRate, falVideoResolutions, getFalVideoModel,
 } from '../../lib/falVideoModels.js';
-import { SOURCE_AUDIO_LIPSYNC } from '../../lib/musicVideoShotTiming.js';
+import { SOURCE_AUDIO_LIPSYNC, SOURCE_AUDIO_MUSIC, performanceCapability } from '../../lib/musicVideoShotTiming.js';
 
 const falSelectCls = 'w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 sm:w-auto min-h-[44px] sm:min-h-0';
 const falOptionLabel = (model) => {
@@ -35,6 +35,10 @@ export default function VideoRenderSettings({ videoSettings, generating }) {
   const falModel = getFalVideoModel(settings.falModelId || FAL_DEFAULT_IMAGE_VIDEO_MODEL);
   const falResolutions = falVideoResolutions(falModel);
   const lipSync = SOURCE_AUDIO_LIPSYNC.fal;
+  // Music-driven performance takes (scene Shot › Performance (music-driven)):
+  // an audio-to-video model where the song slice drives the whole frame.
+  const music = performanceCapability('fal', { scene: { performanceStyle: 'music' }, videoSettings: settings });
+  const musicModels = Object.values(SOURCE_AUDIO_MUSIC.fal);
   return (
     <>
       <RenderPoolPicker settings={settings} change={change} disabled={locked} />
@@ -240,6 +244,35 @@ export default function VideoRenderSettings({ videoSettings, generating }) {
             />
             Transcript-guided lip-sync
           </label>
+          <label htmlFor="mv-fal-music-model" className="sr-only">fal.ai music-driven model</label>
+          <select
+            id="mv-fal-music-model"
+            value={settings.falMusicModelId || ''}
+            onChange={(e) => change({ falMusicModelId: e.target.value || null, falMusicResolution: null })}
+            disabled={locked}
+            title="Audio-to-video model for music-driven performance shots: the scene's song slice drives the whole frame's motion, not just a mouth"
+            className={`${falSelectCls} sm:max-w-[280px]`}
+          >
+            {musicModels.map((lane) => (
+              <option key={lane.modelId} value={lane.modelId === FAL_AUDIO_VIDEO_MODEL ? '' : lane.modelId}>
+                {`Music-driven · ${getFalVideoModel(lane.modelId).label} · ${describeFalVideoRate(lane.modelId, lane.defaultResolution)}${lane.modelId === FAL_AUDIO_VIDEO_MODEL ? ' (default)' : ''}`}
+              </option>
+            ))}
+          </select>
+          <label htmlFor="mv-fal-music-resolution" className="sr-only">fal.ai music-driven resolution</label>
+          <select
+            id="mv-fal-music-resolution"
+            value={music.resolutions.includes(settings.falMusicResolution) ? settings.falMusicResolution : ''}
+            onChange={(e) => change({ falMusicResolution: e.target.value || null })}
+            disabled={locked}
+            title={`Output resolution for music-driven takes on ${music.label}`}
+            className={falSelectCls}
+          >
+            <option value="">{`Music-driven ${music.defaultResolution} (default)`}</option>
+            {music.resolutions.map((res) => (
+              <option key={res} value={res}>{`Music-driven ${res} · ${describeFalVideoRate(music.modelId, res)}`}</option>
+            ))}
+          </select>
         </>
       )}
     </>

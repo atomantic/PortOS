@@ -41,8 +41,8 @@ export const SCENE_FILTERS = Object.freeze(['all', 'attention', 'missing']);
 /** The `?scenes=` value as a filter id; anything unknown is `all`. */
 export const parseSceneFilter = (value) => (SCENE_FILTERS.includes(value) ? value : 'all');
 
-function performanceBlocked(scene, { lipSyncBackend, songDurationSec }) {
-  const capability = performanceCapability(lipSyncBackend);
+function performanceBlocked(scene, { lipSyncBackend, songDurationSec, videoSettings }) {
+  const capability = performanceCapability(lipSyncBackend, { scene, videoSettings });
   if (!capability) return performanceBlockedReason(lipSyncBackend);
   const plan = planPerformanceWindow({ startSec: scene.startSec, endSec: scene.endSec, songDurationSec: songDurationSec ?? Infinity, capability });
   return plan.ok ? null : plan.message;
@@ -59,7 +59,7 @@ function performanceBlocked(scene, { lipSyncBackend, songDurationSec }) {
  */
 export function sceneAttention(scene, ctx = {}) {
   if (!scene) return [];
-  const { layered = false, footageOptional = false, lipSyncBackend = '', songDurationSec = null, clipSec = null, failed = {}, songReview = null } = ctx;
+  const { layered = false, footageOptional = false, lipSyncBackend = '', songDurationSec = null, clipSec = null, failed = {}, songReview = null, videoSettings = null } = ctx;
   const layer = sceneVisualLayer(scene, { layered });
   const codes = [];
   const songChange = songReview?.[scene.sceneId];
@@ -72,7 +72,7 @@ export function sceneAttention(scene, ctx = {}) {
     && scene.endSec - scene.startSec - clipSec > COVERAGE_TOLERANCE_SEC) codes.push('under-covered');
   const contract = scene.direction?.actionContract;
   if (contract && shotActionContractProblem(contract, scene)) codes.push('contract-problem');
-  if (layer === 'footage' && isPerformanceScene(scene) && performanceBlocked(scene, { lipSyncBackend, songDurationSec })) codes.push('perf-blocked');
+  if (layer === 'footage' && isPerformanceScene(scene) && performanceBlocked(scene, { lipSyncBackend, songDurationSec, videoSettings })) codes.push('perf-blocked');
   if (sceneHasPendingDecision(scene)) codes.push('candidates-pending');
   if (contract && scene.referenceImageId) {
     const selected = sceneTakeList(scene, 'image').find((take) => take.assetId === scene.referenceImageId);

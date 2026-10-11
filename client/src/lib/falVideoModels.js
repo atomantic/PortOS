@@ -6,6 +6,8 @@
  * board's cost estimate and the server's request body cannot drift.
  */
 export {
+  FAL_AUDIO_VIDEO_MODEL,
+  FAL_AUDIO_VIDEO_MODELS,
   FAL_DEFAULT_IMAGE_VIDEO_MODEL,
   FAL_DEFAULT_TEXT_VIDEO_MODEL,
   FAL_IMAGE_VIDEO_MODELS,
