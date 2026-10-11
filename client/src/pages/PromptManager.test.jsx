@@ -1312,3 +1312,70 @@ describe.each([
     expect(box().disabled).toBe(false);
   });
 });
+
+describe('PromptManager unavailable catalogues (#11143)', () => {
+  const SKILLS = [{ name: 'code-fixer', jobId: 'job-code-fixer', hasTemplate: true }];
+  const VARS = { 'tone-guide': { name: 'Tone Guide', category: 'style', content: 'Be brief' } };
+  const down = () => Promise.reject(new Error('503'));
+
+  beforeEach(() => {
+    getPrompts.mockReset().mockResolvedValue({ stages: STAGES, systemStages: SYSTEM_STAGES });
+    getPrompt.mockReset().mockResolvedValue({ name: 'Pipeline — Prose Draft', template: 'body', variables: [] });
+    getPromptUsage.mockReset().mockResolvedValue({ isSystemStage: false, usedBy: [], referencedBy: [], canDelete: true });
+    getPromptVariables.mockReset().mockResolvedValue({ variables: VARS });
+    getJobSkills.mockReset().mockResolvedValue({ skills: SKILLS });
+    getJobSkill.mockReset().mockResolvedValue({ content: '# t', jobName: 'Job', jobId: 'job-code-fixer' });
+  });
+
+  it('names a failed stage catalogue without claiming the deep-linked stage was deleted, and recovers on Retry', async () => {
+    getPrompts.mockReset().mockImplementationOnce(down).mockResolvedValue({ stages: STAGES, systemStages: SYSTEM_STAGES });
+    await renderPage('/prompts?stage=pipeline-prose-draft');
+    await screen.findByText(/Stages are unavailable/);
+    expect(screen.queryByText('No prompt stages found')).toBeNull();
+    expect(screen.queryByText(/could not be found/)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry stages' }));
+    await screen.findByText('4 stages');
+    expect(screen.queryByText(/Stages are unavailable/)).toBeNull();
+  });
+
+  it('keeps other catalogues usable when only the variables read fails', async () => {
+    getPromptVariables.mockReset().mockImplementation(down);
+    await renderPage('/prompts?tab=variables&var=tone-guide');
+    await screen.findByText(/Variables are unavailable/);
+    expect(screen.queryByText(/could not be found/)).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'Retry variables' }).length).toBe(2);
+    // Skills were never touched.
+    fireEvent.click(screen.getByRole('button', { name: /Job Skills/i }));
+    await screen.findByText('code-fixer');
+    expect(screen.queryByText(/Job skills are unavailable/)).toBeNull();
+  });
+
+  it('shows the genuine empty state for a successful empty skills read', async () => {
+    getJobSkills.mockReset().mockResolvedValue({ skills: [] });
+    await renderPage('/prompts?tab=job-skills');
+    await screen.findByText('No job skill templates found');
+    expect(screen.queryByText(/Job skills are unavailable/)).toBeNull();
+  });
+
+  it('names a failed skills read instead of "No job skill templates found"', async () => {
+    getJobSkills.mockReset().mockImplementation(down);
+    await renderPage('/prompts?tab=job-skills');
+    await screen.findByText(/Job skills are unavailable/);
+    expect(screen.queryByText('No job skill templates found')).toBeNull();
+  });
+
+  it('keeps rows and the open variable when a refresh fails, flagging them stale', async () => {
+    await renderPage('/prompts?tab=variables&var=tone-guide');
+    await screen.findByText('Edit: tone-guide');
+    getPromptVariables.mockReset().mockImplementation(down);
+    fireEvent.click(screen.getByLabelText('Reload'));
+    await screen.findByText(/Variables may be out of date/);
+    expect(screen.getByText('Edit: tone-guide')).toBeTruthy();
+    expect(screen.getByText('Tone Guide')).toBeTruthy();
+
+    getPromptVariables.mockReset().mockResolvedValue({ variables: VARS });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry variables' }));
+    await waitFor(() => expect(screen.queryByText(/may be out of date/)).toBeNull());
+  });
+});
