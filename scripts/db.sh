@@ -475,15 +475,19 @@ fix_docker() {
   docker compose stop db 2>/dev/null || true
   docker rm -f portos-db 2>/dev/null || true
 
-  # Remove stale postmaster.pid from the volume
+  # Remove stale postmaster.pid from the volume. Reuse the pinned, already-pulled
+  # db image from docker-compose.yml (has rm/cat) so repair works offline.
+  local PG_HELPER_IMAGE
+  PG_HELPER_IMAGE=$(docker compose config --images db 2>/dev/null | head -1)
+  [ -n "$PG_HELPER_IMAGE" ] || PG_HELPER_IMAGE=$(grep -m1 'image:.*pgvector' "$ROOT_DIR/docker-compose.yml" | awk '{print $2}')
   if [ -n "$data_volume" ]; then
-    docker run --rm -v "${data_volume}:/data" alpine:3.20 rm -f /data/postmaster.pid 2>/dev/null || true
+    docker run --rm -v "${data_volume}:/data" "$PG_HELPER_IMAGE" rm -f /data/postmaster.pid 2>/dev/null || true
   else
     # Fallback: derive volume name from compose project name
     local project_name
     project_name=$(docker compose config --format json 2>/dev/null | grep -o '"name":"[^"]*"' | head -1 | cut -d'"' -f4 || echo "portos")
-    docker run --rm -v "${project_name}_portos-pgdata:/data" alpine:3.20 rm -f /data/postmaster.pid 2>/dev/null ||
-      docker run --rm -v "portos-pgdata:/data" alpine:3.20 rm -f /data/postmaster.pid 2>/dev/null || true
+    docker run --rm -v "${project_name}_portos-pgdata:/data" "$PG_HELPER_IMAGE" rm -f /data/postmaster.pid 2>/dev/null ||
+      docker run --rm -v "portos-pgdata:/data" "$PG_HELPER_IMAGE" rm -f /data/postmaster.pid 2>/dev/null || true
   fi
 
   log "Stale lock files cleaned"
