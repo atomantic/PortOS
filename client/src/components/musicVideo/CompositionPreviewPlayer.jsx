@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pause, Play } from 'lucide-react';
 import { normalizeTitleCard } from '../../../../server/lib/musicVideoTitleCard.js';
 import useGeneratedPreview from '../../hooks/useGeneratedPreview.js';
+import ShotStepper from './ShotStepper.jsx';
 
 const buttonCls = 'flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
 
@@ -33,9 +34,10 @@ const startsDeferred = (collapsed) => collapsed && window.matchMedia?.(DESKTOP_Q
  * `seekRequest` (`{ t, n }`) moves the player from outside. `collapsed` hides
  * the picture below `lg` until the dock is expanded or the viewport is desktop.
  * `lyrics` previews timed lyrics instead of the document. `draft` previews the
- * candidate document.
+ * candidate document. `shotNav` adds Back and Next shot buttons (and the arrow
+ * keys) for the docked player.
  */
-export default function CompositionPreviewPlayer({ project, audioUrl, seekRequest = null, collapsed = false, draft = false, lyrics = false, scrubId: givenScrubId = null }) {
+export default function CompositionPreviewPlayer({ project, audioUrl, seekRequest = null, collapsed = false, draft = false, lyrics = false, shotNav = false, scrubId: givenScrubId = null }) {
   const doc = lyrics ? { playthrough: true } : (draft ? project.composition?.documentDraft : project.composition?.document) || null;
   const scrubId = givenScrubId || (lyrics ? 'mv-lyrics-scrub' : draft ? 'mv-doc-draft-scrub' : 'mv-doc-scrub');
   const [wanted, setWanted] = useState(() => !startsDeferred(collapsed));
@@ -133,6 +135,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
           className="min-w-0 flex-1" />
         <span className="text-xs text-port-text-muted tabular-nums">{timeLabel}</span>
       </div>
+      {shotNav && <ShotStepper scenes={project.scenes} time={t} onSeek={seek} disabled={!preview.ready || failed} keys />}
       {lyric && !lyrics && <p className="text-xs italic break-words" aria-live="off" data-testid="preview-lyric">♪ {lyric}</p>}
       {audioUrl && <audio ref={audioRef} src={audioUrl} preload="none" className="hidden" onEnded={() => setPlaying(false)} />}
     </div>

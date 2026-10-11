@@ -20,12 +20,12 @@ describe('StoryboardAnimatic', () => {
     const { container } = render(<StoryboardAnimatic project={{ id: 'p', scenes }} audioUrl="/song.mp3" />);
     expect(screen.getByText('Opening')).toBeTruthy();
     expect(screen.getByText('Lights come up')).toBeTruthy();
-    expect(screen.getByText('Shot 1 of 2 · 0:00')).toBeTruthy();
+    expect(screen.getByText('Shot 1 / 2')).toBeTruthy();
     const audio = screen.getByLabelText('Song for the storyboard animatic');
     Object.defineProperty(audio, 'currentTime', { value: 12, configurable: true });
     fireEvent.timeUpdate(audio);
     expect(container.querySelector('img').getAttribute('src')).toBe('/data/images/frame-b.png');
-    expect(screen.getByText('Shot 2 of 2 · 0:10')).toBeTruthy();
+    expect(screen.getByText('Shot 2 / 2')).toBeTruthy();
   });
 });
 
@@ -119,6 +119,18 @@ describe('StoryboardAnimatic clips', () => {
     expect(screen.getByLabelText('Clip for Two')).toBe(next);
     expect(next.className).toContain('opacity-100');
     expect(await screen.findByLabelText('Clip for Four')).toBeTruthy();
+  });
+
+  it('steps the song to the next and previous shot starts', () => {
+    const stills = clipScenes.map(({ videoHistoryId, ...scene }) => scene);
+    render(<StoryboardAnimatic project={{ id: 'p', scenes: stills }} audioUrl="/song.mp3" />);
+    const audio = screen.getByLabelText('Song for the storyboard animatic');
+    expect(screen.getByText('Shot 1 / 2')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Next shot' }));
+    expect(audio.currentTime).toBe(10);
+    expect(screen.getByText('Shot 2 / 2')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Previous shot' }));
+    expect(audio.currentTime).toBe(0);
   });
 
   it('maps song time into the clip: trimmed in-point, then loop or hold past its end', () => {
