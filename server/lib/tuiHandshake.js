@@ -764,6 +764,53 @@ export const WORK_COUNTER_PATTERN = /\(\s*(\d+)\s*s\s*[·•]/g;
 export const GENERATION_ACTIVITY_PATTERN =
   new RegExp(`Generating\\s*[.·•…]|${WORK_COUNTER_PATTERN.source}`, 'i');
 
+// Chrome a TUI's status line shows while a request is still in flight, for the
+// one-shot runner's idle-completion guard (`screenShowsInFlightChrome`). Broader
+// than GENERATION_ACTIVITY_PATTERN on purpose — that one latches "recovered" and
+// must never false-positive, while a false positive here only means waiting for
+// the response file or the hard timeout instead of scraping the screen early.
+// The `\s*` gaps tolerate cursor-forward escapes that strip to nothing; the
+// counter also takes Claude Code's `(1m 5s ·` form past the first minute.
+const IN_FLIGHT_CHROME_PATTERN = new RegExp([
+  `Generating\\s*[.·•…]`,
+  `\\(\\s*(?:\\d+\\s*[hm]\\s*)*\\d+\\s*s\\s*[·•]`,
+  `thinking\\s*with\\s*\\w+\\s*effort`,
+  `esc\\s*to\\s*interrupt`,
+].join('|'), 'gi');
+// How much visible text may follow the last in-flight chrome before the screen
+// counts as having moved on. Below the spinner Claude Code paints its composer
+// box and footer (`? for shortcuts`, mode hints), so the allowance has to clear
+// that chrome; an inline answer — the case idle completion exists for — is a
+// structured response that runs far longer.
+const IN_FLIGHT_CHROME_TRAILING_CHARS = 300;
+// Box-drawing (U+2500–U+257F) and block elements (U+2580–U+259F) are composer
+// frame, not content, so they never count toward the trailing allowance.
+const NON_CONTENT_CHARS = /[\s\u2500-\u259F]+/g;
+
+/**
+ * Whether the END of an ANSI-stripped screen transcript is still showing a
+ * request in flight — a working counter, `thinking with <level> effort`,
+ * `esc to interrupt` — rather than an answer printed after it.
+ *
+ * A model can sit in a long thinking stretch without repainting its spinner
+ * (Claude Code on Fable did, 2026-10-11), so silence alone is not completion:
+ * the one-shot runner consults this before idle-completing, and while it holds
+ * the run waits for its response file, process exit, or the hard timeout.
+ *
+ * @param {string} strippedTail recent ANSI-stripped output (a few KB is plenty)
+ * @returns {boolean}
+ */
+export function screenShowsInFlightChrome(strippedTail) {
+  if (typeof strippedTail !== 'string' || !strippedTail) return false;
+  let lastEnd = -1;
+  for (const match of strippedTail.matchAll(IN_FLIGHT_CHROME_PATTERN)) {
+    lastEnd = match.index + match[0].length;
+  }
+  if (lastEnd < 0) return false;
+  const trailing = strippedTail.slice(lastEnd).replace(NON_CONTENT_CHARS, '');
+  return trailing.length <= IN_FLIGHT_CHROME_TRAILING_CHARS;
+}
+
 // Carry-over kept across chunks so in-flight chrome split by a PTY chunk boundary
 // (`Generat` + `ing…`) still matches.
 //
