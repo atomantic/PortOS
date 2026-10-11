@@ -292,7 +292,8 @@ module.exports = {
         PGPORT_DOCKER: DATABASE_ENDPOINTS.docker.port,
         PGUSER: PG_USER,
         PGDATABASE: PG_DATABASE,
-        PGPASSWORD: PG_PASSWORD
+        PGPASSWORD: PG_PASSWORD,
+        PATH: process.env.PATH // Inherit PATH so the runner finds claude/node/git under a launchd/systemd PM2 daemon
       },
       watch: false,
       autorestart: true,
