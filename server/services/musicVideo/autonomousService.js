@@ -71,7 +71,7 @@ import { getMusicVideoCharacterStyle } from '../../lib/musicVideoCharacterStyles
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { IMAGE_GEN_MODE } from '../../lib/generationModes.js';
 import { assertFootageVideoModelsCapable, loadPoolEnv } from './productionPool.js';
-import { PRODUCTION_RESUMABLE_STATUSES, acceptProductionPilot, productionTargets } from './production.js';
+import { PRODUCTION_RESUMABLE_STATUSES, PRODUCTION_TRANSIENT_RETRIES, acceptProductionPilot, productionTargets, transientProductionRetry } from './production.js';
 import { currentPilotPass, pilotInputBasis, pilotRepair } from './productionPilot.js';
 import {
   AUTONOMOUS_DEFAULT_LIMITS,
@@ -1782,6 +1782,8 @@ async function resumeDelegatedProduction(projectId, run, { swapModels = false, l
     // Only approving the stills goes on to the clips; any other resume reviews them (again).
     settleStills(projectId, run, adopt.id).catch((err) => console.error(`❌ Autonomous music video ${short(run.id)} stills review: ${err.message}`));
   } else {
+    // A footage run started before shots were composed by default renders its drafts from them.
+    if (!rendersFromCode(project, run)) await ensureFootageComposition(projectId);
     // Resuming a "running" run is safe and re-pins one left by a previous server process.
     const productionLimits = limits ? Object.fromEntries(Object.entries(limits).filter(([, v]) => v != null)) : undefined;
     const failure = await deps.resumeProduction(projectId, adopt.id, {
@@ -1945,9 +1947,9 @@ async function approvePilotProof(projectId, run, production) {
 }
 
 /**
- * Production stopped (`blocked`) on something a run set to approve can settle
- * itself. Returns true when it settled it and production resumed; false parks
- * the run for the director as before.
+ * Production stopped (`blocked`, or `stopped` by its draft review) on something
+ * the run can settle itself. Returns true when it settled it and production
+ * resumed; false parks the run for the director as before.
  */
 async function settleBlockedProduction(projectId, run, productionRunId) {
   if (settlingProduction.has(productionRunId)) return true;
@@ -1958,8 +1960,17 @@ async function settleBlockedProduction(projectId, run, productionRunId) {
     if (!production) return false;
     const orchestrated = isOrchestratedRun(run);
     const readiness = productionReadiness(project);
+    const retry = production.status === 'blocked' && orchestrated ? transientProductionRetry(production) : null;
     let settled = false;
-    if (!readiness.storyboard.approved && (orchestrated || autoApproves(run, 'storyboard'))) {
+    if (production.status === 'stopped') {
+      // Only the draft review's own refusal, never a director's stop: a footage
+      // project made before it composed its shots has no document to render.
+      settled = /no composition document/i.test(production.stopReason || '') && await ensureFootageComposition(projectId);
+    } else if (retry) {
+      // The machine failed, not the shot: generate it again, within the slot's retries.
+      console.log(`🔁 Autonomous music video ${short(run.id)} retrying ${retry.map((s) => `${s.kind} ${s.sceneId}`).join(', ')} after a transient failure (up to ${PRODUCTION_TRANSIENT_RETRIES} retries)`);
+      settled = true;
+    } else if (!readiness.storyboard.approved && (orchestrated || autoApproves(run, 'storyboard'))) {
       project = await settleProductionStage(project, run, 'art');
       project = await settleProductionStage(project, run, 'storyboard');
       settled = productionReadiness(project).storyboard.approved;
@@ -2012,7 +2023,7 @@ async function onProductionEvent({ projectId, runId, run: production }) {
     if (run.status === 'running') await settleStills(projectId, run, runId);
   } else if (production.status === 'limit-reached' && run.status === 'running' && await raiseSizedLimit(projectId, runId, run, project, production)) {
     // The default generation limit grew to the planned shots and production goes on.
-  } else if (production.status === 'blocked' && run.status === 'running' && await settleBlockedProduction(projectId, run, runId)) {
+  } else if (['blocked', 'stopped'].includes(production.status) && run.status === 'running' && await settleBlockedProduction(projectId, run, runId)) {
     // A run set to approve settled the stop itself and production goes on.
   } else if (PRODUCTION_PARKED.has(production.status) && run.status === 'running') {
     await park(projectId, 'needs-human', { error: reason || `Production is ${production.status}`, errorCode: 'PRODUCTION_PARKED' });
@@ -2152,10 +2163,11 @@ async function ensureFootageComposition(projectId) {
   const project = await getProject(projectId);
   const composition = project?.composition;
   if (composition?.mode !== 'document' || composition.document || composition.documentDraft
-    || normalizeMusicVideoProductionPolicy(project.productionPolicy).strategy === 'code-first') return;
+    || normalizeMusicVideoProductionPolicy(project.productionPolicy).strategy === 'code-first') return false;
   // The manifest is replaced whole, so its cues, cutting and grade ride along.
   await deps.updateProject(projectId, { composition: { ...composition, mode: 'composed' } });
   console.log(`🎬 Autonomous music video set ${short(projectId)} to compose its footage (it had no composition document)`);
+  return true;
 }
 
 /** Render the film (again) and wait for the render's own event. */

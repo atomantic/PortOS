@@ -32,13 +32,32 @@ function releasePublications() {
   for (const resolve of waiters) resolve();
 }
 
-/** Hold one admission across an entire file-plus-row workflow. Nested calls reuse it. */
-export async function withBackupAssetPublication(work, { timeoutMs = DEFAULT_DRAIN_TIMEOUT_MS } = {}) {
-  let started = false;
-  return maintenance.continueSettlement(() => withAdmittedBackupAssetPublication(() => {
-    started = true;
-    return work();
-  }, timeoutMs), { hasStarted: () => started });
+const DEFAULT_WAIT_NOTICE_MS = 60_000;
+
+/**
+ * Hold one admission across an entire file-plus-row workflow. Nested calls reuse it.
+ *
+ * A caller publishing output that already exists (a finished render) passes
+ * `onWait` with a `timeoutMs` long enough to outlast a whole backup cut, which
+ * spans rsync and the database dump. `onWait` runs every `waitNoticeMs` while
+ * admission is still closed, so the caller can keep its job watchdog alive and
+ * say why it is waiting; only a wait that started no writes is retried.
+ */
+export async function withBackupAssetPublication(work, { timeoutMs = DEFAULT_DRAIN_TIMEOUT_MS, onWait = null, waitNoticeMs = DEFAULT_WAIT_NOTICE_MS } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    let started = false;
+    const attemptMs = onWait ? Math.max(0, Math.min(waitNoticeMs, deadline - Date.now())) : timeoutMs;
+    try {
+      return await maintenance.continueSettlement(() => withAdmittedBackupAssetPublication(() => {
+        started = true;
+        return work();
+      }, attemptMs), { hasStarted: () => started });
+    } catch (error) {
+      if (!onWait || started || error?.code !== 'BACKUP_SNAPSHOT_BUSY' || Date.now() >= deadline) throw error;
+      onWait(error);
+    }
+  }
 }
 
 function publicationTimeoutError() {

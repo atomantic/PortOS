@@ -1604,6 +1604,38 @@ describe('orchestrated mode (brief.orchestrator)', () => {
       expect(reviews()).toContain('proof:approve');
       expect(doubles.resumeProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-1', { acceptBasis: true });
     });
+
+    // Uniquely catches an orchestrated run parking on a clip the machine failed to save, or retrying one forever.
+    it('retries a clip that failed on infrastructure, then parks once the slot spent its retries', async () => {
+      await pilotFixture();
+      const busy = 'Timed out waiting for backup publication admission at <data>/backup-admission/cut. No publication writes started.';
+      const failedClip = (n) => ({ key: `clip:mvs-a:base:${n}`, kind: 'clip', sceneId: 'mvs-a', revisionId: null, status: 'failed', error: busy });
+      const production = store.get('mv-auto').productionRuns[0];
+      production.steps = [failedClip(1)];
+      await blocked();
+      expect(doubles.resumeProduction).toHaveBeenLastCalledWith('mv-auto', 'mvpr-1', { acceptBasis: true });
+      expect(runOf().status).toBe('running');
+
+      // The slot's retries are spent: the third failure parks.
+      doubles.resumeProduction.mockClear();
+      production.retryAcknowledged = ['clip:mvs-a:base:1', 'clip:mvs-a:base:2'];
+      production.steps = [failedClip(1), failedClip(2), failedClip(3)];
+      await blocked();
+      expect(doubles.resumeProduction).not.toHaveBeenCalled();
+      expect(runOf()).toMatchObject({ status: 'needs-human', errorCode: 'PRODUCTION_PARKED' });
+    });
+
+    // Uniquely catches a pre-composed-default footage run parking on its draft render instead of composing its shots.
+    it('composes a legacy footage project whose draft review stopped for want of a document', async () => {
+      await pilotFixture();
+      store.get('mv-auto').composition = { mode: 'document', textCues: [{ id: 'cue' }] };
+      const stopped = { status: 'stopped', stopReason: 'The review paused: The draft could not render: This project has no composition document on this machine' };
+      Object.assign(store.get('mv-auto').productionRuns[0], stopped);
+      await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: stopped });
+      expect(store.get('mv-auto').composition).toEqual({ mode: 'composed', textCues: [{ id: 'cue' }] });
+      expect(doubles.resumeProduction).toHaveBeenLastCalledWith('mv-auto', 'mvpr-1', { acceptBasis: true });
+      expect(runOf().status).toBe('running');
+    });
   });
 
   // Uniquely catches an unviewable still being recorded as an approved review while the run still waits for the director.
