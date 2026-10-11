@@ -310,7 +310,11 @@ start_docker() {
   info "Waiting for PostgreSQL..."
 
   for i in $(seq 1 30); do
-    if docker compose exec -T db pg_isready -U "$PGUSER" >/dev/null 2>&1; then
+    # -h 127.0.0.1 forces TCP: during first-time init the entrypoint runs a
+    # socket-only temp server, so a default (socket) probe passes too early.
+    # Also require the base schema (01-init.sql) so dependents don't race it.
+    if docker compose exec -T db pg_isready -h 127.0.0.1 -U "$PGUSER" >/dev/null 2>&1 &&
+       [ "$(docker compose exec -T db psql -X -U "$PGUSER" -d "$PGDATABASE" -tAc "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'memories' LIMIT 1" 2>/dev/null | tr -d '[:space:]')" = "1" ]; then
       log "PostgreSQL ready on port $PGPORT"
       return
     fi
