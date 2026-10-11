@@ -11,9 +11,13 @@
  * per-run nonce and is torn down in afterAll; assertions are relative to the
  * rows this suite inserts.
  */
-import { describe, it, expect, afterAll } from 'vitest';
+import { describe, it, expect, afterAll, vi } from 'vitest';
 import { checkHealth, ensureSchema, close, query, withTransaction } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
+// Pin the user timezone per test so day bounds are deterministic.
+const tzState = vi.hoisted(() => ({ tz: 'UTC' }));
+vi.mock('./userTimezone.js', () => ({ getUserTimezone: async () => tzState.tz }));
+
 import { recordEvents, listEvents, getDaySummary, stripParticipantsForAccount, countEventsByHandle } from './humanActivity.js';
 
 let dbReady = false;
@@ -133,6 +137,77 @@ describe.skipIf(!runDb)('humanActivity store (#2150)', () => {
     expect(summary.histogram).toHaveLength(24);
     expect(typeof summary.counts.total).toBe('number');
     expect(summary.counts.bySource).toBeTruthy();
+  });
+});
+
+describe.skipIf(!runDb)('getDaySummary full-day aggregates (#11151)', () => {
+  const DAY_SOURCE = `test-${nonce}-day`;
+  const dayEvents = (n, iso, prefix, over = {}) => Array.from({ length: n }, (_, i) => ({
+    source: DAY_SOURCE, kind: 'message.received', happenedAt: iso, dedupeKey: `${prefix}-${i}`, title: 'e', ...over,
+  }));
+
+  afterAll(async () => {
+    tzState.tz = 'UTC';
+    if (dbReady) await query('DELETE FROM human_activity_events WHERE source = $1', [DAY_SOURCE]).catch(() => {});
+  });
+
+  it('counts and buckets the whole day even when it exceeds the event page (2,001-event case, scaled)', async () => {
+    tzState.tz = 'UTC';
+    // Far-past day: no other suite or live data lands here.
+    const date = '2001-03-04';
+    const PAGE = 3;
+    const before = await getDaySummary({ date, eventLimit: PAGE });
+    await recordEvents([
+      ...dayEvents(PAGE, '2001-03-04T12:00:00Z', 'noon'),
+      ...dayEvents(1, '2001-03-04T08:00:00Z', 'early', { kind: 'calendar.event' }),
+    ]);
+    const s = await getDaySummary({ date, eventLimit: PAGE });
+    expect(s.counts.total - before.counts.total).toBe(PAGE + 1);
+    expect(s.counts.bySource[DAY_SOURCE]).toBe(PAGE + 1);
+    expect(s.counts.byKind['calendar.event'] - (before.counts.byKind['calendar.event'] || 0)).toBe(1);
+    expect(s.histogram[8].count - before.histogram[8].count).toBe(1);
+    expect(s.histogram[12].count - before.histogram[12].count).toBe(PAGE);
+    // The listed page stays bounded and is honest about it.
+    expect(s.events.length).toBeLessThanOrEqual(PAGE);
+    expect(s.eventPage).toEqual({ total: s.counts.total, returned: s.events.length, limit: PAGE, hasMore: true });
+    // Oldest-first display order.
+    const times = s.events.map((e) => new Date(e.happenedAt).getTime());
+    expect(times).toEqual([...times].sort((a, b) => a - b));
+  });
+
+  it('uses the same exclusive local-day bounds for aggregates and rows across a DST day', async () => {
+    tzState.tz = 'America/Los_Angeles';
+    // 2001-04-01 was a 23-hour day in Los Angeles: 08:00Z .. 07:00Z next day.
+    const date = '2001-04-01';
+    await recordEvents([
+      { source: DAY_SOURCE, kind: 'message.sent', happenedAt: '2001-04-01T07:59:59Z', dedupeKey: 'dst-prev' },
+      { source: DAY_SOURCE, kind: 'message.sent', happenedAt: '2001-04-01T08:00:00Z', dedupeKey: 'dst-start' },
+      { source: DAY_SOURCE, kind: 'message.sent', happenedAt: '2001-04-02T06:59:59Z', dedupeKey: 'dst-last' },
+      { source: DAY_SOURCE, kind: 'message.sent', happenedAt: '2001-04-02T07:00:00Z', dedupeKey: 'dst-next' },
+    ]);
+    const s = await getDaySummary({ date });
+    const mine = s.events.filter((e) => e.source === DAY_SOURCE).map((e) => e.dedupeKey).sort();
+    expect(mine).toEqual(['dst-last', 'dst-start']);
+    expect(s.counts.bySource[DAY_SOURCE]).toBe(2);
+    expect(s.histogram[0].count).toBeGreaterThanOrEqual(1); // 08:00Z = local 00:00
+    expect(s.histogram[23].count).toBeGreaterThanOrEqual(1); // 06:59:59Z next day = local 23:59
+    expect(s.eventPage.total).toBe(s.counts.total);
+  });
+
+  it('keeps aggregates and the page consistent when rows are inserted mid-read', async () => {
+    tzState.tz = 'UTC';
+    const date = '2001-05-06';
+    await recordEvents(dayEvents(3, '2001-05-06T10:00:00Z', 'base'));
+    // Insert concurrently with the read; whichever side of the snapshot the
+    // insert lands on, total and page must describe the same row set.
+    const [s] = await Promise.all([
+      getDaySummary({ date }),
+      recordEvents(dayEvents(5, '2001-05-06T11:00:00Z', 'racer')),
+    ]);
+    const listed = s.events.filter((e) => e.source === DAY_SOURCE).length;
+    expect(s.eventPage.returned).toBe(s.events.length);
+    expect(s.counts.bySource[DAY_SOURCE]).toBe(listed);
+    expect(s.counts.total).toBe(s.eventPage.total);
   });
 });
 

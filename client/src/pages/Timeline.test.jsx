@@ -19,6 +19,7 @@ vi.mock('../services/api', () => ({
   importGmailMbox: vi.fn(),
 }));
 
+import * as api from '../services/api';
 import Timeline from './Timeline';
 import { IMPORT_SOURCE_COUNT } from '../components/timeline/TimelineImportPanels';
 
@@ -65,5 +66,27 @@ describe('Timeline import-history disclosure (#3789)', () => {
     // scrolling to the already-open panels.
     fireEvent.click(screen.getByRole('button', { name: 'Backfill from an export' }));
     expect(scrollIntoView).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('Timeline bounded event page (#11151)', () => {
+  it('labels the listed rows as a page while totals stay full-day', async () => {
+    api.getTimelineDay.mockResolvedValueOnce({
+      date: '2026-01-02',
+      today: '2026-01-02',
+      timezone: 'UTC',
+      events: [{ id: 'e1', source: 's', kind: 'message.received', happenedAt: '2026-01-02T12:00:00Z', title: 'Hi' }],
+      eventPage: { total: 2001, returned: 1, limit: 2000, hasMore: true },
+      counts: { total: 2001, bySource: { s: 2001 }, byKind: { 'message.received': 2001 } },
+      histogram: Array.from({ length: 24 }, (_, hour) => ({ hour, count: hour === 8 ? 1 : 0 })),
+    });
+    await renderPage();
+    expect(await screen.findByText('2,001 events')).toBeTruthy();
+    expect(screen.getByRole('status').textContent).toMatch(/Showing the latest 1 of 2,001 events/);
+  });
+
+  it('shows no page notice when every event is listed', async () => {
+    await renderPage();
+    expect(screen.queryByRole('status')).toBeNull();
   });
 });

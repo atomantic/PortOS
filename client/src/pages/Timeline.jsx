@@ -162,6 +162,8 @@ export default function Timeline() {
 
   const events = day?.events || [];
   const counts = day?.counts || { total: 0, bySource: {}, byKind: {} };
+  // `counts` / `histogram` cover the whole day; `events` is a bounded page of it.
+  const hasMore = Boolean(day?.eventPage?.hasMore);
   const histogram = day?.histogram || Array.from({ length: 24 }, (_, hour) => ({ hour, count: 0 }));
 
   const dayLabel = useMemo(() => {
@@ -270,6 +272,12 @@ export default function Timeline() {
         </div>
       ) : (
         <div className="flex flex-col gap-2 pb-6">
+          {hasMore && (
+            <div role="status" className="rounded border border-port-border bg-port-card px-3 py-2 text-xs text-gray-400">
+              Showing the latest {formatCount(day.eventPage.returned)} of {formatCount(day.eventPage.total)} events
+              — earlier events are included in the totals and histogram above but not listed.
+            </div>
+          )}
           {events.map((event) => <EventRow key={event.id} event={event} timezone={day?.timezone} />)}
         </div>
       )}
