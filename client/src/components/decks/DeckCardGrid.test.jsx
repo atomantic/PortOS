@@ -82,14 +82,18 @@ describe('DeckCardGrid', () => {
     // its slot is an opening into the editor rather than a dead grey button.
     const renderable = screen.getAllByRole('button', { name: /^Render Card [ad]$/ });
     expect(renderable).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: /^Render / })).toHaveLength(2);
+    renderable.forEach((button) => expect(button).toBeEnabled());
     fireEvent.click(renderable[0]);
+    fireEvent.click(renderable[1]);
+    expect(props.onRenderCard).toHaveBeenCalledWith(expect.objectContaining({ id: 'd' }));
     expect(props.onRenderCard).toHaveBeenCalledWith(expect.objectContaining({ id: 'a' }));
 
     const write = screen.getByRole('button', { name: 'Write a prompt for Card e' });
     expect(write).toBeEnabled();
     fireEvent.click(write);
     expect(props.onOpenCard).toHaveBeenCalledWith(expect.objectContaining({ id: 'e' }));
-    expect(props.onRenderCard).toHaveBeenCalledTimes(1);
+    expect(props.onRenderCard).toHaveBeenCalledTimes(2);
   });
 
   it('derives every badge from the card record: in-flight, rendered, failed, ready, needs prompt', () => {
@@ -117,25 +121,30 @@ describe('DeckCardGrid', () => {
     const reRender = screen.getByRole('button', { name: 'Re-render Card b on Local · flux2-klein-9b · 1096×1536' });
     fireEvent.click(reRender);
     expect(props.onRenderCard).toHaveBeenCalledWith(expect.objectContaining({ id: 'b' }));
-    // A card that has never rendered gets the same button, worded for a first run.
-    expect(screen.getByRole('button', { name: 'Render Card a on Local · flux2-klein-9b · 1096×1536' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('img', { name: 'Card b' }));
+    expect(props.onPreview).toHaveBeenCalledWith(expect.objectContaining({ id: 'b' }), 'b.png');
+    expect(props.onRenderCard).toHaveBeenCalledTimes(1);
   });
 
-  it('names why a card cannot be rendered rather than showing a bare dead icon', () => {
+  it('keeps queued cards out of the render actions and promptless cards on the editor path', () => {
     renderGrid();
-    // No prompt, and already rendering: both fixable, neither by this button.
-    expect(screen.getByRole('button', { name: 'Write a prompt for Card e before rendering it' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Card c is rendering' })).toBeDisabled();
+    const queued = screen.getByText('Card c').closest('li');
+    expect(within(queued).queryByRole('button', { name: /render/i })).toBeNull();
+    const promptless = screen.getByText('Card e').closest('li');
+    expect(within(promptless).getByRole('button', { name: 'Write a prompt for Card e' })).toBeEnabled();
+    expect(within(promptless).queryByRole('button', { name: /render/i })).toBeNull();
   });
 
   it('stands every render affordance down while the local runtime is unavailable', () => {
     const props = renderGrid({ renderTarget: renderTarget({ blocked: true }) });
     const blocked = screen.getAllByRole('button', { name: /the local image runtime is unavailable/ });
-    // The three renderable cards' buttons, plus the empty slot of each card
-    // that would otherwise offer a one-click render (a and d) — the bigger
-    // affordance of the two, so leaving it live would read as broken.
-    expect(blocked).toHaveLength(5);
-    blocked.forEach((b) => expect(b).toBeDisabled());
+    // One action each: empty slots for a/d and the rendered card's footer.
+    expect(blocked).toHaveLength(3);
+    blocked.forEach((b) => {
+      expect(b).toBeDisabled();
+      fireEvent.click(b);
+    });
+    expect(props.onRenderCard).not.toHaveBeenCalled();
     // The promptless card keeps its way out: that slot opens the editor, which
     // works whatever the runtime is doing.
     const write = screen.getByRole('button', { name: 'Write a prompt for Card e' });
