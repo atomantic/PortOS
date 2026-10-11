@@ -3,8 +3,8 @@ import ShotActionInspector from './ShotActionInspector.jsx';
 import SceneCameraControls from './SceneCameraControls.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { useEffect, useRef, useState } from 'react';
-import { Trash2, Activity, ArrowUp, ArrowDown, ChevronRight, Image as ImageIcon, Video, Maximize2, AlertTriangle, ImagePlus, Clapperboard, Merge, Scissors } from 'lucide-react';
-import { formatDurationSec, formatUsd } from '../../utils/formatters.js';
+import { Trash2, Activity, ArrowUp, ArrowDown, ChevronRight, Image as ImageIcon, Video, Maximize2, AlertTriangle, ImagePlus, Clapperboard } from 'lucide-react';
+import { formatDurationSec } from '../../utils/formatters.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 import PerformanceEvidence from './PerformanceEvidence.jsx';
 import { planPerformanceRepair } from '../../lib/musicVideoShotTiming.js';
@@ -17,16 +17,10 @@ const STILL_MOVE_LABELS = [['hold', 'Hold'], ['push', 'Push in'], ['pan', 'Pan']
 // #10583: the shared lyric type's zone and style for this shot (composition documents).
 const TEXT_ZONE_LABELS = { 'lower-left': 'Lower left', 'upper-right': 'Upper right', upper: 'Upper centre', lower: 'Lower centre', center: 'Centre', none: 'No lyrics' };
 const LYRIC_ROLE_LABELS = { line: 'Sung line', hook: 'Hook slam', stamp: 'Stamp', data: 'Data caption' };
-import {
-  falSceneTake, grokCoverage, isPerformanceScene, performanceBlockedReason, performanceCapability, planPerformanceWindow, shotSplitLimit,
-} from '../../lib/musicVideoShotTiming.js';
+import { buildSceneTimingPresentation } from '../../lib/musicVideoSceneTiming.js';
+import SceneTimingPlan from './SceneTimingPlan.jsx';
 import SceneRenderProgress from './SceneRenderProgress.jsx';
-import { getFalVideoModel } from '../../lib/falVideoModels.js';
 import { COVERAGE_TOLERANCE_SEC, SCENE_ATTENTION_LABELS, sceneAttention } from '../../lib/musicVideoSceneAttention.js';
-
-// "est. $0.81 (5.05s at 1080P)" — or null when the take cannot be priced.
-const falEstimate = (take) => (take?.costUsd == null ? null
-  : `est. ${formatUsd(take.costUsd)} (${take.seconds}s${take.resolution ? ` at ${take.resolution}` : ''})`);
 
 // The two timeline-bound scene fields rendered as identical number inputs.
 const SCENE_TIME_FIELDS = [['Start', 'startSec'], ['End', 'endSec']];
@@ -136,28 +130,11 @@ export default function SceneCard({
   const fieldId = (name) => `mv-scene-${scene.sceneId}-${name}`;
   // #10297: a code shot is drawn by the composition, so it has no frame or clip to make.
   const codeShot = layered && layer === 'code';
-  const performance = isPerformanceScene(scene);
-  const capability = performance ? performanceCapability(lipSyncBackend) : null;
-  const timedSpan = typeof scene.startSec === 'number' && typeof scene.endSec === 'number' && scene.endSec > scene.startSec
-    ? scene.endSec - scene.startSec
-    : null;
-  const plan = capability
-    ? planPerformanceWindow({ startSec: scene.startSec, endSec: scene.endSec, songDurationSec: songDurationSec ?? Infinity, capability })
-    : null;
-  const performanceBlocked = performance
-    ? (capability ? (plan.ok ? null : plan.message) : performanceBlockedReason(lipSyncBackend))
-    : null;
-  const grokPlan = !performance && lipSyncBackend === 'grok' && timedSpan != null ? grokCoverage(timedSpan) : null;
-  const falTake = lipSyncBackend === 'fal' && layer === 'footage'
-    ? falSceneTake({ scene, videoSettings: falVideoSettings || {}, songDurationSec })
-    : null;
-  const falCost = falEstimate(falTake);
-  const performanceCost = falTake?.performance ? (falCost || capability?.costLabel) : capability?.costLabel;
-  const splitLimit = layer === 'footage' ? shotSplitLimit(scene, lipSyncBackend) : null;
-  const canSplit = splitLimit != null && timedSpan != null && timedSpan > splitLimit + 1e-6;
-  const mergedSpan = typeof scene.startSec === 'number' && typeof nextEndSec === 'number' ? nextEndSec - scene.startSec : null;
-  const canMerge = !!onMergeNext && !isLast && !documentComposition
-    && (splitLimit == null || (mergedSpan != null && mergedSpan <= splitLimit + 1e-6));
+  const timing = buildSceneTimingPresentation({
+    scene, layer, lipSyncBackend, songDurationSec, falVideoSettings,
+    nextEndSec, isLast, documentComposition, hasMergeNext: !!onMergeNext,
+  });
+  const { performance, capability, performanceBlocked, performanceCost } = timing;
   const instruction = scene.takes?.find((take) => take.kind === 'video' && take.assetId === scene.videoHistoryId)?.shotInstruction;
   const repairPlan = planPerformanceRepair({ scene, temporal: performanceReview?.shot,
     excerptStartSec: performanceReview?.excerptStartSec, backend: lipSyncBackend, videoSettings: falVideoSettings || {} });
@@ -382,44 +359,7 @@ export default function SceneCard({
             Set a start and end — a {{ card: 'title card', code: 'code-drawn shot' }[layer] || 'still'} runs for exactly its span.
           </p>
         )}
-        {performance && performanceBlocked && (
-          <div role="alert" className="flex items-start gap-2 rounded border border-port-warning/40 bg-port-warning/10 px-2 py-1.5 text-xs text-port-warning">
-            <AlertTriangle size={13} className="shrink-0 mt-0.5" />
-            <span className="min-w-0 break-words">{performanceBlocked}</span>
-          </div>
-        )}
-        {performance && !performanceBlocked && (
-          <p className="text-[11px] text-port-text-muted break-words" data-testid="performance-plan">
-            Lip-sync via {capability.label} ({capability.modelId}) · song {formatDurationSec(plan.windowStartSec)}–{formatDurationSec(plan.windowEndSec)}
-            {plan.editInSec > 0 ? ` · shot starts ${plan.editInSec.toFixed(2)}s into the take` : ''} · {performanceCost}
-          </p>
-        )}
-        {falTake && !falTake.performance && (
-          <p className="text-[11px] text-port-text-muted break-words" data-testid="fal-cutaway-plan">
-            fal.ai renders {falTake.seconds != null ? `a ${falTake.seconds}s ` : 'a '}clip on {getFalVideoModel(falTake.modelId)?.label || falTake.modelId}
-            {' · '}{falCost || 'cost unknown — billed to your fal.ai account'}
-          </p>
-        )}
-        {grokPlan && (
-          <p className={`text-[11px] break-words ${grokPlan.needsSplit ? 'text-port-warning' : 'text-port-text-muted'}`}>
-            Grok renders a {grokPlan.requestSec}s clip for this {timedSpan.toFixed(1)}s cutaway
-            {grokPlan.needsSplit ? ` — ${grokPlan.uncoveredSec.toFixed(1)}s uncovered; split the scene rather than loop it` : ''}. Motion timing in the prompt is approximate.
-          </p>
-        )}
-        {canSplit && onSplit && (
-          <button type="button" onClick={() => onSplit(scene.sceneId, lipSyncBackend || null)}
-            className="inline-flex items-center gap-1 rounded bg-port-bg border border-port-border hover:bg-port-border/40 px-2 py-1 text-xs min-h-[44px] sm:min-h-0"
-            title={`Cut this ${timedSpan.toFixed(1)}s shot into scenes of at most ${splitLimit.toFixed(2)}s at lyric pauses or phrase boundaries — nothing is looped or stretched`}>
-            <Scissors size={13} /> Split on lyric boundaries
-          </button>
-        )}
-        {canMerge && (
-          <button type="button" onClick={() => onMergeNext(scene.sceneId, lipSyncBackend || null)}
-            className="inline-flex items-center gap-1 rounded bg-port-bg border border-port-border hover:bg-port-border/40 px-2 py-1 text-xs min-h-[44px] sm:min-h-0"
-            title="Join this shot with the next one into a single shot — the inverse of split">
-            <Merge size={13} /> Merge with next
-          </button>
-        )}
+        <SceneTimingPlan timing={timing} sceneId={scene.sceneId} lipSyncBackend={lipSyncBackend} onSplit={onSplit} onMergeNext={onMergeNext} />
         {underCovered && (
           <div role="alert" className="flex flex-wrap items-center gap-2 rounded border border-port-warning/40 bg-port-warning/10 px-2 py-1.5 text-xs text-port-warning">
             <AlertTriangle size={13} className="shrink-0" />
