@@ -1466,6 +1466,27 @@ describe('orchestrated mode (brief.orchestrator)', () => {
     expect(doubles.resumeProduction.mock.calls[0][2].stopBefore).toBeUndefined();
   });
 
+  // Uniquely catches a cancel during the pending stills review being undone by its verdict (clearing stills, resuming production, spending).
+  it('ignores a stills verdict that lands after the run was cancelled', async () => {
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], orchestrator: ORCHESTRATOR }, { autoApproveAuthorized: true });
+    await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
+    store.get('mv-auto').scenes = [{ sceneId: 'mvs-a', label: 'Intro', framePrompt: 'a skater', referenceImageId: 'a1.png' }];
+    let release;
+    doubles.orchestrate.mockImplementation(() => new Promise((resolve) => { release = () => resolve({
+      text: JSON.stringify({ verdict: 'revise', score: 4, notes: 'Bad.', issues: [{ sceneId: 'mvs-a', text: 'wrong' }] }),
+      route: { providerId: 'orch', model: 'judge' }, visual: true }); }));
+    doubles.resumeProduction.mockClear();
+    doubles.orchestrate.mockClear();
+    const settling = service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'awaiting-video' } });
+    await vi.waitFor(() => expect(doubles.orchestrate).toHaveBeenCalled());
+    await service.cancelAutonomousVideo('mv-auto');
+    release();
+    await settling;
+    expect(runOf().status).toBe('canceled');
+    expect(doubles.resumeProduction).not.toHaveBeenCalled();
+    expect(store.get('mv-auto').scenes[0].referenceImageId).toBe('a1.png');
+  });
+
   // Uniquely catches the orchestrator approving art or a storyboard it still wants changed once its revisions run out.
   it('parks for the director with the open changes named when a production gate runs out of revisions', async () => {
     creativeReview.real = true;

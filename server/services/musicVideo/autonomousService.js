@@ -1283,15 +1283,22 @@ async function settleStills(projectId, run, productionRunId) {
   try {
     await reviewOrPark(projectId, run, productionRunId);
   } catch (err) {
-    await park(projectId, 'needs-human', { error: trimTo(`The stills review failed: ${err.message}`, 500), errorCode: err.code || 'STILLS_REVIEW_FAILED' });
+    if (await ownsStillsReview(projectId, productionRunId)) await park(projectId, 'needs-human', { error: trimTo(`The stills review failed: ${err.message}`, 500), errorCode: err.code || 'STILLS_REVIEW_FAILED' });
   } finally {
     settlingStills.delete(productionRunId);
   }
 }
 
+/** A stop or cancel while the stills review was pending releases the run; its verdict must then change nothing. */
+async function ownsStillsReview(projectId, productionRunId) {
+  const latest = projectAutonomousRun(await getProject(projectId));
+  return latest?.status === 'running' && latest.processId === PROCESS_ID && latest.output?.productionRunId === productionRunId;
+}
+
 async function reviewOrPark(projectId, run, productionRunId) {
   if (isOrchestratedRun(run)) {
     const regenerate = await reviewStills(projectId, run);
+    if (!await ownsStillsReview(projectId, productionRunId)) return;
     if (regenerate.length) {
       const fixes = new Map();
       for (const issue of regenerate) fixes.set(issue.sceneId, [fixes.get(issue.sceneId), issue.text].filter(Boolean).join(' '));
