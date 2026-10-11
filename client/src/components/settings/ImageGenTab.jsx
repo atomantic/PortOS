@@ -1314,7 +1314,7 @@ export function ImageGenTab() {
                   <option key={lvl} value={lvl}>{lvl}</option>
                 ))}
               </select>
-              <p className="text-xs text-gray-500 mt-1">Passed as <code>codex exec -c model_reasoning_effort=&lt;level&gt;</code>. Lower effort is cheaper; leave on the shipped default (<code>{CODEX_IMAGEGEN_DEFAULT_EFFORT}</code>) or drop to <code>{codexEffortLevels[0]}</code> for the cheapest possible renders. The levels offered depend on the model above.</p>
+              <p className="text-xs text-gray-500 mt-1">Passed as <code>codex exec -c model_reasoning_effort=&lt;level&gt;</code>. Lower effort is cheaper; leave on the shipped default (<code>{CODEX_IMAGEGEN_DEFAULT_EFFORT}</code>){codexEffortLevels[0] !== CODEX_IMAGEGEN_DEFAULT_EFFORT ? <> or drop to <code>{codexEffortLevels[0]}</code> for the cheapest possible renders</> : null}. The levels offered depend on the model above.</p>
             </FormField>
             <FormField label="Parallel render limit" labelClassName="block text-xs font-medium text-gray-400 mb-1">
               <input

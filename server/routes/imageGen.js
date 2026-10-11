@@ -666,7 +666,7 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     // routes cloud jobs to the parallel cloud lane, and runJob's image branch
     // dispatches to the matching imageGen provider module when it sees it.
     // `cloud.modelId` is the *effective* model so the response metadata reports
-    // what actually renders (gpt-5.6-luna by default) instead of "codex"/null.
+    // what actually renders (gpt-6-luna by default) instead of "codex"/null.
     const queued = await enqueueLoggedImage(req, { kind: 'image', params: { ...cloud.jobParams, ...params } });
     return res.json(queuedImageResponse({ ...queued, mode, model: cloud.modelId }));
   }
