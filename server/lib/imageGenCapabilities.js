@@ -51,12 +51,12 @@ export const I2I_CAPABLE_MODES = Object.freeze(IMAGE_GEN_MODES.filter(isEditCapa
 // Shipped defaults for the Codex imagegen backend. Codex's built-in image_gen
 // tool otherwise runs whatever model its logged-in session defaults to — often
 // the heaviest, most expensive tier — at default reasoning effort. Pin the cheap
-// `gpt-5.6-luna` model at `low` reasoning effort so every media-pipeline render
+// `gpt-6-luna` model at `low` reasoning effort so every media-pipeline render
 // pays the light path by default. Applied as a code-level default (not a
 // settings migration) so it reaches every install and federated peer with no
 // per-install bookkeeping; an explicit `imageGen.codex.model` / `.effort` in
 // Settings still wins. Effort is one of providerModels' CODEX_EFFORT_LEVELS.
-export const CODEX_IMAGEGEN_DEFAULT_MODEL = 'gpt-5.6-luna';
+export const CODEX_IMAGEGEN_DEFAULT_MODEL = 'gpt-6-luna';
 export const CODEX_IMAGEGEN_DEFAULT_EFFORT = 'low';
 
 // The Agy mirror of the Codex pin above (#3231). An unpinned agy render used to

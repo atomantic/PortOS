@@ -193,7 +193,7 @@ export async function generateImage({
   const renderStartedAtMs = Date.now();
   await ensureDir(PATHS.images);
 
-  // Ship the cheap gpt-5.6-luna / low-effort path by default (see modes.js).
+  // Ship the cheap gpt-6-luna / low-effort path by default (see modes.js).
   // A caller-supplied model/effort (an explicit Settings → Image Gen override,
   // threaded through the dispatcher) wins; `null`/`''`/absent falls back to the
   // shipped default so a bare install never runs Codex's heaviest tier.

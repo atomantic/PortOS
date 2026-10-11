@@ -219,15 +219,15 @@ describe('codex provider — generateImage', () => {
     await flush();
   });
 
-  it('defaults to the cheap gpt-5.6-luna model at low effort when none is configured', async () => {
+  it('defaults to the cheap gpt-6-luna model at low effort when none is configured', async () => {
     const job = await codex.generateImage({ prompt: 'a small fox' });
     // The resolved default surfaces on the job descriptor so the gallery/UI reflects it.
-    expect(job.model).toBe('gpt-5.6-luna');
+    expect(job.model).toBe('gpt-6-luna');
     const { args } = spawnCalls[0];
-    // Model default → `-m gpt-5.6-luna`.
+    // Model default → `-m gpt-6-luna`.
     const mIdx = args.indexOf('-m');
     expect(mIdx).toBeGreaterThan(-1);
-    expect(args[mIdx + 1]).toBe('gpt-5.6-luna');
+    expect(args[mIdx + 1]).toBe('gpt-6-luna');
     // Effort default → `-c model_reasoning_effort=low`.
     expect(args).toEqual(expect.arrayContaining(['-c', 'model_reasoning_effort=low']));
     spawnCalls[0].child.exitCode = 1;
@@ -243,7 +243,7 @@ describe('codex provider — generateImage', () => {
     expect(args[mIdx + 1]).toBe('gpt-5.6-terra');
     expect(args).toEqual(expect.arrayContaining(['-c', 'model_reasoning_effort=high']));
     // The shipped defaults must NOT leak in when an override is set.
-    expect(args).not.toContain('gpt-5.6-luna');
+    expect(args).not.toContain('gpt-6-luna');
     expect(args).not.toEqual(expect.arrayContaining(['model_reasoning_effort=low']));
     spawnCalls[0].child.exitCode = 1;
     spawnCalls[0].child.emit('close', 1, null);
