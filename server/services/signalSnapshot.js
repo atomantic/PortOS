@@ -9,17 +9,16 @@
  * Capture opens the source with the bundled SQLCipher driver
  * (`better-sqlite3-multiple-ciphers`, SQLCipher 4 compatibility, raw 64-hex
  * key — the same key form Signal uses). One connection holds a deferred read
- * transaction so a checkpoint cannot discard frames mid-capture. A second
- * read-only connection materializes that committed view with SQLite
- * `VACUUM INTO`, which includes WAL frames and works against a read-only
- * source. `backup()` is not used: this driver rejects an encrypted source
- * backing up into a plaintext target, and it does not ship `sqlcipher_export`.
+ * transaction so a checkpoint cannot discard frames mid-capture. Ordinary
+ * tables are then copied into a new plaintext database, including each
+ * source `rowid`. That rowid is the ingestion cursor, and SQLite may
+ * renumber it during `VACUUM` for tables without an INTEGER PRIMARY KEY.
+ * `backup()` is not used either: this driver rejects an encrypted source
+ * backing up into a new file, and it does not ship `sqlcipher_export`.
  *
- * The private copy is then `rekey`ed with an empty key, which yields a
- * standard plaintext SQLite file. Rekey runs only on that copy. The source is
- * opened `readonly` and this module never issues `wal_checkpoint`,
- * `journal_mode`, or any other write against it. The WAL index may record a
- * reader mark; the database file and the WAL must stay byte-identical.
+ * The source is opened `readonly`. This module never issues `wal_checkpoint`,
+ * `journal_mode`, `VACUUM`, or any other write against it. The WAL index may
+ * record a reader mark; the database file and the WAL must stay byte-identical.
  *
  * If the driver cannot be loaded, or the snapshot is not a single integrity-
  * clean committed view, the result is an explicit failure. Callers leave the
@@ -72,8 +71,46 @@ function resolveConstructor(loaded) {
   return null;
 }
 
-function sqlLiteral(value) {
-  return `'${String(value).replaceAll("'", "''")}'`;
+function quoteIdent(name) {
+  return `"${String(name).replaceAll('"', '""')}"`;
+}
+
+// INTEGER PRIMARY KEY is the rowid alias and survives a normal INSERT.
+// Any other rowid is not, and the sync cursor needs the source value.
+function isIntegerPrimaryKey(info) {
+  const pk = info.filter((column) => column.pk > 0);
+  return pk.length === 1 && String(pk[0].type).trim().toLowerCase() === 'integer';
+}
+
+function copyOrdinaryTables(source, dest) {
+  const tables = source.prepare(`
+    SELECT name, sql FROM sqlite_master
+    WHERE type = 'table' AND sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
+    ORDER BY name
+  `).all();
+  dest.pragma('foreign_keys = OFF');
+  const copyAll = dest.transaction(() => {
+    for (const table of tables) {
+      if (/^\s*create\s+virtual\b/i.test(table.sql)) continue;
+      dest.exec(table.sql);
+      const info = source.prepare(`PRAGMA table_xinfo(${quoteIdent(table.name)})`).all()
+        .filter((column) => !column.hidden);
+      const names = info.map((column) => quoteIdent(column.name));
+      if (names.length === 0) continue;
+      // WITHOUT ROWID tables have no rowid to preserve. Every other table
+      // copies the source rowid unless an INTEGER PRIMARY KEY already is one.
+      const withoutRowid = /\bwithout\s+rowid\b/i.test(table.sql);
+      const selectCols = withoutRowid || isIntegerPrimaryKey(info) ? names : ['rowid', ...names];
+      const insert = dest.prepare(
+        `INSERT INTO ${quoteIdent(table.name)} (${selectCols.join(', ')}) VALUES (${selectCols.map(() => '?').join(', ')})`,
+      );
+      const rows = source.prepare(
+        `SELECT ${selectCols.join(', ')} FROM ${quoteIdent(table.name)}`,
+      ).raw(true);
+      for (const row of rows.iterate()) insert.run(...row);
+    }
+  });
+  copyAll();
 }
 
 function applyKey(db, key) {
@@ -150,32 +187,22 @@ export async function captureConsistentSnapshot(sourcePath, key, options = {}) {
   const tmp = await mkdtemp(join(options.tmpRoot || tmpdir(), 'portos-signal-'));
   const plainPath = join(tmp, 'db.plain.sqlite');
   let holder;
-  let exporter;
-  let owned;
   let plain;
   try {
     holder = openReadonly(Database, sourcePath);
     applyKey(holder, key);
     holder.exec('BEGIN');
-    // Establishes the read mark and rejects a wrong key before any export.
+    // Establishes the read mark and rejects a wrong key before any copy.
     holder.prepare('SELECT count(*) AS n FROM sqlite_master').get();
     if (options.onReadLocked) await options.onReadLocked();
 
-    exporter = openReadonly(Database, sourcePath);
-    applyKey(exporter, key);
-    exporter.exec(`VACUUM INTO ${sqlLiteral(plainPath)}`);
-    exporter.close();
-    exporter = null;
+    plain = new Database(plainPath);
+    copyOrdinaryTables(holder, plain);
+    plain.close();
+    plain = null;
     holder.exec('ROLLBACK');
     holder.close();
     holder = null;
-
-    owned = new Database(plainPath, { fileMustExist: true });
-    applyKey(owned, key);
-    owned.prepare('SELECT count(*) AS n FROM sqlite_master').get();
-    owned.pragma(`rekey=''`);
-    owned.close();
-    owned = null;
 
     const header = await readFile(plainPath);
     if (header.length < 16 || header.subarray(0, 16).toString('latin1') !== SQLITE_MAGIC) {
@@ -195,8 +222,6 @@ export async function captureConsistentSnapshot(sourcePath, key, options = {}) {
     return { ok: true, plaintextPath: plainPath, tmpDir: tmp };
   } catch (err) {
     await closeQuietly(plain);
-    await closeQuietly(owned);
-    await closeQuietly(exporter);
     await closeQuietly(holder);
     await rm(tmp, { recursive: true, force: true }).catch(() => {});
     return classifyDriverError(err);

@@ -126,6 +126,47 @@ describe('runSync WAL snapshot', () => {
     expect(recordEventsMock.mock.calls[1][0]).toEqual([]);
   });
 
+  it('ingests a WAL message inserted after an older row was deleted', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'signal-sync-rowid-'));
+    const path = join(dir, 'db.sqlite');
+    const local = new Database(path);
+    local.pragma(`cipher='sqlcipher'`);
+    local.pragma('legacy=4');
+    local.pragma(`key="x'${key}'"`);
+    local.pragma('journal_mode = WAL');
+    local.pragma('wal_autocheckpoint = 0');
+    local.exec(`
+      CREATE TABLE conversations (
+        id TEXT PRIMARY KEY, e164 TEXT, type TEXT, name TEXT, profileName TEXT
+      );
+      CREATE TABLE messages (
+        id TEXT, conversationId TEXT, type TEXT, sent_at INTEGER, received_at INTEGER, body TEXT
+      );
+      INSERT INTO conversations VALUES ('c1', '+15551230001', 'private', 'Ada', 'Ada');
+      INSERT INTO messages VALUES ('m1', 'c1', 'incoming', 1700000000000, 1700000000000, 'first');
+      INSERT INTO messages VALUES ('m2', 'c1', 'outgoing', 1700000001000, 1700000001000, 'second');
+    `);
+    const previous = process.env.SIGNAL_DB_PATH;
+    process.env.SIGNAL_DB_PATH = path;
+    try {
+      const first = await runSync();
+      expect(first.ok, first.error).toBe(true);
+      expect(first.cursorRowid).toBe(2);
+      local.exec(`DELETE FROM messages WHERE id = 'm1'`);
+      local.exec(`INSERT INTO messages VALUES ('m3', 'c1', 'incoming', 1700000002000, 1700000002000, 'after-delete')`);
+      recordEventsMock.mockClear();
+      const second = await runSync();
+      expect(second.ok, second.error).toBe(true);
+      expect(second.scanned).toBe(1);
+      expect(second.cursorRowid).toBeGreaterThan(first.cursorRowid);
+      expect(recordEventsMock.mock.calls[0][0].map((row) => row.dedupeKey)).toEqual(['signal:m3']);
+    } finally {
+      process.env.SIGNAL_DB_PATH = previous;
+      local.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('leaves the cursor and activity calls untouched when the key is rejected', async () => {
     const first = await runSync();
     expect(first.ok, first.error).toBe(true);

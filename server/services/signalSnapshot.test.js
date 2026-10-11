@@ -135,6 +135,45 @@ describe('captureConsistentSnapshot', () => {
     }
   });
 
+  it('keeps source rowids after a delete so a newer WAL row stays above an old cursor', async () => {
+    const dir = scratch();
+    const src = join(dir, 'db.sqlite');
+    const key = randomBytes(32).toString('hex');
+    const writer = new Database(src);
+    applyKey(writer, key);
+    writer.pragma('journal_mode = WAL');
+    writer.pragma('wal_autocheckpoint = 0');
+    writer.exec(`
+      CREATE TABLE messages (id TEXT, body TEXT);
+      CREATE TABLE lookup (name TEXT PRIMARY KEY, value TEXT) WITHOUT ROWID;
+      INSERT INTO lookup VALUES ('k', 'v');
+      INSERT INTO messages(rowid, id, body) VALUES (1, 'm1', 'old'), (2, 'm2', 'kept');
+    `);
+    writer.pragma('wal_checkpoint(TRUNCATE)');
+    writer.exec(`
+      DELETE FROM messages WHERE id = 'm1';
+      INSERT INTO messages(rowid, id, body) VALUES (4, 'm4', 'wal-only');
+    `);
+    try {
+      const snap = await captureConsistentSnapshot(src, key, { tmpRoot: dir });
+      expect(snap.ok, snap.error).toBe(true);
+      const plain = new DatabaseSync(snap.plaintextPath, { readOnly: true });
+      try {
+        const rows = plain.prepare('SELECT rowid, id FROM messages ORDER BY rowid').all()
+          .map((row) => ({ rowid: Number(row.rowid), id: row.id }));
+        expect(rows).toEqual([
+          { rowid: 2, id: 'm2' },
+          { rowid: 4, id: 'm4' },
+        ]);
+        expect(plain.prepare('SELECT name, value FROM lookup').all()).toEqual([{ name: 'k', value: 'v' }]);
+      } finally {
+        plain.close();
+      }
+    } finally {
+      writer.close();
+    }
+  });
+
   it('reports setup failure and leaves no temp copy when the driver cannot load', async () => {
     const dir = scratch();
     const result = await captureConsistentSnapshot(join(dir, 'missing.sqlite'), 'ab'.repeat(32), {
