@@ -533,10 +533,28 @@ export function staleApprovalText(stale) {
   if (!stale) return null;
   return stale.changedFields.length ? `Approved earlier — changed since: ${changedFieldsText(stale.changedFields)}.` : 'Approved earlier — its inputs changed since.';
 }
-/** "concept, scene 3 prompt +2 more": the first `limit` changed inputs of a stale approval. */
+const SCENE_FIELD = /^scene \d+ (.+)$/;
+const SCENE_FIELD_PLURALS = { prompt: 'prompts', timing: 'timings', lyrics: 'lyrics', camera: 'cameras' };
+/**
+ * "concept, 26 scene prompts +2 more": the first `limit` changed inputs of a
+ * stale approval, with each per-scene kind (prompt, timing, …) folded into one count.
+ */
 export function changedFieldsText(changedFields, limit = 4) {
-  const more = changedFields.length > limit ? ` +${changedFields.length - limit} more` : '';
-  return `${changedFields.slice(0, limit).join(', ')}${more}`;
+  const scenes = new Map();
+  const labels = [];
+  for (const field of changedFields) {
+    const kind = SCENE_FIELD.exec(field)?.[1];
+    if (!kind) { labels.push(field); continue; }
+    if (!scenes.has(kind)) { scenes.set(kind, []); labels.push({ kind }); }
+    scenes.get(kind).push(field);
+  }
+  const text = labels.map((label) => {
+    if (typeof label === 'string') return label;
+    const fields = scenes.get(label.kind);
+    return fields.length === 1 ? fields[0] : `${formatCount(fields.length)} scene ${SCENE_FIELD_PLURALS[label.kind] || label.kind}`;
+  });
+  const more = text.length > limit ? ` +${text.length - limit} more` : '';
+  return `${text.slice(0, limit).join(', ')}${more}`;
 }
 const APPROVAL_ANCHORS = { art: 'mv-review-art', storyboard: 'mv-review-storyboard', proof: 'mv-review-proof' };
 const APPROVAL_STAGES = { art: 'cast-sets', storyboard: 'board', proof: 'produce' };
@@ -664,11 +682,12 @@ export function stageChecklist(stageId, project, readiness = project?.production
     const stale = staleApprovalText(readiness?.[key]?.stale);
     // Change requests have their own Feedback row; the approval names the first other blocker, else points there.
     const blocker = readiness?.[key]?.problems?.find(notFeedback) || changeRequestBlocker(openChangeRequests(project, key));
+    // A stale approval with nothing else blocking it can be kept as is, right from the row.
+    const keepable = !!stale && !approved && !blocker && key !== 'proof';
     return {
       id: `approve-${key}`, label: `${label} approved`, done: approved, stale: !!stale,
-      detail: approved || !readiness ? null : (stale ? `${stale} Re-approve in the editor below.` : blocker || waitingText),
-      // A stale approval with nothing else blocking it can be kept as is, right from the row.
-      ...(stale && !approved && !blocker && key !== 'proof'
+      detail: approved || !readiness ? null : (stale ? (keepable ? stale : `${stale} Re-approve in the editor below.`) : blocker || waitingText),
+      ...(keepable
         ? { action: { label: 'Keep approved', run: 'keep-approval', stage: key }, secondary: { label: `Review ${label.toLowerCase()}`, anchor: APPROVAL_ANCHORS[key], stage: APPROVAL_STAGES[key] } }
         : { action: approved ? null : { label: `Review ${label.toLowerCase()}`, anchor: APPROVAL_ANCHORS[key], stage: APPROVAL_STAGES[key] } }),
       // Inputs whose approved value the server kept: each gets a Revert button.

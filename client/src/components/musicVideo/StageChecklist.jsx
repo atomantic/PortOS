@@ -1,4 +1,5 @@
 import { ArrowRight, CheckCircle2, Circle } from 'lucide-react';
+import StaleApprovalActions from './StaleApprovalActions.jsx';
 
 /**
  * The top of every stage tab: what this stage needs before it counts as done
@@ -7,7 +8,8 @@ import { ArrowRight, CheckCircle2, Circle } from 'lucide-react';
  * control, a `run` starts the work itself (`onAction` gets either) — unless the
  * header's next action already goes there (`headerAnchor`). An item may add a
  * quieter `secondary` choice beside it. Run buttons wait while `busy`. A stale
- * approval lists a Revert button per changed input whose approved value was kept.
+ * approval offers a Revert per changed input whose approved value was kept
+ * (folded behind "See N changes" when there are several).
  * An `optional` item is listed but never counted toward the step being done.
  * An item's `notes` (open change requests) each get a Mark resolved button,
  * which calls `onAction({ run: 'resolve-feedback', feedbackId })`.
@@ -61,14 +63,8 @@ export default function StageChecklist({ items, onAction, onRevert, headerAnchor
                 </ul>
               )}
               {!item.done && item.revert && onRevert && (
-                <div className="mt-1 flex flex-wrap gap-1.5">
-                  {item.revert.fields.map((field) => (
-                    <button key={field} type="button" onClick={() => onRevert(item.revert.stage, field)}
-                      title="Put this back to the value you approved"
-                      className="min-h-[44px] rounded border border-port-border px-2 py-1 text-xs text-port-accent sm:min-h-0">
-                      Revert {field}
-                    </button>
-                  ))}
+                <div className="mt-1">
+                  <StaleApprovalActions revertible={item.revert.fields} busy={busy} onRevert={(field) => onRevert(item.revert.stage, field)} />
                 </div>
               )}
             </div>

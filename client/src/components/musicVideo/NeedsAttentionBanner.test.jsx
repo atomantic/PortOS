@@ -47,6 +47,16 @@ describe('NeedsAttentionBanner (#9940)', () => {
     expect(handlers.onRevertApproval).toHaveBeenCalledWith('storyboard', 'concept');
   });
 
+  it('folds many reverts behind one toggle so Keep approved stays the obvious choice', () => {
+    const revertible = Array.from({ length: 26 }, (_, i) => `scene ${i + 1} prompt`);
+    const readiness = { storyboard: { approved: false, problems: [], stale: { changedFields: ['storyboard shots', ...revertible], revertible } } };
+    renderWithRouter(<NeedsAttentionBanner items={deriveAttentionItems({ id: 'mv-example', scenes: [] }, { readiness })} actions={{ onKeepApproval: vi.fn(), onRevertApproval: vi.fn() }} />);
+    const banner = screen.getByRole('region', { name: 'Needs attention' });
+    expect(banner).toHaveTextContent('changed since: storyboard shots, 26 scene prompts.');
+    expect(within(banner).getByText('See 26 changes to Timed storyboard you can undo').closest('details').open).toBe(false);
+    expect(within(banner).getByRole('button', { name: 'Keep Timed storyboard approved' })).toBeVisible();
+  });
+
   it('offers Resume and Cancel for an open revision, wired to the id the project holds', () => {
     const handlers = actions();
     renderWithRouter(<NeedsAttentionBanner items={deriveAttentionItems({ ...stranded, status: 'complete', castAndSets: null })} actions={handlers} />);
