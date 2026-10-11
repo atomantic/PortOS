@@ -492,6 +492,16 @@ describe('stageChecklist', () => {
     const stale = { ...readiness, storyboard: { approved: false, problems: ['Review and approve the current art direction first.'], stale: { changedFields: ['art direction', 'cast'] } } };
     expect(stageChecklist('board', castProject({ scenes: [scene()] }), stale).at(-1).detail).toMatch(/changed since: art direction, cast/);
   });
+  it('offers Keep approved on a stale approval nothing else blocks, and files feedback on its own row', () => {
+    const feedback = [{ id: 'fb-1', stage: 'storyboard', target: 'Chorus', text: 'More lyrics on screen', decision: 'request-changes' }];
+    const stale = { ...NOT_APPROVED, storyboard: { approved: false, problems: [], stale: { changedFields: ['cast'] } } };
+    expect(stageChecklist('board', castProject({ scenes: [scene()] }), stale).at(-1).action).toEqual({ label: 'Keep approved', run: 'keep-approval', stage: 'storyboard' });
+    const blocked = { ...NOT_APPROVED, storyboard: { approved: false, problems: ['Resolve storyboard feedback for Chorus: More lyrics on screen'], stale: { changedFields: ['cast'] } } };
+    const items = stageChecklist('board', castProject({ scenes: [scene()], productionReview: { feedback } }), blocked);
+    expect(items.map((i) => i.id)).toEqual(['shots', 'feedback-storyboard', 'approve-storyboard']);
+    expect(items[1]).toMatchObject({ label: 'Feedback', notes: [{ id: 'fb-1', target: 'Chorus', text: 'More lyrics on screen' }], action: { run: 'revise-feedback', stage: 'storyboard' } });
+    expect(items.at(-1).action.run).toBeUndefined();
+  });
   it('keeps Setup open until lyrics are imported and their timing verified, unless the song is instrumental', () => {
     const base = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS };
     const setup = (project, readiness) => deriveStages(project, readiness).stages.find((st) => st.id === 'setup').state;

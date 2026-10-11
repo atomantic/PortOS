@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { AlertTriangle, ExternalLink, Link2, Play, X } from 'lucide-react';
 import { Link } from 'react-router';
 import { ATTENTION_ANCHOR_ID } from '../../lib/musicVideoAttention.js';
+import StaleApprovalActions from './StaleApprovalActions.jsx';
 
 const BUTTON = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2.5 text-xs disabled:opacity-50 sm:min-h-0 sm:py-1';
 const PRIMARY = `${BUTTON} text-port-accent`;
@@ -84,7 +85,16 @@ function ItemActions({ item, busy, actions }) {
         </>
       );
     case 'stale-approvals':
-      return <OpenLink item={item} />;
+      return (
+        <>
+          {(item.approvals || []).map((approval) => (
+            <StaleApprovalActions key={approval.stage} label={approval.label} revertible={approval.revertible} busy={busy}
+              onKeep={approval.canKeep && actions.onKeepApproval ? () => actions.onKeepApproval(approval.stage) : undefined}
+              onRevert={actions.onRevertApproval ? (field) => actions.onRevertApproval(approval.stage, field) : undefined} />
+          ))}
+          <OpenLink item={item} />
+        </>
+      );
     default:
       return null;
   }
@@ -109,7 +119,8 @@ function OpenLink({ item }) {
  * are the page's handlers (`onResumeRevision(id)`, `onCancelRevision(id)`,
  * `onResumeCastAndSets()`, `onContinueAutoReview(runId)`,
  * `onCancelAutoReview(runId)`, `onReattachRender()`, and for the parked-run
- * rows `onResumeAutonomous()` / `onResumeProduction(runId, opts)`). Renders nothing when
+ * rows `onResumeAutonomous()` / `onResumeProduction(runId, opts)`; for stale
+ * approvals `onKeepApproval(stage)` / `onRevertApproval(stage, field)`). Renders nothing when
  * there is nothing to attend to.
  */
 export default function NeedsAttentionBanner({ items, busy = false, actions = {} }) {

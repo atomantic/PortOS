@@ -566,6 +566,59 @@ export function summarizeStoryboardProblems(problems = []) {
   });
 }
 
+// The server names each open change request as a readiness problem; the
+// checklist lists those requests on their own Feedback row instead.
+const FEEDBACK_PROBLEM = /^Resolve (art|storyboard|proof) feedback for /;
+const notFeedback = (text) => !FEEDBACK_PROBLEM.test(text);
+
+/** The open change requests on one approval stage ('art' | 'storyboard' | 'proof'). */
+export const openChangeRequests = (project, stage) => (project?.productionReview?.feedback || [])
+  .filter((f) => f.stage === stage && f.decision === 'request-changes' && !f.resolvedAt);
+
+/**
+ * What "Revise from feedback" does for one stage, mirroring the server's revise
+ * routing: `{ action }` describes the revision, `{ unavailable }` says why
+ * there is none and what to do instead.
+ */
+export function feedbackRevisionScope(project, stage) {
+  if (stage === 'art') return project.castAndSets?.direction
+    ? { action: 'Regenerates the Cast & Sets direction and sheet with these requests. Review the new sheet before approving.' }
+    : { unavailable: 'This art direction has no Cast & Sets direction to regenerate. Edit the guide, then resolve each request.' };
+  if (stage === 'storyboard') {
+    if (project.productionReview?.draft?.storyboardSource === 'document') return { unavailable: 'Document shots come from the authored source. Revise it, reimport its shot manifest, then resolve each request.' };
+    return project.scenes?.length
+      ? { action: 'Re-plans the shots these requests name (every shot when a request names none) in place, keeping their takes and selected media.' }
+      : { unavailable: 'Plan timed Board shots before revising them from feedback.' };
+  }
+  const mode = project.composition?.mode;
+  if (mode === 'code') return { action: 'Regenerates the code composition with these requests. Render a new proof afterwards.' };
+  if (mode === 'document') return ['generated', 'template', undefined].includes(project.composition?.document?.source?.kind)
+    ? { action: 'Authors a revised composition candidate with these requests. Accept it in Make, then render a new proof.' }
+    : { unavailable: 'This composition was imported from its own source. Revise that source and reimport it, then resolve each request.' };
+  return { unavailable: 'This proof is assembled from Board footage. Revise the affected storyboard shots or takes, then render a new proof.' };
+}
+
+/** The line an approval shows while change requests block it: the one note by name, or how many. */
+export function changeRequestBlocker(requests) {
+  if (!requests?.length) return null;
+  return requests.length === 1 ? `Resolve the change request on ${requests[0].target} first.` : `Resolve the ${requests.length} change requests above first.`;
+}
+
+// One Feedback row per stage with open change requests: each note carries its
+// own Mark resolved button, and the row offers Revise from feedback where the
+// stage supports it. An approved stage has nothing left to block.
+function feedbackItem(project, stage, readiness, { optional = false } = {}) {
+  const requests = openChangeRequests(project, stage);
+  if (!requests.length || readiness?.[stage]?.approved) return null;
+  const scope = feedbackRevisionScope(project, stage);
+  return {
+    id: `feedback-${stage}`, label: 'Feedback', done: false, optional,
+    notes: requests.map(({ id, target, text }) => ({ id, target, text })),
+    detail: scope.unavailable || null,
+    action: scope.unavailable ? null : { label: 'Revise from feedback', run: 'revise-feedback', stage, reason: scope.action },
+  };
+}
+
 // Storyboard readiness problems, grouped by what the user has to go fix. The
 // server returns plain sentences; the first matching rule picks the group.
 const STORYBOARD_PROBLEM_GROUPS = [
@@ -581,7 +634,7 @@ const STORYBOARD_PROBLEM_GROUPS = [
 
 /** One open checklist item per group of storyboard readiness problems, per-shot problems counted rather than listed. */
 function storyboardProblemItems(readiness) {
-  const problems = summarizeStoryboardProblems(readiness?.storyboard?.problems);
+  const problems = summarizeStoryboardProblems(readiness?.storyboard?.problems?.filter(notFeedback));
   if (readiness?.storyboard?.approved || !problems.length) return [];
   return STORYBOARD_PROBLEM_GROUPS.flatMap((group, index) => {
     const earlier = STORYBOARD_PROBLEM_GROUPS.slice(0, index);
@@ -609,10 +662,15 @@ export function stageChecklist(stageId, project, readiness = project?.production
   const approval = (key, label, waitingText) => {
     const approved = !!readiness?.[key]?.approved;
     const stale = staleApprovalText(readiness?.[key]?.stale);
+    // Change requests have their own Feedback row; the approval names the first other blocker, else points there.
+    const blocker = readiness?.[key]?.problems?.find(notFeedback) || changeRequestBlocker(openChangeRequests(project, key));
     return {
       id: `approve-${key}`, label: `${label} approved`, done: approved, stale: !!stale,
-      detail: approved || !readiness ? null : (stale ? `${stale} Re-approve in the editor below.` : readiness[key]?.problems?.[0] || waitingText),
-      action: approved ? null : { label: `Review ${label.toLowerCase()}`, anchor: APPROVAL_ANCHORS[key], stage: APPROVAL_STAGES[key] },
+      detail: approved || !readiness ? null : (stale ? `${stale} Re-approve in the editor below.` : blocker || waitingText),
+      // A stale approval with nothing else blocking it can be kept as is, right from the row.
+      ...(stale && !approved && !blocker && key !== 'proof'
+        ? { action: { label: 'Keep approved', run: 'keep-approval', stage: key }, secondary: { label: `Review ${label.toLowerCase()}`, anchor: APPROVAL_ANCHORS[key], stage: APPROVAL_STAGES[key] } }
+        : { action: approved ? null : { label: `Review ${label.toLowerCase()}`, anchor: APPROVAL_ANCHORS[key], stage: APPROVAL_STAGES[key] } }),
       // Inputs whose approved value the server kept: each gets a Revert button.
       revert: !approved && stale && readiness[key].stale.revertible?.length ? { stage: key, fields: readiness[key].stale.revertible } : null,
     };
@@ -683,12 +741,14 @@ export function stageChecklist(stageId, project, readiness = project?.production
       return [
         { id: 'direction', label: 'Art direction written', done: missing.length === 0, ...direction },
         { id: 'guide', label: guide ? `Visual guide chosen: ${guide.title || guide.filename || 'sheet'}` : 'Visual guide chosen', done: !!guide, ...guideRow },
+        feedbackItem(project, 'art', readiness),
         waiting ? { ...approve, detail: 'Opens once the art direction is written and a guide is chosen.', action: null } : approve,
-      ];
+      ].filter(Boolean);
     }
     case 'board': {
       const planned = scenes.length > 0 || (draft.storyboard || []).length > 0;
-      const problems = storyboardProblemItems(readiness);
+      const feedback = feedbackItem(project, 'storyboard', readiness);
+      const problems = [...storyboardProblemItems(readiness), ...(feedback ? [feedback] : [])];
       const storyboardApproval = approval('storyboard', 'Timed storyboard', 'Ready for your review below.');
       return [
         { id: 'shots', label: 'Shots planned', done: planned, detail: planned ? null : 'Plan the shots from the header, or add scenes by hand.',
@@ -726,7 +786,8 @@ export function stageChecklist(stageId, project, readiness = project?.production
           detail: done ? null : 'Generate the code video from the Code Video panel.',
           action: done ? null : { label: 'Open Code Video', anchor: 'mv-code-section' } };
       }
-      return [...items, ...(work ? [work] : []), proof];
+      const proofFeedback = feedbackItem(project, 'proof', readiness, { optional: true });
+      return [...items, ...(work ? [work] : []), ...(proofFeedback ? [proofFeedback] : []), proof];
     }
     case 'review':
       return [{

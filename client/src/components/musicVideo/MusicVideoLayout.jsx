@@ -196,7 +196,12 @@ export default function MusicVideoLayout({
           </div>
           {status && (
             <p role="status" aria-label="Project status" className={`flex min-h-[36px] min-w-0 items-center rounded-lg border px-2.5 text-xs font-medium sm:text-sm ${TONE_CLASSES[status.tone] || TONE_CLASSES.muted}`}>
-              {status.headline}
+              {/* A step that needs you is one tap away: from any other step, the status opens it. */}
+              {needsYouStage && needsYouStage !== stage ? (
+                <button type="button" onClick={() => onStageChange(needsYouStage)} className="flex min-h-[36px] items-center gap-1 text-left underline-offset-2 hover:underline">
+                  {status.headline} <ArrowRight size={12} aria-hidden="true" />
+                </button>
+              ) : status.headline}
             </p>
           )}
           {nextAction && (

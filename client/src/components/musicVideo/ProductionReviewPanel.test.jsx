@@ -203,30 +203,18 @@ describe('Production proof playback evidence', () => {
     await waitFor(() => expect(screen.getByLabelText('Requested change').value).toBe(''));
   });
 
-  it('offers a stage revision for open change requests and explains the blocked approval', async () => {
-    const review = { ...reviewFixture(), revise: vi.fn(async () => ({ revision: { stage: 'storyboard', sceneIds: ['scene-a', 'scene-b'] } })) };
+  it('names the open change request that blocks approval in one line, leaving its controls to the step checklist', () => {
+    const review = reviewFixture();
     review.readiness.storyboard = { approved: false, problems: ['Resolve storyboard feedback for shot: Chorus: Land the leap on the downbeat'] };
     const withRequests = { ...project, scenes: [{ sceneId: 'scene-a', label: 'Chorus', startSec: 0, endSec: 10 }],
       productionReview: { ...project.productionReview, feedback: [
         { id: 'fb-open', stage: 'storyboard', target: 'shot: Chorus', text: 'Land the leap on the downbeat', decision: 'request-changes', basis: 'board' },
         { id: 'fb-done', stage: 'storyboard', target: 'shot: Intro', text: 'Already handled', decision: 'request-changes', basis: 'board', resolvedAt: '2026-01-01T00:00:00.000Z' },
-        { id: 'fb-proof', stage: 'proof', target: 'frame: 0:04', text: 'Prop lands late', decision: 'request-changes', basis: 'same-creative-basis' },
       ] } };
-    const board = render(<ProductionReviewPanel project={withRequests} review={review} onOpenArtifact={vi.fn()} stage="storyboard" />);
-    expect(screen.queryByRole('group', { name: 'Animated proof change requests' })).toBeNull();
-    const requests = screen.getByRole('group', { name: 'Lyric-timed storyboard change requests' });
-    expect(requests.textContent).toContain('Resolve these change requests to approve.');
-    expect(requests.textContent).toContain('Land the leap on the downbeat');
-    expect(requests.textContent).not.toContain('Already handled');
-    fireEvent.click(within(requests).getByRole('button', { name: 'Revise from feedback' }));
-    expect(review.revise).toHaveBeenCalledWith('storyboard');
-    await waitFor(() => expect(requests.textContent).toContain('Revised 2 shots. Review them, then resolve each request.'));
-    // A document-mode proof with no imported source can be re-authored as a generated candidate.
-    board.unmount();
-    render(<ProductionReviewPanel project={withRequests} review={review} onOpenArtifact={vi.fn()} stage="proof" />);
-    expect(screen.queryByRole('group', { name: 'Lyric-timed storyboard change requests' })).toBeNull();
-    const proofRequests = screen.getByRole('group', { name: 'Animated proof change requests' });
-    expect(within(proofRequests).getByRole('button', { name: 'Revise from feedback' })).toBeTruthy();
+    render(<ProductionReviewPanel project={withRequests} review={review} onOpenArtifact={vi.fn()} stage="storyboard" />);
+    const box = screen.getByRole('region', { name: 'Approve: Lyric-timed storyboard' });
+    expect(within(box).getByRole('status').textContent).toBe('Resolve the change request on shot: Chorus first.');
+    expect(within(box).queryByRole('button', { name: 'Revise from feedback' })).toBeNull();
   });
 
   it('keeps the art approval to one quiet line while there is no direction or guide to review', () => {
@@ -331,7 +319,7 @@ describe('Production proof playback evidence', () => {
 describe('Approval problems with unsaved edits', () => {
   it.each([
     [['Render and watch a current animated chorus proof with the master song.']],
-    [['Render and watch a current animated chorus proof with the master song.', 'Resolve proof feedback for chorus: hold longer']],
+    [['Render and watch a current animated chorus proof with the master song.', 'Second problem.']],
   ])('lists every proof problem while planning edits are unsaved (%j)', (problems) => {
     const review = reviewFixture();
     review.readiness.proof = { ...review.readiness.proof, approved: false, problems };
@@ -344,11 +332,19 @@ describe('Approval problems with unsaved edits', () => {
     for (const problem of problems) expect(screen.getByText(problem)).toBeTruthy();
   });
 
-  it('shows the first proof problem once, on the help line, when nothing is unsaved', () => {
+  it('shows the first proof problem once, on the help line, and names an open change request ahead of it', () => {
     const review = reviewFixture();
-    review.readiness.proof = { ...review.readiness.proof, approved: false, problems: ['Resolve proof feedback for chorus: hold longer', 'Second problem.'] };
-    render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="proof" />);
-    expect(screen.getAllByText(/Resolve proof feedback for chorus/)).toHaveLength(1);
+    review.readiness.proof = { ...review.readiness.proof, approved: false, problems: ['First problem.', 'Second problem.', 'Resolve proof feedback for chorus: hold longer'] };
+    const { unmount } = render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="proof" />);
+    expect(screen.getAllByText(/First problem\./)).toHaveLength(1);
+    expect(screen.getByText('Second problem.')).toBeTruthy();
+    expect(screen.queryByText(/hold longer/)).toBeNull();
+    unmount();
+    const withRequest = { ...project, productionReview: { ...project.productionReview, feedback: [
+      { id: 'fb-proof', stage: 'proof', target: 'chorus', text: 'hold longer', decision: 'request-changes', basis: 'same-creative-basis' }] } };
+    render(<ProductionReviewPanel project={withRequest} review={review} onOpenArtifact={vi.fn()} stage="proof" />);
+    expect(screen.getByText('Resolve the change request on chorus first.')).toBeTruthy();
+    expect(screen.getByText('First problem.')).toBeTruthy();
     expect(screen.getByText('Second problem.')).toBeTruthy();
   });
 
