@@ -858,15 +858,15 @@ export default function PromptManager() {
               </div>
             ) : selectedStage ? (
               <>
-                <div className="bg-port-card border border-port-border rounded-xl p-4">
-                  <div className="flex items-center justify-between mb-4">
-                    <div>
-                      <h3 className="text-lg font-medium text-white">{stageConfig.name}</h3>
+                <div className="bg-port-card border border-port-border rounded-xl p-4 @container">
+                  <div className="flex flex-col gap-3 mb-4 @sm:flex-row @sm:items-start @sm:justify-between">
+                    <div className="min-w-0 @sm:flex-1">
+                      <h3 className="break-words text-lg font-medium text-white">{stageConfig.name}</h3>
                       {isStageDirty && (
                         <div className="text-xs text-port-warning mt-1">Unsaved changes</div>
                       )}
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex w-full max-w-full flex-wrap gap-2 @sm:w-auto @sm:shrink-0">
                       <button
                         onClick={previewStage}
                         disabled={!stageReady || saving}
@@ -1105,10 +1105,10 @@ export default function PromptManager() {
                 </button>
               </div>
             ) : (
-            <div className="bg-port-card border border-port-border rounded-xl p-4">
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <h3 className="text-lg font-medium text-white">
+            <div className="bg-port-card border border-port-border rounded-xl p-4 @container">
+              <div className="flex flex-col gap-3 mb-4 @sm:flex-row @sm:items-start @sm:justify-between">
+                <div className="min-w-0 @sm:flex-1">
+                  <h3 className="break-words text-lg font-medium text-white">
                     {selectedVar ? `Edit: ${selectedVar}` : 'New Variable'}
                   </h3>
                   {isVarDirty && (
@@ -1239,18 +1239,18 @@ export default function PromptManager() {
           <div className="lg:col-span-2 space-y-4">
             {selectedJobSkill ? (
               <>
-                <div className="bg-port-card border border-port-border rounded-xl p-4">
-                  <div className="flex items-center justify-between mb-4">
-                    <div>
-                      <h3 className="text-lg font-medium text-white">{jobSkillMeta.jobName || selectedJobSkill}</h3>
-                      <div className="flex gap-3 text-xs text-gray-500 mt-1">
+                <div className="bg-port-card border border-port-border rounded-xl p-4 @container">
+                  <div className="flex flex-col gap-3 mb-4 @sm:flex-row @sm:items-start @sm:justify-between">
+                    <div className="min-w-0 @sm:flex-1">
+                      <h3 className="break-words text-lg font-medium text-white">{jobSkillMeta.jobName || selectedJobSkill}</h3>
+                      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-500 [overflow-wrap:anywhere]">
                         {jobSkillMeta.category && <span>Category: {jobSkillMeta.category}</span>}
                         {jobSkillMeta.interval && <span>Interval: {jobSkillMeta.interval}</span>}
                         {jobSkillMeta.jobId && <span>ID: {jobSkillMeta.jobId}</span>}
                         {isJobSkillDirty && <span className="text-port-warning">Unsaved changes</span>}
                       </div>
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex w-full max-w-full flex-wrap gap-2 @sm:w-auto @sm:shrink-0">
                       <button
                         onClick={previewJobSkill}
                         disabled={!jobSkillReady || saving || previewLoading}
