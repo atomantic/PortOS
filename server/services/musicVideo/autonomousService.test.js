@@ -1466,6 +1466,17 @@ describe('orchestrated mode (brief.orchestrator)', () => {
     expect(doubles.resumeProduction.mock.calls[0][2].stopBefore).toBeUndefined();
   });
 
+  // Uniquely catches an unviewable still being recorded as an approved review while the run still waits for the director.
+  it('does not record approval for stills the reviewer could not see', async () => {
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], orchestrator: ORCHESTRATOR }, { autoApproveAuthorized: true });
+    await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
+    store.get('mv-auto').scenes = [{ sceneId: 'mvs-a', label: 'Intro', framePrompt: 'a skater', referenceImageId: 'a1.png' }];
+    doubles.galleryImagePath.mockRejectedValue(new Error('missing'));
+    await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'awaiting-video' } });
+    expect(reviews().filter((r) => r.startsWith('stills'))).toEqual(['stills:revise']);
+    expect(runOf()).toMatchObject({ status: 'awaiting-approval', awaiting: 'stills' });
+  });
+
   // Uniquely catches a cancel during the pending stills review being undone by its verdict (clearing stills, resuming production, spending).
   it('ignores a stills verdict that lands after the run was cancelled', async () => {
     await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], orchestrator: ORCHESTRATOR }, { autoApproveAuthorized: true });

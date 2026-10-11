@@ -1240,6 +1240,7 @@ async function reviewStills(projectId, run) {
   const shots = (project.scenes || []).filter((scene) => scene.referenceImageId);
   const issues = [];
   const reviews = [];
+  let shown = 0;
   for (let i = 0; i < shots.length; i += STILLS_BATCH) {
     const listed = [];
     const images = [];
@@ -1252,6 +1253,7 @@ async function reviewStills(projectId, run) {
       cast: project.productionReview?.draft?.cast || '',
       shots: listed.map((scene, n) => ({ image: n + 1, sceneId: scene.sceneId, label: scene.label || '', still: trimTo(scene.framePrompt || scene.prompt, 400) })) }), images);
     reviews.push(review);
+    if (review.visual) shown += listed.length;
     // A review that could not see the stills cannot judge them.
     const known = new Set(listed.map((scene) => scene.sceneId));
     if (review.visual && review.verdict === 'revise') issues.push(...review.issues.filter((issue) => known.has(issue.sceneId)));
@@ -1259,13 +1261,16 @@ async function reviewStills(projectId, run) {
   const spent = revisionsSpent(await latestRun(projectId), 'stills');
   const regenerate = spent < reviewLimit(run) ? issues : [];
   const scored = reviews.map((r) => r.score).filter((n) => n != null);
+  // Approval needs every still seen and nothing flagged; an inconclusive or unresolved round is not one.
+  const conclusive = shots.length > 0 && shown === shots.length;
+  const unresolved = issues.length > 0 && !regenerate.length;
   const why = !reviews.length ? 'No still could be shown to the reviewer. '
     : reviews.some((r) => !r.visual) ? 'The reviewer could not see every still. '
-      : issues.length && !regenerate.length ? 'Revision limit reached; accepted the latest stills. ' : '';
-  await recordReview(projectId, { checkpoint: 'stills', verdict: regenerate.length ? 'revise' : 'approve',
+      : unresolved ? 'Revision limit reached with changes still open. ' : '';
+  await recordReview(projectId, { checkpoint: 'stills', verdict: regenerate.length || unresolved || !conclusive ? 'revise' : 'approve',
     score: scored.length ? Math.min(...scored) : null, route: reviews.at(-1)?.route || null, visual: reviews.length > 0 && reviews.every((r) => r.visual),
     notes: trimTo(`${why}${regenerate.length ? `Regenerating ${regenerate.length} still${regenerate.length === 1 ? '' : 's'}. ` : ''}${reviews.map((r) => r.notes).filter(Boolean).join(' ')}`, 1500),
-    ...(regenerate.length ? { changes: regenerate.map((issue) => trimTo(`${issue.sceneId}: ${issue.text}`, 300)) } : {}) });
+    ...(regenerate.length || unresolved ? { changes: (regenerate.length ? regenerate : issues).map((issue) => trimTo(`${issue.sceneId}: ${issue.text}`, 300)) } : {}) });
   return regenerate;
 }
 
