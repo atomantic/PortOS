@@ -229,7 +229,7 @@ export default function AutonomousRunPanel({ project, auto, readiness, selectedS
                 </div>
               </fieldset>
             )}
-            <button type="button" disabled={auto.busy} onClick={() => resume({ ...(changed ? { [editable.key]: draft } : {}), ...(addTools.length ? { addTools } : {}) })} className={`${buttonClass} bg-port-accent text-white border-port-accent`}>
+            <button type="button" disabled={auto.busy || (missingVideoTools.length > 0 && !addTools.length)} title={missingVideoTools.length > 0 && !addTools.length ? 'Choose a video tool to make the clips' : undefined} onClick={() => resume({ ...(changed ? { [editable.key]: draft } : {}), ...(addTools.length ? { addTools } : {}) })} className={`${buttonClass} bg-port-accent text-white border-port-accent`}>
               <Play size={14} aria-hidden="true" /> {changed ? 'Save edit & approve' : 'Approve & continue'}
             </button>
             {awaiting === 'song' && (
