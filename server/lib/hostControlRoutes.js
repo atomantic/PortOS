@@ -522,6 +522,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/lora-datasets/:id/generate',
   'POST /api/lora-datasets/:id/caption',
   'POST /api/lora-datasets/:id/slice-reference-sheet',
+  // LoRA training start/resume spawn detached trainer processes on the host GPU (#11073).
+  'POST /api/lora-training/runs',
+  'POST /api/lora-training/runs/:id/resume',
 
   // Code Animation contained execution (#9388): choosing the installed tool a
   // worker runs, and the containment check that spawns sandboxed processes.

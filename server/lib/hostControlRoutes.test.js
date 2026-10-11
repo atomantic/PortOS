@@ -673,6 +673,29 @@ describe('Caller-prompted AI outside Pipeline policy (#10908)', () => {
   });
 });
 
+describe('LoRA training run policy (#11073)', () => {
+  const protectedRoutes = [
+    'POST /api/lora-training/runs',
+    'POST /api/lora-training/runs/:id/resume',
+  ];
+
+  it('gates each route and maps every entry to a mounted route', () => {
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => method + ' ' + path));
+    for (const route of protectedRoutes) {
+      const [method, path] = route.split(' ');
+      expect(mounted.has(route), route).toBe(true);
+      expect(hostControlRouteFor(method, path), route).toBe(route);
+    }
+  });
+
+  it('keeps reads open', () => {
+    for (const [method, path] of [
+      ['GET', '/api/lora-training/runs'],
+      ['GET', '/api/lora-training/runs/:id'],
+    ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
+  });
+});
+
 describe('Music Video cover/promotion and POST LLM drill policy (#10989)', () => {
   const protectedRoutes = [
     'POST /api/music-video/:id/publish-kit/cover-art/design',
