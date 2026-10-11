@@ -74,3 +74,171 @@ describe('buildVideoGenSubmission — fal options (#9232)', () => {
     expect(payload).not.toHaveProperty('falGenerateAudio');
   });
 });
+
+describe('buildVideoGenSubmission — hosted image-mode source', () => {
+  const source = { sourceImageFile: 'frame.png', sourceImageUpload: 'data:image/png;base64,AAA' };
+  const lanes = { grok: { isGrok: true }, fal: { isFal: true }, reactor: { isReactor: true } };
+
+  for (const [backend, flag] of Object.entries(lanes)) {
+    it(`${backend}: image mode copies the source, text mode sends empty strings`, () => {
+      expect(buildVideoGenSubmission(baseArgs({ ...flag, ...source, mode: 'image' })))
+        .toMatchObject({ backend, mode: 'image', sourceImageFile: 'frame.png', sourceImage: 'data:image/png;base64,AAA' });
+      expect(buildVideoGenSubmission(baseArgs({ ...flag, ...source, mode: 'text' })))
+        .toMatchObject({ backend, mode: 'text', sourceImageFile: '', sourceImage: '' });
+      // Any non-image mode collapses to text on hosted lanes.
+      expect(buildVideoGenSubmission(baseArgs({ ...flag, ...source, mode: 'a2v' })))
+        .toMatchObject({ mode: 'text', sourceImageFile: '', sourceImage: '' });
+    });
+
+    it(`${backend}: image mode with no source sends empty strings`, () => {
+      expect(buildVideoGenSubmission(baseArgs({ ...flag, mode: 'image' })))
+        .toMatchObject({ mode: 'image', sourceImageFile: '', sourceImage: '' });
+    });
+  }
+
+  it('fal and reactor never send a negative prompt; grok does', () => {
+    const args = { negativePrompt: 'blurry' };
+    expect(buildVideoGenSubmission(baseArgs({ isFal: true, ...args }))).not.toHaveProperty('negativePrompt');
+    expect(buildVideoGenSubmission(baseArgs({ isReactor: true, ...args }))).not.toHaveProperty('negativePrompt');
+    expect(buildVideoGenSubmission(baseArgs({ isGrok: true, ...args }))).toHaveProperty('negativePrompt');
+  });
+
+  it('fal omits an unset model id', () => {
+    expect(buildVideoGenSubmission(baseArgs({ isFal: true, falModelId: '' })).falModelId).toBeUndefined();
+    expect(buildVideoGenSubmission(baseArgs({ isFal: true, falModelId: 'm1' })).falModelId).toBe('m1');
+  });
+});
+
+describe('buildVideoGenSubmission — reactor fields', () => {
+  const reactor = (o) => buildVideoGenSubmission(baseArgs({ isReactor: true, ...o }));
+
+  it('sends a seed of 0 and omits an unset seed', () => {
+    expect(reactor({ reactorSeed: 0 }).reactorSeed).toBe(0);
+    expect(reactor({ reactorSeed: 42 }).reactorSeed).toBe(42);
+    expect(reactor({ reactorSeed: '' }).reactorSeed).toBeUndefined();
+    expect(reactor({ reactorSeed: null }).reactorSeed).toBeUndefined();
+    expect(reactor({ reactorSeed: undefined }).reactorSeed).toBeUndefined();
+  });
+
+  it('drops the continuation clip id in image mode and omits empty seconds/aspect', () => {
+    expect(reactor({ reactorClipId: 'c1', mode: 'text' }).reactorClipId).toBe('c1');
+    expect(reactor({ reactorClipId: 'c1', mode: 'image' }).reactorClipId).toBeUndefined();
+    expect(reactor({ reactorClipId: '' }).reactorClipId).toBeUndefined();
+    const p = reactor({ reactorSeconds: 0, reactorAspect: '' });
+    expect(p.reactorSeconds).toBeUndefined();
+    expect(p.reactorAspect).toBeUndefined();
+    expect(p).not.toHaveProperty('width');
+    expect(reactor({ reactorSeconds: 5, reactorAspect: '9:16' })).toMatchObject({ reactorSeconds: 5, reactorAspect: '9:16' });
+  });
+});
+
+describe('buildVideoGenSubmission — remote lane', () => {
+  it('spreads remote fields over a text-mode local payload', () => {
+    const p = buildVideoGenSubmission(baseArgs({
+      remoteSubmissionFields: { modelId: 'remote-1', remoteInstanceId: 'peer' },
+      steps: 0, guidanceScale: 0, seed: 0,
+    }));
+    expect(p).toMatchObject({
+      backend: 'local', mode: 'text', modelId: 'remote-1', remoteInstanceId: 'peer',
+      steps: '', guidanceScale: '', seed: 0, numFrames: 121, fps: 24,
+    });
+    expect(p).not.toHaveProperty('tiling');
+  });
+});
+
+describe('buildVideoGenSubmission — local frame sources', () => {
+  const ltx = { runtime: 'ltx2' };
+  const other = { runtime: 'mlx_video' };
+  const src = { sourceImageFile: 'a.png', sourceImageUpload: 'up', lastImageFile: 'z.png', lastImageUpload: 'zup', extendFromVideoId: 'v1', audioFile: 'a.wav' };
+  const local = (o) => buildVideoGenSubmission(baseArgs({ currentModel: other, ...src, ...o }));
+
+  it('attaches the start frame for image mode', () => {
+    expect(local({ mode: 'image' })).toMatchObject({ sourceImageFile: 'a.png', sourceImage: 'up', lastImageFile: '', lastImage: '', extendFromVideoId: '', audioFile: '' });
+  });
+
+  it('attaches the start frame and audio for a2v', () => {
+    expect(local({ mode: 'a2v' })).toMatchObject({ sourceImageFile: 'a.png', sourceImage: 'up', audioFile: 'a.wav', extendFromVideoId: '' });
+  });
+
+  it('attaches both frames for legacy first-last-frame, not when keyframes are active', () => {
+    expect(local({ mode: 'fflf', keyframesActive: false }))
+      .toMatchObject({ sourceImageFile: 'a.png', sourceImage: 'up', lastImageFile: 'z.png', lastImage: 'zup' });
+    expect(local({ mode: 'fflf', keyframesActive: true, keyframes: [{ a: 1 }] }))
+      .toMatchObject({ sourceImageFile: '', sourceImage: '', lastImageFile: '', lastImage: '', keyframes: '[{"a":1}]' });
+  });
+
+  it('extend on a non-LTX-2 runtime attaches the file only (no upload, no video id)', () => {
+    expect(local({ mode: 'extend' })).toMatchObject({ sourceImageFile: 'a.png', sourceImage: '', extendFromVideoId: '' });
+  });
+
+  it('extend on LTX-2 uses extendFromVideoId and no start frame', () => {
+    expect(local({ mode: 'extend', currentModel: ltx })).toMatchObject({ sourceImageFile: '', sourceImage: '', extendFromVideoId: 'v1' });
+  });
+
+  it('text mode sends empty strings for every frame/audio/extend field', () => {
+    expect(local({ mode: 'text' })).toMatchObject({
+      sourceImageFile: '', sourceImage: '', lastImageFile: '', lastImage: '', extendFromVideoId: '', audioFile: '', keyframes: '',
+    });
+  });
+
+  it('missing sources fall back to empty strings', () => {
+    expect(buildVideoGenSubmission(baseArgs({ currentModel: other, mode: 'fflf' })))
+      .toMatchObject({ sourceImageFile: '', sourceImage: '', lastImageFile: '', lastImage: '' });
+  });
+});
+
+describe('buildVideoGenSubmission — local IC-LoRA, chunks and misc', () => {
+  const local = (o) => buildVideoGenSubmission(baseArgs({ currentModel: { runtime: 'ltx2' }, ...o }));
+
+  it('inactive IC mode sends empty reference fields', () => {
+    expect(local({ icReferenceFile: 'r.mp4', icReferenceVideoId: 'v' })).toMatchObject({
+      icReference: '', icReferenceVideoIds: '', icStrength: '', icSkipStage2: '',
+    });
+    expect(local({})).toHaveProperty('icReferenceImageFiles', undefined);
+  });
+
+  it('video reference: file wins over video id; video id used when no file', () => {
+    expect(local({ icModeActive: true, icReferenceFile: 'r.mp4', icReferenceVideoId: 'v', icStrength: 0.5, icSkipStage2: true }))
+      .toMatchObject({ icReference: 'r.mp4', icReferenceVideoIds: '', icStrength: 0.5, icSkipStage2: 'true' });
+    expect(local({ icModeActive: true, icReferenceVideoId: 'v' }))
+      .toMatchObject({ icReference: '', icReferenceVideoIds: 'v', icSkipStage2: '' });
+    expect(local({ icModeActive: true }).icReferenceImageFiles).toBeUndefined();
+  });
+
+  it('image reference kind sends filtered image files and no video fields', () => {
+    expect(local({
+      icModeActive: true, icImageKind: true, icReferenceFile: 'r.mp4', icReferenceVideoId: 'v',
+      icReferenceImageFiles: ['a.png', '', 'b.png'],
+    })).toMatchObject({ icReference: '', icReferenceVideoIds: '', icReferenceImageFiles: ['a.png', 'b.png'] });
+  });
+
+  it('inactive chunking sends empty strings; active chunking slices live beats', () => {
+    expect(local({ chunkPrompts: ['x'], chunks: 2, contextFrames: 9 }))
+      .toMatchObject({ chunks: '', chunkPrompts: '', contextFrames: '' });
+    const p = local({ chainingActive: true, chunks: 2, chunkPrompts: ['one', 'two', 'stale'], contextFrames: 9 });
+    expect(p).toMatchObject({ chunks: 2, contextFrames: '9' });
+    expect(JSON.parse(p.chunkPrompts)).toEqual(['one', 'two']);
+    expect(local({ chainingActive: true, chunks: 2, chunkPrompts: ['', '  '] }).chunkPrompts).toBe('');
+  });
+
+  it('batch size, loras, display sleep and negative prompt follow model support', () => {
+    expect(local({ currentModel: { runtime: 'ltx2', supportsWarmBatch: true }, batchSize: 3 }).batchSize).toBe(3);
+    expect(local({ currentModel: { runtime: 'ltx2', supportsWarmBatch: true }, batchSize: 3, chainingActive: true })).not.toHaveProperty('batchSize');
+    expect(local({ batchSize: 3 })).not.toHaveProperty('batchSize');
+    const loras = local({ loraFamily: 'ltx', selectedLoras: [{ filename: 'f.safetensors', scale: 0.8 }] });
+    expect(loras.loraFilenames).toEqual(['f.safetensors']);
+    expect(loras.loraScales).toEqual([0.8]);
+    expect(local({ loraFamily: 'ltx', selectedLoras: [] }).loraFilenames).toBeUndefined();
+    expect(local({ currentModel: { runtime: 'ltx2', sleepsDisplayDuringRender: true }, displaySleepEnabled: true }).displaySleep).toBe('true');
+    expect(local({ currentModel: { runtime: 'ltx2', sleepsDisplayDuringRender: true }, displaySleepEnabled: false }).displaySleep).toBe('false');
+    expect(local({})).not.toHaveProperty('displaySleep');
+    expect(local({ currentModel: { runtime: 'ltx2', supportsNegativePrompt: false }, negativePrompt: 'x' }).negativePrompt).toBe('');
+    expect(local({ currentModel: { runtime: 'ltx2', supportsTiling: false }, tiling: 'on' }).tiling).toBe('auto');
+    expect(local({ tiling: 'on' }).tiling).toBe('on');
+  });
+
+  it('steps, guidance and seed keep 0 seed but blank 0 steps/guidance', () => {
+    expect(local({ steps: 0, guidanceScale: 0, seed: 0 })).toMatchObject({ steps: '', guidanceScale: '', seed: 0 });
+    expect(local({ steps: 8, guidanceScale: 3, seed: null })).toMatchObject({ steps: 8, guidanceScale: 3, seed: '' });
+  });
+});
