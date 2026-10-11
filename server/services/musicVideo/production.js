@@ -394,6 +394,88 @@ const slotSteps = (run, sceneId, stepKind, revisionId = null) => run.steps
   .filter((s) => s.sceneId === sceneId && s.kind === stepKind && (s.revisionId || null) === revisionId);
 
 /**
+ * The attached full-song review's verdict on the run, or null when no review
+ * is attached. A passing review still needs its dependencies unchanged; a
+ * code-first run then renders the reviewed document before completing.
+ */
+function reviewRunDisposition(project, run) {
+  if (!run.reviewRunId) return null;
+  const review = projectAutoReviews(project).find((r) => r.id === run.reviewRunId);
+  if (!review) return { type: 'halt', status: 'needs-human', reason: 'The review run is gone — watch the draft yourself' };
+  if (review.status === 'running') {
+    const attempt = review.attempts?.[review.attempts.length - 1];
+    if (run.authoring && attempt?.review?.verdict === 'revise') return { type: 'revise-document', reviewRunId: review.id, attemptN: attempt.n };
+    return { type: 'wait', on: 'review' };
+  }
+  if (review.status === 'passed') {
+    const evidence = review.attempts?.at(-1)?.review?.dependencies;
+    if (musicVideoDependencyChanges(project, evidence).length) return { type: 'halt', status: 'needs-human', reason: 'The passing review has changed or unrecorded dependencies — rebuild and review the current draft' };
+    if (!run.authoring) return { type: 'halt', status: 'completed', reason: null };
+    if (run.documentCheckpoint?.directory !== project.composition?.document?.directory) return { type: 'halt', status: 'needs-replan', reason: 'The selected document changed after review — start a fresh run' };
+    if (!run.finalRender) return { type: 'render-document' };
+    if (run.finalRender.status === 'completed') return { type: 'halt', status: 'completed', reason: null };
+    if (run.finalRender.status === 'failed') return { type: 'halt', status: 'blocked', reason: run.finalRender.error || 'The final document render failed — resume to retry' };
+    return { type: 'wait', on: 'final-render' };
+  }
+  if (review.status === 'stopped' || review.status === 'limit-reached') {
+    return { type: 'halt', status: review.status === 'limit-reached' ? 'limit-reached' : 'stopped', reason: `The review paused: ${review.stopReason || review.status}` };
+  }
+  return { type: 'halt', status: 'needs-human', reason: review.stopReason || `The review ended ${review.status}` };
+}
+
+/**
+ * A pilot review that must hold the run before any more generation: one still
+ * running, paused, or a current failing verdict. Returns null when none blocks.
+ * Opening a pilot's review is NOT decided here — that waits until its media
+ * exists, after generation (see nextProductionStep).
+ */
+function blockingPilotReview(project, run, pendingPilots) {
+  for (const pilot of pendingPilots) {
+    const review = projectAutoReviews(project).find((r) => r.id === pilot.reviewRunId);
+    if (review?.status === 'running') return { type: 'wait', on: 'pilot-review' };
+    if (review && ['stopped', 'limit-reached'].includes(review.status)) return { type: 'halt', status: review.status, reason: review.stopReason || 'Pilot review paused; resume to continue' };
+    const result = review?.attempts?.at(-1)?.review;
+    const changes = result && musicVideoDependencyChanges(project, result.dependencies);
+    if (result && (changes.some((change) => change.role === 'unknown')
+      || (pilot.inputBasis === pilotInputBasis(project, pilot.sceneId) && !changes.length))) {
+      if (result.verdict === 'inconclusive' && result.reviewedAt < run.resumedAt) continue;
+      const exhausted = ['PRODUCTION_REVIEW_LIMIT', 'PRODUCTION_BUDGET_EXHAUSTED'].includes(result.providerErrorCode);
+      const scene = (project.scenes || []).find((s) => s.sceneId === pilot.sceneId);
+      return { type: 'halt', status: exhausted ? 'limit-reached' : 'blocked', reason: `Pilot ${pilot.sceneId}: ${result.reason || result.verdict}. ${pilotRepair(result, scene, project).reason}` };
+    }
+  }
+  return null;
+}
+
+/**
+ * The next frame/clip slot to generate (`dispatch`), a `halt` before a charge
+ * that should not repeat, `{ waiting: true }` while slots are in flight, or
+ * null when every target slot is filled. While pilots are pending, only their
+ * scenes are considered.
+ */
+function nextOpenGeneration(project, run, jobs, { pendingPilots, targets }) {
+  let waiting = false;
+  for (const stepKind of run.stopBefore === 'clips' ? ['frame'] : ['frame', 'clip']) {
+    for (const scene of targets[stepKind]) {
+      if (pendingPilots.length && !pendingPilots.some((pilot) => pilot.sceneId === scene.sceneId)) continue;
+      if (scene[SLOT[stepKind]]) continue;
+      // A clip is generated from the scene's frame; wait for it.
+      if (stepKind === 'clip' && !scene.referenceImageId) { waiting = true; continue; }
+      const steps = slotSteps(run, scene.sceneId, stepKind);
+      if (steps.some((s) => LIVE_STEP.has(s.status)) || liveSlotJob(jobs, project.id, scene.sceneId, stepKind)) { waiting = true; continue; }
+      const refused = terminalRefusal(project, run, scene.sceneId, stepKind);
+      if (refused) return { type: 'halt', status: 'blocked', reason: `"${scene.label || scene.sceneId}" has a terminal ${stepKind} refusal (${refused.errorCode}). Change its inputs or resume with another supported route; Resume will not repeat it.` };
+      // A paid failure is not evidence that the same operation will work next
+      // time. Pause before another charge; explicit Resume permits a transient retry.
+      const failed = steps.find((s) => s.status === 'failed' && !(run.retryAcknowledged || []).includes(s.key));
+      if (failed) return { type: 'halt', status: 'blocked', reason: `"${scene.label || scene.sceneId}" failed to generate its ${stepKind}. Inspect the failure and repair its inputs, or resume explicitly to retry.` };
+      return { type: 'dispatch', kind: stepKind, sceneId: scene.sceneId };
+    }
+  }
+  return waiting ? { waiting: true } : null;
+}
+
+/**
  * Pure: what the run should do next, from the record and the queue alone:
  *   `cast-and-sets` — the board is empty and no Cast & Sets check-in exists:
  *                start one (it runs before the plan; see castAndSetsService.js);
@@ -420,29 +502,8 @@ export function nextProductionStep(project, run, { jobs = [], processId = null }
     if (run.documentCheckpoint && (run.documentCheckpoint.directory !== project.composition?.document?.directory
       || run.documentCheckpoint.scenesRevision !== canonicalSnapshotChecksum(project.scenes || []))) return { type: 'halt', status: 'needs-replan', reason: 'The selected document changed — review and resume against the new setup' };
   }
-  if (run.reviewRunId) {
-    const review = projectAutoReviews(project).find((r) => r.id === run.reviewRunId);
-    if (!review) return { type: 'halt', status: 'needs-human', reason: 'The review run is gone — watch the draft yourself' };
-    if (review.status === 'running') {
-      const attempt = review.attempts?.[review.attempts.length - 1];
-      if (run.authoring && attempt?.review?.verdict === 'revise') return { type: 'revise-document', reviewRunId: review.id, attemptN: attempt.n };
-      return { type: 'wait', on: 'review' };
-    }
-    if (review.status === 'passed') {
-      const evidence = review.attempts?.at(-1)?.review?.dependencies;
-      if (musicVideoDependencyChanges(project, evidence).length) return { type: 'halt', status: 'needs-human', reason: 'The passing review has changed or unrecorded dependencies — rebuild and review the current draft' };
-      if (!run.authoring) return { type: 'halt', status: 'completed', reason: null };
-      if (run.documentCheckpoint?.directory !== project.composition?.document?.directory) return { type: 'halt', status: 'needs-replan', reason: 'The selected document changed after review — start a fresh run' };
-      if (!run.finalRender) return { type: 'render-document' };
-      if (run.finalRender.status === 'completed') return { type: 'halt', status: 'completed', reason: null };
-      if (run.finalRender.status === 'failed') return { type: 'halt', status: 'blocked', reason: run.finalRender.error || 'The final document render failed — resume to retry' };
-      return { type: 'wait', on: 'final-render' };
-    }
-    if (review.status === 'stopped' || review.status === 'limit-reached') {
-      return { type: 'halt', status: review.status === 'limit-reached' ? 'limit-reached' : 'stopped', reason: `The review paused: ${review.stopReason || review.status}` };
-    }
-    return { type: 'halt', status: 'needs-human', reason: review.stopReason || `The review ended ${review.status}` };
-  }
+  const disposition = reviewRunDisposition(project, run);
+  if (disposition) return disposition;
   const scenes = Array.isArray(project.scenes) ? project.scenes : [];
   if (!scenes.length) {
     if (run.planned) return { type: 'halt', status: 'blocked', reason: 'Planning produced no scenes — check the song analysis' };
@@ -454,42 +515,15 @@ export function nextProductionStep(project, run, { jobs = [], processId = null }
   if (run.pilot && !run.pilot.scenes) return { type: 'plan-pilots' };
   const pilots = run.pilot?.scenes || [];
   const pendingPilots = pilots.filter((pilot) => !currentPilotPass(project, pilot));
-  for (const pilot of pendingPilots) {
-    const review = projectAutoReviews(project).find((r) => r.id === pilot.reviewRunId);
-    if (review?.status === 'running') return { type: 'wait', on: 'pilot-review' };
-    if (review && ['stopped', 'limit-reached'].includes(review.status)) return { type: 'halt', status: review.status, reason: review.stopReason || 'Pilot review paused; resume to continue' };
-    const result = review?.attempts?.at(-1)?.review;
-    const changes = result && musicVideoDependencyChanges(project, result.dependencies);
-    if (result && (changes.some((change) => change.role === 'unknown')
-      || (pilot.inputBasis === pilotInputBasis(project, pilot.sceneId) && !changes.length))) {
-      if (result.verdict === 'inconclusive' && result.reviewedAt < run.resumedAt) continue;
-      const exhausted = ['PRODUCTION_REVIEW_LIMIT', 'PRODUCTION_BUDGET_EXHAUSTED'].includes(result.providerErrorCode);
-      return { type: 'halt', status: exhausted ? 'limit-reached' : 'blocked', reason: `Pilot ${pilot.sceneId}: ${result.reason || result.verdict}. ${pilotRepair(result, scenes.find((s) => s.sceneId === pilot.sceneId), project).reason}` };
-    }
-  }
+  const blocking = blockingPilotReview(project, run, pendingPilots);
+  if (blocking) return blocking;
   if (run.authoring && targets.frame.some((scene) => scene.shotMode === 'performance')) {
     const gate = castAndSetsGate(project, run);
     if (gate) return { type: 'halt', status: 'blocked', reason: 'This selected performance shot needs the reviewed Cast & Sets references. Build and approve that check-in, then resume; production will not start an unbudgeted image batch.' };
   }
-  let waiting = false;
-  for (const stepKind of run.stopBefore === 'clips' ? ['frame'] : ['frame', 'clip']) {
-    for (const scene of targets[stepKind]) {
-      if (pendingPilots.length && !pendingPilots.some((pilot) => pilot.sceneId === scene.sceneId)) continue;
-      if (scene[SLOT[stepKind]]) continue;
-      // A clip is generated from the scene's frame; wait for it.
-      if (stepKind === 'clip' && !scene.referenceImageId) { waiting = true; continue; }
-      const steps = slotSteps(run, scene.sceneId, stepKind);
-      if (steps.some((s) => LIVE_STEP.has(s.status)) || liveSlotJob(jobs, project.id, scene.sceneId, stepKind)) { waiting = true; continue; }
-      const refused = terminalRefusal(project, run, scene.sceneId, stepKind);
-      if (refused) return { type: 'halt', status: 'blocked', reason: `"${scene.label || scene.sceneId}" has a terminal ${stepKind} refusal (${refused.errorCode}). Change its inputs or resume with another supported route; Resume will not repeat it.` };
-      // A paid failure is not evidence that the same operation will work next
-      // time. Pause before another charge; explicit Resume permits a transient retry.
-      const failed = steps.find((s) => s.status === 'failed' && !(run.retryAcknowledged || []).includes(s.key));
-      if (failed) return { type: 'halt', status: 'blocked', reason: `"${scene.label || scene.sceneId}" failed to generate its ${stepKind}. Inspect the failure and repair its inputs, or resume explicitly to retry.` };
-      return { type: 'dispatch', kind: stepKind, sceneId: scene.sceneId };
-    }
-  }
-  if (waiting) return { type: 'wait', on: 'generation' };
+  const generation = nextOpenGeneration(project, run, jobs, { pendingPilots, targets });
+  if (generation?.waiting) return { type: 'wait', on: 'generation' };
+  if (generation) return generation;
   if (run.stopBefore === 'clips') return { type: 'halt', status: 'awaiting-video', reason: 'Every shot has its still. Resume to make the clips.' };
   if (pendingPilots.length) {
     const pilot = pendingPilots[0];

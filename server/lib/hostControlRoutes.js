@@ -245,6 +245,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/system/maintenance',
   'POST /api/system/maintenance/resume',
   'POST /api/voice/studio/setup',
+  // Voice fine-tune start spawns a Python trainer on the host (#11074).
+  'POST /api/voice/profiles/:id/fine-tune/start',
 
   // Instances: runs the Tailscale CLI and writes a TLS certificate and private
   // key into the install's cert directory.
@@ -441,6 +443,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // stay open.
   'POST /api/image-to-3d/targets/:targetId/install',
   'POST /api/image-to-3d/trellis2/install',
+  // 3D generation and re-generation run host Python/GPU adapters (#11075).
+  'POST /api/image-to-3d/models',
+  'POST /api/image-to-3d/models/:id/generate',
   'POST /api/midi-runtime/install',
   'POST /api/devtools/video-download/yt-dlp/update',
 
@@ -454,6 +459,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/music/lyrics',
   'POST /api/music/waveform',
   'POST /api/music/code',
+  // Local music generation spawns neural-audio Python on the host (#11077).
+  'POST /api/music/generate',
   'POST /api/tracks/:id/waveform/draw',
   'POST /api/music-video/autonomous',
   'POST /api/music-video/:id/autonomous/resume',
@@ -485,6 +492,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/image-gen/generate',
   'POST /api/image-gen/avatar',
   'POST /api/video-gen',
+  // Upscale (LTX subprocess / ffmpeg) and stitch (ffmpeg) run on the host (#11076).
+  'POST /api/video-gen/upscale/:id',
+  'POST /api/video-gen/stitch',
   'POST /api/sprites/:id/reference/generate',
   // Fork creates a record and immediately queues reference generation too.
   'POST /api/sprites/:id/fork',
@@ -522,6 +532,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/lora-datasets/:id/generate',
   'POST /api/lora-datasets/:id/caption',
   'POST /api/lora-datasets/:id/slice-reference-sheet',
+  // LoRA training start/resume spawn detached trainer processes on the host GPU (#11073).
+  'POST /api/lora-training/runs',
+  'POST /api/lora-training/runs/:id/resume',
 
   // Code Animation contained execution (#9388): choosing the installed tool a
   // worker runs, and the containment check that spawns sandboxed processes.
