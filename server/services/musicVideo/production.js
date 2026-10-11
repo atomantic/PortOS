@@ -368,7 +368,6 @@ export function assertProductionActive(project, runId, processId) {
 }
 
 /** The scenes that need a still frame and a clip, per the project's render mode. */
-/** The scenes production makes a frame for and a clip for, by kind. */
 export function productionTargets(project) {
   const assets = codeFirstProductionAssets(project);
   if (assets) {

@@ -1807,11 +1807,6 @@ export async function cancelAutonomousVideo(projectId) {
 const PRODUCTION_PARKED = new Set(['limit-reached', 'blocked', 'needs-replan', 'needs-human', 'stopped']);
 
 /**
- * A production run this autonomous run delegated to advanced. Mirrors its
- * terminal state onto the run: completed → kick off the final render and
- * finish; failed → failed; any parked state → needs-human (resume continues it).
- */
-/**
  * A run whose director chose no generation limit outgrows the default: when
  * production stops at its generation limit with stills or clips still to make,
  * the limit becomes what is spent plus two per shot left (a retry or
@@ -1833,6 +1828,11 @@ async function raiseSizedLimit(projectId, runId, run, project, production) {
   return resumed;
 }
 
+/**
+ * A production run this autonomous run delegated to advanced. Mirrors its
+ * terminal state onto the run: completed → kick off the final render and
+ * finish; failed → failed; any parked state → needs-human (resume continues it).
+ */
 async function onProductionEvent({ projectId, runId, run: production }) {
   // Production emits on every step; only a terminal or parked state concerns us, and
   // the project is read only once one arrives.
