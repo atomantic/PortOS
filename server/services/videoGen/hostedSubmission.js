@@ -4,6 +4,9 @@
  * enter prepared output or persisted params (their workers resolve them).
  */
 import { ServerError } from '../../lib/errorHandler.js';
+import { resolveGalleryImage } from '../../lib/fileUtils.js';
+import { probeVideoDuration } from '../../lib/ffmpeg.js';
+import { FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_DEFAULT_TEXT_VIDEO_MODEL, getFalVideoModel } from '../../lib/falVideoModels.js';
 import { isDefaultI2vReferenceMode } from '../../lib/videoReferenceModes.js';
 import { VIDEO_GEN_MODE, isVideoModeUsable } from './modes.js';
 
@@ -19,12 +22,79 @@ const assertAnchoredReference = (backend, params) => {
   );
 };
 
+// Grok and reactor take no staged inputs beyond the source frame the caller
+// already owns.
+const NO_STAGED_INPUTS = async () => ({});
+
+// fal end frame: refuse a model whose catalog entry takes none, then stage an
+// upload durably (the queue owns the copy) or resolve a gallery pick. Throws
+// leave cleanup to the caller's rollback guard, as the inlined block did.
+async function stageFalEndFrame({ body, uploads, sourceImagePath, stageUploadDurable }) {
+  if (!uploads.lastImage && !body.lastImageFile) return null;
+  const modelId = body.falModelId || (sourceImagePath ? FAL_DEFAULT_IMAGE_VIDEO_MODEL : FAL_DEFAULT_TEXT_VIDEO_MODEL);
+  const model = getFalVideoModel(modelId);
+  if (!model?.endImage) {
+    throw new ServerError(model ? `${model.label} takes no end frame` : 'End frames require a fal.ai model with catalogued end-frame support',
+      { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (uploads.lastImage) {
+    const staged = await stageUploadDurable(uploads.lastImage, 'last');
+    return { path: staged, owned: true };
+  }
+  const resolved = resolveGalleryImage(body.lastImageFile);
+  if (!resolved) {
+    throw new ServerError('The end frame is missing or could not be resolved.', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  return { path: resolved, owned: false };
+}
+
+// A standalone fal source-audio take: stage the audio clip durably like the frame. The queue removes
+// it if the job fails, is cancelled or is lost to a restart (uploadedTempPaths); the fal worker
+// removes it once the take is published.
+async function stageFalSourceAudio({ body, uploads, sourceImagePath, stageUploadDurable, cleanupStaged }) {
+  if (!uploads.audioFile) return null;
+  if (!sourceImagePath) {
+    await cleanupStaged();
+    throw new ServerError('A fal.ai source-audio render needs a reference frame (sourceImage or sourceImageFile).', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const audioPath = await stageUploadDurable(uploads.audioFile, 'audio');
+  // A paid route: refuse a clip fal would reject (unreadable, or outside the model's window)
+  // before anything is submitted.
+  const window = getFalVideoModel(body.falModelId)?.audioInput || {};
+  const clipSec = await probeVideoDuration(audioPath).catch(() => null);
+  if (clipSec == null) {
+    await cleanupStaged();
+    throw new ServerError('Could not read the voice clip\'s duration. Upload a valid WAV, MP3, M4A, AAC, FLAC, OGG or WebM file.',
+      { status: 400, code: 'VIDEO_GEN_AUDIO_DURATION_UNREADABLE' });
+  }
+  if ((window.minSec != null && clipSec < window.minSec) || (window.maxSec != null && clipSec > window.maxSec)) {
+    await cleanupStaged();
+    throw new ServerError(`The voice clip is ${clipSec.toFixed(2)} s; this model takes ${window.minSec}–${window.maxSec} s (pad a short line with silence).`,
+      { status: 400, code: 'VIDEO_GEN_AUDIO_LENGTH' });
+  }
+  return audioPath;
+}
+
+// Stage fal's extra inputs (end frame, then source audio — the order matters
+// for rollback). Returns the provider fields plus every queue-owned path.
+async function stageFalInputs(ctx) {
+  const endFrame = await stageFalEndFrame(ctx);
+  const audioFilePath = ctx.falSourceAudio ? await stageFalSourceAudio(ctx) : null;
+  const uploadedTempPaths = [...(endFrame?.owned ? [endFrame.path] : []), ...(audioFilePath ? [audioFilePath] : [])];
+  return {
+    ...(endFrame ? { lastImagePath: endFrame.path } : {}),
+    ...(audioFilePath ? { audioFilePath } : {}),
+    ...(uploadedTempPaths.length ? { uploadedTempPaths } : {}),
+  };
+}
+
 export const HOSTED_VIDEO_SUBMISSIONS = {
   [VIDEO_GEN_MODE.GROK]: {
     prepare: (settings) => {
       const grok = settings.imageGen?.grok || {};
       return { usable: grok.enabled, extras: { grok } };
     },
+    stageInputs: NO_STAGED_INPUTS,
     validateRetry: (params) => assertAnchoredReference(VIDEO_GEN_MODE.GROK, params),
     errorCode: 'GROK_IMAGEGEN_DISABLED',
     errorMessage: 'Grok Imagegen is disabled — enable it in Settings → Image Gen first',
@@ -41,6 +111,7 @@ export const HOSTED_VIDEO_SUBMISSIONS = {
       usable: isVideoModeUsable(settings, VIDEO_GEN_MODE.FAL),
       extras: {},
     }),
+    stageInputs: stageFalInputs,
     validateRetry: (params) => assertAnchoredReference(VIDEO_GEN_MODE.FAL, params),
     errorCode: 'FAL_NOT_CONFIGURED',
     errorMessage: 'No fal.ai API key configured — set it in Settings → Video Gen (or the FAL_KEY env var) first',
@@ -64,6 +135,7 @@ export const HOSTED_VIDEO_SUBMISSIONS = {
       usable: isVideoModeUsable(settings, VIDEO_GEN_MODE.REACTOR),
       extras: {},
     }),
+    stageInputs: NO_STAGED_INPUTS,
     validateRetry: (params) => assertAnchoredReference(VIDEO_GEN_MODE.REACTOR, params),
     errorCode: 'REACTOR_NOT_CONFIGURED',
     errorMessage: 'No reactor.inc API key configured — set it in Settings → Video Gen (or the REACTOR_API_KEY env var) first',
