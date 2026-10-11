@@ -1481,8 +1481,9 @@ export async function startAutonomousVideo(input, { autoApproveAuthorized = fals
     mode: 'autonomous',
     mediaMode: brief.mediaMode,
     ...(brief.mediaMode !== 'code-images-video' ? { productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 } } : {}),
-    // ...as does its production policy (a project with none is legacy), so a footage project stays one.
-    ...(song && input.mediaMode === undefined ? { productionPolicy: normalizeMusicVideoProductionPolicy(song.source.productionPolicy) } : {}),
+    // ...as does its production policy (a project with none is legacy), so a footage project stays one,
+    // also when the request names a mode that allows footage; a code-only or stills mode keeps no footage.
+    ...(song && (input.mediaMode === undefined || brief.mediaMode === 'code-images-video') ? { productionPolicy: normalizeMusicVideoProductionPolicy(song.source.productionPolicy) } : {}),
     ...(song ? { trackId: song.source.trackId || null, uploadedAudioFilename: song.source.uploadedAudioFilename || null } : {}),
     // The style id makes createProject cast its character and attach the sheet (styleSnapshots.js).
     concept: { prompt: trimTo(brief.prompt, 8000), ...(brief.characterStyleId ? { characterStyleId: brief.characterStyleId } : {}),

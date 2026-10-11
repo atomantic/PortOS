@@ -633,6 +633,15 @@ describe('starting on an existing project\'s song (fromProjectId)', () => {
     service.__setAutonomousDepsForTests(doubles);
   });
 
+  // Uniquely catches a reused footage song turning code-first when the request names the footage mode itself.
+  it('keeps the source song\'s production policy when the request names a footage media mode, but not a code-only one', async () => {
+    const { project } = await service.startAutonomousVideo({ prompt: 'p', fromProjectId: 'mv-src', mediaMode: 'code-images-video' });
+    expect(project.productionPolicy).toMatchObject({ strategy: 'legacy', maxGeneratedVideoPercent: 100 });
+    store.delete('mv-auto');
+    const { project: codeOnly } = await service.startAutonomousVideo({ prompt: 'p', fromProjectId: 'mv-src', mediaMode: 'code-only' });
+    expect(codeOnly.productionPolicy).toMatchObject({ strategy: 'code-first', maxGeneratedVideoPercent: 0 });
+  });
+
   // Uniquely catches a reused song re-running lyrics/Suno/analysis or the new project inheriting the source's look.
   it('copies only the song, writes no lyrics, makes no song, skips analysis, and leaves the source untouched', async () => {
     const { project, run } = await service.startAutonomousVideo({ prompt: 'skatepark at golden hour', fromProjectId: 'mv-src', checkpoints: ['lyrics', 'song', 'style'] });
