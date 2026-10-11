@@ -88,6 +88,18 @@ describe('overlayWindows (#8984)', () => {
   });
 });
 
+describe('card cues (#11185)', () => {
+  it('turns the sheet joiner into real line breaks and draws in the lyric type look', () => {
+    const cards = sectionCardCues(
+      [{ sceneId: 's1', layer: 'card', cardText: 'First line / Second line' }],
+      [{ sceneId: 's1', startSec: 0, endSec: 3 }], 10);
+    expect(cards[0].text).toBe('First line\nSecond line');
+    const html = buildTypographyDocument({ cues: cards, width: 1280, height: 720, durationSec: 10, fps: 24 });
+    expect(html).toContain('"MV Archivo"');
+    expect(html).toContain('white-space: pre-line');
+  });
+});
+
 describe('buildTypographyDocument (#8984)', () => {
   it('embeds cue text as inert data that cannot close the script element', () => {
     const html = buildTypographyDocument({ cues: [cue({ text: '</script><img src=x onerror=alert(1)>' })], width: 1920, height: 1080, durationSec: 30, fps: 24 });

@@ -15,13 +15,16 @@
  */
 
 import { join } from 'path';
-import { mkdir, rm, writeFile } from 'fs/promises';
+import { copyFile, mkdir, rm, writeFile } from 'fs/promises';
+import { fileURLToPath } from 'url';
 import { spawn } from '../../lib/childProcess.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { findFfmpeg } from '../../lib/ffmpeg.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
-import { buildTypographyDocument, overlayWindows } from './composition.js';
+import { buildTypographyDocument, LYRIC_FONT_FILE, overlayWindows } from './composition.js';
+
+const LYRIC_FONT_SOURCE = fileURLToPath(new URL(`./documentTemplates/shared/fonts/${LYRIC_FONT_FILE}`, import.meta.url));
 
 export const COMPOSITION_SCRATCH_DIR = 'music-video-compositions';
 
@@ -140,6 +143,7 @@ export async function renderTypographyOverlays({ jobId, cues, style, width, heig
   const root = scratchPath(jobId);
   await mkdir(join(root, 'doc'), { recursive: true });
   await writeFile(join(root, 'doc', 'index.html'), buildTypographyDocument({ cues, style, width, height, durationSec, fps }));
+  if (cues.some((c) => c.card)) await copyFile(LYRIC_FONT_SOURCE, join(root, 'doc', LYRIC_FONT_FILE));
   signal?.throwIfAborted();
   // Lazy: the composition browser drags in browserService, which only a
   // composed render needs — not every suite that reaches render.js.

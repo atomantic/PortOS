@@ -246,13 +246,15 @@ export function projectTypographyPlan(project, clips, sections, durationSec) {
  * clipped to the rendered video.
  */
 export function sectionCardCues(clips, sections, durationSec, graphicLanguage = '') {
-  const textBySceneId = new Map(clips.filter((c) => c.layer === 'card' && c.cardText).map((c) => [c.sceneId, c.cardText]));
+  // A sheet line break is stored as " / "; on a card each sheet line is its own line.
+  const textBySceneId = new Map(clips.filter((c) => c.layer === 'card' && c.cardText)
+    .map((c) => [c.sceneId, c.cardText.split(/\s+\/\s+/).map((l) => l.trim()).filter(Boolean).join('\n')]));
   return sections
     .filter((section) => textBySceneId.has(section.sceneId) && section.startSec < durationSec)
     .map((section) => ({
       id: `card-${section.sceneId}`, text: textBySceneId.get(section.sceneId),
       startSec: section.startSec, endSec: Math.min(section.endSec, durationSec),
-      template: /\b(pictograms?|counters?|hud)\b/i.test(graphicLanguage) ? 'pop' : 'fade', placement: 'center', emphasis: 'hero',
+      template: /\b(pictograms?|counters?|hud)\b/i.test(graphicLanguage) ? 'pop' : 'fade', placement: 'center', emphasis: 'hero', card: true,
     }));
 }
 
@@ -323,6 +325,8 @@ export function overlayWindows(cues, { joinGapSec = 1 } = {}) {
 
 // Title-safe area: 10% in from every edge of the frame, at any aspect.
 export const SAFE_INSET = 0.1;
+// The lyric type face, copied next to the overlay page by renderTypographyOverlays.
+export const LYRIC_FONT_FILE = 'archivo-variable.woff2';
 const FONT_STACKS = {
   sans: "'Helvetica Neue', Helvetica, Arial, sans-serif",
   serif: "Georgia, 'Times New Roman', serif",
@@ -340,11 +344,13 @@ const scriptJson = (value) => JSON.stringify(value).replace(/</g, '\\u003c');
  * box never changes between frames and cannot leave the safe area.
  */
 export function buildTypographyDocument({ cues, style = {}, width, height, durationSec, fps }) {
-  const payload = cues.map(({ id, text, startSec, endSec, template, placement, emphasis, words }) => ({ id, text, startSec, endSec, template, placement, emphasis, ...(words ? { words } : {}) }));
+  const payload = cues.map(({ id, text, startSec, endSec, template, placement, emphasis, words, card }) => ({ id, text, startSec, endSec, template, placement, emphasis, ...(words ? { words } : {}), ...(card ? { card: true } : {}) }));
+  const hud = /\b(hud|counters?)\b/i.test(style.graphicLanguage || '');
   const color = /^#[0-9a-f]{6}$/i.test(style.color || '') ? style.color : '#ffffff';
-  const fontStack = /\b(hud|counters?)\b/i.test(style.graphicLanguage || '') ? FONT_STACKS.mono : (FONT_STACKS[style.font] || FONT_STACKS.sans);
+  const fontStack = hud ? FONT_STACKS.mono : (FONT_STACKS[style.font] || FONT_STACKS.sans);
   const accent = /^#[0-9a-f]{6}$/i.test(style.accentColor || '') ? style.accentColor : '#ff5a1f';
   return `<!doctype html><html><head><meta charset="utf-8"><style>
+@font-face { font-family: "MV Archivo"; src: url(${LYRIC_FONT_FILE}) format("woff2"); font-weight: 100 900; font-stretch: 62% 125%; }
 html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
 #safe { position: absolute; }
 .cue { position: absolute; left: 0; right: 0; box-sizing: border-box; padding: 0.25em; text-align: center; color: ${color}; font-family: ${fontStack};
@@ -352,6 +358,9 @@ html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
   /* The padding keeps this legibility shadow inside the cue box, and so inside the safe area. */
   text-shadow: 0 0 0.12em rgba(0,0,0,0.85), 0 0.04em 0.18em rgba(0,0,0,0.7); }
 .cue .rest { visibility: hidden; }
+/* Title cards use the lyric type look (lyricType.js): cream fill, ink outline, no plate. */
+.cue.card { white-space: pre-line; font-family: ${hud ? fontStack : '"MV Archivo", "Arial Black", Impact, sans-serif'}; font-weight: 800; line-height: 1.05;
+  color: #f3ead7; text-shadow: none; -webkit-text-stroke: 0.14em #141217; paint-order: stroke fill; }
 /* #9291 word build: heavy condensed caps, words hold their place as they land. */
 .cue.build { text-align: left; font-family: Impact, "Arial Narrow Bold", "Arial Narrow", ${fontStack}; font-weight: 900; text-transform: uppercase; letter-spacing: 0.01em; line-height: 0.98; }
 .cue.build .word { visibility: hidden; }
@@ -363,7 +372,7 @@ const cueStateAt = ${cueStateAt.toString()};
 const safe = document.getElementById('safe');
 const nodes = CUES.map((cue) => {
   const el = document.createElement('div');
-  el.className = cue.template === 'build' ? 'cue build' : 'cue';
+  el.className = cue.template === 'build' ? 'cue build' : cue.card ? 'cue card' : 'cue';
   const shown = document.createElement('span');
   const rest = document.createElement('span');
   rest.className = 'rest';

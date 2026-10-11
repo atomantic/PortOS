@@ -651,7 +651,8 @@ describe('directed planner', () => {
       expect(scene.framePrompt).toMatch(/Frontal medium close-up.*mouth fully visible/);
     }
     expect(scenes.slice(8, 12).every((s) => s.visualLayer === 'card')).toBe(true);
-    expect(scenes[8].cardText).toBe('');
+    // #11185: a silence card keeps the shot's own line; only a wordless silence stays blank.
+    expect(scenes[8].cardText).toBe(scenes[8].lyricText || '');
     expect(scenes[10].cardText).toBe('Rise');
     expect(scenes[0].framePrompt).toMatch(/Signal keeper.*Signal tower.*Ochre coat/);
     expect(scenes[4].framePrompt).toMatch(/Echo hall.*Silver jacket/);
