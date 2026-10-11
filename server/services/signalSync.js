@@ -338,13 +338,13 @@ async function openDecryptedSnapshot(key) {
     await rm(tmp, { recursive: true, force: true });
     return { ok: false, error: 'Signal database snapshot is empty', remediation: 'The Signal database copy was empty — try again with Signal closed.' };
   }
-  const decrypted = decryptSqlcipherDatabase(encBuf, key, { verify: 'first' });
+  const decrypted = decryptSqlcipherDatabase(encBuf, key, { verify: 'all' });
   if (!decrypted.ok) {
     await rm(tmp, { recursive: true, force: true });
     return {
       ok: false,
       error: `Signal database decryption failed: ${decrypted.error}`,
-      remediation: 'Signal database decryption failed — the key or SQLCipher format may have changed in this Signal version (not yet supported).',
+      remediation: 'Signal database authentication failed — the key or SQLCipher format may have changed, or the snapshot is damaged. Close Signal Desktop and retry; if the failure persists, check or restore the source database.',
     };
   }
   await writeFile(plainPath, decrypted.plaintext);
