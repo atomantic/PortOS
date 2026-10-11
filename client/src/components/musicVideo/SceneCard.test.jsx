@@ -48,6 +48,29 @@ describe('performance speaker save boundary', () => {
   });
 });
 
+describe('music-driven performance', () => {
+  it('switches a shot between cutaway, lip-sync and music-driven, and plans the music-driven take on the audio-to-video model', () => {
+    const onSave = vi.fn();
+    function Harness() {
+      const [scene, setScene] = useState({ sceneId: 's1', shotMode: 'cutaway', startSec: 10, endSec: 13.5, referenceImageId: 'frame.png', takes: [] });
+      return <SceneCard scene={scene} index={0} lipSyncBackend="fal" songDurationSec={60} falVideoSettings={{}}
+        onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
+    }
+    render(<Harness />);
+    const shot = screen.getByLabelText('Shot');
+    fireEvent.change(shot, { target: { value: 'music' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { shotMode: 'performance', performanceStyle: 'music' });
+    expect(shot.value).toBe('music');
+    // The shot's own 3.5s, not lip-sync's 5s minimum window.
+    expect(screen.getByTestId('performance-plan').textContent).toMatch(/^Music-driven via fal\.ai OmniHuman v1\.5 \(audio-driven person\) \(fal-ai\/bytedance\/omnihuman\/v1\.5\) · song 0:10–0:13 · est\. \$0\.56 \(3\.5s at 1080p\)/);
+    fireEvent.change(shot, { target: { value: 'performance' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { shotMode: 'performance', performanceStyle: null });
+    expect(screen.getByTestId('performance-plan').textContent).toMatch(/^Lip-sync via/);
+    fireEvent.change(shot, { target: { value: 'cutaway' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { shotMode: 'cutaway' });
+  });
+});
+
 describe('failed video retry behind the speaker save gate (#11040)', () => {
   function Harness({ onSave, onGenerateVideo, onGenerateFrame = vi.fn(), lastFailure }) {
     const [scene, setScene] = useState({ sceneId: 's1', shotMode: 'performance', startSec: 0, endSec: 5, referenceImageId: 'frame.png', takes: [], lastFailure });

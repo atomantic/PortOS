@@ -159,10 +159,10 @@ export async function generateVideo({
   if (promptRequired && !prompt?.trim()) {
     throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  // A lip-sync render conditions a reference frame on source audio; either
-  // input alone is not a request this route can honor.
+  // A lip-sync or audio-to-video render conditions a reference frame on
+  // source audio; either input alone is not a request this route can honor.
   if (audioFilePath && !sourceImagePath) {
-    throw new ServerError('A fal.ai lip-sync render needs a reference frame', { status: 400, code: 'VALIDATION_ERROR' });
+    throw new ServerError('A fal.ai source-audio render needs a reference frame', { status: 400, code: 'VALIDATION_ERROR' });
   }
   // The queue only persists the resolved provider CONFIG a job needs (mirrors
   // grokPath on the grok lane) — never a secret — so the key is re-resolved
@@ -184,7 +184,7 @@ export async function generateVideo({
   // only — a curated model resolves its own aspect rule.
   const effectiveAspectRatio = FAL_ASPECT_RATIOS.includes(aspectRatio) ? aspectRatio : deriveAspectRatio(width, height);
 
-  // A lip-sync take is billed on its audio length: the shot instruction's
+  // A source-audio take is billed on its audio length: the shot instruction's
   // planned window, else the staged slice itself.
   const audioSec = audioFilePath
     ? (shotInstruction?.audioWindow?.durationSec || await probeVideoDuration(audioFilePath).catch(() => null))
@@ -235,14 +235,15 @@ export async function generateVideo({
     filename,
     createdAt: new Date().toISOString(),
     mode: sourceImagePath ? 'image' : 'text',
-    ...(audioFilePath ? { lipSync: true } : {}),
+    // A lip-sync take syncs a mouth; an audio-to-video take moves the whole frame to the audio.
+    ...(audioFilePath ? (catalogModel?.kind === 'a2v' ? { audioDriven: true } : { lipSync: true }) : {}),
     ...(shotInstruction?.audioWindow ? { audioWindow: shotInstruction.audioWindow } : {}),
   };
   const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
   jobs.set(jobId, job);
 
   const costNote = meta.estimatedCostUsd != null ? ` ~$${meta.estimatedCostUsd.toFixed(2)}` : ' cost unknown';
-  console.log(`🎬 Generating video [${jobId.slice(0, 8)}] fal (${modelId}${meta.resolution ? ` ${meta.resolution}` : ''}${costNote}): ${(prompt || '(lip-sync)').slice(0, 60)}…`);
+  console.log(`🎬 Generating video [${jobId.slice(0, 8)}] fal (${modelId}${meta.resolution ? ` ${meta.resolution}` : ''}${costNote}): ${(prompt || '(source audio)').slice(0, 60)}…`);
   videoGenEvents.emit('started', { generationId: jobId, totalSteps: 1, ...meta });
   activeJobs.set(jobId, { ...meta, generationId: jobId, totalSteps: 1, step: 0, progress: 0 });
   emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.SUBMIT, 'Submitting to fal.ai…');
@@ -342,7 +343,7 @@ async function runFalVideo(job, jobId, {
     const measured = (await probeVideoGeometry(outputPath)) || {};
     const expectedSec = meta.audioWindow?.durationSec;
     if (expectedSec && measured.durationSec && measured.durationSec + 0.1 < expectedSec) {
-      console.warn(`⚠️ fal lip-sync [${jobId.slice(0, 8)}] delivered ${measured.durationSec.toFixed(2)}s for a ${expectedSec.toFixed(2)}s audio window`);
+      console.warn(`⚠️ fal source-audio take [${jobId.slice(0, 8)}] delivered ${measured.durationSec.toFixed(2)}s for a ${expectedSec.toFixed(2)}s audio window`);
     }
     activeRequests.delete(jobId);
     activeJobs.delete(jobId);

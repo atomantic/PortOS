@@ -18,7 +18,7 @@ export default function SceneTimingPlan({ timing, sceneId, lipSyncBackend, onSpl
       )}
       {performance && !performanceBlocked && (
         <p className="text-[11px] text-port-text-muted break-words" data-testid="performance-plan">
-          Lip-sync via {capability.label} ({capability.modelId}) · song {formatDurationSec(plan.windowStartSec)}–{formatDurationSec(plan.windowEndSec)}
+          {capability.style === 'music' ? 'Music-driven' : 'Lip-sync'} via {capability.label} ({capability.modelId}) · song {formatDurationSec(plan.windowStartSec)}–{formatDurationSec(plan.windowEndSec)}
           {plan.editInSec > 0 ? ` · shot starts ${plan.editInSec.toFixed(2)}s into the take` : ''} · {performanceCost}
         </p>
       )}

@@ -16,7 +16,7 @@ export function buildSceneTimingPresentation({
   nextEndSec, isLast, documentComposition, hasMergeNext,
 }) {
   const performance = isPerformanceScene(scene);
-  const capability = performance ? performanceCapability(lipSyncBackend) : null;
+  const capability = performance ? performanceCapability(lipSyncBackend, { scene, videoSettings: falVideoSettings }) : null;
   const timedSpan = typeof scene.startSec === 'number' && typeof scene.endSec === 'number' && scene.endSec > scene.startSec
     ? scene.endSec - scene.startSec
     : null;
@@ -32,7 +32,7 @@ export function buildSceneTimingPresentation({
     : null;
   const falCost = falEstimate(falTake);
   const performanceCost = falTake?.performance ? (falCost || capability?.costLabel) : capability?.costLabel;
-  const splitLimit = layer === 'footage' ? shotSplitLimit(scene, lipSyncBackend) : null;
+  const splitLimit = layer === 'footage' ? shotSplitLimit(scene, lipSyncBackend, falVideoSettings) : null;
   const canSplit = splitLimit != null && timedSpan != null && timedSpan > splitLimit + 1e-6;
   const mergedSpan = typeof scene.startSec === 'number' && typeof nextEndSec === 'number' ? nextEndSec - scene.startSec : null;
   const canMerge = hasMergeNext && !isLast && !documentComposition

@@ -140,7 +140,7 @@ export default function SceneCard({
     excerptStartSec: performanceReview?.excerptStartSec, backend: lipSyncBackend, videoSettings: falVideoSettings || {} });
   const shotModeId = `mv-shot-mode-${scene.sceneId}`;
   // #10152: what needs the director's attention, visible without opening the card.
-  const attention = sceneAttention(scene, { layered, footageOptional, lipSyncBackend, songDurationSec, clipSec, failed: failedScenes || {}, songReview });
+  const attention = sceneAttention(scene, { layered, footageOptional, lipSyncBackend, songDurationSec, clipSec, failed: failedScenes || {}, songReview, videoSettings: falVideoSettings });
   const songChange = songReview?.[scene.sceneId];
   const generatingLane = generatingFrame && generatingVideo ? 'Frame + clip' : generatingFrame ? 'Frame' : generatingVideo ? 'Clip' : null;
   // #10154: the server-persisted failure of the last render, shown until a
@@ -274,17 +274,22 @@ export default function SceneCard({
           {layer === 'footage' && (
             <>
               <label htmlFor={shotModeId} className="flex items-center gap-1">Shot</label>
-              <select id={shotModeId} value={performance ? 'performance' : 'cutaway'}
-                onChange={(e) => applyPatch({ shotMode: e.target.value })}
+              <select id={shotModeId} value={performance ? (scene.performanceStyle === 'music' ? 'music' : 'performance') : 'cutaway'}
+                onChange={(e) => applyPatch(e.target.value === 'cutaway' ? { shotMode: 'cutaway' }
+                  : e.target.value === 'music' ? { shotMode: 'performance', performanceStyle: 'music' }
+                    // Clear the style only when one is stored, so a plain lip-sync switch stays one field.
+                    : { shotMode: 'performance', ...(scene.performanceStyle ? { performanceStyle: null } : {}) })}
                 className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0"
-                title="Cutaway: any video lane animates the frame under the song. Performance: a singer lip-synced to the song itself (needs a source-audio provider).">
+                title="Cutaway: any video lane animates the frame under the song. Lip-sync: a singer's mouth follows the song. Music-driven: the song slice drives the whole frame's motion (a drummer on the beat). Both need a source-audio provider.">
                 <option value="cutaway">Cutaway</option>
                 <option value="performance">Performance (lip-sync)</option>
+                <option value="music">Performance (music-driven)</option>
               </select>
             </>
           )}
         </div>
-        {performance && (
+        {/* A music-driven shot follows the whole mix, not one voice. */}
+        {performance && scene.performanceStyle !== 'music' && (
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <label htmlFor={fieldId('speaker')}>Speaker / singer</label>
             <input id={fieldId('speaker')} value={scene.performanceSpeaker || ''} maxLength={120}
@@ -475,7 +480,7 @@ export default function SceneCard({
             disabled={!!videoRefusal}
             className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
             title={videoRefusal
-              || (performance ? `Lip-sync this scene's frame to the song via ${capability.label} — ${performanceCost}`
+              || (performance ? `${capability.style === 'music' ? "Animate this scene's frame to the song" : "Lip-sync this scene's frame to the song"} via ${capability.label} — ${performanceCost}`
                 : "Generate this scene's video from its reference frame (i2v)")}>
             {generatingVideo ? <Activity size={14} className="animate-spin" /> : <Video size={14} />}
             {generatingVideo ? 'Generating video…' : (scene.videoHistoryId ? 'New video take' : 'Generate video')}

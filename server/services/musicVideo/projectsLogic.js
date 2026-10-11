@@ -132,6 +132,8 @@ export function buildProjectRecord(input, { id, now }) {
       falModelId: videoSettings.falModelId ?? null,
       falResolution: videoSettings.falResolution ?? null,
       falLipSyncResolution: videoSettings.falLipSyncResolution ?? null,
+      falMusicModelId: videoSettings.falMusicModelId ?? null,
+      falMusicResolution: videoSettings.falMusicResolution ?? null,
       generationMode: videoSettings.generationMode ?? 'image',
       audioReactiveLora: videoSettings.audioReactiveLora ?? null,
       audioReactiveScale: videoSettings.audioReactiveScale ?? 1.2,
@@ -388,6 +390,8 @@ export function applyProjectPatch(project, patch) {
         falModelId: null,
         falResolution: null,
         falLipSyncResolution: null,
+        falMusicModelId: null,
+        falMusicResolution: null,
         generationMode: 'image',
         audioReactiveLora: null,
         audioReactiveScale: 1.2,
@@ -502,6 +506,7 @@ function buildScene(input, { order }) {
     // lip-synced performance shot, which only a source-audio provider renders.
     shotMode: input.shotMode ?? 'cutaway',
     ...(input.performanceSpeaker ? { performanceSpeaker: input.performanceSpeaker } : {}),
+    ...(input.performanceStyle === 'music' ? { performanceStyle: 'music' } : {}),
     referenceImageId: null,
     videoHistoryId: null,
     // #8965 — immutable candidate takes; the two slot fields above are the
@@ -703,7 +708,7 @@ export function splitScene(project, sceneId, { backend = null } = {}) {
   if (idx < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
   const scene = scenes[idx];
   const lane = backend || project.videoSettings?.backend || null;
-  const maxSec = shotSplitLimit(scene, lane);
+  const maxSec = shotSplitLimit(scene, lane, project.videoSettings);
   if (maxSec == null) {
     throw new ServerError('This backend renders the shot at any length — there is nothing to split.', { status: 400, code: 'MUSIC_VIDEO_SPLIT_NOT_NEEDED' });
   }
@@ -752,6 +757,7 @@ export function splitScene(project, sceneId, { backend = null } = {}) {
         visualLayer: scene.visualLayer ?? 'footage',
         shotMode: scene.shotMode ?? 'cutaway',
         performanceSpeaker: scene.performanceSpeaker ?? null,
+        performanceStyle: scene.performanceStyle ?? null,
         ...(scene.camera ? { camera: scene.camera } : {}),
         ...timing,
       }),
@@ -801,7 +807,7 @@ export function mergeNextScene(project, sceneId, { backend = null } = {}) {
   if (timedSec(startSec) && timedSec(endSec) && (endSec <= startSec || (timedSec(scene.endSec) && endSec < scene.endSec))) {
     throw new ServerError('The next scene ends before this one does — put the scenes in song order before merging them.', { status: 400, code: 'MUSIC_VIDEO_MERGE_OUT_OF_ORDER' });
   }
-  const maxSec = shotSplitLimit(scene, lane);
+  const maxSec = shotSplitLimit(scene, lane, project.videoSettings);
   if (maxSec != null) {
     if (!timedSec(startSec) || !timedSec(endSec)) {
       throw new ServerError('Both scenes need a start and end time before they can be merged on this backend.', { status: 400, code: 'MUSIC_VIDEO_MERGE_UNTIMED' });
