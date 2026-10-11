@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { aspectCropSize } from './aspectConform.js';
 
 // The crop-box arithmetic, over the shapes Codex actually returned for 16:9
-// production stills. The end-to-end crop (sharp + sidecar) is covered in
-// codex.test.js; this pins the tolerance boundary and both crop directions.
+// production stills. The end-to-end crop is covered in videoGen/fal.test.js;
+// this pins the tolerance boundary and both crop directions.
 describe('aspectCropSize', () => {
   it.each([
     ['Codex 16:9 passes untouched', [1672, 941, 1920, 1080], null],
