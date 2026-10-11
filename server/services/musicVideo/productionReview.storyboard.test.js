@@ -108,6 +108,12 @@ describe('the director trimming an approved storyboard', () => {
     const rows = reprompted.productionReview.draft.storyboard.map((shot) => shot.sceneId === 's2' ? { ...shot, action: 'ASCII-art video plays' } : shot);
     const reworded = { ...reprompted, productionReview: { ...reprompted.productionReview, draft: { ...reprompted.productionReview.draft, storyboard: rows } } };
     expect(productionReadiness(reworded).storyboard).toMatchObject({ approved: true, stale: null });
+    // A row that drops its lyric anchor keeps the allowance but fails the anchor check, so the board is not approved.
+    const unanchoredRows = rows.map((shot) => shot.sceneId === 's1' ? { ...shot, lyricCueIds: [] } : shot);
+    const unanchored = productionReadiness({ ...reworded, productionReview: { ...reworded.productionReview,
+      draft: { ...reworded.productionReview.draft, storyboard: unanchoredRows } } }).storyboard;
+    expect(unanchored.approved).toBe(false);
+    expect(unanchored.problems).toContain('Review lyric anchors for Verse.');
     const added = { ...reworded, scenes: [...reworded.scenes.map((scene) => scene.sceneId === 's3' ? { ...scene, endSec: 7 } : scene),
       { sceneId: 's4', label: 'Extra', startSec: 7, endSec: 8, visualIntent: 'A new shot', framePrompt: 'Wide shot' }] };
     const addedBoard = productionReadiness(added).storyboard;
