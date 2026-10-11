@@ -67,6 +67,7 @@ import { HOST_CONTROL_FORBIDDEN_MESSAGE, socketHasHostControl } from './authGate
 import { runEventLogEvents } from './agentRunEventLog.js';
 import { armSystemActivityWatchers, bindSystemActivityIo } from './systemActivityNotify.js';
 import { armReadinessWatchers, registerReadinessSocket } from './readinessNotify.js';
+import { registerGeneratedPreviewHandlers } from './generatedPreview/sessions.js';
 
 // Store CoS subscribers
 const cosSubscribers = new Set();
@@ -270,6 +271,7 @@ const SOCKET_HANDLER_REGISTRARS = [
   registerErrorHandlers,
   registerShellHandlers,
   registerItermHandlers,
+  registerGeneratedPreviewHandlers,
   registerLifecycleHandlers
 ];
 

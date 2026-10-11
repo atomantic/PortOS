@@ -3,11 +3,46 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 
 const api = vi.hoisted(() => ({
   getMusicVideoCompositionPreview: vi.fn(),
+  getMusicVideoLyricPlaythroughPreview: vi.fn(),
   fetchMusicVideoPreviewAsset: vi.fn(),
 }));
+const socket = vi.hoisted(() => {
+  const handlers = new Map();
+  let sessions = 0;
+  const reply = (event, payload) => {
+    if (event !== 'generated-preview:open') return;
+    sessions += 1;
+    const opened = {
+      requestId: payload.requestId,
+      sessionId: `00000000-0000-4000-8000-${String(sessions).padStart(12, '0')}`,
+      durationSec: 10,
+      fps: 24,
+      width: 1920,
+      height: 1080,
+      revision: payload.revision,
+      audio: 'none',
+    };
+    for (const fn of handlers.get('generated-preview:opened') || []) fn(opened);
+    for (const fn of handlers.get('generated-preview:frame') || []) {
+      fn({ ...opened, generation: 0, mime: 'image/jpeg', data: btoa('frame') });
+    }
+  };
+  return {
+    emit: vi.fn(reply),
+    reply,
+    on: vi.fn((event, cb) => {
+      if (!handlers.has(event)) handlers.set(event, new Set());
+      handlers.get(event).add(cb);
+    }),
+    off: vi.fn((event, cb) => { handlers.get(event)?.delete(cb); }),
+    connected: true,
+    __handlers: handlers,
+  };
+});
 vi.mock('../../services/apiMusicVideo.js', () => api);
+vi.mock('../../services/socket', () => ({ default: socket }));
 
-import CompositionPreviewPlayer, { PREVIEW_BLOB_BUDGET_BYTES } from './CompositionPreviewPlayer.jsx';
+import CompositionPreviewPlayer from './CompositionPreviewPlayer.jsx';
 
 const DOCUMENT = { directory: 'music-video/mv-1/composition/doc-a', entry: 'index.html' };
 const project = {
@@ -15,168 +50,90 @@ const project = {
   lyricCues: [{ id: 'l1', text: 'first line', startSec: 1, endSec: 3 }, { id: 'l2', text: 'second line', startSec: 3, endSec: 6 }],
 };
 
+const opens = () => socket.emit.mock.calls.filter(([event]) => event === 'generated-preview:open');
+
 beforeEach(() => {
   for (const fn of Object.values(api)) fn.mockReset();
-  api.getMusicVideoCompositionPreview.mockResolvedValue({ html: '<!doctype html><p>preview</p>', assets: [], width: 1920, height: 1080, fps: 24, durationSec: 10 });
+  socket.emit.mockReset();
+  socket.emit.mockImplementation(socket.reply);
+  socket.__handlers.clear();
 });
 
 describe('CompositionPreviewPlayer', () => {
-  // The iframe is played by the test: it reports `loaded`, then asks for keys the way the bootstrap does.
-  const loadPreview = async (assets) => {
-    api.getMusicVideoCompositionPreview.mockResolvedValue({ html: '<!doctype html><p>preview</p>', assets, fps: 24, durationSec: 10 });
+  it('opens an isolated preview and never fetches media or mounts generated HTML', async () => {
     render(<CompositionPreviewPlayer project={project} audioUrl={null} />);
-    const frame = await screen.findByTitle('Composition document preview');
-    const post = vi.spyOn(frame.contentWindow, 'postMessage');
-    const send = (data) => act(async () => {
-      window.dispatchEvent(new MessageEvent('message', { source: frame.contentWindow, data: { ...data, previewRevision: frame.dataset.previewRevision } }));
-    });
-    // findByTitle can resolve before React flushes the passive effect that attaches the message listener, so a
-    // `loaded` sent that early is dropped; repeat it until the player answers with its manifest.
-    await waitFor(async () => {
-      await send({ type: 'portos-mv:loaded' });
-      expect(post).toHaveBeenCalledWith(expect.objectContaining({ type: 'portos-mv:manifest' }), '*');
-    });
-    const ask = async (key) => {
-      await send({ type: 'portos-mv:request', key });
-      await waitFor(() => expect(post).toHaveBeenCalledWith(expect.objectContaining({ type: 'portos-mv:asset', key }), '*'));
-      const answer = post.mock.calls.filter(([data]) => data.type === 'portos-mv:asset' && data.key === key).at(-1)[0];
-      post.mockClear();
-      return answer.blob;
-    };
-    return { post, send, ask };
-  };
-
-  it('posts the media manifest first and fetches only the files the document asks for', async () => {
-    const assets = [{ key: 'media/scene-a.mp4', url: '/preview/scene-a' }, { key: 'media/scene-b.png', url: '/preview/scene-b' }, { key: 'media/scene-c.png', url: '/preview/scene-c' }];
-    const blob = new Blob(['example media'], { type: 'image/png' });
-    api.fetchMusicVideoPreviewAsset.mockResolvedValue(blob);
-    const { post, ask } = await loadPreview(assets);
-    expect(post).toHaveBeenCalledWith({ type: 'portos-mv:manifest', keys: assets.map((asset) => asset.key) }, '*');
-    expect(post).toHaveBeenCalledWith({ type: 'portos-mv:seek', t: 0 }, '*');
+    await screen.findByTitle('Composition document preview');
+    await waitFor(() => expect(opens()).toHaveLength(1));
+    expect(opens()[0][1]).toEqual(expect.objectContaining({
+      kind: 'music-video', projectId: 'mv-1', revision: `${DOCUMENT.directory}|`,
+    }));
+    expect(api.getMusicVideoCompositionPreview).not.toHaveBeenCalled();
     expect(api.fetchMusicVideoPreviewAsset).not.toHaveBeenCalled();
-
-    expect(await ask('media/scene-b.png')).toBe(blob);
-    expect(api.fetchMusicVideoPreviewAsset.mock.calls).toEqual([['/preview/scene-b']]);
-    // A key outside the manifest is refused without a request: document code names nothing else.
-    expect(await ask('../secrets.png')).toBeNull();
-    expect(api.fetchMusicVideoPreviewAsset).toHaveBeenCalledTimes(1);
-    expect(screen.queryByText('Some preview media could not be loaded')).toBeInTheDocument();
+    expect(document.querySelector('iframe')).toBeNull();
   });
 
-  it('retires a revision before delivering an in-flight media response and rejects forged revision messages', async () => {
-    let resolveAsset;
-    api.fetchMusicVideoPreviewAsset.mockImplementation(() => new Promise(resolve => { resolveAsset = resolve; }));
-    api.getMusicVideoCompositionPreview.mockResolvedValue({ html: '<p>one</p>', assets: [{ key: 'private', url: '/synthetic' }], durationSec: 5 });
-    const { rerender } = render(<CompositionPreviewPlayer project={project} />);
-    const frame = await screen.findByTitle('Composition document preview');
-    const post = vi.spyOn(frame.contentWindow, 'postMessage');
-    await act(async () => window.dispatchEvent(new MessageEvent('message', { source: frame.contentWindow,
-      data: { type: 'portos-mv:request', key: 'private', previewRevision: 'wrong' } })));
-    expect(api.fetchMusicVideoPreviewAsset).not.toHaveBeenCalled();
-    await act(async () => { window.dispatchEvent(new MessageEvent('message', { source: frame.contentWindow,
-      data: { type: 'portos-mv:request', key: 'private', previewRevision: frame.dataset.previewRevision } })); });
-    expect(api.fetchMusicVideoPreviewAsset).toHaveBeenCalledOnce();
-    rerender(<CompositionPreviewPlayer project={{ ...project, composition: { document: { ...DOCUMENT, updatedAt: 'next' } } }} />);
-    await waitFor(() => expect(screen.getByTitle('Composition document preview')).not.toBe(frame));
-    await act(async () => resolveAsset(new Blob(['private'])));
-    expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'portos-mv:asset' }), '*');
+  it('reports an explicit unavailable state and still does not mount an iframe', async () => {
+    socket.emit.mockImplementation((event, payload) => {
+      if (event !== 'generated-preview:open') return;
+      for (const fn of socket.__handlers.get('generated-preview:unavailable') || []) {
+        fn({ requestId: payload.requestId, code: 'PREVIEW_ISOLATION_UNAVAILABLE', message: 'Isolated preview is unavailable on this host.' });
+      }
+    });
+    render(<CompositionPreviewPlayer project={project} audioUrl={null} />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Isolated preview is unavailable on this host.');
+    expect(screen.getByText('Preview unavailable')).toBeInTheDocument();
+    expect(document.querySelector('iframe')).toBeNull();
   });
 
-  it('answers a failed fetch with no blob and reports the missing media once the first frame is drawn', async () => {
-    api.fetchMusicVideoPreviewAsset.mockRejectedValue(new Error('Example unavailable asset'));
-    const { send, ask } = await loadPreview([{ key: 'media/scene-a.png', url: '/preview/scene-a' }]);
-    expect(screen.getByText('Loading preview media…')).toBeInTheDocument();
-    expect(await ask('media/scene-a.png')).toBeNull();
-    await send({ type: 'portos-mv:seeked', t: 0 });
-    expect(screen.getByText('Some preview media could not be loaded')).toBeInTheDocument();
-    expect(screen.queryByText('Loading preview media…')).not.toBeInTheDocument();
-  });
-
-  it('keeps fetched media within the blob budget, dropping the least recently used file first', async () => {
-    const assets = ['a', 'b', 'c', 'd'].map((name) => ({ key: `media/${name}.jpg`, url: `/preview/${name}` }));
-    // Each file is half the budget, so two fit; sizes stand in for real blobs without allocating them.
-    api.fetchMusicVideoPreviewAsset.mockImplementation(async (url) => ({ url, size: PREVIEW_BLOB_BUDGET_BYTES / 2 }));
-    const { ask } = await loadPreview(assets);
-    const fetched = () => api.fetchMusicVideoPreviewAsset.mock.calls.map(([url]) => url);
-    await ask('media/a.jpg');
-    await ask('media/b.jpg');
-    await ask('media/a.jpg'); // cached, and now the most recently used
-    expect(fetched()).toEqual(['/preview/a', '/preview/b']);
-    await ask('media/c.jpg'); // over budget: b goes, a stays
-    await ask('media/a.jpg');
-    expect(fetched()).toEqual(['/preview/a', '/preview/b', '/preview/c']);
-    await ask('media/b.jpg'); // evicted, so fetched again (and c, now oldest, goes)
-    await ask('media/c.jpg');
-    expect(fetched()).toEqual(['/preview/a', '/preview/b', '/preview/c', '/preview/b', '/preview/c']);
-  });
-
-  it('hands the project film look to the loaded document and again when it changes, without rebuilding the preview', async () => {
+  it('sends the film look with the open and again when it changes, without reopening', async () => {
     const look = { version: 1, preset: 'custom', grain: 0.4 };
     const { rerender } = render(<CompositionPreviewPlayer project={{ ...project, filmLook: look }} audioUrl={null} />);
-    const frame = await screen.findByTitle('Composition document preview');
-    const post = vi.spyOn(frame.contentWindow, 'postMessage');
-    const send = (data) => act(async () => { window.dispatchEvent(new MessageEvent('message', { source: frame.contentWindow, data: { ...data, previewRevision: frame.dataset.previewRevision } })); });
-    await waitFor(async () => {
-      await send({ type: 'portos-mv:loaded' });
-      expect(post).toHaveBeenCalledWith({ type: 'portos-mv:film-look', look }, '*');
-      expect(post).toHaveBeenCalledWith(expect.objectContaining({ type: 'portos-mv:manifest' }), '*');
-    });
-    // The look lands before the first seek so the document's first frame is already filtered.
-    const seekAt = post.mock.calls.findIndex(([data]) => data.type === 'portos-mv:seek');
-    const lookAt = post.mock.calls.findIndex(([data]) => data.type === 'portos-mv:film-look');
-    expect(seekAt).toBeGreaterThan(-1);
-    expect(lookAt).toBeLessThan(seekAt);
-
+    await waitFor(() => expect(opens()[0][1].look).toEqual(look));
     const next = { ...look, grain: 0.9 };
     rerender(<CompositionPreviewPlayer project={{ ...project, filmLook: next }} audioUrl={null} />);
-    await waitFor(() => expect(post).toHaveBeenCalledWith({ type: 'portos-mv:film-look', look: next }, '*'));
+    await waitFor(() => expect(socket.emit).toHaveBeenCalledWith('generated-preview:command', expect.objectContaining({ action: 'film-look', look: next })));
     rerender(<CompositionPreviewPlayer project={{ ...project, filmLook: null }} audioUrl={null} />);
-    await waitFor(() => expect(post).toHaveBeenCalledWith({ type: 'portos-mv:film-look', look: null }, '*'));
-    expect(api.getMusicVideoCompositionPreview).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(socket.emit).toHaveBeenCalledWith('generated-preview:command', expect.objectContaining({ action: 'film-look', look: null })));
+    expect(opens()).toHaveLength(1);
   });
 
-  it('hands the opening title card to the loaded document and again on each edit, without rebuilding the preview', async () => {
+  it('sends the normalized title card with the open and again on each edit, without reopening', async () => {
     const card = { enabled: true, title: 'Example Song', startSec: 2, endSec: 8 };
     const { rerender } = render(<CompositionPreviewPlayer project={{ ...project, titleCard: card }} audioUrl={null} />);
-    const frame = await screen.findByTitle('Composition document preview');
-    const post = vi.spyOn(frame.contentWindow, 'postMessage');
-    const send = (data) => act(async () => { window.dispatchEvent(new MessageEvent('message', { source: frame.contentWindow, data: { ...data, previewRevision: frame.dataset.previewRevision } })); });
-    await waitFor(async () => {
-      await send({ type: 'portos-mv:loaded' });
-      expect(post).toHaveBeenCalledWith({ type: 'portos-mv:title-card', card: expect.objectContaining({ title: 'Example Song', position: 'lower-left' }) }, '*');
-    });
+    await waitFor(() => expect(opens()[0][1].card).toEqual(expect.objectContaining({ title: 'Example Song', position: 'lower-left' })));
     rerender(<CompositionPreviewPlayer project={{ ...project, titleCard: { ...card, position: 'upper-right' } }} audioUrl={null} />);
-    await waitFor(() => expect(post).toHaveBeenCalledWith({ type: 'portos-mv:title-card', card: expect.objectContaining({ position: 'upper-right' }) }, '*'));
+    await waitFor(() => expect(socket.emit).toHaveBeenCalledWith('generated-preview:command', expect.objectContaining({
+      action: 'title-card', card: expect.objectContaining({ position: 'upper-right' }),
+    })));
     rerender(<CompositionPreviewPlayer project={{ ...project, titleCard: null }} audioUrl={null} />);
-    await waitFor(() => expect(post).toHaveBeenCalledWith({ type: 'portos-mv:title-card', card: null }, '*'));
-    expect(api.getMusicVideoCompositionPreview).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(socket.emit).toHaveBeenCalledWith('generated-preview:command', expect.objectContaining({ action: 'title-card', card: null })));
+    expect(opens()).toHaveLength(1);
   });
 
-  it('keeps the loaded preview through an unrelated project save and rebuilds when the document version changes', async () => {
+  it('keeps the loaded preview through an unrelated project save and reopens when the document version changes', async () => {
     const { rerender } = render(<CompositionPreviewPlayer project={project} audioUrl={null} />);
-    const frame = await screen.findByTitle('Composition document preview');
+    await waitFor(() => expect(opens()).toHaveLength(1));
     rerender(<CompositionPreviewPlayer project={{ ...project, updatedAt: '2026-02-02T00:00:00.000Z', name: 'Renamed' }} audioUrl={null} />);
     await act(async () => {});
-    expect(api.getMusicVideoCompositionPreview).toHaveBeenCalledTimes(1);
-    expect(screen.getByTitle('Composition document preview')).toBe(frame);
+    expect(opens()).toHaveLength(1);
     const next = { ...project, composition: { mode: 'document', document: { ...DOCUMENT, directory: 'music-video/mv-1/composition/doc-b' } } };
     rerender(<CompositionPreviewPlayer project={next} audioUrl={null} />);
-    await waitFor(() => expect(api.getMusicVideoCompositionPreview).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(opens()).toHaveLength(2));
   });
 
-  it('does not build the preview behind a collapsed phone mini-player until it is expanded', async () => {
+  it('does not open the preview behind a collapsed phone mini-player until it is expanded', async () => {
     const original = window.matchMedia;
     window.matchMedia = vi.fn(() => ({ matches: false }));
     try {
       const { rerender } = render(<CompositionPreviewPlayer project={project} audioUrl={null} collapsed />);
       await act(async () => {});
-      expect(api.getMusicVideoCompositionPreview).not.toHaveBeenCalled();
+      expect(opens()).toHaveLength(0);
       expect(screen.getByText('Expand to load preview')).toBeInTheDocument();
       expect(screen.getByLabelText('Scrub the composition preview')).toBeDisabled();
       expect(screen.queryByText('0.00s / 0.0s')).not.toBeInTheDocument();
       rerender(<CompositionPreviewPlayer project={project} audioUrl={null} collapsed={false} />);
-      await screen.findByTitle('Composition document preview');
-      expect(api.getMusicVideoCompositionPreview).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(opens()).toHaveLength(1));
+      expect(screen.getByTitle('Composition document preview')).toBeInTheDocument();
     } finally {
       window.matchMedia = original;
     }
@@ -189,47 +146,46 @@ describe('CompositionPreviewPlayer', () => {
     try {
       render(<CompositionPreviewPlayer project={project} audioUrl="/data/music/song.mp3" collapsed />);
       await act(async () => {});
-      expect(api.getMusicVideoCompositionPreview).not.toHaveBeenCalled();
+      expect(opens()).toHaveLength(0);
       await act(async () => {
         desktop.matches = true;
         desktop.dispatchEvent(new Event('change'));
       });
       await screen.findByTitle('Composition document preview');
       expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled();
-      expect(api.getMusicVideoCompositionPreview).toHaveBeenCalledTimes(1);
+      expect(opens()).toHaveLength(1);
       await act(async () => {
         desktop.matches = false;
         desktop.dispatchEvent(new Event('change'));
       });
       expect(screen.getByTitle('Composition document preview')).toBeInTheDocument();
-      expect(api.getMusicVideoCompositionPreview).toHaveBeenCalledTimes(1);
+      expect(opens()).toHaveLength(1);
     } finally {
       window.matchMedia = original;
     }
   });
 
-  it('runs the document in an opaque-origin sandbox and renders nothing without one', async () => {
+  it('renders nothing without a document and never mounts an iframe when one exists', async () => {
     const { container, rerender } = render(<CompositionPreviewPlayer project={{ ...project, composition: { mode: 'document' } }} audioUrl={null} />);
     expect(container).toBeEmptyDOMElement();
-    expect(api.getMusicVideoCompositionPreview).not.toHaveBeenCalled();
+    expect(opens()).toHaveLength(0);
 
     rerender(<CompositionPreviewPlayer project={project} audioUrl={null} />);
-    const frame = await screen.findByTitle('Composition document preview');
-    expect(frame.getAttribute('sandbox')).toBe('allow-scripts');
+    await screen.findByTitle('Composition document preview');
+    expect(document.querySelector('iframe')).toBeNull();
   });
 
   it('seeks to each outside request once the preview knows its length, and follows the lyric line', async () => {
     const { rerender } = render(<CompositionPreviewPlayer project={project} audioUrl="/data/music/song.mp3" seekRequest={{ t: 2, n: 1 }} />);
-    // The request arrived before the preview loaded; it applies when the duration is known.
     await waitFor(() => expect(screen.getByText('2.00s / 10.0s')).toBeTruthy());
     expect(screen.getByTestId('preview-lyric')).toHaveTextContent('first line');
+    const seekAt = socket.emit.mock.calls.findIndex(([event, payload]) => event === 'generated-preview:seek' && payload.t === 2);
+    expect(seekAt).toBeGreaterThan(socket.emit.mock.calls.findIndex(([event]) => event === 'generated-preview:open'));
 
-    // Seeking again to the same time is a new request (a new n), not a no-op.
     rerender(<CompositionPreviewPlayer project={project} audioUrl="/data/music/song.mp3" seekRequest={{ t: 4.5, n: 2 }} />);
     await waitFor(() => expect(screen.getByText('4.50s / 10.0s')).toBeTruthy());
     expect(screen.getByTestId('preview-lyric')).toHaveTextContent('second line');
 
-    // Past the end clamps to the last frame instead of leaving the timeline.
     rerender(<CompositionPreviewPlayer project={project} audioUrl="/data/music/song.mp3" seekRequest={{ t: 99, n: 3 }} />);
     await waitFor(() => expect(screen.getByText(/^9\.9\ds \/ 10\.0s$/)).toBeTruthy());
   });
@@ -241,5 +197,6 @@ describe('CompositionPreviewPlayer', () => {
     await screen.findByTitle('Composition candidate preview');
     expect(screen.getByLabelText('Scrub the composition preview').id).toBe('mv-doc-scrub');
     expect(screen.getByLabelText('Scrub the composition candidate').id).toBe('mv-doc-draft-scrub');
+    expect(document.querySelector('iframe')).toBeNull();
   });
 });

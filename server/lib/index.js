@@ -22,6 +22,7 @@ export * from './apiContractSchemas.js';
 export * from './codeAnimationPackage.js';
 export * from './codeAnimationAcceptance.js';
 export * from './codeAnimationContainment.js';
+export * from './generatedPreviewSandbox.js';
 export * from './autonomousJobTask.js';
 export * from './asyncApiSpec.js';
 export * from './avatarVariants.js';
@@ -871,5 +872,3 @@ export * from './deepAudit.js';
 export * from './deepAuditCoverage.js';
 
 export * from './auditWorkflow.js';
-
-export * from './generatedPreviewSandbox.js';

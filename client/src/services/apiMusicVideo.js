@@ -103,7 +103,6 @@ export const prepareMusicVideoSong = (id, options = {}) => request(`/music-video
   method: 'POST', ...options,
 });
 // The lyric timing playthrough page: the aligned words over a plain frame (same shape as the composition preview).
-export const getMusicVideoLyricPlaythroughPreview = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/lyrics/playthrough/preview`, options);
 export const getMusicVideoLyricOverlayPreview = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/lyrics/overlay/preview`, options);
 export const musicVideoLyricAlignEventsUrl = (jobId) =>
   `/api/music-video/lyrics/align/${encodeURIComponent(jobId)}/events`;
@@ -512,7 +511,6 @@ export const startMusicVideoCompositionTemplate = (id, template = 'layered', opt
   request(`${compositionDocumentPath(id)}/template`, { method: 'POST', body: JSON.stringify({ template }), ...options });
 export const getMusicVideoCompositionExport = (id, options = {}) =>
   request(`${compositionDocumentPath(id)}/export`, { responseType: 'arraybuffer', ...options });
-export const getMusicVideoCompositionPreview = (id, { draft = false, ...options } = {}) => request(`${compositionDocumentPath(id)}/preview${draft ? '?draft=1' : ''}`, options);
 export const generateMusicVideoMixedMediaDocument = (id, body, options = {}) =>
   request(`${compositionDocumentPath(id)}/generate`, { method: 'POST', body: JSON.stringify(body || {}), ...options });
 export const getMusicVideoMixedMediaCandidate = (id, options = {}) => request(`${compositionDocumentPath(id)}/candidate`, options);
@@ -526,13 +524,7 @@ export const discardMusicVideoMixedMediaDocument = (id, directory, options = {})
   request(`${compositionDocumentPath(id)}/candidate`, { method: 'DELETE', body: JSON.stringify({ directory }), ...options });
 export const detachMusicVideoCompositionDocument = (id, options = {}) =>
   request(compositionDocumentPath(id), { method: 'DELETE', ...options });
-// One preview asset (a scene take under /data, or a document file) as a Blob the
-// page posts into the sandboxed preview, which cannot fetch anything itself.
-export async function fetchMusicVideoPreviewAsset(url) {
-  const response = await fetch(url, { credentials: 'same-origin' });
-  if (!response.ok) throw new Error(`Could not load preview media (${response.status})`);
-  return response.blob();
-}
+
 
 
 export const getMusicVideoDependencyImpact = (id, options = {}) =>

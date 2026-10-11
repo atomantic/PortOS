@@ -3,13 +3,15 @@ import { musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
 import { filmLookRuntimeSource } from '../../lib/filmLook.js';
 import { titleCardRuntimeSource } from '../../lib/musicVideoTitleCard.js';
 /**
- * Music Video — the in-app live preview of a composition document.
+ * Music Video — HTML for a composition preview document.
  *
- * The preview runs in an opaque-origin `<iframe sandbox="allow-scripts"
- * srcdoc>` inside the trusted generatedPreviewSandbox wrapper. The wrapper blocks
- * child navigation; the inherited CSP allows only inline
- * code and data:/blob: assets. This is URL/subresource containment, not a
- * complete network boundary (fresh-realm WebRTC is tracked in #11157). The server therefore hands the client ONE self-contained page:
+ * Live players do not mount this HTML. `openIsolatedDocumentPreview` runs it
+ * in the OS-jailed worker and returns frames. This builder still serves the
+ * lyric template, tests, and the preview route.
+ *
+ * The page is an opaque-origin document (its CSP allows only inline
+ * code and data:/blob: assets), so it can never call PortOS with the user's
+ * session. The server therefore hands the client ONE self-contained page:
  *
  *   - the document's own scripts and stylesheets inlined, and every file its
  *     CSS or `<img>` tags name inlined as a data: URL;
@@ -64,10 +66,8 @@ const cleanRef = (ref) => {
 
 // Runs before any document script: asset bridge, relative-src mapping, seek/layout messages.
 const BOOTSTRAP = `(() => {
-  // CSP does not block ICE/STUN. Keep the direct document guard too: render/test
-  // consumers may load this document without the application's outer wrapper.
+  // CSP does not block ICE/STUN. Match the render host before document code runs.
   for (const key of ['RTCPeerConnection', 'webkitRTCPeerConnection', 'WebTransport', 'Worker', 'SharedWorker', 'WebSocket']) {
-    if (Object.getOwnPropertyDescriptor(globalThis, key)?.configurable === false) continue;
     Object.defineProperty(globalThis, key, { configurable: false, writable: false,
       value: function() { throw new Error(key + ' is disabled in compositions'); } });
   }
