@@ -22,12 +22,24 @@ import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } fro
 const NOTE_MAX = 600;
 const NOTES_MAX = 10;
 
-function buildBriefPrompt({ prompt, guidance, instrumental }) {
+const SONG_LYRICS_MAX = 6000;
+
+// A run that reuses an existing song designs only the video: the song is fixed.
+function existingSongBlock(song) {
+  if (!song) return '';
+  const lyrics = trimTo(song.lyrics, SONG_LYRICS_MAX);
+  return `
+The song ALREADY EXISTS; do not write a new one. Design the video for this song. Keep "title" exactly as given, and describe the existing song's sound in "musicalDescription" and "sunoStyle".
+Title: ${song.title}
+${song.style ? `Song style: ${song.style}\n` : ''}${lyrics ? `Lyrics:\n${lyrics}\n` : ''}`;
+}
+
+function buildBriefPrompt({ prompt, guidance, instrumental, song = null }) {
   return `You are the creative director for a fully autonomous music video. From the operator's idea below, design the song AND the look of its video.
 
 Idea:
 ${prompt}
-${guidance ? `\nOperator guidance:\n${guidance}\n` : ''}
+${guidance ? `\nOperator guidance:\n${guidance}\n` : ''}${existingSongBlock(song)}
 ${instrumental ? 'The song is INSTRUMENTAL: no vocals.\n' : ''}
 Return JSON only, with exactly these keys:
 {
@@ -76,14 +88,14 @@ function sanitizeBrief(parsed, { prompt }) {
   };
 }
 
-export async function draftCreativeBrief({ prompt, guidance = '', instrumental = false, providerId, model, effort } = {}) {
+export async function draftCreativeBrief({ prompt, guidance = '', instrumental = false, song = null, providerId, model, effort } = {}) {
   const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
   assertProvider(provider, { message: 'No AI provider available to draft the music video brief', code: 'NO_PROVIDER' });
   const result = await runPromptThroughProvider({
     provider,
     model: selectedModel,
     ...(effort ? { effort } : {}),
-    prompt: buildBriefPrompt({ prompt, guidance, instrumental }),
+    prompt: buildBriefPrompt({ prompt, guidance, instrumental, song }),
     source: 'music-video-autonomous-brief',
   });
   let parsed;

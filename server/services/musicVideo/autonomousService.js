@@ -81,6 +81,7 @@ import {
   normalizeAutonomousBrief,
   normalizeLocalMusicOptions,
   normalizeSunoOptions,
+  SUNO_LIMITS,
   sunoSongFields,
 } from '../../lib/musicVideoAutonomous.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
@@ -108,6 +109,7 @@ const defaults = {
   generateSunoSong: async (fields, opts) => (await import('./autonomousSuno.js')).generateSunoSong(fields, opts),
   generateLocalSong: async (args) => (await import('./autonomousLocalSong.js')).generateLocalSong(args),
   cancelLocalSong: async (jobId) => (await import('../mediaJobQueue/index.js')).cancelJob(jobId),
+  getTrack: async (id) => (await import('../tracks/index.js')).getTrack(id).catch(() => null),
   createTrack: async (input) => (await import('../trackAlbumMembership.js')).createTrackWithAlbum(input).then((r) => r.track),
   attachAudio: async (trackId, filename, take) => (await import('../trackAudioAttach.js')).attachAudioAsRender(trackId, filename, take),
   probeDuration: (filename) => probeVideoDuration(join(PATHS.music, filename)).catch(() => null),
@@ -481,6 +483,15 @@ async function settleLyricTiming(projectId, run) {
   if (!draft || draft.storyboardSource === 'document') return;
   const status = productionReadiness(project).alignment.status;
   if (status === 'verified' || status === 'instrumental') return;
+  const reviewer = runReviewer(run);
+  // A reused song's timing a director already verified on its source project, untouched since.
+  const reusedBasis = run.brief.songFrom?.verifiedAlignmentBasis;
+  if (reusedBasis && reusedBasis === productionAlignmentBasis(project)) {
+    const notes = 'Lyric timing carried over unchanged from the source project, where it was verified.';
+    await deps.verifyAlignment(projectId, { basis: reusedBasis, notes, reviewer });
+    await record('approve', notes);
+    return;
+  }
   const cues = (project.lyricCues || []).filter((c) => cueText(c));
   if (!cues.length) {
     if (!run.brief.instrumental) return;
@@ -503,7 +514,6 @@ async function settleLyricTiming(projectId, run) {
     await record('revise', `${notes} ${held}`);
     return `${notes} ${held}`;
   }
-  const reviewer = runReviewer(run);
   await deps.verifyAlignment(projectId, { basis: productionAlignmentBasis(project), notes, reviewer });
   await record('approve', notes);
 }
@@ -933,9 +943,13 @@ function briefGuidance(brief) {
 const STAGES = {
   async brief({ project, run }) {
     const { route, ...llm } = await llmOf(run, 'brief');
-    const { brief } = await deps.draftCreativeBrief({
+    const reused = run.brief.songFrom;
+    const { brief: drafted } = await deps.draftCreativeBrief({
       prompt: run.brief.prompt, guidance: briefGuidance(run.brief), instrumental: run.brief.instrumental, ...llm,
+      ...(reused ? { song: { title: reused.title, style: reused.style, lyrics: run.output.lyrics } } : {}),
     });
+    // A reused song keeps its own title and style; the brief only designs the video around it.
+    const brief = reused ? { ...drafted, title: reused.title, ...(reused.style ? { sunoStyle: trimTo(reused.style, SUNO_LIMITS.style) } : {}) } : drafted;
     // A blank project name from the prompt gives way to the song title.
     if (!run.brief.name) await deps.updateProject(project.id, { name: trimTo(brief.title, 200) });
     await recordRoute(project, 'brief', route);
@@ -945,6 +959,8 @@ const STAGES = {
   // The orchestrator judges the written lyrics and may rewrite them (orchestrateLyrics).
   async lyrics(ctx) {
     const { project, run, save } = ctx;
+    // A reused song's lyrics were copied with it at start.
+    if (run.brief.songFrom) return { output: {} };
     if (run.brief.instrumental || !isOrchestratedRun(run)) return writeRunLyrics(ctx);
     // The draft (or reviewed draft) is stored before the orchestrator judges it,
     // so a failed review retries only the review.
@@ -1014,13 +1030,21 @@ const STAGES = {
   },
 
   async analyze({ project, run }) {
-    await deps.analyzeSong(project.id);
-    // A storyboard grant needs the lyric timings production verifies, so the autopilot aligns too.
-    if (!isOrchestratedRun(run) && autoApproves(run, 'storyboard')) await alignRunLyrics(project.id, run);
-    if (isOrchestratedRun(run) && (await orchestrateSong(project.id, run)).retake) {
-      // A local fallback stays local: the retake must not send the run back to Suno.
-      const reset = Object.fromEntries(SONG_OUTPUT_KEYS.filter((key) => key !== 'songSource' && key !== 'songFallbackReason').map((key) => [key, null]));
-      return { output: reset, goto: 'song', unlinkTrack: run.output.trackId || null };
+    if (run.brief.songFrom) {
+      // A reused song arrives analyzed and word-timed from its source project and is
+      // kept as is (no song review, so no retake); only what the source lacks is made.
+      if (!project.audioAnalysis) await deps.analyzeSong(project.id);
+      const untimed = (project.lyricCues || []).some((c) => cueText(c) && !c.words?.length);
+      if (untimed && (isOrchestratedRun(run) || autoApproves(run, 'storyboard'))) await alignRunLyrics(project.id, run);
+    } else {
+      await deps.analyzeSong(project.id);
+      // A storyboard grant needs the lyric timings production verifies, so the autopilot aligns too.
+      if (!isOrchestratedRun(run) && autoApproves(run, 'storyboard')) await alignRunLyrics(project.id, run);
+      if (isOrchestratedRun(run) && (await orchestrateSong(project.id, run)).retake) {
+        // A local fallback stays local: the retake must not send the run back to Suno.
+        const reset = Object.fromEntries(SONG_OUTPUT_KEYS.filter((key) => key !== 'songSource' && key !== 'songFallbackReason').map((key) => [key, null]));
+        return { output: reset, goto: 'song', unlinkTrack: run.output.trackId || null };
+      }
     }
     // The single's own cover design, drafted from the song just made, ready
     // for the publishing kit. Best-effort: a failed draft never stops the video.
@@ -1223,19 +1247,53 @@ async function assertBriefVideoModelsCapable(tools, models) {
   if (pool.some((route) => route.kind === 'video' && route.model)) await assertFootageVideoModelsCapable(pool, await loadPoolEnv());
 }
 
+// The song fields a reused song brings along: the audio, its analysis and the
+// timed lyrics. Never the source's look, cast, scenes, storyboard or treatment.
+const REUSED_SONG_FIELDS = ['audioAnalysis', 'midiTranscription', 'lyricCues', 'lyricMarkers', 'phrases',
+  'vocalStemFilename', 'performanceConditioningSource', 'lyricAlignSource', 'lyricAlignSilentWords'];
+
+/** The song an autonomous run reuses from another project, or a 4xx naming why it cannot. */
+async function loadSongSource(projectId) {
+  const source = await getProject(projectId);
+  if (!source || source.deleted) throw runError(404, 'NOT_FOUND', 'The project to take the song from was not found');
+  if (!source.trackId && !source.uploadedAudioFilename) throw runError(409, 'NO_SONG', `"${source.name}" has no song to reuse`);
+  const track = source.trackId ? await deps.getTrack(source.trackId) : null;
+  const cueLines = (source.lyricCues || []).map(cueText).filter(Boolean);
+  return {
+    source,
+    title: trimTo(track?.title || source.name, SUNO_LIMITS.title) || 'Untitled',
+    style: trimTo(source.concept?.songStyle || track?.prompt || '', 2000),
+    lyrics: cueLines.length ? cueLines.join('\n') : (typeof track?.lyrics === 'string' ? track.lyrics.trim() : ''),
+    // Verified timing carries over only while it is still verified on the source.
+    verified: productionReadiness(source).alignment.status === 'verified',
+  };
+}
+
 export async function startAutonomousVideo(input, { autoApproveAuthorized = false } = {}) {
   const brief = { ...normalizeAutonomousBrief(input), ...autoApproveGrant(input?.autoApprove, autoApproveAuthorized) };
   if (!brief.prompt) throw runError(400, 'VALIDATION_ERROR', 'A prompt is required');
   if (brief.orchestrator) Object.assign(brief, orchestratorGrant(autoApproveAuthorized));
   await assertBriefVideoModelsCapable(brief.tools, brief.models);
+  const song = input?.fromProjectId ? await loadSongSource(input.fromProjectId) : null;
+  if (song) {
+    // No lyrics are written and no song is made, so those checkpoints have nothing to stop on.
+    Object.assign(brief, {
+      name: brief.name || trimTo(`${song.title} (Auto)`, 200),
+      instrumental: !song.lyrics,
+      checkpoints: brief.checkpoints.filter((id) => id !== 'lyrics' && id !== 'song'),
+      songFrom: { projectId: song.source.id, title: song.title, style: song.style, verifiedAlignmentBasis: null },
+    });
+  }
   const now = new Date().toISOString();
   const created = await deps.createProject({
     name: brief.name || trimTo(brief.prompt.replace(/\s+/g, ' '), 60) || 'Autonomous music video',
     mode: 'autonomous',
     mediaMode: brief.mediaMode,
     ...(brief.mediaMode !== 'code-images-video' ? { productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 } } : {}),
+    ...(song ? { trackId: song.source.trackId || null, uploadedAudioFilename: song.source.uploadedAudioFilename || null } : {}),
     // The style id makes createProject cast its character and attach the sheet (styleSnapshots.js).
-    concept: { prompt: trimTo(brief.prompt, 8000), ...(brief.characterStyleId ? { characterStyleId: brief.characterStyleId } : {}) },
+    concept: { prompt: trimTo(brief.prompt, 8000), ...(brief.characterStyleId ? { characterStyleId: brief.characterStyleId } : {}),
+      ...(song?.style ? { songStyle: song.style } : {}) },
     automation: {
       tools: brief.tools,
       guidance: brief.guidance,
@@ -1253,15 +1311,24 @@ export async function startAutonomousVideo(input, { autoApproveAuthorized = fals
     awaiting: null,
     brief,
     stages: emptyStages(),
-    output: {},
+    output: song ? { trackId: song.source.trackId || null, lyrics: song.lyrics, songSource: 'reused' } : {},
     error: null,
     errorCode: null,
     processId: PROCESS_ID,
     createdAt: now,
     updatedAt: now,
   };
-  const out = await mutateProjectRecord(created.id, (current) => ({ project: { ...current, autonomousRun: run }, run }));
-  console.log(`🎬 Autonomous music video ${short(run.id)} started (${brief.tools.length} tool(s), ${brief.orchestrator ? `orchestrated by ${brief.orchestrator.providerId}` : `${brief.checkpoints.length} checkpoint(s)`}${brief.autoApprove.length ? `, auto-approve ${brief.autoApprove.join('/')}` : ''}${brief.origin.kind === 'schedule' ? ', scheduled' : ''})`);
+  const out = await mutateProjectRecord(created.id, (current) => {
+    if (!song) return { project: { ...current, autonomousRun: run }, run };
+    const copied = Object.fromEntries(REUSED_SONG_FIELDS.filter((key) => song.source[key] !== undefined)
+      .map((key) => [key, structuredClone(song.source[key])]));
+    const project = { ...current, ...copied, ...(copied.audioAnalysis ? { status: 'analyzed' } : {}) };
+    // Bound to the copy as written: any later change to the audio or timings unbinds it.
+    const reused = { ...run, brief: { ...run.brief, songFrom: { ...run.brief.songFrom,
+      verifiedAlignmentBasis: song.verified ? productionAlignmentBasis(project) : null } } };
+    return { project: { ...project, autonomousRun: reused }, run: reused };
+  });
+  console.log(`🎬 Autonomous music video ${short(run.id)} started${song ? ` on the song from ${short(song.source.id)}` : ''} (${brief.tools.length} tool(s), ${brief.orchestrator ? `orchestrated by ${brief.orchestrator.providerId}` : `${brief.checkpoints.length} checkpoint(s)`}${brief.autoApprove.length ? `, auto-approve ${brief.autoApprove.join('/')}` : ''}${brief.origin.kind === 'schedule' ? ', scheduled' : ''})`);
   publish(out.project, out.run);
   advanceInBackground(created.id);
   return { project: out.project, run: presentAutonomousRun(out.run) };
@@ -1342,6 +1409,7 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
   // "Auto-approve the rest": replaces the brief's grant (an empty list clears it).
   const grant = edits.autoApprove !== undefined ? autoApproveGrant(edits.autoApprove, autoApproveAuthorized) : null;
   const retake = edits.retakeSong === true;
+  if (retake && run.brief.songFrom) throw runError(409, 'SONG_REUSED', 'This run reuses an existing song, so it has no song to retake');
   if (retake) assertAtSongCheckpoint(run);
   const modelsChanged = modelsPatch !== null && JSON.stringify(modelsPatch) !== JSON.stringify(run.brief.models || {});
   const limitsPatch = edits.limits ? { ...run.brief.limits, ...edits.limits } : null;

@@ -1017,6 +1017,9 @@ export const musicVideoAutonomousStartSchema = z.object({
   checkpoints: z.array(z.enum(AUTONOMOUS_CHECKPOINT_IDS)).max(AUTONOMOUS_CHECKPOINT_IDS.length).optional(),
   // Reuse this existing mood board instead of generating one from the prompt.
   moodBoardId: z.string().trim().min(1).max(64).nullable().optional(),
+  // Start on this project's song: its audio, analysis and lyric timing are copied,
+  // so the run writes no lyrics, makes no song and skips re-analysis.
+  fromProjectId: z.string().trim().min(1).max(80).optional(),
   // A built-in character style (musicVideoCharacterStyles.js) cast as protagonist from the start.
   characterStyleId: z.enum(MUSIC_VIDEO_CHARACTER_STYLE_IDS).nullable().optional(),
   // The LLM that writes the brief and lyrics (blank = an eligible TUI provider, else the
