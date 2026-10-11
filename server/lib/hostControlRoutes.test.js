@@ -718,6 +718,27 @@ describe('Music Video cover/promotion and POST LLM drill policy (#10989)', () =>
   });
 });
 
+describe('Voice fine-tuning policy (#11074)', () => {
+  const protectedRoutes = [
+    'POST /api/voice/profiles/:id/fine-tune/start',
+  ];
+
+  it('gates each route and maps every entry to a mounted route', () => {
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => method + ' ' + path));
+    for (const route of protectedRoutes) {
+      const [method, path] = route.split(' ');
+      expect(mounted.has(route), route).toBe(true);
+      expect(hostControlRouteFor(method, path), route).toBe(route);
+    }
+  });
+
+  it('keeps reads open', () => {
+    for (const [method, path] of [
+      ['GET', '/api/voice/profiles/:id/fine-tune'],
+    ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
+  });
+});
+
 describe('3D model rigging host-workers (#10922)', () => {
   const protectedRoutes = [
     'POST /api/rigging/models/:id',

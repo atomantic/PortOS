@@ -245,6 +245,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/system/maintenance',
   'POST /api/system/maintenance/resume',
   'POST /api/voice/studio/setup',
+  // Voice fine-tune start spawns a Python trainer on the host (#11074).
+  'POST /api/voice/profiles/:id/fine-tune/start',
 
   // Instances: runs the Tailscale CLI and writes a TLS certificate and private
   // key into the install's cert directory.
