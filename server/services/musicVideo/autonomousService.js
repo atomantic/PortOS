@@ -1905,7 +1905,7 @@ async function repairPilot(projectId, run, productionRunId, { pilot, result }) {
       if (s.sceneId !== pilot.sceneId) return s;
       // Earlier fixes stay in the prompt so a repair never undoes the last one; the newest win the length cap.
       const text = [s[slot]?.text, problems].filter(Boolean).join(' ');
-      return { ...s, ...(slot === 'stillFixes' ? { referenceImageId: null } : {}), [slot]: { text: text.slice(-CLIP_FIXES_MAX), at } };
+      return { ...s, ...(slot === 'stillFixes' ? { referenceImageId: null } : {}), [slot]: { text: text.slice(-(slot === 'stillFixes' ? STILL_FIXES_MAX : CLIP_FIXES_MAX)), at } };
     }) } }));
     await recordReview(projectId, { checkpoint: 'pilot', sceneId: pilot.sceneId, verdict: 'revise',
       notes: trimTo(`Pilot ${scene.label || pilot.sceneId}: ${repair.category} repair (${spent + 1} of ${reviewLimit(run)}), generated again with the fix. ${problems}`, 1500),
