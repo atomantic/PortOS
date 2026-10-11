@@ -127,6 +127,13 @@ describe('accepted-prefix repair planning', () => {
     expect(planPerformanceRepair({ scene, temporal, excerptStartSec: 8, backend: 'fal' }))
       .toMatchObject({ ok: true, boundarySec: 14, endSec: 24, suffixSec: 10, referenceClipSec: 6, costUsd: 1.6 });
   });
+  it('plans a take whose edit points were moved onto padded clip audio (#11210) in clip time', async () => {
+    const { planPerformanceRepair } = await import('./musicVideoShotTiming.js');
+    const aligned = structuredClone(scene);
+    Object.assign(aligned.takes[0].shotInstruction, { edit: { inSec: 2.42, outSec: 16.42 }, alignment: { offsetSec: 0.42 } });
+    expect(planPerformanceRepair({ scene: aligned, temporal, excerptStartSec: 8, backend: 'fal' }))
+      .toMatchObject({ ok: true, boundarySec: 14, referenceClipSec: 6.42 });
+  });
   it('rejects inconclusive/partial evidence, unsafe word gaps, short suffixes and unsupported routes', async () => {
     const { planPerformanceRepair } = await import('./musicVideoShotTiming.js');
     const plan = (overrides = {}) => planPerformanceRepair({ scene, temporal, excerptStartSec: 8, backend: 'fal', ...overrides });

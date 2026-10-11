@@ -8,7 +8,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { findFfmpeg } from './ffmpeg.js';
-import { compareWindowFingerprint, computeRmsEnvelope, windowFingerprint } from './audioFingerprint.js';
+import { compareWindowFingerprint, computeRmsEnvelope, envelopeOffsetSec, windowFingerprint } from './audioFingerprint.js';
 
 const ffmpeg = await findFfmpeg();
 const RATE = 48000;
@@ -105,4 +105,22 @@ describe.skipIf(!ffmpeg)('audio window fingerprints', () => {
     expect(compareWindowFingerprint({ ...fp, version: 99 }, envelope).same).toBe(false);
     expect(compareWindowFingerprint(null, envelope).same).toBe(false);
   }, 30_000);
+});
+
+describe('envelopeOffsetSec', () => {
+  // An irregular contour: no stretch resembles another a few frames off.
+  let seed = 3;
+  const contour = Int8Array.from({ length: 400 }, () => { seed = (seed * 1103515245 + 12345) % 2147483648; return -10 - Math.floor((seed / 2147483648) * 40); });
+  const shifted = (frames) => Int8Array.from({ length: 500 }, (_, i) => (i - frames >= 0 && i - frames < contour.length ? contour[i - frames] : -90));
+
+  it('finds the reference late (padding) or early inside the candidate', () => {
+    expect(envelopeOffsetSec(contour, shifted(42))).toMatchObject({ offsetSec: 0.42, correlation: 1 });
+    expect(envelopeOffsetSec(contour.subarray(30), shifted(0)).offsetSec).toBe(0.3);
+    expect(envelopeOffsetSec(contour.subarray(0, 370), Int8Array.from(contour.subarray(20)))).toMatchObject({ offsetSec: -0.2 });
+  });
+
+  it('returns null for a flat window or a contour that does not match', () => {
+    expect(envelopeOffsetSec(new Int8Array(400).fill(-20), shifted(10))).toBeNull();
+    expect(envelopeOffsetSec(contour, Int8Array.from(contour).reverse())).toBeNull();
+  });
 });

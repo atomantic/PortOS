@@ -161,3 +161,63 @@ export function compareWindowFingerprint(fingerprint, envelope) {
   const same = !localChange && meanDeltaDb <= FINGERPRINT_MAX_MEAN_DELTA_DB && (correlation == null || correlation >= FINGERPRINT_MIN_CORRELATION);
   return { same, correlation, meanDeltaDb };
 }
+
+// A lip-sync provider's lead padding is a fraction of a second; a clip that
+// starts early is rarer and smaller. Searching only this span keeps one
+// syllable from matching a repeat of itself a bar away.
+const OFFSET_MIN_LAG_SEC = -0.5;
+const OFFSET_MAX_LAG_SEC = 1.5;
+// Below this the two contours are not the same performance shifted in time.
+export const OFFSET_MIN_CORRELATION = 0.6;
+
+/**
+ * Where `reference`'s sound sits inside `candidate`: the lag (seconds) at which
+ * `candidate[t + lag]` best matches `reference[t]`, by Pearson correlation of
+ * the two 100 Hz envelopes above the codec-noise floor, refined to a fraction
+ * of a frame. Positive = the candidate's sound starts later (leading padding).
+ * Returns `{ offsetSec, correlation }`, or null when nothing matches well
+ * enough (a flat or silent window, a different performance).
+ */
+export function envelopeOffsetSec(reference, candidate, { minLagSec = OFFSET_MIN_LAG_SEC, maxLagSec = OFFSET_MAX_LAG_SEC } = {}) {
+  const ref = Float64Array.from(reference, (v) => Math.max(COMPARE_FLOOR_DB, v));
+  const cand = Float64Array.from(candidate, (v) => Math.max(COMPARE_FLOOR_DB, v));
+  const minOverlap = Math.max(FINGERPRINT_RATE_HZ, Math.ceil(ref.length * 0.6));
+  const scores = new Map();
+  const score = (lag) => {
+    const from = Math.max(0, -lag);
+    const to = Math.min(ref.length, cand.length - lag);
+    const n = to - from;
+    if (n < minOverlap) return null;
+    let sumA = 0;
+    let sumB = 0;
+    for (let i = from; i < to; i++) { sumA += ref[i]; sumB += cand[i + lag]; }
+    const meanA = sumA / n;
+    const meanB = sumB / n;
+    let cov = 0;
+    let varA = 0;
+    let varB = 0;
+    for (let i = from; i < to; i++) {
+      const a = ref[i] - meanA;
+      const b = cand[i + lag] - meanB;
+      cov += a * b;
+      varA += a * a;
+      varB += b * b;
+    }
+    if (Math.sqrt(varA / n) < MIN_SHAPE_STD_DB || Math.sqrt(varB / n) < MIN_SHAPE_STD_DB) return null;
+    return cov / Math.sqrt(varA * varB);
+  };
+  let best = null;
+  for (let lag = Math.round(minLagSec * FINGERPRINT_RATE_HZ); lag <= Math.round(maxLagSec * FINGERPRINT_RATE_HZ); lag++) {
+    const r = score(lag);
+    scores.set(lag, r);
+    if (r != null && (best == null || r > best.r)) best = { lag, r };
+  }
+  if (!best || best.r < OFFSET_MIN_CORRELATION) return null;
+  // Parabolic peak through the neighbors: the envelope is 10 ms frames, a
+  // video frame is ~42 ms, so the refinement only keeps rounding honest.
+  const left = scores.get(best.lag - 1);
+  const right = scores.get(best.lag + 1);
+  const curve = left != null && right != null ? left - 2 * best.r + right : 0;
+  const shift = curve < 0 ? Math.max(-0.5, Math.min(0.5, (left - right) / (2 * curve))) : 0;
+  return { offsetSec: Math.round((best.lag + shift) / FINGERPRINT_RATE_HZ * 1000) / 1000, correlation: Math.round(best.r * 1000) / 1000 };
+}
