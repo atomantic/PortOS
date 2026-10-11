@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { EventEmitter } from 'node:events';
 import sharp from 'sharp';
 import { encodeComposition, encodeCompositionSegments } from './encode.js';
@@ -142,6 +142,9 @@ describe('encodeCompositionSegments when a worker browser stalls', () => {
       async close() { state.closed += 1; },
     });
   };
+  // The join list is written beside the output, so it needs a real directory (`/tmp` is not one on Windows).
+  const stallDir = mkdtempSync(join(tmpdir(), 'encode-stall-'));
+  afterAll(() => rmSync(stallDir, { recursive: true, force: true }));
   const run = (first, openPage, options = {}) => {
     const written = [];
     const encode = (p, c, path, encodeOptions) => encodeComposition(p, c, path, {
@@ -157,7 +160,7 @@ describe('encodeCompositionSegments when a worker browser stalls', () => {
         return proc;
       },
     });
-    const result = encodeCompositionSegments(first, { fps: 10, durationSec: 48, width: 4, height: 4, motionBlur: 1 }, '/tmp/stall.mp4', {
+    const result = encodeCompositionSegments(first, { fps: 10, durationSec: 48, width: 4, height: 4, motionBlur: 1 }, join(stallDir, 'stall.mp4'), {
       workers: 2, openPage, encode, locateFfmpeg: async () => 'ffmpeg', runFfmpeg: async () => ({ ok: true }), ...options,
     });
     return { result, written };
