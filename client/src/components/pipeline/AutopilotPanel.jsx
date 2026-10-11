@@ -481,11 +481,8 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     setFileGaps(paused && typeof resumeFileGaps === 'boolean' ? resumeFileGaps : false);
   }, [seriesId, series?.autopilot?.status, resumeIncludeVisual, resumeFileGaps]);
   // Persist a setting (clamped) so a later Resume picks it up server-side.
-  // patchSettingsSlice is a GET-merge-PUT, so two overlapping calls (a blur save
-  // racing start()'s save) can lose an update — a slow earlier PUT lands after a
-  // newer one and clobbers it. Serialize every write onto one tail promise so the
-  // cycles can't interleave; start() awaiting its own enqueued write transitively
-  // awaits any in-flight blur save. Returns the promise so start() can await it.
+  // Keep same-control writes ordered so start() also waits for an in-flight
+  // blur save. Independent settings patches are merged atomically server-side.
   const persistTailRef = useRef(Promise.resolve());
   const persistRounds = useCallback((patch) => {
     const next = persistTailRef.current
