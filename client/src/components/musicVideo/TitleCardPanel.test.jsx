@@ -36,6 +36,15 @@ describe('TitleCardPanel', () => {
     expect(screen.queryByText(/A sung line starts/)).toBeNull();
   });
 
+  it('re-enables the switch when the first save fails', async () => {
+    const onSave = vi.fn().mockRejectedValue(new Error('offline'));
+    render(<Harness initial={base} onSave={onSave} />);
+    const toggle = screen.getByLabelText(/Off/);
+    fireEvent.click(toggle);
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByRole('checkbox', { name: /Live in the preview/ })).not.toBeDisabled());
+  });
+
   it('flags a sung line under the card and ends the card before it in one tap', async () => {
     const onSave = vi.fn().mockResolvedValue({});
     render(<Harness initial={{ ...base, titleCard: { enabled: true, title: 'Example Song', startSec: 2, endSec: 10 } }} onSave={onSave} />);

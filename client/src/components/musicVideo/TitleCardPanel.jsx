@@ -44,17 +44,20 @@ export default function TitleCardPanel({ project, onEditLocal, onSave, onPreview
     return onSave({ titleCard: next });
   };
 
-  const turnOn = async () => {
+  const turnOn = () => {
     if (card) return commit({ enabled: true });
     setStarting(true);
-    const platforms = await getMusicVideoPublishPlatforms({ silent: true }).catch(() => null);
-    const distrokid = platforms?.distrokid;
-    const artist = distrokid?.account || distrokid?.defaults?.artistName || '';
     const firstLyricSec = (project.lyricCues || []).map((cue) => cue?.startSec).filter((s) => typeof s === 'number').sort((a, b) => a - b)[0] ?? null;
-    const next = titleCardPrefill(project, { artist, firstLyricSec });
-    onEditLocal({ titleCard: next });
-    await onSave({ titleCard: next });
-    setStarting(false);
+    return getMusicVideoPublishPlatforms({ silent: true }).catch(() => null)
+      .then((platforms) => {
+        const distrokid = platforms?.distrokid;
+        const next = titleCardPrefill(project, { artist: distrokid?.account || distrokid?.defaults?.artistName || '', firstLyricSec });
+        onEditLocal({ titleCard: next });
+        return onSave({ titleCard: next });
+      })
+      // The board's save already reports a failure; it must not leave the switch disabled.
+      .catch(() => null)
+      .finally(() => setStarting(false));
   };
 
   const overlap = on ? lyricDuringCard(project, card) : null;
