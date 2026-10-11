@@ -32,7 +32,7 @@ import { cancelMusicVideoRenderJob, isMusicVideoRenderCanceled } from './renderC
 import { safeUnder } from '../../lib/ffmpeg.js';
 import { encodeFileContactSheetAtTimes } from '../htmlComposition/encode.js';
 import { getProject, listProjects, mutateProjectRecord } from './projects.js';
-import { assertCurrentPerformanceTakes } from './performanceShot.js';
+import { assertCurrentPerformanceTakes, withDraftPerformanceFallbacks } from './performanceShot.js';
 import { assertCurrentClipDependencies, planMusicVideoRender, buildMusicVideoFfmpegArgs, excerptBoundaryTimes, isLocalRenderMark, resolveMasterAudioPath, resolveSoundBedPath } from './render.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
 import { encodeDocumentComposition, prepareDocumentRender } from './documentRender.js';
@@ -127,13 +127,14 @@ async function launchSeekedExcerpt({ projectId, project: stored, startSec, endSe
   // A social cut renders the same composition at another frame (#9280): the
   // re-framed view drives planning, staging and capture; the record keeps its own aspect.
   const project = musicVideoAtAspect(stored, aspect);
-  const prepared = await renderer.prepare(project);
-  // Same order as a full render: a missing master throws before the
-  // excerpt is marked rendering.
+  // A missing master throws before the excerpt is marked rendering.
   const audioPath = await resolveMasterAudioPath(project);
+  // A draft draws a stale performance shot as a cutaway; the excerpt still records the real selection.
+  const drawn = renderer.performanceTakes ? await withDraftPerformanceFallbacks(project, audioPath) : project;
+  const prepared = await renderer.prepare(drawn);
   if (renderer.performanceTakes) {
-    assertCurrentClipDependencies(project);
-    await assertCurrentPerformanceTakes(project, audioPath);
+    assertCurrentClipDependencies(drawn);
+    await assertCurrentPerformanceTakes(drawn, audioPath);
   }
   const soundBed = renderer.soundBed ? await resolveSoundBedPath(project) : null;
   if (!excerptRangeFits(startSec, endSec, prepared.totalSec, prepared.plan?.fps ?? prepared.full?.fps)) {
@@ -180,7 +181,7 @@ async function launchSeekedExcerpt({ projectId, project: stored, startSec, endSe
     return persisted;
   };
   Promise.resolve().then(() => renderer.encode({
-    prepared, project, projectId, jobId, audioPath, soundBed, outputPath, signal, startSec, endSec: endClamped, fade,
+    prepared, project: drawn, projectId, jobId, audioPath, soundBed, outputPath, signal, startSec, endSec: endClamped, fade,
     onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: fraction }),
   })).then(async (encoded) => {
     job.overlayAbort = null;

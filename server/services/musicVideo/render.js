@@ -48,7 +48,7 @@ import { encodeDocumentComposition, prepareDocumentRender, sweepDocumentScratch 
 import { renderTypographyOverlays, removeCompositionScratch, sweepCompositionScratch } from './compositionRender.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
 import { captureMusicVideoEvidence, musicVideoTakeChanges } from '../../lib/musicVideoDependencies.js';
-import { assertCurrentPerformanceTakes } from './performanceShot.js';
+import { assertCurrentPerformanceTakes, withDraftPerformanceFallbacks } from './performanceShot.js';
 import { ensureInstanceId } from '../instanceIdentity.js';
 import { AUDIO_NORM, buildAudioBedMix } from '../videoTimeline/audioBedMix.js';
 import { musicVideoEvents } from './events.js';
@@ -613,7 +613,8 @@ export async function planMusicVideoRender(project, { draft = false } = {}) {
 
   const audioPath = await resolveMasterAudioPath(project);
   // #8977/#9266: refuse a performance take whose scene was re-timed or whose
-  // sung window changed in the current master.
+  // sung window changed in the current master. A draft shows a cutaway instead.
+  if (draft) project = await withDraftPerformanceFallbacks(project, audioPath);
   await assertCurrentPerformanceTakes(project, audioPath);
   // #8985: a composed render cuts still and card sections into the same
   // timebase as the footage; plain concat renders footage only, as before.
