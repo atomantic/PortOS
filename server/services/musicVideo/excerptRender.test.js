@@ -49,6 +49,19 @@ vi.mock('./render.js', () => ({
   resolveMasterAudioPath: vi.fn(),
   resolveSoundBedPath: vi.fn(),
 }));
+// The film look finishing pass (filmLookFinish.js) runs between a zero-exit
+// encode and the excerpt's completion: controllable so the window can be
+// settled, cancelled or failed while it is under way.
+const look = vi.hoisted(() => ({ calls: [], resolve: null, reject: null }));
+vi.mock('./filmLookFinish.js', () => ({
+  filmLookFinishNeeded: (project) => !!project?.filmLook,
+  applyFilmLookFinish: (options) => new Promise((resolve, reject) => {
+    look.calls.push(options);
+    look.resolve = resolve;
+    look.reject = reject;
+    options.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+  }),
+}));
 vi.mock('./compositionRender.js', () => ({
   removeCompositionScratch: vi.fn(async () => {}),
   renderTypographyOverlays: vi.fn(({ signal }) => new Promise((resolve, reject) => {
@@ -75,6 +88,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.procs.length = 0;
   h.store.clear();
+  look.calls.length = 0;
 });
 
 describe('excerpt render cancellation', () => {
@@ -191,5 +205,62 @@ describe('excerpt range', () => {
     lastProc().emit('close', 1, null);
     await vi.waitFor(() => expect(excerpt('excerpt-range', excerptId).status).toBe('error'));
     await expect(startExcerptRender('excerpt-range', { startSec: 0, endSec: 4.1 })).rejects.toMatchObject({ code: 'INVALID_EXCERPT_RANGE' });
+  });
+});
+
+
+describe('film look finishing pass on a footage excerpt', () => {
+  const primeLook = (id) => h.store.set(id, { id, name: 'Test', scenes: [], excerpts: [], composition: null, filmLook: { preset: 'super8', grain: 0.5 } });
+  const progressFrames = (jobId) => broadcastSse.mock.calls.filter(([job, frame]) => job.id === jobId && frame.type === 'progress').map(([, frame]) => frame.progress);
+  const encodeDone = async (id) => {
+    primeLook(id);
+    const started = await startExcerptRender(id, { startSec: 1, endSec: 3 });
+    lastProc().emit('spawn');
+    lastProc().stderr.emit('data', 'progress=end\n');
+    lastProc().emit('close', 0, null);
+    await vi.waitFor(() => expect(look.calls).toHaveLength(1));
+    return started;
+  };
+
+  it('runs the pass on the excerpt window after a zero exit and completes only once it resolves', async () => {
+    const id = 'excerpt-look';
+    const { jobId, excerptId } = await encodeDone(id);
+    // The encode's end is the middle of the bar; the pass fills the rest, on song time.
+    expect(progressFrames(jobId)).toEqual([0.5]);
+    expect(look.calls[0]).toMatchObject({ jobId, offsetSec: 1, path: join('/test/videos', excerpt(id, excerptId).partialFilename), project: expect.objectContaining({ id }) });
+    expect(excerpt(id, excerptId).status).toBe('rendering');
+    expect(terminalFrames(jobId)).toEqual([]);
+    look.calls[0].onProgress(0.5);
+    expect(progressFrames(jobId)).toEqual([0.5, 0.75]);
+    look.resolve(true);
+    await vi.waitFor(() => expect(terminalFrames(jobId)).toHaveLength(1));
+    expect(terminalFrames(jobId)[0].type).toBe('complete');
+    expect(excerpt(id, excerptId)).toMatchObject({ status: 'complete', jobId: null, error: null });
+    expect(excerpt(id, excerptId).filename).toBeTruthy();
+    expect(unlink).not.toHaveBeenCalled();
+  });
+
+  it('cancels during the pass: the partial output goes and the excerpt settles as canceled', async () => {
+    const id = 'excerpt-look-cancel';
+    const { jobId, excerptId } = await encodeDone(id);
+    const partialFilename = excerpt(id, excerptId).partialFilename;
+    expect(cancelExcerptRender(jobId)).toBe(true);
+    expect(look.calls[0].signal.aborted).toBe(true);
+    await vi.waitFor(() => expect(terminalFrames(jobId)).toHaveLength(1));
+    expect(terminalFrames(jobId)).toEqual([{ type: 'canceled', error: 'Render cancelled' }]);
+    expect(excerpt(id, excerptId)).toMatchObject({ status: 'canceled', filename: null, partialFilename: null, jobId: null, error: null });
+    expect(unlink.mock.calls).toEqual([[join('/test/videos', partialFilename)]]);
+    expect(cancelExcerptRender(jobId)).toBe(false);
+  });
+
+  it('settles a failed pass as an error that names it, with the window removed', async () => {
+    const id = 'excerpt-look-fail';
+    const { jobId, excerptId } = await encodeDone(id);
+    const partialFilename = excerpt(id, excerptId).partialFilename;
+    look.reject(new Error('no browser'));
+    await vi.waitFor(() => expect(terminalFrames(jobId)).toHaveLength(1));
+    expect(terminalFrames(jobId)).toEqual([{ type: 'error', error: 'Film look pass failed: no browser' }]);
+    expect(excerpt(id, excerptId)).toMatchObject({ status: 'error', filename: null, jobId: null, error: 'Film look pass failed: no browser' });
+    expect(unlink.mock.calls).toEqual([[join('/test/videos', partialFilename)]]);
   });
 });
