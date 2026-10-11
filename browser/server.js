@@ -384,7 +384,7 @@ process.on('SIGINT', shutdown);
 async function main() {
   await launchBrowser();
 
-  healthServer.listen(HEALTH_PORT, '0.0.0.0', () => {
+  healthServer.listen(HEALTH_PORT, '127.0.0.1', () => {
     console.log(`📡 Health check server listening on port ${HEALTH_PORT}`);
   });
 }
