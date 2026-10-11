@@ -1193,9 +1193,9 @@ describe('browser ingestion identity across sync, cache, and activity (#11150)',
     expect(f.stored().messages.filter(m => m.providerRowId === 'row-b').map(m => m.bodyText)).toEqual(['First body', 'Second body']);
   });
 
-  it('preserves ambiguous no-child-ID members rather than overwriting one with another', async () => {
+  it.each([null, 'repeated-provider-id'])('preserves ambiguous members rather than overwriting one with another (child ID: %s)', async (providerMessageId) => {
     const f = await fixture();
-    const details = ['Body one', 'Body two'].map(body => ({ from: summary.from, fromEmail: summary.fromEmail, date: summary.date, body }));
+    const details = ['Body one', 'Body two'].map(body => ({ providerMessageId, from: summary.from, fromEmail: summary.fromEmail, date: summary.date, body }));
     scrape([{ ...summary, providerRowId: 'row-a' }], details);
     await syncAccount(VALID_UUID);
     await syncAccount(VALID_UUID);

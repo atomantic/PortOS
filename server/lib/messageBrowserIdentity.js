@@ -167,6 +167,15 @@ export function browserDetailIdentities(summary, details) {
       date
     };
   });
+  const providerIdCounts = new Map();
+  for (const member of members) {
+    if (member.providerMessageId) providerIdCounts.set(member.providerMessageId, (providerIdCounts.get(member.providerMessageId) || 0) + 1);
+  }
+  // Some provider paints repeat a conversation attribute on every child. It is
+  // not a usable child ID when it fails uniqueness inside the reading pane.
+  for (const member of members) {
+    if (providerIdCounts.get(member.providerMessageId) > 1) member.providerMessageId = null;
+  }
   const counts = new Map();
   for (const member of members) {
     const key = messageIngestionIdentity(member);
