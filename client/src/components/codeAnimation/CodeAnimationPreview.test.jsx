@@ -21,7 +21,10 @@ const renderPreview = ({ audioUrl = null, jobId, html = HTML } = {}) => render(
   </MemoryRouter>,
 );
 
+const childHtml = (frame) => JSON.parse(/frame.srcdoc = (.*);/.exec(frame.getAttribute('srcdoc'))[1]);
 const postFromFrame = (source, data) => act(async () => {
+  const frame = [...document.querySelectorAll('iframe')].find((el) => el.contentWindow === source);
+  data = { ...data, previewRevision: frame?.dataset.previewRevision };
   window.dispatchEvent(new MessageEvent('message', { data, source }));
 });
 
@@ -66,7 +69,7 @@ describe('CodeAnimationPreview', () => {
     const three = "<!DOCTYPE html><html><head></head><body><script type=\"module\">import * as THREE from 'three';</script></body></html>";
     renderPreview({ html: three });
     const frame = await screen.findByTitle('Code animation preview');
-    const srcDoc = frame.getAttribute('srcdoc');
+    const srcDoc = childHtml(frame);
     expect(srcDoc).toContain("script-src 'unsafe-inline' data:");
     expect(srcDoc).toContain("connect-src 'none'");
     expect(srcDoc.indexOf('Content-Security-Policy')).toBeLessThan(srcDoc.indexOf('type="importmap"'));
@@ -79,7 +82,7 @@ describe('CodeAnimationPreview', () => {
     // A film that does not import three never fetches the modules or gets the wider policy.
     getCodeAnimationThreeVendor.mockClear();
     renderPreview();
-    expect((await screen.findAllByTitle('Code animation preview')).at(-1).getAttribute('srcdoc')).toContain("script-src 'unsafe-inline'; style-src");
+    expect(childHtml((await screen.findAllByTitle('Code animation preview')).at(-1))).toContain("script-src 'unsafe-inline'; style-src");
     expect(getCodeAnimationThreeVendor).not.toHaveBeenCalled();
   });
 
@@ -98,8 +101,8 @@ describe('CodeAnimationPreview', () => {
     const user = userEvent.setup();
     renderPreview();
     const frame = screen.getByTitle('Code animation preview');
-    expect(frame.getAttribute('sandbox')).toBe('allow-scripts allow-downloads');
-    expect(frame.getAttribute('srcdoc')).toContain("connect-src 'none'");
+    expect(frame.getAttribute('sandbox')).toBe('allow-scripts');
+    expect(childHtml(frame)).toContain("connect-src 'none'");
     const target = frame.contentWindow;
     const postMessage = vi.spyOn(target, 'postMessage');
 
@@ -126,14 +129,14 @@ describe('CodeAnimationPreview', () => {
 
     expect(screen.getByRole('heading', { name: 'Preview paused' })).toBeInTheDocument();
     expect(screen.getByText(/preview is paused until you choose/i)).toBeInTheDocument();
-    expect(screen.getByText(/could send that track outside PortOS/i)).toBeInTheDocument();
+    expect(screen.getByText(/send this track outside PortOS/i)).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
     expect(screen.queryByTitle('Code animation preview')).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Run with audio' }));
     const frame = await screen.findByTitle('Code animation preview');
     expect(fetchMock).toHaveBeenCalledWith('/api/uploads/audio/example.wav', { credentials: 'same-origin' });
-    expect(frame.getAttribute('srcdoc')).toContain('window["ANIMATION_AUDIO_URL"] = "data:audio/');
+    expect(childHtml(frame)).toContain('window["ANIMATION_AUDIO_URL"] = "data:audio/');
   });
 
   it('lets the user preview without audio and never fetches the selected track', async () => {
@@ -145,7 +148,7 @@ describe('CodeAnimationPreview', () => {
     await user.click(screen.getByRole('button', { name: 'Preview without audio' }));
     const frame = await screen.findByTitle('Code animation preview');
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(frame.getAttribute('srcdoc')).not.toContain('ANIMATION_AUDIO_URL');
+    expect(childHtml(frame)).not.toContain('ANIMATION_AUDIO_URL');
   });
 });
 

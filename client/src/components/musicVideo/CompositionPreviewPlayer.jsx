@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { uuidv4 } from '../../lib/uuid.js';
+import { buildGeneratedPreviewSandbox, MUSIC_VIDEO_PREVIEW_MESSAGES } from '../../../../server/lib/generatedPreviewSandbox.js';
 import { Pause, Play } from 'lucide-react';
 import { normalizeTitleCard } from '../../../../server/lib/musicVideoTitleCard.js';
 import { fetchMusicVideoPreviewAsset, getMusicVideoCompositionPreview, getMusicVideoLyricPlaythroughPreview } from '../../services/apiMusicVideo.js';
@@ -63,6 +65,8 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
   const doc = lyrics ? { playthrough: true } : (draft ? project.composition?.documentDraft : project.composition?.document) || null;
   const scrubId = givenScrubId || (lyrics ? 'mv-lyrics-scrub' : draft ? 'mv-doc-draft-scrub' : 'mv-doc-scrub');
   const [preview, setPreview] = useState(null);
+  const sandbox = useMemo(() => preview?.html ? { revision: uuidv4(), html: preview.html } : null, [preview]);
+  const sandboxHtml = useMemo(() => sandbox ? buildGeneratedPreviewSandbox(sandbox.html, { revision: sandbox.revision, ...MUSIC_VIDEO_PREVIEW_MESSAGES }) : null, [sandbox]);
   const [previewError, setPreviewError] = useState('');
   const [status, setStatus] = useState('');
   const [wanted, setWanted] = useState(() => !startsDeferred(collapsed));
@@ -153,7 +157,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
       return inFlight.get(url);
     };
     const onMessage = async (event) => {
-      if (event.source !== iframeRef.current?.contentWindow) return;
+      if (event.source !== iframeRef.current?.contentWindow || event.data?.previewRevision !== sandbox?.revision) return;
       const message = event.data || {};
       const state = seekState.current;
       if (message.type === 'portos-mv:loaded') {
@@ -171,7 +175,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
         const asset = byKey.get(key);
         const blob = asset ? await mediaFor(asset.url) : null;
         if (!blob) { missing = true; showStatus(); }
-        if (active) event.source.postMessage({ type: 'portos-mv:asset', key, blob }, '*');
+        if (active && event.source === iframeRef.current?.contentWindow) event.source.postMessage({ type: 'portos-mv:asset', key, blob }, '*');
       } else if (message.type === 'portos-mv:seeked') {
         if (firstFrame) { firstFrame = false; showStatus(); }
         state.inFlight = false;
@@ -187,7 +191,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
     return () => { active = false; window.removeEventListener('message', onMessage); };
     // `t` is read once when the page loads; later seeks go through postSeek.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [preview, postSeek]);
+  }, [preview, sandbox, postSeek]);
 
   const duration = preview?.durationSec || 0;
   const fps = preview?.fps || 24;
@@ -241,7 +245,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
       <div className={`overflow-hidden rounded border border-port-border bg-black mx-auto ${collapsed ? 'max-xl:hidden' : ''}`}
         style={{ aspectRatio: aspect, maxHeight: '70vh', maxWidth: '100%' }}>
         {preview?.html ? (
-          <iframe ref={iframeRef} title={lyrics ? 'Lyric timing playthrough' : draft ? 'Composition candidate preview' : 'Composition document preview'} sandbox="allow-scripts" srcDoc={preview.html} className="h-full w-full" />
+          <iframe key={sandbox.revision} data-preview-revision={sandbox.revision} ref={iframeRef} title={lyrics ? 'Lyric timing playthrough' : draft ? 'Composition candidate preview' : 'Composition document preview'} sandbox="allow-scripts" srcDoc={sandboxHtml} className="h-full w-full" />
         ) : (
           <p className="p-3 text-xs text-port-text-muted">{previewError ? '' : 'Building the preview…'}</p>
         )}

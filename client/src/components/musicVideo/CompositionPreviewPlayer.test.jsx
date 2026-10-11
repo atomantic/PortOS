@@ -28,7 +28,7 @@ describe('CompositionPreviewPlayer', () => {
     const frame = await screen.findByTitle('Composition document preview');
     const post = vi.spyOn(frame.contentWindow, 'postMessage');
     const send = (data) => act(async () => {
-      window.dispatchEvent(new MessageEvent('message', { source: frame.contentWindow, data }));
+      window.dispatchEvent(new MessageEvent('message', { source: frame.contentWindow, data: { ...data, previewRevision: frame.dataset.previewRevision } }));
     });
     // findByTitle can resolve before React flushes the passive effect that attaches the message listener, so a
     // `loaded` sent that early is dropped; repeat it until the player answers with its manifest.
@@ -61,6 +61,25 @@ describe('CompositionPreviewPlayer', () => {
     expect(await ask('../secrets.png')).toBeNull();
     expect(api.fetchMusicVideoPreviewAsset).toHaveBeenCalledTimes(1);
     expect(screen.queryByText('Some preview media could not be loaded')).toBeInTheDocument();
+  });
+
+  it('retires a revision before delivering an in-flight media response and rejects forged revision messages', async () => {
+    let resolveAsset;
+    api.fetchMusicVideoPreviewAsset.mockImplementation(() => new Promise(resolve => { resolveAsset = resolve; }));
+    api.getMusicVideoCompositionPreview.mockResolvedValue({ html: '<p>one</p>', assets: [{ key: 'private', url: '/synthetic' }], durationSec: 5 });
+    const { rerender } = render(<CompositionPreviewPlayer project={project} />);
+    const frame = await screen.findByTitle('Composition document preview');
+    const post = vi.spyOn(frame.contentWindow, 'postMessage');
+    await act(async () => window.dispatchEvent(new MessageEvent('message', { source: frame.contentWindow,
+      data: { type: 'portos-mv:request', key: 'private', previewRevision: 'wrong' } })));
+    expect(api.fetchMusicVideoPreviewAsset).not.toHaveBeenCalled();
+    await act(async () => { window.dispatchEvent(new MessageEvent('message', { source: frame.contentWindow,
+      data: { type: 'portos-mv:request', key: 'private', previewRevision: frame.dataset.previewRevision } })); });
+    expect(api.fetchMusicVideoPreviewAsset).toHaveBeenCalledOnce();
+    rerender(<CompositionPreviewPlayer project={{ ...project, composition: { document: { ...DOCUMENT, updatedAt: 'next' } } }} />);
+    await waitFor(() => expect(screen.getByTitle('Composition document preview')).not.toBe(frame));
+    await act(async () => resolveAsset(new Blob(['private'])));
+    expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'portos-mv:asset' }), '*');
   });
 
   it('answers a failed fetch with no blob and reports the missing media once the first frame is drawn', async () => {
@@ -96,7 +115,7 @@ describe('CompositionPreviewPlayer', () => {
     const { rerender } = render(<CompositionPreviewPlayer project={{ ...project, filmLook: look }} audioUrl={null} />);
     const frame = await screen.findByTitle('Composition document preview');
     const post = vi.spyOn(frame.contentWindow, 'postMessage');
-    const send = (data) => act(async () => { window.dispatchEvent(new MessageEvent('message', { source: frame.contentWindow, data })); });
+    const send = (data) => act(async () => { window.dispatchEvent(new MessageEvent('message', { source: frame.contentWindow, data: { ...data, previewRevision: frame.dataset.previewRevision } })); });
     await waitFor(async () => {
       await send({ type: 'portos-mv:loaded' });
       expect(post).toHaveBeenCalledWith({ type: 'portos-mv:film-look', look }, '*');
@@ -121,7 +140,7 @@ describe('CompositionPreviewPlayer', () => {
     const { rerender } = render(<CompositionPreviewPlayer project={{ ...project, titleCard: card }} audioUrl={null} />);
     const frame = await screen.findByTitle('Composition document preview');
     const post = vi.spyOn(frame.contentWindow, 'postMessage');
-    const send = (data) => act(async () => { window.dispatchEvent(new MessageEvent('message', { source: frame.contentWindow, data })); });
+    const send = (data) => act(async () => { window.dispatchEvent(new MessageEvent('message', { source: frame.contentWindow, data: { ...data, previewRevision: frame.dataset.previewRevision } })); });
     await waitFor(async () => {
       await send({ type: 'portos-mv:loaded' });
       expect(post).toHaveBeenCalledWith({ type: 'portos-mv:title-card', card: expect.objectContaining({ title: 'Example Song', position: 'lower-left' }) }, '*');

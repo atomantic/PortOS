@@ -888,3 +888,5 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `deepAudit.js` | Strict Deep audit checkpoint schema, scope invalidation, server-assigned passes and mechanical completion rules. |
 
 - `auditWorkflow.js`: versioned extended Deep execution and historical certification classification.
+
+| `generatedPreviewSandbox.js` | Browser-safe trusted wrapper for generated previews, child navigation containment and revision-bound typed media/recording relay. |
