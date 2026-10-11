@@ -8,6 +8,8 @@ import TreatmentPanel, { treatmentSummary } from '../TreatmentPanel.jsx';
 import StageSection from '../StageSection.jsx';
 import { PlanActions } from '../ProjectActionGroups.jsx';
 import ShotPacingFields from '../ShotPacingFields.jsx';
+import TitleCardPanel from '../TitleCardPanel.jsx';
+import { normalizeTitleCard } from '../../../../../server/lib/musicVideoTitleCard.js';
 import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
 import { FOOTAGE_OPTIONAL_MODES } from '../../../lib/musicVideoStages.js';
 import { parseSceneFilter, sceneAttention, sceneMatchesFilter, SCENE_ATTENTION_LABELS } from '../../../lib/musicVideoSceneAttention.js';
@@ -17,9 +19,17 @@ import { formatTimecode } from '../../../utils/formatters.js';
 const FILTER_LABELS = [['all', 'All'], ['attention', 'Needs attention'], ['missing', 'Missing footage']];
 const isTypingTarget = (el) => !!el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName));
 
+/** One line for the folded title card section: off, or what it says and when. */
+function titleCardSummary(stored) {
+  const card = normalizeTitleCard(stored);
+  if (!card?.enabled) return 'Off · the song, artist and year over the opener';
+  const words = [card.title && `“${card.title}”`, card.artist].filter(Boolean).join(' · ') || 'No text yet';
+  return `${words} · ${formatTimecode(card.startSec, 1)}–${formatTimecode(card.endSec, 1)}`;
+}
+
 /**
  * Storyboard: the treatment (the brief the planner reads, then per-shot
- * direction), planning tools, the beat timeline, and the scene cards —
+ * direction), planning tools, the opening title card, the beat timeline, and the scene cards —
  * one column on a phone, two and three as the column widens (a container
  * query, so the docked preview narrowing the column is accounted for). Cards
  * are collapsed to a thumbnail, lyric and status until tapped.
@@ -100,6 +110,12 @@ export default function BoardStage({ board }) {
       <StageSection title="Planning tools">
         <PlanActions project={project} busy={busy} onPlan={board.onPlan} onAutoArrange={board.onAutoArrange} />
         <ShotPacingFields project={project} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields} />
+      </StageSection>
+
+      {/* The opening credit block, set here so it plays in the storyboard animatic from the start. */}
+      <StageSection id="mv-board-title-card" title="Opening title card" summary={titleCardSummary(project.titleCard)}>
+        <TitleCardPanel bare project={project} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields}
+          onPreview={board.seekToScene ? (startSec) => board.seekToScene({ startSec }, { play: true }) : null} />
       </StageSection>
 
       {/* The brief feeds the shot planner; the direction is applied per shot once they exist. */}

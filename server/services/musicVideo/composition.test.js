@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildTypographyDocument, cueStateAt, normalizeComposition, overlayWindows, renderableCues, sectionCardCues } from './composition.js';
+import { buildTypographyDocument, cueStateAt, normalizeComposition, overlayWindows, projectTypographyPlan, renderableCues, sectionCardCues } from './composition.js';
 
 const cue = (over = {}) => ({ id: 'c', text: 'Hello world', startSec: 10, endSec: 12, template: 'fade', placement: 'lower', emphasis: 'subtitle', ...over });
 
@@ -97,6 +97,24 @@ describe('card cues (#11185)', () => {
     const html = buildTypographyDocument({ cues: cards, width: 1280, height: 720, durationSec: 10, fps: 24 });
     expect(html).toContain('"MV Archivo"');
     expect(html).toContain('white-space: pre-line');
+  });
+});
+
+describe('opening title card in composed renders', () => {
+  const titleCard = { enabled: true, title: 'Example Song', artist: 'Example Artist', year: '2026', startSec: 1, endSec: 6 };
+
+  it('is a capture window drawn by the title card runtime, not a text cue', () => {
+    const plan = projectTypographyPlan({ composition: { mode: 'composed' }, titleCard }, [], [], 10);
+    const cue = plan.cues.find((c) => c.titleCard);
+    expect(cue).toMatchObject({ startSec: 1, endSec: 6, titleCard: { title: 'Example Song' } });
+    const html = buildTypographyDocument({ cues: plan.cues, width: 1280, height: 720, durationSec: 10, fps: 24 });
+    expect(html).toContain('__portosTitleCard');
+    expect(html).not.toContain('"id":"title-card"');
+  });
+
+  it('is left out when the project is not composed or the card is off', () => {
+    expect(projectTypographyPlan({ composition: { mode: 'footage' }, titleCard }, [], [], 10).cues).toEqual([]);
+    expect(projectTypographyPlan({ composition: { mode: 'composed' }, titleCard: { ...titleCard, enabled: false } }, [], [], 10).cues).toEqual([]);
   });
 });
 

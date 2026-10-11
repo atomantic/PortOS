@@ -19,6 +19,7 @@ import { normalizeMusicVideoGrade } from '../../lib/musicVideoGrade.js';
 
 import { randomUUID } from 'crypto';
 import { trimTo } from '../../lib/textUtils.js';
+import { normalizeTitleCard, titleCardRuntimeSource, titleCardVisible } from '../../lib/musicVideoTitleCard.js';
 import { filmStyleIdSchema } from '../../lib/filmStyleGrammarValidation.js';
 import {
   musicVideoEidoverseSceneSchema,
@@ -230,11 +231,25 @@ export function renderableCues(composition, durationSec) {
     .sort((a, b) => a.startSec - b.startSec);
 }
 
+/**
+ * The opening title card (lib/musicVideoTitleCard.js) as a capture window in a
+ * composed render: a cue with no text of its own whose `titleCard` the overlay
+ * page draws with the same runtime the live preview and document renders use.
+ * Null when the card is off, empty or starts after the video ends.
+ */
+function titleCardCue(project, durationSec) {
+  if (project?.composition?.mode !== 'composed') return null;
+  const card = normalizeTitleCard(project.titleCard);
+  if (!titleCardVisible(card) || card.startSec >= durationSec) return null;
+  return { id: 'title-card', titleCard: card, startSec: card.startSec, endSec: Math.min(card.endSec, durationSec) };
+}
+
 /** Shared absolute-song-time cues and style for full renders and draft excerpts. */
 export function projectTypographyPlan(project, clips, sections, durationSec) {
   const graphicLanguage = project.treatment?.brief?.graphicLanguage;
+  const titleCard = titleCardCue(project, durationSec);
   return {
-    cues: [...renderableCues(project.composition, durationSec), ...sectionCardCues(clips, sections, durationSec, graphicLanguage)]
+    cues: [...renderableCues(project.composition, durationSec), ...sectionCardCues(clips, sections, durationSec, graphicLanguage), ...(titleCard ? [titleCard] : [])]
       .sort((a, b) => a.startSec - b.startSec),
     style: { ...project.composition?.style, graphicLanguage },
   };
@@ -344,12 +359,15 @@ const scriptJson = (value) => JSON.stringify(value).replace(/</g, '\\u003c');
  * box never changes between frames and cannot leave the safe area.
  */
 export function buildTypographyDocument({ cues, style = {}, width, height, durationSec, fps }) {
-  const payload = cues.map(({ id, text, startSec, endSec, template, placement, emphasis, words, card }) => ({ id, text, startSec, endSec, template, placement, emphasis, ...(words ? { words } : {}), ...(card ? { card: true } : {}) }));
+  // The title card is drawn by its own runtime (installed ahead of the page's script), not as a text cue.
+  const titleCard = cues.find((cue) => cue.titleCard)?.titleCard || null;
+  const payload = cues.filter((cue) => !cue.titleCard).map(({ id, text, startSec, endSec, template, placement, emphasis, words, card }) => ({ id, text, startSec, endSec, template, placement, emphasis, ...(words ? { words } : {}), ...(card ? { card: true } : {}) }));
   const hud = /\b(hud|counters?)\b/i.test(style.graphicLanguage || '');
   const color = /^#[0-9a-f]{6}$/i.test(style.color || '') ? style.color : '#ffffff';
   const fontStack = hud ? FONT_STACKS.mono : (FONT_STACKS[style.font] || FONT_STACKS.sans);
   const accent = /^#[0-9a-f]{6}$/i.test(style.accentColor || '') ? style.accentColor : '#ff5a1f';
-  return `<!doctype html><html><head><meta charset="utf-8"><style>
+  const titleCardScript = titleCard ? `<script>${titleCardRuntimeSource(titleCard)}</script>` : '';
+  return `<!doctype html><html><head><meta charset="utf-8">${titleCardScript}<style>
 @font-face { font-family: "MV Archivo"; src: url(${LYRIC_FONT_FILE}) format("woff2"); font-weight: 100 900; font-stretch: 62% 125%; }
 html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
 #safe { position: absolute; }

@@ -2,11 +2,14 @@ import { useState } from 'react';
 import { Clapperboard, Play } from 'lucide-react';
 import { getMusicVideoPublishPlatforms } from '../../services/apiMusicVideo.js';
 import {
-  TITLE_CARD_LIMITS, normalizeTitleCard, titleCardPrefill,
+  TITLE_CARD_LIMITS, TITLE_CARD_MTV_COLORS, normalizeTitleCard, titleCardPrefill,
 } from '../../../../server/lib/musicVideoTitleCard.js';
 
 const POSITIONS = [['lower-left', 'Bottom left'], ['lower-right', 'Bottom right'], ['upper-left', 'Top left'], ['upper-right', 'Top right'], ['lower-center', 'Bottom centre'], ['center', 'Centre']];
 const FONTS = [['display', 'Lyric type'], ['sans', 'Helvetica'], ['serif', 'Serif'], ['mono', 'Mono']];
+const LOOKS = [['outline', 'Outlined, like the lyrics'], ['mtv', 'Classic MTV lower third']];
+// Render styles that draw the card: the composition document and a composed cut's typography layer.
+const DRAWN_BY = ['document', 'composed'];
 const inputCls = 'w-full rounded border border-port-border bg-port-bg px-2 py-1 text-sm min-h-[44px] sm:min-h-0';
 const labelCls = 'mb-0.5 block text-xs text-port-text-muted';
 const clock = (sec) => {
@@ -24,15 +27,17 @@ function lyricDuringCard(project, card) {
 
 /**
  * The MTV-style opening title card (lib/musicVideoTitleCard.js): song title,
- * artist and year in a corner, fading in and out over the opener. Drawn over
- * the composition document in the docked live preview and the final render.
+ * artist and year in a corner, fading in and out over the opener, outlined like
+ * the lyrics or as a classic lower third. Drawn in the docked live preview, the
+ * storyboard animatic and the final render (composed or document styles).
  * Turning it on fills the song title, the artist named for DistroKid under
  * Where you post, this year and a window that ends before the first sung line.
  * Edits reach the preview at once (`onEditLocal`); leaving a field saves.
+ * `bare` drops the panel's own heading where a section around it carries one.
  */
-export default function TitleCardPanel({ project, onEditLocal, onSave, onPreview }) {
+export default function TitleCardPanel({ project, onEditLocal, onSave, onPreview, bare = false }) {
   const [starting, setStarting] = useState(false);
-  const documentMode = project.composition?.mode === 'document';
+  const drawn = DRAWN_BY.includes(project.composition?.mode);
   const raw = project.titleCard || null;
   const card = normalizeTitleCard(raw);
   const on = !!card?.enabled;
@@ -65,17 +70,17 @@ export default function TitleCardPanel({ project, onEditLocal, onSave, onPreview
   const field = (key) => (raw?.[key] ?? card?.[key] ?? '');
 
   return (
-    <section aria-label="Opening title card" className="space-y-2 border-t border-port-border pt-3">
+    <section aria-label="Opening title card" className={bare ? 'space-y-2' : 'space-y-2 border-t border-port-border pt-3'}>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="inline-flex items-center gap-1.5 text-sm font-medium"><Clapperboard size={14} className="text-port-accent" aria-hidden="true" /> Opening title card</h3>
+        {!bare && <h3 className="inline-flex items-center gap-1.5 text-sm font-medium"><Clapperboard size={14} className="text-port-accent" aria-hidden="true" /> Opening title card</h3>}
         <label htmlFor="mv-title-card-on" className="inline-flex min-h-[44px] items-center gap-2 text-xs text-port-text-muted sm:min-h-0">
           {on ? `Live in the preview · ${clock(card.startSec)}–${clock(card.endSec)}` : 'Off'}
           <input id="mv-title-card-on" type="checkbox" checked={on} disabled={starting}
             onChange={(e) => (e.target.checked ? turnOn() : commit({ enabled: false }))} className="h-4 w-4" />
         </label>
       </div>
-      {!documentMode && on && (
-        <p className="text-xs text-port-text-muted" role="status">The title card is drawn by the composition-document render style; this project's render style ignores it.</p>
+      {!drawn && on && (
+        <p className="text-xs text-port-text-muted" role="status">This project's render style does not draw the title card; the composed and composition-document styles do.</p>
       )}
       {on && (
         <>
@@ -118,6 +123,12 @@ export default function TitleCardPanel({ project, onEditLocal, onSave, onPreview
                 onChange={(e) => edit({ fadeSec: toNumber(e.target.value) })} onBlur={() => commit()} className={inputCls} />
             </div>
           </div>
+          <div>
+            <label htmlFor="mv-title-card-look" className={labelCls}>Look</label>
+            <select id="mv-title-card-look" value={card.style} onChange={(e) => commit({ style: e.target.value })} className={inputCls}>
+              {LOOKS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </div>
           <div className="grid grid-cols-2 gap-2">
             <div>
               <label htmlFor="mv-title-card-position" className={labelCls}>Position</label>
@@ -140,10 +151,22 @@ export default function TitleCardPanel({ project, onEditLocal, onSave, onPreview
                 className="h-11 w-full sm:h-auto" />
             </div>
             <div>
-              <label htmlFor="mv-title-card-color" className={labelCls}>Color</label>
+              <label htmlFor="mv-title-card-color" className={labelCls}>Text</label>
               <input id="mv-title-card-color" type="color" value={card.color}
                 onChange={(e) => edit({ color: e.target.value })} onBlur={() => commit()} className="h-11 w-14 rounded border border-port-border bg-port-bg sm:h-8" />
             </div>
+            <div>
+              <label htmlFor="mv-title-card-title-color" className={labelCls}>Title</label>
+              <input id="mv-title-card-title-color" type="color" value={card.titleColor || (card.style === 'mtv' ? TITLE_CARD_MTV_COLORS.title : card.color)}
+                onChange={(e) => edit({ titleColor: e.target.value })} onBlur={() => commit()} className="h-11 w-14 rounded border border-port-border bg-port-bg sm:h-8" />
+            </div>
+            {card.style === 'mtv' && (
+              <div>
+                <label htmlFor="mv-title-card-accent" className={labelCls}>Bar</label>
+                <input id="mv-title-card-accent" type="color" value={card.accentColor || TITLE_CARD_MTV_COLORS.accent}
+                  onChange={(e) => edit({ accentColor: e.target.value })} onBlur={() => commit()} className="h-11 w-14 rounded border border-port-border bg-port-bg sm:h-8" />
+              </div>
+            )}
             <label htmlFor="mv-title-card-quote" className="inline-flex min-h-[44px] items-center gap-2 text-xs text-port-text-muted sm:min-h-0">
               <input id="mv-title-card-quote" type="checkbox" checked={card.quoteTitle} onChange={(e) => commit({ quoteTitle: e.target.checked })} className="h-4 w-4" />
               Quote the title
