@@ -9,17 +9,20 @@
  * schema, a missing key, or a failed decryption surfaces an actionable sync-status
  * error and NEVER crashes or retry-loops.
  *
- * Design constraints (docs/plans/2026-07-04-human-activity-tracking.md):
+ * Design constraints (docs/plans/2026-07-04-human-activity-tracking.md, #11149):
  *
- * - **Zero new dependencies.** The SQLCipher-4 page decryption + Chromium
- *   safeStorage key-unwrap are implemented in pure `node:crypto`
- *   (`server/lib/signalCrypto.js`) — `node:sqlite` cannot open a SQLCipher file
- *   and shelling to a `sqlcipher` CLI would add a tool most machines lack. We
- *   decrypt to a plaintext temp copy, then read THAT with the built-in
- *   `node:sqlite` (readOnly). The macOS keychain read shells to the system
- *   `security` CLI (no dependency).
- * - **Never touch Signal's live file.** The DB is copied to a temp snapshot before
- *   decryption; the original `db.sqlite` is opened only for the `cp`.
+ * - **Consistent snapshot, not a main-file copy.** Signal runs in WAL mode, so
+ *   committed messages can live only in the WAL until the next checkpoint.
+ *   `signalSnapshot.js` opens the live file read-only with the bundled
+ *   SQLCipher driver, holds a read transaction, and exports one committed
+ *   view (WAL frames included) to a private plaintext database. `node:sqlite`
+ *   then reads that plaintext file. Key unwrap stays in `server/lib/signalCrypto.js`.
+ *   The macOS keychain read shells to the system `security` CLI.
+ * - **Fail closed.** If the driver prebuild cannot load, or the export is not
+ *   one integrity-clean snapshot, sync returns a setup/snapshot error and does
+ *   not advance the cursor. A stale main-file copy is not a fallback.
+ * - **Never write Signal's live database or WAL.** No checkpoint, no rekey, no
+ *   journal-mode change on the source. Only the private temp copy is decrypted.
  * - **Machine-local.** The incremental cursor lives in a `data/` JSON file — the DB
  *   and its rowids are per-machine. Derived events land in the already-machine-local
  *   `human_activity_events` table (excluded from peer sync).
@@ -35,16 +38,15 @@
 import { DatabaseSync } from 'node:sqlite';
 import { promisify } from 'node:util';
 import { execFile } from '../lib/childProcess.js';
-import { copyFile, mkdtemp, writeFile, rm } from 'node:fs/promises';
-import { statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { expandHome, dataPath, atomicWrite, tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
 import { getUserTimezone } from './userTimezone.js';
 import { identityFromHandle } from '../lib/tribeMatch.js';
-import { decryptSqlcipherDatabase, decryptSafeStorageValue, isRawHexKey } from '../lib/signalCrypto.js';
+import { decryptSafeStorageValue, isRawHexKey } from '../lib/signalCrypto.js';
 import { shortSummary, localDayKey } from './humanActivity.js';
+import { captureConsistentSnapshot } from './signalSnapshot.js';
 import { getSettings } from './settings.js';
 
 const execFileAsync = promisify(execFile);
@@ -313,42 +315,14 @@ export async function resolveDbKey() {
 }
 
 // ---------------------------------------------------------------------------
-// DB access — copy → decrypt → open plaintext with node:sqlite (readOnly).
+// DB access — read-only SQLCipher snapshot, then node:sqlite on the plaintext.
 // ---------------------------------------------------------------------------
 
-// Copy the live DB to a temp snapshot, decrypt it to a sibling plaintext file,
-// and return both paths for cleanup. Never touches Signal's live file beyond the
-// read for `cp`. Returns { ok, plaintextPath, tmpDir } or an error report.
+// Export one committed view of the live database, including WAL frames, to a
+// private plaintext file. Returns { ok, plaintextPath, tmpDir } or an error
+// report. Does not write the source database or WAL. See signalSnapshot.js.
 async function openDecryptedSnapshot(key) {
-  const src = dbPath();
-  try { statSync(src); } catch (err) {
-    const missing = err?.code === 'ENOENT';
-    return {
-      ok: false,
-      error: missing ? `Signal database not found at ${src}` : `Cannot access ${src}: ${err?.message || err}`,
-      remediation: missing ? 'Signal Desktop has no chat database yet (never opened, or a different profile).' : 'Could not read the Signal database file — check file permissions for the process running PortOS.',
-    };
-  }
-  const tmp = await mkdtemp(join(tmpdir(), 'portos-signal-'));
-  const encPath = join(tmp, 'db.enc.sqlite');
-  const plainPath = join(tmp, 'db.plain.sqlite');
-  await copyFile(src, encPath);
-  const encBuf = await tryReadFile(encPath, { encoding: null });
-  if (!encBuf || !encBuf.length) {
-    await rm(tmp, { recursive: true, force: true });
-    return { ok: false, error: 'Signal database snapshot is empty', remediation: 'The Signal database copy was empty — try again with Signal closed.' };
-  }
-  const decrypted = decryptSqlcipherDatabase(encBuf, key, { verify: 'all' });
-  if (!decrypted.ok) {
-    await rm(tmp, { recursive: true, force: true });
-    return {
-      ok: false,
-      error: `Signal database decryption failed: ${decrypted.error}`,
-      remediation: 'Signal database authentication failed — the key or SQLCipher format may have changed, or the snapshot is damaged. Close Signal Desktop and retry; if the failure persists, check or restore the source database.',
-    };
-  }
-  await writeFile(plainPath, decrypted.plaintext);
-  return { ok: true, plaintextPath: plainPath, tmpDir: tmp };
+  return captureConsistentSnapshot(dbPath(), key);
 }
 
 // Confirm the decrypted DB carries the Signal schema we understand. On an
@@ -424,7 +398,7 @@ export async function checkSetup() {
   }
   const snapshot = await openDecryptedSnapshot(keyResult.key);
   if (!snapshot.ok) {
-    return { ok: false, dbPath: dbPath(), error: snapshot.error, remediation: snapshot.remediation };
+    return { ok: false, dbPath: dbPath(), error: snapshot.error, remediation: snapshot.remediation, reason: snapshot.reason };
   }
   let db;
   try {
@@ -473,7 +447,7 @@ async function doRunSync() {
   const snapshot = await openDecryptedSnapshot(keyResult.key);
   if (!snapshot.ok) {
     console.error(`❌ Signal sync: ${snapshot.error}`);
-    return { ok: false, error: snapshot.error, remediation: snapshot.remediation };
+    return { ok: false, error: snapshot.error, remediation: snapshot.remediation, reason: snapshot.reason };
   }
 
   let db;

@@ -8,12 +8,13 @@
  *
  *  1. **SQLCipher 4 page decryption.** Signal stores its chat DB as a
  *     SQLCipher-4 file (`sql/db.sqlite`). `node:sqlite` cannot open it (no
- *     SQLCipher support), and shelling to a `sqlcipher` CLI would add an
- *     external tool dependency that most machines lack. Instead we decrypt the
- *     file page-by-page here (PBKDF2-SHA512 for the HMAC key + AES-256-CBC per
- *     page + HMAC-SHA512 verification) into a *plaintext* standard SQLite file,
- *     which the built-in `node:sqlite` then opens read-only. This keeps the read
- *     path self-contained and testable.
+ *     SQLCipher support). These helpers decrypt a buffer page-by-page
+ *     (PBKDF2-SHA512 for the HMAC key + AES-256-CBC per page + HMAC-SHA512
+ *     verification) into a plaintext SQLite buffer. Live sync does not use
+ *     them to read the on-disk file: a main-file decrypt misses committed WAL
+ *     frames (#11149). `services/signalSnapshot.js` opens the live database
+ *     read-only through the bundled SQLCipher driver and exports one committed
+ *     snapshot instead. Key format checks (`isRawHexKey`) still live here.
  *
  *  2. **Chromium `safeStorage` decryption.** Signal ≥6.2 no longer stores the DB
  *     key in plaintext; `config.json` carries an `encryptedKey` wrapped by

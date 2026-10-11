@@ -145,11 +145,17 @@ describe('Signal authenticated snapshot ingestion', () => {
       expect(readable.prepare('SELECT body FROM messages').get().body).not.toBe(BODY);
     } finally { readable.close(); }
 
+    // verify:'first' still produces a readable database whose integrity_check
+    // passes and whose body is wrong. The SQLCipher snapshot must refuse that
+    // file (the driver reports the damaged page as malformed) and must not
+    // ingest it or move the cursor. The old main-file copy named this as a
+    // page HMAC mismatch; the snapshot failure is the same refusal.
     vi.spyOn(console, 'error').mockImplementation(() => {});
     for (const result of [await checkSetup(), await runSync()]) {
       expect(result.ok).toBe(false);
-      expect(result.error).toMatch(/Page-[2-9]\d* HMAC mismatch/);
-      expect(result.remediation).toMatch(/Close Signal Desktop and retry/);
+      expect(['auth', 'snapshot']).toContain(result.reason);
+      expect(result.error).toMatch(/malformed|hmac|decryption failed|integrity/i);
+      expect(result.remediation).toMatch(/left unchanged|Nothing was ingested|not yet supported/);
     }
     expect(mocks.recordEvents).not.toHaveBeenCalled();
     expect(mocks.autoLogTouchpoints).not.toHaveBeenCalled();

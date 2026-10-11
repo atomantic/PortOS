@@ -188,7 +188,7 @@ Unified inbox for everything that talks back at you — email, chat, agent-gener
 
 - **Inbox / Drafts / Sync** — Aggregated message inbox with AI-generated drafts you can approve, edit, or discard before sending. Message content is untrusted input, and the prompt-injection boundary around it is explicit ([Messages security model](./docs/features/messages-security.md))
 - **iMessage** — Local `chat.db` sync (requires Full Disk Access) with contact resolution, blocklist, and spam triage; feeds Tribe and the Activity Timeline
-- **Signal** — Read-only sync from a local Signal Desktop install (SQLCipher key via Keychain) into the same surfaces
+- **Signal** — Read-only SQLCipher snapshot of a local Signal Desktop database (key via Keychain), including committed write-ahead-log messages, into the same surfaces. Does not write or checkpoint Signal's database.
 - **OpenClaw** — In-app chat with external operator agents (computer-use, Anthropic operator, etc.) with app context, attachments, and streaming responses ([OpenClaw docs](./docs/features/openclaw-operator-chat.md))
 - **Social Agents** — Personality-driven agents that handle specific accounts/personas
 - **Stacker News** — Territory management, untrusted content safety, and account stewardship ([Stacker News docs](./docs/features/stacker-news.md))

@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { EventEmitter } from 'node:events';
 import sharp from 'sharp';
 import { encodeComposition, encodeCompositionSegments } from './encode.js';
@@ -18,32 +18,41 @@ describe('encodeCompositionSegments', () => {
     const progress = [];
     const joins = [];
     const first = page('first');
-    await encodeCompositionSegments(first, contract, '/tmp/out.mp4', {
-      workers: 3, offsetSec: 30,
-      openPage: async () => { const p = page(`extra${opened.length}`); opened.push(p); return p; },
-      videoFilterAt: (offsetSec) => `grade@${offsetSec}`,
-      encode: async (p, c, path, options) => {
-        calls.push({ page: p.name, frames: Math.round(c.durationSec * c.fps), path, offsetSec: options.offsetSec, continuous: options.continuous, followed: options.followed, filter: options.videoFilter });
-        options.onProgress(1, { frame: Math.round(c.durationSec * c.fps) });
-        return {};
-      },
-      locateFfmpeg: async () => 'ffmpeg',
-      runFfmpeg: async ({ args }) => { joins.push(args); return { ok: true }; },
-      onProgress: (fraction) => progress.push(fraction),
-    });
-    calls.sort((a, b) => a.offsetSec - b.offsetSec);
-    expect(calls.map(({ frames, offsetSec, continuous, followed, filter }) => ({ frames, offsetSec, continuous, followed, filter }))).toEqual([
-      { frames: 480, offsetSec: 30, continuous: false, followed: true, filter: 'grade@30' },
-      { frames: 480, offsetSec: 50, continuous: true, followed: true, filter: 'grade@50' },
-      { frames: 480, offsetSec: 70, continuous: true, followed: false, filter: 'grade@70' },
-    ]);
-    // The caller's page draws the first segment and stays open; the extra pages close.
-    expect(calls[0].page).toBe('first');
-    expect(first.closed).toBe(0);
-    expect(opened.map((p) => p.closed)).toEqual([1, 1]);
-    expect(progress.at(-1)).toBe(1);
-    expect(joins).toHaveLength(1);
-    expect(joins[0]).toEqual(expect.arrayContaining(['-f', 'concat', '-c', 'copy', '/tmp/out.mp4']));
+    // The join writes `<output>.parts.txt` beside the output. `/tmp` is not a
+    // directory on Windows (it becomes `<drive>:\tmp`), so the parent must be
+    // a real temp directory or writeFile fails with ENOENT.
+    const dir = mkdtempSync(join(tmpdir(), 'encode-segments-'));
+    const output = join(dir, 'out.mp4');
+    try {
+      await encodeCompositionSegments(first, contract, output, {
+        workers: 3, offsetSec: 30,
+        openPage: async () => { const p = page(`extra${opened.length}`); opened.push(p); return p; },
+        videoFilterAt: (offsetSec) => `grade@${offsetSec}`,
+        encode: async (p, c, path, options) => {
+          calls.push({ page: p.name, frames: Math.round(c.durationSec * c.fps), path, offsetSec: options.offsetSec, continuous: options.continuous, followed: options.followed, filter: options.videoFilter });
+          options.onProgress(1, { frame: Math.round(c.durationSec * c.fps) });
+          return {};
+        },
+        locateFfmpeg: async () => 'ffmpeg',
+        runFfmpeg: async ({ args }) => { joins.push(args); return { ok: true }; },
+        onProgress: (fraction) => progress.push(fraction),
+      });
+      calls.sort((a, b) => a.offsetSec - b.offsetSec);
+      expect(calls.map(({ frames, offsetSec, continuous, followed, filter }) => ({ frames, offsetSec, continuous, followed, filter }))).toEqual([
+        { frames: 480, offsetSec: 30, continuous: false, followed: true, filter: 'grade@30' },
+        { frames: 480, offsetSec: 50, continuous: true, followed: true, filter: 'grade@50' },
+        { frames: 480, offsetSec: 70, continuous: true, followed: false, filter: 'grade@70' },
+      ]);
+      // The caller's page draws the first segment and stays open; the extra pages close.
+      expect(calls[0].page).toBe('first');
+      expect(first.closed).toBe(0);
+      expect(opened.map((p) => p.closed)).toEqual([1, 1]);
+      expect(progress.at(-1)).toBe(1);
+      expect(joins).toHaveLength(1);
+      expect(joins[0]).toEqual(expect.arrayContaining(['-f', 'concat', '-c', 'copy', output]));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('renders a short window in one pass on the caller\'s page', async () => {
@@ -133,6 +142,9 @@ describe('encodeCompositionSegments when a worker browser stalls', () => {
       async close() { state.closed += 1; },
     });
   };
+  // The join list is written beside the output, so it needs a real directory (`/tmp` is not one on Windows).
+  const stallDir = mkdtempSync(join(tmpdir(), 'encode-stall-'));
+  afterAll(() => rmSync(stallDir, { recursive: true, force: true }));
   const run = (first, openPage, options = {}) => {
     const written = [];
     const encode = (p, c, path, encodeOptions) => encodeComposition(p, c, path, {
@@ -148,7 +160,7 @@ describe('encodeCompositionSegments when a worker browser stalls', () => {
         return proc;
       },
     });
-    const result = encodeCompositionSegments(first, { fps: 10, durationSec: 48, width: 4, height: 4, motionBlur: 1 }, '/tmp/stall.mp4', {
+    const result = encodeCompositionSegments(first, { fps: 10, durationSec: 48, width: 4, height: 4, motionBlur: 1 }, join(stallDir, 'stall.mp4'), {
       workers: 2, openPage, encode, locateFfmpeg: async () => 'ffmpeg', runFfmpeg: async () => ({ ok: true }), ...options,
     });
     return { result, written };
