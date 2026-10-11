@@ -235,6 +235,9 @@ const generateSchema = z.object({
     // Selective section revision (#9011): see the matching comment on the
     // video route's musicVideo schema (server/routes/videoGen.js).
     revisionId: z.string().min(1).max(200).optional(),
+    // #11173: 'end' files the render as the scene's style-break end frame
+    // (an `endImage` take) instead of its start frame.
+    slot: z.enum(['end']).optional(),
   }).optional(),
   // Durable catalog attach (#1359). When present, the mediaJobQueue completion
   // hook (catalogImageAttachHook) files the finished render onto this catalog

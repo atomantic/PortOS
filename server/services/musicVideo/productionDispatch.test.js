@@ -181,4 +181,20 @@ describe('production scene dispatch (#9066)', () => {
     expect(performance).not.toHaveProperty('falDuration');
     expect(performance).not.toHaveProperty('falModelId');
   });
+
+  // Uniquely catches a style-break end frame (#11173) never reaching fal, or
+  // reaching a model or renderer that takes none.
+  it('sends the scene end frame only to a fal model that takes one', async () => {
+    const clipTag = { ...tag, productionStepKey: 'clip:mvs-a:base:1' };
+    const styleBreak = { ...scene, endImageId: 'end-example.png' };
+    const onModel = (falModelId) => ({ ...project, videoSettings: { backend: 'fal', falModelId } });
+    const fal = { kind: 'video', mode: 'fal', model: null };
+    await dispatchProductionStep({ stepKind: 'clip', project: onModel('fal-ai/kling-video/v3/pro/image-to-video'), scene: styleBreak, route: fal, tag: clipTag, settings });
+    expect(submitVideoGenJob.mock.calls[0][0]).toMatchObject({ backend: 'fal', mode: 'image', sourceImageFile: 'frame-example.png', lastImageFile: 'end-example.png' });
+    await dispatchProductionStep({ stepKind: 'clip', project: onModel('fal-ai/veo3.1/fast/image-to-video'), scene: styleBreak, route: fal, tag: clipTag, settings });
+    await dispatchProductionStep({ stepKind: 'clip', project, scene: styleBreak, route: { kind: 'video', mode: 'grok', model: null }, tag: clipTag, settings });
+    await dispatchProductionStep({ stepKind: 'clip', project: onModel('fal-ai/kling-video/v3/pro/image-to-video'), scene, route: fal, tag: clipTag, settings });
+    for (const call of submitVideoGenJob.mock.calls.slice(1)) expect(call[0]).not.toHaveProperty('lastImageFile');
+  });
 });
+

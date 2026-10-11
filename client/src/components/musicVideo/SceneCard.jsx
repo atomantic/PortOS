@@ -9,6 +9,7 @@ import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 import PerformanceEvidence from './PerformanceEvidence.jsx';
 import { planPerformanceRepair } from '../../lib/musicVideoShotTiming.js';
 import SceneTakeStrip from './SceneTakeStrip.jsx';
+import SceneEndFrame from './SceneEndFrame.jsx';
 import { MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_TEXT_ZONES, MUSIC_VIDEO_VISUAL_LAYERS, sceneHasAuthoredSpan } from '../../lib/musicVideoLayers.js';
 
 // #8985: what a composed render shows for this scene's span.
@@ -86,7 +87,7 @@ export default function SceneCard({
   scene, index, isLast, generatingFrame, generatingVideo, frameProgress = null, videoProgress = null,
   settingsSaving, videoBlockedReason, canContinueShot,
   onMove, onDelete, onEditLocal, onSave,
-  onGenerateFrame, onGenerateVideo, onContinueVideo,
+  onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false,
   onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, takeBusy = false, layered = false, documentComposition = false,
   lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, nextEndSec = null, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
   expanded, onToggleExpand, footageOptional = false, failedScenes = null, songReview = null,
@@ -433,6 +434,12 @@ export default function SceneCard({
           onSelect={(take) => onSelectTake?.(scene, take)}
           onReview={(take, review) => onReviewTake?.(scene, take, review)}
           onOpenPreview={onOpenPreview} />
+        {/* Style-break end frame (#11173) — what a fal clip ends on */}
+        {onGenerateEndFrame && layer === 'footage' && (
+          <SceneEndFrame scene={scene} index={index} generating={!!generatingEndFrame} onGenerate={onGenerateEndFrame}
+            onEditLocal={onEditLocal} onSave={onSave} onOpenPreview={onOpenPreview} takeBusy={takeBusy}
+            onSelectTake={onSelectTake} onReviewTake={onReviewTake} videoSettings={falVideoSettings} />
+        )}
         {/* Scene clip — i2v video generated from the reference frame (Phase 1) */}
         <div className="flex items-center gap-2 flex-wrap">
           {scene.videoHistoryId && performance && (

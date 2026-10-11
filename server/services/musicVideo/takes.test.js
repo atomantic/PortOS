@@ -48,3 +48,25 @@ describe('supplied-audio take fills an empty slot', () => {
     expect(scene.takes.at(-1).status).toBe('candidate');
   });
 });
+
+describe('a clip made toward an end frame (#11173)', () => {
+  const endProject = () => ({ id: 'mv-1', scenes: [{ sceneId: 's1', referenceImageId: 'plate.png', endImageId: 'end.png' }] });
+  const clipTake = (project) => ({
+    kind: 'video', assetId: 'clip-1', source: 'generated', sourceImageId: 'plate.png',
+    dependencies: captureTakeDependencies(project.scenes[0], 'plate.png', 'end.png'),
+  });
+
+  it('fills the slot while the same end frame is selected', () => {
+    const project = endProject();
+    expect(appendSceneTakes(project, 's1', [clipTake(project)]).scene.videoHistoryId).toBe('clip-1');
+  });
+
+  it('stays a candidate once a different end frame is selected', () => {
+    const project = endProject();
+    const input = clipTake(project);
+    project.scenes[0].endImageId = 'other-end.png';
+    const { scene } = appendSceneTakes(project, 's1', [input]);
+    expect(scene.videoHistoryId).toBeUndefined();
+    expect(scene.takes.at(-1).status).toBe('candidate');
+  });
+});

@@ -1501,7 +1501,7 @@ router.post('/:id/scenes/:sceneId/merge-next', asyncHandler(async (req, res) => 
 // a clip in the video history (both reached through the existing upload
 // routes) — so a take can never point at an arbitrary file.
 async function takeAssetExists(kind, assetId) {
-  if (kind === 'image') return Boolean(resolveGalleryImage(assetId));
+  if (kind !== 'video') return Boolean(resolveGalleryImage(assetId));
   return Boolean(await getHistoryItem(assetId));
 }
 
@@ -1510,7 +1510,7 @@ async function takeAssetExists(kind, assetId) {
 router.post('/:id/scenes/:sceneId/takes', asyncHandler(async (req, res) => {
   const { kind, assetId, source = 'imported', provider, originalName, use, sourceImageId, inputAssets } = validateRequest(musicVideoTakeInputSchema, req.body);
   if (!(await takeAssetExists(kind, assetId))) {
-    throw new ServerError(`${kind === 'image' ? 'Image' : 'Video'} not found in this install's media library`, { status: 400, code: 'TAKE_ASSET_NOT_FOUND' });
+    throw new ServerError(`${kind === 'video' ? 'Video' : 'Image'} not found in this install's media library`, { status: 400, code: 'TAKE_ASSET_NOT_FOUND' });
   }
   for (const imageId of [sourceImageId, ...(inputAssets || []).map((input) => input.assetId)].filter(Boolean)) {
     if (!(await takeAssetExists('image', imageId))) throw new ServerError('Dependency image not found', { status: 400, code: 'TAKE_ASSET_NOT_FOUND' });

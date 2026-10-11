@@ -217,6 +217,7 @@ export function cloneProjectRecord(source, {
     order,
     referenceImageId: includeGeneratedMedia ? (scene.referenceImageId ?? null) : null,
     videoHistoryId: includeGeneratedMedia ? (scene.videoHistoryId ?? null) : null,
+    endImageId: includeGeneratedMedia ? (scene.endImageId ?? null) : null,
     // Takes are immutable pointers to shared media, so a media-keeping clone
     // carries the whole candidate history; a clean clone starts empty.
     takes: includeGeneratedMedia ? ensureSceneTakes(scene, now) : [],
@@ -572,6 +573,8 @@ export function replaceScenes(project, sceneInputs) {
       sceneId: prior.sceneId,
       referenceImageId: prior.referenceImageId ?? null,
       videoHistoryId: prior.videoHistoryId ?? null,
+      ...(prior.endImageId ? { endImageId: prior.endImageId } : {}),
+      ...(prior.endFramePrompt ? { endFramePrompt: prior.endFramePrompt } : {}),
       takes: prior.takes || [],
       ...(prior.direction ? { direction: prior.direction } : {}),
     };

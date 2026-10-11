@@ -2,10 +2,12 @@
 import { canonicalSnapshotChecksum } from './snapshotChecksum.js';
 
 export const MUSIC_VIDEO_DEPENDENCY_VERSION = 1;
-const slots = { plate: 'referenceImageId', clip: 'videoHistoryId' };
+// `endPlate` (#11173): the style-break end frame a fal clip was generated to end on.
+const slots = { plate: 'referenceImageId', clip: 'videoHistoryId', endPlate: 'endImageId' };
+const takeKinds = { plate: 'image', clip: 'video', endPlate: 'endImage' };
 const checksum = (value) => canonicalSnapshotChecksum(value);
 const selectedTake = (scene, role, assetId = scene?.[slots[role]]) => (scene?.takes || [])
-  .find((take) => take.kind === (role === 'plate' ? 'image' : 'video') && take.assetId === assetId);
+  .find((take) => take.kind === takeKinds[role] && take.assetId === assetId);
 const assetRef = (scene, role, assetId = scene?.[slots[role]]) => ({
   role, sceneId: scene.sceneId, assetId: assetId || null,
   revision: checksum({ assetId: assetId || null, inputs: selectedTake(scene, role, assetId)?.inputAssets || [] }),
@@ -19,9 +21,12 @@ const layerRef = (scene) => ({ role: 'layer', sceneId: scene.sceneId, assetId: s
     .concat(scene.performanceStyle === 'music' ? [['performanceStyle', 'music']] : []))) });
 const snapshot = (references) => ({ version: MUSIC_VIDEO_DEPENDENCY_VERSION, references });
 
-/** Capture the actual submitted plate, including optional crop/mask provenance. */
-export function captureTakeDependencies(scene, sourceImageId = scene?.referenceImageId) {
-  return snapshot(sourceImageId ? [assetRef(scene, 'plate', sourceImageId)] : []);
+/** Capture the actual submitted plate (and end frame), including optional crop/mask provenance. */
+export function captureTakeDependencies(scene, sourceImageId = scene?.referenceImageId, endImageId = null) {
+  return snapshot([
+    ...(sourceImageId ? [assetRef(scene, 'plate', sourceImageId)] : []),
+    ...(endImageId ? [assetRef(scene, 'endPlate', endImageId)] : []),
+  ]);
 }
 
 const intersects = (scene, startSec, endSec) => !(typeof scene.startSec === 'number' && typeof scene.endSec === 'number')
@@ -78,7 +83,7 @@ export function musicVideoDependencyChanges(project, dependencies) {
     else if (slots[ref.role]) current = assetRef(scene, ref.role);
     else if (ref.role === 'layer') current = layerRef(scene);
     if (!current || current.assetId !== ref.assetId || current.revision !== ref.revision) {
-      changes.push({ ...ref, reason: `${ref.role === 'song' ? 'Master audio, lyrics or alignment' : ref.role === 'plate' ? 'Selected plate or its crop/mask inputs' : ref.role === 'clip' ? 'Selected clip' : ref.role === 'layer' ? 'Shot timing or composition layer' : 'Composition'} changed` });
+      changes.push({ ...ref, reason: `${ref.role === 'song' ? 'Master audio, lyrics or alignment' : ref.role === 'plate' ? 'Selected plate or its crop/mask inputs' : ref.role === 'endPlate' ? 'Selected end frame' : ref.role === 'clip' ? 'Selected clip' : ref.role === 'layer' ? 'Shot timing or composition layer' : 'Composition'} changed` });
     }
   }
   return changes;

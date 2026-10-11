@@ -50,6 +50,7 @@ export default function useMusicVideoTakes({ project, applyScenePatch }) {
   const applyScene = (projectId, scene) => applyScenePatch?.(projectId, scene.sceneId, {
     referenceImageId: scene.referenceImageId ?? null,
     videoHistoryId: scene.videoHistoryId ?? null,
+    endImageId: scene.endImageId ?? null,
     takes: scene.takes || [],
   });
 
