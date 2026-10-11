@@ -116,6 +116,23 @@ describe('CompositionPreviewPlayer', () => {
     expect(api.getMusicVideoCompositionPreview).toHaveBeenCalledTimes(1);
   });
 
+  it('hands the opening title card to the loaded document and again on each edit, without rebuilding the preview', async () => {
+    const card = { enabled: true, title: 'Example Song', startSec: 2, endSec: 8 };
+    const { rerender } = render(<CompositionPreviewPlayer project={{ ...project, titleCard: card }} audioUrl={null} />);
+    const frame = await screen.findByTitle('Composition document preview');
+    const post = vi.spyOn(frame.contentWindow, 'postMessage');
+    const send = (data) => act(async () => { window.dispatchEvent(new MessageEvent('message', { source: frame.contentWindow, data })); });
+    await waitFor(async () => {
+      await send({ type: 'portos-mv:loaded' });
+      expect(post).toHaveBeenCalledWith({ type: 'portos-mv:title-card', card: expect.objectContaining({ title: 'Example Song', position: 'lower-left' }) }, '*');
+    });
+    rerender(<CompositionPreviewPlayer project={{ ...project, titleCard: { ...card, position: 'upper-right' } }} audioUrl={null} />);
+    await waitFor(() => expect(post).toHaveBeenCalledWith({ type: 'portos-mv:title-card', card: expect.objectContaining({ position: 'upper-right' }) }, '*'));
+    rerender(<CompositionPreviewPlayer project={{ ...project, titleCard: null }} audioUrl={null} />);
+    await waitFor(() => expect(post).toHaveBeenCalledWith({ type: 'portos-mv:title-card', card: null }, '*'));
+    expect(api.getMusicVideoCompositionPreview).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps the loaded preview through an unrelated project save and rebuilds when the document version changes', async () => {
     const { rerender } = render(<CompositionPreviewPlayer project={project} audioUrl={null} />);
     const frame = await screen.findByTitle('Composition document preview');

@@ -182,3 +182,16 @@ it('installs the project film look in the render page before the document runs, 
   expect(browser.seen.initScripts[0]).toContain('"grain":0.6');
   expect(await scratchEntries()).toEqual([]);
 });
+
+// Uniquely catches the final render dropping the opening title card the live preview shows.
+it('installs the opening title card in the render page only while it is on and has text', async () => {
+  const { project, plan } = await fixture();
+  const titled = { ...project, titleCard: { enabled: true, title: 'Example Song', artist: 'Example Artist', year: '2026', startSec: 2, endSec: 8, fadeSec: 0.8, position: 'lower-left', font: 'display', size: 100, color: '#f3ead7', extra: '', quoteTitle: true } };
+  await expect(encode(titled, plan, 'job-title')).rejects.toThrow('stop after staging');
+  expect(browser.seen.initScripts).toHaveLength(1);
+  expect(browser.seen.initScripts[0]).toContain('__portosTitleCard');
+  expect(browser.seen.initScripts[0]).toContain('"title":"Example Song"');
+  await expect(encode({ ...titled, titleCard: { ...titled.titleCard, enabled: false } }, plan, 'job-title-off')).rejects.toThrow('stop after staging');
+  expect(browser.seen.initScripts).toEqual([]);
+  expect(await scratchEntries()).toEqual([]);
+});

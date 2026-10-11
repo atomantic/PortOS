@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Captions } from 'lucide-react';
 import { formatDurationSec } from '../../utils/formatters.js';
 import { getMusicVideoLyricOverlayPreview } from '../../services/apiMusicVideo.js';
 import { playthroughVersion } from './CompositionPreviewPlayer.jsx';
+import { normalizeTitleCard } from '../../../../server/lib/musicVideoTitleCard.js';
 
 const timedShots = (scenes) => scenes.filter((scene) => Number.isFinite(scene?.startSec)).sort((a, b) => a.startSec - b.startSec);
 
@@ -39,6 +40,13 @@ function useLyricOverlay({ project, enabled, audioRef, time }) {
   const iframeRef = useRef(null);
   const seekState = useRef({ inFlight: false, pending: null, ready: false, sentAt: 0 });
   const version = enabled ? playthroughVersion(project) : null;
+  // The opening title card rides on the lyric layer, posted live so its panel's edits show at once.
+  const titleCard = useMemo(() => normalizeTitleCard(project.titleCard), [project.titleCard]);
+  const titleCardRef = useRef(titleCard);
+  useEffect(() => {
+    titleCardRef.current = titleCard;
+    if (seekState.current.ready) iframeRef.current?.contentWindow?.postMessage({ type: 'portos-mv:title-card', card: titleCard }, '*');
+  }, [titleCard]);
 
   useEffect(() => {
     let active = true;
@@ -71,6 +79,7 @@ function useLyricOverlay({ project, enabled, audioRef, time }) {
       const state = seekState.current;
       if (message.type === 'portos-mv:loaded') {
         event.source.postMessage({ type: 'portos-mv:manifest', keys: [] }, '*');
+        event.source.postMessage({ type: 'portos-mv:title-card', card: titleCardRef.current }, '*');
         state.ready = true;
         postSeek(audioRef.current?.currentTime || 0);
       } else if (message.type === 'portos-mv:request') {

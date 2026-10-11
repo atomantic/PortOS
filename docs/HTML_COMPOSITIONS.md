@@ -320,6 +320,34 @@ qualities (`describeFilmLook`), so tuning a look also teaches the vocabulary
 for the next generation prompt. The look works on composition-document
 projects; the composed render style keeps its own render grade above.
 
+## Music-video opening title card
+
+The MTV-style credit block a video opens with: song title, artist, year and an
+optional extra line (album, director), fading in over the opener and out again.
+**Compose → Opening title card** stores it on the project (`project.titleCard`,
+validated by `musicVideoTitleCardSchema`, normalized by `normalizeTitleCard` in
+`server/lib/musicVideoTitleCard.js`; `null` = none, `enabled: false` keeps the
+text). Turning it on fills the song title (the project name without its version
+suffix), the artist named for DistroKid under Where you post, this year, and a
+window that ends half a second before the first sung line. Timing (in, out,
+fade), position (four corners, bottom centre, centre), font (the lyric type's
+Archivo, Helvetica, serif, Plex Mono), size and color are all editable; the
+panel flags a sung line that starts while the card is up and offers to end the
+card before it.
+
+The card is not part of the composition document. `titleCardRuntimeSource()`
+is a page script installed beside it, in the live preview's head (live edits
+arrive as `portos-mv:title-card` messages) and in every render browser
+(`documentRenderInitScripts`). It draws on its own canvas fixed over the page,
+fitted to the render's aspect, and wraps `portosComposition.seek()` (chaining
+the film look's wrapper) so the card is drawn for each frame after its faces
+load. It follows the lyric type: cream fill, ink outline, no plate, inside the
+same title-safe insets, and a block wider than its zone shrinks rather than
+running off frame. Like the lyrics it sits under the film look. It also rides
+on the lyric pages (the lyric-timing playthrough and the lyrics laid over the
+storyboard animatic, which carry no film look), so it can be checked against
+the timed words before the composition exists.
+
 ## Music-video composition documents
 
 A Music Video project can own its whole edit as a composition document: set
