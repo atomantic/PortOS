@@ -1735,10 +1735,18 @@ path, _, _ = runner.a2v_audio_covering_clip(short, 0.0, 97, 24.0, tmp)
 with wave.open(path) as w:
     w.setpos(w.getnframes() - 1)
     print(round(w.getnframes() / w.getframerate(), 4), w.readframes(1) == b"\\x00" * 4)
+# A direct upload: the server rounds a 4.6s file UP to 113 frames (4.708s),
+# so the audio trails the clip; the pad follows the final frame count.
+upload = os.path.join(tmp, "upload.wav")
+subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=4.6",
+                "-ac", "2", "-c:a", "pcm_s16le", "-y", upload], check=True)
+path, _, _ = runner.a2v_audio_covering_clip(upload, 0.0, 113, 24.0, tmp)
+with wave.open(path) as w:
+    print(round(w.getnframes() / w.getframerate(), 4))
 import shutil
 shutil.rmtree(tmp)
 `);
-    // 97 / 24 + 0.25s of tail, offset consumed into the cut.
-    expect(out.trim().split(/\r?\n/)).toEqual(['4.2917 0.0 True', '4.2917 True']);
+    // num_frames / 24 + 0.25s of tail, offset consumed into the cut.
+    expect(out.trim().split(/\r?\n/)).toEqual(['4.2917 0.0 True', '4.2917 True', '4.9583']);
   });
 });
