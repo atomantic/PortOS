@@ -220,7 +220,7 @@ export default function DeckCardGrid({
                       place a deck can show it. The fix button for a broken
                       runtime lives in the render bar above. */}
                   {status === CARD_STATUS.FAILED && card.render?.error ? (
-                    <p className="w-full text-center text-[10px] leading-snug text-port-error line-clamp-3" title={card.render.error}>
+                    <p className="w-full text-center text-[10px] leading-snug text-port-error [overflow-wrap:anywhere]">
                       {card.render.error}
                     </p>
                   ) : null}

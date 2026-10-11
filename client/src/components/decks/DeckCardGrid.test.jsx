@@ -39,6 +39,33 @@ const renderGrid = (over = {}) => {
 };
 
 describe('DeckCardGrid', () => {
+  it('shows the complete failure beside an enabled retry and clears it after success', () => {
+    const error = `Render failed: ${'diagnostic '.repeat(60)}${'x'.repeat(180)}. Remedy: select an available model and retry.`;
+    const failed = card('failed', 'major', { prompt: 'a fool', render: { status: 'failed', error } });
+    const props = {
+      deck: { ...deck, cards: [failed] }, renderTarget: renderTarget(),
+      onOpenCard: vi.fn(), onRenderCard: vi.fn(),
+    };
+    const { rerender } = render(<DeckCardGrid {...props} />);
+    const message = screen.getByText(error);
+    expect(message).toBeVisible();
+    expect(message).not.toHaveAttribute('title');
+    expect(message).not.toHaveClass('line-clamp-3');
+    expect(message).toHaveClass('[overflow-wrap:anywhere]');
+    const retry = screen.getByRole('button', { name: /^Render Card failed on/ });
+    expect(retry).toBeEnabled();
+    fireEvent.click(retry);
+    expect(props.onRenderCard).toHaveBeenCalledWith(failed);
+    expect(props.onOpenCard).not.toHaveBeenCalled();
+
+    rerender(<DeckCardGrid {...props} deck={{ ...deck, cards: [{
+      ...failed, imageRefs: ['result.png'], primaryImageRef: 'result.png',
+      render: { status: 'completed', filename: 'result.png' },
+    }] }} />);
+    expect(screen.queryByText(error)).toBeNull();
+    expect(screen.getByText('Rendered')).toBeInTheDocument();
+  });
+
   it('spells out each group\'s rendered count and how many still need a prompt', () => {
     renderGrid();
     const major = screen.getByRole('region', { name: 'Major Arcana' });
