@@ -769,9 +769,10 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // `scan-report` and link CRUD only read or record; nothing runs. The one
   // exception is a repository URL that auto-clones: POST /api/brain/links
   // (unless `autoClone: false`) and a bare-repo-URL POST /api/brain/capture
-  // start a clone and may arm post-clone scan/study agents, so those two are
-  // gated per request in their handlers (`assertHostControl`, #11037) rather
-  // than listed here — a plain bookmark stays open.
+  // start a clone and may arm post-clone scan/study agents. Links are gated per
+  // request in their handler (`assertHostControl`, #11037) so a plain bookmark
+  // stays open; capture is listed below whole (#11036) because it can also
+  // dispatch classification.
   'POST /api/brain/links/:id/clone',
   'POST /api/brain/links/:id/pull',
   'POST /api/brain/links/:id/open-folder',

@@ -187,11 +187,19 @@ describe('automatic repository intake operator authority (#11037)', () => {
       expect(response.body.cloneStatus).toBe('none');
       expect(response.body.repoIntake).toBeUndefined();
     }
-    const capture = await post(appFor(), ['/api/brain/capture', { text: 'https://example.com/article-two' }]);
-    expect(capture.status).toBe(200);
     await settle();
-    expect(store.links.size).toBe(3);
+    expect(store.links.size).toBe(2);
     expect(clone.cloneRepo).not.toHaveBeenCalled();
     expect(clone.runRepoIntake).not.toHaveBeenCalled();
+  });
+
+  // Capture is gated whole (#11036): even a plain note can dispatch the
+  // classifier, so a remote password-free caller is refused before any record.
+  it('refuses a plain capture from a remote password-free caller before any record or clone', async () => {
+    const capture = await post(appFor(), ['/api/brain/capture', { text: 'https://example.com/article-two' }]);
+    expect([capture.status, capture.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    await settle();
+    expect(store.links.size).toBe(0);
+    expect(clone.cloneRepo).not.toHaveBeenCalled();
   });
 });
