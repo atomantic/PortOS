@@ -1062,6 +1062,9 @@ export const musicVideoAutonomousStartSchema = z.object({
 
 // Resume a parked/failed run, or approve the checkpoint it is waiting on.
 export const musicVideoAutonomousResumeSchema = z.object({
+  // Change course mid-run: the brief's prompt and guidance, which production plans shots from.
+  prompt: z.string().trim().min(1).max(AUTONOMOUS_PROMPT_MAX).optional(),
+  guidance: z.string().max(4000).optional(),
   // Replace the stage output the director edited at a checkpoint.
   lyrics: z.string().max(20000).optional(),
   style: z.string().max(AUTONOMOUS_PROMPT_MAX).optional(),

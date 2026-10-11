@@ -468,6 +468,26 @@ export function approveProductionStage(project, { stage, basis, proofReview, app
     approvals: { ...project.productionReview?.approvals, [stage]: decision } } };
 }
 
+/**
+ * Re-bind the stages that were approved before a machine-only change (a legacy
+ * footage project switched to compose its shots) onto the changed project, so
+ * a change no one reviewed does not stale an approval no one revoked. A stage
+ * that was not approved stays as it was.
+ */
+export function carryProductionApprovals(before, after, reason) {
+  const was = productionReadiness(before);
+  const basis = productionReviewBasis(after);
+  const inputs = productionApprovalInputs(after);
+  const proofExcerpt = after.excerpts?.find(e => e.id === after.productionReview?.proof?.excerptId);
+  const approvals = { ...after.productionReview?.approvals };
+  for (const stage of ['art', 'storyboard', 'proof']) {
+    if (!was[stage]?.approved || !approvals[stage]) continue;
+    const next = stage === 'proof' ? hash({ basis: basis.proof, excerptId: proofExcerpt?.id, filename: proofExcerpt?.filename }) : basis[stage];
+    approvals[stage] = { ...approvals[stage], basis: next, inputs: inputs[stage], carriedOver: { reason, at: new Date().toISOString() } };
+  }
+  return { ...after, productionReview: { ...after.productionReview, approvals } };
+}
+
 /** Comments retain the exact reviewed draft, even after a replacement import. */
 export function recordProductionFeedback(project, input) {
   const review = project.productionReview || {};

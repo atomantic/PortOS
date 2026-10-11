@@ -285,7 +285,8 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
     // dims/fps/sections/cues in ABSOLUTE song time — the coordinate space
     // `startSec`/`endSec` and `excerptBoundaryTimes` are given in.
     const probe = buildMusicVideoFfmpegArgs(clips, audioPath, join(PATHS.videos, 'probe.mp4'), { audioDurationSec, frameGrid: composed });
-    if (!(startSec >= 0) || !(endSec > startSec) || endSec > probe.totalDuration + (pilotSceneId ? 1 / probe.fps : 1e-6)) {
+    // A range ending on the song's analysed length may overrun the frame-rounded render by under a frame.
+    if (!excerptRangeFits(startSec, endSec, probe.totalDuration, probe.fps)) {
       throw new ServerError(
         `The excerpt range must fall within the project's ${probe.totalDuration.toFixed(2)}s render`,
         { status: 422, code: 'INVALID_EXCERPT_RANGE', context: { totalDuration: probe.totalDuration } },

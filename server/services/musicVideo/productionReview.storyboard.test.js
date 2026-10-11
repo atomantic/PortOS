@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { productionReadiness, productionAlignmentBasis, approveProductionStage } from './productionReview.js';
+import { productionReadiness, productionAlignmentBasis, approveProductionStage, carryProductionApprovals } from './productionReview.js';
 
 const WORD_PROBLEM = /bounded, positive-duration word timings/;
 const SHOT_PROBLEM = /^Complete timing, action, staging, camera and transition/;
@@ -64,6 +64,15 @@ describe('approving a Board storyboard of derived shots', () => {
     const approved = approveProductionStage(art, { stage: 'storyboard', basis: before.basis.storyboard });
     expect(approved.productionReview.draft.storyboard).toEqual(before.storyboard.shots);
     expect(productionReadiness(approved).storyboard.approved).toBe(true);
+
+    // Uniquely catches a machine-only composition migration staling art and storyboard approvals.
+    const composed = { ...approved, composition: { mode: 'composed' } };
+    expect(productionReadiness(composed).storyboard.approved).toBe(false);
+    const carried = carryProductionApprovals(approved, composed, 'compose footage');
+    expect(productionReadiness(carried)).toMatchObject({ art: { approved: true }, storyboard: { approved: true } });
+    expect(carried.productionReview.approvals.storyboard.carriedOver).toMatchObject({ reason: 'compose footage' });
+    // A later creative change still stales it.
+    expect(productionReadiness({ ...carried, concept: 'A new concept' }).storyboard.approved).toBe(false);
   });
 });
 

@@ -377,6 +377,16 @@ describe('startAutonomousVideo', () => {
       expect(runOf()).toMatchObject({ status: 'completed', output: expect.objectContaining({ productionDone: true, renderJobId: 'production-render' }) });
     });
 
+    // Uniquely catches a mid-run course change never reaching production's shot planner.
+    it('carries a changed prompt and guidance to the parked production run on resume', async () => {
+      await delegated();
+      store.get('mv-auto').productionRuns[0].status = 'limit-reached';
+      await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'limit-reached', stopReason: 'generation limit' } });
+      await service.resumeAutonomousVideo('mv-auto', { prompt: 'p', guidance: 'Natural chestnut shag, no pencil.' });
+      expect(runOf().brief).toMatchObject({ prompt: 'p', guidance: 'Natural chestnut shag, no pencil.' });
+      expect(doubles.resumeProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-1', { acceptBasis: true, directive: 'p\n\nNatural chestnut shag, no pencil.' });
+    });
+
     it('resumes a parked run with raised limits, and a model swap continues that run with the new pool', async () => {
       await delegated();
       store.get('mv-auto').productionRuns[0].status = 'limit-reached';

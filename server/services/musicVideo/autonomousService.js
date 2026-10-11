@@ -1,6 +1,6 @@
 import { musicVideoMediaMode, musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
 import { prepareProductionReview } from './productionReviewService.js';
-import { ALIGNMENT_UNVERIFIED_PROBLEM, assertProductionApproval, productionAlignmentBasis, productionReadiness, productionReviewBasis } from './productionReview.js';
+import { ALIGNMENT_UNVERIFIED_PROBLEM, assertProductionApproval, carryProductionApprovals, productionAlignmentBasis, productionReadiness, productionReviewBasis } from './productionReview.js';
 import { CAST_SETS_WORKING } from './castAndSets.js';
 import { applyTreatmentPatch, applyTreatmentToProject } from './treatment.js';
 import { codeFirstProductionAssets, normalizeMusicVideoProductionPolicy } from '../../lib/musicVideoMediumPlan.js';
@@ -700,6 +700,9 @@ async function orchestrateProductionStage(project, run, stage) {
 }
 
 /** The run renders its film from code alone rather than through production. */
+/** The brief's prompt and guidance as production's planning directive. */
+const briefDirective = (brief) => trimTo([brief.prompt, brief.guidance].filter(Boolean).join('\n\n'), 4000);
+
 const rendersFromCode = (project, run) => musicVideoMediaMode(project) === 'code-only' || autonomousMedium(run.brief.tools) === 'code';
 
 /**
@@ -1210,7 +1213,7 @@ const STAGES = {
     }
     const pool = briefProductionPool(run.brief, project);
     const started = await deps.startProduction(project.id, {
-      directive: trimTo([run.brief.prompt, run.brief.guidance].filter(Boolean).join('\n\n'), 4000),
+      directive: briefDirective(run.brief),
       pool,
       ...(stopsBeforeClips(project, run, pool) ? { stopBefore: 'clips' } : {}),
       limits: { ...run.brief.limits, ...(run.brief.budgetUsd != null ? { spendCapUsd: run.brief.budgetUsd } : {}) },
@@ -1634,6 +1637,9 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
   const retake = edits.retakeSong === true;
   if (retake && run.brief.songFrom) throw runError(409, 'SONG_REUSED', 'This run reuses an existing song, so it has no song to retake');
   if (retake) assertAtSongCheckpoint(run);
+  // A changed prompt or guidance reaches production's shot planner on this resume.
+  const directionPatch = Object.fromEntries(['prompt', 'guidance'].filter((key) => typeof edits[key] === 'string' && edits[key] !== (run.brief[key] ?? '')).map((key) => [key, edits[key]]));
+  const directionChanged = Object.keys(directionPatch).length > 0;
   const modelsChanged = toolsPatch !== null || (modelsPatch !== null && JSON.stringify(modelsPatch) !== JSON.stringify(run.brief.models || {}));
   // Approving the stills goes on to the clips, including in any new production run.
   const stillsApproved = run.status === 'awaiting-approval' && run.awaiting === 'stills';
@@ -1659,8 +1665,9 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
     const stage = retake ? 'song' : r.stage;
     return {
       status: 'running', awaiting: null, error: null, errorCode: null, processId: PROCESS_ID,
-      ...(edits.suno || edits.localMusic !== undefined || grant || modelsPatch || toolsPatch || limitsPatch || stillsApproved ? { brief: {
+      ...(edits.suno || edits.localMusic !== undefined || grant || modelsPatch || toolsPatch || limitsPatch || stillsApproved || directionChanged ? { brief: {
         ...r.brief,
+        ...directionPatch,
         ...(toolsPatch ? { tools: toolsPatch } : {}),
         ...(stillsApproved ? { stopBeforeVideo: false } : {}),
         ...(modelsPatch ? { models: modelsPatch } : {}),
@@ -1724,7 +1731,7 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
     return { project: presentProjectAutonomousRun(latest), run: presentAutonomousRun(projectAutonomousRun(latest)) };
   }
   if (resume.kind === 'production') {
-    return resumeDelegatedProduction(projectId, out.run, { swapModels: modelsChanged, limits: edits.limits, stillsApproved });
+    return resumeDelegatedProduction(projectId, out.run, { swapModels: modelsChanged, limits: edits.limits, stillsApproved, directionChanged });
   }
   advanceInBackground(projectId);
   return { project: out.project, run: presentAutonomousRun(out.run) };
@@ -1756,7 +1763,7 @@ const PRODUCTION_LIVE = new Set(['running', 'limit-reached', 'blocked', 'needs-r
  * when that run is already complete. No production run left to follow — or a model
  * swap on one that cannot resume — starts a new one from the brief by re-entering `produce`.
  */
-async function resumeDelegatedProduction(projectId, run, { swapModels = false, limits, stillsApproved = false } = {}) {
+async function resumeDelegatedProduction(projectId, run, { swapModels = false, limits, stillsApproved = false, directionChanged = false } = {}) {
   const project = await getProject(projectId);
   const runs = Array.isArray(project.productionRuns) ? project.productionRuns : [];
   const current = runs.find((r) => r.id === run.output.productionRunId) || null;
@@ -1790,6 +1797,7 @@ async function resumeDelegatedProduction(projectId, run, { swapModels = false, l
       acceptBasis: true,
       ...(productionLimits ? { limits: productionLimits } : {}),
       ...(swapModels ? { pool: briefProductionPool(run.brief, project) } : {}),
+      ...(directionChanged ? { directive: briefDirective(run.brief) } : {}),
     })
       .then(() => null, (err) => err);
     if (failure) {
@@ -2166,6 +2174,8 @@ async function ensureFootageComposition(projectId) {
     || normalizeMusicVideoProductionPolicy(project.productionPolicy).strategy === 'code-first') return false;
   // The manifest is replaced whole, so its cues, cutting and grade ride along.
   await deps.updateProject(projectId, { composition: { ...composition, mode: 'composed' } });
+  // No one reviewed this switch, so the approvals it would stale carry over.
+  await mutateProjectRecord(projectId, (current) => ({ project: carryProductionApprovals(project, current, 'Composed the footage of a project with no composition document') }));
   console.log(`🎬 Autonomous music video set ${short(projectId)} to compose its footage (it had no composition document)`);
   return true;
 }

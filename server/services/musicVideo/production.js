@@ -847,7 +847,7 @@ export function stopProductionOnProject(project, runId, now = new Date().toISOSt
  * budget. A run halted on a changed creative setup continues only when the
  * director accepts the new basis (`acceptBasis`), which re-snapshots it.
  */
-export function resumeProductionOnProject(project, runId, { limits, acceptBasis = false, processId, pool = null, pricing = {}, stopBefore } = {}, now = new Date().toISOString()) {
+export function resumeProductionOnProject(project, runId, { limits, acceptBasis = false, processId, pool = null, pricing = {}, stopBefore, directive } = {}, now = new Date().toISOString()) {
   return mutateRun(project, runId, (run) => {
     if (!RESUMABLE.has(run.status)) throw productionError(409, 'PRODUCTION_CLOSED', `This production run is ${run.status} — start a new run instead`);
     if (normalizeMusicVideoProductionPolicy(project?.productionPolicy).strategy === 'code-first' && !run.authoring) throw productionError(409, 'PRODUCTION_AUTHORING_REQUIRED', 'Cancel this legacy run and start a code-first run with an authoring model');
@@ -878,6 +878,8 @@ export function resumeProductionOnProject(project, runId, { limits, acceptBasis 
       processId,
       resumedAt: now,
       retryAcknowledged: run.steps.filter((step) => step.status === 'failed').map((step) => step.key),
+      // The director changed course: later shot planning follows the new direction.
+      ...(typeof directive === 'string' ? { directive: trimTo(directive, PRODUCTION_DIRECTIVE_MAX) } : {}),
       stopBefore: nextStop,
       // A stills-only run makes no clip, so it drops any pending clip pilot.
       ...(nextStop ? { pilot: null } : !run.pilot && !run.reviewRunId ? { pilot: { scenes: null } } : {}),
