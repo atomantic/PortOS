@@ -25,7 +25,9 @@ export const getProductionReview = async id => present(await requireProject(id))
 /**
  * The approval a scene's media job needs. A still is how the director reviews
  * the storyboard, so a still for a planned shot needs only the art direction;
- * clips, and anything a production run submits, wait for the storyboard.
+ * clips, and anything a production run submits, wait for the storyboard. A
+ * production run's bulk work also waits for the animated proof, except the
+ * stills of a run that stops before clips: the proof is made from clips.
  */
 export async function assertMusicVideoSceneReview(tag, kind = null) {
   if (!tag?.projectId || !tag.sceneId) return;
@@ -34,7 +36,8 @@ export async function assertMusicVideoSceneReview(tag, kind = null) {
   assertProductionApproval(project, boardStill ? 'art' : 'storyboard');
   if (tag.productionRunId) {
     const run = project.productionRuns?.find(r => r.id === tag.productionRunId);
-    if (!run?.pilot?.scenes?.some(scene => scene.sceneId === tag.sceneId)) assertProductionApproval(project, 'proof');
+    const stillsOnly = kind === 'image' && run?.stopBefore === 'clips';
+    if (!stillsOnly && !run?.pilot?.scenes?.some(scene => scene.sceneId === tag.sceneId)) assertProductionApproval(project, 'proof');
   }
 }
 
