@@ -11,8 +11,6 @@
  * Scope is deliberately narrower than "every NAV_COMMANDS path" — this change
  * only touches the Comms section, and a repo-wide version of this guard would
  * fail today on pre-existing gaps this change did not introduce:
- *   - /messages/signal — the doc row still names the pre-#30 previousPath
- *     `/settings/signal`, not the live path.
  *   - /messages/config — no row at all.
  *   - /messages/imessage?settings=1 — no row at all (the bare /messages/imessage
  *     row does not cover the settings-drawer deep link).
@@ -32,7 +30,6 @@ const SECTION_HEADING = '## 6. Communications, Voice, Social, & Spatial UI';
 
 // Pre-existing gaps this change did not introduce — see the file comment above.
 const KNOWN_UNRELATED_GAPS = new Set([
-  '/messages/signal',
   '/messages/config',
   '/messages/imessage?settings=1',
 ]);

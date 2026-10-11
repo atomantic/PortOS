@@ -176,7 +176,7 @@ Unified communication channels, local voice assistant, community stewardship, an
 |---|---|---|---|
 | **Comms Inbox & Drafts** | `/messages/inbox`, `/messages/drafts`, `/messages/sync` | Centralized message triage, drafting assistant, and cross-channel message synchronization. | [Messages Security](./messages-security.md) |
 | **iMessage Sync & Contacts** | `/messages/imessage`, `/messages/contacts` | Local macOS `chat.db` SQLite ingestion, sender identity resolution, spam filtering, and address book contact merging. | [Messages Security](./messages-security.md) |
-| **Signal Integration** | `/settings/signal` | Encrypted local sync from Signal Desktop SQLCipher database. | [Messages Security](./messages-security.md) |
+| **Signal Integration** | `/messages/signal` | Read-only SQLCipher snapshot of the local Signal Desktop database, including committed WAL messages, into Tribe and the activity timeline. Fails setup instead of ingesting a partial copy when the bundled driver cannot capture a consistent view. | [Messages Security](./messages-security.md) |
 | **Beeper Bridge** | `/messages/beeper`, `/messages/beeper?settings=1` | Local Beeper Desktop bridge mirroring WhatsApp, Discord, Telegram, and other bridged networks into a machine-local store, with a human-gated one-message-at-a-time outbox; the settings drawer connects an account and configures scheduled sync. | [Beeper](./beeper.md) |
 | **Telegram & X (Twitter)** | `/settings/telegram`, `/x` | Social channel monitoring, outreach staging, engagement diagnostics, and shadowban checks. | — |
 | **Stacker News Stewardship** | `/stacker-news` | Community territory moderation, Bitcoin Lightning tipping, post review, and encrypted credential storage. | [Stacker News](./stacker-news.md) |
