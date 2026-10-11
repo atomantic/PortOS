@@ -317,6 +317,17 @@ describe('resolveSceneClips', () => {
     expect(clips).toEqual([expect.objectContaining({ sceneId: 's1', layer: 'card', cardText: '', cardColor: '#000000', duration: 3 })]);
   });
 
+  // #11185: the treatment drops the lyric cue under a card, so a blank card is the only place its line can appear.
+  it('gives a blank card its sung line, and leaves a wordless card blank', async () => {
+    loadHistory.mockResolvedValue([]);
+    const clips = await resolveSceneClips({ scenes: [
+      { sceneId: 's1', order: 0, visualLayer: 'card', cardText: '', lyricText: 'Example spoken line', startSec: 0, endSec: 2 },
+      { sceneId: 's2', order: 1, visualLayer: 'card', cardText: ' Set by hand ', lyricText: 'Example spoken line', startSec: 2, endSec: 4 },
+      { sceneId: 's3', order: 2, visualLayer: 'card', cardText: '', startSec: 4, endSec: 6 },
+    ] }, { layered: true });
+    expect(clips.map((c) => c.cardText)).toEqual(['Example spoken line', 'Set by hand', '']);
+  });
+
   // Uniquely catches a draft dropping a footage shot that has a still but no clip yet, or a final render padding with stills.
   it('shows a clipless footage shot as its still in a layered draft only', async () => {
     loadHistory.mockResolvedValue([{ id: 'h1', filename: 'a.mp4', width: 768, height: 512, fps: 24, numFrames: 48 }]);
