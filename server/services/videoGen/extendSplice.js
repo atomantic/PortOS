@@ -15,10 +15,11 @@
  */
 
 import { existsSync } from 'fs';
-import { rename, writeFile } from 'fs/promises';
+import { writeFile } from 'fs/promises';
 import { unlinkGuarded } from '../../lib/fileUtils.js';
 import {
-  findFfmpeg, runFfmpegProcess, probeFrameCount, probeVideoStreamInfo, probeVideoDuration,
+  findFfmpeg, runFfmpegProcess, probeFrameCount, probeVideoStreamInfo,
+  audioFingerprint, sealAudioMaster, readAudioMasterFingerprint,
   probeVideoCodecSignature, videoFrameHashes,
   hasAudioStream, bt709TagFilter, buildExtendSpliceArgs, buildExtendNewSpanArgs, buildExtendCopyArgs,
   buildExtendConcatList, installEncodedVideo,
@@ -29,22 +30,20 @@ import { extendMasterPath } from './extendMaster.js';
 /** Linear crossfade at the source/generated audio seam (~one 25 Hz audio token). */
 export const SEAM_CROSSFADE_SEC = 0.04;
 
-/** How far a master's length may sit from its clip's before it is treated as stale (AAC priming/padding is ~tens of ms). */
-const MASTER_DURATION_TOLERANCE_SEC = 0.15;
-
 const partPath = (path) => path.replace(/\.flac$/i, '.part.flac');
 
 /**
  * The lossless master to read the SOURCE span's audio from, or null to use the
- * source clip's own track. A master only counts while its length still matches
- * the clip beside it: a clip whose audio was later trimmed, replaced or
- * re-muxed in place leaves a master that no longer describes it.
+ * source clip's own track. A master only counts while it is provably the mix the
+ * clip's soundtrack was encoded from: it carries the fingerprint of that decoded
+ * soundtrack, so a clip whose audio was later trimmed, replaced or re-muxed in
+ * place — even to the same length — no longer matches and is ignored.
  */
 async function usableSourceMaster(sourcePath) {
   const masterPath = extendMasterPath(sourcePath);
   if (!masterPath || !existsSync(masterPath)) return null;
-  const [masterSec, sourceSec] = await Promise.all([probeVideoDuration(masterPath), probeVideoDuration(sourcePath)]);
-  if (!masterSec || !sourceSec || Math.abs(masterSec - sourceSec) > MASTER_DURATION_TOLERANCE_SEC) {
+  const [sealed, current] = await Promise.all([readAudioMasterFingerprint(masterPath), audioFingerprint(sourcePath)]);
+  if (!sealed || sealed !== current) {
     console.warn('⚠️ Extend audio master does not match its clip, using the clip\'s own track');
     return null;
   }
@@ -183,13 +182,16 @@ export async function spliceExtendSource({ sourcePath, outputPath, extendLatents
   if (splicedFrames !== outputFrames) return skip(`spliced clip has ${splicedFrames ?? '?'} frames, expected ${outputFrames}`);
   const installed = await installEncodedVideo(tmpPath, outputPath, 'extend-spliced');
   if (!installed.ok) return skip(installed.reason);
-  // The master is an optimization: a failed install leaves the clip as its own
-  // (AAC) source of audio for the next round, exactly as before masters existed.
+  // The master is an optimization: without one the clip stays its own (AAC)
+  // source of audio for the next round, exactly as before masters existed.
   if (wantMaster) {
-    await rename(wantMaster, masterPath).catch(async (err) => {
-      console.warn(`⚠️ Extend audio master not kept: ${err.message}`);
-      await unlinkGuarded(wantMaster).catch(() => {});
-    });
+    const fingerprint = await audioFingerprint(outputPath);
+    const sealed = fingerprint ? await sealAudioMaster({ inPath: wantMaster, outPath: masterPath, fingerprint }) : { ok: false, reason: 'clip audio unreadable' };
+    if (!sealed.ok) {
+      console.warn(`⚠️ Extend audio master not kept: ${sealed.reason}`);
+      await unlinkGuarded(masterPath).catch(() => {});
+    }
+    await unlinkGuarded(wantMaster).catch(() => {});
   }
   console.log(`🧵 Extend kept the original source${streamCopied ? ' (stream-copied)' : ''}: ${plan.keepFrames} source + ${plan.newFrames} new frames${audio === 'splice' ? ` (audio crossfaded at the seam${sourceMaster ? ', from the lossless master' : ''})` : ''}`);
   return { applied: true, keptFrames: plan.keepFrames, droppedSourceFrames: plan.droppedSourceFrames, streamCopied };

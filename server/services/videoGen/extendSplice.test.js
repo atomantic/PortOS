@@ -8,7 +8,7 @@
  * whenever the layout doesn't verify.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, renameSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { execFile } from 'child_process';
@@ -142,6 +142,34 @@ describe('spliceExtendSource', () => {
     expect(logs.some((line) => line.includes('lossless master'))).toBe(true);
     expect(existsSync(extendMasterPath(roundTwo))).toBe(true);
     expect(await probeFrameCount(roundTwo)).toBe(49);
+  });
+
+  it('ignores a master once the clip\'s soundtrack was replaced in place, even at the same length', async () => {
+    if (!ffmpeg) return;
+    const source = await makeClip('swap-source.mp4', { color: 'black', frames: 17, tone: 440 });
+    const roundOne = await makeClip('swap-render.mp4', { color: 'white', frames: 33, tone: 880 });
+    const roundTwo = await makeClip('swap-render-2.mp4', { color: 'gray', frames: 49, tone: 660 });
+    if (!source || !roundOne || !roundTwo) return;
+    expect((await spliceExtendSource({ sourcePath: source, outputPath: roundOne, extendLatents: 2 })).applied).toBe(true);
+    const master = extendMasterPath(roundOne);
+    expect(existsSync(master)).toBe(true);
+    // Swap the soundtrack, keeping the picture and the length.
+    const swapped = join(tmpDir, 'swap-render.swapped.mp4');
+    const remux = await runFfmpegProcess({
+      bin: ffmpeg,
+      args: ['-i', roundOne, '-f', 'lavfi', '-i', 'sine=frequency=1500:sample_rate=48000', '-map', '0:v', '-map', '1:a', '-c:v', 'copy', '-c:a', 'aac', '-shortest', '-y', swapped],
+      stderrTailBytes: 0,
+    });
+    if (!remux.ok) return;
+    renameSync(swapped, roundOne);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const result = await spliceExtendSource({ sourcePath: roundOne, outputPath: roundTwo, extendLatents: 2 });
+    const warned = warn.mock.calls.some(([line]) => String(line).includes('does not match'));
+    warn.mockRestore();
+
+    expect(result.applied).toBe(true);
+    expect(warned).toBe(true);
   });
 
   it('ignores a stale master and honors keepMaster:false', async () => {

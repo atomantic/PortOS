@@ -348,6 +348,40 @@ export const videoFrameHashes = async (videoPath) => {
   }
 };
 
+// Identity of the soundtrack a clip plays: the MD5 of its decoded first audio
+// stream. Decoded rather than hashed as packets so a lossless remux (faststart)
+// keeps it, while any change to the samples — a replaced or re-muxed soundtrack,
+// even at the same length — does not. Null when the clip has no readable audio.
+export const audioFingerprint = async (mediaPath) => {
+  const ffmpeg = await findFfmpeg();
+  if (!ffmpeg || typeof mediaPath !== 'string' || !mediaPath) return null;
+  const { stdout } = await execFileAsync(
+    ffmpeg,
+    ['-v', 'error', '-i', mediaPath, '-map', '0:a:0', '-vn', '-f', 'md5', '-'],
+    safeChildProcessOptions({ timeout: 60000 }),
+  ).catch(() => ({ stdout: '' }));
+  return /^MD5=([0-9a-f]{32})/m.exec(stdout || '')?.[1] ?? null;
+};
+
+const MASTER_FINGERPRINT_TAG = 'portos_clip_audio_md5';
+
+/** Copy a lossless audio master to `outPath`, stamping the clip-audio fingerprint it was mixed for. */
+export const sealAudioMaster = async ({ inPath, outPath, fingerprint }) => {
+  const ffmpeg = await findFfmpeg();
+  if (!ffmpeg) return { ok: false, reason: 'ffmpeg not found' };
+  return runFfmpegProcess({
+    bin: ffmpeg,
+    args: ['-i', inPath, '-map', '0:a:0', '-c:a', 'copy', '-metadata', `${MASTER_FINGERPRINT_TAG}=${fingerprint}`, '-y', outPath],
+  });
+};
+
+/** The clip-audio fingerprint a master was sealed with, or null when absent or unreadable. */
+export const readAudioMasterFingerprint = async (masterPath) => {
+  const stdout = await runFfprobe(['-v', 'error', '-show_entries', 'format_tags', '-of', 'default=noprint_wrappers=1', masterPath]);
+  const line = stdout.split(/\r?\n/).find((row) => row.toLowerCase().startsWith(`tag:${MASTER_FINGERPRINT_TAG}=`));
+  return line ? line.slice(line.indexOf('=') + 1).trim() || null : null;
+};
+
 // The playable geometry of a finished clip — `{ width, height, fps, numFrames,
 // durationSec }` — or null when any axis cannot be measured. For entries whose
 // producer never recorded a frame count (hosted Grok/fal/reactor renders), so a
