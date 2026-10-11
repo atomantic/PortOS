@@ -64,6 +64,16 @@
  *     POST /api/meatspace/post/drill is gated only when `type` is an LLM
  *     drill; math, memory and cognitive drills stay open. Cover compose,
  *     lettering saves and promotion reads stay open.
+ *   - Importer, Brain and analytics AI (#11036): classify/analyze/retry-issues,
+ *     model-personality run, goal-scorecard narrative, Brain capture (it can
+ *     dispatch classification or repository intake), inbox retry, digest/review
+ *     runs and the daily-log draft hand caller text, stored reference data
+ *     and/or a caller-chosen provider to a runner that is not tool-free. Brain
+ *     daily-log digest-settings select the provider a scheduled digest uses and
+ *     arm it. Importer commit is gated only when `cleanupFormatting` is true;
+ *     the default deterministic commit stays open. Collateral restriction:
+ *     remote password-free Brain capture is refused whole. Record reads/CRUD and
+ *     the non-AI insights compute/refresh routes stay open.
  *   - Creative Director and Creative Commissions (#10867): project create/edit
  *     choose agent instructions and provider pins; start/resume/directive/
  *     replan/plan-step/auto-cast/smoke-test/review enqueue or re-arm writable
@@ -720,6 +730,22 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/catalog/ingest/voice',
   'POST /api/catalog/ingest/brain',
 
+  // Importer, Brain and analytics AI (#11036): caller text, stored reference
+  // data and a caller-chosen provider reach a non-tool-free runner. Authorize
+  // before stores, run creation, queueing or dispatch. `POST /api/importer/commit`
+  // is gated per body (cleanupFormatting) in COMPILED_BODY_ROUTES.
+  'POST /api/importer/classify',
+  'POST /api/importer/analyze',
+  'POST /api/importer/retry-issues',
+  'POST /api/brain/capture',
+  'POST /api/brain/inbox/:id/retry',
+  'POST /api/brain/digest/run',
+  'POST /api/brain/review/run',
+  'POST /api/brain/daily-log/:date/draft',
+  'PUT /api/brain/daily-log/digest-settings',
+  'POST /api/model-personality/run',
+  'POST /api/insights/goal-scorecard/narrative',
+
   // Eidoverse: clone and install a caller-named repo, or repoint it.
   'POST /api/settings/features/eidoverse/install',
   'PUT /api/settings/features/eidoverse/source',
@@ -743,9 +769,10 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // `scan-report` and link CRUD only read or record; nothing runs. The one
   // exception is a repository URL that auto-clones: POST /api/brain/links
   // (unless `autoClone: false`) and a bare-repo-URL POST /api/brain/capture
-  // start a clone and may arm post-clone scan/study agents, so those two are
-  // gated per request in their handlers (`assertHostControl`, #11037) rather
-  // than listed here — a plain bookmark stays open.
+  // start a clone and may arm post-clone scan/study agents. Links are gated per
+  // request in their handler (`assertHostControl`, #11037) so a plain bookmark
+  // stays open; capture is listed below whole (#11036) because it can also
+  // dispatch classification.
   'POST /api/brain/links/:id/clone',
   'POST /api/brain/links/:id/pull',
   'POST /api/brain/links/:id/open-folder',
@@ -877,6 +904,9 @@ const COMPILED_BODY_ROUTES = [
   // LLM drill types reach a caller-chosen provider (#10989). Math, memory and
   // cognitive types stay open, including a missing or unknown type.
   ['POST /api/meatspace/post/drill', (body) => LLM_DRILL_TYPES.includes(body?.type) ? ['type'] : []],
+  // Importer commit runs one LLM reformat call per excerpt only when asked to
+  // (#11036); the default deterministic commit stays open.
+  ['POST /api/importer/commit', (body) => body?.cleanupFormatting === true ? ['cleanupFormatting'] : []],
 ].map(([route, pick]) => ({ ...compileRoute(route), pick }));
 
 /** The host-control keys a request body names, for `method path` of a policy store; [] elsewhere. */
