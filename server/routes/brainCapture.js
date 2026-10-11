@@ -7,6 +7,9 @@
 import { Router } from 'express';
 import * as brainService from '../services/brain.js';
 import { recordUserAction } from '../services/userActions.js';
+import { assertHostControl } from '../services/authGate.js';
+import { parseBareUrl } from '../lib/bareUrl.js';
+import { deriveRepoLinkFields } from '../lib/repoLinkFields.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, brainInboxRetryBodySchema } from '../lib/validation.js';
 import {
@@ -22,10 +25,15 @@ const router = Router();
 
 /**
  * POST /api/brain/capture
- * Capture a thought, classify it, and store it
+ * Capture a thought, classify it, and store it. A capture that is nothing but
+ * a repository URL is filed as a link and auto-cloned (with any `repoIntake`
+ * agents queued after), so it needs the same operator authority as creating
+ * that link directly (#11037).
  */
 router.post('/capture', asyncHandler(async (req, res) => {
   const { text, providerOverride, modelOverride, creative, repoIntake, note } = validateRequest(captureInputSchema, req.body);
+  const bareUrl = parseBareUrl(text);
+  if (bareUrl && deriveRepoLinkFields(bareUrl).isRepo) assertHostControl(req);
   const captureOptions = { creative, repoIntake };
   if (note !== undefined) captureOptions.note = note;
   const result = await brainService.captureThought(text, providerOverride, modelOverride, captureOptions);

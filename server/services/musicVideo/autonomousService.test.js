@@ -607,6 +607,66 @@ describe('startAutonomousVideo', () => {
   });
 });
 
+// A finished project whose song a new run reuses; everything but the song is its own look.
+const SONG_SOURCE = {
+  id: 'mv-src', name: 'Example Song', trackId: 'track-src', uploadedAudioFilename: null, status: 'ready',
+  concept: { prompt: 'Its own concept', songStyle: 'post-punk, driving drums, -metal' },
+  visualSpec: { moodBoardId: 'board-src', references: [{ id: 'ref-1', imageId: 'img-1' }] },
+  audioAnalysis: { durationSec: 20, bpm: 120, sections: [{ id: 'chorus', label: 'Chorus', startSec: 0, endSec: 20 }] },
+  midiTranscription: { filename: 'song.mid' },
+  lyricCues: [{ id: 'c1', text: 'rain on glass', startSec: 1, endSec: 4, words: [
+    { w: 'rain', startSec: 1, endSec: 2, conf: 'interpolated' }, { w: 'on', startSec: 2, endSec: 3, conf: 'interpolated' }, { w: 'glass', startSec: 3, endSec: 4, conf: 'interpolated' }] }],
+  lyricMarkers: [{ cueIndex: 0, kind: 'section', text: 'Chorus' }],
+  phrases: [{ id: 'mp-1', label: 'hook', intent: 'lift', startSec: 1, endSec: 4 }],
+  vocalStemFilename: 'vocals.wav', performanceConditioningSource: 'vocal-stem', lyricAlignSource: 'vocal-stem', lyricAlignSilentWords: 0,
+  scenes: [{ sceneId: 'mvs-src', startSec: 0, endSec: 20 }],
+  castAndSets: { status: 'complete', cast: 'Its own lead' },
+  treatment: { brief: 'Its own treatment' },
+  filmLook: { preset: 'example' },
+  productionReview: { draft: { lyricsMode: 'vocal', timingStatus: 'verified', storyboard: [{ sceneId: 'mvs-src' }] } },
+};
+
+describe('starting on an existing project\'s song (fromProjectId)', () => {
+  beforeEach(() => {
+    store.set('mv-src', clone(SONG_SOURCE));
+    doubles.getTrack = vi.fn(async () => ({ id: 'track-src', title: 'Example Song', prompt: 'track style', lyrics: 'rain on glass' }));
+    service.__setAutonomousDepsForTests(doubles);
+  });
+
+  // Uniquely catches a reused song re-running lyrics/Suno/analysis or the new project inheriting the source's look.
+  it('copies only the song, writes no lyrics, makes no song, skips analysis, and leaves the source untouched', async () => {
+    const { project, run } = await service.startAutonomousVideo({ prompt: 'skatepark at golden hour', fromProjectId: 'mv-src', checkpoints: ['lyrics', 'song', 'style'] });
+    expect(project).toMatchObject({ name: 'Example Song (Auto)', trackId: 'track-src', status: 'analyzed',
+      audioAnalysis: SONG_SOURCE.audioAnalysis, lyricCues: SONG_SOURCE.lyricCues, vocalStemFilename: 'vocals.wav', lyricAlignSource: 'vocal-stem' });
+    expect(project.concept).toEqual({ prompt: 'skatepark at golden hour', songStyle: 'post-punk, driving drums, -metal' });
+    for (const key of ['visualSpec', 'castAndSets', 'treatment', 'filmLook']) expect(project[key]).toBeUndefined();
+    expect(project.scenes).toBeUndefined();
+    expect(run.brief).toMatchObject({ checkpoints: ['style'], instrumental: false, songFrom: { projectId: 'mv-src', title: 'Example Song' } });
+    expect(run.output).toMatchObject({ trackId: 'track-src', lyrics: 'rain on glass', songSource: 'reused' });
+
+    await settled('awaiting-approval');
+    await service.resumeAutonomousVideo('mv-auto');
+    await vi.waitFor(() => expect(calls).toContain('production'));
+    expect(calls).toEqual(['createProject', 'brief', 'board', 'updateProject', 'production']);
+    expect(doubles.draftCreativeBrief).toHaveBeenCalledWith(expect.objectContaining({
+      song: { title: 'Example Song', style: 'post-punk, driving drums, -metal', lyrics: 'rain on glass' },
+    }));
+    // The brief designs the video; the song keeps its own title and style.
+    expect(runOf().output).toMatchObject({ title: 'Example Song', sunoStyle: 'post-punk, driving drums, -metal' });
+    expect(runOf().stages).toMatchObject({ lyrics: { status: 'done' }, song: { status: 'done' }, analyze: { status: 'done' } });
+    expect(store.get('mv-auto').name).toBe('Example Song (Auto)');
+    expect(store.get('mv-src')).toEqual(SONG_SOURCE);
+    await expect(service.resumeAutonomousVideo('mv-auto', { retakeSong: true })).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('refuses a missing source or one with no song before creating anything', async () => {
+    await expect(service.startAutonomousVideo({ prompt: 'p', fromProjectId: 'mv-missing' })).rejects.toMatchObject({ status: 404 });
+    store.set('mv-src', { ...clone(SONG_SOURCE), trackId: null });
+    await expect(service.startAutonomousVideo({ prompt: 'p', fromProjectId: 'mv-src' })).rejects.toMatchObject({ status: 409, code: 'NO_SONG' });
+    expect(calls).toEqual([]);
+  });
+});
+
 describe('overlay text pass before the final render', () => {
   const finding = (atSec, message, severity = 'error') => ({ id: `f${atSec}`, kind: severity === 'error' ? 'overlap' : 'contrast', severity, atSec, texts: ['A'], message, count: 1 });
   const textEntries = () => (runOf()?.orchestration?.reviews || []).filter((r) => r.checkpoint === 'text');
@@ -1205,6 +1265,29 @@ describe('autopilot clears the gates it was granted on its own', () => {
     expect(project.productionReview.alignmentReview.reviewer).toMatchObject({ kind: 'autopilot', runId: runOf().id });
     expect(project.productionReview.draft.storyboard[0].lyricCueIds).toEqual(['c1', 'c2']);
     expect(project.productionReview.approvals).toMatchObject({ art: { approvedBy: 'autopilot' }, storyboard: { approvedBy: 'autopilot' } });
+  });
+
+  // Uniquely catches verified timing on the source being re-judged (and held) on the copy.
+  it('carries a source\'s verified lyric timing over unchanged, without re-aligning', async () => {
+    const source = clone(SONG_SOURCE);
+    source.productionReview.alignmentBasis = actual.productionAlignmentBasis(source);
+    store.set('mv-src', source);
+    doubles.getTrack = vi.fn(async () => null);
+    service.__setAutonomousDepsForTests(doubles);
+    prepare.mockImplementation(async (id) => {
+      const project = store.get(id);
+      if (project.productionReview?.draft?.storyboard) return;
+      Object.assign(project, {
+        scenes: [{ sceneId: 'shot', startSec: 0, endSec: 20, label: 'Chorus' }],
+        devArtifacts: [{ id: 'guide', version: 1, file: 'guide.html', mimeType: 'text/html' }],
+        productionReview: { ...project.productionReview, draft: { ...GUIDE, lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [shot] } },
+      });
+    });
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], fromProjectId: 'mv-src', ...GRANT[0] }, GRANT[1]);
+    await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
+    expect(doubles.alignLyrics).not.toHaveBeenCalled();
+    expect(doubles.analyzeSong).not.toHaveBeenCalled();
+    expect(doubles.verifyAlignment).toHaveBeenCalledWith('mv-auto', expect.objectContaining({ notes: expect.stringContaining('source project') }));
   });
 
   it('marks an instrumental song as one instead of asking for lyrics', async () => {

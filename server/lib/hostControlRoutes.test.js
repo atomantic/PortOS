@@ -760,3 +760,79 @@ describe('Remote desktop session policy (#10923)', () => {
     ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
   });
 });
+
+describe('Calendar MCP execution policy (#11051)', () => {
+  it('gates mounted MCP actions while preserving non-agent Calendar operations', () => {
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => `${method} ${path}`));
+    for (const action of ['google', 'discover']) {
+      const path = `/api/calendar/sync/:accountId/${action}`;
+      expect(mounted.has(`POST ${path}`)).toBe(true);
+      expect(hostControlRouteFor('POST', path)).toBe(`POST ${path}`);
+      expect(hostControlRouteFor('post', path.toUpperCase() + '/')).toBe(`POST ${path}`);
+    }
+    for (const route of [
+      'POST /api/calendar/sync/:accountId',
+      'POST /api/calendar/sync/:accountId/push',
+      'POST /api/calendar/sync/:accountId/api',
+      'POST /api/calendar/sync/:accountId/discover-api',
+      'GET /api/calendar/accounts/:id/subcalendars',
+      'PUT /api/calendar/accounts/:id/subcalendars',
+      'GET /api/calendar/events',
+      'POST /api/calendar/accounts',
+      'PUT /api/calendar/accounts/:id',
+      'DELETE /api/calendar/accounts/:id',
+    ]) {
+      const [method, path] = route.split(' ');
+      expect(mounted.has(route), route).toBe(true);
+      expect(isHostControlRoute(method, path), route).toBe(false);
+    }
+  });
+});
+
+describe('Importer, Brain and analytics AI policy (#11036)', () => {
+  const protectedRoutes = [
+    'POST /api/importer/classify',
+    'POST /api/importer/analyze',
+    'POST /api/importer/retry-issues',
+    'POST /api/brain/capture',
+    'POST /api/brain/inbox/:id/retry',
+    'POST /api/brain/digest/run',
+    'POST /api/brain/review/run',
+    'POST /api/brain/daily-log/:date/draft',
+    'PUT /api/brain/daily-log/digest-settings',
+    'POST /api/model-personality/run',
+    'POST /api/insights/goal-scorecard/narrative',
+  ];
+
+  it('gates each audited operation and maps every entry to a mounted route', () => {
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => method + ' ' + path));
+    for (const route of protectedRoutes) {
+      const [method, path] = route.split(' ');
+      expect(mounted.has(route), route).toBe(true);
+      expect(hostControlRouteFor(method, path), route).toBe(route);
+      expect(hostControlRouteFor(method, path.toUpperCase() + '/'), route).toBe(route);
+    }
+  });
+
+  it('gates Importer commit only when cleanupFormatting is true', () => {
+    expect(isHostControlRoute('POST', '/api/importer/commit')).toBe(false);
+    expect(hostControlBodyKeys('POST', '/api/importer/commit', { cleanupFormatting: true })).toEqual(['cleanupFormatting']);
+    expect(hostControlBodyKeys('post', '/API/importer/commit/', { cleanupFormatting: true })).toEqual(['cleanupFormatting']);
+    for (const body of [{}, { cleanupFormatting: false }, { cleanupFormatting: 'true' }, null, [true]]) {
+      expect(hostControlBodyKeys('POST', '/api/importer/commit', body), JSON.stringify(body)).toEqual([]);
+    }
+  });
+
+  it('keeps record reads, CRUD and non-AI insights compute open', () => {
+    for (const [method, path] of [
+      ['GET', '/api/importer/config'],
+      ['GET', '/api/brain/digest/latest'],
+      ['POST', '/api/brain/daily-log/:date/append'],
+      ['PUT', '/api/brain/daily-log/:date'],
+      ['PUT', '/api/brain/daily-log/settings'],
+      ['PUT', '/api/model-personality/settings'],
+      ['GET', '/api/insights/goal-scorecard'],
+      ['PUT', '/api/insights/goal-scorecard/rules'],
+    ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
+  });
+});
