@@ -699,10 +699,10 @@ async function orchestrateProductionStage(project, run, stage) {
   }
 }
 
-/** The run renders its film from code alone rather than through production. */
 /** The brief's prompt and guidance as production's planning directive. */
 const briefDirective = (brief) => trimTo([brief.prompt, brief.guidance].filter(Boolean).join('\n\n'), 4000);
 
+/** The run renders its film from code alone rather than through production. */
 const rendersFromCode = (project, run) => musicVideoMediaMode(project) === 'code-only' || autonomousMedium(run.brief.tools) === 'code';
 
 /**
