@@ -44,6 +44,7 @@ import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { mutateVideoHistory } from './history.js';
 import { getSettings } from '../settings.js';
 import { nearestAspectRatio } from '../imageGen/modes.js';
+import { frameDataUriAtAspect } from './falFrameAspect.js';
 import {
   FAL_QUEUE_BASE, awaitFalCompletion, cancelFalRequest, createFalRequestEntry, fileToDataUri,
   readCompletedFalResult, resolveFalApiKey, submitFalRequest,
@@ -145,7 +146,7 @@ export async function generateVideo({
   sourceImagePath = null, lastImagePath = null, jobId: providedJobId = null,
   audioFilePath = null, lipSync = null, shotInstruction = null,
   uploadedTempPath = null, uploadedTempPaths = [],
-  resolution = null, generateAudio = false,
+  resolution = null, generateAudio = false, frameAspect = null,
 }) {
   await ensureDir(PATHS.videos);
   const renderStartedAtMs = Date.now();
@@ -251,7 +252,7 @@ export async function generateVideo({
   runFalVideo(job, jobId, {
     apiKey, modelId, prompt, negativePrompt, duration, aspectRatio: effectiveAspectRatio, sourceImagePath, lastImagePath, outputPath, filename, meta,
     audioFilePath, uploadedTempPath, uploadedTempPaths, enableTranscription: lipSync?.enableTranscription === true,
-    requestSpec: planned ? requestSpec : null,
+    requestSpec: planned ? requestSpec : null, frameAspect,
   })
     .catch((err) => {
       console.error(`❌ fal video run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
@@ -281,14 +282,25 @@ function audioMimeType(path) {
 async function runFalVideo(job, jobId, {
   apiKey, modelId, prompt, negativePrompt, duration, aspectRatio, sourceImagePath, lastImagePath, outputPath, filename, meta,
   audioFilePath = null, uploadedTempPath = null, uploadedTempPaths = [], enableTranscription = false, requestSpec = null,
+  frameAspect = null,
 }) {
   const entry = createFalRequestEntry(apiKey);
   const publication = {};
   activeRequests.set(jobId, entry);
   const deadline = Date.now() + FAL_RENDER_TIMEOUT_MS;
   try {
-    const imageDataUri = sourceImagePath ? await fileToDataUri(sourceImagePath) : null;
-    const endImageDataUri = lastImagePath ? await fileToDataUri(lastImagePath) : null;
+    // A Music Video clip's frames are cropped to its project's aspect, since
+    // most routes size the output canvas from the start frame (falFrameAspect.js).
+    const frame = sourceImagePath ? await frameDataUriAtAspect(sourceImagePath, frameAspect) : null;
+    const endFrame = lastImagePath ? await frameDataUriAtAspect(lastImagePath, frameAspect) : null;
+    const imageDataUri = frame?.dataUri ?? null;
+    const endImageDataUri = endFrame?.dataUri ?? null;
+    for (const [label, fit] of [['start', frame], ['end', endFrame]]) {
+      if (fit?.conformed) console.log(`✂️ Cropped fal ${label} frame [${jobId.slice(0, 8)}] ${fit.conformed.from} → ${fit.conformed.to} for ${frameAspect}`);
+    }
+    if (frame?.conformed || endFrame?.conformed) {
+      meta.frameConformed = { aspect: frameAspect, ...(frame?.conformed ? { start: frame.conformed } : {}), ...(endFrame?.conformed ? { end: endFrame.conformed } : {}) };
+    }
     const audioDataUri = audioFilePath
       ? `data:${audioMimeType(audioFilePath)};base64,${(await readFile(audioFilePath)).toString('base64')}`
       : null;

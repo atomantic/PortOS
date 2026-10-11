@@ -15,7 +15,8 @@
  * largest rectangle of the requested ratio, positioned by sharp's attention
  * strategy so a close-up keeps the face rather than a geometric centre. The
  * crop never upscales — it keeps the provider's native resolution on the long
- * side it can afford.
+ * side it can afford. The fal clip lane applies the same crop box to the frames
+ * it uploads (videoGen/falFrameAspect.js).
  */
 
 import sharp from 'sharp';
@@ -33,7 +34,7 @@ const positive = (n) => Number.isFinite(Number(n)) && Number(n) > 0;
  *
  * @returns {{ width: number, height: number }|null}
  */
-function aspectCropSize(srcW, srcH, targetW, targetH, tolerance = ASPECT_TOLERANCE) {
+export function aspectCropSize(srcW, srcH, targetW, targetH, tolerance = ASPECT_TOLERANCE) {
   if (![srcW, srcH, targetW, targetH].every(positive)) return null;
   const target = targetW / targetH;
   const actual = srcW / srcH;

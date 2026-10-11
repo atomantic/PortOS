@@ -7,7 +7,8 @@ import { conformImageAspect } from './aspectConform.js';
 
 // The crop over the shapes Codex actually returned for 16:9 production stills:
 // pins the tolerance boundary (its own 1672x941 must pass byte-for-byte) and
-// both crop directions. The provider wiring + sidecar is covered in codex.test.js.
+// both crop directions. The provider wiring + sidecar is covered in codex.test.js,
+// the clip-lane use of the same crop box in videoGen/fal.test.js.
 describe('conformImageAspect', () => {
   let dir;
   beforeAll(async () => { dir = await mkdtemp(join(tmpdir(), 'aspect-conform-')); });

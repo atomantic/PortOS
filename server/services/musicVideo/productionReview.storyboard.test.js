@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { productionReadiness, productionAlignmentBasis, approveProductionStage, carryProductionApprovals } from './productionReview.js';
+import { applySceneUpdate, mergeNextScene, removeScene } from './projectsLogic.js';
 
 const WORD_PROBLEM = /bounded, positive-duration word timings/;
 const SHOT_PROBLEM = /^Complete timing, action, staging, camera and transition/;
@@ -73,6 +74,37 @@ describe('approving a Board storyboard of derived shots', () => {
     expect(carried.productionReview.approvals.storyboard.carriedOver).toMatchObject({ reason: 'compose footage' });
     // A later creative change still stales it.
     expect(productionReadiness({ ...carried, concept: 'A new concept' }).storyboard.approved).toBe(false);
+  });
+});
+
+describe('the director trimming an approved storyboard', () => {
+  // An approved three-shot board: s1 0-4, s2 4-6, s3 6-8.
+  function approvedBoard() {
+    const planned = project();
+    const scenes = [planned.scenes[0], { ...planned.scenes[1], sceneId: 's2', label: 'Insert', endSec: 6 },
+      { ...planned.scenes[1], sceneId: 's3', startSec: 6, endSec: 8 }];
+    const draft = { ...planned.productionReview.draft, cast: 'The director', environments: 'Edit room', visualLanguage: 'Analog grain',
+      motionLanguage: 'Slow push-ins', guideArtifactId: 'g1' };
+    const ready = { ...planned, scenes, devArtifacts: [{ id: 'g1', mimeType: 'image/png', file: 'guide.png', version: 1 }],
+      productionReview: { ...planned.productionReview, draft } };
+    const art = approveProductionStage(ready, { stage: 'art', basis: productionReadiness(ready).basis.art });
+    return approveProductionStage(art, { stage: 'storyboard', basis: productionReadiness(art).basis.storyboard });
+  }
+
+  // Uniquely catches cutting a shot and stretching its neighbour over the gap asking for a fresh storyboard approval.
+  it('keeps the approval through a cut and a retime, and still stales on new content', () => {
+    const cut = removeScene(approvedBoard(), 's2');
+    expect(cut.productionReview.draft.storyboard.map((shot) => shot.sceneId)).toEqual(['s1', 's3']);
+    expect(productionReadiness(cut).storyboard.problems).toContain('Storyboard shots must cover the master without unintended gaps or overlaps.');
+    const { project: stretched } = applySceneUpdate(cut, 's1', { endSec: 6 });
+    expect(productionReadiness(stretched).storyboard).toMatchObject({ approved: true, stale: null });
+    const { project: reprompted } = applySceneUpdate(stretched, 's1', { visualIntent: 'A new idea' });
+    expect(productionReadiness(reprompted).storyboard.approved).toBe(false);
+  });
+
+  it('keeps the approval when two shots are merged into one', () => {
+    const { project: merged } = mergeNextScene(approvedBoard(), 's1');
+    expect(productionReadiness(merged).storyboard).toMatchObject({ approved: true, stale: null });
   });
 });
 
