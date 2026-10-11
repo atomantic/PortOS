@@ -3,6 +3,7 @@ import toast from '../components/ui/Toast';
 import {
   addMusicVideoSceneTake,
   selectMusicVideoSceneTake,
+  continueMusicVideoSceneFromPrevious,
   reviewMusicVideoSceneTake,
   getMusicVideoHandoff,
   getMusicVideoHandoffBundle,
@@ -66,6 +67,13 @@ export default function useMusicVideoTakes({ project, applyScenePatch }) {
   const selectTake = (scene, take) => runTakeOp(
     (projectId) => selectMusicVideoSceneTake(projectId, scene.sceneId, take.takeId, { silent: true }),
     'Failed to select take',
+  );
+
+  // Continuing shot: the previous shot's last on-screen frame becomes this
+  // scene's start frame; `keepStillAsEnd` keeps the current one as its end frame.
+  const continueFromPrevious = (scene, { keepStillAsEnd = false } = {}) => runTakeOp(
+    (projectId) => continueMusicVideoSceneFromPrevious(projectId, scene.sceneId, { keepStillAsEnd }, { silent: true }).then((res) => res.scene),
+    'Failed to continue from the previous shot',
   );
 
   const reviewTake = (scene, take, review) => runTakeOp(
@@ -146,5 +154,5 @@ export default function useMusicVideoTakes({ project, applyScenePatch }) {
     if (failures.length) toast.error(failures.slice(0, 3).join(' · '));
   };
 
-  return { busy, selectTake, reviewTake, importTake, importClipTake, exportHandoff, exportHandoffBundle, importHandoffFiles };
+  return { busy, selectTake, reviewTake, continueFromPrevious, importTake, importClipTake, exportHandoff, exportHandoffBundle, importHandoffFiles };
 }

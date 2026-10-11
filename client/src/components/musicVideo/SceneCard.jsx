@@ -3,7 +3,7 @@ import ShotActionInspector from './ShotActionInspector.jsx';
 import SceneCameraControls from './SceneCameraControls.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { useEffect, useRef, useState } from 'react';
-import { Trash2, Activity, ArrowUp, ArrowDown, ChevronRight, Image as ImageIcon, Video, Maximize2, AlertTriangle, ImagePlus, Clapperboard } from 'lucide-react';
+import { Trash2, Activity, ArrowUp, ArrowDown, ChevronRight, Image as ImageIcon, Video, Maximize2, AlertTriangle, ImagePlus, Clapperboard, SkipForward } from 'lucide-react';
 import { formatDurationSec } from '../../utils/formatters.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 import PerformanceEvidence from './PerformanceEvidence.jsx';
@@ -87,7 +87,7 @@ export default function SceneCard({
   scene, index, isLast, generatingFrame, generatingVideo, frameProgress = null, videoProgress = null,
   settingsSaving, videoBlockedReason, canContinueShot,
   onMove, onDelete, onEditLocal, onSave,
-  onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false,
+  onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
   onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, takeBusy = false, layered = false, documentComposition = false,
   lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, nextEndSec = null, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
   expanded, onToggleExpand, footageOptional = false, failedScenes = null, songReview = null,
@@ -116,6 +116,7 @@ export default function SceneCard({
   // Source-clip length, read from the inline player's metadata and keyed to
   // the clip it was measured from so a regenerated clip is re-measured.
   const [speakerDirty, setSpeakerDirty] = useState(false);
+  const [keepStillAsEnd, setKeepStillAsEnd] = useState(false);
   const [speakerSaving, setSpeakerSaving] = useState(false);
   const [clipMeta, setClipMeta] = useState(null);
   const clipSec = clipMeta && clipMeta.id === scene.videoHistoryId ? clipMeta.sec : null;
@@ -426,6 +427,23 @@ export default function SceneCard({
                   title="Add a frame from the gallery or an upload (e.g. made in an external tool) as a take">
                   <ImagePlus size={14} /> Import take
                 </button>
+              )}
+              {onContinueFromPrevious && layer === 'footage' && index > 0 && (
+                <>
+                  <button type="button" onClick={() => onContinueFromPrevious(scene, { keepStillAsEnd: keepStillAsEnd && Boolean(scene.referenceImageId) })}
+                    disabled={takeBusy || !previousHasClip}
+                    className="flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
+                    title={previousHasClip ? 'Start this shot from the last frame the previous shot shows in the cut' : 'The previous shot needs a clip first'}>
+                    <SkipForward size={14} /> From previous shot
+                  </button>
+                  {scene.referenceImageId && (
+                    <label htmlFor={`mv-scene-${scene.sceneId}-keep-still-end`} className="flex items-center gap-1 text-[11px] text-port-text-muted min-h-[44px] sm:min-h-0">
+                      <input id={`mv-scene-${scene.sceneId}-keep-still-end`} type="checkbox" checked={keepStillAsEnd}
+                        onChange={(e) => setKeepStillAsEnd(e.target.checked)} />
+                      Keep this frame as the end frame
+                    </label>
+                  )}
+                </>
               )}
             </div>
           </div>

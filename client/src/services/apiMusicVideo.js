@@ -170,6 +170,11 @@ export const addMusicVideoSceneTake = (id, sceneId, body, options = {}) => reque
 });
 export const selectMusicVideoSceneTake = (id, sceneId, takeId, options = {}) =>
   request(`${takesPath(id, sceneId)}/${encodeURIComponent(takeId)}/select`, { method: 'POST', ...options });
+// Start a shot from the previous shot's last on-screen frame → { scene, frame }.
+export const continueMusicVideoSceneFromPrevious = (id, sceneId, body = {}, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/continue-from-previous`, {
+    method: 'POST', body: JSON.stringify(body), ...options,
+  });
 export const reviewMusicVideoSceneTake = (id, sceneId, takeId, review, options = {}) =>
   request(`${takesPath(id, sceneId)}/${encodeURIComponent(takeId)}`, {
     method: 'PATCH', body: JSON.stringify(review), ...options,

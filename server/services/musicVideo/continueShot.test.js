@@ -1,0 +1,59 @@
+/**
+ * Continuing shots against a real ffmpeg: the handoff frame is the last frame
+ * the cut shows of the previous shot's clip, and it becomes this shot's start
+ * frame (optionally moving the planned still to the end frame).
+ */
+import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
+import { mkdtempSync, rmSync, mkdirSync, existsSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+
+const ROOT = mkdtempSync(join(tmpdir(), 'mv-continue-shot-'));
+const mocks = vi.hoisted(() => ({ project: null, appended: [], selected: [] }));
+
+vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, PATHS: { ...actual.PATHS, videos: join(ROOT, 'videos'), images: join(ROOT, 'images') } };
+});
+vi.mock('../videoGen/history.js', () => ({ getHistoryItem: vi.fn(async (id) => (id === 'clip-a' ? { id, filename: 'clip-a.mp4' } : null)) }));
+vi.mock('./projects.js', () => ({
+  getProject: vi.fn(async () => mocks.project),
+  appendSceneTakes: vi.fn(async (_id, _sceneId, inputs) => {
+    mocks.appended.push(...inputs);
+    return { appended: inputs.map((input, i) => ({ ...input, takeId: `t${mocks.appended.length - inputs.length + i}` })) };
+  }),
+  selectSceneTake: vi.fn(async (_id, sceneId, takeId) => { mocks.selected.push(takeId); return { sceneId }; }),
+}));
+
+const { findFfmpeg, runFfmpegProcess, probeVideoStreamInfo } = await import('../../lib/ffmpeg.js');
+const { continueFromPreviousShot } = await import('./continueShot.js');
+const ffmpeg = await findFfmpeg();
+
+describe.skipIf(!ffmpeg)('continueFromPreviousShot', () => {
+  beforeAll(async () => {
+    mkdirSync(join(ROOT, 'videos'), { recursive: true });
+    // A 3 s clip under a 1 s shot.
+    const made = await runFfmpegProcess({ bin: ffmpeg, args: ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc=size=320x180:rate=24:duration=3', '-pix_fmt', 'yuv420p', join(ROOT, 'videos', 'clip-a.mp4')] });
+    expect(made.ok).toBe(true);
+  });
+  afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
+
+  it('extracts the frame at the previous shot\'s out-point and keeps the planned still as the end frame', async () => {
+    mocks.project = { id: 'mv-1', scenes: [
+      { sceneId: 'a', startSec: 0, endSec: 1, loop: false, videoHistoryId: 'clip-a' },
+      { sceneId: 'b', startSec: 1, endSec: 3, referenceImageId: 'planned.png' },
+    ] };
+    const { frame } = await continueFromPreviousShot('mv-1', 'b', { keepStillAsEnd: true });
+    expect(frame).toEqual({ imageId: 'handoff-clip-a-958.png', atSec: 0.958, fromSceneId: 'a' });
+    expect(existsSync(join(ROOT, 'images', frame.imageId))).toBe(true);
+    expect((await probeVideoStreamInfo(join(ROOT, 'images', frame.imageId))).width).toBe(320);
+    expect(mocks.appended.map((t) => [t.kind, t.assetId])).toEqual([['image', 'handoff-clip-a-958.png'], ['endImage', 'planned.png']]);
+    expect(mocks.selected).toEqual(['t0', 't1']);
+  });
+
+  it('refuses the first shot and a previous shot without a clip', async () => {
+    mocks.project = { id: 'mv-1', scenes: [{ sceneId: 'a', startSec: 0, endSec: 1 }, { sceneId: 'b', startSec: 1, endSec: 2 }] };
+    await expect(continueFromPreviousShot('mv-1', 'a')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_NO_PREVIOUS_SHOT' });
+    await expect(continueFromPreviousShot('mv-1', 'b')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_PREVIOUS_CLIP_MISSING' });
+  });
+});

@@ -10,6 +10,7 @@ import { PlanActions } from '../ProjectActionGroups.jsx';
 import ShotPacingFields from '../ShotPacingFields.jsx';
 import TitleCardPanel from '../TitleCardPanel.jsx';
 import { normalizeTitleCard } from '../../../../../server/lib/musicVideoTitleCard.js';
+import { previousShot } from '../../../../../server/lib/musicVideoHandoffFrame.js';
 import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
 import { FOOTAGE_OPTIONAL_MODES } from '../../../lib/musicVideoStages.js';
 import { parseSceneFilter, sceneAttention, sceneMatchesFilter, sceneMediaKind, SCENE_ATTENTION_LABELS, SCENE_MEDIA_LABELS } from '../../../lib/musicVideoSceneAttention.js';
@@ -232,6 +233,9 @@ export default function BoardStage({ board }) {
               takeBusy={takes.busy}
               onSelectTake={takes.selectTake}
               onReviewTake={takes.reviewTake}
+              onContinueFromPrevious={takes.continueFromPrevious}
+              // The server's own neighbor rule: the shot before this one by start time.
+              previousHasClip={Boolean(previousShot(project, scene.sceneId)?.videoHistoryId)}
               onImportTake={(target) => board.setPickerTarget({ type: 'take', sceneId: target.sceneId })}
               onImportClipTake={(target) => board.setPickerTarget({ type: 'clip', sceneId: target.sceneId })}
               layered={layered}
