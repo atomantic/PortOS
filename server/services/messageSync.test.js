@@ -52,6 +52,9 @@ vi.mock('./messageGmailSync.js', () => ({
   syncGmail: vi.fn()
 }));
 
+const browser = vi.hoisted(() => ({ findOrOpenPage: vi.fn(), evaluateOnPage: vi.fn(), isAuthPage: vi.fn(() => false), listCdpPages: vi.fn() }));
+vi.mock('./browserService.js', () => browser);
+
 vi.mock('./messagePlaywrightSync.js', () => ({
   syncPlaywright: vi.fn(),
   refreshMessageDetail: vi.fn()
@@ -833,9 +836,8 @@ describe('refreshMessage', () => {
     expect(merged.bodyText).toBe('keep me');
   });
 
-  it('clears the original message body when the extracted body is empty (fallback path)', async () => {
-    // No externalId on the cached message → it is not matched in the loop and
-    // falls through to the original-message update (line ~284).
+  it('preserves an unmatched original rather than borrowing another conversation member body', async () => {
+    // Different member evidence must not clear an unrelated legacy record.
     readFile.mockResolvedValue(JSON.stringify({
       syncCursor: null,
       messages: [{ id: 'msg-1', bodyText: 'stale original', from: { name: 'Bob' }, subject: 'Re: x', date: '2026-02-01' }]
@@ -845,8 +847,8 @@ describe('refreshMessage', () => {
 
     const result = await refreshMessage(VALID_UUID, 'msg-1');
 
-    const original = result.find(m => m.id === 'msg-1');
-    expect(original.bodyText).toBe('');
+    expect(result.every(m => m.id !== 'msg-1')).toBe(true);
+    expect(atomicWrite.mock.calls[0][1].messages.find(m => m.id === 'msg-1').bodyText).toBe('stale original');
   });
 
   it('loads and saves the cache once when refreshing multiple messages', async () => {
@@ -1095,5 +1097,131 @@ describe('full inbox coverage contract', () => {
     gmailApi.list.mockResolvedValue({ data: { messages: 'invalid' } });
     expect(await syncAccount(VALID_UUID, null, { mode: 'full' })).toMatchObject({ status: 502 });
     expect(saved.messages).toHaveLength(3);
+  });
+});
+
+
+describe('browser ingestion identity across sync, cache, and activity (#11150)', () => {
+  async function fixture(initial = []) {
+    let stored = { messages: initial };
+    const events = new Map();
+    const { recordEvents, messageActivityCandidates } = await import('./humanActivity.js');
+    const account = { id: VALID_UUID, type: 'outlook', enabled: true };
+    for (const candidate of messageActivityCandidates(account, initial.map(m => ({ ...m, activityIdentity: m.externalId })))) events.set(candidate.dedupeKey, candidate);
+    recordEvents.mockImplementation(async candidates => {
+      for (const candidate of candidates) if (!events.has(candidate.dedupeKey)) events.set(candidate.dedupeKey, candidate);
+    });
+    readFile.mockImplementation(async path => path.endsWith('selectors.json') ? '{}' : JSON.stringify(stored));
+    atomicWrite.mockImplementation(async (_path, data) => { stored = structuredClone(data); });
+    getAccount.mockResolvedValue(account);
+    browser.findOrOpenPage.mockResolvedValue({ url: 'https://outlook.office.com/mail/' });
+    const actual = await vi.importActual('./messagePlaywrightSync.js');
+    syncPlaywright.mockImplementation(actual.syncPlaywright);
+    return { events, stored: () => stored };
+  }
+
+  const summary = { from: 'Example Sender', fromEmail: 'sender@example.test', subject: 'Same subject', date: '2026-01-01T12:00:00Z', isUnread: true };
+  function scrape(rows, details) {
+    browser.evaluateOnPage.mockImplementation(async (_page, script) => {
+      if (script.includes('const seen = new Map()')) return rows;
+      if (script.includes('const targetId =')) return details ? true : { found: false };
+      return details;
+    });
+  }
+
+  it('keeps colliding rows distinct and replays mutable summaries without losing local evaluations or activity identity', async () => {
+    const f = await fixture();
+    scrape([{ ...summary, providerRowId: 'row-a' }, { ...summary, providerRowId: 'row-b' }]);
+    await syncAccount(VALID_UUID);
+    expect(f.stored().messages).toHaveLength(2);
+    expect(f.events.size).toBe(2);
+    const original = f.stored().messages.find(m => m.providerRowId === 'row-a');
+    original.evaluation = { score: 9 };
+    scrape([{ ...summary, providerRowId: 'row-a', from: 'Renamed Sender', date: '2026-01-01T07:00:00-05:00' }, { ...summary, providerRowId: 'row-b' }]);
+    await syncAccount(VALID_UUID);
+    await syncAccount(VALID_UUID);
+    expect(f.stored().messages).toHaveLength(2);
+    expect(f.stored().messages.find(m => m.providerRowId === 'row-a')).toMatchObject({ id: original.id, evaluation: { score: 9 }, from: { name: 'Renamed Sender' } });
+    expect(f.events.size).toBe(2);
+  });
+
+  it('retains the event key and local evaluation of an unambiguous legacy row', async () => {
+    const f = await fixture([{ id: 'legacy-local', externalId: 'pw-legacy', providerRowId: 'row-a', from: { name: summary.from }, date: summary.date, subject: summary.subject, evaluation: { score: 8 } }]);
+    scrape([{ ...summary, providerRowId: 'row-a', from: 'New display name' }]);
+    await syncAccount(VALID_UUID);
+    await syncAccount(VALID_UUID);
+    expect(f.stored().messages).toHaveLength(1);
+    expect(f.stored().messages[0]).toMatchObject({ id: 'legacy-local', evaluation: { score: 8 }, activityIdentity: 'pw-legacy' });
+    expect([...f.events.keys()]).toEqual([`msg:${VALID_UUID}:pw-legacy`]);
+  });
+
+  it('adopts a newly available child ID by unique canonical evidence and retains it if the provider later omits it', async () => {
+    const legacy = { id: 'legacy-member', externalId: 'pw-old-display', providerRowId: 'row-a',
+      threadId: 'legacy-thread', bodyFull: true, bodyText: 'old body', date: summary.date,
+      from: { name: summary.from, email: summary.fromEmail }, subject: summary.subject, evaluation: { score: 8 } };
+    const f = await fixture([legacy]);
+    const details = [{ providerMessageId: 'child-a', from: 'Renamed', fromEmail: summary.fromEmail,
+      date: '2026-01-01T07:00:00-05:00', body: 'new body' }];
+    scrape([{ ...summary, providerRowId: 'row-a' }], details);
+    await syncAccount(VALID_UUID);
+    expect(f.stored().messages).toHaveLength(1);
+    expect(f.stored().messages[0]).toMatchObject({ id: legacy.id, providerMessageId: 'child-a', evaluation: { score: 8 }, bodyText: 'new body' });
+    expect(f.events.size).toBe(1);
+    refreshMessageDetail.mockResolvedValue(details.map(({ providerMessageId, ...detail }) => detail));
+    await refreshMessage(VALID_UUID, legacy.id);
+    expect(f.stored().messages).toHaveLength(1);
+    expect(f.stored().messages[0].providerMessageId).toBe('child-a');
+  });
+
+  it('upgrades a summary to its unambiguous child without adding a second activity event', async () => {
+    const f = await fixture();
+    scrape([{ ...summary, providerRowId: 'row-a' }]);
+    await syncAccount(VALID_UUID);
+    const original = f.stored().messages[0];
+    original.evaluation = { score: 7 };
+    const details = [
+      { from: 'Renamed Sender', fromEmail: summary.fromEmail, date: '2026-01-01T07:00:00-05:00', body: 'Current message' },
+      { from: summary.from, fromEmail: summary.fromEmail, date: '2025-12-31T12:00:00Z', body: 'Earlier message' }
+    ];
+    scrape([{ ...summary, providerRowId: 'row-a' }], details);
+    await syncAccount(VALID_UUID);
+    await syncAccount(VALID_UUID);
+    expect(f.stored().messages).toHaveLength(2);
+    expect(f.stored().messages.find(m => m.id === original.id)).toMatchObject({ bodyText: 'Current message', evaluation: { score: 7 }, browserMessageKind: 'member' });
+    expect(f.events.size).toBe(2);
+  });
+
+  it('retains every expanded member on cached replay and isolates refresh bodies by provider row', async () => {
+    const f = await fixture();
+    const details = [
+      { from: summary.from, fromEmail: summary.fromEmail, date: summary.date, body: 'First body', providerMessageId: 'child-a' },
+      { from: summary.from, fromEmail: summary.fromEmail, date: summary.date, body: 'Second body', providerMessageId: 'child-b' }
+    ];
+    scrape([{ ...summary, providerRowId: 'row-a' }, { ...summary, providerRowId: 'row-b' }], details);
+    await syncAccount(VALID_UUID);
+    expect(f.stored().messages).toHaveLength(4);
+    expect(f.events.size).toBe(4);
+    await syncAccount(VALID_UUID);
+    expect(f.stored().messages).toHaveLength(4);
+    expect(f.events.size).toBe(4);
+    const first = f.stored().messages.find(m => m.providerRowId === 'row-a');
+    refreshMessageDetail.mockResolvedValue(details.map(d => ({ ...d, body: 'Refreshed ' + d.body })));
+    await refreshMessage(VALID_UUID, first.id);
+    expect(f.stored().messages.filter(m => m.providerRowId === 'row-a').map(m => m.bodyText)).toEqual(['Refreshed First body', 'Refreshed Second body']);
+    expect(f.stored().messages.filter(m => m.providerRowId === 'row-b').map(m => m.bodyText)).toEqual(['First body', 'Second body']);
+  });
+
+  it.each([null, 'repeated-provider-id'])('preserves ambiguous members rather than overwriting one with another (child ID: %s)', async (providerMessageId) => {
+    const f = await fixture();
+    const details = ['Body one', 'Body two'].map(body => ({ providerMessageId, from: summary.from, fromEmail: summary.fromEmail, date: summary.date, body }));
+    scrape([{ ...summary, providerRowId: 'row-a' }], details);
+    await syncAccount(VALID_UUID);
+    await syncAccount(VALID_UUID);
+    expect(f.stored().messages.map(m => m.bodyText)).toEqual(['Body one', 'Body two']);
+    expect(f.events.size).toBe(2);
+    const first = f.stored().messages[0];
+    refreshMessageDetail.mockResolvedValue([details[0], { ...details[1], body: 'Changed ambiguous body' }]);
+    await refreshMessage(VALID_UUID, first.id);
+    expect(f.stored().messages.map(m => m.bodyText)).toEqual(['Body one', 'Body two', 'Changed ambiguous body']);
   });
 });
