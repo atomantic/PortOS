@@ -1171,7 +1171,7 @@ export const musicVideoCastAndSetsStartSchema = z.object({
 }).strict();
 
 // Regenerate with notes. Omitted notes = the open notes on the sheet. A
-// `target` names an image (`character`, `expressions`, `looks`, `set:<id>`,
+// `target` names an image (`character`, `expressions`, `looks`, `cast:<id>`, `set:<id>`,
 // `test:<n>`); any other note revises the direction.
 export const musicVideoCastAndSetsRegenerateSchema = z.object({
   notes: z.array(z.object({

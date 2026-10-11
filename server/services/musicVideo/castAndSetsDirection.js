@@ -6,7 +6,8 @@ import { musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
  * Before any image is made, one provider call reads the song as a story and
  * returns the production's cast and world: a logline, one protagonist (face,
  * hair, signature prop, a recurring gesture tied to a lyric hook, continuity
- * rules), 1–4 wardrobe looks mapped to chapters, 3–8 sets (one dominant light
+ * rules), 1–4 wardrobe looks mapped to chapters, up to 4 recurring supporting
+ * cast members (photographic only), 3–8 sets (one dominant light
  * each) mapped to song sections, 2–4 in-set test frames, an overlay concept,
  * and the 2–4 mood-board images that best show the look. The prompt is told
  * explicitly that the mood board is look/lighting/texture reference only —
@@ -57,6 +58,7 @@ export const CAST_SETS_LIMITS = Object.freeze({
   expressions: 8,
   questions: 4,
   overlayElements: 4,
+  cast: 4,
 });
 export const CAST_SETS_IMAGE_ROLES = Object.freeze(['background', 'texture', 'decoration', 'cutout']);
 const TEXT = 1000;
@@ -155,6 +157,7 @@ const OUTPUT_SHAPE = `{
     "rules": ["<continuity or safety rule>"]
   },
   "looks": [{ "name": "<SHORT NAME>", "description": "<the complete outfit>", "chapters": "<which parts of the song>" }],
+  "cast": [{ "id": "<short-slug>", "name": "<a name>", "role": "<what they are in the video: drummer, shopkeeper, ...>", "description": "<who they are: age, vibe, attitude>", "face": "<face: skin, eyes, brows, distinguishing features>", "hair": "<hair>", "wardrobe": "<their one outfit>" }],
   "sets": [{ "id": "<short-slug>", "name": "<set name>", "description": "<the empty location, concrete and visual, with nobody in it>", "lighting": "<its one dominant light>", "sections": ["<section label it serves>"] }],
   "songMap": [{ "section": 0, "setId": "<short-slug>" }],
   "tests": [{ "setId": "<short-slug>", "look": "<SHORT NAME>", "action": "<what the protagonist does in this frame>", "caption": "<the lyric or beat it serves>" }],
@@ -280,6 +283,7 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
     LOOK_AND_SET_RULES,
     '- songMap: one entry per song section index listed above, naming the set that section plays in.',
     '- tests: in-set frames of the protagonist that prove the cast works in the world; each names a set id and a look name.',
+    `- cast: the RECURRING supporting characters besides the protagonist that the song, concept or guidance calls for (band members, someone who returns across scenes), at most ${CAST_SETS_LIMITS.cast}; [] when the protagonist is alone. Each gets their own photographic character sheet. Shots that name a cast member by name or role are conditioned on that sheet, so give each a distinct name and a plain role word.`,
     '- Wet or revealing looks use opaque fabric so the video stays safe to post.',
     '- questions: up to three things you need the director to decide.',
   ].join('\n');
@@ -388,6 +392,15 @@ const setSchema = z.object({
   sections: z.union([z.array(z.union([z.string(), z.number()])), z.string()]).optional(),
 }).passthrough();
 const songMapSchema = z.object({ section: z.union([z.number(), z.string()]), setId: z.string() }).passthrough();
+const castSchema = z.preprocess(withoutNulls, z.object({
+  id: z.string().optional(),
+  name: prose(SHORT),
+  role: prose(SHORT).optional(),
+  description: prose(TEXT).optional(),
+  face: prose(TEXT).optional(),
+  hair: prose(TEXT).optional(),
+  wardrobe: prose(TEXT).optional(),
+}).passthrough());
 const testSchema = z.object({ setId: z.string(), look: text(SHORT).optional(), action: text(TEXT), caption: text(300).optional() }).passthrough();
 const overlaySchema = z.union([
   text(TEXT).transform((summary) => ({ summary, elements: [] })),
@@ -407,6 +420,7 @@ const FIELD_PARSERS = {
   world: worldSchema,
   definitions: definitionsSchema,
   looks: z.array(lookSchema),
+  cast: z.array(castSchema),
   sets: z.array(setSchema),
   songMap: z.array(songMapSchema),
   tests: z.array(testSchema),
@@ -480,6 +494,20 @@ function normalizeSongMap(entries, sets, sections) {
   return [...out.values()].sort((a, b) => a.section - b.section);
 }
 
+// Supporting cast: a named person with something to draw (face or description),
+// unique slug ids, never the protagonist again.
+function normalizeCast(cast, protagonist) {
+  const seen = new Set();
+  const lead = String(protagonist?.name || '').trim().toLowerCase();
+  return cast.filter((c) => c.name && (c.face || c.description) && c.name.trim().toLowerCase() !== lead)
+    .slice(0, CAST_SETS_LIMITS.cast).map((c, i) => {
+      let id = slug(c.id) || slug(c.name) || `cast-${i + 1}`;
+      while (seen.has(id)) id = `${id}-${i + 1}`;
+      seen.add(id);
+      return { id, name: c.name, role: c.role || '', description: c.description || '', face: c.face || '', hair: c.hair || '', wardrobe: c.wardrobe || '' };
+    });
+}
+
 function normalizeTests(tests, sets, looks) {
   const setIds = new Set(sets.map((s) => s.id));
   return tests
@@ -548,6 +576,8 @@ export function mergeCastAndSetsDirection(previous, parsed, { sections = [], med
     look: pick('look', ''),
     protagonist,
     looks,
+    // Photographic only: a procedural cast lives in `definitions`.
+    ...(procedural ? {} : { cast: normalizeCast(pick('cast', []), protagonist) }),
     sets,
     songMap,
     tests,
@@ -639,6 +669,7 @@ export function describeDirectionChanges(previous, next) {
   const protagonistFields = Object.keys({ ...p0, ...p1 }).filter((k) => !same(p0[k], p1[k]));
   if (protagonistFields.length) out.push(`Protagonist: ${nameList(protagonistFields)}`);
   if (!same(previous.looks, next.looks)) out.push('Wardrobe looks revised');
+  if (!same(previous.cast || [], next.cast || [])) out.push('Supporting cast revised');
   if (!same(previous.world?.lighting, next.world?.lighting)) out.push('World lighting revised');
   const before = new Map((previous.sets || []).map((s) => [s.id, s]));
   const lit = [];

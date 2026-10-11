@@ -1,5 +1,6 @@
 import { isEditCapableMode, maxInputImages } from './imageGenCapabilities.js';
 import { RUNNER_FAMILIES } from './runners.js';
+import { escapeRegExp } from './textUtils.js';
 
 /** Browser-safe reference selection shared by the board and production lanes. */
 export const MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES = 4;
@@ -12,6 +13,30 @@ export const MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES = 4;
 export const isOutsideMusicVideoReference = (ref) => String(ref?.id || '').startsWith('mvr-board-')
   || String(ref?.imageId || '').startsWith('pinterest-');
 
+const namesIn = (text, phrase) => {
+  const p = String(phrase || '').trim();
+  return p.length >= 3 && new RegExp(`\\b${escapeRegExp(p)}\\b`, 'i').test(text);
+};
+
+/** The supporting cast members a scene's frame or shot prompt names, by name or role. */
+function featuredCast(direction, scene) {
+  const text = [scene?.framePrompt, scene?.prompt].filter(Boolean).join(' ');
+  if (!text) return [];
+  return (direction?.cast || []).filter((c) => namesIn(text, c.name) || namesIn(text, c.role));
+}
+
+/**
+ * The director's own character references (an upload or a PortOS render, not
+ * Cast & Sets output or outside inspiration) whose label's name, the part
+ * before any " — ", " - ", ":" or "(", the scene's prompt names.
+ */
+function featuredAuthoredCharacters(references, scene) {
+  const text = [scene?.framePrompt, scene?.prompt].filter(Boolean).join(' ');
+  if (!text) return [];
+  return references.filter((ref) => ref?.role === 'character' && ref.imageId && !String(ref.id || '').startsWith('mvr-cs-')
+    && !isOutsideMusicVideoReference(ref) && namesIn(text, String(ref.label || '').split(/\s[—-]\s|[:(]/)[0]));
+}
+
 export function musicVideoConditioningReferences(project, scene) {
   const references = project?.visualSpec?.references || [];
   const stage = project?.castAndSets;
@@ -19,9 +44,19 @@ export function musicVideoConditioningReferences(project, scene) {
     const setId = stage.direction?.songMap?.find((entry) => entry.section === scene.sectionIndex)?.setId;
     const character = references.find((ref) => ref?.id === 'mvr-cs-character' && ref.imageId);
     const plate = setId && references.find((ref) => ref?.id === `mvr-cs-set-${setId}` && ref.imageId);
-    // Check-in plates beyond the project-wide cap are still available for their
-    // own scenes. Their condition flag reflects that cap, not scene relevance.
-    if (character && plate) return [character, plate];
+    // Check-in plates and cast sheets beyond the project-wide cap are still
+    // available for their own scenes. Their condition flag reflects that cap,
+    // not scene relevance. A supporting cast member's sheet joins the shots
+    // that name them, and so does a director's own character reference whose
+    // label names someone the shot names.
+    if (character && plate) {
+      const cast = featuredCast(stage.direction, scene)
+        .map((c) => references.find((ref) => ref?.id === `mvr-cs-cast-${c.id}`.slice(0, 64) && ref.imageId))
+        .filter(Boolean);
+      const chosen = [character, plate, ...cast, ...featuredAuthoredCharacters(references, scene)];
+      return chosen.filter((ref, i) => chosen.findIndex((r) => r.imageId === ref.imageId) === i)
+        .slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
+    }
   }
   // Legacy projects and incomplete check-ins retain the authored reference set.
   return references.filter((ref) => ref?.condition && ref.imageId && !isOutsideMusicVideoReference(ref))
