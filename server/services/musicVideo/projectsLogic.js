@@ -588,8 +588,10 @@ export function replaceScenes(project, sceneInputs) {
   return { project: touch(project, { scenes }), scenes, replaced: existing.length };
 }
 
-// Scene fields a trim changes without adding new content to the shot.
-const SCENE_RETIME_FIELDS = ['startSec', 'endSec', 'beatAligned'];
+// Scene fields a director edits within an approved shot (its span, wording and
+// selected takes) without adding a shot or lyric the storyboard approval did not cover.
+const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'label', 'prompt', 'framePrompt', 'visualIntent',
+  'referenceImageId', 'videoHistoryId', 'endImageId'];
 
 /**
  * Apply a patch to a single scene. Returns `{ project, updated }`. Throws if the
@@ -614,9 +616,9 @@ export function applySceneUpdate(project, sceneId, patch) {
   const nextScenes = scenes.slice();
   nextScenes[idx] = updated;
   const next = touch(project, { scenes: nextScenes });
-  // A trim that only moves the shot's span keeps the storyboard approval it was judged on.
-  const retimeOnly = Object.keys(data).every((key) => SCENE_RETIME_FIELDS.includes(key));
-  return { project: retimeOnly ? carryStoryboardApproval(project, next, 'Retimed a shot') : next, updated };
+  // Retiming or rewording a shot, or picking another take, keeps the storyboard approval it was judged on.
+  const shotEdit = Object.keys(data).every((key) => SCENE_SHOT_EDIT_FIELDS.includes(key));
+  return { project: shotEdit ? carryStoryboardApproval(project, next, 'Edited a shot') : next, updated };
 }
 
 /** Remove a scene and re-sequence the remaining scenes' `order`. Returns the next record. */

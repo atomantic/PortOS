@@ -98,8 +98,22 @@ describe('the director trimming an approved storyboard', () => {
     expect(productionReadiness(cut).storyboard.problems).toContain('Storyboard shots must cover the master without unintended gaps or overlaps.');
     const { project: stretched } = applySceneUpdate(cut, 's1', { endSec: 6 });
     expect(productionReadiness(stretched).storyboard).toMatchObject({ approved: true, stale: null });
-    const { project: reprompted } = applySceneUpdate(stretched, 's1', { visualIntent: 'A new idea' });
-    expect(productionReadiness(reprompted).storyboard.approved).toBe(false);
+    const { project: relyriced } = applySceneUpdate(stretched, 's1', { lyricText: 'A new line' });
+    expect(productionReadiness(relyriced).storyboard.approved).toBe(false);
+  });
+
+  // Uniquely catches rewording one approved shot (its prompt, or its storyboard row) un-approving the whole board.
+  it('keeps the approval when a shot is reworded, and stales it when a shot is added', () => {
+    const { project: reprompted } = applySceneUpdate(approvedBoard(), 's2', { visualIntent: 'ASCII-art music video on the CRT', prompt: 'Green ASCII frames' });
+    const rows = reprompted.productionReview.draft.storyboard.map((shot) => shot.sceneId === 's2' ? { ...shot, action: 'ASCII-art video plays' } : shot);
+    const reworded = { ...reprompted, productionReview: { ...reprompted.productionReview, draft: { ...reprompted.productionReview.draft, storyboard: rows } } };
+    expect(productionReadiness(reworded).storyboard).toMatchObject({ approved: true, stale: null });
+    const added = { ...reworded, scenes: [...reworded.scenes.map((scene) => scene.sceneId === 's3' ? { ...scene, endSec: 7 } : scene),
+      { sceneId: 's4', label: 'Extra', startSec: 7, endSec: 8, visualIntent: 'A new shot', framePrompt: 'Wide shot' }] };
+    const addedBoard = productionReadiness(added).storyboard;
+    expect(addedBoard.problems).toEqual([]);
+    expect(addedBoard.approved).toBe(false);
+    expect(addedBoard.stale.changedFields).toContain('scene 4 timing');
   });
 
   it('keeps the approval when two shots are merged into one', () => {
