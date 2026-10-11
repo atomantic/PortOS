@@ -240,7 +240,9 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
         continue;
       }
       if (layer === 'card') {
-        clips.push({ ...section, cardText: typeof scene.cardText === 'string' ? scene.cardText.trim() : '', cardColor: /^#[0-9a-f]{6}$/i.test(scene.cardColor || '') ? scene.cardColor : '#000000' });
+        // A blank card falls back to the shot's own line, so a silence card is not left black.
+        const cardText = [scene.cardText, scene.lyricText].find((t) => typeof t === 'string' && t.trim())?.trim() || '';
+        clips.push({ ...section, cardText, cardColor: /^#[0-9a-f]{6}$/i.test(scene.cardColor || '') ? scene.cardColor : '#000000' });
         continue;
       }
       const imagePath = scene.referenceImageId ? safeUnder(PATHS.images, scene.referenceImageId) : null;

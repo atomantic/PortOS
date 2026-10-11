@@ -326,7 +326,7 @@ function directShotsByCast(shots, project) {
     return {
       ...shot, delivery, set, look, protagonist: direction.protagonist,
       visualLayer: card ? 'card' : 'footage', shotMode: 'cutaway',
-      ...(card ? { cardText: silence ? '' : (shot.lyricText || project.name || '').slice(0, 500) } : {}),
+      ...(card ? { cardText: (silence ? (shot.lyricText || '') : (shot.lyricText || project.name || '')).slice(0, 500) } : {}),
       performanceCandidate: !card && !!shot.lyricText && (intimate || (sungHook && kinds.length === 0)),
     };
   });
