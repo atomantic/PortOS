@@ -42,9 +42,7 @@
  * records that happen to share a substring (e.g. a real series called
  * "Commit Universe Tour").
  */
-import { listUniverses, deleteUniverse } from '../server/services/universeBuilder.js';
-import { listSeries, deleteSeries } from '../server/services/pipeline/series.js';
-import { listIssues, deleteIssue } from '../server/services/pipeline/issues.js';
+import { isDirectlyInvoked } from './lib/directInvocation.js';
 
 // Real records are ALWAYS minted with randomUUID() — universes get a bare UUID,
 // series an `ser-<uuid>`, issues an `iss-<uuid>` (server/services/pipeline/{series,
@@ -104,15 +102,15 @@ function parseArgs(argv) {
   return out;
 }
 
-async function main() {
-  const { apply } = parseArgs(process.argv);
+async function cleanup({ apply, services, output }) {
+  const { listUniverses, deleteUniverse, listSeries, deleteSeries, listIssues, deleteIssue } = services;
   if (!apply) {
-    console.log('🧪 DRY-RUN — pass --apply to actually soft-delete\n');
+    output.log('🧪 DRY-RUN — pass --apply to actually soft-delete\n');
   } else {
     // Service-layer write tails are in-process — a concurrent portos-server
     // can clobber tombstones (last-writer-wins on the JSON file). Warn loudly.
-    console.log('⚠️  --apply: STOP the server before continuing or tombstones may be clobbered');
-    console.log('⚠️  Run `pm2 stop portos-server` first, then `pm2 start portos-server` to propagate\n');
+    output.log('⚠️  --apply: STOP the server before continuing or tombstones may be clobbered');
+    output.log('⚠️  Run `pm2 stop portos-server` first, then `pm2 start portos-server` to propagate\n');
   }
 
   // A record is a fixture target on EITHER signal: an impossible (non-minted)
@@ -130,9 +128,9 @@ async function main() {
   const universeTargets = universes
     .map(u => ({ rec: u, reason: universeReason(u) }))
     .filter(t => t.reason);
-  console.log(`🗑️  Universes to delete: ${universeTargets.length}`);
+  output.log(`🗑️  Universes to delete: ${universeTargets.length}`);
   for (const { rec: u, reason } of universeTargets) {
-    console.log(`   - ${u.id.slice(0, 8)} "${u.name}" (${reason}, updated ${u.updatedAt})`);
+    output.log(`   - ${u.id.slice(0, 8)} "${u.name}" (${reason}, updated ${u.updatedAt})`);
   }
 
   // Series + their child issues. Resolve children up front so the dry-run
@@ -145,72 +143,99 @@ async function main() {
   // Map series.id → array of live child issues for that series.
   const childIssuesBySeries = new Map();
   for (const { rec: s } of seriesTargets) {
-    const children = await listIssues({ seriesId: s.id, includeDeleted: false }).catch(() => []);
+    const children = await listIssues({ seriesId: s.id, includeDeleted: false });
     childIssuesBySeries.set(s.id, children);
   }
   const totalChildIssues = [...childIssuesBySeries.values()].reduce((n, arr) => n + arr.length, 0);
-  console.log(`\n🗑️  Series to delete: ${seriesTargets.length} (cascading ${totalChildIssues} child issue${totalChildIssues === 1 ? '' : 's'})`);
+  output.log(`\n🗑️  Series to delete: ${seriesTargets.length} (cascading ${totalChildIssues} child issue${totalChildIssues === 1 ? '' : 's'})`);
   for (const { rec: s, reason } of seriesTargets) {
     const children = childIssuesBySeries.get(s.id) || [];
-    console.log(`   - ${s.id.slice(0, 12)} "${s.name}" (${reason}, updated ${s.updatedAt}, ${children.length} child issue${children.length === 1 ? '' : 's'})`);
+    output.log(`   - ${s.id.slice(0, 12)} "${s.name}" (${reason}, updated ${s.updatedAt}, ${children.length} child issue${children.length === 1 ? '' : 's'})`);
   }
 
   // Orphan fixture issues: a non-uuid-id issue whose parent series is NOT itself
   // a target (so it won't be reached by the cascade above). These are direct
   // test-fixture inserts (`iss-live`, `iss-dup`, …) that would otherwise survive.
-  const allIssues = await listIssues({ includeDeleted: false }).catch(() => []);
+  const allIssues = await listIssues({ includeDeleted: false });
   const orphanIssueTargets = allIssues.filter(
     i => isIssueFixtureId(i.id) && !seriesTargetIds.has(i.seriesId),
   );
-  console.log(`\n🗑️  Orphan fixture issues (non-uuid id, parent not targeted): ${orphanIssueTargets.length}`);
+  output.log(`\n🗑️  Orphan fixture issues (non-uuid id, parent not targeted): ${orphanIssueTargets.length}`);
   for (const i of orphanIssueTargets) {
-    console.log(`   - ${i.id} (series ${i.seriesId}, #${i.number})`);
+    output.log(`   - ${i.id} (series ${i.seriesId}, #${i.number})`);
   }
 
   if (!apply) {
-    console.log('\n🧪 DRY-RUN complete — re-run with --apply to write tombstones');
+    output.log('\n🧪 DRY-RUN complete — re-run with --apply to write tombstones');
     return;
   }
 
   // Apply phase — universes first (their child series carry universeId
   // pointers, but the tombstone on the universe doesn't cascade to series;
   // series with this universeId orphan-but-live, which is fine).
-  console.log('\n🗑️  Applying universe tombstones...');
+  output.log('\n🗑️  Applying universe tombstones...');
   for (const { rec: u } of universeTargets) {
-    await deleteUniverse(u.id).catch(err =>
-      console.error(`   ⚠️  failed to delete universe ${u.id.slice(0, 8)}: ${err.message}`),
-    );
+    await deleteUniverse(u.id).catch(err => {
+      throw new Error(`Failed to delete universe ${u.id.slice(0, 8)}: ${err.message}`, { cause: err });
+    });
   }
   // Series: tombstone the children FIRST so a re-run can't see them after
   // the parent series tombstone is gone (listIssues filters by seriesId so
   // an orphan child wouldn't surface in the dry-run either — children must
   // go via this script's pass, not the parent's GC). Then tombstone the series.
-  console.log('🗑️  Applying issue + series tombstones...');
+  output.log('🗑️  Applying issue + series tombstones...');
   for (const { rec: s } of seriesTargets) {
     const children = childIssuesBySeries.get(s.id) || [];
     for (const i of children) {
-      await deleteIssue(i.id).catch(err =>
-        console.error(`   ⚠️  failed to delete issue ${i.id.slice(0, 12)} (child of ${s.id.slice(0, 12)}): ${err.message}`),
-      );
+      await deleteIssue(i.id).catch(err => {
+        throw new Error(`Failed to delete issue ${i.id.slice(0, 12)} (child of ${s.id.slice(0, 12)}): ${err.message}`, { cause: err });
+      });
     }
-    await deleteSeries(s.id).catch(err =>
-      console.error(`   ⚠️  failed to delete series ${s.id.slice(0, 12)}: ${err.message}`),
-    );
+    await deleteSeries(s.id).catch(err => {
+      throw new Error(`Failed to delete series ${s.id.slice(0, 12)}: ${err.message}`, { cause: err });
+    });
   }
   // Orphan fixture issues whose parent series wasn't itself a target.
   for (const i of orphanIssueTargets) {
-    await deleteIssue(i.id).catch(err =>
-      console.error(`   ⚠️  failed to delete orphan issue ${i.id}: ${err.message}`),
-    );
+    await deleteIssue(i.id).catch(err => {
+      throw new Error(`Failed to delete orphan issue ${i.id}: ${err.message}`, { cause: err });
+    });
   }
-  console.log(`\n✅ Tombstoned ${universeTargets.length} universe(s) + ${seriesTargets.length} series + ${totalChildIssues + orphanIssueTargets.length} issue(s).`);
-  console.log('🔄 Now restart the PM2 server to propagate the tombstones to peers:');
-  console.log('   pm2 restart portos-server');
-  console.log('   (peer:online will re-fire every per-record sub and the new tombstone');
-  console.log('    hashes will diverge from lastPushedHash so the deletes push.)');
+  output.log(`\n✅ Tombstoned ${universeTargets.length} universe(s) + ${seriesTargets.length} series + ${totalChildIssues + orphanIssueTargets.length} issue(s).`);
+  output.log('🔄 Now restart the PM2 server to propagate the tombstones to peers:');
+  output.log('   pm2 restart portos-server');
+  output.log('   (peer:online will re-fire every per-record sub and the new tombstone');
+  output.log('    hashes will diverge from lastPushedHash so the deletes push.)');
 }
 
-main().catch(err => {
-  console.error('❌ cleanup-test-data failed:', err);
-  process.exit(1);
-});
+/**
+ * CLI boundary: injected services keep workflow tests out of the live DB and
+ * peer-sync graph. Production imports happen only when running without them.
+ * Returns the process exit code; already-written tombstones survive failures.
+ */
+export async function runCleanupTestData({ argv = process.argv, services, output = console } = {}) {
+  try {
+    if (!services) {
+      const [universes, series, issues] = await Promise.all([
+        import('../server/services/universeBuilder.js'),
+        import('../server/services/pipeline/series.js'),
+        import('../server/services/pipeline/issues.js'),
+      ]);
+      services = {
+        listUniverses: universes.listUniverses, deleteUniverse: universes.deleteUniverse,
+        listSeries: series.listSeries, deleteSeries: series.deleteSeries,
+        listIssues: issues.listIssues, deleteIssue: issues.deleteIssue,
+      };
+    }
+    await cleanup({ ...parseArgs(argv), services, output });
+    return 0;
+  } catch (err) {
+    output.error(`❌ cleanup-test-data failed: ${err.message}`);
+    output.error('❌ Cleanup incomplete; any earlier tombstones are retained. Re-run after fixing the failure.');
+    return 1;
+  }
+}
+
+if (isDirectlyInvoked(import.meta.url)) {
+  process.exitCode = await runCleanupTestData();
+}
