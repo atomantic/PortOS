@@ -19,5 +19,6 @@ export {
   performanceCapability,
   planPerformanceWindow,
   planPerformanceRepair,
+  selectedPerformanceInstruction,
   shotSplitLimit,
 } from '../../../server/lib/musicVideoShotTiming.js';

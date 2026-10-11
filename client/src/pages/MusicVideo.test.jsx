@@ -1688,6 +1688,9 @@ describe('MusicVideo lyrics and shot coverage (#8964)', () => {
   });
 
   it('flags a non-looping shot longer than its clip and trims it; a legacy scene is left alone', async () => {
+    // The scene cards' players; the preview dock's storyboard animatic plays the shot's clip on its own.
+    const cardPlayers = () => [...document.body.querySelectorAll('video[src^="/data/videos/h"]')]
+      .filter((video) => !video.closest('figure[aria-label="Storyboard animatic"]'));
     const project = {
       ...PROJECT_WITH_CLIP,
       scenes: [
@@ -1700,7 +1703,7 @@ describe('MusicVideo lyrics and shot coverage (#8964)', () => {
     // The card's summary row and its editor both quote the lyric.
     expect(screen.getAllByText(/first line/).length).toBeGreaterThan(0);
 
-    const players = document.body.querySelectorAll('video[src^="/data/videos/h"]');
+    const players = cardPlayers();
     expect(players).toHaveLength(1); // only the selected shot owns a player
     for (const player of players) {
       Object.defineProperty(player, 'duration', { configurable: true, value: 5 });
@@ -1715,7 +1718,7 @@ describe('MusicVideo lyrics and shot coverage (#8964)', () => {
     await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
 
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Scene 2' })));
-    const legacyPlayers = document.body.querySelectorAll('video[src^="/data/videos/h"]');
+    const legacyPlayers = cardPlayers();
     expect(legacyPlayers).toHaveLength(1);
     expect(legacyPlayers[0]).toHaveAttribute('src', '/data/videos/h2.mp4');
     Object.defineProperty(legacyPlayers[0], 'duration', { configurable: true, value: 5 });
