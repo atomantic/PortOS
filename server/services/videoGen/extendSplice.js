@@ -51,6 +51,8 @@ export async function spliceExtendSource({ sourcePath, outputPath, extendLatents
   if (!outputInfo.width || !outputInfo.height || !outputInfo.fps) return skip('render geometry unreadable');
 
   const [sourceHasAudio, outputHasAudio] = await Promise.all([hasAudioStream(sourcePath), hasAudioStream(outputPath)]);
+  // A render with no track is one the user asked to be silent (`disableAudio`),
+  // so the source's soundtrack is dropped with it, matching what Extend delivered before.
   const audio = !outputHasAudio ? 'none' : sourceHasAudio ? 'splice' : 'generated';
   const args = buildExtendSpliceArgs({
     sourcePath, generatedPath: outputPath, outPath: tmpPath,
