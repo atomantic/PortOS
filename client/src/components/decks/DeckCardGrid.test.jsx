@@ -52,7 +52,8 @@ describe('DeckCardGrid', () => {
     expect(message).not.toHaveAttribute('title');
     expect(message).not.toHaveClass('line-clamp-3');
     expect(message).toHaveClass('[overflow-wrap:anywhere]');
-    const retry = screen.getByRole('button', { name: /^Render Card failed on/ });
+    // #11058: an unrendered card's empty slot is its one render action, so it is the retry.
+    const retry = screen.getByRole('button', { name: 'Render Card failed' });
     expect(retry).toBeEnabled();
     fireEvent.click(retry);
     expect(props.onRenderCard).toHaveBeenCalledWith(failed);
