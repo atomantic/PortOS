@@ -489,8 +489,6 @@ export default function Importer() {
         title="Importer"
         subtitle="Reverse-engineer a finished story, novel, screenplay, or comic script into the pipeline. The LLM extracts universe canon, the story arc, and a proposed issue split; you review, edit, and commit."
       />
-      <div className="flex-1 min-h-0 overflow-auto p-4">
-      <div className="space-y-6">
 
       {phase === 'intake' && (
         <IntakeForm
@@ -517,6 +515,7 @@ export default function Importer() {
       )}
 
       {phase === 'review' && preview && (
+        <div className="flex-1 min-h-0 overflow-auto p-4">
         <ReviewPanel
           preview={preview}
           contentType={intake.contentType}
@@ -546,14 +545,13 @@ export default function Importer() {
           onRetryIssues={runRetryIssues}
           retryingIssues={retryingIssues}
         />
+        </div>
       )}
-      </div>
-      </div>
     </div>
   );
 }
 
-function IntakeForm({
+export function IntakeForm({
   intake, setIntake,
   universeItems, universeSelectedId, seriesItems, seriesSelectedId,
   sourceCharLimit, analyzing, analyzeStages, onAnalyze, classifying, onClassify, classifyHint,
@@ -571,7 +569,7 @@ function IntakeForm({
   const confirmNewName = () => {};
   return (
     <form
-      className="space-y-4 bg-port-card border border-port-border rounded-lg p-4 sm:p-6"
+      className="flex flex-1 min-h-0 flex-col"
       // Swallow default form submission so an accidental Enter in any input
       // doesn't trigger Analyze — Analyze fires three heavy-tier LLM calls
       // and accidental triggering costs real money. Tab to the button + Space
@@ -579,6 +577,8 @@ function IntakeForm({
       // round 6 after this cost trade-off was surfaced.
       onSubmit={(e) => e.preventDefault()}
     >
+      <div className="flex-1 min-h-0 overflow-y-auto p-4">
+      <div className="space-y-4 bg-port-card border border-port-border rounded-lg p-4 sm:p-6">
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <label htmlFor="importer-universe-name" className="block text-sm font-medium mb-1">
@@ -705,7 +705,9 @@ function IntakeForm({
         )}
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <details>
+        <summary className="cursor-pointer text-sm font-medium">Import options</summary>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-3">
         <div>
           <label htmlFor="importer-target-issue-count" className="block text-sm font-medium mb-1">
             Target Issue Count (optional)
@@ -740,14 +742,23 @@ function IntakeForm({
         </div>
       </div>
 
-      {analyzing && <ImporterProgress stages={analyzeStages} />}
+      </details>
 
-      <div className="flex items-center justify-end gap-2 pt-2">
+      {analyzing && <ImporterProgress stages={analyzeStages} />}
+      </div>
+      </div>
+
+      <div className="shrink-0 flex items-center justify-between gap-3 border-t border-port-border bg-port-card px-4 py-3">
+        <p className="min-w-0 text-xs text-port-text-muted break-words">
+          {llmProvider
+            ? <>{providers.find((provider) => provider.id === llmProvider)?.name || llmProvider} · {llmModel || 'Default model'}</>
+            : 'AI: configured stage providers'}
+        </p>
         <button
           type="button"
           onClick={onAnalyze}
           disabled={!intakeValid || analyzing}
-          className="bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded text-sm font-medium flex items-center gap-2"
+          className="bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded text-sm font-medium flex shrink-0 items-center gap-2"
         >
           {analyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileInput className="w-4 h-4" />}
           {analyzing ? 'Analyzing…' : 'Analyze'}
