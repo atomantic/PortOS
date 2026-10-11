@@ -21,7 +21,7 @@
  * email/handle index. No AI-provider calls happen here.
  */
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { ensureSchema, query } from '../lib/db.js';
+import { ensureSchema, query, withTransaction } from '../lib/db.js';
 import { normalizeIdentifier } from '../lib/tribeMatch.js';
 import { getLocalParts, localDayRangeUtc, todayInTimezone, anchorLocalMidnightUtc } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
@@ -631,8 +631,20 @@ export async function sourceStats(source) {
   };
 }
 
-// Day view: all events on a local calendar day plus an hourly histogram and
-// source/kind tallies. `date` defaults to today in the user's timezone.
+// Max event rows hydrated for the day view. The day's counts and histogram are
+// aggregated in SQL over the WHOLE day and are independent of this page size.
+export const DAY_EVENT_PAGE_SIZE = 2000;
+
+// Day view: a bounded page of events on a local calendar day plus full-day
+// aggregates (hourly histogram, source/kind tallies). `date` defaults to today
+// in the user's timezone.
+//
+// `counts` / `histogram` cover every event in the day regardless of how many
+// are hydrated into `events`. `events` holds the NEWEST `DAY_EVENT_PAGE_SIZE`
+// rows, returned oldest-first; `eventPage` says how complete that page is
+// ({ total, returned, limit, hasMore }). The aggregates and the page are read
+// in one REPEATABLE READ snapshot so concurrent ingestion cannot make them
+// disagree, and share the same exclusive [start, end) UTC bounds.
 export async function getDaySummary({ date } = {}) {
   const timezone = await getUserTimezone();
   // `today` is computed in the USER's configured timezone (not the browser's) and
@@ -641,16 +653,46 @@ export async function getDaySummary({ date } = {}) {
   const today = todayInTimezone(timezone);
   const day = /^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) ? date : today;
   const range = localDayRangeUtc(day, timezone);
-  if (!range) return { date: day, today, timezone, events: [], histogram: hourlyHistogram([], timezone), counts: summarizeCounts([]) };
-  const events = await listEvents({ from: range.start.toISOString(), to: range.end.toISOString(), limit: 2000 });
-  // listEvents returns newest-first; a day view reads better oldest-first.
-  const ordered = [...events].reverse();
-  return {
-    date: day,
-    today,
-    timezone,
-    events: ordered,
-    histogram: hourlyHistogram(ordered, timezone),
-    counts: summarizeCounts(ordered),
-  };
+  const eventPage = (returned, total) => ({ total, returned, limit: DAY_EVENT_PAGE_SIZE, hasMore: returned < total });
+  if (!range) {
+    return { date: day, today, timezone, events: [], eventPage: eventPage(0, 0), histogram: hourlyHistogram([], timezone), counts: summarizeCounts([]) };
+  }
+  await ensureReady();
+  const bounds = [range.start.toISOString(), range.end.toISOString()];
+  const { aggregates, rows } = await withTransaction(async (client) => {
+    // Must be the transaction's first statement: every query below then sees
+    // one snapshot.
+    await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+    const agg = await client.query(
+      `SELECT 'source' AS dim, source AS key, COUNT(*)::int AS n
+         FROM human_activity_events WHERE happened_at >= $1 AND happened_at < $2 GROUP BY source
+       UNION ALL
+       SELECT 'kind', kind, COUNT(*)::int
+         FROM human_activity_events WHERE happened_at >= $1 AND happened_at < $2 GROUP BY kind
+       UNION ALL
+       SELECT 'hour', EXTRACT(HOUR FROM happened_at AT TIME ZONE $3)::int::text, COUNT(*)::int
+         FROM human_activity_events WHERE happened_at >= $1 AND happened_at < $2 GROUP BY 2`,
+      [...bounds, timezone],
+    );
+    const page = await client.query(
+      `SELECT * FROM human_activity_events
+        WHERE happened_at >= $1 AND happened_at < $2
+        ORDER BY happened_at DESC LIMIT $3`,
+      [...bounds, DAY_EVENT_PAGE_SIZE],
+    );
+    return { aggregates: agg.rows, rows: page.rows };
+  });
+
+  const bySource = {};
+  const byKind = {};
+  const histogram = Array.from({ length: 24 }, (_, hour) => ({ hour, count: 0 }));
+  for (const { dim, key, n } of aggregates) {
+    if (dim === 'source') bySource[key || 'unknown'] = (bySource[key || 'unknown'] || 0) + n;
+    else if (dim === 'kind') byKind[key || 'unknown'] = (byKind[key || 'unknown'] || 0) + n;
+    else if (histogram[Number(key)]) histogram[Number(key)].count += n;
+  }
+  const total = Object.values(bySource).reduce((sum, n) => sum + n, 0);
+  // Newest-first from SQL; a day view reads better oldest-first.
+  const events = rows.map(rowToEvent).reverse();
+  return { date: day, today, timezone, events, eventPage: eventPage(events.length, total), histogram, counts: { bySource, byKind, total } };
 }
