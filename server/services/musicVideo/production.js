@@ -832,7 +832,8 @@ export function resumeProductionOnProject(project, runId, { limits, acceptBasis 
       resumedAt: now,
       retryAcknowledged: run.steps.filter((step) => step.status === 'failed').map((step) => step.key),
       stopBefore: nextStop,
-      ...(!run.pilot && !run.reviewRunId && !nextStop ? { pilot: { scenes: null } } : {}),
+      // A stills-only run makes no clip, so it drops any pending clip pilot.
+      ...(nextStop ? { pilot: null } : !run.pilot && !run.reviewRunId ? { pilot: { scenes: null } } : {}),
       stopReason: null,
       error: null,
       ...(run.finalRender?.status === 'failed' || (run.finalRender && run.processId !== processId) ? { finalRender: null } : {}),

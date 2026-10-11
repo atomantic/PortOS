@@ -280,6 +280,19 @@ describe('music video production run (#9066)', () => {
     expect(dispatch.mock.calls.length).toBeGreaterThan(2);
   });
 
+  // Uniquely catches a resumed run keeping its pending clip pilot, which would filter stills to the pilot scenes and park early.
+  it('drops a pending clip pilot when a normal run is resumed as stills-only', async () => {
+    seedProject();
+    await start();
+    await service.stopProduction('mv-example', theRun().id);
+    expect(theRun().pilot).not.toBeNull();
+    await service.resumeProduction('mv-example', theRun().id, { stopBefore: 'clips' });
+    await settle();
+    expect(theRun()).toMatchObject({ stopBefore: 'clips', pilot: null });
+    expect(dispatch.mock.calls.every(([a]) => a.stepKind === 'frame')).toBe(true);
+    expect(new Set(dispatch.mock.calls.map(([a]) => a.scene.sceneId))).toEqual(new Set(['mvs-a', 'mvs-b']));
+  });
+
   it('in a composition document, skips frames for card scenes and clips for still/card scenes', async () => {
     seedProject({
       composition: { mode: 'document' },
