@@ -1,6 +1,7 @@
 import { assertMusicVideoMediaSelections, musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
 import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 import { filmLookRuntimeSource, isFilmLookNeutral } from '../../lib/filmLook.js';
+import { titleCardRuntimeSource, titleCardVisible } from '../../lib/musicVideoTitleCard.js';
 /**
  * Music Video — render a project's composition document over the song.
  *
@@ -61,12 +62,16 @@ export const documentAspect = musicVideoAspect;
 
 /**
  * The browser init scripts a document render opens its page with: the film
- * look runtime (lib/filmLook.js) when the project has a non-neutral look, so
- * every captured frame, probe sample and worker browser draws the same
- * finishing filter the live preview shows. Pure.
+ * look runtime (lib/filmLook.js) when the project has a non-neutral look, and
+ * the opening title card (lib/musicVideoTitleCard.js) when it has one to show,
+ * so every captured frame, probe sample and worker browser draws what the live
+ * preview shows. Pure.
  */
 export function documentRenderInitScripts(project) {
-  return isFilmLookNeutral(project?.filmLook) ? [] : [filmLookRuntimeSource(project.filmLook)];
+  return [
+    ...(isFilmLookNeutral(project?.filmLook) ? [] : [filmLookRuntimeSource(project.filmLook)]),
+    ...(titleCardVisible(project?.titleCard) ? [titleCardRuntimeSource(project.titleCard)] : []),
+  ];
 }
 
 const aspectOf = (width, height) => {

@@ -174,6 +174,18 @@ describe('music-video composition documents', () => {
     expect((await projects.getProject(project.id)).filmLook).toBeNull();
   });
 
+  it('persists a normalized opening title card through the project route, refuses an unknown field, and clears it with null', async () => {
+    const saved = await request(app).patch(`/api/music-video/${project.id}`).send({ titleCard: { title: '  Example   Song ', artist: 'Example Artist', year: '2026', startSec: 3, endSec: 2 } });
+    expect(saved.status).toBe(200);
+    expect(saved.body.titleCard).toMatchObject({ enabled: true, title: 'Example Song', startSec: 3, endSec: 3.5, position: 'lower-left', font: 'display' });
+    expect((await projects.getProject(project.id)).titleCard).toEqual(saved.body.titleCard);
+    expect((await request(app).patch(`/api/music-video/${project.id}`).send({ titleCard: { title: 'x', label: 'y' } })).status).toBe(400);
+    expect((await request(app).patch(`/api/music-video/${project.id}`).send({ titleCard: { position: 'sideways' } })).status).toBe(400);
+    const cleared = await request(app).patch(`/api/music-video/${project.id}`).send({ titleCard: null });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.titleCard).toBeNull();
+  });
+
   it('imports a zip (one top folder), switches the render style, lists, exports, previews and serves its files inert', async () => {
     const zip = createZip(Object.entries(FILES).map(([name, data]) => ({ name: `my-video/${name}`, data })), { compress: true });
     const created = await uploadZip(project.id, zip, 'my-video.zip');

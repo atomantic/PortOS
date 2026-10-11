@@ -82,7 +82,8 @@ describe('lyric timing playthrough', () => {
   it('draws the same words alone on a transparent page for the storyboard animatic', async () => {
     const scenes = [{ sceneId: 's1', order: 0, label: 'Wide', startSec: 0, endSec: 30, textZone: 'upper-right', referenceImageId: 'frame.png' }];
     const filmLook = { preset: 'vhs', enabled: true };
-    const preview = await buildLyricPlaythroughPreview({ ...project, scenes, filmLook }, { overlay: true });
+    const titleCard = { enabled: true, title: 'Example Song' };
+    const preview = await buildLyricPlaythroughPreview({ ...project, scenes, filmLook, titleCard }, { overlay: true });
     const data = portosData(preview.html);
     expect(data.lyrics.map((line) => line.text)).toEqual(['hello there', 'second line']);
     expect(data.scenes.map(({ sceneId, textZone, media }) => [sceneId, textZone, media])).toEqual([['s1', 'upper-right', null]]);
@@ -92,5 +93,7 @@ describe('lyric timing playthrough', () => {
     expect(preview.assets).toEqual([]);
     // The project's film look would filter (and dim) the whole transparent page.
     expect(preview.html).toContain('let look = null;');
+    // Nor does the opening title card belong over the storyboard animatic.
+    expect(preview.html).toContain('let card = null;');
   });
 });

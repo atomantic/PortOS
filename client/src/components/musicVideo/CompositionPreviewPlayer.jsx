@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pause, Play } from 'lucide-react';
+import { normalizeTitleCard } from '../../../../server/lib/musicVideoTitleCard.js';
 import { fetchMusicVideoPreviewAsset, getMusicVideoCompositionPreview, getMusicVideoLyricPlaythroughPreview } from '../../services/apiMusicVideo.js';
 
 const buttonCls = 'flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
@@ -91,6 +92,13 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
     filmLookRef.current = filmLook;
     if (seekState.current.ready) iframeRef.current?.contentWindow?.postMessage({ type: 'portos-mv:film-look', look: filmLook }, '*');
   }, [filmLook]);
+  // The opening title card is posted the same way, so its panel's edits redraw the paused frame at once.
+  const titleCard = useMemo(() => (lyrics ? null : normalizeTitleCard(project.titleCard)), [lyrics, project.titleCard]);
+  const titleCardRef = useRef(titleCard);
+  useEffect(() => {
+    titleCardRef.current = titleCard;
+    if (seekState.current.ready) iframeRef.current?.contentWindow?.postMessage({ type: 'portos-mv:title-card', card: titleCard }, '*');
+  }, [titleCard]);
 
   // The document's own version (its folder + save time), not the project's
   // `updatedAt`: an unrelated save must not reload a playing preview.
@@ -153,6 +161,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
         event.source.postMessage({ type: 'portos-mv:manifest', keys: [...byKey.keys()] }, '*');
         // The page starts from the look saved when it was built; the board may have moved the sliders since.
         event.source.postMessage({ type: 'portos-mv:film-look', look: filmLookRef.current }, '*');
+        event.source.postMessage({ type: 'portos-mv:title-card', card: titleCardRef.current }, '*');
         showStatus();
         state.ready = true;
         postSeek(t);
