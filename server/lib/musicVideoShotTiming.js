@@ -90,6 +90,13 @@ export function selectedPerformanceInstruction(scene) {
   return edit.inSec >= 0 && edit.outSec > edit.inSec ? instruction : null;
 }
 
+/**
+ * How far into a take's clip its audio window really starts (#11210): the
+ * provider's leading padding the take's edit points were moved by when it
+ * landed, or 0. Clip time t plays song time `audioWindow.startSec + t - offset`.
+ */
+export const clipAudioOffsetSec = (instruction) => (Number.isFinite(instruction?.alignment?.offsetSec) ? instruction.alignment.offsetSec : 0);
+
 // Safety margin kept inside the provider's documented bounds so ffmpeg's
 // sample rounding can never land a window a hair under the minimum (rejected)
 // or over the maximum (silently clipped by the provider).
@@ -528,8 +535,10 @@ export function planPerformanceRepair({ scene, temporal, excerptStartSec, backen
   }
   if (Math.abs(cursor - scene.endSec) > 0.001 || failedAt === null || failedAt <= scene.startSec) return no('Review needed: no accepted prefix and failed suffix were measured');
   const windowStart = instruction.audioWindow?.startSec;
-  if (!Number.isFinite(windowStart) || Math.abs(windowStart + instruction.edit.inSec - scene.startSec) > 0.001
-    || Math.abs(windowStart + instruction.edit.outSec - scene.endSec) > 0.001) return no('Review needed: the source audio timebase is missing');
+  // Song time of clip time 0: an aligned take's window starts `offset` into its clip.
+  const clipStart = windowStart - clipAudioOffsetSec(instruction);
+  if (!Number.isFinite(windowStart) || Math.abs(clipStart + instruction.edit.inSec - scene.startSec) > 0.001
+    || Math.abs(clipStart + instruction.edit.outSec - scene.endSec) > 0.001) return no('Review needed: the source audio timebase is missing');
   const cues = (instruction.cues || []).filter((cue) => cue.endSec + windowStart > scene.startSec && cue.startSec + windowStart < scene.endSec);
   if (!cues.length || cues.some((cue) => !cue.words?.length)) return no('Review needed: word timings are required to choose a safe boundary');
   const words = cues.flatMap((cue) => cue.words).slice().sort((a, b) => a.startSec - b.startSec);

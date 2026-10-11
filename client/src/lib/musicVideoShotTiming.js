@@ -11,6 +11,7 @@ export {
   SOURCE_AUDIO_LIPSYNC,
   SOURCE_AUDIO_MUSIC,
   approximateMotionCues,
+  clipAudioOffsetSec,
   falSceneTake,
   falTakeRequestFields,
   grokCoverage,
