@@ -88,6 +88,14 @@ describe('project render-pool submission policy', () => {
     expect(m.resolve).not.toHaveBeenCalled();
     expect(await applyProjectRenderPool(body())).toMatchObject({ mode: 'a2v', backend: 'local' });
   });
+  // Uniquely catches a production clip losing its bound song window, or a prompt-motion run silently switching mode.
+  it('lets a production run\'s supplied-audio route through and refuses a prompt-motion run after the switch', async () => {
+    m.project.videoSettings.generationMode = 'suppliedAudio';
+    m.project.videoSettings.renderPool.mode = 'local';
+    const production = { ...body(), musicVideo: { ...body().musicVideo, productionRunId: 'run' } };
+    expect(await applyProjectRenderPool({ ...production, mode: 'a2v', _suppliedAudio: true })).toMatchObject({ mode: 'a2v', backend: 'local', _suppliedAudio: true });
+    await expect(applyProjectRenderPool(production)).rejects.toThrow(/Prompt motion/);
+  });
   it('keeps node selections machine-local on outbound and inbound project sync', () => {
     const pool = m.project.videoSettings.renderPool;
     expect(stripMusicVideoLocalRenderPins(m.project, { stripVideoBackend: false }).videoSettings.renderPool).toBeUndefined();

@@ -15,8 +15,9 @@ export async function applyProjectRenderPool(body) {
       || body.lastImageFile || body.keyframes?.length || body.chunks > 1)) {
     refuse('Supplied song audio does not support continuation, end frames, keyframes or chained clips');
   }
-  if (body.musicVideo.productionRunId && project?.videoSettings?.generationMode === 'suppliedAudio') {
-    refuse('Production runs do not yet bind supplied-audio windows in their immutable pool; use Prompt motion');
+  // A production run's own routes decide: a supplied-audio route sends `_suppliedAudio` itself.
+  if (body.musicVideo.productionRunId && project?.videoSettings?.generationMode === 'suppliedAudio' && !body._suppliedAudio) {
+    refuse('This production run was started with Prompt motion; start a new run to use Supplied song audio');
   }
   // Existing projects retain their renderer pins until a pool is saved.
   if (!pool || pool.mode === 'local') {

@@ -92,6 +92,7 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
 import { getProject, mutateProjectRecord } from './projects.js';
 import { musicVideoEvents } from './events.js';
 import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
+import { isPerformanceScene, performanceCapability } from '../../lib/musicVideoShotTiming.js';
 
 const PROCESS_ID = `proc-${randomUUID()}`;
 const inflight = new Map();
@@ -147,6 +148,12 @@ const defaults = {
   reviseFromFeedback: async (...args) => (await import('./productionReviewService.js')).reviseProductionFromFeedback(...args),
   guideImagePath: async (artifact) => (await import('./devArtifactStore.js')).resolveDevArtifactFile(artifact.file),
   // A gallery image (a Cast & Sets plate, a production still) the orchestrator looks at.
+  // Can this local video model take a shot's song window (an LTX a2v model)?
+  localVideoTakesSongAudio: async (modelId) => {
+    const [{ resolveVideoModelSelection }, { supportsSourceAudioWindow }] = await Promise.all([
+      import('../videoGen/modelSelection.js'), import('../federatedMedia/sourceAudio.js')]);
+    return supportsSourceAudioWindow((await resolveVideoModelSelection(modelId || undefined)).model);
+  },
   galleryImagePath: async (filename) => (await import('../../lib/pathSafety.js')).resolveGalleryImage(filename),
   finalReviewFrames: async (jobId) => (await import('./orchestratorReview.js')).captureFinalReviewFrames(jobId),
   // The overlay text pass before a final render: resolves the finished check.
@@ -1428,6 +1435,19 @@ const emptyStages = () => Object.fromEntries(AUTONOMOUS_STAGE_IDS.map((id) => [i
  * yet) and begins the pipeline in the background. Returns `{ project, run }`.
  */
 /** The production pool a brief allows on this project. */
+/**
+ * The project video settings the run's own video tool implies, so the plan and
+ * production agree on what can render: its backend and local model, and Supplied
+ * song audio when that local model takes a shot's song window. With no video tool
+ * it is local video, which plans no lip-sync shots.
+ */
+async function briefVideoSettings(tools, models) {
+  const route = autonomousPool(tools, models).find((entry) => entry.kind === 'video');
+  if (!route || route.mode !== 'local') return { backend: route?.mode || 'local', generationMode: 'image' };
+  const songAudio = await deps.localVideoTakesSongAudio(route.model).catch(() => false);
+  return { backend: 'local', modelId: route.model || null, generationMode: songAudio ? 'suppliedAudio' : 'image' };
+}
+
 const briefProductionPool = (brief, project) => autonomousPool(brief.tools, brief.models)
   .filter((route) => musicVideoAllowsMedia(project, route.kind));
 
@@ -1481,6 +1501,7 @@ export async function startAutonomousVideo(input, { autoApproveAuthorized = fals
     name: brief.name || trimTo(brief.prompt.replace(/\s+/g, ' '), 60) || 'Autonomous music video',
     mode: 'autonomous',
     mediaMode: brief.mediaMode,
+    videoSettings: await briefVideoSettings(brief.tools, brief.models),
     ...(brief.mediaMode !== 'code-images-video' ? { productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 } } : {}),
     // ...as does its production policy (a project with none is legacy), so a footage project stays one,
     // also when the request names a mode that allows footage; a code-only or stills mode keeps no footage.
@@ -1658,10 +1679,15 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
     };
   });
   if (retakenTrackId) await unlinkRunTrack(projectId, out.run.id, retakenTrackId);
-  // The project's brief tools gate what production may submit (a video tool for clips), so they follow too.
-  if (toolsPatch) {
+  // The project's brief tools gate what production may submit (a video tool for clips), so they follow
+  // too, as do its video settings. Performance shots no route can lip-sync play as cutaways.
+  if (toolsPatch || modelsPatch) {
+    const video = await briefVideoSettings(tools, modelsPatch || run.brief.models || {});
+    const lipSync = !!performanceCapability(video.backend);
     await mutateProjectRecord(projectId, (current) => ({ project: { ...current,
-      automation: { ...current.automation, tools: [...new Set([...(current.automation?.tools || []), ...added])] } } }));
+      ...(toolsPatch ? { automation: { ...current.automation, tools: [...new Set([...(current.automation?.tools || []), ...added])] } } : {}),
+      videoSettings: { ...current.videoSettings, ...video },
+      ...(lipSync ? {} : { scenes: (current.scenes || []).map((scene) => (isPerformanceScene(scene) ? { ...scene, shotMode: 'cutaway' } : scene)) }) } }));
   }
   const { resume } = produceContinuation(out.run);
   if (resume.kind === 'final-revision') {
