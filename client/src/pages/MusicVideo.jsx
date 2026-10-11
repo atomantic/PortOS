@@ -1119,6 +1119,7 @@ export default function MusicVideo() {
     finalRenderAttached: renderTargetsSelected,
     readiness: productionReview.readiness,
     headerAction: nextAction,
+    stage: activeStage,
   }) : [];
   // A checklist row either jumps to the control that settles it or, for work
   // the page can start itself (build or resume the cast & sets, fill the art

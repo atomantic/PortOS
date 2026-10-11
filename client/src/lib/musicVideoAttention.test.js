@@ -184,6 +184,12 @@ describe('stale approvals in Needs attention (#10141)', () => {
     expect(item.detail).toBe('Cast & Sets check-in — changed since: concept. Art direction — changed since: concept, cast, environments +1 more. Keep the approval, or undo the change.');
   });
 
+  it('leaves out an approval the open step already shows with its own controls', () => {
+    const [onBoard] = deriveAttentionItems(project(), { readiness, stage: 'board' });
+    expect(onBoard.approvals.map((a) => a.stage)).toEqual(['castAndSets', 'art']);
+    expect(deriveAttentionItems(project(), { readiness, stage: 'cast-sets' })).toEqual([]);
+  });
+
   it('stays quiet with no stale approval, and while a production run is replacing takes', () => {
     expect(deriveAttentionItems(project(), { readiness: { art: { stale: null } } })).toEqual([]);
     const producing = project({ productionRuns: [{ id: 'run-1', status: 'running' }], productionRunId: 'run-1' });
