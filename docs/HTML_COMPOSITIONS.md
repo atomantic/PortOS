@@ -343,8 +343,10 @@ fitted to the render's aspect, and wraps `portosComposition.seek()` (chaining
 the film look's wrapper) so the card is drawn for each frame after its faces
 load. It follows the lyric type: cream fill, ink outline, no plate, inside the
 same title-safe insets, and a block wider than its zone shrinks rather than
-running off frame. Like the lyrics it sits under the film look, and the
-storyboard animatic leaves it out.
+running off frame. Like the lyrics it sits under the film look. It also rides
+on the lyric pages (the lyric-timing playthrough and the lyrics laid over the
+storyboard animatic, which carry no film look), so it can be checked against
+the timed words before the composition exists.
 
 ## Music-video composition documents
 

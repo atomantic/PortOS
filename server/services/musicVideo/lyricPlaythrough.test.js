@@ -93,7 +93,7 @@ describe('lyric timing playthrough', () => {
     expect(preview.assets).toEqual([]);
     // The project's film look would filter (and dim) the whole transparent page.
     expect(preview.html).toContain('let look = null;');
-    // Nor does the opening title card belong over the storyboard animatic.
-    expect(preview.html).toContain('let card = null;');
+    // The opening title card does ride along, so it can be checked against the lyrics and the animatic.
+    expect(preview.html).toContain('"title":"Example Song"');
   });
 });

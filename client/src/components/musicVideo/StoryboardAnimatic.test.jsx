@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import StoryboardAnimatic, { shotAt } from './StoryboardAnimatic.jsx';
 
 const scenes = [
@@ -50,6 +50,18 @@ describe('StoryboardAnimatic lyrics', () => {
     fireEvent.click(toggle);
     await waitFor(() => expect(screen.queryByTestId('animatic-lyrics')).toBeNull());
     expect(screen.getByText('Opening').closest('figure')).toBeTruthy();
+  });
+
+  // Uniquely catches the animatic's lyric layer dropping the opening title card or its live edits.
+  it('hands the opening title card to the lyric layer and again when it is edited', async () => {
+    const card = { enabled: true, title: 'Example Song', startSec: 2, endSec: 8 };
+    const { rerender } = render(<StoryboardAnimatic project={{ ...lyricProject, titleCard: card }} audioUrl="/song.mp3" />);
+    const overlay = await screen.findByTestId('animatic-lyrics');
+    const post = vi.spyOn(overlay.contentWindow, 'postMessage');
+    await act(async () => { window.dispatchEvent(new MessageEvent('message', { source: overlay.contentWindow, data: { type: 'portos-mv:loaded' } })); });
+    expect(post).toHaveBeenCalledWith({ type: 'portos-mv:title-card', card: expect.objectContaining({ title: 'Example Song', position: 'lower-left' }) }, '*');
+    rerender(<StoryboardAnimatic project={{ ...lyricProject, titleCard: { ...card, position: 'upper-right' } }} audioUrl="/song.mp3" />);
+    await waitFor(() => expect(post).toHaveBeenCalledWith({ type: 'portos-mv:title-card', card: expect.objectContaining({ position: 'upper-right' }) }, '*'));
   });
 
   it('offers no lyrics until the words are timed', () => {

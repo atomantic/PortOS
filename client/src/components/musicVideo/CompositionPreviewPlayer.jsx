@@ -92,8 +92,9 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
     filmLookRef.current = filmLook;
     if (seekState.current.ready) iframeRef.current?.contentWindow?.postMessage({ type: 'portos-mv:film-look', look: filmLook }, '*');
   }, [filmLook]);
-  // The opening title card is posted the same way, so its panel's edits redraw the paused frame at once.
-  const titleCard = useMemo(() => (lyrics ? null : normalizeTitleCard(project.titleCard)), [lyrics, project.titleCard]);
+  // The opening title card is posted the same way, so its panel's edits redraw the paused frame at once;
+  // unlike the look it also shows over the lyric playthrough, to check it against the timed lyrics.
+  const titleCard = useMemo(() => normalizeTitleCard(project.titleCard), [project.titleCard]);
   const titleCardRef = useRef(titleCard);
   useEffect(() => {
     titleCardRef.current = titleCard;
