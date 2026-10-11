@@ -287,7 +287,8 @@ export default function MusicVideoLayout({
         >
           <div className="space-y-0.5">
             <h3 id={`mv-step-title-${stage}`} className="text-xl font-semibold">{stageEntry?.title || stageEntry?.label}</h3>
-            {stageEntry?.doneWhen && <p className="text-sm text-port-text-muted">{stageEntry.doneWhen}</p>}
+            {/* The step checklist already says what done means, item by item; the line stands in only without one. */}
+            {stageEntry?.doneWhen && !lead && <p className="text-sm text-port-text-muted">{stageEntry.doneWhen}</p>}
           </div>
           {lead}
           {playerFirst && (dock || review) && (
