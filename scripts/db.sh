@@ -480,6 +480,10 @@ fix_docker() {
   local PG_HELPER_IMAGE
   PG_HELPER_IMAGE=$(docker compose config --images db 2>/dev/null | head -1)
   [ -n "$PG_HELPER_IMAGE" ] || PG_HELPER_IMAGE=$(grep -m1 'image:.*pgvector' "$ROOT_DIR/docker-compose.yml" | awk '{print $2}')
+  if [ -z "$PG_HELPER_IMAGE" ]; then
+    warn "Could not resolve the db image from docker-compose.yml — cannot remove stale lock files"
+    return 1
+  fi
   if [ -n "$data_volume" ]; then
     docker run --rm -v "${data_volume}:/data" "$PG_HELPER_IMAGE" rm -f /data/postmaster.pid 2>/dev/null || true
   else
