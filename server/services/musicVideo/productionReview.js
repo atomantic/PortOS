@@ -110,6 +110,15 @@ export function seedArtDraft(project, stage = project.castAndSets) {
   return { ...project, productionReview: { ...project.productionReview, draft, seededDraft } };
 }
 
+/**
+ * Is a storyboard approval current on this revision? Either it was given on
+ * exactly this revision, or only the wording, prompts or timing of the shots
+ * it covered have changed since (`shotsBasis`; approvals recorded before it
+ * existed match on the exact revision only).
+ */
+const storyboardApprovalCurrent = (approval, basis) => !!approval
+  && (approval.basis === basis.storyboard || (!!basis.storyboardShots && approval.shotsBasis === basis.storyboardShots));
+
 export function productionReviewBasis(project) {
   const draft = project.productionReview?.draft || {};
   const art = hash({ projectId: project.id, mediaMode: project.mediaMode, authoringRenderer: project.composition?.authoringRenderer, mode: project.composition?.mode, policy: project.productionPolicy,
@@ -117,13 +126,20 @@ export function productionReviewBasis(project) {
     direction: project.castAndSets?.direction,
     cast: draft.cast, environments: draft.environments, visualLanguage: draft.visualLanguage,
     motionLanguage: draft.motionLanguage, implementationPlan: draft.implementationPlan, guide: artifactBasis(artifact(project, draft.guideArtifactId)) });
-  const storyboard = hash({ art, source: source(project), lyricsMode: draft.lyricsMode,
+  const storyboardInputs = { art, source: source(project), lyricsMode: draft.lyricsMode,
     timingStatus: draft.timingStatus, timingNotes: draft.timingNotes, storyboard: draft.storyboard,
     storyboardSource: draft.storyboardSource || 'board', documentStoryboard: project.productionReview?.documentStoryboard,
     document: draft.storyboardSource === 'document' ? project.composition?.document : null,
     // A planned camera (#10589) joins the hash only when set, so older approvals stay current.
     scenes: (project.scenes || []).map(({ sceneId, startSec, endSec, lyricText, visualIntent, prompt, framePrompt, camera }) =>
-      ({ sceneId, startSec, endSec, lyricText, visualIntent, prompt, framePrompt, ...(camera ? { camera } : {}) })), treatment: project.treatment });
+      ({ sceneId, startSec, endSec, lyricText, visualIntent, prompt, framePrompt, ...(camera ? { camera } : {}) })), treatment: project.treatment };
+  const storyboard = hash(storyboardInputs);
+  // The same revision without each shot's own wording and span: a director rewording or retiming
+  // a shot keeps the board they approved, while new shots, lyrics, song or direction still stale it.
+  // A document storyboard's shots live in its source, so it has no such allowance.
+  const storyboardShots = draft.storyboardSource === 'document' ? null : hash({ ...storyboardInputs,
+    storyboard: Array.isArray(draft.storyboard) ? draft.storyboard.map(shot => shot?.sceneId ?? null) : draft.storyboard,
+    scenes: (project.scenes || []).map(({ sceneId, lyricText }) => ({ sceneId, lyricText })) });
   const window = project.productionReview?.proof;
   const proof = hash({ storyboard, composition: project.composition,
     window: window && { startSec: window.startSec, endSec: window.endSec },
@@ -131,7 +147,7 @@ export function productionReviewBasis(project) {
       .map(({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer }) =>
         ({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer })),
     soundBed: project.soundBed, videoSettings: project.videoSettings });
-  return { art, storyboard, proof };
+  return { art, storyboard, storyboardShots, proof };
 }
 
 /** Labeled per-input hashes so a stale approval can name what changed since. */
@@ -348,7 +364,7 @@ export function productionReadiness(project) {
     if (overlapping.some(c => !shot?.lyricCueIds?.includes(c.id))
       || shot?.lyricCueIds?.some(id => !cues.some(c => c.id === id))) boardProblems.push(`Review lyric anchors for ${scene.label || 'each shot'}.`);
   }
-  const storyboardApproved = !boardProblems.length && review.approvals?.storyboard?.basis === basis.storyboard;
+  const storyboardApproved = !boardProblems.length && storyboardApprovalCurrent(review.approvals?.storyboard, basis);
   const camera = storyboardCameraReport(scenes, documentShots ? null : boardStoryboard(project));
   const proof = review.proof;
   const excerpt = (project.excerpts || []).find(e => e.id === proof?.excerptId);
@@ -468,7 +484,7 @@ export function approveProductionStage(project, { stage, basis, proofReview, app
       draft: { ...project.productionReview?.draft, storyboard: boardStoryboard(project) } } };
     expected = productionReviewBasis(project).storyboard;
   }
-  const decision = { stage, basis: expected, inputs: productionApprovalInputs(project)[stage], values: productionApprovalValues(project, stage), approvedAt: new Date().toISOString(),
+  const decision = { stage, basis: expected, ...(stage === 'storyboard' ? { shotsBasis: productionReviewBasis(project).storyboardShots } : {}), inputs: productionApprovalInputs(project)[stage], values: productionApprovalValues(project, stage), approvedAt: new Date().toISOString(),
     ...(approvedBy ? { approvedBy } : {}), ...(reviewer ? { reviewer: structuredClone(reviewer) } : {}),
     ...(stage === 'proof' ? { proofReview: structuredClone(proofReview) } : {}) };
   return { ...project, productionReview: { ...project.productionReview,
@@ -492,24 +508,25 @@ export function carryProductionApprovals(before, after, reason) {
   for (const stage of ['art', 'storyboard', 'proof']) {
     if (!was[stage]?.approved || !approvals[stage]) continue;
     const next = stage === 'proof' ? hash({ basis: basis.proof, excerptId: proofExcerpt?.id, filename: proofExcerpt?.filename }) : basis[stage];
-    approvals[stage] = { ...approvals[stage], basis: next, inputs: inputs[stage], carriedOver: { reason, at: new Date().toISOString() } };
+    approvals[stage] = { ...approvals[stage], basis: next, ...(stage === 'storyboard' ? { shotsBasis: basis.storyboardShots } : {}), inputs: inputs[stage], carriedOver: { reason, at: new Date().toISOString() } };
   }
   return { ...after, productionReview: { ...after.productionReview, approvals } };
 }
 
 /**
- * Keep a current storyboard approval across an edit that only cuts shots or
- * moves their timing (the director's own trims): it adds no shot, prompt or
- * lyric the approval did not already cover, so the director is not asked to
- * approve the same board again. The proof stays bound to its render and stales
+ * Keep a current storyboard approval across a director's own shot edit (a cut,
+ * a merge, a retime or a reworded prompt): it adds no shot or lyric the
+ * approval did not already cover, so the director is not asked to approve the
+ * same board again. The proof stays bound to its render and stales
  * as before. Returns `after` unchanged when the storyboard was not approved on
  * `before`'s current revision.
  */
 export function carryStoryboardApproval(before, after, reason) {
   const approval = before.productionReview?.approvals?.storyboard;
-  if (!approval || approval.basis !== productionReviewBasis(before).storyboard) return after;
+  if (!storyboardApprovalCurrent(approval, productionReviewBasis(before))) return after;
+  const basis = productionReviewBasis(after);
   const approvals = { ...after.productionReview?.approvals, storyboard: { ...approval,
-    basis: productionReviewBasis(after).storyboard, inputs: productionApprovalInputs(after).storyboard,
+    basis: basis.storyboard, shotsBasis: basis.storyboardShots, inputs: productionApprovalInputs(after).storyboard,
     carriedOver: { reason, at: new Date().toISOString() } } };
   return { ...after, productionReview: { ...after.productionReview, approvals } };
 }

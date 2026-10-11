@@ -381,11 +381,13 @@ describe('human-reviewed Music Video workflow', () => {
     expect(revised.body.project.productionReview.reviewedRevisions[entry.basis].draft.storyboard[0].staging).toBe('Figure foreground, doorway behind');
     expect(revised.body.project.productionReview.feedback.at(-1).resolvedAt).toBeUndefined();
     expect(revised.body.readiness.art.approved).toBe(true);
-    expect(revised.body.readiness.storyboard.approved).toBe(false);
+    // Rewording an approved shot keeps the storyboard approval; the proof it fed is reviewed again.
+    expect(revised.body.readiness.storyboard.approved).toBe(true);
+    expect(revised.body.readiness.proof.approved).toBe(false);
     const resolution = { feedbackId: entry.id, resolution: 'Reviewed the revised staging.' };
     expect((await request(app).post(`${base}/production-review/feedback/resolve`).set('authorization', 'Bearer expired').send(resolution)).status).toBe(401);
     expect((await request(app).post(`${base}/production-review/feedback/resolve`).send(resolution)).status).toBe(200);
-    expect((await read()).body.readiness.readyForProduction).toBe(false);
+    expect((await read()).body.readiness.proof.approved).toBe(false);
     await request(app).post(`${base}/production-review/import`).send({ source: JSON.stringify({ cast: 'Another proposal', storyboard: [] }) });
     const imported = await read();
     expect(imported.body.project.productionReview.feedback).toHaveLength(2);
