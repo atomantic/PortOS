@@ -26,7 +26,7 @@ import {
   getSettings, updateSettings, getImageGenStatus, getVideoGenModelContext, generateImage,
   registerTool, updateTool, getToolsList,
   saveHfToken, clearHfToken,
-  getCredentialInventory, saveCredential,
+  getCredentialInventory, saveCredential, getProviders,
 } from '../../services/api';
 import FalModelSelect from '../imageGen/FalModelSelect';
 import { deriveAvailableBackends, imageGenReadiness, isCloudCliMode, IMAGE_GEN_MODE, FAL_IMAGE_DEFAULT_MODEL, falImageFamily, LOCAL_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_IMAGE_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT, CODEX_IMAGEGEN_DEFAULT_MODEL, GROK_ASPECT_RATIOS, RENDER_TARGET_BACKEND_AUTO, RENDER_TARGET_OPTIONS, VIDEO_RENDER_MODES, localModelSelectOptions, modeLabel, normalizeRenderPinValue, supportsCloudModelOverride } from '../../lib/imageGenBackends';
@@ -36,7 +36,7 @@ import { useMediaJobSse, isMediaRunEnded } from '../../hooks/useMediaJobSse';
 import { useAgyModels } from '../../hooks/useAgyModels';
 import { useHfTokenStatus } from '../../hooks/useHfTokenStatus';
 import useLocalImageModels from '../../hooks/useLocalImageModels';
-import { effortLevelsForProvider } from '../../utils/providers';
+import { effortLevelsForProvider, isCodexSubscriptionProvider, providerModelList } from '../../utils/providers';
 
 const SDAPI_TOOL_ID = 'sdapi';
 const CODEX_TOOL_ID = 'codex-imagegen';
@@ -161,6 +161,33 @@ export function ImageGenTab() {
   const codexEffortLevels = effortLevelsForProvider(
     { id: 'codex', command: 'codex' },
     codexModel.trim() || CODEX_IMAGEGEN_DEFAULT_MODEL,
+  );
+  // Model picker options: the configured Codex provider's model list (the
+  // signed-in account's catalog when fetched, else the shipped presets), read
+  // only once the Codex section is enabled. `null` = not loaded yet; the
+  // shipped default is always offered so the picker is never empty.
+  const [codexProviderModels, setCodexProviderModels] = useState(null);
+  useEffect(() => {
+    if (!codexEnabled) return undefined;
+    let active = true;
+    getProviders({ silent: true })
+      .then((data) => {
+        if (!active) return;
+        const providers = Array.isArray(data?.providers) ? data.providers : [];
+        const provider = providers.find((p) => p?.id === 'codex' && isCodexSubscriptionProvider(p))
+          || providers.find(isCodexSubscriptionProvider);
+        const ids = provider ? providerModelList(provider)
+          .map((m) => (typeof m === 'string' ? m : m?.id))
+          .filter((id) => typeof id === 'string' && id !== '') : [];
+        setCodexProviderModels(ids);
+      })
+      .catch(() => { if (active) setCodexProviderModels([]); });
+    return () => { active = false; };
+  }, [codexEnabled]);
+  const codexModelOptions = withUnlistedOption(
+    [...new Set([CODEX_IMAGEGEN_DEFAULT_MODEL, ...(codexProviderModels || [])])].map((id) => ({ id })),
+    codexModel.trim(),
+    (id) => ({ id }),
   );
   const [codexParallelLimit, setCodexParallelLimit] = useState(1);
   // Grok Build CLI provider config — gated by `grokEnabled` the same way as
@@ -1292,15 +1319,18 @@ export function ImageGenTab() {
               <p className="text-xs text-gray-500 mt-1">Leave empty to invoke <code>codex</code> from $PATH.</p>
             </FormField>
             <FormField label="Model override (optional)" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-              <input
+              <select
                 id={codexModelId}
-                type="text"
-                value={codexModel}
+                value={codexModel.trim()}
                 onChange={(e) => setCodexModel(e.target.value)}
                 className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-                placeholder={`${CODEX_IMAGEGEN_DEFAULT_MODEL} (default)`}
-              />
-              <p className="text-xs text-gray-500 mt-1">Passed as <code>codex exec -m &lt;model&gt;</code>. Leave empty to use the cheap default (<code>{CODEX_IMAGEGEN_DEFAULT_MODEL}</code>).</p>
+              >
+                <option value="">Default ({CODEX_IMAGEGEN_DEFAULT_MODEL})</option>
+                {codexModelOptions.map(({ id }) => (
+                  <option key={id} value={id}>{id}</option>
+                ))}
+              </select>
+              <p className="text-xs text-gray-500 mt-1">Passed as <code>codex exec -m &lt;model&gt;</code>. Leave on Default for the cheap shipped model (<code>{CODEX_IMAGEGEN_DEFAULT_MODEL}</code>). Models come from your Codex provider.</p>
             </FormField>
             <FormField label="Reasoning effort (optional)" labelClassName="block text-xs font-medium text-gray-400 mb-1">
               <select

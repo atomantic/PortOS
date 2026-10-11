@@ -17,6 +17,7 @@ vi.mock('../../services/api', () => ({
   saveCredential: vi.fn(),
   listAgyImageModels: vi.fn(),
   listImageModels: vi.fn(),
+  getProviders: vi.fn(),
 }));
 vi.mock('../../hooks/useHfTokenStatus', () => ({
   useHfTokenStatus: vi.fn(),
@@ -36,7 +37,7 @@ vi.mock('../imageGen/Flux2InstallModal', () => ({ default: () => null }));
 
 import {
   getSettings, getToolsList, updateSettings, listAgyImageModels, listImageModels, getImageGenStatus,
-  getVideoGenModelContext, generateImage, getCredentialInventory,
+  getVideoGenModelContext, generateImage, getCredentialInventory, getProviders,
 } from '../../services/api';
 import { useHfTokenStatus } from '../../hooks/useHfTokenStatus';
 import { ImageGenTab, MEDIA_TABS } from './ImageGenTab';
@@ -81,6 +82,9 @@ beforeEach(() => {
     ],
   });
   updateSettings.mockResolvedValue({});
+  getProviders.mockResolvedValue({
+    providers: [{ id: 'codex', type: 'cli', command: 'codex', models: ['gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-luna'] }],
+  });
   listAgyImageModels.mockResolvedValue({ models: ['gemini-image', 'custom/image-v2'], error: null });
   listImageModels.mockResolvedValue([
     { id: 'dev', name: 'FLUX.1 Dev' },
@@ -281,6 +285,24 @@ describe('ImageGenTab grouped tabs', () => {
     expect(patch.imageGen).toHaveProperty('grok');
     expect(patch.imageGen).toHaveProperty('agy');
     expect(patch.imageGen).toHaveProperty('expose');
+  });
+
+  it('offers the Codex provider\'s models in a picker and keeps an unlisted stored pin', async () => {
+    getSettings.mockResolvedValue({
+      imageGen: { mode: 'codex', codex: { enabled: true, model: 'gpt-retired' }, expose: { a1111: false } },
+    });
+    await renderTab(['/media/image?mediaTab=codex']);
+    const select = await screen.findByLabelText('Model override (optional)');
+    await waitFor(() => expect(screen.getByRole('option', { name: 'gpt-6-sol' })).toBeTruthy());
+    // A stored model the catalog no longer lists stays selected rather than
+    // rendering blank and being dropped on the next save.
+    expect(select.value).toBe('gpt-retired');
+    expect(screen.getByRole('option', { name: /^Default \(gpt-6-luna\)/ })).toBeTruthy();
+
+    fireEvent.change(select, { target: { value: 'gpt-6-sol' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
+    expect(updateSettings.mock.calls[0][0].imageGen.codex.model).toBe('gpt-6-sol');
   });
 
   it('pins the install-wide default local model and saves it under imageGen.local.modelId', async () => {
