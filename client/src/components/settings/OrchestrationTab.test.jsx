@@ -80,6 +80,18 @@ describe('OrchestrationTab', () => {
     expect(screen.queryByText('Orchestration profiles are unavailable.')).toBeNull();
   });
 
+  it('offers a single create action for an empty inventory and none while the form is open', async () => {
+    api.getOrchestrationProfiles.mockResolvedValue([]);
+    render(<OrchestrationTab />);
+    expect(await screen.findByText('Create your first profile')).toBeTruthy();
+    expect(screen.queryByText('New Profile')).toBeNull();
+
+    fireEvent.click(screen.getByText('Create your first profile'));
+    expect(await screen.findByText('Create Orchestration Profile')).toBeTruthy();
+    expect(screen.queryByText('Create your first profile')).toBeNull();
+    expect(screen.queryByText('New Profile')).toBeNull();
+  });
+
   it('recovers profiles on retry while provider metadata fails independently', async () => {
     api.getOrchestrationProfiles.mockRejectedValueOnce(new Error('Unavailable')).mockResolvedValueOnce(mockProfiles);
     api.getProviders.mockRejectedValue(new Error('Unavailable'));

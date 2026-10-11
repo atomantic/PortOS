@@ -192,7 +192,7 @@ export default function OrchestrationTab() {
             for the Architect, Implementer, and Reviewer. Machine-local and opt-in per task.
           </p>
         </div>
-        {!editingProfile && (
+        {!editingProfile && profilesLoaded && profiles.length > 0 && (
           <button
             onClick={handleStartCreate}
             className="inline-flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg text-sm font-medium transition-colors self-start sm:self-auto"
@@ -368,7 +368,7 @@ export default function OrchestrationTab() {
 
       {loading && !profilesLoaded ? (
         <div className="p-8 text-center text-gray-400">Loading orchestration profiles…</div>
-      ) : !profilesLoaded || (profileError && profiles.length === 0) ? null : profiles.length === 0 ? (
+      ) : !profilesLoaded || (profileError && profiles.length === 0) || (editingProfile && profiles.length === 0) ? null : profiles.length === 0 ? (
         <div className="bg-port-card border border-port-border rounded-xl p-8 text-center space-y-3">
           <p className="text-gray-400">No orchestration profiles configured.</p>
           <button
