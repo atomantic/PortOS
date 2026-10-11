@@ -452,6 +452,20 @@ describe('authGate per-API public registry (apiAccess)', () => {
     expect(result.called).toBe(true);
   });
 
+  it('retains verified human and delegated agent sessions on a passwordless API', async () => {
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'example-password' });
+    await writeApiAccess({ sdapi: { exposed: true, requireAuth: false } });
+    const { authGate, requestHasHostControl } = await import('./authGate.js');
+    for (const label of [null, 'agent']) {
+      const { token } = await auth.createSession({ label });
+      const req = { path: '/sdapi/v1/txt2img', headers: { authorization: `Bearer ${token}` }, socket: { remoteAddress: '192.0.2.10' } };
+      expect((await runGate(authGate, req)).called).toBe(true);
+      expect(req.portosAuthContext).toEqual({ enabled: true, authenticated: true, method: 'session' });
+      expect(requestHasHostControl(req)).toBe(true);
+    }
+  });
+
   it('still applies the CSRF cross-origin guard to an exposed public path', async () => {
     const auth = await import('./auth.js');
     await auth.setPassword({ newPassword: 'correct-horse' });

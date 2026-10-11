@@ -23,12 +23,19 @@ import { sdapiTxt2imgBodySchema } from '../lib/apiContractSchemas.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { getSettings } from '../services/settings.js';
+import { assertHostControl } from '../services/authGate.js';
 import { generateImage, getMode, getActiveJob, IMAGE_GEN_MODE, CLOUD_IMAGE_GEN_MODES } from '../services/imageGen/index.js';
 import { local as localImage } from '../services/imageGen/index.js';
 import { createImageGenWaiter } from '../services/imageGenWaiter.js';
 import { listVideoModels, defaultVideoModelId, warmByovLoraCapabilities } from '../services/videoGen/local.js';
 
 const router = Router();
+
+// Cloud/queue classification is not authority: Fal is an API-only backend.
+// Keep both lists explicit so a new backend cannot silently inherit inference
+// authority before its execution path has been audited.
+const AGENT_IMAGE_MODES = [IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK, IMAGE_GEN_MODE.AGY];
+const INFERENCE_IMAGE_MODES = [IMAGE_GEN_MODE.EXTERNAL, IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.FAL];
 
 // `onTimeout` + `onFailed` map the shared waiter's rejections onto the
 // ServerError shape sdapi routes need; centralized middleware surfaces the
@@ -175,6 +182,11 @@ router.post('/txt2img', asyncHandler(async (req, res) => {
   // file is on disk by the time generateImage resolves, so the wait is a
   // no-op there.
   const mode = await getMode();
+  if (AGENT_IMAGE_MODES.includes(mode)) {
+    assertHostControl(req);
+  } else if (!INFERENCE_IMAGE_MODES.includes(mode)) {
+    throw new ServerError('Unsupported image generation mode', { status: 400, code: 'IMAGE_GEN_UNKNOWN_MODE' });
+  }
   const isAsyncMode = mode === IMAGE_GEN_MODE.LOCAL || CLOUD_IMAGE_GEN_MODES.includes(mode);
   // Allocate the correlation ID up front and register it BEFORE dispatch: a
   // job-based provider can emit completed/failed while generateImage is still
@@ -189,6 +201,8 @@ router.post('/txt2img', asyncHandler(async (req, res) => {
   let result;
   try {
     result = await generateImage({
+      // Pin the authorized backend even if saved settings change during dispatch.
+      mode,
       ...(jobId ? { jobId } : {}),
       prompt,
       negativePrompt: negative_prompt,

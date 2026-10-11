@@ -43,6 +43,10 @@
  *     caller text to a caller-chosen provider, so they gate per request
  *     instead: a provider that cannot run tool-free (`toolFreeOneShotArgs` in
  *     lib/providerVendors.js) needs host control.
+ *   - A1111 compatibility (#11138): POST /sdapi/v1/txt2img gates in-handler
+ *     when the resolved backend is Codex, Grok or Antigravity. External/local/
+ *     Fal inference and discovery/progress retain their exposure/auth policy.
+ *     The checked mode is pinned into dispatch; unclassified modes are refused.
  *   - pipeline and FableLoom: autopilot start is gated — with gap filing or
  *     self-improvement on it queues CoS agents — and so are the Pipeline
  *     text/visual generation operations listed under "Pipeline authoring"
