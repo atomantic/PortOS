@@ -346,30 +346,48 @@ function equal(valueA, valueB) {
   return canonicalStringify(valueA) === canonicalStringify(valueB);
 }
 
-/**
- * Build the deterministic world operations without opening a socket. This is
- * intentionally exported so recipe changes can be tested without a live
- * Eidoverse process and so future renderers can reuse the same projection.
- */
-export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PROJECTION_RECIPE, currentState = {}, meta = null, labelAliases = {}, assetResolutions = {} }) {
-  const effectiveRecipe = mergeRecipe(recipe);
-  const objects = [];
-  const labelContext = { aliases: labelAliases, objects, recipe: effectiveRecipe, assetResolutions };
-  const stateEntities = currentState?.entities && typeof currentState.entities === 'object'
+// How a live signal is presented, by severity: how far it floats above its
+// anchor, how much larger it renders, and how it bobs. Data, not control flow;
+// a severity the table does not name presents as `normal`.
+const SEVERITY_PRESENCE = Object.freeze({
+  error: Object.freeze({ lift: 1.6, scale: 1.22, motion: Object.freeze({ amp: 0.5, period: 1.7 }) }),
+  attention: Object.freeze({ lift: 0.7, scale: 1.1, motion: Object.freeze({ amp: 0.3, period: 2.8 }) }),
+  normal: Object.freeze({ lift: 0, scale: 1, motion: Object.freeze({ amp: 0.14, period: 4.5 }) }),
+});
+// Kinds that keep bobbing while healthy; any other kind bobs only when its
+// severity is not `normal`.
+const AMBIENT_BOB_KINDS = new Set(['agent', 'activity', 'goal', 'jira', 'memory']);
+// A retained stale signal drifts slower and lower than any live one. This is a
+// staleness policy, not a severity, so it stays out of SEVERITY_PRESENCE.
+const STALE_BOB = Object.freeze({ amp: 0.12, period: 6 });
+
+function bobMotion(seed, { amp, period }) {
+  return { type: 'bob', amp, period, phase: Number((stableEidoverseUnit(seed) * Math.PI * 2).toFixed(4)) };
+}
+
+function currentEntities(currentState) {
+  return currentState?.entities && typeof currentState.entities === 'object'
     ? currentState.entities
     : {};
-  const operations = [];
-  const desiredIds = new Set();
-  const sourceAvailability = {};
-  let created = 0;
-  let updated = 0;
-  let removed = 0;
+}
 
+/** `upsertModel` bound to the plan context, folding its delta into the running tally. */
+function upsertTallied(ctx, params) {
+  const { operations, labelContext, stateEntities, desiredIds } = ctx;
+  const delta = upsertModel({ operations, labelContext, stateEntities, desiredIds, ...params });
+  ctx.tally.created += delta.created;
+  ctx.tally.updated += delta.updated;
+  ctx.tally.removed += delta.removed;
+  return delta;
+}
+
+/**
+ * Environment, lights, city surface, architecture, districts, paths and the
+ * world-meta entity: everything that exists regardless of live signals.
+ */
+function projectManagedInfrastructure(ctx, { currentState, meta }) {
+  const { source, effectiveRecipe, stateEntities, operations, desiredIds, districts, assetResolutions } = ctx;
   const environment = effectiveRecipe.environment;
-  const districts = Array.isArray(effectiveRecipe.districts) && effectiveRecipe.districts.length
-    ? effectiveRecipe.districts
-    : EIDOVERSE_DISTRICTS_V2;
-  sourceAvailability.environment = true;
   if (!containsConfiguredValue(currentState?.terrain, environment.terrain)) {
     operations.push({ layer: 'environment', verb: 'terrain', args: environment.terrain });
   }
@@ -391,28 +409,26 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
     if (!existing || existing.kind !== 'light') {
       if (existing) {
         operations.push({ layer, verb: 'remove', args: { id: light.id } });
-        removed += 1;
+        ctx.tally.removed += 1;
       }
       operations.push({ layer, verb: 'light', args: light });
-      created += 1;
+      ctx.tally.created += 1;
     } else if (!containsConfiguredLight(existing, light)) {
       operations.push({ layer, verb: 'light', args: light });
-      updated += 1;
+      ctx.tally.updated += 1;
     }
   }
 
-  let cityEntityCount = 0;
   if (effectiveRecipe.assets.citySurface) {
-    const delta = upsertModel({ operations, labelContext, stateEntities, desiredIds,
+    upsertTallied(ctx, {
       id: `${EIDOVERSE_MANAGED_PREFIX}city-surface`, lib: effectiveRecipe.assets.citySurface,
       pos: [0, 0, 0], normalizeModel: false, collide: null,
       component: { schemaVersion: 1, managedBy: 'portos', designVersion: EIDOVERSE_WORLD_DESIGN_VERSION,
         kind: 'architecture', districtId: 'nexus' }, layer: 'infrastructure' });
-    created += delta.created; updated += delta.updated; removed += delta.removed;
-    cityEntityCount += 1;
+    ctx.cityEntityCount += 1;
   }
   for (const item of [...eidoverseCityArchitecture(districts), ...eidoverseCityFurniture(districts, assetResolutions)]) {
-    const delta = upsertModel({ operations, labelContext, stateEntities, desiredIds,
+    upsertTallied(ctx, {
       id: `${EIDOVERSE_MANAGED_PREFIX}city-${item.key}`,
       lib: assetPathFor(effectiveRecipe, null, item.slot || 'task'),
       pos: item.pos, yaw: item.yaw || 0, scale: item.scale || 1, modelSize: item.size || 2, collide: item.structure ? null : 'box',
@@ -421,10 +437,7 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
         kind: item.structure ? 'architecture' : 'furniture', districtId: item.districtId },
       layer: 'infrastructure',
     });
-    created += delta.created;
-    updated += delta.updated;
-    removed += delta.removed;
-    cityEntityCount += 1;
+    ctx.cityEntityCount += 1;
   }
 
   for (const district of districts) {
@@ -470,11 +483,7 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
     };
     const districtSlot = DISTRICT_ASSET_SLOT[district.id] ?? 'district';
     const districtScale = DISTRICT_SCALE[district.id] ?? 1;
-    const delta = upsertModel({
-      operations,
-      labelContext,
-      stateEntities,
-      desiredIds,
+    upsertTallied(ctx, {
       id,
       lib: assetPathFor(effectiveRecipe, district.id === 'nexus' ? 'operations' : null, districtSlot),
       pos: eidoverseDistrictPoint(district, district.id === 'apps' ? -5 : 0,
@@ -485,30 +494,20 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
       scale: Number((districtScale * (1 + Math.min(affordances.length, 3) * 0.035)).toFixed(3)),
       component,
       motion: ['agents', 'goals', 'memory'].includes(district.id)
-        ? {
-          type: 'bob',
+        ? bobMotion(`${district.id}:motion`, {
           amp: district.id === 'goals' ? 0.28 : 0.16,
           period: district.id === 'memory' ? 5.5 : 4.2,
-          phase: Number((stableEidoverseUnit(`${district.id}:motion`) * Math.PI * 2).toFixed(4)),
-        }
+        })
         : null,
       layer: 'infrastructure',
     });
-    created += delta.created;
-    updated += delta.updated;
-    removed += delta.removed;
   }
 
   let pathNodeCount = 0;
   for (const path of effectiveRecipe.paths || []) {
     path.nodes.forEach((pos, index) => {
-      const id = `${EIDOVERSE_MANAGED_PREFIX}path-${path.id}-${index + 1}`;
-      const delta = upsertModel({
-        operations,
-        labelContext,
-        stateEntities,
-        desiredIds,
-        id,
+      upsertTallied(ctx, {
+        id: `${EIDOVERSE_MANAGED_PREFIX}path-${path.id}-${index + 1}`,
         lib: assetPathFor(effectiveRecipe, null, 'district'),
         pos,
         yaw: 0,
@@ -528,9 +527,6 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
         },
         layer: 'infrastructure',
       });
-      created += delta.created;
-      updated += delta.updated;
-      removed += delta.removed;
       pathNodeCount += 1;
     });
   }
@@ -540,11 +536,7 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
   // away with every other `portos-design-v2-` entity.
   let metaEntityCount = 0;
   if (meta) {
-    const delta = upsertModel({
-      operations,
-      labelContext,
-      stateEntities,
-      desiredIds,
+    upsertTallied(ctx, {
       id: EIDOVERSE_META_ENTITY_ID,
       lib: assetPathFor(effectiveRecipe, null, 'district'),
       pos: META_ENTITY_POS,
@@ -568,24 +560,18 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
       },
       layer: 'infrastructure',
     });
-    created += delta.created;
-    updated += delta.updated;
-    removed += delta.removed;
     metaEntityCount = 1;
   }
+  return { pathNodeCount, metaEntityCount };
+}
 
-  const liveEntityLimit = Math.min(
-    effectiveRecipe.maxEntities ?? EIDOVERSE_MAX_LIVE_ENTITIES,
-    EIDOVERSE_MAX_LIVE_ENTITIES,
-  );
-  const unavailableKinds = new Set(EIDOVERSE_PROJECTION_KINDS
-    .filter(({ source: sourceKey }) => (
-      effectiveRecipe.includes[sourceKey] && !sourceAvailable(source, sourceKey)
-    ))
-    .map(({ kind }) => kind));
-  for (const { source: sourceKey } of EIDOVERSE_PROJECTION_KINDS) {
-    sourceAvailability[sourceKey] = sourceAvailable(source, sourceKey);
-  }
+/**
+ * Stale and live signal buckets for the shared entity budget. Retained stale
+ * entities compete for the same slots as live ones, so both are bucketed
+ * together before the round-robin split.
+ */
+function bucketProjectionSignals(ctx, unavailableKinds) {
+  const { source, effectiveRecipe, districts, stateEntities } = ctx;
   const staleCandidates = Object.keys(stateEntities)
     .map((id) => ({ id, kind: signalKindFromEntityId(id) }))
     .filter(({ kind }) => kind && unavailableKinds.has(kind))
@@ -622,31 +608,57 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
   const signalBuckets = EIDOVERSE_PROJECTION_KINDS
     .map(({ kind }) => bucketsByKind.get(kind))
     .filter(Boolean);
+  return { staleCandidates, staleBuckets, signalBuckets };
+}
+
+// Travel destinations are infrastructure, not a capped health sample: every
+// available peer gets a chamber even when the live signal budget is full.
+function placeTravelPods(ctx, districtCounts) {
+  const { source, effectiveRecipe, districts } = ctx;
+  const travelSignals = effectiveRecipe.includes.peers && Array.isArray(source.peers)
+    ? source.peers.filter((peer) => peer?.travelAvailable).map((peer) => worldSignal('peer', 'peers', peer, districts)).sort((a, b) => a.id.localeCompare(b.id))
+    : [];
+  for (const signal of travelSignals) {
+    const district = districtForSource(districts, 'peers');
+    upsertTallied(ctx, {
+      id: `${EIDOVERSE_MANAGED_PREFIX}travel-${signal.resourceKey}`,
+      lib: assetPathFor(effectiveRecipe, 'peer', 'peer'),
+      pos: eidoverseCitySignalPosition(district, districtCounts[district.id]),
+      yaw: eidoverseDistrictYaw(district), structure: eidoverseCityTravelPod(), collide: null,
+      component: signal, layer: 'infrastructure' });
+    ctx.cityEntityCount += 1;
+    districtCounts[district.id] += 1;
+  }
+}
+
+/**
+ * Split the shared live-entity budget between stale and live signals and seed
+ * the per-district slot counters. Travel pods are placed here, before any live
+ * signal, because they take their district slots first.
+ */
+function allocateProjectionSignals(ctx, sourceAvailability) {
+  const { source, effectiveRecipe, districts } = ctx;
+  const liveEntityLimit = Math.min(
+    effectiveRecipe.maxEntities ?? EIDOVERSE_MAX_LIVE_ENTITIES,
+    EIDOVERSE_MAX_LIVE_ENTITIES,
+  );
+  const unavailableKinds = new Set(EIDOVERSE_PROJECTION_KINDS
+    .filter(({ source: sourceKey }) => (
+      effectiveRecipe.includes[sourceKey] && !sourceAvailable(source, sourceKey)
+    ))
+    .map(({ kind }) => kind));
+  for (const { source: sourceKey } of EIDOVERSE_PROJECTION_KINDS) {
+    sourceAvailability[sourceKey] = sourceAvailable(source, sourceKey);
+  }
+  const { staleCandidates, staleBuckets, signalBuckets } = bucketProjectionSignals(ctx, unavailableKinds);
   const selectedSignals = allocateRoundRobin(signalBuckets, liveEntityLimit);
   const retainedStaleCandidates = staleBuckets.flatMap(({ key }) => selectedSignals.get(key) || []);
   const retainedStaleIds = new Set(retainedStaleCandidates.map(({ id }) => id));
   const overBudgetStaleIds = new Set(staleCandidates
     .filter(({ id }) => !retainedStaleIds.has(id))
     .map(({ id }) => id));
-  let liveEntityCount = retainedStaleIds.size;
   const districtCounts = Object.fromEntries(districts.map(({ id }) => [id, 0]));
-  // Travel destinations are infrastructure, not a capped health sample: every
-  // available peer gets a chamber even when the live signal budget is full.
-  const travelSignals = effectiveRecipe.includes.peers && Array.isArray(source.peers)
-    ? source.peers.filter((peer) => peer?.travelAvailable).map((peer) => worldSignal('peer', 'peers', peer, districts)).sort((a, b) => a.id.localeCompare(b.id))
-    : [];
-  for (const signal of travelSignals) {
-    const district = districtForSource(districts, 'peers');
-    const delta = upsertModel({ operations, labelContext, stateEntities, desiredIds,
-      id: `${EIDOVERSE_MANAGED_PREFIX}travel-${signal.resourceKey}`,
-      lib: assetPathFor(effectiveRecipe, 'peer', 'peer'),
-      pos: eidoverseCitySignalPosition(district, districtCounts[district.id]),
-      yaw: eidoverseDistrictYaw(district), structure: eidoverseCityTravelPod(), collide: null,
-      component: signal, layer: 'infrastructure' });
-    created += delta.created; updated += delta.updated; removed += delta.removed;
-    cityEntityCount += 1;
-    districtCounts[district.id] += 1;
-  }
+  placeTravelPods(ctx, districtCounts);
   const droppedBySource = {};
   for (const { kind } of retainedStaleCandidates) {
     const sourceKey = EIDOVERSE_PROJECTION_KINDS.find((entry) => entry.kind === kind)?.source;
@@ -658,151 +670,217 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
     const dropped = values.length - (selectedSignals.get(key)?.length || 0);
     if (dropped > 0) droppedBySource[sourceKey] = (droppedBySource[sourceKey] || 0) + dropped;
   }
+  return {
+    liveEntityLimit,
+    unavailableKinds,
+    selectedSignals,
+    retainedStaleIds,
+    overBudgetStaleIds,
+    districtCounts,
+    droppedBySource,
+    liveEntityCount: retainedStaleIds.size,
+  };
+}
 
-  for (const { kind, source: sourceKey, slot } of EIDOVERSE_PROJECTION_KINDS) {
-    const available = sourceAvailable(source, sourceKey);
-    if (!effectiveRecipe.includes[`${sourceKey}`]) {
-      continue;
+/** The stale `comp.portos` payload for a retained entity, carrying only its finite metrics. */
+function staleSignalComponent({ kind, id, existing, district }) {
+  const priorComponent = existing?.comp?.[COMPONENT_TYPE] || {};
+  const priorMetrics = priorComponent.metrics || {};
+  const resourceKey = priorComponent.managedBy === 'portos'
+    && priorComponent.kind === kind
+    && typeof priorComponent.resourceKey === 'string'
+    ? priorComponent.resourceKey
+    : `${kind}-${id.slice(`${PROJECTION_ID_PREFIX}${kind}-`.length)}`;
+  return {
+    schemaVersion: 1,
+    managedBy: 'portos',
+    designVersion: EIDOVERSE_WORLD_DESIGN_VERSION,
+    id: resourceKey,
+    resourceKey,
+    kind,
+    resource: COMPONENT_RESOURCE_BY_KIND[kind] || kind,
+    route: COMPONENT_ROUTE_BY_KIND[kind] || '/eidoverse',
+    districtId: district.id,
+    districtLabel: district.label,
+    label: COMPONENT_LABEL_BY_KIND[kind] || 'PortOS signal',
+    status: 'stale',
+    severity: 'attention',
+    freshness: 'stale',
+    disclosure: 'aggregate',
+    visualCue: { shape: 'diamond', motion: 'slow-pulse' },
+    metrics: Object.fromEntries(Object.entries(priorMetrics).filter(([, value]) => (
+      value === null || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))
+    ))),
+  };
+}
+
+/**
+ * A source that is temporarily unavailable keeps the entities the budget
+ * retained: they are marked stale in place and added to `desiredIds` so the
+ * reconciliation pass does not remove them.
+ */
+function refreshUnavailableSignals(ctx, { kind, source: sourceKey }, { retainedStaleIds }) {
+  const { stateEntities, operations, desiredIds, labelContext, districts } = ctx;
+  const district = districtForSource(districts, sourceKey);
+  for (const [id, existing] of Object.entries(stateEntities)) {
+    if (!id.startsWith(`${PROJECTION_ID_PREFIX}${kind}-`)) continue;
+    if (!retainedStaleIds.has(id)) continue;
+    desiredIds.add(id);
+    if (kind === 'app') {
+      const deskId = `${EIDOVERSE_MANAGED_PREFIX}city-desk-${id.slice(PROJECTION_ID_PREFIX.length)}`;
+      if (stateEntities[deskId]) { desiredIds.add(deskId); ctx.cityEntityCount += 1; }
     }
-    if (!available) {
-      for (const [id, existing] of Object.entries(stateEntities)) {
-        if (!id.startsWith(`${PROJECTION_ID_PREFIX}${kind}-`)) continue;
-        if (!retainedStaleIds.has(id)) continue;
-        desiredIds.add(id);
-        if (kind === 'app') {
-          const deskId = `${EIDOVERSE_MANAGED_PREFIX}city-desk-${id.slice(PROJECTION_ID_PREFIX.length)}`;
-          if (stateEntities[deskId]) { desiredIds.add(deskId); cityEntityCount += 1; }
-        }
-        const priorComponent = existing?.comp?.[COMPONENT_TYPE] || {};
-        const priorMetrics = priorComponent.metrics || {};
-        const district = districtForSource(districts, sourceKey);
-        const resourceKey = priorComponent.managedBy === 'portos'
-          && priorComponent.kind === kind
-          && typeof priorComponent.resourceKey === 'string'
-          ? priorComponent.resourceKey
-          : `${kind}-${id.slice(`${PROJECTION_ID_PREFIX}${kind}-`.length)}`;
-        const staleComponent = {
-          schemaVersion: 1,
-          managedBy: 'portos',
-          designVersion: EIDOVERSE_WORLD_DESIGN_VERSION,
-          id: resourceKey,
-          resourceKey,
-          kind,
-          resource: COMPONENT_RESOURCE_BY_KIND[kind] || kind,
-          route: COMPONENT_ROUTE_BY_KIND[kind] || '/eidoverse',
-          districtId: district.id,
-          districtLabel: district.label,
-          label: COMPONENT_LABEL_BY_KIND[kind] || 'PortOS signal',
-          status: 'stale',
-          severity: 'attention',
-          freshness: 'stale',
-          disclosure: 'aggregate',
-          visualCue: { shape: 'diamond', motion: 'slow-pulse' },
-          metrics: Object.fromEntries(Object.entries(priorMetrics).filter(([, value]) => (
-            value === null || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))
-          ))),
-        };
-        if (!equal(existing?.comp?.[COMPONENT_TYPE], staleComponent)) {
-          operations.push({ layer: 'live', verb: 'comp', args: { id, type: COMPONENT_TYPE, data: staleComponent } });
-          updated += 1;
-        }
-        const staleLabelOp = labelOperation({
-          prior: existing?.comp?.[EIDOVERSE_LABEL_COMPONENT_TYPE],
-          id,
-          component: staleComponent,
-          layer: 'live',
-          lib: existing.lib,
-          labelContext,
-        });
-        if (staleLabelOp) {
-          operations.push(staleLabelOp);
-          updated += 1;
-        }
-        const staleMotion = kind === 'app' ? null : {
-          type: 'bob', amp: 0.12, period: 6,
-          phase: Number((stableEidoverseUnit(`${id}:stale`) * Math.PI * 2).toFixed(4)),
-        };
-        if (!equal(existing?.comp?.motion ?? null, staleMotion)) {
-          operations.push({ layer: 'ambient', verb: 'comp', args: { id, type: 'motion', data: staleMotion } });
-          updated += 1;
-        }
-      }
-      continue;
+    const staleComponent = staleSignalComponent({ kind, id, existing, district });
+    if (!equal(existing?.comp?.[COMPONENT_TYPE], staleComponent)) {
+      operations.push({ layer: 'live', verb: 'comp', args: { id, type: COMPONENT_TYPE, data: staleComponent } });
+      ctx.tally.updated += 1;
     }
-    if (!slot) continue;
-    for (const signal of selectedSignals.get(kind) || []) {
-      const id = projectionEntityId(kind, signal.id);
-      const district = districtForSource(districts, sourceKey);
-      const pos = eidoverseCitySignalPosition(district, districtCounts[district.id], kind === 'app');
-      if (kind === 'app') {
-        const desk = upsertModel({ operations, labelContext, stateEntities, desiredIds,
-          id: `${EIDOVERSE_MANAGED_PREFIX}city-desk-${id.slice(PROJECTION_ID_PREFIX.length)}`, lib: assetPathFor(effectiveRecipe, null, 'desk'), pos: [...pos],
-          yaw: eidoverseDistrictYaw(district), modelSize: 2.25,
-          component: { schemaVersion: 1, managedBy: 'portos', designVersion: EIDOVERSE_WORLD_DESIGN_VERSION,
-            kind: 'furniture', districtId: district.id }, layer: 'live' });
-        created += desk.created; updated += desk.updated; removed += desk.removed;
-        cityEntityCount += 1;
-        pos[1] += eidoverseDesktopHeight(assetResolutions) - 0.1;
-      }
-      if (kind === 'goal' && typeof signal.metrics.progress === 'number') {
-        pos[1] += 1.5 + Math.max(0, Math.min(100, signal.metrics.progress)) * 0.055;
-      }
-      const scaleVariation = 0.92 + stableEidoverseUnit(`${signal.id}:scale`) * 0.16;
-      const statusScale = signal.severity === 'error' ? 1.22 : (signal.severity === 'attention' ? 1.1 : 1);
-      if (kind !== 'app' && signal.severity === 'error') pos[1] += 1.6;
-      else if (kind !== 'app' && signal.severity === 'attention') pos[1] += 0.7;
-      const shouldMove = kind !== 'app' && (signal.severity !== 'normal' || ['agent', 'activity', 'goal', 'jira', 'memory'].includes(kind));
-      const delta = upsertModel({
-        operations,
-        labelContext,
-        stateEntities,
-        desiredIds,
-        id,
-        lib: assetPathFor(effectiveRecipe, kind, slot),
-        pos,
-        yaw: eidoverseDistrictYaw(district),
-        modelSize: kind === 'app' ? 0.7 : 1.5,
-        scale: Number(((effectiveRecipe.scale[kind] || 1) * scaleVariation * statusScale).toFixed(3)),
-        component: signal,
-        motion: shouldMove ? {
-          type: 'bob',
-          amp: signal.severity === 'error' ? 0.5 : (signal.severity === 'attention' ? 0.3 : 0.14),
-          period: signal.severity === 'error' ? 1.7 : (signal.severity === 'attention' ? 2.8 : 4.5),
-          phase: Number((stableEidoverseUnit(`${signal.id}:motion`) * Math.PI * 2).toFixed(4)),
-        } : null,
-        layer: 'live',
-      });
-      created += delta.created;
-      updated += delta.updated;
-      removed += delta.removed;
-      liveEntityCount += 1;
-      districtCounts[signal.districtId] += 1;
+    const staleLabelOp = labelOperation({
+      prior: existing?.comp?.[EIDOVERSE_LABEL_COMPONENT_TYPE],
+      id,
+      component: staleComponent,
+      layer: 'live',
+      lib: existing.lib,
+      labelContext,
+    });
+    if (staleLabelOp) {
+      operations.push(staleLabelOp);
+      ctx.tally.updated += 1;
+    }
+    const staleMotion = kind === 'app' ? null : bobMotion(`${id}:stale`, STALE_BOB);
+    if (!equal(existing?.comp?.motion ?? null, staleMotion)) {
+      operations.push({ layer: 'ambient', verb: 'comp', args: { id, type: 'motion', data: staleMotion } });
+      ctx.tally.updated += 1;
     }
   }
+}
 
-  for (const id of Object.keys(stateEntities)) {
+function placeAppDesk(ctx, { id, district, pos }) {
+  upsertTallied(ctx, {
+    id: `${EIDOVERSE_MANAGED_PREFIX}city-desk-${id.slice(PROJECTION_ID_PREFIX.length)}`,
+    lib: assetPathFor(ctx.effectiveRecipe, null, 'desk'), pos: [...pos],
+    yaw: eidoverseDistrictYaw(district), modelSize: 2.25,
+    component: { schemaVersion: 1, managedBy: 'portos', designVersion: EIDOVERSE_WORLD_DESIGN_VERSION,
+      kind: 'furniture', districtId: district.id }, layer: 'live' });
+  ctx.cityEntityCount += 1;
+}
+
+// Goal progress raises the model; severity lifts everything except apps, which
+// sit on their desks. Applied in this order so the float sum is stable.
+function liftSignalPosition(pos, kind, signal, presence) {
+  if (kind === 'goal' && typeof signal.metrics.progress === 'number') {
+    pos[1] += 1.5 + Math.max(0, Math.min(100, signal.metrics.progress)) * 0.055;
+  }
+  if (kind !== 'app') pos[1] += presence.lift;
+}
+
+function signalMoves(kind, signal) {
+  return kind !== 'app' && (signal.severity !== 'normal' || AMBIENT_BOB_KINDS.has(kind));
+}
+
+/** Spawn or update the budgeted live signals of one available source kind. */
+function placeLiveSignals(ctx, { kind, source: sourceKey, slot }, allocation) {
+  const { effectiveRecipe, districts, assetResolutions } = ctx;
+  const { districtCounts } = allocation;
+  const isApp = kind === 'app';
+  for (const signal of allocation.selectedSignals.get(kind) || []) {
+    const id = projectionEntityId(kind, signal.id);
+    const district = districtForSource(districts, sourceKey);
+    const pos = eidoverseCitySignalPosition(district, districtCounts[district.id], isApp);
+    if (isApp) {
+      placeAppDesk(ctx, { id, district, pos });
+      pos[1] += eidoverseDesktopHeight(assetResolutions) - 0.1;
+    }
+    const presence = SEVERITY_PRESENCE[signal.severity] ?? SEVERITY_PRESENCE.normal;
+    liftSignalPosition(pos, kind, signal, presence);
+    const scaleVariation = 0.92 + stableEidoverseUnit(`${signal.id}:scale`) * 0.16;
+    upsertTallied(ctx, {
+      id,
+      lib: assetPathFor(effectiveRecipe, kind, slot),
+      pos,
+      yaw: eidoverseDistrictYaw(district),
+      modelSize: isApp ? 0.7 : 1.5,
+      scale: Number(((effectiveRecipe.scale[kind] || 1) * scaleVariation * presence.scale).toFixed(3)),
+      component: signal,
+      motion: signalMoves(kind, signal) ? bobMotion(`${signal.id}:motion`, presence.motion) : null,
+      layer: 'live',
+    });
+    allocation.liveEntityCount += 1;
+    districtCounts[signal.districtId] += 1;
+  }
+}
+
+/**
+ * Remove every managed entity the plan no longer wants. A retained stale
+ * entity is wanted (it is in `desiredIds`); an unavailable-kind entity the
+ * budget dropped is not, and an unavailable-kind entity that was never
+ * budgeted at all is left alone.
+ */
+function reconcileAbsentEntities(ctx, { unavailableKinds, overBudgetStaleIds }) {
+  for (const id of Object.keys(ctx.stateEntities)) {
     const isCurrentManaged = id.startsWith(EIDOVERSE_MANAGED_PREFIX);
     const isLegacyManaged = id.startsWith(LEGACY_PROJECTION_ID_PREFIX);
-    if ((!isCurrentManaged && !isLegacyManaged) || desiredIds.has(id)) continue;
+    if ((!isCurrentManaged && !isLegacyManaged) || ctx.desiredIds.has(id)) continue;
     const kind = signalKindFromEntityId(id);
     if (kind && unavailableKinds.has(kind) && !overBudgetStaleIds.has(id)) continue;
-    operations.push({ layer: 'reconciliation', verb: 'remove', args: { id } });
-    removed += 1;
+    ctx.operations.push({ layer: 'reconciliation', verb: 'remove', args: { id } });
+    ctx.tally.removed += 1;
   }
+}
 
+/**
+ * Build the deterministic world operations without opening a socket. This is
+ * intentionally exported so recipe changes can be tested without a live
+ * Eidoverse process and so future renderers can reuse the same projection.
+ *
+ * The recipe order is load-bearing: `desiredIds` is filled by every earlier
+ * step and read by the final removal pass.
+ */
+export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PROJECTION_RECIPE, currentState = {}, meta = null, labelAliases = {}, assetResolutions = {} }) {
+  const effectiveRecipe = mergeRecipe(recipe);
+  const objects = [];
+  const ctx = {
+    source,
+    effectiveRecipe,
+    assetResolutions,
+    labelContext: { aliases: labelAliases, objects, recipe: effectiveRecipe, assetResolutions },
+    stateEntities: currentEntities(currentState),
+    operations: [],
+    desiredIds: new Set(),
+    districts: Array.isArray(effectiveRecipe.districts) && effectiveRecipe.districts.length
+      ? effectiveRecipe.districts
+      : EIDOVERSE_DISTRICTS_V2,
+    tally: { created: 0, updated: 0, removed: 0 },
+    cityEntityCount: 0,
+  };
+  const sourceAvailability = { environment: true };
+
+  const { pathNodeCount, metaEntityCount } = projectManagedInfrastructure(ctx, { currentState, meta });
+  const allocation = allocateProjectionSignals(ctx, sourceAvailability);
+  // One pass per source kind: an unavailable source refreshes what it retains,
+  // an available one places its live signals, in kind order.
+  for (const entry of EIDOVERSE_PROJECTION_KINDS) {
+    if (!effectiveRecipe.includes[entry.source]) continue;
+    if (!sourceAvailable(source, entry.source)) refreshUnavailableSignals(ctx, entry, allocation);
+    else if (entry.slot) placeLiveSignals(ctx, entry, allocation);
+  }
+  reconcileAbsentEntities(ctx, allocation);
+
+  const { operations, tally, districts } = ctx;
+  const { droppedBySource } = allocation;
   return {
     operations,
     summary: {
       objects,
-      created,
-      updated,
-      removed,
+      created: tally.created,
+      updated: tally.updated,
+      removed: tally.removed,
       operationCount: operations.length,
       designVersion: EIDOVERSE_WORLD_DESIGN_VERSION,
-      liveEntityCount,
-      maxLiveEntities: liveEntityLimit,
-      infrastructureCount: districts.length + pathNodeCount + metaEntityCount + cityEntityCount,
-      districtCounts,
+      liveEntityCount: allocation.liveEntityCount,
+      maxLiveEntities: allocation.liveEntityLimit,
+      infrastructureCount: districts.length + pathNodeCount + metaEntityCount + ctx.cityEntityCount,
+      districtCounts: allocation.districtCounts,
       sourceAvailability,
       truncated: Object.keys(droppedBySource).length > 0,
       droppedBySource,
