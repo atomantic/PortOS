@@ -742,6 +742,9 @@ export function bufferChildExit(proc, { bufferOutput = false } = {}) {
   };
 }
 
+/** How long a finished output waits for a backup cut before giving up (a cut spans rsync and the database dump). */
+export const FINISHED_OUTPUT_ADMISSION_MS = 60 * 60 * 1000;
+
 // Only fresh, unreferenced outputs belong here. Callers retain the publication
 // latch so a later notification failure never sends committed bytes to cleanup.
 export async function discardUnpublishedVideo({ jobId, outputPath }) {
@@ -774,6 +777,15 @@ export async function discardUnpublishedVideo({ jobId, outputPath }) {
  *   spawned. Defaults to `job.renderStartedAtMs`, which generateVideo stamps.
  */
 export async function finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, mutateHistory, startedAtMs = job?.renderStartedAtMs, terminal = true, publication = {} }) {
+  // The render already exists, so a backup cut holding admission is a pause,
+  // not a failure: wait it out, heartbeating so the queue watchdog never
+  // reaps a finished clip as idle.
+  const waitForBackup = () => {
+    const message = 'Waiting for the backup to finish before saving the video';
+    videoGenEvents.emit('activity', { generationId: jobId });
+    broadcastSse(job, { type: 'status', message });
+    videoGenEvents.emit('status', { generationId: jobId, message });
+  };
   const thumbnail = await withBackupAssetPublication(async () => {
     try {
       await optimizeForStreaming(outputPath);
@@ -834,7 +846,7 @@ export async function finalizeGeneratedVideo({ job, jobId, outputPath, filename,
       await discardUnpublishedVideo({ jobId, outputPath });
       throw error;
     }
-  });
+  }, { timeoutMs: FINISHED_OUTPUT_ADMISSION_MS, onWait: waitForBackup });
   if (terminal) job.status = 'complete';
   console.log(`✅ Video generated [${jobId.slice(0, 8)}]: ${filename}`);
   if (terminal) {

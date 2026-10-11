@@ -119,6 +119,21 @@ describe('backup snapshot publication admission', () => {
     await expect(withBackupAssetPublication(() => 'recovered')).resolves.toBe('recovered');
   });
 
+  // Uniquely catches a finished output failing because a backup cut outlasted one admission wait.
+  it('keeps a patient publication waiting through a long cut, noting each wait, then runs it once', async () => {
+    vi.useFakeTimers();
+    const release = await acquireBackupSnapshotCut();
+    const work = vi.fn(() => 'saved');
+    const onWait = vi.fn();
+    const pending = withBackupAssetPublication(work, { timeoutMs: 1_000, waitNoticeMs: 100, onWait });
+    await vi.advanceTimersByTimeAsync(350);
+    expect(onWait).toHaveBeenCalledTimes(3);
+    expect(work).not.toHaveBeenCalled();
+    release();
+    await expect(pending).resolves.toBe('saved');
+    expect(work).toHaveBeenCalledOnce();
+  });
+
   it('lets a listener spawned by an admitted workflow join it only while that workflow holds its lease', async () => {
     const listenerWrite = deferred();
     let listener;

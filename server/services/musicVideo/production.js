@@ -395,6 +395,25 @@ function liveSlotJob(jobs, projectId, sceneId, stepKind) {
 const slotSteps = (run, sceneId, stepKind, revisionId = null) => run.steps
   .filter((s) => s.sceneId === sceneId && s.kind === stepKind && (s.revisionId || null) === revisionId);
 
+// Failures of the machine around a generation (a backup holding publication
+// admission, a lost queue record, an idle watchdog), not of its inputs.
+const TRANSIENT_FAILURE = /backup publication admission|BACKUP_SNAPSHOT_BUSY|no longer in the queue history|watchdog timeout|awaiting storage recovery/i;
+/** Retries per slot a run takes on its own for transient failures before it parks. */
+export const PRODUCTION_TRANSIENT_RETRIES = 2;
+
+/**
+ * The failed frame/clip steps a run may retry without the director: every
+ * unacknowledged failure is transient and no slot spent its retries. Null
+ * otherwise, so an input-caused or repeated failure still halts.
+ */
+export function transientProductionRetry(run) {
+  const transient = (step) => step.status === 'failed' && TRANSIENT_FAILURE.test(step.error || '');
+  const failed = (run?.steps || []).filter((s) => s.status === 'failed' && !(run.retryAcknowledged || []).includes(s.key));
+  if (!failed.length || !failed.every((s) => ['frame', 'clip'].includes(s.kind) && transient(s))) return null;
+  const spent = failed.some((s) => slotSteps(run, s.sceneId, s.kind, s.revisionId || null).filter(transient).length > PRODUCTION_TRANSIENT_RETRIES);
+  return spent ? null : failed;
+}
+
 /**
  * The attached full-song review's verdict on the run, or null when no review
  * is attached. A passing review still needs its dependencies unchanged; a
