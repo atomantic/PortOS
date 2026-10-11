@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import StoryboardAnimatic, { shotAt } from './StoryboardAnimatic.jsx';
+import StoryboardAnimatic, { clipTimeAt, shotAt } from './StoryboardAnimatic.jsx';
 
 const scenes = [
   { sceneId: 'b', label: 'Chorus', startSec: 10, endSec: 20, referenceImageId: 'frame-b.png' },
@@ -67,5 +67,39 @@ describe('StoryboardAnimatic lyrics', () => {
   it('offers no lyrics until the words are timed', () => {
     render(<StoryboardAnimatic project={{ ...lyricProject, lyricCues: [{ id: 'c1', text: 'hello', startSec: null }] }} audioUrl="/song.mp3" />);
     expect(screen.queryByRole('button', { name: 'Lyrics' })).toBeNull();
+  });
+});
+
+vi.mock('../../services/apiImageVideo.js', () => ({
+  getVideoHistoryItem: vi.fn(async (id) => ({ id, filename: `${id}.mov` })),
+}));
+
+describe('StoryboardAnimatic clips', () => {
+  const clipScenes = [
+    { sceneId: 'a', label: 'Opening', startSec: 0, endSec: 10, referenceImageId: 'frame-a.png', videoHistoryId: 'clip-a' },
+    { sceneId: 'b', label: 'Chorus', startSec: 10, endSec: 20, referenceImageId: 'frame-b.png' },
+  ];
+
+  it('plays a shot\'s clip muted where it has one and its still where it does not', async () => {
+    const { container } = render(<StoryboardAnimatic project={{ id: 'p', scenes: clipScenes }} audioUrl="/song.mp3" />);
+    const clip = await screen.findByLabelText('Clip for Opening');
+    await waitFor(() => expect(clip.getAttribute('src')).toBe('/data/videos/clip-a.mov'));
+    expect(clip.muted).toBe(true);
+    expect(clip.getAttribute('poster')).toBe('/data/images/frame-a.png');
+    const audio = screen.getByLabelText('Song for the storyboard animatic');
+    Object.defineProperty(audio, 'currentTime', { value: 12, configurable: true });
+    fireEvent.timeUpdate(audio);
+    expect(screen.queryByLabelText('Clip for Opening')).toBeNull();
+    expect(container.querySelector('img').getAttribute('src')).toBe('/data/images/frame-b.png');
+  });
+
+  it('maps song time into the clip: trimmed in-point, then loop or hold past its end', () => {
+    const performance = {
+      sceneId: 'p', startSec: 10, endSec: 20, shotMode: 'performance', videoHistoryId: 'v1',
+      takes: [{ kind: 'video', assetId: 'v1', shotInstruction: { shotMode: 'performance', edit: { inSec: 2, outSec: 9 } } }],
+    };
+    expect(clipTimeAt(performance, 13, 9)).toBe(5);
+    expect(clipTimeAt({ startSec: 10 }, 16, 4)).toBe(2);
+    expect(clipTimeAt({ startSec: 10, loop: false }, 16, 4)).toBeCloseTo(3.95);
   });
 });

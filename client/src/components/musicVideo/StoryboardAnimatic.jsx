@@ -3,6 +3,8 @@ import { Captions } from 'lucide-react';
 import { formatDurationSec } from '../../utils/formatters.js';
 import { getMusicVideoLyricOverlayPreview } from '../../services/apiMusicVideo.js';
 import { playthroughVersion } from './CompositionPreviewPlayer.jsx';
+import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
+import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
 import { normalizeTitleCard } from '../../../../server/lib/musicVideoTitleCard.js';
 
 const timedShots = (scenes) => scenes.filter((scene) => Number.isFinite(scene?.startSec)).sort((a, b) => a.startSec - b.startSec);
@@ -138,10 +140,70 @@ function useLyricOverlay({ project, enabled, audioRef, time }) {
   };
 }
 
+// How far a shot's clip may drift from the song before it is put back in step.
+const CLIP_DRIFT_SEC = 0.25;
+
+/**
+ * Where song time `t` lands in a shot's clip: the take's edit-in point (a
+ * performance take trimmed to the sung window) plus the time into the shot. Past
+ * the clip's end it loops (`loop`, the render's default) or holds the last frame.
+ */
+export function clipTimeAt(scene, t, clipSec = null) {
+  const inSec = selectedPerformanceInstruction(scene)?.edit?.inSec ?? 0;
+  const local = Math.max(0, t - (scene.startSec || 0));
+  if (!(clipSec > inSec)) return inSec + local;
+  const span = clipSec - inSec;
+  if (local < span) return inSec + local;
+  return scene.loop !== false ? inSec + (local % span) : Math.max(inSec, clipSec - 0.05);
+}
+
+/**
+ * A shot's selected video clip, muted under the master song and kept in step
+ * with it: it plays and pauses with the song, and a seek or drift puts it back
+ * at the song's place in the shot. The shot's frame is its poster.
+ */
+function ShotClip({ scene, audioRef, time }) {
+  const videoRef = useRef(null);
+  const file = useVideoFileSrc(scene.videoHistoryId);
+  const src = file.src || (file.resolving ? null : `/data/videos/${scene.videoHistoryId}.mp4`);
+  const sync = useCallback(() => {
+    const video = videoRef.current;
+    const audio = audioRef.current;
+    if (!video || !audio || video.readyState < 1) return;
+    const target = clipTimeAt(scene, audio.currentTime || 0, Number.isFinite(video.duration) ? video.duration : null);
+    if (Math.abs((video.currentTime || 0) - target) > CLIP_DRIFT_SEC) video.currentTime = target;
+    if (audio.paused) video.pause?.();
+    else if (video.paused) video.play?.()?.catch?.(() => {});
+  }, [scene, audioRef]);
+  useEffect(() => { sync(); }, [time, sync]);
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return undefined;
+    audio.addEventListener('play', sync);
+    audio.addEventListener('pause', sync);
+    return () => { audio.removeEventListener('play', sync); audio.removeEventListener('pause', sync); };
+  }, [audioRef, sync]);
+  if (!src) return null;
+  return (
+    <video
+      ref={videoRef}
+      src={src}
+      poster={scene.referenceImageId ? `/data/images/${scene.referenceImageId}` : undefined}
+      muted
+      playsInline
+      preload="auto"
+      onLoadedMetadata={sync}
+      aria-label={`Clip for ${scene.label || 'this shot'}`}
+      className="h-full w-full object-contain"
+    />
+  );
+}
+
 /**
  * Something to watch before anything is rendered: the master song under the
- * storyboard, showing each shot's selected frame (or, without one, its label,
- * time and intent) as the song reaches it, with the aligned lyrics drawn over
+ * storyboard, showing each shot's selected video clip (muted, in step with the
+ * song) or else its selected frame (or, without either, its label, time and
+ * intent) as the song reaches it, with the aligned lyrics drawn over
  * it once the words are timed (a toggle hides them). `seekRequest`
  * (`{ t, n }`) is the scene-card seek the other preview sources honour too.
  */
@@ -170,7 +232,9 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   return (
     <div className={`space-y-2 ${collapsed ? 'max-xl:hidden' : ''}`}>
       <figure aria-label="Storyboard animatic" className="relative aspect-video w-full overflow-hidden rounded border border-port-border bg-black">
-        {shot?.referenceImageId ? (
+        {shot?.videoHistoryId ? (
+          <ShotClip key={`${shot.sceneId}:${shot.videoHistoryId}`} scene={shot} audioRef={audioRef} time={time} />
+        ) : shot?.referenceImageId ? (
           <img src={`/data/images/${shot.referenceImageId}`} alt="" className="h-full w-full object-contain" />
         ) : cardInFrame ? (
           <div className="flex h-full w-full flex-col items-center justify-center gap-1 p-4 text-center">
@@ -183,7 +247,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
       <div className="flex min-w-0 items-start gap-2">
         <div className="min-w-0 flex-1 text-[11px] text-port-text-muted">
           {shot && <p>Shot {index + 1} of {timed.length} · {formatDurationSec(shot.startSec)}</p>}
-          {!cardInFrame && shot && !shot.referenceImageId && (
+          {!cardInFrame && shot && !shot.referenceImageId && !shot.videoHistoryId && (
             <p className="line-clamp-2 break-words">
               <span className="font-medium text-port-text">{label}</span>{shot.visualIntent ? ` · ${shot.visualIntent}` : ''}
             </p>
