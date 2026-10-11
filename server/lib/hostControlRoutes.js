@@ -665,6 +665,12 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/meatspace/post/rhetoric/evaluate',
   'POST /api/meatspace/post/drill-cache/fill',
 
+  // Calendar MCP sync/discovery (#11051) can launch a tool-capable CLI with
+  // stored subcalendar text. Configuring that provider does not authorize a
+  // network caller to run it. Direct API sync, push ingestion and CRUD stay open.
+  'POST /api/calendar/sync/:accountId/google',
+  'POST /api/calendar/sync/:accountId/discover',
+
   // Writers Room authoring reaches the staged runner, including CLI/TUI
   // fallback. Stored prose and live cursor text are caller-controlled; a
   // configured provider or live-mode budget does not grant host authority.

@@ -760,3 +760,31 @@ describe('Remote desktop session policy (#10923)', () => {
     ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
   });
 });
+
+describe('Calendar MCP execution policy (#11051)', () => {
+  it('gates mounted MCP actions while preserving non-agent Calendar operations', () => {
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => `${method} ${path}`));
+    for (const action of ['google', 'discover']) {
+      const path = `/api/calendar/sync/:accountId/${action}`;
+      expect(mounted.has(`POST ${path}`)).toBe(true);
+      expect(hostControlRouteFor('POST', path)).toBe(`POST ${path}`);
+      expect(hostControlRouteFor('post', path.toUpperCase() + '/')).toBe(`POST ${path}`);
+    }
+    for (const route of [
+      'POST /api/calendar/sync/:accountId',
+      'POST /api/calendar/sync/:accountId/push',
+      'POST /api/calendar/sync/:accountId/api',
+      'POST /api/calendar/sync/:accountId/discover-api',
+      'GET /api/calendar/accounts/:id/subcalendars',
+      'PUT /api/calendar/accounts/:id/subcalendars',
+      'GET /api/calendar/events',
+      'POST /api/calendar/accounts',
+      'PUT /api/calendar/accounts/:id',
+      'DELETE /api/calendar/accounts/:id',
+    ]) {
+      const [method, path] = route.split(' ');
+      expect(mounted.has(route), route).toBe(true);
+      expect(isHostControlRoute(method, path), route).toBe(false);
+    }
+  });
+});
