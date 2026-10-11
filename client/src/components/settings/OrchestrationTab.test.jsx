@@ -68,6 +68,50 @@ describe('OrchestrationTab', () => {
     expect(screen.queryByText('anthropic')).toBeNull();
   });
 
+  it('distinguishes an unavailable inventory from a successful empty retry', async () => {
+    api.getOrchestrationProfiles.mockRejectedValueOnce(new Error('Unavailable')).mockResolvedValueOnce([]);
+    render(<OrchestrationTab />);
+    expect(await screen.findByText('Orchestration profiles are unavailable.')).toBeTruthy();
+    expect(screen.queryByText('No orchestration profiles configured.')).toBeNull();
+    expect(screen.queryByText('Create your first profile')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('No orchestration profiles configured.')).toBeTruthy();
+    expect(screen.queryByText('Orchestration profiles are unavailable.')).toBeNull();
+  });
+
+  it('recovers profiles on retry while provider metadata fails independently', async () => {
+    api.getOrchestrationProfiles.mockRejectedValueOnce(new Error('Unavailable')).mockResolvedValueOnce(mockProfiles);
+    api.getProviders.mockRejectedValue(new Error('Unavailable'));
+    render(<OrchestrationTab />);
+    await screen.findByText('Orchestration profiles are unavailable.');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Custom Team')).toBeTruthy();
+    expect(screen.getByText(/Provider metadata is unavailable/)).toBeTruthy();
+    expect(screen.getAllByText('anthropic').length).toBeGreaterThan(0);
+    expect(screen.queryByText('No orchestration profiles configured.')).toBeNull();
+  });
+
+  it('retains profiles and provider names when a refresh fails, then clears stale notices on recovery', async () => {
+    api.getProviders.mockRejectedValueOnce(new Error('Unavailable'));
+    render(<OrchestrationTab />);
+    await screen.findByText('Custom Team');
+    api.getOrchestrationProfiles.mockRejectedValueOnce(new Error('Unavailable'));
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText(/Showing previously loaded profiles/)).toBeTruthy();
+    expect(screen.getByText('Custom Team')).toBeTruthy();
+    expect(screen.getAllByText('Anthropic').length).toBeGreaterThan(0);
+    expect(screen.queryByText('No orchestration profiles configured.')).toBeNull();
+
+    api.getProviders.mockRejectedValueOnce(new Error('Unavailable'));
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByText(/Showing previously loaded profiles/)).toBeNull());
+    expect(screen.getAllByText('Anthropic').length).toBeGreaterThan(0);
+    expect(screen.getByText(/Provider metadata is unavailable/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByText(/Provider metadata is unavailable/)).toBeNull());
+  });
+
   it('opens create profile form and saves', async () => {
     api.saveOrchestrationProfile.mockResolvedValue({
       id: 'new-profile',
