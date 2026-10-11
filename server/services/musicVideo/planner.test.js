@@ -713,6 +713,43 @@ describe('directed planner', () => {
     expect(planned.scenes.filter((s) => s.visualLayer === 'card').every((s) => !s.codeOverlay)).toBe(true);
   });
 
+  // Uniquely catches the lead and their wardrobe being stamped on every frame, including cards and shots the planner leaves empty.
+  it('names the lead only in shots that show them, and lets the planner empty, recast or move a shot', async () => {
+    resolveProviderAndModel.mockResolvedValue({ provider: { id: 'example' }, selectedModel: 'example' });
+    runPromptThroughProvider.mockResolvedValue({ text: JSON.stringify([
+      { index: 0, framePrompt: 'An empty platform', prompt: 'Wind', subject: 'none' },
+      { index: 1, framePrompt: 'A clerk stamps forms', prompt: 'Stamp', subject: 'a desk clerk', set: 'echo hall' },
+      { index: 2, framePrompt: 'She climbs', prompt: 'Climb', subject: 'lead' },
+    ]) });
+    const { project } = await runDirected(directedProject(), { seedPrompts: true });
+    const [empty, clerk, lead] = project.scenes;
+    expect(runPromptThroughProvider.mock.calls[0][0].prompt).toContain('"subject": who the frame shows');
+    expect(empty.framePrompt).toMatch(/^No people in frame\. Location: Signal tower.*An empty platform$/);
+    expect(clerk.framePrompt).toMatch(/^Subject: a desk clerk Location: Echo hall.*A clerk stamps forms$/);
+    expect(lead.framePrompt).toMatch(/^Subject: Signal keeper.*Location: Signal tower.*Wardrobe: Field.*She climbs$/);
+    for (const card of project.scenes.filter((s) => s.visualLayer === 'card')) expect(card.framePrompt).not.toMatch(/Signal keeper|Wardrobe/);
+    expect(project.scenes.filter((s) => s.shotMode === 'performance').every((s) => s.framePrompt.includes('Subject: Signal keeper'))).toBe(true);
+  });
+
+  // Uniquely catches a storyboard revision putting the lead back into a shot that was emptied, which no reviser could undo.
+  it('keeps a revised shot\'s subject and set unless the revision changes them', async () => {
+    const project = directedProject();
+    project.scenes = [
+      { sceneId: 'scene-empty', label: 'Verse', startSec: 0, endSec: 5, visualLayer: 'footage', shotMode: 'cutaway',
+        framePrompt: 'No people in frame. Location: Echo hall. A vaulted stone chamber. Blue lamps. An empty platform', prompt: 'Wind' },
+      { sceneId: 'scene-lead', label: 'Verse 2', startSec: 5, endSec: 10, visualLayer: 'footage', shotMode: 'cutaway',
+        framePrompt: 'Subject: Signal keeper; A solitary explorer; silver badge Location: Signal tower. An open steel platform. Dawn. Wardrobe: Field. Ochre coat She climbs', prompt: 'Climb' },
+    ];
+    resolveProviderAndModel.mockResolvedValue({ provider: { id: 'example' }, selectedModel: 'example' });
+    runPromptThroughProvider.mockResolvedValue({ text: JSON.stringify([
+      { index: 0, framePrompt: 'Dust drifts over the platform', prompt: 'Wind rises' },
+      { index: 1, framePrompt: 'Only the badge on the floor', prompt: 'Hold', subject: 'none' },
+    ]) });
+    const updates = await proposeShotRevisions(project, [{ id: 'fb', stage: 'storyboard', target: 'overall', text: 'Tighten', decision: 'request-changes', basis: 'b' }]);
+    expect(updates.get('scene-empty').framePrompt).toBe('No people in frame. Location: Echo hall. A vaulted stone chamber. Blue lamps Dust drifts over the platform');
+    expect(updates.get('scene-lead').framePrompt).toBe('No people in frame. Location: Signal tower. An open steel platform. Dawn Only the badge on the floor');
+  });
+
   it('leaves skipped-stage projects on the legacy scene path even with retained direction', async () => {
     const project = directedProject();
     project.castAndSets.status = 'skipped';
