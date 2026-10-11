@@ -184,7 +184,9 @@ export async function syncPlaywright(account, cache, io, options = {}) {
       : !m.providerRowId && m.externalId === extId);
     if (cached.length && (msg.providerRowId || (cached.length === 1
       && extracted.filter(row => browserSummaryId(row.date || '', row.from || '', row.subject || '') === extId).length === 1))) {
-      const batch = cached.map(m => ({ ...m, isRead: !msg.isUnread, isUnread: msg.isUnread,
+      const batch = cached.map(m => ({ ...m,
+        isRead: msg.isUnread === null ? null : !(msg.isUnread ?? false),
+        isUnread: msg.isUnread === null ? null : (msg.isUnread ?? false),
         isPinned: msg.isPinned, isFlagged: msg.isFlagged, isReplied: msg.isReplied }));
       messages.push(...batch);
       emitMessages(batch);
