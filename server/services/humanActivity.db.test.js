@@ -18,7 +18,7 @@ import { requireDbOrSkip } from '../lib/dbTestGate.js';
 const tzState = vi.hoisted(() => ({ tz: 'UTC' }));
 vi.mock('./userTimezone.js', () => ({ getUserTimezone: async () => tzState.tz }));
 
-import { recordEvents, listEvents, getDaySummary, DAY_EVENT_PAGE_SIZE, stripParticipantsForAccount, countEventsByHandle } from './humanActivity.js';
+import { recordEvents, listEvents, getDaySummary, stripParticipantsForAccount, countEventsByHandle } from './humanActivity.js';
 
 let dbReady = false;
 let skipReason = '';
@@ -151,24 +151,25 @@ describe.skipIf(!runDb)('getDaySummary full-day aggregates (#11151)', () => {
     if (dbReady) await query('DELETE FROM human_activity_events WHERE source = $1', [DAY_SOURCE]).catch(() => {});
   });
 
-  it('counts and buckets the whole day even when it exceeds the event page', async () => {
+  it('counts and buckets the whole day even when it exceeds the event page (2,001-event case, scaled)', async () => {
     tzState.tz = 'UTC';
     // Far-past day: no other suite or live data lands here.
     const date = '2001-03-04';
-    const before = await getDaySummary({ date });
+    const PAGE = 3;
+    const before = await getDaySummary({ date, eventLimit: PAGE });
     await recordEvents([
-      ...dayEvents(DAY_EVENT_PAGE_SIZE, '2001-03-04T12:00:00Z', 'noon'),
+      ...dayEvents(PAGE, '2001-03-04T12:00:00Z', 'noon'),
       ...dayEvents(1, '2001-03-04T08:00:00Z', 'early', { kind: 'calendar.event' }),
     ]);
-    const s = await getDaySummary({ date });
-    expect(s.counts.total - before.counts.total).toBe(DAY_EVENT_PAGE_SIZE + 1);
-    expect(s.counts.bySource[DAY_SOURCE]).toBe(DAY_EVENT_PAGE_SIZE + 1);
+    const s = await getDaySummary({ date, eventLimit: PAGE });
+    expect(s.counts.total - before.counts.total).toBe(PAGE + 1);
+    expect(s.counts.bySource[DAY_SOURCE]).toBe(PAGE + 1);
     expect(s.counts.byKind['calendar.event'] - (before.counts.byKind['calendar.event'] || 0)).toBe(1);
     expect(s.histogram[8].count - before.histogram[8].count).toBe(1);
-    expect(s.histogram[12].count - before.histogram[12].count).toBe(DAY_EVENT_PAGE_SIZE);
+    expect(s.histogram[12].count - before.histogram[12].count).toBe(PAGE);
     // The listed page stays bounded and is honest about it.
-    expect(s.events.length).toBeLessThanOrEqual(DAY_EVENT_PAGE_SIZE);
-    expect(s.eventPage).toEqual({ total: s.counts.total, returned: s.events.length, limit: DAY_EVENT_PAGE_SIZE, hasMore: true });
+    expect(s.events.length).toBeLessThanOrEqual(PAGE);
+    expect(s.eventPage).toEqual({ total: s.counts.total, returned: s.events.length, limit: PAGE, hasMore: true });
     // Oldest-first display order.
     const times = s.events.map((e) => new Date(e.happenedAt).getTime());
     expect(times).toEqual([...times].sort((a, b) => a - b));

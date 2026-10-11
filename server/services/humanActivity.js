@@ -644,8 +644,10 @@ export const DAY_EVENT_PAGE_SIZE = 2000;
 // rows, returned oldest-first; `eventPage` says how complete that page is
 // ({ total, returned, limit, hasMore }). The aggregates and the page are read
 // in one REPEATABLE READ snapshot so concurrent ingestion cannot make them
-// disagree, and share the same exclusive [start, end) UTC bounds.
-export async function getDaySummary({ date } = {}) {
+// disagree, and share the same exclusive [start, end) UTC bounds. `eventLimit`
+// can only shrink the page (tests use it to avoid thousand-row fixtures).
+export async function getDaySummary({ date, eventLimit = DAY_EVENT_PAGE_SIZE } = {}) {
+  const pageSize = Math.min(Math.max(Number(eventLimit) || DAY_EVENT_PAGE_SIZE, 1), DAY_EVENT_PAGE_SIZE);
   const timezone = await getUserTimezone();
   // `today` is computed in the USER's configured timezone (not the browser's) and
   // returned so the client can default the bare /timeline route and gate its
@@ -653,7 +655,7 @@ export async function getDaySummary({ date } = {}) {
   const today = todayInTimezone(timezone);
   const day = /^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) ? date : today;
   const range = localDayRangeUtc(day, timezone);
-  const eventPage = (returned, total) => ({ total, returned, limit: DAY_EVENT_PAGE_SIZE, hasMore: returned < total });
+  const eventPage = (returned, total) => ({ total, returned, limit: pageSize, hasMore: returned < total });
   if (!range) {
     return { date: day, today, timezone, events: [], eventPage: eventPage(0, 0), histogram: hourlyHistogram([], timezone), counts: summarizeCounts([]) };
   }
@@ -678,7 +680,7 @@ export async function getDaySummary({ date } = {}) {
       `SELECT * FROM human_activity_events
         WHERE happened_at >= $1 AND happened_at < $2
         ORDER BY happened_at DESC LIMIT $3`,
-      [...bounds, DAY_EVENT_PAGE_SIZE],
+      [...bounds, pageSize],
     );
     return { aggregates: agg.rows, rows: page.rows };
   });
