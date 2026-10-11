@@ -42,6 +42,7 @@ export const BROWSER_SUITES = [
   'server/routes/musicVideoProductionReview.browser.test.js',
   'server/routes/musicVideoRichAuthoring.browser.test.js',
   'server/routes/musicVideoSongRevision.browser.test.js',
+  'server/services/federatedMedia/sourceAudio.browser.test.js',
   'server/services/musicVideo/documentRender.browser.test.js',
   'server/services/musicVideo/documentTemplates/shared/toonWorld.browser.test.js',
 ];
