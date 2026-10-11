@@ -383,7 +383,12 @@ export async function planProject(id, { seedPrompts = true, providerId, model, e
   let llmRoute = null;
   let proposedCameras = new Map();
   if (seedPrompts) {
-    const guidance = [project.automation?.guidance?.trim(), directive?.trim()].filter(Boolean).join('\n');
+    // The run's brief comes first; the project's live guidance is edited later
+    // and wins where they disagree (a director's mid-run course change).
+    const live = project.automation?.guidance?.trim();
+    const guidance = directive?.trim()
+      ? [`Run brief:\n${directive.trim()}`, live && `Current project guidance (takes precedence over the brief):\n${live}`].filter(Boolean).join('\n\n')
+      : live;
     const planning = directive?.trim() ? { ...project, automation: { ...project.automation, guidance } } : project;
     const { seeded, reason, route } = await tryProposeScenePrompts(planning, shots, { providerId, model, effort });
     llmRoute = route || null;

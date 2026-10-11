@@ -682,7 +682,7 @@ export async function startProduction(projectId, { directive, pool: requested, l
  * continue. A replacement pool is validated exactly like Start's.
  * Returns `{ project, run }`.
  */
-export async function resumeProduction(projectId, runId, { limits, acceptBasis = false, pool: requested, stopBefore } = {}) {
+export async function resumeProduction(projectId, runId, { limits, acceptBasis = false, pool: requested, stopBefore, directive } = {}) {
   const before = await requireProject(projectId);
   const prior = findProductionRun(before, runId);
   const priorReviewId = prior.reviewRunId;
@@ -691,7 +691,7 @@ export async function resumeProduction(projectId, runId, { limits, acceptBasis =
   const jobs = await liveJobs();
   await mutateProjectRecord(projectId, (current) => reconcileProductionSteps(current, runId, jobs));
   const out = await mutateProjectRecord(projectId, (current) => resumeProductionOnProject(current, runId, {
-    limits, acceptBasis, processId: PROCESS_ID, stopBefore, ...(pool ? { pool, pricing: poolPricing(pool, current) } : {}),
+    limits, acceptBasis, processId: PROCESS_ID, stopBefore, directive, ...(pool ? { pool, pricing: poolPricing(pool, current) } : {}),
   }));
   if (pool) console.log(`🎬 Music Video production ${short(runId)} resumed with a replaced pool: ${pool.length} allowed route(s)`);
   if (priorReviewId && !out.run.reviewRunId) {

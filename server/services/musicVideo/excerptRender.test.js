@@ -181,3 +181,15 @@ describe('excerpt typography parity (#10703)', () => {
     expect(encodeFileContactSheetAtTimes).toHaveBeenCalledWith(expect.any(String), expect.any(String), [0], { width: 64, height: 64, fps: 24 });
   });
 });
+
+describe('excerpt range', () => {
+  // Uniquely catches a full-film review (ending on the analysed song length) refused by the frame-rounded render.
+  it('accepts an end under one frame past the render and refuses one beyond it', async () => {
+    prime('excerpt-range');
+    const { excerptId } = await startExcerptRender('excerpt-range', { startSec: 0, endSec: 4.014 });
+    expect(excerpt('excerpt-range', excerptId)).toMatchObject({ status: 'rendering', endSec: 4 });
+    lastProc().emit('close', 1, null);
+    await vi.waitFor(() => expect(excerpt('excerpt-range', excerptId).status).toBe('error'));
+    await expect(startExcerptRender('excerpt-range', { startSec: 0, endSec: 4.1 })).rejects.toMatchObject({ code: 'INVALID_EXCERPT_RANGE' });
+  });
+});
