@@ -654,19 +654,20 @@ export async function spawnAndWatchVideo({
     // would be answered by relaunching the render the user just stopped.
     if (childKilled) return false;
     const stderrText = typeof stderr === 'string' ? stderr : '';
+    // At most ONE relaunch per job across both mitigations: a render that already
+    // spent either retry does not get a second GPU-grinding attempt.
+    const relaunchesUsed = promptEncodingRetriesUsed + metalBufferRetriesUsed;
     const encodePlan = planPromptEncodingRetry({
       signal,
       stderr,
       promptEncodePhase: job.promptEncodePhase,
-      retriesUsed: promptEncodingRetriesUsed,
+      retriesUsed: relaunchesUsed,
       platform: process.platform,
     });
-    // At most ONE relaunch per job across both mitigations: a render that already
-    // spent its prompt-encode retry does not get a second GPU-grinding attempt.
-    const bufferPlan = encodePlan || promptEncodingRetriesUsed > 0 ? null : planMetalBufferRetry({
+    const bufferPlan = encodePlan || relaunchesUsed > 0 ? null : planMetalBufferRetry({
       signal,
       stderr: stderrText,
-      retriesUsed: metalBufferRetriesUsed,
+      retriesUsed: 0,
       mlxRuntime: runtimeUsesMlx(model.runtime),
     });
     if (!encodePlan && !bufferPlan) return false;

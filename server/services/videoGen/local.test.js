@@ -5258,6 +5258,24 @@ describe('generateVideo — Gemma prompt-encode watchdog relaunch', () => {
     expect(failures[0].error).toMatch(/SIGABRT/);
   });
 
+  it('spends one relaunch per job — a buffer retry is not followed by a prompt-encode retry', async () => {
+    const first = makeDrivenProc(112);
+    const second = makeDrivenProc(113);
+    const spawnMock = await startRender('pe-buffer-then-encode', [first, second]);
+
+    first.stderr('STAGE:encode-prompt-done');
+    first.stderr(TIMEOUT_ABORT);
+    await first.abort();
+    expect(ltx2Calls(spawnMock)).toHaveLength(2);
+
+    second.stderr('STAGE:encode-prompt');
+    second.stderr(TIMEOUT_ABORT);
+    await second.abort();
+
+    expect(ltx2Calls(spawnMock)).toHaveLength(2);
+    expect(failures).toHaveLength(1);
+  });
+
   it('does not use smaller command buffers off Apple silicon', async () => {
     restoreArch();
     const { pinArch } = await import('../../lib/testHelper.js');
