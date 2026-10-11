@@ -252,13 +252,25 @@ export const socketHasCurrentHostControl = async (socket) => {
   return socketHasHostControl(socket);
 };
 
+const hostControlRefusal = (req) => {
+  logSecurityEvent('host-control.refused', { refused: true, ip: req.ip, method: req.method, path: req.originalUrl?.split('?')[0] ?? req.path, auth: req.portosAuthContext?.method ?? 'none' });
+  return new ServerError(HOST_CONTROL_FORBIDDEN_MESSAGE, {
+    status: 403, code: 'HOST_CONTROL_FORBIDDEN',
+  });
+};
+
 // Mount after authGate: missing context fails closed.
 export const requireHostControl = (req, res, next) => {
   if (requestHasHostControl(req)) return next();
-  logSecurityEvent('host-control.refused', { refused: true, ip: req.ip, method: req.method, path: req.originalUrl?.split('?')[0] ?? req.path, auth: req.portosAuthContext?.method ?? 'none' });
-  sendErrorResponse(res, new ServerError(HOST_CONTROL_FORBIDDEN_MESSAGE, {
-    status: 403, code: 'HOST_CONTROL_FORBIDDEN',
-  }));
+  sendErrorResponse(res, hostControlRefusal(req));
+};
+
+// The in-handler twin of requireHostControl, for a route that is open for
+// plain records and needs operator authority only when the validated request
+// would start host work (e.g. a repository link that auto-clones). Throws the
+// same 403 so the route's error middleware answers it.
+export const assertHostControl = (req) => {
+  if (!requestHasHostControl(req)) throw hostControlRefusal(req);
 };
 
 // Applies requireHostControl to every route in the audited

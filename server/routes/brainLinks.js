@@ -23,6 +23,7 @@ import {
 } from '../lib/brainValidation.js';
 import * as repoCloner from '../services/repoCloner.js';
 import { deriveRepoLinkFields } from '../lib/repoLinkFields.js';
+import { assertHostControl } from '../services/authGate.js';
 import { queueMalwareScan, restudyRepoLink } from '../services/repoIntake.js';
 import { getScanReport } from '../services/malwareScanReports.js';
 
@@ -115,10 +116,14 @@ router.get('/links/:id', asyncHandler(async (req, res) => {
 
 /**
  * POST /api/brain/links
- * Create a new link (quick-add with URL)
+ * Create a new link (quick-add with URL). A plain bookmark, or a repository
+ * with `autoClone: false`, is a record; a repository that will auto-clone runs
+ * git on the host and can queue post-clone CoS agents (`repoIntake`), so that
+ * form needs operator authority (#11037).
  */
 router.post('/links', asyncHandler(async (req, res) => {
   const { url, ...options } = validateRequest(linkInputSchema, req.body);
+  if (deriveRepoLinkFields(url).isRepo && options.autoClone !== false) assertHostControl(req);
 
   // Check if URL already exists
   const existing = await brainService.getLinkByUrl(url);
