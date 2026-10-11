@@ -413,3 +413,44 @@ describe('editable code revisions and footage variants', () => {
     expect(await file.getProject(source.id)).toEqual(original);
   });
 });
+
+describe('nextProductionStep step types', () => {
+  const PROCESS = 'test-process';
+  // Pure: no queue, provider or store is used. Scenes are outside a legacy run's basis.
+  async function startedRun({ scenes, castAndSets = null } = {}) {
+    const { startProductionOnProject } = await import('./production.js');
+    const project = { id: 'mv-example', name: 'Example Song', trackId: 'example-track', composition: { mode: 'composed' },
+      audioAnalysis: { durationSec: 4, sections: [{ label: 'Verse', startSec: 0, endSec: 4 }] }, castAndSets,
+      scenes: scenes ?? [{ sceneId: 'scene-a', startSec: 0, endSec: 4, visualLayer: 'footage', prompt: 'Example shot' }] };
+    return startProductionOnProject(project, { pool: [{ kind: 'image', mode: 'local' }, { kind: 'video', mode: 'local' }], processId: PROCESS, limits: { maxGenerations: 10, maxReviewAttempts: 1 } });
+  }
+  const step = async (project, run) => (await import('./production.js')).nextProductionStep(project, run, { processId: PROCESS });
+  const withPilot = (run, pilot = {}) => ({ ...run, planned: true, pilot: { scenes: [{ sceneId: 'scene-a', operation: 'cutaway', ...pilot }] } });
+
+  it('dispatches a pending pilot that still lacks media before opening its review', async () => {
+    const { project, run } = await startedRun();
+    expect(await step(project, withPilot(run))).toEqual({ type: 'dispatch', kind: 'frame', sceneId: 'scene-a' });
+  });
+
+  it('opens the pilot review once the pilot frame and clip are ready', async () => {
+    const { project, run } = await startedRun({ scenes: [{ sceneId: 'scene-a', startSec: 0, endSec: 4, visualLayer: 'footage', prompt: 'Example shot', referenceImageId: 'frame.png', videoHistoryId: 'clip-1' }] });
+    expect(await step(project, withPilot(run))).toEqual({ type: 'pilot-review', sceneId: 'scene-a', startSec: 0, endSec: 4 });
+  });
+
+  it('waits while a pilot review is running', async () => {
+    const { project, run } = await startedRun();
+    const reviewing = { ...project, autoReviews: [{ id: 'review-pilot', status: 'running', attempts: [] }] };
+    expect(await step(reviewing, withPilot(run, { reviewRunId: 'review-pilot' }))).toEqual({ type: 'wait', on: 'pilot-review' });
+  });
+
+  it('halts for a human when the passing review has changed dependencies', async () => {
+    const { project, run } = await startedRun();
+    const reviewed = { ...project, autoReviews: [{ id: 'review-full', status: 'passed', attempts: [{ n: 1, review: { verdict: 'pass', dependencies: null } }] }] };
+    expect(await step(reviewed, { ...run, planned: true, reviewRunId: 'review-full' })).toMatchObject({ type: 'halt', status: 'needs-human' });
+  });
+
+  it('plans an empty board once Cast & Sets is settled', async () => {
+    const { project, run } = await startedRun({ scenes: [], castAndSets: { status: 'approved' } });
+    expect(await step(project, run)).toEqual({ type: 'plan' });
+  });
+});
