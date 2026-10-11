@@ -217,11 +217,14 @@ describe('music video production run (#9066)', () => {
     expect(current().productionRuns).toBeUndefined();
   });
 
-  it('refuses unbound supplied-audio windows before starting or spending a production budget', async () => {
+  // Uniquely catches a Supplied song audio project refused by production, or its clips losing the song window.
+  it('binds supplied song audio into the run\'s local video routes, and refuses it with a remote video route', async () => {
     seedProject({ videoSettings: { generationMode: 'suppliedAudio', renderPool: { mode: 'local', peers: [] } } });
-    await expect(start()).rejects.toMatchObject({ code: 'MUSIC_VIDEO_RENDER_POOL_UNAVAILABLE' });
-    expect(dispatch).not.toHaveBeenCalled();
+    await expect(start({ pool: [...POOL, { kind: 'video', mode: 'fal' }] })).rejects.toMatchObject({ code: 'MUSIC_VIDEO_RENDER_POOL_UNAVAILABLE' });
     expect(current().productionRuns).toBeUndefined();
+    await start();
+    expect(theRun().pool.filter((route) => route.kind === 'video').every((route) => route.audio === 'supplied')).toBe(true);
+    expect(theRun().pool.filter((route) => route.kind === 'image').some((route) => 'audio' in route)).toBe(false);
   });
 
   it('produces a reviewed draft from one Start: frames, then clips, then the continuous-excerpt review', async () => {

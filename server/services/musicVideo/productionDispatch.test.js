@@ -129,6 +129,14 @@ describe('production scene dispatch (#9066)', () => {
     }), {});
   });
 
+  // Uniquely catches a supplied-audio route rendering prompt motion instead of its shot's song window.
+  it('submits a supplied-audio local clip as audio-to-video from its song window', async () => {
+    const clipTag = { ...tag, productionStepKey: 'clip:mvs-a:base:1' };
+    await dispatchProductionStep({ stepKind: 'clip', project, scene, route: { kind: 'video', mode: 'local', model: 'example-ltx', audio: 'supplied' }, tag: clipTag, settings });
+    expect(submitVideoGenJob.mock.calls[0][0]).toMatchObject({ backend: 'local', mode: 'a2v', _suppliedAudio: true, modelId: 'example-ltx', sourceImageFile: 'frame-example.png' });
+    expect(submitVideoGenJob.mock.calls[0][0].disableAudio).toBeUndefined();
+  });
+
   it('submits a fal clip as exactly the take the step was priced for (falSceneTake)', async () => {
     const clipTag = { ...tag, productionStepKey: 'clip:mvs-a:base:1' };
     const falProject = { ...project, videoSettings: { backend: 'fal', falModelId: 'fal-ai/veo3.1/fast/image-to-video', falResolution: '1080p' } };

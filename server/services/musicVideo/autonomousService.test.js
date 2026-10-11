@@ -70,6 +70,7 @@ beforeEach(() => {
   store.clear();
   calls = [];
   doubles = {
+    localVideoTakesSongAudio: vi.fn(async () => false),
     createProject: stub('createProject', async (input) => {
       const project = { id: 'mv-auto', productionReview: { proof: { basis: 'test-proof', excerptId: 'test-proof' } }, excerpts: [{ id: 'test-proof', status: 'complete', filename: 'test-proof.mp4' }], ...input };
       store.set(project.id, clone(project));
@@ -640,6 +641,17 @@ describe('starting on an existing project\'s song (fromProjectId)', () => {
     store.delete('mv-auto');
     const { project: codeOnly } = await service.startAutonomousVideo({ prompt: 'p', fromProjectId: 'mv-src', mediaMode: 'code-only' });
     expect(codeOnly.productionPolicy).toMatchObject({ strategy: 'code-first', maxGeneratedVideoPercent: 0 });
+  });
+
+  // Uniquely catches the install's video pin (fal, say) planning lip-sync shots the run's own video tool cannot render.
+  it('sets the project\'s video settings from the run\'s own video tool', async () => {
+    doubles.localVideoTakesSongAudio.mockResolvedValue(true);
+    const { project } = await service.startAutonomousVideo({ prompt: 'p', fromProjectId: 'mv-src', tools: ['image:local', 'video:local'], models: { 'video:local': 'example-ltx' } });
+    expect(project.videoSettings).toEqual({ backend: 'local', modelId: 'example-ltx', generationMode: 'suppliedAudio' });
+    expect(doubles.localVideoTakesSongAudio).toHaveBeenCalledWith('example-ltx');
+    store.delete('mv-auto');
+    const { project: stills } = await service.startAutonomousVideo({ prompt: 'p', fromProjectId: 'mv-src', tools: ['image:local'] });
+    expect(stills.videoSettings).toEqual({ backend: 'local', generationMode: 'image' });
   });
 
   // Uniquely catches a reused song re-running lyrics/Suno/analysis or the new project inheriting the source's look.
@@ -1466,10 +1478,15 @@ describe('orchestrated mode (brief.orchestrator)', () => {
     expect(reviews().filter((r) => r.startsWith('stills'))).toEqual(['stills:revise', 'stills:approve']);
     expect(runOf()).toMatchObject({ status: 'awaiting-approval', awaiting: 'stills' });
     store.get('mv-auto').productionRuns = [{ id: 'mvpr-1', status: 'awaiting-video', createdAt: new Date().toISOString() }];
+    store.get('mv-auto').scenes[0].shotMode = 'performance';
     doubles.resumeProduction.mockClear();
+    doubles.localVideoTakesSongAudio.mockResolvedValue(true);
     await service.resumeAutonomousVideo('mv-auto', { addTools: ['video:local'] });
     expect(runOf().brief).toMatchObject({ tools: ['image:local', 'video:local'], stopBeforeVideo: false });
     expect(store.get('mv-auto').automation.tools).toEqual(['image:local', 'video:local']);
+    // The added local video tool sets the project's renderer, and a performance shot it cannot lip-sync plays as a cutaway.
+    expect(store.get('mv-auto').videoSettings).toMatchObject({ backend: 'local', generationMode: 'suppliedAudio' });
+    expect(store.get('mv-auto').scenes[0].shotMode).toBe('cutaway');
     expect(doubles.resumeProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-1', expect.objectContaining({
       pool: expect.arrayContaining([expect.objectContaining({ kind: 'video', mode: 'local' })]) }));
     expect(doubles.resumeProduction.mock.calls[0][2].stopBefore).toBeUndefined();

@@ -115,7 +115,8 @@ async function dispatchClip({ project, scene, route, tag }) {
   const isGrok = route.mode === 'grok';
   const prompt = [base, isGrok ? approximateMotionCues(project.phrases, scene.startSec, scene.endSec) : ''].filter(Boolean).join('. ');
   const byBackend = {
-    local: { modelId: route.model, disableAudio: true },
+    // A supplied-audio route animates the frame from its shot's own song window.
+    local: route.audio === 'supplied' ? { modelId: route.model, mode: 'a2v', _suppliedAudio: true } : { modelId: route.model, disableAudio: true },
     grok: { grokDuration: spanSec != null ? grokCoverage(spanSec).requestSec : (project.videoSettings?.grokDuration || 10), disableAudio: true },
     fal: falClipParams(project, scene, route),
     reactor: { disableAudio: true },

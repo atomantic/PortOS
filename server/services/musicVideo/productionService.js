@@ -634,6 +634,19 @@ async function cancelOwnedJobs(runId, { includeRunning = false, jobIds = null } 
 // ---- director actions -----------------------------------------------------------
 
 /**
+ * A project rendering clips from Supplied song audio binds that into the run's
+ * own video routes, so each clip takes its shot's song window and a later
+ * settings change cannot alter a running grant. It needs local video.
+ */
+function bindSuppliedAudio(pool, project) {
+  if (project.videoSettings?.generationMode !== 'suppliedAudio') return pool;
+  if (pool.some((route) => route.kind === 'video' && route.mode !== 'local')) {
+    throw new ServerError('Supplied song audio needs Local video; remove the other video routes or use Prompt motion', { status: 409, code: 'MUSIC_VIDEO_RENDER_POOL_UNAVAILABLE' });
+  }
+  return pool.map((route) => (route.kind === 'video' ? { ...route, audio: 'supplied' } : route));
+}
+
+/**
  * Start a run (explicit director request). Every pool route must be eligible
  * now. Returns `{ project, run }`; the run advances in the background.
  */
@@ -642,12 +655,9 @@ export async function startProduction(projectId, { directive, pool: requested, l
   if (project.videoSettings?.renderPool && project.videoSettings.renderPool.mode !== 'local') {
     throw new ServerError('Production runs require This Mac until immutable run pools support peer placement', { status: 409, code: 'MUSIC_VIDEO_RENDER_POOL_UNAVAILABLE' });
   }
-  if (project.videoSettings?.generationMode === 'suppliedAudio') {
-    throw new ServerError('Production runs do not yet bind supplied-audio windows in their immutable pool; use Prompt motion', { status: 409, code: 'MUSIC_VIDEO_RENDER_POOL_UNAVAILABLE' });
-  }
   const assets = codeFirstProductionAssets(project);
   const authoring = assets ? await deps.resolveAuthoring(requestedAuthoring) : null;
-  const pool = normalizeProductionPool(requested, { allowEmpty: !!assets });
+  const pool = bindSuppliedAudio(normalizeProductionPool(requested, { allowEmpty: !!assets }), project);
   await assertPoolEligible(pool, await deps.loadEnv());
   // The autopilot cuts on the song (#9290) unless the director chose how it
   // cuts — set before the run captures its creative-setup basis.
@@ -670,7 +680,7 @@ export async function resumeProduction(projectId, runId, { limits, acceptBasis =
   const before = await requireProject(projectId);
   const prior = findProductionRun(before, runId);
   const priorReviewId = prior.reviewRunId;
-  const pool = requested ? normalizeProductionPool(requested, { allowEmpty: !!prior.authoring }) : null;
+  const pool = requested ? bindSuppliedAudio(normalizeProductionPool(requested, { allowEmpty: !!prior.authoring }), before) : null;
   if (pool) await assertPoolEligible(pool, await deps.loadEnv());
   const jobs = await liveJobs();
   await mutateProjectRecord(projectId, (current) => reconcileProductionSteps(current, runId, jobs));
