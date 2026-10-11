@@ -19,6 +19,29 @@ Registry: `server/lib/auditCatalog.js` (what each lane is and how it files),
 `server/services/taskScheduleRegistry.js` (cadence and posture),
 `server/services/taskPromptDefaults/prompts.js` (the mission bodies).
 
+## Codex security scans
+
+When a `security` task runs through a Codex CLI/TUI provider, dispatch adds a
+Codex Security runtime contract, including for customized or previously queued
+missions. Selection follows the provider executable (with the shipped provider
+id as a fallback), rather than the model name. Other providers and the separate
+local-inference-only private assessment keep their existing workflows.
+
+The agent uses an available Codex Security scanner or the official
+[`@openai/codex-security` CLI](https://learn.chatgpt.com/docs/security/cli) in
+report-only, unattended mode, with private artifacts outside the checkout.
+Existing authentication, configured model/effort, quota and spending limits
+still apply. This routing does not install a hook, patch code, create a PR,
+publish findings, or authorize a different provider account. The audit's
+file-issues/remediation contract remains responsible for delivery.
+
+Unavailable access or a refused action must be recorded without interactive
+login or repeated attempts through another tool. The agent preserves completed
+evidence, continues independently permitted review, delivers supported findings,
+and writes the usual quality assessment and completion sentinel. Scanner
+coverage and unresolved areas remain evidence to inspect, not a clean bill of
+health for the repository.
+
 ## The lanes
 
 `Mode` is the shipped default. `Isolated` marks lanes whose remediation must run
