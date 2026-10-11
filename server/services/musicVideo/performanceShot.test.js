@@ -31,7 +31,7 @@ vi.mock('../videoGen/local.js', async () => {
 
 const { PATHS } = await import('../../lib/fileUtils.js');
 const { findFfmpeg, probeVideoStreamInfo } = await import('../../lib/ffmpeg.js');
-const { preparePerformanceShot, findStalePerformanceTakes } = await import('./performanceShot.js');
+const { preparePerformanceShot, findStalePerformanceTakes, withDraftPerformanceFallbacks } = await import('./performanceShot.js');
 const fal = await import('../videoGen/fal.js');
 const { videoGenEvents } = await import('../videoGen/events.js');
 const { buildMusicVideoFfmpegArgs, beatSnapClips, resolveSceneClips } = await import('./render.js');
@@ -520,4 +520,23 @@ describe.skipIf(!ffmpeg)('accepted-prefix continuation render (#9348)', () => {
     expect(error / before.length).toBeLessThan(2);
     expect(prefix.videoHistoryId).toBe('accepted');
   }, 60_000);
+});
+
+// Uniquely catches a draft standing a stale lip-sync shot in with another lip-sync take, or dropping a cutaway clip it has.
+describe('draft fallbacks for stale performance shots', () => {
+  it('draws a stale performance shot as its newest cutaway clip, else its still', async () => {
+    const takes = [{ kind: 'video', assetId: 'cut-1' }, { kind: 'video', assetId: 'cut-2', shotInstruction: { shotMode: 'cutaway' } },
+      { kind: 'video', assetId: 'sync-1', shotInstruction: { shotMode: 'performance' } }];
+    const project = { scenes: [
+      { sceneId: 'a', shotMode: 'performance', startSec: 0, endSec: 2, videoHistoryId: 'sync-1', takes },
+      { sceneId: 'b', shotMode: 'performance', startSec: 2, endSec: 4, videoHistoryId: 'sync-2', referenceImageId: 'b.png',
+        takes: [{ kind: 'video', assetId: 'sync-2', shotInstruction: { shotMode: 'performance' } }] },
+      { sceneId: 'c', shotMode: 'cutaway', startSec: 4, endSec: 6, videoHistoryId: 'cut-3', takes: [] },
+    ] };
+    const drawn = await withDraftPerformanceFallbacks(project, '/no/master.wav');
+    expect(drawn.scenes.map(({ sceneId, shotMode, videoHistoryId }) => [sceneId, shotMode, videoHistoryId])).toEqual([
+      ['a', 'cutaway', 'cut-2'], ['b', 'cutaway', null], ['c', 'cutaway', 'cut-3'],
+    ]);
+    expect(project.scenes[0].videoHistoryId).toBe('sync-1');
+  });
 });

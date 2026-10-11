@@ -209,6 +209,23 @@ export async function findStalePerformanceTakes(project, masterPath) {
 }
 
 /**
+ * A draft never waits on lip sync. Each performance (or supplied-audio) shot
+ * whose selected take is stale for the current song stands in as a cutaway:
+ * its newest cutaway clip (a video take with no performance or song-audio
+ * instruction), else its still. Final renders keep the strict gate below.
+ */
+export async function withDraftPerformanceFallbacks(project, masterPath) {
+  const stale = new Set((await findStalePerformanceTakes(project, masterPath)).map(({ sceneId }) => sceneId));
+  if (!stale.size) return project;
+  return { ...project, scenes: project.scenes.map((scene) => {
+    if (!stale.has(scene.sceneId)) return scene;
+    const cutaway = (scene.takes || []).filter((take) => take?.kind === 'video' && take.assetId
+      && take.shotInstruction?.shotMode !== 'performance' && !take.shotInstruction?.audioConditioning).at(-1);
+    return { ...scene, shotMode: 'cutaway', videoHistoryId: cutaway?.assetId || null };
+  }) };
+}
+
+/**
  * The one staleness gate every renderer that draws performance takes runs
  * (concat, composed, document, and their excerpts): a performance take sings
  * one stretch of one recording, so a re-timed scene or a changed sung window
