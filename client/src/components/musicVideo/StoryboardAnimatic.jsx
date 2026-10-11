@@ -6,6 +6,7 @@ import { playthroughVersion } from './CompositionPreviewPlayer.jsx';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
 import { normalizeTitleCard } from '../../../../server/lib/musicVideoTitleCard.js';
+import ShotStepper from './ShotStepper.jsx';
 
 const timedShots = (scenes) => scenes.filter((scene) => Number.isFinite(scene?.startSec)).sort((a, b) => a.startSec - b.startSec);
 
@@ -240,6 +241,12 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
     setTime(seekRequest.t);
     if (seekRequest.play) audioRef.current.play?.()?.catch?.(() => {});
   }, [seekRequest]);
+  // Back and Next move the song; it keeps playing or stays paused as it was.
+  const seekTo = useCallback((t) => {
+    if (!audioRef.current) return;
+    audioRef.current.currentTime = t;
+    setTime(t);
+  }, []);
   const shot = shotAt(scenes, time);
   const timed = timedShots(scenes);
   const index = shot ? timed.indexOf(shot) : -1;
@@ -268,7 +275,12 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
       </figure>
       <div className="flex min-w-0 items-start gap-2">
         <div className="min-w-0 flex-1 text-[11px] text-port-text-muted">
-          {shot && <p>Shot {index + 1} of {timed.length} · {formatDurationSec(shot.startSec)}</p>}
+          {shot && (
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <ShotStepper scenes={timed} time={time} onSeek={seekTo} keys />
+              <span className="tabular-nums">{formatDurationSec(shot.startSec)}</span>
+            </div>
+          )}
           {!cardInFrame && shot && !shot.referenceImageId && !shot.videoHistoryId && (
             <p className="line-clamp-2 break-words">
               <span className="font-medium text-port-text">{label}</span>{shot.visualIntent ? ` · ${shot.visualIntent}` : ''}

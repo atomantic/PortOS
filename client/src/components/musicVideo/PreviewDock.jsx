@@ -1,14 +1,16 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { ChevronDown, ChevronUp, MonitorPlay } from 'lucide-react';
 import CompositionPreviewPlayer from './CompositionPreviewPlayer.jsx';
 import StoryboardAnimatic from './StoryboardAnimatic.jsx';
+import ShotStepper from './ShotStepper.jsx';
 
 // A rendered file (the final render or a draft excerpt). Its clock starts at
 // the clip's own start, so a seek to song time `t` lands at `t - startSec` and
-// is ignored outside it.
-function VideoPreview({ source, seekRequest, collapsed }) {
+// is ignored outside it. Back and Next step through the shots inside it.
+function VideoPreview({ source, scenes, seekRequest, collapsed }) {
   const videoRef = useRef(null);
+  const [time, setTime] = useState(0);
   const pending = useRef(null);
   const applied = useRef(null);
   const seekTo = (t, play = false) => {
@@ -24,17 +26,29 @@ function VideoPreview({ source, seekRequest, collapsed }) {
     const t = seekRequest.t - source.startSec;
     if (t >= 0 && (source.endSec == null || t <= source.endSec - source.startSec)) seekTo(t, !!seekRequest.play);
   }, [seekRequest, source.startSec, source.endSec]);
+  const startSec = source.startSec || 0;
   return (
-    <video
-      ref={videoRef}
-      src={source.src}
-      controls
-      playsInline
-      preload="metadata"
-      onLoadedMetadata={() => { if (pending.current != null) { seekTo(pending.current); pending.current = null; } }}
-      aria-label={source.id === 'final' ? 'Final render preview' : 'Draft excerpt preview'}
-      className={`aspect-video max-h-[50vh] w-full rounded border border-port-border bg-black object-contain ${collapsed ? 'max-xl:hidden' : ''}`}
-    />
+    <div className={`space-y-2 ${collapsed ? 'max-xl:hidden' : ''}`}>
+      <video
+        ref={videoRef}
+        src={source.src}
+        controls
+        playsInline
+        preload="metadata"
+        onLoadedMetadata={() => { if (pending.current != null) { seekTo(pending.current); pending.current = null; } }}
+        onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
+        onSeeked={(e) => setTime(e.currentTarget.currentTime)}
+        aria-label={source.id === 'final' ? 'Final render preview' : 'Draft excerpt preview'}
+        className="aspect-video max-h-[50vh] w-full rounded border border-port-border bg-black object-contain"
+      />
+      <ShotStepper
+        scenes={scenes}
+        time={startSec + time}
+        onSeek={(t) => { seekTo(t - startSec); setTime(t - startSec); }}
+        range={{ startSec, endSec: source.endSec ?? null }}
+        keys
+      />
+    </div>
   );
 }
 
@@ -100,10 +114,10 @@ export default function PreviewDock({ project, sources, audioUrl, seekRequest, c
         </p>
       )}
       {/* Folded below xl, the dock is one row: the player and its controls wait for the expand. */}
-      {source?.kind === 'document' && <div className={collapsed ? 'max-xl:hidden' : ''}><CompositionPreviewPlayer project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} /></div>}
-      {source?.kind === 'lyrics' && <div className={collapsed ? 'max-xl:hidden' : ''}><CompositionPreviewPlayer project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} lyrics /></div>}
+      {source?.kind === 'document' && <div className={collapsed ? 'max-xl:hidden' : ''}><CompositionPreviewPlayer project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} shotNav /></div>}
+      {source?.kind === 'lyrics' && <div className={collapsed ? 'max-xl:hidden' : ''}><CompositionPreviewPlayer project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} lyrics shotNav /></div>}
       {source?.kind === 'animatic' && <StoryboardAnimatic project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} />}
-      {source?.kind === 'video' && <VideoPreview key={source.id} source={source} seekRequest={seekRequest} collapsed={collapsed} />}
+      {source?.kind === 'video' && <VideoPreview key={source.id} source={source} scenes={project.scenes} seekRequest={seekRequest} collapsed={collapsed} />}
     </aside>
   );
 }
