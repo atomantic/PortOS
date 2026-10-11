@@ -761,6 +761,29 @@ describe('Remote desktop session policy (#10923)', () => {
   });
 });
 
+describe('Video upscale and stitch policy (#11076)', () => {
+  const protectedRoutes = [
+    'POST /api/video-gen/upscale/:id',
+    'POST /api/video-gen/stitch',
+  ];
+
+  it('gates each route and maps every entry to a mounted route', () => {
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => method + ' ' + path));
+    for (const route of protectedRoutes) {
+      const [method, path] = route.split(' ');
+      expect(mounted.has(route), route).toBe(true);
+      expect(hostControlRouteFor(method, path), route).toBe(route);
+    }
+  });
+
+  it('keeps reads open', () => {
+    for (const [method, path] of [
+      ['GET', '/api/video-gen/upscale/:id/plan'],
+      ['GET', '/api/video-gen/history'],
+    ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
+  });
+});
+
 describe('Calendar MCP execution policy (#11051)', () => {
   it('gates mounted MCP actions while preserving non-agent Calendar operations', () => {
     const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => `${method} ${path}`));
