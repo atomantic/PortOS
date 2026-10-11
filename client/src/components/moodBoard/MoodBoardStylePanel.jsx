@@ -10,7 +10,8 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import socket from '../../services/socket';
-import { ScanEye, Sparkles, ImageIcon, ChevronDown, ChevronRight } from 'lucide-react';
+import { ScanEye, Sparkles, ImageIcon, ChevronDown, ChevronRight, X } from 'lucide-react';
+import Modal from '../ui/Modal';
 import ProviderModelSelector from '../ProviderModelSelector';
 import MediaJobThumb from '../pipeline/MediaJobThumb';
 import toast from '../ui/Toast';
@@ -60,6 +61,7 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
   const jobRunningRef = useRef(false);
   jobRunningRef.current = jobRunning;
   const [savingStyle, setSavingStyle] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [effort, setEffort] = useState('');
   const [rendererMode, setRendererMode] = useState('');
   const capturedKeyRef = useRef(null);
@@ -278,7 +280,14 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
             {jobId ? (
               <MediaJobThumb jobId={jobId} onFilename={handleComplete} size="fill" label="Board poster" />
             ) : posterSrc ? (
-              <img src={posterSrc} alt="Board poster" className="w-full h-full object-cover" />
+              <button
+                type="button"
+                onClick={() => setPreviewOpen(true)}
+                aria-label="Preview board poster"
+                className="block w-full h-full cursor-zoom-in"
+              >
+                <img src={posterSrc} alt="Board poster" className="w-full h-full object-cover" />
+              </button>
             ) : (
               <div className="w-full h-full flex flex-col items-center justify-center text-gray-600 gap-1">
                 <ImageIcon className="w-6 h-6" aria-hidden="true" />
@@ -404,6 +413,31 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
           </div>
         </div>
       </div>
+      {posterSrc ? (
+        <Modal
+          open={previewOpen}
+          onClose={() => setPreviewOpen(false)}
+          size="3xl"
+          backdropClassName="bg-black/85"
+          ariaLabelledBy="board-poster-preview-title"
+          panelClassName="overflow-hidden bg-port-card border border-port-border rounded-xl shadow-2xl flex flex-col"
+        >
+          <header className="flex items-center justify-between gap-3 px-4 py-3 border-b border-port-border">
+            <h2 id="board-poster-preview-title" className="text-sm font-semibold text-white">Board poster</h2>
+            <button
+              type="button"
+              onClick={() => setPreviewOpen(false)}
+              className="p-1.5 rounded text-gray-400 hover:text-white hover:bg-port-border/50 min-h-[44px] min-w-[44px] flex items-center justify-center"
+              aria-label="Close"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </header>
+          <div className="min-h-0 flex-1 overflow-auto bg-port-bg p-2 flex items-center justify-center">
+            <img src={posterSrc} alt="Board poster preview" className="max-w-full max-h-full object-contain" />
+          </div>
+        </Modal>
+      ) : null}
     </section>
   );
 }
