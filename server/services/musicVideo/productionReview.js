@@ -68,35 +68,44 @@ const ART_SEEDS = {
   visualLanguage: d => ({ look: d.look, palette: d.protagonist?.palette, world: d.world }),
   motionLanguage: d => ({ movement: d.protagonist?.movement, camera: d.world?.camera, transitions: d.world?.transitions }),
 };
-// Drafts seeded before productionReview.seededDraft existed have no record of
-// what was seeded. describeDirection writes objects as JSON, which typed notes
-// never are, so a field holding a JSON object or list is treated as an untouched seed.
-const looksSeeded = value => {
-  if (!/^[[{]/.test(value.trim())) return false;
-  try { return typeof JSON.parse(value) === 'object'; } catch { return false; }
+// Equal content in any formatting: JSON compares by value (key order and
+// whitespace ignored), plain text by its trimmed string.
+const parsedJson = value => {
+  if (!/^[[{]/.test(value.trim())) return undefined;
+  try { return JSON.parse(value); } catch { return undefined; }
+};
+const sameContent = (a, b) => {
+  const [x, y] = [parsedJson(a), parsedJson(b)];
+  return x !== undefined && y !== undefined ? hash(x) === hash(y) : a.trim() === b.trim();
 };
 
 /**
  * Seed the art-direction draft fields (and the visual guide) from a Cast & Sets
- * sheet. A field that is blank or still holds the text an earlier approval
- * seeded follows the newest direction; text the director typed — and a guide
- * already chosen — is never overwritten, and a document-shot draft is left alone.
- * Seeding supplies editable content only; it never records an approval.
+ * sheet. A blank field, or one still holding the exact text an earlier approval
+ * seeded, follows the newest direction. Text that already says what the
+ * direction says is kept as written (rewriting its formatting would stale an
+ * art approval for nothing), and any other text the director or an agent
+ * entered — and a guide already chosen — is never overwritten. A document-shot
+ * draft is left alone. Seeding supplies editable content only; it never records
+ * an approval.
  */
 export function seedArtDraft(project, stage = project.castAndSets) {
   const prior = project.productionReview?.draft || {};
   if (prior.storyboardSource === 'document' || !stage?.direction) return project;
-  const recorded = project.productionReview?.seededDraft;
-  const untouched = key => !text(prior[key])
-    || (recorded ? recorded[key] === hash(prior[key]) : looksSeeded(prior[key]));
+  const recorded = project.productionReview?.seededDraft || {};
   const draft = { lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [], ...prior,
     guideArtifactId: prior.guideArtifactId || (artifact(project, stage.artifactId) ? stage.artifactId : null) };
   // Kept outside the strict draft schema: the hash of each field as last seeded.
+  // A field absent here was entered by hand and is never rewritten.
   const seededDraft = {};
   for (const [key, from] of Object.entries(ART_SEEDS)) {
-    if (!untouched(key)) continue;
-    draft[key] = describeDirection(from(stage.direction));
-    seededDraft[key] = hash(draft[key]);
+    const seed = describeDirection(from(stage.direction));
+    const current = text(prior[key]) ? prior[key] : null;
+    if (current && sameContent(current, seed)) seededDraft[key] = hash(current);
+    else if (!current || recorded[key] === hash(current)) {
+      draft[key] = seed;
+      seededDraft[key] = hash(seed);
+    }
   }
   return { ...project, productionReview: { ...project.productionReview, draft, seededDraft } };
 }
