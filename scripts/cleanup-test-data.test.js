@@ -15,7 +15,7 @@ const CHILD_A = `iss-${uuid(4)}`;
 const CHILD_B = `iss-${uuid(5)}`;
 const REAL_I = `iss-${uuid(6)}`;
 
-function fixtureStore() {
+function fixtureStore(pageSize = 1000) {
   const universes = [
     { id: U, name: ' Test Work ' },
     { id: 'fixture-universe', name: 'Example Universe' },
@@ -56,8 +56,13 @@ function fixtureStore() {
   const services = {
     listUniverses: async options => list(universes, 'universes', options),
     listSeries: async options => list(series, 'series', options),
-    listIssues: async options => list(issues, options.seriesId ? 'children' : 'all-issues', options)
-      .filter(i => !options.seriesId || i.seriesId === options.seriesId),
+    listIssues: async options => {
+      expect(options.paginated).toBe(true);
+      const key = options.seriesId ? 'children' : 'all-issues';
+      if (failures.has(`${key}:${options.offset}`)) throw new Error('Later issue page unavailable');
+      const rows = list(issues, key, options).filter(i => !options.seriesId || i.seriesId === options.seriesId);
+      return { items: rows.slice(options.offset, options.offset + pageSize), total: rows.length };
+    },
     deleteUniverse: remove(universes, 'universe'),
     deleteSeries: remove(series, 'series'),
     deleteIssue: remove(issues, 'issue'),
@@ -125,6 +130,30 @@ describe('fixture cleanup CLI workflow', () => {
     expect(store.attempts).toEqual([]);
     expect(store.completed).toEqual([]);
     expectFailure(await store.run(false));
+    expect(store.attempts).toEqual([]);
+  });
+
+  it('plans every page before deleting a parent with over 1000 children or a late orphan', async () => {
+    const store = fixtureStore();
+    const extraChildren = Array.from({ length: 1001 }, (_, index) => ({
+      id: `iss-${uuid(index + 100)}`, seriesId: S, number: index + 3,
+    }));
+    store.issues.push(...extraChildren, { id: 'iss-late-orphan', seriesId: REAL_S, number: 3 });
+    const result = await store.run();
+    expect(result.code).toBe(0);
+    const parentPosition = store.completed.indexOf(`series:${S}`);
+    expect(store.completed.slice(2, parentPosition)).toEqual(
+      [CHILD_A, CHILD_B, ...extraChildren.map(child => child.id)].map(id => `issue:${id}`),
+    );
+    expect(store.completed).toContain('issue:iss-late-orphan');
+    expect(result.logs).toContain('✅ Tombstoned 2 universe(s) + 2 series + 1006 issue(s).');
+  });
+
+  it.each(['children:2', 'all-issues:2'])('refuses all writes if a later %s page is unavailable', async key => {
+    const store = fixtureStore(2);
+    store.issues.push({ id: `iss-${uuid(20)}`, seriesId: S, number: 3 });
+    store.failures.add(key);
+    expectFailure(await store.run());
     expect(store.attempts).toEqual([]);
   });
 

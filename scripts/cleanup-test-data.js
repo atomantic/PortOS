@@ -102,6 +102,24 @@ function parseArgs(argv) {
   return out;
 }
 
+// listIssues caps even its unpaginated result. Plan from every page before
+// writing so a parent with more than one page of children remains recoverable.
+async function listAllIssues(listIssues, options = {}) {
+  const issues = [];
+  while (true) {
+    const page = await listIssues({
+      ...options, includeDeleted: false, withHistory: false,
+      paginated: true, offset: issues.length,
+    });
+    if (!Array.isArray(page.items) || !Number.isInteger(page.total) || page.total < 0) {
+      throw new Error('Invalid issue enumeration page');
+    }
+    issues.push(...page.items);
+    if (issues.length >= page.total) return issues;
+    if (page.items.length === 0) throw new Error('Incomplete issue enumeration');
+  }
+}
+
 async function cleanup({ apply, services, output }) {
   const { listUniverses, deleteUniverse, listSeries, deleteSeries, listIssues, deleteIssue } = services;
   if (!apply) {
@@ -143,7 +161,7 @@ async function cleanup({ apply, services, output }) {
   // Map series.id → array of live child issues for that series.
   const childIssuesBySeries = new Map();
   for (const { rec: s } of seriesTargets) {
-    const children = await listIssues({ seriesId: s.id, includeDeleted: false });
+    const children = await listAllIssues(listIssues, { seriesId: s.id });
     childIssuesBySeries.set(s.id, children);
   }
   const totalChildIssues = [...childIssuesBySeries.values()].reduce((n, arr) => n + arr.length, 0);
@@ -156,7 +174,7 @@ async function cleanup({ apply, services, output }) {
   // Orphan fixture issues: a non-uuid-id issue whose parent series is NOT itself
   // a target (so it won't be reached by the cascade above). These are direct
   // test-fixture inserts (`iss-live`, `iss-dup`, …) that would otherwise survive.
-  const allIssues = await listIssues({ includeDeleted: false });
+  const allIssues = await listAllIssues(listIssues);
   const orphanIssueTargets = allIssues.filter(
     i => isIssueFixtureId(i.id) && !seriesTargetIds.has(i.seriesId),
   );
