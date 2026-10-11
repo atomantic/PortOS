@@ -157,24 +157,38 @@ export function clipTimeAt(scene, t, clipSec = null) {
   return scene.loop !== false ? inSec + (local % span) : Math.max(inSec, clipSec - 0.05);
 }
 
+// How many shots past the one on screen get their clip loaded ahead, so a short shot is
+// ready to show the moment the song reaches it.
+const CLIP_PRELOAD_SHOTS = 2;
+
 /**
  * A shot's selected video clip, muted under the master song and kept in step
- * with it: it plays and pauses with the song, and a seek or drift puts it back
- * at the song's place in the shot. The shot's frame is its poster.
+ * with it while its shot is `current`: it plays and pauses with the song, and a
+ * seek or drift puts it back at the song's place in the shot. A shot still to
+ * come waits paused on its first frame. The clip stays transparent until it has
+ * a frame to show, so the shot's still underneath covers the load and the seek.
  */
-function ShotClip({ scene, audioRef, time }) {
+function ShotClip({ scene, audioRef, time, current }) {
   const videoRef = useRef(null);
+  const [ready, setReady] = useState(false);
   const file = useVideoFileSrc(scene.videoHistoryId);
   const src = file.src || (file.resolving ? null : `/data/videos/${scene.videoHistoryId}.mp4`);
   const sync = useCallback(() => {
     const video = videoRef.current;
     const audio = audioRef.current;
     if (!video || !audio || video.readyState < 1) return;
-    const target = clipTimeAt(scene, audio.currentTime || 0, Number.isFinite(video.duration) ? video.duration : null);
+    const duration = Number.isFinite(video.duration) ? video.duration : null;
+    const target = clipTimeAt(scene, current ? audio.currentTime || 0 : scene.startSec || 0, duration);
     if (Math.abs((video.currentTime || 0) - target) > CLIP_DRIFT_SEC) video.currentTime = target;
-    if (audio.paused) video.pause?.();
+    if (!current || audio.paused) video.pause?.();
     else if (video.paused) video.play?.()?.catch?.(() => {});
-  }, [scene, audioRef]);
+  }, [scene, audioRef, current]);
+  // Shown once a frame is decoded where the clip should be; kept from then on, since a
+  // drift re-seek holds the last frame rather than going blank.
+  const markReady = useCallback(() => {
+    const video = videoRef.current;
+    if (video && video.readyState >= 2 && !video.seeking) setReady(true);
+  }, []);
   useEffect(() => { sync(); }, [time, sync]);
   useEffect(() => {
     const audio = audioRef.current;
@@ -188,13 +202,17 @@ function ShotClip({ scene, audioRef, time }) {
     <video
       ref={videoRef}
       src={src}
-      poster={scene.referenceImageId ? `/data/images/${scene.referenceImageId}` : undefined}
       muted
       playsInline
       preload="auto"
       onLoadedMetadata={sync}
+      onLoadedData={markReady}
+      onSeeked={markReady}
+      onPlaying={markReady}
       aria-label={`Clip for ${scene.label || 'this shot'}`}
-      className="h-full w-full object-contain"
+      aria-hidden={current ? undefined : true}
+      data-ready={ready ? 'true' : 'false'}
+      className={`pointer-events-none absolute inset-0 h-full w-full object-contain ${current && ready ? 'opacity-100' : 'opacity-0'}`}
     />
   );
 }
@@ -225,6 +243,9 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   const shot = shotAt(scenes, time);
   const timed = timedShots(scenes);
   const index = shot ? timed.indexOf(shot) : -1;
+  // The shot on screen and the next few: each keeps one mounted clip, so the cut to the
+  // next shot shows a clip that has already loaded and sits on its first frame.
+  const clipShots = timed.slice(Math.max(index, 0), Math.max(index, 0) + 1 + CLIP_PRELOAD_SHOTS).filter((scene) => scene.videoHistoryId);
   const label = shot ? shot.label || `Shot ${index + 1}` : 'No shots yet';
   // With the lyrics drawn over the picture, a shot without a frame keeps its label and
   // intent under the picture instead, so no stand-in text sits under the sung words.
@@ -232,16 +253,17 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   return (
     <div className={`space-y-2 ${collapsed ? 'max-xl:hidden' : ''}`}>
       <figure aria-label="Storyboard animatic" className="relative aspect-video w-full overflow-hidden rounded border border-port-border bg-black">
-        {shot?.videoHistoryId ? (
-          <ShotClip key={`${shot.sceneId}:${shot.videoHistoryId}`} scene={shot} audioRef={audioRef} time={time} />
-        ) : shot?.referenceImageId ? (
+        {shot?.referenceImageId ? (
           <img src={`/data/images/${shot.referenceImageId}`} alt="" className="h-full w-full object-contain" />
-        ) : cardInFrame ? (
+        ) : cardInFrame && !shot?.videoHistoryId ? (
           <div className="flex h-full w-full flex-col items-center justify-center gap-1 p-4 text-center">
             <span className="text-sm font-medium text-port-text">{label}</span>
             {shot?.visualIntent && <span className="line-clamp-3 text-xs text-port-text-muted">{shot.visualIntent}</span>}
           </div>
         ) : null}
+        {clipShots.map((scene) => (
+          <ShotClip key={`${scene.sceneId}:${scene.videoHistoryId}`} scene={scene} audioRef={audioRef} time={time} current={scene === shot} />
+        ))}
         {overlay}
       </figure>
       <div className="flex min-w-0 items-start gap-2">

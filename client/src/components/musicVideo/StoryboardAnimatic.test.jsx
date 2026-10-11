@@ -80,17 +80,45 @@ describe('StoryboardAnimatic clips', () => {
     { sceneId: 'b', label: 'Chorus', startSec: 10, endSec: 20, referenceImageId: 'frame-b.png' },
   ];
 
-  it('plays a shot\'s clip muted where it has one and its still where it does not', async () => {
+  it('plays a shot\'s clip muted over its still, and only the still where it has no clip', async () => {
     const { container } = render(<StoryboardAnimatic project={{ id: 'p', scenes: clipScenes }} audioUrl="/song.mp3" />);
     const clip = await screen.findByLabelText('Clip for Opening');
     await waitFor(() => expect(clip.getAttribute('src')).toBe('/data/videos/clip-a.mov'));
     expect(clip.muted).toBe(true);
-    expect(clip.getAttribute('poster')).toBe('/data/images/frame-a.png');
+    // The still stays underneath, and the clip stays transparent until it has a frame.
+    expect(container.querySelector('img').getAttribute('src')).toBe('/data/images/frame-a.png');
+    expect(clip.className).toContain('opacity-0');
+    Object.defineProperty(clip, 'readyState', { value: 4, configurable: true });
+    fireEvent.loadedData(clip);
+    expect(clip.className).toContain('opacity-100');
     const audio = screen.getByLabelText('Song for the storyboard animatic');
     Object.defineProperty(audio, 'currentTime', { value: 12, configurable: true });
     fireEvent.timeUpdate(audio);
     expect(screen.queryByLabelText('Clip for Opening')).toBeNull();
     expect(container.querySelector('img').getAttribute('src')).toBe('/data/images/frame-b.png');
+  });
+
+  it('loads the next shots\' clips ahead and cuts to the same loaded clip', async () => {
+    const scenes = [
+      { sceneId: 'a', label: 'One', startSec: 0, endSec: 1, referenceImageId: 'frame-a.png' },
+      { sceneId: 'b', label: 'Two', startSec: 1, endSec: 2, videoHistoryId: 'clip-b' },
+      { sceneId: 'c', label: 'Three', startSec: 2, endSec: 3, videoHistoryId: 'clip-c' },
+      { sceneId: 'd', label: 'Four', startSec: 3, endSec: 4, videoHistoryId: 'clip-d' },
+    ];
+    render(<StoryboardAnimatic project={{ id: 'p', scenes }} audioUrl="/song.mp3" />);
+    const next = await screen.findByLabelText('Clip for Two');
+    expect(screen.getByLabelText('Clip for Three')).toBeTruthy();
+    expect(screen.queryByLabelText('Clip for Four')).toBeNull();
+    expect(next.getAttribute('aria-hidden')).toBe('true');
+    Object.defineProperty(next, 'readyState', { value: 4, configurable: true });
+    fireEvent.seeked(next);
+    expect(next.className).toContain('opacity-0');
+    const audio = screen.getByLabelText('Song for the storyboard animatic');
+    Object.defineProperty(audio, 'currentTime', { value: 1.2, configurable: true });
+    fireEvent.timeUpdate(audio);
+    expect(screen.getByLabelText('Clip for Two')).toBe(next);
+    expect(next.className).toContain('opacity-100');
+    expect(await screen.findByLabelText('Clip for Four')).toBeTruthy();
   });
 
   it('maps song time into the clip: trimmed in-point, then loop or hold past its end', () => {
