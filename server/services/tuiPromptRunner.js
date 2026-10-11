@@ -74,6 +74,7 @@ import {
   createInputReadyTracker,
   detectMissingTuiBinary,
   createSelfClearingSignalGate,
+  screenShowsInFlightChrome,
   SUBMIT_KEY,
 } from '../lib/tuiHandshake.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
@@ -89,6 +90,9 @@ import { killProcessTree } from '../lib/bufferedSpawn.js';
 //     to stop talking)
 const DEFAULT_TIMEOUT_MS = 300000;
 const DEFAULT_ONE_SHOT_IDLE_MS = 8000;
+// Enough stripped screen to hold a status line plus the composer and footer
+// painted beneath it; see screenShowsInFlightChrome.
+const IN_FLIGHT_SCREEN_TAIL_CHARS = 4096;
 
 // A one-shot prompt must return one machine-consumed answer. Codex's general
 // interactive TUI inherits the user's multi-agent feature flag, which can turn
@@ -793,13 +797,19 @@ ${prompt}`;
           const idle = Date.now() - lastOutputAt;
           if (idle >= idleThresholdMs) {
             if (requiresResponseFileForIdleCompletion) return;
-            // NOTE: unlike the long-running agent path, the one-shot runner does
-            // NOT gate non-Codex providers on a work-activity signal.
-            // Idle-complete is their inline-output fallback when a model prints
-            // its answer instead of writing the response file; that output may
-            // legitimately carry no `(Ns ·` working counter. Codex is held to
-            // the response-file contract above because its quiet reasoning
-            // stretches are otherwise indistinguishable from completion.
+            // A quiet screen whose last paint is still in-flight chrome (a
+            // working counter, `thinking with medium effort`) is a model
+            // thinking without repainting, not an answer — Fable sat silent
+            // on that spinner past the idle threshold and the run scraped it
+            // as the response. Hold for the response file, process exit, or
+            // the hard timeout instead.
+            if (screenShowsInFlightChrome(outputBuffer.slice(-IN_FLIGHT_SCREEN_TAIL_CHARS))) return;
+            // NOTE: non-Codex providers are NOT required to show a work-activity
+            // signal. Idle-complete is their inline-output fallback when a model
+            // prints its answer instead of writing the response file; that
+            // output may legitimately carry no `(Ns ·` working counter. Codex is
+            // held to the response-file contract above because its quiet
+            // reasoning stretches are otherwise indistinguishable from completion.
             finish({ success: true, exitCode: 0, reason: 'idle-complete' });
           }
         }, 1000);
