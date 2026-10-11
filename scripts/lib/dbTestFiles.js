@@ -13,6 +13,7 @@ export const DB_TEST_INCLUDE = [
   'services/voice/profiles.db.test.js',
   'services/voice/studio.db.test.js',
   '../scripts/perf/collectionFixture.db.test.js',
+  '../scripts/recover-synced-test-fixtures.db.test.js',
   'services/appQuality.db.test.js',
   'services/deepAudit.db.test.js',
   '**/db.test.js',
