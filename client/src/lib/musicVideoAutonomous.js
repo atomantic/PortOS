@@ -60,6 +60,8 @@ export const emptyAutonomousDraft = () => ({
   mediaMode: 'code-images-video',
   authoring: { providerId: '', model: '', effort: '' },
   songSource: AUTONOMOUS_SONG_SOURCES[0],
+  // Start on this project's song instead of making one ('' = make a new song).
+  fromProjectId: '',
   localFallback: false,
   localMusic: {
     type: 'model',
@@ -107,6 +109,9 @@ const optionalInt = (raw) => {
   return Number.isInteger(n) ? n : undefined;
 };
 
+/** The checkpoints a run on an existing song never reaches. */
+export const REUSED_SONG_SKIPPED_CHECKPOINTS = Object.freeze(['lyrics', 'song']);
+
 /** The start request for a draft: blank optional fields are omitted so the server defaults apply. */
 export function autonomousRequestFromDraft(draft, { providerId, model, effort } = {}) {
   const budget = Number.parseFloat(draft.budget);
@@ -137,8 +142,10 @@ export function autonomousRequestFromDraft(draft, { providerId, model, effort } 
     ...(draft.guidance.trim() ? { guidance: draft.guidance.trim() } : {}),
     budgetUsd: Number.isFinite(budget) && budget >= 0 ? budget : null,
     ...(Object.keys(limits).length ? { limits } : {}),
-    // The orchestrator clears every review point itself, so it pauses at none.
-    checkpoints: orchestrated ? [] : draft.checkpoints,
+    // The orchestrator clears every review point itself, so it pauses at none;
+    // a reused song writes no lyrics and makes no song, so those never pause.
+    checkpoints: orchestrated ? [] : draft.fromProjectId ? draft.checkpoints.filter((id) => !REUSED_SONG_SKIPPED_CHECKPOINTS.includes(id)) : draft.checkpoints,
+    ...(draft.fromProjectId ? { fromProjectId: draft.fromProjectId } : {}),
     ...(orchestrated ? { orchestrator: {
       providerId: draft.orchestrator.providerId,
       ...(draft.orchestrator.model ? { model: draft.orchestrator.model } : {}),
@@ -230,7 +237,7 @@ export function autonomousStageOutput(run, stageId) {
     add('conceptStyle', 'Visual style', out.concept?.style);
     if (out.moodBoardId) fields.push({ key: 'moodBoard', label: 'Mood board', href: `/mood-boards/${encodeURIComponent(out.moodBoardId)}`, text: out.moodBoard?.name || 'Open mood board' });
   } else if (stageId === 'song') {
-    add('songSource', 'Source', out.songSource ? AUTONOMOUS_SONG_SOURCE_LABELS[out.songSource] || out.songSource : null);
+    add('songSource', 'Source', out.songSource === 'reused' ? 'Existing song' : out.songSource ? AUTONOMOUS_SONG_SOURCE_LABELS[out.songSource] || out.songSource : null);
     add('songFallbackReason', 'Why Suno was skipped', out.songFallbackReason);
     add('sunoSongIds', 'Suno song ids', Array.isArray(out.sunoSongIds) ? out.sunoSongIds.join(', ') : null, { mono: true });
   }
