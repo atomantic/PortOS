@@ -57,7 +57,8 @@ import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
  */
 
 import { meatspaceEvents } from './meatspaceEvents.js';
-import { join, basename } from 'path';
+import { join } from 'path';
+import { documentFilenameSchema } from '../lib/digitalTwinValidation.js';
 import { readdir, readFile, unlink } from 'fs/promises';
 import { existsSync } from 'fs';
 import { atomicWrite, readJSONFile, ensureDir, PATHS } from '../lib/fileUtils.js';
@@ -435,11 +436,16 @@ function documentLiveStamp(doc) {
  * Returns the surviving documents plus the merged tombstone list.
  */
 export function mergeDocumentsWithTombstones(local, remote) {
-  const { merged: tombstonesUnion } = mergeTombstones(local?.deletedDocuments, remote?.deletedDocuments, DOC_TOMBSTONE_OPTS);
+  const safeRecords = records => (Array.isArray(records) ? records : [])
+    .filter(record => isPlainObject(record) && safeMdName(record.filename));
+  const localDocuments = safeRecords(local?.documents);
+  const remoteDocuments = safeRecords(remote?.documents);
+  const { merged: tombstonesUnion } = mergeTombstones(
+    safeRecords(local?.deletedDocuments), safeRecords(remote?.deletedDocuments), DOC_TOMBSTONE_OPTS
+  );
 
   const remoteStamps = new Map();
-  for (const doc of Array.isArray(remote?.documents) ? remote.documents : []) {
-    if (!isPlainObject(doc) || typeof doc.filename !== 'string') continue;
+  for (const doc of remoteDocuments) {
     const prev = remoteStamps.get(doc.filename);
     remoteStamps.set(doc.filename, {
       createdAt: newerStamp(doc.createdAt, prev?.createdAt),
@@ -447,7 +453,7 @@ export function mergeDocumentsWithTombstones(local, remote) {
     });
   }
 
-  const { merged: unioned } = unionByKey(local?.documents, remote?.documents, 'filename');
+  const { merged: unioned } = unionByKey(localDocuments, remoteDocuments, 'filename');
   const documents = unioned
     .map((doc) => {
       const peer = remoteStamps.get(doc.filename);
@@ -525,7 +531,13 @@ export function mergePersonasWithTombstones(local, remote) {
  */
 export function mergeMeta(local, remote) {
   if (!isPlainObject(remote)) return { merged: local, changed: false };
-  if (!isPlainObject(local)) return { merged: remote, changed: true };
+  if (!isPlainObject(local)) {
+    const safeDocuments = mergeDocumentsWithTombstones(null, remote);
+    return { merged: { ...remote,
+      ...(Object.hasOwn(remote, 'documents') ? { documents: safeDocuments.documents } : {}),
+      ...(Object.hasOwn(remote, 'deletedDocuments') ? { deletedDocuments: safeDocuments.deletedDocuments } : {})
+    }, changed: true };
+  }
 
   let changed = false;
   const merged = { ...local };
@@ -736,12 +748,7 @@ export function mergeAutobiographyStories(local, remote) {
 // Sanitize a peer-supplied document name down to a safe `*.md` basename so a
 // malformed/buggy payload can't write outside the digital-twin dir.
 export function safeMdName(name) {
-  if (typeof name !== 'string') return null;
-  const base = basename(name);
-  if (base !== name) return null;
-  if (!base.toLowerCase().endsWith('.md')) return null;
-  if (base.startsWith('.')) return null;
-  return base;
+  return documentFilenameSchema.safeParse(name).success ? name : null;
 }
 
 // --- Snapshot ---
