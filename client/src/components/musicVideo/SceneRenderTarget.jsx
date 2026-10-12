@@ -18,7 +18,7 @@ function savedLabel(saved) {
 export function renderTargetOptions({ performance, saved }) {
   return [
     { value: '', label: `Project setting · ${savedLabel(saved)}` },
-    { value: 'local', label: 'Local LTX' },
+    { value: 'local', label: performance ? 'Local LTX-2.5 lip-sync (free)' : 'Local LTX' },
     { value: 'grok', label: performance ? 'Grok (cutaways only)' : 'Grok', disabled: performance },
     ...(performance
       ? [{ value: 'fal', label: 'fal.ai (song-driven)' }]
