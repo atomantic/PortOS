@@ -657,7 +657,9 @@ describe('directed planner', () => {
     expect(scenes[0].framePrompt).toMatch(/Signal keeper.*Signal tower.*Ochre coat/);
     expect(scenes[4].framePrompt).toMatch(/Echo hall.*Silver jacket/);
     expect(scenes.every((s) => !s.framePrompt.includes('greenhouse'))).toBe(true);
-    expect(scenes[0].prompt).toContain('We follow the signal 0');
+    // The fallback motion never quotes the lyric: a silent video model acts it out.
+    expect(scenes[0].prompt).toMatch(/^Stage a readable subject action/);
+    expect(scenes[0].prompt).not.toContain('We follow the signal');
     expect(planned.composition).toMatchObject({ mode: 'composed', style: { color: '#abcdef' } });
   });
 
