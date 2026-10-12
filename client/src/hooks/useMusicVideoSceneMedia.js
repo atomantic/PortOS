@@ -222,18 +222,21 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    * tracking it (a batch registers the job there, so a terminal event that raced
    * ahead of the kickoff is still attributed to it).
    */
-  const generateFrame = (scene, { revisionId, onJob } = {}) => {
+  const generateFrame = (scene, { revisionId, onJob, referenceImageId = null } = {}) => {
     const conditioning = conditioningReferences(project, scene);
     const problem = shotActionContractProblem(scene.direction?.actionContract, scene);
     if (problem) { toast.error(problem); return Promise.resolve({ ok: false }); }
-    const prompt = buildFramePrompt(scene);
-    if (!prompt) { toast.error('Add a frame prompt or shot prompt first'); return Promise.resolve({ ok: false }); }
+    const framePrompt = buildFramePrompt(scene);
+    if (!framePrompt) { toast.error('Add a frame prompt or shot prompt first'); return Promise.resolve({ ok: false }); }
+    // A frame picked on the card (its start or end frame) leads the references, as the image this render reworks.
+    const prompt = referenceImageId ? `${framePrompt}\nStart from the first reference image and rework it to match this prompt.` : framePrompt;
+    const references = [...(referenceImageId ? [referenceImageId] : []), ...conditioning.map((ref) => ref.imageId).filter((id) => id !== referenceImageId)];
     const projectId = project.id;
     frameLane.startScene(scene.sceneId);
     return generateImage({
       prompt,
       ...musicVideoFrameGenSize(project),
-      ...(conditioning.length ? { referenceImageFiles: conditioning.map((ref) => ref.imageId) } : {}),
+      ...(references.length ? { referenceImageFiles: references } : {}),
       musicVideo: { projectId, sceneId: scene.sceneId, ...(revisionId ? { revisionId } : {}) },
     }, { silent: true })
       .then((res) => {
@@ -278,16 +281,18 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    * `slot: 'end'` tag); a fal clip on a model that takes an end frame then ends
    * on it. Resolves `{ ok }` like generateFrame.
    */
-  const generateEndFrame = (scene) => {
-    if (!scene.referenceImageId) { toast.error('Generate a reference frame first'); return Promise.resolve({ ok: false }); }
+  const generateEndFrame = (scene, { referenceImageId = scene.referenceImageId } = {}) => {
     const endPrompt = scene.endFramePrompt?.trim();
     if (!endPrompt) { toast.error('Describe the end frame first'); return Promise.resolve({ ok: false }); }
     const projectId = project.id;
     endFrameLane.startScene(scene.sceneId);
     return generateImage({
-      prompt: `${endPrompt}. Keep the reference image's composition, subject, pose and framing; change only the visual style.`,
+      // From a frame, keep its shot and change what the prompt asks; prompt only, render it like a start frame.
+      prompt: referenceImageId
+        ? `${endPrompt}. Keep the reference image's composition, subject and framing; change only what this prompt describes.`
+        : [endPrompt, style, direction].filter(Boolean).join(', '),
       ...musicVideoFrameGenSize(project),
-      referenceImageFiles: [scene.referenceImageId],
+      ...(referenceImageId ? { referenceImageFiles: [referenceImageId] } : {}),
       musicVideo: { projectId, sceneId: scene.sceneId, slot: 'end' },
     }, { silent: true })
       .then((res) => {
