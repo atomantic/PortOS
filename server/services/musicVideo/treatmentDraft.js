@@ -289,11 +289,12 @@ function deriveCapabilityGaps(project, brief, directions) {
     id: 'medium-planning',
     detail: 'This treatment plans media only. Apply saves direction without selecting a renderer or generating assets; procedural document authoring and production enforcement are separate capabilities.',
   });
-  // Source-audio lip-sync exists only on a verified lane (#8977, fal.ai today);
+  // Source-audio lip-sync exists only on a verified lane (#8977: fal.ai, or
+  // local LTX audio-to-video);
   // judged against the project's pinned video backend at compile time.
   const backend = project.videoSettings?.backend || null;
   if (directions.some((d) => d.mode === 'performance') && !performanceCapability(backend)) {
-    gaps.push({ id: 'lip-sync', detail: `This project's video backend (${backend || 'install default'}) cannot lip-sync to the song — source-audio lip-sync is only available on fal.ai MiniMax H3. Pin fal.ai for performance shots, or frame them as non-sync (wide, silhouette, hands, backs) and cut away on sung lines.` });
+    gaps.push({ id: 'lip-sync', detail: `This project's video backend (${backend || 'install default'}) cannot lip-sync to the song — source-audio lip-sync is only available on local LTX-2.5 or fal.ai MiniMax H3. Pin one of those for performance shots, or frame them as non-sync (wide, silhouette, hands, backs) and cut away on sung lines.` });
   }
   const motionRefs = (project.visualSpec?.references || []).some((r) => r.use === 'motion-reference')
     || (project.scenes || []).some((s) => (s.takes || []).some((t) => t?.use === 'motion-reference'));
