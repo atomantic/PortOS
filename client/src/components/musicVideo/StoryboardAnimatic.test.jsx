@@ -56,7 +56,10 @@ describe('StoryboardAnimatic lyrics', () => {
   it('hands the opening title card to the lyric layer and again when it is edited', async () => {
     const card = { enabled: true, title: 'Example Song', startSec: 2, endSec: 8 };
     const { rerender } = render(<StoryboardAnimatic project={{ ...lyricProject, titleCard: card }} audioUrl="/song.mp3" />);
-    const overlay = await screen.findByTestId('animatic-lyrics');
+    // Flush the preview promise AND its message-listener effect before the one-shot
+    // handshake. Finding the iframe only observes the DOM commit, not effect readiness.
+    await act(async () => {});
+    const overlay = screen.getByTestId('animatic-lyrics');
     const post = vi.spyOn(overlay.contentWindow, 'postMessage');
     await act(async () => { window.dispatchEvent(new MessageEvent('message', { source: overlay.contentWindow, data: { type: 'portos-mv:loaded' } })); });
     expect(post).toHaveBeenCalledWith({ type: 'portos-mv:title-card', card: expect.objectContaining({ title: 'Example Song', position: 'lower-left' }) }, '*');
