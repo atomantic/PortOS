@@ -1,16 +1,11 @@
 import { useContext, useEffect, useLayoutEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router';
 import { Plus, Image as ImageIcon, Film, Code2, Type, FlagTriangleRight, Lock, LockOpen } from 'lucide-react';
-import BeatTimeline from '../BeatTimeline.jsx';
 import ContactSheetButton from '../ContactSheetButton.jsx';
 import SceneCard from '../SceneCard.jsx';
 import ScenePoster from '../ScenePoster.jsx';
 import { ShotLockContext, SHOT_LOCK_LABELS, overallShotLock } from '../ShotLock.jsx';
 import { shotNumbers } from '../ShotStepper.jsx';
-import TreatmentPanel, { treatmentSummary } from '../TreatmentPanel.jsx';
-import StageSection from '../StageSection.jsx';
-import { PlanActions } from '../ProjectActionGroups.jsx';
-import ShotPacingFields from '../ShotPacingFields.jsx';
 import { previousShot } from '../../../../../server/lib/musicVideoHandoffFrame.js';
 import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
 import { FOOTAGE_OPTIONAL_MODES } from '../../../lib/musicVideoStages.js';
@@ -52,14 +47,14 @@ function SceneLockBadge({ sceneId, state }) {
 }
 
 /**
- * Storyboard: the treatment (the brief the planner reads, then per-shot
- * direction), planning tools, the beat timeline, and the scene cards —
+ * The scene board on Shots: a thumbnail per shot with its lock and media marks,
+ * and the open shot's card, where its still and clip are made and locked —
  * one column on a phone, two and three as the column widens (a container
  * query, so the docked preview narrowing the column is accounted for). Cards
  * are collapsed to a thumbnail, lyric and status until tapped.
  */
 export default function BoardStage({ board }) {
-  const { project, locked, busy, sceneMedia, videoSettings, takes, treatment, activeSceneId, onToggleSceneExpand } = board;
+  const { project, locked, sceneMedia, videoSettings, takes, activeSceneId, onToggleSceneExpand } = board;
   const scenes = project.scenes || [];
   const lockValue = useContext(ShotLockContext);
   const shotLocks = Object.fromEntries(Object.entries(lockValue?.locks || {}).map(([id, still]) => [id, overallShotLock(still, lockValue.clips?.[id])]));
@@ -137,26 +132,6 @@ export default function BoardStage({ board }) {
   }
   return (
     <fieldset disabled={locked} className="min-w-0 space-y-3">
-      <StageSection title="Planning tools">
-        <PlanActions project={project} busy={busy} onPlan={board.onPlan} onAutoArrange={board.onAutoArrange} />
-        <ShotPacingFields project={project} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields} />
-      </StageSection>
-
-      {/* The brief feeds the shot planner; the direction is applied per shot once they exist. */}
-      <StageSection id="mv-board-treatment" title="Treatment" summary={scenes.length ? treatmentSummary(project) : 'Write the brief the shot planner follows'}>
-        <div id="mv-setup-treatment">
-          <TreatmentPanel key={`treatment-${project.id}`} project={project} treatment={treatment}
-            storyboardApproved={!!board.productionReadiness?.storyboard?.approved} />
-        </div>
-      </StageSection>
-
-      {project.audioAnalysis && scenes.length > 0 && (
-        <StageSection title="Beat timeline">
-        <BeatTimeline audioAnalysis={project.audioAnalysis} scenes={scenes} lyricCues={project.lyricCues} narrativeEvents={project.composition?.narrativeEvents}
-          onSeek={(startSec) => board.seekToScene({ startSec })} onCommit={board.commitSceneTiming} />
-        </StageSection>
-      )}
-
       <div id="mv-scene-board" className="flex items-center justify-between">
         <h3 className="text-sm font-medium">Scene board</h3>
         <div className="flex items-center gap-2">

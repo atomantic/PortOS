@@ -14,7 +14,9 @@ const labels = { art: 'Art direction', storyboard: 'Lyric-timed storyboard', pro
 // The proof is an optional check (the final render doesn't wait on it), so its heading says so.
 const OPTIONAL = { proof: true };
 // Each approval closes the step that owns its work (#10151); the page passes that step's `stage`.
-const STAGE_TABS = { art: 'cast-sets', storyboard: 'board', proof: 'produce' };
+const STAGE_TABS = { art: 'cast-sets', storyboard: 'produce', proof: 'produce' };
+// Approving the storyboard locks every shot's still, so its box says so.
+const HEADINGS = { storyboard: { open: 'Lock all stills', approved: 'All stills locked' } };
 const EMPTY_PLAYBACK = { method: 'playback', timecodedNotes: '', visualReview: '', audioReview: '', limitations: '' };
 
 const FOLD_STYLE = { scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' };
@@ -23,11 +25,11 @@ const FOLD_STYLE = { scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' };
  * Approve / Request changes, highlighted until approved. A `waiting` box has
  * nothing to review yet, so it is not highlighted either.
  */
-function ApprovalBox({ id, label, approved, optional = false, waiting = false, children }) {
+function ApprovalBox({ id, stage, label, approved, optional = false, waiting = false, children }) {
   return <section id={id} tabIndex={-1} aria-label={`Approve: ${label}`} style={FOLD_STYLE}
     className={`rounded-lg border p-3 focus:outline focus:outline-2 focus:outline-port-accent ${approved || optional || waiting ? 'border-port-border' : 'border-port-accent bg-port-accent/5'}`}>
     {/* An optional check isn't highlighted: it never competes with the step's real next action. */}
-    <h4 className="text-sm font-semibold">{approved ? `${label} approved` : optional ? label : `Approve the ${label.toLowerCase()}`}{optional && !approved && <span className="ml-2 font-normal text-port-text-muted">Optional</span>}</h4>
+    <h4 className="text-sm font-semibold">{HEADINGS[stage]?.[approved ? 'approved' : 'open'] || (approved ? `${label} approved` : optional ? label : `Approve the ${label.toLowerCase()}`)}{optional && !approved && <span className="ml-2 font-normal text-port-text-muted">Optional</span>}</h4>
     {children}
   </section>;
 }
@@ -153,7 +155,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
   const proofContent = <>
     {!excerpt && <div className="space-y-1 text-sm" aria-label="Proof approval prerequisites">
       {!ready?.art.approved && <p><a href="#mv-review-art" onClick={jump('cast-sets', 'mv-review-art')} className="text-port-accent underline">Approve the art direction</a> first.</p>}
-      {ready?.art.approved && !ready?.storyboard.approved && <p><a href="#mv-review-storyboard" onClick={jump('board', 'mv-review-storyboard')} className="text-port-accent underline">Approve the storyboard</a> first.</p>}
+      {ready?.art.approved && !ready?.storyboard.approved && <p><a href="#mv-review-storyboard" onClick={jump('produce', 'mv-review-storyboard')} className="text-port-accent underline">Lock the stills</a> first.</p>}
     </div>}
     {excerpt && <p className="text-xs text-port-text-muted break-words">{excerpt.filename || excerpt.status} · {project.productionReview?.proof?.basis === ready?.basis.proof ? 'Current source revision' : 'Source changed — render a new proof'}</p>}
     {excerpt?.status === 'error' && excerpt.error && <p role="alert" className="text-sm text-port-error break-words">{excerpt.error}</p>}
@@ -216,7 +218,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
   const artWaiting = key === 'art' && !!ready && !ready.art.approved && !ready.art.stale && !artDirectionGaps(project).ready;
   return <section id="mv-production-review" aria-label="Production review" className="space-y-3">
     {review.error && <p role="alert" className="text-port-error">{review.error}</p>}
-    <ApprovalBox id={`mv-review-${key}`} label={label} optional={!!OPTIONAL[key]} approved={!!ready?.[key].approved} waiting={artWaiting}>
+    <ApprovalBox id={`mv-review-${key}`} stage={key} label={label} optional={!!OPTIONAL[key]} approved={!!ready?.[key].approved} waiting={artWaiting}>
         {artWaiting ? <p role="status" className="mt-1 text-sm text-port-text-muted">Opens once the art direction is written and a visual guide is chosen.</p> : <>
         {/* The decision comes first, at the top of the box, with one line on what it still needs. */}
         {key === 'proof' && proofNeedsRender && !ready?.[key].approved && <div className="mt-2">{renderControls}</div>}
@@ -225,7 +227,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
           aria-describedby={approvalHelp(key) ? fieldId(`${key}-approval-help`) : undefined}
           disabled={blocked || (key === 'art' && visibleArt !== artIdentity) || ready?.[key].approved || !!ready?.[key].problems.length
             || (key === 'proof' && (playbackBlocked || !evidenceComplete))}>
-          {key === 'proof' ? machineReview ? 'Approve proof with machine evidence' : 'Approve proof — watched with sound' : `Approve ${label.toLowerCase()}`}
+          {key === 'proof' ? machineReview ? 'Approve proof with machine evidence' : 'Approve proof — watched with sound' : HEADINGS[key]?.open || `Approve ${label.toLowerCase()}`}
         </button>}
         <button type="button" className={buttonClass} onClick={() => {
           setFeedback({ ...feedback, stage: key, decision: 'request-changes' });

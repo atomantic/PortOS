@@ -77,7 +77,7 @@ import NeedsAttentionBanner from '../components/musicVideo/NeedsAttentionBanner.
 import SetupStage from '../components/musicVideo/stages/SetupStage.jsx';
 import StageChecklist from '../components/musicVideo/StageChecklist.jsx';
 import CastSetsStage from '../components/musicVideo/stages/CastSetsStage.jsx';
-import BoardStage from '../components/musicVideo/stages/BoardStage.jsx';
+import PlanStage from '../components/musicVideo/stages/PlanStage.jsx';
 import ProduceStage from '../components/musicVideo/stages/ProduceStage.jsx';
 import ReviewStage from '../components/musicVideo/stages/ReviewStage.jsx';
 import { PUBLISH_TARGETS } from '../components/musicVideo/PublishPostingPanel.jsx';
@@ -127,11 +127,16 @@ function autopilotBlocker(project) {
 const EMPTY_PRODUCTION_DRAFT = { cast: '', environments: '', visualLanguage: '', motionLanguage: '', guideArtifactId: null,
   lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [] };
 // The step each production approval closes (#10151); it sits at the bottom of that step.
-const APPROVAL_STAGE_BY_TAB = { 'cast-sets': 'art', board: 'storyboard', produce: 'proof' };
+// Shots closes with Lock all stills (the storyboard approval); once the stills are locked, a
+// production run parked on its pilot shows its optional animated proof there instead.
+const APPROVAL_STAGE_BY_TAB = { 'cast-sets': 'art', produce: 'storyboard' };
+const approvalStageFor = (tab, project, readiness, proofActive) => (tab === 'produce' && readiness?.storyboard?.approved
+  ? (proofReviewInUse(project, readiness, { proofActive }) ? 'proof' : null)
+  : APPROVAL_STAGE_BY_TAB[tab] || null);
 // Steps reviewed by watching: the player leads them, with the approval beside it.
 const PLAYER_FIRST_STAGES = new Set(['board', 'produce', 'review']);
 const STAGE_VIEWS = {
-  setup: SetupStage, 'cast-sets': CastSetsStage, board: BoardStage, produce: ProduceStage, review: ReviewStage, publish: PublishStage,
+  setup: SetupStage, 'cast-sets': CastSetsStage, board: PlanStage, produce: ProduceStage, review: ReviewStage, publish: PublishStage,
 };
 
 
@@ -316,11 +321,12 @@ export default function MusicVideo() {
   const statusKnown = !!productionReview.readiness || !!productionReview.readinessError;
   if (selected && statusKnown && openedStage.id !== selected.id) setOpenedStage({ id: selected.id, stage: latestMusicVideoReviewDraft(selected) && !selected.renderHistoryId ? 'review' : progress.current });
   const pinnedStage = openedStage.id === selected?.id ? openedStage.stage : null;
-  const activeStage = resolveStageParam(routeStage) || (routeSceneId ? 'board' : (pinnedStage || progress.current));
+  // A shot's card lives on Shots, including links made when it lived on the Storyboard.
+  const activeStage = routeSceneId ? 'produce' : (resolveStageParam(routeStage) || pinnedStage || progress.current);
 
   const handleToggleSceneExpand = (sceneId, isExpanded) => {
     if (!selected) return;
-    const stage = activeStage || 'board';
+    const stage = 'produce';
     if (isExpanded) {
       navigate(`/music-video/${selected.id}/${stage}/scene/${sceneId}`, { replace: true });
     } else if (routeSceneId === sceneId) {
@@ -1313,7 +1319,8 @@ export default function MusicVideo() {
       ? { headline: `Status unavailable: ${productionReview.readinessError}`, tone: 'warn', needsYouStage: null }
       : { headline: 'Loading status…', tone: 'muted', needsYouStage: null };
 
-  const previewSources = selected ? listPreviewSources(selected, { finalVideoSrc: finalVideo.src, liveFirst: activeStage === 'produce', draftsFirst: activeStage === 'review', storyboardFirst: activeStage === 'board' }) : [];
+  const reviewStage = selected ? approvalStageFor(activeStage, selected, productionReview.readiness, productionReview.proof.active) : null;
+  const previewSources = selected ? listPreviewSources(selected, { finalVideoSrc: finalVideo.src, draftsFirst: activeStage === 'review', storyboardFirst: activeStage === 'board' || activeStage === 'produce' }) : [];
 
   return (
     // Below md the whole page scrolls (title bar and project header with it), so the step gets the screen.
@@ -1575,15 +1582,13 @@ export default function MusicVideo() {
                 headerAnchor={nextAction?.kind === 'goto' ? nextAction.anchor : null}
               />
             )}
-            // Make shows the optional proof only while a run's pilot or open feedback needs it.
-            review={APPROVAL_STAGE_BY_TAB[activeStage] && (activeStage !== 'produce'
-              || proofReviewInUse(selected, productionReview.readiness, { proofActive: productionReview.proof.active })) ? (
+            review={reviewStage ? (
               <ProductionReviewPanel
                 key={`${selected.id}-${activeStage}`}
                 project={selected}
                 review={productionReview}
                 onOpenArtifact={openArtifact}
-                stage={APPROVAL_STAGE_BY_TAB[activeStage]}
+                stage={reviewStage}
                 planning={planningDraft}
                 onNavigate={goToStage}
                 onSeek={(startSec) => seekToScene({ startSec }, { play: true })}
