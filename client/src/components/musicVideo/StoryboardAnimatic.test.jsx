@@ -149,6 +149,17 @@ describe('StoryboardAnimatic clips', () => {
     expect(uploadGalleryImage.mock.lastCall[0]).toBe(clip);
   });
 
+  it('moves a paused clip to the exact frame on each frame step', async () => {
+    render(<StoryboardAnimatic project={{ id: 'p', scenes: clipScenes }} audioUrl="/song.mp3" />);
+    const clip = await screen.findByLabelText('Clip for Opening');
+    Object.defineProperty(clip, 'readyState', { value: 4, configurable: true });
+    Object.defineProperty(clip, 'duration', { value: 10, configurable: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Forward 1 frame' }));
+    expect(clip.currentTime).toBeCloseTo(1.5 / 24);
+    fireEvent.click(screen.getByRole('button', { name: 'Forward 1 frame' }));
+    expect(clip.currentTime).toBeCloseTo(2.5 / 24);
+  });
+
   it('maps song time into the clip: trimmed in-point, then loop or hold past its end', () => {
     const performance = {
       sceneId: 'p', startSec: 10, endSec: 20, shotMode: 'performance', videoHistoryId: 'v1',
