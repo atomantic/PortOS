@@ -536,7 +536,8 @@ describe('source-aware playback', () => {
       expect(bedBlock().style.width).toBe('600px');
 
       reportBedLength(el, 2);
-      expect(bedBlock().style.width).toBe('120px');
+      // Metadata updates React state; wait for the measured span to render.
+      await waitFor(() => expect(bedBlock().style.width).toBe('120px'));
 
       // 2s file, 4s+4s authored fades refit to 1s+1s: gain is 0.5 at 0.5s.
       seekTo(0.5);
@@ -567,7 +568,8 @@ describe('source-aware playback', () => {
       const { container } = renderEditorRoute();
       await awaitPageLoaded('Loading timeline project');
       reportBedLength(container.querySelector('audio'), 2);
-      expect(bedBlock().style.width).toBe('120px');
+      // Metadata updates React state; wait for the measured span to render.
+      await waitFor(() => expect(bedBlock().style.width).toBe('120px'));
 
       fireEvent.click(screen.getByRole('button', { name: 'Remove bed.mp3 from timeline' }));
       expect(container.querySelector('audio')).toBeNull();
