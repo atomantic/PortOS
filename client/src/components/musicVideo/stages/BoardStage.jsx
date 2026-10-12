@@ -1,9 +1,10 @@
-import { useEffect, useLayoutEffect, useRef } from 'react';
+import { useContext, useEffect, useLayoutEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router';
-import { Plus, Image as ImageIcon, Film, Code2, Type, FlagTriangleRight } from 'lucide-react';
+import { Plus, Image as ImageIcon, Film, Code2, Type, FlagTriangleRight, Lock, LockOpen } from 'lucide-react';
 import BeatTimeline from '../BeatTimeline.jsx';
 import ContactSheetButton from '../ContactSheetButton.jsx';
 import SceneCard from '../SceneCard.jsx';
+import { ShotLockContext, SHOT_LOCK_LABELS } from '../ShotLock.jsx';
 import TreatmentPanel, { treatmentSummary } from '../TreatmentPanel.jsx';
 import StageSection from '../StageSection.jsx';
 import { PlanActions } from '../ProjectActionGroups.jsx';
@@ -42,6 +43,18 @@ function SceneMediaBadges({ scene, layered }) {
   );
 }
 
+/** Top-left mark on a Board thumbnail: locked, or changed since it was locked (an open shot shows none). */
+function SceneLockBadge({ sceneId, state }) {
+  if (state !== 'locked' && state !== 'changed') return null;
+  const Icon = state === 'locked' ? Lock : LockOpen;
+  return (
+    <span id={`scene-lock-${sceneId}`} title={SHOT_LOCK_LABELS[state]}
+      className={`port-media-overlay-strong absolute left-1 top-1 inline-flex items-center rounded p-0.5 ${state === 'locked' ? 'text-port-success' : 'text-port-warning'}`}>
+      <Icon size={12} aria-hidden="true" /><span className="sr-only">{SHOT_LOCK_LABELS[state]}</span>
+    </span>
+  );
+}
+
 /**
  * Storyboard: the treatment (the brief the planner reads, then per-shot
  * direction), planning tools, the opening title card, the beat timeline, and the scene cards —
@@ -52,6 +65,7 @@ function SceneMediaBadges({ scene, layered }) {
 export default function BoardStage({ board }) {
   const { project, locked, busy, sceneMedia, videoSettings, takes, treatment, activeSceneId, onToggleSceneExpand } = board;
   const scenes = project.scenes || [];
+  const shotLocks = useContext(ShotLockContext)?.locks || {};
   const [searchParams, setSearchParams] = useSearchParams();
   const filter = parseSceneFilter(searchParams.get('scenes'));
   const setFilter = (next) => setSearchParams((prev) => {
@@ -179,11 +193,13 @@ export default function BoardStage({ board }) {
             ref={element => { if (element) thumbnailsRef.current.set(scene.sceneId, element); else thumbnailsRef.current.delete(scene.sceneId); }}
             onClick={() => { board.seekToScene?.(scene); onToggleSceneExpand?.(scene.sceneId, true); }}
             aria-label={`Open ${scene.sectionLabel || scene.label || `Scene ${scene.order + 1}`}`}
-            aria-describedby={sceneMediaKind(scene, { layered }) || scene.endImageId ? `scene-media-${scene.sceneId}` : undefined}
+            aria-describedby={[['locked', 'changed'].includes(shotLocks[scene.sceneId]) && `scene-lock-${scene.sceneId}`,
+              (sceneMediaKind(scene, { layered }) || scene.endImageId) && `scene-media-${scene.sceneId}`].filter(Boolean).join(' ') || undefined}
             className={`min-w-0 rounded border p-2 text-left ${activeSceneId === scene.sceneId ? 'border-port-accent bg-port-accent/10' : 'border-port-border bg-port-card'}`}>
             <span className="relative block">
               {scene.referenceImageId ? <img src={musicVideoImageSrc(scene.referenceImageId)} alt="" loading="lazy" className="aspect-video w-full rounded object-cover" />
                 : <span className="flex aspect-video items-center justify-center rounded bg-port-bg text-port-text-muted"><ImageIcon size={22} aria-hidden="true" /></span>}
+              <SceneLockBadge sceneId={scene.sceneId} state={shotLocks[scene.sceneId]} />
               <SceneMediaBadges scene={scene} layered={layered} />
             </span>
             <span className="mt-1 block truncate text-sm">{scene.sectionLabel || scene.label || `Scene ${scene.order + 1}`}</span>

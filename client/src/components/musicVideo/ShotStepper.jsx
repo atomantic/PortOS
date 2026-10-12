@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { SkipBack, SkipForward } from 'lucide-react';
 import { shouldIgnoreGlobalKey } from '../../lib/a11yKeyboard.js';
+import { ShotLockButton } from './ShotLock.jsx';
 
 // Back within this far into a shot goes to the shot before it; further in, to its own start.
 const RESTART_SEC = 1;
@@ -30,6 +31,15 @@ export function shotSteps(scenes, t, range = null) {
   return { back, next, index: current + 1, count: starts.length };
 }
 
+/** The shot playing at song time `t`: the last one that has started. */
+function shotOnScreen(scenes, t) {
+  let current = null;
+  for (const scene of scenes || []) {
+    if (Number.isFinite(scene?.startSec) && scene.startSec <= t + ON_START_SEC && (!current || scene.startSec >= current.startSec)) current = scene;
+  }
+  return current;
+}
+
 const buttonCls = 'flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded border border-port-border bg-port-bg text-port-text disabled:opacity-40 sm:min-h-[28px] sm:min-w-[28px]';
 
 /**
@@ -39,6 +49,7 @@ const buttonCls = 'flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-
  */
 export default function ShotStepper({ scenes, time, onSeek, range = null, disabled = false, keys = false, className = '' }) {
   const { back, next, index, count } = shotSteps(scenes, time, range);
+  const onScreen = shotOnScreen(scenes, time);
   const latest = useRef({ back, next, onSeek, disabled });
   latest.current = { back, next, onSeek, disabled };
   useEffect(() => {
@@ -66,6 +77,7 @@ export default function ShotStepper({ scenes, time, onSeek, range = null, disabl
       <button type="button" onClick={() => onSeek(next)} disabled={disabled || next == null} aria-label="Next shot" title="Next shot" className={buttonCls}>
         <SkipForward size={14} aria-hidden="true" />
       </button>
+      {onScreen && <ShotLockButton sceneId={onScreen.sceneId} />}
     </div>
   );
 }

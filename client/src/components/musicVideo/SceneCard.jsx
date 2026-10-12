@@ -22,6 +22,7 @@ import { buildSceneTimingPresentation } from '../../lib/musicVideoSceneTiming.js
 import SceneTimingPlan from './SceneTimingPlan.jsx';
 import SceneRenderProgress from './SceneRenderProgress.jsx';
 import { COVERAGE_TOLERANCE_SEC, SCENE_ATTENTION_LABELS, sceneAttention } from '../../lib/musicVideoSceneAttention.js';
+import { ShotLockButton } from './ShotLock.jsx';
 
 // The two timeline-bound scene fields rendered as identical number inputs.
 const SCENE_TIME_FIELDS = [['Start', 'startSec'], ['End', 'endSec']];
@@ -213,6 +214,7 @@ export default function SceneCard({
       <div className="space-y-2 p-3 pt-0">
         {/* A move swaps this shot with its neighbor; the song timing and lyric stay with the slot. */}
         <div className="flex items-center justify-end gap-2">
+          <ShotLockButton sceneId={scene.sceneId} className="mr-auto" />
           {documentComposition && (
             <span className="mr-auto text-[11px] text-gray-400">Shot order comes from the composition document, so it can't be reordered here.</span>
           )}

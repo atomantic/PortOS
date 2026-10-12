@@ -1356,6 +1356,10 @@ export const musicVideoDocumentShotsSchema = z.object({
 // the current start frame as its end frame.
 export const musicVideoContinueShotSchema = z.object({ keepStillAsEnd: z.boolean().optional() }).strict();
 export const musicVideoProductionImportSchema = z.object({ source: z.string().min(2).max(250000) }).strict();
+export const musicVideoShotLockSchema = z.object({
+  sceneIds: z.array(z.string().min(1).max(200)).min(1).max(500),
+  locked: z.boolean(),
+}).strict();
 export const musicVideoProductionApprovalSchema = z.object({
   stage: z.enum(['art', 'storyboard', 'proof']), basis: z.string().min(1).max(128),
   password: z.string().max(1024).optional(),

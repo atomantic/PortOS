@@ -66,6 +66,7 @@ import CreateProjectDrawer from '../components/musicVideo/CreateProjectDrawer.js
 import AutonomousStartDrawer from '../components/musicVideo/AutonomousStartDrawer.jsx';
 import { automationDraftFrom, automationFromDraft } from '../lib/musicVideoAutomation.js';
 import { listUniverseNames } from '../services/apiUniverseBuilder.js';
+import { ShotLockContext } from '../components/musicVideo/ShotLock.jsx';
 import MusicVideoLayout, { MUSIC_VIDEO_PAGE_ID, MUSIC_VIDEO_SCROLL_ID } from '../components/musicVideo/MusicVideoLayout.jsx';
 import ProjectManageActions from '../components/musicVideo/ProjectManageActions.jsx';
 import ProjectSettingsDrawer, { SETTINGS_TAB_IDS } from '../components/musicVideo/ProjectSettingsDrawer.jsx';
@@ -296,6 +297,10 @@ export default function MusicVideo() {
     navigate(newest ? `/music-video/${encodeURIComponent(newest.id)}/${stageOnlyParam}` : "/music-video", { replace: true });
   }, [stageOnlyParam, summaries.loaded, summaries.error, sortedProjects, navigate]);
   const productionReview = useMusicVideoProductionReview({ project: selected, replaceProject });
+  const shotLocks = productionReview.readiness?.storyboard?.shotLocks;
+  const shotLockValue = shotLocks
+    ? { locks: shotLocks, toggle: (sceneId, lock) => productionReview.lockShots([sceneId], lock), busy: productionReview.busy }
+    : null;
   // Posting (#9282): fill each platform's post in the PortOS Browser, post on a second press.
   const publishing = useMusicVideoPublishing({ project: selected, replaceProject });
   // Publish counts every platform the director turned on (#9287), not just any one post.
@@ -1523,6 +1528,7 @@ export default function MusicVideo() {
           />
         )}
         {selected && (
+          <ShotLockContext.Provider value={shotLockValue}>
           <MusicVideoLayout
             project={selected}
             trackLabel={trackName(selected.trackId)}
@@ -1592,6 +1598,7 @@ export default function MusicVideo() {
           >
             <StageView key={selected.id} board={board} />
           </MusicVideoLayout>
+          </ShotLockContext.Provider>
         )}
       </div>
     </div>
