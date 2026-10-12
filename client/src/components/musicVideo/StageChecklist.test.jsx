@@ -23,11 +23,16 @@ describe('StageChecklist Revert buttons (#10241)', () => {
 });
 
 describe('StageChecklist on a finished step', () => {
-  it('folds the done rows into one line so the step content comes up sooner', () => {
-    render(<StageChecklist items={[{ id: 'a', label: 'Track attached', done: true }, { id: 'b', label: 'Lyric timing verified', done: true }]} />);
+  // Uniquely catches a done step reading as a to-do list (labels with no done marks, or an open optional item among them).
+  it('folds the done rows into one checked line so the step content comes up sooner', () => {
+    render(<StageChecklist items={[{ id: 'a', label: 'Track attached', done: true }, { id: 'b', label: 'Lyric timing verified', done: true },
+      { id: 'c', label: 'Song style read', done: false, optional: true }]} />);
     expect(screen.getByText('All done')).toBeTruthy();
-    expect(screen.getByText('Track attached · Lyric timing verified')).toBeTruthy();
-    expect(screen.queryByRole('list')).toBeNull();
+    const done = screen.getByRole('list', { name: 'Done' });
+    expect([...done.querySelectorAll('li')].map((li) => [li.textContent, !!li.querySelector('svg')]))
+      .toEqual([['Track attached', true], ['Lyric timing verified', true]]);
+    expect(screen.queryByText(/Song style read/)).toBeNull();
+    expect(screen.queryByRole('button')).toBeNull();
   });
 
   it('keeps one row per item while anything is left', () => {

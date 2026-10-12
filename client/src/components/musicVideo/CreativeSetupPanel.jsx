@@ -96,7 +96,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
   return <section className="bg-port-card border border-port-border rounded-lg p-3 space-y-3 min-w-0 break-words" aria-label="Creative setup">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <h3 className="text-sm font-medium">Character style, universe, cast, places &amp; objects</h3>
-      {!editing && <button type="button" onClick={begin} className="text-sm text-port-accent min-h-[44px]">Set up creative direction</button>}
+      {!editing && <button type="button" onClick={begin} aria-label={subjects.length || project.concept?.characterStyleId ? 'Edit creative direction' : undefined} className="text-sm text-port-accent min-h-[44px]">{subjects.length || project.concept?.characterStyleId ? 'Edit' : 'Set up creative direction'}</button>}
     </div>
     {!editing && project.concept?.characterStyleId && <p className="text-xs">Character style: {project.concept.characterStyle?.split(':')[0] || project.concept.characterStyleId}</p>}
     {!editing ? <p className="text-xs text-port-text-muted">{subjects.length ? subjects.map((s) => `${s.name}${s.role === 'protagonist' ? ' (protagonist)' : s.role === 'band' ? ' (band)' : ''}`).join(' · ') : 'Create the band or protagonist, choose a universe, and select the places and objects that anchor the story.'}</p> : <fieldset disabled={saving} className="space-y-3 min-w-0">

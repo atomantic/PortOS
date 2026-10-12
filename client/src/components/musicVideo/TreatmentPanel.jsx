@@ -47,7 +47,7 @@ function BeatObjective({ beat, idFor, onSave }) {
 /** One-line state for the section header: revision, applied state and capability gaps. */
 export function treatmentSummary(project) {
   const t = project.treatment;
-  if (!t) return 'Not started';
+  if (!t) return 'Optional · not used';
   const parts = [`rev ${t.revision}`];
   if (t.arc) {
     parts.push(`${t.shotDirections.length} directed ${t.shotDirections.length === 1 ? 'shot' : 'shots'}`);
@@ -109,6 +109,9 @@ export default function TreatmentPanel({ project, treatment: api, storyboardAppr
 
   return (
     <div className="space-y-3">
+      <p className="text-xs text-port-text-muted">
+        Optional. The brief steers the shot planner, and a compiled arc adds per-shot direction. A board planned without one is complete.
+      </p>
       {storyboardApproved && (
         <p role="note" className="rounded border border-port-warning/40 bg-port-warning/5 p-2 text-xs text-port-warning">
           The storyboard is approved. Editing the treatment will need re-approval of the storyboard.

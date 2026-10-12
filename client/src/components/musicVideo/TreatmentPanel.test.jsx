@@ -264,7 +264,7 @@ describe('TreatmentPanel brief and direction', () => {
     expect(screen.queryByRole('note')).toBeNull();
   });
   it('summarizes revision, applied state and gaps for the section header', () => {
-    expect(treatmentSummary({})).toBe('Not started');
+    expect(treatmentSummary({})).toBe('Optional · not used');
     expect(treatmentSummary(PROJECT)).toBe('rev 3 · 0 directed shots · not applied · 1 capability gap');
   });
 });

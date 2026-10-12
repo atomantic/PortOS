@@ -137,3 +137,12 @@ describe('tools / policy conflict', () => {
     expect(onSave.mock.calls[0][0].concept).toMatchObject({ characterStyleId: 'claudia-slopcore' });
   });
 });
+
+describe('creative setup already made', () => {
+  it('offers Edit, not Set up, once the cast exists', () => {
+    const made = { id: 'mv2', concept: { subjects: [{ id: 's1', kind: 'character', name: 'Example lead', role: 'protagonist' }] }, visualSpec: {} };
+    render(<MemoryRouter><CreativeSetupPanel project={made} onSave={vi.fn()} onPendingChange={vi.fn()} /></MemoryRouter>);
+    expect(screen.getByRole('button', { name: 'Edit creative direction' })).toBeTruthy();
+    expect(screen.queryByText('Set up creative direction')).toBeNull();
+  });
+});

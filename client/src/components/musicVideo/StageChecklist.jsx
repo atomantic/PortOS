@@ -27,8 +27,16 @@ export default function StageChecklist({ items, onAction, onRevert, headerAnchor
           {allDone ? 'All done' : `${done} of ${required.length} done`}
         </span>
       </div>
-      {/* A finished step needs no rows: one line names what was done, so the step's own work comes up sooner. */}
-      {allDone ? <p className="mt-1 text-xs text-port-text-muted">{items.map((item) => item.label).join(' · ')}</p> : (
+      {/* A finished step needs no rows: one wrapped line names what was done, each with its check, so the step's own work comes up sooner. */}
+      {allDone ? (
+        <ul aria-label="Done" className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-port-text-muted">
+          {items.filter((item) => item.done).map((item) => (
+            <li key={item.id} className="flex min-w-0 items-start gap-1 break-words">
+              <CheckCircle2 size={12} className="mt-0.5 shrink-0 text-port-success" aria-hidden="true" />{item.label}
+            </li>
+          ))}
+        </ul>
+      ) : (
       <ul className="mt-2 space-y-1.5">
         {items.map((item) => (
           // The action wraps under the text on a phone instead of squeezing it into a narrow column.
