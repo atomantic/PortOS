@@ -24,6 +24,7 @@ import SceneRenderProgress from './SceneRenderProgress.jsx';
 import { COVERAGE_TOLERANCE_SEC, SCENE_ATTENTION_LABELS, sceneAttention } from '../../lib/musicVideoSceneAttention.js';
 import { ShotLockButton, useShotLock } from './ShotLock.jsx';
 import ScenePoster from './ScenePoster.jsx';
+import SceneRenderTarget, { renderTargetOverrides } from './SceneRenderTarget.jsx';
 
 // The two timeline-bound scene fields rendered as identical number inputs.
 const SCENE_TIME_FIELDS = [['Start', 'startSec'], ['End', 'endSec']];
@@ -75,7 +76,8 @@ const MOVE_DOCUMENT_TITLE = "This video's shot order comes from its composition 
 // the persisted scene (and its speaker), so an unsaved or failed speaker edit
 // must hold back every video entry point — Generate video and the failure Retry.
 // Returns the refusal reason, or null when the render may go ahead.
-function videoGenerationRefusal({ settingsSaving, speakerUnsaved, referenceImageId, generatingVideo, videoBlockedReason, performanceBlocked }) {
+function videoGenerationRefusal({ settingsSaving, speakerUnsaved, referenceImageId, generatingVideo, videoBlockedReason, performanceBlocked, lockBlocked }) {
+  if (lockBlocked) return lockBlocked;
   if (videoBlockedReason) return videoBlockedReason;
   if (performanceBlocked) return performanceBlocked;
   if (speakerUnsaved) return 'Save the speaker / singer edit first';
@@ -87,7 +89,7 @@ function videoGenerationRefusal({ settingsSaving, speakerUnsaved, referenceImage
 
 export default function SceneCard({
   scene, index, shotNumber = null, isLast, generatingFrame, generatingVideo, frameProgress = null, videoProgress = null,
-  settingsSaving, videoBlockedReason, canContinueShot,
+  settingsSaving, videoBlockedReason, videoBlockedReasonFor = null, canContinueShot,
   onMove, onDelete, onEditLocal, onSave,
   onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
   onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, takeBusy = false, layered = false, documentComposition = false,
@@ -134,8 +136,15 @@ export default function SceneCard({
   const fieldId = (name) => `mv-scene-${scene.sceneId}-${name}`;
   // #10297: a code shot is drawn by the composition, so it has no frame or clip to make.
   const codeShot = layered && layer === 'code';
+  // Where this shot's clip renders: the project's saved renderer unless the card picks another for this shot.
+  const [renderPick, setRenderPick] = useState('');
+  const renderOverrides = renderTargetOverrides(renderPick, falVideoSettings || {});
+  const renderSettings = renderOverrides ? { ...falVideoSettings, ...renderOverrides } : falVideoSettings;
+  const renderLane = renderOverrides
+    ? (renderSettings.backend === 'local' && renderSettings.generationMode === 'audioReactive' ? 'local' : renderSettings.backend)
+    : lipSyncBackend;
   const timing = buildSceneTimingPresentation({
-    scene, layer, lipSyncBackend, songDurationSec, falVideoSettings,
+    scene, layer, lipSyncBackend: renderLane, songDurationSec, falVideoSettings: renderSettings,
     nextEndSec, isLast, documentComposition, hasMergeNext: !!onMergeNext,
   });
   const { performance, capability, performanceBlocked, performanceCost } = timing;
@@ -144,7 +153,12 @@ export default function SceneCard({
     excerptStartSec: performanceReview?.excerptStartSec, backend: lipSyncBackend, videoSettings: falVideoSettings || {} });
   const shotModeId = `mv-shot-mode-${scene.sceneId}`;
   // #10152: what needs the director's attention, visible without opening the card.
-  const locked = useShotLock(scene.sceneId)?.state === 'locked';
+  const shotLock = useShotLock(scene.sceneId);
+  const locked = shotLock?.state === 'locked';
+  // A clip needs its still locked, and a locked video stays as it is until unlocked.
+  const lockBlocked = !shotLock ? null
+    : shotLock.clip === 'locked' ? 'Video locked. Unlock the video to render it again.'
+      : shotLock.still !== 'locked' ? 'Lock the still first' : null;
   const attention = sceneAttention(scene, { layered, footageOptional, lipSyncBackend, songDurationSec, clipSec, failed: failedScenes || {}, songReview, videoSettings: falVideoSettings, locked });
   const songChange = songReview?.[scene.sceneId];
   const generatingLane = generatingFrame && generatingVideo ? 'Frame + clip' : generatingFrame ? 'Frame' : generatingVideo ? 'Clip' : null;
@@ -154,9 +168,25 @@ export default function SceneCard({
     ? scene.lastFailure : null;
   const videoRefusal = videoGenerationRefusal({
     settingsSaving, speakerUnsaved: performance && (speakerDirty || speakerSaving),
-    referenceImageId: scene.referenceImageId, generatingVideo, videoBlockedReason, performanceBlocked,
+    referenceImageId: scene.referenceImageId, generatingVideo, performanceBlocked, lockBlocked,
+    videoBlockedReason: renderOverrides && videoBlockedReasonFor ? videoBlockedReasonFor(renderSettings) : videoBlockedReason,
   });
-  const generateVideo = () => { if (!videoRefusal) onGenerateVideo?.(scene); };
+  const generateVideo = () => {
+    if (videoRefusal) return;
+    if (renderOverrides) onGenerateVideo?.(scene, { target: renderOverrides });
+    else onGenerateVideo?.(scene);
+  };
+  const renderCost = performance ? performanceCost : timing.falCost;
+  const promptField = (
+    <textarea
+      aria-label="Shot prompt"
+      value={scene.prompt || ''} rows={2}
+      onChange={(e) => onEditLocal(scene.sceneId, { prompt: e.target.value })}
+      onBlur={(e) => onSave(scene.sceneId, { prompt: e.target.value })}
+      placeholder={layer === 'footage' ? 'Motion prompt: what happens in this shot' : "Shot prompt — what this scene's video should show"}
+      className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
+    />
+  );
   return (
     <div className="min-w-0">
     <details
@@ -223,14 +253,8 @@ export default function SceneCard({
           </button>
           <button onClick={() => onDelete(scene.sceneId)} aria-label="Delete scene" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-port-error" title="Delete scene"><Trash2 size={14} /></button>
         </div>
-        <textarea
-          aria-label="Shot prompt"
-          value={scene.prompt || ''} rows={2}
-          onChange={(e) => onEditLocal(scene.sceneId, { prompt: e.target.value })}
-          onBlur={(e) => onSave(scene.sceneId, { prompt: e.target.value })}
-          placeholder="Shot prompt — what this scene's video should show"
-          className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
-        />
+        {/* A footage shot's prompt is its motion, edited beside its Render button below. */}
+        {(layer !== 'footage' || codeShot) && promptField}
         {(scene.lyricText || scene.visualIntent || scene.direction) && (
           <div className="text-[11px] text-port-text-muted space-y-0.5">
             {scene.lyricText && <p className="italic break-words">♪ {scene.lyricText}</p>}
@@ -363,7 +387,7 @@ export default function SceneCard({
             Set a start and end — a {{ card: 'title card', code: 'code-drawn shot' }[layer] || 'still'} runs for exactly its span.
           </p>
         )}
-        <SceneTimingPlan timing={timing} sceneId={scene.sceneId} lipSyncBackend={lipSyncBackend} onSplit={onSplit} onMergeNext={onMergeNext} />
+        <SceneTimingPlan timing={timing} sceneId={scene.sceneId} lipSyncBackend={renderLane} onSplit={onSplit} onMergeNext={onMergeNext} />
         {underCovered && (
           <div role="alert" className="flex flex-wrap items-center gap-2 rounded border border-port-warning/40 bg-port-warning/10 px-2 py-1.5 text-xs text-port-warning">
             <AlertTriangle size={13} className="shrink-0" />
@@ -455,7 +479,15 @@ export default function SceneCard({
             onEditLocal={onEditLocal} onSave={onSave} onOpenPreview={onOpenPreview} takeBusy={takeBusy}
             onSelectTake={onSelectTake} onReviewTake={onReviewTake} videoSettings={falVideoSettings} />
         )}
-        {/* Scene clip — i2v video generated from the reference frame (Phase 1) */}
+        {/* Render: the motion prompt, where this shot renders and what it costs, then its clip (Phase 1). */}
+        <section aria-label="Render" className="space-y-2 rounded border border-port-border p-2">
+        <h4 className="text-xs font-medium">Render</h4>
+        {layer === 'footage' && promptField}
+        <div className="flex flex-wrap items-center gap-2">
+          <SceneRenderTarget id={fieldId('render-on')} value={renderPick} onChange={setRenderPick} performance={performance}
+            saved={falVideoSettings || {}} disabled={!!generatingVideo} />
+          {renderCost && <span className="text-[11px] text-port-text-muted">{renderCost}</span>}
+        </div>
         <div className="flex items-center gap-2 flex-wrap">
           {scene.videoHistoryId && performance && (
             <PerformanceEvidence key={scene.videoHistoryId} clipSrc={clipSrc} instruction={instruction}
@@ -503,9 +535,9 @@ export default function SceneCard({
             className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
             title={videoRefusal
               || (performance ? `${capability.style === 'music' ? "Animate this scene's frame to the song" : "Lip-sync this scene's frame to the song"} via ${capability.label} — ${performanceCost}`
-                : "Generate this scene's video from its reference frame (i2v)")}>
+                : "Render this shot's clip from its still")}>
             {generatingVideo ? <Activity size={14} className="animate-spin" /> : <Video size={14} />}
-            {generatingVideo ? 'Generating video…' : (scene.videoHistoryId ? 'New video take' : 'Generate video')}
+            {generatingVideo ? 'Rendering…' : (scene.videoHistoryId ? 'Render again' : 'Render')}
           </button>
           {scene.videoHistoryId && canContinueShot && (
             <button
@@ -529,6 +561,7 @@ export default function SceneCard({
           onSelect={(take) => onSelectTake?.(scene, take)}
           onReview={(take, review) => onReviewTake?.(scene, take, review)}
           onOpenPreview={onOpenPreview} />
+        </section>
         </>)}
       </div>
     </details>

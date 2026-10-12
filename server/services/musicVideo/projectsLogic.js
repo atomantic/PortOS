@@ -526,9 +526,16 @@ function buildScene(input, { order }) {
   };
 }
 
+/** Where a new scene goes: before the first timed scene that starts after it; untimed scenes go last. */
+function insertByTime(scenes, scene) {
+  const at = scene.startSec;
+  const idx = typeof at === 'number' ? scenes.findIndex((s) => typeof s.startSec === 'number' && s.startSec > at) : -1;
+  return idx < 0 ? [...scenes, scene] : [...scenes.slice(0, idx), scene, ...scenes.slice(idx)];
+}
+
 /**
- * Append a scene to the board. Validates the input, assigns a sceneId and the
- * next order index. Returns `{ project, scene }`. A thin single-item wrapper
+ * Add a scene to the board at its time. Validates the input, assigns a sceneId and
+ * renumbers order. Returns `{ project, scene }`. A thin single-item wrapper
  * over `addScenes` so the validate/build/order logic lives in exactly one
  * place.
  */
@@ -538,23 +545,26 @@ export function addScene(project, sceneInput) {
 }
 
 /**
- * Append several scenes to the board in one pass (the autonomous planner,
+ * Add several scenes to the board in one pass (the autonomous planner,
  * #1855) — a single `touch`/persist instead of N sequential addScene calls, so
  * a 10-section plan is one write (and one peer-sync emit) instead of ten.
- * Returns `{ project, scenes }` (the newly-created scenes, in input order).
+ * A timed scene goes in at its time, so the board stays in song order; an
+ * untimed one is appended. Returns `{ project, scenes }` (the newly-created
+ * scenes, in input order).
  */
 export function addScenes(project, sceneInputs) {
   const list = Array.isArray(sceneInputs) ? sceneInputs : [];
-  const existing = project.scenes || [];
-  const added = [];
-  let order = existing.length;
+  let scenes = project.scenes || [];
+  const ids = [];
   for (const input of list) {
     const data = parseSceneOrThrow(musicVideoSceneCreateSchema, input);
-    added.push(buildScene(data, { order }));
-    order += 1;
+    const scene = buildScene(data, { order: 0 });
+    ids.push(scene.sceneId);
+    scenes = insertByTime(scenes, scene);
   }
-  const next = touch(project, { scenes: [...existing, ...added] });
-  return { project: next, scenes: added };
+  scenes = scenes.map((s, i) => (s.order === i ? s : { ...s, order: i }));
+  const next = touch(project, { scenes });
+  return { project: next, scenes: ids.map((id) => scenes.find((s) => s.sceneId === id)) };
 }
 
 /**
@@ -727,23 +737,19 @@ function lyricTextWithin(cues, startSec, endSec) {
  * piece is a new scene placed right after it, carrying the shot's direction
  * and the selected reference frame (as a take, so the frame is ready to
  * animate) but no clip — the old clip was generated for the whole span. Each
- * piece's `lyricText` is the timed lines sung inside it. Returns `{ project, scenes }` (all pieces, in
- * order); throws 400 when the shot is untimed or already fits one take.
+ * piece's `lyricText` is the timed lines sung inside it. `atSec` instead cuts
+ * the shot in two at that song time, whatever the backend. Returns `{ project, scenes }` (all pieces, in
+ * order); throws 400 when the shot is untimed, already fits one take, or `atSec` falls outside it.
  */
-export function splitScene(project, sceneId, { backend = null } = {}) {
+export function splitScene(project, sceneId, { backend = null, atSec = null } = {}) {
   const scenes = project.scenes || [];
   const idx = scenes.findIndex((s) => s.sceneId === sceneId);
   if (idx < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
   const scene = scenes[idx];
-  const lane = backend || project.videoSettings?.backend || null;
-  const maxSec = shotSplitLimit(scene, lane, project.videoSettings);
-  if (maxSec == null) {
-    throw new ServerError('This backend renders the shot at any length — there is nothing to split.', { status: 400, code: 'MUSIC_VIDEO_SPLIT_NOT_NEEDED' });
-  }
-  const plan = planShotSplit({
+  const plan = atSec != null ? splitAtTime(scene, atSec) : planShotSplit({
     startSec: scene.startSec,
     endSec: scene.endSec,
-    maxSec,
+    maxSec: splitLimitOrThrow(project, scene, backend),
     lyricCues: project.lyricCues,
     phrases: project.phrases,
     beats: project.audioAnalysis?.beats,
@@ -805,6 +811,29 @@ export function splitScene(project, sceneId, { backend = null } = {}) {
 }
 
 const timedSec = (v) => typeof v === 'number' && Number.isFinite(v);
+
+function splitLimitOrThrow(project, scene, backend) {
+  const maxSec = shotSplitLimit(scene, backend || project.videoSettings?.backend || null, project.videoSettings);
+  if (maxSec == null) {
+    throw new ServerError('This backend renders the shot at any length — there is nothing to split.', { status: 400, code: 'MUSIC_VIDEO_SPLIT_NOT_NEEDED' });
+  }
+  return maxSec;
+}
+
+/** Shortest piece a split at a chosen time may leave. */
+const MIN_SPLIT_PIECE_SEC = 0.1;
+
+/** Two pieces cut at `atSec`, which must fall inside the timed shot. */
+function splitAtTime(scene, atSec) {
+  const { startSec, endSec } = scene;
+  if (!timedSec(startSec) || !timedSec(endSec)) {
+    return { ok: false, code: 'MUSIC_VIDEO_SPLIT_UNTIMED', message: 'Give this shot a start and end time before splitting it.' };
+  }
+  if (atSec < startSec + MIN_SPLIT_PIECE_SEC || atSec > endSec - MIN_SPLIT_PIECE_SEC) {
+    return { ok: false, code: 'MUSIC_VIDEO_SPLIT_OUT_OF_RANGE', message: `Split inside the shot, between ${startSec + MIN_SPLIT_PIECE_SEC}s and ${endSec - MIN_SPLIT_PIECE_SEC}s.` };
+  }
+  return { ok: true, pieces: [{ startSec, endSec: atSec }, { startSec: atSec, endSec }] };
+}
 
 /**
  * Join a scene with the one after it — the inverse of `splitScene`. The first

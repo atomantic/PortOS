@@ -1489,9 +1489,10 @@ router.post('/:id/scenes/reorder', asyncHandler(async (req, res) => {
 
 // Split a shot its backend cannot render in one take (#8977): a performance
 // longer than the lip-sync window, a Grok cutaway longer than its longest clip.
+// With `atSec`, cut it in two at that song time instead.
 router.post('/:id/scenes/:sceneId/split', asyncHandler(async (req, res) => {
-  const { backend } = validateRequest(musicVideoSceneSplitSchema, req.body ?? {});
-  res.json(await splitProjectScene(req.params.id, req.params.sceneId, { backend }));
+  const { backend, atSec } = validateRequest(musicVideoSceneSplitSchema, req.body ?? {});
+  res.json(await splitProjectScene(req.params.id, req.params.sceneId, { backend, atSec }));
 }));
 
 // Merge a scene with the next one — the inverse of split.

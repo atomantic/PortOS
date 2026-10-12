@@ -248,6 +248,39 @@ export function preserveAutomatedShotLocks(before, after, source) {
 }
 
 /**
+ * Keep the director's still locks through a change that adds shots or reshapes
+ * the board (a new shot, a split). Every shot locked before stays locked by its
+ * own timing-free lock, even one covered only by a whole-board approval the
+ * change stales; `from` maps a new shot to the shot it was cut from, and a new
+ * piece of a locked still is locked too. Clip locks are not copied: a new piece
+ * has no clip of its own.
+ */
+export function carryShotLocks(before, after, { from = {} } = {}) {
+  const locks = shotLocks(before);
+  if (!locks) return after;
+  const held = before.productionReview?.shotApprovals || {};
+  const board = before.productionReview?.approvals?.storyboard;
+  const lockOf = scene => held[scene.sceneId] || { ...board, fromBoardApproval: true };
+  const shotApprovals = { ...after.productionReview?.shotApprovals };
+  let carried = false;
+  for (const scene of before.scenes || []) {
+    if (locks[scene.sceneId] !== 'locked' || !after.scenes?.some(s => s.sceneId === scene.sceneId)) continue;
+    const own = held[scene.sceneId];
+    if (own?.v === STILL_LOCK_VERSION) continue;
+    shotApprovals[scene.sceneId] = stillLock(before, scene, lockOf(scene));
+    carried = true;
+  }
+  for (const [pieceId, sourceId] of Object.entries(from)) {
+    const source = before.scenes?.find(s => s.sceneId === sourceId);
+    const piece = after.scenes?.find(s => s.sceneId === pieceId);
+    if (!source || !piece || locks[sourceId] !== 'locked') continue;
+    shotApprovals[pieceId] = stillLock(after, piece, lockOf(source));
+    carried = true;
+  }
+  return carried ? { ...after, productionReview: { ...after.productionReview, shotApprovals } } : after;
+}
+
+/**
  * Lock or unlock Board shots for the director. A lock binds to the shot as it is now.
  * `stage: 'video'` locks or unlocks a video shot's selected clip, which needs its
  * still locked first; unlocking a still unlocks its clip too.

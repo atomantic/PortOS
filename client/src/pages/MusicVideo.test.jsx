@@ -1037,7 +1037,7 @@ describe('MusicVideo project video renderer', () => {
     expect(await screen.findByLabelText('Scene video renderer')).toHaveProperty('value', '');
     closeSettings();
     await openStage('produce');
-    fireEvent.click(screen.getByRole('button', { name: /^Generate video$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Render$/ }));
     await waitFor(() => expect(generateVideo).toHaveBeenCalled());
     expect(generateVideo.mock.calls.at(-1)[0]).not.toHaveProperty('backend');
     expect(generateVideo.mock.calls.at(-1)[0]).not.toHaveProperty('modelId');
@@ -1073,7 +1073,7 @@ describe('MusicVideo project video renderer', () => {
 
     closeSettings();
     await openStage('produce');
-    fireEvent.click(screen.getByRole('button', { name: /^Generate video$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Render$/ }));
     await waitFor(() => expect(generateVideo).toHaveBeenCalledWith(expect.objectContaining({
       backend: 'local',
       modelId: 'ltx23_distilled_q4',
@@ -1120,7 +1120,7 @@ describe('MusicVideo project video renderer', () => {
 
     closeSettings();
     await openStage('produce');
-    fireEvent.click(screen.getByRole('button', { name: /^Generate video$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Render$/ }));
     await waitFor(() => expect(generateVideo).toHaveBeenCalledWith(expect.objectContaining({
       backend: 'local',
       modelId: 'ltx23_distilled_q4',
@@ -1187,7 +1187,7 @@ describe('MusicVideo project video renderer', () => {
       reactions: [{ startSec: 1, endSec: 2, subject: 'Listener', description: 'Turns back' }] };
     await openProject({ ...PROJECT_NO_CLIP, videoSettings: { backend: 'fal', falDuration: 6 },
       scenes: [{ ...PROJECT_NO_CLIP.scenes[0], startSec: 0, endSec: 4, direction: { actionContract } }] }, 'produce');
-    fireEvent.click(await findEnabledByRole('button', { name: /^Generate video$/ }));
+    fireEvent.click(await findEnabledByRole('button', { name: /^Render$/ }));
     await waitFor(() => expect(generateVideo).toHaveBeenCalled());
     const prompt = generateVideo.mock.calls.at(-1)[0].prompt;
     expect(prompt).toContain('Action 0.000s–1.000s: Singer');
@@ -1213,7 +1213,7 @@ describe('MusicVideo project video renderer', () => {
     await openStage('produce');
     // No model pin: the default Hailuo-02 image-to-video take, priced before it is paid for.
     expect((await screen.findByTestId('fal-cutaway-plan')).textContent).toContain('est. $0.27 (6s at 768P)');
-    fireEvent.click(await findEnabledByRole('button', { name: /^Generate video$/ }));
+    fireEvent.click(await findEnabledByRole('button', { name: /^Render$/ }));
     await waitFor(() => expect(generateVideo).toHaveBeenCalledWith(expect.objectContaining({
       backend: 'fal',
       falDuration: 6,
@@ -1224,6 +1224,28 @@ describe('MusicVideo project video renderer', () => {
     })));
     expect(generateVideo.mock.calls.at(-1)[0]).not.toHaveProperty('modelId');
     expect(generateVideo.mock.calls.at(-1)[0]).not.toHaveProperty('disableAudio');
+  });
+
+  // Uniquely catches the card's Render on pick being ignored, or rewriting the project's saved renderer.
+  it('renders one shot on the fal.ai model picked on its card, priced there, without changing the project renderer', async () => {
+    getVideoGenStatus.mockResolvedValueOnce({ connected: true, defaultModel: 'ltx23_distilled_q4', falEnabled: true,
+      models: [{ id: 'ltx23_distilled_q4', name: 'LTX-2.3 Distilled Q4', runtime: 'ltx2' }] });
+    generateVideo.mockResolvedValue({ jobId: 'fal-pick-job' });
+    await openProject({ ...PROJECT_NO_CLIP, videoSettings: { backend: 'local' } });
+    await openStage('produce');
+    const render = within(await screen.findByRole('region', { name: 'Render' }));
+    const pick = render.getByLabelText('Render on');
+    expect(pick.value).toBe('');
+    expect(within(pick).getByRole('option', { name: /^fal\.ai · .*Kling/ })).toBeTruthy();
+    expect(within(pick).queryByRole('option', { name: /LTX.*fal|fal.*LTX/ })).toBeNull();
+    fireEvent.change(pick, { target: { value: 'fal:fal-ai/minimax/hailuo-02/standard/image-to-video' } });
+    expect(render.getByText(/^est\. \$/)).toBeTruthy();
+    fireEvent.click(render.getByRole('button', { name: /^Render$/ }));
+    await waitFor(() => expect(generateVideo).toHaveBeenCalledWith(expect.objectContaining({
+      backend: 'fal', falModelId: 'fal-ai/minimax/hailuo-02/standard/image-to-video', mode: 'image', sourceImageFile: 'img1',
+    })));
+    expect(generateVideo.mock.calls.at(-1)[0]).not.toHaveProperty('modelId');
+    expect(updateMusicVideoProject.mock.calls.some(([, patch]) => patch?.videoSettings)).toBe(false);
   });
 
   it('renders a cutaway on the picked fal.ai model at the shot-covering length, sending exactly the take it prices', async () => {
@@ -1237,7 +1259,7 @@ describe('MusicVideo project video renderer', () => {
 
     // A 7.2s shot on H3 Max (5–15s whole seconds) renders 8s at $0.16/s.
     expect((await screen.findByTestId('fal-cutaway-plan')).textContent).toContain('est. $1.28 (8s at 1080P)');
-    fireEvent.click(await findEnabledByRole('button', { name: /^Generate video$/ }));
+    fireEvent.click(await findEnabledByRole('button', { name: /^Render$/ }));
     await waitFor(() => expect(generateVideo).toHaveBeenCalledWith(expect.objectContaining({
       backend: 'fal', falModelId: 'minimax/h3-max/image-to-video', falDuration: 8, falResolution: '1080P',
     })));
@@ -1259,7 +1281,7 @@ describe('MusicVideo project video renderer', () => {
     // exactly the "no fal.ai API key configured" install this covers.
     await openProject({ ...PROJECT_NO_CLIP, videoSettings: { backend: 'fal' } }, 'produce');
 
-    const generate = await screen.findByRole('button', { name: /^Generate video$/ });
+    const generate = await screen.findByRole('button', { name: /^Render$/ });
     expect(generate).toBeDisabled();
     expect(generate).toHaveProperty('title', expect.stringContaining('No fal.ai API key configured'));
     fireEvent.click(generate);
@@ -1286,7 +1308,7 @@ describe('MusicVideo project video renderer', () => {
       closeSettings();
       await openStage('produce');
       expect(await screen.findByText(/Grok video is cutaway-only/)).toBeTruthy();
-      const generate = await screen.findByRole('button', { name: /^Generate video$/ });
+      const generate = await screen.findByRole('button', { name: /^Render$/ });
       expect(generate).toBeDisabled();
       fireEvent.click(generate);
       expect(generateVideo).not.toHaveBeenCalled();
@@ -1305,7 +1327,7 @@ describe('MusicVideo project video renderer', () => {
       expect(plan.textContent).toMatch(/shot starts 1\.7[78]s into the take/);
       // The padded 5.05s window at the 1080P lip-sync default ($0.16/s).
       expect(plan.textContent).toContain('est. $0.81 (5.05s at 1080P)');
-      fireEvent.click(await findEnabledByRole('button', { name: /^Generate video$/ }));
+      fireEvent.click(await findEnabledByRole('button', { name: /^Render$/ }));
       await waitFor(() => expect(generateVideo).toHaveBeenCalledWith(expect.objectContaining({
         backend: 'fal', mode: 'image', sourceImageFile: 'img1', falResolution: '1080P',
       })));
@@ -1354,7 +1376,7 @@ describe('MusicVideo project video renderer', () => {
       }, 'produce');
 
       expect(await screen.findByText(/Grok renders a 10s clip for this 7\.2s cutaway/)).toBeTruthy();
-      fireEvent.click(await findEnabledByRole('button', { name: /^Generate video$/ }));
+      fireEvent.click(await findEnabledByRole('button', { name: /^Render$/ }));
       await waitFor(() => expect(generateVideo).toHaveBeenCalledWith(expect.objectContaining({
         backend: 'grok', grokDuration: 10,
         prompt: expect.stringContaining('around 2.0s: camera pushes in'),
@@ -1396,7 +1418,7 @@ describe('MusicVideo restricted-model license gate', () => {
     generateVideo.mockResolvedValue({ jobId: 'gated-job' });
     await openProject(PROJECT_NO_CLIP, 'produce');
 
-    const generate = await findEnabledByRole('button', { name: /^Generate video$/ });
+    const generate = await findEnabledByRole('button', { name: /^Render$/ });
     expect(screen.queryByRole('checkbox', { name: /I am eligible/ })).toBeNull();
     fireEvent.click(generate);
     await waitFor(() => expect(generateVideo).toHaveBeenCalled());

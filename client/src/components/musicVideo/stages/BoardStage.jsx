@@ -193,6 +193,7 @@ export default function BoardStage({ board }) {
               videoProgress={sceneMedia.videoSceneProgress?.[scene.sceneId]}
               settingsSaving={videoSettings.saving}
               videoBlockedReason={videoSettings.videoBlockedReason}
+              videoBlockedReasonFor={videoSettings.blockedReasonFor}
               lipSyncBackend={lipSyncBackend}
               songDurationSec={songDurationSec}
               footageOptional={attentionCtx.footageOptional}
