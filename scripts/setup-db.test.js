@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import databaseSettings from './lib/databaseSettings.cjs';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'fs';
 import { tmpdir } from 'node:os';
@@ -51,13 +52,13 @@ describe('native setup inherited endpoint', () => {
   it('builds native subprocess settings from native identity, not the active Docker port', () => {
     // Execute the real setup configuration boundary without starting its menu,
     // probing PostgreSQL, or loading the install's .env.
-    const start = setupDbSrc.indexOf('const envVar =');
+    const start = setupDbSrc.indexOf('const settings =');
     const end = setupDbSrc.indexOf('function getMode()');
     expect(start).toBeGreaterThan(0);
     expect(end).toBeGreaterThan(start);
     const configure = (env) => runInNewContext(
       setupDbSrc.slice(start, end) + '\nPG_CHILD_ENV',
-      { process: { env }, envFile: {}, parseNativePort, parseDockerPort },
+      { process: { env }, envFile: {}, databaseSettings },
     );
     expect(configure({ PGPORT: '5570', PORTOS_NATIVE_PGPORT: '5433' }).PGPORT).toBe('5433');
     expect(configure({ PGPORT: '5434' }).PGPORT).toBe('5434');
@@ -86,7 +87,7 @@ async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady
   try {
     await runInNewContext(`(async () => {${source}\n})()`, {
       scriptUrl: new URL('./setup-db.js', import.meta.url).href, dirname, join, fileURLToPath,
-      parseNativePort, parseDockerPort,
+      databaseSettings,
       createRequire: () => (name) => {
         if (name !== 'pg' || pgMissing) throw new Error("Cannot find module 'pg'");
         return { Client: class {

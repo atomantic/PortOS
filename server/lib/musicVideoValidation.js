@@ -52,6 +52,7 @@ import { shotActionContractProblem } from './musicVideoActionContract.js';
 import { NARRATIVE_EVENT_KINDS } from './musicVideoNarrativeEvents.js';
 import { MUSIC_VIDEO_MEDIA } from './musicVideoMediumPlan.js';
 import { MUSIC_VIDEO_FRAME_FITS, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_STILL_MOVES, MUSIC_VIDEO_TEXT_ZONES, MUSIC_VIDEO_VISUAL_LAYERS } from './musicVideoLayers.js';
+import { MUSIC_VIDEO_TRANSITIONS } from './musicVideoTransitions.js';
 import { CAMERA_FRAMINGS, CAMERA_MOVEMENT_VALUES, CAMERA_SPEEDS } from './cameraMovements.js';
 import { MUSIC_VIDEO_PERFORMANCE_STYLES, MUSIC_VIDEO_SHOT_MODES, SOURCE_AUDIO_LIPSYNC } from './musicVideoShotTiming.js';
 import {
@@ -603,6 +604,9 @@ const sceneLayerFields = {
   stillMove: z.enum(MUSIC_VIDEO_STILL_MOVES).optional(),
   // How a clip of another shape fills the video's frame (musicVideoLayers.js).
   frameFit: z.enum(MUSIC_VIDEO_FRAME_FITS).optional(),
+  // A VHS glitch over the cut into / out of this shot (musicVideoTransitions.js); null clears it.
+  transitionIn: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),
+  transitionOut: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),
   cardText: z.string().max(500).nullable().optional(),
   // #10302: footage that the composition also draws code over; still counts as footage.
   codeOverlay: z.boolean().optional(),

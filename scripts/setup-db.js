@@ -14,31 +14,20 @@ import { createRequire } from 'module';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { parseEnvFile } from './lib/envFile.js';
-import { parseDockerPort, parseNativePort } from './lib/setupDbChoice.js';
+import databaseSettings from './lib/databaseSettings.cjs';
 import { resolveBashBinary } from '../server/lib/bashResolver.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
 
 const envFile = parseEnvFile(join(rootDir, '.env'));
-// Resolve PG config from process.env first, then .env, then defaults — so a
-// user who sets PGPASSWORD in .env (without exporting it into the shell) is
-// respected the same way getMode() respects PGMODE in .env.
-const envVar = (key, fallback) => process.env[key] ?? envFile[key] ?? fallback;
-const PG_USER = envVar('PGUSER', 'portos');
-const PG_DATABASE = envVar('PGDATABASE', 'portos');
-const PG_PASSWORD = envVar('PGPASSWORD', 'portos');
-// Same env > .env > default rule as PM2 (ecosystem.config.cjs), so a PGHOST set
-// only in .env reaches both db.sh and the readiness probes.
-const PG_HOST = envVar('PGHOST', 'localhost');
-// A managed parent exports PGPORT for its active pool (possibly Docker), and
-// preserves the native identity separately. Ordinary shells keep legacy PGPORT.
-const PG_PORT_NATIVE = parseNativePort(process.env.PORTOS_NATIVE_PGPORT || envVar('PGPORT', 5432));
-// Docker host-port mapping (docker-compose.yml maps `${PGPORT_DOCKER:-5561}:5432`).
-// Resolve it the same tolerant way so the "ready on port N" log can't lie when a
-// user overrides PGPORT_DOCKER — a misleading success port is exactly the kind of
-// "looks fine but points at the wrong place" footgun this script exists to avoid.
-const PG_PORT_DOCKER = parseDockerPort(envVar('PGPORT_DOCKER', 5561));
+const settings = databaseSettings.resolveDatabaseSettings({ env: process.env, saved: envFile });
+const PG_USER = settings.user;
+const PG_DATABASE = settings.database;
+const PG_PASSWORD = settings.password;
+const PG_HOST = settings.host;
+const PG_PORT_NATIVE = settings.nativePort;
+const PG_PORT_DOCKER = settings.dockerPort;
 
 // Environment to pass to `db.sh` and other psql-wrapping subprocesses, so
 // values configured in .env (but not exported into the shell) reach the
@@ -80,8 +69,7 @@ const COMPOSE_ENV = {
 };
 
 function getMode() {
-  // Nonempty exported PGMODE → .env → docker; must match ecosystem.config.cjs (#10758).
-  return process.env.PGMODE || envFile.PGMODE || 'docker';
+  return settings.mode;
 }
 
 // Check if Docker is available

@@ -34,6 +34,7 @@ import ScenePoster from './ScenePoster.jsx';
 import SceneRenderTarget, { lastRenderTarget, renderTargetOverrides } from './SceneRenderTarget.jsx';
 import SceneRenderInputs, { shotCardRenderRequest, shotCardRequestProblem } from './SceneRenderInputs.jsx';
 import SceneFrameFit, { sceneFrameFit } from './SceneFrameFit.jsx';
+import SceneTransitions from './SceneTransitions.jsx';
 
 // The two timeline-bound scene fields rendered as identical number inputs.
 const SCENE_TIME_FIELDS = [['Start', 'startSec'], ['End', 'endSec']];
@@ -231,6 +232,8 @@ export default function SceneCard({
     <>
         {/* What this shot's render covers and costs, and what blocks it, stays in view. */}
         <SceneTimingPlan timing={timing} sceneId={scene.sceneId} lipSyncBackend={renderLane} onSplit={onSplit} onMergeNext={onMergeNext} />
+        {/* A VHS glitch riding on the cut into or out of this shot; never moves the cut. */}
+        <SceneTransitions fieldId={fieldId} scene={scene} onChange={applyPatch} />
         {/* Everything set once and rarely revisited: timing, shot mode, layer, camera. */}
         <details className="group/settings rounded border border-port-border">
           <summary className="flex min-h-[44px] cursor-pointer items-center gap-2 px-2 text-xs marker:content-none sm:min-h-[32px] [&::-webkit-details-marker]:hidden">

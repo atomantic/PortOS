@@ -447,3 +447,22 @@ describe('Sent to the model', () => {
     expect(onGenerateVideo).toHaveBeenCalledWith(scene, expect.objectContaining({ card: { prompt: 'She shakes her head', songAudio: true } }));
   });
 });
+
+// Uniquely catches the glitch picker saving the wrong field or failing to clear it.
+describe('VHS glitch transitions', () => {
+  it('sets a glitch on the cut out of a shot and clears it with Off', () => {
+    const onSave = vi.fn();
+    function Harness() {
+      const [scene, setScene] = useState({ sceneId: 's1', startSec: 0, endSec: 4, takes: [] });
+      return <SceneCard scene={scene} index={0} onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
+    }
+    render(<Harness />);
+    const out = screen.getByLabelText('Glitch out');
+    fireEvent.change(out, { target: { value: 'vhs-glitch' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { transitionOut: 'vhs-glitch' });
+    expect(out.value).toBe('vhs-glitch');
+    fireEvent.change(out, { target: { value: '' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { transitionOut: null });
+    expect(screen.getByLabelText('Glitch in').value).toBe('');
+  });
+});

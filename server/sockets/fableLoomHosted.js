@@ -28,6 +28,25 @@ import {
 // 8 MB is ~4 minutes of 16 kHz mono audio for a single turn.
 const MAX_MIC_FRAME_BYTES = 64 * 1024;
 const MAX_UTTERANCE_BYTES = 8 * 1024 * 1024;
+const AUDIO_TOO_LARGE = Symbol('audio-too-large');
+
+// Socket payloads are untrusted: never let Buffer.from coerce arbitrary objects
+// or allocate from a declared array-like length. Views represent raw audio bytes,
+// including their offsets, rather than an array of numeric sample values.
+function boundedAudioBuffer(chunk, maxBytes) {
+  try {
+    if (!(chunk instanceof ArrayBuffer) && !ArrayBuffer.isView(chunk)) return null;
+    if (chunk.byteLength > maxBytes) return AUDIO_TOO_LARGE;
+    if (Buffer.isBuffer(chunk)) return chunk;
+    return chunk instanceof ArrayBuffer
+      ? Buffer.from(chunk)
+      : Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+  } catch {
+    // A detached buffer (or otherwise unusable binary view) is a dropped frame,
+    // never an exception escaping the Socket.IO event boundary.
+    return null;
+  }
+}
 
 let hostedNsInstance = null;
 
@@ -209,8 +228,8 @@ export function registerFableLoomHostedNamespace(io) {
       // Already refused this turn — keep dropping until the next mic:start.
       if (micOverflow || !chunk) return;
 
-      const frame = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      if (frame.length > MAX_MIC_FRAME_BYTES) return;
+      const frame = boundedAudioBuffer(chunk, MAX_MIC_FRAME_BYTES);
+      if (!Buffer.isBuffer(frame)) return;
 
       if (micBytes + frame.length > MAX_UTTERANCE_BYTES) {
         micOverflow = true;
@@ -234,14 +253,13 @@ export function registerFableLoomHostedNamespace(io) {
 
       const overflowed = micOverflow;
       let finalAudio = null;
-      if (!overflowed && completeBuffer
-        && (Buffer.isBuffer(completeBuffer) || ArrayBuffer.isView(completeBuffer))) {
-        const complete = Buffer.isBuffer(completeBuffer) ? completeBuffer : Buffer.from(completeBuffer);
-        if (complete.length > MAX_UTTERANCE_BYTES) {
+      if (!overflowed && completeBuffer != null) {
+        const complete = boundedAudioBuffer(completeBuffer, MAX_UTTERANCE_BYTES);
+        if (!Buffer.isBuffer(complete)) {
           resetMicBuffer();
           socket.emit('hosted:error', {
-            code: 'UTTERANCE_TOO_LARGE',
-            message: `audio too large (${complete.length} > ${MAX_UTTERANCE_BYTES} bytes)`,
+            code: complete === AUDIO_TOO_LARGE ? 'UTTERANCE_TOO_LARGE' : 'INVALID_AUDIO_FRAME',
+            message: 'audio must be a binary buffer within the utterance limit',
           });
           return;
         }

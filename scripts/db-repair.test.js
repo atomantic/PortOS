@@ -27,6 +27,7 @@ describe.skipIf(process.platform === 'win32')('database Docker repair safety', (
     mkdirSync(join(root, 'volume'));
     copyFileSync(join(here, 'db.sh'), join(root, 'scripts', 'db.sh'));
     copyFileSync(join(here, 'lib', 'envFile.cjs'), join(root, 'scripts', 'lib', 'envFile.cjs'));
+    copyFileSync(join(here, 'lib', 'databaseSettings.cjs'), join(root, 'scripts', 'lib', 'databaseSettings.cjs'));
     copyFileSync(join(here, '..', 'docker-compose.yml'), join(root, 'docker-compose.yml'));
     symlinkSync(process.execPath, join(root, 'bin', 'node'));
     executable(join(root, 'bin', 'uname'), '#!/bin/sh\necho Linux\n');

@@ -56,6 +56,7 @@ import { AUDIO_NORM, buildAudioBedMix } from '../videoTimeline/audioBedMix.js';
 import { musicVideoEvents } from './events.js';
 import { projectSoundBed } from './soundBed.js';
 import { intercutClips } from './intercut.js';
+import { musicVideoTransitionFilter, sceneTransitions, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
 import { stillMoveForCamera } from '../../lib/cameraMovements.js';
 
 // Per-project render mutex (keyed by projectId so two projects can render in
@@ -234,7 +235,7 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
     if (layer !== 'footage') {
       const spanSec = authoredSpan(scene);
       if (spanSec == null) { untimed.push(scene.sceneId); continue; }
-      const section = { sceneId: scene.sceneId, layer, inSec: 0, outSec: spanSec, duration: spanSec, sourceSec: spanSec };
+      const section = { sceneId: scene.sceneId, layer, inSec: 0, outSec: spanSec, duration: spanSec, sourceSec: spanSec, ...sceneTransitions(scene) };
       // A composed render has no code to run: a code shot (#10297) is a black
       // ground the typography layer draws over, cut exactly like a blank card.
       if (layer === 'code') {
@@ -285,6 +286,8 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
       inSec,
       outSec,
       ...footageFrameFit(scene),
+      // VHS glitches on its cuts (musicVideoTransitions.js) ride over the edit without moving it.
+      ...sceneTransitions(scene),
     });
   }
   if (missing.length > 0) {
@@ -532,9 +535,16 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
 
   const filters = plan.map(({ c, frames }, i) => `${sectionChain(c, inputOf[i], { canonW, canonH, fps, frames, frameGrid })}[v${i}]`);
   const gradeFilter = musicVideoGradeFilter(grade, plan.map(({ c, startSec, endSec }) => ({ sceneId: c.sceneId, startSec, endSec })), { fps });
+  // Cut transitions repaint a few frames around their cuts, under the typography, and add no time.
+  const glitches = transitionGlitchFrames(plan.map(({ c, startSec, endSec }) => ({
+    sceneId: c.sceneId, startFrame: Math.round(startSec * fps), endFrame: Math.round(endSec * fps),
+    partner: !!c.intercutOf, transitionIn: c.transitionIn, transitionOut: c.transitionOut,
+  })));
+  const glitchFilter = musicVideoTransitionFilter(glitches, { width: canonW, height: canonH });
   const cutLabel = overlays.length > 0 ? 'cut0' : 'outv';
-  filters.push(`${plan.map((_, i) => `[v${i}]`).join('')}concat=n=${plan.length}:v=1:a=0[${gradeFilter ? 'ungraded' : cutLabel}]`);
-  if (gradeFilter) filters.push(`[ungraded]${gradeFilter}[${cutLabel}]`);
+  const finishing = [gradeFilter, glitchFilter].filter(Boolean).join(',');
+  filters.push(`${plan.map((_, i) => `[v${i}]`).join('')}concat=n=${plan.length}:v=1:a=0[${finishing ? 'ungraded' : cutLabel}]`);
+  if (finishing) filters.push(`[ungraded]${finishing}[${cutLabel}]`);
   overlays.forEach((_, k) => {
     const out = k === overlays.length - 1 ? 'outv' : `cut${k + 1}`;
     filters.push(`[cut${k}][${audioIdx + 1 + k}:v]overlay=eof_action=pass:format=auto[${out}]`);
