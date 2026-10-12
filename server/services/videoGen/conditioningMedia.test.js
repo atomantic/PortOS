@@ -43,4 +43,35 @@ describe('prepareVideoConditioningMedia', () => {
     expect(findFfmpegMock).not.toHaveBeenCalled();
     expect(execFileMock).not.toHaveBeenCalled();
   });
+
+  // Uniquely catches the LTX-2.3 "holds the reference for one frame, then cuts
+  // away" regression: the mlx_video CLI skips Lightricks' CRF round trip, so
+  // PortOS must do it, and only for that runtime (the others do their own).
+  const imageInput = (runtime) => ({
+    model: { runtime },
+    mode: 'image',
+    sourceImagePath: '/tmp/source.png',
+    w: 704,
+    h: 448,
+    parsedFps: 24,
+    jobId: `crf-${runtime}`,
+    uploadedTempPath: null,
+    uploadedTempPaths: [],
+    audioFilePath: null,
+  });
+  const crfCalls = () => execFileMock.mock.calls.filter(([, args]) => args.includes('-crf'));
+
+  it('re-compresses the conditioning still at CRF 33 on the mlx_video runtime', async () => {
+    const result = await prepareVideoConditioningMedia(imageInput('mlx_video'));
+    expect(crfCalls()).toHaveLength(1);
+    const [, args] = crfCalls()[0];
+    expect(args[args.indexOf('-crf') + 1]).toBe('33');
+    expect(args[args.indexOf('-i') + 1]).toBe(result.resolvedSourceImage);
+  });
+
+  it('leaves the still alone on runtimes whose loader already does the round trip', async () => {
+    await prepareVideoConditioningMedia(imageInput('ltx25'));
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+    expect(crfCalls()).toHaveLength(0);
+  });
 });

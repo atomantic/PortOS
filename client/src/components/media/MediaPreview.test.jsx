@@ -4,12 +4,13 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import MediaPreview from './MediaPreview';
 import usePreviewRoute from '../../hooks/usePreviewRoute';
-import { updateVideoPrompt, updateVideoPoster, listImageVariants, listMediaGalleryPage } from '../../services/apiImageVideo';
+import { trimVideoStart, updateVideoPrompt, updateVideoPoster, listImageVariants, listMediaGalleryPage } from '../../services/apiImageVideo';
 
 vi.mock('../../services/apiImageVideo', () => ({
   updateImagePrompt: vi.fn(),
   updateVideoPrompt: vi.fn(),
   updateVideoPoster: vi.fn(),
+  trimVideoStart: vi.fn(),
   listImageVariants: vi.fn(),
   listMediaGalleryPage: vi.fn(),
 }));
@@ -18,8 +19,9 @@ vi.mock('../../services/apiImageVideo', () => ({
 // its own interaction coverage; this stub exposes the item it receives and
 // invokes the same callback the real Save prompt button uses.
 vi.mock('./MediaLightbox', () => ({
-  default: ({ item, onPromptChange, onPosterChange, variantGroup, onSelectVariant }) => item ? (
+  default: ({ item, onPromptChange, onPosterChange, onTrimStart, variantGroup, onSelectVariant }) => item ? (
     <div data-testid="lightbox">
+      {onTrimStart && <button type="button" onClick={() => onTrimStart(item, 1.25)}>Start clip here</button>}
       <span data-testid="lightbox-poster">{item.previewUrl}</span>
       <button onClick={() => onPosterChange(item, 12.4)}>Save poster</button>
       <span data-testid="lightbox-prompt">{item.prompt}</span>
@@ -288,4 +290,19 @@ it('applies a saved poster immediately and reports the updated history fields to
   fireEvent.click(screen.getByRole('button', { name: 'Save poster' }));
   await waitFor(() => expect(screen.getByTestId('lightbox-poster')).toHaveTextContent('/data/video-thumbnails/new-poster.jpg'));
   expect(saved).toHaveBeenCalledWith(VIDEO, { id: VIDEO.id, thumbnail: 'new-poster.jpg', posterSec: 12.4 });
+});
+
+// Uniquely catches a trim that never reaches the host's gallery, or a control
+// offered by a host that has nowhere to show the new clip.
+it('hands the trimmed clip to the host, and offers no trim to a host that cannot list it', async () => {
+  const trimmed = { id: 'video-2', filename: 'video-2.mp4', trimmedFrom: VIDEO.id };
+  trimVideoStart.mockResolvedValue({ ok: true, video: trimmed });
+  const onTrimmed = vi.fn();
+  const { rerender } = render(<MediaPreview preview={VIDEO} setPreview={() => {}} items={[VIDEO]} onTrimmed={onTrimmed} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Start clip here' }));
+  await waitFor(() => expect(onTrimmed).toHaveBeenCalledWith(trimmed, VIDEO));
+  expect(trimVideoStart).toHaveBeenCalledWith(VIDEO.id, 1.25, { silent: true });
+
+  rerender(<MediaPreview preview={VIDEO} setPreview={() => {}} items={[VIDEO]} />);
+  expect(screen.queryByRole('button', { name: 'Start clip here' })).toBeNull();
 });

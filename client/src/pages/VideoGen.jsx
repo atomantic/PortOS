@@ -469,6 +469,11 @@ export default function VideoGen() {
   const handleUpscaleHistory = useCallback((item) => {
     setUpscaleItem(item?.raw || item);
   }, []);
+  // A start trim is a new clip: list it first and open it in place of the source.
+  const handleTrimmed = useCallback((video) => {
+    setHistory((h) => [video, ...h]);
+    setPreview(normalizeVideo(video));
+  }, [setPreview]);
   const handleUpscaled = useCallback((video) => {
     setHistory((h) => [video, ...h]);
   }, []);
@@ -1872,6 +1877,7 @@ export default function VideoGen() {
         onPromptSaved={handlePromptSaved}
         onContinue={handleContinue}
         onRemix={(item) => item?.raw && handleRemixVideo(item.raw)}
+        onTrimmed={handleTrimmed}
       />
 
       <GalleryImagePicker
