@@ -24,6 +24,14 @@ describe('shotCardRenderRequest', () => {
     expect(shotCardRenderRequest({ ...base, inputs: { endFrame: false } }).endFrame.state).toBe('off');
   });
 
+  // Review on #11280: an audio-reactive render hears the song through its LoRA, so the card must say so and never stack a supplied window.
+  it('shows an audio-reactive render as hearing the song, with its guard in the prompt', () => {
+    const request = shotCardRenderRequest({ scene: scene(), settings: { backend: 'local', modelId: 'ltx25_example', generationMode: 'audioReactive' }, models,
+      inputs: { songAudio: false } });
+    expect(request.songAudio.state).toBe('required');
+    expect(request.prompt).toMatch(/No singing, lip-sync/);
+  });
+
   it('requires the song for a performance shot and flags a prompt over the fal model limit', () => {
     expect(shotCardRenderRequest({ scene: scene(), performance: true, settings: { backend: 'local' }, models }).songAudio.state).toBe('required');
     const long = shotCardRenderRequest({ scene: scene({ prompt: 'x'.repeat(2100) }), settings: { backend: 'fal' } });
