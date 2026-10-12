@@ -37,7 +37,7 @@ export function musicVideoAtAspect(project, aspect) {
 export const musicVideoFrameGenSize = (project) => ({ ...MUSIC_VIDEO_FRAME_GEN_SIZES[musicVideoAspect(project)] });
 
 /** Width over height for each aspect. */
-export const MUSIC_VIDEO_ASPECT_RATIOS = Object.freeze({ '16:9': 16 / 9, '9:16': 9 / 16, '1:1': 1 });
+const ASPECT_RATIO_VALUES = Object.freeze({ '16:9': 16 / 9, '9:16': 9 / 16, '1:1': 1 });
 
 // A frame within this of the aspect counts as matching it: an H3 1344x768
 // canvas (1.75) is its 16:9, and ffmpeg's fit loses under a percent of it.
@@ -45,7 +45,7 @@ const ASPECT_TOLERANCE = 0.02;
 
 /** Whether `width` x `height` is the aspect's shape (within a couple of percent). */
 export function matchesMusicVideoAspect(width, height, aspect) {
-  const target = MUSIC_VIDEO_ASPECT_RATIOS[aspect];
+  const target = ASPECT_RATIO_VALUES[aspect];
   const w = Number(width);
   const h = Number(height);
   if (!target || !(w > 0) || !(h > 0)) return false;
@@ -94,7 +94,7 @@ export function musicVideoLocalClipSize(project, model = null, { endFrame = fals
  * whole video 3:2.
  */
 export function musicVideoRenderCanvas(aspect, lead) {
-  const ratio = MUSIC_VIDEO_ASPECT_RATIOS[aspect];
+  const ratio = ASPECT_RATIO_VALUES[aspect];
   if (!ratio || matchesMusicVideoAspect(lead.width, lead.height, aspect)) return { width: lead.width, height: lead.height };
   const even = (n) => Math.max(2, Math.round(n / 2) * 2);
   return ratio >= 1
