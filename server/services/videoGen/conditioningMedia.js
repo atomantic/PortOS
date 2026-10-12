@@ -87,7 +87,9 @@ export async function prepareVideoConditioningMedia({
   }
   const ffmpeg = (sourceImagePath || lastImageWillBeUsed || hasMultiKeyframes) ? await findFfmpeg() : null;
   const ffprobe = model.runtime === 'minimax_h3_ref2va' ? await findFfprobe() : null;
-  const conditioningCrf = CONDITIONING_CRF_BY_RUNTIME[model.runtime || 'mlx_video'] ?? null;
+  // Keyed on the runner, not just the runtime name: a model that routes to
+  // generate_win.py also reads as mlx_video, but that pipeline is LTX-Video 0.9.
+  const conditioningCrf = routesToWindowsHelper(model) ? null : (CONDITIONING_CRF_BY_RUNTIME[model.runtime || 'mlx_video'] ?? null);
   const resizeImage = async (srcPath, tag) => {
     if (!srcPath || !ffmpeg) return { resolved: srcPath, tempPath: null };
     const resizedPath = join(tmpdir(), `resized-${tag}-${jobId}.png`);
