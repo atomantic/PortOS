@@ -92,7 +92,8 @@ import {
   sunoSongFields,
 } from '../../lib/musicVideoAutonomous.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
-import { getProject, mutateProjectRecord } from './projects.js';
+import { getProject, mutateProjectRecord as mutateRecord } from './projects.js';
+const mutateProjectRecord = (id, transform) => mutateRecord(id, transform, { source: 'orchestrator' });
 import { musicVideoEvents } from './events.js';
 import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
 import { isPerformanceScene, performanceCapability } from '../../lib/musicVideoShotTiming.js';

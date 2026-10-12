@@ -28,7 +28,8 @@ import { ensureSceneTakes, selectSceneTake } from './takes.js';
 
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
-import { getProject, mutateProjectRecord } from './projects.js';
+import { getProject, mutateProjectRecord as mutateRecord } from './projects.js';
+const mutateProjectRecord = (id, transform) => mutateRecord(id, transform, { source: 'production-run' });
 import { musicVideoEvents } from './events.js';
 import { isFreeProvider } from '../../lib/modelPricing.js';
 import { isAuthoringOneShotProvider } from '../../lib/providerVendors.js';

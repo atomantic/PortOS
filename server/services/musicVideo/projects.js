@@ -239,7 +239,11 @@ export async function addProjectScene(id, sceneInput) {
  * caller composing a response never has to re-fetch or risk overwriting a
  * concurrent edit with stale state.
  */
-export async function addProjectScenes(id, sceneInputs) {
+export async function addProjectScenes(id, sceneInputs, { source = null } = {}) {
+  if (source) {
+    const { addScenes } = await import('./projectsLogic.js');
+    return mutateProjectRecord(id, current => addScenes(current, sceneInputs), { source });
+  }
   const { project, scenes } = await (await selectBackend()).addProjectScenes(id, sceneInputs);
   emitRecordUpdated('musicVideoProject', id);
   return { project, scenes };
@@ -286,6 +290,11 @@ export async function mergeProjectNextScene(id, sceneId, options = {}) {
 // Append candidate takes to one scene: `{ scene, appended }`. A take fills its
 // slot only while the slot is empty — never replaces a selection (takes.js).
 export async function appendSceneTakes(id, sceneId, inputs) {
+  if (inputs.some(input => input.source === 'generated')) {
+    const { appendSceneTakes: append } = await import('./takes.js');
+    const outcome = await mutateProjectRecord(id, current => append(current, sceneId, inputs), { source: 'generation-completion' });
+    return { scene: outcome.project.scenes.find(scene => scene.sceneId === sceneId), appended: outcome.appended };
+  }
   const result = await (await selectBackend()).appendSceneTakes(id, sceneId, inputs);
   emitRecordUpdated('musicVideoProject', id);
   return result;
@@ -327,9 +336,21 @@ export async function reviewSceneTake(id, sceneId, takeId, review) {
  * resolves to that outcome with the persisted project. Used by the treatment
  * service (#8980) so its revision checks run against the freshest record.
  */
-export async function mutateProjectRecord(id, transform) {
+export async function mutateProjectRecord(id, transform, { source = null } = {}) {
+  const { preserveAutomatedShotLocks } = source ? await import('./productionReview.js') : {};
   const outcome = await (await selectBackend()).mutateProjectRecord(id, (current) => {
     const outcome = transform(current);
+    if (source) {
+      const guarded = preserveAutomatedShotLocks(current, outcome.project, source);
+      outcome.project = guarded.project;
+      if (guarded.rejected) {
+        outcome.rejected = true;
+        if (outcome.scenes) outcome.scenes = guarded.project.scenes;
+        if (outcome.scene) outcome.scene = guarded.project.scenes.find(scene => scene.sceneId === outcome.scene.sceneId) || null;
+        if (outcome.updated) outcome.updated = guarded.project.scenes.find(scene => scene.sceneId === outcome.updated.sceneId) || null;
+        if ('replaced' in outcome) outcome.replaced = 0;
+      }
+    }
     return { ...outcome, project: retainMusicVideoDependencies(current, outcome.project) };
   });
   emitRecordUpdated('musicVideoProject', id);

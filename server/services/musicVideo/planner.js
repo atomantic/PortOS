@@ -427,11 +427,11 @@ export async function planProject(id, { seedPrompts = true, providerId, model, e
   const hasCards = sceneInputs.some((s) => s.visualLayer === 'card');
   // Persist card scenes and the mode that renders them in the same transaction.
   // Read the current composition under the lock so concurrent edits survive.
-  const { project: persisted, scenes } = await persistPlan(id, sceneInputs, { hasCards, replace: mode === 'replace' });
+  const { project: persisted, scenes, rejected } = await persistPlan(id, sceneInputs, { hasCards, replace: mode === 'replace' });
   // Only a project with an automation brief keeps the route it planned on.
   const updated = (persisted.automation && await recordLlmRoute(id, 'plan', llmRoute)) || persisted;
   console.log(`🪄 Music Video plan: seeded ${scenes.length} scene${scenes.length === 1 ? '' : 's'} for ${id} (prompts ${promptsSeeded ? 'seeded' : `skipped: ${promptsSkippedReason || 'n/a'}`})`);
-  return { project: updated, scenesAdded: scenes.length, promptsSeeded, promptsSkippedReason, pacing, llmRoute };
+  return { project: updated, scenesAdded: rejected ? 0 : scenes.length, promptsSeeded, promptsSkippedReason, pacing, llmRoute };
 }
 
 const castSets = (project) => (project.castAndSets?.status === 'skipped' ? null : project.castAndSets?.direction?.sets) || [];
@@ -509,7 +509,8 @@ export async function proposeShotRevisions(project, feedback, { providerId, mode
 }
 
 async function persistPlan(id, sceneInputs, { hasCards, replace }) {
-  if (!hasCards && !replace) return addProjectScenes(id, sceneInputs);
+  if (!hasCards && !replace) return addProjectScenes(id, sceneInputs, { source: 'shot-planner' });
+
   const { addScenes, replaceScenes } = await import('./projectsLogic.js');
   const { normalizeComposition } = await import('./composition.js');
   return mutateProjectRecord(id, (current) => {
@@ -519,5 +520,5 @@ async function persistPlan(id, sceneInputs, { hasCards, replace }) {
       outcome.project.composition = normalizeComposition({ ...current.composition, mode: 'composed' });
     }
     return outcome;
-  });
+  }, { source: 'shot-planner' });
 }
