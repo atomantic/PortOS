@@ -27,6 +27,9 @@ export const MAX_CONDITIONING_REFERENCES = MUSIC_VIDEO_MAX_CONDITIONING_REFERENC
 // Refusals the image route returns when the resolved backend can't consume
 // reference images — surfaced as explicit capability feedback, never retried
 // silently without the references.
+// Refine: edit one frame by a short instruction, keeping the rest of the picture.
+const refineFramePrompt = (instruction) => `Edit the reference image: ${instruction.trim()}. Keep everything else exactly as it is: composition, framing, subject, lighting, color and film look.`;
+
 const REFERENCE_CAPABILITY_CODES = new Set([
   'REFERENCE_IMAGES_FLUX2_ONLY',
   'IMAGE_EDIT_UNSUPPORTED_MODE',
@@ -217,15 +220,19 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    * returns its `jobId`, and `onJob(jobId)` is told of it before the lane starts
    * tracking it (a batch registers the job there, so a terminal event that raced
    * ahead of the kickoff is still attributed to it).
+   *
+   * `refine` (with `referenceImageId`) edits that frame by a short instruction
+   * instead: the frame is the only reference and the prompt is the instruction.
    */
-  const generateFrame = (scene, { revisionId, onJob, referenceImageId = null } = {}) => {
-    const conditioning = conditioningReferences(project, scene);
-    const problem = shotActionContractProblem(scene.direction?.actionContract, scene);
+  const generateFrame = (scene, { revisionId, onJob, referenceImageId = null, refine = null } = {}) => {
+    const refining = Boolean(refine?.trim() && referenceImageId);
+    const conditioning = refining ? [] : conditioningReferences(project, scene);
+    const problem = refining ? null : shotActionContractProblem(scene.direction?.actionContract, scene);
     if (problem) { toast.error(problem); return Promise.resolve({ ok: false }); }
-    const framePrompt = buildFramePrompt(scene);
+    const framePrompt = refining ? refineFramePrompt(refine) : buildFramePrompt(scene);
     if (!framePrompt) { toast.error('Add a frame prompt or shot prompt first'); return Promise.resolve({ ok: false }); }
     // A frame picked on the card (its start or end frame) leads the references, as the image this render reworks.
-    const prompt = referenceImageId ? `${framePrompt}\nStart from the first reference image and rework it to match this prompt.` : framePrompt;
+    const prompt = referenceImageId && !refining ? `${framePrompt}\nStart from the first reference image and rework it to match this prompt.` : framePrompt;
     const references = [...(referenceImageId ? [referenceImageId] : []), ...conditioning.map((ref) => ref.imageId).filter((id) => id !== referenceImageId)];
     const projectId = project.id;
     frameLane.startScene(scene.sceneId);
@@ -277,14 +284,16 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    * `slot: 'end'` tag); a fal clip on a model that takes an end frame then ends
    * on it. Resolves `{ ok }` like generateFrame.
    */
-  const generateEndFrame = (scene, { referenceImageId = scene.referenceImageId } = {}) => {
+  const generateEndFrame = (scene, { referenceImageId = scene.referenceImageId, refine = null } = {}) => {
+    const refining = Boolean(refine?.trim() && referenceImageId);
     const endPrompt = scene.endFramePrompt?.trim();
-    if (!endPrompt) { toast.error('Describe the end frame first'); return Promise.resolve({ ok: false }); }
+    if (!endPrompt && !refining) { toast.error('Describe the end frame first'); return Promise.resolve({ ok: false }); }
     const projectId = project.id;
     endFrameLane.startScene(scene.sceneId);
     return generateImage({
       // From a frame, keep its shot and change what the prompt asks; prompt only, render it like a start frame.
-      prompt: referenceImageId
+      prompt: refining ? refineFramePrompt(refine)
+        : referenceImageId
         ? `${endPrompt}. Keep the reference image's composition, subject and framing; change only what this prompt describes.`
         : [endPrompt, style, direction].filter(Boolean).join(', '),
       ...musicVideoFrameGenSize(project),
