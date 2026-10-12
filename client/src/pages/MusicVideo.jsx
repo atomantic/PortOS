@@ -1577,9 +1577,10 @@ export default function MusicVideo() {
             ) : null}
             attention={(
               <NeedsAttentionBanner
-                // A parked autonomous or production run with nothing to resume is
-                // already the header's Autopilot button, which opens it; no second row.
-                items={attentionItems.filter((item) => !(['autonomous', 'production'].includes(item.kind) && !item.canResume))}
+                // A parked autonomous or production run with nothing to resume, while the
+                // header's Autopilot button reports that run, is that button (which opens it); no second row.
+                items={autopilotStatus(selected).label === 'Autopilot' ? attentionItems
+                  : attentionItems.filter((item) => !(['autonomous', 'production'].includes(item.kind) && !item.canResume))}
                 busy={revisions.busy || castSets.busy || autoReview.busy || autonomous.busy || production.busy || renderJob.reattaching}
                 actions={{
                   onResumeRevision: revisions.resume,

@@ -2879,6 +2879,17 @@ describe('MusicVideo stage tabs (#9243)', () => {
       await waitFor(() => expect(stopMusicVideoProduction).toHaveBeenCalledWith('mv-3', 'run-1', { silent: true }));
     });
 
+    it('keeps the attention row for a parked production run the Autopilot button does not report', async () => {
+      const run = {
+        id: 'run-2', status: 'needs-human', interrupted: false, directive: '', stopReason: 'Example stop reason', error: null, pool: [],
+        limits: { maxGenerations: 12, maxReviewAttempts: 3, spendCapUsd: 20 }, usage: { generations: 3, spentUsd: 4.5 }, steps: [],
+      };
+      await openProject({ ...PROJECT_ANALYZED, productionRuns: [run] }, 'board');
+      // "needs-human" has no Resume and the header's Autopilot button stays plain, so the row is the only signal.
+      const banner = screen.getByRole('region', { name: 'Needs attention' });
+      expect(within(banner).getByText('Production needs you')).toBeTruthy();
+    });
+
     it('takes a finished project on to its release (#9281)', async () => {
       await openProject({ ...PROJECT_WITH_CLIP, audioAnalysis: PROJECT_ANALYZED.audioAnalysis, renderHistoryId: 'rh-9' }, 'board');
       fireEvent.click(screen.getByRole('button', { name: 'Build the publishing kit' }));
