@@ -8,13 +8,13 @@ import { z } from 'zod';
 import * as digitalTwinService from '../../services/digital-twin.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { validateRequest } from '../../lib/validation.js';
-import { importDataInputSchema } from '../../lib/digitalTwinValidation.js';
+import { documentFilenameSchema, importDataInputSchema } from '../../lib/digitalTwinValidation.js';
 import * as spotifyBrowserImport from '../../services/spotifyBrowserImport.js';
 
 const importSaveSchema = z.object({
   source: z.string().min(1),
   suggestedDoc: z.object({
-    filename: z.string().min(1),
+    filename: documentFilenameSchema,
     content: z.string().min(1),
     title: z.string().optional(),
     category: z.string().optional(),
