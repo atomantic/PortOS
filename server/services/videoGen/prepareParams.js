@@ -52,6 +52,8 @@ import {
 import { getSettings } from '../settings.js';
 import { getProject as getMusicVideoProject } from '../musicVideo/projects.js';
 import { musicVideoLocalClipSize } from '../../lib/musicVideoAspect.js';
+import { localModelRendersCutaway, localModelRendersPerformance } from '../../lib/musicVideoLocalModels.js';
+import { isPerformanceScene } from '../../lib/musicVideoShotTiming.js';
 import { getTrack } from '../tracks/index.js';
 import { VIDEO_GEN_MODE, resolveVideoMode } from './modes.js';
 import { getFalVideoModel } from '../../lib/falVideoModels.js';
@@ -328,15 +330,38 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
       { status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' },
     );
   }
-  // A local Music Video clip left unsized would render the model's 768x512
-  // (3:2) default, cropping its 16:9 still and leaving side gaps in a 16:9
-  // video; it renders at the project's aspect instead.
-  if (backend === VIDEO_GEN_MODE.LOCAL && body.musicVideo?.projectId && body.width == null && body.height == null) {
-    const project = await getMusicVideoProject(body.musicVideo.projectId)
-      .catch(async (error) => { await cleanupMultipartTemp(uploads); throw error; });
-    if (project) {
+  // A local Music Video shot: sized to the project's aspect, and checked
+  // against the model its kind of shot needs (musicVideoLocalModels.js).
+  let musicVideoContractMode = null;
+  if (backend === VIDEO_GEN_MODE.LOCAL && body.musicVideo?.projectId) {
+    // A clip's own audio never reaches the music video (the song does), so a
+    // model that always renders its audio track is not asked to mute it.
+    if (effectiveModel?.supportsDisableAudio === false) delete body.disableAudio;
+    const unsized = body.width == null && body.height == null;
+    const audioOnlyModel = !!effectiveModel && (!body.mode || body.mode === 'image') && !localModelRendersCutaway(effectiveModel);
+    const project = unsized || audioOnlyModel
+      ? await Promise.resolve().then(() => getMusicVideoProject(body.musicVideo.projectId))
+        .catch(async (error) => { await cleanupMultipartTemp(uploads); throw error; })
+      : null;
+    // Left unsized it would render the model's 768x512 (3:2) default,
+    // cropping its 16:9 still and leaving side gaps in a 16:9 video.
+    if (project && unsized) {
       const endFrame = body.mode === 'fflf' || !!body.lastImageFile || !!uploads.lastImage;
       Object.assign(body, musicVideoLocalClipSize(project, effectiveModel, { endFrame }));
+    }
+    const scene = project?.scenes?.find((entry) => entry.sceneId === body.musicVideo.sceneId);
+    if (scene && audioOnlyModel) {
+      // An audio-only model (MiniMax H3 Ref2VA) renders a performance shot as
+      // the a2v job the performance step builds from the still and the song
+      // slice after staging, so its contract is checked as that render.
+      if (isPerformanceScene(scene) && localModelRendersPerformance(effectiveModel)) musicVideoContractMode = 'a2v';
+      else {
+        await cleanupMultipartTemp(uploads);
+        throw new ServerError(
+          `${effectiveModel.name} renders lip-sync and music-driven shots only, from the still and the song. Pick an image-to-video model such as LTX-2.5 for this cutaway.`,
+          { status: 400, code: 'MUSIC_VIDEO_MODEL_NEEDS_PERFORMANCE_SHOT' },
+        );
+      }
     }
   }
   validateVideoBatch({ ...body, backend }, effectiveModel);
@@ -393,7 +418,7 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
   // rejection point at once, and stays correct as new awaits are added.
   return withStagedRollback(cleanupStaged, () => resolvePreparedParams({
     body, uploads, settings, backend, pythonPath,
-    effectiveModel, effectiveModelId, stagedDurablePaths, cleanupStaged,
+    effectiveModel, effectiveModelId, stagedDurablePaths, cleanupStaged, musicVideoContractMode,
   }));
 }
 
@@ -588,7 +613,7 @@ async function resolveAudioFrameCount({ body, audioFilePath, effectiveModel, eff
  */
 async function resolvePreparedParams({
   body, uploads, settings, backend, pythonPath,
-  effectiveModel, effectiveModelId, stagedDurablePaths, cleanupStaged,
+  effectiveModel, effectiveModelId, stagedDurablePaths, cleanupStaged, musicVideoContractMode = null,
 }) {
   // Stage a multipart upload into data/uploads so the queue worker can find
   // it after a server restart — the OS temp dir gets reaped on reboot, and a
@@ -778,7 +803,7 @@ async function resolvePreparedParams({
   // Pinned here rather than re-derived at the resolved pass below: once a
   // declared gallery pick fails to resolve, "was this an i2v request?" can only
   // be answered from what the caller declared.
-  const declaredMode = body.mode || (hasDeclaredFirstImage ? 'image' : 'text');
+  const declaredMode = musicVideoContractMode || body.mode || (hasDeclaredFirstImage ? 'image' : 'text');
   const modeContractError = videoModeContractError({
     model: effectiveModel,
     mode: declaredMode,

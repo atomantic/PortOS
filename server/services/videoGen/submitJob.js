@@ -239,18 +239,20 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
       throw error;
     })
     : null;
-  // Local LTX lip-sync: the performance window is the a2v audio, on a frame
+  // Local lip-sync (LTX, or MiniMax H3 Ref2VA): the performance window is the a2v audio, on a frame
   // canvas that covers it (the helper pads the tail; the edit points trim it).
   let localPerformanceParams = null;
   if (performance && backend === 'local') {
-    const { sourceAudioVideoRequest, supportsSourceAudioWindow } = await import('../federatedMedia/sourceAudio.js');
+    const [{ sourceAudioVideoRequest }, { localModelRendersPerformance }] = await Promise.all([
+      import('../federatedMedia/sourceAudio.js'), import('../../lib/musicVideoLocalModels.js'),
+    ]);
     const fail = async (message, code) => {
       await unlink(performance.audioFilePath).catch(() => {});
       await cleanupStaged();
       throw new ServerError(message, { status: 400, code });
     };
-    if (!supportsSourceAudioWindow(prepared.effectiveModel)) {
-      await fail(`${prepared.effectiveModel?.name || 'This local model'} cannot lip-sync; choose an LTX-2.5 (or LTX-2.3 dgrauet) model for performance shots`, 'MUSIC_VIDEO_PERFORMANCE_UNSUPPORTED');
+    if (!localModelRendersPerformance(prepared.effectiveModel)) {
+      await fail(`${prepared.effectiveModel?.name || 'This local model'} cannot lip-sync; choose LTX-2.5, LTX-2.3 dgrauet or MiniMax H3 Ref2VA for performance shots`, 'MUSIC_VIDEO_PERFORMANCE_UNSUPPORTED');
     }
     const { audioWindow } = performance.shotInstruction;
     const { numFrames } = await Promise.resolve()

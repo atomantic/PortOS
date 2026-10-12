@@ -3,7 +3,7 @@ import {
 } from '../../lib/falVideoModels.js';
 import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
 import { grokCoverage } from '../../lib/musicVideoShotTiming.js';
-import { isAudioToVideoRuntime, isLtx2FamilyRuntime } from '../../lib/runnerFamilies';
+import { localMusicVideoModels } from '../../../../server/lib/musicVideoLocalModels.js';
 import { frameOptionsForModel } from '../../lib/videoGenParams.js';
 
 /**
@@ -47,10 +47,12 @@ export function renderTargetOptions({ performance, saved, endFrame = false }) {
 
 const isLtx25 = (model) => /^ltx25/.test(model?.runtime || '');
 
-/** Local models a shot can render on: any image-to-video model, or for lip-sync only the LTX audio-to-video ones. */
-export const localModelChoices = (models, performance) => (performance
-  ? models.filter((model) => isLtx2FamilyRuntime(model.runtime) && isAudioToVideoRuntime(model.runtime))
-  : models);
+/**
+ * Local models a shot can render on: image-to-video models for a cutaway, and
+ * for a lip-sync or music-driven shot the audio-to-video models PortOS hands
+ * the song slice (LTX-2.x, MiniMax H3 Ref2VA). Same rule the server checks.
+ */
+export const localModelChoices = (models, performance) => localMusicVideoModels(models, performance);
 
 /**
  * The local model a shot renders on unless the director picks another: the
