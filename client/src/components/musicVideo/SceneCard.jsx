@@ -215,6 +215,129 @@ export default function SceneCard({
       className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
     />
   );
+  const shotSettings = (
+    <>
+        {/* What this shot's render covers and costs, and what blocks it, stays in view. */}
+        <SceneTimingPlan timing={timing} sceneId={scene.sceneId} lipSyncBackend={renderLane} onSplit={onSplit} onMergeNext={onMergeNext} />
+        {/* Everything set once and rarely revisited: timing, shot mode, layer, camera. */}
+        <details className="group/settings rounded border border-port-border">
+          <summary className="flex min-h-[44px] cursor-pointer items-center gap-2 px-2 text-xs marker:content-none sm:min-h-[32px] [&::-webkit-details-marker]:hidden">
+            <ChevronRight size={12} aria-hidden="true" className="shrink-0 transition-transform group-open/settings:rotate-90" />
+            <span className="shrink-0 font-medium">Shot settings</span>
+            <span className="min-w-0 truncate text-port-text-muted">· {settingsSummary}</span>
+          </summary>
+          <div className="space-y-2 p-2 pt-0">
+        <div className="flex flex-wrap gap-2 items-center text-xs">
+          {SCENE_TIME_FIELDS.map(([labelText, key]) => {
+            const toValue = (v) => (v === '' ? null : Number(v));
+            return (
+              <label key={key} className="flex items-center gap-1">{labelText}
+                <input type="number" min="0" step="0.1" value={scene[key] ?? ''} className="w-20 bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0"
+                  onChange={(e) => onEditLocal(scene.sceneId, { [key]: toValue(e.target.value) })}
+                  onBlur={(e) => onSave(scene.sceneId, { [key]: toValue(e.target.value) })} />
+              </label>
+            );
+          })}
+          <label className="flex items-center gap-1 min-h-[44px] sm:min-h-0">
+            <input type="checkbox" checked={!!scene.beatAligned}
+              onChange={(e) => { onEditLocal(scene.sceneId, { beatAligned: e.target.checked }); onSave(scene.sceneId, { beatAligned: e.target.checked }); }} />
+            Beat-aligned
+          </label>
+          <label className="flex items-center gap-1 min-h-[44px] sm:min-h-0" title="Repeat the generated clip to fill a span longer than the clip. Off: the shot must be covered by its clip (trim, continue, or replace it).">
+            <input type="checkbox" checked={loops} disabled={performance} onChange={(e) => applyPatch({ loop: e.target.checked })} />
+            Loop clip
+          </label>
+        </div>
+        <div className="flex flex-wrap gap-2 items-center text-xs">
+          <label htmlFor={fieldId('layer')}>Layer</label>
+          <select id={fieldId('layer')} value={layer} onChange={(e) => applyPatch({ visualLayer: e.target.value })}
+            className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0">
+            {MUSIC_VIDEO_VISUAL_LAYERS.map((value) => <option key={value} value={value}>{LAYER_LABELS[value]}</option>)}
+          </select>
+          {/* A performance is sung footage — only the footage layer offers it. */}
+          {layer === 'footage' && (
+            <>
+              <label htmlFor={shotModeId} className="flex items-center gap-1">Shot</label>
+              <select id={shotModeId} value={shotModeValue}
+                onChange={(e) => applyPatch(e.target.value === 'cutaway' ? { shotMode: 'cutaway' }
+                  : e.target.value === 'music' ? { shotMode: 'performance', performanceStyle: 'music' }
+                    // Clear the style only when one is stored, so a plain lip-sync switch stays one field.
+                    : { shotMode: 'performance', ...(scene.performanceStyle ? { performanceStyle: null } : {}) })}
+                className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0"
+                title="Cutaway: any video lane animates the frame under the song. Lip-sync: a singer's mouth follows the song. Music-driven: the song slice drives the whole frame's motion (a drummer on the beat). Both need a source-audio provider.">
+                {Object.entries(SHOT_MODE_LABELS).map(([value, text]) => <option key={value} value={value}>{text}</option>)}
+              </select>
+            </>
+          )}
+          {layer === 'still' && (
+            <>
+              <label htmlFor={fieldId('move')}>Move</label>
+              <select id={fieldId('move')} value={scene.stillMove || 'hold'} onChange={(e) => applyPatch({ stillMove: e.target.value })}
+                disabled={!!scene.camera?.move} title={scene.camera?.move ? 'The planned camera move drives this still.' : undefined}
+                className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0 disabled:opacity-50">
+                {STILL_MOVE_LABELS.map(([value, text]) => <option key={value} value={value}>{text}</option>)}
+              </select>
+            </>
+          )}
+          {layer === 'card' && (
+            <>
+              <label htmlFor={fieldId('card-text')}>Card text</label>
+              <input id={fieldId('card-text')} type="text" maxLength={500} value={scene.cardText || ''}
+                placeholder="Title shown on the card"
+                onChange={(e) => onEditLocal(scene.sceneId, { cardText: e.target.value })}
+                onBlur={(e) => onSave(scene.sceneId, { cardText: e.target.value.trim() || null })}
+                className="min-w-0 flex-1 basis-40 bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0" />
+              <label htmlFor={fieldId('card-color')}>Background</label>
+              <input id={fieldId('card-color')} type="color" value={scene.cardColor || '#000000'}
+                onChange={(e) => onEditLocal(scene.sceneId, { cardColor: e.target.value })}
+                onBlur={(e) => onSave(scene.sceneId, { cardColor: e.target.value })}
+                className="h-8 w-10 min-h-[44px] sm:min-h-0 bg-port-bg border border-port-border rounded" />
+            </>
+          )}
+          {documentComposition && (
+            <>
+              <label htmlFor={fieldId('text-zone')}>Lyrics</label>
+              <select id={fieldId('text-zone')} value={scene.textZone || ''} onChange={(e) => applyPatch({ textZone: e.target.value || null })}
+                title="Where the lyric type may sit in this shot, so it stays off the subject"
+                className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0">
+                <option value="">Default zone</option>
+                {MUSIC_VIDEO_TEXT_ZONES.map((value) => <option key={value} value={value}>{TEXT_ZONE_LABELS[value]}</option>)}
+              </select>
+              <label htmlFor={fieldId('lyric-role')} className="sr-only">Lyric style</label>
+              <select id={fieldId('lyric-role')} value={scene.lyricRole || ''} onChange={(e) => applyPatch({ lyricRole: e.target.value || null })}
+                title="The lyric style of the lines sung over this shot"
+                className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0">
+                <option value="">Style from the lyric sheet</option>
+                {MUSIC_VIDEO_LYRIC_ROLES.map((value) => <option key={value} value={value}>{LYRIC_ROLE_LABELS[value]}</option>)}
+              </select>
+            </>
+          )}
+        </div>
+        {layer !== 'footage' && !layered && (
+          <p className="text-[11px] text-port-text-muted">
+            {LAYER_LABELS[layer]} sections render in composed or document mode — a plain render plays this scene&apos;s footage.
+          </p>
+        )}
+        {layer !== 'card' && <SceneCameraControls scene={scene} fieldId={fieldId} onEditLocal={onEditLocal} onSave={onSave} />}
+          </div>
+        </details>
+        {/* A music-driven shot follows the whole mix, not one voice; a lip-sync needs its singer before it renders. */}
+        {performance && scene.performanceStyle !== 'music' && (
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <label htmlFor={fieldId('speaker')}>Speaker / singer</label>
+            <input id={fieldId('speaker')} value={scene.performanceSpeaker || ''} maxLength={120}
+              onChange={(e) => { setSpeakerDirty(true); onEditLocal(scene.sceneId, { performanceSpeaker: e.target.value }); }}
+              onBlur={(e) => {
+                setSpeakerSaving(true);
+                Promise.resolve(onSave(scene.sceneId, { performanceSpeaker: e.target.value || null }))
+                  .then((saved) => setSpeakerDirty(saved === false), () => setSpeakerDirty(true))
+                  .finally(() => setSpeakerSaving(false));
+              }}
+              className="bg-port-bg border border-port-border rounded px-2 py-1" placeholder="Intended singer" />
+          </div>
+        )}
+    </>
+  );
   return (
     <div className="min-w-0">
     <details
@@ -423,128 +546,12 @@ export default function SceneCard({
             onSelect={(take) => onSelectTake?.(scene, take)}
             onReview={(take, review) => onReviewTake?.(scene, take, review)}
             onOpenPreview={onOpenPreview} />
+          {/* The render's settings sit with the render: what it covers and costs, then timing, shot mode, layer and camera. */}
+          {shotSettings}
         </section>
         </div>
         )}
-        {/* What this shot's render covers and costs, and what blocks it, stays in view. */}
-        <SceneTimingPlan timing={timing} sceneId={scene.sceneId} lipSyncBackend={renderLane} onSplit={onSplit} onMergeNext={onMergeNext} />
-        {/* Everything set once and rarely revisited: timing, shot mode, layer, camera. */}
-        <details className="group/settings rounded border border-port-border">
-          <summary className="flex min-h-[44px] cursor-pointer items-center gap-2 px-2 text-xs marker:content-none sm:min-h-[32px] [&::-webkit-details-marker]:hidden">
-            <ChevronRight size={12} aria-hidden="true" className="shrink-0 transition-transform group-open/settings:rotate-90" />
-            <span className="shrink-0 font-medium">Shot settings</span>
-            <span className="min-w-0 truncate text-port-text-muted">· {settingsSummary}</span>
-          </summary>
-          <div className="space-y-2 p-2 pt-0">
-        <div className="flex flex-wrap gap-2 items-center text-xs">
-          {SCENE_TIME_FIELDS.map(([labelText, key]) => {
-            const toValue = (v) => (v === '' ? null : Number(v));
-            return (
-              <label key={key} className="flex items-center gap-1">{labelText}
-                <input type="number" min="0" step="0.1" value={scene[key] ?? ''} className="w-20 bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0"
-                  onChange={(e) => onEditLocal(scene.sceneId, { [key]: toValue(e.target.value) })}
-                  onBlur={(e) => onSave(scene.sceneId, { [key]: toValue(e.target.value) })} />
-              </label>
-            );
-          })}
-          <label className="flex items-center gap-1 min-h-[44px] sm:min-h-0">
-            <input type="checkbox" checked={!!scene.beatAligned}
-              onChange={(e) => { onEditLocal(scene.sceneId, { beatAligned: e.target.checked }); onSave(scene.sceneId, { beatAligned: e.target.checked }); }} />
-            Beat-aligned
-          </label>
-          <label className="flex items-center gap-1 min-h-[44px] sm:min-h-0" title="Repeat the generated clip to fill a span longer than the clip. Off: the shot must be covered by its clip (trim, continue, or replace it).">
-            <input type="checkbox" checked={loops} disabled={performance} onChange={(e) => applyPatch({ loop: e.target.checked })} />
-            Loop clip
-          </label>
-        </div>
-        <div className="flex flex-wrap gap-2 items-center text-xs">
-          <label htmlFor={fieldId('layer')}>Layer</label>
-          <select id={fieldId('layer')} value={layer} onChange={(e) => applyPatch({ visualLayer: e.target.value })}
-            className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0">
-            {MUSIC_VIDEO_VISUAL_LAYERS.map((value) => <option key={value} value={value}>{LAYER_LABELS[value]}</option>)}
-          </select>
-          {/* A performance is sung footage — only the footage layer offers it. */}
-          {layer === 'footage' && (
-            <>
-              <label htmlFor={shotModeId} className="flex items-center gap-1">Shot</label>
-              <select id={shotModeId} value={shotModeValue}
-                onChange={(e) => applyPatch(e.target.value === 'cutaway' ? { shotMode: 'cutaway' }
-                  : e.target.value === 'music' ? { shotMode: 'performance', performanceStyle: 'music' }
-                    // Clear the style only when one is stored, so a plain lip-sync switch stays one field.
-                    : { shotMode: 'performance', ...(scene.performanceStyle ? { performanceStyle: null } : {}) })}
-                className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0"
-                title="Cutaway: any video lane animates the frame under the song. Lip-sync: a singer's mouth follows the song. Music-driven: the song slice drives the whole frame's motion (a drummer on the beat). Both need a source-audio provider.">
-                {Object.entries(SHOT_MODE_LABELS).map(([value, text]) => <option key={value} value={value}>{text}</option>)}
-              </select>
-            </>
-          )}
-          {layer === 'still' && (
-            <>
-              <label htmlFor={fieldId('move')}>Move</label>
-              <select id={fieldId('move')} value={scene.stillMove || 'hold'} onChange={(e) => applyPatch({ stillMove: e.target.value })}
-                disabled={!!scene.camera?.move} title={scene.camera?.move ? 'The planned camera move drives this still.' : undefined}
-                className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0 disabled:opacity-50">
-                {STILL_MOVE_LABELS.map(([value, text]) => <option key={value} value={value}>{text}</option>)}
-              </select>
-            </>
-          )}
-          {layer === 'card' && (
-            <>
-              <label htmlFor={fieldId('card-text')}>Card text</label>
-              <input id={fieldId('card-text')} type="text" maxLength={500} value={scene.cardText || ''}
-                placeholder="Title shown on the card"
-                onChange={(e) => onEditLocal(scene.sceneId, { cardText: e.target.value })}
-                onBlur={(e) => onSave(scene.sceneId, { cardText: e.target.value.trim() || null })}
-                className="min-w-0 flex-1 basis-40 bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0" />
-              <label htmlFor={fieldId('card-color')}>Background</label>
-              <input id={fieldId('card-color')} type="color" value={scene.cardColor || '#000000'}
-                onChange={(e) => onEditLocal(scene.sceneId, { cardColor: e.target.value })}
-                onBlur={(e) => onSave(scene.sceneId, { cardColor: e.target.value })}
-                className="h-8 w-10 min-h-[44px] sm:min-h-0 bg-port-bg border border-port-border rounded" />
-            </>
-          )}
-          {documentComposition && (
-            <>
-              <label htmlFor={fieldId('text-zone')}>Lyrics</label>
-              <select id={fieldId('text-zone')} value={scene.textZone || ''} onChange={(e) => applyPatch({ textZone: e.target.value || null })}
-                title="Where the lyric type may sit in this shot, so it stays off the subject"
-                className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0">
-                <option value="">Default zone</option>
-                {MUSIC_VIDEO_TEXT_ZONES.map((value) => <option key={value} value={value}>{TEXT_ZONE_LABELS[value]}</option>)}
-              </select>
-              <label htmlFor={fieldId('lyric-role')} className="sr-only">Lyric style</label>
-              <select id={fieldId('lyric-role')} value={scene.lyricRole || ''} onChange={(e) => applyPatch({ lyricRole: e.target.value || null })}
-                title="The lyric style of the lines sung over this shot"
-                className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0">
-                <option value="">Style from the lyric sheet</option>
-                {MUSIC_VIDEO_LYRIC_ROLES.map((value) => <option key={value} value={value}>{LYRIC_ROLE_LABELS[value]}</option>)}
-              </select>
-            </>
-          )}
-        </div>
-        {layer !== 'footage' && !layered && (
-          <p className="text-[11px] text-port-text-muted">
-            {LAYER_LABELS[layer]} sections render in composed or document mode — a plain render plays this scene&apos;s footage.
-          </p>
-        )}
-        {layer !== 'card' && <SceneCameraControls scene={scene} fieldId={fieldId} onEditLocal={onEditLocal} onSave={onSave} />}
-          </div>
-        </details>
-        {/* A music-driven shot follows the whole mix, not one voice; a lip-sync needs its singer before it renders. */}
-        {performance && scene.performanceStyle !== 'music' && (
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            <label htmlFor={fieldId('speaker')}>Speaker / singer</label>
-            <input id={fieldId('speaker')} value={scene.performanceSpeaker || ''} maxLength={120}
-              onChange={(e) => { setSpeakerDirty(true); onEditLocal(scene.sceneId, { performanceSpeaker: e.target.value }); }}
-              onBlur={(e) => {
-                setSpeakerSaving(true);
-                Promise.resolve(onSave(scene.sceneId, { performanceSpeaker: e.target.value || null }))
-                  .then((saved) => setSpeakerDirty(saved === false), () => setSpeakerDirty(true))
-                  .finally(() => setSpeakerSaving(false));
-              }}
-              className="bg-port-bg border border-port-border rounded px-2 py-1" placeholder="Intended singer" />
-          </div>
-        )}
+        {codeShot && shotSettings}
         {(scene.visualIntent || scene.direction || scene.direction?.actionContract) && (
           <details className="group/direction rounded border border-port-border">
             <summary className="flex min-h-[44px] cursor-pointer items-center gap-2 px-2 text-xs marker:content-none sm:min-h-[32px] [&::-webkit-details-marker]:hidden">
