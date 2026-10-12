@@ -217,7 +217,7 @@ export default function SceneCard({
   const renderCost = performance ? performanceCost : timing.falCost;
   // A footage shot's start and end frames show as a pair; the end frame is optional.
   const endFrames = Boolean(onGenerateEndFrame) && layer === 'footage';
-  const endFramePlan = sceneEndFramePlanFor(scene, renderSettings || {});
+  const endFramePlan = sceneEndFramePlanFor(scene, renderSettings || {}, { models: videoModels, defaultModel: defaultVideoModel });
   const shotModeValue = performance ? (scene.performanceStyle === 'music' ? 'music' : 'performance') : 'cutaway';
   // The collapsed Shot settings row says what is set, so it rarely needs opening.
   const settingsSummary = [

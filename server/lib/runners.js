@@ -68,6 +68,12 @@ export const isMiniMaxH3Runtime = (runtime) => MINIMAX_H3_RUNTIME_SET.has(runtim
 export const LTX2_FAMILY_RUNTIMES = Object.freeze(['ltx2', 'ltx25']);
 const LTX2_FAMILY_RUNTIME_SET = new Set(LTX2_FAMILY_RUNTIMES);
 export const isLtx2FamilyRuntime = (runtime) => LTX2_FAMILY_RUNTIME_SET.has(runtime);
+// Runtimes whose first+last-frame (FFLF) render really anchors the LAST frame:
+// the LTX-2 family runs a keyframe-interpolation pipeline and both MiniMax H3
+// runtimes pack both frames as conditioning rows. Every other runtime keeps one
+// frame and drops the other. Re-exported by services/videoGen/runtimes.js.
+export const LAST_FRAME_ANCHORED_RUNTIMES = Object.freeze(new Set([...LTX2_FAMILY_RUNTIMES, ...MINIMAX_H3_RUNTIMES]));
+export const isLastFrameAnchoredRuntime = (runtime) => LAST_FRAME_ANCHORED_RUNTIMES.has(runtime);
 export const AUDIO_TO_VIDEO_RUNTIMES = Object.freeze([
   ...LTX2_FAMILY_RUNTIMES,
   MINIMAX_H3_REF2VA_RUNTIME,

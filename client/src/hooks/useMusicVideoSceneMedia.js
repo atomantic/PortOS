@@ -403,8 +403,12 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
             : { grokDuration: settings.grokDuration, disableAudio: true }),
       mode,
       sourceImageFile: scene.referenceImageId,
-      // A style-break end frame (#11173), when this fal model takes one.
-      ...sceneEndFrameRequestFields(scene, { backend: settings.backend, falModelId: falFields?.falModelId, mode }),
+      // A style-break end frame (#11173), when this fal or local model takes one
+      // (a local LTX clip then renders first+last frame, #11258).
+      ...sceneEndFrameRequestFields(scene, {
+        backend: settings.backend, falModelId: falFields?.falModelId, mode, // A card's local pick names its own model; else the active one.
+        localRuntime: (target?.modelId ? (videoSettings.models || []).find((m) => m.id === target.modelId)?.runtime : videoSettings.activeModel?.runtime) ?? null,
+      }),
       ...(audioReactiveSelected ? {
         audioStartSec: scene.startSec || 0,
         loraFilenames: [detectedAudioReactiveLora.filename],

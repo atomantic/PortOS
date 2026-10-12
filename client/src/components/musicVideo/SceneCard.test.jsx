@@ -361,7 +361,7 @@ describe('start and end frames', () => {
     fireEvent.click(within(pair).getByRole('button', { name: 'End frame' }));
     expect(screen.getByLabelText('End frame prompt')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Clear scene 1 end frame' })).toBeTruthy();
-    expect(screen.getByTestId('end-frame-plan').textContent).toMatch(/ignores it/);
+    expect(screen.getByTestId('end-frame-plan').textContent).toMatch(/animates from the start frame only/);
     const pick = screen.getByLabelText('Render on');
     expect(within(pick).getByRole('option', { name: /Kling v3 Pro.*ends on end frame/ })).toBeTruthy();
     fireEvent.change(pick, { target: { value: 'fal:fal-ai/kling-video/v3/pro/image-to-video' } });
