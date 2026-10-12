@@ -158,6 +158,25 @@ describe('locking shots one at a time', () => {
     expect(productionReadiness(relocked).storyboard.approved).toBe(true);
   });
 
+  // Uniquely catches a board approved before per-shot locks shipped dropping to "N shots not locked"
+  // the moment one shot is locked or unlocked.
+  it('keeps an earlier whole-board approval as a lock on every shot it covers', () => {
+    const art = artApproved();
+    const approved = approveProductionStage(art, { stage: 'storyboard', basis: productionReadiness(art).basis.storyboard });
+    const { shotApprovals: _none, ...review } = approved.productionReview;
+    const legacy = { ...approved, productionReview: review };
+    expect(productionReadiness(legacy).storyboard).toMatchObject({ approved: true, unlocked: [] });
+    // The shape already saved by the first release: one shot locked on top of the old approval.
+    const s2 = { basis: setShotLocks(legacy, { sceneIds: ['s2'], locked: true }).productionReview.shotApprovals.s2.basis };
+    expect(productionReadiness({ ...legacy, productionReview: { ...review, shotApprovals: { s2 } } }).storyboard)
+      .toMatchObject({ approved: true, unlocked: [] });
+    // Locking now carries the approval onto every shot, so it outlives the approval going stale.
+    expect(Object.keys(setShotLocks(legacy, { sceneIds: ['s2'], locked: true }).productionReview.shotApprovals)).toEqual(['s1', 's2', 's3']);
+    const unlocked = setShotLocks(legacy, { sceneIds: ['s2'], locked: false });
+    expect(productionReadiness(unlocked).storyboard).toMatchObject({ approved: false, unlocked: ['s2'] });
+    expect(() => assertShotApproval(unlocked, 's1')).not.toThrow();
+  });
+
   // Uniquely catches unlocking every shot falling back to the old whole-board approval.
   it('leaves the board unapproved after every shot of an approved board is unlocked', () => {
     const art = artApproved();

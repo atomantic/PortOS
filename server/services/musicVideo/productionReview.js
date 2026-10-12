@@ -126,13 +126,21 @@ function shotApprovalBasis(project, scene) {
     row: row ? { action: row.action, staging: row.staging, camera: row.camera, transition: row.transition, lyricCueIds: row.lyricCueIds } : null });
 }
 
-/** Each Board shot's lock: `locked`, `changed` (locked, then edited) or `open`. Null for a document storyboard. */
+/** Is the whole-board storyboard approval (given before shots locked one by one, or by Approve all) current? */
+const boardApprovalCovers = project => storyboardApprovalCurrent(project.productionReview?.approvals?.storyboard, productionReviewBasis(project));
+
+/**
+ * Each Board shot's lock: `locked`, `changed` (locked, then edited) or `open`. Null for a document storyboard.
+ * A shot with no lock of its own is locked while a current whole-board approval covers it, so a board
+ * approved before per-shot locks existed stays approved after one shot is locked or unlocked.
+ */
 export function shotLocks(project) {
   if (project.productionReview?.draft?.storyboardSource === 'document') return null;
   const approvals = project.productionReview?.shotApprovals || {};
+  const covered = (project.scenes || []).some(scene => !approvals[scene.sceneId]) && boardApprovalCovers(project);
   return Object.fromEntries((project.scenes || []).map(scene => {
     const approval = approvals[scene.sceneId];
-    return [scene.sceneId, !approval ? 'open' : approval.basis === shotApprovalBasis(project, scene) ? 'locked' : 'changed'];
+    return [scene.sceneId, !approval ? (covered ? 'locked' : 'open') : approval.basis === shotApprovalBasis(project, scene) ? 'locked' : 'changed'];
   }));
 }
 
@@ -145,6 +153,14 @@ export function setShotLocks(project, { sceneIds, locked, reviewer = null, appro
   if (scenes.some(scene => !scene)) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
   const approvals = { ...project.productionReview?.shotApprovals };
   const approvedAt = new Date().toISOString();
+  // A current whole-board approval becomes a lock on every shot it covers first, so withdrawing it
+  // below (or a later edit staling it) never opens the shots the director did not touch.
+  if (boardApprovalCovers(project)) {
+    const carried = project.productionReview.approvals.storyboard;
+    for (const scene of project.scenes || []) {
+      if (!approvals[scene.sceneId]) approvals[scene.sceneId] = { basis: shotApprovalBasis(project, scene), approvedAt: carried.approvedAt || approvedAt, fromBoardApproval: true };
+    }
+  }
   for (const scene of scenes) {
     if (!locked) delete approvals[scene.sceneId];
     else approvals[scene.sceneId] = { basis: shotApprovalBasis(project, scene), approvedAt,
