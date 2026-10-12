@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 const api = vi.hoisted(() => ({
   getMusicVideoCompositionPreview: vi.fn(),
@@ -62,6 +62,27 @@ beforeEach(() => {
 });
 
 describe('CompositionPreviewPlayer', () => {
+  it('sends motion mode during playback and exact mode on pause and scrub without reopening', async () => {
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
+    const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+    const raf = vi.spyOn(window, 'requestAnimationFrame').mockImplementation(() => 1);
+    const cancel = vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {});
+    try {
+      const { container } = render(<CompositionPreviewPlayer project={project} audioUrl='/song.mp3' />);
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled());
+      fireEvent.click(screen.getByRole('button', { name: 'Play' }));
+      const tick = raf.mock.calls.at(-1)[0];
+      container.querySelector('audio').currentTime = 2;
+      act(() => tick());
+      expect(socket.emit).toHaveBeenLastCalledWith('generated-preview:seek', expect.objectContaining({ t: 2, playing: true }));
+      fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
+      await waitFor(() => expect(socket.emit).toHaveBeenLastCalledWith('generated-preview:seek', expect.objectContaining({ t: 2, playing: false })));
+      fireEvent.change(screen.getByLabelText('Scrub the composition preview'), { target: { value: '3' } });
+      expect(socket.emit).toHaveBeenLastCalledWith('generated-preview:seek', expect.objectContaining({ t: 3, playing: false }));
+      expect(opens()).toHaveLength(1);
+    } finally { play.mockRestore(); pause.mockRestore(); raf.mockRestore(); cancel.mockRestore(); }
+  });
+
   it('opens an isolated preview and never fetches media or mounts generated HTML', async () => {
     render(<CompositionPreviewPlayer project={project} audioUrl={null} />);
     await screen.findByTitle('Composition document preview');

@@ -43,7 +43,7 @@ export default function useGeneratedPreview({ active, request, controls = null }
   const [state, setState] = useState(EMPTY);
   const requestKey = active && request ? JSON.stringify(request) : '';
 
-  const seek = useCallback((t) => {
+  const seek = useCallback((t, { playing = false } = {}) => {
     const current = pending.current;
     if (!current?.sessionId) return;
     current.generation += 1;
@@ -52,6 +52,7 @@ export default function useGeneratedPreview({ active, request, controls = null }
       sessionId: current.sessionId,
       generation: current.generation,
       t,
+      playing,
     });
   }, []);
 

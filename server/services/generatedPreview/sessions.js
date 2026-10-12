@@ -48,6 +48,7 @@ const seekSchema = z.object({
   sessionId: z.string().uuid(),
   generation: z.number().int().nonnegative(),
   t: z.number().min(0).max(86400),
+  playing: z.boolean().optional(),
 }).strict();
 
 const commandSchema = z.object({
@@ -175,7 +176,7 @@ async function applyJson(page, globalName, value) {
   await page.evaluate(`globalThis.${globalName} && globalThis.${globalName}.apply(${literal})`);
 }
 
-async function seekPage(session, t) {
+async function seekPage(session, t, playing = false) {
   const time = Number(t);
   if (session.kind === 'code-animation') return;
   if (session.lyrics) {
@@ -185,6 +186,7 @@ async function seekPage(session, t) {
   }
   await session.page.evaluate(`(() => {
     const time = ${time};
+    globalThis.__portosFilmLook?.playback(${playing === true});
     window.postMessage({ type: 'mv-code:seek', t: time }, '*');
     window.postMessage({ type: 'portos-mv:seek', t: time }, '*');
     const seek = globalThis.portosComposition && globalThis.portosComposition.seek;
@@ -200,13 +202,13 @@ function emitFrame(session, generation, data) {
   armIdle(session);
 }
 
-async function runSeek(session, generation, t) {
+async function runSeek(session, generation, t, playing = false) {
   if (session.seekTail) {
-    session.pendingSeek = { generation, t };
+    session.pendingSeek = { generation, t, playing };
     return;
   }
   session.seekTail = (async () => {
-    let next = { generation, t };
+    let next = { generation, t, playing };
     while (next && !session.closed) {
       const current = next;
       session.pendingSeek = null;
@@ -215,7 +217,7 @@ async function runSeek(session, generation, t) {
         continue;
       }
       try {
-        await seekPage(session, current.t);
+        await seekPage(session, current.t, current.playing);
         emitFrame(session, current.generation, await capture(session.page));
         session.appliedGeneration = current.generation;
       } catch (error) {
@@ -574,7 +576,7 @@ async function seekGeneratedPreview(socket, data) {
   if (!parsed.success) return;
   const session = sessions.get(parsed.data.sessionId);
   if (!session || session.socket.id !== socket.id || session.closed) return;
-  await runSeek(session, parsed.data.generation, parsed.data.t);
+  await runSeek(session, parsed.data.generation, parsed.data.t, parsed.data.playing);
 }
 
 async function commandGeneratedPreview(socket, data) {

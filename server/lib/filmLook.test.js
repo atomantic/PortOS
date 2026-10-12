@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { runInNewContext } from 'node:vm';
 import {
   FILM_LOOK_CONTROLS, FILM_LOOK_PRESETS, describeFilmLook, filmLookFilterMarkup, filmLookMotionLayers, filmLookPreset, filmLookRuntimeSource,
   isFilmLookNeutral, normalizeFilmLook,
@@ -86,6 +87,52 @@ describe('film look filter markup', () => {
 });
 
 describe('film look runtime', () => {
+  // Catches motion mode retaining the per-frame SVG chain or pause failing to restore render parity.
+  it('switches the inlined page runtime between cheap reusable motion layers and the exact seek filter', () => {
+    const element = () => ({
+      style: { filter: '', transform: '' }, dataset: {}, children: [], isConnected: false,
+      setAttribute() {},
+      get lastElementChild() { return this.children.at(-1); },
+      appendChild(child) { child.remove(); this.children.push(child); child.parent = this; child.parentNode = this; child.isConnected = true; },
+      remove() { if (this.parent) this.parent.children = this.parent.children.filter((child) => child !== this); this.isConnected = false; },
+    });
+    const root = Object.assign(element(), { clientWidth: 390, clientHeight: 219 });
+    root.style.transform = 'scale(0.9)';
+    const context = { document: { documentElement: root, body: root, readyState: 'complete', createElement: element, createElementNS: element }, addEventListener() {} };
+    context.window = context;
+    const look = filmLookPreset('vhs');
+    runInNewContext(filmLookRuntimeSource(look), context);
+    const api = context.__portosFilmLook;
+    context.portosComposition = { fps: 30, seek: (t) => t };
+    context.portosComposition.seek(0.4);
+    const exact = filmLookFilterMarkup(look, { frame: 12, width: 390, height: 219 });
+    expect(root.style.filter).toBe(exact.css);
+    expect(root.children[0].innerHTML).toBe('<defs>' + exact.filter + '</defs>');
+    api.playback(true);
+    expect(root.style.filter).not.toContain('url(');
+    const overlays = root.lastElementChild;
+    const grain = overlays.children.find((child) => child.dataset.filmLookLayer === 'grain');
+    const originalImage = grain.style.backgroundImage;
+    const originalShift = grain.style.transform;
+    context.portosComposition.seek(0.5);
+    expect(root.lastElementChild).toBe(overlays);
+    expect(overlays.children.find((child) => child.dataset.filmLookLayer === 'grain')).toBe(grain);
+    expect(grain.style.backgroundImage).toBe(originalImage);
+    expect(grain.style.transform).not.toBe(originalShift);
+    expect(overlays.style.cssText).toContain('pointer-events:none;z-index:2147483647');
+    expect(overlays.children.every((child) => child.style.pointerEvents === 'none')).toBe(true);
+    api.playback(false);
+    expect(root.style.filter).toBe(exact.css);
+    expect(root.style.transform).toBe('scale(0.9)');
+    expect(overlays.isConnected).toBe(false);
+    expect(root.lastElementChild.innerHTML).toBe('<defs>' + filmLookFilterMarkup(look, { frame: 15, width: 390, height: 219 }).filter + '</defs>');
+    api.playback(true);
+    api.apply(null);
+    expect(root.style.filter).toBe('');
+    expect(root.style.transform).toBe('scale(0.9)');
+    expect(root.children).toHaveLength(0);
+  });
+
   it('carries the markup, the starting look and the composition seek hook into a page', () => {
     const source = filmLookRuntimeSource({ grain: 0.3, preset: 'custom' });
     expect(source).toContain('function filmLookFilterMarkup');

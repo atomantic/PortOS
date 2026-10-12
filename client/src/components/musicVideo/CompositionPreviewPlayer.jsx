@@ -90,12 +90,17 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
     const tick = () => {
       const time = audioRef.current?.currentTime || 0;
       const frameIndex = Math.floor(time * fps + 1e-9);
-      if (frameIndex !== posted) { posted = frameIndex; setT(time); preview.seek(time); }
+      if (frameIndex !== posted) { posted = frameIndex; setT(time); preview.seek(time, { playing: true }); }
       handle = requestAnimationFrame(tick);
     };
     handle = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(handle);
   }, [playing, fps, preview.seek]);
+
+  // Pause/end repaints the current frame with the exact render filter.
+  useEffect(() => {
+    if (!playing && preview.ready) seek(audioRef.current?.currentTime || 0);
+  }, [playing, preview.ready, seek]);
 
   const togglePlay = () => {
     const audio = audioRef.current;

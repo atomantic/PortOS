@@ -363,15 +363,6 @@ export function filmLookFilterMarkup(look, { frame = 0, width = 1920, height = 1
   };
 }
 
-const FILM_LOOK_TILE_PX = 256;
-const svgDataUrl = (markup) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" ${markup}</svg>`)}`;
-const frameHash = (seed) => {
-  let x = Math.imul(seed + 0x9e3779b9, 0x85ebca6b) >>> 0;
-  x ^= x >>> 13; x = Math.imul(x, 0xc2b2ae35) >>> 0; x ^= x >>> 16;
-  return (x >>> 0) / 4294967296;
-};
-const hexColor = (value, fallback) => (typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value) ? value : fallback);
-
 /**
  * The look as a PLAYING picture can afford it: no SVG filter, which a browser
  * re-runs over every decoded video frame (the full chain drops a phone's
@@ -388,6 +379,19 @@ const hexColor = (value, fallback) => (typeof value === 'string' && /^#[0-9a-f]{
 export function filmLookMotionLayers(look, { frame = 0, width = 1920, height = 1080 } = {}) {
   const settings = normalizeFilmLook(look);
   if (!settings || isFilmLookNeutral(settings)) return null;
+  return filmLookMotionMarkup(settings, { frame, width, height });
+}
+
+// Inlined into the page runtime; all dependencies stay inside this function.
+function filmLookMotionMarkup(settings, { frame = 0, width = 1920, height = 1080 } = {}) {
+  const FILM_LOOK_TILE_PX = 256;
+  const svgDataUrl = (markup) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" ${markup}</svg>`)}`;
+  const frameHash = (seed) => {
+    let x = Math.imul(seed + 0x9e3779b9, 0x85ebca6b) >>> 0;
+    x ^= x >>> 13; x = Math.imul(x, 0xc2b2ae35) >>> 0; x ^= x >>> 16;
+    return (x >>> 0) / 4294967296;
+  };
+  const hexColor = (value, fallback) => (typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value) ? value : fallback);
   const v = (key) => (Number.isFinite(settings[key]) ? settings[key] : 0);
   const n = (value) => Number(value.toFixed(4));
   const w = Math.max(1, width);
@@ -467,7 +471,8 @@ export function filmLookMotionLayers(look, { frame = 0, width = 1920, height = 1
  * document's own scripts. It exposes `window.__portosFilmLook`:
  *
  *   apply(look)   put a (normalized) look on the page, or null to clear it
- *   frame(n)      redraw the filter for song frame n (grain, weave, flicker, leak)
+ *   frame(n)      redraw for song frame n (grain, weave, flicker, leak)
+ *   playback(on)  use cheap motion layers while a live preview plays; exact by default
  *   look          the look currently applied
  *
  * `globalThis.portosComposition` is intercepted when the document assigns it so
@@ -478,15 +483,63 @@ export function filmLookMotionLayers(look, { frame = 0, width = 1920, height = 1
 export function filmLookRuntimeSource(look = null) {
   return `(() => {
   const markup = ${filmLookFilterMarkup.toString()};
+  const motion = ${filmLookMotionMarkup.toString()};
   const ID = 'portos-film-look';
   let look = ${JSON.stringify(normalizeFilmLook(look))};
   let frame = 0;
   let fps = 24;
   let host = null;
+  let overlays = null;
+  let playing = false;
+  let savedTransform = null;
+  const clearMotion = (root) => {
+    if (overlays) { overlays.remove(); overlays = null; }
+    if (savedTransform !== null) { root.style.transform = savedTransform; savedTransform = null; }
+  };
+  const drawMotion = (root, size) => {
+    if (host) { host.remove(); host = null; }
+    const built = motion(look, size);
+    root.style.filter = built.filter || '';
+    if (savedTransform === null) savedTransform = root.style.transform;
+    root.style.transform = [savedTransform, built.transform].filter(Boolean).join(' ');
+    if (!overlays) {
+      overlays = document.createElement('div');
+      overlays.dataset.portosFilmLookMotion = '1';
+      overlays.setAttribute('aria-hidden', 'true');
+      overlays.style.cssText = 'position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:2147483647';
+    }
+    // A root child after body also paints after max-z-index lyrics/title layers.
+    if (root.lastElementChild !== overlays) root.appendChild(overlays);
+    const keys = new Set(built.overlays.map((layer) => layer.key));
+    for (const child of [...overlays.children]) if (!keys.has(child.dataset.filmLookLayer)) child.remove();
+    for (const [index, layer] of built.overlays.entries()) {
+      let el = [...overlays.children].find((child) => child.dataset.filmLookLayer === layer.key);
+      if (!el) { el = document.createElement('div'); el.dataset.filmLookLayer = layer.key; }
+      // Reuse the nodes and tile URLs across frames: only the tile transform changes.
+      el.style.position = 'absolute'; el.style.pointerEvents = 'none';
+      el.style.opacity = layer.opacity; el.style.mixBlendMode = layer.blend;
+      el.style.left = '0'; el.style.top = '0';
+      el.style.width = layer.kind === 'tile' ? '200%' : '100%';
+      el.style.height = layer.kind === 'tile' ? '200%' : '100%';
+      if (layer.kind === 'flat') el.style.backgroundColor = layer.color;
+      if (layer.kind === 'gradient') el.style.backgroundImage = layer.gradient;
+      if (layer.kind === 'tile') {
+        el.style.backgroundImage = 'url("' + layer.image + '")';
+        el.style.backgroundSize = layer.size[0] + 'px ' + layer.size[1] + 'px';
+        el.style.backgroundRepeat = 'repeat';
+        el.style.transform = 'translate(' + (-layer.shift[0] * 50) + '%, ' + (-layer.shift[1] * 50) + '%)';
+      }
+      el.style.zIndex = String(index);
+      if (el.parentNode !== overlays) overlays.appendChild(el);
+    }
+  };
   const draw = () => {
     const root = document.documentElement;
     if (!root) return;
-    const built = look ? markup(look, { frame, width: root.clientWidth || innerWidth || 1920, height: root.clientHeight || innerHeight || 1080, id: ID }) : null;
+    const size = { frame, width: root.clientWidth || innerWidth || 1920, height: root.clientHeight || innerHeight || 1080, id: ID };
+    if (playing && look) { drawMotion(root, size); return; }
+    clearMotion(root);
+    const built = look ? markup(look, size) : null;
     if (!built || !built.active) {
       if (host) { host.remove(); host = null; }
       root.style.filter = '';
@@ -504,7 +557,8 @@ export function filmLookRuntimeSource(look = null) {
   };
   const api = {
     apply(next) { look = next && typeof next === 'object' ? next : null; draw(); },
-    frame(n) { const next = Math.max(0, Math.floor(Number(n) || 0)); if (next !== frame || !host) { frame = next; if (look) draw(); } },
+    playback(value) { const next = value === true; if (next !== playing) { playing = next; draw(); } },
+    frame(n) { const next = Math.max(0, Math.floor(Number(n) || 0)); if (next !== frame || (!host && !overlays)) { frame = next; if (look) draw(); } },
     get look() { return look; },
   };
   Object.defineProperty(window, '__portosFilmLook', { value: api, configurable: false, writable: false });
