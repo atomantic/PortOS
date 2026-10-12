@@ -87,6 +87,19 @@ describe('FableLoom visual conditioning compiler', () => {
     expect(result.prompt).toContain('Wardrobe: Red coat');
     expect(result.prompt).toContain('ARIA_V2');
     expect(result.negativePrompt).toContain('wrong aria face');
+    // Pin the complete render text before moving composition out of admission.
+    expect(result.prompt).toBe([
+      'Universe style: ligne claire, flat matte color fields',
+      'Environment: Atrium. glass roof',
+      'Character: Aria. silver braid. Wardrobe: Red coat weathered wool. Expression: alert. Continuity: coat stays wet. Identity adapter triggers: ARIA_V2',
+      'Object: Compass. brass',
+      'Presentation: no subtitles, captions, dialogue lettering, speech balloons, or text overlays. Dialogue is spoken audio only; never draw the script into the image.',
+      'The preceding image is temporal context. Preserve recurring identities and props, but follow the current authored location and camera framing; do not copy the previous location across an intentional scene change.',
+      'A cautious arrival',
+    ].join('\n\n'));
+    expect(result.negativePrompt).toBe('subtitles, captions, dialogue lettering, speech balloons, text overlays, photoreal, gore, wrong aria face');
+    expect(result.visualConditioning.compiledPrompt).toBe(result.prompt);
+    expect(result.visualConditioning.compiledNegativePrompt).toBe(result.negativePrompt);
     expect(result.visualConditioning).toMatchObject({
       status: 'locked', compilerVersion: '1.1.0', universeId: universe.id,
       temporalSourceNodeId: 'opening',
@@ -133,12 +146,36 @@ describe('FableLoom visual conditioning compiler', () => {
     expect(result.prompt).toContain(current.prose);
     expect(result.prompt).toContain('No subtitles');
     expect(result.prompt.length).toBeLessThanOrEqual(800);
+    expect(result.prompt).toBe([
+      'Animate this reference as one continuous shot. Preserve its cast, room, props, lighting and screen direction. No subtitles, captions, speech balloons or text overlays. Dialogue is audio only.',
+      'She folds the ticket.',
+      'Script: ARIA\nThe last shuttle leaves tonight.',
+    ].join('\n'));
+    expect(result.negativePrompt).toBe('subtitles, captions, dialogue lettering, speech balloons, text overlays, photoreal, gore, wrong aria face');
     expect(result.visualConditioning.compiledPrompt).toBe(result.prompt);
+    expect(result.visualConditioning.compiledNegativePrompt).toBe(result.negativePrompt);
     current.visualCanon = { ...lockedBinding, mode: 'draft', storyboardImageApproved: false };
     await expect(compile()).rejects.toMatchObject({ code: 'FABLELOOM_REACTOR_REFERENCE_REQUIRED' });
     current.visualCanon = lockedBinding;
     current.prose = 'x'.repeat(801);
     await expect(compile()).rejects.toMatchObject({ code: 'FABLELOOM_REACTOR_PROMPT_TOO_LONG' });
+  });
+
+  it('reports the Reactor reference error before accumulated locked-canon failures', async () => {
+    const loom = loomWith({
+      ...lockedBinding,
+      storyboardImageApproved: false,
+      characterAppearances: [{ characterId: 'missing-character' }],
+    });
+    await expect(compileFableLoomVisualRequest({
+      tag: { loomId: loom.id, episodeId: 'episode-1', nodeId: 'shot' }, kind: 'video',
+      sourceImagePath: '/approved/storyboard.png',
+      capability: fableLoomVideoCapabilities({ backend: 'reactor', model: { supportedModes: ['image'] } }),
+      ...deps(loom),
+    })).rejects.toMatchObject({
+      status: 422, code: 'FABLELOOM_REACTOR_REFERENCE_REQUIRED',
+      message: 'Review and approve the current storyboard reference before rendering with Reactor.',
+    });
   });
 
   it('uses the explicit draft character anchor without changing approved canon', async () => {

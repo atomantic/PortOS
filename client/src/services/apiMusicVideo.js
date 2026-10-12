@@ -170,6 +170,12 @@ export const addMusicVideoSceneTake = (id, sceneId, body, options = {}) => reque
 });
 export const selectMusicVideoSceneTake = (id, sceneId, takeId, options = {}) =>
   request(`${takesPath(id, sceneId)}/${encodeURIComponent(takeId)}/select`, { method: 'POST', ...options });
+// The project's unused stills and clips (the shot card's "Swap from unused") → { collectionId, items }.
+export const getMusicVideoMediaPool = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/media-pool`, options);
+// Put a pool still or clip on a shot as its selection; `withAssetId` brings its partner → { scene }.
+export const placeMusicVideoPoolItem = (id, sceneId, body, options = {}) => request(`${takesPath(id, sceneId)}/use`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
 // Start a shot from the previous shot's last on-screen frame → { scene, frame }.
 export const continueMusicVideoSceneFromPrevious = (id, sceneId, body = {}, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/continue-from-previous`, {

@@ -3,6 +3,7 @@ import toast from '../components/ui/Toast';
 import {
   addMusicVideoSceneTake,
   selectMusicVideoSceneTake,
+  placeMusicVideoPoolItem,
   continueMusicVideoSceneFromPrevious,
   reviewMusicVideoSceneTake,
   getMusicVideoHandoff,
@@ -10,7 +11,7 @@ import {
   importMusicVideoHandoff,
 } from '../services/apiMusicVideo.js';
 import { uploadGalleryImage } from '../services/apiSystem.js';
-import { uploadGalleryVideo } from '../services/apiImageVideo.js';
+import { trimVideoStart, uploadGalleryVideo } from '../services/apiImageVideo.js';
 import { downloadBlob } from '../lib/downloadBlob.js';
 import { validateImageFile } from '../utils/fileUpload.js';
 
@@ -56,11 +57,12 @@ export default function useMusicVideoTakes({ project, applyScenePatch }) {
   });
 
   // Serialize take mutations; a failure toasts and leaves the chain usable.
+  // Resolves true when the change landed, false when it was refused.
   const runTakeOp = (work, failMessage) => {
     const projectId = project.id;
     const run = chainRef.current.then(() => work(projectId));
-    chainRef.current = run.then((scene) => { if (scene) applyScene(projectId, scene); })
-      .catch((err) => toast.error(err?.message || failMessage));
+    chainRef.current = run.then((scene) => { if (scene) applyScene(projectId, scene); return true; })
+      .catch((err) => { toast.error(err?.message || failMessage); return false; });
     return chainRef.current;
   };
 
@@ -68,6 +70,29 @@ export default function useMusicVideoTakes({ project, applyScenePatch }) {
     (projectId) => selectMusicVideoSceneTake(projectId, scene.sceneId, take.takeId, { silent: true }),
     'Failed to select take',
   );
+
+  // An unused still or clip from the project's pool becomes this shot's selection (with its partner, when picked).
+  const placePoolItem = (scene, pick) => runTakeOp(
+    (projectId) => placeMusicVideoPoolItem(projectId, scene.sceneId, pick, { silent: true }).then((res) => res.scene),
+    'Failed to use that take',
+  );
+
+  // "Start clip here": the shot's clip from a later frame becomes a new clip take, and the selected one.
+  // It keeps the cut clip's still and provider, so a still change still marks it stale and the pool pairs it.
+  const trimClipTake = (scene, startSec) => {
+    const origin = scene.takes?.find((take) => take.kind === 'video' && take.assetId === scene.videoHistoryId);
+    const provenance = {
+      ...(origin?.sourceImageId ? { sourceImageId: origin.sourceImageId } : {}),
+      // Only a slug the take route accepts; an older free-form label is left off rather than failing the trim.
+      ...(/^[a-z0-9][a-z0-9._-]{0,39}$/i.test(origin?.provider || '') ? { provider: origin.provider } : {}),
+    };
+    return runTakeOp(
+      (projectId) => trimVideoStart(scene.videoHistoryId, startSec, { silent: true })
+        .then(({ video }) => addMusicVideoSceneTake(projectId, scene.sceneId, { kind: 'video', assetId: video.id, source: 'trimmed', ...provenance }, { silent: true }))
+        .then(({ take }) => selectMusicVideoSceneTake(projectId, scene.sceneId, take.takeId, { silent: true })),
+      'Failed to trim the clip',
+    );
+  };
 
   // Continuing shot: the previous shot's last on-screen frame becomes this
   // scene's start frame; `keepStillAsEnd` keeps the current one as its end frame.
@@ -154,5 +179,5 @@ export default function useMusicVideoTakes({ project, applyScenePatch }) {
     if (failures.length) toast.error(failures.slice(0, 3).join(' · '));
   };
 
-  return { busy, selectTake, reviewTake, continueFromPrevious, importTake, importClipTake, exportHandoff, exportHandoffBundle, importHandoffFiles };
+  return { busy, selectTake, placePoolItem, trimClipTake, reviewTake, continueFromPrevious, importTake, importClipTake, exportHandoff, exportHandoffBundle, importHandoffFiles };
 }

@@ -4,6 +4,7 @@ import toast from '../components/ui/Toast';
 import { cleanGalleryImage, extractLastFrame, removeImageWatermark } from '../services/apiImageVideo';
 import { normalizeVideoTiling } from '../lib/videoTilingOptions';
 import { hydrateMediaItem } from '../components/media/mediaDetail';
+import { MUSIC_VIDEO_FILING_PARAM, musicVideoOf } from '../lib/musicVideoFiling';
 
 // Handoffs that copy a record's prompt/settings into a generator form read the
 // FULL record: a compact gallery item (#8292) only holds a prompt preview, so
@@ -44,9 +45,11 @@ function buildImageGenParams(item) {
 // placeholder for items that lost theirs — skip it so the next render doesn't
 // start with that literal, and an item we never generated lands on a blank
 // prompt rather than a bogus one. The caller adds `sourceImageFile`, which is
-// the only thing that differs between the two.
+// the only thing that differs between the two. A clip made for a music video
+// hands the video on, so the next render lands in its collection too.
 function buildVideoGenParams(item) {
   const params = new URLSearchParams();
+  if (musicVideoOf(item)) params.set(MUSIC_VIDEO_FILING_PARAM, musicVideoOf(item));
   if (item.prompt && item.prompt !== '(no prompt)') params.set('prompt', item.prompt);
   const neg = item.negativePrompt || item.raw?.negativePrompt || item.raw?.negative_prompt;
   if (neg) params.set('negativePrompt', neg);
@@ -101,7 +104,8 @@ export default function useMediaPreviewActions({ onCleanComplete = null } = {}) 
     if (!item) return;
     if (item.kind === 'video') {
       if (item.id != null && item.id !== '') {
-        navigate(`/media/video?remix=${encodeURIComponent(item.id)}`);
+        const projectId = musicVideoOf(item);
+        navigate(`/media/video?remix=${encodeURIComponent(item.id)}${projectId ? `&${MUSIC_VIDEO_FILING_PARAM}=${encodeURIComponent(projectId)}` : ''}`);
         return;
       }
       const params = new URLSearchParams();

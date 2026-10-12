@@ -239,6 +239,11 @@ const generateSchema = z.object({
     // (an `endImage` take) instead of its start frame.
     slot: z.enum(['end']).optional(),
   }).optional(),
+  // File the render into this music video's media collection even when no shot
+  // keeps it (sheets, tests, alternates): musicVideoCollectionHook for the
+  // queued lanes, inline below for the synchronous one. Collection only; the
+  // render itself is unchanged.
+  musicVideoProjectId: z.string().min(1).max(200).optional(),
   // Durable catalog attach (#1359). When present, the mediaJobQueue completion
   // hook (catalogImageAttachHook) files the finished render onto this catalog
   // ingredient even if the page that started the render has since unmounted —
@@ -698,6 +703,10 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     await assertRevisionOpen(params.musicVideo.projectId, params.musicVideo.revisionId, { sceneId: params.musicVideo.sceneId, kind: 'image' });
   }
   const result = await imageGen.generateImage(params);
+  if (params.musicVideoProjectId && result?.filename) {
+    const { fileIntoMusicVideoCollection } = await import('../services/musicVideoCollectionHook.js');
+    await fileIntoMusicVideoCollection(params.musicVideoProjectId, [{ kind: 'image', ref: result.filename }]);
+  }
   if (params.fableLoom && result?.filename) {
     await attachNodeImage(
       params.fableLoom.loomId,

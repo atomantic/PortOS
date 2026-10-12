@@ -384,7 +384,8 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       ...(settings.backend === 'grok'
         // Request the 6/10s clip that COVERS this shot; the saved pin is only
         // the fallback for a scene not yet timed on the song.
-        ? { grokDuration: spanSec != null ? grokCoverage(spanSec).requestSec : settings.grokDuration }
+        // A scene card's Length pick wins.
+        ? { grokDuration: target?.grokDuration || (spanSec != null ? grokCoverage(spanSec).requestSec : settings.grokDuration) }
         // fal.ai (#8968) — image-to-video only (see VideoRenderSettings). The
         // request is exactly the take the scene card prices (falSceneTake):
         // a cutaway names its model, the length covering the shot (or the
@@ -394,7 +395,8 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         : falFields
           ? falFields
           : settings.backend === 'local'
-            ? { modelId: settings.modelId || undefined, disableAudio: true }
+            // A scene card's pick names its model and length; else the saved model at the model's default length.
+            ? { modelId: settings.modelId || undefined, ...(target?.numFrames ? { numFrames: target.numFrames } : {}), disableAudio: true }
             // A named model is local-only machinery at the server boundary and
             // would force the resolver off a Grok install default. Keep the
             // shared pin saved, but omit it until this peer chooses Local.
@@ -404,7 +406,8 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       // A style-break end frame (#11173), when this fal or local model takes one
       // (a local LTX clip then renders first+last frame, #11258).
       ...sceneEndFrameRequestFields(scene, {
-        backend: settings.backend, falModelId: falFields?.falModelId, mode, localRuntime: videoSettings.activeModel?.runtime ?? null,
+        backend: settings.backend, falModelId: falFields?.falModelId, mode, // A card's local pick names its own model; else the active one.
+        localRuntime: (target?.modelId ? (videoSettings.models || []).find((m) => m.id === target.modelId)?.runtime : videoSettings.activeModel?.runtime) ?? null,
       }),
       ...(audioReactiveSelected ? {
         audioStartSec: scene.startSec || 0,
