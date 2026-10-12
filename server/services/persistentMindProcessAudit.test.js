@@ -1,14 +1,17 @@
 import { beforeEach, afterAll, expect, it as vitestIt, vi } from 'vitest';
 import { join } from 'node:path';
+import express from 'express';
+import { request } from '../lib/testHelper.js';
+import { errorMiddleware } from '../lib/errorHandler.js';
 import { mkdir, writeFile, rm } from 'node:fs/promises';
 import { ownTestBodies } from '../lib/mockPathsDataRoot.js';
-const mocks = vi.hoisted(() => ({ root: {}, apps: [], records: {}, dir: null, file: vi.fn(), list: vi.fn(), git: vi.fn() }));
-vi.mock('../lib/fileUtils.js', async () => {
+const mocks = vi.hoisted(() => ({ root: {}, apps: [], rosterError: false, records: {}, dir: null, file: vi.fn(), list: vi.fn(), git: vi.fn() }));
+vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   const fs = await import('node:fs/promises');
   const os = await import('node:os');
   const path = await import('node:path');
   mocks.dir ||= await fs.mkdtemp(path.join(os.tmpdir(), 'process-audit-'));
-  return { PATHS: { cos: mocks.dir },
+  return { ...await importOriginal(), PATHS: { cos: mocks.dir },
     atomicWrite: async (name, value) => fs.writeFile(name, JSON.stringify(value)),
     readJSONFileStrict: async (name, fallback) => {
       try { return { ok: true, value: JSON.parse(await fs.readFile(name, 'utf8')) }; }
@@ -17,15 +20,26 @@ vi.mock('../lib/fileUtils.js', async () => {
 });
 vi.mock('./cosState.js', async () => {
   await import('../lib/fileUtils.js');
-  return { AGENTS_DIR: mocks.dir, loadState: async () => mocks.root };
+  return { AGENTS_DIR: mocks.dir, loadState: async () => mocks.root, saveState: async () => {}, withStateLock: async fn => fn() };
 });
 vi.mock('./cosAgentIndex.js', () => ({ loadAgentIndex: async () => new Map(Object.values(mocks.records).map(record => [record.id, record.archiveDay || record.completedAt.slice(0, 10)])) }));
 vi.mock('./cosAgentLifecycle.js', () => ({ getAgentRecord: async id => mocks.records[id] || null }));
-vi.mock('./persistentMindManagedApps.js', () => ({ readPersistentMindManagedApps: async () => mocks.apps }));
+vi.mock('./persistentMindManagedApps.js', () => ({ readPersistentMindManagedApps: async () => { if (mocks.rosterError) throw new Error('private roster error'); return mocks.apps; } }));
 vi.mock('./persistentMindIssueCapability.js', () => ({ filePersistentMindIssue: (...args) => mocks.file(...args) }));
 vi.mock('./appIssues.js', () => ({ listAppIssues: (...args) => mocks.list(...args) }));
 vi.mock('../lib/execGit.js', () => ({ execGit: (...args) => mocks.git(...args) }));
+vi.mock('./voice/tools.js', () => ({ getToolSpecs: () => [], getToolSpecsForIntent: () => ({ specs: [], activeGroups: new Set() }), dispatchTool: vi.fn() }));
+vi.mock('./persistentMindTaskCapability.js', () => ({ executePersistentMindTaskRequests: vi.fn() }));
+vi.mock('./persistentMindMaintenance.js', () => ({ cleanupPersistentMind: vi.fn() }));
+vi.mock('./settings.js', () => ({ getSettings: async () => ({}) }));
+vi.mock('./apps.js', () => ({ getActiveApps: async () => [] }));
+vi.mock('./persistentMindOrientation.js', () => ({ readPersistentMindOrientation: async () => ({ status: 'unknown' }) }));
+vi.mock('./persistentMindRuntime.js', () => ({ inspectPersistentMindRuntime: async () => ({}) }));
+vi.mock('./persistentMindWorkspacePreflight.js', () => ({ PERSISTENT_MIND_WORKSPACE_PREFLIGHT_TTL_MS: 30000, readPersistentMindWorkspacePreflights: async () => [] }));
 const audit = await import('./persistentMindProcessAudit.js');
+const registry = await import('./cosToolRegistry.js');
+const visibility = await import('./persistentMindVisibility.js');
+const toolRoutes = (await import('../routes/cosToolRoutes.js')).default;
 const turn = { turnId: 'example-turn' };
 const storePath = () => join(mocks.dir, 'persistent-mind-process-audit.json');
 const addJob = async (id, text = 'unknown tool: example\n', extra = {}) => {
@@ -35,8 +49,8 @@ const addJob = async (id, text = 'unknown tool: example\n', extra = {}) => {
   await mkdir(path, { recursive: true }); await writeFile(join(path, 'output.txt'), text);
 };
 beforeEach(async () => {
-  vi.clearAllMocks(); await rm(storePath(), { force: true });
-  mocks.records = {}; mocks.root = { agents: {}, config: { persistentMindMaintainer: { enabled: true, appIds: ['example', 'slashdo'] },
+  vi.clearAllMocks(); registry.__testing.toolCalls.clear(); registry.__testing.toolCallFingerprints.clear(); await rm(storePath(), { force: true });
+  mocks.rosterError = false; mocks.records = {}; mocks.root = { agents: {}, persistentMind: {}, config: { persistentMindMaintainer: { enabled: true, appIds: ['example', 'slashdo'] },
     persistentMindCapabilities: { auditReports: true, readPortos: true, fileIssues: true } } };
   mocks.apps = ['example', 'slashdo'].map(id => ({ id, granted: true, forge: 'github', fullName: `example/${id}`, repoPath: '/example/repo' }));
   mocks.list.mockResolvedValue({ transient: false, issues: [] });
@@ -237,4 +251,67 @@ it('keeps distinct mechanisms separate through the downstream normalized-title d
   const distinct = await audit.recordProcessAuditOutcome({ ...finding(second.receiptId), anchors: ['commands/review.md'] }, context);
   expect(result.issue.number).not.toBe(distinct.issue.number);
   expect(titles.size).toBe(2);
+});
+
+// Regression: a capability grant used to advertise reports despite a disabled
+// maintainer; successful cached calls could also replay after app revocation.
+it('keeps report visibility, family activation and private tool access consistent with app authorization', async () => {
+  const caps = mocks.root.config.persistentMindCapabilities;
+  const authority = { scope: 'mind', capabilities: caps };
+  const invoke = (name, arguments_, requestId) => registry.executeCosToolCall({
+    call: { name, arguments: arguments_, requestId }, authority, context: turn,
+  });
+  const snapshot = async () => visibility.readPersistentMindVisibility({ root: mocks.root, apps: [] });
+  const reportGroup = snap => snap.actions.tools.find(tool => tool.id === 'reports.audit');
+  mocks.root.config.persistentMindMaintainer.enabled = false;
+  const disabled = await snapshot();
+  expect(disabled.actions.grants.auditReports).toBe(true);
+  expect(reportGroup(disabled)).toMatchObject({ granted: false, access: { reasonCode: 'maintainer-disabled' } });
+  const catalog = registry.getCosToolCatalog({ scope: 'mind', capabilities: caps, reportAccess: reportGroup(disabled).access });
+  expect(catalog.tools.filter(tool => tool.family === 'reports').every(tool => !tool.granted)).toBe(true);
+  expect(await invoke('tools.activate', { families: ['reports'] }, 'activate-reports')).toMatchObject({ state: 'completed' });
+  await expect(invoke('reports.next', { appId: 'example' }, 'disabled-next')).rejects.toMatchObject({ code: 'PROCESS_AUDIT_ACCESS_DENIED', message: expect.stringContaining('maintainer-disabled') });
+
+  mocks.root.config.persistentMindMaintainer.enabled = true;
+  caps.allowedAppIds = ['example'];
+  const enabled = await snapshot();
+  expect(reportGroup(enabled)).toMatchObject({ granted: true, access: { apps: [
+    { appId: 'example', granted: true }, { appId: 'slashdo', granted: false, reasonCode: 'app-revoked' },
+  ] } });
+  const prompt = await registry.buildPersistentMindToolPrompt(caps, [], { activatedFamilies: ['reports'], turnId: turn.turnId });
+  expect(prompt).toContain('reports.next');
+  const result = await invoke('reports.next', { appId: 'example' }, 'authorized-next');
+  expect(result).toMatchObject({ state: 'completed', result: { jobs: [{ evidence: { excerpt: 'unknown tool: example\n' } }] } });
+  await expect(registry.executeCosToolCall({ call: { name: 'reports.next', arguments: { appId: 'example' }, requestId: 'authorized-next' }, authority, context: { turnId: 'another-turn' } })).rejects.toMatchObject({ code: 'TOOL_IDEMPOTENCY_CONFLICT' });
+  const app = express();
+  app.use('/api/cos', toolRoutes);
+  app.use(errorMiddleware);
+  const cached = await request(app).get('/api/cos/tools/calls/authorized-next');
+  expect(cached.status).toBe(200);
+  expect(cached.body.result.jobs[0].evidence.excerpt).toBe('unknown tool: example\n');
+  const receiptId = result.result.jobs[0].receiptId;
+  expect(await invoke('reports.read', { appId: 'example', receiptId }, 'authorized-read')).toMatchObject({ state: 'completed', result: { evidence: { excerpt: 'unknown tool: example\n' } } });
+  await expect(invoke('reports.read', { appId: 'slashdo', receiptId }, 'other-app-read')).rejects.toMatchObject({ code: 'PROCESS_AUDIT_ACCESS_DENIED' });
+  await expect(invoke('reports.next', { appId: 'not-maintained' }, 'unselected-next')).rejects.toThrow('app-not-maintained');
+  caps.allowedAppIds = ['slashdo'];
+  const deniedCache = await request(app).get('/api/cos/tools/calls/authorized-next');
+  expect(deniedCache.status).toBe(403);
+  expect(deniedCache.body.code).toBe('PROCESS_AUDIT_ACCESS_DENIED');
+  expect(JSON.stringify(deniedCache.body)).not.toContain('unknown tool: example');
+  await expect(invoke('reports.next', { appId: 'example' }, 'authorized-next')).rejects.toThrow('app-revoked');
+  await expect(invoke('reports.read', { appId: 'example', receiptId }, 'authorized-read')).rejects.toThrow('app-revoked');
+  expect(JSON.stringify(reportGroup(await snapshot()))).not.toMatch(/unknown tool|Synthetic task|repoPath|fullName/);
+});
+
+it('reports distinct unavailable prerequisites and never treats a failed app lookup as authorized', async () => {
+  const role = mocks.root.config.persistentMindMaintainer;
+  role.appIds = [];
+  await expect(next()).rejects.toThrow('maintainer-apps-empty');
+  role.appIds = ['example'];
+  mocks.apps[0].forge = null;
+  expect(await audit.readProcessAuditAccess()).toMatchObject({ granted: false, apps: [{ appId: 'example', reasonCode: 'app-tracker-unavailable' }] });
+  await expect(next()).rejects.toThrow('app-tracker-unavailable');
+  mocks.rosterError = true;
+  expect(await audit.readProcessAuditAccess()).toMatchObject({ granted: false, reasonCode: 'report-access-unknown' });
+  await expect(next()).rejects.toThrow('report-access-unknown');
 });
