@@ -49,7 +49,8 @@ export {
 import { cosEvents, emitLog } from './cosEvents.js';
 import { schedule, cancel, getEvent } from './eventScheduler.js';
 import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
-import { acquireLocalEndpointProviderSlot, localEndpointOfProvider } from './cosLocalEndpointSlots.js';
+import { acquireLocalEndpointProviderSlot, localEndpointOfProvider, providerBaseUrl } from './cosLocalEndpointSlots.js';
+import { isOllamaBackedProvider } from '../lib/aiToolkit/index.js';
 import { acquireCosActionReservation, acquireCosGlobalSlot } from './cosAdmissionReservations.js';
 import {
   createPersistentMindCallBoundary,
@@ -105,6 +106,59 @@ let usageLimitProbeAttempt = 0;
 let lastWatchdogCheckAt = null;
 /** Wall time this process was last seen resuming from such a gap. */
 let watchdogResumedAt = null;
+/**
+ * Provider calls currently in flight, keyed by turn id. A stale heartbeat only
+ * means the turn's pulse stopped; while a call is still open in THIS process
+ * the thought may simply be long, so the watchdog consults this before it
+ * interrupts. Empty after a process restart, so a turn orphaned by a restart
+ * is still interrupted as before.
+ */
+const inFlightCalls = new Map();
+const OLLAMA_LIVENESS_TIMEOUT_MS = 5_000;
+
+async function providerLivenessProbe(provider, model) {
+  if (!isOllamaBackedProvider(provider)) return { alive: true, reason: 'request open' };
+  const base = String(providerBaseUrl(provider) || '').replace(/\/+$/, '').replace(/\/v1$/, '');
+  if (!base) return { alive: true, reason: 'request open' };
+  const response = await fetch(`${base}/api/ps`, { signal: AbortSignal.timeout(OLLAMA_LIVENESS_TIMEOUT_MS) }).catch(() => null);
+  if (!response?.ok) return { alive: false, reason: 'Ollama is not responding' };
+  const data = await response.json().catch(() => null);
+  const models = Array.isArray(data?.models) ? data.models : [];
+  const loaded = models.some((m) => !model || m.name === model || m.model === model);
+  return loaded ? { alive: true, reason: 'model loaded' } : { alive: false, reason: `Ollama no longer has ${model || 'the model'} loaded` };
+}
+
+
+function trackInFlightCall(turnId, provider, model, call) {
+  return async (meta, run) => {
+    const entry = { provider, model, startedAt: Date.now() };
+    const calls = inFlightCalls.get(turnId) || new Set();
+    calls.add(entry);
+    inFlightCalls.set(turnId, calls);
+    try {
+      return await call(meta, run);
+    } finally {
+      calls.delete(entry);
+      if (calls.size === 0) inFlightCalls.delete(turnId);
+    }
+  };
+}
+
+/**
+ * Whether a stale-heartbeat turn still has a live provider call. Only a call
+ * that is open in this process AND whose provider still answers counts.
+ */
+async function turnHasLiveCall(turnId) {
+  const calls = inFlightCalls.get(turnId);
+  if (!calls?.size) return { alive: false, reason: 'no provider call in flight' };
+  for (const entry of calls) {
+    const result = await Promise.resolve(providerLivenessProbe(entry.provider, entry.model))
+      .catch((err) => ({ alive: false, reason: err?.message || 'liveness probe failed' }));
+    if (result?.alive) return { alive: true, reason: result.reason };
+    return { alive: false, reason: result?.reason || 'provider gone' };
+  }
+  return { alive: false, reason: 'no provider call in flight' };
+}
 
 const nowIso = () => new Date().toISOString();
 const errorMessage = (error) => String(error?.message || error || 'Persistent mind turn failed')
@@ -980,7 +1034,7 @@ async function runClaimedPersistentMindTurn(turn, mind, globalSlot) {
       effort: prepared.effort || null,
       signal: controller.signal,
       heartbeat: () => heartbeat(turn.id, generation),
-      callBoundary: callBoundary.call,
+      callBoundary: trackInFlightCall(turn.id, prepared.provider, prepared.model || null, callBoundary.call),
     });
     const context = await preparePersistentMindContext({
       mindId: mind.mindId,
@@ -1027,7 +1081,7 @@ async function runClaimedPersistentMindTurn(turn, mind, globalSlot) {
       signal: controller.signal,
       heartbeat: () => heartbeat(turn.id, generation),
       context,
-      callBoundary: callBoundary.call,
+      callBoundary: trackInFlightCall(turn.id, prepared.provider, prepared.model || null, callBoundary.call),
       recordCapabilityEvent: ({ kind, id, data } = {}) => {
         const eventKind = kind === 'result' ? 'mind.capability.result' : 'mind.capability.request';
         const capabilityId = typeof id === 'string' && id ? id : randomUUID();
@@ -1649,6 +1703,10 @@ export async function checkPersistentMindWatchdog(now = Date.now()) {
   if (watchdogResumedAt != null && now - watchdogResumedAt < PERSISTENT_MIND_LIMITS.WATCHDOG_STALE_MS) {
     return { interrupted: false, resumeGrace: true };
   }
+  // A long thought is not a dead one: while the provider call is still open
+  // and its provider still answers, keep waiting with no fixed cap.
+  const liveness = await turnHasLiveCall(state.activeTurn.id);
+  if (liveness.alive) return { interrupted: false, inFlight: true };
   const result = await interruptActiveTurn('Persistent mind turn heartbeat expired', 'interrupted', {
     retry: true,
     expectedTurnId: state.activeTurn.id,

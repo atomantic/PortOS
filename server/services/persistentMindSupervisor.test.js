@@ -70,6 +70,7 @@ vi.mock('./domainUsage.js', () => ({
 vi.mock('./cosLocalEndpointSlots.js', () => ({
   acquireLocalEndpointProviderSlot: (...args) => mock.acquireSlot(...args),
   localEndpointOfProvider: (...args) => mock.localEndpointOfProvider(...args),
+  providerBaseUrl: (provider) => provider?.endpoint || null,
 }));
 
 vi.mock('./agentRunEventLog.js', () => ({
@@ -915,6 +916,50 @@ describe('persistent mind supervisor', () => {
     expect(mock.root.persistentMind.activeTurn).toBeNull();
     expect(mock.root.persistentMind.queuedMessages.map((item) => item.id)).toEqual(['message-1']);
     expect(mock.root.persistentMind.status).toBe('interrupted');
+  });
+
+  it.each([
+    ['alive', () => Promise.resolve(new Response(JSON.stringify({ models: [{ name: 'example-model' }] }))), false],
+    ['unloaded', () => Promise.resolve(new Response(JSON.stringify({ models: [] }))), true],
+    ['gone', () => Promise.reject(new Error('ECONNREFUSED')), true],
+  ])('watchdog with an Ollama call in flight and the runner %s', async (_label, psResponse, interrupts) => {
+    let callStarted = false;
+    const run = vi.fn(({ signal, callBoundary }) => callBoundary({ purpose: 'turn', round: 0 }, () => new Promise((resolve, reject) => {
+      callStarted = true;
+      signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+    })));
+    const probe = vi.fn(psResponse);
+    vi.stubGlobal('fetch', probe);
+    try {
+      await supervisor.registerPersistentMindTurnAdapter({
+        prepare: vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud', ollamaBacked: true, endpoint: 'http://127.0.0.1:11434/v1' } })),
+        run,
+      });
+      await supervisor.setPersistentMindEnabled(true);
+      await supervisor.startPersistentMind();
+      await supervisor.enqueuePersistentMindMessage({ id: 'message-1', text: 'Think for a long time.' });
+      const drain = supervisor.drainPersistentMind();
+      await vi.waitFor(() => expect(callStarted).toBe(true));
+      // Far past the stale window: a long thought, not a suspend.
+      mock.root.persistentMind.activeTurn.heartbeatAt = new Date(
+        Date.now() - 10 * PERSISTENT_MIND_LIMITS.WATCHDOG_STALE_MS
+      ).toISOString();
+      const result = await supervisor.checkPersistentMindWatchdog();
+      expect(probe).toHaveBeenCalledWith('http://127.0.0.1:11434/api/ps', expect.anything());
+      if (interrupts) {
+        expect(result).toEqual({ interrupted: true });
+        await drain;
+        expect(mock.root.persistentMind.activeTurn).toBeNull();
+      } else {
+        expect(result).toEqual({ interrupted: false, inFlight: true });
+        expect(mock.root.persistentMind.activeTurn).not.toBeNull();
+        await supervisor.interruptPersistentMindTurn?.();
+        await supervisor.stopPersistentMind?.();
+        await drain.catch(() => {});
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('watchdog restarts the stale window after a host suspend instead of killing the in-flight turn', async () => {
