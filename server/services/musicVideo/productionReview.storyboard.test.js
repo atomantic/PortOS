@@ -145,6 +145,8 @@ describe('locking shots one at a time', () => {
     const art = artApproved();
     const approved = approveProductionStage(art, { stage: 'storyboard', basis: productionReadiness(art).basis.storyboard });
     expect(productionReadiness(approved).storyboard.shotLocks).toEqual({ s1: 'locked', s2: 'locked', s3: 'locked' });
+    // Marking a clip as code-rendered only relabels it on the board: the board stays approved.
+    expect(productionReadiness(applySceneUpdate(approved, 's3', { codeClip: true }).project).storyboard.approved).toBe(true);
     const { project: edited } = applySceneUpdate(approved, 's2', { prompt: 'ASCII-art music video on the CRT' });
     const board = productionReadiness(edited).storyboard;
     expect(board.shotLocks).toEqual({ s1: 'locked', s2: 'changed', s3: 'locked' });

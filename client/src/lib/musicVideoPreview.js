@@ -10,6 +10,13 @@ export const musicVideoImageSrc = (assetId) => {
   return `/data/images/${raw}`;
 };
 
+/**
+ * The picture a scene card shows: its frame, else a poster cut from its selected
+ * clip (a code-rendered or uploaded clip often has no frame), else null.
+ */
+export const scenePosterSrc = (scene) => musicVideoImageSrc(scene?.referenceImageId)
+  || (nonEmptyString(scene?.videoHistoryId) ? videoPosterForJob(encodeURIComponent(scene.videoHistoryId)) : null);
+
 export const musicVideoImageFallback = (assetId) => {
   const raw = nonEmptyString(assetId);
   if (!raw || raw.includes('.')) return null;

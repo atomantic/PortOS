@@ -22,7 +22,8 @@ import { buildSceneTimingPresentation } from '../../lib/musicVideoSceneTiming.js
 import SceneTimingPlan from './SceneTimingPlan.jsx';
 import SceneRenderProgress from './SceneRenderProgress.jsx';
 import { COVERAGE_TOLERANCE_SEC, SCENE_ATTENTION_LABELS, sceneAttention } from '../../lib/musicVideoSceneAttention.js';
-import { ShotLockButton } from './ShotLock.jsx';
+import { ShotLockButton, useShotLock } from './ShotLock.jsx';
+import ScenePoster from './ScenePoster.jsx';
 
 // The two timeline-bound scene fields rendered as identical number inputs.
 const SCENE_TIME_FIELDS = [['Start', 'startSec'], ['End', 'endSec']];
@@ -85,7 +86,7 @@ function videoGenerationRefusal({ settingsSaving, speakerUnsaved, referenceImage
 }
 
 export default function SceneCard({
-  scene, index, isLast, generatingFrame, generatingVideo, frameProgress = null, videoProgress = null,
+  scene, index, shotNumber = null, isLast, generatingFrame, generatingVideo, frameProgress = null, videoProgress = null,
   settingsSaving, videoBlockedReason, canContinueShot,
   onMove, onDelete, onEditLocal, onSave,
   onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
@@ -143,7 +144,8 @@ export default function SceneCard({
     excerptStartSec: performanceReview?.excerptStartSec, backend: lipSyncBackend, videoSettings: falVideoSettings || {} });
   const shotModeId = `mv-shot-mode-${scene.sceneId}`;
   // #10152: what needs the director's attention, visible without opening the card.
-  const attention = sceneAttention(scene, { layered, footageOptional, lipSyncBackend, songDurationSec, clipSec, failed: failedScenes || {}, songReview, videoSettings: falVideoSettings });
+  const locked = useShotLock(scene.sceneId)?.state === 'locked';
+  const attention = sceneAttention(scene, { layered, footageOptional, lipSyncBackend, songDurationSec, clipSec, failed: failedScenes || {}, songReview, videoSettings: falVideoSettings, locked });
   const songChange = songReview?.[scene.sceneId];
   const generatingLane = generatingFrame && generatingVideo ? 'Frame + clip' : generatingFrame ? 'Frame' : generatingVideo ? 'Clip' : null;
   // #10154: the server-persisted failure of the last render, shown until a
@@ -171,22 +173,15 @@ export default function SceneCard({
         className="flex min-h-[44px] cursor-pointer select-none items-center gap-3 p-2 marker:content-none [&::-webkit-details-marker]:hidden"
       >
         <ChevronRight size={14} aria-hidden="true" className="shrink-0 text-port-text-muted transition-transform group-open:rotate-90" />
-        {scene.referenceImageId ? (
-          <img src={`/data/images/${scene.referenceImageId}`} alt="" loading="lazy" className="aspect-video w-16 shrink-0 rounded border border-port-border object-cover sm:w-20" />
-        ) : (
-          <span className="flex aspect-video w-16 shrink-0 items-center justify-center rounded border border-dashed border-port-border text-port-text-muted sm:w-20" aria-hidden="true">
-            <ImageIcon size={14} />
-          </span>
-        )}
+        <ScenePoster scene={scene} iconSize={14} className="aspect-video w-16 shrink-0 rounded border border-port-border sm:w-20" />
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium">
-            {scene.sectionLabel || scene.label || `Scene ${scene.order + 1}`}
+            {[shotNumber ? `Shot ${shotNumber}` : null, scene.sectionLabel || scene.label].filter(Boolean).join(' · ') || `Scene ${scene.order + 1}`}
           </div>
           <div className="truncate text-[11px] text-port-text-muted">
-            #{scene.order + 1}
             {typeof scene.startSec === 'number' && typeof scene.endSec === 'number'
-              ? ` · ${formatDurationSec(scene.endSec - scene.startSec)} · ${formatDurationSec(scene.startSec)}–${formatDurationSec(scene.endSec)}`
-              : ''}
+              ? `${formatDurationSec(scene.endSec - scene.startSec)} · ${formatDurationSec(scene.startSec)}–${formatDurationSec(scene.endSec)}`
+              : `#${scene.order + 1}`}
             {scene.referenceImageId ? ' · frame ready' : ''}
             {scene.videoHistoryId ? ' · video ready' : ''}
             {clipSec != null ? ` · clip ${clipSec.toFixed(1)}s` : ''}

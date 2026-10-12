@@ -511,6 +511,7 @@ function buildScene(input, { order }) {
     ...(input.camera ? { camera: input.camera } : {}),
     cardText: input.cardText ?? null,
     ...(input.codeOverlay ? { codeOverlay: true } : {}),
+    ...(input.codeClip ? { codeClip: true } : {}),
     cardColor: input.cardColor ?? null,
     // #8977: cutaway (any image-to-video lane) unless the director asks for a
     // lip-synced performance shot, which only a source-audio provider renders.
@@ -591,7 +592,7 @@ export function replaceScenes(project, sceneInputs) {
 // Scene fields a director edits within an approved shot (its span, wording and
 // selected takes) without adding a shot or lyric the storyboard approval did not cover.
 const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'label', 'prompt', 'framePrompt', 'visualIntent',
-  'referenceImageId', 'videoHistoryId', 'endImageId'];
+  'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip'];
 
 /**
  * Apply a patch to a single scene. Returns `{ project, updated }`. Throws if the
