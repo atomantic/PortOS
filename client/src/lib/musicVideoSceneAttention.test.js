@@ -35,7 +35,7 @@ describe('sceneAttention', () => {
 
   it('flags a blocked performance, pending candidates, failures and an unverified plate', () => {
     const performance = { ...ready, shotMode: 'performance' };
-    expect(sceneAttention(performance, { lipSyncBackend: 'local' })).toContain('perf-blocked');
+    expect(sceneAttention(performance, { lipSyncBackend: 'grok' })).toContain('perf-blocked');
     expect(sceneAttention({ ...ready, takes: [{ takeId: 't1', kind: 'image', assetId: 'g.png', status: 'candidate' }] })).toEqual(['candidates-pending']);
     expect(sceneAttention(ready, { failed: { video: { s: true } } })).toEqual(['last-failure']);
     const withIntent = { ...ready, direction: { actionContract: { purpose: 'Singer turns toward the door' } },

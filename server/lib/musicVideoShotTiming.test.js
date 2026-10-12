@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  falSceneTake, falTakeRequestFields, planShotSplit, shotSplitLimit, SOURCE_AUDIO_LIPSYNC, PERFORMANCE_WINDOW_MARGIN_SEC,
+  falSceneTake, falTakeRequestFields, performanceCapability, planPerformanceWindow, planShotSplit, shotSplitLimit,
+  SOURCE_AUDIO_LIPSYNC, PERFORMANCE_WINDOW_MARGIN_SEC,
 } from './musicVideoShotTiming.js';
 
 // The split planner is an algorithm with a real input matrix (#8977): which
@@ -84,6 +85,22 @@ describe('shotSplitLimit', () => {
     expect(shotSplitLimit({ shotMode: 'performance' }, 'grok')).toBeNull();
     expect(shotSplitLimit({ shotMode: 'cutaway' }, 'fal')).toBeNull();
     expect(shotSplitLimit({ shotMode: 'cutaway', visualLayer: 'still' }, 'grok')).toBeNull();
+  });
+});
+
+// Local LTX lip-sync (the song slice is the a2v audio): no provider minimum to
+// pad to, and a shorter per-take ceiling than fal's.
+describe('local LTX lip-sync lane', () => {
+  it('plans the shot itself as the window, for lip-sync and music-driven scenes alike', () => {
+    for (const performanceStyle of [null, 'music']) {
+      const capability = performanceCapability('local', { scene: { shotMode: 'performance', performanceStyle } });
+      expect(capability).toMatchObject({ provider: 'local', modelId: null, style: performanceStyle === 'music' ? 'music' : 'lipsync' });
+      expect(planPerformanceWindow({ startSec: 2, endSec: 4.5, songDurationSec: 60, capability }))
+        .toMatchObject({ ok: true, windowStartSec: 2, windowEndSec: 4.5, editInSec: 0 });
+    }
+    expect(planPerformanceWindow({ startSec: 0, endSec: 25, songDurationSec: 60, capability: performanceCapability('local') }))
+      .toMatchObject({ ok: false, code: 'MUSIC_VIDEO_PERFORMANCE_TOO_LONG' });
+    expect(shotSplitLimit({ shotMode: 'performance' }, 'local')).toBeCloseTo(20 - PERFORMANCE_WINDOW_MARGIN_SEC, 6);
   });
 });
 

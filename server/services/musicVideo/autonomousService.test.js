@@ -1526,9 +1526,9 @@ describe('orchestrated mode (brief.orchestrator)', () => {
     await service.resumeAutonomousVideo('mv-auto', { addTools: ['video:local'] });
     expect(runOf().brief).toMatchObject({ tools: ['image:local', 'video:local'], stopBeforeVideo: false });
     expect(store.get('mv-auto').automation.tools).toEqual(['image:local', 'video:local']);
-    // The added local video tool sets the project's renderer, and a performance shot it cannot lip-sync plays as a cutaway.
+    // The added local video tool sets the project's renderer, and a performance shot keeps lip-syncing on local LTX.
     expect(store.get('mv-auto').videoSettings).toMatchObject({ backend: 'local', generationMode: 'suppliedAudio' });
-    expect(store.get('mv-auto').scenes[0].shotMode).toBe('cutaway');
+    expect(store.get('mv-auto').scenes[0].shotMode).toBe('performance');
     expect(doubles.resumeProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-1', expect.objectContaining({
       pool: expect.arrayContaining([expect.objectContaining({ kind: 'video', mode: 'local' })]) }));
     expect(doubles.resumeProduction.mock.calls[0][2].stopBefore).toBeUndefined();

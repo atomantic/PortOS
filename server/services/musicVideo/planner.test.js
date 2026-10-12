@@ -671,7 +671,7 @@ describe('directed planner', () => {
       const duration = (list) => list.reduce((sum, s) => sum + s.endSec - s.startSec, 0);
       const performances = planned.scenes.filter((s) => s.shotMode === 'performance');
       expect(duration(performances)).toBeLessThanOrEqual(duration(planned.scenes.filter((s) => s.visualLayer === 'footage')) * 0.4);
-      expect(performances.length > 0).toBe(backend === 'fal');
+      expect(performances.length > 0).toBe(backend === 'fal' || backend === 'local');
     }
   });
 

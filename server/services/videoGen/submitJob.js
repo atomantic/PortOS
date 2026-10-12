@@ -126,16 +126,22 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
       cleanupStaged: async () => { if (audio) await discardSourceAudioWindow(audio.audioFilePath); } };
   } else {
     if (body._suppliedAudio) {
-      const [{ getProject }, { resolveVideoModelSelection }, { sourceAudioVideoRequest, supportsSourceAudioWindow }] = await Promise.all([
+      const [{ getProject }, { resolveVideoModelSelection }, { sourceAudioVideoRequest, supportsSourceAudioWindow }, { isPerformanceScene }] = await Promise.all([
         import('../musicVideo/projects.js'), import('./modelSelection.js'), import('../federatedMedia/sourceAudio.js'),
+        import('../../lib/musicVideoShotTiming.js'),
       ]);
       const project = await getProject(body.musicVideo.projectId);
       const scene = project?.scenes?.find((entry) => entry.sceneId === body.musicVideo.sceneId);
-      const { model, modelId } = await resolveVideoModelSelection(body.modelId);
-      if (!supportsSourceAudioWindow(model)) {
-        throw new ServerError('Supplied song windows currently require an LTX MLX model with audio conditioning', { status: 400, code: 'MUSIC_VIDEO_AUDIO_UNSUPPORTED' });
+      // A performance shot cuts its own song window (performanceShot.js), so
+      // it enters as an image render and becomes a2v once that window exists.
+      if (isPerformanceScene(scene)) body = { ...body, mode: 'image', _suppliedAudio: false };
+      else {
+        const { model, modelId } = await resolveVideoModelSelection(body.modelId);
+        if (!supportsSourceAudioWindow(model)) {
+          throw new ServerError('Supplied song windows currently require an LTX MLX model with audio conditioning', { status: 400, code: 'MUSIC_VIDEO_AUDIO_UNSUPPORTED' });
+        }
+        body = sourceAudioVideoRequest(scene, model, { ...body, modelId });
       }
-      body = sourceAudioVideoRequest(scene, model, { ...body, modelId });
     }
     prepared = await prepareVideoGenParams({ body, uploads, localOnlyParamKeys: VIDEO_GEN_LOCAL_ONLY_FIELD_NAMES });
   }
@@ -224,7 +230,34 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
       throw error;
     })
     : null;
-  const performanceParams = performance ? {
+  // Local LTX lip-sync: the performance window is the a2v audio, on a frame
+  // canvas that covers it (the helper pads the tail; the edit points trim it).
+  let localPerformanceParams = null;
+  if (performance && backend === 'local') {
+    const { sourceAudioVideoRequest, supportsSourceAudioWindow } = await import('../federatedMedia/sourceAudio.js');
+    const fail = async (message, code) => {
+      await unlink(performance.audioFilePath).catch(() => {});
+      await cleanupStaged();
+      throw new ServerError(message, { status: 400, code });
+    };
+    if (!supportsSourceAudioWindow(prepared.effectiveModel)) {
+      await fail(`${prepared.effectiveModel?.name || 'This local model'} cannot lip-sync; choose an LTX-2.5 (or LTX-2.3 dgrauet) model for performance shots`, 'MUSIC_VIDEO_PERFORMANCE_UNSUPPORTED');
+    }
+    const { audioWindow } = performance.shotInstruction;
+    const { numFrames } = await Promise.resolve()
+      .then(() => sourceAudioVideoRequest(audioWindow, prepared.effectiveModel, { fps: body.fps || 24 }))
+      .catch((error) => fail(error.message, error.code || 'MUSIC_VIDEO_AUDIO_WINDOW_INVALID'));
+    localPerformanceParams = {
+      mode: 'a2v',
+      numFrames,
+      audioFilePath: performance.audioFilePath,
+      audioStartSec: 0,
+      disableAudio: false,
+      uploadedTempPaths: [...(prepared.uploadedTempPaths || []), performance.audioFilePath],
+      shotInstruction: performance.shotInstruction,
+    };
+  }
+  const performanceParams = performance && !localPerformanceParams ? {
     modelId: performance.modelId,
     // The output length follows the submitted audio window; a clip-length pin
     // would contradict it, so none is sent.
@@ -420,7 +453,10 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
     ...(isDefaultSpeedProfile(body.speedProfileId) ? {} : { speedProfileId: body.speedProfileId }),
     ...(isFullDecode(body.draftDecode) ? {} : { draftDecode: body.draftDecode }),
     ...(isDefaultVideoStreamingMode(body.streamingMode) ? {} : { streamingMode: body.streamingMode }),
-    disableAudio: isTruthyMeta(body.disableAudio),
+    // A Music Video cutaway plays under the song, so its own soundtrack is never
+    // heard: local clips render silent unless the song conditions them (a2v),
+    // whatever the caller sent. Lip-sync shots set this back below.
+    disableAudio: isTruthyMeta(body.disableAudio) || (Boolean(body.musicVideo) && mode !== 'a2v'),
     // Absent means "use the settings.videoGen.displaySleep default" — only
     // forward it when the form actually sent an explicit choice.
     ...(body.displaySleep !== undefined
@@ -451,6 +487,7 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
     ...(body.musicVideo ? { musicVideo: body.musicVideo } : {}),
     ...(body.fableLoom ? { fableLoom: body.fableLoom } : {}),
     ...(body.visualConditioning ? { visualConditioning: body.visualConditioning } : {}),
+    ...localPerformanceParams,
   });
   return {
     jobId,

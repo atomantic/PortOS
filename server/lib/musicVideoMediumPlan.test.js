@@ -41,7 +41,7 @@ describe('footage tools on a code-first project (#10450)', () => {
   });
 
   it('does not demand a Performance shot mode when the backend has no lip-sync lane', () => {
-    const p = project(['video:local'], 'local');
+    const p = project(['video:grok'], 'grok');
     p.treatment = { revision: 1, appliedRevision: 1, shotDirections: planMusicVideoMedia(p, directions).map((d) => ({ ...d, mediumRationale: 'x' })) };
     expect(codeFirstProductionAssets(p).conflicts).toEqual([]);
   });

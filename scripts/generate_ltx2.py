@@ -319,6 +319,51 @@ def _install_guided_denoise_teacache_patches() -> None:
 _install_guided_denoise_teacache_patches()
 
 
+_A2V_FREEZE_STAGE2_AUDIO = False
+_A2V_FREEZE_PATCH_OK = False
+
+
+def _install_a2v_stage2_audio_freeze() -> None:
+    """Hold the supplied audio fixed through A2V's Stage-2 refine, as in Stage 1.
+
+    `A2VidPipelineTwoStage` freezes the encoded song in Stage 1 (denoise_mask 0)
+    but re-noises it at Stage 2's start sigma and denoises it with the video, so
+    the refine pass attends to a drifting audio latent and the mouth loosens
+    off the real vocal. The pipeline discards that refined audio anyway (it
+    muxes the original file), so freezing it costs nothing. Stage 2 is the
+    module's only `denoise_loop` call; the patch swaps its audio state for the
+    clean latent with a zero mask while `run_a2v` has the flag set.
+    """
+    global _A2V_FREEZE_PATCH_OK
+    try:
+        import mlx.core as mx
+        import ltx_pipelines_mlx.a2vid_two_stage as a2v_mod
+        from ltx_core_mlx.conditioning.types.latent_cond import LatentState
+    except Exception:
+        return
+    original_denoise_loop = getattr(a2v_mod, "denoise_loop", None)
+    if original_denoise_loop is None:
+        return
+
+    def denoise_loop_with_frozen_audio(*args, **kwargs):
+        audio_state = kwargs.get("audio_state")
+        if _A2V_FREEZE_STAGE2_AUDIO and audio_state is not None:
+            kwargs["audio_state"] = LatentState(
+                latent=audio_state.clean_latent,
+                clean_latent=audio_state.clean_latent,
+                denoise_mask=mx.zeros_like(audio_state.denoise_mask),
+                positions=audio_state.positions,
+                attention_mask=audio_state.attention_mask,
+            )
+        return original_denoise_loop(*args, **kwargs)
+
+    a2v_mod.denoise_loop = denoise_loop_with_frozen_audio
+    _A2V_FREEZE_PATCH_OK = True
+
+
+_install_a2v_stage2_audio_freeze()
+
+
 def _teacache_config(enabled: bool, patch_ok: bool, num_steps: int,
                      thresh: float | None = None) -> dict:
     return {
@@ -1829,7 +1874,7 @@ def run_a2v(args: argparse.Namespace) -> str:
     --image is optional: when provided, conditions the FIRST frame the same
     way ImageToVideoPipeline does, so motion + audio sync to a chosen still.
     """
-    global _A2V_TC_CONFIG
+    global _A2V_TC_CONFIG, _A2V_FREEZE_STAGE2_AUDIO
     AudioToVideoPipeline = _resolve_pipeline("A2VidPipelineTwoStage", "AudioToVideoPipeline")
     if not args.audio:
         raise SystemExit("--audio is required for a2v mode")
@@ -1853,6 +1898,9 @@ def run_a2v(args: argparse.Namespace) -> str:
     audio_path, audio_start, padded_audio = a2v_audio_covering_clip(
         args.audio, args.audio_start, args.num_frames, args.fps, str(Path(args.output).parent))
     restore_image_rate = _patch_a2v_image_conditioning_rate(args.fps)
+    _A2V_FREEZE_STAGE2_AUDIO = _A2V_FREEZE_PATCH_OK
+    if _A2V_FREEZE_PATCH_OK:
+        emit_status("Holding the supplied audio fixed through the refine pass")
     try:
         return _run_with_ltx_stepwise_preview(pipe, args, lambda: pipe.generate_and_save(
             prompt=args.prompt,
@@ -1872,6 +1920,7 @@ def run_a2v(args: argparse.Namespace) -> str:
     finally:
         restore_image_rate()
         _A2V_TC_CONFIG = None
+        _A2V_FREEZE_STAGE2_AUDIO = False
         if padded_audio:
             Path(padded_audio).unlink(missing_ok=True)
 
