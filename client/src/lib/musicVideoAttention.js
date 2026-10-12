@@ -258,6 +258,8 @@ export function revealAttention() {
   if (typeof document === 'undefined') return false;
   const banner = document.getElementById(ATTENTION_ANCHOR_ID);
   if (!banner) return false;
+  // The banner folds to a chip; open it so the exits the toast points at are showing.
+  banner.querySelector?.('button[aria-expanded="false"]')?.click?.();
   banner.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
   banner.querySelector?.('button')?.focus?.({ preventScroll: true });
   return true;

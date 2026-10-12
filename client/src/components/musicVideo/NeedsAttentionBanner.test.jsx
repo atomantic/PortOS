@@ -108,14 +108,15 @@ describe('NeedsAttentionBanner (#9940)', () => {
     expect(within(header).getByRole('status', { name: 'Project status' })).toBeInTheDocument();
   });
 
-  it('collapses to a count chip below sm and expands on tap (#10170)', () => {
+  it('folds to a count chip at every width and expands on tap (#10170)', () => {
     render(<NeedsAttentionBanner items={deriveAttentionItems({ ...stranded, status: 'complete', revisions: [], autoReviews: [] })} actions={actions()} />);
     const chip = screen.getByRole('button', { name: '1 needs attention' });
-    expect(chip).toHaveClass('sm:hidden');
+    expect(chip).not.toHaveClass('sm:hidden');
     expect(chip).toHaveAttribute('aria-expanded', 'false');
-    expect(chip.parentElement.querySelector('.max-sm\\:hidden')).toBeTruthy();
+    expect(chip.parentElement.querySelector(':scope > .hidden')).toBeTruthy();
     fireEvent.click(chip);
     expect(chip).toHaveAttribute('aria-expanded', 'true');
+    expect(chip.parentElement.querySelector(':scope > .hidden')).toBeNull();
     expect(screen.getByRole('region', { name: 'Needs attention' })).toHaveTextContent('Cast & Sets');
   });
 });

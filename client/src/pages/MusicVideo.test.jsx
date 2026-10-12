@@ -2661,6 +2661,19 @@ describe('MusicVideo stage tabs (#9243)', () => {
     expect(dialog.contains(document.getElementById('mv-auto-edit'))).toBe(true);
   });
 
+  it('lets the header Autopilot button stand in for the attention row of a run awaiting its checkpoint', async () => {
+    listMusicVideoProjects.mockResolvedValue([{ ...PROJECT_WITH_CLIP,
+      autonomousRun: { id: 'auto-1', status: 'awaiting-approval', awaiting: 'lyrics', stage: 'lyrics', output: { lyrics: 'Example lyric line' }, brief: {} },
+    }]);
+    renderAt('/music-video/mv-1/setup');
+    await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
+    expect(screen.queryByRole('region', { name: 'Needs attention' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /^Autonomous run/ }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('tab', { name: /^Autopilot/ })).toHaveAttribute('aria-selected', 'true');
+    await waitFor(() => expect(document.getElementById('mv-auto-edit')).toHaveFocus());
+  });
+
   it('leads Storyboard and Make with the player and their approval, closes Look with its approval, keeps the run in Project settings and unsaved planning edits across steps', async () => {
     listMusicVideoProjects.mockResolvedValue([{ ...PROJECT_WITH_CLIP,
       autonomousRun: { status: 'needs-human', stage: 'video', output: {}, brief: {} },
