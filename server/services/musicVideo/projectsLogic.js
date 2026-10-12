@@ -34,7 +34,7 @@ import { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 import { isPerformanceScene, planShotSplit, shotSplitLimit } from '../../lib/musicVideoShotTiming.js';
 import { normalizeLyricCues, normalizePhrases, invalidateTimedText } from './timedText.js';
 import { normalizeLyricMarkers } from './lyricMarkers.js';
-import { ensureSceneTakes, TAKE_SLOT } from './takes.js';
+import { ensureSceneTakes, keepCodeClipWithItsClip, TAKE_SLOT } from './takes.js';
 import { normalizeComposition, invalidateCompositionTiming, withStoredCompositionDocument } from './composition.js';
 import { normalizeSoundBed } from './soundBed.js';
 import { normalizeFilmLook } from '../../lib/filmLook.js';
@@ -603,7 +603,7 @@ export function applySceneUpdate(project, sceneId, patch) {
   const scenes = project.scenes || [];
   const idx = scenes.findIndex((s) => s.sceneId === sceneId);
   if (idx < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
-  const merged = { ...scenes[idx], ...data };
+  const merged = 'codeClip' in data ? { ...scenes[idx], ...data } : keepCodeClipWithItsClip(scenes[idx], { ...scenes[idx], ...data });
   // Setting a slot directly (an older client, or a hand edit) still records the
   // asset as a take so the candidate list stays a superset of the selection.
   const touchesSlot = Object.values(TAKE_SLOT).some((field) => typeof data[field] === 'string');

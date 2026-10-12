@@ -146,7 +146,11 @@ describe('locking shots one at a time', () => {
     const approved = approveProductionStage(art, { stage: 'storyboard', basis: productionReadiness(art).basis.storyboard });
     expect(productionReadiness(approved).storyboard.shotLocks).toEqual({ s1: 'locked', s2: 'locked', s3: 'locked' });
     // Marking a clip as code-rendered only relabels it on the board: the board stays approved.
-    expect(productionReadiness(applySceneUpdate(approved, 's3', { codeClip: true }).project).storyboard.approved).toBe(true);
+    const coded = applySceneUpdate(approved, 's3', { codeClip: true }).project;
+    expect(productionReadiness(coded).storyboard.approved).toBe(true);
+    // The mark belongs to the clip it was set on: choosing another clip drops it.
+    expect(applySceneUpdate(coded, 's3', { videoHistoryId: 'ai-clip' }).updated.codeClip).toBeUndefined();
+    expect(applySceneUpdate(coded, 's3', { prompt: 'Same clip, new words' }).updated.codeClip).toBe(true);
     const { project: edited } = applySceneUpdate(approved, 's2', { prompt: 'ASCII-art music video on the CRT' });
     const board = productionReadiness(edited).storyboard;
     expect(board.shotLocks).toEqual({ s1: 'locked', s2: 'changed', s3: 'locked' });
