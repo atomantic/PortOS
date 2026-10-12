@@ -199,17 +199,17 @@ describe('CompositionPreviewPlayer', () => {
   });
 
   it('seeks to each outside request once the preview knows its length, and follows the lyric line', async () => {
-    const { rerender } = render(<CompositionPreviewPlayer project={project} audioUrl="/data/music/song.mp3" seekRequest={{ t: 2, n: 1 }} />);
+    const { rerender } = render(<CompositionPreviewPlayer project={project} audioUrl={null} seekRequest={{ t: 2, n: 1 }} />);
     await waitFor(() => expect(screen.getByText('2.00s / 10.0s')).toBeTruthy());
     expect(screen.getByTestId('preview-lyric')).toHaveTextContent('first line');
     const seekAt = socket.emit.mock.calls.findIndex(([event, payload]) => event === 'generated-preview:seek' && payload.t === 2);
     expect(seekAt).toBeGreaterThan(socket.emit.mock.calls.findIndex(([event]) => event === 'generated-preview:open'));
 
-    rerender(<CompositionPreviewPlayer project={project} audioUrl="/data/music/song.mp3" seekRequest={{ t: 4.5, n: 2 }} />);
+    rerender(<CompositionPreviewPlayer project={project} audioUrl={null} seekRequest={{ t: 4.5, n: 2 }} />);
     await waitFor(() => expect(screen.getByText('4.50s / 10.0s')).toBeTruthy());
     expect(screen.getByTestId('preview-lyric')).toHaveTextContent('second line');
 
-    rerender(<CompositionPreviewPlayer project={project} audioUrl="/data/music/song.mp3" seekRequest={{ t: 99, n: 3 }} />);
+    rerender(<CompositionPreviewPlayer project={project} audioUrl={null} seekRequest={{ t: 99, n: 3 }} />);
     await waitFor(() => expect(screen.getByText(/^9\.9\ds \/ 10\.0s$/)).toBeTruthy());
   });
 

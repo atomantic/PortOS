@@ -53,6 +53,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
   const [t, setT] = useState(0);
   const [playing, setPlaying] = useState(false);
   const audioRef = useRef(null);
+  const wasPlaying = useRef(false);
   const appliedSeek = useRef(null);
   const filmLook = lyrics ? null : (project.filmLook ?? null);
   const titleCard = useMemo(() => normalizeTitleCard(project.titleCard), [project.titleCard]);
@@ -99,7 +100,8 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
 
   // Pause/end repaints the current frame with the exact render filter.
   useEffect(() => {
-    if (!playing && preview.ready) seek(audioRef.current?.currentTime || 0);
+    if (wasPlaying.current && !playing && preview.ready) seek(audioRef.current?.currentTime || 0);
+    wasPlaying.current = playing;
   }, [playing, preview.ready, seek]);
 
   const togglePlay = () => {
