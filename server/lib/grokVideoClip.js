@@ -28,6 +28,13 @@
  * hand-copied literals in a schema are how a schema and its service drift apart
  * (as `[1,2,3,6,10]` here and `[6,10]` in the schema already had).
  *
+ * 2026-10-12: xAI's video API (grok-imagine-video-1.5 / 1.5-lite) now takes a
+ * `duration` of 1–15 s (default 8), so 15 s joins the list as the new longest
+ * clip. The CLI tool was last measured at 6/10 only; `generateVideo` probes
+ * every delivered clip and warns when one comes back shorter than requested,
+ * which is the check that confirms 15 s through the CLI (and would show
+ * whether shorter clips are now honored too).
+ *
  * If grok's tool ever gains shorter clips, change this list — the walk picker,
  * both Zod schemas, and the service gates all follow from it. Confirm with a
  * probe (every packaged walk run stamps `sourceVideoSeconds` for exactly this
@@ -35,7 +42,7 @@
  */
 
 /** Clip lengths (seconds) grok's image_to_video delivers, ascending. */
-export const GROK_VIDEO_DURATIONS = Object.freeze([6, 10]);
+export const GROK_VIDEO_DURATIONS = Object.freeze([6, 10, 15]);
 
 /** Fallback when a caller omits (or requests an undeliverable) clip length. */
 export const GROK_VIDEO_DEFAULT_DURATION = 6;

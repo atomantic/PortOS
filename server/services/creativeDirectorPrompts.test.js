@@ -283,7 +283,7 @@ describe('standalone Video treatment planning', () => {
   it('distinguishes pinned Grok durations from unresolved inherited capabilities', async () => {
     const project = { ...baseProject, workspace: 'video' };
     const grok = await buildTreatmentPrompt({ ...project, renderBackend: { video: { mode: 'grok' } } });
-    expect(grok).toContain('"durationSeconds":[6,10]');
+    expect(grok).toContain('"durationSeconds":[6,10,15]');
     const inherited = await buildTreatmentPrompt(project);
     expect(inherited).toContain('"backendCompatibility":"unresolved"');
     expect(inherited).toContain('source record IDs are not image filenames');

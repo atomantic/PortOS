@@ -35,7 +35,7 @@ const CELL_PX = 96; // preview cell size — the strip animates at 96px/frame
 const LOOP_KEYFRAMES = '@keyframes sprite-walk-loop { to { background-position-x: var(--sprite-walk-loop-end) } }';
 // Clip length only decides how much source footage the packer can choose from;
 // the CYCLE'S look (walk vs run) comes from the frame-count + speed controls.
-// The offered lengths live in lib/grokVideoClip.js — see there for why 6s/10s
+// The offered lengths live in lib/grokVideoClip.js — see there for why 6/10/15 s
 // are the only two (#3022).
 
 // Delivered clip length for a run, when the server managed to probe it
@@ -267,7 +267,7 @@ function DirectionCard({
         <p
           className={`text-[10px] ${clipLength.mismatch ? 'text-port-warning' : 'text-gray-500'}`}
           title={clipLength.mismatch
-            ? 'grok delivered a different clip length than requested — its image_to_video tool renders only 6s or 10s'
+            ? 'grok delivered a different clip length than requested — its image_to_video tool renders only 6, 10 or 15 s'
             : 'Source clip length grok delivered (probed from the file)'}
         >
           {clipLength.text}
@@ -729,7 +729,7 @@ export default function WalkWorkflow({
             />
             <label className="flex items-center gap-1.5 text-xs text-gray-400" htmlFor={`walk-clip-${recordId}`} title={provider === 'local'
                 ? "The local model renders on a fixed frame grid, so this length is snapped to the nearest legal clip. Length only affects how much source footage the packer has to choose from, not the walk's speed."
-                : "grok renders 6s or 10s clips — these are the only lengths it offers, and a shorter request comes back as 6s. Length only affects how much source footage the packer has to choose from, not the walk's speed."}>
+                : "grok renders 6, 10 or 15 s clips — these are the only lengths it offers, and a shorter request comes back as 6s. Length only affects how much source footage the packer has to choose from, not the walk's speed."}>
               Clip
               <select
                 id={`walk-clip-${recordId}`}

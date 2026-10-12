@@ -77,8 +77,8 @@ describe('POST /:id/scenes/:sceneId/split', () => {
     expect(stored.scenes[1].takes.map((t) => t.assetId)).toEqual(['singer.png', 'clip-whole-verse']);
   });
 
-  it('splits a Grok cutaway at its 10-second clip limit when the director renders on Grok', async () => {
-    const shot = await projects.addProjectScene(project.id, { label: 'Bridge', startSec: 30, endSec: 55 });
+  it('splits a Grok cutaway at its 15-second clip limit when the director renders on Grok', async () => {
+    const shot = await projects.addProjectScene(project.id, { label: 'Bridge', startSec: 30, endSec: 70 });
     await projects.updateScene(project.id, shot.sceneId, { videoHistoryId: 'clip-bridge' });
     const res = await split(shot.sceneId, { backend: 'grok' });
     expect(res.status).toBe(200);
@@ -86,9 +86,9 @@ describe('POST /:id/scenes/:sceneId/split', () => {
     // A cutaway clip still starts where the first piece does: it stays selected.
     expect(pieces.map((p) => p.videoHistoryId)).toEqual(['clip-bridge', null, null]);
     expect(pieces).toHaveLength(3);
-    for (const p of pieces) expect(p.endSec - p.startSec).toBeLessThanOrEqual(10);
+    for (const p of pieces) expect(p.endSec - p.startSec).toBeLessThanOrEqual(15);
     expect(pieces[0].startSec).toBe(30);
-    expect(pieces.at(-1).endSec).toBe(55);
+    expect(pieces.at(-1).endSec).toBe(70);
   });
 
   it('gives a sung line held across an unavoidable cut to both pieces', async () => {
