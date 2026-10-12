@@ -62,6 +62,25 @@ beforeEach(() => {
 });
 
 describe('CompositionPreviewPlayer', () => {
+  it('preserves a one-frame step while pausing playback with audio present', async () => {
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
+    const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+    const raf = vi.spyOn(window, 'requestAnimationFrame').mockImplementation(() => 1);
+    const cancel = vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {});
+    try {
+      const { container } = render(<CompositionPreviewPlayer project={project} audioUrl='/song.mp3' shotNav />);
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled());
+      fireEvent.click(screen.getByRole('button', { name: 'Play' }));
+      container.querySelector('audio').currentTime = 48.5 / 24;
+      act(() => raf.mock.calls.at(-1)[0]());
+      fireEvent.click(screen.getByRole('button', { name: 'Forward 1 frame' }));
+      const next = 49.5 / 24;
+      expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled();
+      expect(container.querySelector('audio').currentTime).toBeCloseTo(next);
+      expect(socket.emit).toHaveBeenLastCalledWith('generated-preview:seek', expect.objectContaining({ t: next, playing: false }));
+    } finally { play.mockRestore(); pause.mockRestore(); raf.mockRestore(); cancel.mockRestore(); }
+  });
+
   it('sends motion mode during playback and exact mode on pause and scrub without reopening', async () => {
     const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
     const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});

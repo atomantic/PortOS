@@ -639,7 +639,7 @@ describe('film look finishing pass on a footage render', () => {
     // The encode's end is the middle of the bar; the pass fills the rest.
     expect(broadcastSse).toHaveBeenCalledWith(expect.anything(), { type: 'progress', progress: 0.5 });
     expect(look.calls).toHaveLength(1);
-    expect(look.calls[0]).toMatchObject({ jobId, path: expect.stringMatching(/^\/data\/videos\/music-video-/), project: expect.objectContaining({ id: pid }) });
+    expect(look.calls[0]).toMatchObject({ jobId, path: lastProc().args.at(-1), project: expect.objectContaining({ id: pid }) });
     expect(getRenderJobStatus(jobId).status).toBe('running');
     expect(updateProject).not.toHaveBeenCalledWith(pid, expect.objectContaining({ status: 'complete' }));
     look.calls[0].onProgress(0.5);

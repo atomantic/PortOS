@@ -73,7 +73,8 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
     const next = Math.min(Math.max(0, time), Math.max(0, duration - 1 / fps));
     setT(next);
     preview.seek(next);
-    if (audioRef.current && Math.abs((audioRef.current.currentTime || 0) - next) > 0.05) audioRef.current.currentTime = next;
+    // Even a one-frame move must update audio before the pause repaint reads it.
+    if (audioRef.current && audioRef.current.currentTime !== next) audioRef.current.currentTime = next;
   }, [duration, fps, preview.seek]);
 
   useEffect(() => {
