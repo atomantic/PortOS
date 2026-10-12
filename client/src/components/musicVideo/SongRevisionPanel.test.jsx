@@ -34,7 +34,7 @@ describe('song revision UI', () => {
     expect(await screen.findByText(/New master selected/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Regenerate or reimport/ })).toHaveAttribute('href', '/music-video/fork/produce#mv-composition');
     expect(screen.getByRole('link', { name: /Follow the re-time on the Song step/ })).toHaveAttribute('href', '/music-video/fork/setup');
-    expect(screen.getByRole('link', { name: /Rebuild and review proofs/ })).toHaveAttribute('href', '/music-video/fork/produce#mv-review-proof');
+    expect(screen.getByRole('link', { name: /Render a draft of the changed sections/ })).toHaveAttribute('href', '/music-video/fork/review#mv-draft-excerpts');
     expect(api.act.mock.calls.map((call) => call[1])).toEqual(['generate', 'select']);
   });
   it('recovers a revision completed while Setup was closed and adopts its saved fields', async () => {

@@ -2688,7 +2688,7 @@ describe('MusicVideo stage tabs (#9243)', () => {
     }
   });
 
-  it('leads Storyboard and Make with the player and their approval, closes Look with its approval, keeps the run in Project settings and unsaved planning edits across steps', async () => {
+  it('leads Storyboard with the player and its approval, leaves an unused proof off Make, closes Look with its approval, keeps the run in Project settings and unsaved planning edits across steps', async () => {
     listMusicVideoProjects.mockResolvedValue([{ ...PROJECT_WITH_CLIP,
       autonomousRun: { status: 'needs-human', stage: 'video', output: {}, brief: {} },
     }]);
@@ -2701,7 +2701,7 @@ describe('MusicVideo stage tabs (#9243)', () => {
     const castDraft = within(review).getByLabelText('Cast guide');
     fireEvent.change(castDraft, { target: { value: 'Example unsaved cast direction' } });
 
-    const approvals = { 'cast-sets': 'Art direction', board: 'Lyric-timed storyboard', produce: 'Animated proof' };
+    const approvals = { 'cast-sets': 'Art direction', board: 'Lyric-timed storyboard' };
     for (const stage of ['board', 'produce', 'cast-sets']) {
       await openStage(stage);
       const panel = screen.getByRole('tabpanel');
@@ -2709,6 +2709,11 @@ describe('MusicVideo stage tabs (#9243)', () => {
       const title = selectedTab().textContent.split(',')[0];
       expect(within(panel).getByRole('heading', { level: 3, name: title })).toBeInTheDocument();
       expect(panel).toHaveAccessibleName(title);
+      // Make shows the optional proof only while a production run needs it.
+      if (stage === 'produce') {
+        expect(within(panel).queryByRole('region', { name: 'Production review' })).toBeNull();
+        continue;
+      }
       const stageReview = within(panel).getByRole('region', { name: 'Production review' });
       if (stage === 'cast-sets') {
         // Look is reviewed through its visual guide: the step's work comes first and the approval closes it.

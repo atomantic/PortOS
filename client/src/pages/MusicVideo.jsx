@@ -97,7 +97,7 @@ import { deriveAttentionItems } from '../lib/musicVideoAttention.js';
 import { latestMusicVideoReviewDraft } from '../../../server/lib/musicVideoReviewDraft.js';
 import { useMusicVideoReviewDraft } from '../hooks/useMusicVideoReviewDraft.js';
 import {
-  deriveNextAction, deriveStages, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam, stageChecklist, stepNotes, autopilotStatus, compareMusicVideoProjectsNewestFirst,
+  deriveNextAction, deriveStages, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam, stageChecklist, stepNotes, autopilotStatus, compareMusicVideoProjectsNewestFirst, proofReviewInUse,
 } from '../lib/musicVideoStages.js';
 import { groupMusicVideoProjects } from '../lib/musicVideoProjectList.js';
 import { AUTONOMOUS_VIEWABLE_STAGES } from '../lib/musicVideoAutonomous.js';
@@ -1573,7 +1573,9 @@ export default function MusicVideo() {
                 headerAnchor={nextAction?.kind === 'goto' ? nextAction.anchor : null}
               />
             )}
-            review={APPROVAL_STAGE_BY_TAB[activeStage] ? (
+            // Make shows the optional proof only while a run's pilot or open feedback needs it.
+            review={APPROVAL_STAGE_BY_TAB[activeStage] && (activeStage !== 'produce'
+              || proofReviewInUse(selected, productionReview.readiness, { proofActive: productionReview.proof.active })) ? (
               <ProductionReviewPanel
                 key={`${selected.id}-${activeStage}`}
                 project={selected}

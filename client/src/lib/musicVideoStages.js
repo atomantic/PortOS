@@ -647,6 +647,17 @@ function unlockedDetail(readiness, item) {
 const FEEDBACK_PROBLEM = /^Resolve (art|storyboard|proof) feedback for /;
 const notFeedback = (text) => !FEEDBACK_PROBLEM.test(text);
 
+/**
+ * Whether Make shows the animated proof: only while something needs it — a
+ * production run parked on its pilot proof before bulk generation, a proof
+ * rendering, or open change requests on one. The final render never waits on it.
+ */
+export function proofReviewInUse(project, readiness, { proofActive = false } = {}) {
+  const run = currentProductionRun(project);
+  return proofActive || openChangeRequests(project, 'proof').length > 0
+    || (!!run && RESUMABLE_RUN_STATUSES.has(run.status) && !!run.pilot?.scenes?.length && !readiness?.proof?.approved);
+}
+
 /** The open change requests on one approval stage ('art' | 'storyboard' | 'proof'). */
 export const openChangeRequests = (project, stage) => (project?.productionReview?.feedback || [])
   .filter((f) => f.stage === stage && f.decision === 'request-changes' && !f.resolvedAt);
@@ -843,7 +854,7 @@ export function stageChecklist(stageId, project, readiness = project?.production
     }
     case 'produce': {
       // Make: footage (unless the render style draws its own picture), the
-      // composition over it, then the optional proof (see deriveStages).
+      // composition over it, then the optional proof while a run needs it (see proofReviewInUse).
       const items = [];
       if (!FOOTAGE_OPTIONAL_MODES.has(mode)) {
         const layered = isLayeredComposition(project);
@@ -853,8 +864,9 @@ export function stageChecklist(stageId, project, readiness = project?.production
           action: footageDone ? null : { label: 'Make the footage', anchor: 'mv-generation' } });
       }
       const proofApproval = approval('proof', 'Animated proof', null);
-      // Optional: shown so it can be found, never counted toward the step being done.
-      const proof = { ...proofApproval, label: proofApproval.done ? proofApproval.label : 'Animated proof (optional)', optional: true, detail: null };
+      // Optional: never counted toward the step being done.
+      const proof = proofReviewInUse(project, readiness)
+        ? [{ ...proofApproval, label: proofApproval.done ? proofApproval.label : 'Animated proof (optional)', optional: true, detail: null }] : [];
       const composition = project.composition || {};
       let work = null;
       if (mode === 'composed') work = { id: 'composition', label: 'Timed typography added', done: (composition.textCues || []).length > 0, action: { label: 'Add typography', anchor: 'mv-typo-font' } };
@@ -869,7 +881,7 @@ export function stageChecklist(stageId, project, readiness = project?.production
           action: done ? null : { label: 'Open Code Video', anchor: 'mv-code-section' } };
       }
       const proofFeedback = feedbackItem(project, 'proof', readiness, { optional: true });
-      return [...items, ...(work ? [work] : []), ...(proofFeedback ? [proofFeedback] : []), proof];
+      return [...items, ...(work ? [work] : []), ...(proofFeedback ? [proofFeedback] : []), ...proof];
     }
     case 'review':
       return [{

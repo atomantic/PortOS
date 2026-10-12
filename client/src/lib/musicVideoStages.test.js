@@ -159,7 +159,7 @@ describe('deriveStages / deriveNextAction', () => {
     expect(deriveStages(withMode({ mode: 'composed', textCues: [] })).current).toBe('produce');
     // Eidoverse needs no footage; Make waits on a saved scene.
     expect(deriveStages(withMode({ mode: 'eidoverse' })).current).toBe('produce');
-    expect(stageChecklist('produce', withMode({ mode: 'eidoverse' }), APPROVED).map((i) => [i.id, i.done])).toEqual([['composition', false], ['approve-proof', true]]);
+    expect(stageChecklist('produce', withMode({ mode: 'eidoverse' }), APPROVED).map((i) => [i.id, i.done])).toEqual([['composition', false]]);
     expect(stageChecklist('produce', withMode({ mode: 'eidoverse' }), APPROVED)[0])
       .toMatchObject({ label: 'Save the Eidoverse scene', done: false, action: { anchor: 'mv-eidoverse-scene' } });
     const saved = withMode({ mode: 'eidoverse', eidoverseScene: { inlineScript: 'scene()' } });
@@ -183,7 +183,7 @@ describe('deriveStages / deriveNextAction', () => {
   it('does not require scene footage for code-rendered or document projects', () => {
     const bare = { productionReadiness: APPROVED, id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, scenes: [scene({ referenceImageId: null, videoHistoryId: null })] };
     // Make lists no footage row for them; only the composition and its proof remain.
-    expect(stageChecklist('produce', { ...bare, composition: { mode: 'code' } }, APPROVED).map((i) => i.id)).toEqual(['composition', 'approve-proof']);
+    expect(stageChecklist('produce', { ...bare, composition: { mode: 'code' } }, APPROVED).map((i) => i.id)).toEqual(['composition']);
     const doc = { ...bare, composition: { mode: 'document' } };
     expect(deriveStages(doc).current).toBe('produce');
     expect(deriveNextAction(doc).label).toBe('Attach a composition');
@@ -244,7 +244,7 @@ describe('following the tab order', () => {
     expect(deriveStages(project, readinessFor(project, approvals)).current).toBe('publish');
   });
 
-  it('a typography edit after proof approval keeps Make done and lists the proof as optional', () => {
+  it('a typography edit after proof approval keeps Make done and leaves the unused proof off its list', () => {
     const composition = { mode: 'composed', textCues: [{ id: 'c1', text: 'Hello', startSec: 0, endSec: 2 }] };
     const project = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, scenes: [scene()], composition };
     const approvals = { art: true, storyboard: true, approvedComposition: JSON.stringify(composition) };
@@ -256,7 +256,7 @@ describe('following the tab order', () => {
       .toMatchObject({ board: 'done', produce: 'done', review: 'active' });
     expect(deriveNextAction(edited, { readiness })).toMatchObject({ id: 'render-final' });
     expect(stageChecklist('produce', edited, readiness).map((i) => [i.id, i.done, !!i.optional, i.label]))
-      .toEqual([['footage', true, false, 'Footage for every shot (1 of 1)'], ['composition', true, false, 'Timed typography added'], ['approve-proof', false, true, 'Animated proof (optional)']]);
+      .toEqual([['footage', true, false, 'Footage for every shot (1 of 1)'], ['composition', true, false, 'Timed typography added']]);
   });
 
   it('keeps the header on the footage until it is in, unless a run is parked on its pilot proof', () => {
@@ -266,6 +266,9 @@ describe('following the tab order', () => {
     // A run parked on its pilot proof before paid bulk generation still sends the director to that proof.
     const parked = { ...project, productionRuns: [run({ status: 'blocked', pilot: { scenes: [{ sceneId: 's1' }] } })] };
     expect(deriveNextAction(parked, { readiness })).toMatchObject({ id: 'review-production', stage: 'produce', anchor: 'mv-review-proof' });
+    // Make lists the optional proof only while such a run needs it.
+    expect(stageChecklist('produce', parked, readiness).map((i) => i.label)).toContain('Animated proof (optional)');
+    expect(stageChecklist('produce', project, readiness).map((i) => i.label)).not.toContain('Animated proof (optional)');
     const parkedNoPilot = { ...project, productionRuns: [run({ status: 'blocked' })] };
     expect(deriveNextAction(parkedNoPilot, { readiness })).toMatchObject({ id: 'resume-production' });
   });
@@ -476,10 +479,10 @@ describe('stageChecklist', () => {
     expect(stageChecklist('produce', castProject({ composition: { mode: 'composed' }, scenes: [scene(), scene({ sceneId: 's2', videoHistoryId: null, visualLayer: 'code', startSec: 0, endSec: 2 })] }), APPROVED)[0])
       .toMatchObject({ id: 'footage', label: 'Footage for every shot (2 of 2)', done: true });
     // A code render draws its own picture: no footage row, just its composition and proof.
-    expect(stageChecklist('produce', castProject({ composition: { mode: 'code' } }), APPROVED).map((i) => i.id)).toEqual(['composition', 'approve-proof']);
+    expect(stageChecklist('produce', castProject({ composition: { mode: 'code' } }), APPROVED).map((i) => i.id)).toEqual(['composition']);
     // The proof closes Make, after the composition work it is judged over.
     expect(stageChecklist('produce', castProject({ scenes: [scene()], composition: { mode: 'composed', textCues: [] } }), APPROVED).map((i) => [i.id, i.done]))
-      .toEqual([['footage', true], ['composition', false], ['approve-proof', true]]);
+      .toEqual([['footage', true], ['composition', false]]);
   });
   it('asks for the storyboard review, not a board plan, when a document storyboard brings its own shots', () => {
     const project = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, ...LYRICS, scenes: [], composition: { mode: 'document', document: { directory: 'd' } },
