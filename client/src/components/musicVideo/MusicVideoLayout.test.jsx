@@ -89,6 +89,16 @@ describe('music-video step navigation', () => {
     expect(action.querySelector('.sm\\:hidden')).toHaveTextContent('Board');
   });
 
+  it('keeps settings beside the title and lets the next action carry the status', () => {
+    render(<MusicVideoLayout project={{ id: 'example-project', name: 'Example Project' }} stage="board"
+      onStageChange={() => {}} progress={progressFor('board')} spend={{ spentUsd: 0 }} onOpenSettings={() => {}}
+      status={{ headline: 'Step 3 of 6: Storyboard needs you', tone: 'warn', needsYouStage: 'board' }}
+      nextAction={{ id: 'review-production', kind: 'goto', label: 'Review timed storyboard' }} onNextAction={() => {}} />);
+    const title = screen.getByRole('heading', { level: 2, name: 'Example Project' });
+    expect(title.parentElement).toContainElement(screen.getByRole('button', { name: 'Project settings' }));
+    expect(screen.getByRole('status', { name: 'Project status' })).toHaveClass('sr-only');
+  });
+
   it('keeps every step in the phone icon bar, each with its own icon', () => {
     render(<MusicVideoLayout project={{ id: 'example-project', name: 'Example Project' }} stage="publish"
       onStageChange={() => {}} progress={progressFor('publish')} spend={{ spentUsd: 0 }} />);

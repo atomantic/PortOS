@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import NeedsAttentionBanner from './NeedsAttentionBanner.jsx';
 import MusicVideoLayout from './MusicVideoLayout.jsx';
 import { MUSIC_VIDEO_STAGES } from '../../lib/musicVideoStages.js';
-import { deriveAttentionItems } from '../../lib/musicVideoAttention.js';
+import { deriveAttentionItems, revealAttention } from '../../lib/musicVideoAttention.js';
 
 const renderWithRouter = (ui) => render(<MemoryRouter>{ui}</MemoryRouter>);
 
@@ -108,14 +108,28 @@ describe('NeedsAttentionBanner (#9940)', () => {
     expect(within(header).getByRole('status', { name: 'Project status' })).toBeInTheDocument();
   });
 
-  it('collapses to a count chip below sm and expands on tap (#10170)', () => {
+  it('opens the folded chip when a refusal toast reveals it', () => {
     render(<NeedsAttentionBanner items={deriveAttentionItems({ ...stranded, status: 'complete', revisions: [], autoReviews: [] })} actions={actions()} />);
     const chip = screen.getByRole('button', { name: '1 needs attention' });
-    expect(chip).toHaveClass('sm:hidden');
+    let revealed;
+    act(() => { revealed = revealAttention(); });
+    expect(revealed).toBe(true);
+    expect(chip).toHaveAttribute('aria-expanded', 'true');
+    expect(chip).toHaveFocus();
+    // A second reveal leaves the open banner open.
+    act(() => { revealAttention(); });
+    expect(chip).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('folds to a count chip at every width and expands on tap (#10170)', () => {
+    render(<NeedsAttentionBanner items={deriveAttentionItems({ ...stranded, status: 'complete', revisions: [], autoReviews: [] })} actions={actions()} />);
+    const chip = screen.getByRole('button', { name: '1 needs attention' });
+    expect(chip).not.toHaveClass('sm:hidden');
     expect(chip).toHaveAttribute('aria-expanded', 'false');
-    expect(chip.parentElement.querySelector('.max-sm\\:hidden')).toBeTruthy();
+    expect(chip.parentElement.querySelector(':scope > .hidden')).toBeTruthy();
     fireEvent.click(chip);
     expect(chip).toHaveAttribute('aria-expanded', 'true');
+    expect(chip.parentElement.querySelector(':scope > .hidden')).toBeNull();
     expect(screen.getByRole('region', { name: 'Needs attention' })).toHaveTextContent('Cast & Sets');
   });
 });

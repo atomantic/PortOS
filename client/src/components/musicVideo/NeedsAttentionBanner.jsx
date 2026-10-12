@@ -128,23 +128,22 @@ export default function NeedsAttentionBanner({ items, busy = false, actions = {}
   if (!items?.length) return null;
   const countLabel = items.length === 1 ? '1 needs attention' : `${items.length} need attention`;
   return (
+    // Folded to one chip in the header's button row at every width; the rows and
+    // their exits open below the row on a tap, so the card never costs a line.
     <section
       id={ATTENTION_ANCHOR_ID}
       aria-label="Needs attention"
-      className="text-xs sm:max-h-[40vh] sm:space-y-1.5 sm:overflow-y-auto sm:rounded sm:border sm:border-port-warning/40 sm:bg-port-warning/5 sm:p-2"
+      className={`text-xs ${open ? 'order-last basis-full' : ''}`}
     >
       <button
         type="button"
-        className="inline-flex h-8 items-center gap-1 rounded border border-port-warning/40 bg-port-warning/5 px-2 font-medium text-port-warning sm:hidden"
+        className="inline-flex min-h-[44px] items-center gap-1 rounded-lg border border-port-warning/50 bg-port-warning/5 px-2.5 text-sm font-medium text-port-warning"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
       >
-        <AlertTriangle size={12} aria-hidden="true" /> {countLabel}
+        <AlertTriangle size={14} aria-hidden="true" /> {countLabel}
       </button>
-      <div className={open ? 'max-sm:mt-1.5 max-sm:max-h-[40vh] max-sm:space-y-1.5 max-sm:overflow-y-auto max-sm:rounded max-sm:border max-sm:border-port-warning/40 max-sm:bg-port-warning/5 max-sm:p-2' : 'max-sm:hidden'}>
-        <h3 className="flex items-center gap-1 font-medium text-port-warning">
-          <AlertTriangle size={12} aria-hidden="true" /> Needs attention
-        </h3>
+      <div className={open ? 'mt-1.5 max-h-[40vh] space-y-1.5 overflow-y-auto rounded border border-port-warning/40 bg-port-warning/5 p-2' : 'hidden'}>
         <ul className="space-y-1.5">
           {items.map((item) => (
             <li key={item.id} className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">

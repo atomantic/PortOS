@@ -184,20 +184,35 @@ export default function MusicVideoLayout({
                     <Pencil size={14} aria-hidden="true" />
                   </button>
                 )}
+                {/* Settings sits with the title's own controls, not on a row of its own. */}
+                {onOpenSettings && (
+                  <button
+                    type="button"
+                    onClick={() => onOpenSettings('project')}
+                    aria-label="Project settings"
+                    title="Project settings"
+                    className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded text-port-text-muted hover:text-port-text sm:min-h-[32px] sm:min-w-[32px]"
+                  >
+                    <Settings size={15} aria-hidden="true" />
+                  </button>
+                )}
               </div>
             )}
-            {/* The song usually shares the project's name; name it only when it differs. */}
+            {/* The song usually shares the project's name; name it only when it differs,
+                and not on a phone, where the line would push the step down (Song shows it). */}
             {trackLabel && trackLabel !== project.name && (
-              <p className="flex min-w-0 items-center gap-1 text-xs text-port-text-muted">
+              <p className="flex min-w-0 items-center gap-1 text-xs text-port-text-muted max-sm:hidden">
                 <Music size={12} className="shrink-0" aria-hidden="true" />
                 <span className="truncate">{trackLabel}</span>
               </p>
             )}
           </div>
           {status && (
-            <p role="status" aria-label="Project status" className={`flex min-h-[36px] min-w-0 items-center rounded-lg border px-2.5 text-xs font-medium sm:text-sm ${TONE_CLASSES[status.tone] || TONE_CLASSES.muted}`}>
+            // With a next action showing, the status is said by that button (and the
+            // step list's "needs you"), so it stays for screen readers only.
+            <p role="status" aria-label="Project status" className={nextAction ? 'sr-only' : `flex min-h-[36px] min-w-0 items-center rounded-lg border px-2.5 text-xs font-medium sm:text-sm ${TONE_CLASSES[status.tone] || TONE_CLASSES.muted}`}>
               {/* A step that needs you is one tap away: from any other step, the status opens it. */}
-              {needsYouStage && needsYouStage !== stage ? (
+              {!nextAction && needsYouStage && needsYouStage !== stage ? (
                 <button type="button" onClick={() => onStageChange(needsYouStage)} className="flex min-h-[36px] items-center gap-1 text-left underline-offset-2 hover:underline">
                   {status.headline} <ArrowRight size={12} aria-hidden="true" />
                 </button>
@@ -241,20 +256,9 @@ export default function MusicVideoLayout({
               </span>
             </Pill>
           )}
-          {onOpenSettings && (
-            <button
-              type="button"
-              onClick={() => onOpenSettings('project')}
-              aria-label="Project settings"
-              title="Project settings"
-              className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg border border-port-border text-port-text-muted hover:text-port-text"
-            >
-              <Settings size={16} aria-hidden="true" />
-            </button>
-          )}
+          {attention}
         </div>
         {nextAction?.disabled && nextAction.reason && <p role="status" className="text-xs text-port-text-muted">{nextAction.reason}</p>}
-        {attention}
         <nav
           aria-label="Steps"
           className="md:hidden max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-40 max-md:border-t max-md:border-port-border max-md:bg-port-bg max-md:pb-[env(safe-area-inset-bottom)]"

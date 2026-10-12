@@ -1074,6 +1074,14 @@ export default function MusicVideo() {
     else next.delete('mvPanel');
     return next;
   }, { replace: !!tab && !!settingsTab });
+  // The header's Autopilot button stands in for the attention row's Open: a run
+  // waiting on its checkpoint opens Autopilot at the editor, like that row did.
+  const openHeaderSettings = (tab) => {
+    if (tab !== 'autopilot' || selected?.autonomousRun?.status !== 'awaiting-approval') { setSettingsTab(tab); return; }
+    const next = new URLSearchParams(searchParams);
+    next.set('mvPanel', 'autopilot');
+    navigate({ search: `?${next}`, hash: '#mv-auto-edit' });
+  };
 
   // The preview: scene cards and storyboard rows seek it. Steps reviewed by
   // watching put it first (open); elsewhere, below xl, it is a folded row until
@@ -1360,7 +1368,7 @@ export default function MusicVideo() {
               onChange={(e) => selectProject(e.target.value || null)}
               onFocus={() => setSummariesWanted(true)}
               disabled={loading || youtube.editJob.active}
-              className="w-40 min-w-0 max-w-[45vw] sm:w-72 sm:max-w-none bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm disabled:opacity-50"
+              className="w-40 min-w-0 max-w-[45vw] sm:w-56 sm:max-w-none bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm disabled:opacity-50"
             >
               <option value="">{loading ? 'Loading projects…' : 'Select a project…'}</option>
               {sortedProjects.map((project) => (
@@ -1541,7 +1549,7 @@ export default function MusicVideo() {
             status={projectStatus}
             notes={stepNotes(selected, productionReview.readiness, publish)}
             autopilot={autopilotStatus(selected)}
-            onOpenSettings={setSettingsTab}
+            onOpenSettings={openHeaderSettings}
             playerFirst={playerFirst}
             onRename={handleRename}
             renameForm={renameForm}
@@ -1569,7 +1577,10 @@ export default function MusicVideo() {
             ) : null}
             attention={(
               <NeedsAttentionBanner
-                items={attentionItems}
+                // A parked autonomous or production run with nothing to resume, while the
+                // header's Autopilot button reports that run, is that button (which opens it); no second row.
+                items={autopilotStatus(selected).label === 'Autopilot' ? attentionItems
+                  : attentionItems.filter((item) => !(['autonomous', 'production'].includes(item.kind) && !item.canResume))}
                 busy={revisions.busy || castSets.busy || autoReview.busy || autonomous.busy || production.busy || renderJob.reattaching}
                 actions={{
                   onResumeRevision: revisions.resume,

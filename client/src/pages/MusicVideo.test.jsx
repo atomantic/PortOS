@@ -2661,6 +2661,19 @@ describe('MusicVideo stage tabs (#9243)', () => {
     expect(dialog.contains(document.getElementById('mv-auto-edit'))).toBe(true);
   });
 
+  it('lets the header Autopilot button stand in for the attention row of a run awaiting its checkpoint', async () => {
+    listMusicVideoProjects.mockResolvedValue([{ ...PROJECT_WITH_CLIP,
+      autonomousRun: { id: 'auto-1', status: 'awaiting-approval', awaiting: 'lyrics', stage: 'lyrics', output: { lyrics: 'Example lyric line' }, brief: {} },
+    }]);
+    renderAt('/music-video/mv-1/setup');
+    await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
+    expect(screen.queryByRole('region', { name: 'Needs attention' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /^Autonomous run/ }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('tab', { name: /^Autopilot/ })).toHaveAttribute('aria-selected', 'true');
+    await waitFor(() => expect(document.getElementById('mv-auto-edit')).toHaveFocus());
+  });
+
   it('leads Storyboard and Make with the player and their approval, closes Look with its approval, keeps the run in Project settings and unsaved planning edits across steps', async () => {
     listMusicVideoProjects.mockResolvedValue([{ ...PROJECT_WITH_CLIP,
       autonomousRun: { status: 'needs-human', stage: 'video', output: {}, brief: {} },
@@ -2864,6 +2877,17 @@ describe('MusicVideo stage tabs (#9243)', () => {
       expect(screen.getByText('$4.50 / $20.00')).toBeTruthy();
       fireEvent.click(screen.getByRole('button', { name: 'Stop production' }));
       await waitFor(() => expect(stopMusicVideoProduction).toHaveBeenCalledWith('mv-3', 'run-1', { silent: true }));
+    });
+
+    it('keeps the attention row for a parked production run the Autopilot button does not report', async () => {
+      const run = {
+        id: 'run-2', status: 'needs-human', interrupted: false, directive: '', stopReason: 'Example stop reason', error: null, pool: [],
+        limits: { maxGenerations: 12, maxReviewAttempts: 3, spendCapUsd: 20 }, usage: { generations: 3, spentUsd: 4.5 }, steps: [],
+      };
+      await openProject({ ...PROJECT_ANALYZED, productionRuns: [run] }, 'board');
+      // "needs-human" has no Resume and the header's Autopilot button stays plain, so the row is the only signal.
+      const banner = screen.getByRole('region', { name: 'Needs attention' });
+      expect(within(banner).getByText('Production needs you')).toBeTruthy();
     });
 
     it('takes a finished project on to its release (#9281)', async () => {
