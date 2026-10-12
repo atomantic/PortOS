@@ -1472,6 +1472,8 @@ export const musicVideoSceneReorderSchema = z.object({
 // the lane the director will render with; omitted/null = the project's pin.
 export const musicVideoSceneSplitSchema = z.object({
   backend: z.enum(['local', 'grok', 'fal']).nullable().optional(),
+  // Split the shot in two at this song time instead of by the backend's longest take.
+  atSec: z.number().finite().nonnegative().optional(),
 }).strict();
 
 // Autonomous shot planner (#1855): propose a scene per analyzed audio section.

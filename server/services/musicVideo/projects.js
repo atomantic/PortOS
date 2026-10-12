@@ -227,9 +227,13 @@ export async function setProjectMidiTranscription(id, midi) {
   return next;
 }
 
+/** Add a director's shot at its time; shots locked before stay locked. */
 export async function addProjectScene(id, sceneInput) {
-  const scene = await (await selectBackend()).addProjectScene(id, sceneInput);
-  emitRecordUpdated('musicVideoProject', id);
+  const [{ addScene }, { carryShotLocks }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
+  const { scene } = await mutateProjectRecord(id, (current) => {
+    const outcome = addScene(current, sceneInput);
+    return { ...outcome, project: carryShotLocks(current, outcome.project) };
+  });
   return scene;
 }
 
@@ -282,13 +286,17 @@ export async function reorderProjectScenes(id, orderedIds) {
 
 /**
  * Split a shot longer than its backend renders in one take into contiguous
- * scenes on lyric/phrase boundaries (#8977, projectsLogic.splitScene).
- * Returns `{ project, scenes }` — the persisted project and the pieces.
+ * scenes on lyric/phrase boundaries (#8977, projectsLogic.splitScene), or in
+ * two at `options.atSec`. A locked still stays locked on every piece. Returns `{ project, scenes }` — the persisted project and the pieces.
  */
 export async function splitProjectScene(id, sceneId, options = {}) {
   await assertClipsUnlocked(id, [sceneId]);
-  const { splitScene } = await import('./projectsLogic.js');
-  return mutateProjectRecord(id, (current) => splitScene(current, sceneId, options));
+  const [{ splitScene }, { carryShotLocks }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
+  return mutateProjectRecord(id, (current) => {
+    const outcome = splitScene(current, sceneId, options);
+    const from = Object.fromEntries(outcome.scenes.slice(1).map((piece) => [piece.sceneId, sceneId]));
+    return { ...outcome, project: carryShotLocks(current, outcome.project, { from }) };
+  });
 }
 
 /**
