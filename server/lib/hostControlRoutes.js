@@ -775,6 +775,10 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'PUT /api/github/secrets/:name',
   'POST /api/github/secrets/:name/sync',
 
+  // Jira instance updates can retain a saved API token while changing its
+  // destination, so require operator authority before persisting the URL.
+  'POST /api/jira/instances',
+
   // Self-update (#8742): runs git + npm and restarts the process, or `gh repo
   // sync` against the fork. `check` and `ignore`/DELETE-`ignore` only read or
   // record a preference — left open.
