@@ -1,11 +1,13 @@
 import { useState } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 vi.mock('../../hooks/useVideoFileSrc.js', () => ({ useVideoFileSrc: () => ({}) }));
 import SceneCard from './SceneCard.jsx';
 import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
 
 const GROK_MAX = GROK_VIDEO_DURATIONS.at(-1);
+// A card opens on the last Render on pick, so each test starts from the project setting.
+beforeEach(() => localStorage.clear());
 
 describe('code shot (#10297)', () => {
   it('offers no frame or clip generation for a code shot in a layered composition', () => {
@@ -366,5 +368,27 @@ describe('start and end frames', () => {
     expect(within(pick).getByRole('option', { name: /Kling v3 Pro.*ends on end frame/ })).toBeTruthy();
     fireEvent.change(pick, { target: { value: 'fal:fal-ai/kling-video/v3/pro/image-to-video' } });
     expect(screen.getByTestId('end-frame-plan').textContent).toBe('The clip ends on the end frame.');
+  });
+});
+
+describe('Render on remembers the last pick', () => {
+  // Uniquely catches a new card falling back to the project setting (a paid fal render) after the director picked local.
+  it('opens the next card on the last pick made on this device, and falls back where the shot cannot use it', () => {
+    const scene = { sceneId: 's1', prompt: 'She turns away', referenceImageId: 'start.png', startSec: 0, endSec: 4,
+      takes: [{ takeId: 't1', kind: 'image', assetId: 'start.png', status: 'selected' }] };
+    const saved = { backend: 'fal' };
+    const first = render(<SceneCard scene={scene} index={0} expanded onEditLocal={() => {}} onSave={() => {}} falVideoSettings={saved} />);
+    expect(screen.getByLabelText('Render on').value).toBe('');
+    fireEvent.change(screen.getByLabelText('Render on'), { target: { value: 'local' } });
+    first.unmount();
+
+    const second = render(<SceneCard scene={{ ...scene, sceneId: 's2' }} index={1} expanded onEditLocal={() => {}} onSave={() => {}} falVideoSettings={saved} />);
+    expect(screen.getByLabelText('Render on').value).toBe('local');
+    fireEvent.change(screen.getByLabelText('Render on'), { target: { value: 'grok' } });
+    second.unmount();
+
+    // Grok renders cutaways only, so a lip-synced shot opens on the project setting.
+    render(<SceneCard scene={{ ...scene, sceneId: 's3', shotMode: 'performance' }} index={2} expanded onEditLocal={() => {}} onSave={() => {}} falVideoSettings={saved} />);
+    expect(screen.getByLabelText('Render on').value).toBe('');
   });
 });

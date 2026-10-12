@@ -30,7 +30,7 @@ import SceneRenderProgress from './SceneRenderProgress.jsx';
 import { COVERAGE_TOLERANCE_SEC, SCENE_ATTENTION_LABELS, sceneAttention } from '../../lib/musicVideoSceneAttention.js';
 import { ShotLockButton, useShotLock } from './ShotLock.jsx';
 import ScenePoster from './ScenePoster.jsx';
-import SceneRenderTarget, { renderTargetOverrides } from './SceneRenderTarget.jsx';
+import SceneRenderTarget, { lastRenderTarget, renderTargetOverrides } from './SceneRenderTarget.jsx';
 
 /** One of a shot's two frames: tap to work on it, the corner button to see it full size. */
 function FrameTile({ label, imageId, empty, active, onPick, onOpen, openLabel }) {
@@ -172,9 +172,10 @@ export default function SceneCard({
   const fieldId = (name) => `mv-scene-${scene.sceneId}-${name}`;
   // #10297: a code shot is drawn by the composition, so it has no frame or clip to make.
   const codeShot = layered && layer === 'code';
-  // Where this shot's clip renders: the project's saved renderer unless the card picks another for this shot.
-  const [renderPick, setRenderPick] = useState('');
-  const [renderOptions, setRenderOptions] = useState({});
+  // Where this shot's clip renders: the last pick made on this device, else the project's saved renderer.
+  const [initialRender] = useState(() => lastRenderTarget({ performance: isPerformanceScene(scene), saved: falVideoSettings || {} }));
+  const [renderPick, setRenderPick] = useState(initialRender.pick);
+  const [renderOptions, setRenderOptions] = useState(initialRender.options);
   const renderOverrides = renderTargetOverrides(renderPick, falVideoSettings || {}, renderOptions,
     { models: videoModels, defaultModel: defaultVideoModel, performance: isPerformanceScene(scene), scene });
   const renderSettings = renderOverrides ? { ...falVideoSettings, ...renderOverrides } : falVideoSettings;
