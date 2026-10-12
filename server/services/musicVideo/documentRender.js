@@ -294,24 +294,28 @@ export async function openIsolatedDocumentPreview({ project, jobId, signal, onEv
     media, frame: plan.frame, clock: plan.clock, songDurationSec: plan.songDurationSec, generated,
   });
   let staged;
+  let page;
   try {
     staged = await stageMusicVideoComposition(plan.directory, jobId, musicVideoSongDocument(project), {
       prepare: (dir) => stageDocumentData(dir, data, media),
     });
     signal?.throwIfAborted();
-    const page = await openComposition(staged.directory, {
+    page = await openComposition(staged.directory, {
       signal, streamMedia: true, mediaMode: musicVideoMediaMode(project), ownedBrowser: true, isolation: 'required',
       initScripts: [filmLookRuntimeSource(project?.filmLook), titleCardRuntime(project?.titleCard)],
       previewBridge: true, refuseUnknown: 'empty', lockLoopback: true, onEvent,
     });
+    signal?.throwIfAborted();
     await page.send('Emulation.setDeviceMetricsOverride', {
       width: plan.width, height: plan.height, deviceScaleFactor: 1, mobile: false,
     });
+    signal?.throwIfAborted();
     return {
       page, scratchRoot: staged.scratchRoot,
       width: plan.width, height: plan.height, fps: plan.fps, durationSec: plan.durationSec,
     };
   } catch (error) {
+    if (page) await page.close().catch(() => {});
     if (staged?.scratchRoot) await rm(staged.scratchRoot, { recursive: true, force: true }).catch(() => {});
     throw error;
   }

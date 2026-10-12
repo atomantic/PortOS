@@ -15,7 +15,7 @@ import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../li
 vi.mock('../htmlComposition/encode.js', async (importOriginal) => ({ ...(await importOriginal()), encodeComposition: vi.fn(async () => { throw new Error('stop at encoder'); }) }));
 const { encodeComposition } = await import('../htmlComposition/encode.js');
 
-const { browser } = vi.hoisted(() => ({ browser: { seen: null, contract: null, visibility: null, sampleTimes: [] } }));
+const { browser } = vi.hoisted(() => ({ browser: { seen: null, contract: null, visibility: null, sampleTimes: [], send: null, closed: [] } }));
 vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-mv-document-stage-'),
 }));
@@ -46,17 +46,17 @@ vi.mock('../htmlComposition/browser.js', () => ({
         throw new Error('stop after staging');
       },
       check() {},
-      async close() {},
-      async send() { return {}; },
+      async close() { browser.closed.push({ directory, assetsPresent: (await list(dir)).includes('portos-mv.js') }); },
+      async send(...args) { return browser.send?.(...args) ?? {}; },
     };
   },
 }));
 
 const { PATHS } = await import('../../lib/paths.js');
-const { encodeDocumentComposition, documentRenderClock } = await import('./documentRender.js');
+const { encodeDocumentComposition, documentRenderClock, openIsolatedDocumentPreview } = await import('./documentRender.js');
 
 afterAll(() => cleanupTempDataRoots());
-beforeEach(() => { browser.seen = null; browser.contract = null; browser.visibility = null; browser.sampleTimes = []; });
+beforeEach(() => { browser.seen = null; browser.contract = null; browser.visibility = null; browser.sampleTimes = []; browser.send = null; browser.closed = []; });
 
 const performanceTake = (assetId) => ({ takeId: 'mvt-p', kind: 'video', assetId, status: 'candidate', shotInstruction: { shotMode: 'performance', edit: { inSec: 0.5, outSec: 3.5 } } });
 
@@ -91,6 +91,38 @@ async function fixture({ shipped = {} } = {}) {
 
 const encode = (project, plan, jobId) => encodeDocumentComposition({ project, plan, jobId, audioPath: join(PATHS.data, 'none.wav'), outputPath: join(PATHS.videos, `${jobId}.mp4`) });
 const scratchEntries = async () => (await readdir(join(PATHS.data, 'music-video-song-renders')).catch(() => []));
+
+describe('isolated document preview ownership', () => {
+  it.each(['metrics failure', 'cancellation'])('closes its opened page before removing staged assets after %s', async failure => {
+    const { project, plan } = await fixture();
+    project.composition.document = { directory: plan.directory };
+    const controller = new AbortController();
+    const error = new Error(`Synthetic preview ${failure}`);
+    browser.send = () => {
+      if (failure === 'metrics failure') throw error;
+      controller.abort(error);
+      return {};
+    };
+    await expect(openIsolatedDocumentPreview({ project, jobId: 'preview-failure', signal: controller.signal })).rejects.toBe(error);
+    expect(browser.closed).toEqual([{ directory: browser.seen.directory, assetsPresent: true }]);
+    expect(await scratchEntries()).toEqual([]);
+    expect(existsSync(join(PATHS.data, plan.directory, 'index.html'))).toBe(true);
+  });
+
+  it('hands the successful page and staging directory to its caller without closing them', async () => {
+    const { project, plan } = await fixture();
+    project.composition.document = { directory: plan.directory };
+    const preview = await openIsolatedDocumentPreview({ project, jobId: 'preview-success' });
+    try {
+      expect(browser.closed).toEqual([]);
+      expect(existsSync(preview.scratchRoot)).toBe(true);
+      expect(preview).toMatchObject({ width: 1920, height: 1080, fps: 24, durationSec: 30 });
+    } finally {
+      await preview.page.close();
+      await rm(preview.scratchRoot, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('composition document staging', () => {
   it('preserves the document shutter sampling contract through the shared encoder', async () => {
