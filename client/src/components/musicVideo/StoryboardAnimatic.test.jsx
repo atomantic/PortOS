@@ -70,6 +70,11 @@ describe('StoryboardAnimatic lyrics', () => {
   });
 });
 
+const uploadGalleryImage = vi.hoisted(() => vi.fn(async () => ({ filename: 'upload-1234abcd.png' })));
+vi.mock('../../services/apiSystem.js', () => ({ uploadGalleryImage }));
+// Save frame hands over the element it would draw, so the test sees which picture it picked.
+vi.mock('./FrameStepper.jsx', async (importOriginal) => ({ ...(await importOriginal()), captureMediaFrame: async (el) => el }));
+
 vi.mock('../../services/apiImageVideo.js', () => ({
   getVideoHistoryItem: vi.fn(async (id) => ({ id, filename: `${id}.mov` })),
 }));
@@ -131,6 +136,17 @@ describe('StoryboardAnimatic clips', () => {
     expect(screen.getByText('Shot 2 / 2')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Previous shot' }));
     expect(audio.currentTime).toBe(0);
+  });
+
+  it('saves the shot\'s still, then its clip once that shows', async () => {
+    render(<StoryboardAnimatic project={{ id: 'p', name: 'Example Song', scenes: clipScenes }} audioUrl="/song.mp3" />);
+    const clip = await screen.findByLabelText('Clip for Opening');
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Save frame/ })); });
+    expect(uploadGalleryImage.mock.lastCall[0].tagName).toBe('IMG');
+    Object.defineProperty(clip, 'readyState', { value: 4, configurable: true });
+    fireEvent.loadedData(clip);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Save frame/ })); });
+    expect(uploadGalleryImage.mock.lastCall[0]).toBe(clip);
   });
 
   it('maps song time into the clip: trimmed in-point, then loop or hold past its end', () => {
