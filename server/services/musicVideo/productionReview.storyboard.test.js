@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { productionReadiness, productionAlignmentBasis, approveProductionStage, carryProductionApprovals, assertShotApproval, assertClipUnlocked, setShotLocks } from './productionReview.js';
-import { applySceneUpdate, mergeNextScene, removeScene } from './projectsLogic.js';
+import { productionReadiness, productionAlignmentBasis, approveProductionStage, carryProductionApprovals, carryShotLocks, assertShotApproval, assertClipUnlocked, setShotLocks } from './productionReview.js';
+import { addScenes, applySceneUpdate, mergeNextScene, removeScene } from './projectsLogic.js';
 
 const WORD_PROBLEM = /bounded, positive-duration word timings/;
 const SHOT_PROBLEM = /^Complete timing, action, staging, camera and transition/;
@@ -106,6 +106,14 @@ describe('the director trimming an approved storyboard', () => {
   it('keeps the merged shot still locked when two shots are joined', () => {
     const { project: merged } = mergeNextScene(approvedBoard(), 's1');
     expect(productionReadiness(merged).storyboard.shotLocks).toEqual({ s1: 'locked', s3: 'locked' });
+  });
+
+  // Uniquely catches new shots staling the whole-board approval that was all that locked the old ones.
+  it('keeps the approved shots locked when the planner adds shots, and leaves the new ones open', () => {
+    const board = approvedBoard();
+    const { project: added, scenes: [fresh] } = addScenes(board, [{ label: 'Tag', startSec: 8, endSec: 9, visualIntent: 'Lights out', framePrompt: 'Black' }]);
+    expect(productionReadiness(carryShotLocks(board, added)).storyboard.shotLocks)
+      .toEqual({ s1: 'locked', s2: 'locked', s3: 'locked', [fresh.sceneId]: 'open' });
   });
 
   // Uniquely catches a lyric anchor dropped from a row slipping past the board check.

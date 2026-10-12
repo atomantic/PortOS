@@ -244,13 +244,11 @@ export async function addProjectScene(id, sceneInput) {
  * concurrent edit with stale state.
  */
 export async function addProjectScenes(id, sceneInputs, { source = null } = {}) {
-  if (source) {
-    const { addScenes } = await import('./projectsLogic.js');
-    return mutateProjectRecord(id, current => addScenes(current, sceneInputs), { source });
-  }
-  const { project, scenes } = await (await selectBackend()).addProjectScenes(id, sceneInputs);
-  emitRecordUpdated('musicVideoProject', id);
-  return { project, scenes };
+  const [{ addScenes }, { carryShotLocks }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
+  return mutateProjectRecord(id, (current) => {
+    const outcome = addScenes(current, sceneInputs);
+    return { ...outcome, project: carryShotLocks(current, outcome.project) };
+  }, { source });
 }
 
 /**
