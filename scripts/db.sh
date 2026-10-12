@@ -36,20 +36,19 @@ read_db_config() {
 const { join } = require('node:path');
 const { parseEnvFile } = require(join(process.argv[2], 'scripts/lib/envFile.cjs'));
 const saved = parseEnvFile(join(process.argv[2], '.env'));
-const value = (key, fallback = '') => process.env[key] || saved[key] || fallback;
-const mode = value('PGMODE', 'docker');
+const { resolveDatabaseSettings, parsePort } = require(join(process.argv[2], 'scripts/lib/databaseSettings.cjs'));
+const resolved = resolveDatabaseSettings({ saved });
 const nativeSetup = process.argv[3] === 'setup-native';
-const selectedHost = value('PGHOST');
-const dockerPort = value('PGPORT_DOCKER', '5561');
-const selectedPort = nativeSetup
-  ? process.env.PORTOS_NATIVE_PGPORT || value('PGPORT')
-  : process.env.PGPORT || (mode === 'native' ? saved.PGPORT || '' : dockerPort);
+// Ordinary CLI commands retain an explicit exported endpoint override, even in
+// Docker mode (offline maintenance uses this to address a selected cluster).
+const selectedPort = nativeSetup ? resolved.selectedNativePort : parsePort(process.env.PGPORT);
 const settings = {
-  PGMODE: mode, PGUSER: value('PGUSER', 'portos'),
-  PGDATABASE: value('PGDATABASE', 'portos'), PGPASSWORD: value('PGPASSWORD', 'portos'),
-  PGHOST: selectedHost || 'localhost', SELECTED_PGHOST: selectedHost,
-  PGPORT: selectedPort || (mode === 'native' || nativeSetup ? '5432' : dockerPort),
-  SELECTED_PGPORT: selectedPort, PGPORT_DOCKER: dockerPort,
+  PGMODE: resolved.mode, PGUSER: resolved.user,
+  PGDATABASE: resolved.database, PGPASSWORD: resolved.password,
+  PGHOST: resolved.host, SELECTED_PGHOST: resolved.selectedHost,
+  PGPORT: String(selectedPort ?? (nativeSetup ? resolved.nativePort : resolved.port)),
+  SELECTED_PGPORT: selectedPort === undefined ? '' : String(selectedPort),
+  PGPORT_DOCKER: String(resolved.dockerPort),
 };
 process.stdout.write(Object.entries({ ...settings, complete: '1' })
   .flat().join('\0') + '\0');

@@ -16,6 +16,9 @@
  */
 import { describe, it, expect, afterEach } from 'vitest';
 import { createRequire } from 'module';
+import { spawnSync } from 'node:child_process';
+import { runInNewContext } from 'node:vm';
+import databaseSettings from './lib/databaseSettings.cjs';
 import { mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
@@ -53,6 +56,7 @@ function loadConfigIn(envContent, overrideEnv = {}) {
   writeFileSync(configPath, CONFIG_SOURCE);
   mkdirSync(join(dir, 'scripts', 'lib'), { recursive: true });
   writeFileSync(join(dir, 'scripts', 'lib', 'envFile.cjs'), PARSER_SOURCE);
+  writeFileSync(join(dir, 'scripts', 'lib', 'databaseSettings.cjs'), readFileSync(join(REPO_ROOT, 'scripts/lib/databaseSettings.cjs')));
   if (envContent !== null) writeFileSync(join(dir, '.env'), envContent);
 
   const savedEnv = {};
@@ -299,5 +303,75 @@ describe('ecosystem.config.cjs server bind HOST (#10946)', () => {
     expect(envs['portos-cos'].HOST).toBe('127.0.0.1');
     expect(envs['portos-browser'].CDP_HOST).toBe('127.0.0.1');
     expect(envs['portos-browser'].HOST).not.toBe('192.0.2.11');
+  });
+});
+
+// Compare real configuration bodies without running setup or db.sh operations.
+describe('database settings agree across setup, PM2 and CLI (#11254)', () => {
+  const setupSource = readFileSync(join(REPO_ROOT, 'scripts/setup-db.js'), 'utf8');
+  const setupConfig = setupSource.slice(setupSource.indexOf('const settings ='), setupSource.indexOf('function getMode()'));
+  const cliConfig = readFileSync(join(REPO_ROOT, 'scripts/db.sh'), 'utf8').split("<<'NODE'\n")[1].split('\nNODE')[0];
+  const saved = 'PGMODE=docker\nPGPORT=5433\nPGPORT_DOCKER=5570\nPGHOST="db.example.com"\nPGUSER="example user"\nPGDATABASE=example-db\nPGPASSWORD=\'example $literal # secret\'\n';
+  const readCli = (dir, env, action = 'status') => {
+    const child = spawnSync(process.execPath, ['--input-type=commonjs', '-', dir, action], {
+      input: cliConfig, encoding: 'utf8', env,
+    });
+    expect(child.status, child.stderr).toBe(0);
+    const fields = child.stdout.split('\0');
+    const config = Object.fromEntries(Array.from({ length: (fields.length - 1) / 2 }, (_, i) => fields.slice(i * 2, i * 2 + 2)));
+    expect(config.complete).toBe('1');
+    return config;
+  };
+
+  it.each(['docker', 'native'].flatMap(mode =>
+    ['', 'bad', '5571suffix', '5571.5', '0', '65536', '-1', '0x15c2'].map(raw => [mode, raw])))(
+    '%s falls through invalid exported port %j and empty credentials in every consumer', (mode, raw) => {
+      const exported = Object.fromEntries(PG_KEYS.map(key => [key, '']));
+      exported.PGPORT = raw;
+      exported.PGPORT_DOCKER = raw;
+      const { config, dir } = loadConfigIn(saved.replace('PGMODE=docker', `PGMODE=${mode}`), exported);
+      const setup = runInNewContext(setupConfig + '\n({ PG_CHILD_ENV, COMPOSE_ENV })', {
+        process: { env: exported }, envFile: parseEnvFile(join(dir, '.env')), databaseSettings,
+      });
+      const cli = readCli(dir, exported);
+      for (const app of config.apps.filter(app => ['portos-server', 'portos-cos'].includes(app.name))) {
+        expect(app.env).toMatchObject({ PGPORT: mode === 'native' ? 5433 : 5570, PORTOS_NATIVE_PGPORT: 5433 });
+        for (const key of ['PGHOST', 'PGUSER', 'PGDATABASE', 'PGPASSWORD']) {
+          expect(cli[key]).toBe(app.env[key]);
+          expect(setup.PG_CHILD_ENV[key]).toBe(app.env[key]);
+        }
+        expect(Number(cli.PGPORT)).toBe(app.env.PGPORT);
+        expect(Number(setup.COMPOSE_ENV.PGPORT_DOCKER)).toBe(config.DATABASE_ENDPOINTS.docker.port);
+        expect(Number(setup.PG_CHILD_ENV.PGPORT)).toBe(app.env.PORTOS_NATIVE_PGPORT);
+      }
+    },
+  );
+
+  it.each([null, 'PGPORT=bad\nPGPORT_DOCKER=65536\n'])(
+    'uses identical defaults for missing or invalid saved settings %j', content => {
+      const { config, dir } = loadConfigIn(content, clearedPgEnv);
+      const setup = runInNewContext(setupConfig + '\n({ PG_CHILD_ENV, COMPOSE_ENV })', {
+        process: { env: {} }, envFile: parseEnvFile(join(dir, '.env')), databaseSettings,
+      });
+      const cli = readCli(dir, {});
+      expect(config.DATABASE_ENDPOINTS.native.port).toBe(5432);
+      expect(config.DATABASE_ENDPOINTS.docker.port).toBe(5561);
+      expect(cli).toMatchObject({ PGPORT: '5561', PGPASSWORD: 'portos' });
+      expect(setup.PG_CHILD_ENV.PGPORT).toBe('5432');
+      expect(setup.COMPOSE_ENV.PGPORT_DOCKER).toBe('5561');
+    },
+  );
+
+  it('retains inherited native identity and explicit CLI endpoint selection', () => {
+    const inherited = { PGPORT: '5572', PORTOS_NATIVE_PGPORT: '5434' };
+    const { config, dir } = loadConfigIn(saved, { ...clearedPgEnv, ...inherited });
+    const setup = runInNewContext(setupConfig + '\nPG_CHILD_ENV', {
+      process: { env: inherited }, envFile: parseEnvFile(join(dir, '.env')), databaseSettings,
+    });
+    expect(config.DATABASE_ENDPOINTS.native.port).toBe(5434);
+    expect(config.DATABASE_ENDPOINTS.docker.port).toBe(5570);
+    expect(setup.PGPORT).toBe('5434');
+    expect(readCli(dir, inherited).PGPORT).toBe('5572');
+    expect(readCli(dir, inherited, 'setup-native').SELECTED_PGPORT).toBe('5434');
   });
 });

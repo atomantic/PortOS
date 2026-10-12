@@ -25,25 +25,14 @@ const envFile = path.join(__dirname, '.env');
 const { parseEnvFile, resolveHttpMirrorPort } = require('./scripts/lib/envFile.cjs');
 const dotenv = parseEnvFile(envFile); // {} when .env is missing
 const envValue = (key) => dotenv[key] || null;
-// Same precedence as scripts/setup-db.js getMode(): a NONEMPTY exported PGMODE →
-// saved .env → docker, so setup and PM2 always provision/dial the same backend
-// (#10758). An empty export is unset, never a third mode.
-const pgMode = process.env.PGMODE || envValue('PGMODE') || 'docker';
+const { resolveDatabaseSettings } = require('./scripts/lib/databaseSettings.cjs');
+const databaseSettings = resolveDatabaseSettings({ saved: dotenv });
+const pgMode = databaseSettings.mode;
 const envServerMaxMemory = envValue('PORTOS_SERVER_MAX_MEMORY');
-const envPgPassword = envValue('PGPASSWORD');
-const envPgUser = envValue('PGUSER');
-const envPgDatabase = envValue('PGDATABASE');
-const envPgHost = envValue('PGHOST');
-const envPgPort = envValue('PGPORT');
-const envPgPortDocker = envValue('PGPORT_DOCKER');
-
-// Same precedence as scripts/setup-db.js: process.env → .env → default. Keep the
-// 'portos' password fallback (AGENTS.md: intentional backward-compatible
-// default) — this only changes WHERE a user-set value can come from.
-const PG_USER = process.env.PGUSER || envPgUser || 'portos';
-const PG_DATABASE = process.env.PGDATABASE || envPgDatabase || 'portos';
-const PG_PASSWORD = process.env.PGPASSWORD || envPgPassword || 'portos';
-const PG_HOST = process.env.PGHOST || envPgHost || 'localhost';
+const PG_USER = databaseSettings.user;
+const PG_DATABASE = databaseSettings.database;
+const PG_PASSWORD = databaseSettings.password;
+const PG_HOST = databaseSettings.host;
 // Express bind for portos-server only: nonempty exported HOST → .env → all interfaces (#10946).
 const SERVER_HOST = process.env.HOST || envValue('HOST') || '0.0.0.0';
 
@@ -171,8 +160,8 @@ const databaseEndpoint = (mode, port) => ({
   mode, host: PG_HOST, port: Number(port), database: PG_DATABASE, user: PG_USER
 });
 const DATABASE_ENDPOINTS = {
-  native: databaseEndpoint('native', process.env.PORTOS_NATIVE_PGPORT || process.env.PGPORT || envPgPort || 5432),
-  docker: databaseEndpoint('docker', process.env.PGPORT_DOCKER || envPgPortDocker || PORTS.POSTGRES_DOCKER)
+  native: databaseEndpoint('native', databaseSettings.nativePort),
+  docker: databaseEndpoint('docker', databaseSettings.dockerPort)
 };
 const PG_PORT = DATABASE_ENDPOINTS[pgMode === 'native' ? 'native' : 'docker'].port;
 
