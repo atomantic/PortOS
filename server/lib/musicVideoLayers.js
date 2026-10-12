@@ -22,6 +22,14 @@ export const isSelfDrawnLayer = (layer) => layer === 'card' || layer === 'code';
 export const MUSIC_VIDEO_STILL_MOVES = ['hold', 'push', 'pan'];
 
 /**
+ * How a footage clip whose shape is not the video's fills the frame:
+ * `fill` zooms it to fill (the default, and every shot saved before the field
+ * existed), the others keep it whole and cover the side gaps with the shot's
+ * still, a VHS-style blur of the clip itself, or black bars.
+ */
+export const MUSIC_VIDEO_FRAME_FITS = ['fill', 'still', 'vhs', 'black'];
+
+/**
  * Kinetic lyric type per shot (#10583), read by the shared lyricType.js document
  * module: `textZone` is where the shot's words may sit so they never cover the
  * subject (`none` keeps the shot clear), and `lyricRole` overrides the role of the

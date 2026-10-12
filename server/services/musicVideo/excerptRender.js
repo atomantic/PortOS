@@ -278,14 +278,14 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
         status: 422, code: 'EXCERPT_ASPECT_UNSUPPORTED',
       });
     }
-    const { ffmpeg, audioPath, composed, clips, audioDurationSec, soundBed } = await planMusicVideoRender(project, { draft: true });
+    const { ffmpeg, audioPath, composed, clips, audioDurationSec, soundBed, aspect: canvasAspect } = await planMusicVideoRender(project, { draft: true });
     await ensureDir(PATHS.videos);
     await ensureDir(PATHS.videoThumbnails);
 
     // A probe pass (no `excerpt` option) gets the full-song plan's canonical
     // dims/fps/sections/cues in ABSOLUTE song time — the coordinate space
     // `startSec`/`endSec` and `excerptBoundaryTimes` are given in.
-    const probe = buildMusicVideoFfmpegArgs(clips, audioPath, join(PATHS.videos, 'probe.mp4'), { audioDurationSec, frameGrid: composed });
+    const probe = buildMusicVideoFfmpegArgs(clips, audioPath, join(PATHS.videos, 'probe.mp4'), { audioDurationSec, frameGrid: composed, aspect: canvasAspect });
     // A range ending on the song's analysed length may overrun the frame-rounded render by under a frame.
     if (!excerptRangeFits(startSec, endSec, probe.totalDuration, probe.fps)) {
       throw new ServerError(
@@ -478,7 +478,7 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
     };
 
     if (!composition) {
-      const { args } = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, frameGrid: composed, excerpt: { startSec, endSec: endClamped }, soundBed, grade: composed ? project.composition?.grade : null });
+      const { args } = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, frameGrid: composed, excerpt: { startSec, endSec: endClamped }, soundBed, grade: composed ? project.composition?.grade : null, aspect: canvasAspect });
       startEncode(args);
       return { jobId, excerptId };
     }
@@ -497,7 +497,7 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
     }).then((overlays) => {
       signal.throwIfAborted();
       job.overlayAbort = null;
-      const layered = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, overlays, frameGrid: true, excerpt: { startSec, endSec: endClamped }, soundBed, grade: composed ? project.composition?.grade : null });
+      const layered = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, overlays, frameGrid: true, excerpt: { startSec, endSec: endClamped }, soundBed, grade: composed ? project.composition?.grade : null, aspect: canvasAspect });
       startEncode(layered.args, 0.5);
     }).catch(async (err) => {
       const canceled = signal.aborted;

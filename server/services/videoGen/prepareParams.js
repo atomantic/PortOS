@@ -51,6 +51,7 @@ import {
 } from '../../lib/icLoraWeights.js';
 import { getSettings } from '../settings.js';
 import { getProject as getMusicVideoProject } from '../musicVideo/projects.js';
+import { musicVideoLocalClipSize } from '../../lib/musicVideoAspect.js';
 import { getTrack } from '../tracks/index.js';
 import { VIDEO_GEN_MODE, resolveVideoMode } from './modes.js';
 import { getFalVideoModel } from '../../lib/falVideoModels.js';
@@ -326,6 +327,17 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
       `Unknown modelId: ${body.modelId}`,
       { status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' },
     );
+  }
+  // A local Music Video clip left unsized would render the model's 768x512
+  // (3:2) default, cropping its 16:9 still and leaving side gaps in a 16:9
+  // video; it renders at the project's aspect instead.
+  if (backend === VIDEO_GEN_MODE.LOCAL && body.musicVideo?.projectId && body.width == null && body.height == null) {
+    const project = await getMusicVideoProject(body.musicVideo.projectId)
+      .catch(async (error) => { await cleanupMultipartTemp(uploads); throw error; });
+    if (project) {
+      const endFrame = body.mode === 'fflf' || !!body.lastImageFile || !!uploads.lastImage;
+      Object.assign(body, musicVideoLocalClipSize(project, effectiveModel, { endFrame }));
+    }
   }
   validateVideoBatch({ ...body, backend }, effectiveModel);
   if (effectiveModel && !isHardwareCompatible(effectiveModel.hardwareCompatibility)) {

@@ -8,6 +8,7 @@ import { ShotLockContext, SHOT_LOCK_LABELS, overallShotLock } from '../ShotLock.
 import { shotNumbers } from '../ShotStepper.jsx';
 import { previousShot } from '../../../../../server/lib/musicVideoHandoffFrame.js';
 import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
+import { musicVideoAspect } from '../../../lib/musicVideoAspect.js';
 import { FOOTAGE_OPTIONAL_MODES } from '../../../lib/musicVideoStages.js';
 import { parseSceneFilter, sceneAttention, sceneMatchesFilter, sceneMediaKind, SCENE_ATTENTION_LABELS, SCENE_MEDIA_LABELS } from '../../../lib/musicVideoSceneAttention.js';
 import { formatTimecode } from '../../../utils/formatters.js';
@@ -230,6 +231,7 @@ export default function BoardStage({ board }) {
               onPlacePoolItem={takes.placePoolItem}
               onTrimClip={takes.trimClipTake}
               projectId={project.id}
+              aspect={musicVideoAspect(project)}
               shotNumbers={numbers}
               layered={layered}
               documentComposition={project.composition?.mode === 'document'}

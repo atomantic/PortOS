@@ -256,6 +256,25 @@ describe('prepareVideoGenParams', () => {
       expect(unlinkedDurablePaths()).toEqual([posix(prepared.audioFilePath)]);
     });
 
+    // Uniquely catches a local Music Video clip falling back to the model's
+    // 768x512 (3:2) default, which crops its still and leaves side gaps in the
+    // 16:9 video, and an end-frame clip losing length to the FFLF pixel budget.
+    it('sizes an unsized local Music Video clip to the project aspect', async () => {
+      getMusicVideoProject.mockResolvedValue({ treatment: { brief: { aspectRatio: '16:9' } }, scenes: [] });
+      const musicVideo = { projectId: 'project-example', sceneId: 'scene-example' };
+      const body = { prompt: 'a clip', backend: 'local', mode: 'image', sourceImageFile: 'still.png', musicVideo };
+      await prepareVideoGenParams({ body, uploads: {}, localOnlyParamKeys: LOCAL_ONLY_KEYS });
+      expect([body.width, body.height]).toEqual([1024, 576]);
+
+      const endFrame = { ...body, width: undefined, height: undefined, mode: 'fflf', lastImageFile: 'end.png' };
+      await prepareVideoGenParams({ body: endFrame, uploads: {}, localOnlyParamKeys: LOCAL_ONLY_KEYS });
+      expect([endFrame.width, endFrame.height]).toEqual([896, 512]);
+
+      const picked = { ...body, width: 768, height: 512 };
+      await prepareVideoGenParams({ body: picked, uploads: {}, localOnlyParamKeys: LOCAL_ONLY_KEYS });
+      expect([picked.width, picked.height]).toEqual([768, 512]);
+    });
+
     it('short-circuits for grok without staging local-only inputs', async () => {
       const prepared = await prepare({ backend: 'grok', sourceImageFile: 'still.png' });
       expect(prepared.backend).toBe('grok');

@@ -11,6 +11,7 @@ import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.j
 import { normalizeTitleCard } from '../../../../server/lib/musicVideoTitleCard.js';
 import ShotStepper from './ShotStepper.jsx';
 import FrameStepper, { captureMediaFrame } from './FrameStepper.jsx';
+import { sceneFrameFit } from './SceneFrameFit.jsx';
 
 const timedShots = (scenes) => scenes.filter((scene) => Number.isFinite(scene?.startSec)).sort((a, b) => a.startSec - b.startSec);
 
@@ -211,6 +212,8 @@ function ShotClip({ scene, audioRef, time, current }) {
     return () => { audio.removeEventListener('play', sync); audio.removeEventListener('pause', sync); };
   }, [audioRef, sync]);
   if (!src) return null;
+  // The final render's frame fit: zoomed to fill, or whole over the still, the VHS edge or black bars.
+  const fit = sceneFrameFit(scene);
   return (
     <video
       ref={videoRef}
@@ -225,7 +228,7 @@ function ShotClip({ scene, audioRef, time, current }) {
       aria-label={`Clip for ${scene.label || 'this shot'}`}
       aria-hidden={current ? undefined : true}
       data-ready={ready ? 'true' : 'false'}
-      className={`pointer-events-none absolute inset-0 h-full w-full object-contain ${current && ready ? 'opacity-100' : 'opacity-0'}`}
+      className={`pointer-events-none absolute inset-0 h-full w-full ${fit === 'fill' ? 'object-cover' : 'object-contain'} ${fit === 'black' ? 'bg-black' : ''} ${current && ready ? 'opacity-100' : 'opacity-0'}`}
     />
   );
 }
@@ -287,13 +290,16 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   // With the lyrics drawn over the picture, a shot without a frame keeps its label and
   // intent under the picture instead, so no stand-in text sits under the sung words.
   const cardInFrame = !overlay;
+  const vhsEdges = !!shot?.videoHistoryId && sceneFrameFit(shot) === 'vhs';
   return (
     <div className={`space-y-2 ${collapsed ? 'max-xl:hidden' : ''}`}>
       <figure ref={figureRef} aria-label="Storyboard animatic" className="relative aspect-video w-full overflow-hidden rounded border border-port-border bg-black">
         {/* The project's film look, as the final render applies it over the whole picture, lyrics included. */}
         <FilmLookFrame look={lookOn ? project.filmLook : null} frame={Math.round(time * ANIMATIC_FPS)} playing={playing} className="h-full w-full">
         {shot?.referenceImageId ? (
-          <img src={`/data/images/${shot.referenceImageId}`} alt="" className="h-full w-full object-contain" />
+          // Behind a VHS-edged clip the still stands in, blurred and faded, for the render's blur of the clip.
+          <img src={`/data/images/${shot.referenceImageId}`} alt=""
+            className={`h-full w-full ${vhsEdges ? 'object-cover blur-md saturate-50 brightness-75' : 'object-contain'}`} />
         ) : cardInFrame && !shot?.videoHistoryId ? (
           <div className="flex h-full w-full flex-col items-center justify-center gap-1 p-4 text-center">
             <span className="text-sm font-medium text-port-text">{label}</span>
