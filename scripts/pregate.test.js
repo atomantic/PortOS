@@ -290,6 +290,14 @@ describe('downgradeFullPlan', () => {
     const downgraded = downgradeFullPlan(planWith({ full: true }), []);
     expect(downgraded.server.files).toEqual([]);
   });
+
+  it('keeps structural guards selected by a large diff when downgrading a full plan', () => {
+    const tracked = [...ALWAYS_RUN_TESTS, 'server/lib/index.test.js'];
+    const changedFiles = Array.from({ length: 31 }, (_, index) => `server/lib/module-${index}.js`);
+    const downgraded = downgradeFullPlan(planWith({ full: true }), tracked, changedFiles);
+
+    expect(downgraded.server.files).toContain('server/lib/index.test.js');
+  });
 });
 
 describe('parseArgs', () => {

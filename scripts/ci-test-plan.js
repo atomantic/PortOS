@@ -471,7 +471,7 @@ const featureDirectory = (path) => {
   return null;
 };
 
-const structuralTestsFor = (changedFiles, trackedSet) => {
+export const structuralTestsFor = (changedFiles, trackedSet) => {
   const selected = [];
   const add = (path) => {
     if (trackedSet.has(path)) selected.push(path);
