@@ -325,25 +325,25 @@ describe('PersistentMindTools', () => {
       { silent: true },
     ));
   });
-});
 
-// A capability-only optimistic update used to overwrite the server's effective
-// report restriction after saving any grant on this page.
-it('keeps the server report restriction visible after a capability save', async () => {
-  const user = userEvent.setup();
-  const access = { granted: false, reason: 'The development maintainer role is disabled.', reasonCode: 'maintainer-disabled', apps: [] };
-  api.getPersistentMindTools.mockResolvedValueOnce(response({
-    capabilities: { auditReports: true, readPortos: true },
-    tools: [{ id: 'reports.audit', capability: 'auditReports', name: 'Audit private reports', granted: false, access }],
-    semanticTools: [{ name: 'reports.next', family: 'reports', granted: false, access,
-      policy: { requiredCapabilities: ['auditReports', 'readPortos'] }, input_schema: {} }],
-  })).mockImplementationOnce(() => new Promise(() => {}));
-  renderPage();
-  expect(await screen.findByText('Private report access restricted')).toBeInTheDocument();
-  expect(screen.getAllByText('The development maintainer role is disabled.').length).toBeGreaterThan(0);
-  expect(screen.getByText('reports.next · Disabled')).toBeInTheDocument();
-  await user.click(screen.getByRole('checkbox', { name: 'Allow mind to clean up its mindspace' }));
-  await waitFor(() => expect(api.getPersistentMindTools).toHaveBeenCalledTimes(2));
-  expect(screen.getByText('Restricted')).toBeInTheDocument();
-  expect(screen.getByText('reports.next · Disabled')).toBeInTheDocument();
+  // A capability-only optimistic update used to overwrite the server's effective
+  // report restriction after saving any grant on this page.
+  it('keeps the server report restriction visible after a capability save', async () => {
+    const user = userEvent.setup();
+    const access = { granted: false, reason: 'The development maintainer role is disabled.', reasonCode: 'maintainer-disabled', apps: [] };
+    api.getPersistentMindTools.mockResolvedValueOnce(response({
+      capabilities: { auditReports: true, readPortos: true },
+      tools: [{ id: 'reports.audit', capability: 'auditReports', name: 'Audit private reports', granted: false, access }],
+      semanticTools: [{ name: 'reports.next', family: 'reports', granted: false, access,
+        policy: { requiredCapabilities: ['auditReports', 'readPortos'] }, input_schema: {} }],
+    })).mockImplementationOnce(() => new Promise(() => {}));
+    renderPage();
+    expect(await screen.findByText('Private report access restricted')).toBeInTheDocument();
+    expect(screen.getAllByText('The development maintainer role is disabled.').length).toBeGreaterThan(0);
+    expect(screen.getByText('reports.next · Disabled')).toBeInTheDocument();
+    await user.click(screen.getByRole('checkbox', { name: 'Allow mind to clean up its mindspace' }));
+    await waitFor(() => expect(api.getPersistentMindTools).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('Restricted')).toBeInTheDocument();
+    expect(screen.getByText('reports.next · Disabled')).toBeInTheDocument();
+  });
 });
