@@ -69,7 +69,7 @@ export const resolveGrokDuration = (requested) => {
  *
  * Distinct from `resolveGrokDuration`, which validates an ALREADY-grok-shaped
  * request and defaults anything else to 6s: that's correct at the route boundary
- * (the picker only offers 6/10, so a third value is bad input), but wrong when
+ * (the picker only offers the listed lengths, so any other value is bad input), but wrong when
  * translating — an 8-second brief would silently become 6s and truncate the
  * beat. Rounds UP because there is no cost or render-time saving at a shorter
  * clip (see the measurement note above), so covering the request is free; a

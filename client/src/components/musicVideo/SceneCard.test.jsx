@@ -3,6 +3,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 vi.mock('../../hooks/useVideoFileSrc.js', () => ({ useVideoFileSrc: () => ({}) }));
 import SceneCard from './SceneCard.jsx';
+import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
+
+const GROK_MAX = GROK_VIDEO_DURATIONS.at(-1);
 
 describe('code shot (#10297)', () => {
   it('offers no frame or clip generation for a code shot in a layered composition', () => {
@@ -291,9 +294,9 @@ describe('scene timing and provider presentation (#11046)', () => {
     expect(screen.getByText(/Grok renders a 15s clip for this 18.0s cutaway/).textContent).toContain('3.0s uncovered; split the scene rather than loop it');
     fireEvent.click(screen.getByRole('button', { name: 'Split on lyric boundaries' }));
     expect(onSplit).toHaveBeenCalledWith('timing', 'grok');
-    rerender(<SceneCard {...props} scene={{ ...scene, startSec: 0, endSec: 15 + 1e-6 }} lipSyncBackend="grok" onSplit={onSplit} />);
+    rerender(<SceneCard {...props} scene={{ ...scene, startSec: 0, endSec: GROK_MAX + 1e-6 }} lipSyncBackend="grok" onSplit={onSplit} />);
     expect(screen.queryByRole('button', { name: 'Split on lyric boundaries' })).toBeNull();
-    rerender(<SceneCard {...props} scene={{ ...scene, startSec: 0, endSec: 15 + 2e-6 }} lipSyncBackend="grok" onSplit={onSplit} />);
+    rerender(<SceneCard {...props} scene={{ ...scene, startSec: 0, endSec: GROK_MAX + 2e-6 }} lipSyncBackend="grok" onSplit={onSplit} />);
     expect(screen.getByRole('button', { name: 'Split on lyric boundaries' })).toBeTruthy();
     rerender(<SceneCard {...props} scene={{ ...scene, endSec: null }} lipSyncBackend="grok" onSplit={onSplit} />);
     expect(screen.queryByText(/Grok renders/)).toBeNull();
@@ -303,10 +306,10 @@ describe('scene timing and provider presentation (#11046)', () => {
   it('merges at the provider limit including its epsilon, requires the next span for bounded providers, and preserves default-backend arguments', () => {
     const onMergeNext = vi.fn();
     const current = { ...scene, startSec: 0, endSec: 4 };
-    const { rerender } = render(<SceneCard {...props} scene={current} lipSyncBackend="grok" nextEndSec={15 + 1e-6} onMergeNext={onMergeNext} />);
+    const { rerender } = render(<SceneCard {...props} scene={current} lipSyncBackend="grok" nextEndSec={GROK_MAX + 1e-6} onMergeNext={onMergeNext} />);
     fireEvent.click(screen.getByRole('button', { name: 'Merge with next' }));
     expect(onMergeNext).toHaveBeenLastCalledWith('timing', 'grok');
-    rerender(<SceneCard {...props} scene={current} lipSyncBackend="grok" nextEndSec={15 + 2e-6} onMergeNext={onMergeNext} />);
+    rerender(<SceneCard {...props} scene={current} lipSyncBackend="grok" nextEndSec={GROK_MAX + 2e-6} onMergeNext={onMergeNext} />);
     expect(screen.queryByRole('button', { name: 'Merge with next' })).toBeNull();
     rerender(<SceneCard {...props} scene={current} lipSyncBackend="grok" onMergeNext={onMergeNext} />);
     expect(screen.queryByRole('button', { name: 'Merge with next' })).toBeNull();

@@ -36,7 +36,7 @@ const LOOP_KEYFRAMES = '@keyframes sprite-walk-loop { to { background-position-x
 // Clip length only decides how much source footage the packer can choose from;
 // the CYCLE'S look (walk vs run) comes from the frame-count + speed controls.
 // The offered lengths live in lib/grokVideoClip.js — see there for why 6/10/15 s
-// are the only two (#3022).
+// are the only ones (#3022).
 
 // Delivered clip length for a run, when the server managed to probe it
 // (`sourceVideoSeconds` is absent on older runs and when ffprobe is missing —
