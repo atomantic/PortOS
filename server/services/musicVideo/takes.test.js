@@ -8,14 +8,16 @@ describe('take generation cost (#10157)', () => {
   it('stores a finite quote and its spend kind, and omits both when unpriced or invalid', () => {
     const input = { kind: 'video', source: 'generated' };
     const { appended } = appendSceneTakes(project(), 's1', [
-      { ...input, assetId: 'a', costUsd: 0.4, spendKind: 'autoReview' },
+      { ...input, assetId: 'a', costUsd: 0.4, spendKind: 'autoReview', costModelId: 'fal-ai/kling-video/v3/pro/image-to-video' },
       { ...input, assetId: 'b', costUsd: 0.1 },
-      { ...input, assetId: 'c', costUsd: null },
+      { ...input, assetId: 'c', costUsd: null, costModelId: 'fal-ai/kling-video/v3/pro/image-to-video' },
       { ...input, assetId: 'd', costUsd: -3, spendKind: 'manual' },
     ]);
-    expect(appended[0]).toMatchObject({ costUsd: 0.4, spendKind: 'autoReview' });
+    expect(appended[0]).toMatchObject({ costUsd: 0.4, spendKind: 'autoReview', costModelId: 'fal-ai/kling-video/v3/pro/image-to-video' });
     expect(appended[1]).toMatchObject({ costUsd: 0.1, spendKind: 'manual' });
+    expect(appended[1]).not.toHaveProperty('costModelId');
     expect(appended[2]).not.toHaveProperty('costUsd');
+    expect(appended[2]).not.toHaveProperty('costModelId');
     expect(appended[3]).not.toHaveProperty('costUsd');
   });
 });

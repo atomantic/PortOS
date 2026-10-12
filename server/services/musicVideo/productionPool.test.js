@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assertFootageVideoModelsCapable, assertPoolEligible } from './productionPool.js';
+import { assertFootageVideoModelsCapable, assertPoolEligible, stepCostModelId, stepPriceUsd } from './productionPool.js';
 
 // Blank local-video pins are the install default. The renderer already resolves
 // that omission; Start must accept the same route instead of demanding an id.
@@ -65,5 +65,18 @@ describe('local image pool eligibility', () => {
     env.imageModels[0].hardwareCompatibility = { state: 'unavailable', reasons: ['needs a GPU'] };
     await expect(assertPoolEligible([route], env)).rejects.toThrow(/example-image.*cannot run/);
     await expect(assertPoolEligible([route], imageEnv([]))).rejects.toThrow(/not installed/);
+  });
+});
+
+describe('fal step pricing names the model it priced', () => {
+  it('records the end-frame upgrade on an end-frame clip and the default elsewhere', () => {
+    const KLING = 'fal-ai/kling-video/v3/pro/image-to-video';
+    const project = { videoSettings: { falEndFrameModelId: KLING } };
+    const route = { kind: 'video', mode: 'fal', model: null };
+    const shot = { sceneId: 's', startSec: 0, endSec: 2 };
+    const step = (scene) => ({ route, project, scene, stepKind: 'clip' });
+    expect([stepCostModelId(step(shot)), stepPriceUsd(step(shot))]).toEqual(['fal-ai/minimax/hailuo-02/standard/image-to-video', 0.27]);
+    expect([stepCostModelId(step({ ...shot, endImageId: 'sketch.png' })), stepPriceUsd(step({ ...shot, endImageId: 'sketch.png' }))]).toEqual([KLING, 0.42]);
+    expect(stepCostModelId({ route: { kind: 'video', mode: 'local' }, project, scene: shot, stepKind: 'clip' })).toBeNull();
   });
 });
