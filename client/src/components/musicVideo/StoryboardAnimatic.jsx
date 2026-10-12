@@ -145,8 +145,11 @@ function useLyricOverlay({ project, enabled, audioRef, time }) {
   };
 }
 
-// How far a shot's clip may drift from the song before it is put back in step.
+// How far a playing shot's clip may drift from the song before it is put back in step.
+// Paused (frame stepping, scrubbing), the clip must show the exact frame, so any gap
+// wider than a fraction of a frame re-seeks it.
 const CLIP_DRIFT_SEC = 0.25;
+const CLIP_PAUSED_DRIFT_SEC = 0.01;
 
 /**
  * Where song time `t` lands in a shot's clip: the take's edit-in point (a
@@ -188,7 +191,8 @@ function ShotClip({ scene, audioRef, time, current }) {
     if (!video || !audio || video.readyState < 1) return;
     const duration = Number.isFinite(video.duration) ? video.duration : null;
     const target = clipTimeAt(scene, current ? audio.currentTime || 0 : scene.startSec || 0, duration);
-    if (Math.abs((video.currentTime || 0) - target) > CLIP_DRIFT_SEC) video.currentTime = target;
+    const tolerance = current && audio.paused ? CLIP_PAUSED_DRIFT_SEC : CLIP_DRIFT_SEC;
+    if (Math.abs((video.currentTime || 0) - target) > tolerance) video.currentTime = target;
     if (!current || audio.paused) video.pause?.();
     else if (video.paused) video.play?.()?.catch?.(() => {});
   }, [scene, audioRef, current]);
