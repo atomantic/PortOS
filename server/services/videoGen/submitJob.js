@@ -389,6 +389,7 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
     const { remoteMedia, audio } = prepared;
     const { jobId, position, status } = await enqueue({
       prompt: body.prompt, remoteMedia, ...(body.musicVideo ? { musicVideo: body.musicVideo } : {}),
+      ...(body.musicVideoProjectId ? { musicVideoProjectId: body.musicVideoProjectId } : {}),
       ...(body.musicVideo && prepared.sourceImagePath ? { sourceImagePath: prepared.sourceImagePath } : {}),
       ...(body.musicVideo ? { ...remoteMedia.request } : {}),
       ...(audio ? { audioConditioning: audio.audioConditioning, uploadedTempPaths: [audio.audioFilePath],
@@ -418,6 +419,7 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
       uploadedTempPath,
       ...(body.musicVideo ? { musicVideo: body.musicVideo } : {}),
       ...(body.fableLoom ? { fableLoom: body.fableLoom } : {}),
+      ...(body.musicVideoProjectId ? { musicVideoProjectId: body.musicVideoProjectId } : {}),
       ...(body.visualConditioning ? { visualConditioning: body.visualConditioning } : {}),
       ...hosted.buildParams(body, prepared),
       ...(projectAspect ? { aspectRatio: projectAspect, frameAspect: projectAspect } : {}),
@@ -499,6 +501,7 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
     icSkipStage2: isTruthyMeta(body.icSkipStage2),
     ...(body.musicVideo ? { musicVideo: body.musicVideo } : {}),
     ...(body.fableLoom ? { fableLoom: body.fableLoom } : {}),
+    ...(body.musicVideoProjectId ? { musicVideoProjectId: body.musicVideoProjectId } : {}),
     ...(body.visualConditioning ? { visualConditioning: body.visualConditioning } : {}),
     ...localPerformanceParams,
   });

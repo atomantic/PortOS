@@ -71,6 +71,7 @@ export * from './muscriptorModels.js';
 export * from './musicVideoBatchPlan.js';
 export * from './musicVideoLayers.js';
 export * from './musicVideoAspect.js';
+export * from './musicVideoFiling.js';
 export * from './musicVideoMotion.js';
 export * from './musicVideoTakes.js';
 export * from './musicVideoSceneAttention.js';

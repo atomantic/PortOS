@@ -31,6 +31,7 @@ import {
   listMediaJobs,
   regenerateGalleryImage,
 } from '../services/api';
+import { musicVideoFilingFields } from '../lib/musicVideoFiling';
 
 const IMAGE_QUEUE_EVENTS = ['media-jobs:changed'];
 
@@ -291,6 +292,7 @@ export function useImageGenPageRuntime() {
       cleanC2PA: fields.cleanC2PA,
       denoise: fields.denoise,
     };
+    Object.assign(payload, musicVideoFilingFields(searchParams));
     const hasInitImage = derived.i2iCapable && images.initImage.source != null;
     const hasReferenceImages = derived.populatedRefs.length > 0;
     if (hasInitImage || hasReferenceImages) {
@@ -414,6 +416,7 @@ export function useImageGenPageRuntime() {
           denoise: fields.denoise,
         };
         if (fields.seed && Number(fields.seed) >= 0) payload.seed = Number(fields.seed);
+        Object.assign(payload, musicVideoFilingFields(searchParams));
         const data = await generateImage(payload, { silent: true });
         setResult({
           ...data,
