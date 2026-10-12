@@ -10,6 +10,7 @@ import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
 import { normalizeTitleCard } from '../../../../server/lib/musicVideoTitleCard.js';
 import ShotStepper from './ShotStepper.jsx';
+import FrameStepper, { captureMediaFrame } from './FrameStepper.jsx';
 
 const timedShots = (scenes) => scenes.filter((scene) => Number.isFinite(scene?.startSec)).sort((a, b) => a.startSec - b.startSec);
 
@@ -235,6 +236,7 @@ function ShotClip({ scene, audioRef, time, current }) {
  */
 export default function StoryboardAnimatic({ project, audioUrl, seekRequest, collapsed }) {
   const audioRef = useRef(null);
+  const figureRef = useRef(null);
   const applied = useRef(null);
   const [time, setTime] = useState(0);
   const [lyricsOn, setLyricsOn] = useState(true);
@@ -260,6 +262,17 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
     audioRef.current.currentTime = t;
     setTime(t);
   }, []);
+  // Frame steps pause the song first, so the frame stays on screen to check.
+  const stepFrame = useCallback((t) => {
+    audioRef.current?.pause?.();
+    seekTo(t);
+  }, [seekTo]);
+  // Save frame keeps the shot's picture: its clip's frame once that shows, else its still.
+  const captureFrame = () => {
+    const figure = figureRef.current;
+    const media = figure?.querySelector('video[data-ready="true"]:not([aria-hidden="true"])') || figure?.querySelector('img');
+    return captureMediaFrame(media);
+  };
   const shot = shotAt(scenes, time);
   const timed = timedShots(scenes);
   const index = shot ? timed.indexOf(shot) : -1;
@@ -272,7 +285,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   const cardInFrame = !overlay;
   return (
     <div className={`space-y-2 ${collapsed ? 'max-xl:hidden' : ''}`}>
-      <figure aria-label="Storyboard animatic" className="relative aspect-video w-full overflow-hidden rounded border border-port-border bg-black">
+      <figure ref={figureRef} aria-label="Storyboard animatic" className="relative aspect-video w-full overflow-hidden rounded border border-port-border bg-black">
         {/* The project's film look, as the final render applies it over the whole picture, lyrics included. */}
         <FilmLookFrame look={lookOn ? project.filmLook : null} frame={Math.round(time * ANIMATIC_FPS)} playing={playing} className="h-full w-full">
         {shot?.referenceImageId ? (
@@ -326,6 +339,17 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
           </button>
         )}
       </div>
+      {shot && (
+        <FrameStepper
+          time={time}
+          fps={ANIMATIC_FPS}
+          maxSec={Number(project.audioAnalysis?.durationSec) || null}
+          onSeek={stepFrame}
+          capture={captureFrame}
+          label={[project.name, `Shot ${index + 1}`].filter(Boolean).join(' · ')}
+          keys
+        />
+      )}
       <audio
         ref={audioRef}
         src={audioUrl}

@@ -3,14 +3,16 @@ import { useSearchParams } from 'react-router';
 import { ChevronDown, ChevronUp, MonitorPlay } from 'lucide-react';
 import CompositionPreviewPlayer from './CompositionPreviewPlayer.jsx';
 import StoryboardAnimatic from './StoryboardAnimatic.jsx';
-import ShotStepper from './ShotStepper.jsx';
+import ShotStepper, { shotSteps } from './ShotStepper.jsx';
+import FrameStepper, { captureMediaFrame } from './FrameStepper.jsx';
 
 // A rendered file (the final render or a draft excerpt). Its clock starts at
 // the clip's own start, so a seek to song time `t` lands at `t - startSec` and
 // is ignored outside it. Back and Next step through the shots inside it.
-function VideoPreview({ source, scenes, seekRequest, collapsed }) {
+function VideoPreview({ source, scenes, projectName, seekRequest, collapsed }) {
   const videoRef = useRef(null);
   const [time, setTime] = useState(0);
+  const [duration, setDuration] = useState(null);
   const pending = useRef(null);
   const applied = useRef(null);
   const seekTo = (t, play = false) => {
@@ -27,6 +29,14 @@ function VideoPreview({ source, scenes, seekRequest, collapsed }) {
     if (t >= 0 && (source.endSec == null || t <= source.endSec - source.startSec)) seekTo(t, !!seekRequest.play);
   }, [seekRequest, source.startSec, source.endSec]);
   const startSec = source.startSec || 0;
+  const range = { startSec, endSec: source.endSec ?? null };
+  const songTime = startSec + time;
+  const shot = shotSteps(scenes, songTime, range).index;
+  const stepFrame = (t) => {
+    videoRef.current?.pause?.();
+    seekTo(t - startSec);
+    setTime(t - startSec);
+  };
   return (
     <div className={`space-y-2 ${collapsed ? 'max-xl:hidden' : ''}`}>
       <video
@@ -38,14 +48,23 @@ function VideoPreview({ source, scenes, seekRequest, collapsed }) {
         onLoadedMetadata={() => { if (pending.current != null) { seekTo(pending.current); pending.current = null; } }}
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
         onSeeked={(e) => setTime(e.currentTarget.currentTime)}
+        onLoadedData={(e) => setDuration(e.currentTarget.duration)}
         aria-label={source.id === 'final' ? 'Final render preview' : 'Draft excerpt preview'}
         className="aspect-video max-h-[50vh] w-full rounded border border-port-border bg-black object-contain"
       />
       <ShotStepper
         scenes={scenes}
-        time={startSec + time}
+        time={songTime}
         onSeek={(t) => { seekTo(t - startSec); setTime(t - startSec); }}
-        range={{ startSec, endSec: source.endSec ?? null }}
+        range={range}
+        keys
+      />
+      <FrameStepper
+        time={songTime}
+        onSeek={stepFrame}
+        maxSec={source.endSec ?? (Number.isFinite(duration) ? startSec + duration : null)}
+        capture={() => captureMediaFrame(videoRef.current)}
+        label={[projectName, shot ? `Shot ${shot}` : null].filter(Boolean).join(' · ')}
         keys
       />
     </div>
@@ -117,7 +136,7 @@ export default function PreviewDock({ project, sources, audioUrl, seekRequest, c
       {source?.kind === 'document' && <div className={collapsed ? 'max-xl:hidden' : ''}><CompositionPreviewPlayer project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} shotNav /></div>}
       {source?.kind === 'lyrics' && <div className={collapsed ? 'max-xl:hidden' : ''}><CompositionPreviewPlayer project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} lyrics shotNav /></div>}
       {source?.kind === 'animatic' && <StoryboardAnimatic project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} />}
-      {source?.kind === 'video' && <VideoPreview key={source.id} source={source} scenes={project.scenes} seekRequest={seekRequest} collapsed={collapsed} />}
+      {source?.kind === 'video' && <VideoPreview key={source.id} source={source} scenes={project.scenes} projectName={project.name} seekRequest={seekRequest} collapsed={collapsed} />}
     </aside>
   );
 }
