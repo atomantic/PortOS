@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import FilmLookFrame from '../media/FilmLookFrame.jsx';
+import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage.js';
 import { isFilmLookNeutral } from '../../lib/filmLook.js';
-import { Captions } from 'lucide-react';
+import { Captions, Film } from 'lucide-react';
 import { formatDurationSec } from '../../utils/formatters.js';
 import { getMusicVideoLyricOverlayPreview } from '../../services/apiMusicVideo.js';
 import { playthroughVersion } from './CompositionPreviewPlayer.jsx';
@@ -165,6 +166,8 @@ export function clipTimeAt(scene, t, clipSec = null) {
 const CLIP_PRELOAD_SHOTS = 2;
 // The song frame the film look's grain and drift follow; footage renders run at 24 fps.
 const ANIMATIC_FPS = 24;
+// Remembers, per viewer, that the animatic plays without the project's film look.
+const ANIMATIC_LOOK_KEY = 'portos-mv-animatic-look';
 
 /**
  * A shot's selected video clip, muted under the master song and kept in step
@@ -235,6 +238,12 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   const applied = useRef(null);
   const [time, setTime] = useState(0);
   const [lyricsOn, setLyricsOn] = useState(true);
+  // The look is the render's; a viewer whose phone struggles can watch without it.
+  const [lookOn, setLookOn] = useState(() => safeReadStorage(ANIMATIC_LOOK_KEY) !== 'off');
+  // While the song plays the look is the light playback version; paused, the exact render filter.
+  const [playing, setPlaying] = useState(false);
+  const lookAvailable = !isFilmLookNeutral(project.filmLook);
+  const toggleLook = () => setLookOn((on) => { safeWriteStorage(ANIMATIC_LOOK_KEY, on ? 'off' : 'on'); return !on; });
   const scenes = project.scenes || [];
   const lyricsAvailable = hasTimedLyrics(project);
   const { overlay, failed } = useLyricOverlay({ project, enabled: lyricsAvailable && lyricsOn, audioRef, time });
@@ -265,7 +274,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
     <div className={`space-y-2 ${collapsed ? 'max-xl:hidden' : ''}`}>
       <figure aria-label="Storyboard animatic" className="relative aspect-video w-full overflow-hidden rounded border border-port-border bg-black">
         {/* The project's film look, as the final render applies it over the whole picture, lyrics included. */}
-        <FilmLookFrame look={project.filmLook} frame={Math.round(time * ANIMATIC_FPS)} className="h-full w-full">
+        <FilmLookFrame look={lookOn ? project.filmLook : null} frame={Math.round(time * ANIMATIC_FPS)} playing={playing} className="h-full w-full">
         {shot?.referenceImageId ? (
           <img src={`/data/images/${shot.referenceImageId}`} alt="" className="h-full w-full object-contain" />
         ) : cardInFrame && !shot?.videoHistoryId ? (
@@ -286,7 +295,6 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <ShotStepper scenes={timed} time={time} onSeek={seekTo} keys />
               <span className="tabular-nums">{formatDurationSec(shot.startSec)}</span>
-              {!isFilmLookNeutral(project.filmLook) && <span className="text-port-accent">Film look</span>}
             </div>
           )}
           {!cardInFrame && shot && !shot.referenceImageId && !shot.videoHistoryId && (
@@ -296,6 +304,17 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
           )}
           {lyricsOn && failed && <p className="text-port-error">The lyrics could not be drawn over the animatic.</p>}
         </div>
+        {lookAvailable && (
+          <button
+            type="button"
+            onClick={toggleLook}
+            aria-pressed={lookOn}
+            title={lookOn ? 'Showing the project film look: a light version while playing, the exact render look when paused. Tap to watch without it.' : 'Film look hidden in the animatic; the render still applies it'}
+            className={`flex min-h-[44px] shrink-0 items-center gap-1 rounded border px-2 text-xs sm:min-h-0 sm:py-1 ${lookOn ? 'border-port-accent text-port-accent' : 'border-port-border text-port-text-muted'}`}
+          >
+            <Film size={14} aria-hidden="true" /> Film look
+          </button>
+        )}
         {lyricsAvailable && (
           <button
             type="button"
@@ -315,6 +334,9 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
         aria-label="Song for the storyboard animatic"
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
         onSeeked={(e) => setTime(e.currentTarget.currentTime)}
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => setPlaying(false)}
         className="w-full"
       />
     </div>

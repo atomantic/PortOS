@@ -145,25 +145,49 @@ describe('StoryboardAnimatic clips', () => {
 });
 
 describe('StoryboardAnimatic film look', () => {
-  // Uniquely catches the animatic showing footage without the look the final render will apply.
-  it('shows the project film look over the whole picture on the song frame, and nothing without one', () => {
-    const look = { preset: 'super8', grain: 0.5, halation: 0.4 };
+  // Uniquely catches the animatic showing footage without the look the final render will apply,
+  // and an SVG filter over the PLAYING picture (re-run per video frame, it stalled a phone after #11215).
+  it('shows the exact look when paused, a light compositor-only look while playing, and nothing without one', () => {
+    const look = { preset: 'super8', defocus: 0.2, grain: 0.5, halation: 0.4, vignette: 0.3 };
     const { container, rerender } = render(<StoryboardAnimatic project={{ id: 'p', scenes, filmLook: look }} audioUrl="/song.mp3" />);
-    const frame = container.querySelector('figure [data-film-look="on"]');
-    expect(frame).toBeTruthy();
-    expect(frame.style.filter).toMatch(/^url\(#portos-film-look-/);
-    expect(frame.querySelector('svg filter')).toBeTruthy();
-    expect(screen.getByText('Film look')).toBeTruthy();
-    const before = frame.querySelector('svg').innerHTML;
     const audio = screen.getByLabelText('Song for the storyboard animatic');
+    // Paused: the render's filter over the whole box.
+    const exact = container.querySelector('figure [data-film-look="exact"]');
+    expect(exact).toBeTruthy();
+    expect(exact.style.filter).toMatch(/^url\(#portos-film-look-/);
+    expect(exact.querySelector('svg filter feTurbulence')).toBeTruthy();
+    // Playing: no SVG filter anywhere in the picture; CSS functions on it and tiles over it.
+    fireEvent.play(audio);
+    const motion = container.querySelector('figure [data-film-look="motion"]');
+    expect(motion).toBeTruthy();
+    expect(motion.querySelector('svg')).toBeNull();
+    const picture = motion.querySelector('[data-film-look-layer="picture"]');
+    expect(picture.style.filter).toMatch(/^blur\(/);
+    expect(picture.style.filter).not.toContain('url(');
+    const grain = motion.querySelector('[data-film-look-layer="grain"]');
+    expect(grain.style.mixBlendMode).toBe('overlay');
+    expect(grain.style.opacity).toBe('0.5');
+    expect(motion.querySelector('[data-film-look-layer="vignette"]')).toBeTruthy();
+    const shiftBefore = grain.style.transform;
     Object.defineProperty(audio, 'currentTime', { value: 12, configurable: true });
     fireEvent.timeUpdate(audio);
-    // The picture sits inside the filtered box, and the grain re-seeds on the new song frame.
-    const after = container.querySelector('figure [data-film-look="on"]');
+    // The picture sits inside the filtered box, and the grain tile shifts on the new song frame.
+    const after = container.querySelector('figure [data-film-look="motion"]');
     expect(after.querySelector('img').getAttribute('src')).toBe('/data/images/frame-b.png');
-    expect(after.querySelector('svg').innerHTML).not.toBe(before);
+    expect(after.querySelector('[data-film-look-layer="grain"]').style.transform).not.toBe(shiftBefore);
+    fireEvent.pause(audio);
+    expect(container.querySelector('figure [data-film-look="exact"]')).toBeTruthy();
+    // The viewer can watch without the look; the choice is remembered.
+    const toggle = screen.getByRole('button', { name: 'Film look' });
+    expect(toggle.getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(toggle);
+    expect(container.querySelector('[data-film-look]')).toBeNull();
+    expect(toggle.getAttribute('aria-pressed')).toBe('false');
+    expect(globalThis.localStorage.getItem('portos-mv-animatic-look')).toBe('off');
+    fireEvent.click(toggle);
+    expect(container.querySelector('figure [data-film-look="exact"]')).toBeTruthy();
     rerender(<StoryboardAnimatic project={{ id: 'p', scenes, filmLook: null }} audioUrl="/song.mp3" />);
     expect(container.querySelector('[data-film-look]')).toBeNull();
-    expect(screen.queryByText('Film look')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Film look' })).toBeNull();
   });
 });
