@@ -32,6 +32,14 @@ describe('shotCardRenderRequest', () => {
     expect(request.prompt).toMatch(/No singing, lip-sync/);
   });
 
+  // Review on #11280: a split piece keeps its parent's longer contract, which must refuse Render, not crash the Board.
+  it('reports a contract that outlasts its scene instead of throwing', () => {
+    const request = shotCardRenderRequest({ project: { phrases: [] }, settings: { backend: 'grok' }, scene: scene({ startSec: 10, endSec: 12, prompt: 'p',
+      direction: { actionContract: { version: 1, purpose: 'x', actions: [{ startSec: 0, endSec: 3, subject: 'A', description: 'walks' }] } } }) });
+    expect(request.prompt).toBe('p');
+    expect(shotCardRequestProblem(request)).toMatch(/must fit inside its 2.000s scene/);
+  });
+
   it('requires the song for a performance shot and flags a prompt over the fal model limit', () => {
     expect(shotCardRenderRequest({ scene: scene(), performance: true, settings: { backend: 'local' }, models }).songAudio.state).toBe('required');
     const long = shotCardRenderRequest({ scene: scene({ prompt: 'x'.repeat(2100) }), settings: { backend: 'fal' } });

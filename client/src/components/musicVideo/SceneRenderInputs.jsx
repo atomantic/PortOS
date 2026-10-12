@@ -1,7 +1,7 @@
 import { getFalVideoModel } from '../../lib/falVideoModels.js';
 import { AUDIO_REACTIVE_PERFORMANCE_GUARD, silentMotionPrompt } from '../../lib/musicVideoMotion.js';
 import { approximateMotionCues, falSceneTake } from '../../lib/musicVideoShotTiming.js';
-import { shotActionPrompt } from '../../../../server/lib/musicVideoActionContract.js';
+import { shotActionContractProblem, shotActionPrompt } from '../../../../server/lib/musicVideoActionContract.js';
 import { shotCameraPrompt } from '../../../../server/lib/cameraMovements.js';
 import { localModelTakesSongAudio } from '../../../../server/lib/musicVideoLocalModels.js';
 import { formatCount } from '../../utils/formatters.js';
@@ -23,7 +23,7 @@ const clock = (sec) => {
  * `settings` is the renderer this render uses (the project's, or the card's
  * Render on pick merged over it); `inputs` holds the card's toggles,
  * `{ endFrame, songAudio }`, each undefined until the director flips it.
- * Returns `{ prompt, promptUsed, maxChars, endFrame, songAudio }`, where each
+ * Returns `{ prompt, promptUsed, maxChars, endFrame, songAudio, contractProblem }`, where each
  * input is `{ state: 'on' | 'off' | 'required' | 'unavailable', note }`.
  */
 export function shotCardRenderRequest({
@@ -46,7 +46,10 @@ export function shotCardRenderRequest({
 
   // A take that hears nothing gets its shot actions without the lyric and beat lines it cannot hear.
   const hears = songAudio.state === 'on' || songAudio.state === 'required';
-  const actions = project && scene?.direction?.actionContract != null ? shotActionPrompt(project, scene) : '';
+  // A saved contract can outgrow its scene (a split piece, a retimed shot); the card shows the problem rather than throwing.
+  const contract = scene?.direction?.actionContract;
+  const contractProblem = contract != null ? shotActionContractProblem(contract, scene) : null;
+  const actions = project && contract != null && !contractProblem ? shotActionPrompt(project, scene) : '';
   const motionCues = settings.backend === 'grok' ? approximateMotionCues(project?.phrases, scene?.startSec, scene?.endSec) : '';
   const base = [(scene?.prompt?.trim() || scene?.framePrompt?.trim() || ''), shotCameraPrompt(scene?.camera),
     hears ? actions : silentMotionPrompt(actions)].filter(Boolean).join('\n');
@@ -66,6 +69,7 @@ export function shotCardRenderRequest({
     maxChars: falModel?.promptMaxChars ?? null,
     endFrame,
     songAudio,
+    contractProblem,
   };
 }
 
@@ -106,5 +110,5 @@ export default function SceneRenderInputs({ id, request, onChange }) {
 }
 
 /** Why the card's Render cannot send this request, or null. */
-export const shotCardRequestProblem = (request) => (request.promptUsed && request.maxChars != null && request.prompt.length > request.maxChars
+export const shotCardRequestProblem = (request) => request.contractProblem || (request.promptUsed && request.maxChars != null && request.prompt.length > request.maxChars
   ? `The prompt is ${formatCount(request.prompt.length)} characters; this model takes ${formatCount(request.maxChars)}` : null);
