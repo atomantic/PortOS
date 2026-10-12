@@ -345,6 +345,8 @@ describe('Render follows the shot locks', () => {
     expect(screen.getByRole('button', { name: 'Render again' }).disabled).toBe(true);
     expect(screen.getByRole('button', { name: 'Render again' }).title).toMatch(/^Video locked/);
     rerender(card('locked', 'open'));
+    // The corner lock shows only its icon on a phone; its label stays the button's name.
+    expect(screen.getByRole('button', { name: 'Lock video' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Render again' }));
     expect(onGenerateVideo).toHaveBeenCalledWith(scene);
   });
