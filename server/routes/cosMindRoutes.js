@@ -345,12 +345,13 @@ router.get('/mind/tools', asyncHandler(async (_req, res) => {
     ? import('../services/persistentMindManagedApps.js')
       .then(({ readPersistentMindManagedApps }) => readPersistentMindManagedApps())
     : null;
-  const [recipes, roster] = await Promise.all([
+  const [recipes, roster, reportAccess] = await Promise.all([
     readCosToolRecipeCatalog({ scope: 'mind' }),
     managedApps,
+    import('../services/persistentMindProcessAudit.js').then(({ readProcessAuditAccess }) => readProcessAuditAccess({ root })),
   ]);
   res.json({
-    semanticTools: getCosToolCatalog({ scope: 'mind', capabilities, recipes }).tools,
+    semanticTools: getCosToolCatalog({ scope: 'mind', capabilities, recipes, reportAccess }).tools,
     schemaVersion: PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION,
     capabilities,
     boundaries: PERSISTENT_MIND_TOOL_BOUNDARIES,
@@ -363,7 +364,8 @@ router.get('/mind/tools', asyncHandler(async (_req, res) => {
     })),
     tools: PERSISTENT_MIND_TOOL_CATALOG.map((tool) => ({
       ...tool,
-      granted: capabilities[tool.capability] === true,
+      granted: tool.id === 'reports.audit' ? reportAccess.granted : capabilities[tool.capability] === true,
+      ...(tool.id === 'reports.audit' ? { access: reportAccess } : {}),
     })),
   });
 }));

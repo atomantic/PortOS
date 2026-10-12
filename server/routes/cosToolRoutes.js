@@ -31,11 +31,14 @@ router.get('/tools', asyncHandler(async (req, res) => {
     ? settings.agentContext?.actions
     : state.config?.persistentMindCapabilities;
   const recipes = await readCosToolRecipeCatalog({ scope: query.scope });
+  const reportAccess = query.scope === 'mind'
+    ? await import('../services/persistentMindProcessAudit.js').then(({ readProcessAuditAccess }) => readProcessAuditAccess({ root: state })) : undefined;
   const catalog = getCosToolCatalog({
     scope: query.scope,
     intent: query.intent,
     capabilities,
     recipes,
+    reportAccess,
   });
   const response = formatCosToolCatalog(catalog, query.format);
   const etag = etagFor(response);

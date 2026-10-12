@@ -2,16 +2,19 @@
 import { open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { PATHS, atomicWrite, readJSONFileStrict } from '../lib/fileUtils.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { execGit } from '../lib/execGit.js';
 import { normalizePersistentMindCapabilities } from '../lib/persistentMindCapabilities.js';
 import { normalizePersistentMindMaintainer } from '../lib/persistentMindMaintainer.js';
 import { PROCESS_AUDIT_LIMITS as LIMITS, processAuditFingerprint, processAuditSignals, processAuditMetrics, renderProcessAuditFinding,
   processAuditNextSchema, processAuditReadSchema, processAuditOutcomeSchema, processAuditFixSchema } from '../lib/persistentMindProcessAudit.js';
-import { loadState, AGENTS_DIR } from './cosState.js';
-import { loadAgentIndex } from './cosAgentIndex.js';
-import { getAgentRecord } from './cosAgentLifecycle.js';
+import { loadState } from './cosState.js';
 import { readPersistentMindManagedApps } from './persistentMindManagedApps.js';
+
+// Access projections must not load the archived-job graph merely to read grants.
+const loadAgentIndex = async () => (await import('./cosAgentIndex.js')).loadAgentIndex();
+const getAgentRecord = async id => (await import('./cosAgentLifecycle.js')).getAgentRecord(id);
 
 const STORE = join(PATHS.cos, 'persistent-mind-process-audit.json');
 const serialize = createFileWriteQueue();
@@ -24,14 +27,49 @@ async function readStore() {
   }
   return value;
 }
-async function authorize(appId) {
-  const root = await loadState();
+// This is the same decision used by visibility, tool discovery and execution.
+// It projects only app IDs and fixed restrictions, never private report evidence.
+const denied = (reasonCode, reason) => ({ granted: false, reasonCode, reason });
+async function resolveProcessAuditAccess({ root } = {}) {
+  root ||= await loadState();
   const role = normalizePersistentMindMaintainer(root.config?.persistentMindMaintainer);
   const grants = normalizePersistentMindCapabilities(root.config?.persistentMindCapabilities);
-  if (!role.enabled || !grants.auditReports || !grants.readPortos || !role.appIds.includes(appId)) throw new Error('Process audit is not granted for this app');
-  const app = (await readPersistentMindManagedApps()).find(item => item.id === appId && item.granted && item.forge);
-  if (!app) throw new Error('Process audit app is unavailable or revoked');
-  return { app, root, grants };
+  const restriction = !grants.auditReports ? denied('audit-reports-disabled', 'The auditReports capability is disabled.')
+    : !grants.readPortos ? denied('portos-read-disabled', 'The readPortos capability is required for report audits.')
+      : !role.enabled ? denied('maintainer-disabled', 'The development maintainer role is disabled.')
+        : !role.appIds.length ? denied('maintainer-apps-empty', 'No apps are selected for the development maintainer role.') : null;
+  if (restriction) return { access: { ...restriction, apps: [] }, apps: [] };
+  const apps = await readPersistentMindManagedApps().catch(() => null);
+  if (!apps) return { access: { ...denied('report-access-unknown', 'Report app authorization could not be established.'), apps: [] }, apps: [] };
+  const scoped = role.appIds.map(appId => {
+    const app = apps.find(item => item.id === appId);
+    const restriction = grants.allowedAppIds && !grants.allowedAppIds.includes(appId)
+      ? denied('app-revoked', 'The app is outside the Persistent Mind app allowlist.')
+      : !app ? denied('app-unavailable', 'The app is not an active runnable managed app.')
+        : !app.granted ? denied('app-revoked', 'The app grant is revoked.')
+          : !app.forge ? denied('app-tracker-unavailable', 'The app has no resolved supported forge tracker.') : null;
+    return { appId, ...(restriction || { granted: true, reasonCode: null, reason: null }) };
+  });
+  return { apps, access: { ...(scoped.some(app => app.granted) ? { granted: true, reasonCode: null, reason: null }
+    : denied('no-authorized-apps', 'No selected maintainer app is authorized for report audits.')), apps: scoped } };
+}
+export async function readProcessAuditAccess(options) {
+  return (await resolveProcessAuditAccess(options)).access;
+}
+async function authorize(appId) {
+  const root = await loadState();
+  const { access, apps } = await resolveProcessAuditAccess({ root });
+  const selected = access.apps.find(app => app.appId === appId);
+  const restriction = selected || (!access.apps.length ? access
+    : denied('app-not-maintained', 'The app is not selected for the development maintainer role.'));
+  if (!restriction.granted) throw new ServerError(`Process audit is not granted for this app: ${restriction.reason} (${restriction.reasonCode})`, { status: 403, code: 'PROCESS_AUDIT_ACCESS_DENIED' });
+  const app = apps.find(item => item.id === appId);
+  return { app, root, grants: normalizePersistentMindCapabilities(root.config?.persistentMindCapabilities) };
+}
+// Report result replay must recheck grants before the tool registry returns
+// cached private evidence, as well as inside each ledger operation.
+export async function assertProcessAuditAccess(appId) {
+  await authorize(appId);
 }
 const safeAgentId = id => typeof id === 'string' && /^agent-[a-zA-Z0-9_-]+$/.test(id);
 const appOf = record => record.metadata?.taskApp || null;
@@ -46,6 +84,7 @@ function workflowOf(record) {
 async function transcript(record, offset = 0) {
   const date = (await loadAgentIndex()).get(record.id);
   if (!safeAgentId(record.id) || !/^\d{4}-\d{2}-\d{2}$/.test(date || '')) return { state: 'missing', excerpt: '', nextOffset: null };
+  const { AGENTS_DIR } = await import('./cosState.js');
   const path = join(AGENTS_DIR, date, record.id, 'output.txt');
   let file;
   try {

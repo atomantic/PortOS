@@ -139,6 +139,15 @@ install, fetch weights, or silently choose a remote model to make readiness gree
 ## Private process audit
 
 Grant **Allow private CoS process audits** and bounded PortOS reads separately.
+Report capability configuration and effective access are distinct. `auditReports`
+and `readPortos` alone do not authorize reports: the development maintainer role
+must be enabled, the app selected in that role and allowed by the mind app
+allowlist, and the active runnable app must resolve to a supported forge tracker.
+The visibility `reports.audit` group and live semantic catalog expose effective
+access with fixed restriction codes and per-app decisions; configured capabilities
+remain visible separately. Activating the `reports` family exposes schemas only.
+Revocation also prevents replaying previously cached private report results.
+
 The `reports` family provides `reports.next` (bounded scan and durable job
 reservation), `reports.read` (additional byte window), and `reports.record`
 (clean, insufficient evidence, transient provider, known issue, or finding). `reports.fix` records a tracked finding's candidate fix revision
