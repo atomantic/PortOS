@@ -346,7 +346,7 @@ describe('Render follows the shot locks', () => {
     expect(screen.getByRole('button', { name: 'Render again' }).title).toMatch(/^Video locked/);
     rerender(card('locked', 'open'));
     fireEvent.click(screen.getByRole('button', { name: 'Render again' }));
-    expect(onGenerateVideo).toHaveBeenCalledWith(scene);
+    expect(onGenerateVideo).toHaveBeenCalledWith(scene, { card: expect.objectContaining({ prompt: scene.prompt }) });
   });
 });
 
@@ -428,6 +428,23 @@ describe('frame fit for an off-shape clip', () => {
     fireEvent.change(pick, { target: { value: 'vhs' } });
     expect(onSave).toHaveBeenCalledWith('s1', { frameFit: 'vhs' });
     expect(onEditLocal).toHaveBeenCalledWith('s1', { frameFit: 'vhs' });
+  });
+});
+
+describe('Sent to the model', () => {
+  // Uniquely catches the card's Render sending anything other than what the card shows, or dropping the Song audio toggle.
+  it('shows the prompt Render sends and hands it, with the song audio pick, to the render', () => {
+    const scene = { sceneId: 's1', prompt: 'She shakes her head', referenceImageId: 'start.png', startSec: 0, endSec: 4,
+      takes: [{ takeId: 't1', kind: 'image', assetId: 'start.png', status: 'selected' }] };
+    const onGenerateVideo = vi.fn();
+    const models = [{ id: 'ltx25_example', name: 'LTX-2.5 Example', runtime: 'ltx25', supportedModes: ['image', 'a2v'] }];
+    render(<SceneCard scene={scene} index={0} expanded onEditLocal={() => {}} onSave={() => {}} onGenerateVideo={onGenerateVideo}
+      videoModels={models} falVideoSettings={{ backend: 'local', modelId: 'ltx25_example' }} />);
+    const inputs = screen.getByTestId('render-inputs');
+    expect(within(inputs).getByText('She shakes her head')).toBeTruthy();
+    fireEvent.click(within(inputs).getByLabelText('Song audio'));
+    fireEvent.click(screen.getByRole('button', { name: 'Render' }));
+    expect(onGenerateVideo).toHaveBeenCalledWith(scene, expect.objectContaining({ card: { prompt: 'She shakes her head', songAudio: true } }));
   });
 });
 

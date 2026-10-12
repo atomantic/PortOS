@@ -104,4 +104,13 @@ describe('project render-pool submission policy', () => {
     const local = { ...m.project, updatedAt: '2026-10-01T00:00:00.000Z' };
     expect(mergeProjectRecord(local, remote).next.videoSettings.renderPool).toEqual(pool);
   });
+  // The shot card's Song audio toggle decides for its own render, so a local test never needs the project setting flipped.
+  it('lets one render hand its cutaway the song slice, or keep it silent, whatever the project mode', async () => {
+    m.project.videoSettings = { backend: 'local', generationMode: 'image' };
+    const withSong = { ...body(), musicVideo: { ...body().musicVideo, songAudio: true } };
+    expect(await applyProjectRenderPool(withSong)).toMatchObject({ backend: 'local', mode: 'a2v', _suppliedAudio: true });
+    m.project.videoSettings = { backend: 'local', generationMode: 'suppliedAudio' };
+    const silent = { ...body(), backend: 'fal', musicVideo: { ...body().musicVideo, songAudio: false } };
+    expect(await applyProjectRenderPool(silent)).toEqual(silent);
+  });
 });

@@ -8,6 +8,9 @@
  */
 export const MOTION_CONTINUITY_CLAUSE = "hold the reference frame's lighting, time of day and palette for the whole shot";
 
+/** Appended to an audio-reactive (LoRA) shot's prompt so the music moves the scene, never a performer. */
+export const AUDIO_REACTIVE_PERFORMANCE_GUARD = 'The music drives only environmental motion, lighting, particles, reflections, fabric, and subtle camera accents. No singing, lip-sync, speaking, mouth movement, dancing, instruments, performers, or musical performance.';
+
 // A song reference a silent i2v model cannot hear: a quoted lyric cue ("on
 // 'Sleep'"), a musical event ("on the downbeat", "in time with the snare") or
 // a song timestamp ("at 1:42").

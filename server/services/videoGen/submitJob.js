@@ -313,8 +313,12 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
         // A take that hears nothing (no lip-sync or supplied song audio) gets plain physical
         // motion: the model would act out song cues and look words instead of reading them.
         const hearsAudio = !!(performance || prepared.audio || params.audioConditioning || params.audioFilePath);
-        params.prompt = withShotActionPrompt(params.prompt, project, scene, { offsetSec: performance?.shotInstruction?.edit?.inSec || 0 });
-        if (!hearsAudio) params.prompt = await silentMusicVideoMotionPrompt(params.prompt, project, scene);
+        // A shot card's prompt is sent as shown, its shot actions included; only a performance
+        // take re-times them to its padded song slice.
+        if (!body.musicVideo.promptAsTyped || performance) {
+          params.prompt = withShotActionPrompt(params.prompt, project, scene, { offsetSec: performance?.shotInstruction?.edit?.inSec || 0 });
+        }
+        if (!hearsAudio && !body.musicVideo.promptAsTyped) params.prompt = await silentMusicVideoMotionPrompt(params.prompt, project, scene);
         const interval = performance?.shotInstruction?.songInterval || prepared.audio?.songInterval;
         if (params.audioConditioning && Math.round(scene?.startSec * 48000) !== params.audioConditioning.startSample) {
           throw new ServerError('Scene timing changed while source audio was prepared', { status: 409, code: 'MUSIC_VIDEO_SHOT_TIMING_CHANGED' });

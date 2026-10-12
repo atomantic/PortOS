@@ -70,3 +70,18 @@ describe('useMusicVideoSceneMedia clip batch (#10153)', () => {
     expect(result.current.videoBatch.state).toMatchObject({ done: 1, canceled: 8, failed: 0 });
   });
 });
+
+describe('useMusicVideoSceneMedia shot card Render', () => {
+  beforeEach(() => { handlers.clear(); generateVideo.mockReset(); });
+
+  // Uniquely catches a card Render picking up hidden direction, or its Song audio pick not reaching the server.
+  it('sends the card prompt untouched, tagged as typed, with its song audio pick', async () => {
+    generateVideo.mockResolvedValue({ status: 'queued', jobId: 'job-card' });
+    const { result } = renderMedia();
+    await act(() => result.current.generateSceneVideo(project.scenes[0], { card: { prompt: 'exactly this', songAudio: true } }));
+    const request = generateVideo.mock.calls[0][0];
+    expect(request.prompt).toBe('exactly this');
+    expect(request.mode).toBe('a2v');
+    expect(JSON.parse(request.musicVideo)).toEqual({ projectId: 'p1', sceneId: 's0', promptAsTyped: true, songAudio: true });
+  });
+});

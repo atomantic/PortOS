@@ -32,6 +32,7 @@ import { COVERAGE_TOLERANCE_SEC, SCENE_ATTENTION_LABELS, sceneAttention } from '
 import { ShotLockButton, useShotLock } from './ShotLock.jsx';
 import ScenePoster from './ScenePoster.jsx';
 import SceneRenderTarget, { lastRenderTarget, renderTargetOverrides } from './SceneRenderTarget.jsx';
+import SceneRenderInputs, { shotCardRenderRequest, shotCardRequestProblem } from './SceneRenderInputs.jsx';
 import SceneFrameFit, { sceneFrameFit } from './SceneFrameFit.jsx';
 import SceneTransitions from './SceneTransitions.jsx';
 
@@ -105,7 +106,7 @@ export default function SceneCard({
   scene, index, shotNumber = null, isLast, generatingFrame, generatingVideo, frameProgress = null, videoProgress = null,
   settingsSaving, videoBlockedReason, videoBlockedReasonFor = null, canContinueShot,
   onMove, onDelete, onEditLocal, onSave,
-  onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
+  project = null, onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
   onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, onPlacePoolItem, onTrimClip, projectId = null, aspect = '16:9', videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false,
   lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, nextEndSec = null, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
   expanded, onToggleExpand, footageOptional = false, failedScenes = null, songReview = null,
@@ -185,20 +186,29 @@ export default function SceneCard({
   // retry is in flight (or lands a take, which clears it server-side).
   const failure = scene.lastFailure && !(scene.lastFailure.lane === 'video' ? generatingVideo : generatingFrame)
     ? scene.lastFailure : null;
+  const endFramePlan = sceneEndFramePlanFor(scene, renderSettings || {}, { models: videoModels, defaultModel: defaultVideoModel });
+  // Exactly what Render sends: the prompt as typed and the inputs the card toggles.
+  const [renderInputs, setRenderInputs] = useState({});
+  const cardRequest = shotCardRenderRequest({ project, scene, settings: renderSettings || {}, performance, endFramePlan,
+    models: videoModels, defaultModel: defaultVideoModel, inputs: renderInputs });
   const videoRefusal = videoGenerationRefusal({
     settingsSaving, speakerUnsaved: performance && (speakerDirty || speakerSaving),
     referenceImageId: scene.referenceImageId, generatingVideo, performanceBlocked, lockBlocked,
     videoBlockedReason: renderOverrides && videoBlockedReasonFor ? videoBlockedReasonFor(renderSettings) : videoBlockedReason,
-  });
+  }) || shotCardRequestProblem(cardRequest);
   const generateVideo = () => {
     if (videoRefusal) return;
-    if (renderOverrides) onGenerateVideo?.(scene, { target: renderOverrides });
-    else onGenerateVideo?.(scene);
+    const { songAudio, endFrame } = cardRequest;
+    const card = {
+      prompt: cardRequest.prompt,
+      ...(endFrame ? { endFrame: endFrame.state === 'on' } : {}),
+      ...(songAudio.state === 'on' || songAudio.state === 'off' ? { songAudio: songAudio.state === 'on' } : {}),
+    };
+    onGenerateVideo?.(scene, { ...(renderOverrides ? { target: renderOverrides } : {}), card });
   };
   const renderCost = performance ? performanceCost : timing.falCost;
   // A footage shot's start and end frames show as a pair; the end frame is optional.
   const endFrames = Boolean(onGenerateEndFrame) && layer === 'footage';
-  const endFramePlan = sceneEndFramePlanFor(scene, renderSettings || {}, { models: videoModels, defaultModel: defaultVideoModel });
   const shotModeValue = performance ? (scene.performanceStyle === 'music' ? 'music' : 'performance') : 'cutaway';
   // The collapsed Shot settings row says what is set, so it rarely needs opening.
   const settingsSummary = [
@@ -508,6 +518,9 @@ export default function SceneCard({
               saved={falVideoSettings || {}} disabled={!!generatingVideo} />
             {renderCost && <span className="text-[11px] text-port-text-muted">{renderCost}</span>}
           </div>
+          {layer === 'footage' && (
+            <SceneRenderInputs id={fieldId('inputs')} request={cardRequest} onChange={(patch) => setRenderInputs((prev) => ({ ...prev, ...patch }))} />
+          )}
           {endFramePlan.endImageId && (
             <p className={`text-[11px] ${endFramePlan.used ? 'text-port-text-muted' : 'text-port-warning'}`} data-testid="end-frame-plan">
               {endFramePlan.used ? 'The clip ends on the end frame.' : `${endFramePlan.reason}.`}
