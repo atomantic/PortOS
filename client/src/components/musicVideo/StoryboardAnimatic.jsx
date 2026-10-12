@@ -12,6 +12,7 @@ import { normalizeTitleCard } from '../../../../server/lib/musicVideoTitleCard.j
 import ShotStepper from './ShotStepper.jsx';
 import FrameStepper, { captureMediaFrame } from './FrameStepper.jsx';
 import { sceneFrameFit } from './SceneFrameFit.jsx';
+import TransitionGlitch from './TransitionGlitch.jsx';
 
 const timedShots = (scenes) => scenes.filter((scene) => Number.isFinite(scene?.startSec)).sort((a, b) => a.startSec - b.startSec);
 
@@ -311,6 +312,9 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
         {clipShots.map((scene) => (
           <ShotClip key={`${scene.sceneId}:${scene.videoHistoryId}`} scene={scene} audioRef={audioRef} time={time} current={scene === shot} />
         ))}
+        {/* The shots' VHS glitches on their cuts, on the frames the final render repaints. */}
+        <TransitionGlitch scenes={scenes} figureRef={figureRef} audioRef={audioRef} time={time}
+          endSec={Number(project.audioAnalysis?.durationSec) || null} fps={ANIMATIC_FPS} />
         {overlay}
         </FilmLookFrame>
       </figure>

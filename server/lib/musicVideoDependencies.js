@@ -19,6 +19,8 @@ const layerRef = (scene) => ({ role: 'layer', sceneId: scene.sceneId, assetId: s
     .concat(scene.camera ? [['camera', scene.camera]] : [])
     // A chosen frame fit changes the render; a shot left to fill keeps its evidence.
     .concat(scene.frameFit && scene.frameFit !== 'fill' ? [['frameFit', scene.frameFit]] : [])
+    // A glitch over its cuts changes the render; a shot without one keeps its evidence.
+    .concat(['transitionIn', 'transitionOut'].filter((key) => scene[key]).map((key) => [key, scene[key]]))
     // Only a music-driven performance joins it, so lip-sync evidence stays current.
     .concat(scene.performanceStyle === 'music' ? [['performanceStyle', 'music']] : []))) });
 const snapshot = (references) => ({ version: MUSIC_VIDEO_DEPENDENCY_VERSION, references });
