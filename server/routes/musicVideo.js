@@ -1546,7 +1546,7 @@ router.get('/:id/media-pool', asyncHandler(async (req, res) => {
 
 router.post('/:id/scenes/:sceneId/takes/use', asyncHandler(async (req, res) => {
   const { kind, assetId, withAssetId } = validateRequest(musicVideoPoolUseSchema, req.body);
-  const otherKind = kind === 'image' ? 'video' : 'image';
+  const otherKind = kind === 'video' ? 'image' : 'video';
   for (const [assetKind, id] of [[kind, assetId], [otherKind, withAssetId]]) {
     if (id && !(await takeAssetExists(assetKind, id))) {
       throw new ServerError(`${assetKind === 'video' ? 'Video' : 'Image'} not found in this install's media library`, { status: 400, code: 'TAKE_ASSET_NOT_FOUND' });

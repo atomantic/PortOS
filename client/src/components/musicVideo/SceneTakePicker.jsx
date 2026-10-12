@@ -7,7 +7,9 @@ import { takeThumbUrl, takeClipUrl } from '../../lib/musicVideoTakes.js';
 import { formatCount } from '../../utils/formatters.js';
 
 const PAGE = 60;
-const SLOT_NOUN = { image: 'still', video: 'clip' };
+const SLOT_NOUN = { image: 'still', video: 'clip', endImage: 'end frame' };
+// An end frame is picked from the same unused stills as a start frame.
+const POOL_KIND = { image: 'image', video: 'video', endImage: 'image' };
 
 /** Which tab a pool item belongs on for this shot: its own takes, another shot's, or the floor. */
 export const poolGroup = (item, sceneId) => (!item.sceneId ? 'floor' : item.sceneId === sceneId ? 'shot' : 'others');
@@ -26,6 +28,7 @@ export function filterPool(items, { kind, query, shotNumbers }) {
  * other takes, other shots' unused takes, and the floor (takes a cut shot, a
  * re-plan or a merge left behind). Tap one to see it full size, then use it,
  * or use it with its partner: a still's rendered clip, or a clip's still.
+ * `kind: 'endImage'` picks a still for the shot's end frame, on its own.
  * `onPlace({ kind, assetId, withAssetId? })` puts it on the shot.
  */
 export default function SceneTakePicker({ open, onClose, projectId, scene, kind, shotNumbers = new Map(), onPlace, busy = false }) {
@@ -46,21 +49,22 @@ export default function SceneTakePicker({ open, onClose, projectId, scene, kind,
         const items = res.items || [];
         setPool(items);
         // Open on the first tab that has anything in it.
-        const groups = new Set(items.filter((item) => item.kind === kind).map((item) => poolGroup(item, scene.sceneId)));
+        const groups = new Set(items.filter((item) => item.kind === POOL_KIND[kind]).map((item) => poolGroup(item, scene.sceneId)));
         setGroup(['shot', 'others', 'floor'].find((g) => groups.has(g)) || 'shot');
       })
       .catch((err) => { if (active) setError(err?.message || 'Could not load the unused takes'); });
     return () => { active = false; };
   }, [open, projectId, scene.sceneId, kind]);
 
-  const ofKind = pool ? filterPool(pool, { kind, query, shotNumbers }) : [];
+  const ofKind = pool ? filterPool(pool, { kind: POOL_KIND[kind], query, shotNumbers }) : [];
   const counts = { shot: 0, others: 0, floor: 0 };
   for (const item of ofKind) counts[poolGroup(item, scene.sceneId)] += 1;
   const activeGroup = group;
   const items = ofKind.filter((item) => poolGroup(item, scene.sceneId) === activeGroup);
   const noun = SLOT_NOUN[kind];
+  const itemNoun = SLOT_NOUN[POOL_KIND[kind]];
   const shotName = shotNumbers.get(scene.sceneId) ? `Shot ${shotNumbers.get(scene.sceneId)}` : 'this shot';
-  const partner = picked && (kind === 'image' ? picked.clipIds?.[0] : picked.sourceImageId) || null;
+  const partner = picked && (kind === 'image' ? picked.clipIds?.[0] : kind === 'video' ? picked.sourceImageId : null) || null;
   const place = (withAssetId) => Promise.resolve(onPlace?.({ kind, assetId: picked.assetId, ...(withAssetId ? { withAssetId } : {}) }))
     .then(() => onClose?.());
 
@@ -102,18 +106,18 @@ export default function SceneTakePicker({ open, onClose, projectId, scene, kind,
         </div>
       )}
       {error && <p role="alert" className="text-xs text-port-error">{error}</p>}
-      {!pool && !error && <p className="flex items-center gap-2 text-xs text-port-text-muted"><Activity size={14} className="animate-spin" />Gathering every {noun} made for this video…</p>}
+      {!pool && !error && <p className="flex items-center gap-2 text-xs text-port-text-muted"><Activity size={14} className="animate-spin" />Gathering every {itemNoun} made for this video…</p>}
       {pool && items.length === 0 && (
-        <p className="text-xs text-port-text-muted">{query ? `No unused ${noun}s match.` : `No unused ${noun}s here.`}</p>
+        <p className="text-xs text-port-text-muted">{query ? `No unused ${itemNoun}s match.` : `No unused ${itemNoun}s here.`}</p>
       )}
-      <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6" aria-label={`Unused ${noun}s`}>
+      <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6" aria-label={`Unused ${itemNoun}s`}>
         {items.slice(0, shown).map((item) => {
           const number = item.sceneId ? shotNumbers.get(item.sceneId) : null;
           const selected = picked?.assetId === item.assetId;
           return (
             <li key={item.assetId}>
               <button type="button" onClick={() => setPicked(item)} aria-pressed={selected}
-                aria-label={`${noun}${number ? ` from shot ${number}` : ''}${item.prompt ? `: ${item.prompt.slice(0, 80)}` : ''}`}
+                aria-label={`${itemNoun}${number ? ` from shot ${number}` : ''}${item.prompt ? `: ${item.prompt.slice(0, 80)}` : ''}`}
                 className={`relative block w-full overflow-hidden rounded border ${selected ? 'border-port-accent ring-2 ring-port-accent' : 'border-port-border'} ${item.takeStatus === 'rejected' ? 'opacity-60' : ''}`}>
                 <img src={takeThumbUrl(item)} alt="" loading="lazy" className="block aspect-video w-full bg-black object-cover" />
                 {number && <span className="port-media-overlay-strong absolute left-1 top-1 rounded px-1 text-[10px] leading-tight">#{number}</span>}

@@ -364,6 +364,7 @@ export async function selectSceneTake(id, sceneId, takeId) {
  * Put an unused still or clip from the project's pool on a shot (the shot
  * card's "Swap from unused"): it becomes a take of the shot and its selection.
  * `withAssetId` brings its partner too: a still's clip, or a clip's still.
+ * `kind: 'endImage'` puts a still on the shot's end frame instead.
  * The take keeps the prompt and provider of the take it came from. A shot
  * whose video is locked refuses, as it does any other new selection.
  * Returns the updated scene.
@@ -375,14 +376,16 @@ export async function placeMediaPoolItem(id, sceneId, { kind, assetId, withAsset
   const { scene } = await mutateProjectRecord(id, (current) => {
     assertClipUnlocked(current, sceneId);
     const origin = new Map(projectTakeAssets(current).filter(asset => asset.take).map(asset => [`${asset.kind}:${asset.ref}`, asset.take]));
-    const still = kind === 'image' ? assetId : withAssetId;
+    const still = kind === 'video' ? withAssetId : assetId;
     const clip = kind === 'video' ? assetId : withAssetId;
     const input = (takeKind, ref) => {
-      const from = origin.get(`${takeKind}:${ref}`);
+      const from = origin.get(`${takeKind === 'video' ? 'video' : 'image'}:${ref}`);
       return { kind: takeKind, assetId: ref, source: 'reused', provider: from?.provider || null, prompt: from?.prompt || null,
         ...(takeKind === 'video' && still ? { sourceImageId: still } : {}) };
     };
-    const inputs = [...(still ? [input('image', still)] : []), ...(clip ? [input('video', clip)] : [])];
+    const inputs = kind === 'endImage'
+      ? [input('endImage', assetId)]
+      : [...(still ? [input('image', still)] : []), ...(clip ? [input('video', clip)] : [])];
     let outcome = append(current, sceneId, inputs);
     for (const take of outcome.appended) outcome = { ...select(outcome.project, sceneId, take.takeId), appended: outcome.appended };
     return outcome;

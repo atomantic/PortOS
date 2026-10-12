@@ -256,6 +256,13 @@ describe('swapping a shot from unused takes', () => {
     expect(used.body.scene.takes.find((take) => take.assetId === 'clip-b2')).toMatchObject({ source: 'reused', sourceImageId: 'b-2.png' });
     expect((await pool()).map((item) => item.assetId).sort()).toEqual(['a-1.png', 'a-2.png', 'b-1.png', 'clip-a1']);
 
+    // Any unused still can become the shot's end frame, and leaves the pool.
+    const end = await request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/use`).send({ kind: 'endImage', assetId: 'b-1.png' });
+    expect(end.status).toBe(200);
+    expect(end.body.scene).toMatchObject({ referenceImageId: 'b-2.png', endImageId: 'b-1.png' });
+    expect((await pool()).map((item) => item.assetId).sort()).toEqual(['a-1.png', 'a-2.png', 'clip-a1']);
+
     expect((await request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/use`).send({ kind: 'image', assetId: 'missing.png' })).status).toBe(400);
+    expect((await request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/use`).send({ kind: 'endImage', assetId: 'a-1.png', withAssetId: 'clip-a1' })).status).toBe(400);
   });
 });

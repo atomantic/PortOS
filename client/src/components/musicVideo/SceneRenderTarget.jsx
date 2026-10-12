@@ -31,7 +31,7 @@ function savedLabel(saved) {
   return BACKEND_LABELS[saved.backend] || 'install default';
 }
 
-export function renderTargetOptions({ performance, saved }) {
+export function renderTargetOptions({ performance, saved, endFrame = false }) {
   return [
     { value: '', label: `Project setting · ${savedLabel(saved)}` },
     { value: 'local', label: performance ? 'Local LTX lip-sync (free)' : 'Local LTX (free)' },
@@ -40,7 +40,7 @@ export function renderTargetOptions({ performance, saved }) {
       ? [{ value: 'fal', label: 'fal.ai (song-driven)' }]
       : FAL_IMAGE_VIDEO_MODELS.map((model) => {
         const rate = describeFalVideoRate(model.id);
-        return { value: `fal:${model.id}`, label: `fal.ai · ${model.label}${rate ? ` · ${rate}` : ''}` };
+        return { value: `fal:${model.id}`, label: `fal.ai · ${model.label}${rate ? ` · ${rate}` : ''}${endFrame && model.endImage ? ' · ends on end frame' : ''}` };
       })),
   ];
 }
@@ -139,7 +139,7 @@ export default function SceneRenderTarget({
         <select id={id} value={value} onChange={(e) => { onChange(e.target.value); onOptionsChange?.({}); }} disabled={disabled}
           title="Where this shot's clip renders. Only this shot; the project setting stays as it is."
           className={`${SELECT} flex-1 sm:flex-none`}>
-          {renderTargetOptions({ performance, saved }).map((option) => (
+          {renderTargetOptions({ performance, saved, endFrame: Boolean(scene?.endImageId) }).map((option) => (
             <option key={option.value} value={option.value} disabled={option.disabled}>{option.label}</option>
           ))}
         </select>
