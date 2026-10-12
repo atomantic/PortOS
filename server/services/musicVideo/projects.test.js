@@ -274,6 +274,8 @@ describe('automation respects persisted shot locks (#11218)', () => {
     expect(revised.project.productionReview.draft.storyboard[0].action).toBe('Stay');
     const replaced = await projects.mutateProjectRecord(p.id, current => replaceScenes(current, [{ startSec: 0, endSec: 2, prompt: 'New span' }]), { source: 'shot-planner' });
     expect(replaced.project.scenes.map(s => s.sceneId)).toEqual([scene.sceneId]);
+    expect(replaced).toMatchObject({ rejected: true, replaced: 0 });
+    expect(replaced.scenes).toEqual((await projects.getProject(p.id)).scenes);
     expect(shotLocks(await projects.getProject(p.id))[scene.sceneId]).toBe('locked');
     expect(replaced.project.productionReview.feedback).toHaveLength(2);
   });
@@ -285,6 +287,10 @@ describe('automation respects persisted shot locks (#11218)', () => {
     await projects.mutateProjectRecord(p.id, current => ({ project: setShotLocks(current, { sceneIds: [scene.sceneId], locked: true }) }));
     const repair = await projects.mutateProjectRecord(p.id, current => ({ project: { ...current, scenes: current.scenes.map(s => ({ ...s, clipFixes: { text: 'New motion' } })) } }), { source: 'orchestrator' });
     expect(repair.project.scenes[0].clipFixes).toBeUndefined();
+    const frame = await projects.appendSceneTakes(p.id, scene.sceneId, [{ kind: 'image', assetId: 'candidate.png', source: 'generated' }]);
+    expect(frame.scene.referenceImageId).toBeNull();
+    expect(frame.scene.takes.some(take => take.assetId === 'candidate.png')).toBe(true);
+    expect(shotLocks(await projects.getProject(p.id))[scene.sceneId]).toBe('locked');
     const clip = await projects.mutateProjectRecord(p.id, current => ({ project: { ...current, scenes: current.scenes.map(s => ({ ...s, videoHistoryId: 'new-clip' })) } }), { source: 'production-run' });
     expect(clip.project.scenes[0].videoHistoryId).toBe('new-clip');
     expect(shotLocks(clip.project)[scene.sceneId]).toBe('locked');
