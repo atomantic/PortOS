@@ -1,11 +1,13 @@
 import { useState } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 vi.mock('../../hooks/useVideoFileSrc.js', () => ({ useVideoFileSrc: () => ({}) }));
 import SceneCard from './SceneCard.jsx';
 import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
 
 const GROK_MAX = GROK_VIDEO_DURATIONS.at(-1);
+// A card opens on the last Render on pick, so each test starts from the project setting.
+beforeEach(() => localStorage.clear());
 
 describe('code shot (#10297)', () => {
   it('offers no frame or clip generation for a code shot in a layered composition', () => {
@@ -349,23 +351,57 @@ describe('Render follows the shot locks', () => {
 });
 
 describe('start and end frames', () => {
-  // Uniquely catches the end frame hiding behind a collapsed row, losing its own actions, or the Render section not saying which renderer ends on it.
-  it('shows the start and end frames as a pair, works on the tapped one, and says which renderer ends on the end frame', () => {
-    const scene = { sceneId: 's1', prompt: 'She looks into the lens', referenceImageId: 'start.png', endImageId: 'end.png', startSec: 0, endSec: 4,
+  // Uniquely catches a frame's prompt or Render hiding away from its picture, a frame reference not reaching the render, or the Render section not saying which renderer ends on the end frame.
+  it('shows each frame with its prompt and Render, renders from a picked frame, and shows the tapped frame\'s takes', () => {
+    const scene = { sceneId: 's1', prompt: 'She looks into the lens', referenceImageId: 'start.png', endImageId: 'end.png', endFramePrompt: 'Head thrown back', startSec: 0, endSec: 4,
       takes: [{ takeId: 't1', kind: 'image', assetId: 'start.png', status: 'selected' }, { takeId: 't2', kind: 'endImage', assetId: 'end.png', status: 'selected' }] };
-    render(<SceneCard scene={scene} index={0} expanded onEditLocal={() => {}} onSave={() => {}} onGenerateEndFrame={() => {}} onPlacePoolItem={() => {}}
-      falVideoSettings={{ backend: 'local' }} />);
+    const onGenerateFrame = vi.fn();
+    const onGenerateEndFrame = vi.fn();
+    render(<SceneCard scene={scene} index={0} expanded onEditLocal={() => {}} onSave={() => {}} onGenerateFrame={onGenerateFrame} onGenerateEndFrame={onGenerateEndFrame}
+      onPlacePoolItem={() => {}} falVideoSettings={{ backend: 'local' }} />);
     const pair = screen.getByRole('group', { name: 'Start and end frames' });
-    expect(within(pair).getByRole('button', { name: 'Start frame' }).getAttribute('aria-pressed')).toBe('true');
-    expect(screen.queryByLabelText('End frame prompt')).toBeNull();
+    expect(within(pair).getByLabelText('Reference frame prompt')).toBeTruthy();
+    expect(within(pair).getByLabelText('End frame prompt').value).toBe('Head thrown back');
+
+    // The end frame renders from the start frame unless another frame is picked; the start frame from its prompt.
+    fireEvent.click(within(pair).getByRole('button', { name: 'New end frame take' }));
+    expect(onGenerateEndFrame).toHaveBeenLastCalledWith(scene, { referenceImageId: 'start.png' });
+    fireEvent.change(screen.getByLabelText('From', { selector: '#mv-scene-s1-start-from' }), { target: { value: 'end' } });
+    fireEvent.click(within(pair).getByRole('button', { name: 'New frame take' }));
+    expect(onGenerateFrame).toHaveBeenLastCalledWith(scene, { referenceImageId: 'end.png' });
+
+    expect(screen.getByRole('list', { name: /^Frame takes/ })).toBeTruthy();
     fireEvent.click(within(pair).getByRole('button', { name: 'End frame' }));
-    expect(screen.getByLabelText('End frame prompt')).toBeTruthy();
+    expect(screen.getByRole('list', { name: /^End frame takes/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Clear scene 1 end frame' })).toBeTruthy();
+
     expect(screen.getByTestId('end-frame-plan').textContent).toMatch(/animates from the start frame only/);
     const pick = screen.getByLabelText('Render on');
     expect(within(pick).getByRole('option', { name: /Kling v3 Pro.*ends on end frame/ })).toBeTruthy();
     fireEvent.change(pick, { target: { value: 'fal:fal-ai/kling-video/v3/pro/image-to-video' } });
     expect(screen.getByTestId('end-frame-plan').textContent).toBe('The clip ends on the end frame.');
+  });
+});
+
+describe('Render on remembers the last pick', () => {
+  // Uniquely catches a new card falling back to the project setting (a paid fal render) after the director picked local.
+  it('opens the next card on the last pick made on this device, and falls back where the shot cannot use it', () => {
+    const scene = { sceneId: 's1', prompt: 'She turns away', referenceImageId: 'start.png', startSec: 0, endSec: 4,
+      takes: [{ takeId: 't1', kind: 'image', assetId: 'start.png', status: 'selected' }] };
+    const saved = { backend: 'fal' };
+    const first = render(<SceneCard scene={scene} index={0} expanded onEditLocal={() => {}} onSave={() => {}} falVideoSettings={saved} />);
+    expect(screen.getByLabelText('Render on').value).toBe('');
+    fireEvent.change(screen.getByLabelText('Render on'), { target: { value: 'local' } });
+    first.unmount();
+
+    const second = render(<SceneCard scene={{ ...scene, sceneId: 's2' }} index={1} expanded onEditLocal={() => {}} onSave={() => {}} falVideoSettings={saved} />);
+    expect(screen.getByLabelText('Render on').value).toBe('local');
+    fireEvent.change(screen.getByLabelText('Render on'), { target: { value: 'grok' } });
+    second.unmount();
+
+    // Grok renders cutaways only, so a lip-synced shot opens on the project setting.
+    render(<SceneCard scene={{ ...scene, sceneId: 's3', shotMode: 'performance' }} index={2} expanded onEditLocal={() => {}} onSave={() => {}} falVideoSettings={saved} />);
+    expect(screen.getByLabelText('Render on').value).toBe('');
   });
 });
 

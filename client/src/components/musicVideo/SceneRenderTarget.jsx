@@ -5,6 +5,7 @@ import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
 import { grokCoverage } from '../../lib/musicVideoShotTiming.js';
 import { localMusicVideoModels } from '../../../../server/lib/musicVideoLocalModels.js';
 import { frameOptionsForModel } from '../../lib/videoGenParams.js';
+import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage.js';
 
 /**
  * Where one shot's clip renders, picked on its card: the project's saved
@@ -20,6 +21,9 @@ import { frameOptionsForModel } from '../../lib/videoGenParams.js';
  * resolutions. Each length defaults to the shortest one that covers the shot.
  * `options` holds only what the director changed: `{ modelId, numFrames,
  * grokDuration, falDuration, falResolution }`.
+ *
+ * A card opens on the last pick made on this device (lastRenderTarget), with
+ * its local model or fal size; lengths stay sized to each shot.
  */
 const BACKEND_LABELS = { local: 'Local LTX', grok: 'Grok', fal: 'fal.ai' };
 // The local render's frame rate when the request names none (generateVideo's default).
@@ -43,6 +47,29 @@ export function renderTargetOptions({ performance, saved, endFrame = false }) {
         return { value: `fal:${model.id}`, label: `fal.ai · ${model.label}${rate ? ` · ${rate}` : ''}${endFrame && model.endImage ? ' · ends on end frame' : ''}` };
       })),
   ];
+}
+
+const LAST_PICK_KEY = 'portos.musicVideo.lastRenderOn';
+
+/** Remember a card's pick for the next card opened on this device. */
+export function rememberRenderTarget(pick, options = {}) {
+  safeWriteJsonStorage(LAST_PICK_KEY, { pick, modelId: options.modelId || null, falResolution: options.falResolution || null });
+}
+
+/**
+ * The pick and options a card opens on: the last pick made on this device,
+ * when this shot offers it (a lip-synced shot has one fal choice and no Grok),
+ * else the project setting.
+ */
+export function lastRenderTarget({ performance, saved }) {
+  const last = safeReadJsonStorage(LAST_PICK_KEY, null);
+  let pick = typeof last?.pick === 'string' ? last.pick : '';
+  if (performance && pick.startsWith('fal:')) pick = 'fal';
+  if (!renderTargetOptions({ performance, saved }).some((option) => option.value === pick && !option.disabled)) pick = '';
+  const falModel = pick.startsWith('fal:') ? getFalVideoModel(pick.slice(4)) : null;
+  const options = pick === 'local' && last.modelId ? { modelId: last.modelId }
+    : falModel && falVideoResolutions(falModel).includes(last.falResolution) ? { falResolution: last.falResolution } : {};
+  return { pick, options };
 }
 
 const isLtx25 = (model) => /^ltx25/.test(model?.runtime || '');
@@ -92,7 +119,10 @@ export function renderTargetOverrides(value, saved, options = {}, context = {}) 
   if (!value) return null;
   const spanSec = shotSpan(context.scene);
   if (value === 'local') {
-    const modelId = options.modelId || defaultLocalModelId({ ...context, saved });
+    // A remembered model this shot can't use (a non-lip-sync model on a lip-synced shot) falls back to the default.
+    const choices = localModelChoices(context.models || [], context.performance);
+    const picked = options.modelId && (!choices.length || choices.some((m) => m.id === options.modelId)) ? options.modelId : null;
+    const modelId = picked || defaultLocalModelId({ ...context, saved });
     const model = (context.models || []).find((m) => m.id === modelId);
     const numFrames = context.performance ? null : options.numFrames || (model ? coveringFrames(model, spanSec) : null);
     return { backend: 'local', ...(modelId ? { modelId } : {}), ...(numFrames ? { numFrames } : {}) };
@@ -127,7 +157,11 @@ function OptionSelect({ id, label, value, onChange, disabled, children }) {
 export default function SceneRenderTarget({
   id, value, onChange, options = {}, onOptionsChange, performance, saved, scene = null, models = [], defaultModel = '', disabled = false,
 }) {
-  const set = (patch) => onOptionsChange?.({ ...options, ...patch });
+  const set = (patch) => {
+    const next = { ...options, ...patch };
+    onOptionsChange?.(next);
+    rememberRenderTarget(value, next);
+  };
   const spanSec = shotSpan(scene);
   const overrides = renderTargetOverrides(value, saved, options, { models, defaultModel, performance, scene });
   const localChoices = localModelChoices(models, performance);
@@ -138,7 +172,7 @@ export default function SceneRenderTarget({
     <>
       <span className="flex min-w-0 flex-1 basis-48 items-center gap-1 sm:flex-none">
         <label htmlFor={id} className="text-xs">Render on</label>
-        <select id={id} value={value} onChange={(e) => { onChange(e.target.value); onOptionsChange?.({}); }} disabled={disabled}
+        <select id={id} value={value} onChange={(e) => { onChange(e.target.value); onOptionsChange?.({}); rememberRenderTarget(e.target.value); }} disabled={disabled}
           title="Where this shot's clip renders. Only this shot; the project setting stays as it is."
           className={`${SELECT} flex-1 sm:flex-none`}>
           {renderTargetOptions({ performance, saved, endFrame: Boolean(scene?.endImageId) }).map((option) => (

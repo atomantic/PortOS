@@ -2500,6 +2500,17 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     }), { silent: true }));
   });
 
+  // Uniquely catches a frame picked as the render's image reference not reaching the request, or not leading the references.
+  it('renders a new frame take from the shot\'s own start frame when it is picked as the reference', async () => {
+    await openProject({ ...SPEC_PROJECT, scenes: [{ ...SPEC_PROJECT.scenes[0], referenceImageId: 'start.png' }] }, 'produce');
+    fireEvent.change(screen.getByLabelText('From', { selector: '#mv-scene-s1-start-from' }), { target: { value: 'start' } });
+    fireEvent.click(screen.getByRole('button', { name: /^New frame take$/ }));
+    await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: expect.stringContaining('Start from the first reference image'),
+      referenceImageFiles: ['start.png', 'mood.png'],
+    }), { silent: true }));
+  });
+
   // Uniquely catches a trimmed clip landing only in Video Gen history, never as this shot's take, or not becoming the shot's clip.
   it('trims the shot clip to a later start frame and makes it the shot\'s selected clip take', async () => {
     const scene = { sceneId: 's1', order: 0, prompt: 'waves', referenceImageId: 'img1', videoHistoryId: 'h1',

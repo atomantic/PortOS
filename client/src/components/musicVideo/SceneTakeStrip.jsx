@@ -14,10 +14,11 @@ const KIND_LABEL = { image: 'Frame takes', video: 'Clip takes', endImage: 'End f
  * larger size in the project contact sheet.
  *
  * A legacy take (a pre-takes selection the server hasn't materialized yet) is
- * shown but has no actions — it has no take id to address.
+ * shown but has no actions — it has no take id to address. `grid` lays the
+ * takes out in rows that fit the width instead of one scrolling row.
  */
 export default function SceneTakeStrip({
-  scene, kind, busy = false, large = false, onSelect, onReview, onOpenPreview,
+  scene, kind, busy = false, large = false, grid = false, onSelect, onReview, onOpenPreview,
 }) {
   const [noteFor, setNoteFor] = useState(null);
   const [noteDraft, setNoteDraft] = useState('');
@@ -31,7 +32,7 @@ export default function SceneTakeStrip({
     setNoteFor(null);
     if ((take.note || '') !== noteDraft.trim()) onReview?.(take, { note: noteDraft.trim() || null });
   };
-  const thumbClass = large ? 'w-40' : 'w-24';
+  const thumbClass = grid ? 'min-w-0' : `${large ? 'w-40' : 'w-24'} shrink-0`;
   const noteInputId = (take) => `mv-take-note-${scene.sceneId}-${take.takeId}`;
 
   return (
@@ -39,7 +40,7 @@ export default function SceneTakeStrip({
       <div className="text-[11px] text-port-text-muted">
         {KIND_LABEL[kind]} ({takes.length})
       </div>
-      <ul className="flex gap-2 overflow-x-auto pb-1" aria-label={`${KIND_LABEL[kind]} for ${scene.label || `scene ${scene.order + 1}`}`}>
+      <ul className={grid ? 'grid grid-cols-[repeat(auto-fill,minmax(6rem,1fr))] gap-2' : 'flex gap-2 overflow-x-auto pb-1'} aria-label={`${KIND_LABEL[kind]} for ${scene.label || `scene ${scene.order + 1}`}`}>
         {takes.map((take) => {
           const isSelected = take.assetId === selected;
           const rejected = take.status === 'rejected';
@@ -47,7 +48,7 @@ export default function SceneTakeStrip({
           const playKey = take.takeId || take.assetId;
           const playing = kind === 'video' && playingId === playKey;
           return (
-            <li key={take.takeId || `legacy-${take.assetId}`} className={`${thumbClass} shrink-0 space-y-1`}>
+            <li key={take.takeId || `legacy-${take.assetId}`} className={`${thumbClass} space-y-1`}>
               <button
                 type="button"
                 data-take-focus=""
