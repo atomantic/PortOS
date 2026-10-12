@@ -13,6 +13,15 @@ import { IC_STILL_REFERENCE_FRAMES } from './renderArgs.js';
 
 const execFileAsync = promisify(execFile);
 
+// LTX-2.x was trained on video frames, so Lightricks' pipelines re-compress a
+// conditioning still through H.264 before encoding it (CRF 33 for LTX-2.0 to
+// 2.3, `DEFAULT_IMAGE_CRF` in ltx_pipelines). A pristine still is out of
+// distribution: the model holds it for the first frame and then cuts away to
+// a different scene. The dgrauet/MrMofer runtimes do this round trip in their
+// own loader; the notapalindrome `mlx_video.generate_av` CLI does not, so
+// PortOS does it here for that runtime.
+const CONDITIONING_CRF_BY_RUNTIME = Object.freeze({ mlx_video: 33 });
+
 /** Resolve local conditioning media and return its existing cleanup capability.
  * Derived files are always owned here; upload/audio cleanup stays caller-selected.
  */
@@ -78,6 +87,7 @@ export async function prepareVideoConditioningMedia({
   }
   const ffmpeg = (sourceImagePath || lastImageWillBeUsed || hasMultiKeyframes) ? await findFfmpeg() : null;
   const ffprobe = model.runtime === 'minimax_h3_ref2va' ? await findFfprobe() : null;
+  const conditioningCrf = CONDITIONING_CRF_BY_RUNTIME[model.runtime || 'mlx_video'] ?? null;
   const resizeImage = async (srcPath, tag) => {
     if (!srcPath || !ffmpeg) return { resolved: srcPath, tempPath: null };
     const resizedPath = join(tmpdir(), `resized-${tag}-${jobId}.png`);
@@ -91,6 +101,7 @@ export async function prepareVideoConditioningMedia({
       console.log(`⚠️ Failed to resize ${tag} image, using original: ${resizeResult.error.message}`);
       return { resolved: srcPath, tempPath: null };
     }
+    if (conditioningCrf != null) await recompressAsVideoFrame(ffmpeg, resizedPath, conditioningCrf, `${tag}-${jobId}`);
     return { resolved: resizedPath, tempPath: resizedPath };
   };
   // Two independent ffmpeg spawns — fan out for the same reason the keyframe
@@ -218,4 +229,20 @@ async function materializeIngredientsReferences({
   }
 
   return icReferencePaths;
+}
+
+/** Round-trip a still through one H.264 frame at `crf`, in place (see CONDITIONING_CRF_BY_RUNTIME). */
+async function recompressAsVideoFrame(ffmpeg, pngPath, crf, tag) {
+  const framePath = join(tmpdir(), `crf-${tag}.mp4`);
+  const options = safeChildProcessOptions({ timeout: 10000 });
+  const failed = await execFileAsync(ffmpeg, [
+    '-i', pngPath, '-frames:v', '1', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', String(crf),
+    '-pix_fmt', 'yuv420p', '-y', framePath,
+  ], options)
+    .then(() => execFileAsync(ffmpeg, ['-i', framePath, '-frames:v', '1', '-update', '1', '-y', pngPath], options))
+    .then(() => null, (err) => err);
+  await unlinkGuarded(framePath).catch(() => {});
+  // A still that keeps its pristine pixels is still a valid conditioning, so
+  // a failed round trip degrades to the old behavior rather than the render.
+  if (failed) console.warn(`⚠️ Could not re-compress the ${tag} conditioning frame: ${failed.message}`);
 }

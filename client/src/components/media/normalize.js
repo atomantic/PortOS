@@ -145,6 +145,7 @@ export function normalizeVideo(v) {
     mode: v.mode,
     stitchedFrom: v.stitchedFrom,
     upscaledFrom: v.upscaledFrom,
+    trimmedFrom: v.trimmedFrom,
     loraNames,
     createdAt: v.createdAt,
     // Same contract as normalizeImage's renderMs above.

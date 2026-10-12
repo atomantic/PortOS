@@ -49,7 +49,7 @@ const resolveMethod = (options) => {
 // shape. Validating the arg first surfaces a clean 400 even if the history file
 // happens to contain a record with a malformed id, and it short-circuits the
 // loadHistory I/O for obviously-bogus requests.
-const resolveHistoryItem = async (historyId) => {
+export const resolveHistoryItem = async (historyId) => {
   if (typeof historyId !== 'string' || (!UUID_RE.test(historyId) && !UPLOADED_HISTORY_ID_RE.test(historyId))) {
     throw new ServerError('Invalid history id', { status: 400, code: 'VALIDATION_ERROR' });
   }
@@ -59,7 +59,7 @@ const resolveHistoryItem = async (historyId) => {
   return item;
 };
 
-const resolveSourcePath = (item) => {
+export const resolveSourcePath = (item) => {
   const sourcePath = safeUnder(PATHS.videos, item.filename);
   if (!sourcePath) throw new ServerError('Invalid video filename', { status: 400, code: 'VALIDATION_ERROR' });
   if (!existsSync(sourcePath)) throw new ServerError('Video file not found on disk', { status: 404, code: 'NOT_FOUND' });

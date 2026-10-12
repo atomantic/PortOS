@@ -110,6 +110,10 @@ vi.mock('../services/videoGen/upscaleJob.js', () => ({
   enqueueLtxUpscale: vi.fn(),
 }));
 
+vi.mock('../services/videoGen/trimStart.js', () => ({
+  trimHistoryItemStart: vi.fn(),
+}));
+
 vi.mock('../services/videoGen/local.js', () => ({
   // The route checks `runtime` on the default model when validating a2v —
   // include it so the a2v happy-path tests don't trip the runtime capability
@@ -295,6 +299,7 @@ vi.mock('fs/promises', () => ({
 import { copyFile, unlink } from 'fs/promises';
 import * as videoGenService from '../services/videoGen/local.js';
 import * as upscaleJobService from '../services/videoGen/upscaleJob.js';
+import { trimHistoryItemStart } from '../services/videoGen/trimStart.js';
 import * as mediaJobQueue from '../services/mediaJobQueue/index.js';
 import { prepareRemoteMediaJob } from '../services/federatedMedia/remoteSubmission.js';
 import { getProject as getMusicVideoProject } from '../services/musicVideo/projects.js';
@@ -3053,6 +3058,26 @@ describe('videoGen routes', () => {
         .send({ hidden: true });
       expect(r.status).toBe(400);
       expect(videoGenService.setHistoryItemHidden).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /history/:id/trim-start', () => {
+    const id = 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaa1';
+
+    it('returns the new trimmed clip', async () => {
+      trimHistoryItemStart.mockResolvedValue({ id: 'new-clip', trimStartSec: 1.25 });
+      const r = await request(app).post(`/api/video-gen/history/${id}/trim-start`).send({ startSec: 1.25 });
+      expect(r.status).toBe(200);
+      expect(r.body.video).toEqual({ id: 'new-clip', trimStartSec: 1.25 });
+      expect(trimHistoryItemStart).toHaveBeenCalledWith(id, { startSec: 1.25 });
+    });
+
+    it('rejects a missing or non-positive start before trimming', async () => {
+      for (const body of [{}, { startSec: 0 }, { startSec: '2' }]) {
+        const r = await request(app).post(`/api/video-gen/history/${id}/trim-start`).send(body);
+        expect(r.status).toBe(400);
+      }
+      expect(trimHistoryItemStart).not.toHaveBeenCalled();
     });
   });
 

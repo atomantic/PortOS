@@ -4,6 +4,7 @@ import {
   X, Copy, Sparkles, Film, Image as ImageIcon, Download, Eraser, Wand2,
   ChevronLeft, ChevronRight, Maximize2, Minimize2, Star, Box, ScanEye, Aperture,
 } from 'lucide-react';
+import VideoStartTrimControl from './VideoStartTrimControl';
 import PromptRefineModal from './PromptRefineModal';
 import { PromptFromMediaModal } from './PromptFromMedia';
 import AddToCollectionMenu from './AddToCollectionMenu';
@@ -132,6 +133,7 @@ export default function MediaLightbox({
   onPromptChange,
   onPromptAnalysis,
   onPosterChange,
+  onTrimStart,
   variantGroup = null,
   onSelectVariant,
   onFilmLookComplete,
@@ -480,6 +482,8 @@ export default function MediaLightbox({
             onPromptChange={item.compact ? undefined : onPromptChange}
             onPosterChange={onPosterChange}
             getPlayhead={() => videoRef.current?.currentTime ?? 0}
+            onTrimStart={onTrimStart}
+            videoRef={videoRef}
             variantGroup={variantGroup}
             onSelectVariant={onSelectVariant}
             onFilmLook={!isVideo && item.filename ? () => setFilmLookOpen(true) : undefined}
@@ -525,7 +529,7 @@ function SettingsPane({
   item, meta, isVideo,
   onClose, onRemix, onSendToImage, onSendToVideo, onSendTo3d, onContinue, onClean, onRegenerate, onRemoveWatermark, regenAvailable, regenBounds,
   copy, onRefine, onPromptFrom,
-  annotation, onAnnotationChange, onPromptChange, onPosterChange, getPlayhead,
+  annotation, onAnnotationChange, onPromptChange, onPosterChange, getPlayhead, onTrimStart, videoRef,
   variantGroup, onSelectVariant, onFilmLook,
 }) {
   const asideClasses = 'md:w-80 lg:w-96 shrink-0 flex flex-col border-t md:border-t-0 md:border-l border-port-border min-h-0 max-h-dvh-cap [--dvh-cap:40vh] [--dvh-cap-dynamic:40dvh] md:[--dvh-cap:92vh] md:[--dvh-cap-dynamic:92dvh] [--dvh-inset:2rem]';
@@ -1018,6 +1022,10 @@ function SettingsPane({
               className="min-h-[44px] px-2 rounded bg-port-border text-white disabled:opacity-50">Reset poster</button>
             {posterError && <p role="alert" className="text-port-error">{posterError}</p>}
           </div>
+        )}
+        {isVideo && onTrimStart && item.id && (
+          <VideoStartTrimControl videoRef={videoRef} fps={item.fps} sourceKey={item.key}
+            onTrim={(startSec) => onTrimStart(item, startSec)} />
         )}
         {isVideo && item.id && item.previewUrl && (
           <a href={`/api/video-gen/history/${encodeURIComponent(item.id)}/sharing-download`} download

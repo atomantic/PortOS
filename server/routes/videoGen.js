@@ -55,6 +55,7 @@ import {
 // re-declaring it just so this file's route schemas can be built.
 import { UPSCALE_METHODS, DEFAULT_UPSCALE_METHOD } from '../services/videoGen/upscalePlan.js';
 import { enqueueLtxUpscale } from '../services/videoGen/upscaleJob.js';
+import { trimHistoryItemStart } from '../services/videoGen/trimStart.js';
 import { cleanupMultipartTemp } from '../services/videoGen/prepareParams.js';
 import { submitVideoGenJob } from '../services/videoGen/submitJob.js';
 import { resolveReactorApiKey, mintReactorToken } from '../services/videoGen/reactor.js';
@@ -1250,6 +1251,16 @@ router.post('/upscale/:id', asyncHandler(async (req, res) => {
   }
   const entry = await upscaleHistoryItem(parsed.data, body.data);
   res.json({ ok: true, video: entry });
+}));
+
+// Keep a clip from a later frame on (a start trim). Like an upscale, it writes
+// a NEW gallery row and leaves the source clip untouched.
+const trimStartBodySchema = z.object({ startSec: z.number().finite().positive().max(3600) });
+router.post('/history/:id/trim-start', asyncHandler(async (req, res) => {
+  const parsed = historyIdSchema.safeParse(req.params.id);
+  if (!parsed.success) failValidation(parsed);
+  const body = validateRequest(trimStartBodySchema, req.body ?? {});
+  res.json({ ok: true, video: await trimHistoryItemStart(parsed.data, body) });
 }));
 
 const stitchBodySchema = z.object({
