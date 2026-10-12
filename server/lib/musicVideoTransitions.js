@@ -16,10 +16,11 @@
  * of the frame's width or height, so a glitch reads the same at any size.
  */
 
-export const MUSIC_VIDEO_TRANSITIONS = Object.freeze(['vhs-glitch', 'vhs-tracking', 'vhs-dropout']);
+export const MUSIC_VIDEO_TRANSITIONS = Object.freeze(['vhs-glitch', 'channel-change', 'vhs-tracking', 'vhs-dropout']);
 
 export const MUSIC_VIDEO_TRANSITION_LABELS = Object.freeze({
   'vhs-glitch': 'VHS glitch',
+  'channel-change': 'Channel change',
   'vhs-tracking': 'Tracking roll',
   'vhs-dropout': 'Dropout flash',
 });
@@ -27,10 +28,11 @@ export const MUSIC_VIDEO_TRANSITION_LABELS = Object.freeze({
 // Each style's frames, in order, and how many of them come before the cut
 // (`lead`, the outgoing shot's last frames). Per frame:
 //   shift   whole-frame horizontal slip (signed fraction of width)
+//   roll    whole-frame vertical roll (signed fraction of height), a TV losing vertical hold
 //   tears   bands slipped sideways: { y, h } fractions of height, shift of width
 //   chroma  colour fringe width (fraction of width)
 //   bright  brightness multiplier; sat a saturation multiplier
-//   noise   tape snow strength, 0..1
+//   noise   snow strength: 0..1 over the picture, up to 1.6 for a dead channel's static
 //   lines   scanline darkness, 0..1
 //   bar     a bright tracking band { y, h, alpha }
 export const MUSIC_VIDEO_TRANSITION_STYLES = Object.freeze({
@@ -41,6 +43,21 @@ export const MUSIC_VIDEO_TRANSITION_STYLES = Object.freeze({
       { shift: 0.03, tears: [{ y: 0.12, h: 0.1, shift: -0.08 }, { y: 0.7, h: 0.18, shift: 0.1 }], chroma: 0.016, bright: 1.25, sat: 1.4,
         noise: 0.45, lines: 0.4, bar: { y: 0.66, h: 0.035, alpha: 0.7 } },
       { tears: [{ y: 0.4, h: 0.08, shift: 0.04 }], chroma: 0.006, sat: 1.1, noise: 0.2, lines: 0.2 },
+    ],
+  },
+  // A classic TV changing channels: the old picture rolls and breaks into
+  // static, a frame of dead air, and the new one rolls in and settles.
+  'channel-change': {
+    lead: 3,
+    frames: [
+      { roll: 0.12, shift: 0.02, chroma: 0.006, bright: 1.1, noise: 0.4, lines: 0.3 },
+      { roll: 0.38, shift: -0.04, chroma: 0.012, bright: 0.8, sat: 0.6, noise: 0.9, lines: 0.4, bar: { y: 0.36, h: 0.06, alpha: 0.5 } },
+      // Dead air: the picture all but gone under a grey wash of static.
+      { bright: 0.35, sat: 0, bar: { y: 0, h: 1, alpha: 0.45 }, noise: 1.6, lines: 0.5 },
+      { bright: 0.3, sat: 0, bar: { y: 0, h: 1, alpha: 0.5 }, noise: 1.6, lines: 0.5 },
+      { roll: -0.3, shift: 0.03, chroma: 0.012, bright: 0.85, sat: 0.6, noise: 0.85, lines: 0.4, bar: { y: 0.68, h: 0.06, alpha: 0.5 } },
+      { roll: -0.08, chroma: 0.008, bright: 1.15, sat: 1.1, noise: 0.35, lines: 0.3 },
+      { chroma: 0.003, noise: 0.15, lines: 0.15 },
     ],
   },
   'vhs-tracking': {
@@ -144,6 +161,14 @@ function slip(px, y, h, width) {
   return `swaprect=w=${width - a}:h=${h}:x1=${x1}:y1=${y}:x2=${x2}:y2=${y}`;
 }
 
+// A vertical roll by `px` (+ down, - up) as one swaprect over the full width.
+function roll(px, width, height) {
+  const a = Math.min(Math.abs(even(px)), height - 2);
+  if (a < 2) return null;
+  const [y1, y2] = px > 0 ? [0, a] : [a, 0];
+  return `swaprect=w=${width}:h=${height - a}:x1=0:y1=${y1}:x2=0:y2=${y2}`;
+}
+
 /** Inclusive frame runs as a timeline expression: `between(n,4,6)+between(n,90,90)`. */
 function framesExpr(frames) {
   const sorted = [...new Set(frames)].sort((a, b) => a - b);
@@ -175,6 +200,7 @@ export function musicVideoTransitionFilter(glitches, { width, height }) {
   for (const { params: p, frames } of groups.values()) {
     const enable = `:enable='${framesExpr(frames)}'`;
     const add = (filter) => { if (filter) chain.push(`${filter}${enable}`); };
+    if (p.roll) add(roll(p.roll * height, width, height));
     if (p.shift) add(slip(p.shift * width, 0, height, width));
     for (const tear of p.tears || []) {
       const y = rows(tear.y);
@@ -193,7 +219,7 @@ export function musicVideoTransitionFilter(glitches, { width, height }) {
       const gap = Math.max(2, Math.round(height / 270));
       add(`drawgrid=w=iw:h=${gap}:t=${Math.max(1, Math.floor(gap / 2))}:c=black@${num(p.lines)}`);
     }
-    if (p.noise) add(`noise=alls=${Math.round(p.noise * 60)}:allf=t`);
+    if (p.noise) add(`noise=alls=${Math.min(100, Math.round(p.noise * 60))}:allf=t`);
   }
   return chain.length ? chain.join(',') : null;
 }

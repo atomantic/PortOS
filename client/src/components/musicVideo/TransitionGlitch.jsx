@@ -29,8 +29,9 @@ function snow() {
   const image = ctx.createImageData(256, 256);
   let seed = 123457;
   for (let i = 0; i < image.data.length; i += 4) {
-    seed = (seed * 1103515245 + 12345) % 2147483648;
-    const v = seed % 256;
+    // xorshift32: an LCG's low byte repeats every 256 pixels and draws stripes.
+    seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5;
+    const v = (seed >>> 24) & 255;
     image.data[i] = v; image.data[i + 1] = v; image.data[i + 2] = v; image.data[i + 3] = 255;
   }
   ctx.putImageData(image, 0, 0);
@@ -64,6 +65,20 @@ function slip(ctx, src, a, y, h, width) {
   }
 }
 
+// The render's vertical roll (one ffmpeg swaprect): the frame moves `a` px down (or up)
+// and the edge it uncovers shows the strip beside it.
+function roll(ctx, src, a, width, height) {
+  const d = Math.min(Math.abs(Math.round(a)), height - 1);
+  if (d < 1) return;
+  if (a > 0) {
+    ctx.drawImage(src, 0, 0, width, height - d, 0, d, width, height - d);
+    ctx.drawImage(src, 0, d, width, d, 0, 0, width, d);
+  } else {
+    ctx.drawImage(src, 0, d, width, height - d, 0, 0, width, height - d);
+    ctx.drawImage(src, 0, Math.max(0, height - 2 * d), width, d, 0, height - d, width, d);
+  }
+}
+
 /** Paint one glitch frame (`params` from musicVideoTransitions.js) of what the figure shows. */
 function paintGlitch(canvas, figure, params, frame) {
   const box = canvas.getBoundingClientRect();
@@ -91,6 +106,7 @@ function paintGlitch(canvas, figure, params, frame) {
 
   // Slips in the render's order: the whole frame, then each torn band, ping-ponging two scratch canvases.
   const slips = [
+    ...(params.roll ? [{ roll: params.roll * height }] : []),
     ...(params.shift ? [{ a: params.shift * width, y: 0, h: height }] : []),
     ...(params.tears || []).map((t) => ({ a: t.shift * width, y: Math.round(t.y * height), h: Math.round(t.h * height) })),
   ];
@@ -98,7 +114,8 @@ function paintGlitch(canvas, figure, params, frame) {
     const next = scratchCanvas(i % 2 ? 'a' : 'b', width, height);
     const ctx = next.getContext('2d');
     ctx.drawImage(cur, 0, 0);
-    slip(ctx, cur, s.a, s.y, Math.min(s.h, height - s.y), width);
+    if (s.roll) roll(ctx, cur, s.roll, width, height);
+    else slip(ctx, cur, s.a, s.y, Math.min(s.h, height - s.y), width);
     cur = next;
   });
 
@@ -126,6 +143,29 @@ function paintGlitch(canvas, figure, params, frame) {
     out.drawImage(cur, 0, 0);
   }
 
+  // Brightness and saturation, in the render's order (before the bar, lines and snow).
+  const bright = params.bright ?? 1;
+  const sat = params.sat ?? 1;
+  if (bright > 1) {
+    // Adding the picture to itself at (b - 1) scales it by b.
+    const lit = scratchCanvas('lit', width, height);
+    lit.getContext('2d').drawImage(canvas, 0, 0);
+    out.globalCompositeOperation = 'lighter';
+    out.globalAlpha = Math.min(1, bright - 1);
+    out.drawImage(lit, 0, 0);
+  } else if (bright < 1) {
+    out.globalAlpha = 1 - bright;
+    out.fillStyle = '#000';
+    out.fillRect(0, 0, width, height);
+  }
+  if (sat < 1) {
+    out.globalCompositeOperation = 'saturation';
+    out.globalAlpha = 1 - sat;
+    out.fillStyle = '#808080';
+    out.fillRect(0, 0, width, height);
+  }
+  out.globalCompositeOperation = 'source-over';
+  out.globalAlpha = 1;
   if (params.bar) {
     out.fillStyle = `rgba(255,255,255,${params.bar.alpha})`;
     out.fillRect(0, Math.round(params.bar.y * height), width, Math.max(2, Math.round(params.bar.h * height)));
@@ -145,12 +185,16 @@ function paintGlitch(canvas, figure, params, frame) {
       out.translate((frame * 97) % 256, (frame * 61) % 256);
       out.fillStyle = pattern;
       out.fillRect(-256, -256, width + 256, height + 256);
+      // Past 1 the snow drowns the picture: a dead channel's static.
+      if (params.noise > 1) {
+        out.globalCompositeOperation = 'source-over';
+        out.globalAlpha = Math.min(1, params.noise - 1);
+        out.fillRect(-256, -256, width + 256, height + 256);
+      }
       out.restore();
     }
   }
-  const bright = params.bright ?? 1;
-  const sat = params.sat ?? 1;
-  canvas.style.filter = bright !== 1 || sat !== 1 ? `brightness(${bright}) saturate(${sat})` : '';
+  canvas.style.filter = sat > 1 ? `saturate(${sat})` : '';
   return true;
 }
 

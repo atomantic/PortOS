@@ -57,7 +57,7 @@ function frameSpreads(path) {
 // Uniquely catches the glitch filter chain failing in ffmpeg, landing on the
 // wrong frames, or adding time to the edit.
 describe.skipIf(!ffmpeg)('a VHS glitch on a cut in the final render', () => {
-  it('repaints only the frames around the cut and keeps every frame of the edit', () => {
+  it.each([['vhs-glitch', [11, 12, 13]], ['channel-change', [9, 10, 11, 12, 13, 14, 15]]])('%s repaints only the frames around the cut and keeps every frame of the edit', (style, expected) => {
     const song = join(dir, 'song.wav');
     const clips = ['0x2050a0', '0xa05020'].map((color, i) => {
       const videoPath = join(dir, `clip${i}.mp4`);
@@ -65,16 +65,15 @@ describe.skipIf(!ffmpeg)('a VHS glitch on a cut in the final render', () => {
       return { sceneId: `s${i}`, videoPath, width: W, height: H, fps: FPS, duration: 1, sourceSec: 1, loop: false, inSec: 0, outSec: 1, frameFit: 'fill' };
     });
     run(['-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-y', song]);
-    clips[0].transitionOut = 'vhs-glitch';
-    const output = join(dir, 'cut.mp4');
+    clips[0].transitionOut = style;
+    const output = join(dir, `${style}.mp4`);
     const plan = buildMusicVideoFfmpegArgs(clips, song, output, { audioDurationSec: 2, frameGrid: true });
     run(plan.args.filter((arg, i) => !(arg === '-progress' || plan.args[i - 1] === '-progress')));
     expect(plan.totalDuration).toBe(2);
     expect(plan.sections.map((s) => [s.startSec, s.endSec])).toEqual([[0, 1], [1, 2]]);
     const spreads = frameSpreads(output);
     expect(spreads).toHaveLength(2 * FPS);
-    const glitched = spreads.map((s, f) => (s > 4 ? f : null)).filter((f) => f != null);
-    expect(glitched).toEqual([FPS - 1, FPS, FPS + 1]);
+    expect(spreads.map((s, f) => (s > 4 ? f : null)).filter((f) => f != null)).toEqual(expected);
   });
 });
 
