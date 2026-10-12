@@ -454,7 +454,10 @@ export function planShotSplit({ startSec, endSec, maxSec, lyricCues, phrases, be
  * renders on `videoSettings.falModelId` (default Hailuo-02 image-to-video) at
  * `falResolution` (default: the model's), for the pinned `falDuration` or else
  * the shot's span — rounded UP to a length the model delivers, so the clip
- * covers the shot. An uncurated model keeps the legacy contract (only an
+ * covers the shot. A shot with a style-break end frame renders on
+ * `videoSettings.falEndFrameModelId` when the project picked one that takes an
+ * end frame — a dearer model is an explicit upgrade for those shots only, never
+ * the footage default. An uncurated model keeps the legacy contract (only an
  * explicit pin is sent) and reports cost unknown.
  *
  * Returns `{ performance, modelId, seconds, resolution, costUsd }`; `seconds`
@@ -480,7 +483,9 @@ export function falSceneTake({ scene, videoSettings = {}, songDurationSec = null
       costUsd: seconds == null ? null : estimateFalVideoCostUsd({ modelId: capability.modelId, seconds, resolution }),
     };
   }
-  const modelId = settings.falModelId || FAL_DEFAULT_IMAGE_VIDEO_MODEL;
+  const endFrameModel = typeof scene?.endImageId === 'string' && scene.endImageId.trim()
+    ? getFalVideoModel(settings.falEndFrameModelId) : null;
+  const modelId = endFrameModel?.endImage ? endFrameModel.id : settings.falModelId || FAL_DEFAULT_IMAGE_VIDEO_MODEL;
   const model = getFalVideoModel(modelId);
   if (!model) {
     return { performance: false, modelId, seconds: settings.falDuration || null, resolution: settings.falResolution || null, costUsd: null };

@@ -133,7 +133,7 @@ export default function ProjectOptionsPanel({
       <div className={rowCls}>
         <span className={headCls}>Video service</span>
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <VideoRenderSettings videoSettings={videoSettings} generating={generatingVideos} />
+          <VideoRenderSettings videoSettings={videoSettings} generating={generatingVideos} project={project} />
         </div>
       </div>
       <div className={rowCls}>

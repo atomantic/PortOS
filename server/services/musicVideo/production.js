@@ -597,7 +597,7 @@ function castAndSetsGate(project, run) {
  * Returns `{ project, run, step }`.
  */
 export function reserveProductionStep(project, runId, {
-  kind, sceneId, revisionId = null, route, rationale = '', processId, costUsd: stepCostUsd = undefined, plateRepairBasis = null,
+  kind, sceneId, revisionId = null, route, rationale = '', processId, costUsd: stepCostUsd = undefined, costModelId = null, plateRepairBasis = null,
 }, now = new Date().toISOString()) {
   let step = null;
   const out = mutateRun(project, runId, (run) => {
@@ -647,6 +647,7 @@ export function reserveProductionStep(project, runId, {
       route: { kind: route.kind, mode: route.mode, model: route.model || null },
       rationale: trimTo(rationale, MAX_ERROR_LEN) || '',
       costUsd,
+      ...(costUsd !== null && isNonBlankStr(costModelId) ? { costModelId: trimTo(costModelId, 200) } : {}),
       ...(['frame', 'clip'].includes(kind) ? { retryBasis: productionRetryBasis(project, sceneId, kind) } : {}),
       ...(['frame', 'clip'].includes(kind) ? { providerBasis: productionProviderBasis(project, kind) } : {}),
       ...(kind === 'clip' && scene?.direction?.actionContract ? { plateAdmission: { assetId: scene.referenceImageId, basis: plateRequirementBasis(scene) } } : {}),

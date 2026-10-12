@@ -98,6 +98,7 @@ const hook = createMediaJobImageHook({
     // #10157: the estimate this clip was priced at; a revision-tagged job is
     // an auto-review generation, the rest are manual takes.
     costUsd: job.params?.musicVideoCostUsd ?? null,
+    costModelId: job.params?.musicVideoCostModelId ?? null,
     spendKind: job.params?.musicVideo?.revisionId ? 'autoReview' : 'manual',
   }]),
   onAttached: ({ projectId, sceneId, videoHistoryId }, { scene, appended }) => {

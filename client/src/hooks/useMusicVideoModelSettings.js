@@ -73,6 +73,8 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
     // MUSIC_VIDEO_LIPSYNC_DEFAULT_RESOLUTION), resolved by falSceneTake.
     falModelId: project?.videoSettings?.falModelId ?? null,
     falResolution: project?.videoSettings?.falResolution ?? null,
+    // Upgrade model for end-frame shots only; null = they use falModelId.
+    falEndFrameModelId: project?.videoSettings?.falEndFrameModelId ?? null,
     falLipSyncResolution: project?.videoSettings?.falLipSyncResolution ?? null,
     // false = lip-sync without transcript guidance (null/absent = on).
     falLipSyncTranscription: project?.videoSettings?.falLipSyncTranscription ?? null,

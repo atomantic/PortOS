@@ -95,6 +95,19 @@ export function stepPriceUsd({ route, project, scene, stepKind }) {
   return routePriceUsd(route, project);
 }
 
+/**
+ * The paid model a step's price is for, recorded on the step so project spend
+ * can be broken down by model: the fal clip model `stepPriceUsd` priced (an
+ * end-frame upgrade included), a fal image route's own model, else null.
+ */
+export function stepCostModelId({ route, project, scene, stepKind }) {
+  if (route?.mode !== 'fal') return null;
+  if (stepKind !== 'frame' && route.kind === 'video' && scene) {
+    return falSceneTake({ scene, videoSettings: falRouteVideoSettings(project, route) }).modelId;
+  }
+  return route.model || null;
+}
+
 /** routeKey → price map for a pool (fal routes priced for `project`). */
 export const poolPricing = (pool, project = null) => Object.fromEntries(pool.map((r) => [routeKey(r), routePriceUsd(r, project)]));
 

@@ -307,7 +307,7 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
         // step is already charged to the run's own usage, so it is skipped.
         if (scene && backend === VIDEO_GEN_MODE.FAL && !body.musicVideo.productionRunId) {
           const { falSceneTake } = await import('../../lib/musicVideoShotTiming.js');
-          const { costUsd } = falSceneTake({
+          const { costUsd, modelId: costModelId } = falSceneTake({
             scene,
             videoSettings: {
               falMusicModelId: project.videoSettings?.falMusicModelId ?? null,
@@ -316,7 +316,7 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
             },
             songDurationSec: project.audioAnalysis?.durationSec ?? null,
           });
-          if (Number.isFinite(costUsd)) params.musicVideoCostUsd = costUsd;
+          if (Number.isFinite(costUsd)) Object.assign(params, { musicVideoCostUsd: costUsd, musicVideoCostModelId: costModelId });
         }
       }
       // Selective section revision (#9011): checked as the LAST step before the

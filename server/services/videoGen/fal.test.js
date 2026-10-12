@@ -168,8 +168,8 @@ describe('videoGen/fal — generateVideo', () => {
       duration: '8', generate_audio: false,
     });
     const [entry] = await loadHistory();
-    // 8s (the covering length) × $0.112/s audio off.
-    expect(entry).toMatchObject({ modelId: 'fal:fal-ai/kling-video/v3/pro/image-to-video', duration: 8, generateAudio: false, estimatedCostUsd: 0.896 });
+    // 8s (the covering length) × $0.14/s audio off.
+    expect(entry).toMatchObject({ modelId: 'fal:fal-ai/kling-video/v3/pro/image-to-video', duration: 8, generateAudio: false, estimatedCostUsd: 1.12 });
     if (input === 'upload') {
       await vi.waitFor(async () => {
         await expect(readFile(framePath)).rejects.toMatchObject({ code: 'ENOENT' });

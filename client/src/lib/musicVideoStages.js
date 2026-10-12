@@ -12,6 +12,7 @@ import { formatCount, formatDurationSec, formatTimecode } from '../utils/formatt
 import { isNonBlankStr } from './textUtils';
 import { modeLabel } from './imageGenModes.js';
 import { falSceneTake } from './musicVideoShotTiming.js';
+import { getFalVideoModel } from './falVideoModels.js';
 import { latestMusicVideoReviewDraft } from '../../../server/lib/musicVideoReviewDraft.js';
 import { FINISHED_OUTSIDE_RERENDER_NOTE, finishedOutside, finishedOutsideCovers } from '../../../server/lib/musicVideoFinishedOutside.js';
 
@@ -107,6 +108,37 @@ export function projectSpend(project) {
   const briefCap = project?.automation?.budgetUsd;
   const capUsd = runCap != null ? runCap : (briefCap != null ? briefCap : null);
   return { spentUsd, capUsd, autopilot, manual, autoReview, total: spentUsd };
+}
+
+/**
+ * What the project has spent on fal.ai, by model, from the estimates its paid
+ * takes and production-run steps recorded: `{ totalUsd, models: [{ modelId,
+ * label, usd, count }] }`, dearest first. `modelId` is null for spend recorded
+ * before takes named their model. Estimates, not fal's invoice; a take pruned
+ * from a full scene no longer counts.
+ */
+export function projectFalSpend(project) {
+  const byModel = new Map();
+  const add = (modelId, usd) => {
+    if (!(Number.isFinite(usd) && usd > 0)) return;
+    const key = modelId || null;
+    const row = byModel.get(key) || { modelId: key, label: key ? getFalVideoModel(key)?.label || key : 'Model not recorded', usd: 0, count: 0 };
+    row.usd += usd;
+    row.count += 1;
+    byModel.set(key, row);
+  };
+  for (const scene of Array.isArray(project?.scenes) ? project.scenes : []) {
+    for (const take of Array.isArray(scene?.takes) ? scene.takes : []) {
+      if (take?.spendKind) add(take.costModelId, Number(take.costUsd));
+    }
+  }
+  for (const run of Array.isArray(project?.productionRuns) ? project.productionRuns : []) {
+    for (const step of Array.isArray(run?.steps) ? run.steps : []) {
+      if (step?.route?.mode === 'fal' && step.status !== 'refused') add(step.costModelId || step.route.model, Number(step.costUsd));
+    }
+  }
+  const models = [...byModel.values()].map((row) => ({ ...row, usd: Math.round(row.usd * 1e4) / 1e4 })).sort((a, b) => b.usd - a.usd);
+  return { totalUsd: Math.round(models.reduce((sum, row) => sum + row.usd, 0) * 1e4) / 1e4, models };
 }
 
 /**
