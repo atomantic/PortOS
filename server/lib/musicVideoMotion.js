@@ -26,6 +26,23 @@ const SONG_INTENT_LINE = /^(?:Lyric|Word) \d+(?:\.\d+)?s–\d+(?:\.\d+)?s: .*$|^
 // Generated shot-intent and camera lines, kept as written.
 const CONTRACT_LINE = /^(?:(?:Action|Reaction) \d+(?:\.\d+)?s–|(?:Purpose|Starting emotion|Ending emotion|Active speaker|Camera|Camera movement|Must preserve|Acceptance|Speed|Framing|End):)/;
 
+// The opening of each block musicVideoCreativeContext() writes. A shot prompt the
+// board composed from an older copy of the project still carries its bible, which
+// the verbatim strip cannot match; the block runs to the clause that follows it.
+const CREATIVE_CONTEXT_START = /Character style \(fixed identity|Universe style: |Look \(palette, light and texture only\): |Mood board look \(palette, lighting and texture only|Production bible \(use the subjects/;
+const CREATIVE_CONTEXT_END = /\n(?=Camera|Shot intent \(clip-relative seconds\):|(?:Action|Reaction) \d)/;
+
+function withoutCreativeContext(text, ends) {
+  let out = text;
+  for (let start = out.search(CREATIVE_CONTEXT_START); start >= 0; start = out.search(CREATIVE_CONTEXT_START)) {
+    const rest = out.slice(start);
+    const stops = [...ends.map((end) => rest.indexOf(end)), rest.search(CREATIVE_CONTEXT_END)].filter((i) => i > 0);
+    const length = stops.length ? Math.min(...stops) : rest.length;
+    out = `${out.slice(0, start)}${out.slice(start + length)}`;
+  }
+  return out;
+}
+
 const tidy = (text) => text.replace(/\s+([,.;:])/g, '$1').replace(/([,;])\s*(?=[,;.])/g, '').replace(/[ \t]{2,}/g, ' ').replace(/^[,;\s]+|[,;\s]+$/gm, '');
 
 /**
@@ -36,16 +53,19 @@ const tidy = (text) => text.replace(/\s+([,.;:])/g, '$1').replace(/([,;])\s*(?=[
  * then any short subjectless clause naming film stock, grain, lens or grade),
  * since the frame already carries the look and these models act style words
  * out literally. The shot-intent block keeps its clip-relative actions but
- * drops its lyric, word and onset lines. An audio-driven or lip-sync take keeps
- * its prompt as authored.
+ * drops its lyric, word and onset lines. A creative-context block left over
+ * (the bible from an older copy of the project) is cut up to the first of
+ * `keep`, the continuity clause or the camera and shot-intent lines. An
+ * audio-driven or lip-sync take keeps its prompt as authored.
  */
-export function silentMotionPrompt(prompt, { styleParts = [] } = {}) {
+export function silentMotionPrompt(prompt, { styleParts = [], keep = [] } = {}) {
   let text = String(prompt || '');
   for (const part of styleParts) {
     const trimmed = typeof part === 'string' ? part.trim() : '';
     if (trimmed) text = text.split(trimmed).join('');
   }
-  return text.split('\n')
+  const ends = [MOTION_CONTINUITY_CLAUSE, ...keep].map((part) => (typeof part === 'string' ? part.trim() : '')).filter(Boolean);
+  return withoutCreativeContext(text, ends).split('\n')
     .filter((line) => !SONG_INTENT_LINE.test(line.trim()))
     .map((line) => {
       if (CONTRACT_LINE.test(line.trim())) return line.replace(/; land the move exactly on the downbeat/, '');

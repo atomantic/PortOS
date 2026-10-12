@@ -210,6 +210,11 @@ export async function generateVideo({
     throw new ServerError(err.message, { status: 400, code: 'VALIDATION_ERROR' });
   }
 
+  if (planned?.promptClipped) {
+    const { from, to, max } = planned.promptClipped;
+    console.warn(`✂️ fal prompt for ${modelId} shortened ${from} → ${to} chars (model limit ${max})`);
+  }
+
   if (lastImagePath && !planned) {
     throw new ServerError('End frames require a fal.ai model with catalogued end-frame support', { status: 400, code: 'VALIDATION_ERROR' });
   }

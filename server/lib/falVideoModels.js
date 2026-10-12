@@ -71,6 +71,8 @@ const seedance = (id, kind, label, extra) => ({
 const h3 = (id, label, rates, extra = {}) => ({
   id, kind: 'i2v', label, family: 'minimax-h3',
   prompt: 'required',
+  // MiniMax's own prompt cap, the same as Hailuo-02's.
+  promptMaxChars: 2000,
   image: { param: 'image_url', required: false },
   endImage: { param: 'end_image_url' },
   duration: { kind: 'range', min: 5, max: 15, wire: 'integer', defaultSec: 5 },
@@ -90,6 +92,8 @@ export const FAL_VIDEO_MODELS = Object.freeze([
   {
     id: FAL_DEFAULT_IMAGE_VIDEO_MODEL, kind: 'i2v', label: 'MiniMax Hailuo-02 Standard (image)', family: 'hailuo-02',
     prompt: 'required',
+    // fal refuses a longer prompt with a 422 after the job is queued.
+    promptMaxChars: 2000,
     image: { param: 'image_url', required: true },
     endImage: { param: 'end_image_url' },
     duration: { kind: 'enum', values: [6, 10], wire: 'string', defaultSec: 6 },
@@ -101,6 +105,7 @@ export const FAL_VIDEO_MODELS = Object.freeze([
   {
     id: FAL_DEFAULT_TEXT_VIDEO_MODEL, kind: 't2v', label: 'MiniMax Hailuo-02 Standard (text)', family: 'hailuo-02',
     prompt: 'required',
+    promptMaxChars: 2000,
     duration: { kind: 'enum', values: [6, 10], wire: 'string', defaultSec: 6 },
     // Fixed 768P output; the text route takes neither resolution nor aspect ratio.
     resolution: null,
@@ -113,6 +118,7 @@ export const FAL_VIDEO_MODELS = Object.freeze([
   {
     id: 'minimax/h3-max/reference-to-video', kind: 'ref2v', label: 'MiniMax H3 Max (reference)', family: 'minimax-h3',
     prompt: 'required',
+    promptMaxChars: 2000,
     // Referenced in the prompt as "Image 1", "Audio 1", … in list order.
     referenceImages: { param: 'reference_image_urls', max: 9 },
     referenceAudio: { param: 'reference_audio_urls', max: 3, minSec: 2, maxSec: 15 },
@@ -176,6 +182,7 @@ export const FAL_VIDEO_MODELS = Object.freeze([
   {
     id: 'fal-ai/kling-video/v3/pro/image-to-video', kind: 'i2v', label: 'Kling v3 Pro (image)', family: 'kling-v3',
     prompt: 'required',
+    promptMaxChars: 2500,
     image: { param: 'start_image_url', required: true },
     endImage: { param: 'end_image_url' },
     duration: { kind: 'range', min: 3, max: 15, wire: 'string', defaultSec: 5 },
@@ -396,6 +403,27 @@ export function describeFalVideoRate(modelId, resolution) {
  * master soundtrack (Music Video) or silent-by-default clips; a caller asks for
  * provider audio explicitly.
  */
+// The last clause, sentence or line boundary at or before `max`, else a hard cut.
+const clipAtBoundary = (text, max) => {
+  if (text.length <= max) return text;
+  const head = text.slice(0, max);
+  const cut = Math.max(head.lastIndexOf('\n'), head.lastIndexOf(', '), head.lastIndexOf('. '), head.lastIndexOf('; '));
+  return (cut > max / 2 ? head.slice(0, cut) : head).trimEnd();
+};
+
+/**
+ * `text` plus its folded `Avoid:` clause within `max` characters. The Avoid
+ * clause keeps up to a quarter of the budget; the authored text is cut at a
+ * clause boundary. Unchanged when it already fits.
+ */
+function fitFalPrompt(text, avoid, max) {
+  const whole = avoid ? `${text}\nAvoid: ${avoid}` : text;
+  if (whole.length <= max) return whole;
+  const avoidPart = avoid ? `\nAvoid: ${clipAtBoundary(avoid, Math.max(0, Math.floor(max / 4) - 8))}` : '';
+  const keptAvoid = avoidPart.trim() === 'Avoid:' ? '' : avoidPart;
+  return `${clipAtBoundary(text, max - keptAvoid.length)}${keptAvoid}`;
+}
+
 export function buildFalVideoRequest({
   modelId, prompt = '', negativePrompt = '', seconds, audioSec, aspectRatio, width, height, resolution,
   imageUrl = null, endImageUrl = null, referenceImageUrls = [], audioUrl = null, referenceAudioUrls = [],
@@ -408,12 +436,17 @@ export function buildFalVideoRequest({
   const text = typeof prompt === 'string' ? prompt.trim() : '';
   const avoid = typeof negativePrompt === 'string' ? negativePrompt.trim() : '';
 
+  let promptClipped = null;
   if (model.prompt !== 'none') {
     if (model.prompt === 'required' && !text) throw refuse(`${model.label} needs a prompt`);
     // No native field: fold the negative prompt into the prompt as an "Avoid:"
     // clause — the same fallback grok.js uses for a provider without one.
     const folded = model.negativePrompt === 'fold' && avoid ? `${text}\nAvoid: ${avoid}` : text;
-    if (folded) body.prompt = folded;
+    // A prompt over the model's cap is refused by fal only after the job is
+    // queued, so it is shortened here: the authored text first, then the Avoid clause.
+    const fitted = model.promptMaxChars ? fitFalPrompt(text, model.negativePrompt === 'fold' ? avoid : '', model.promptMaxChars) : folded;
+    if (fitted.length < folded.length) promptClipped = { from: folded.length, to: fitted.length, max: model.promptMaxChars };
+    if (fitted) body.prompt = fitted;
     if (model.negativePrompt === 'native' && avoid) body.negative_prompt = avoid;
   }
 
@@ -460,6 +493,7 @@ export function buildFalVideoRequest({
   return {
     body,
     model,
+    promptClipped,
     seconds: coercedSec,
     resolution: res,
     generateAudio: wantsAudio,
