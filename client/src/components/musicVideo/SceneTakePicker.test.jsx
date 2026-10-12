@@ -5,10 +5,16 @@ const pool = [
   { kind: 'image', assetId: 'mine.png', sceneId: 's8', prompt: 'Film strip held to the lamp', clipIds: [] },
   { kind: 'image', assetId: 'other.png', sceneId: 's12', prompt: 'Splicer close-up', clipIds: ['clip-12'] },
   { kind: 'image', assetId: 'floor.png', sceneId: null, prompt: 'Reel on the floor', clipIds: [] },
+  { kind: 'image', assetId: 'blurry.png', sceneId: null, prompt: 'Out of focus', clipIds: [], mark: 'bad' },
   { kind: 'video', assetId: 'clip-12', sceneId: 's12', sourceImageId: 'other.png' },
 ];
-vi.mock('../../services/apiMusicVideo.js', () => ({ getMusicVideoMediaPool: vi.fn(async () => ({ items: pool })) }));
+vi.mock('../../services/apiMusicVideo.js', () => ({
+  getMusicVideoMediaPool: vi.fn(async () => ({ items: pool })),
+  markMusicVideoPoolAssets: vi.fn(async () => ({})),
+  deleteMusicVideoPoolAssets: vi.fn(async () => ({ deleted: 1 })),
+}));
 const { default: SceneTakePicker } = await import('./SceneTakePicker.jsx');
+const api = await import('../../services/apiMusicVideo.js');
 
 describe('Swap from unused', () => {
   // Uniquely catches the picker offering the wrong kind or group, a shot-number search missing, or the partner clip dropped.
@@ -30,5 +36,22 @@ describe('Swap from unused', () => {
     fireEvent.click(screen.getByRole('tab', { name: /Floor/ }));
     fireEvent.change(screen.getByLabelText('Search prompts or shot number'), { target: { value: 'reel' } });
     expect(screen.getAllByRole('listitem')).toHaveLength(1);
+  });
+
+  // Uniquely catches a mark that never reaches the server, a Bad filter that misses a mark, or a delete that skips its confirm.
+  it('marks a floor still as an ingredient, and deletes the bad ones after a confirm', async () => {
+    render(<SceneTakePicker open projectId="mv-1" scene={{ sceneId: 's8' }} kind="image" onPlace={vi.fn()} shotNumbers={new Map([['s8', 8]])} />);
+    fireEvent.click(await screen.findByRole('tab', { name: /Floor/ }));
+    fireEvent.click(screen.getByRole('button', { name: /still: Reel on the floor/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Ingredient' }));
+    await waitFor(() => expect(api.markMusicVideoPoolAssets).toHaveBeenCalledWith('mv-1', [{ kind: 'image', assetId: 'floor.png' }], 'ingredient', { silent: true }));
+    expect(await screen.findByRole('button', { name: '★ Ingredients 1' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: '✕ Bad 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete 1 bad' }));
+    expect(api.deleteMusicVideoPoolAssets).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Yes, delete' }));
+    await waitFor(() => expect(api.deleteMusicVideoPoolAssets).toHaveBeenCalledWith('mv-1', [{ kind: 'image', assetId: 'blurry.png' }], { silent: true }));
+    expect(await screen.findByRole('button', { name: '✕ Bad 0' })).toBeTruthy();
   });
 });

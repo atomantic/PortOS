@@ -308,3 +308,40 @@ describe('renders made for a video with no shot', () => {
     expect(pool.find((item) => item.assetId === 'test-clip')).toMatchObject({ kind: 'video', sceneId: null, sourceImageId: 'frame.png' });
   });
 });
+
+describe('the shot asset manager', () => {
+  // Uniquely catches a deleted still or clip leaving a take, mark or collection row pointing at a file that is gone, and a shot's own still being deletable.
+  it('marks unused assets, refuses a shot\'s own, and forgets deleted ones everywhere', async () => {
+    for (const name of ['keep.png', 'bad.png', 'used.png', 'b-used.png']) seedImage(name);
+    seedVideoHistory([{ id: 'b-clip', filename: 'b-clip.mp4' }, { id: 'bad-clip', filename: 'bad-clip.mp4' }]);
+    await addTake(sceneA.sceneId, { kind: 'image', assetId: 'used.png', source: 'generated' });
+    await addTake(sceneA.sceneId, { kind: 'image', assetId: 'keep.png', source: 'generated' });
+    await addTake(sceneB.sceneId, { kind: 'image', assetId: 'b-used.png', source: 'generated' });
+    await addTake(sceneB.sceneId, { kind: 'image', assetId: 'bad.png', source: 'generated' });
+    await addTake(sceneB.sceneId, { kind: 'video', assetId: 'b-clip', source: 'generated' });
+    await addTake(sceneB.sceneId, { kind: 'video', assetId: 'bad-clip', source: 'generated' });
+    const marks = (items, mark) => request(app).patch(`${base()}/media-pool/marks`).send({ items, mark });
+
+    expect((await marks([{ kind: 'image', assetId: 'keep.png' }], 'ingredient')).body.assetMarks).toEqual({ 'image:keep.png': 'ingredient' });
+    await marks([{ kind: 'image', assetId: 'bad.png' }], 'bad');
+    const pool = (await request(app).get(`${base()}/media-pool`)).body.items;
+    expect(pool.find((item) => item.assetId === 'keep.png').mark).toBe('ingredient');
+
+    const refused = await request(app).post(`${base()}/media-pool/delete`).send({ items: [{ kind: 'image', assetId: 'used.png' }] });
+    expect(refused.status).toBe(409);
+
+    const deleted = await request(app).post(`${base()}/media-pool/delete`).send({ items: [{ kind: 'image', assetId: 'bad.png' }] });
+    expect(deleted.status).toBe(200);
+    // A clip deleted from Media history is forgotten the same way.
+    const { deleteHistoryItem } = await import('../services/videoGen/historyOps.js');
+    await deleteHistoryItem('bad-clip');
+
+    const stored = await reload();
+    const takeIds = stored.scenes.flatMap((scene) => (scene.takes || []).map((take) => take.assetId));
+    expect(takeIds).not.toContain('bad.png');
+    expect(takeIds).not.toContain('bad-clip');
+    expect(stored.assetMarks).toEqual({ 'image:keep.png': 'ingredient' });
+    const { getCollection, musicVideoCollectionId } = await import('../services/mediaCollections.js');
+    expect((await getCollection(musicVideoCollectionId(project.id))).items.map((item) => item.ref).sort()).toEqual(['b-clip', 'b-used.png', 'keep.png', 'used.png']);
+  });
+});

@@ -321,6 +321,26 @@ export const musicVideoTakeInputSchema = z.object({
 
 // Put an unused still or clip from the project's pool on a shot; `withAssetId` is its partner (a still's clip, a clip's still).
 // `endImage` puts a still on the shot's end frame; only a start still pairs with a clip.
+/** One still or clip in a video's media pool, as the asset manager names it. */
+const musicVideoPoolAssetSchema = z.object({
+  kind: z.enum(['image', 'video']),
+  assetId: z.string().min(1).max(256),
+}).strict().superRefine((input, ctx) => {
+  const parsed = (input.kind === 'video' ? videoHistoryIdSchema : galleryImageName).safeParse(input.assetId);
+  if (!parsed.success) ctx.addIssue({ code: 'custom', path: ['assetId'], message: parsed.error.issues[0].message });
+});
+
+/** ★ ingredient (good, not placed) or ✕ bad (to clean up); null clears the mark. */
+export const musicVideoPoolMarkSchema = z.object({
+  items: z.array(musicVideoPoolAssetSchema).min(1).max(500),
+  mark: z.enum(['ingredient', 'bad']).nullable(),
+}).strict();
+
+/** Delete unused stills and clips from the media library (the asset manager's "Delete bad"). */
+export const musicVideoPoolDeleteSchema = z.object({
+  items: z.array(musicVideoPoolAssetSchema).min(1).max(500),
+}).strict();
+
 export const musicVideoPoolUseSchema = z.object({
   kind: z.enum(['image', 'video', 'endImage']),
   assetId: z.string().min(1).max(256),

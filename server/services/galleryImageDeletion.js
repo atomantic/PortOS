@@ -1,6 +1,7 @@
 /**
  * Gallery image deletion as one durable workflow: the image, its sidecars and
- * derived index row, then every universe canon `imageRefs[]` entry naming it.
+ * derived index row, then every universe canon `imageRefs[]` entry naming it
+ * and every music video's unused takes, marks and collection rows.
  * One backup admission spans both halves, so a snapshot cannot capture canon
  * rows that still reference bytes the delete has already removed.
  */
@@ -19,6 +20,8 @@ export function deleteGalleryImage(filename) {
     if (universePurge.removed > 0) {
       console.log(`🧹 Purged ${universePurge.removed} canon ref(s) for ${filename}`);
     }
+    // Music videos forget it too (their unused takes, marks and collection rows).
+    await import('./musicVideo/mediaPool.js').then((m) => m.forgetDeletedMusicVideoAsset('image', filename));
     return { ...result, canonRefsRemoved: universePurge.removed };
   });
 }

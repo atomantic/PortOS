@@ -12,7 +12,7 @@ import { existsSync } from 'fs';
 import { unlink } from 'fs/promises';
 import { pipeline } from 'stream/promises';
 import { Router } from 'express';
-import { musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoShotLockSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoContinueShotSchema, musicVideoPoolUseSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
+import { musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoShotLockSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoContinueShotSchema, musicVideoPoolUseSchema, musicVideoPoolMarkSchema, musicVideoPoolDeleteSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
 import { productionReadiness } from '../services/musicVideo/productionReview.js';
 import { finishedOutsideBlocker } from '../lib/musicVideoFinishedOutside.js';
 import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, lockProductionShots, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, reviseProductionFromFeedback, revertProductionInput } from '../services/musicVideo/productionReviewService.js';
@@ -116,6 +116,7 @@ import {
   appendTakesAcrossScenes,
   selectSceneTake,
   placeMediaPoolItem,
+  markMediaPoolAssets,
   reviewSceneTake,
   refreshSongStyleFromSuno,
 } from '../services/musicVideo/projects.js';
@@ -1542,6 +1543,20 @@ router.get('/:id/media-pool', asyncHandler(async (req, res) => {
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   const { getMusicVideoMediaPool } = await import('../services/musicVideo/mediaPool.js');
   res.json(await getMusicVideoMediaPool(project));
+}));
+
+// The asset manager: mark unused stills and clips ★ ingredient / ✕ bad, or delete them from the library.
+router.patch('/:id/media-pool/marks', asyncHandler(async (req, res) => {
+  const { items, mark } = validateRequest(musicVideoPoolMarkSchema, req.body);
+  res.json({ assetMarks: await markMediaPoolAssets(req.params.id, items.map((item) => `${item.kind}:${item.assetId}`), mark) });
+}));
+
+router.post('/:id/media-pool/delete', asyncHandler(async (req, res) => {
+  const { items } = validateRequest(musicVideoPoolDeleteSchema, req.body);
+  const project = await getProject(req.params.id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const { deleteMusicVideoPoolAssets } = await import('../services/musicVideo/mediaPool.js');
+  res.json(await deleteMusicVideoPoolAssets(project, items));
 }));
 
 router.post('/:id/scenes/:sceneId/takes/use', asyncHandler(async (req, res) => {

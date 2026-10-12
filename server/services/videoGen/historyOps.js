@@ -75,6 +75,8 @@ export async function deleteHistoryItem(id) {
     await import('../mediaAssetIndex/index.js')
       .then((m) => m.unindexVideo(id))
       .catch((err) => console.error(`❌ Media index video delete hook: ${err.message}`));
+    // Music videos forget it too (their unused takes, marks and collection rows).
+    await import('../musicVideo/mediaPool.js').then((m) => m.forgetDeletedMusicVideoAsset('video', id));
     console.log(`🗑️ Deleted video: ${item.filename}`);
     return { ok: true };
   });

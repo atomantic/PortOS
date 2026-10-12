@@ -51,6 +51,43 @@ export function droppedTakeAssets(before, after) {
   return projectTakeAssets(before).filter((asset) => !kept.has(`${asset.kind}:${asset.ref}`));
 }
 
+/**
+ * Mark assets ★ ingredient (good, unplaced) or ✕ bad (to clean up); null
+ * clears the mark. Marks live on the project (`assetMarks`, keyed
+ * `<image|video>:<ref>`), so a still bad for one video stays fine in another.
+ */
+export function markPoolAssets(project, keys, mark) {
+  const assetMarks = { ...(project.assetMarks || {}) };
+  for (const key of keys) {
+    if (mark) assetMarks[key] = mark;
+    else delete assetMarks[key];
+  }
+  return { project: { ...project, assetMarks } };
+}
+
+/**
+ * Forget assets whose files are gone: their takes on every shot that does not
+ * use them now, and their marks. A shot still using one keeps it, so its
+ * missing media is reported where the shot is, not silently cleared.
+ */
+function forgetPoolAssets(project, keys) {
+  const gone = new Set(keys);
+  const used = usedKeys(project);
+  let removed = 0;
+  const scenes = (project.scenes || []).map((scene) => {
+    if (!Array.isArray(scene.takes)) return scene;
+    const takes = scene.takes.filter((take) => {
+      const key = `${KIND_OF_SLOT[take?.kind]}:${take?.assetId}`;
+      const drop = gone.has(key) && !used.has(key);
+      if (drop) removed += 1;
+      return !drop;
+    });
+    return takes.length === scene.takes.length ? scene : { ...scene, takes };
+  });
+  const assetMarks = Object.fromEntries(Object.entries(project.assetMarks || {}).filter(([key]) => !gone.has(key)));
+  return { project: { ...project, scenes, assetMarks }, removed };
+}
+
 const usedKeys = (project) => new Set((project?.scenes || []).flatMap((scene) => Object.entries(TAKE_SLOT)
   .map(([slot, field]) => (scene[field] ? `${KIND_OF_SLOT[slot]}:${scene[field]}` : null)).filter(Boolean)));
 
@@ -86,8 +123,11 @@ function buildMediaPool(project, collectionItems = [], history = new Map()) {
     if (item.kind !== 'video' || !item.sourceImageId) continue;
     clipsByStill.set(item.sourceImageId, [...(clipsByStill.get(item.sourceImageId) || []), item.assetId]);
   }
+  const marks = project?.assetMarks || {};
   return items
     .filter((item) => !used.has(`${item.kind}:${item.assetId}`))
+    // A rejected take counts as bad until the director marks it otherwise.
+    .map((item) => ({ ...item, mark: marks[`${item.kind}:${item.assetId}`] || (item.takeStatus === 'rejected' ? 'bad' : null) }))
     .map((item) => (item.kind === 'image' ? { ...item, clipIds: clipsByStill.get(item.assetId) || [] } : item))
     .sort((a, b) => String(b.addedAt || '').localeCompare(String(a.addedAt || '')));
 }
@@ -154,4 +194,52 @@ export async function getMusicVideoMediaPool(project) {
     .map((item) => (item.clipIds ? { ...item, clipIds: item.clipIds.filter((id) => history.has(id)) }
       : item.sourceImageId && !resolveGalleryImage(item.sourceImageId) ? { ...item, sourceImageId: null } : item));
   return { collectionId: collection?.id || null, items };
+}
+
+/**
+ * After a still or clip is deleted from the media library: forget it on every
+ * music video that held it (unused takes, marks, collection rows), so nothing
+ * points at a file that is gone. Best-effort, like the other filing.
+ */
+export async function forgetDeletedMusicVideoAsset(kind, ref) {
+  const key = `${kind}:${ref}`;
+  try {
+    const [{ listProjects, mutateProjectRecord }, { getCollection, musicVideoCollectionId, bulkUpdateCollectionItems }] = await Promise.all([
+      import('./projects.js'), import('../mediaCollections.js'),
+    ]);
+    for (const project of await listProjects()) {
+      const held = Boolean(project.assetMarks?.[key])
+        || (project.scenes || []).some((scene) => (scene.takes || []).some((take) => `${KIND_OF_SLOT[take?.kind]}:${take?.assetId}` === key));
+      // The take removal files dropped takes into the collection, so the row goes after it.
+      if (held) await mutateProjectRecord(project.id, (current) => forgetPoolAssets(current, [key]));
+      const collection = await getCollection(musicVideoCollectionId(project.id)).catch(() => null);
+      if (collection?.items?.some((item) => `${item.kind}:${item.ref}` === key)) {
+        await bulkUpdateCollectionItems(collection.id, { remove: [key] });
+      }
+    }
+  } catch (err) {
+    console.error(`❌ music-video media pool: forgetting deleted ${key} failed: ${err.message}`);
+  }
+}
+
+/**
+ * Delete unused stills and clips of a video from the media library (the asset
+ * manager's "Delete"): only assets in the video's pool, so a shot's still or
+ * clip and media this video never made are refused. Each delete then forgets
+ * the asset on every music video (forgetDeletedMusicVideoAsset).
+ */
+export async function deleteMusicVideoPoolAssets(project, items) {
+  const { ServerError } = await import('../../lib/errorHandler.js');
+  const pool = new Set((await getMusicVideoMediaPool(project)).items.map((item) => `${item.kind}:${item.assetId}`));
+  const refused = items.filter((item) => !pool.has(`${item.kind}:${item.assetId}`));
+  if (refused.length) {
+    throw new ServerError(`${refused.length} of these ${refused.length === 1 ? 'is' : 'are'} on a shot or not made for this video`, { status: 409, code: 'POOL_ASSET_IN_USE' });
+  }
+  const [{ deleteGalleryImage }, { deleteHistoryItem }] = await Promise.all([
+    import('../galleryImageDeletion.js'), import('../videoGen/historyOps.js'),
+  ]);
+  for (const item of items) {
+    await (item.kind === 'image' ? deleteGalleryImage(item.assetId) : deleteHistoryItem(item.assetId));
+  }
+  return { deleted: items.length };
 }
