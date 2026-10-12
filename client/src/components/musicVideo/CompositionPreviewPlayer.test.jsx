@@ -127,10 +127,52 @@ describe('CompositionPreviewPlayer', () => {
     expect(document.querySelector('iframe')).toBeNull();
   });
 
+  it('applies film look and title-card edits made while the isolated worker is opening', async () => {
+    socket.emit.mockImplementation(() => {});
+    const look = { version: 1, preset: 'custom', grain: 0.4 };
+    const card = { enabled: true, title: 'Opening title', startSec: 2, endSec: 8 };
+    const { rerender } = render(<CompositionPreviewPlayer project={{ ...project, filmLook: look, titleCard: card }} audioUrl={null} />);
+    const open = opens()[0][1];
+    const nextLook = { ...look, grain: 0.9 };
+    const nextCard = { ...card, title: 'Edited title' };
+    rerender(<CompositionPreviewPlayer project={{ ...project, filmLook: nextLook, titleCard: nextCard }} audioUrl={null} />);
+    expect(socket.emit.mock.calls.filter(([event]) => event === 'generated-preview:command')).toHaveLength(0);
+
+    act(() => socket.reply('generated-preview:open', open));
+    await waitFor(() => expect(socket.emit).toHaveBeenCalledWith('generated-preview:command', expect.objectContaining({
+      requestId: open.requestId, action: 'film-look', look: nextLook,
+    })));
+    expect(socket.emit).toHaveBeenCalledWith('generated-preview:command', expect.objectContaining({
+      requestId: open.requestId, action: 'title-card', card: expect.objectContaining({ title: 'Edited title' }),
+    }));
+    expect(opens()).toHaveLength(1);
+  });
+
+  it('reconciles controls only for the new session after reopening and ignores the old reply', async () => {
+    const look = { version: 1, preset: 'custom', grain: 0.4 };
+    const { rerender } = render(<CompositionPreviewPlayer project={{ ...project, filmLook: look }} audioUrl={null} />);
+    const oldOpen = opens()[0][1];
+    socket.emit.mockImplementation(() => {});
+    const nextProject = { ...project, filmLook: { ...look, grain: 0.6 }, composition: { ...project.composition,
+      document: { ...DOCUMENT, updatedAt: '2026-02-02T00:00:00.000Z' } } };
+    rerender(<CompositionPreviewPlayer project={nextProject} audioUrl={null} />);
+    const nextOpen = opens()[1][1];
+    const latestLook = { ...look, grain: 0.9 };
+    rerender(<CompositionPreviewPlayer project={{ ...nextProject, filmLook: latestLook }} audioUrl={null} />);
+    act(() => socket.reply('generated-preview:open', oldOpen));
+    expect(socket.emit.mock.calls.filter(([event]) => event === 'generated-preview:command')).toHaveLength(0);
+    act(() => socket.reply('generated-preview:open', nextOpen));
+    await waitFor(() => expect(socket.emit).toHaveBeenCalledWith('generated-preview:command', expect.objectContaining({
+      requestId: nextOpen.requestId, action: 'film-look', look: latestLook,
+    })));
+    expect(socket.emit.mock.calls.filter(([event]) => event === 'generated-preview:command')).toHaveLength(1);
+  });
+
   it('sends the film look with the open and again when it changes, without reopening', async () => {
     const look = { version: 1, preset: 'custom', grain: 0.4 };
     const { rerender } = render(<CompositionPreviewPlayer project={{ ...project, filmLook: look }} audioUrl={null} />);
     await waitFor(() => expect(opens()[0][1].look).toEqual(look));
+    expect(socket.emit.mock.calls.filter(([event]) => event === 'generated-preview:command')).toHaveLength(0);
     const next = { ...look, grain: 0.9 };
     rerender(<CompositionPreviewPlayer project={{ ...project, filmLook: next }} audioUrl={null} />);
     await waitFor(() => expect(socket.emit).toHaveBeenCalledWith('generated-preview:command', expect.objectContaining({ action: 'film-look', look: next })));
