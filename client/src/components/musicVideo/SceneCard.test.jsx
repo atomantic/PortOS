@@ -210,11 +210,14 @@ describe('move buttons (#10785)', () => {
     const onMove = vi.fn();
     const props = { scene, index: 1, isLast: false, onMove, onEditLocal: () => {}, onSave: () => {} };
     const { rerender } = render(<SceneCard {...props} />);
-    expect(screen.getByRole('button', { name: /Move earlier/ }).disabled).toBe(false);
-    expect(screen.getByRole('button', { name: /Move later/ }).disabled).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Shot actions' }));
+    expect(screen.getByRole('menuitem', { name: /Move earlier/ }).disabled).toBe(false);
+    fireEvent.click(screen.getByRole('menuitem', { name: /Move later/ }));
+    expect(onMove).toHaveBeenCalledWith(1, 1);
     rerender(<SceneCard {...props} documentComposition />);
-    expect(screen.getByRole('button', { name: /Move earlier/ }).disabled).toBe(true);
-    expect(screen.getByRole('button', { name: /Move later/ }).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Shot actions' }));
+    expect(screen.getByRole('menuitem', { name: /Move earlier/ }).disabled).toBe(true);
+    expect(screen.getByRole('menuitem', { name: /Move later/ }).disabled).toBe(true);
     expect(screen.getByText(/comes from the composition document/)).toBeTruthy();
   });
 });
@@ -332,6 +335,10 @@ describe('Render follows the shot locks', () => {
     );
     const { rerender } = render(card('open', 'open'));
     expect(screen.getByRole('button', { name: 'Render again' })).toHaveProperty('title', 'Lock the still first');
+    // On a phone there is no tooltip: the reason and the lock it needs sit under Render.
+    const refusal = screen.getByTestId('render-refusal');
+    expect(refusal.textContent).toContain('Lock the still first');
+    expect(refusal.querySelector('button')).toBeTruthy();
     rerender(card('locked', 'locked'));
     expect(screen.getByRole('button', { name: 'Render again' }).disabled).toBe(true);
     expect(screen.getByRole('button', { name: 'Render again' }).title).toMatch(/^Video locked/);

@@ -3,7 +3,9 @@ import ShotActionInspector from './ShotActionInspector.jsx';
 import SceneCameraControls from './SceneCameraControls.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { useEffect, useRef, useState } from 'react';
-import { Trash2, Activity, ArrowUp, ArrowDown, ChevronRight, Image as ImageIcon, Video, Maximize2, AlertTriangle, ImagePlus, Clapperboard, SkipForward } from 'lucide-react';
+import { Trash2, Activity, ArrowUp, ArrowDown, ChevronRight, Image as ImageIcon, Video, Maximize2, AlertTriangle, ImagePlus, Clapperboard, SkipForward, Shuffle } from 'lucide-react';
+import OverflowMenu from '../ui/OverflowMenu.jsx';
+import SceneTakePicker from './SceneTakePicker.jsx';
 import { formatDurationSec } from '../../utils/formatters.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 import PerformanceEvidence from './PerformanceEvidence.jsx';
@@ -18,6 +20,9 @@ const STILL_MOVE_LABELS = [['hold', 'Hold'], ['push', 'Push in'], ['pan', 'Pan']
 // #10583: the shared lyric type's zone and style for this shot (composition documents).
 const TEXT_ZONE_LABELS = { 'lower-left': 'Lower left', 'upper-right': 'Upper right', upper: 'Upper centre', lower: 'Lower centre', center: 'Centre', none: 'No lyrics' };
 const LYRIC_ROLE_LABELS = { line: 'Sung line', hook: 'Hook slam', stamp: 'Stamp', data: 'Data caption' };
+const SHOT_MODE_LABELS = { cutaway: 'Cutaway', performance: 'Performance (lip-sync)', music: 'Performance (music-driven)' };
+const PRIMARY_BUTTON = 'flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap';
+const SECONDARY_BUTTON = 'flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap';
 import { buildSceneTimingPresentation } from '../../lib/musicVideoSceneTiming.js';
 import SceneTimingPlan from './SceneTimingPlan.jsx';
 import SceneRenderProgress from './SceneRenderProgress.jsx';
@@ -66,12 +71,17 @@ const SCENE_TIME_FIELDS = [['Start', 'startSec'], ['End', 'endSec']];
  * it is hidden when the joined span would exceed that lane's longest take.
  *
  * The card is a disclosure: collapsed it is one row — frame thumbnail, title,
- * timing, lyric line and status — and it opens on tap to the full editor.
+ * timing, lyric line and status — and it opens on tap to the full editor:
+ * the lock and a "…" menu (move, delete), then the Still and the Clip side by
+ * side (stacked on a phone), each with its selected picture large, its make /
+ * "Swap from unused" / import buttons and its takes. Swap from unused
+ * (`onPlacePoolItem(scene, { kind, assetId, withAssetId? })`) opens
+ * SceneTakePicker over the project's unused stills or clips. Timing, shot
+ * mode, layer and camera sit in a collapsed Shot settings row that names what
+ * is set; intent and the action contract in a collapsed Direction row.
  * Opening or closing it also calls `onSeek(scene)`, so the docked preview
  * jumps to the scene's start.
  */
-const MOVE_DOCUMENT_TITLE = "This video's shot order comes from its composition document";
-
 // #11040: the one owner of whether a video render may start. The server reloads
 // the persisted scene (and its speaker), so an unsaved or failed speaker edit
 // must hold back every video entry point — Generate video and the failure Retry.
@@ -92,7 +102,7 @@ export default function SceneCard({
   settingsSaving, videoBlockedReason, videoBlockedReasonFor = null, canContinueShot,
   onMove, onDelete, onEditLocal, onSave,
   onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
-  onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, takeBusy = false, layered = false, documentComposition = false,
+  onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, onPlacePoolItem, projectId = null, shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false,
   lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, nextEndSec = null, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
   expanded, onToggleExpand, footageOptional = false, failedScenes = null, songReview = null,
 }) {
@@ -123,6 +133,8 @@ export default function SceneCard({
   const [keepStillAsEnd, setKeepStillAsEnd] = useState(false);
   const [speakerSaving, setSpeakerSaving] = useState(false);
   const [clipMeta, setClipMeta] = useState(null);
+  // Which slot's "Swap from unused" picker is open: 'image', 'video' or null.
+  const [swapKind, setSwapKind] = useState(null);
   const clipSec = clipMeta && clipMeta.id === scene.videoHistoryId ? clipMeta.sec : null;
   // Pre-#8964 scenes have no `loop` key and keep the legacy loop-to-fill render.
   const loops = scene.loop !== false;
@@ -177,6 +189,15 @@ export default function SceneCard({
     else onGenerateVideo?.(scene);
   };
   const renderCost = performance ? performanceCost : timing.falCost;
+  const shotModeValue = performance ? (scene.performanceStyle === 'music' ? 'music' : 'performance') : 'cutaway';
+  // The collapsed Shot settings row says what is set, so it rarely needs opening.
+  const settingsSummary = [
+    layer === 'footage' ? SHOT_MODE_LABELS[shotModeValue] : LAYER_LABELS[layer],
+    typeof scene.startSec === 'number' && typeof scene.endSec === 'number' ? `${scene.startSec.toFixed(2)}–${scene.endSec.toFixed(2)}s` : null,
+    scene.beatAligned ? 'beat-aligned' : null,
+    layer === 'footage' && loops && !performance ? 'loops' : null,
+    scene.camera?.move ? `camera ${scene.camera.move}` : null,
+  ].filter(Boolean).join(' · ');
   const promptField = (
     <textarea
       aria-label="Shot prompt"
@@ -236,49 +257,238 @@ export default function SceneCard({
         <SceneRenderProgress kind="Frame" generating={generatingFrame} progress={frameProgress} />
         <SceneRenderProgress kind="Video" generating={generatingVideo} progress={videoProgress} />
       </summary>
-      <div className="space-y-2 p-3 pt-0">
-        {/* A move swaps this shot with its neighbor; the song timing and lyric stay with the slot. */}
-        <div className="flex items-center justify-end gap-2">
+      <div className="space-y-3 p-3 pt-0">
+        {/* Locks first; reorder and delete wait behind the overflow menu. A move swaps this
+            shot with its neighbor; the song timing and lyric stay with the slot. */}
+        <div className="flex items-center gap-2">
           <ShotLockButton scene={scene} className="mr-auto" />
           {documentComposition && (
             <span className="mr-auto text-[11px] text-gray-400">Shot order comes from the composition document, so it can't be reordered here.</span>
           )}
-          <button type="button" onClick={() => onMove(index, -1)} disabled={index === 0 || documentComposition} title={documentComposition ? MOVE_DOCUMENT_TITLE : "Swap with the previous shot; the song timing stays put"}
-            className="min-h-[44px] inline-flex items-center justify-center gap-1 rounded border border-port-border px-2 text-xs disabled:opacity-30 sm:min-h-0 sm:py-1">
-            <ArrowUp size={14} aria-hidden="true" /> Move earlier
-          </button>
-          <button type="button" onClick={() => onMove(index, 1)} disabled={isLast || documentComposition} title={documentComposition ? MOVE_DOCUMENT_TITLE : "Swap with the next shot; the song timing stays put"}
-            className="min-h-[44px] inline-flex items-center justify-center gap-1 rounded border border-port-border px-2 text-xs disabled:opacity-30 sm:min-h-0 sm:py-1">
-            <ArrowDown size={14} aria-hidden="true" /> Move later
-          </button>
-          <button onClick={() => onDelete(scene.sceneId)} aria-label="Delete scene" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-port-error" title="Delete scene"><Trash2 size={14} /></button>
+          <OverflowMenu label="Shot actions" items={[
+            { id: 'earlier', label: 'Move earlier', icon: ArrowUp, onSelect: () => onMove(index, -1), disabled: index === 0 || documentComposition },
+            { id: 'later', label: 'Move later', icon: ArrowDown, onSelect: () => onMove(index, 1), disabled: isLast || documentComposition },
+            { id: 'delete', label: 'Delete shot', icon: Trash2, tone: 'danger', onSelect: () => onDelete(scene.sceneId) },
+          ]} />
         </div>
-        {/* A footage shot's prompt is its motion, edited beside its Render button below. */}
+        {songChange && !songChange.resolved && songChange.status !== 'kept' && (
+          <p className="break-words text-[11px] text-port-warning">{songChange.status === 'new' ? 'New shot for lines the revised song added.' : `Before the song revision: ${songChange.previousLyricText ? `♪ ${songChange.previousLyricText}` : 'instrumental'}`}</p>
+        )}
         {(layer !== 'footage' || codeShot) && promptField}
-        {(scene.lyricText || scene.visualIntent || scene.direction) && (
-          <div className="text-[11px] text-port-text-muted space-y-0.5">
-            {scene.lyricText && <p className="italic break-words">♪ {scene.lyricText}</p>}
-            {songChange && !songChange.resolved && songChange.status !== 'kept' && (
-              <p className="break-words text-port-warning">{songChange.status === 'new' ? 'New shot for lines the revised song added.' : `Before the song revision: ${songChange.previousLyricText ? `♪ ${songChange.previousLyricText}` : 'instrumental'}`}</p>
-            )}
-            {scene.visualIntent && <p className="break-words">Intent: {scene.visualIntent}</p>}
-            {/* Applied treatment direction (#8980) — appended to both generated prompts. */}
-            {scene.direction && (
-              <p className="break-words" title={scene.direction.frameClause}>
-                Direction: {scene.direction.mode}{scene.direction.medium ? ` · planned ${MUSIC_VIDEO_MEDIUM_LABELS[scene.direction.medium] || scene.direction.medium}${scene.direction.mediumPinned ? ' (pinned)' : ''}` : ''}{scene.direction.focalSubject ? ` · ${scene.direction.focalSubject}` : ''}
-                {scene.direction.typographyRole !== 'none' ? ` · ${scene.direction.typographyRole} text, ${scene.direction.negativeSpace} region kept clear` : ' · no text'}
-              </p>
-            )}
+        {underCovered && (
+          <div role="alert" className="flex flex-wrap items-center gap-2 rounded border border-port-warning/40 bg-port-warning/10 px-2 py-1.5 text-xs text-port-warning">
+            <AlertTriangle size={13} className="shrink-0" />
+            <span className="min-w-0 flex-1 basis-48">
+              Shot runs {spanSec.toFixed(1)}s but its clip is {clipSec.toFixed(1)}s — the render won&apos;t repeat it.
+              Trim the shot, continue or regenerate a longer clip, or loop it on purpose.
+            </span>
+            <button type="button" onClick={() => applyPatch({ endSec: Math.round((scene.startSec + clipSec) * 1000) / 1000 })}
+              className="rounded bg-port-bg border border-port-border px-2 py-1 min-h-[44px] sm:min-h-0 text-port-text">Trim to clip</button>
+            <button type="button" onClick={() => applyPatch({ loop: true })}
+              className="rounded bg-port-bg border border-port-border px-2 py-1 min-h-[44px] sm:min-h-0 text-port-text">Loop clip</button>
           </div>
         )}
-        <ShotActionInspector contract={scene.direction?.actionContract} scene={scene} />
-        <PlateComparison scene={scene} frames={false} />
+        {layer !== 'footage' && layered && !sceneHasAuthoredSpan(scene) && (
+          <p role="alert" className="text-[11px] text-port-warning">
+            Set a start and end — a {{ card: 'title card', code: 'code-drawn shot' }[layer] || 'still'} runs for exactly its span.
+          </p>
+        )}
+        {codeShot ? (
+          <p className="text-xs text-port-text-muted" data-testid="code-shot-note">
+            The composition draws this shot, so it needs no frame or clip.
+            {!documentComposition && ' A composed render shows it as a black frame under the typography; render from a composition document to draw it.'}
+          </p>
+        ) : (
+        <div className="grid gap-3 @3xl:grid-cols-2">
+        {/* Still: the picture this shot starts from (Phase 1b). */}
+        <section aria-label="Still" className="min-w-0 space-y-2">
+          <h4 className="text-xs font-medium">Still</h4>
+          {scene.referenceImageId ? (
+            <button type="button" onClick={() => onOpenPreview?.(`image:${scene.referenceImageId}`)}
+              aria-label={`View scene ${index + 1} reference frame full size`} title={`View scene ${index + 1} reference frame full size`}
+              className="block w-full overflow-hidden rounded border border-port-border focus:outline-none focus:ring-2 focus:ring-port-accent">
+              <img src={`/data/images/${scene.referenceImageId}`} alt="" className="block aspect-video w-full bg-black object-cover" />
+            </button>
+          ) : (
+            <div className="flex aspect-video w-full items-center justify-center rounded border border-dashed border-port-border text-xs text-port-text-muted">No still yet</div>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <button onClick={() => onGenerateFrame(scene)} disabled={!!generatingFrame}
+              className={PRIMARY_BUTTON}
+              title={scene.referenceImageId
+                ? 'Render another candidate frame — your selected frame stays until you pick a new one'
+                : 'Generate a still reference frame for this scene'}>
+              {generatingFrame ? <Activity size={14} className="animate-spin" /> : <ImageIcon size={14} />}
+              {generatingFrame ? 'Generating frame…' : (scene.referenceImageId ? 'New frame take' : 'Generate frame')}
+            </button>
+            {onPlacePoolItem && (
+              <button type="button" onClick={() => setSwapKind('image')} disabled={takeBusy} className={SECONDARY_BUTTON}
+                title="Pick a still made for this video that no shot uses: this shot's other takes, other shots', or the floor">
+                <Shuffle size={14} /> Swap from unused
+              </button>
+            )}
+            {onImportTake && (
+              <button type="button" onClick={() => onImportTake(scene)} disabled={takeBusy} className={SECONDARY_BUTTON}
+                title="Add a frame from the gallery or an upload (e.g. made in an external tool) as a take">
+                <ImagePlus size={14} /> Import take
+              </button>
+            )}
+            {onContinueFromPrevious && layer === 'footage' && index > 0 && (
+              <button type="button" onClick={() => onContinueFromPrevious(scene, { keepStillAsEnd: keepStillAsEnd && Boolean(scene.referenceImageId) })}
+                disabled={takeBusy || !previousHasClip} className={SECONDARY_BUTTON}
+                title={previousHasClip ? 'Start this shot from the last frame the previous shot shows in the cut' : 'The previous shot needs a clip first'}>
+                <SkipForward size={14} /> From previous shot
+              </button>
+            )}
+          </div>
+          {onContinueFromPrevious && layer === 'footage' && index > 0 && scene.referenceImageId && (
+            <label htmlFor={`mv-scene-${scene.sceneId}-keep-still-end`} className="flex items-center gap-1 text-[11px] text-port-text-muted min-h-[44px] sm:min-h-0">
+              <input id={`mv-scene-${scene.sceneId}-keep-still-end`} type="checkbox" checked={keepStillAsEnd}
+                onChange={(e) => setKeepStillAsEnd(e.target.checked)} />
+              From previous shot: keep this frame as the end frame
+            </label>
+          )}
+          <SceneTakeStrip scene={scene} kind="image" busy={takeBusy}
+            onSelect={(take) => onSelectTake?.(scene, take)}
+            onReview={(take, review) => onReviewTake?.(scene, take, review)}
+            onOpenPreview={onOpenPreview} />
+          <details className="group/prompt">
+            <summary className="flex min-h-[44px] cursor-pointer items-center gap-1 text-[11px] text-port-text-muted marker:content-none sm:min-h-0 [&::-webkit-details-marker]:hidden">
+              <ChevronRight size={12} aria-hidden="true" className="shrink-0 transition-transform group-open/prompt:rotate-90" />
+              <span className="shrink-0">Still prompt</span>
+              <span className="min-w-0 truncate">{scene.framePrompt ? `· ${scene.framePrompt}` : '· from the shot prompt'}</span>
+            </summary>
+            <textarea
+              aria-label="Reference frame prompt"
+              value={scene.framePrompt || ''} rows={4}
+              onChange={(e) => onEditLocal(scene.sceneId, { framePrompt: e.target.value })}
+              onBlur={(e) => onSave(scene.sceneId, { framePrompt: e.target.value || null })}
+              placeholder="Reference frame prompt — the still that seeds this shot (defaults to the shot prompt)"
+              className="mt-1 w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
+            />
+          </details>
+          {/* Style-break end frame (#11173) — what a fal clip ends on */}
+          {onGenerateEndFrame && layer === 'footage' && (
+            <SceneEndFrame scene={scene} index={index} generating={!!generatingEndFrame} onGenerate={onGenerateEndFrame}
+              onEditLocal={onEditLocal} onSave={onSave} onOpenPreview={onOpenPreview} takeBusy={takeBusy}
+              onSelectTake={onSelectTake} onReviewTake={onReviewTake} videoSettings={falVideoSettings} />
+          )}
+        </section>
+        {/* Clip: the motion prompt, where this shot renders and what it costs, then its clip (Phase 1). */}
+        <section aria-label="Render" className="min-w-0 space-y-2">
+          <h4 className="text-xs font-medium">Clip</h4>
+          {scene.videoHistoryId && performance && (
+            <PerformanceEvidence key={scene.videoHistoryId} clipSrc={clipSrc} instruction={instruction}
+              temporal={performanceReview?.shot} excerptStartSec={performanceReview?.excerptStartSec || 0}
+              repair={repairPlan} repairBusy={repairBusy || settingsSaving || generatingVideo || takeBusy}
+              onRepair={onRepairPerformance ? () => onRepairPerformance(scene.sceneId, {
+                excerptId: performanceReview.excerptId, sourceAssetId: repairPlan.sourceAssetId, boundarySec: repairPlan.boundarySec,
+              }) : null} />
+          )}
+          {scene.videoHistoryId && !performance && (
+            <div className="relative w-full">
+              <video
+                ref={clipPlayerRef}
+                src={clipSrc}
+                className="block w-full aspect-video object-cover rounded border border-port-border bg-black"
+                muted
+                playsInline
+                preload="metadata"
+                controls
+                onLoadedMetadata={(e) => {
+                  const sec = e.currentTarget.duration;
+                  if (Number.isFinite(sec) && sec > 0) setClipMeta({ id: scene.videoHistoryId, sec });
+                }}
+              />
+              {/* Corner expand — do not put the open handler on <video> itself;
+                  that would fight native play/pause controls. Pause first so the
+                  lightbox's unmuted autoplay doesn't double-play the audio. */}
+              <button
+                type="button"
+                onClick={() => {
+                  clipPlayerRef.current?.pause();
+                  onOpenPreview?.(`video:${scene.videoHistoryId}`);
+                }}
+                aria-label={`View scene ${index + 1} clip full size`}
+                title={`View scene ${index + 1} clip full size`}
+                className="always-dark absolute top-1 right-1 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 p-1 flex items-center justify-center rounded bg-black/50 text-white hover:bg-black/80 focus:outline-none focus:ring-2 focus:ring-port-accent"
+              >
+                <Maximize2 className="w-3 h-3" />
+              </button>
+            </div>
+          )}
+          {!scene.videoHistoryId && layer === 'footage' && (
+            <div className="flex aspect-video w-full items-center justify-center rounded border border-dashed border-port-border text-xs text-port-text-muted">No clip yet</div>
+          )}
+          {layer === 'footage' && promptField}
+          <div className="flex flex-wrap items-center gap-2">
+            <SceneRenderTarget id={fieldId('render-on')} value={renderPick} onChange={setRenderPick} performance={performance}
+              saved={falVideoSettings || {}} disabled={!!generatingVideo} />
+            {renderCost && <span className="text-[11px] text-port-text-muted">{renderCost}</span>}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button onClick={generateVideo}
+              disabled={!!videoRefusal}
+              className={PRIMARY_BUTTON}
+              title={videoRefusal
+                || (performance ? `${capability.style === 'music' ? "Animate this scene's frame to the song" : "Lip-sync this scene's frame to the song"} via ${capability.label} — ${performanceCost}`
+                  : "Render this shot's clip from its still")}>
+              {generatingVideo ? <Activity size={14} className="animate-spin" /> : <Video size={14} />}
+              {generatingVideo ? 'Rendering…' : (scene.videoHistoryId ? 'Render again' : 'Render')}
+            </button>
+            {onPlacePoolItem && (
+              <button type="button" onClick={() => setSwapKind('video')} disabled={takeBusy || shotLock?.clip === 'locked'} className={SECONDARY_BUTTON}
+                title={shotLock?.clip === 'locked' ? 'Video locked. Unlock the video to change it.' : "Pick a clip made for this video that no shot uses: this shot's other takes, other shots', or the floor"}>
+                <Shuffle size={14} /> Swap from unused
+              </button>
+            )}
+            {scene.videoHistoryId && canContinueShot && (
+              <button
+                onClick={() => onContinueVideo(scene)}
+                disabled={settingsSaving || !!generatingVideo}
+                className={SECONDARY_BUTTON}
+                title="Native-extend this clip from its final latent frames and attach the longer result to this scene"
+              >
+                <Video size={14} /> Continue shot
+              </button>
+            )}
+            {onImportClipTake && (
+              <button type="button" onClick={() => onImportClipTake(scene)} disabled={takeBusy} className={SECONDARY_BUTTON}
+                title="Pick an existing clip from the gallery (e.g. made in an external tool) as a take">
+                <Clapperboard size={14} /> Import clip take
+              </button>
+            )}
+          </div>
+          {/* Why Render is off, on the card itself: a tooltip never shows on a phone. */}
+          {videoRefusal && videoRefusal !== performanceBlocked && !generatingVideo && layer === 'footage' && (
+            <div className="flex flex-wrap items-center gap-2 text-[11px] text-port-warning" data-testid="render-refusal">
+              <span>{videoRefusal}</span>
+              {shotLock && shotLock.still !== 'locked' && lockBlocked && <ShotLockButton scene={scene} />}
+            </div>
+          )}
+          <SceneTakeStrip scene={scene} kind="video" busy={takeBusy}
+            onSelect={(take) => onSelectTake?.(scene, take)}
+            onReview={(take, review) => onReviewTake?.(scene, take, review)}
+            onOpenPreview={onOpenPreview} />
+        </section>
+        </div>
+        )}
+        {/* What this shot's render covers and costs, and what blocks it, stays in view. */}
+        <SceneTimingPlan timing={timing} sceneId={scene.sceneId} lipSyncBackend={renderLane} onSplit={onSplit} onMergeNext={onMergeNext} />
+        {/* Everything set once and rarely revisited: timing, shot mode, layer, camera. */}
+        <details className="group/settings rounded border border-port-border">
+          <summary className="flex min-h-[44px] cursor-pointer items-center gap-2 px-2 text-xs marker:content-none sm:min-h-[32px] [&::-webkit-details-marker]:hidden">
+            <ChevronRight size={12} aria-hidden="true" className="shrink-0 transition-transform group-open/settings:rotate-90" />
+            <span className="shrink-0 font-medium">Shot settings</span>
+            <span className="min-w-0 truncate text-port-text-muted">· {settingsSummary}</span>
+          </summary>
+          <div className="space-y-2 p-2 pt-0">
         <div className="flex flex-wrap gap-2 items-center text-xs">
           {SCENE_TIME_FIELDS.map(([labelText, key]) => {
             const toValue = (v) => (v === '' ? null : Number(v));
             return (
               <label key={key} className="flex items-center gap-1">{labelText}
-                <input type="number" min="0" step="0.1" value={scene[key] ?? ''} className="w-16 bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0"
+                <input type="number" min="0" step="0.1" value={scene[key] ?? ''} className="w-20 bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0"
                   onChange={(e) => onEditLocal(scene.sceneId, { [key]: toValue(e.target.value) })}
                   onBlur={(e) => onSave(scene.sceneId, { [key]: toValue(e.target.value) })} />
               </label>
@@ -293,45 +503,28 @@ export default function SceneCard({
             <input type="checkbox" checked={loops} disabled={performance} onChange={(e) => applyPatch({ loop: e.target.checked })} />
             Loop clip
           </label>
-          {/* A performance is sung footage — only the footage layer offers it. */}
-          {layer === 'footage' && (
-            <>
-              <label htmlFor={shotModeId} className="flex items-center gap-1">Shot</label>
-              <select id={shotModeId} value={performance ? (scene.performanceStyle === 'music' ? 'music' : 'performance') : 'cutaway'}
-                onChange={(e) => applyPatch(e.target.value === 'cutaway' ? { shotMode: 'cutaway' }
-                  : e.target.value === 'music' ? { shotMode: 'performance', performanceStyle: 'music' }
-                    // Clear the style only when one is stored, so a plain lip-sync switch stays one field.
-                    : { shotMode: 'performance', ...(scene.performanceStyle ? { performanceStyle: null } : {}) })}
-                className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0"
-                title="Cutaway: any video lane animates the frame under the song. Lip-sync: a singer's mouth follows the song. Music-driven: the song slice drives the whole frame's motion (a drummer on the beat). Both need a source-audio provider.">
-                <option value="cutaway">Cutaway</option>
-                <option value="performance">Performance (lip-sync)</option>
-                <option value="music">Performance (music-driven)</option>
-              </select>
-            </>
-          )}
         </div>
-        {/* A music-driven shot follows the whole mix, not one voice. */}
-        {performance && scene.performanceStyle !== 'music' && (
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            <label htmlFor={fieldId('speaker')}>Speaker / singer</label>
-            <input id={fieldId('speaker')} value={scene.performanceSpeaker || ''} maxLength={120}
-              onChange={(e) => { setSpeakerDirty(true); onEditLocal(scene.sceneId, { performanceSpeaker: e.target.value }); }}
-              onBlur={(e) => {
-                setSpeakerSaving(true);
-                Promise.resolve(onSave(scene.sceneId, { performanceSpeaker: e.target.value || null }))
-                  .then((saved) => setSpeakerDirty(saved === false), () => setSpeakerDirty(true))
-                  .finally(() => setSpeakerSaving(false));
-              }}
-              className="bg-port-bg border border-port-border rounded px-2 py-1" placeholder="Intended singer" />
-          </div>
-        )}
         <div className="flex flex-wrap gap-2 items-center text-xs">
           <label htmlFor={fieldId('layer')}>Layer</label>
           <select id={fieldId('layer')} value={layer} onChange={(e) => applyPatch({ visualLayer: e.target.value })}
             className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0">
             {MUSIC_VIDEO_VISUAL_LAYERS.map((value) => <option key={value} value={value}>{LAYER_LABELS[value]}</option>)}
           </select>
+          {/* A performance is sung footage — only the footage layer offers it. */}
+          {layer === 'footage' && (
+            <>
+              <label htmlFor={shotModeId} className="flex items-center gap-1">Shot</label>
+              <select id={shotModeId} value={shotModeValue}
+                onChange={(e) => applyPatch(e.target.value === 'cutaway' ? { shotMode: 'cutaway' }
+                  : e.target.value === 'music' ? { shotMode: 'performance', performanceStyle: 'music' }
+                    // Clear the style only when one is stored, so a plain lip-sync switch stays one field.
+                    : { shotMode: 'performance', ...(scene.performanceStyle ? { performanceStyle: null } : {}) })}
+                className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0"
+                title="Cutaway: any video lane animates the frame under the song. Lip-sync: a singer's mouth follows the song. Music-driven: the song slice drives the whole frame's motion (a drummer on the beat). Both need a source-audio provider.">
+                {Object.entries(SHOT_MODE_LABELS).map(([value, text]) => <option key={value} value={value}>{text}</option>)}
+              </select>
+            </>
+          )}
           {layer === 'still' && (
             <>
               <label htmlFor={fieldId('move')}>Move</label>
@@ -376,194 +569,55 @@ export default function SceneCard({
             </>
           )}
         </div>
-        {layer !== 'card' && <SceneCameraControls scene={scene} fieldId={fieldId} onEditLocal={onEditLocal} onSave={onSave} />}
         {layer !== 'footage' && !layered && (
           <p className="text-[11px] text-port-text-muted">
             {LAYER_LABELS[layer]} sections render in composed or document mode — a plain render plays this scene&apos;s footage.
           </p>
         )}
-        {layer !== 'footage' && layered && !sceneHasAuthoredSpan(scene) && (
-          <p role="alert" className="text-[11px] text-port-warning">
-            Set a start and end — a {{ card: 'title card', code: 'code-drawn shot' }[layer] || 'still'} runs for exactly its span.
-          </p>
-        )}
-        <SceneTimingPlan timing={timing} sceneId={scene.sceneId} lipSyncBackend={renderLane} onSplit={onSplit} onMergeNext={onMergeNext} />
-        {underCovered && (
-          <div role="alert" className="flex flex-wrap items-center gap-2 rounded border border-port-warning/40 bg-port-warning/10 px-2 py-1.5 text-xs text-port-warning">
-            <AlertTriangle size={13} className="shrink-0" />
-            <span className="min-w-0 flex-1 basis-48">
-              Shot runs {spanSec.toFixed(1)}s but its clip is {clipSec.toFixed(1)}s — the render won&apos;t repeat it.
-              Trim the shot, continue or regenerate a longer clip, or loop it on purpose.
-            </span>
-            <button type="button" onClick={() => applyPatch({ endSec: Math.round((scene.startSec + clipSec) * 1000) / 1000 })}
-              className="rounded bg-port-bg border border-port-border px-2 py-1 min-h-[44px] sm:min-h-0 text-port-text">Trim to clip</button>
-            <button type="button" onClick={() => applyPatch({ loop: true })}
-              className="rounded bg-port-bg border border-port-border px-2 py-1 min-h-[44px] sm:min-h-0 text-port-text">Loop clip</button>
+        {layer !== 'card' && <SceneCameraControls scene={scene} fieldId={fieldId} onEditLocal={onEditLocal} onSave={onSave} />}
+          </div>
+        </details>
+        {/* A music-driven shot follows the whole mix, not one voice; a lip-sync needs its singer before it renders. */}
+        {performance && scene.performanceStyle !== 'music' && (
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <label htmlFor={fieldId('speaker')}>Speaker / singer</label>
+            <input id={fieldId('speaker')} value={scene.performanceSpeaker || ''} maxLength={120}
+              onChange={(e) => { setSpeakerDirty(true); onEditLocal(scene.sceneId, { performanceSpeaker: e.target.value }); }}
+              onBlur={(e) => {
+                setSpeakerSaving(true);
+                Promise.resolve(onSave(scene.sceneId, { performanceSpeaker: e.target.value || null }))
+                  .then((saved) => setSpeakerDirty(saved === false), () => setSpeakerDirty(true))
+                  .finally(() => setSpeakerSaving(false));
+              }}
+              className="bg-port-bg border border-port-border rounded px-2 py-1" placeholder="Intended singer" />
           </div>
         )}
-        {codeShot ? (
-          <p className="text-xs text-port-text-muted" data-testid="code-shot-note">
-            The composition draws this shot, so it needs no frame or clip.
-            {!documentComposition && ' A composed render shows it as a black frame under the typography; render from a composition document to draw it.'}
-          </p>
-        ) : (<>
-        {/* Reference frame — the still image that seeds this shot (Phase 1b) */}
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
-          <textarea
-            aria-label="Reference frame prompt"
-            value={scene.framePrompt || ''} rows={2}
-            onChange={(e) => onEditLocal(scene.sceneId, { framePrompt: e.target.value })}
-            onBlur={(e) => onSave(scene.sceneId, { framePrompt: e.target.value || null })}
-            placeholder="Reference frame prompt — the still that seeds this shot (defaults to the shot prompt)"
-            className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
-          />
-          <div className="flex items-center gap-2">
-            {scene.referenceImageId && (
-              <button
-                type="button"
-                onClick={() => onOpenPreview?.(`image:${scene.referenceImageId}`)}
-                aria-label={`View scene ${index + 1} reference frame full size`}
-                title={`View scene ${index + 1} reference frame full size`}
-                className="shrink-0 rounded border border-port-border overflow-hidden focus:outline-none focus:ring-2 focus:ring-port-accent"
-              >
-                <img
-                  src={`/data/images/${scene.referenceImageId}`}
-                  alt=""
-                  className="w-32 aspect-video object-cover block"
-                />
-              </button>
-            )}
-            <div className="flex flex-col gap-1">
-              <button onClick={() => onGenerateFrame(scene)} disabled={!!generatingFrame}
-                className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
-                title={scene.referenceImageId
-                  ? 'Render another candidate frame — your selected frame stays until you pick a new one'
-                  : 'Generate a still reference frame for this scene'}>
-                {generatingFrame ? <Activity size={14} className="animate-spin" /> : <ImageIcon size={14} />}
-                {generatingFrame ? 'Generating frame…' : (scene.referenceImageId ? 'New frame take' : 'Generate frame')}
-              </button>
-              {onImportTake && (
-                <button type="button" onClick={() => onImportTake(scene)} disabled={takeBusy}
-                  className="flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
-                  title="Add a frame from the gallery or an upload (e.g. made in an external tool) as a take">
-                  <ImagePlus size={14} /> Import take
-                </button>
+        {(scene.visualIntent || scene.direction || scene.direction?.actionContract) && (
+          <details className="group/direction rounded border border-port-border">
+            <summary className="flex min-h-[44px] cursor-pointer items-center gap-2 px-2 text-xs marker:content-none sm:min-h-[32px] [&::-webkit-details-marker]:hidden">
+              <ChevronRight size={12} aria-hidden="true" className="shrink-0 transition-transform group-open/direction:rotate-90" />
+              <span className="shrink-0 font-medium">Direction</span>
+              {scene.visualIntent && <span className="min-w-0 truncate text-port-text-muted">· {scene.visualIntent}</span>}
+            </summary>
+            <div className="space-y-2 p-2 pt-0 text-[11px] text-port-text-muted">
+              {scene.visualIntent && <p className="break-words">Intent: {scene.visualIntent}</p>}
+              {/* Applied treatment direction (#8980) — appended to both generated prompts. */}
+              {scene.direction && (
+                <p className="break-words" title={scene.direction.frameClause}>
+                  Direction: {scene.direction.mode}{scene.direction.medium ? ` · planned ${MUSIC_VIDEO_MEDIUM_LABELS[scene.direction.medium] || scene.direction.medium}${scene.direction.mediumPinned ? ' (pinned)' : ''}` : ''}{scene.direction.focalSubject ? ` · ${scene.direction.focalSubject}` : ''}
+                  {scene.direction.typographyRole !== 'none' ? ` · ${scene.direction.typographyRole} text, ${scene.direction.negativeSpace} region kept clear` : ' · no text'}
+                </p>
               )}
-              {onContinueFromPrevious && layer === 'footage' && index > 0 && (
-                <>
-                  <button type="button" onClick={() => onContinueFromPrevious(scene, { keepStillAsEnd: keepStillAsEnd && Boolean(scene.referenceImageId) })}
-                    disabled={takeBusy || !previousHasClip}
-                    className="flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
-                    title={previousHasClip ? 'Start this shot from the last frame the previous shot shows in the cut' : 'The previous shot needs a clip first'}>
-                    <SkipForward size={14} /> From previous shot
-                  </button>
-                  {scene.referenceImageId && (
-                    <label htmlFor={`mv-scene-${scene.sceneId}-keep-still-end`} className="flex items-center gap-1 text-[11px] text-port-text-muted min-h-[44px] sm:min-h-0">
-                      <input id={`mv-scene-${scene.sceneId}-keep-still-end`} type="checkbox" checked={keepStillAsEnd}
-                        onChange={(e) => setKeepStillAsEnd(e.target.checked)} />
-                      Keep this frame as the end frame
-                    </label>
-                  )}
-                </>
-              )}
+              <ShotActionInspector contract={scene.direction?.actionContract} scene={scene} />
+              <PlateComparison scene={scene} frames={false} />
             </div>
-          </div>
-        </div>
-        <SceneTakeStrip scene={scene} kind="image" busy={takeBusy}
-          onSelect={(take) => onSelectTake?.(scene, take)}
-          onReview={(take, review) => onReviewTake?.(scene, take, review)}
-          onOpenPreview={onOpenPreview} />
-        {/* Style-break end frame (#11173) — what a fal clip ends on */}
-        {onGenerateEndFrame && layer === 'footage' && (
-          <SceneEndFrame scene={scene} index={index} generating={!!generatingEndFrame} onGenerate={onGenerateEndFrame}
-            onEditLocal={onEditLocal} onSave={onSave} onOpenPreview={onOpenPreview} takeBusy={takeBusy}
-            onSelectTake={onSelectTake} onReviewTake={onReviewTake} videoSettings={falVideoSettings} />
+          </details>
         )}
-        {/* Render: the motion prompt, where this shot renders and what it costs, then its clip (Phase 1). */}
-        <section aria-label="Render" className="space-y-2 rounded border border-port-border p-2">
-        <h4 className="text-xs font-medium">Render</h4>
-        {layer === 'footage' && promptField}
-        <div className="flex flex-wrap items-center gap-2">
-          <SceneRenderTarget id={fieldId('render-on')} value={renderPick} onChange={setRenderPick} performance={performance}
-            saved={falVideoSettings || {}} disabled={!!generatingVideo} />
-          {renderCost && <span className="text-[11px] text-port-text-muted">{renderCost}</span>}
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          {scene.videoHistoryId && performance && (
-            <PerformanceEvidence key={scene.videoHistoryId} clipSrc={clipSrc} instruction={instruction}
-              temporal={performanceReview?.shot} excerptStartSec={performanceReview?.excerptStartSec || 0}
-              repair={repairPlan} repairBusy={repairBusy || settingsSaving || generatingVideo || takeBusy}
-              onRepair={onRepairPerformance ? () => onRepairPerformance(scene.sceneId, {
-                excerptId: performanceReview.excerptId, sourceAssetId: repairPlan.sourceAssetId, boundarySec: repairPlan.boundarySec,
-              }) : null} />
-          )}
-          {scene.videoHistoryId && !performance && (
-            <div className="relative w-40 shrink-0">
-              <video
-                ref={clipPlayerRef}
-                src={clipSrc}
-                className="w-full aspect-video object-cover rounded border border-port-border bg-black"
-                muted
-                playsInline
-                preload="metadata"
-                controls
-                onLoadedMetadata={(e) => {
-                  const sec = e.currentTarget.duration;
-                  if (Number.isFinite(sec) && sec > 0) setClipMeta({ id: scene.videoHistoryId, sec });
-                }}
-              />
-              {/* Corner expand — do not put the open handler on <video> itself;
-                  that would fight native play/pause controls. Shape matches
-                  ScenePreview's open-in-new-tab overlay. Pause first so the
-                  lightbox's unmuted autoplay doesn't double-play the audio. */}
-              <button
-                type="button"
-                onClick={() => {
-                  clipPlayerRef.current?.pause();
-                  onOpenPreview?.(`video:${scene.videoHistoryId}`);
-                }}
-                aria-label={`View scene ${index + 1} clip full size`}
-                title={`View scene ${index + 1} clip full size`}
-                className="always-dark absolute top-1 right-1 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 p-1 flex items-center justify-center rounded bg-black/50 text-white hover:bg-black/80 focus:outline-none focus:ring-2 focus:ring-port-accent"
-              >
-                <Maximize2 className="w-3 h-3" />
-              </button>
-            </div>
-          )}
-          <button onClick={generateVideo}
-            disabled={!!videoRefusal}
-            className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
-            title={videoRefusal
-              || (performance ? `${capability.style === 'music' ? "Animate this scene's frame to the song" : "Lip-sync this scene's frame to the song"} via ${capability.label} — ${performanceCost}`
-                : "Render this shot's clip from its still")}>
-            {generatingVideo ? <Activity size={14} className="animate-spin" /> : <Video size={14} />}
-            {generatingVideo ? 'Rendering…' : (scene.videoHistoryId ? 'Render again' : 'Render')}
-          </button>
-          {scene.videoHistoryId && canContinueShot && (
-            <button
-              onClick={() => onContinueVideo(scene)}
-              disabled={settingsSaving || !!generatingVideo}
-              className="flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
-              title="Native-extend this clip from its final latent frames and attach the longer result to this scene"
-            >
-              <Video size={14} /> Continue shot
-            </button>
-          )}
-          {onImportClipTake && (
-            <button type="button" onClick={() => onImportClipTake(scene)} disabled={takeBusy}
-              className="flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
-              title="Pick an existing clip from the gallery (e.g. made in an external tool) as a take">
-              <Clapperboard size={14} /> Import clip take
-            </button>
-          )}
-        </div>
-        <SceneTakeStrip scene={scene} kind="video" busy={takeBusy}
-          onSelect={(take) => onSelectTake?.(scene, take)}
-          onReview={(take, review) => onReviewTake?.(scene, take, review)}
-          onOpenPreview={onOpenPreview} />
-        </section>
-        </>)}
       </div>
+      {swapKind && (
+        <SceneTakePicker open onClose={() => setSwapKind(null)} projectId={projectId} scene={scene} kind={swapKind}
+          shotNumbers={shotNumbers} busy={takeBusy} onPlace={(pick) => onPlacePoolItem?.(scene, pick)} />
+      )}
     </details>
     {failure && (
       <div className="mt-1 flex items-start gap-2 rounded border border-port-error/40 bg-port-error/10 px-2 py-1 text-xs text-port-error">

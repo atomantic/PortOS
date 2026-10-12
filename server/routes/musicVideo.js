@@ -12,7 +12,7 @@ import { existsSync } from 'fs';
 import { unlink } from 'fs/promises';
 import { pipeline } from 'stream/promises';
 import { Router } from 'express';
-import { musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoShotLockSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoContinueShotSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
+import { musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoShotLockSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoContinueShotSchema, musicVideoPoolUseSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
 import { productionReadiness } from '../services/musicVideo/productionReview.js';
 import { finishedOutsideBlocker } from '../lib/musicVideoFinishedOutside.js';
 import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, lockProductionShots, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, reviseProductionFromFeedback, revertProductionInput } from '../services/musicVideo/productionReviewService.js';
@@ -115,6 +115,7 @@ import {
   appendSceneTakes,
   appendTakesAcrossScenes,
   selectSceneTake,
+  placeMediaPoolItem,
   reviewSceneTake,
   refreshSongStyleFromSuno,
 } from '../services/musicVideo/projects.js';
@@ -1533,6 +1534,25 @@ router.post('/:id/scenes/:sceneId/continue-from-previous', asyncHandler(async (r
   const { keepStillAsEnd } = validateRequest(musicVideoContinueShotSchema, req.body ?? {});
   const { continueFromPreviousShot } = await import('../services/musicVideo/continueShot.js');
   res.json(await continueFromPreviousShot(req.params.id, req.params.sceneId, { keepStillAsEnd }));
+}));
+
+// Every still and clip generated for this video that no shot uses now (the shot card's "Swap from unused").
+router.get('/:id/media-pool', asyncHandler(async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const { getMusicVideoMediaPool } = await import('../services/musicVideo/mediaPool.js');
+  res.json(await getMusicVideoMediaPool(project));
+}));
+
+router.post('/:id/scenes/:sceneId/takes/use', asyncHandler(async (req, res) => {
+  const { kind, assetId, withAssetId } = validateRequest(musicVideoPoolUseSchema, req.body);
+  const otherKind = kind === 'image' ? 'video' : 'image';
+  for (const [assetKind, id] of [[kind, assetId], [otherKind, withAssetId]]) {
+    if (id && !(await takeAssetExists(assetKind, id))) {
+      throw new ServerError(`${assetKind === 'video' ? 'Video' : 'Image'} not found in this install's media library`, { status: 400, code: 'TAKE_ASSET_NOT_FOUND' });
+    }
+  }
+  res.json({ scene: await placeMediaPoolItem(req.params.id, req.params.sceneId, { kind, assetId, withAssetId }) });
 }));
 
 router.post('/:id/scenes/:sceneId/takes/:takeId/select', asyncHandler(async (req, res) => {

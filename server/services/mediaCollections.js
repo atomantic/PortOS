@@ -612,6 +612,42 @@ export async function findOrCreateSeriesCollection({ seriesId, seriesName, descr
   return result;
 }
 
+// A music video's own collection (one per project): every still and clip
+// generated for it, kept findable after a shot drops them. The id is derived
+// from the project id, so the same project converges on one collection on
+// every peer and no owner stamp is needed.
+const MUSIC_VIDEO_ID_MAX = 100;
+export const musicVideoCollectionId = (projectId) => `mvc-${String(projectId).slice(0, MUSIC_VIDEO_ID_MAX)}`;
+export const musicVideoCollectionNameFor = (projectName) =>
+  `Music video: ${typeof projectName === 'string' && projectName.trim() ? projectName.trim() : 'Untitled'}`.slice(0, NAME_MAX_LENGTH);
+
+export async function findOrCreateMusicVideoCollection({ projectId, projectName }) {
+  if (!projectId || typeof projectId !== 'string') throw codedError('projectId is required', ERR_VALIDATION);
+  const id = musicVideoCollectionId(projectId);
+  assertCollectionId(id);
+  let createdId = null;
+  const result = await store().queueRecordWrite(id, async () => {
+    const current = await store().loadOne(id);
+    if (current && !current.deleted) return current;
+    const now = new Date().toISOString();
+    const next = {
+      id,
+      name: musicVideoCollectionNameFor(projectName),
+      description: 'Every still and clip generated for this music video.',
+      coverKey: null,
+      source: 'auto',
+      items: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    createdId = id;
+    await store().saveOneNow(id, next);
+    return next;
+  });
+  if (createdId) announceNewCollection(createdId);
+  return result;
+}
+
 // Both cascade families below — unlink (clear the owner link) and rename
 // (cascade the owner's display name) — share the same shape: scan all records
 // by their owner stamp, then per-match queue a load→re-check→save. The

@@ -225,6 +225,9 @@ export default function BoardStage({ board }) {
               previousHasClip={Boolean(previousShot(project, scene.sceneId)?.videoHistoryId)}
               onImportTake={(target) => board.setPickerTarget({ type: 'take', sceneId: target.sceneId })}
               onImportClipTake={(target) => board.setPickerTarget({ type: 'clip', sceneId: target.sceneId })}
+              onPlacePoolItem={takes.placePoolItem}
+              projectId={project.id}
+              shotNumbers={numbers}
               layered={layered}
               documentComposition={project.composition?.mode === 'document'}
             />

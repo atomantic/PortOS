@@ -318,6 +318,20 @@ export const musicVideoTakeInputSchema = z.object({
   if (!parsed.success) ctx.addIssue({ code: 'custom', path: ['assetId'], message: parsed.error.issues[0].message });
 });
 
+// Put an unused still or clip from the project's pool on a shot; `withAssetId` is its partner (a still's clip, a clip's still).
+export const musicVideoPoolUseSchema = z.object({
+  kind: z.enum(['image', 'video']),
+  assetId: z.string().min(1).max(256),
+  withAssetId: z.string().min(1).max(256).optional(),
+}).strict().superRefine((input, ctx) => {
+  const [still, clip] = input.kind === 'image' ? [input.assetId, input.withAssetId] : [input.withAssetId, input.assetId];
+  for (const [value, schema, path] of [[still, galleryImageName, input.kind === 'image' ? 'assetId' : 'withAssetId'], [clip, videoHistoryIdSchema, input.kind === 'video' ? 'assetId' : 'withAssetId']]) {
+    if (value === undefined) continue;
+    const parsed = schema.safeParse(value);
+    if (!parsed.success) ctx.addIssue({ code: 'custom', path: [path], message: parsed.error.issues[0].message });
+  }
+});
+
 // Review a take: reject/restore it and/or leave a note for regeneration.
 export const musicVideoTakeReviewSchema = z.object({
   status: z.enum(MUSIC_VIDEO_TAKE_STATUSES).optional(),

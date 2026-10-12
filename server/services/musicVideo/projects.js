@@ -23,6 +23,7 @@ import { assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy
  */
 
 import { setSceneLastFailure } from './takes.js';
+import { droppedTakeAssets, fileMusicVideoMedia } from './mediaPool.js';
 import { presentMusicVideoDependencies, retainMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
 import { createRecordStoreBackendSelector } from '../../lib/pgFileFacade.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
@@ -317,11 +318,19 @@ export async function appendSceneTakes(id, sceneId, inputs) {
   if (inputs.some(input => input.source === 'generated')) {
     const { appendSceneTakes: append } = await import('./takes.js');
     const outcome = await mutateProjectRecord(id, current => append(current, sceneId, inputs), { source: 'generation-completion' });
+    await fileAppendedTakes(outcome.project, outcome.appended.map(take => ({ sceneId, take })));
     return { scene: outcome.project.scenes.find(scene => scene.sceneId === sceneId), appended: outcome.appended };
   }
   const result = await (await selectBackend()).appendSceneTakes(id, sceneId, inputs);
   emitRecordUpdated('musicVideoProject', id);
+  await fileAppendedTakes(await getProject(id), result.appended.map(take => ({ sceneId, take })));
   return result;
+}
+
+// Every take that lands also lands in the project's own collection (mediaPool.js).
+function fileAppendedTakes(project, placed) {
+  return fileMusicVideoMedia(project, placed.filter(({ take }) => take?.assetId)
+    .map(({ sceneId, take }) => ({ kind: take.kind === 'video' ? 'video' : 'image', ref: take.assetId, sceneId, take })));
 }
 
 /**
@@ -337,6 +346,7 @@ export async function recordSceneFailure(id, sceneId, failure) {
 export async function appendTakesAcrossScenes(id, items) {
   const result = await (await selectBackend()).appendTakesAcrossScenes(id, items);
   emitRecordUpdated('musicVideoProject', id);
+  await fileAppendedTakes(result.project, result.appended.filter(Boolean));
   return result;
 }
 
@@ -346,6 +356,36 @@ export async function selectSceneTake(id, sceneId, takeId) {
   const { scene } = await mutateProjectRecord(id, (current) => {
     assertClipUnlocked(current, sceneId);
     return select(current, sceneId, takeId);
+  });
+  return scene;
+}
+
+/**
+ * Put an unused still or clip from the project's pool on a shot (the shot
+ * card's "Swap from unused"): it becomes a take of the shot and its selection.
+ * `withAssetId` brings its partner too: a still's clip, or a clip's still.
+ * The take keeps the prompt and provider of the take it came from. A shot
+ * whose video is locked refuses, as it does any other new selection.
+ * Returns the updated scene.
+ */
+export async function placeMediaPoolItem(id, sceneId, { kind, assetId, withAssetId = null }) {
+  const [{ appendSceneTakes: append, selectSceneTake: select }, { assertClipUnlocked }, { projectTakeAssets }] = await Promise.all([
+    import('./takes.js'), import('./productionReview.js'), import('./mediaPool.js'),
+  ]);
+  const { scene } = await mutateProjectRecord(id, (current) => {
+    assertClipUnlocked(current, sceneId);
+    const origin = new Map(projectTakeAssets(current).filter(asset => asset.take).map(asset => [`${asset.kind}:${asset.ref}`, asset.take]));
+    const still = kind === 'image' ? assetId : withAssetId;
+    const clip = kind === 'video' ? assetId : withAssetId;
+    const input = (takeKind, ref) => {
+      const from = origin.get(`${takeKind}:${ref}`);
+      return { kind: takeKind, assetId: ref, source: 'reused', provider: from?.provider || null, prompt: from?.prompt || null,
+        ...(takeKind === 'video' && still ? { sourceImageId: still } : {}) };
+    };
+    const inputs = [...(still ? [input('image', still)] : []), ...(clip ? [input('video', clip)] : [])];
+    let outcome = append(current, sceneId, inputs);
+    for (const take of outcome.appended) outcome = { ...select(outcome.project, sceneId, take.takeId), appended: outcome.appended };
+    return outcome;
   });
   return scene;
 }
@@ -369,6 +409,7 @@ export async function reviewSceneTake(id, sceneId, takeId, review) {
  */
 export async function mutateProjectRecord(id, transform, { source = null } = {}) {
   const { preserveAutomatedShotLocks } = source ? await import('./productionReview.js') : {};
+  let dropped = null;
   const outcome = await (await selectBackend()).mutateProjectRecord(id, (current) => {
     const outcome = transform(current);
     if (source) {
@@ -382,9 +423,12 @@ export async function mutateProjectRecord(id, transform, { source = null } = {})
         if ('replaced' in outcome) outcome.replaced = 0;
       }
     }
+    dropped = { project: current, assets: droppedTakeAssets(current, outcome.project) };
     return { ...outcome, project: retainMusicVideoDependencies(current, outcome.project) };
   });
   emitRecordUpdated('musicVideoProject', id);
+  // A cut shot, a merge or a re-plan drops takes from the board: they stay findable in the project's collection.
+  if (dropped?.assets.length) await fileMusicVideoMedia(dropped.project, dropped.assets);
   return outcome;
 }
 
