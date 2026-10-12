@@ -329,6 +329,17 @@ describe('the shot asset manager', () => {
 
     const refused = await request(app).post(`${base()}/media-pool/delete`).send({ items: [{ kind: 'image', assetId: 'used.png' }] });
     expect(refused.status).toBe(409);
+    // Nor a still another video's shot uses, though it sits in this video's collection.
+    seedImage('shared.png');
+    const other = await projects.createProject({ name: 'Second Video' });
+    const otherScene = await projects.addProjectScene(other.id, { prompt: 'an empty stage' });
+    await request(app).post(`/api/music-video/${other.id}/scenes/${otherScene.sceneId}/takes`).send({ kind: 'image', assetId: 'shared.png', source: 'generated' });
+    const { fileMusicVideoMedia } = await import('../services/musicVideo/mediaPool.js');
+    await fileMusicVideoMedia(await reload(), [{ kind: 'image', ref: 'shared.png' }]);
+    expect((await request(app).post(`${base()}/media-pool/delete`).send({ items: [{ kind: 'image', assetId: 'shared.png' }] })).status).toBe(409);
+    // A mark can be cleared again.
+    await marks([{ kind: 'image', assetId: 'shared.png' }], 'bad');
+    expect((await marks([{ kind: 'image', assetId: 'shared.png' }], null)).body.assetMarks).toEqual({ 'image:keep.png': 'ingredient', 'image:bad.png': 'bad' });
 
     const deleted = await request(app).post(`${base()}/media-pool/delete`).send({ items: [{ kind: 'image', assetId: 'bad.png' }] });
     expect(deleted.status).toBe(200);
@@ -342,6 +353,6 @@ describe('the shot asset manager', () => {
     expect(takeIds).not.toContain('bad-clip');
     expect(stored.assetMarks).toEqual({ 'image:keep.png': 'ingredient' });
     const { getCollection, musicVideoCollectionId } = await import('../services/mediaCollections.js');
-    expect((await getCollection(musicVideoCollectionId(project.id))).items.map((item) => item.ref).sort()).toEqual(['b-clip', 'b-used.png', 'keep.png', 'used.png']);
+    expect((await getCollection(musicVideoCollectionId(project.id))).items.map((item) => item.ref).sort()).toEqual(['b-clip', 'b-used.png', 'keep.png', 'shared.png', 'used.png']);
   });
 });

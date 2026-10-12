@@ -46,6 +46,10 @@ describe('Swap from unused', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Ingredient' }));
     await waitFor(() => expect(api.markMusicVideoPoolAssets).toHaveBeenCalledWith('mv-1', [{ kind: 'image', assetId: 'floor.png' }], 'ingredient', { silent: true }));
     expect(await screen.findByRole('button', { name: '★ Ingredients 1' })).toBeTruthy();
+    // Tapping the active mark clears it.
+    fireEvent.click(screen.getByRole('button', { name: 'Ingredient' }));
+    await waitFor(() => expect(api.markMusicVideoPoolAssets).toHaveBeenLastCalledWith('mv-1', [{ kind: 'image', assetId: 'floor.png' }], null, { silent: true }));
+    expect(await screen.findByRole('button', { name: '★ Ingredients 0' })).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: '✕ Bad 1' }));
     fireEvent.click(screen.getByRole('button', { name: 'Delete 1 bad' }));

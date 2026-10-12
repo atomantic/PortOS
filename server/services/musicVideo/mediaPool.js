@@ -197,28 +197,28 @@ export async function getMusicVideoMediaPool(project) {
 }
 
 /**
- * After a still or clip is deleted from the media library: forget it on every
- * music video that held it (unused takes, marks, collection rows), so nothing
- * points at a file that is gone. Best-effort, like the other filing.
+ * After stills or clips (`<image|video>:<ref>` keys) are deleted from the
+ * media library: forget them on every music video that held them (unused
+ * takes, marks, collection rows), in one pass per project, so nothing points
+ * at a file that is gone. Best-effort, like the other filing.
  */
-export async function forgetDeletedMusicVideoAsset(kind, ref) {
-  const key = `${kind}:${ref}`;
+export async function forgetDeletedMusicVideoAssets(keys) {
+  const gone = new Set(keys);
   try {
     const [{ listProjects, mutateProjectRecord }, { getCollection, musicVideoCollectionId, bulkUpdateCollectionItems }] = await Promise.all([
       import('./projects.js'), import('../mediaCollections.js'),
     ]);
     for (const project of await listProjects()) {
-      const held = Boolean(project.assetMarks?.[key])
-        || (project.scenes || []).some((scene) => (scene.takes || []).some((take) => `${KIND_OF_SLOT[take?.kind]}:${take?.assetId}` === key));
-      // The take removal files dropped takes into the collection, so the row goes after it.
-      if (held) await mutateProjectRecord(project.id, (current) => forgetPoolAssets(current, [key]));
+      const held = Object.keys(project.assetMarks || {}).some((key) => gone.has(key))
+        || (project.scenes || []).some((scene) => (scene.takes || []).some((take) => gone.has(`${KIND_OF_SLOT[take?.kind]}:${take?.assetId}`)));
+      // The take removal files dropped takes into the collection, so the rows go after it.
+      if (held) await mutateProjectRecord(project.id, (current) => forgetPoolAssets(current, keys));
       const collection = await getCollection(musicVideoCollectionId(project.id)).catch(() => null);
-      if (collection?.items?.some((item) => `${item.kind}:${item.ref}` === key)) {
-        await bulkUpdateCollectionItems(collection.id, { remove: [key] });
-      }
+      const rows = (collection?.items || []).map((item) => `${item.kind}:${item.ref}`).filter((key) => gone.has(key));
+      if (rows.length) await bulkUpdateCollectionItems(collection.id, { remove: rows });
     }
   } catch (err) {
-    console.error(`❌ music-video media pool: forgetting deleted ${key} failed: ${err.message}`);
+    console.error(`❌ music-video media pool: forgetting ${keys.length} deleted asset(s) failed: ${err.message}`);
   }
 }
 
@@ -226,12 +226,16 @@ export async function forgetDeletedMusicVideoAsset(kind, ref) {
  * Delete unused stills and clips of a video from the media library (the asset
  * manager's "Delete"): only assets in the video's pool, so a shot's still or
  * clip and media this video never made are refused. Each delete then forgets
- * the asset on every music video (forgetDeletedMusicVideoAsset).
+ * the batch on every music video (forgetDeletedMusicVideoAssets).
  */
 export async function deleteMusicVideoPoolAssets(project, items) {
   const { ServerError } = await import('../../lib/errorHandler.js');
   const pool = new Set((await getMusicVideoMediaPool(project)).items.map((item) => `${item.kind}:${item.assetId}`));
-  const refused = items.filter((item) => !pool.has(`${item.kind}:${item.assetId}`));
+  // A shot on any music video using it keeps it, not only this video's shots.
+  const { listProjects } = await import('./projects.js');
+  const usedAnywhere = new Set((await listProjects()).flatMap((other) => [...usedKeys(other)]));
+  const keys = items.map((item) => `${item.kind}:${item.assetId}`);
+  const refused = keys.filter((key) => !pool.has(key) || usedAnywhere.has(key));
   if (refused.length) {
     throw new ServerError(`${refused.length} of these ${refused.length === 1 ? 'is' : 'are'} on a shot or not made for this video`, { status: 409, code: 'POOL_ASSET_IN_USE' });
   }
@@ -239,7 +243,8 @@ export async function deleteMusicVideoPoolAssets(project, items) {
     import('../galleryImageDeletion.js'), import('../videoGen/historyOps.js'),
   ]);
   for (const item of items) {
-    await (item.kind === 'image' ? deleteGalleryImage(item.assetId) : deleteHistoryItem(item.assetId));
+    await (item.kind === 'image' ? deleteGalleryImage : deleteHistoryItem)(item.assetId, { forgetInMusicVideos: false });
   }
+  await forgetDeletedMusicVideoAssets(keys);
   return { deleted: items.length };
 }

@@ -9,7 +9,7 @@ import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { deleteImage } from './imageGen/local.js';
 import { purgeImageRefFromAllUniverses } from './universeCanon.js';
 
-export function deleteGalleryImage(filename) {
+export function deleteGalleryImage(filename, { forgetInMusicVideos = true } = {}) {
   return withBackupAssetPublication(async () => {
     const result = await deleteImage(filename);
     // Best-effort: a purge failure must not fail the gallery delete itself.
@@ -20,8 +20,9 @@ export function deleteGalleryImage(filename) {
     if (universePurge.removed > 0) {
       console.log(`🧹 Purged ${universePurge.removed} canon ref(s) for ${filename}`);
     }
-    // Music videos forget it too (their unused takes, marks and collection rows).
-    await import('./musicVideo/mediaPool.js').then((m) => m.forgetDeletedMusicVideoAsset('image', filename));
+    // Music videos forget it too (their unused takes, marks and collection rows);
+    // a batch delete from a video's asset manager forgets its whole batch at once.
+    if (forgetInMusicVideos) await import('./musicVideo/mediaPool.js').then((m) => m.forgetDeletedMusicVideoAssets([`image:${filename}`]));
     return { ...result, canonRefsRemoved: universePurge.removed };
   });
 }

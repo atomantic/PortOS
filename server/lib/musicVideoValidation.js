@@ -319,8 +319,6 @@ export const musicVideoTakeInputSchema = z.object({
   if (!parsed.success) ctx.addIssue({ code: 'custom', path: ['assetId'], message: parsed.error.issues[0].message });
 });
 
-// Put an unused still or clip from the project's pool on a shot; `withAssetId` is its partner (a still's clip, a clip's still).
-// `endImage` puts a still on the shot's end frame; only a start still pairs with a clip.
 /** One still or clip in a video's media pool, as the asset manager names it. */
 const musicVideoPoolAssetSchema = z.object({
   kind: z.enum(['image', 'video']),
@@ -341,6 +339,8 @@ export const musicVideoPoolDeleteSchema = z.object({
   items: z.array(musicVideoPoolAssetSchema).min(1).max(500),
 }).strict();
 
+// Put an unused still or clip from the project's pool on a shot; `withAssetId` is its partner (a still's clip, a clip's still).
+// `endImage` puts a still on the shot's end frame; only a start still pairs with a clip.
 export const musicVideoPoolUseSchema = z.object({
   kind: z.enum(['image', 'video', 'endImage']),
   assetId: z.string().min(1).max(256),
