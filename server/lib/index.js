@@ -128,6 +128,7 @@ export * from './fableLoomProduction.js';
 export * from './fableLoomContinuity.js';
 export * from './fableLoomOutline.js';
 export * from './fableLoomPlaytest.js';
+export * from './fableLoomVisualPrompts.js';
 export * from './scenePrompt.js';
 export * from './proseExportSettings.js';
 export * from './shotGrammar.js';
