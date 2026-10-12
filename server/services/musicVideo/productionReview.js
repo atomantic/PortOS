@@ -120,9 +120,9 @@ export function seedArtDraft(project, stage = project.castAndSets) {
 function shotApprovalBasis(project, scene) {
   const row = (project.productionReview?.draft?.storyboard || []).find(shot => shot?.sceneId === scene.sceneId);
   const { prompt, framePrompt, visualIntent, camera, direction, startSec, endSec, lyricText, referenceImageId, endImageId,
-    shotMode, performanceSpeaker, performanceStyle, visualLayer, loop } = scene;
+    shotMode, performanceSpeaker, performanceStyle, visualLayer, loop, stillFixes, clipFixes } = scene;
   return hash({ prompt, framePrompt, visualIntent, camera, direction, startSec, endSec, lyricText, referenceImageId, endImageId,
-    shotMode, performanceSpeaker, performanceStyle, visualLayer, loop,
+    shotMode, performanceSpeaker, performanceStyle, visualLayer, loop, stillFixes, clipFixes,
     row: row ? { action: row.action, staging: row.staging, camera: row.camera, transition: row.transition, lyricCueIds: row.lyricCueIds } : null });
 }
 
@@ -142,6 +142,36 @@ export function shotLocks(project) {
     const approval = approvals[scene.sceneId];
     return [scene.sceneId, !approval ? (covered ? 'locked' : 'open') : approval.basis === shotApprovalBasis(project, scene) ? 'locked' : 'changed'];
   }));
+}
+
+/** Apply an automation proposal under the store lock; locked render inputs stay intact. */
+export function preserveAutomatedShotLocks(before, after, source) {
+  const locks = shotLocks(before) || {};
+  const locked = (before.scenes || []).filter(scene => locks[scene.sceneId] === 'locked');
+  if (!locked.length) return after;
+  const rejected = locked.filter(scene => {
+    const proposed = after.scenes?.find(next => next.sceneId === scene.sceneId);
+    return !proposed || shotApprovalBasis(before, scene) !== shotApprovalBasis(after, proposed);
+  });
+  // Materialize legacy whole-board locks before an open shot's edit can stale
+  // that approval. No new approval is granted: these shots were already locked.
+  const shotApprovals = { ...after.productionReview?.shotApprovals };
+  for (const scene of locked) shotApprovals[scene.sceneId] = before.productionReview?.shotApprovals?.[scene.sceneId]
+    || { ...before.productionReview?.approvals?.storyboard, basis: shotApprovalBasis(before, scene), fromBoardApproval: true };
+  let next = { ...after, productionReview: { ...after.productionReview, shotApprovals } };
+  if (!rejected.length) return next;
+  // A merge/re-plan may replace IDs or spans. Refuse the whole board mutation
+  // rather than splice an old locked shot into an overlapping new timeline.
+  next = { ...next, scenes: before.scenes, productionReview: { ...next.productionReview,
+    draft: before.productionReview?.draft } };
+  for (const scene of rejected) {
+    const proposed = after.scenes?.find(next => next.sceneId === scene.sceneId);
+    next = recordProductionFeedback(next, { stage: 'storyboard', basis: productionReviewBasis(next).storyboard,
+      target: scene.sceneId, decision: 'comment',
+      text: `${source} proposed changing locked shot ${scene.sceneId}; unlock it before applying this proposal. ${JSON.stringify({ scene: proposed || null,
+        storyboard: after.productionReview?.draft?.storyboard?.find(row => row.sceneId === scene.sceneId) || null }).slice(0, 6000)}` });
+  }
+  return next;
 }
 
 /** Lock or unlock Board shots for the director. A lock binds to the shot as it is now. */

@@ -344,7 +344,7 @@ export async function reviseProductionFromFeedback(id, { stage, ...route }) {
       });
       return { project: { ...current, scenes, updatedAt: new Date().toISOString(),
         ...(storyboard ? { productionReview: { ...current.productionReview, draft: { ...draft, storyboard } } } : {}) } };
-    });
+    }, { source: 'storyboard-revision' });
     return { ...changed(next), revision: { stage, sceneIds: [...updates.keys()] } };
   }
   const mode = project.composition?.mode;

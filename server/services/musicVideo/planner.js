@@ -509,7 +509,8 @@ export async function proposeShotRevisions(project, feedback, { providerId, mode
 }
 
 async function persistPlan(id, sceneInputs, { hasCards, replace }) {
-  if (!hasCards && !replace) return addProjectScenes(id, sceneInputs);
+  if (!hasCards && !replace) return addProjectScenes(id, sceneInputs, { source: 'shot-planner' });
+
   const { addScenes, replaceScenes } = await import('./projectsLogic.js');
   const { normalizeComposition } = await import('./composition.js');
   return mutateProjectRecord(id, (current) => {
@@ -519,5 +520,5 @@ async function persistPlan(id, sceneInputs, { hasCards, replace }) {
       outcome.project.composition = normalizeComposition({ ...current.composition, mode: 'composed' });
     }
     return outcome;
-  });
+  }, { source: 'shot-planner' });
 }

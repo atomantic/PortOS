@@ -238,3 +238,55 @@ describe('refreshSongStyleFromSuno', () => {
     expect(updateTrack).toHaveBeenCalledWith('track-1', { prompt: 'synth-pop, -metal' });
   });
 });
+
+
+describe('automation respects persisted shot locks (#11218)', () => {
+  it('records run edits, cuts and merges as proposals, allows open edits and director edits', async () => {
+    const { applySceneUpdate, removeScene, mergeNextScene } = await import('./projectsLogic.js');
+    const { setShotLocks, shotLocks } = await import('./productionReview.js');
+    const p = await projects.createProject({ name: 'Locks' });
+    const a = await projects.addProjectScene(p.id, { startSec: 0, endSec: 2, prompt: 'Keep this' });
+    const b = await projects.addProjectScene(p.id, { startSec: 2, endSec: 4, prompt: 'Open shot' });
+    await projects.mutateProjectRecord(p.id, current => ({ project: setShotLocks(current, { sceneIds: [a.sceneId], locked: true }) }));
+    const attempt = await projects.mutateProjectRecord(p.id, current => applySceneUpdate(current, a.sceneId, { prompt: 'Automation edit' }), { source: 'orchestrator' });
+    expect(attempt.project.scenes[0].prompt).toBe('Keep this');
+    expect(attempt.project.productionReview.feedback.at(-1)).toMatchObject({ target: a.sceneId, decision: 'comment', text: expect.stringContaining('Automation edit') });
+    for (const transform of [current => ({ project: removeScene(current, a.sceneId) }), current => mergeNextScene(current, a.sceneId)]) {
+      const out = await projects.mutateProjectRecord(p.id, transform, { source: 'production-run' });
+      expect(out.project.scenes.map(s => s.sceneId)).toEqual([a.sceneId, b.sceneId]);
+      expect(shotLocks(out.project)[a.sceneId]).toBe('locked');
+    }
+    await projects.mutateProjectRecord(p.id, current => applySceneUpdate(current, b.sceneId, { prompt: 'Allowed run edit' }), { source: 'orchestrator' });
+    expect((await projects.getProject(p.id)).scenes[1].prompt).toBe('Allowed run edit');
+    await projects.updateScene(p.id, a.sceneId, { prompt: 'Director edit' });
+    expect(shotLocks(await projects.getProject(p.id))).toEqual({ [a.sceneId]: 'changed', [b.sceneId]: 'open' });
+  });
+
+  it('keeps locked storyboard rows and the original board when a planner replaces its IDs', async () => {
+    const { setShotLocks, shotLocks } = await import('./productionReview.js');
+    const { replaceScenes } = await import('./projectsLogic.js');
+    const p = await projects.createProject({ name: 'Locked plan' });
+    const scene = await projects.addProjectScene(p.id, { startSec: 0, endSec: 4, prompt: 'Original' });
+    await projects.mutateProjectRecord(p.id, current => ({ project: setShotLocks({ ...current,
+      productionReview: { draft: { storyboard: [{ sceneId: scene.sceneId, action: 'Stay' }] } } }, { sceneIds: [scene.sceneId], locked: true }) }));
+    const revised = await projects.mutateProjectRecord(p.id, current => ({ project: { ...current,
+      productionReview: { ...current.productionReview, draft: { storyboard: [{ sceneId: scene.sceneId, action: 'Move' }] } } } }), { source: 'orchestrator' });
+    expect(revised.project.productionReview.draft.storyboard[0].action).toBe('Stay');
+    const replaced = await projects.mutateProjectRecord(p.id, current => replaceScenes(current, [{ startSec: 0, endSec: 2, prompt: 'New span' }]), { source: 'shot-planner' });
+    expect(replaced.project.scenes.map(s => s.sceneId)).toEqual([scene.sceneId]);
+    expect(shotLocks(await projects.getProject(p.id))[scene.sceneId]).toBe('locked');
+    expect(replaced.project.productionReview.feedback).toHaveLength(2);
+  });
+
+  it('checks fresh locks when an asynchronous repair lands and preserves generated clip output', async () => {
+    const { setShotLocks, shotLocks } = await import('./productionReview.js');
+    const p = await projects.createProject({ name: 'Repair race' });
+    const scene = await projects.addProjectScene(p.id, { startSec: 0, endSec: 2, prompt: 'Approved input' });
+    await projects.mutateProjectRecord(p.id, current => ({ project: setShotLocks(current, { sceneIds: [scene.sceneId], locked: true }) }));
+    const repair = await projects.mutateProjectRecord(p.id, current => ({ project: { ...current, scenes: current.scenes.map(s => ({ ...s, clipFixes: { text: 'New motion' } })) } }), { source: 'orchestrator' });
+    expect(repair.project.scenes[0].clipFixes).toBeUndefined();
+    const clip = await projects.mutateProjectRecord(p.id, current => ({ project: { ...current, scenes: current.scenes.map(s => ({ ...s, videoHistoryId: 'new-clip' })) } }), { source: 'production-run' });
+    expect(clip.project.scenes[0].videoHistoryId).toBe('new-clip');
+    expect(shotLocks(clip.project)[scene.sceneId]).toBe('locked');
+  });
+});

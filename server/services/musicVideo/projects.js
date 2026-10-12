@@ -239,7 +239,11 @@ export async function addProjectScene(id, sceneInput) {
  * caller composing a response never has to re-fetch or risk overwriting a
  * concurrent edit with stale state.
  */
-export async function addProjectScenes(id, sceneInputs) {
+export async function addProjectScenes(id, sceneInputs, { source = null } = {}) {
+  if (source) {
+    const { addScenes } = await import('./projectsLogic.js');
+    return mutateProjectRecord(id, current => addScenes(current, sceneInputs), { source });
+  }
   const { project, scenes } = await (await selectBackend()).addProjectScenes(id, sceneInputs);
   emitRecordUpdated('musicVideoProject', id);
   return { project, scenes };
@@ -327,9 +331,11 @@ export async function reviewSceneTake(id, sceneId, takeId, review) {
  * resolves to that outcome with the persisted project. Used by the treatment
  * service (#8980) so its revision checks run against the freshest record.
  */
-export async function mutateProjectRecord(id, transform) {
+export async function mutateProjectRecord(id, transform, { source = null } = {}) {
+  const { preserveAutomatedShotLocks } = source ? await import('./productionReview.js') : {};
   const outcome = await (await selectBackend()).mutateProjectRecord(id, (current) => {
     const outcome = transform(current);
+    if (source) outcome.project = preserveAutomatedShotLocks(current, outcome.project, source);
     return { ...outcome, project: retainMusicVideoDependencies(current, outcome.project) };
   });
   emitRecordUpdated('musicVideoProject', id);
