@@ -80,6 +80,21 @@ describe('isProcessAlive', () => {
     expect(isProcessAlive(12345)).toBe(true);
   });
 
+  it('keeps a zombie dead when it is reaped during the next liveness probe', () => {
+    vi.spyOn(process, 'kill')
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(true)
+      .mockImplementationOnce(() => { throw new Error('ESRCH'); });
+    mocks.readFileSync.mockReturnValueOnce('12345 (node) Z 1 2 3').mockImplementationOnce(() => {
+      const error = new Error('stat disappeared after the signal probe');
+      error.code = 'ENOENT';
+      throw error;
+    });
+
+    expect(isProcessAlive(12345)).toBe(false);
+    expect(isProcessAlive(12345)).toBe(false);
+  });
+
   it('falls back to process.kill(pid, 0) when /proc/<pid>/stat is unavailable (e.g. macOS)', () => {
     vi.spyOn(process, 'kill').mockImplementation((pid, sig) => {
       if (pid === 12345 && sig === 0) return true;
