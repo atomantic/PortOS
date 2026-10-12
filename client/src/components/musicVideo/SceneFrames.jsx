@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { Activity, ArrowRight, Image as ImageIcon, ImagePlus, Maximize2, Shuffle, SkipForward, Wand2, X } from 'lucide-react';
 import SceneTakeStrip from './SceneTakeStrip.jsx';
 
@@ -24,6 +24,27 @@ function FrameTile({ label, imageId, empty, active, onPick, onOpen, openLabel })
         </button>
       )}
     </div>
+  );
+}
+
+/**
+ * A frame prompt that grows to fit its text, so a long prompt never sits
+ * scrolled partway inside a short box (on iOS that left a half-cut line).
+ */
+function FramePrompt({ id, label, value, ...props }) {
+  const ref = useRef(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight + el.offsetHeight - el.clientHeight}px`;
+  }, [value]);
+  return (
+    <>
+      <label htmlFor={id} className="sr-only">{label}</label>
+      <textarea ref={ref} id={id} value={value} rows={3} {...props}
+        className="block max-h-80 w-full resize-none overflow-y-auto bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm" />
+    </>
   );
 }
 
@@ -67,12 +88,10 @@ export default function SceneFrames({
         <FrameTile label={label} imageId={imageId} empty={start ? 'No still yet' : 'Optional'} active={endFrames && activeSide === which}
           onPick={() => setSide(which)} onOpen={() => onOpenPreview?.(`image:${imageId}`)}
           openLabel={`View scene ${index + 1} ${start ? 'reference' : 'end'} frame full size`} />
-        <label htmlFor={id(`${which}-prompt`)} className="sr-only">{start ? 'Reference frame prompt' : 'End frame prompt'}</label>
-        <textarea id={id(`${which}-prompt`)} value={scene[field] || ''} rows={3}
+        <FramePrompt id={id(`${which}-prompt`)} label={start ? 'Reference frame prompt' : 'End frame prompt'} value={scene[field] || ''}
           onChange={(e) => onEditLocal(scene.sceneId, { [field]: e.target.value })}
           onBlur={(e) => onSave(scene.sceneId, { [field]: e.target.value || null })}
-          placeholder={start ? 'Start frame prompt (defaults to the shot prompt)' : 'Where the shot ends, e.g. her head thrown back, eyes white'}
-          className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm" />
+          placeholder={start ? 'Start frame prompt (defaults to the shot prompt)' : 'Where the shot ends, e.g. her head thrown back, eyes white'} />
         <div className="flex flex-wrap items-center gap-2">
           <button type="button" onClick={render} disabled={!!generating || needsPrompt || (!start && clipLocked)} className={PRIMARY_BUTTON}
             title={needsPrompt ? 'Describe the end frame first' : ref ? `Render from the ${REFERENCE_LABELS[ref].toLowerCase()} with this prompt` : 'Render from this prompt'}>

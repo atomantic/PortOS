@@ -356,7 +356,7 @@ export default function SceneCard({
     >
       <summary
         onClick={() => onSeek?.(scene)}
-        className="flex min-h-[44px] cursor-pointer select-none items-center gap-3 p-2 marker:content-none group-open:pr-52 [&::-webkit-details-marker]:hidden"
+        className="flex min-h-[44px] cursor-pointer select-none items-center gap-3 p-2 marker:content-none flex-wrap group-open:pr-40 sm:group-open:pr-52 [&::-webkit-details-marker]:hidden"
       >
         <ChevronRight size={14} aria-hidden="true" className="shrink-0 text-port-text-muted transition-transform group-open:rotate-90" />
         <ScenePoster scene={scene} iconSize={14} className="aspect-video w-16 shrink-0 rounded border border-port-border sm:w-20 max-sm:group-open:hidden" />
@@ -376,26 +376,31 @@ export default function SceneCard({
           {attention.length > 0 && (
             <ul aria-label="Needs attention" className="mt-0.5 flex flex-wrap gap-1">
               {attention.map((code) => (
-                <li key={code} data-attention={code} className="rounded border border-port-warning/40 bg-port-warning/10 px-1.5 text-[10px] text-port-warning">
+                <li key={code} data-attention={code} className="whitespace-nowrap rounded border border-port-warning/40 bg-port-warning/10 px-1.5 text-[10px] text-port-warning">
                   {SCENE_ATTENTION_LABELS[code]}
                 </li>
               ))}
             </ul>
           )}
         </div>
-        {generatingLane && (
-          <span className="flex shrink-0 items-center gap-1 text-[11px] text-port-accent">
-            <Activity size={14} className="animate-spin" aria-label="Generating" />
-            {generatingLane}
+        {/* Render status wraps under the title on a phone instead of squeezing it. */}
+        {(generatingLane || generatingFrame || generatingVideo) && (
+          <span className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 max-sm:basis-full max-sm:pl-6">
+            {generatingLane && (
+              <span className="flex items-center gap-1 text-[11px] text-port-accent">
+                <Activity size={14} className="animate-spin" aria-label="Generating" />
+                {generatingLane}
+              </span>
+            )}
+            <SceneRenderProgress kind="Frame" generating={generatingFrame} progress={frameProgress} />
+            <SceneRenderProgress kind="Video" generating={generatingVideo} progress={videoProgress} />
           </span>
         )}
-        <SceneRenderProgress kind="Frame" generating={generatingFrame} progress={frameProgress} />
-        <SceneRenderProgress kind="Video" generating={generatingVideo} progress={videoProgress} />
       </summary>
       {/* The open card's lock and "…" menu sit in its top-right corner. A move swaps this
           shot with its neighbor; the song timing and lyric stay with the slot. */}
       <div className="absolute right-2 top-2 z-10 flex items-center gap-1">
-        <ShotLockButton scene={scene} />
+        <ShotLockButton scene={scene} compact />
         <OverflowMenu label="Shot actions" items={[
           { id: 'earlier', label: 'Move earlier', icon: ArrowUp, onSelect: () => onMove(index, -1), disabled: index === 0 || documentComposition },
           { id: 'later', label: 'Move later', icon: ArrowDown, onSelect: () => onMove(index, 1), disabled: isLast || documentComposition },
