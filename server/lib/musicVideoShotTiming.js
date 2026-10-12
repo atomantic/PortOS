@@ -121,6 +121,21 @@ export const MUSIC_VIDEO_LIPSYNC_DEFAULT_RESOLUTION = '1080P';
  * one lip-sync lane fits the other. Takes past 15s are billed at 1.2×; the
  * cost label says so, and a director who wants to avoid it splits shorter.
  */
+function localAudioLane(style) {
+  return Object.freeze({
+    provider: 'local',
+    style,
+    label: style === 'music' ? 'Local LTX-2.5 audio-to-video' : 'Local LTX-2.5 lip-sync',
+    modelId: null,
+    minAudioSec: 1,
+    maxAudioSec: 20,
+    transcription: false,
+    resolutions: Object.freeze([]),
+    defaultResolution: null,
+    costLabel: 'Free, renders on this machine',
+  });
+}
+
 export const SOURCE_AUDIO_LIPSYNC = Object.freeze({
   fal: Object.freeze({
     provider: 'fal',
@@ -136,6 +151,12 @@ export const SOURCE_AUDIO_LIPSYNC = Object.freeze({
     // take's own estimate beside it (falSceneTake).
     costLabel: `${describeFalVideoRate(FAL_LIPSYNC_VIDEO_MODEL, MUSIC_VIDEO_LIPSYNC_DEFAULT_RESOLUTION)} — billed to your fal.ai account`,
   }),
+  // LTX audio-to-video on this machine: the song slice is the audio latent the
+  // picture is denoised against, held fixed through both passes
+  // (scripts/generate_ltx2.py `_install_a2v_stage2_audio_freeze`). The model is
+  // the project's local LTX pick, checked at submission; 20s keeps one take
+  // inside what LTX-2.5 renders well and within a Mac's memory.
+  local: localAudioLane('lipsync'),
 });
 
 /**
@@ -169,6 +190,8 @@ const musicCapability = (model) => {
  * `videoSettings.falMusicModelId` picks one; absent (or a model this install
  * does not curate) = `FAL_AUDIO_VIDEO_MODEL` (OmniHuman v1.5).
  */
+const LOCAL_MUSIC_LANE = localAudioLane('music');
+
 export const SOURCE_AUDIO_MUSIC = Object.freeze({
   fal: Object.freeze(Object.fromEntries(FAL_AUDIO_VIDEO_MODELS.map((model) => [model.id, musicCapability(model)]))),
 });
@@ -181,6 +204,7 @@ export const SOURCE_AUDIO_MUSIC = Object.freeze({
 export function performanceCapability(backend, { scene = null, videoSettings = null } = {}) {
   if (!Object.prototype.hasOwnProperty.call(SOURCE_AUDIO_LIPSYNC, backend || '')) return null;
   if (scene?.performanceStyle !== 'music') return SOURCE_AUDIO_LIPSYNC[backend];
+  if (backend === 'local') return LOCAL_MUSIC_LANE;
   const lanes = SOURCE_AUDIO_MUSIC[backend];
   const pinned = videoSettings?.falMusicModelId;
   return (pinned && Object.prototype.hasOwnProperty.call(lanes, pinned) ? lanes[pinned] : null) || lanes[FAL_AUDIO_VIDEO_MODEL];
@@ -195,9 +219,6 @@ export function performanceBlockedReason(backend) {
   if (performanceCapability(backend)) return null;
   if (backend === 'grok') {
     return 'Grok video is cutaway-only: it cannot synchronize a singer to the song. Pin fal.ai for performance shots, or switch this scene to Cutaway.';
-  }
-  if (backend === 'local') {
-    return 'Local video models cannot lip-sync to the song. Pin fal.ai for performance shots, or switch this scene to Cutaway — with Supplied song audio and a local LTX model, the scene\'s song slice still drives its motion.';
   }
   return 'Performance shots need a source-audio lip-sync provider — pin fal.ai as this project\'s video backend.';
 }

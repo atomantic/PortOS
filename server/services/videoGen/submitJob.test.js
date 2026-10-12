@@ -270,6 +270,51 @@ describe('submitVideoGenJob', () => {
       expect(mocks.enqueueJob).not.toHaveBeenCalled();
     });
 
+    describe('on local LTX', () => {
+      const ltx = { id: 'ltx25-example', name: 'LTX-2.5 Example', runtime: 'ltx25', frameStride: 8, maxNumFrames: 1017 };
+      const slice = '/example/uploads/mv-performance-2.wav';
+      const shotInstruction = {
+        version: 2, shotMode: 'performance', audioWindow: { startSec: 2.003, endSec: 6.203, durationSec: 4.2 },
+        edit: { inSec: 0, outSec: 4.2, targetSec: 4.2 },
+      };
+      beforeEach(() => {
+        mocks.preparePerformanceShot.mockResolvedValue({ audioFilePath: slice, shotInstruction, modelId: null, resolution: null, enableTranscription: false });
+      });
+
+      it('renders the song window as LTX audio-to-video on a canvas that covers it', async () => {
+        mocks.prepareVideoGenParams.mockResolvedValue(localPrepared({
+          effectiveModel: ltx, mode: 'image', sourceImagePath: '/example/images/frame.png', uploadedTempPaths: ['/example/uploads/frame.png'],
+        }));
+        await submitVideoGenJob({ prompt: 'singer', backend: 'local', modelId: ltx.id, mode: 'image', disableAudio: true, fps: 24, musicVideo }, {});
+        const { params } = mocks.enqueueJob.mock.calls[0][0];
+        // 4.2 s at 24 fps needs 102 frames; the LTX 8n+1 grid rounds that to 105.
+        expect(params).toMatchObject({
+          mode: 'a2v', numFrames: 105, audioFilePath: slice, audioStartSec: 0, disableAudio: false, shotInstruction,
+          uploadedTempPaths: ['/example/uploads/frame.png', slice],
+        });
+        expect(params).not.toHaveProperty('lipSync');
+      });
+
+      it('renders a local cutaway silent unless the song conditions it', async () => {
+        mocks.preparePerformanceShot.mockResolvedValue(null);
+        mocks.prepareVideoGenParams.mockResolvedValue(localPrepared({ effectiveModel: ltx, mode: 'image' }));
+        await submitVideoGenJob({ prompt: 'skyline', backend: 'local', mode: 'image', musicVideo }, {});
+        mocks.prepareVideoGenParams.mockResolvedValue(localPrepared({ effectiveModel: ltx, mode: 'a2v' }));
+        await submitVideoGenJob({ prompt: 'skyline', backend: 'local', mode: 'a2v', musicVideo }, {});
+        await submitVideoGenJob({ prompt: 'skyline', backend: 'local', mode: 'a2v' }, {});
+        expect(mocks.enqueueJob.mock.calls.map(([job]) => job.params.disableAudio)).toEqual([true, false, false]);
+      });
+
+      it('refuses a local model without audio-to-video and releases the slice and staged inputs', async () => {
+        const prepared = localPrepared({ effectiveModel: { id: 'wan-example', name: 'Example Wan', runtime: 'wan22' }, mode: 'image' });
+        mocks.prepareVideoGenParams.mockResolvedValue(prepared);
+        await expect(submitVideoGenJob({ prompt: 'singer', backend: 'local', mode: 'image', musicVideo }, {}))
+          .rejects.toMatchObject({ status: 400, code: 'MUSIC_VIDEO_PERFORMANCE_UNSUPPORTED', message: expect.stringMatching(/Example Wan cannot lip-sync/) });
+        expect(prepared.cleanupStaged).toHaveBeenCalledTimes(1);
+        expect(mocks.enqueueJob).not.toHaveBeenCalled();
+      });
+    });
+
     it('refuses a kickoff tagged for a revision that has since closed, as the last step before the queue write (#9011)', async () => {
       const closed = Object.assign(new Error('This revision is already canceled'), { status: 409, code: 'REVISION_CLOSED' });
       mocks.assertRevisionOpen.mockRejectedValueOnce(closed);

@@ -287,8 +287,9 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
   if (!capability) throw refuse(performanceBlockedReason(backend), 'MUSIC_VIDEO_PERFORMANCE_UNSUPPORTED');
   const musicDriven = capability.style === 'music';
   // The lip-sync route is image + source audio; any other semantic mode would
-  // ask it for something it does not do.
-  if (mode && mode !== 'image') {
+  // ask it for something it does not do. Local LTX renders it as a2v, which
+  // the audio-reactive local lane already asks for.
+  if (mode && mode !== 'image' && !(mode === 'a2v' && capability.provider === 'local')) {
     throw refuse(`A performance shot renders from its reference frame and the song — mode '${mode}' is not supported.`, 'MUSIC_VIDEO_PERFORMANCE_MODE_UNSUPPORTED');
   }
 

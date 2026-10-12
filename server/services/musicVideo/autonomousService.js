@@ -1446,7 +1446,7 @@ const emptyStages = () => Object.fromEntries(AUTONOMOUS_STAGE_IDS.map((id) => [i
  * The project video settings the run's own video tool implies, so the plan and
  * production agree on what can render: its backend and local model, and Supplied
  * song audio when that local model takes a shot's song window. With no video tool
- * it is local video, which plans no lip-sync shots.
+ * it is local video, whose lip-sync shots render as LTX audio-to-video.
  */
 async function briefVideoSettings(tools, models) {
   const route = autonomousPool(tools, models).find((entry) => entry.kind === 'video');
