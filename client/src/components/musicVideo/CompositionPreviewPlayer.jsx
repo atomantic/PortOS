@@ -53,6 +53,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
   const [t, setT] = useState(0);
   const [playing, setPlaying] = useState(false);
   const audioRef = useRef(null);
+  const wasPlaying = useRef(false);
   const appliedSeek = useRef(null);
   const filmLook = lyrics ? null : (project.filmLook ?? null);
   const titleCard = useMemo(() => normalizeTitleCard(project.titleCard), [project.titleCard]);
@@ -72,7 +73,8 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
     const next = Math.min(Math.max(0, time), Math.max(0, duration - 1 / fps));
     setT(next);
     preview.seek(next);
-    if (audioRef.current && Math.abs((audioRef.current.currentTime || 0) - next) > 0.05) audioRef.current.currentTime = next;
+    // Even a one-frame move must update audio before the pause repaint reads it.
+    if (audioRef.current && audioRef.current.currentTime !== next) audioRef.current.currentTime = next;
   }, [duration, fps, preview.seek]);
 
   useEffect(() => {
@@ -90,12 +92,18 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
     const tick = () => {
       const time = audioRef.current?.currentTime || 0;
       const frameIndex = Math.floor(time * fps + 1e-9);
-      if (frameIndex !== posted) { posted = frameIndex; setT(time); preview.seek(time); }
+      if (frameIndex !== posted) { posted = frameIndex; setT(time); preview.seek(time, { playing: true }); }
       handle = requestAnimationFrame(tick);
     };
     handle = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(handle);
   }, [playing, fps, preview.seek]);
+
+  // Pause/end repaints the current frame with the exact render filter.
+  useEffect(() => {
+    if (wasPlaying.current && !playing && preview.ready) seek(audioRef.current?.currentTime || 0);
+    wasPlaying.current = playing;
+  }, [playing, preview.ready, seek]);
 
   const togglePlay = () => {
     const audio = audioRef.current;

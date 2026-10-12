@@ -1464,7 +1464,7 @@ describe('cross-workspace browser suites (#10312)', () => {
     const plan = buildCiTestPlan(inputs.changedFiles, { ...inputs, trackedFiles });
 
     // Server-only media suites do not mount the changed client component.
-    const runtimeOnly = ['server/lib/musicVideoTitleCard.browser.test.js',
+    const runtimeOnly = ['server/lib/filmLook.browser.test.js', 'server/lib/musicVideoTitleCard.browser.test.js',
       'server/services/federatedMedia/sourceAudio.browser.test.js'];
     expect(plan.full).toBe(false);
     expect(plan.browserFiles).toEqual(expect.arrayContaining(BROWSER_SUITES.filter((suite) => !runtimeOnly.includes(suite))));

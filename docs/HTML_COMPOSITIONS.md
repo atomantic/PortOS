@@ -311,6 +311,15 @@ what the preview shows and what the render bakes:
   audio is copied back untouched. Paid clips are never regenerated to change
   the feel. The pass takes the second half of the render's progress bar and a
   cancel aborts it.
+- **The composition document preview** carries playback mode with each seek
+  into the OS-isolated preview worker. Playing frames use the same lightweight
+  motion layers as the animatic: CSS focus/tone/saturation and weave on the
+  root, with pointer-transparent overlays above document and lyric layers.
+  Noise tiles are rasterized once into canvases from trusted inline filters,
+  preserving the worker's image restrictions. Each overlay blends directly
+  with the document and preceding layers rather than an isolated overlay group.
+  Pause, scrub and frame stepping restore the exact SVG filter. This mode is
+  preview-only; final renders remain exact and generated HTML stays isolated.
 - **The storyboard animatic** (the docked preview for footage projects) shows
   the look live over the whole picture, lyrics included, on the song frame.
   Paused, that is the exact filter; **while the song plays** it is the light
