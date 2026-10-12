@@ -157,6 +157,15 @@ describe('locking shots one at a time', () => {
     const relocked = setShotLocks(retaken, { sceneIds: ['s2'], locked: true });
     expect(productionReadiness(relocked).storyboard.approved).toBe(true);
   });
+
+  // Uniquely catches unlocking every shot falling back to the old whole-board approval.
+  it('leaves the board unapproved after every shot of an approved board is unlocked', () => {
+    const art = artApproved();
+    const approved = approveProductionStage(art, { stage: 'storyboard', basis: productionReadiness(art).basis.storyboard });
+    const open = setShotLocks(approved, { sceneIds: ['s1', 's2', 's3'], locked: false });
+    expect(productionReadiness(open).storyboard.approved).toBe(false);
+    expect(() => assertShotApproval(open, 's1')).toThrow(/Lock this shot/);
+  });
 });
 
 describe('derived shot transitions', () => {

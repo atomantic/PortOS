@@ -150,7 +150,14 @@ export function setShotLocks(project, { sceneIds, locked, reviewer = null, appro
     else approvals[scene.sceneId] = { basis: shotApprovalBasis(project, scene), approvedAt,
       ...(approvedBy ? { approvedBy } : {}), ...(reviewer ? { reviewer: structuredClone(reviewer) } : {}) };
   }
-  return { ...project, productionReview: { ...project.productionReview, shotApprovals: approvals } };
+  const review = { ...project.productionReview, shotApprovals: approvals };
+  // Unlocking withdraws the whole-board approval too: with every lock gone, readiness would otherwise
+  // fall back to it and read the board approved with no shot locked.
+  if (!locked && review.approvals?.storyboard) {
+    const { storyboard: _withdrawn, ...rest } = review.approvals;
+    review.approvals = rest;
+  }
+  return { ...project, productionReview: review };
 }
 
 /**
