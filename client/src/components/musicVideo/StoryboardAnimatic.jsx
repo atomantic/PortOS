@@ -291,6 +291,8 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   // intent under the picture instead, so no stand-in text sits under the sung words.
   const cardInFrame = !overlay;
   const vhsEdges = !!shot?.videoHistoryId && sceneFrameFit(shot) === 'vhs';
+  // The render cover-fits the still behind a still-edged clip; the preview matches it.
+  const stillEdges = !!shot?.videoHistoryId && sceneFrameFit(shot) === 'still';
   return (
     <div className={`space-y-2 ${collapsed ? 'max-xl:hidden' : ''}`}>
       <figure ref={figureRef} aria-label="Storyboard animatic" className="relative aspect-video w-full overflow-hidden rounded border border-port-border bg-black">
@@ -299,7 +301,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
         {shot?.referenceImageId ? (
           // Behind a VHS-edged clip the still stands in, blurred and faded, for the render's blur of the clip.
           <img src={`/data/images/${shot.referenceImageId}`} alt=""
-            className={`h-full w-full ${vhsEdges ? 'object-cover blur-md saturate-50 brightness-75' : 'object-contain'}`} />
+            className={`h-full w-full ${vhsEdges ? 'object-cover blur-md saturate-50 brightness-75' : stillEdges ? 'object-cover' : 'object-contain'}`} />
         ) : cardInFrame && !shot?.videoHistoryId ? (
           <div className="flex h-full w-full flex-col items-center justify-center gap-1 p-4 text-center">
             <span className="text-sm font-medium text-port-text">{label}</span>
