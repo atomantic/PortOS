@@ -1,11 +1,12 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
-const { execFileMock, findFfmpegMock } = vi.hoisted(() => ({
+const { execFileMock, findFfmpegMock, routesToWindowsHelperMock } = vi.hoisted(() => ({
   execFileMock: vi.fn((...args) => {
     const callback = args.at(-1);
     callback(null, { stdout: '', stderr: '' });
   }),
   findFfmpegMock: vi.fn(async () => '/mock/ffmpeg'),
+  routesToWindowsHelperMock: vi.fn(),
 }));
 
 vi.mock('../../lib/childProcess.js', async (importOriginal) => ({
@@ -18,11 +19,19 @@ vi.mock('../../lib/ffmpeg.js', async (importOriginal) => ({
   findFfmpeg: findFfmpegMock,
 }));
 
+vi.mock('./runtimes.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  routesToWindowsHelper: routesToWindowsHelperMock,
+}));
+
 import { prepareVideoConditioningMedia } from './conditioningMedia.js';
 
 describe('prepareVideoConditioningMedia', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Exercise both runner contracts on every host; runtimes.test.js covers
+    // the actual platform-dependent routing decision.
+    routesToWindowsHelperMock.mockReturnValue(false);
   });
 
   it('rejects malformed keyframes before resizing any other conditioning input', async () => {
@@ -71,6 +80,13 @@ describe('prepareVideoConditioningMedia', () => {
 
   it('leaves the still alone on runtimes whose loader already does the round trip', async () => {
     await prepareVideoConditioningMedia(imageInput('ltx25'));
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+    expect(crfCalls()).toHaveLength(0);
+  });
+
+  it('only resizes an mlx_video model routed to the Windows helper', async () => {
+    routesToWindowsHelperMock.mockReturnValue(true);
+    await prepareVideoConditioningMedia(imageInput('mlx_video'));
     expect(execFileMock).toHaveBeenCalledTimes(1);
     expect(crfCalls()).toHaveLength(0);
   });

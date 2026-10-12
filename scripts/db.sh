@@ -471,13 +471,60 @@ fix_docker() {
 
   cd "$ROOT_DIR"
 
-  # Determine the actual data volume used by the portos-db container, if it exists
-  local data_volume=""
-  data_volume=$(docker inspect -f '{{ range .Mounts }}{{ if eq .Destination "/var/lib/postgresql/data" }}{{ .Name }}{{ end }}{{ end }}' portos-db 2>/dev/null || echo "")
-
-  # Stop and remove container
-  docker compose stop db 2>/dev/null || true
-  docker rm -f portos-db 2>/dev/null || true
+  # A successful list distinguishes an absent container from an unavailable
+  # daemon. Never turn a failed inspection into permission to modify its volume.
+  local container_id data_volume running
+  if ! container_id=$(docker ps -aq --filter 'name=^/portos-db$'); then
+    err "Could not establish the database container state; repair stopped"
+    return 1
+  fi
+  if [ -n "$container_id" ]; then
+    # Retain the actual volume before removing the container, not a guessed
+    # Compose project name (which may have changed since it was provisioned).
+    if ! data_volume=$(docker inspect -f '{{ range .Mounts }}{{ if eq .Destination "/var/lib/postgresql/data" }}{{ .Name }}{{ end }}{{ end }}' "$container_id"); then
+      err "Could not resolve the database data volume; repair stopped"
+      return 1
+    fi
+    if ! docker compose stop db; then
+      err "Failed to stop Docker PostgreSQL; repair stopped"
+      return 1
+    fi
+    if ! running=$(docker inspect -f '{{.State.Running}}' "$container_id") || [ "$running" != false ]; then
+      err "Database container is still running or its state is unknown; repair stopped"
+      return 1
+    fi
+    # Do not force-remove a container that may have restarted since inspection.
+    if ! docker rm "$container_id"; then
+      err "Failed to remove the database container; repair stopped"
+      return 1
+    fi
+  else
+    # No container exists. Ask Compose for the exact configured volume name;
+    # never try guessed names, which docker run would silently create.
+    if ! data_volume=$(docker compose config --format json | node -e '
+      let input = "";
+      process.stdin.on("data", chunk => { input += chunk; });
+      process.stdin.on("end", () => {
+        const config = JSON.parse(input);
+        const mount = config.services?.db?.volumes?.find(v => v.type === "volume" && v.target === "/var/lib/postgresql/data");
+        const name = config.volumes?.[mount?.source]?.name;
+        if (typeof name !== "string" || !name) process.exit(1);
+        process.stdout.write(name);
+      });
+    '); then
+      err "Could not resolve the configured database volume; repair stopped"
+      return 1
+    fi
+  fi
+  # Verify absence after removal too, including any concurrent restart.
+  if ! container_id=$(docker ps -aq --filter 'name=^/portos-db$') || [ -n "$container_id" ]; then
+    err "Database container absence could not be verified; repair stopped"
+    return 1
+  fi
+  if [ -z "$data_volume" ] || ! docker volume inspect "$data_volume" >/dev/null; then
+    err "Database data volume could not be verified; repair stopped"
+    return 1
+  fi
 
   # Remove stale postmaster.pid from the volume. Reuse the pinned, already-pulled
   # db image from docker-compose.yml (has rm/cat) so repair works offline.
@@ -488,14 +535,10 @@ fix_docker() {
     warn "Could not resolve the db image from docker-compose.yml — cannot remove stale lock files"
     return 1
   fi
-  if [ -n "$data_volume" ]; then
-    docker run --rm -v "${data_volume}:/data" "$PG_HELPER_IMAGE" rm -f /data/postmaster.pid 2>/dev/null || true
-  else
-    # Fallback: derive volume name from compose project name
-    local project_name
-    project_name=$(docker compose config --format json 2>/dev/null | grep -o '"name":"[^"]*"' | head -1 | cut -d'"' -f4 || echo "portos")
-    docker run --rm -v "${project_name}_portos-pgdata:/data" "$PG_HELPER_IMAGE" rm -f /data/postmaster.pid 2>/dev/null ||
-      docker run --rm -v "portos-pgdata:/data" "$PG_HELPER_IMAGE" rm -f /data/postmaster.pid 2>/dev/null || true
+  if ! docker run --rm --pull=never -v "${data_volume}:/data" "$PG_HELPER_IMAGE" \
+      sh -c 'rm -f /data/postmaster.pid && test ! -e /data/postmaster.pid'; then
+    err "Failed to remove or verify the stale database lock; repair stopped"
+    return 1
   fi
 
   log "Stale lock files cleaned"
