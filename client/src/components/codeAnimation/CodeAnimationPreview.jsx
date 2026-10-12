@@ -144,8 +144,11 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
     if (jobId) body.jobId = jobId;
     else body.html = html;
     if (audioChoice === 'with-audio' && audioUrl) body.audioUrl = audioUrl;
-    if (frame?.width) body.width = Math.min(1920, Math.round(frame.width));
-    if (frame?.height) body.height = Math.min(1080, Math.round(frame.height));
+    // Fit the renderer's bounds with one scale so portrait and square canvases
+    // retain their composition instead of stretching each axis independently.
+    const scale = Math.min(1, 1920 / (frame?.width || 1920), 1080 / (frame?.height || 1080));
+    if (frame?.width) body.width = Math.round(frame.width * scale);
+    if (frame?.height) body.height = Math.round(frame.height * scale);
     return body;
   }, [html, audioChoice, audioGlobal, jobId, audioUrl, frame]);
   const preview = useGeneratedPreview({ active: !!request, request });

@@ -41,9 +41,9 @@ import { useSseProgress } from '../../hooks/useSseProgress';
 const MESSAGES = { ready: 'ca:ready', record: 'ca:record', recorded: 'ca:recorded', progress: 'ca:progress', error: 'ca:error' };
 const HTML = '<!DOCTYPE html><html><head><title>x</title></head><body><canvas></canvas></body></html>';
 
-const renderPreview = ({ audioUrl = null, jobId, html = HTML } = {}) => render(
+const renderPreview = ({ audioUrl = null, jobId, html = HTML, frame = { width: 1920, height: 1080, durationSeconds: 5 } } = {}) => render(
   <MemoryRouter>
-    <CodeAnimationPreview html={html} audioUrl={audioUrl} messages={MESSAGES} audioGlobal="ANIMATION_AUDIO_URL" frame={{ width: 1920, height: 1080, durationSeconds: 5 }} title="Lantern" jobId={jobId} />
+    <CodeAnimationPreview html={html} audioUrl={audioUrl} messages={MESSAGES} audioGlobal="ANIMATION_AUDIO_URL" frame={frame} title="Lantern" jobId={jobId} />
   </MemoryRouter>,
 );
 
@@ -82,6 +82,20 @@ describe('CodeAnimationPreview', () => {
   });
 
   afterEach(() => vi.unstubAllGlobals());
+
+  it.each([
+    ['portrait', 1080, 1920, 608, 1080],
+    ['oversized landscape', 3840, 2160, 1920, 1080],
+    ['square', 1440, 1440, 1080, 1080],
+    ['below-limit landscape', 1280, 720, 1280, 720],
+  ])('preserves the %s canvas aspect when opening the isolated preview', async (_label, width, height, previewWidth, previewHeight) => {
+    renderPreview({ frame: { width, height } });
+    await screen.findByTitle('Code animation preview');
+    expect(previewOpens().at(-1)[1]).toEqual(expect.objectContaining({
+      width: previewWidth,
+      height: previewHeight,
+    }));
+  });
 
   it('downloads a standalone three film with the vendored modules inlined and does not execute it here (#10464)', async () => {
     const user = userEvent.setup();
