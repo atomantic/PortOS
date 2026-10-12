@@ -37,7 +37,8 @@ export function renderTargetOverrides(value, saved) {
   if (!falModelId) return { backend: 'fal' };
   // Each model has its own resolutions, so the saved one only carries over to the saved model.
   const sameModel = falModelId === (saved.falModelId || FAL_DEFAULT_IMAGE_VIDEO_MODEL);
-  return { backend: 'fal', falModelId, ...(sameModel ? {} : { falResolution: null, falDuration: null }) };
+  // A picked model is the one this render uses, end frame or not.
+  return { backend: 'fal', falModelId, falEndFrameModelId: falModelId, ...(sameModel ? {} : { falResolution: null, falDuration: null }) };
 }
 
 export default function SceneRenderTarget({ id, value, onChange, performance, saved, disabled = false }) {
