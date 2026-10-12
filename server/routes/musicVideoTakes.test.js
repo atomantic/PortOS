@@ -264,5 +264,15 @@ describe('swapping a shot from unused takes', () => {
 
     expect((await request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/use`).send({ kind: 'image', assetId: 'missing.png' })).status).toBe(400);
     expect((await request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/use`).send({ kind: 'endImage', assetId: 'a-1.png', withAssetId: 'clip-a1' })).status).toBe(400);
+
+    // A shot whose video is locked takes nothing new until it is unlocked.
+    const { setShotLocks } = await import('../services/musicVideo/productionReview.js');
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: setShotLocks(
+      setShotLocks(current, { sceneIds: [sceneA.sceneId], locked: true, stage: 'still' }),
+      { sceneIds: [sceneA.sceneId], locked: true, stage: 'video' },
+    ) }));
+    const refused = await request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/use`).send({ kind: 'image', assetId: 'a-1.png' });
+    expect(refused.status).toBe(409);
+    expect((await reload()).scenes.find((scene) => scene.sceneId === sceneA.sceneId).referenceImageId).toBe('b-2.png');
   });
 });

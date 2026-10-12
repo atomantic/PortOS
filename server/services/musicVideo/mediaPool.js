@@ -146,6 +146,8 @@ export async function getMusicVideoMediaPool(project) {
   const history = new Map((await loadHistory()).filter((entry) => entry?.id).map((entry) => [entry.id, entry]));
   const items = buildMediaPool(project, collection?.items || [], history)
     .filter((item) => (item.kind === 'video' ? history.has(item.assetId) : Boolean(resolveGalleryImage(item.assetId))))
-    .map((item) => (item.clipIds ? { ...item, clipIds: item.clipIds.filter((id) => history.has(id)) } : item));
+    // A partner that is gone is not offered, so "Use … + its still|clip" always works.
+    .map((item) => (item.clipIds ? { ...item, clipIds: item.clipIds.filter((id) => history.has(id)) }
+      : item.sourceImageId && !resolveGalleryImage(item.sourceImageId) ? { ...item, sourceImageId: null } : item));
   return { collectionId: collection?.id || null, items };
 }

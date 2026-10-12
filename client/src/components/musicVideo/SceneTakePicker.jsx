@@ -65,8 +65,9 @@ export default function SceneTakePicker({ open, onClose, projectId, scene, kind,
   const itemNoun = SLOT_NOUN[POOL_KIND[kind]];
   const shotName = shotNumbers.get(scene.sceneId) ? `Shot ${shotNumbers.get(scene.sceneId)}` : 'this shot';
   const partner = picked && (kind === 'image' ? picked.clipIds?.[0] : kind === 'video' ? picked.sourceImageId : null) || null;
+  // Stays open when the shot refuses the pick (onPlace resolves false), so another can be tried.
   const place = (withAssetId) => Promise.resolve(onPlace?.({ kind, assetId: picked.assetId, ...(withAssetId ? { withAssetId } : {}) }))
-    .then(() => onClose?.());
+    .then((placed) => { if (placed !== false) onClose?.(); });
 
   return (
     <Modal open={open} onClose={onClose} size="2xl" align="top" usePortal ariaLabel={`Swap ${noun} for ${shotName}`}

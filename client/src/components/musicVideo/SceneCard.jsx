@@ -368,8 +368,8 @@ export default function SceneCard({
                 {generatingFrame ? 'Generating frame…' : (scene.referenceImageId ? 'New frame take' : 'Generate frame')}
               </button>
               {onPlacePoolItem && (
-                <button type="button" onClick={() => setSwapKind('image')} disabled={takeBusy} className={SECONDARY_BUTTON}
-                  title="Pick a still made for this video that no shot uses: this shot's other takes, other shots', or the floor">
+                <button type="button" onClick={() => setSwapKind('image')} disabled={takeBusy || shotLock?.clip === 'locked'} className={SECONDARY_BUTTON}
+                  title={shotLock?.clip === 'locked' ? 'Video locked. Unlock the video to change it.' : "Pick a still made for this video that no shot uses: this shot's other takes, other shots', or the floor"}>
                   <Shuffle size={14} /> Swap from unused
                 </button>
               )}

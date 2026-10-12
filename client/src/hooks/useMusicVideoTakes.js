@@ -57,11 +57,12 @@ export default function useMusicVideoTakes({ project, applyScenePatch }) {
   });
 
   // Serialize take mutations; a failure toasts and leaves the chain usable.
+  // Resolves true when the change landed, false when it was refused.
   const runTakeOp = (work, failMessage) => {
     const projectId = project.id;
     const run = chainRef.current.then(() => work(projectId));
-    chainRef.current = run.then((scene) => { if (scene) applyScene(projectId, scene); })
-      .catch((err) => toast.error(err?.message || failMessage));
+    chainRef.current = run.then((scene) => { if (scene) applyScene(projectId, scene); return true; })
+      .catch((err) => { toast.error(err?.message || failMessage); return false; });
     return chainRef.current;
   };
 
