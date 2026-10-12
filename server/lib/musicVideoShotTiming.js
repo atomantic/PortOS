@@ -310,7 +310,7 @@ export function clipRelativeCues(cues, windowStartSec, windowEndSec) {
 
 /**
  * The Grok CLI request that covers a cutaway shot of `spanSec`: the shortest
- * deliverable clip at least that long (6 or 10s), or the longest when none is.
+ * deliverable clip at least that long (6, 10 or 15 s), or the longest when none is.
  * `uncoveredSec > 0` means one clip cannot cover the shot — split the scene
  * rather than loop or stretch the clip.
  */

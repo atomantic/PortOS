@@ -9,7 +9,7 @@ describe('grokVideoClip', () => {
   // down here so a future "shorter clips save render time" change has to come
   // with a new measurement rather than an assumption.
   it('offers exactly the clip lengths grok delivers', () => {
-    expect(GROK_VIDEO_DURATIONS).toEqual([6, 10]);
+    expect(GROK_VIDEO_DURATIONS).toEqual([6, 10, 15]);
     expect(Object.isFrozen(GROK_VIDEO_DURATIONS)).toBe(true);
   });
 
@@ -52,11 +52,12 @@ describe('nearestGrokDuration — translating another backend\'s continuous leng
     expect(nearestGrokDuration(7)).toBe(10);
     expect(nearestGrokDuration(8)).toBe(10);
     expect(nearestGrokDuration(10)).toBe(10);
+    expect(nearestGrokDuration(12)).toBe(15);
   });
 
   it('clamps a request longer than the longest clip', () => {
-    expect(nearestGrokDuration(30)).toBe(10);
-    expect(nearestGrokDuration(600)).toBe(10);
+    expect(nearestGrokDuration(30)).toBe(15);
+    expect(nearestGrokDuration(600)).toBe(15);
   });
 
   it('accepts a numeric string', () => {

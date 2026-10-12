@@ -16,6 +16,7 @@ import { CROSS_LINK_EDIT_TARGETS } from './musicVideoCrossLinks.js';
  */
 
 import { z } from 'zod';
+import { GROK_VIDEO_DURATIONS } from './grokVideoClip.js';
 import { knownFilmStyleIdSchema } from './filmStyleGrammars.js';
 
 const makingOfId = z.string().regex(/^[A-Za-z0-9_-]{1,100}$/);
@@ -133,7 +134,7 @@ export const musicVideoVideoSettingsSchema = z.object({
   // (see generationMode below).
   backend: z.enum(['local', 'grok', 'fal']).nullable().optional(),
   modelId: z.string().max(64).nullable().optional(),
-  grokDuration: z.union([z.literal(6), z.literal(10)]).optional(),
+  grokDuration: z.union(GROK_VIDEO_DURATIONS.map((d) => z.literal(d))).optional(),
   // fal.ai clip length in seconds. Loosely bounded (not a closed enum) for the
   // same reason routes/videoGen.js's falDuration is: fal's own model catalog,
   // not PortOS, owns the set of valid durations per model. null/omitted lets

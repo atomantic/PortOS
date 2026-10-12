@@ -80,7 +80,7 @@ describe('shotSplitLimit', () => {
   it('bounds a performance by the lip-sync window and a Grok footage cutaway by its longest clip', () => {
     const fal = SOURCE_AUDIO_LIPSYNC.fal;
     expect(shotSplitLimit({ shotMode: 'performance' }, 'fal')).toBeCloseTo(fal.maxAudioSec - PERFORMANCE_WINDOW_MARGIN_SEC, 6);
-    expect(shotSplitLimit({ shotMode: 'cutaway' }, 'grok')).toBe(10);
+    expect(shotSplitLimit({ shotMode: 'cutaway' }, 'grok')).toBe(15);
     // Blocked outright (not split) or unbounded lanes have no limit.
     expect(shotSplitLimit({ shotMode: 'performance' }, 'grok')).toBeNull();
     expect(shotSplitLimit({ shotMode: 'cutaway' }, 'fal')).toBeNull();

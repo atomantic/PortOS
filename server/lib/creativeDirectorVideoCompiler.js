@@ -14,7 +14,7 @@ export function validateVideoShot(project, scene, isFirst) {
   const unsupported = [];
   if (isFirst && scene.useContinuationFromPrior) unsupported.push('continuation without a prior shot');
   if (backend === 'grok' && !GROK_VIDEO_DURATIONS.includes(scene.durationSeconds)) {
-    unsupported.push(`duration (choose ${GROK_VIDEO_DURATIONS.join(' or ')} seconds)`);
+    unsupported.push(`duration (choose ${GROK_VIDEO_DURATIONS.slice(0, -1).join(', ')} or ${GROK_VIDEO_DURATIONS.at(-1)} seconds)`);
   }
   if (backend === 'reactor') {
     if (scene.durationSeconds < REACTOR_MIN_CLIP_SECONDS || scene.durationSeconds > REACTOR_MAX_CLIP_SECONDS) {

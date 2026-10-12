@@ -2,7 +2,7 @@
  * Video Gen — xAI Grok Build CLI provider (image-first flow).
  *
  * Grok has no text-to-video tool: its `image_to_video` animates a source
- * image (durations 6s/10s). So the flow, following grok's bundled
+ * image (durations 6/10/15 s). So the flow, following grok's bundled
  * `game-animation-frames` skill, is image-first — one headless agent turn
  * that (1) generates a base image with `image_gen` when the caller didn't
  * supply one, then (2) animates it with `image_to_video`, saving the MP4 to
@@ -38,6 +38,7 @@ import { mutateVideoHistory } from './history.js';
 import { noImageReason, deriveAspectRatio, GROK_ASPECT_RATIOS } from '../imageGen/grok.js';
 import { resolveGrokDuration } from '../../lib/grokVideoClip.js';
 import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
+import { probeVideoDuration } from '../../lib/ffmpeg.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 
 // 30 minutes — an image-first video turn is two sequential tool calls
@@ -298,6 +299,14 @@ async function runGrokVideo(job, jobId, bin, args, {
         return finalizeJobFailure(job, jobId, proc, `${prefix}${noVideoReason(stdoutTail)}`);
       }
       await copyFileGuarded(stagingPath, outputPath);
+      // grok's agent picks its own image_to_video length (see grokVideoClip.js),
+      // so record what it actually delivered and flag a clip that came back
+      // short: that is how a 15 s request is confirmed through the CLI.
+      const deliveredSec = await probeVideoDuration(outputPath).catch(() => null);
+      if (Number.isFinite(deliveredSec)) {
+        meta.deliveredSec = Math.round(deliveredSec * 100) / 100;
+        if (deliveredSec < meta.duration - 1) console.warn(`⚠️ grok delivered ${meta.deliveredSec}s for a ${meta.duration}s request [${jobId.slice(0, 8)}]`);
+      }
       // Removing the scratch directory also removes the harvested staging file.
       await cleanup();
       if (activeProcs.get(jobId) === proc) activeProcs.delete(jobId);
