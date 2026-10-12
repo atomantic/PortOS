@@ -24,8 +24,8 @@ describe('music-video step navigation', () => {
     expect(steps.map((step) => step.textContent)).toEqual([
       'Song' + 'Done' + '4:40 · 70 lyric lines',
       'Look' + 'Done',
-      '3Storyboard' + 'Needs you' + '26 shots',
-      '4Make' + 'Not started',
+      '3Plan' + 'Needs you' + '26 shots',
+      '4Shots' + 'Not started',
       '5Final render' + 'Not started',
       '6Publish' + 'Not started',
     ]);
@@ -34,11 +34,11 @@ describe('music-video step navigation', () => {
     expect(onStageChange).toHaveBeenCalledWith('produce');
     // The phone bar says each state to screen readers, since it shows only icons.
     expect(within(phoneBar()).getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
-      'Song, Done', 'Look, Done', 'Storyboard, Needs you', 'Make, Not started', 'Final render, Not started', 'Publish, Not started',
+      'Song, Done', 'Look, Done', 'Plan, Needs you', 'Shots, Not started', 'Final render, Not started', 'Publish, Not started',
     ]);
     // The step names what "done" means under its title, and labels the panel.
-    expect(screen.getByRole('tabpanel', { name: 'Storyboard' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { level: 3, name: 'Storyboard' })).toBeInTheDocument();
+    expect(screen.getByRole('tabpanel', { name: 'Plan' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 3, name: 'Plan' })).toBeInTheDocument();
     expect(screen.getByText(MUSIC_VIDEO_STAGES[2].doneWhen)).toBeInTheDocument();
     // The track, version and spend stay in the header.
     expect(screen.getByText('Example Track')).toBeInTheDocument();

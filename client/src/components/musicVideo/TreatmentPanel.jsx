@@ -67,7 +67,7 @@ export function treatmentSummary(project) {
  *
  * The brief (what the planner reads) needs no scenes, so it is always shown;
  * compile / arc / shot direction / Apply need them and wait until shots are
- * planned. The Storyboard step supplies the collapsible section, so there is
+ * planned. The Plan step supplies the collapsible section, so there is
  * no fold of its own here.
  * `storyboardApproved` (from the server's readiness) warns that any treatment
  * edit will need the storyboard re-approved (#10141).
