@@ -10,6 +10,7 @@ import { killProcessTree, prepareCliSpawn } from '../server/lib/bufferedSpawn.js
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { sweepStaleRunRoots, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
 import { writeStepEnv, writeStepSummary } from './lib/githubOutput.js';
+import { reportWindowsCrashDiagnostics } from './ci-windows-crash-diagnostics.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -264,10 +265,12 @@ function runNpmWithReport(scope, script, extraArgs, reportPath) {
   });
 }
 
-async function spawnNpm(scope, script, extraArgs, label) {
+export async function spawnNpm(scope, script, extraArgs, label, {
+  run = runNpm, diagnose = reportWindowsCrashDiagnostics,
+} = {}) {
   console.log(`Running ${scope} ${label}${extraArgs.length ? ` (${extraArgs.length} selector argument(s))` : ''}.`);
   const startedAt = Date.now();
-  const result = await runNpm(scope, script, extraArgs);
+  const result = await run(scope, script, extraArgs);
   recordVitestDuration(scope, label, startedAt);
   if (result.error) {
     console.error(result.error.message);
@@ -275,6 +278,8 @@ async function spawnNpm(scope, script, extraArgs, label) {
   }
   if (result.status === 0) return 0;
   if (result.interrupted) return result.status;
+
+  if (extractCrashedTestFile(result.output)) await diagnose(startedAt);
 
   const plan = planCrashRetry(scope, result.output);
   if (!plan.retry) {
@@ -289,7 +294,7 @@ async function spawnNpm(scope, script, extraArgs, label) {
   // reproduces or was a one-off runner fault.
   console.warn(`⚠️ Vitest worker crashed natively on ${relPath} — retrying that file once`);
   const retryStartedAt = Date.now();
-  const retry = await runNpm(scope, script, [selector]);
+  const retry = await run(scope, script, [selector]);
   recordVitestDuration(scope, `crash retry: ${relPath}`, retryStartedAt);
   if (!retry.error && retry.status === 0) {
     if (hasOtherTestFailures(result.output)) {
@@ -303,6 +308,7 @@ async function spawnNpm(scope, script, extraArgs, label) {
   }
 
   if (extractCrashedTestFile(retry.output)) {
+    await diagnose(retryStartedAt);
     console.error(`❌ ${relPath} crashed again on retry — this reproduces, not a runner fluke`);
     writeStepEnv('CI_CRASHED_TEST_FILE', relPath);
   } else {

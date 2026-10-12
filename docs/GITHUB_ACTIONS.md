@@ -718,6 +718,24 @@ other canceling an older run when a newer commit arrives. Scheduled, manually
 dispatched, and release-called runs skip this sibling cancellation so their
 aggregate diagnostics and cache post-steps can complete normally.
 
+### Windows native worker crash evidence
+
+When Vitest reports a worker exit with a crashed test filename, the test
+launcher queries Windows Application Error event 1000 before the existing
+single-file retry, and again if that retry crashes. Each query is limited to
+the failed invocation's time window, 32 events and 10 seconds. Logs and the
+step summary retain at most ten Node event candidates: Node/module versions,
+module basename, exception code and fault offset. Raw event messages, paths,
+machine identity and memory dumps are excluded. Diagnostic failures do not
+change the test result or add retries.
+
+These events can narrow the native module involved; they do not establish
+causality or identify the triggering operation. A missing or unavailable
+event is explicitly inconclusive. Correlate candidates with the crashed
+test and a minimal Windows reproduction before changing production metadata
+handling (#8152). Microsoft documents these fields in its
+[application crash troubleshooting guide](https://learn.microsoft.com/en-us/troubleshoot/windows-server/performance/troubleshoot-application-service-crashing-behavior).
+
 ### External cancellation and one automatic retry
 
 Not every cancel comes from this repository. When several PRs build at once,
