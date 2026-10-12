@@ -280,6 +280,46 @@ describe('relatedInputs', () => {
 
 
 describe('structured failure diagnostics', () => {
+  it('reports a run-level rejection and worker cause when every test passed (#11244)', () => {
+    const fixture = mkdtempSync(join(tmpdir(), 'portos-diagnostics-'));
+    try {
+      const host = join(fixture, 'host');
+      mkdirSync(host);
+      writeFileSync(join(fixture, 'vitest.config.mjs'), FIXTURE_CONFIG);
+      writeFileSync(join(fixture, 'fixture.test.js'), `
+        test('passing assertion with unhandled rejection', async () => {
+          Promise.reject(new Error('synthetic run-level rejection', {
+            cause: new Error('Worker exited unexpectedly with exit code 3221226505'),
+          }));
+          await new Promise(resolve => setImmediate(resolve));
+          expect(true).toBe(true);
+        });`);
+      const runnerUrl = new URL('./run-ci-tests.js', import.meta.url).href;
+      const args = ['--config', join(fixture, 'vitest.config.mjs'), '--root', fixture, './fixture.test.js'];
+      const env = { ...process.env, NODE_ENV: 'test', TMPDIR: host, TMP: host, TEMP: host, NODE_DISABLE_COMPILE_CACHE: '1' };
+      delete env.PORTOS_TEST_TEMP_ROOT;
+      const result = spawnSync(process.execPath, ['--input-type=module', '-e',
+        `import { runNpm } from ${JSON.stringify(runnerUrl)};
+         const result = await runNpm('server', 'test:ci:related', ${JSON.stringify(args)});
+         process.exitCode = result.status;`,
+      ], { encoding: 'utf8', timeout: 30_000, env });
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(1);
+      expect(result.stdout).toMatch(/Test Files\s+1 passed/);
+      const diagnostic = result.stderr.slice(result.stderr.indexOf('Test launcher exited:'));
+      expect(diagnostic).toContain('code=1, signal=none');
+      expect(diagnostic).toContain('unhandledErrors=1');
+      const errors = diagnostic.slice(diagnostic.indexOf('Vitest unhandled errors'), diagnostic.indexOf('Inconclusive'));
+      expect(errors).toContain('synthetic run-level rejection');
+      expect(errors).toContain('fixture.test.js:');
+      expect(errors).toContain('Worker exited unexpectedly with exit code 3221226505');
+      expect(diagnostic).toContain('Vitest output tail');
+      expect(readdirSync(host)).toEqual([]);
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  }, 35_000);
+
   it('recovers a real bail failure with default and GitHub reporters even if their summary is incomplete', () => {
     const fixture = mkdtempSync(join(tmpdir(), 'portos-diagnostics-'));
     try {
