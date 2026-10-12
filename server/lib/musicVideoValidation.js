@@ -306,7 +306,8 @@ const providerSlug = z.string().min(1).max(40).regex(/^[a-z0-9][a-z0-9._-]*$/i, 
 export const musicVideoTakeInputSchema = z.object({
   kind: z.enum(MUSIC_VIDEO_TAKE_KINDS),
   assetId: z.string().min(1).max(256),
-  source: z.enum(['generated', 'imported']).optional(),
+  // `trimmed`: a clip take cut from a later start frame of another (the shot card's "Start clip here").
+  source: z.enum(['generated', 'imported', 'trimmed']).optional(),
   provider: providerSlug.optional(),
   originalName: z.string().max(255).optional(),
   sourceImageId: galleryImageName.optional(),

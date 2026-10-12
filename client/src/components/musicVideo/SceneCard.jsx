@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Trash2, Activity, ArrowUp, ArrowDown, ChevronRight, Image as ImageIcon, Video, Maximize2, AlertTriangle, ImagePlus, Clapperboard, SkipForward, Shuffle, ArrowRight } from 'lucide-react';
 import OverflowMenu from '../ui/OverflowMenu.jsx';
 import SceneTakePicker from './SceneTakePicker.jsx';
+import VideoStartTrimControl from '../media/VideoStartTrimControl.jsx';
 import { formatDurationSec } from '../../utils/formatters.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 import PerformanceEvidence from './PerformanceEvidence.jsx';
@@ -123,7 +124,7 @@ export default function SceneCard({
   settingsSaving, videoBlockedReason, videoBlockedReasonFor = null, canContinueShot,
   onMove, onDelete, onEditLocal, onSave,
   onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
-  onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, onPlacePoolItem, projectId = null, videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false,
+  onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, onPlacePoolItem, onTrimClip, projectId = null, videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false,
   lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, nextEndSec = null, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
   expanded, onToggleExpand, footageOptional = false, failedScenes = null, songReview = null,
 }) {
@@ -458,6 +459,12 @@ export default function SceneCard({
                 <Maximize2 className="w-3 h-3" />
               </button>
             </div>
+          )}
+          {/* Step to a later frame and keep the clip from there, as a new take of this shot. */}
+          {scene.videoHistoryId && !performance && onTrimClip && (
+            <VideoStartTrimControl videoRef={clipPlayerRef} sourceKey={scene.videoHistoryId}
+              disabled={takeBusy || !!generatingVideo || shotLock?.clip === 'locked'}
+              onTrim={(startSec) => onTrimClip(scene, startSec)} />
           )}
           {!scene.videoHistoryId && layer === 'footage' && (
             <div className="flex aspect-video w-full items-center justify-center rounded border border-dashed border-port-border text-xs text-port-text-muted">No clip yet</div>

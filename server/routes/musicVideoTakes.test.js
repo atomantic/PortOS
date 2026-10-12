@@ -228,7 +228,7 @@ describe('swapping a shot from unused takes', () => {
   // Uniquely catches a cut shot's takes vanishing from the picker, a clip losing its still, and a used take offered as unused.
   it('lists every unused still and clip, keeps a cut shot\'s takes on the floor, and puts a still with its clip on a shot', async () => {
     for (const name of ['a-1.png', 'a-2.png', 'b-1.png', 'b-2.png']) seedImage(name);
-    seedVideoHistory([{ id: 'clip-b2', prompt: 'waves in slow motion' }, { id: 'clip-a1' }]);
+    seedVideoHistory([{ id: 'clip-b2', prompt: 'waves in slow motion' }, { id: 'clip-a1' }, { id: 'clip-a1-trim' }]);
     await addTake(sceneA.sceneId, { kind: 'image', assetId: 'a-1.png', source: 'generated' });
     await addTake(sceneA.sceneId, { kind: 'image', assetId: 'a-2.png', source: 'generated' });
     await addTake(sceneA.sceneId, { kind: 'video', assetId: 'clip-a1', source: 'generated', sourceImageId: 'a-1.png' });
@@ -256,11 +256,16 @@ describe('swapping a shot from unused takes', () => {
     expect(used.body.scene.takes.find((take) => take.assetId === 'clip-b2')).toMatchObject({ source: 'reused', sourceImageId: 'b-2.png' });
     expect((await pool()).map((item) => item.assetId).sort()).toEqual(['a-1.png', 'a-2.png', 'b-1.png', 'clip-a1']);
 
+    // A clip cut from a later start frame ("Start clip here") lands as a trimmed take.
+    const trimmed = await addTake(sceneA.sceneId, { kind: 'video', assetId: 'clip-a1-trim', source: 'trimmed' });
+    expect(trimmed.status).toBe(201);
+    expect(trimmed.body.take).toMatchObject({ kind: 'video', assetId: 'clip-a1-trim', source: 'trimmed' });
+
     // Any unused still can become the shot's end frame, and leaves the pool.
     const end = await request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/use`).send({ kind: 'endImage', assetId: 'b-1.png' });
     expect(end.status).toBe(200);
     expect(end.body.scene).toMatchObject({ referenceImageId: 'b-2.png', endImageId: 'b-1.png' });
-    expect((await pool()).map((item) => item.assetId).sort()).toEqual(['a-1.png', 'a-2.png', 'clip-a1']);
+    expect((await pool()).map((item) => item.assetId).sort()).toEqual(['a-1.png', 'a-2.png', 'clip-a1', 'clip-a1-trim']);
 
     expect((await request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/use`).send({ kind: 'image', assetId: 'missing.png' })).status).toBe(400);
     expect((await request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/use`).send({ kind: 'endImage', assetId: 'a-1.png', withAssetId: 'clip-a1' })).status).toBe(400);

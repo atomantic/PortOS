@@ -11,7 +11,7 @@ import {
   importMusicVideoHandoff,
 } from '../services/apiMusicVideo.js';
 import { uploadGalleryImage } from '../services/apiSystem.js';
-import { uploadGalleryVideo } from '../services/apiImageVideo.js';
+import { trimVideoStart, uploadGalleryVideo } from '../services/apiImageVideo.js';
 import { downloadBlob } from '../lib/downloadBlob.js';
 import { validateImageFile } from '../utils/fileUpload.js';
 
@@ -75,6 +75,14 @@ export default function useMusicVideoTakes({ project, applyScenePatch }) {
   const placePoolItem = (scene, pick) => runTakeOp(
     (projectId) => placeMusicVideoPoolItem(projectId, scene.sceneId, pick, { silent: true }).then((res) => res.scene),
     'Failed to use that take',
+  );
+
+  // "Start clip here": the shot's clip from a later frame becomes a new clip take, and the selected one.
+  const trimClipTake = (scene, startSec) => runTakeOp(
+    (projectId) => trimVideoStart(scene.videoHistoryId, startSec, { silent: true })
+      .then(({ video }) => addMusicVideoSceneTake(projectId, scene.sceneId, { kind: 'video', assetId: video.id, source: 'trimmed' }, { silent: true }))
+      .then(({ take }) => selectMusicVideoSceneTake(projectId, scene.sceneId, take.takeId, { silent: true })),
+    'Failed to trim the clip',
   );
 
   // Continuing shot: the previous shot's last on-screen frame becomes this
@@ -162,5 +170,5 @@ export default function useMusicVideoTakes({ project, applyScenePatch }) {
     if (failures.length) toast.error(failures.slice(0, 3).join(' · '));
   };
 
-  return { busy, selectTake, placePoolItem, reviewTake, continueFromPrevious, importTake, importClipTake, exportHandoff, exportHandoffBundle, importHandoffFiles };
+  return { busy, selectTake, placePoolItem, trimClipTake, reviewTake, continueFromPrevious, importTake, importClipTake, exportHandoff, exportHandoffBundle, importHandoffFiles };
 }
