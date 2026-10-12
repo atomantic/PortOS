@@ -209,7 +209,6 @@ export default function TransitionGlitch({ scenes, figureRef, audioRef, time, en
   return (
     <canvas
       ref={canvasRef}
-      aria-hidden="true"
       data-testid="animatic-glitch"
       style={{ visibility: 'hidden' }}
       className="pointer-events-none absolute inset-0 h-full w-full"
