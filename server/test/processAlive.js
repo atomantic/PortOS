@@ -18,6 +18,9 @@ export function isProcessAlive(pid) {
     // the state letter is the first token after the LAST ')'.
     return stat.slice(stat.lastIndexOf(')') + 2, stat.lastIndexOf(')') + 3) !== 'Z';
   } catch {
-    return true;
+    // The child may have been reaped between signal-0 and reading /proc.
+    // Probe again rather than turning a completed exit back into "alive".
+    // This also preserves the signal-0 fallback on platforms without /proc.
+    try { process.kill(pid, 0); return true; } catch { return false; }
   }
 }
