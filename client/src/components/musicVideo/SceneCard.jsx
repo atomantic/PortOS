@@ -9,7 +9,7 @@ import SceneTakePicker from './SceneTakePicker.jsx';
 import { formatDurationSec } from '../../utils/formatters.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 import PerformanceEvidence from './PerformanceEvidence.jsx';
-import { planPerformanceRepair } from '../../lib/musicVideoShotTiming.js';
+import { isPerformanceScene, planPerformanceRepair } from '../../lib/musicVideoShotTiming.js';
 import SceneTakeStrip from './SceneTakeStrip.jsx';
 import SceneEndFrame from './SceneEndFrame.jsx';
 import { MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_TEXT_ZONES, MUSIC_VIDEO_VISUAL_LAYERS, sceneHasAuthoredSpan } from '../../lib/musicVideoLayers.js';
@@ -102,7 +102,7 @@ export default function SceneCard({
   settingsSaving, videoBlockedReason, videoBlockedReasonFor = null, canContinueShot,
   onMove, onDelete, onEditLocal, onSave,
   onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
-  onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, onPlacePoolItem, projectId = null, shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false,
+  onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, onPlacePoolItem, projectId = null, videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false,
   lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, nextEndSec = null, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
   expanded, onToggleExpand, footageOptional = false, failedScenes = null, songReview = null,
 }) {
@@ -150,7 +150,9 @@ export default function SceneCard({
   const codeShot = layered && layer === 'code';
   // Where this shot's clip renders: the project's saved renderer unless the card picks another for this shot.
   const [renderPick, setRenderPick] = useState('');
-  const renderOverrides = renderTargetOverrides(renderPick, falVideoSettings || {});
+  const [renderOptions, setRenderOptions] = useState({});
+  const renderOverrides = renderTargetOverrides(renderPick, falVideoSettings || {}, renderOptions,
+    { models: videoModels, defaultModel: defaultVideoModel, performance: isPerformanceScene(scene), scene });
   const renderSettings = renderOverrides ? { ...falVideoSettings, ...renderOverrides } : falVideoSettings;
   const renderLane = renderOverrides
     ? (renderSettings.backend === 'local' && renderSettings.generationMode === 'audioReactive' ? 'local' : renderSettings.backend)
@@ -423,6 +425,7 @@ export default function SceneCard({
           {layer === 'footage' && promptField}
           <div className="flex flex-wrap items-center gap-2">
             <SceneRenderTarget id={fieldId('render-on')} value={renderPick} onChange={setRenderPick} performance={performance}
+              options={renderOptions} onOptionsChange={setRenderOptions} scene={scene} models={videoModels} defaultModel={defaultVideoModel}
               saved={falVideoSettings || {}} disabled={!!generatingVideo} />
             {renderCost && <span className="text-[11px] text-port-text-muted">{renderCost}</span>}
           </div>
