@@ -31,6 +31,7 @@ import { COVERAGE_TOLERANCE_SEC, SCENE_ATTENTION_LABELS, sceneAttention } from '
 import { ShotLockButton, useShotLock } from './ShotLock.jsx';
 import ScenePoster from './ScenePoster.jsx';
 import SceneRenderTarget, { renderTargetOverrides } from './SceneRenderTarget.jsx';
+import SceneFrameFit, { sceneFrameFit } from './SceneFrameFit.jsx';
 
 /** One of a shot's two frames: tap to work on it, the corner button to see it full size. */
 function FrameTile({ label, imageId, empty, active, onPick, onOpen, openLabel }) {
@@ -124,7 +125,7 @@ export default function SceneCard({
   settingsSaving, videoBlockedReason, videoBlockedReasonFor = null, canContinueShot,
   onMove, onDelete, onEditLocal, onSave,
   onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
-  onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, onPlacePoolItem, onTrimClip, projectId = null, videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false,
+  onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, onPlacePoolItem, onTrimClip, projectId = null, aspect = '16:9', videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false,
   lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, nextEndSec = null, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
   expanded, onToggleExpand, footageOptional = false, failedScenes = null, songReview = null,
 }) {
@@ -160,6 +161,7 @@ export default function SceneCard({
   // Which of the shot's two frames the Frames section works on.
   const [frameSide, setFrameSide] = useState('start');
   const clipSec = clipMeta && clipMeta.id === scene.videoHistoryId ? clipMeta.sec : null;
+  const clipSize = clipMeta && clipMeta.id === scene.videoHistoryId && clipMeta.width > 0 ? { width: clipMeta.width, height: clipMeta.height } : null;
   // Pre-#8964 scenes have no `loop` key and keep the legacy loop-to-fill render.
   const loops = scene.loop !== false;
   const spanSec = scene.beatAligned && typeof scene.startSec === 'number' && typeof scene.endSec === 'number'
@@ -433,14 +435,15 @@ export default function SceneCard({
               <video
                 ref={clipPlayerRef}
                 src={clipSrc}
-                className="block w-full aspect-video object-cover rounded border border-port-border bg-black"
+                className={`block w-full aspect-video ${sceneFrameFit(scene) === 'fill' ? 'object-cover' : 'object-contain'} rounded border border-port-border bg-black`}
                 muted
                 playsInline
                 preload="metadata"
                 controls
                 onLoadedMetadata={(e) => {
                   const sec = e.currentTarget.duration;
-                  if (Number.isFinite(sec) && sec > 0) setClipMeta({ id: scene.videoHistoryId, sec });
+                  const { videoWidth: width, videoHeight: height } = e.currentTarget;
+                  if (Number.isFinite(sec) && sec > 0) setClipMeta({ id: scene.videoHistoryId, sec, width, height });
                 }}
               />
               {/* Corner expand — do not put the open handler on <video> itself;
@@ -465,6 +468,11 @@ export default function SceneCard({
             <VideoStartTrimControl videoRef={clipPlayerRef} sourceKey={scene.videoHistoryId}
               disabled={takeBusy || !!generatingVideo || shotLock?.clip === 'locked'}
               onTrim={(startSec) => onTrimClip(scene, startSec)} />
+          )}
+          {/* A clip of another shape (a 3:2 local render) zooms to fill, or keeps its ratio with covered edges. */}
+          {scene.videoHistoryId && (
+            <SceneFrameFit id={fieldId('frame-fit')} scene={scene} clipSize={clipSize} aspect={aspect}
+              onChange={(frameFit) => applyPatch({ frameFit })} />
           )}
           {!scene.videoHistoryId && layer === 'footage' && (
             <div className="flex aspect-video w-full items-center justify-center rounded border border-dashed border-port-border text-xs text-port-text-muted">No clip yet</div>

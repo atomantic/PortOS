@@ -41,7 +41,8 @@ import { loadHistory, mutateVideoHistory } from '../videoGen/local.js';
 import { getTrack } from '../tracks/index.js';
 import { getProject, listProjects, updateProject, mutateProjectRecord } from './projects.js';
 import { applyProjectPatch } from './projectsLogic.js';
-import { isSelfDrawnLayer, sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { MUSIC_VIDEO_FRAME_FITS, isSelfDrawnLayer, sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { musicVideoAspect, musicVideoRenderCanvas } from '../../lib/musicVideoAspect.js';
 import { projectTypographyPlan } from './composition.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
 import { documentRenderInitScripts, encodeDocumentComposition, prepareDocumentRender, sweepDocumentScratch } from './documentRender.js';
@@ -283,6 +284,7 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
       loop: edit ? false : sceneLoops(scene),
       inSec,
       outSec,
+      ...footageFrameFit(scene),
     });
   }
   if (missing.length > 0) {
@@ -381,6 +383,17 @@ export function beatSnapClips(clips, beats, { toleranceSec = 0.12, minClipSec = 
   });
 }
 
+// How a clip whose shape is not the video's fills the frame: zoomed
+// to fill (the default), or kept whole with its side gaps covered by the shot's
+// still, a VHS-style blur of the clip, or black. The still edge needs the
+// still on disk; without it the gaps fall back to black.
+function footageFrameFit(scene) {
+  const fit = MUSIC_VIDEO_FRAME_FITS.includes(scene.frameFit) ? scene.frameFit : 'fill';
+  if (fit !== 'still') return { frameFit: fit };
+  const stillPath = scene.referenceImageId ? safeUnder(PATHS.images, scene.referenceImageId) : null;
+  return stillPath && existsSync(stillPath) ? { frameFit: 'still', stillPath } : { frameFit: 'black' };
+}
+
 // The frame for a composed render with no footage to take dimensions from.
 const DEFAULT_CANVAS = Object.freeze({ width: 1280, height: 720, fps: 24 });
 // A still's push-in ends this much closer; a pan crosses this much extra width.
@@ -420,9 +433,23 @@ function sectionChain(c, input, { canonW, canonH, fps, frames, frameGrid }) {
   const holdSec = c.loop === false ? (c.outSec - c.inSec) - (c.sourceSec ?? c.duration) : 0;
   const padSec = c.loop === false && frameGrid ? Math.max(0, holdSec) + 2 / fps : holdSec;
   const hold = padSec > 0 ? `tpad=stop_mode=clone:stop_duration=${round3(padSec)},` : '';
-  return `[${input}:v]scale=${canonW}:${canonH}:force_original_aspect_ratio=decrease,`
-    + `pad=${canonW}:${canonH}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps},`
-    + `${hold}${trim},setpts=PTS-STARTPTS`;
+  const timed = `fps=${fps},${hold}${trim},setpts=PTS-STARTPTS`;
+  const cover = `scale=${canonW}:${canonH}:force_original_aspect_ratio=increase,crop=${canonW}:${canonH},setsar=1`;
+  const fit = `scale=${canonW}:${canonH}:force_original_aspect_ratio=decrease,setsar=1`;
+  const centered = `overlay=(W-w)/2:(H-h)/2:shortest=1`;
+  const id = typeof input === 'number' ? input : input.clip;
+  if (c.frameFit === 'fill') return `[${id}:v]${cover},${timed}`;
+  // The shot's still, cover-fitted like a still section, fills the gaps beside the whole clip.
+  if (c.frameFit === 'still' && typeof input === 'object') {
+    return `[${input.still}:v]fps=${fps},${cover}[edge${id}];[${id}:v]${fit},${timed}[clip${id}];[edge${id}][clip${id}]${centered}`;
+  }
+  // The clip itself, zoomed, blurred, faded and noisy with scanlines, like a worn tape behind it.
+  if (c.frameFit === 'vhs') {
+    return `[${id}:v]${fit},${timed},split[clip${id}][tape${id}];`
+      + `[tape${id}]${cover},boxblur=lr=min(h\\,w)/20:lp=2:cr=min(ch\\,cw)/20:cp=2,eq=saturation=0.55:brightness=-0.12,noise=alls=24:allf=t+u,`
+      + `drawgrid=w=iw:h=3:t=1:c=black@0.35[edge${id}];[edge${id}][clip${id}]${centered}`;
+  }
+  return `[${id}:v]${fit},pad=${canonW}:${canonH}:(ow-iw)/2:(oh-ih)/2,${timed}`;
 }
 
 // Pure: build the ffmpeg args for the master-bed render. Concats the clips
@@ -448,14 +475,14 @@ function sectionChain(c, input, { canonW, canonH, fps, frames, frameGrid }) {
 // overlap the window, clipped to it and re-based to the excerpt's own timeline
 // (0 = `startSec`) so a contact sheet built from the excerpt file can sample
 // cut boundaries directly. `totalDuration` becomes the excerpt's own length.
-export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec = null, overlays = [], frameGrid: gridOption = false, excerpt = null, soundBed = null, grade = null } = {}) {
+export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec = null, overlays = [], frameGrid: gridOption = false, excerpt = null, soundBed = null, grade = null, aspect = null } = {}) {
   if (!Array.isArray(clips) || clips.length === 0) throw new Error('buildMusicVideoFfmpegArgs: empty clips');
   const frameGrid = gridOption || clips.some((c) => c.layer);
   // Stills and cards have no dimensions of their own: the first footage clip
   // sets the frame, or a default one when the render has no footage at all.
+  // The project's aspect (when given) wins over a lead clip of another shape.
   const lead = clips.find((c) => !c.layer) || DEFAULT_CANVAS;
-  const canonW = lead.width;
-  const canonH = lead.height;
+  const { width: canonW, height: canonH } = aspect ? musicVideoRenderCanvas(aspect, lead) : lead;
   const fps = lead.fps || 24;
 
   let cursorSec = 0;
@@ -487,12 +514,17 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
   let nextInput = 0;
   for (const { c } of plan) {
     if (c.layer === 'card') { inputOf.push(null); continue; }
-    inputOf.push(nextInput++);
+    const clipInput = nextInput++;
     if (c.layer === 'still') inputs.push('-loop', '1', '-framerate', String(fps), '-i', c.imagePath);
     else {
       if (c.loop !== false) inputs.push('-stream_loop', '-1');
       inputs.push('-i', c.videoPath);
     }
+    // A still edge reads the shot's still as one more looping input.
+    if (!c.layer && c.frameFit === 'still' && c.stillPath) {
+      inputOf.push({ clip: clipInput, still: nextInput++ });
+      inputs.push('-loop', '1', '-framerate', String(fps), '-i', c.stillPath);
+    } else inputOf.push(clipInput);
   }
   const audioIdx = nextInput; // master audio follows the section inputs
   inputs.push('-i', audioPath);
@@ -651,7 +683,7 @@ export async function planMusicVideoRender(project, { draft = false } = {}) {
     })
     : snapped;
   const soundBed = await resolveSoundBedPath(project);
-  return { ffmpeg, audioPath, composed, clips, audioDurationSec, soundBed };
+  return { ffmpeg, audioPath, composed, clips, audioDurationSec, soundBed, aspect: musicVideoAspect(project) };
 }
 
 // Code-rendered mode (#9076) and the composition-document mode seek a
@@ -837,7 +869,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
     if (seeked) {
       return await renderSeekedMode(projectId, project, () => { handedOff = true; }, seeked, { ...options, maintenancePermit: permit });
     }
-    const { ffmpeg, audioPath, composed, clips, audioDurationSec, soundBed } = await planMusicVideoRender(project);
+    const { ffmpeg, audioPath, composed, clips, audioDurationSec, soundBed, aspect } = await planMusicVideoRender(project);
     await ensureDir(PATHS.videos);
     await ensureDir(PATHS.videoThumbnails);
 
@@ -846,7 +878,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
     const jobId = randomUUID();
     const filename = `music-video-${projectId.slice(0, 8)}-${Date.now()}.mp4`;
     const outputPath = join(PATHS.videos, filename);
-    const { args, totalDuration, canonW, canonH, fps, sections } = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, frameGrid: composed, soundBed, grade: composed ? project.composition?.grade : null });
+    const { args, totalDuration, canonW, canonH, fps, sections } = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, frameGrid: composed, soundBed, grade: composed ? project.composition?.grade : null, aspect });
     // #8984: a composed project lays its timed text cues over the cut, and a
     // title card's text (#8985) joins them over its own section. No renderable
     // cue (plain mode, or nothing timed) skips the overlay capture entirely.

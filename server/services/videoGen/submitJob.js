@@ -43,12 +43,12 @@ const musicVideoProjectAspect = async (projectId) => {
   return musicVideoAspect(await getProject(projectId));
 };
 /** A Music Video motion prompt for a take that hears no audio, with the project's look clauses removed. */
-async function silentMusicVideoMotionPrompt(prompt, project) {
+async function silentMusicVideoMotionPrompt(prompt, project, scene) {
   const [{ silentMotionPrompt }, { musicVideoCreativeContext }, { visualDirection }] = await Promise.all([
     import('../../lib/musicVideoMotion.js'), import('../../lib/musicVideoCreativeContext.js'), import('../musicVideo/handoff.js'),
   ]);
   return silentMotionPrompt(prompt, { styleParts: [project?.concept?.style, musicVideoCreativeContext(project?.concept, { moodBoard: false }),
-    visualDirection(project?.visualSpec)].filter(Boolean) });
+    visualDirection(project?.visualSpec)].filter(Boolean), keep: [scene?.direction?.motionClause] });
 }
 
 const submitValidatedVideoGenJob = async (body, uploads) => {
@@ -239,18 +239,20 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
       throw error;
     })
     : null;
-  // Local LTX lip-sync: the performance window is the a2v audio, on a frame
+  // Local lip-sync (LTX, or MiniMax H3 Ref2VA): the performance window is the a2v audio, on a frame
   // canvas that covers it (the helper pads the tail; the edit points trim it).
   let localPerformanceParams = null;
   if (performance && backend === 'local') {
-    const { sourceAudioVideoRequest, supportsSourceAudioWindow } = await import('../federatedMedia/sourceAudio.js');
+    const [{ sourceAudioVideoRequest }, { localModelRendersPerformance }] = await Promise.all([
+      import('../federatedMedia/sourceAudio.js'), import('../../lib/musicVideoLocalModels.js'),
+    ]);
     const fail = async (message, code) => {
       await unlink(performance.audioFilePath).catch(() => {});
       await cleanupStaged();
       throw new ServerError(message, { status: 400, code });
     };
-    if (!supportsSourceAudioWindow(prepared.effectiveModel)) {
-      await fail(`${prepared.effectiveModel?.name || 'This local model'} cannot lip-sync; choose an LTX-2.5 (or LTX-2.3 dgrauet) model for performance shots`, 'MUSIC_VIDEO_PERFORMANCE_UNSUPPORTED');
+    if (!localModelRendersPerformance(prepared.effectiveModel)) {
+      await fail(`${prepared.effectiveModel?.name || 'This local model'} cannot lip-sync; choose LTX-2.5, LTX-2.3 dgrauet or MiniMax H3 Ref2VA for performance shots`, 'MUSIC_VIDEO_PERFORMANCE_UNSUPPORTED');
     }
     const { audioWindow } = performance.shotInstruction;
     const { numFrames } = await Promise.resolve()
@@ -312,7 +314,7 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
         // motion: the model would act out song cues and look words instead of reading them.
         const hearsAudio = !!(performance || prepared.audio || params.audioConditioning || params.audioFilePath);
         params.prompt = withShotActionPrompt(params.prompt, project, scene, { offsetSec: performance?.shotInstruction?.edit?.inSec || 0 });
-        if (!hearsAudio) params.prompt = await silentMusicVideoMotionPrompt(params.prompt, project);
+        if (!hearsAudio) params.prompt = await silentMusicVideoMotionPrompt(params.prompt, project, scene);
         const interval = performance?.shotInstruction?.songInterval || prepared.audio?.songInterval;
         if (params.audioConditioning && Math.round(scene?.startSec * 48000) !== params.audioConditioning.startSample) {
           throw new ServerError('Scene timing changed while source audio was prepared', { status: 409, code: 'MUSIC_VIDEO_SHOT_TIMING_CHANGED' });

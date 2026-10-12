@@ -368,3 +368,29 @@ describe('start and end frames', () => {
     expect(screen.getByTestId('end-frame-plan').textContent).toBe('The clip ends on the end frame.');
   });
 });
+
+describe('frame fit for an off-shape clip', () => {
+  // Uniquely catches the fit choice hiding on a 3:2 clip in a 16:9 video (or
+  // cluttering a matching one), and the pick not reaching the saved shot.
+  it('offers zoom to fill or keep ratio once the clip reads 3:2, and saves the pick', () => {
+    const scene = { sceneId: 's1', prompt: 'Memory footage', referenceImageId: 'still.png', videoHistoryId: 'clip-1', startSec: 0, endSec: 4, takes: [] };
+    const onSave = vi.fn();
+    const onEditLocal = vi.fn();
+    const { container } = render(<SceneCard scene={scene} index={0} expanded onEditLocal={onEditLocal} onSave={onSave} />);
+    const video = container.querySelector('video');
+    const load = (width, height) => {
+      Object.defineProperty(video, 'duration', { value: 4, configurable: true });
+      Object.defineProperty(video, 'videoWidth', { value: width, configurable: true });
+      Object.defineProperty(video, 'videoHeight', { value: height, configurable: true });
+      fireEvent.loadedMetadata(video);
+    };
+    load(1024, 576);
+    expect(screen.queryByLabelText('Not 16:9')).toBeNull();
+    load(768, 512);
+    const pick = screen.getByLabelText('Not 16:9');
+    expect(pick.value).toBe('fill');
+    fireEvent.change(pick, { target: { value: 'vhs' } });
+    expect(onSave).toHaveBeenCalledWith('s1', { frameFit: 'vhs' });
+    expect(onEditLocal).toHaveBeenCalledWith('s1', { frameFit: 'vhs' });
+  });
+});

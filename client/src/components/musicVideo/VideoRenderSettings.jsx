@@ -6,6 +6,7 @@ import {
 import { projectFalSpend } from '../../lib/musicVideoStages.js';
 import { formatUsd } from '../../utils/formatters.js';
 import { SOURCE_AUDIO_LIPSYNC, SOURCE_AUDIO_MUSIC, performanceCapability } from '../../lib/musicVideoShotTiming.js';
+import { localModelRendersCutaway } from '../../../../server/lib/musicVideoLocalModels.js';
 
 const falSelectCls = 'w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 sm:w-auto min-h-[44px] sm:min-h-0';
 const falOptionLabel = (model) => {
@@ -106,7 +107,8 @@ export default function VideoRenderSettings({ videoSettings, generating, project
                 ? `Local default · ${models.find((model) => model.id === defaultModel)?.name || defaultModel}`
                 : 'Local default model'}
             </option>
-            {(audioReactiveSelected ? audioReactiveModels : models).map((model) => (
+            {/* Cutaways animate their still, so an audio-only model (Ref2VA) is a per-shot pick for performance shots. */}
+            {(audioReactiveSelected ? audioReactiveModels : models.filter((model) => localModelRendersCutaway(model) || model.id === settings.modelId)).map((model) => (
               <option key={model.id} value={model.id}>{model.name || model.id}</option>
             ))}
           </select>

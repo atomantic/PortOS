@@ -161,3 +161,21 @@ describe('per-clip quotes — what a shot actually bills', () => {
     expect(endFrame.map((q) => q.modelId)).not.toContain('fal-ai/veo3.1/fast/image-to-video');
   });
 });
+
+// Regression: a 2,000+ character prompt reached Hailuo-02, which fal refused with a 422 only after the job was queued.
+describe('buildFalVideoRequest — prompt length caps', () => {
+  it('cuts a prompt over the model limit at a clause boundary and keeps a short Avoid clause', () => {
+    const prompt = Array.from({ length: 300 }, (_, i) => `clause ${i}`).join(', ');
+    const { body, promptClipped } = build('fal-ai/minimax/hailuo-02/standard/image-to-video', { prompt, negativePrompt: 'blur' });
+    expect(body.prompt.length).toBeLessThanOrEqual(2000);
+    expect(body.prompt).toMatch(/clause \d+\nAvoid: blur$/);
+    expect(body.prompt.startsWith('clause 0, clause 1,')).toBe(true);
+    expect(promptClipped).toEqual({ from: prompt.length + '\nAvoid: blur'.length, to: body.prompt.length, max: 2000 });
+  });
+
+  it('leaves a prompt within the limit, and a model without a known limit, untouched', () => {
+    expect(build('fal-ai/minimax/hailuo-02/standard/image-to-video').promptClipped).toBeNull();
+    const long = 'x '.repeat(1500).trim();
+    expect(build('fal-ai/veo3.1/fast/image-to-video', { prompt: long }).body.prompt).toBe(long);
+  });
+});

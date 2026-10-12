@@ -295,6 +295,15 @@ describe('submitVideoGenJob', () => {
         expect(params).not.toHaveProperty('lipSync');
       });
 
+      // Uniquely catches MiniMax H3 Ref2VA (image + audio only) being refused
+      // for lip-sync, or sent a frame count off its 17n+5 grid.
+      it('renders the song window on MiniMax H3 Ref2VA at its covering frame count', async () => {
+        const ref2va = { id: 'ref2va-example', name: 'Ref2VA Example', runtime: 'minimax_h3_ref2va', supportedModes: ['a2v'], frameOptions: [107, 124, 141], fpsOptions: [24] };
+        mocks.prepareVideoGenParams.mockResolvedValue(localPrepared({ effectiveModel: ref2va, mode: 'image', sourceImagePath: '/example/images/frame.png' }));
+        await submitVideoGenJob({ prompt: 'singer', backend: 'local', modelId: ref2va.id, mode: 'image', fps: 24, musicVideo }, {});
+        expect(mocks.enqueueJob.mock.calls[0][0].params).toMatchObject({ mode: 'a2v', numFrames: 107, audioFilePath: slice, audioStartSec: 0, disableAudio: false });
+      });
+
       it('renders a local cutaway silent unless the song conditions it', async () => {
         mocks.preparePerformanceShot.mockResolvedValue(null);
         mocks.prepareVideoGenParams.mockResolvedValue(localPrepared({ effectiveModel: ltx, mode: 'image' }));
