@@ -120,9 +120,9 @@ export function seedArtDraft(project, stage = project.castAndSets) {
 function shotApprovalBasis(project, scene) {
   const row = (project.productionReview?.draft?.storyboard || []).find(shot => shot?.sceneId === scene.sceneId);
   const { prompt, framePrompt, visualIntent, camera, direction, startSec, endSec, lyricText, referenceImageId, endImageId,
-    shotMode, performanceSpeaker, performanceStyle, visualLayer, loop, stillFixes, clipFixes } = scene;
+    shotMode, performanceSpeaker, performanceStyle, visualLayer, loop } = scene;
   return hash({ prompt, framePrompt, visualIntent, camera, direction, startSec, endSec, lyricText, referenceImageId, endImageId,
-    shotMode, performanceSpeaker, performanceStyle, visualLayer, loop, stillFixes, clipFixes,
+    shotMode, performanceSpeaker, performanceStyle, visualLayer, loop,
     row: row ? { action: row.action, staging: row.staging, camera: row.camera, transition: row.transition, lyricCueIds: row.lyricCueIds } : null });
 }
 
@@ -151,7 +151,11 @@ export function preserveAutomatedShotLocks(before, after, source) {
   if (!locked.length) return { project: after, rejected: false };
   const rejected = locked.filter(scene => {
     const proposed = after.scenes?.find(next => next.sceneId === scene.sceneId);
-    return !proposed || shotApprovalBasis(before, scene) !== shotApprovalBasis(after, proposed);
+    // Repair notes feed generation too, but stay outside the persisted approval
+    // hash so existing shot locks keep their cross-version meaning.
+    const repairBasis = shot => hash({ stillFixes: shot.stillFixes, clipFixes: shot.clipFixes });
+    return !proposed || shotApprovalBasis(before, scene) !== shotApprovalBasis(after, proposed)
+      || repairBasis(scene) !== repairBasis(proposed);
   });
   // Materialize legacy whole-board locks before an open shot's edit can stale
   // that approval. No new approval is granted: these shots were already locked.
@@ -162,7 +166,7 @@ export function preserveAutomatedShotLocks(before, after, source) {
   if (!rejected.length) return { project: next, rejected: false };
   // A merge/re-plan may replace IDs or spans. Refuse the whole board mutation
   // rather than splice an old locked shot into an overlapping new timeline.
-  next = { ...next, scenes: before.scenes.map(scene => {
+  next = { ...next, composition: before.composition, scenes: before.scenes.map(scene => {
     const output = after.scenes?.find(candidate => candidate.sceneId === scene.sceneId);
     return output ? { ...scene, takes: output.takes, videoHistoryId: output.videoHistoryId } : scene;
   }), productionReview: { ...next.productionReview,
