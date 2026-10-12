@@ -44,7 +44,9 @@ describe('ShotStepper shot lock', () => {
 
   it('locks the shot on screen in one tap, and unlocks a locked one', () => {
     const toggle = renderWith({ a: 'locked', b: 'changed' }, 5);
-    fireEvent.click(screen.getByRole('button', { name: 'Lock again' }));
+    const lock = screen.getByRole('button', { name: 'Lock' });
+    expect(lock).toHaveAttribute('title', 'Changed since locked. Lock this shot again so its clip can be made.');
+    fireEvent.click(lock);
     expect(toggle).toHaveBeenLastCalledWith('b', true);
   });
 

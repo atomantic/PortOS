@@ -69,7 +69,7 @@ export default function ShotStepper({ scenes, time, onSeek, range = null, disabl
   }, [keys]);
   if (!count) return null;
   return (
-    <div className={`flex min-w-0 items-center gap-1.5 text-[11px] text-port-text-muted ${className}`}>
+    <div className={`flex min-w-0 flex-wrap items-center gap-1.5 text-[11px] text-port-text-muted ${className}`}>
       <button type="button" onClick={() => onSeek(back)} disabled={disabled || back == null} aria-label="Previous shot" title="Previous shot" className={buttonCls}>
         <SkipBack size={14} aria-hidden="true" />
       </button>

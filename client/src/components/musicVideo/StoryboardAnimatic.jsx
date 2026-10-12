@@ -306,8 +306,8 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
         {overlay}
         </FilmLookFrame>
       </figure>
-      <div className="flex min-w-0 items-start gap-2">
-        <div className="min-w-0 flex-1 text-[11px] text-port-text-muted">
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <div className="min-w-0 basis-full text-[11px] text-port-text-muted @min-[32rem]/mv-preview:flex-1 @min-[32rem]/mv-preview:basis-auto">
           {shot && (
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <ShotStepper scenes={timed} time={time} onSeek={seekTo} keys />

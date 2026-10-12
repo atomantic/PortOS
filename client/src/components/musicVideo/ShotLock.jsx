@@ -22,16 +22,16 @@ const baseCls = 'inline-flex min-h-[44px] shrink-0 items-center justify-center g
 
 /**
  * One tap to lock a shot (its clip can then be made) or to unlock it. A shot
- * edited since it was locked offers Lock again.
+ * edited since it was locked keeps its warning color and offers Lock.
  */
 export function ShotLockButton({ sceneId, className = '' }) {
   const lock = useShotLock(sceneId);
   if (!lock) return null;
   const locked = lock.state === 'locked';
-  const label = locked ? 'Unlock' : lock.state === 'changed' ? 'Lock again' : 'Lock';
+  const label = locked ? 'Unlock' : 'Lock';
   return (
     <button type="button" onClick={() => lock.toggle(!locked)} disabled={lock.busy} aria-pressed={locked}
-      title={locked ? 'Locked: its clip can be made. Tap to unlock.' : 'Lock this shot so its clip can be made'}
+      title={locked ? 'Locked: its clip can be made. Tap to unlock.' : lock.state === 'changed' ? 'Changed since locked. Lock this shot again so its clip can be made.' : 'Lock this shot so its clip can be made'}
       className={`${baseCls} ${locked ? 'border-port-success/50 bg-port-success/10 text-port-success' : lock.state === 'changed' ? 'border-port-warning/50 bg-port-warning/10 text-port-warning' : 'border-port-border text-port-text'} ${className}`}>
       {locked ? <Lock size={14} aria-hidden="true" /> : <LockOpen size={14} aria-hidden="true" />}
       {label}

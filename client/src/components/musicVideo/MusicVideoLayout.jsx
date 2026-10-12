@@ -107,17 +107,23 @@ const DOCK_CLASSES = 'min-w-0 max-xl:order-first max-xl:col-span-full xl:sticky 
  * `lead` (the step checklist) opens the step; `review` is the step's approval.
  * With `playerFirst` the player and the approval sit together at the top of the
  * step; otherwise the player docks at the side and the approval closes the step.
+ * `previewExpanded` gives that side player the main column above the step.
  */
 export default function MusicVideoLayout({
   project, trackLabel, stage, onStageChange, progress, nextAction, onNextAction, spend, status = null,
   attention = null, dock = null, notes = null, autopilot = null, onOpenSettings = null,
-  playerFirst = false, lead = null, review = null, onRename = null, renameForm = null, cancelRender = null, children,
+  playerFirst = false, previewExpanded = false, lead = null, review = null, onRename = null, renameForm = null, cancelRender = null, children,
 }) {
   const headerRef = useRef(null);
   const rootRef = useRef(null);
+  const dockRef = useRef(null);
   // On a step reviewed by watching (Storyboard, Make, Final render) the player is the main
   // element: full width at the top of the step with the approval beside it, not a side column.
   const sideDock = !!dock && !playerFirst;
+  const expandedDock = sideDock && previewExpanded;
+  useEffect(() => {
+    if (expandedDock) dockRef.current?.scrollIntoView?.({ block: 'start' });
+  }, [expandedDock]);
 
   // The dock sticks just under the header, whose height depends on wrapping.
   useEffect(() => {
@@ -278,8 +284,8 @@ export default function MusicVideoLayout({
       </header>
 
       {/* One column on a phone, capped at the screen width so a wide control can't push the step off screen. */}
-      <div className={`grid grid-cols-[minmax(0,1fr)] items-start gap-4 md:grid-cols-[13rem_minmax(0,1fr)] ${sideDock ? 'xl:grid-cols-[13rem_minmax(0,1fr)_minmax(20rem,24rem)]' : ''}`}>
-        <div className="hidden md:block md:sticky md:top-[calc(var(--mv-header-h,9rem)-0.75rem)]">
+      <div className={`grid grid-cols-[minmax(0,1fr)] items-start gap-4 md:grid-cols-[13rem_minmax(0,1fr)] ${sideDock && !expandedDock ? 'xl:grid-cols-[13rem_minmax(0,1fr)_minmax(20rem,24rem)]' : ''}`}>
+        <div className={`hidden md:block md:sticky md:top-[calc(var(--mv-header-h,9rem)-0.75rem)] ${expandedDock ? 'xl:col-start-1 xl:row-start-1 xl:row-span-2' : ''}`}>
           <StepRail stages={progress.stages} stage={stage} onStageChange={onStageChange} needsYouStage={needsYouStage} notes={notes} />
         </div>
         {/* Labelled by its own heading: from md the phone tab bar is hidden and the step list drives it. */}
@@ -287,7 +293,7 @@ export default function MusicVideoLayout({
           role="tabpanel"
           id={`mv-stage-${stage}`}
           aria-labelledby={`mv-step-title-${stage}`}
-          className="min-w-0 space-y-3"
+          className={`min-w-0 space-y-3 ${expandedDock ? 'xl:col-start-2 xl:row-start-2' : ''}`}
         >
           <div className="space-y-0.5">
             <h3 id={`mv-step-title-${stage}`} className="text-xl font-semibold">{stageEntry?.title || stageEntry?.label}</h3>
@@ -304,7 +310,8 @@ export default function MusicVideoLayout({
           {children}
           {!playerFirst && review}
         </div>
-        {sideDock ? <div className={DOCK_CLASSES}>{dock}</div> : null}
+        {/* Resize the same mounted player with grid placement, preserving playback and preview settings. */}
+        {sideDock ? <div ref={dockRef} className={expandedDock ? 'min-w-0 max-xl:order-first max-xl:col-span-full xl:col-start-2 xl:row-start-1 xl:scroll-mt-[calc(var(--mv-header-h,9rem)+1rem)]' : DOCK_CLASSES}>{dock}</div> : null}
       </div>
     </div>
   );
