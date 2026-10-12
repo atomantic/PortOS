@@ -159,6 +159,17 @@ describe('HOST_CONTROL_ROUTES (#8716)', () => {
   });
 });
 
+describe('outbound mail host-control policy (#11273)', () => {
+  it('gates draft dispatch and keeps draft management routes open', () => {
+    const route = 'POST /api/messages/drafts/:id/send';
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => method + ' ' + path));
+    expect(mounted.has(route)).toBe(true);
+    expect(hostControlRouteFor('POST', '/api/messages/drafts/33333333-3333-3333-3333-333333333333/send')).toBe(route);
+    expect(isHostControlRoute('POST', '/api/messages/drafts')).toBe(false);
+    expect(isHostControlRoute('POST', '/api/messages/drafts/33333333-3333-3333-3333-333333333333/approve')).toBe(false);
+  });
+});
+
 // Every mutation in these audited routers must be gated or explicitly reviewed
 // as a data/inference operation. A new route fails closed at review time instead
 // of silently falling through the inventory's one-way "listed routes exist" check.

@@ -887,6 +887,85 @@ describe('mounted host-control trailing slashes (#8950)', () => {
   });
 });
 
+describe('outbound mail dispatch authority (#11273)', () => {
+  let mailDependencies;
+
+  const buildApp = async (remoteAddress = '192.0.2.10') => {
+    const { authGate, hostControlRouteGate } = await import('./authGate.js');
+    if (!mailDependencies) {
+      const approvedDraft = {
+        id: '33333333-3333-3333-3333-333333333333',
+        status: 'approved',
+        accountId: '11111111-1111-1111-1111-111111111111',
+        sendVia: 'api',
+        to: ['recipient@example.test'],
+        cc: [],
+        subject: 'Synthetic test message',
+        body: 'This message is never sent outside the test.',
+      };
+      vi.doMock('../services/messageDrafts.js', () => ({
+        getDraft: vi.fn(async (id) => ({ ...approvedDraft, id })),
+        claimDraftForSend: vi.fn(async (id) => ({ ...approvedDraft, id, sendAttemptId: `attempt-${id}` })),
+        finishDraftSend: vi.fn(),
+        releaseDraftSend: vi.fn(),
+      }));
+      vi.doMock('../services/messageAccounts.js', () => ({
+        getAccount: vi.fn().mockResolvedValue({ id: approvedDraft.accountId, type: 'gmail', canSend: true }),
+      }));
+      vi.doMock('../services/messageGmailSync.js', () => ({
+        sendGmail: vi.fn().mockResolvedValue({ success: true }),
+      }));
+      const { default: messagesRoutes } = await import('../routes/messages.js');
+      const drafts = await import('../services/messageDrafts.js');
+      const { sendGmail } = await import('../services/messageGmailSync.js');
+      mailDependencies = { messagesRoutes, drafts, sendGmail };
+    }
+    const app = express();
+    app.use((req, res, next) => {
+      Object.defineProperty(req.socket, 'remoteAddress', { value: remoteAddress, configurable: true });
+      next();
+    });
+    app.use(authGate);
+    app.use(hostControlRouteGate);
+    app.use(express.json());
+    app.use('/api/messages', mailDependencies.messagesRoutes);
+    return { app, drafts: mailDependencies.drafts, sendGmail: mailDependencies.sendGmail };
+  };
+
+  it('refuses remote password-free send before draft lookup or claim while preserving local and delegated operator access', async () => {
+    const remote = await buildApp();
+    const attackerCreatedDraft = '33333333-3333-3333-3333-333333333333';
+    const operatorApprovedDraft = '44444444-4444-4444-4444-444444444444';
+    for (const draftId of [attackerCreatedDraft, operatorApprovedDraft]) {
+      const denied = await request(remote.app).post(`/api/messages/drafts/${draftId}/send`);
+      expect(denied.status).toBe(403);
+      expect(denied.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+    }
+    expect(remote.drafts.getDraft).not.toHaveBeenCalled();
+    expect(remote.drafts.claimDraftForSend).not.toHaveBeenCalled();
+    expect(remote.sendGmail).not.toHaveBeenCalled();
+
+    const local = await buildApp('127.0.0.1');
+    expect((await request(local.app).post(`/api/messages/drafts/${attackerCreatedDraft}/send`)).status).toBe(200);
+    expect(local.drafts.claimDraftForSend).toHaveBeenCalledOnce();
+    expect(local.sendGmail).toHaveBeenCalledOnce();
+
+    const { token } = await (await import('./auth.js')).setPassword({ newPassword: 'example-password' });
+    const session = await buildApp();
+    expect((await request(session.app).post(`/api/messages/drafts/${operatorApprovedDraft}/send`)
+      .set('Cookie', `portos_auth=${token}`)).status).toBe(200);
+
+    const { PORTOS_API_TOKEN: agentToken } = await (await import('./agentApiAuth.js')).resolveAgentApiEnv();
+    expect(agentToken).toBeTruthy();
+    const agent = await buildApp();
+    expect((await request(agent.app).post(`/api/messages/drafts/${operatorApprovedDraft}/send`)
+      .set('Authorization', `Bearer ${agentToken}`)).status).toBe(200);
+    expect(session.sendGmail).toHaveBeenCalledTimes(3);
+    expect(agent.sendGmail).toHaveBeenCalledTimes(3);
+    expect(agent.drafts.claimDraftForSend).toHaveBeenCalledTimes(3);
+  });
+});
+
 describe('paired peer credential (#8356)', () => {
   const PAIR_SECRET = 'example-pair-secret-0123456789-abcdef';
   const PEER_ID = 'peer-example-instance';

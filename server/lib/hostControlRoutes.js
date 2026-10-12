@@ -159,6 +159,9 @@ import { LLM_DRILL_TYPES } from './postDrillTypes.js';
 import { escapeRegExp } from './textUtils.js';
 
 export const HOST_CONTROL_ROUTES = Object.freeze([
+  // Sending a draft performs an external mail side effect as the operator (#11273).
+  'POST /api/messages/drafts/:id/send',
+
   // Capture activation and existing live feeds require operator authority (#11272).
   // HEAD inherits the GET policy because Express invokes the same handler.
   'POST /api/media/start',
