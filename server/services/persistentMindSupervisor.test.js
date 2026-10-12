@@ -70,6 +70,7 @@ vi.mock('./domainUsage.js', () => ({
 vi.mock('./cosLocalEndpointSlots.js', () => ({
   acquireLocalEndpointProviderSlot: (...args) => mock.acquireSlot(...args),
   localEndpointOfProvider: (...args) => mock.localEndpointOfProvider(...args),
+  providerBaseUrl: (provider) => provider?.endpoint || null,
 }));
 
 vi.mock('./agentRunEventLog.js', () => ({
@@ -918,19 +919,20 @@ describe('persistent mind supervisor', () => {
   });
 
   it.each([
-    ['alive', { alive: true, reason: 'model loaded' }, false],
-    ['gone', { alive: false, reason: 'Ollama is not responding' }, true],
-  ])('watchdog with a provider call in flight and the provider %s', async (_label, probeResult, interrupts) => {
+    ['alive', () => Promise.resolve(new Response(JSON.stringify({ models: [{ name: 'example-model' }] }))), false],
+    ['unloaded', () => Promise.resolve(new Response(JSON.stringify({ models: [] }))), true],
+    ['gone', () => Promise.reject(new Error('ECONNREFUSED')), true],
+  ])('watchdog with an Ollama call in flight and the runner %s', async (_label, psResponse, interrupts) => {
     let callStarted = false;
     const run = vi.fn(({ signal, callBoundary }) => callBoundary({ purpose: 'turn', round: 0 }, () => new Promise((resolve, reject) => {
       callStarted = true;
       signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
     })));
-    const probe = vi.fn(async () => probeResult);
-    supervisor.setPersistentMindLivenessProbe(probe);
+    const probe = vi.fn(psResponse);
+    vi.stubGlobal('fetch', probe);
     try {
       await supervisor.registerPersistentMindTurnAdapter({
-        prepare: vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud' } })),
+        prepare: vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud', ollamaBacked: true, endpoint: 'http://127.0.0.1:11434/v1' } })),
         run,
       });
       await supervisor.setPersistentMindEnabled(true);
@@ -943,7 +945,7 @@ describe('persistent mind supervisor', () => {
         Date.now() - 10 * PERSISTENT_MIND_LIMITS.WATCHDOG_STALE_MS
       ).toISOString();
       const result = await supervisor.checkPersistentMindWatchdog();
-      expect(probe).toHaveBeenCalledTimes(1);
+      expect(probe).toHaveBeenCalledWith('http://127.0.0.1:11434/api/ps', expect.anything());
       if (interrupts) {
         expect(result).toEqual({ interrupted: true });
         await drain;
@@ -956,7 +958,7 @@ describe('persistent mind supervisor', () => {
         await drain.catch(() => {});
       }
     } finally {
-      supervisor.setPersistentMindLivenessProbe(null);
+      vi.unstubAllGlobals();
     }
   });
 

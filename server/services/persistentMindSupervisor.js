@@ -116,7 +116,7 @@ let watchdogResumedAt = null;
 const inFlightCalls = new Map();
 const OLLAMA_LIVENESS_TIMEOUT_MS = 5_000;
 
-async function defaultProviderLivenessProbe(provider, model) {
+async function providerLivenessProbe(provider, model) {
   if (!isOllamaBackedProvider(provider)) return { alive: true, reason: 'request open' };
   const base = String(providerBaseUrl(provider) || '').replace(/\/+$/, '').replace(/\/v1$/, '');
   if (!base) return { alive: true, reason: 'request open' };
@@ -128,12 +128,6 @@ async function defaultProviderLivenessProbe(provider, model) {
   return loaded ? { alive: true, reason: 'model loaded' } : { alive: false, reason: `Ollama no longer has ${model || 'the model'} loaded` };
 }
 
-let providerLivenessProbe = defaultProviderLivenessProbe;
-
-/** Test seam: replace the provider liveness probe (null restores the default). */
-export function setPersistentMindLivenessProbe(probe) {
-  providerLivenessProbe = probe || defaultProviderLivenessProbe;
-}
 
 function trackInFlightCall(turnId, provider, model, call) {
   return async (meta, run) => {
