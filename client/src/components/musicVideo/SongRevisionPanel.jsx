@@ -96,7 +96,7 @@ export default function SongRevisionPanel({ project, tracks = [], onUpdated, onF
           <ol className="list-inside list-decimal space-y-1">
             <li><Link className="text-port-accent" to={`/music-video/${project.id}/setup`}>Follow the re-time on the Song step, then replan the shots it flags.</Link></li>
             <li><Link className="text-port-accent" to={`/music-video/${project.id}/produce#mv-composition`}>Regenerate or reimport the composition against the new audio.</Link> Imported source can contain a fuller timeline than the Storyboard; revise that source too.</li>
-            <li><Link className="text-port-accent" to={`/music-video/${project.id}/produce#mv-review-proof`}>Rebuild and review proofs before the full video.</Link></li>
+            <li><Link className="text-port-accent" to={`/music-video/${project.id}/review#mv-draft-excerpts`}>Render a draft of the changed sections before the full video.</Link></li>
           </ol>
         </div>}
       </>}

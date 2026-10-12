@@ -301,3 +301,31 @@ describe('automation respects persisted shot locks (#11218)', () => {
     expect(shotLocks(clip.project)[scene.sceneId]).toBe('locked');
   });
 });
+
+describe('a locked shot video', () => {
+  // Uniquely catches a video lock that only labels the shot: edits, split, merge, take choice and a run must all be refused.
+  it('freezes the shot for the director and for automation until its video is unlocked', async () => {
+    const { setShotLocks, clipLocks } = await import('./productionReview.js');
+    const p = await projects.createProject({ name: 'Video lock' });
+    const scene = await projects.addProjectScene(p.id, { startSec: 0, endSec: 2, prompt: 'Approved' });
+    await projects.updateScene(p.id, scene.sceneId, { videoHistoryId: 'clip-1' });
+    const lock = (locked, stage) => projects.mutateProjectRecord(p.id, current => ({ project: setShotLocks(current, { sceneIds: [scene.sceneId], locked, stage }) }));
+    await lock(true, 'still');
+    await lock(true, 'video');
+    expect(clipLocks(await projects.getProject(p.id))[scene.sceneId]).toBe('locked');
+    await expect(projects.updateScene(p.id, scene.sceneId, { prompt: 'Director edit' })).rejects.toMatchObject({ code: 'MUSIC_VIDEO_SHOT_LOCKED' });
+    await expect(projects.updateScene(p.id, scene.sceneId, { videoHistoryId: 'clip-2' })).rejects.toMatchObject({ code: 'MUSIC_VIDEO_SHOT_LOCKED' });
+    await expect(projects.deleteScene(p.id, scene.sceneId)).rejects.toMatchObject({ code: 'MUSIC_VIDEO_SHOT_LOCKED' });
+    await expect(projects.splitProjectScene(p.id, scene.sceneId, { atSec: 1 })).rejects.toMatchObject({ code: 'MUSIC_VIDEO_SHOT_LOCKED' });
+    await expect(projects.selectSceneTake(p.id, scene.sceneId, 'take-1')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_SHOT_LOCKED' });
+    await projects.addProjectScene(p.id, { startSec: 2, endSec: 3, prompt: 'After' });
+    await expect(projects.mergeProjectNextScene(p.id, scene.sceneId)).rejects.toMatchObject({ code: 'MUSIC_VIDEO_SHOT_LOCKED' });
+    // A field that doesn't change what the shot shows stays editable.
+    await projects.updateScene(p.id, scene.sceneId, { prompt: 'Approved', textZone: 'upper' });
+    const run = await projects.mutateProjectRecord(p.id, current => ({ project: { ...current, scenes: current.scenes.map(s => ({ ...s, videoHistoryId: 'run-clip' })) } }), { source: 'production-run' });
+    expect(run.project.scenes[0].videoHistoryId).toBe('clip-1');
+    await lock(false, 'video');
+    await projects.updateScene(p.id, scene.sceneId, { videoHistoryId: 'clip-2' });
+    expect((await projects.getProject(p.id)).scenes[0].videoHistoryId).toBe('clip-2');
+  });
+});

@@ -97,7 +97,7 @@ import { deriveAttentionItems } from '../lib/musicVideoAttention.js';
 import { latestMusicVideoReviewDraft } from '../../../server/lib/musicVideoReviewDraft.js';
 import { useMusicVideoReviewDraft } from '../hooks/useMusicVideoReviewDraft.js';
 import {
-  deriveNextAction, deriveStages, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam, stageChecklist, stepNotes, autopilotStatus, compareMusicVideoProjectsNewestFirst,
+  deriveNextAction, deriveStages, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam, stageChecklist, stepNotes, autopilotStatus, compareMusicVideoProjectsNewestFirst, proofReviewInUse,
 } from '../lib/musicVideoStages.js';
 import { groupMusicVideoProjects } from '../lib/musicVideoProjectList.js';
 import { AUTONOMOUS_VIEWABLE_STAGES } from '../lib/musicVideoAutonomous.js';
@@ -300,7 +300,8 @@ export default function MusicVideo() {
   const productionReview = useMusicVideoProductionReview({ project: selected, replaceProject });
   const shotLocks = productionReview.readiness?.storyboard?.shotLocks;
   const shotLockValue = shotLocks
-    ? { locks: shotLocks, toggle: (sceneId, lock) => productionReview.lockShots([sceneId], lock), busy: productionReview.busy }
+    ? { locks: shotLocks, clips: productionReview.readiness.storyboard.clipLocks || null,
+      toggle: (sceneId, lock, stage) => productionReview.lockShots([sceneId], lock, stage), busy: productionReview.busy }
     : null;
   // Posting (#9282): fill each platform's post in the PortOS Browser, post on a second press.
   const publishing = useMusicVideoPublishing({ project: selected, replaceProject });
@@ -1574,7 +1575,9 @@ export default function MusicVideo() {
                 headerAnchor={nextAction?.kind === 'goto' ? nextAction.anchor : null}
               />
             )}
-            review={APPROVAL_STAGE_BY_TAB[activeStage] ? (
+            // Make shows the optional proof only while a run's pilot or open feedback needs it.
+            review={APPROVAL_STAGE_BY_TAB[activeStage] && (activeStage !== 'produce'
+              || proofReviewInUse(selected, productionReview.readiness, { proofActive: productionReview.proof.active })) ? (
               <ProductionReviewPanel
                 key={`${selected.id}-${activeStage}`}
                 project={selected}

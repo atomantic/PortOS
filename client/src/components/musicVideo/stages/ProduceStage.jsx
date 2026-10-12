@@ -9,8 +9,8 @@ import { FOOTAGE_OPTIONAL_MODES } from '../../../lib/musicVideoStages.js';
 /**
  * Make: the picture for every shot, then the composition over it. A render
  * style that draws its own picture (code, document, Eidoverse) keeps the
- * footage tools folded, since footage is optional there. The optional animated proof sits at the bottom of
- * the page with the other approvals; the autopilot and production runs live in
+ * footage tools folded, since footage is optional there. The optional animated proof shows at the bottom of
+ * the page only while a production run's pilot or open feedback needs it; the autopilot and production runs live in
  * Project settings › Autopilot.
  */
 export default function ProduceStage({ board }) {

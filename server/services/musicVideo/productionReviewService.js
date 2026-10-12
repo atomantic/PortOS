@@ -3,7 +3,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { musicVideoEvents } from './events.js';
 import { shotCameraLabel } from '../../lib/cameraMovements.js';
-import { productionReadiness, boardStoryboard, seedArtDraft, productionReviewBasis, productionAlignmentBasis, documentStoryboardBasis, approveProductionStage, assertProductionApproval, assertShotApproval, setShotLocks, recordProductionFeedback, resolveProductionFeedback, revertApprovedInput } from './productionReview.js';
+import { productionReadiness, boardStoryboard, seedArtDraft, productionReviewBasis, productionAlignmentBasis, documentStoryboardBasis, approveProductionStage, assertProductionApproval, assertShotApproval, assertClipUnlocked, setShotLocks, recordProductionFeedback, resolveProductionFeedback, revertApprovedInput } from './productionReview.js';
 
 const reviewProcessId = randomUUID();
 
@@ -34,6 +34,8 @@ export async function assertMusicVideoSceneReview(tag, kind = null) {
   if (!tag?.projectId || !tag.sceneId) return;
   const project = await requireProject(tag.projectId);
   const boardShot = !tag.productionRunId && (project.scenes || []).some(scene => scene.sceneId === tag.sceneId);
+  // A locked video is final: no new still or clip for that shot, from the director or a run.
+  assertClipUnlocked(project, tag.sceneId);
   if (boardShot && kind === 'image') assertProductionApproval(project, 'art');
   else if (boardShot) assertShotApproval(project, tag.sceneId);
   else assertProductionApproval(project, 'storyboard');

@@ -1366,12 +1366,12 @@ describe('autopilot clears the gates it was granted on its own', () => {
   });
 
   // Uniquely catches a run granted the storyboard parking for the director when a lyric edit stales that approval mid-production.
-  it('approves a storyboard a lyric edit staled again and resumes production', async () => {
+  it('approves a storyboard an edit staled again and resumes production', async () => {
     analyzed({ productionReview: { draft: { ...GUIDE, lyricsMode: 'instrumental', timingNotes: 'Synthetic instrumental master checked.', storyboard: [shot] } } });
     await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], ...GRANT[0] }, GRANT[1]);
     await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
     const project = store.get('mv-auto');
-    project.scenes[0].lyricText = 'the dancer turns toward the light';
+    project.scenes[0].prompt = 'the dancer turns toward the light';
     project.productionRuns = [{ id: 'mvpr-1', status: 'blocked', createdAt: new Date().toISOString() }];
     expect(actual.productionReadiness(project).storyboard.approved).toBe(false);
     doubles.approveProductionReview.mockClear();

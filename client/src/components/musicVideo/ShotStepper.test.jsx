@@ -45,17 +45,44 @@ describe('ShotStepper shot lock', () => {
   it('locks the shot on screen in one tap, and unlocks a locked one', () => {
     const toggle = renderWith({ a: 'locked', b: 'changed' }, 5);
     const lock = screen.getByRole('button', { name: 'Lock' });
-    expect(lock).toHaveAttribute('title', 'Changed since locked. Lock this shot again so its clip can be made.');
+    expect(lock.title).toMatch(/^Changed since locked/);
     fireEvent.click(lock);
-    expect(toggle).toHaveBeenLastCalledWith('b', true);
+    expect(toggle).toHaveBeenLastCalledWith('b', true, 'still');
   });
 
   it('offers Unlock on a locked shot, and no lock button without lockable shots', () => {
     const toggle = renderWith({ a: 'locked', b: 'open' }, 1);
     fireEvent.click(screen.getByRole('button', { name: 'Unlock' }));
-    expect(toggle).toHaveBeenLastCalledWith('a', false);
+    expect(toggle).toHaveBeenLastCalledWith('a', false, 'still');
     document.body.innerHTML = '';
     render(<ShotStepper scenes={shots} time={1} onSeek={vi.fn()} />);
     expect(screen.queryByRole('button', { name: /lock/i })).toBeNull();
+  });
+
+  // Uniquely catches a video shot skipping its clip lock, or a still lock with no way back.
+  it('walks a video shot from Lock still to Lock video to Unlock video', () => {
+    const scenes = [{ sceneId: 'a', startSec: 0 }, { sceneId: 'b', startSec: 4, videoHistoryId: 'clip-1' }];
+    const view = (locks, clips, time) => {
+      const toggle = vi.fn();
+      document.body.innerHTML = '';
+      render(<ShotLockContext.Provider value={{ locks, clips, toggle, busy: false }}><ShotStepper scenes={scenes} time={time} onSeek={vi.fn()} /></ShotLockContext.Provider>);
+      return toggle;
+    };
+    let toggle = view({ a: 'open', b: 'open' }, { a: 'open', b: 'open' }, 1);
+    fireEvent.click(screen.getByRole('button', { name: 'Lock still' }));
+    expect(toggle).toHaveBeenLastCalledWith('a', true, 'still');
+    // No clip yet: the still stays locked until its clip is made.
+    toggle = view({ a: 'locked', b: 'open' }, { a: 'open', b: 'open' }, 1);
+    expect(screen.queryByRole('button', { name: 'Lock video' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock still' }));
+    expect(toggle).toHaveBeenLastCalledWith('a', false, 'still');
+    toggle = view({ a: 'open', b: 'locked' }, { a: 'open', b: 'open' }, 5);
+    fireEvent.click(screen.getByRole('button', { name: 'Lock video' }));
+    expect(toggle).toHaveBeenLastCalledWith('b', true, 'video');
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock still' }));
+    expect(toggle).toHaveBeenLastCalledWith('b', false, 'still');
+    toggle = view({ a: 'open', b: 'locked' }, { a: 'open', b: 'locked' }, 5);
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock video' }));
+    expect(toggle).toHaveBeenLastCalledWith('b', false, 'video');
   });
 });
