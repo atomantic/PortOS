@@ -90,6 +90,13 @@ export function selectedPerformanceInstruction(scene) {
   return edit.inSec >= 0 && edit.outSec > edit.inSec ? instruction : null;
 }
 
+/**
+ * How far into a take's clip its audio window really starts (#11210): the
+ * provider's leading padding the take's edit points were moved by when it
+ * landed, or 0. Clip time t plays song time `audioWindow.startSec + t - offset`.
+ */
+export const clipAudioOffsetSec = (instruction) => (Number.isFinite(instruction?.alignment?.offsetSec) ? instruction.alignment.offsetSec : 0);
+
 // Safety margin kept inside the provider's documented bounds so ffmpeg's
 // sample rounding can never land a window a hair under the minimum (rejected)
 // or over the maximum (silently clipped by the provider).
@@ -114,6 +121,21 @@ export const MUSIC_VIDEO_LIPSYNC_DEFAULT_RESOLUTION = '1080P';
  * one lip-sync lane fits the other. Takes past 15s are billed at 1.2×; the
  * cost label says so, and a director who wants to avoid it splits shorter.
  */
+function localAudioLane(style) {
+  return Object.freeze({
+    provider: 'local',
+    style,
+    label: style === 'music' ? 'Local LTX-2.5 audio-to-video' : 'Local LTX-2.5 lip-sync',
+    modelId: null,
+    minAudioSec: 1,
+    maxAudioSec: 20,
+    transcription: false,
+    resolutions: Object.freeze([]),
+    defaultResolution: null,
+    costLabel: 'Free, renders on this machine',
+  });
+}
+
 export const SOURCE_AUDIO_LIPSYNC = Object.freeze({
   fal: Object.freeze({
     provider: 'fal',
@@ -129,6 +151,12 @@ export const SOURCE_AUDIO_LIPSYNC = Object.freeze({
     // take's own estimate beside it (falSceneTake).
     costLabel: `${describeFalVideoRate(FAL_LIPSYNC_VIDEO_MODEL, MUSIC_VIDEO_LIPSYNC_DEFAULT_RESOLUTION)} — billed to your fal.ai account`,
   }),
+  // LTX audio-to-video on this machine: the song slice is the audio latent the
+  // picture is denoised against, held fixed through both passes
+  // (scripts/generate_ltx2.py `_install_a2v_stage2_audio_freeze`). The model is
+  // the project's local LTX pick, checked at submission; 20s keeps one take
+  // inside what LTX-2.5 renders well and within a Mac's memory.
+  local: localAudioLane('lipsync'),
 });
 
 /**
@@ -162,6 +190,8 @@ const musicCapability = (model) => {
  * `videoSettings.falMusicModelId` picks one; absent (or a model this install
  * does not curate) = `FAL_AUDIO_VIDEO_MODEL` (OmniHuman v1.5).
  */
+const LOCAL_MUSIC_LANE = localAudioLane('music');
+
 export const SOURCE_AUDIO_MUSIC = Object.freeze({
   fal: Object.freeze(Object.fromEntries(FAL_AUDIO_VIDEO_MODELS.map((model) => [model.id, musicCapability(model)]))),
 });
@@ -174,6 +204,7 @@ export const SOURCE_AUDIO_MUSIC = Object.freeze({
 export function performanceCapability(backend, { scene = null, videoSettings = null } = {}) {
   if (!Object.prototype.hasOwnProperty.call(SOURCE_AUDIO_LIPSYNC, backend || '')) return null;
   if (scene?.performanceStyle !== 'music') return SOURCE_AUDIO_LIPSYNC[backend];
+  if (backend === 'local') return LOCAL_MUSIC_LANE;
   const lanes = SOURCE_AUDIO_MUSIC[backend];
   const pinned = videoSettings?.falMusicModelId;
   return (pinned && Object.prototype.hasOwnProperty.call(lanes, pinned) ? lanes[pinned] : null) || lanes[FAL_AUDIO_VIDEO_MODEL];
@@ -188,9 +219,6 @@ export function performanceBlockedReason(backend) {
   if (performanceCapability(backend)) return null;
   if (backend === 'grok') {
     return 'Grok video is cutaway-only: it cannot synchronize a singer to the song. Pin fal.ai for performance shots, or switch this scene to Cutaway.';
-  }
-  if (backend === 'local') {
-    return 'Local video models cannot lip-sync to the song. Pin fal.ai for performance shots, or switch this scene to Cutaway — with Supplied song audio and a local LTX model, the scene\'s song slice still drives its motion.';
   }
   return 'Performance shots need a source-audio lip-sync provider — pin fal.ai as this project\'s video backend.';
 }
@@ -282,7 +310,7 @@ export function clipRelativeCues(cues, windowStartSec, windowEndSec) {
 
 /**
  * The Grok CLI request that covers a cutaway shot of `spanSec`: the shortest
- * deliverable clip at least that long (6 or 10s), or the longest when none is.
+ * deliverable clip at least that long (6, 10 or 15 s), or the longest when none is.
  * `uncoveredSec > 0` means one clip cannot cover the shot — split the scene
  * rather than loop or stretch the clip.
  */
@@ -447,7 +475,10 @@ export function planShotSplit({ startSec, endSec, maxSec, lyricCues, phrases, be
  * renders on `videoSettings.falModelId` (default Hailuo-02 image-to-video) at
  * `falResolution` (default: the model's), for the pinned `falDuration` or else
  * the shot's span — rounded UP to a length the model delivers, so the clip
- * covers the shot. An uncurated model keeps the legacy contract (only an
+ * covers the shot. A shot with a style-break end frame renders on
+ * `videoSettings.falEndFrameModelId` when the project picked one that takes an
+ * end frame — a dearer model is an explicit upgrade for those shots only, never
+ * the footage default. An uncurated model keeps the legacy contract (only an
  * explicit pin is sent) and reports cost unknown.
  *
  * Returns `{ performance, modelId, seconds, resolution, costUsd }`; `seconds`
@@ -473,7 +504,9 @@ export function falSceneTake({ scene, videoSettings = {}, songDurationSec = null
       costUsd: seconds == null ? null : estimateFalVideoCostUsd({ modelId: capability.modelId, seconds, resolution }),
     };
   }
-  const modelId = settings.falModelId || FAL_DEFAULT_IMAGE_VIDEO_MODEL;
+  const endFrameModel = typeof scene?.endImageId === 'string' && scene.endImageId.trim()
+    ? getFalVideoModel(settings.falEndFrameModelId) : null;
+  const modelId = endFrameModel?.endImage ? endFrameModel.id : settings.falModelId || FAL_DEFAULT_IMAGE_VIDEO_MODEL;
   const model = getFalVideoModel(modelId);
   if (!model) {
     return { performance: false, modelId, seconds: settings.falDuration || null, resolution: settings.falResolution || null, costUsd: null };
@@ -528,8 +561,10 @@ export function planPerformanceRepair({ scene, temporal, excerptStartSec, backen
   }
   if (Math.abs(cursor - scene.endSec) > 0.001 || failedAt === null || failedAt <= scene.startSec) return no('Review needed: no accepted prefix and failed suffix were measured');
   const windowStart = instruction.audioWindow?.startSec;
-  if (!Number.isFinite(windowStart) || Math.abs(windowStart + instruction.edit.inSec - scene.startSec) > 0.001
-    || Math.abs(windowStart + instruction.edit.outSec - scene.endSec) > 0.001) return no('Review needed: the source audio timebase is missing');
+  // Song time of clip time 0: an aligned take's window starts `offset` into its clip.
+  const clipStart = windowStart - clipAudioOffsetSec(instruction);
+  if (!Number.isFinite(windowStart) || Math.abs(clipStart + instruction.edit.inSec - scene.startSec) > 0.001
+    || Math.abs(clipStart + instruction.edit.outSec - scene.endSec) > 0.001) return no('Review needed: the source audio timebase is missing');
   const cues = (instruction.cues || []).filter((cue) => cue.endSec + windowStart > scene.startSec && cue.startSec + windowStart < scene.endSec);
   if (!cues.length || cues.some((cue) => !cue.words?.length)) return no('Review needed: word timings are required to choose a safe boundary');
   const words = cues.flatMap((cue) => cue.words).slice().sort((a, b) => a.startSec - b.startSec);

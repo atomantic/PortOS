@@ -19,6 +19,7 @@ import { mkdir, writeFile, readFile, rm } from 'fs/promises';
 import { createHash } from 'crypto';
 import {
   capSharpThreads, lockAllAnchors, lockAllAnchorsReal, expectCarriesCorrection, normalizeManifestForComparison,
+  writeCandidatePng,
 } from './spriteTestFixtures.js';
 
 const restoreSharpThreads = capSharpThreads();
@@ -2132,12 +2133,21 @@ describe('listSpriteAssets run-intermediate exclusion', () => {
     await mkdir(join(gen, 'frames'), { recursive: true });
     await mkdir(join(gen, 'review'), { recursive: true });
     await writeFile(join(gen, 'raw', 'source-0001.png'), 'raw');
-    await writeFile(join(gen, 'frames', '00-left-contact.png'), 'frame');
-    await writeFile(join(gen, 'review', 'contrast.png'), 'sheet');
-    const paths = (await listSpriteAssets(id)).map((a) => a.path);
+    // Included assets are real images: this public listing also probes their
+    // headers. Corrupt-image handling belongs to pathsAssets.test.js.
+    await writeCandidatePng(join(gen, 'frames', '00-left-contact.png'));
+    await writeCandidatePng(join(gen, 'review', 'contrast.png'));
+    const assets = await listSpriteAssets(id);
+    const paths = assets.map((a) => a.path);
     expect(paths).not.toContain('grok/walk-east-00c0ffee/generated/raw/source-0001.png');
     expect(paths).toContain('grok/walk-east-00c0ffee/generated/frames/00-left-contact.png');
     expect(paths).toContain('grok/walk-east-00c0ffee/generated/review/contrast.png');
+    for (const path of [
+      'grok/walk-east-00c0ffee/generated/frames/00-left-contact.png',
+      'grok/walk-east-00c0ffee/generated/review/contrast.png',
+    ]) {
+      expect(assets.find(asset => asset.path === path)).toMatchObject({ width: 64, height: 64, format: 'png', frameCount: 1 });
+    }
   });
 });
 

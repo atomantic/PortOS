@@ -1,7 +1,8 @@
 import { assertMusicVideoMediaSelections, musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
 import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 import { filmLookRuntimeSource, isFilmLookNeutral } from '../../lib/filmLook.js';
-import { titleCardRuntimeSource, titleCardVisible } from '../../lib/musicVideoTitleCard.js';
+import { titleCardVisible } from '../../lib/musicVideoTitleCard.js';
+import { titleCardRuntime } from './titleCardFonts.js';
 /**
  * Music Video — render a project's composition document over the song.
  *
@@ -70,7 +71,7 @@ export const documentAspect = musicVideoAspect;
 export function documentRenderInitScripts(project) {
   return [
     ...(isFilmLookNeutral(project?.filmLook) ? [] : [filmLookRuntimeSource(project.filmLook)]),
-    ...(titleCardVisible(project?.titleCard) ? [titleCardRuntimeSource(project.titleCard)] : []),
+    ...(titleCardVisible(project?.titleCard) ? [titleCardRuntime(project.titleCard)] : []),
   ];
 }
 
@@ -273,6 +274,51 @@ async function stageDocumentData(compositionDir, data, media) {
     });
   }
   await writeFile(join(compositionDir, 'portos-mv.js'), `window.PORTOS_MV = ${scriptJson(data)};\nwindow.PORTOS_MV_EVENT_STATE = ${narrativeFrameState.toString()};\n`);
+}
+
+/**
+ * Stage a document the way a render does and open it in the OS-jailed preview
+ * browser. The caller closes `page` and removes `scratchRoot`. Private media
+ * stays in the staged copy; it is not posted into the user's browser.
+ */
+export async function openIsolatedDocumentPreview({ project, jobId, signal, onEvent }) {
+  const plan = await prepareDocumentRender(project);
+  const { probeVideoGeometry } = await import('../../lib/ffmpeg.js');
+  const { stageMusicVideoComposition } = await import('../htmlComposition/index.js');
+  const { openComposition } = await import('../htmlComposition/browser.js');
+  const { loadHistory } = await import('../videoGen/history.js');
+  const generated = project.composition?.document?.source?.kind === 'generated';
+  const history = (project.scenes || []).some((scene) => scene?.videoHistoryId) ? await loadHistory() : [];
+  const media = await resolveSceneMedia(project, { history, probe: probeVideoGeometry, strictLayers: generated });
+  const data = buildDocumentData(project, {
+    media, frame: plan.frame, clock: plan.clock, songDurationSec: plan.songDurationSec, generated,
+  });
+  let staged;
+  let page;
+  try {
+    staged = await stageMusicVideoComposition(plan.directory, jobId, musicVideoSongDocument(project), {
+      prepare: (dir) => stageDocumentData(dir, data, media),
+    });
+    signal?.throwIfAborted();
+    page = await openComposition(staged.directory, {
+      signal, streamMedia: true, mediaMode: musicVideoMediaMode(project), ownedBrowser: true, isolation: 'required',
+      initScripts: [filmLookRuntimeSource(project?.filmLook), titleCardRuntime(project?.titleCard)],
+      previewBridge: true, refuseUnknown: 'empty', lockLoopback: true, onEvent,
+    });
+    signal?.throwIfAborted();
+    await page.send('Emulation.setDeviceMetricsOverride', {
+      width: plan.width, height: plan.height, deviceScaleFactor: 1, mobile: false,
+    });
+    signal?.throwIfAborted();
+    return {
+      page, scratchRoot: staged.scratchRoot,
+      width: plan.width, height: plan.height, fps: plan.fps, durationSec: plan.durationSec,
+    };
+  } catch (error) {
+    if (page) await page.close().catch(() => {});
+    if (staged?.scratchRoot) await rm(staged.scratchRoot, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  }
 }
 
 /**

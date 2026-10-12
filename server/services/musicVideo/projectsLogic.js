@@ -34,12 +34,13 @@ import { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 import { isPerformanceScene, planShotSplit, shotSplitLimit } from '../../lib/musicVideoShotTiming.js';
 import { normalizeLyricCues, normalizePhrases, invalidateTimedText } from './timedText.js';
 import { normalizeLyricMarkers } from './lyricMarkers.js';
-import { ensureSceneTakes, TAKE_SLOT } from './takes.js';
+import { ensureSceneTakes, keepCodeClipWithItsClip, TAKE_SLOT } from './takes.js';
 import { normalizeComposition, invalidateCompositionTiming, withStoredCompositionDocument } from './composition.js';
 import { normalizeSoundBed } from './soundBed.js';
 import { normalizeFilmLook } from '../../lib/filmLook.js';
 import { normalizeTitleCard } from '../../lib/musicVideoTitleCard.js';
 import { remapTreatmentForClone, scenesFingerprint } from './treatment.js';
+import { carryStoryboardApproval } from './productionReview.js';
 import { normalizeMusicVideoAutomation } from '../../lib/musicVideoAutomation.js';
 
 export { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
@@ -132,6 +133,7 @@ export function buildProjectRecord(input, { id, now }) {
       falDuration: videoSettings.falDuration ?? null,
       falModelId: videoSettings.falModelId ?? null,
       falResolution: videoSettings.falResolution ?? null,
+      falEndFrameModelId: videoSettings.falEndFrameModelId ?? null,
       falLipSyncResolution: videoSettings.falLipSyncResolution ?? null,
       falMusicModelId: videoSettings.falMusicModelId ?? null,
       falMusicResolution: videoSettings.falMusicResolution ?? null,
@@ -217,6 +219,7 @@ export function cloneProjectRecord(source, {
     order,
     referenceImageId: includeGeneratedMedia ? (scene.referenceImageId ?? null) : null,
     videoHistoryId: includeGeneratedMedia ? (scene.videoHistoryId ?? null) : null,
+    endImageId: includeGeneratedMedia ? (scene.endImageId ?? null) : null,
     // Takes are immutable pointers to shared media, so a media-keeping clone
     // carries the whole candidate history; a clean clone starts empty.
     takes: includeGeneratedMedia ? ensureSceneTakes(scene, now) : [],
@@ -361,10 +364,15 @@ export function applyProjectPatch(project, patch) {
     }) } : {}),
     ...(Array.isArray(patch.lyricMarkers) ? { lyricMarkers: normalizeLyricMarkers(patch.lyricMarkers) } : {}),
     ...(Array.isArray(patch.phrases) ? { phrases: normalizePhrases(patch.phrases) } : {}),
-    // #8984 — the composition manifest is replaced whole; null clears it.
+    // #8984 — a manifest carrying its `mode` replaces the stored one whole
+    // (the editors send the full manifest, so an omitted key clears it); null
+    // clears it all. One without `mode` is a partial patch and merges over the
+    // stored manifest, so `{ style }` cannot silently reset mode and cutting.
     // The composition document pointer is owned by the import routes: a PATCH
     // that echoes (or omits, or forges) it keeps the stored one.
-    ...('composition' in patch ? { composition: withStoredCompositionDocument(normalizeComposition(patch.composition), project.composition) } : {}),
+    ...('composition' in patch ? { composition: withStoredCompositionDocument(normalizeComposition(
+      patch.composition && typeof patch.composition === 'object' && !('mode' in patch.composition) && project.composition
+        ? { ...project.composition, ...patch.composition } : patch.composition), project.composition) } : {}),
     // #8988 — an explicitly chosen sound-design bed; null clears it.
     ...('soundBed' in patch ? { soundBed: normalizeSoundBed(patch.soundBed) } : {}),
     // The film look is replaced whole (one bounded record); null clears it.
@@ -392,6 +400,7 @@ export function applyProjectPatch(project, patch) {
         falDuration: null,
         falModelId: null,
         falResolution: null,
+        falEndFrameModelId: null,
         falLipSyncResolution: null,
         falMusicModelId: null,
         falMusicResolution: null,
@@ -504,6 +513,7 @@ function buildScene(input, { order }) {
     ...(input.camera ? { camera: input.camera } : {}),
     cardText: input.cardText ?? null,
     ...(input.codeOverlay ? { codeOverlay: true } : {}),
+    ...(input.codeClip ? { codeClip: true } : {}),
     cardColor: input.cardColor ?? null,
     // #8977: cutaway (any image-to-video lane) unless the director asks for a
     // lip-synced performance shot, which only a source-audio provider renders.
@@ -518,9 +528,16 @@ function buildScene(input, { order }) {
   };
 }
 
+/** Where a new scene goes: before the first timed scene that starts after it; untimed scenes go last. */
+function insertByTime(scenes, scene) {
+  const at = scene.startSec;
+  const idx = typeof at === 'number' ? scenes.findIndex((s) => typeof s.startSec === 'number' && s.startSec > at) : -1;
+  return idx < 0 ? [...scenes, scene] : [...scenes.slice(0, idx), scene, ...scenes.slice(idx)];
+}
+
 /**
- * Append a scene to the board. Validates the input, assigns a sceneId and the
- * next order index. Returns `{ project, scene }`. A thin single-item wrapper
+ * Add a scene to the board at its time. Validates the input, assigns a sceneId and
+ * renumbers order. Returns `{ project, scene }`. A thin single-item wrapper
  * over `addScenes` so the validate/build/order logic lives in exactly one
  * place.
  */
@@ -530,23 +547,26 @@ export function addScene(project, sceneInput) {
 }
 
 /**
- * Append several scenes to the board in one pass (the autonomous planner,
+ * Add several scenes to the board in one pass (the autonomous planner,
  * #1855) — a single `touch`/persist instead of N sequential addScene calls, so
  * a 10-section plan is one write (and one peer-sync emit) instead of ten.
- * Returns `{ project, scenes }` (the newly-created scenes, in input order).
+ * A timed scene goes in at its time, so the board stays in song order; an
+ * untimed one is appended. Returns `{ project, scenes }` (the newly-created
+ * scenes, in input order).
  */
 export function addScenes(project, sceneInputs) {
   const list = Array.isArray(sceneInputs) ? sceneInputs : [];
-  const existing = project.scenes || [];
-  const added = [];
-  let order = existing.length;
+  let scenes = project.scenes || [];
+  const ids = [];
   for (const input of list) {
     const data = parseSceneOrThrow(musicVideoSceneCreateSchema, input);
-    added.push(buildScene(data, { order }));
-    order += 1;
+    const scene = buildScene(data, { order: 0 });
+    ids.push(scene.sceneId);
+    scenes = insertByTime(scenes, scene);
   }
-  const next = touch(project, { scenes: [...existing, ...added] });
-  return { project: next, scenes: added };
+  scenes = scenes.map((s, i) => (s.order === i ? s : { ...s, order: i }));
+  const next = touch(project, { scenes });
+  return { project: next, scenes: ids.map((id) => scenes.find((s) => s.sceneId === id)) };
 }
 
 /**
@@ -572,12 +592,19 @@ export function replaceScenes(project, sceneInputs) {
       sceneId: prior.sceneId,
       referenceImageId: prior.referenceImageId ?? null,
       videoHistoryId: prior.videoHistoryId ?? null,
+      ...(prior.endImageId ? { endImageId: prior.endImageId } : {}),
+      ...(prior.endFramePrompt ? { endFramePrompt: prior.endFramePrompt } : {}),
       takes: prior.takes || [],
       ...(prior.direction ? { direction: prior.direction } : {}),
     };
   });
   return { project: touch(project, { scenes }), scenes, replaced: existing.length };
 }
+
+// Scene fields a director edits within an approved shot (its span, wording and
+// selected takes) without adding a shot or lyric the storyboard approval did not cover.
+const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'label', 'prompt', 'framePrompt', 'visualIntent',
+  'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip'];
 
 /**
  * Apply a patch to a single scene. Returns `{ project, updated }`. Throws if the
@@ -588,7 +615,7 @@ export function applySceneUpdate(project, sceneId, patch) {
   const scenes = project.scenes || [];
   const idx = scenes.findIndex((s) => s.sceneId === sceneId);
   if (idx < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
-  const merged = { ...scenes[idx], ...data };
+  const merged = 'codeClip' in data ? { ...scenes[idx], ...data } : keepCodeClipWithItsClip(scenes[idx], { ...scenes[idx], ...data });
   // Setting a slot directly (an older client, or a hand edit) still records the
   // asset as a take so the candidate list stays a superset of the selection.
   const touchesSlot = Object.values(TAKE_SLOT).some((field) => typeof data[field] === 'string');
@@ -602,7 +629,9 @@ export function applySceneUpdate(project, sceneId, patch) {
   const nextScenes = scenes.slice();
   nextScenes[idx] = updated;
   const next = touch(project, { scenes: nextScenes });
-  return { project: next, updated };
+  // Retiming or rewording a shot, or picking another take, keeps the storyboard approval it was judged on.
+  const shotEdit = Object.keys(data).every((key) => SCENE_SHOT_EDIT_FIELDS.includes(key));
+  return { project: shotEdit ? carryStoryboardApproval(project, next, 'Edited a shot') : next, updated };
 }
 
 /** Remove a scene and re-sequence the remaining scenes' `order`. Returns the next record. */
@@ -614,7 +643,15 @@ export function removeScene(project, sceneId) {
   const nextScenes = scenes
     .filter((s) => s.sceneId !== sceneId)
     .map((s, i) => ({ ...s, order: i }));
-  return touch(project, { scenes: nextScenes });
+  const extra = { scenes: nextScenes };
+  // The removed shot's storyboard row goes with it, so the board has no row bound to a missing scene.
+  const draft = project.productionReview?.draft;
+  if (Array.isArray(draft?.storyboard) && draft.storyboardSource !== 'document') {
+    extra.productionReview = { ...project.productionReview,
+      draft: { ...draft, storyboard: draft.storyboard.filter((shot) => shot?.sceneId !== sceneId) } };
+  }
+  // Cutting a shot adds nothing the approval did not cover, so a current storyboard approval stays.
+  return carryStoryboardApproval(project, touch(project, extra), 'Cut a shot');
 }
 
 // What a board position owns rather than the shot placed in it: the span of
@@ -702,23 +739,19 @@ function lyricTextWithin(cues, startSec, endSec) {
  * piece is a new scene placed right after it, carrying the shot's direction
  * and the selected reference frame (as a take, so the frame is ready to
  * animate) but no clip — the old clip was generated for the whole span. Each
- * piece's `lyricText` is the timed lines sung inside it. Returns `{ project, scenes }` (all pieces, in
- * order); throws 400 when the shot is untimed or already fits one take.
+ * piece's `lyricText` is the timed lines sung inside it. `atSec` instead cuts
+ * the shot in two at that song time, whatever the backend. Returns `{ project, scenes }` (all pieces, in
+ * order); throws 400 when the shot is untimed, already fits one take, or `atSec` falls outside it.
  */
-export function splitScene(project, sceneId, { backend = null } = {}) {
+export function splitScene(project, sceneId, { backend = null, atSec = null } = {}) {
   const scenes = project.scenes || [];
   const idx = scenes.findIndex((s) => s.sceneId === sceneId);
   if (idx < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
   const scene = scenes[idx];
-  const lane = backend || project.videoSettings?.backend || null;
-  const maxSec = shotSplitLimit(scene, lane, project.videoSettings);
-  if (maxSec == null) {
-    throw new ServerError('This backend renders the shot at any length — there is nothing to split.', { status: 400, code: 'MUSIC_VIDEO_SPLIT_NOT_NEEDED' });
-  }
-  const plan = planShotSplit({
+  const plan = atSec != null ? splitAtTime(scene, atSec) : planShotSplit({
     startSec: scene.startSec,
     endSec: scene.endSec,
-    maxSec,
+    maxSec: splitLimitOrThrow(project, scene, backend),
     lyricCues: project.lyricCues,
     phrases: project.phrases,
     beats: project.audioAnalysis?.beats,
@@ -780,6 +813,29 @@ export function splitScene(project, sceneId, { backend = null } = {}) {
 }
 
 const timedSec = (v) => typeof v === 'number' && Number.isFinite(v);
+
+function splitLimitOrThrow(project, scene, backend) {
+  const maxSec = shotSplitLimit(scene, backend || project.videoSettings?.backend || null, project.videoSettings);
+  if (maxSec == null) {
+    throw new ServerError('This backend renders the shot at any length — there is nothing to split.', { status: 400, code: 'MUSIC_VIDEO_SPLIT_NOT_NEEDED' });
+  }
+  return maxSec;
+}
+
+/** Shortest piece a split at a chosen time may leave. */
+const MIN_SPLIT_PIECE_SEC = 0.1;
+
+/** Two pieces cut at `atSec`, which must fall inside the timed shot. */
+function splitAtTime(scene, atSec) {
+  const { startSec, endSec } = scene;
+  if (!timedSec(startSec) || !timedSec(endSec)) {
+    return { ok: false, code: 'MUSIC_VIDEO_SPLIT_UNTIMED', message: 'Give this shot a start and end time before splitting it.' };
+  }
+  if (atSec < startSec + MIN_SPLIT_PIECE_SEC || atSec > endSec - MIN_SPLIT_PIECE_SEC) {
+    return { ok: false, code: 'MUSIC_VIDEO_SPLIT_OUT_OF_RANGE', message: `Split inside the shot, between ${startSec + MIN_SPLIT_PIECE_SEC}s and ${endSec - MIN_SPLIT_PIECE_SEC}s.` };
+  }
+  return { ok: true, pieces: [{ startSec, endSec: atSec }, { startSec: atSec, endSec }] };
+}
 
 /**
  * Join a scene with the one after it — the inverse of `splitScene`. The first
@@ -852,7 +908,8 @@ export function mergeNextScene(project, sceneId, { backend = null } = {}) {
       });
     extra.productionReview = { ...project.productionReview, draft: { ...draft, storyboard } };
   }
-  return { project: touch(project, extra), scene: nextScenes[idx] };
+  // Joining two shots keeps their prompts and lyrics, so a current storyboard approval stays.
+  return { project: carryStoryboardApproval(project, touch(project, extra), 'Merged two shots'), scene: nextScenes[idx] };
 }
 
 // ---- peer-sync federation (#1770) -----------------------------------------

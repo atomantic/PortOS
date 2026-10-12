@@ -65,6 +65,7 @@ import {
   TOOL_PERMISSION_DECLINE_MAX,
   TOOL_PERMISSION_NUDGE_TEXT,
   CODEX_COMPOSER_READY_PATTERN,
+  screenShowsInFlightChrome,
 } from './tuiHandshake.js';
 import { detectImmediateFallbackSignal } from './aiToolkit/errorDetection.js';
 import { CODEX_CONFIGURED_DEFAULT } from './providerModels.js';
@@ -2216,5 +2217,24 @@ describe('createAgyResumeGate', () => {
     gate.observe(`--conversation=${ID}`);
     expect(gate.takeResume(1, 0)).toBeNull();
     expect(gate.attempts).toBe(2);
+  });
+});
+
+describe('screenShowsInFlightChrome', () => {
+  const footer = '╭──────────────╮\n│ >            │\n╰──────────────╯\n  ? for shortcuts\n';
+  it.each([
+    ['effort status under the composer', `✻ Pondering… (55s · ↓ 1.2k tokens · still thinking with medium effort)\n${footer}`],
+    ['a past-a-minute counter', '✶ Thinking… (1m 5s · ↓ 3.4k tokens)\n'],
+    ['cursor-forward gaps stripped to nothing', '(12s·esctointerrupt)'],
+  ])('reads %s as in flight', (_label, screen) => {
+    expect(screenShowsInFlightChrome(screen)).toBe(true);
+  });
+
+  it.each([
+    ['an inline answer printed after the spinner', `(40s · thinking with high effort)\n${'{"logline":"A long answer"} '.repeat(20)}\n${footer}`],
+    ['a finished turn summary', '✻ Worked for 55s\n{"ok":true}\n'],
+    ['no output', ''],
+  ])('does not read %s as in flight', (_label, screen) => {
+    expect(screenShowsInFlightChrome(screen)).toBe(false);
   });
 });

@@ -27,6 +27,7 @@ import {
   verifyPostCompletionOutputs,
   describeSignalDeath,
   planPromptEncodingRetry,
+  planMetalBufferRetry,
   bufferChildExit,
 } from './generateVideoHelpers.js';
 import {
@@ -40,6 +41,7 @@ import {
 import { isDisplaySleepEnabled, sleepDisplayForVideo, wakeDisplayForVideo } from './displayPower.js';
 import { loadHistory, mutateVideoHistory } from './history.js';
 import { estimateRenderMs } from './eta.js';
+import { spliceExtendSource } from './extendSplice.js';
 import { videoJobState } from './jobState.js';
 
 const MODULE_NOT_FOUND_RE = /ModuleNotFoundError: No module named ['"]([^'"]+)['"]/;
@@ -72,6 +74,9 @@ export async function spawnAndWatchVideo({
   numFrames: parsedNumFrames,
   steps: actualSteps,
   videoGenSettings,
+  // `{ sourcePath, extendLatents }` for a plain native Extend render, whose
+  // delivered file should keep the original source (see ./extendSplice.js).
+  extendSplice = null,
 }) {
   const retainOwnership = () => {
     // Chained renders use child job IDs; their ambient owner is the outer job.
@@ -99,6 +104,9 @@ export async function spawnAndWatchVideo({
   // a second watchdog abort at the reduced budget is a real failure the user has
   // to see, not something to keep grinding the GPU over.
   let promptEncodingRetriesUsed = 0;
+  // Same single-shot rule for the small-command-buffer relaunch (any-phase Metal
+  // watchdog abort on an MLX runtime).
+  let metalBufferRetriesUsed = 0;
   // Hoisted out of the try so a relaunch can respawn with the SAME child env
   // plus a lowered Gemma budget, instead of rebuilding it from scratch.
   let childEnv;
@@ -534,6 +542,10 @@ export async function spawnAndWatchVideo({
             broadcastSse(job, { type: 'complete', result });
             videoGenEvents.emit('completed', { generationId: jobId, ...result });
           } else {
+            // Best-effort: a failed splice leaves the model's own output in place.
+            if (extendSplice && (await spliceExtendSource({ ...extendSplice, outputPath })).applied) {
+              meta.extendSourceOriginal = true;
+            }
             await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, mutateHistory: mutateVideoHistory, publication: publications.get(outputPath) });
           }
         }
@@ -649,14 +661,24 @@ export async function spawnAndWatchVideo({
     // finally landed on. Without this a cancel that raced an in-flight abort
     // would be answered by relaunching the render the user just stopped.
     if (childKilled) return false;
-    const plan = planPromptEncodingRetry({
+    const stderrText = typeof stderr === 'string' ? stderr : '';
+    // At most ONE relaunch per job across both mitigations: a render that already
+    // spent either retry does not get a second GPU-grinding attempt.
+    const relaunchesUsed = promptEncodingRetriesUsed + metalBufferRetriesUsed;
+    const encodePlan = planPromptEncodingRetry({
       signal,
       stderr,
       promptEncodePhase: job.promptEncodePhase,
-      retriesUsed: promptEncodingRetriesUsed,
+      retriesUsed: relaunchesUsed,
       platform: process.platform,
     });
-    if (!plan) return false;
+    const bufferPlan = encodePlan || relaunchesUsed > 0 ? null : planMetalBufferRetry({
+      signal,
+      stderr: stderrText,
+      retriesUsed: 0,
+      mlxRuntime: runtimeUsesMlx(model.runtime),
+    });
+    if (!encodePlan && !bufferPlan) return false;
     // Runs from a child 'close' handler, outside the Express request lifecycle —
     // an uncaught throw here would crash the process, and a failed relaunch must
     // degrade into the normal failure report rather than strand the job.
@@ -668,14 +690,23 @@ export async function spawnAndWatchVideo({
     let retryProc = null;
     let retryWired = false;
     try {
-      promptEncodingRetriesUsed += 1;
-      const retryArgs = [...args, '--gemma-max-length', String(plan.gemmaMaxLength)];
-      const message = `Metal watchdog aborted the prompt encoder — retrying once at ${plan.gemmaMaxLength} Gemma tokens`;
+      let retryArgs = args;
+      let retryEnv = childEnv;
+      let message;
+      if (encodePlan) {
+        promptEncodingRetriesUsed += 1;
+        retryArgs = [...args, '--gemma-max-length', String(encodePlan.gemmaMaxLength)];
+        message = `Metal watchdog aborted the prompt encoder — retrying once at ${encodePlan.gemmaMaxLength} Gemma tokens`;
+      } else {
+        metalBufferRetriesUsed += 1;
+        retryEnv = { ...childEnv, ...bufferPlan.env };
+        message = 'Metal watchdog stopped the GPU — retrying once with smaller command buffers';
+      }
       console.log(`♻️ ${message} [${jobId.slice(0, 8)}]`);
       broadcastSse(job, { type: 'status', message });
       videoGenEvents.emit('status', { generationId: jobId, message });
       retryProc = await spawnDetached(bin, retryArgs, {
-        env: childEnv,
+        env: retryEnv,
         controlDir: join(PATHS.videos, '.detached', `${jobId}-retry`),
         cleanup: true,
         killProcessGroup: runtimeNeedsProcessGroupKill(model.runtime),

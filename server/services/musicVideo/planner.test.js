@@ -651,12 +651,15 @@ describe('directed planner', () => {
       expect(scene.framePrompt).toMatch(/Frontal medium close-up.*mouth fully visible/);
     }
     expect(scenes.slice(8, 12).every((s) => s.visualLayer === 'card')).toBe(true);
-    expect(scenes[8].cardText).toBe('');
+    // #11185: a silence card keeps the shot's own line; only a wordless silence stays blank.
+    expect(scenes[8].cardText).toBe(scenes[8].lyricText || '');
     expect(scenes[10].cardText).toBe('Rise');
     expect(scenes[0].framePrompt).toMatch(/Signal keeper.*Signal tower.*Ochre coat/);
     expect(scenes[4].framePrompt).toMatch(/Echo hall.*Silver jacket/);
     expect(scenes.every((s) => !s.framePrompt.includes('greenhouse'))).toBe(true);
-    expect(scenes[0].prompt).toContain('We follow the signal 0');
+    // The fallback motion never quotes the lyric: a silent video model acts it out.
+    expect(scenes[0].prompt).toMatch(/^Stage a readable subject action/);
+    expect(scenes[0].prompt).not.toContain('We follow the signal');
     expect(planned.composition).toMatchObject({ mode: 'composed', style: { color: '#abcdef' } });
   });
 
@@ -670,7 +673,7 @@ describe('directed planner', () => {
       const duration = (list) => list.reduce((sum, s) => sum + s.endSec - s.startSec, 0);
       const performances = planned.scenes.filter((s) => s.shotMode === 'performance');
       expect(duration(performances)).toBeLessThanOrEqual(duration(planned.scenes.filter((s) => s.visualLayer === 'footage')) * 0.4);
-      expect(performances.length > 0).toBe(backend === 'fal');
+      expect(performances.length > 0).toBe(backend === 'fal' || backend === 'local');
     }
   });
 

@@ -28,7 +28,8 @@ import { ensureSceneTakes, selectSceneTake } from './takes.js';
 
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
-import { getProject, mutateProjectRecord } from './projects.js';
+import { getProject, mutateProjectRecord as mutateRecord } from './projects.js';
+const mutateProjectRecord = (id, transform) => mutateRecord(id, transform, { source: 'production-run' });
 import { musicVideoEvents } from './events.js';
 import { isFreeProvider } from '../../lib/modelPricing.js';
 import { isAuthoringOneShotProvider } from '../../lib/providerVendors.js';
@@ -73,6 +74,7 @@ import {
   chooseProductionRoute,
   loadPoolEnv,
   poolPricing,
+  stepCostModelId,
   stepPriceUsd,
   sceneRequirement,
 } from './productionPool.js';
@@ -311,6 +313,7 @@ async function dispatchSlot(projectId, runId, { stepKind, sceneId, revisionId = 
   const reserved = await mutateProjectRecord(projectId, (current) => reserveProductionStep(current, runId, {
     kind: stepKind, sceneId, revisionId, plateRepairBasis, route: choice.route, rationale: choice.rationale, processId: PROCESS_ID,
     costUsd: stepPriceUsd({ route: choice.route, project: current, scene: (current.scenes || []).find((s) => s.sceneId === sceneId), stepKind }),
+    costModelId: stepCostModelId({ route: choice.route, project: current, scene: (current.scenes || []).find((s) => s.sceneId === sceneId), stepKind }),
   })).catch((err) => ({ error: err }));
   if (reserved.error) {
     const code = reserved.error.code;
@@ -682,7 +685,7 @@ export async function startProduction(projectId, { directive, pool: requested, l
  * continue. A replacement pool is validated exactly like Start's.
  * Returns `{ project, run }`.
  */
-export async function resumeProduction(projectId, runId, { limits, acceptBasis = false, pool: requested, stopBefore } = {}) {
+export async function resumeProduction(projectId, runId, { limits, acceptBasis = false, pool: requested, stopBefore, directive } = {}) {
   const before = await requireProject(projectId);
   const prior = findProductionRun(before, runId);
   const priorReviewId = prior.reviewRunId;
@@ -691,7 +694,7 @@ export async function resumeProduction(projectId, runId, { limits, acceptBasis =
   const jobs = await liveJobs();
   await mutateProjectRecord(projectId, (current) => reconcileProductionSteps(current, runId, jobs));
   const out = await mutateProjectRecord(projectId, (current) => resumeProductionOnProject(current, runId, {
-    limits, acceptBasis, processId: PROCESS_ID, stopBefore, ...(pool ? { pool, pricing: poolPricing(pool, current) } : {}),
+    limits, acceptBasis, processId: PROCESS_ID, stopBefore, directive, ...(pool ? { pool, pricing: poolPricing(pool, current) } : {}),
   }));
   if (pool) console.log(`🎬 Music Video production ${short(runId)} resumed with a replaced pool: ${pool.length} allowed route(s)`);
   if (priorReviewId && !out.run.reviewRunId) {

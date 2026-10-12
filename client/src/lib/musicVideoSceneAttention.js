@@ -56,15 +56,18 @@ function performanceBlocked(scene, { lipSyncBackend, songDurationSec, videoSetti
  * and `failed: { frame: {sceneId: true}, video: {sceneId: true} }` for renders
  * that failed this session, and `songReview` (the project's revised-song
  * verdicts by sceneId) so a shot the new lyrics changed is flagged until acted on.
+ * `locked`: the director locked this shot, so its other takes are not waiting on review.
  */
 export function sceneAttention(scene, ctx = {}) {
   if (!scene) return [];
-  const { layered = false, footageOptional = false, lipSyncBackend = '', songDurationSec = null, clipSec = null, failed = {}, songReview = null, videoSettings = null } = ctx;
+  const { layered = false, footageOptional = false, lipSyncBackend = '', songDurationSec = null, clipSec = null, failed = {}, songReview = null, videoSettings = null, locked = false } = ctx;
   const layer = sceneVisualLayer(scene, { layered });
   const codes = [];
   const songChange = songReview?.[scene.sceneId];
   if (songChange && !songChange.resolved && SONG_REVIEW_CODES[songChange.status]) codes.push(SONG_REVIEW_CODES[songChange.status]);
-  if (!isSelfDrawnLayer(layer) && !scene.referenceImageId) codes.push('missing-frame');
+  // A code-rendered clip was made without a seed frame, so it needs none.
+  const codeRendered = scene.codeClip && scene.videoHistoryId;
+  if (!isSelfDrawnLayer(layer) && !scene.referenceImageId && !codeRendered) codes.push('missing-frame');
   if (layer === 'footage' && !footageOptional && !scene.videoHistoryId) codes.push('missing-clip');
   if (layer !== 'footage' && !sceneHasAuthoredSpan(scene)) codes.push('no-span');
   if (layer === 'footage' && scene.loop === false && scene.beatAligned && clipSec != null
@@ -73,7 +76,7 @@ export function sceneAttention(scene, ctx = {}) {
   const contract = scene.direction?.actionContract;
   if (contract && shotActionContractProblem(contract, scene)) codes.push('contract-problem');
   if (layer === 'footage' && isPerformanceScene(scene) && performanceBlocked(scene, { lipSyncBackend, songDurationSec, videoSettings })) codes.push('perf-blocked');
-  if (sceneHasPendingDecision(scene)) codes.push('candidates-pending');
+  if (!locked && sceneHasPendingDecision(scene)) codes.push('candidates-pending');
   if (contract && scene.referenceImageId) {
     const selected = sceneTakeList(scene, 'image').find((take) => take.assetId === scene.referenceImageId);
     if (currentPlateEvidence(scene, selected)?.verdict !== 'pass') codes.push('plate-unverified');
@@ -87,4 +90,22 @@ export function sceneMatchesFilter(codes, filter) {
   if (filter === 'attention') return codes.length > 0;
   if (filter === 'missing') return codes.some((code) => SCENE_MISSING_CODES.includes(code));
   return true;
+}
+
+export const SCENE_MEDIA_LABELS = Object.freeze({ clip: 'Clip', image: 'Image', code: 'Code', card: 'Card' });
+
+/**
+ * What a scene's selected media is, for the Board thumbnail badge: `clip` (a
+ * rendered video is selected), `image` (only a still frame, whether the shot is
+ * a still or footage still waiting on its clip), `code` / `card` (the
+ * composition draws it, or the clip was rendered from code), or null when
+ * nothing is selected yet.
+ */
+export function sceneMediaKind(scene, { layered = false } = {}) {
+  if (!scene) return null;
+  const layer = sceneVisualLayer(scene, { layered });
+  if (isSelfDrawnLayer(layer)) return layer;
+  // A clip rendered from code (`codeClip`) is still footage to the render, but it reads as Code.
+  if (layer === 'footage' && scene.videoHistoryId) return scene.codeClip ? 'code' : 'clip';
+  return scene.referenceImageId ? 'image' : null;
 }

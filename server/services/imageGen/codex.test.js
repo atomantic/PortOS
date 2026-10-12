@@ -4,6 +4,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { EventEmitter } from 'events';
+import sharp from 'sharp';
 import { ChildProcess } from 'child_process';
 import { pinPlatform } from '../../lib/testHelper.js';
 
@@ -194,7 +195,7 @@ describe('codex provider — generateImage', () => {
   it('appends a "(high quality)" hint when width or height ≥ 1536', async () => {
     await codex.generateImage({ prompt: 'a fox', width: 1536, height: 1024 });
     const promptArg = spawnCalls[0].args[spawnCalls[0].args.length - 1];
-    expect(promptArg).toContain('(1536x1024)');
+    expect(promptArg).toContain('(3:2 landscape frame, 1536x1024)');
     expect(promptArg).toContain('(high quality)');
     spawnCalls[0].child.exitCode = 1;
     spawnCalls[0].child.emit('close', 1, null);
@@ -204,7 +205,7 @@ describe('codex provider — generateImage', () => {
   it('does not append "(high quality)" for sub-1536 dimensions', async () => {
     await codex.generateImage({ prompt: 'a fox', width: 1024, height: 1024 });
     const promptArg = spawnCalls[0].args[spawnCalls[0].args.length - 1];
-    expect(promptArg).toContain('(1024x1024)');
+    expect(promptArg).toContain('(1:1 square frame, 1024x1024)');
     expect(promptArg).not.toContain('high quality');
     spawnCalls[0].child.exitCode = 1;
     spawnCalls[0].child.emit('close', 1, null);
@@ -219,15 +220,15 @@ describe('codex provider — generateImage', () => {
     await flush();
   });
 
-  it('defaults to the cheap gpt-5.6-luna model at low effort when none is configured', async () => {
+  it('defaults to the cheap gpt-6-luna model at low effort when none is configured', async () => {
     const job = await codex.generateImage({ prompt: 'a small fox' });
     // The resolved default surfaces on the job descriptor so the gallery/UI reflects it.
-    expect(job.model).toBe('gpt-5.6-luna');
+    expect(job.model).toBe('gpt-6-luna');
     const { args } = spawnCalls[0];
-    // Model default → `-m gpt-5.6-luna`.
+    // Model default → `-m gpt-6-luna`.
     const mIdx = args.indexOf('-m');
     expect(mIdx).toBeGreaterThan(-1);
-    expect(args[mIdx + 1]).toBe('gpt-5.6-luna');
+    expect(args[mIdx + 1]).toBe('gpt-6-luna');
     // Effort default → `-c model_reasoning_effort=low`.
     expect(args).toEqual(expect.arrayContaining(['-c', 'model_reasoning_effort=low']));
     spawnCalls[0].child.exitCode = 1;
@@ -243,7 +244,7 @@ describe('codex provider — generateImage', () => {
     expect(args[mIdx + 1]).toBe('gpt-5.6-terra');
     expect(args).toEqual(expect.arrayContaining(['-c', 'model_reasoning_effort=high']));
     // The shipped defaults must NOT leak in when an override is set.
-    expect(args).not.toContain('gpt-5.6-luna');
+    expect(args).not.toContain('gpt-6-luna');
     expect(args).not.toEqual(expect.arrayContaining(['model_reasoning_effort=low']));
     spawnCalls[0].child.exitCode = 1;
     spawnCalls[0].child.emit('close', 1, null);
@@ -452,6 +453,36 @@ describe('codex provider — image harvest', () => {
     // Sidecar metadata exists too.
     const sidecar = join(FAKE_IMAGES_DIR, `${job.generationId}.metadata.json`);
     expect(existsSync(sidecar)).toBe(true);
+  });
+
+  it('crops an off-aspect frame to the requested ratio and records it in the sidecar', async () => {
+    const sessionId = '019dd59e-a8da-7bd2-a7d8-4ac6f46e7b99';
+    const codexDir = join(TEST_HOME, '.codex', 'generated_images', sessionId);
+    await mkdir(codexDir, { recursive: true });
+    // Codex answered a 16:9 request with a square close-up.
+    const square = await sharp({ create: { width: 640, height: 640, channels: 3, background: { r: 200, g: 120, b: 40 } } })
+      .composite([{ input: { create: { width: 200, height: 200, channels: 3, background: { r: 20, g: 40, b: 220 } } }, top: 100, left: 220 }])
+      .png().toBuffer();
+    await writeFile(join(codexDir, 'ig_square.png'), square);
+
+    const completedListener = vi.fn();
+    imageGenEvents.on('completed', completedListener);
+    const job = await codex.generateImage({ prompt: 'a singer close-up', width: 1600, height: 900 });
+    const child = spawnCalls[0].child;
+    child.stderr.emit('data', Buffer.from(`session id: ${sessionId}\n`));
+    child.exitCode = 0;
+    child.emit('close', 0, null);
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline && completedListener.mock.calls.length === 0) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    imageGenEvents.off('completed', completedListener);
+
+    expect(completedListener).toHaveBeenCalledTimes(1);
+    const { width, height } = await sharp(join(FAKE_IMAGES_DIR, job.filename)).metadata();
+    expect({ width, height }).toEqual({ width: 640, height: 360 });
+    const sidecar = JSON.parse(await readFile(join(FAKE_IMAGES_DIR, `${job.generationId}.metadata.json`), 'utf8'));
+    expect(sidecar.aspectConformed).toEqual({ from: '640x640', to: '640x360' });
   });
 
   it('harvests the exec-named PNG emitted by newer Codex image tools', async () => {

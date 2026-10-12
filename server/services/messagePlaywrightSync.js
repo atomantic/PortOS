@@ -1,6 +1,5 @@
-import { readOutlookMessageRow } from '../lib/messageBrowserIdentity.js';
+import { readOutlookMessageRow, browserSummaryId, browserDetailIdentities, messageIngestionIdentity } from '../lib/messageBrowserIdentity.js';
 import { join } from 'path';
-import crypto from 'crypto';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureDir, PATHS, safeJSONParse, tryReadFile, atomicWrite } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
@@ -59,14 +58,6 @@ function outlookRowContext(selector, requireScroll = true) {
     return { error: 'invalid-container', message: 'Outlook messageRow must match rows in one scrollable list or region. Edit it in Messages > Sync and test again.' };
   }
   return { rows, scrollContainer };
-}
-
-function makeExternalId(date, sender, subject) {
-  const hash = crypto.createHash('md5')
-    .update(`${date}|${sender}|${subject}`)
-    .digest('hex')
-    .slice(0, 12);
-  return `pw-${hash}`;
 }
 
 export async function getSelectors() {
@@ -146,7 +137,7 @@ export async function syncPlaywright(account, cache, io, options = {}) {
 
   // Phase 2: Click into each conversation to get full body + thread messages
   // Only fetch detail for messages we haven't already cached with full body
-  const existingMap = new Map(cache.messages.filter(m => m.externalId && m.bodyFull).map(m => [m.externalId, true]));
+  const fullMessages = cache.messages.filter(m => m.externalId && m.bodyFull);
   const messages = [];
   let detailsFetched = 0;
 
@@ -155,6 +146,7 @@ export async function syncPlaywright(account, cache, io, options = {}) {
     id: uuidv4(),
     externalId: extId,
     providerRowId: msg.providerRowId || null,
+    browserMessageKind: 'row',
     threadId: null,
     from: { name: msg.from || '', email: msg.fromEmail || '' },
     to: [], cc: [],
@@ -183,14 +175,21 @@ export async function syncPlaywright(account, cache, io, options = {}) {
 
   for (let i = 0; i < extracted.length; i++) {
     const msg = extracted[i];
-    const extId = makeExternalId(msg.date || '', msg.from || '', msg.subject || '');
+    const extId = browserSummaryId(msg.date || '', msg.from || '', msg.subject || '');
     io?.emit('messages:sync:progress', { accountId: account.id, current: i + 1, total: extracted.length });
 
     // Skip detail fetch if we already have full body cached
-    if (existingMap.has(extId)) {
-      const m = buildMessage(msg, extId, { threadId: msg.threadKey || null });
-      messages.push(m);
-      emitMessages([m]);
+    const cached = fullMessages.filter(m => msg.providerRowId
+      ? m.providerRowId === msg.providerRowId && m.browserSummaryExternalId === extId
+      : !m.providerRowId && m.externalId === extId);
+    if (cached.length && (msg.providerRowId || (cached.length === 1
+      && extracted.filter(row => browserSummaryId(row.date || '', row.from || '', row.subject || '') === extId).length === 1))) {
+      const batch = cached.map(m => ({ ...m,
+        isRead: msg.isUnread === null ? null : !(msg.isUnread ?? false),
+        isUnread: msg.isUnread === null ? null : (msg.isUnread ?? false),
+        isPinned: msg.isPinned, isFlagged: msg.isFlagged, isReplied: msg.isReplied }));
+      messages.push(...batch);
+      emitMessages(batch);
       continue;
     }
 
@@ -200,15 +199,19 @@ export async function syncPlaywright(account, cache, io, options = {}) {
       if (detail?.error) return { messages, inboxComplete: false, status: 'extraction-failed', error: detail.message };
       if (detail && detail.length > 0) {
         detailsFetched++;
-        const threadKey = `thread-${extId}`;
-        const batch = detail.map(threadMsg => buildMessage(msg, makeExternalId(threadMsg.date || msg.date || '', threadMsg.from || msg.from || '', msg.subject || ''), {
+        const summary = buildMessage(msg, extId);
+        const threadKey = `thread-${messageIngestionIdentity(summary)}`;
+        const identities = browserDetailIdentities(summary, detail);
+        const batch = detail.map((threadMsg, index) => buildMessage(msg, identities[index].externalId, {
           threadId: threadKey,
           from: { name: threadMsg.from || msg.from || '', email: threadMsg.fromEmail || msg.fromEmail || '' },
           to: threadMsg.to || [],
           cc: threadMsg.cc || [],
           bodyText: threadMsg.body || msg.preview || '',
           bodyFull: true,
-          date: threadMsg.date || msg.date || new Date().toISOString()
+          date: threadMsg.date || msg.date || new Date().toISOString(),
+          ...identities[index],
+          browserSummaryExternalId: extId
         }));
         messages.push(...batch);
         emitMessages(batch);
@@ -377,7 +380,8 @@ async function fetchOutlookConversationDetail(page, subject, sender, date, provi
           }
         }
 
-        results.push({ from, fromEmail, to, cc, date, body });
+        const providerMessageId = container.getAttribute('data-message-id') || container.getAttribute('data-itemid') || null;
+        results.push({ providerMessageId, from, fromEmail, to, cc, date, body });
       }
 
       // Fallback: no Email message containers found — try grabbing role="document" directly

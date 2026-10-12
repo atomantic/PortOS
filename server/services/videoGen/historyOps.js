@@ -5,6 +5,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { safeUnder } from '../../lib/ffmpeg.js';
 import { loadHistory, mutateVideoHistory } from './history.js';
+import { extendMasterPath } from './extendMaster.js';
 
 export async function updateHistoryItemPrompt(id, prompt) {
   let result;
@@ -51,6 +52,9 @@ export async function deleteHistoryItem(id) {
     // filename resolves to inside the expected dir.
     const videoFile = safeUnder(PATHS.videos, item.filename);
     if (videoFile) await unlinkGuarded(videoFile).catch(() => {});
+    // The lossless audio master an Extend output keeps beside it (extendSplice.js).
+    const masterFile = videoFile && extendMasterPath(videoFile);
+    if (masterFile) await unlinkGuarded(masterFile).catch(() => {});
     if (item.thumbnail) {
       const thumbFile = safeUnder(PATHS.videoThumbnails, item.thumbnail);
       if (thumbFile) await unlinkGuarded(thumbFile).catch(() => {});

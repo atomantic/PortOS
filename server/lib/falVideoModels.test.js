@@ -6,6 +6,8 @@ import {
   buildFalVideoRequest,
   coerceFalVideoSeconds,
   estimateFalVideoCostUsd,
+  falImageVideoQuotes,
+  falVideoClipQuote,
   getFalVideoModel,
 } from './falVideoModels.js';
 
@@ -105,9 +107,10 @@ describe('estimateFalVideoCostUsd — list prices per family', () => {
     // H3 Max at list price (not the launch promo), H3 Turbo half that.
     expect(estimateFalVideoCostUsd({ modelId: 'minimax/h3-max/image-to-video', seconds: 6, resolution: '1080P' })).toBe(0.96);
     expect(estimateFalVideoCostUsd({ modelId: 'minimax/h3-max-turbo/image-to-video', seconds: 5, resolution: '480P' })).toBe(0.125);
-    // Kling / Veo: audio-off vs audio-on rates.
-    expect(estimateFalVideoCostUsd({ modelId: 'fal-ai/kling-video/v3/pro/image-to-video', seconds: 5 })).toBe(0.56);
-    expect(estimateFalVideoCostUsd({ modelId: 'fal-ai/kling-video/v3/pro/image-to-video', seconds: 5, generateAudio: true })).toBe(0.84);
+    // Kling / Veo: the billed audio-off vs audio-on rates (Veo bills silence at the audio rate).
+    expect(estimateFalVideoCostUsd({ modelId: 'fal-ai/kling-video/v3/pro/image-to-video', seconds: 5 })).toBe(0.7);
+    expect(estimateFalVideoCostUsd({ modelId: 'fal-ai/kling-video/v3/pro/image-to-video', seconds: 5, generateAudio: true })).toBe(1.05);
+    expect(estimateFalVideoCostUsd({ modelId: 'fal-ai/veo3.1/fast/image-to-video', seconds: 4 })).toBe(0.6);
     expect(estimateFalVideoCostUsd({ modelId: 'fal-ai/veo3.1/fast/image-to-video', seconds: 8, resolution: '4k', generateAudio: true })).toBe(2.8);
   });
 
@@ -134,5 +137,27 @@ describe('estimateFalVideoCostUsd — list prices per family', () => {
       expect(estimateFalVideoCostUsd({ modelId: model.id, seconds }), model.id).toBeGreaterThan(0);
       expect(getFalVideoModel(model.id)).toBe(model);
     }
+  });
+});
+
+describe('per-clip quotes — what a shot actually bills', () => {
+  const HAILUO = 'fal-ai/minimax/hailuo-02/standard/image-to-video';
+  const KLING = 'fal-ai/kling-video/v3/pro/image-to-video';
+
+  it('bills a short shot at the model\'s shortest clip, not the shot length', () => {
+    expect(falVideoClipQuote({ modelId: HAILUO, seconds: 2 })).toMatchObject({ requestedSec: 2, billedSec: 6, minBilledSec: 6, perSec: 0.045, costUsd: 0.27 });
+    expect(falVideoClipQuote({ modelId: KLING, seconds: 2 })).toMatchObject({ billedSec: 3, minBilledSec: 3, perSec: 0.14, costUsd: 0.42 });
+    expect(falVideoClipQuote({ modelId: 'example/uncurated-model', seconds: 2 })).toBeNull();
+  });
+
+  it('lists start-frame models cheapest first, only end-frame capable ones when asked', () => {
+    const all = falImageVideoQuotes({ seconds: 2 });
+    const rank = (id) => all.findIndex((q) => q.modelId === id);
+    expect(rank(HAILUO)).toBeLessThan(rank(KLING));
+    expect(all.map((q) => q.costUsd)).toEqual([...all.map((q) => q.costUsd)].sort((a, b) => a - b));
+    const endFrame = falImageVideoQuotes({ seconds: 2, endFrame: true });
+    expect(endFrame.every((q) => q.endFrame && getFalVideoModel(q.modelId).endImage)).toBe(true);
+    expect(endFrame.map((q) => q.modelId)).toContain(KLING);
+    expect(endFrame.map((q) => q.modelId)).not.toContain('fal-ai/veo3.1/fast/image-to-video');
   });
 });

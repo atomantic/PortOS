@@ -12,13 +12,15 @@ import { CAST_CHECKIN_ANCHOR, LOOK_GUIDES_ANCHOR } from '../../../lib/musicVideo
 // Below the sticky project header when a checklist row scrolls here.
 const ANCHOR_STYLE = { scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' };
 
-const directionSummary = (project) => {
+export const directionSummary = (project) => {
   const specRefs = (project.visualSpec?.references || []).length;
   const styleImages = (project.styleReferences || []).length;
   const characterStyle = project.concept?.characterStyleId
     ? (project.concept.characterStyle?.split(':')[0] || project.concept.characterStyleId) : '';
+  // A character style is an optional preset; without one, the cast's own lead is the character.
+  const lead = (project.concept?.subjects || []).find((s) => s.role === 'protagonist')?.name;
   return [
-    characterStyle ? `Character style: ${characterStyle}` : 'No character style',
+    characterStyle ? `Character style: ${characterStyle}` : lead ? `Original character: ${lead}` : null,
     project.concept?.prompt?.trim() ? 'Concept written' : 'No concept yet',
     // "Visual", so an empty frame style never reads as a missing song style.
     project.concept?.style?.trim() ? 'Visual style set' : 'No visual style yet',
@@ -27,7 +29,7 @@ const directionSummary = (project) => {
     ...(specRefs ? [`${formatCount(specRefs)} ${specRefs === 1 ? 'reference' : 'references'}`] : []),
     ...(styleImages ? [`${formatCount(styleImages)} style ${styleImages === 1 ? 'image' : 'images'}`] : []),
     ...(specRefs || styleImages ? [] : ['No look references']),
-  ].join(' · ');
+  ].filter(Boolean).join(' · ');
 };
 
 /** Re-read the song style from its Suno link, for a song imported before excluded styles were kept. */

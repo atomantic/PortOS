@@ -134,12 +134,27 @@ export function recordVitestDuration(scope, label, startedAt) {
  * Recover diagnostics independently of the terminal reporter. Bound both the
  * input and rendered output; diagnostic failures never change the exit status.
  */
-export function structuredFailureDiagnostics(reportPath) {
+export function structuredFailureDiagnostics(reportPath, runReportPath) {
+  const lines = [];
+  if (runReportPath) {
+    try {
+      if (statSync(runReportPath).size > 100_000) throw new Error('run report exceeds limit');
+      const run = JSON.parse(readFileSync(runReportPath, 'utf8'));
+      if (!Array.isArray(run.errors) || !run.errors.every(error => typeof error === 'string')) {
+        throw new Error('invalid run report schema');
+      }
+      lines.push(`Vitest run: reason=${run.reason}, exitCode=${run.exitCode}, unhandledErrors=${run.errorCount}`);
+      if (run.teardownTimeout) lines.push('Vitest teardown timed out.');
+      if (run.errors.length) lines.push(`Vitest unhandled errors (up to 10):\n${run.errors.slice(0, 10).map(error => error.slice(0, 8000)).join('\n')}`);
+    } catch {
+      lines.push('Vitest run diagnostics unavailable: report missing, malformed, or oversized.');
+    }
+  }
   try {
     if (statSync(reportPath).size > 32 * 1024 * 1024) throw new Error('report exceeds 32 MiB');
     const report = JSON.parse(readFileSync(reportPath, 'utf8'));
     if (!Array.isArray(report?.testResults)) throw new Error('invalid report schema');
-    const lines = [];
+    const failures = [];
     for (const suite of report.testResults) {
       if (typeof suite?.name !== 'string' || !Array.isArray(suite.assertionResults)) {
         throw new Error('invalid suite schema');
@@ -150,20 +165,21 @@ export function structuredFailureDiagnostics(reportPath) {
           || !assertion.failureMessages.every(message => typeof message === 'string')) {
           throw new Error('invalid assertion schema');
         }
-        lines.push(`FAIL ${suite.name} > ${assertion.fullName}\n${assertion.failureMessages.join('\n')}`.slice(0, 8000));
-        if (lines.length === 10) break;
+        failures.push(`FAIL ${suite.name} > ${assertion.fullName}\n${assertion.failureMessages.join('\n')}`.slice(0, 8000));
+        if (failures.length === 10) break;
       }
       if (suite.status === 'failed' && suite.message) {
-        lines.push(`FAIL ${suite.name}\n${String(suite.message)}`.slice(0, 8000));
+        failures.push(`FAIL ${suite.name}\n${String(suite.message)}`.slice(0, 8000));
       }
-      if (lines.length >= 10) break;
+      if (failures.length >= 10) break;
     }
-    return lines.length
-      ? `Structured Vitest failure diagnostics (up to 10 failures):\n${lines.slice(0, 10).join('\n')}`
-      : 'Inconclusive Vitest diagnostics: structured report contains no failed assertion or suite message.';
+    lines.push(failures.length
+      ? `Structured Vitest failure diagnostics (up to 10 failures):\n${failures.slice(0, 10).join('\n')}`
+      : 'Inconclusive Vitest diagnostics: structured report contains no failed assertion or suite message.');
   } catch {
-    return 'Inconclusive Vitest diagnostics: structured report is missing, malformed, or exceeds 32 MiB.';
+    lines.push('Inconclusive Vitest diagnostics: structured report is missing, malformed, or exceeds 32 MiB.');
   }
+  return lines.join('\n');
 }
 
 /**
@@ -187,8 +203,10 @@ export async function runNpm(scope, script, extraArgs) {
 }
 
 function runNpmWithReport(scope, script, extraArgs, reportPath) {
+  const runReportPath = join(dirname(reportPath), 'run.json');
   const args = ['run', script, '--prefix', scope];
-  args.push('--', ...extraArgs, '--reporter=json', `--outputFile.json=${reportPath}`);
+  args.push('--', ...extraArgs, '--reporter=json', `--outputFile.json=${reportPath}`,
+    `--reporter=${join(repoRoot, 'scripts', 'vitestRunDiagnostics.js')}`);
   // Wrapped, not a bare `npm.cmd`: Node refuses to spawn a `.cmd` under
   // `shell:false` and throws EINVAL, so this script could never run on a
   // Windows checkout. See server/lib/bufferedSpawn.js.
@@ -197,7 +215,9 @@ function runNpmWithReport(scope, script, extraArgs, reportPath) {
     // npm is a launcher, not the entire test tree. Give this invocation its
     // own POSIX group; Windows killProcessTree uses taskkill /T instead.
     const processGroup = process.platform !== 'win32';
-    const child = spawn(command, spawnArgs, { env: process.env, cwd: repoRoot, detached: processGroup });
+    const child = spawn(command, spawnArgs, {
+      env: { ...process.env, PORTOS_CI_DIAGNOSTICS_PATH: runReportPath }, cwd: repoRoot, detached: processGroup,
+    });
     let interrupted;
     let escalation;
     let spawnError;
@@ -222,7 +242,7 @@ function runNpmWithReport(scope, script, extraArgs, reportPath) {
     child.stderr.on('data', (chunk) => tee(process.stderr, chunk));
     // A spawn error also emits close. Settle only there, after the pipes close.
     child.on('error', (error) => { spawnError = error; });
-    child.on('close', (code) => {
+    child.on('close', (code, signal) => {
       clearTimeout(escalation);
       if (interrupted) {
         // npm may close before a descendant that detached its stdio. Finish
@@ -232,7 +252,13 @@ function runNpmWithReport(scope, script, extraArgs, reportPath) {
       process.removeListener('SIGINT', onSigint);
       process.removeListener('SIGTERM', onSigterm);
       const status = interrupted ? (interrupted === 'SIGINT' ? 130 : 143) : code ?? 1;
-      if (status !== 0) console.error(structuredFailureDiagnostics(reportPath));
+      if (status !== 0) {
+        console.error(`Test launcher exited: code=${code}, signal=${signal ?? 'none'}${interrupted ? `, interrupted=${interrupted}` : ''}`);
+        console.error(structuredFailureDiagnostics(reportPath, runReportPath));
+        // Also retain teardown/worker output emitted after the reporter's last
+        // hook, including exit codes unavailable through the reporter API.
+        console.error(`Vitest output tail (last 16000 characters):\n${stripVTControlCharacters(output).slice(-16_000)}`);
+      }
       resolve({ status, output, ...(interrupted ? { interrupted } : {}), ...(spawnError ? { error: spawnError } : {}) });
     });
   });

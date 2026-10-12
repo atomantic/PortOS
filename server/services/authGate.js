@@ -180,12 +180,14 @@ export const authGate = async (req, res, next) => {
   // CSRF guard above (a public API is still not a CSRF bypass) and after the
   // static public-path set. `getSettings()` is a cheap file read; no cache is
   // introduced here so a Settings toggle takes effect on the very next request.
-  const settings = await getSettings();
-  if (isRegistryPublic(settings, path)) return next();
+  // A passwordless API exemption must not discard a supplied operator/agent
+  // session: conditional host-control handlers still need that identity.
   if (await verifyRequestSession(req)) {
     req.portosAuthContext = { enabled: true, authenticated: true, method: 'session' };
     return next();
   }
+  const settings = await getSettings();
+  if (isRegistryPublic(settings, path)) return next();
   // A paired peer's scoped credential. Checked before Basic so a sender that
   // presents both during the upgrade handshake is identified as the peer.
   // Its authority ends at the federation surface (#8387): operator routes

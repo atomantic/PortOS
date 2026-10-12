@@ -28,13 +28,14 @@ import { performanceCapability } from '../../lib/musicVideoShotTiming.js';
 import { normalizeMusicVideoProductionPolicy } from '../../lib/musicVideoMediumPlan.js';
 import { deliveryNotesWithin } from './lyricMarkers.js';
 import { snapSectionsToGrid } from './audioAnalysis.js';
+import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
 
 const EPS = 1e-6;
 const SECTION_LABEL_MAX = 120;
 const LYRIC_TEXT_MAX = 2000;
 // An untimed-end cue lasts until the next cue, capped here.
 const OPEN_CUE_MAX_SEC = 8;
-// Grok renders fixed 6s/10s clips; a local model's default render is ~5s
+// Grok renders fixed 6/10/15 s clips; a local model's default render is ~5s
 // (121 frames at 24fps). A project pacing ceiling can only shorten either.
 const DEFAULT_LOCAL_CLIP_CAPACITY_SEC = 5;
 const DEFAULT_MIN_SHOT_SEC = 2;
@@ -68,7 +69,7 @@ export function validSections(sections) {
 
 /** Seconds of footage one generated clip provides for the project's renderer. */
 export function resolveClipCapacitySec(videoSettings) {
-  if (videoSettings?.backend === 'grok') return videoSettings.grokDuration === 6 ? 6 : 10;
+  if (videoSettings?.backend === 'grok') return GROK_VIDEO_DURATIONS.includes(videoSettings.grokDuration) ? videoSettings.grokDuration : 10;
   return DEFAULT_LOCAL_CLIP_CAPACITY_SEC;
 }
 
@@ -326,7 +327,7 @@ function directShotsByCast(shots, project) {
     return {
       ...shot, delivery, set, look, protagonist: direction.protagonist,
       visualLayer: card ? 'card' : 'footage', shotMode: 'cutaway',
-      ...(card ? { cardText: silence ? '' : (shot.lyricText || project.name || '').slice(0, 500) } : {}),
+      ...(card ? { cardText: (silence ? (shot.lyricText || '') : (shot.lyricText || project.name || '')).slice(0, 500) } : {}),
       performanceCandidate: !card && !!shot.lyricText && (intimate || (sungHook && kinds.length === 0)),
     };
   });

@@ -35,7 +35,7 @@ export default function AppQualityRunner({ app, children }) {
   });
   const [mode, setMode] = useState('file-issues');
   const [auditDepth, setAuditDepth] = useState('quick');
-  const [prCompletion, setPrCompletion] = useState('draft');
+  const [prCompletion, setPrCompletion] = useState('inherit');
   const [effort, setEffort] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');

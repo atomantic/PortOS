@@ -395,6 +395,25 @@ function liveSlotJob(jobs, projectId, sceneId, stepKind) {
 const slotSteps = (run, sceneId, stepKind, revisionId = null) => run.steps
   .filter((s) => s.sceneId === sceneId && s.kind === stepKind && (s.revisionId || null) === revisionId);
 
+// Failures of the machine around a generation (a backup holding publication
+// admission, a lost queue record, an idle watchdog), not of its inputs.
+const TRANSIENT_FAILURE = /backup publication admission|BACKUP_SNAPSHOT_BUSY|no longer in the queue history|watchdog timeout|awaiting storage recovery/i;
+/** Retries per slot a run takes on its own for transient failures before it parks. */
+export const PRODUCTION_TRANSIENT_RETRIES = 2;
+
+/**
+ * The failed frame/clip steps a run may retry without the director: every
+ * unacknowledged failure is transient and no slot spent its retries. Null
+ * otherwise, so an input-caused or repeated failure still halts.
+ */
+export function transientProductionRetry(run) {
+  const transient = (step) => step.status === 'failed' && TRANSIENT_FAILURE.test(step.error || '');
+  const failed = (run?.steps || []).filter((s) => s.status === 'failed' && !(run.retryAcknowledged || []).includes(s.key));
+  if (!failed.length || !failed.every((s) => ['frame', 'clip'].includes(s.kind) && transient(s))) return null;
+  const spent = failed.some((s) => slotSteps(run, s.sceneId, s.kind, s.revisionId || null).filter(transient).length > PRODUCTION_TRANSIENT_RETRIES);
+  return spent ? null : failed;
+}
+
 /**
  * The attached full-song review's verdict on the run, or null when no review
  * is attached. A passing review still needs its dependencies unchanged; a
@@ -578,7 +597,7 @@ function castAndSetsGate(project, run) {
  * Returns `{ project, run, step }`.
  */
 export function reserveProductionStep(project, runId, {
-  kind, sceneId, revisionId = null, route, rationale = '', processId, costUsd: stepCostUsd = undefined, plateRepairBasis = null,
+  kind, sceneId, revisionId = null, route, rationale = '', processId, costUsd: stepCostUsd = undefined, costModelId = null, plateRepairBasis = null,
 }, now = new Date().toISOString()) {
   let step = null;
   const out = mutateRun(project, runId, (run) => {
@@ -628,6 +647,7 @@ export function reserveProductionStep(project, runId, {
       route: { kind: route.kind, mode: route.mode, model: route.model || null },
       rationale: trimTo(rationale, MAX_ERROR_LEN) || '',
       costUsd,
+      ...(costUsd !== null && isNonBlankStr(costModelId) ? { costModelId: trimTo(costModelId, 200) } : {}),
       ...(['frame', 'clip'].includes(kind) ? { retryBasis: productionRetryBasis(project, sceneId, kind) } : {}),
       ...(['frame', 'clip'].includes(kind) ? { providerBasis: productionProviderBasis(project, kind) } : {}),
       ...(kind === 'clip' && scene?.direction?.actionContract ? { plateAdmission: { assetId: scene.referenceImageId, basis: plateRequirementBasis(scene) } } : {}),
@@ -828,7 +848,7 @@ export function stopProductionOnProject(project, runId, now = new Date().toISOSt
  * budget. A run halted on a changed creative setup continues only when the
  * director accepts the new basis (`acceptBasis`), which re-snapshots it.
  */
-export function resumeProductionOnProject(project, runId, { limits, acceptBasis = false, processId, pool = null, pricing = {}, stopBefore } = {}, now = new Date().toISOString()) {
+export function resumeProductionOnProject(project, runId, { limits, acceptBasis = false, processId, pool = null, pricing = {}, stopBefore, directive } = {}, now = new Date().toISOString()) {
   return mutateRun(project, runId, (run) => {
     if (!RESUMABLE.has(run.status)) throw productionError(409, 'PRODUCTION_CLOSED', `This production run is ${run.status} — start a new run instead`);
     if (normalizeMusicVideoProductionPolicy(project?.productionPolicy).strategy === 'code-first' && !run.authoring) throw productionError(409, 'PRODUCTION_AUTHORING_REQUIRED', 'Cancel this legacy run and start a code-first run with an authoring model');
@@ -859,6 +879,8 @@ export function resumeProductionOnProject(project, runId, { limits, acceptBasis 
       processId,
       resumedAt: now,
       retryAcknowledged: run.steps.filter((step) => step.status === 'failed').map((step) => step.key),
+      // The director changed course: later shot planning follows the new direction.
+      ...(typeof directive === 'string' ? { directive: trimTo(directive, PRODUCTION_DIRECTIVE_MAX) } : {}),
       stopBefore: nextStop,
       // A stills-only run makes no clip, so it drops any pending clip pilot.
       ...(nextStop ? { pilot: null } : !run.pilot && !run.reviewRunId ? { pilot: { scenes: null } } : {}),

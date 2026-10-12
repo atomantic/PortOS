@@ -36,6 +36,7 @@ import { resolveVideoSupportedModes } from '../../lib/videoModeProfiles.js';
 import { isHardwareCompatible } from '../../lib/systemCapabilities.js';
 import { RUNNER_FAMILIES } from '../../lib/runners.js';
 import { poolHasRoute, routeKey } from './production.js';
+import { supportsSourceAudioWindow } from '../federatedMedia/sourceAudio.js';
 
 async function localImageModel(route, env) {
   if (route.model) return (env.imageModels || []).find((model) => model.id === route.model);
@@ -93,6 +94,19 @@ export function stepPriceUsd({ route, project, scene, stepKind }) {
     }).costUsd;
   }
   return routePriceUsd(route, project);
+}
+
+/**
+ * The paid model a step's price is for, recorded on the step so project spend
+ * can be broken down by model: the fal clip model `stepPriceUsd` priced (an
+ * end-frame upgrade included), a fal image route's own model, else null.
+ */
+export function stepCostModelId({ route, project, scene, stepKind }) {
+  if (route?.mode !== 'fal') return null;
+  if (stepKind !== 'frame' && route.kind === 'video' && scene) {
+    return falSceneTake({ scene, videoSettings: falRouteVideoSettings(project, route) }).modelId;
+  }
+  return route.model || null;
 }
 
 /** routeKey → price map for a pool (fal routes priced for `project`). */
@@ -195,6 +209,14 @@ async function routeIncapableReason(route, requirement, env) {
     }
   }
   if (requirement.kind === 'video' && requirement.performance) {
+    if (route.mode === 'local') {
+      // Local lip-sync is LTX audio-to-video, which only some local models run.
+      const requested = typeof route.model === 'string' ? route.model.trim() : '';
+      const { model, modelId } = await env.resolveVideoModel(requested);
+      if (!supportsSourceAudioWindow(model)) {
+        return `Local video model "${model?.name || requested || modelId || '(none)'}" cannot lip-sync to the song; choose an LTX-2.5 (or LTX-2.3 dgrauet) model`;
+      }
+    }
     return performanceBlockedReason(route.mode);
   }
   return null;

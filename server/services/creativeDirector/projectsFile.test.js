@@ -107,7 +107,7 @@ describe('Video treatment artifacts', () => {
     await file.updateProject(p.id, { renderBackend: { video: { mode: 'grok' } } });
     const rounded = videoTreatment();
     rounded.scenes = Array.from({ length: 15 }, (_, order) => ({ ...rounded.scenes[0], sceneId: `scene-${order}`, order, durationSeconds: 8 }));
-    await expect(file.setTreatment(p.id, { ...rounded, productionRevision: (await file.getProject(p.id)).videoWorkRevision || 0 })).rejects.toThrow('choose 6 or 10 seconds');
+    await expect(file.setTreatment(p.id, { ...rounded, productionRevision: (await file.getProject(p.id)).videoWorkRevision || 0 })).rejects.toThrow('choose 6, 10 or 15 seconds');
     await file.setTreatment(p.id, { ...videoTreatment(), productionRevision: (await file.getProject(p.id)).videoWorkRevision || 0 });
     expect((await file.getProject(p.id)).treatment.artifact.targetDurationSeconds).toBe(120);
   });

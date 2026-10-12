@@ -302,7 +302,36 @@ what the preview shows and what the render bakes:
   the editor also offers **Use on project**.
 - **The final render** installs the same runtime in every worker browser
   (`documentRenderInitScripts` → `openComposition({ initScripts })`), so the
-  split render (#10365) and the overlay text probe see the filtered page.
+  split render (#10365) and the overlay text probe see the filtered page. The
+  code-rendered style takes the same scripts. A **footage render** (the
+  composed or plain-cut ffmpeg encode, final or excerpt) gets the look as a
+  **finishing pass** (`services/musicVideo/filmLookFinish.js`): the finished
+  MP4 plays full-frame in a one-video page in the composition browser, the
+  shared encoder captures it frame by frame on song time, and the render's own
+  audio is copied back untouched. Paid clips are never regenerated to change
+  the feel. The pass takes the second half of the render's progress bar and a
+  cancel aborts it.
+- **The composition document preview** carries playback mode with each seek
+  into the OS-isolated preview worker. Playing frames use the same lightweight
+  motion layers as the animatic: CSS focus/tone/saturation and weave on the
+  root, with pointer-transparent overlays above document and lyric layers.
+  Noise tiles are rasterized once into canvases from trusted inline filters,
+  preserving the worker's image restrictions. Each overlay blends directly
+  with the document and preceding layers rather than an isolated overlay group.
+  Pause, scrub and frame stepping restore the exact SVG filter. This mode is
+  preview-only; final renders remain exact and generated HTML stays isolated.
+- **The storyboard animatic** (the docked preview for footage projects) shows
+  the look live over the whole picture, lyrics included, on the song frame.
+  Paused, that is the exact filter; **while the song plays** it is the light
+  playback version (`filmLookMotionLayers`, `FilmLookFrame.jsx`): a browser
+  re-runs an SVG filter chain over every decoded video frame, and the full
+  look took a phone's animatic from 30 fps to under 1 after #11215. The playback
+  version is compositor-only: CSS filter functions for focus, tone and
+  saturation, the gate weave as a transform, and the cast, grain, tape bands,
+  vignette and leak as blended overlays (the noise rasterized once as tiles
+  and shifted per song frame). The glows, fringing and split tone wait for the
+  pause. The **Film look** button under the animatic turns the preview look
+  off for that viewer (remembered on the device); the render still applies it.
 
 The filter is an SVG `<filter>` applied to the document root (or to the
 `<img>` for a still). Radii and offsets scale with the filtered element's
@@ -317,36 +346,47 @@ the frame before the page paints. A neutral look emits no filter at all.
 Each control names its effect in photography terms, and the **In a prompt**
 box rewrites the current settings as the words that ask a model for the same
 qualities (`describeFilmLook`), so tuning a look also teaches the vocabulary
-for the next generation prompt. The look works on composition-document
-projects; the composed render style keeps its own render grade above.
+for the next generation prompt. A composed project's render grade (above)
+still applies inside the ffmpeg encode; the film look follows it.
 
 ## Music-video opening title card
 
 The MTV-style credit block a video opens with: song title, artist, year and an
 optional extra line (album, director), fading in over the opener and out again.
-**Compose → Opening title card** stores it on the project (`project.titleCard`,
+**Look → Opening title card** (under the docked preview) stores it on the project (`project.titleCard`,
 validated by `musicVideoTitleCardSchema`, normalized by `normalizeTitleCard` in
 `server/lib/musicVideoTitleCard.js`; `null` = none, `enabled: false` keeps the
 text). Turning it on fills the song title (the project name without its version
 suffix), the artist named for DistroKid under Where you post, this year, and a
 window that ends half a second before the first sung line. Timing (in, out,
-fade), position (four corners, bottom centre, centre), font (the lyric type's
-Archivo, Helvetica, serif, Plex Mono), size and color are all editable; the
-panel flags a sung line that starts while the card is up and offers to end the
+fade), position (four corners, bottom centre, centre), font, size, look and
+colors are all editable. Fonts are the lyric type's Archivo, Helvetica, serif,
+Plex Mono, and six bundled OFL faces (`TITLE_CARD_FONT_FACES`: Oswald,
+Audiowide, Orbitron, Righteous, Pacifico, Playfair Display, files and licences
+in `server/services/musicVideo/titleCardFonts/`), picked from swatches drawn in
+each face. Text is drawn exactly as typed;
+the panel flags a sung line that starts while the card is up and offers to end the
 card before it.
 
 The card is not part of the composition document. `titleCardRuntimeSource()`
 is a page script installed beside it, in the live preview's head (live edits
 arrive as `portos-mv:title-card` messages) and in every render browser
 (`documentRenderInitScripts`). It draws on its own canvas fixed over the page,
-fitted to the render's aspect, and wraps `portosComposition.seek()` (chaining
+fitted to the render's aspect, registers the bundled faces from data URLs
+embedded in the script (`services/musicVideo/titleCardFonts.js`, so every page
+draws the same face whatever it declares itself), and wraps `portosComposition.seek()` (chaining
 the film look's wrapper) so the card is drawn for each frame after its faces
-load. It follows the lyric type: cream fill, ink outline, no plate, inside the
-same title-safe insets, and a block wider than its zone shrinks rather than
-running off frame. Like the lyrics it sits under the film look. It also rides
+load. It has two looks (`style`). `outline` follows the lyric type: cream fill, ink
+outline, no plate. `mtv` is the classic lower third: the artist over the title, on a dark translucent plate with a colored bar on its leading
+edge (`accentColor`, cyan by default) and the title in `titleColor` (yellow by
+default). Both sit inside the same title-safe insets, and a block wider than
+its zone shrinks rather than running off frame. Like the lyrics it sits under the film look. It also rides
 on the lyric pages (the lyric-timing playthrough and the lyrics laid over the
 storyboard animatic, which carry no film look), so it can be checked against
-the timed words before the composition exists.
+the timed words before the composition exists. A composed render (`composition.mode:
+'composed'`) and its draft excerpts draw it too: `projectTypographyPlan` adds a
+text-less `title-card` cue, and `buildTypographyDocument` installs the same
+runtime on the transparent overlay page captured over the cut.
 
 ## Music-video composition documents
 
@@ -457,17 +497,42 @@ least 0.8s, and sung type stays at least 56px at 1080p. Palette tokens
 options. Upgrading a pre-module layered engine adds the module's two tags in
 front of the template's engine tag.
 
-The in-app preview is a self-contained `srcdoc` in an opaque-origin sandbox
-with no network: the server inlines the document's scripts, stylesheets and
-small assets, and the scrubber posts `portos-mv:seek` messages. Larger media
-is bridged on demand: the PortOS page posts only the list of files
-(`window.PORTOS_MV_ASSETS` resolves to `{ src: src }`), and the first time a
-script sets a media element's `src` to one of them, the page fetches that file
-on the user's behalf and posts it in as a Blob (`window.PORTOS_MV_ASSET(src)`
-returns a promise of its blob: URL for other uses). The page keeps a bounded
-cache of fetched files, and object URLs idle for a few seconds are revoked
-once the preview holds more than 64 MB, unless a media element still plays
-them. So assign `src` when a frame needs the file, not every file at startup.
+The in-app composition, code-video, and code-animation previews do not run
+generated HTML in the user's browser. A private local Chromium worker executes
+the page and returns JPEG frames (and, for a recording, the finished WebM).
+The worker is wrapped in macOS Seatbelt (`/usr/bin/sandbox-exec`) or Linux
+bubblewrap (`/usr/bin/bwrap --unshare-net`). Seatbelt denies IP sockets, then
+allows the browser's own Unix sockets so Chrome can start, and denies the
+system resolver socket (`/private/var/run/mDNSResponder`) plus the DNS mach
+services. Bubblewrap's empty network namespace blocks direct UDP and TCP, and
+existing host resolver sockets are covered with `/dev/null`. Chrome's own
+process sandbox cannot initialize inside that jail (`sandbox_init` returns
+EPERM and the renderer crashes), so the worker starts with `--no-sandbox`.
+The OS jail is the egress boundary. Windows, Firefox,
+and WebKit have no such jail: the preview shows an explicit unavailable state
+and does not fall back to an iframe. Chrome's HTTP proxy is not the boundary.
+A fresh srcdoc realm can still open WebRTC; the OS deny is what stops UDP,
+HTTP, and navigation. The egress test drives a real local STUN, HTTP, and
+WebSocket collector, including a nested srcdoc, and treats a silent negative
+control (no jail) as an invalid proof. DNS is not proven by binding port 53.
+On macOS the same profile must make `getaddrinfo` fail for a name that resolves
+outside the jail, because the system resolver would send that query itself.
+
+Seek, film look, and the title card go over the private render protocol.
+Project media stays on the server (`streamMedia`); the client never fetches it
+into the page. Exact document or job revisions retire the previous worker.
+Closing the session kills the browser process group and deletes the scratch
+directory under `music-video-song-renders/`.
+
+Two limits stay explicit. The lyric-overlay animatic still mounts the shipped
+lyric template in an iframe because the storyboard has to show through it; that
+template is not given private media. Final MP4 encodes still use the existing
+owned Chromium with HTTP interception, not this OS deny. Authenticated agents
+keep the same preview authority as the signed-in user.
+
+Inside the worker the page still seeks with `portos-mv:seek`. Assign a media
+`src` when a frame needs the file. The server stages that file; the user's
+browser only receives the rendered frame.
 
 Bound your own decoded-image cache the same way. A decoded 2048×1152 frame
 costs about 9 MB however small its JPEG is, so a cache of 90 atlases can hold

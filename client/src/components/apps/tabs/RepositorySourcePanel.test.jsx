@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { awaitEnabled } from '../../../test/enabledBarrier.js';
 
 vi.mock('../../../services/api', () => ({
@@ -273,6 +273,24 @@ describe('managed app repository sources', () => {
     expect(useAppOperation.mock.results[0].value.startUpdate).toHaveBeenCalledWith(
       'portos-default', 'PortOS', { syncFork: false },
     );
+  });
+
+  it('re-checks sources and unlocks the update button when a managed app update completes', async () => {
+    let complete;
+    useAppOperation.mockImplementation(({ onComplete }) => {
+      complete = onComplete;
+      return { ...useAppOperation.mock.results[0]?.value, steps: [], isOperating: false, startUpdate: vi.fn(), restarting: false };
+    });
+    render(<RepositorySourcePanel appId="app-example" appName="Example App" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Update app' }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Update app' }));
+    expect(await screen.findByRole('button', { name: 'Reload to update again' })).toBeDisabled();
+
+    const calls = api.getAppRepositorySources.mock.calls.length;
+    act(() => complete());
+    await waitFor(() => expect(api.getAppRepositorySources.mock.calls.length).toBe(calls + 1));
+    expect(await screen.findByRole('button', { name: 'Update app' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Reload to update again' })).toBeNull();
   });
 
   it('refuses automatic fork sync after divergence but still permits updating from the fork as-is', async () => {

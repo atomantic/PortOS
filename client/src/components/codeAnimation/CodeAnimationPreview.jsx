@@ -7,6 +7,7 @@ import { useSseProgress } from '../../hooks/useSseProgress';
 import { downloadBlob } from '../../lib/downloadBlob';
 import { importsThree, inlineThreeVendor } from '../../lib/threeVendorImportMap';
 import { formatLoudness } from '../../utils/formatters';
+import useGeneratedPreview from '../../hooks/useGeneratedPreview.js';
 
 // Seconds past the film's own duration before a silent recording is abandoned
 // (a page that never answers the handshake must not leave Record spinning).
@@ -64,28 +65,13 @@ export function prepareAnimationHtml(html, globalName, audioDataUrl, vendorFiles
   return `${page.slice(0, at)}${policy}${audio}${page.slice(at)}`;
 }
 
-const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
-  const reader = new FileReader();
-  reader.onload = () => resolve(reader.result);
-  reader.onerror = () => reject(new Error('Failed to read the audio track'));
-  reader.readAsDataURL(blob);
-});
-
 /**
- * Runs a generated code animation in an opaque-origin sandboxed iframe. Its
- * CSP permits the inline code and local media the film needs, while blocking
- * network-backed subresources, fetch/websocket, and form submissions. Browser
- * sandboxing still permits the frame to navigate itself, so this is not a
- * complete network isolation boundary for arbitrary hostile HTML. It also drives
- * the prompt's recording handshake: Record posts `messages.record`, the page
- * answers with the WebM Blob, which can be downloaded or saved to the shared
- * video gallery.
- *
- * The opaque-origin frame cannot fetch `/api/uploads/*` itself, so the audio
- * track is read here and handed over as a data URL through the audio global.
+ * Shows a generated code animation as inert frames from the OS-isolated
+ * preview worker. Record asks that worker to run the page's handshake and
+ * returns the WebM in slices. Download HTML still inlines three.js for a
+ * standalone file; that file is not what the preview executes.
  */
 export default function CodeAnimationPreview({ html, audioUrl, messages, audioGlobal, frame, title, jobId }) {
-  const iframeRef = useRef(null);
   // A generated page receives the selected track only after an explicit choice.
   // Tie that choice to the URL so a changed track needs fresh consent.
   const [audioDecision, setAudioDecision] = useState(() => ({
@@ -95,8 +81,6 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
   const audioChoice = audioDecision.url === audioUrl
     ? audioDecision.choice
     : (audioUrl ? null : 'none');
-  // status: consent | none | loading | ready | failed; dataUrl is set only when ready.
-  const [audio, setAudio] = useState({ status: audioUrl ? 'consent' : 'none', dataUrl: null });
   const [meta, setMeta] = useState(null);
   const [recording, setRecording] = useState(false);
   const [recordProgress, setRecordProgress] = useState(0);
@@ -128,35 +112,7 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
     return () => { exportRequestRef.current += 1; };
   }, [jobId]);
 
-  useEffect(() => {
-    let active = true;
-    if (!audioUrl) {
-      setAudio({ status: 'none', dataUrl: null });
-      return () => { active = false; };
-    }
-    if (audioChoice !== 'with-audio') {
-      setAudio({ status: audioChoice === 'without-audio' ? 'none' : 'consent', dataUrl: null });
-      return () => { active = false; };
-    }
-    setAudio({ status: 'loading', dataUrl: null });
-    fetch(audioUrl, { credentials: 'same-origin' })
-      .then((res) => {
-        if (!res.ok) throw new Error(`Audio track unavailable (${res.status})`);
-        return res.blob();
-      })
-      .then(blobToDataUrl)
-      .then((dataUrl) => {
-        if (active) setAudio({ status: 'ready', dataUrl });
-      })
-      .catch((error) => {
-        if (!active) return;
-        setAudio({ status: 'failed', dataUrl: null });
-        toast.error(error.message);
-      });
-    return () => { active = false; };
-  }, [audioUrl, audioChoice]);
-
-  // A three-renderer film needs the vendored modules inlined before it boots.
+  // A three-renderer film still needs the vendored modules inlined for Download HTML.
   const needsThree = useMemo(() => importsThree(html), [html]);
   const [threeVendor, setThreeVendor] = useState({ status: 'idle', files: null });
   useEffect(() => {
@@ -176,21 +132,33 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
     return () => { active = false; };
   }, [needsThree]);
 
-  // Hold the frame back until the audio (and, for three, the vendored modules)
-  // are in hand so the page boots once, with its globals already set.
   const vendorFiles = needsThree ? threeVendor.files : null;
-  const srcDoc = useMemo(() => {
-    if (!html || audioChoice == null || audio.status === 'loading') return null;
-    if (needsThree && !vendorFiles) return null;
-    return prepareAnimationHtml(html, audioGlobal, audio.dataUrl, vendorFiles);
-  }, [html, audioGlobal, audioChoice, audio, needsThree, vendorFiles]);
+  const request = useMemo(() => {
+    if (!html || audioChoice == null) return null;
+    const body = {
+      kind: 'code-animation',
+      withAudio: audioChoice === 'with-audio',
+      audioGlobal,
+      revision: `${jobId || 'pasted'}:${audioChoice}:${html.length}`,
+    };
+    if (jobId) body.jobId = jobId;
+    else body.html = html;
+    if (audioChoice === 'with-audio' && audioUrl) body.audioUrl = audioUrl;
+    // Fit the renderer's bounds with one scale so portrait and square canvases
+    // retain their composition instead of stretching each axis independently.
+    const scale = Math.min(1, 1920 / (frame?.width || 1920), 1080 / (frame?.height || 1080));
+    if (frame?.width) body.width = Math.round(frame.width * scale);
+    if (frame?.height) body.height = Math.round(frame.height * scale);
+    return body;
+  }, [html, audioChoice, audioGlobal, jobId, audioUrl, frame]);
+  const preview = useGeneratedPreview({ active: !!request, request });
 
   useEffect(() => {
     clearTimeout(recordTimerRef.current);
     setMeta(null);
     setRecording(false);
     setVideo(null);
-  }, [srcDoc]);
+  }, [request]);
 
   // Keyed on the URL, not the object: marking a video saved replaces the
   // object but keeps its URL alive.
@@ -202,37 +170,32 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
   useEffect(() => () => clearTimeout(recordTimerRef.current), []);
 
   useEffect(() => {
-    if (!messages) return undefined;
-    const onMessage = (event) => {
-      if (!iframeRef.current || event.source !== iframeRef.current.contentWindow) return;
-      const data = event.data;
-      if (!data || typeof data !== 'object') return;
-      if (data.type === messages.ready) setMeta(data.meta && typeof data.meta === 'object' ? data.meta : {});
-      if (data.type === messages.progress && Number.isFinite(data.t)) setRecordProgress(data.t);
-      if (data.type === messages.recorded && data.blob instanceof Blob) {
-        clearTimeout(recordTimerRef.current);
-        setRecording(false);
-        setVideo({ blob: data.blob, url: URL.createObjectURL(data.blob), saved: false });
-      }
-      if (data.type === messages.error) {
-        clearTimeout(recordTimerRef.current);
-        setRecording(false);
-        toast.error(`Animation error: ${String(data.message || 'unknown error').slice(0, 300)}`);
-      }
-    };
-    window.addEventListener('message', onMessage);
-    return () => window.removeEventListener('message', onMessage);
-  }, [messages]);
+    const event = preview.lastEvent;
+    if (!event || !messages) return;
+    if (event.type === messages.ready) setMeta(event.meta && typeof event.meta === 'object' ? event.meta : {});
+    if (event.type === messages.progress && Number.isFinite(event.t)) setRecordProgress(event.t);
+    if (event.type === messages.error) {
+      clearTimeout(recordTimerRef.current);
+      setRecording(false);
+      toast.error(`Animation error: ${String(event.message || 'unknown error').slice(0, 300)}`);
+    }
+  }, [preview.lastEvent, messages]);
+
+  useEffect(() => {
+    if (!preview.recording) return;
+    clearTimeout(recordTimerRef.current);
+    setRecording(false);
+    setVideo({ blob: preview.recording.blob, url: preview.recording.url, saved: false });
+  }, [preview.recording]);
 
   const duration = Number(meta?.duration) || frame?.durationSeconds || 0;
   const fileBase = slug(title);
 
   const handleRecord = () => {
-    const target = iframeRef.current?.contentWindow;
-    if (!target || recording) return;
+    if (!preview.ready || recording || !messages?.record) return;
     setRecording(true);
     setRecordProgress(0);
-    target.postMessage({ type: messages.record }, '*');
+    preview.command('record', { message: { type: messages.record } });
     clearTimeout(recordTimerRef.current);
     recordTimerRef.current = setTimeout(() => {
       setRecording(false);
@@ -295,23 +258,22 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
   return (
     <section className="space-y-3" aria-label="Animation preview">
       <div className="overflow-hidden rounded-lg border border-port-border bg-black" style={{ aspectRatio: aspect, maxHeight: '70vh' }}>
-        {srcDoc ? (
-          <iframe
-            ref={iframeRef}
-            title="Code animation preview"
-            // No allow-same-origin: generated code has an opaque origin. The
-            // injected CSP also blocks network resource and connection APIs.
-            sandbox="allow-scripts allow-downloads"
-            allow="autoplay"
-            srcDoc={srcDoc}
-            className="h-full w-full border-0"
-          />
+        {request ? (
+          preview.frameUrl ? (
+            <img title="Code animation preview" alt="" src={preview.frameUrl} className="h-full w-full border-0 object-contain" />
+          ) : (
+            <div className="flex h-full items-center justify-center gap-2 p-5 text-center text-sm text-gray-400">
+              {preview.status === 'unavailable' || preview.status === 'error'
+                ? (preview.reason || 'Isolated preview is unavailable on this host. Generated HTML is not run in this browser.')
+                : <><LoaderCircle className="h-4 w-4 animate-spin" /> Building the isolated preview…</>}
+            </div>
+          )
         ) : audioChoice == null ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 p-5 text-center">
             <h3 className="text-base font-semibold text-white">Preview paused</h3>
             <p className="max-w-xl text-sm text-gray-200">
               Choose whether to run this generated animation with its selected audio track. The preview is paused until you choose.
-              The animation can navigate itself, so its code could send that track outside PortOS. Continue only if you trust it.
+              It runs in an isolated local renderer on this machine. Choosing audio does not publish the track.
             </p>
             <div className="flex flex-wrap justify-center gap-2">
               <button
@@ -332,11 +294,9 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
           </div>
         ) : (
           <div className="flex h-full items-center justify-center gap-2 text-sm text-gray-400">
-            {needsThree && threeVendor.status === 'failed' ? (
-              'The three.js modules could not be loaded; reload the page to retry.'
-            ) : (
-              <><LoaderCircle className="h-4 w-4 animate-spin" /> {audio.status === 'loading' ? 'Loading audio track…' : 'Loading three.js…'}</>
-            )}
+            {needsThree && threeVendor.status === 'failed'
+              ? 'The three.js modules could not be loaded; reload the page to retry.'
+              : <><LoaderCircle className="h-4 w-4 animate-spin" /> Loading three.js…</>}
           </div>
         )}
       </div>
@@ -345,7 +305,7 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
         <button
           type="button"
           onClick={handleRecord}
-          disabled={!srcDoc || recording}
+          disabled={!preview.ready || recording}
           className="inline-flex items-center gap-2 rounded-lg bg-port-error/90 px-3 py-1.5 text-sm text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {recording ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Circle className="h-4 w-4 fill-current" />}
@@ -375,6 +335,7 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
         <button
           type="button"
           onClick={handleDownloadHtml}
+          disabled={needsThree && !vendorFiles}
           className={BUTTON_SECONDARY}
         >
           <FileCode2 className="h-4 w-4" /> Download HTML
@@ -389,7 +350,7 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
         )}
         <span className="text-xs text-gray-500">
           {meta ? 'Animation ready' : 'Waiting for the animation to report ready…'}
-          {audio.status === 'failed' ? ' · audio track failed to load' : ''}
+          {preview.audioStatus === 'unavailable' ? ' · selected audio could not be attached' : ''}
         </span>
       </div>
 

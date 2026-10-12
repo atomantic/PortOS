@@ -9,7 +9,7 @@ import { findFfmpeg, probeVideoDuration } from '../../lib/ffmpeg.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { _cleanupTestBrowser } from '../htmlComposition/testBrowserCleanup.js';
 import { beatSnapClips, buildMusicVideoFfmpegArgs, resolveSceneClips } from './render.js';
-import { renderableCues, sectionCardCues } from './composition.js';
+import { projectTypographyPlan, renderableCues, sectionCardCues } from './composition.js';
 import { COMPOSITION_SCRATCH_DIR, removeCompositionScratch, renderTypographyOverlays } from './compositionRender.js';
 
 let endpoint;
@@ -211,6 +211,61 @@ describe.skipIf(!chrome || !ffmpeg)('music-video typography overlay with real Ch
     expect(whiteIn(600)).toBe(0);
     await removeCompositionScratch('job-layers');
   }, 120000);
+
+  // #11185: a silence card planned with no text shows its spoken line (the
+  // " / " joiner becomes a line break) in the lyric type's cream and ink, with
+  // its own face shipped, inside the title-safe area and on no plate.
+  it('draws a blank card\'s lyric line in the lyric type, inside the safe area', async () => {
+    const [w, h] = [384, 256];
+    const scenes = [{ sceneId: 'quiet', order: 0, visualLayer: 'card', cardText: '', lyricText: 'Example spoken line / Then the answer', startSec: 0, endSec: 2 }];
+    const clips = await resolveSceneClips({ scenes }, { layered: true });
+    expect(clips[0].cardText).toBe('Example spoken line / Then the answer');
+    const plan = buildMusicVideoFfmpegArgs(clips, null, join(PATHS.data, 'unused.mp4'), { audioDurationSec: 2, frameGrid: true });
+    const cues = sectionCardCues(clips, plan.sections, 2);
+    expect(cues).toMatchObject([{ text: 'Example spoken line\nThen the answer', card: true }]);
+    const overlays = await renderTypographyOverlays({ jobId: 'job-card', cues, style: {}, width: w, height: h, fps: 12, durationSec: 2 });
+    expect(existsSync(join(PATHS.data, COMPOSITION_SCRATCH_DIR, 'job-card', 'doc', 'archivo-variable.woff2'))).toBe(true);
+    expect(assertInsideSafeArea(overlays[0].path, w, h)).toBeGreaterThan(1000);
+    // A mid-card frame shows the cream fill inside its ink outline.
+    const raw = frames(overlays[0].path, 'rgba');
+    const frame = raw.subarray(12 * w * h * 4, 13 * w * h * 4);
+    let cream = 0;
+    let ink = 0;
+    for (let p = 0; p < w * h; p++) {
+      const [r, g, b, a] = frame.subarray(p * 4, p * 4 + 4);
+      if (a < 250) continue;
+      if (r > 220 && g > 210 && b > 190 && b < r) cream += 1;
+      else if (r < 40 && g < 40 && b < 40) ink += 1;
+    }
+    expect(cream).toBeGreaterThan(300);
+    expect(ink).toBeGreaterThan(300);
+    await removeCompositionScratch('job-card');
+  }, 60000);
+
+  // The opening title card reaches composed renders: the overlay page draws it
+  // with the same runtime as the live preview, in its lower-left corner.
+  it('draws the opening title card over a composed render, lower left', async () => {
+    const [w, h] = [384, 216];
+    const project = { composition: { mode: 'composed' }, titleCard: {
+      enabled: true, title: 'Example Song', artist: 'Example Artist', year: '2026', style: 'mtv',
+      position: 'lower-left', startSec: 0, endSec: 2, fadeSec: 0.25 } };
+    const { cues, style } = projectTypographyPlan(project, [], [], 2);
+    const overlays = await renderTypographyOverlays({ jobId: 'job-title-card', cues, style, width: w, height: h, fps: 12, durationSec: 2 });
+    expect(overlays).toHaveLength(1);
+    const raw = frames(overlays[0].path, 'rgba');
+    const frame = raw.subarray(12 * w * h * 4, 13 * w * h * 4);
+    let lowerLeft = 0;
+    let elsewhere = 0;
+    for (let p = 0; p < w * h; p++) {
+      if (frame[p * 4 + 3] < 128) continue;
+      const [x, y] = [p % w, Math.floor(p / w)];
+      if (x < w / 2 && y > h / 2) lowerLeft += 1;
+      else elsewhere += 1;
+    }
+    expect(lowerLeft).toBeGreaterThan(1000);
+    expect(elsewhere).toBe(0);
+    await removeCompositionScratch('job-title-card');
+  }, 60000);
 
   it.each([['16:9', 480, 270], ['9:16', 270, 480], ['a small 16:9 frame', 160, 90]])('keeps every motion template inside the title-safe area at %s', async (_label, width, height) => {
     const long = 'A deliberately long lyric line that has to wrap and shrink to stay inside the frame';

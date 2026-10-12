@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  falSceneTake, falTakeRequestFields, planShotSplit, shotSplitLimit, SOURCE_AUDIO_LIPSYNC, PERFORMANCE_WINDOW_MARGIN_SEC,
+  falSceneTake, falTakeRequestFields, performanceCapability, planPerformanceWindow, planShotSplit, shotSplitLimit,
+  SOURCE_AUDIO_LIPSYNC, PERFORMANCE_WINDOW_MARGIN_SEC,
 } from './musicVideoShotTiming.js';
 
 // The split planner is an algorithm with a real input matrix (#8977): which
@@ -79,11 +80,27 @@ describe('shotSplitLimit', () => {
   it('bounds a performance by the lip-sync window and a Grok footage cutaway by its longest clip', () => {
     const fal = SOURCE_AUDIO_LIPSYNC.fal;
     expect(shotSplitLimit({ shotMode: 'performance' }, 'fal')).toBeCloseTo(fal.maxAudioSec - PERFORMANCE_WINDOW_MARGIN_SEC, 6);
-    expect(shotSplitLimit({ shotMode: 'cutaway' }, 'grok')).toBe(10);
+    expect(shotSplitLimit({ shotMode: 'cutaway' }, 'grok')).toBe(15);
     // Blocked outright (not split) or unbounded lanes have no limit.
     expect(shotSplitLimit({ shotMode: 'performance' }, 'grok')).toBeNull();
     expect(shotSplitLimit({ shotMode: 'cutaway' }, 'fal')).toBeNull();
     expect(shotSplitLimit({ shotMode: 'cutaway', visualLayer: 'still' }, 'grok')).toBeNull();
+  });
+});
+
+// Local LTX lip-sync (the song slice is the a2v audio): no provider minimum to
+// pad to, and a shorter per-take ceiling than fal's.
+describe('local LTX lip-sync lane', () => {
+  it('plans the shot itself as the window, for lip-sync and music-driven scenes alike', () => {
+    for (const performanceStyle of [null, 'music']) {
+      const capability = performanceCapability('local', { scene: { shotMode: 'performance', performanceStyle } });
+      expect(capability).toMatchObject({ provider: 'local', modelId: null, style: performanceStyle === 'music' ? 'music' : 'lipsync' });
+      expect(planPerformanceWindow({ startSec: 2, endSec: 4.5, songDurationSec: 60, capability }))
+        .toMatchObject({ ok: true, windowStartSec: 2, windowEndSec: 4.5, editInSec: 0 });
+    }
+    expect(planPerformanceWindow({ startSec: 0, endSec: 25, songDurationSec: 60, capability: performanceCapability('local') }))
+      .toMatchObject({ ok: false, code: 'MUSIC_VIDEO_PERFORMANCE_TOO_LONG' });
+    expect(shotSplitLimit({ shotMode: 'performance' }, 'local')).toBeCloseTo(20 - PERFORMANCE_WINDOW_MARGIN_SEC, 6);
   });
 });
 
@@ -111,6 +128,18 @@ describe('music-driven performance takes', () => {
   });
 });
 
+describe('fal model per shot', () => {
+  it('uses the end-frame upgrade only on shots with an end frame, and only a model that takes one', () => {
+    const KLING = 'fal-ai/kling-video/v3/pro/image-to-video';
+    const shot = { sceneId: 's', startSec: 0, endSec: 2 };
+    const videoSettings = { falEndFrameModelId: KLING };
+    expect(falSceneTake({ scene: shot, videoSettings })).toMatchObject({ modelId: 'fal-ai/minimax/hailuo-02/standard/image-to-video', seconds: 6, costUsd: 0.27 });
+    expect(falSceneTake({ scene: { ...shot, endImageId: 'sketch.png' }, videoSettings })).toMatchObject({ modelId: KLING, seconds: 3, costUsd: 0.42 });
+    expect(falSceneTake({ scene: { ...shot, endImageId: 'sketch.png' }, videoSettings: { falEndFrameModelId: 'fal-ai/veo3.1/fast/image-to-video' } }).modelId)
+      .toBe('fal-ai/minimax/hailuo-02/standard/image-to-video');
+  });
+});
+
 describe('accepted-prefix repair planning', () => {
   const scene = { shotMode: 'performance', sceneId: 'example', videoHistoryId: 'clip', startSec: 10, endSec: 24,
     takes: [{ kind: 'video', assetId: 'clip', shotInstruction: { shotMode: 'performance',
@@ -126,6 +155,13 @@ describe('accepted-prefix repair planning', () => {
     const { planPerformanceRepair } = await import('./musicVideoShotTiming.js');
     expect(planPerformanceRepair({ scene, temporal, excerptStartSec: 8, backend: 'fal' }))
       .toMatchObject({ ok: true, boundarySec: 14, endSec: 24, suffixSec: 10, referenceClipSec: 6, costUsd: 1.6 });
+  });
+  it('plans a take whose edit points were moved onto padded clip audio (#11210) in clip time', async () => {
+    const { planPerformanceRepair } = await import('./musicVideoShotTiming.js');
+    const aligned = structuredClone(scene);
+    Object.assign(aligned.takes[0].shotInstruction, { edit: { inSec: 2.42, outSec: 16.42 }, alignment: { offsetSec: 0.42 } });
+    expect(planPerformanceRepair({ scene: aligned, temporal, excerptStartSec: 8, backend: 'fal' }))
+      .toMatchObject({ ok: true, boundarySec: 14, referenceClipSec: 6.42 });
   });
   it('rejects inconclusive/partial evidence, unsafe word gaps, short suffixes and unsupported routes', async () => {
     const { planPerformanceRepair } = await import('./musicVideoShotTiming.js');

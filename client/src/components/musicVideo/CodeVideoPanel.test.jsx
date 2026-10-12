@@ -21,6 +21,9 @@ vi.mock('../../hooks/useProviderModels.js', () => ({
   }),
 }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../../services/socket', () => ({
+  default: { emit: vi.fn(), on: vi.fn(), off: vi.fn(), connected: true },
+}));
 
 import CodeVideoPanel from './CodeVideoPanel.jsx';
 

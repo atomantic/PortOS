@@ -14,6 +14,8 @@ export {
   FAL_VIDEO_MODELS,
   describeFalVideoRate,
   estimateFalVideoCostUsd,
+  falImageVideoQuotes,
+  falVideoClipQuote,
   falVideoResolutions,
   getFalVideoModel,
 } from '../../../server/lib/falVideoModels.js';

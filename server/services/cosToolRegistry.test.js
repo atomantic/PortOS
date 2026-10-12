@@ -23,6 +23,8 @@ const mocks = vi.hoisted(() => ({
   delegateSandbox: vi.fn(),
 }));
 
+vi.mock('./persistentMindManagedApps.js', () => ({ readPersistentMindManagedApps: async () => [{ id: 'example', granted: true, forge: 'github' }] }));
+
 vi.mock('./sandboxDelegation.js', () => ({ delegateSandbox: (...args) => mocks.delegateSandbox(...args) }));
 
 const specs = [
@@ -849,6 +851,7 @@ Semantic tool access is OFF. Return an empty toolCalls array. Never invent a too
         visitEidoversePeers: true, callUser: true, chooseThinkingPreset: true,
         adjustLocalContext: true,
       };
+      mocks.root.config = { persistentMindCapabilities: capabilities, persistentMindMaintainer: { enabled: true, appIds: ['example'] } };
       const granted = getCosToolCatalog({ scope: 'mind', capabilities }).tools.filter((tool) => tool.granted);
       mocks.root.persistentMind.toolActivation = {
         leases: Object.fromEntries(granted.map((tool) => [tool.family, 3])), lastAgedTurnId: 'turn-1',

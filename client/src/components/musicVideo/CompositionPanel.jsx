@@ -1,7 +1,6 @@
 import { RenderFailure } from './RenderStatusPanel.jsx';
 import GradePanel from './GradePanel.jsx';
 import FilmLookPanel from './FilmLookPanel.jsx';
-import TitleCardPanel from './TitleCardPanel.jsx';
 import TypographyPanel from './TypographyPanel.jsx';
 import EidoverseVideoPanel from './EidoverseVideoPanel.jsx';
 import CodeVideoPanel from './CodeVideoPanel.jsx';
@@ -37,8 +36,6 @@ export default function CompositionPanel({ board }) {
         )}
         <GradePanel project={project} onSave={board.saveCompositionGrade} />
         <FilmLookPanel project={project} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields} />
-        <TitleCardPanel project={project} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields}
-          onPreview={board.seekToScene ? (startSec) => board.seekToScene({ startSec }, { play: true }) : null} />
         {mode !== 'eidoverse' && <TypographyPanel project={project} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields} />}
         {mode === 'eidoverse' && <EidoverseVideoPanel key={project.id} project={project} onProject={board.replaceProject} productionReadiness={board.productionReadiness} />}
         {mode === 'code' && (

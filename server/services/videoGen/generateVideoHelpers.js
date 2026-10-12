@@ -18,6 +18,7 @@ import { formatBytes, PATHS, unlinkGuarded } from '../../lib/fileUtils.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { renderTimingFields } from '../../lib/renderTiming.js';
 import { videoGenEvents } from './events.js';
+import { extendMasterPath } from './extendMaster.js';
 
 /**
  * Parse byte size values from strings, returning bytes as a number.
@@ -539,6 +540,35 @@ export function planPromptEncodingRetry({ signal = null, stderr = '', promptEnco
 }
 
 /**
+ * Per-command-buffer caps MLX reads at startup (`MLX_MAX_OPS_PER_BUFFER` /
+ * `MLX_MAX_MB_PER_BUFFER`). Smaller values only move command-buffer boundaries —
+ * same kernels, same output, slightly slower — so each buffer finishes inside the
+ * macOS GPU watchdog window. Applied reactively on a retry, never by default.
+ */
+export const METAL_BUFFER_RETRY_ENV = Object.freeze({
+  MLX_MAX_OPS_PER_BUFFER: '4',
+  MLX_MAX_MB_PER_BUFFER: '16',
+});
+
+/**
+ * Decide whether a render may be relaunched once with tiny MLX command buffers
+ * after a Metal watchdog abort ANYWHERE in the render (the prompt-encode case has
+ * its own plan, planPromptEncodingRetry). Pure — returns the plan, never acts.
+ * Apple-silicon MLX runtimes only; OutOfMemory / InnocentVictim aborts never
+ * qualify (smaller buffers do not fix them). One retry per job.
+ *
+ * @returns {{ env: Record<string, string> }|null}
+ */
+export function planMetalBufferRetry({ signal = null, stderr = '', retriesUsed = 0, platform = process.platform, arch = process.arch, mlxRuntime = false } = {}) {
+  if (platform !== 'darwin' || arch !== 'arm64' || !mlxRuntime) return null;
+  if (!Number.isInteger(retriesUsed) || retriesUsed > 0) return null;
+  if (signal !== 'SIGABRT') return null;
+  const text = typeof stderr === 'string' ? stderr : '';
+  if (METAL_WATCHDOG_VETO_RE.test(text) || !METAL_WATCHDOG_RE.test(text)) return null;
+  return { env: { ...METAL_BUFFER_RETRY_ENV } };
+}
+
+/**
  * Whether a PortOS-fired completion-watchdog SIGKILL should be treated as
  * success rather than a failure. The watchdog is armed after a completion
  * marker and only guards a post-completion teardown hang. It is a SUCCESS when
@@ -742,13 +772,17 @@ export function bufferChildExit(proc, { bufferOutput = false } = {}) {
   };
 }
 
+/** How long a finished output waits for a backup cut before giving up (a cut spans rsync and the database dump). */
+export const FINISHED_OUTPUT_ADMISSION_MS = 60 * 60 * 1000;
+
 // Only fresh, unreferenced outputs belong here. Callers retain the publication
 // latch so a later notification failure never sends committed bytes to cleanup.
 export async function discardUnpublishedVideo({ jobId, outputPath }) {
   return withBackupAssetPublication(async () => {
     const results = await Promise.allSettled([
       outputPath, `${outputPath}.fs.mp4`, join(PATHS.videoThumbnails, `${jobId}.jpg`),
-    ].map(path => unlinkGuarded(path)));
+      extendMasterPath(outputPath),
+    ].filter(Boolean).map(path => unlinkGuarded(path)));
     const failed = results.find(result => result.status === 'rejected' && result.reason?.code !== 'ENOENT');
     if (failed) throw failed.reason;
   });
@@ -774,6 +808,15 @@ export async function discardUnpublishedVideo({ jobId, outputPath }) {
  *   spawned. Defaults to `job.renderStartedAtMs`, which generateVideo stamps.
  */
 export async function finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, mutateHistory, startedAtMs = job?.renderStartedAtMs, terminal = true, publication = {} }) {
+  // The render already exists, so a backup cut holding admission is a pause,
+  // not a failure: wait it out, heartbeating so the queue watchdog never
+  // reaps a finished clip as idle.
+  const waitForBackup = () => {
+    const message = 'Waiting for the backup to finish before saving the video';
+    videoGenEvents.emit('activity', { generationId: jobId });
+    broadcastSse(job, { type: 'status', message });
+    videoGenEvents.emit('status', { generationId: jobId, message });
+  };
   const thumbnail = await withBackupAssetPublication(async () => {
     try {
       await optimizeForStreaming(outputPath);
@@ -834,7 +877,7 @@ export async function finalizeGeneratedVideo({ job, jobId, outputPath, filename,
       await discardUnpublishedVideo({ jobId, outputPath });
       throw error;
     }
-  });
+  }, { timeoutMs: FINISHED_OUTPUT_ADMISSION_MS, onWait: waitForBackup });
   if (terminal) job.status = 'complete';
   console.log(`✅ Video generated [${jobId.slice(0, 8)}]: ${filename}`);
   if (terminal) {

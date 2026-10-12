@@ -162,6 +162,19 @@ describe('music-video scene completion hooks → takes', () => {
     expect(stored.takes.find((take) => take.assetId === 'clip-old')).toMatchObject({ sourceImageId: 'frame-a.png', dependencyState: { status: 'stale' } });
   });
 
+  it('an end-frame render lands as an endImage take and fills only the end slot (#11173)', async () => {
+    await projects.updateScene(project.id, scene.sceneId, { referenceImageId: 'start.png' });
+    const job = imageJob(project.id, scene.sceneId, 'sketch.png');
+    job.params.musicVideo.slot = 'end';
+    mediaJobEvents.emit('completed', job);
+    await waitFor(() => emitted.length === 1);
+    const stored = await sceneOf(project.id, scene.sceneId);
+    expect(stored.referenceImageId).toBe('start.png');
+    expect(stored.endImageId).toBe('sketch.png');
+    expect(stored.takes.filter((t) => t.kind === 'endImage').map((t) => t.assetId)).toEqual(['sketch.png']);
+    expect(emitted[0]).toMatchObject({ event: 'scene-image', referenceImageId: 'start.png', endImageId: 'sketch.png' });
+  });
+
   it('a late completion cannot resurrect a deleted scene or a deleted project', async () => {
     const other = await projects.addProjectScene(project.id, { prompt: 'second scene' });
     await projects.deleteScene(project.id, scene.sceneId);

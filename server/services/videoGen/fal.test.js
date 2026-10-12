@@ -168,8 +168,8 @@ describe('videoGen/fal — generateVideo', () => {
       duration: '8', generate_audio: false,
     });
     const [entry] = await loadHistory();
-    // 8s (the covering length) × $0.112/s audio off.
-    expect(entry).toMatchObject({ modelId: 'fal:fal-ai/kling-video/v3/pro/image-to-video', duration: 8, generateAudio: false, estimatedCostUsd: 0.896 });
+    // 8s (the covering length) × $0.14/s audio off.
+    expect(entry).toMatchObject({ modelId: 'fal:fal-ai/kling-video/v3/pro/image-to-video', duration: 8, generateAudio: false, estimatedCostUsd: 1.12 });
     if (input === 'upload') {
       await vi.waitFor(async () => {
         await expect(readFile(framePath)).rejects.toMatchObject({ code: 'ENOENT' });
@@ -279,6 +279,32 @@ describe('videoGen/fal — generateVideo', () => {
     });
     expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'completed' });
     expect(fetchMock).toHaveBeenCalled();
+  });
+
+  it('crops an off-aspect start frame to the named frame aspect before upload, leaving the file alone', async () => {
+    const sharp = (await import('sharp')).default;
+    const framePath = join(TEST_ROOT, 'square.png');
+    const square = await sharp({ create: { width: 640, height: 640, channels: 3, background: { r: 200, g: 120, b: 40 } } }).png().toBuffer();
+    await writeFile(framePath, square);
+    let sent = null;
+    vi.stubGlobal('fetch', vi.fn(async (url, opts) => {
+      if (url === 'https://queue.fal.run/fal-ai/x') {
+        sent = JSON.parse(opts.body);
+        return jsonResponse({ request_id: 'r3', status_url: 'https://queue.fal.run/fal-ai/x/requests/r3/status', response_url: 'https://queue.fal.run/fal-ai/x/requests/r3' });
+      }
+      if (url.endsWith('/r3/status')) return jsonResponse({ status: 'COMPLETED' });
+      if (url.endsWith('/r3')) return jsonResponse({ video: { url: 'https://cdn.fal.ai/out.mp4' } });
+      if (url === 'https://cdn.fal.ai/out.mp4') return { ok: true, status: 200, arrayBuffer: async () => Uint8Array.from(Buffer.from('bytes')).buffer };
+      throw new Error(`unexpected fetch: ${url}`);
+    }));
+
+    const job = await fal.generateVideo({ apiKey: 'test-key', modelId: 'fal-ai/x', prompt: 'singer', sourceImagePath: framePath, frameAspect: '16:9' });
+    expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'completed' });
+    const uploaded = Buffer.from(sent.image_url.split(',')[1], 'base64');
+    const { width, height } = await sharp(uploaded).metadata();
+    expect({ width, height }).toEqual({ width: 640, height: 360 });
+    expect((await readFile(framePath)).equals(square)).toBe(true);
+    expect((await loadHistory())[0].frameConformed).toEqual({ aspect: '16:9', start: { from: '640x640', to: '640x360' } });
   });
 
   it('resolves the API key from live settings when the caller supplies neither apiKey nor settings (the mediaJobQueue dispatch shape)', async () => {

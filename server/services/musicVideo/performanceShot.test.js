@@ -390,10 +390,10 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
 
   it('refuses a performance shot on a lane without source-audio conditioning, before slicing anything', async () => {
     getProject.mockResolvedValue(project());
-    for (const backend of ['grok', 'local']) {
+    for (const backend of ['grok', 'reactor']) {
       await expect(preparePerformanceShot({
         musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1' }, backend, sourceImagePath: '/x/frame.png',
-      })).rejects.toMatchObject({ status: 400, code: 'MUSIC_VIDEO_PERFORMANCE_UNSUPPORTED', message: expect.stringMatching(backend === 'grok' ? /cutaway-only/ : /cannot lip-sync/) });
+      })).rejects.toMatchObject({ status: 400, code: 'MUSIC_VIDEO_PERFORMANCE_UNSUPPORTED', message: expect.stringMatching(backend === 'grok' ? /cutaway-only/ : /pin fal\.ai/) });
     }
     const staged = existsSync(PATHS.uploads) ? (await readdir(PATHS.uploads)).filter((f) => f.startsWith('mv-performance-')) : [];
     expect(staged).toEqual([]);

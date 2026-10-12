@@ -2,7 +2,8 @@
  * Mood Board — collage compilation + video frame extraction.
  *
  * `composeBoardCollage` flattens every visual on a board into ONE near-square
- * grid image saved to the gallery. Image pins contribute themselves; video pins
+ * grid image saved to the gallery, led by the board poster when it has one.
+ * Image pins contribute themselves; video pins
  * are sampled into N evenly spaced frames, each becoming a cell. Text pins and
  * pins with no local file (external URLs not yet re-hosted) are skipped and
  * counted. `extractItemFrames` does the same sampling for a single video pin and
@@ -136,12 +137,19 @@ export async function composeBoardCollage(boardId, { framesPerVideo, addFramesTo
     const imported = [];
     let skipped = 0;
 
+    // The board's poster is its cover image: it leads the grid. A pin of the
+    // same file is not repeated.
+    const posterName = typeof board.posterImageRef === 'string' ? assetBasename(board.posterImageRef.trim()) : null;
+    const posterPath = posterName ? safeUnder(PATHS.images, posterName) : null;
+    if (posterPath) sources.push(posterPath);
+
     for (const item of items) {
       if (item.type === 'image') {
         const local = boardItemLocalImage(item);
         const dir = local?.kind === 'image' ? PATHS.images : local?.kind === 'image-ref' ? PATHS.imageRefs : null;
         const path = dir ? safeUnder(dir, local.filename) : null;
-        if (path) sources.push(path); else skipped += 1;
+        if (!path) skipped += 1;
+        else if (path !== posterPath) sources.push(path);
       } else if (item.type === 'video') {
         const file = videoFilename(item);
         if (!file) { skipped += 1; continue; }

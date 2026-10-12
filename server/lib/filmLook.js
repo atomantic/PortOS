@@ -364,13 +364,115 @@ export function filmLookFilterMarkup(look, { frame = 0, width = 1920, height = 1
 }
 
 /**
+ * The look as a PLAYING picture can afford it: no SVG filter, which a browser
+ * re-runs over every decoded video frame (the full chain drops a phone's
+ * animatic from 30 fps to under 1 after #11215), only what the
+ * compositor does for free. The focus, tone and saturation become CSS filter
+ * functions on the box holding the picture (`filter`, with the gate weave as
+ * its `transform`), and the cast, grain, tape bands, vignette and leak become
+ * blended `overlays` in the render's order, each a flat color, a gradient or a
+ * tile rasterized once (`image`) and shifted per song frame (`shift`, [0, 1)).
+ * The glows, the fringing and the split tone have no cheap stand-in and are
+ * left to the exact filter the paused picture shows. Returns null for a
+ * neutral look.
+ */
+export function filmLookMotionLayers(look, { frame = 0, width = 1920, height = 1080 } = {}) {
+  const settings = normalizeFilmLook(look);
+  if (!settings || isFilmLookNeutral(settings)) return null;
+  return filmLookMotionMarkup(settings, { frame, width, height });
+}
+
+// Inlined into the page runtime; all dependencies stay inside this function.
+function filmLookMotionMarkup(settings, { frame = 0, width = 1920, height = 1080 } = {}) {
+  const FILM_LOOK_TILE_PX = 256;
+  const svgDataUrl = (markup) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" ${markup}</svg>`)}`;
+  const frameHash = (seed) => {
+    let x = Math.imul(seed + 0x9e3779b9, 0x85ebca6b) >>> 0;
+    x ^= x >>> 13; x = Math.imul(x, 0xc2b2ae35) >>> 0; x ^= x >>> 16;
+    return (x >>> 0) / 4294967296;
+  };
+  const hexColor = (value, fallback) => (typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value) ? value : fallback);
+  const v = (key) => (Number.isFinite(settings[key]) ? settings[key] : 0);
+  const n = (value) => Number(value.toFixed(4));
+  const w = Math.max(1, width);
+  const h = Math.max(1, height);
+  const f = Math.max(0, Math.floor(frame));
+  const filter = [];
+  const defocus = v('defocus');
+  if (defocus > 0) filter.push(`blur(${n(Math.pow(defocus, 1.5) * 0.014 * w)}px)`);
+  // The render's per-channel transfer v' = slope·v + intercept, as brightness(b) then
+  // contrast(k): k·b·v + (1 − k)/2, so k = 1 − 2·intercept and b = slope / k.
+  const exposure = v('exposure'); const contrast = v('contrast'); const fade = v('fade'); const flicker = v('flicker');
+  if (exposure || contrast || fade || flicker) {
+    const e = Math.pow(2, exposure) * (1 + flicker * 0.12 * (frameHash(f) * 2 - 1));
+    const c = 1 + contrast * 0.8;
+    const s = 1 - 0.28 * fade;
+    const slope = e * c * s;
+    const intercept = s * ((1 - c) / 2) + 0.2 * fade;
+    const k = Math.max(0.05, 1 - 2 * intercept);
+    filter.push(`brightness(${n(slope / k)})`, `contrast(${n(k)})`);
+  }
+  const saturation = v('saturation');
+  if (saturation) filter.push(`saturate(${n(Math.max(0, 1 + saturation))})`);
+  const weave = v('weave');
+  const transform = weave > 0
+    ? `translate(${n(weave * 0.004 * w * (Math.sin(f * 0.37) + 0.6 * Math.sin(f * 1.13)) / 1.6)}px, ${n(weave * 0.004 * h * (Math.cos(f * 0.29) + 0.6 * Math.sin(f * 0.91)) / 1.6)}px)`
+    : null;
+
+  const overlays = [];
+  const flat = (key, color, opacity, blend) => overlays.push({ key, kind: 'flat', color, opacity: n(opacity), blend });
+  // Warmth and tint are per-channel scales in the render; a soft-light wash leans the picture the same way.
+  const warmth = v('warmth');
+  if (warmth) flat('warmth', warmth > 0 ? '#ff9a3c' : '#3c9aff', Math.min(1, Math.abs(warmth) * 0.9), 'soft-light');
+  const tint = v('tint');
+  if (tint) flat('tint', tint > 0 ? '#ff3cff' : '#3cff3c', Math.min(1, Math.abs(tint) * 0.6), 'soft-light');
+  const cast = v('cast');
+  if (cast > 0) flat('cast', hexColor(settings.castColor, '#b9c04a'), cast, 'soft-light');
+  const mono = '1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 0 0 0 0 1';
+  const color = '1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 0 1';
+  const grain = v('grain');
+  if (grain > 0) {
+    const size = Number.isFinite(settings.grainSize) ? settings.grainSize : 0.35;
+    const baseFrequency = Math.min(1.5, (0.95 - 0.7 * size) * (1920 / w));
+    const tile = FILM_LOOK_TILE_PX;
+    overlays.push({
+      key: 'grain', kind: 'tile', size: [tile, tile], opacity: n(grain), blend: 'overlay', shift: [n(frameHash(f)), n(frameHash(f + 1))],
+      image: svgDataUrl(`width="${tile}" height="${tile}"><filter id="g" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB"><feTurbulence type="fractalNoise" baseFrequency="${n(baseFrequency)}" numOctaves="2" seed="7" stitchTiles="stitch"/><feColorMatrix type="matrix" values="${settings.grainColor === true ? color : mono}"/></filter><rect width="${tile}" height="${tile}" filter="url(#g)"/>`),
+    });
+  }
+  const tape = v('tapeNoise');
+  if (tape > 0) {
+    const tileW = Math.round(w);
+    const tileH = 128;
+    overlays.push({
+      key: 'tape', kind: 'tile', size: [tileW, tileH], opacity: n(0.8 * tape), blend: 'soft-light', shift: [0, n(frameHash(f * 7))],
+      image: svgDataUrl(`width="${tileW}" height="${tileH}"><filter id="t" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB"><feTurbulence type="fractalNoise" baseFrequency="${n(0.0015 * (1920 / w))} ${n(0.45 * (1080 / h))}" numOctaves="1" seed="11" stitchTiles="stitch"/><feColorMatrix type="matrix" values="${mono}"/></filter><rect width="${tileW}" height="${tileH}" filter="url(#t)"/>`),
+    });
+  }
+  const vignette = v('vignette');
+  if (vignette > 0) {
+    overlays.push({ key: 'vignette', kind: 'gradient', opacity: 1, blend: 'normal',
+      gradient: `radial-gradient(ellipse at center, rgba(0,0,0,0) ${Math.round(58 - 22 * vignette)}%, rgba(0,0,0,${n(vignette)}) 100%)` });
+  }
+  const leak = v('leak');
+  if (leak > 0) {
+    const drift = 0.62 + 0.18 * Math.sin(f * 0.011) + 0.05 * Math.sin(f * 0.047);
+    const breathe = 0.75 + 0.25 * Math.sin(f * 0.023 + 1);
+    overlays.push({ key: 'leak', kind: 'gradient', opacity: n(Math.min(1, leak * breathe)), blend: 'screen',
+      gradient: `radial-gradient(ellipse 40% 140% at ${n((drift + 0.15) * 100)}% 50%, ${hexColor(settings.leakColor, '#ff7a2a')} 0%, rgba(0,0,0,0) 70%)` });
+  }
+  return { filter: filter.join(' ') || null, transform, overlays };
+}
+
+/**
  * A browser script that applies a look to the page it runs in, re-seeding it
  * for every song frame: installed in the composition live preview and in the
  * final render's browser (`Page.addScriptToEvaluateOnNewDocument`) before the
  * document's own scripts. It exposes `window.__portosFilmLook`:
  *
  *   apply(look)   put a (normalized) look on the page, or null to clear it
- *   frame(n)      redraw the filter for song frame n (grain, weave, flicker, leak)
+ *   frame(n)      redraw for song frame n (grain, weave, flicker, leak)
+ *   playback(on)  use cheap motion layers while a live preview plays; exact by default
  *   look          the look currently applied
  *
  * `globalThis.portosComposition` is intercepted when the document assigns it so
@@ -381,15 +483,90 @@ export function filmLookFilterMarkup(look, { frame = 0, width = 1920, height = 1
 export function filmLookRuntimeSource(look = null) {
   return `(() => {
   const markup = ${filmLookFilterMarkup.toString()};
+  const motion = ${filmLookMotionMarkup.toString()};
   const ID = 'portos-film-look';
   let look = ${JSON.stringify(normalizeFilmLook(look))};
   let frame = 0;
   let fps = 24;
   let host = null;
+  let overlays = null;
+  let playing = false;
+  let savedTransform = null;
+  const clearMotion = (root) => {
+    if (overlays) { overlays.remove(); overlays = null; }
+    if (savedTransform !== null) { root.style.transform = savedTransform; savedTransform = null; }
+  };
+  const paintTile = (el, layer, size) => {
+    const key = layer.image + ':' + size.width + ':' + size.height;
+    if (el._filmLookTileKey === key) return;
+    el._filmLookTileKey = key;
+    // Rasterize our own SVG filter directly into canvas once. Image URLs are
+    // forbidden by the worker's code-only CSP; no image permission is needed.
+    const id = 'portos-film-look-tile-' + layer.key;
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.style.cssText = 'position:absolute;width:0;height:0;pointer-events:none';
+    svg.innerHTML = decodeURIComponent(layer.image.slice(layer.image.indexOf(',') + 1))
+      .replace(/id="[gt]"/g, 'id="' + id + '"').replace(/url\\(#(?:g|t)\\)/g, 'url(#' + id + ')');
+    document.documentElement.appendChild(svg);
+    const tile = document.createElement('canvas');
+    [tile.width, tile.height] = layer.size;
+    const context = tile.getContext('2d');
+    context.filter = 'url(#' + id + ')';
+    context.fillRect(0, 0, tile.width, tile.height);
+    context.filter = 'none';
+    svg.remove();
+    const canvas = el._filmLookCanvas || document.createElement('canvas');
+    canvas.width = Math.ceil(size.width * 2); canvas.height = Math.ceil(size.height * 2);
+    canvas.style.cssText = 'width:200%;height:200%;pointer-events:none';
+    const paint = canvas.getContext('2d');
+    paint.fillStyle = paint.createPattern(tile, 'repeat');
+    paint.fillRect(0, 0, canvas.width, canvas.height);
+    if (!el._filmLookCanvas) el.appendChild(canvas);
+    el._filmLookCanvas = canvas;
+  };
+  const drawMotion = (root, size) => {
+    if (host) { host.remove(); host = null; }
+    const built = motion(look, size);
+    root.style.filter = built.filter || '';
+    if (savedTransform === null) savedTransform = root.style.transform;
+    root.style.transform = [savedTransform, built.transform].filter(Boolean).join(' ');
+    if (!overlays) {
+      overlays = document.createElement('div');
+      overlays.dataset.portosFilmLookMotion = '1';
+      overlays.setAttribute('aria-hidden', 'true');
+      // A stacking context here would make blends see only the overlay group.
+      overlays.style.cssText = 'display:contents;pointer-events:none';
+    }
+    // A root child after body also paints after max-z-index lyrics/title layers.
+    if (root.lastElementChild !== overlays) root.appendChild(overlays);
+    const keys = new Set(built.overlays.map((layer) => layer.key));
+    for (const child of [...overlays.children]) if (!keys.has(child.dataset.filmLookLayer)) child.remove();
+    for (const [index, layer] of built.overlays.entries()) {
+      let el = [...overlays.children].find((child) => child.dataset.filmLookLayer === layer.key);
+      if (!el) { el = document.createElement('div'); el.dataset.filmLookLayer = layer.key; }
+      // Each layer blends with the document and all preceding film layers.
+      el.style.position = 'fixed'; el.style.pointerEvents = 'none'; el.style.overflow = 'hidden';
+      el.style.opacity = layer.opacity; el.style.mixBlendMode = layer.blend;
+      el.style.left = '0'; el.style.top = '0';
+      el.style.width = '100%'; el.style.height = '100%';
+      if (layer.kind === 'flat') el.style.backgroundColor = layer.color;
+      if (layer.kind === 'gradient') el.style.backgroundImage = layer.gradient;
+      if (layer.kind === 'tile') {
+        paintTile(el, layer, size);
+        el._filmLookCanvas.style.transform = 'translate(' + (-layer.shift[0] * 50) + '%, ' + (-layer.shift[1] * 50) + '%)';
+      }
+      el.style.zIndex = '2147483647';
+      // A slider can add an earlier layer after later ones already exist.
+      if (overlays.children[index] !== el) overlays.insertBefore(el, overlays.children[index] || null);
+    }
+  };
   const draw = () => {
     const root = document.documentElement;
     if (!root) return;
-    const built = look ? markup(look, { frame, width: root.clientWidth || innerWidth || 1920, height: root.clientHeight || innerHeight || 1080, id: ID }) : null;
+    const size = { frame, width: root.clientWidth || innerWidth || 1920, height: root.clientHeight || innerHeight || 1080, id: ID };
+    if (playing && look) { drawMotion(root, size); return; }
+    clearMotion(root);
+    const built = look ? markup(look, size) : null;
     if (!built || !built.active) {
       if (host) { host.remove(); host = null; }
       root.style.filter = '';
@@ -407,7 +584,8 @@ export function filmLookRuntimeSource(look = null) {
   };
   const api = {
     apply(next) { look = next && typeof next === 'object' ? next : null; draw(); },
-    frame(n) { const next = Math.max(0, Math.floor(Number(n) || 0)); if (next !== frame || !host) { frame = next; if (look) draw(); } },
+    playback(value) { const next = value === true; if (next !== playing) { playing = next; draw(); } },
+    frame(n) { const next = Math.max(0, Math.floor(Number(n) || 0)); if (next !== frame || (!host && !overlays)) { frame = next; if (look) draw(); } },
     get look() { return look; },
   };
   Object.defineProperty(window, '__portosFilmLook', { value: api, configurable: false, writable: false });

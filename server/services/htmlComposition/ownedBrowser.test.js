@@ -158,6 +158,97 @@ describe('owned composition capture browser lifecycle', () => {
     await expect(access(profile)).rejects.toThrow();
   });
 
+  const answerHandshake = () => {
+    const pipeIn = new PassThrough();
+    const pipeOut = new PassThrough();
+    child.stdio = [null, null, child.stderr, pipeIn, pipeOut];
+    vi.spyOn(process, 'kill').mockImplementation(() => true);
+    pipeIn.on('data', (chunk) => {
+      if (!chunk.toString().includes('Browser.getVersion')) return;
+      pipeOut.write(Buffer.concat([
+        Buffer.from(JSON.stringify({ id: 0, result: { product: 'Chrome/1' } })),
+        Buffer.from([0]),
+      ]));
+    });
+  };
+
+  it('fails closed without spawning when the host cannot jail a preview', async () => {
+    await expect(launchCompositionBrowser({
+      isolation: 'required',
+      support: { platform: 'win32', seatbeltAvailable: false, bubblewrapAvailable: false },
+    })).rejects.toMatchObject({ code: 'PREVIEW_ISOLATION_UNAVAILABLE' });
+    expect(launch.spawn).not.toHaveBeenCalled();
+  });
+
+  it('launches the jailed pipe browser without a DevTools port or inherited tokens', async () => {
+    answerHandshake();
+    const owner = await launchCompositionBrowser({
+      isolation: 'required',
+      support: { platform: 'linux', seatbeltAvailable: false, bubblewrapAvailable: true },
+    });
+    expect(owner.mechanism).toBe('linux-bubblewrap');
+    const [executable, args, options] = launch.spawn.mock.calls[0];
+    expect(executable).toBe('/usr/bin/bwrap');
+    expect(args).toContain('--unshare-net');
+    expect(args).toContain('--remote-debugging-pipe');
+    expect(args).toContain('--no-sandbox');
+    expect(args.some((arg) => String(arg).includes('127.0.0.1:9'))).toBe(true);
+    expect(args.join('\n')).not.toContain('proxy-bypass');
+    expect(args).not.toContain('--remote-debugging-port=0');
+    expect(options.env.USER).toBe('portos-preview');
+    expect(options.env.PORTOS_API_TOKEN).toBeUndefined();
+    expect(options.detached).toBe(true);
+    await owner.close();
+    expect(process.kill).toHaveBeenCalledWith(-child.pid, 'SIGTERM');
+  });
+
+  it('keeps the egress negative control on the pipe without a jail or network flags', async () => {
+    answerHandshake();
+    const owner = await launchCompositionBrowser({
+      isolation: 'off',
+      support: { platform: 'linux', seatbeltAvailable: false, bubblewrapAvailable: false },
+    });
+    expect(owner.mechanism).toBe('none');
+    const [executable, args] = launch.spawn.mock.calls[0];
+    expect(executable).toBe('/synthetic/chrome');
+    expect(args).toContain('--remote-debugging-pipe');
+    expect(args.some((arg) => String(arg).includes('proxy-server'))).toBe(false);
+    expect(args.some((arg) => String(arg).includes('host-resolver'))).toBe(false);
+    expect(args.some((arg) => String(arg).includes('webrtc'))).toBe(false);
+    if (process.getuid?.() !== 0) expect(args).not.toContain('--no-sandbox');
+    await owner.close();
+  });
+
+  it.each([3, 4])('rejects a startup error on pipe fd %s and disposes its owned browser', async fd => {
+    const pipeIn = new PassThrough();
+    const pipeOut = new PassThrough();
+    child.stdio = [null, null, child.stderr, pipeIn, pipeOut];
+    vi.spyOn(process, 'kill').mockImplementation(() => true);
+    pipeIn.on('data', () => {
+      child.stdio[fd].emit('error', Object.assign(new Error('/private/startup-path'), { code: 'EPIPE' }));
+    });
+    await expect(launchCompositionBrowser({ isolation: 'off' })).rejects.toThrow('Composition browser failed to start (pipe)');
+    expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
+    await expect(access(profile)).rejects.toThrow();
+  });
+
+  it('retains handoff pipe failures for the CDP client and still forwards subsequent errors', async () => {
+    answerHandshake();
+    const owner = await launchCompositionBrowser({ isolation: 'off' });
+    const error = Object.assign(new Error('Synthetic broken pipe'), { code: 'EPIPE' });
+    // The launcher has returned, but the client has not subscribed yet.
+    child.stdio[4].emit('error', error);
+    const callback = vi.fn();
+    owner.transport.send('{}', callback);
+    expect(callback).toHaveBeenCalledExactlyOnceWith(error);
+    const clientError = vi.fn();
+    owner.transport.on('error', clientError);
+    child.stdio[3].emit('error', error);
+    expect(clientError).toHaveBeenCalledExactlyOnceWith(error);
+    await owner.close();
+    await expect(access(profile)).rejects.toThrow();
+  });
+
   it('retries a transient profile removal failure so a resolved close means the profile is gone', async () => {
     const owner = await launchCompositionBrowser();
     vi.mocked(rm).mockRejectedValueOnce(Object.assign(new Error('busy'), { code: 'ENOTEMPTY' }));

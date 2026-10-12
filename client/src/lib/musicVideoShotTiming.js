@@ -11,6 +11,7 @@ export {
   SOURCE_AUDIO_LIPSYNC,
   SOURCE_AUDIO_MUSIC,
   approximateMotionCues,
+  clipAudioOffsetSec,
   falSceneTake,
   falTakeRequestFields,
   grokCoverage,
@@ -19,5 +20,6 @@ export {
   performanceCapability,
   planPerformanceWindow,
   planPerformanceRepair,
+  selectedPerformanceInstruction,
   shotSplitLimit,
 } from '../../../server/lib/musicVideoShotTiming.js';

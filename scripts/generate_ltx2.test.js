@@ -569,6 +569,36 @@ describe.skipIf(!pyBin)('generate_ltx2.py', () => {
     ].join('\n')}`);
     expect(output.trim()).toBe('/tmp/previews');
   });
+
+  // The Stage-2 refine must hear the song the clip is lip-synced to, not a
+  // re-noised copy of it: only while run_a2v sets the flag.
+  it('holds the A2V audio latent fixed through the Stage-2 denoise loop', () => {
+    const output = runPython([
+      'import sys, types',
+      'from dataclasses import dataclass',
+      'def mod(name, **attrs):',
+      '    m = types.ModuleType(name); m.__path__ = []; m.__dict__.update(attrs); sys.modules[name] = m; return m',
+      '@dataclass',
+      'class LatentState:',
+      '    latent: object',
+      '    clean_latent: object',
+      '    denoise_mask: object',
+      '    positions: object = None',
+      '    attention_mask: object = None',
+      'mod("mlx"); mod("mlx.core", zeros_like=lambda a: ["zero"] * len(a))',
+      'mod("ltx_core_mlx"); mod("ltx_core_mlx.conditioning"); mod("ltx_core_mlx.conditioning.types")',
+      'mod("ltx_core_mlx.conditioning.types.latent_cond", LatentState=LatentState)',
+      'mod("ltx_pipelines_mlx")',
+      'a2v = mod("ltx_pipelines_mlx.a2vid_two_stage", denoise_loop=lambda **kw: kw["audio_state"])',
+      importRunner,
+      'noised = LatentState(latent="noised", clean_latent="song", denoise_mask=[1, 1], positions="pos")',
+      'print(runner._A2V_FREEZE_PATCH_OK, a2v.denoise_loop(audio_state=noised).latent)',
+      'runner._A2V_FREEZE_STAGE2_AUDIO = True',
+      'held = a2v.denoise_loop(audio_state=noised)',
+      'print(held.latent, held.clean_latent, held.denoise_mask, held.positions)',
+    ].join('\n'));
+    expect(output.trim().split(/\r?\n/)).toEqual(['True noised', "song song ['zero', 'zero'] pos"]);
+  });
 });
 
 // Speed profiles (#4875). The Node side decides the schedule declaratively;

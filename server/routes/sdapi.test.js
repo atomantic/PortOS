@@ -1,17 +1,31 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterAll, describe, it, expect, vi, beforeEach } from 'vitest';
+import { EventEmitter } from 'node:events';
+import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
+import { errorMiddleware } from '../lib/errorHandler.js';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 
 vi.mock('../services/settings.js', () => ({
-  getSettings: vi.fn(),
+  getSettings: vi.fn(), settingsEvents: new EventEmitter(),
 }));
+const auth = vi.hoisted(() => ({ enabled: false }));
+vi.mock('../services/auth.js', () => ({
+  isAuthEnabled: vi.fn(async () => auth.enabled),
+  verifyRequestSession: vi.fn(async (req) => ['Bearer example-session', 'Bearer example-agent-session'].includes(req.headers.authorization)),
+  verifyPassword: vi.fn(async () => true),
+}));
+vi.mock('../services/instanceIdentity.js', () => ({ loadData: vi.fn(async () => ({ peers: [] })) }));
+vi.mock('../lib/paths.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-sdapi-') }));
+afterAll(cleanupTempDataRoots);
 
 vi.mock('../services/imageGen/index.js', () => ({
   generateImage: vi.fn(),
   getMode: vi.fn(),
   getActiveJob: vi.fn(),
-  IMAGE_GEN_MODE: { EXTERNAL: 'external', LOCAL: 'local', CODEX: 'codex', GROK: 'grok' },
-  CLOUD_IMAGE_GEN_MODES: ['codex', 'grok'],
+  IMAGE_GEN_MODE: { EXTERNAL: 'external', LOCAL: 'local', CODEX: 'codex', GROK: 'grok', AGY: 'agy', FAL: 'fal' },
+  CLOUD_IMAGE_GEN_MODES: ['codex', 'grok', 'agy', 'fal'],
   local: { listImageModels: vi.fn(() => [{ id: 'dev', name: 'Flux 1 Dev' }]) },
 }));
 
@@ -29,10 +43,10 @@ vi.mock('../services/videoGen/local.js', () => ({
   warmByovLoraCapabilities: vi.fn(async () => {}),
 }));
 
-vi.mock('../lib/fileUtils.js', () => ({
-  tryReadFile: vi.fn(),
-  PATHS: { images: '/mock/images' },
-}));
+vi.mock('../lib/fileUtils.js', async (importOriginal) => {
+  const proxy = makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-sdapi-') });
+  return { ...proxy, tryReadFile: vi.fn() };
+});
 
 import { getSettings } from '../services/settings.js';
 import * as imageGen from '../services/imageGen/index.js';
@@ -40,6 +54,8 @@ import { imageGenEvents as realEmitter } from '../services/imageGenEvents.js';
 import { tryReadFile } from '../lib/fileUtils.js';
 import * as videoGenService from '../services/videoGen/local.js';
 import sdapiRoutes from './sdapi.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
+import * as waiter from '../services/imageGenWaiter.js';
 
 const enabled = () => getSettings.mockResolvedValue({ imageGen: { expose: { a1111: true } } });
 const disabled = () => getSettings.mockResolvedValue({ imageGen: { expose: { a1111: false } } });
@@ -258,5 +274,153 @@ describe('sdapi routes — A1111-compatible surface', () => {
       expect(r.status).toBe(500);
       expect(realEmitter.listenerCount('completed') + realEmitter.listenerCount('failed')).toBe(before);
     });
+  });
+});
+
+
+// The mounted boundary uniquely catches the passwordless exposure exemption,
+// dev-proxy address handling, and backend authorization/dispatch race together.
+describe('A1111 generation caller authority (#11138)', () => {
+  const appFor = (address = '192.0.2.10') => {
+    const app = express();
+    app.use((req, _res, next) => {
+      Object.defineProperty(req.socket, 'remoteAddress', { value: address });
+      next();
+    });
+    app.use(authGate, hostControlRouteGate, express.json());
+    app.use('/sdapi/v1', sdapiRoutes);
+    app.use(errorMiddleware);
+    return app;
+  };
+  const generate = (mode, { address, headers = {}, path = '/sdapi/v1/txt2img' } = {}) => {
+    imageGen.getMode.mockResolvedValue(mode);
+    const pending = request(appFor(address)).post(path);
+    for (const [name, value] of Object.entries(headers)) pending.set(name, value);
+    return pending.send({ prompt: 'Example scene' });
+  };
+  const useEarlyCompletion = () => {
+    imageGen.generateImage.mockImplementation(async ({ mode, jobId }) => {
+      if (jobId) realEmitter.emit('completed', { generationId: jobId, seed: 777 });
+      return { generationId: jobId, filename: 'example.png', mode, seed: 1 };
+    });
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    auth.enabled = false;
+    enabled();
+    tryReadFile.mockResolvedValue(Buffer.from('png'));
+    useEarlyCompletion();
+  });
+
+  it('refuses agent modes before waiter or generation effects for every non-operator', async () => {
+    const waitSpy = vi.spyOn(waiter, 'createImageGenWaiter');
+    try {
+      for (const mode of ['codex', 'grok', 'agy']) {
+        for (const [password, address, headers] of [
+          [false, '192.0.2.10', {}],
+          [false, '127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }],
+          [false, '192.0.2.10', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '127.0.0.1' }],
+          [true, '192.0.2.10', {}],
+          [true, '192.0.2.10', { Authorization: 'Bearer invalid-session' }],
+          [true, '192.0.2.10', { Authorization: 'Basic ' + Buffer.from(':example-password').toString('base64') }],
+        ]) {
+          auth.enabled = password;
+          getSettings.mockResolvedValue({ imageGen: { expose: { a1111: true } }, apiAccess: { sdapi: { exposed: true, requireAuth: false } } });
+          for (const path of ['/sdapi/v1/txt2img', '/SDAPI/V1/TXT2IMG/']) {
+            const response = await generate(mode, { address, headers, path });
+            expect([response.status, response.body.code], `${mode} ${path}`).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+          }
+        }
+      }
+      expect(waitSpy).not.toHaveBeenCalled();
+      expect(imageGen.generateImage).not.toHaveBeenCalled();
+      expect(tryReadFile).not.toHaveBeenCalled();
+    } finally {
+      waitSpy.mockRestore();
+    }
+  });
+
+  it('preserves operator, delegated-agent and genuine local generation with early completion', async () => {
+    for (const mode of ['codex', 'grok', 'agy']) {
+      for (const [password, address, headers] of [
+        [false, '127.0.0.1', {}],
+        [false, '127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '::ffff:127.0.0.1' }],
+        [true, '192.0.2.10', { Authorization: 'Bearer example-session' }],
+        [true, '127.0.0.1', { Authorization: 'Bearer example-agent-session' }],
+      ]) {
+        auth.enabled = password;
+        getSettings.mockResolvedValue({ imageGen: { expose: { a1111: true } }, apiAccess: { sdapi: { exposed: true, requireAuth: false } } });
+        const response = await generate(mode, { address, headers });
+        expect(response.status, `${mode}: ${JSON.stringify(response.body)}`).toBe(200);
+        expect(JSON.parse(response.body.info).seed).toBe(777);
+        expect(imageGen.generateImage).toHaveBeenLastCalledWith(expect.objectContaining({ mode, jobId: expect.any(String) }));
+        expect(realEmitter.listenerCount('completed') + realEmitter.listenerCount('failed')).toBe(0);
+      }
+    }
+  });
+
+  it('keeps remote inference and discovery/progress under existing exposure and auth policy', async () => {
+    for (const password of [false, true]) {
+      auth.enabled = password;
+      getSettings.mockResolvedValue({ imageGen: { expose: { a1111: true } }, apiAccess: { sdapi: { exposed: true, requireAuth: false } } });
+      for (const mode of ['external', 'local', 'fal']) {
+        const response = await generate(mode);
+        expect(response.status, mode).toBe(200);
+        expect(imageGen.generateImage).toHaveBeenLastCalledWith(expect.objectContaining({ mode }));
+      }
+      imageGen.getMode.mockResolvedValue('grok');
+      imageGen.getActiveJob.mockResolvedValue(null);
+      for (const endpoint of ['options', 'sd-models', 'samplers', 'progress']) {
+        expect((await request(appFor()).get(`/sdapi/v1/${endpoint}`)).status).toBe(200);
+      }
+    }
+    auth.enabled = true;
+    enabled(); // No passwordless registry exemption.
+    const response = await generate('external');
+    expect([response.status, response.body.code]).toEqual([401, 'AUTH_REQUIRED']);
+  });
+
+  it('pins the inference mode when saved settings change before dispatch', async () => {
+    imageGen.generateImage.mockImplementation(async ({ mode, jobId }) => {
+      // A fresh saved-mode lookup would now select a host agent.
+      imageGen.getMode.mockResolvedValue('grok');
+      expect(mode).toBe('local');
+      realEmitter.emit('completed', { generationId: jobId });
+      return { generationId: jobId, filename: 'example.png', mode };
+    });
+    const response = await generate('local');
+    expect(response.status).toBe(200);
+    expect(imageGen.getMode).toHaveBeenCalledTimes(1);
+    expect(imageGen.generateImage).toHaveBeenCalledWith(expect.objectContaining({ mode: 'local' }));
+  });
+
+  it('refuses unclassified backends and disabled exposure without dispatch or waiters', async () => {
+    const waitSpy = vi.spyOn(waiter, 'createImageGenWaiter');
+    try {
+      for (const mode of ['future-agent', undefined, null, '']) {
+        const response = await generate(mode);
+        expect([response.status, response.body.code]).toEqual([400, 'IMAGE_GEN_UNKNOWN_MODE']);
+      }
+      disabled();
+      const response = await generate('grok');
+      expect(response.status).toBe(403);
+      expect(response.body.error).toMatch(/disabled/i);
+      expect(waitSpy).not.toHaveBeenCalled();
+      expect(imageGen.generateImage).not.toHaveBeenCalled();
+    } finally {
+      waitSpy.mockRestore();
+    }
+  });
+
+  it('surfaces authorized agent failure and cleans up its completion listeners', async () => {
+    imageGen.generateImage.mockImplementation(async ({ jobId }) => {
+      realEmitter.emit('failed', { generationId: jobId, error: 'Example provider failure' });
+      return { generationId: jobId, filename: 'example.png', mode: 'grok' };
+    });
+    const response = await generate('grok', { address: '127.0.0.1' });
+    expect([response.status, response.body.code]).toEqual([500, 'GEN_FAILED']);
+    expect(realEmitter.listenerCount('completed') + realEmitter.listenerCount('failed')).toBe(0);
+    expect(tryReadFile).not.toHaveBeenCalled();
   });
 });

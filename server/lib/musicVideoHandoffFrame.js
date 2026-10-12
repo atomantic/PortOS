@@ -1,0 +1,51 @@
+/**
+ * Music Video continuing shots: where the previous shot's clip ends on screen.
+ *
+ * A clip is usually longer than the shot that plays it (a 5.9 s fal clip under
+ * a 4.04 s shot), and the cut stops it at the shot's out-point. A continuing
+ * shot must start from the frame the viewer last saw, not from the clip's true
+ * last frame, which can be seconds further on. That frame sits at the clip's
+ * in-point plus the shot's authored span, using the same rules as the render:
+ *  - a performance take starts at its edit in-point and stops at its edit out-point;
+ *  - a looping shot wraps around the clip;
+ *  - a non-looping shot longer than its clip holds the clip's last frame.
+ * The returned time is the last displayed frame, one frame before the out-point.
+ */
+import { sceneHasAuthoredSpan } from './musicVideoLayers.js';
+import { selectedPerformanceInstruction } from './musicVideoShotTiming.js';
+
+const round3 = (n) => Math.round(n * 1000) / 1000;
+
+/**
+ * Seconds into the scene's clip of the last frame the cut shows, or null when
+ * the scene is untimed or the clip length is unknown. `fps` sets the one-frame
+ * step back from the out-point (24 when unknown).
+ */
+export function sceneClipOutFrameSec(scene, clipDurationSec, fps = 24) {
+  const duration = Number(clipDurationSec);
+  if (!sceneHasAuthoredSpan(scene) || !(duration > 0)) return null;
+  const frameSec = 1 / (Number(fps) > 0 ? Number(fps) : 24);
+  const span = scene.endSec - scene.startSec;
+  const edit = selectedPerformanceInstruction(scene)?.edit ?? null;
+  const inSec = edit ? Math.min(Math.max(0, edit.inSec), duration) : 0;
+  const stopSec = edit ? Math.min(edit.outSec, duration) : duration;
+  // Mirrors render.js: only a pre-#8964 scene (no `loop` key) or `loop: true`
+  // repeats, and a performance take never does.
+  const loops = !edit && scene.loop !== false;
+  const playable = stopSec - inSec;
+  if (!(playable > 0)) return round3(inSec);
+  const played = loops && span > playable ? span % playable || playable : Math.min(span, playable);
+  return round3(Math.max(inSec, inSec + played - frameSec));
+}
+
+/**
+ * The shot that plays immediately before `sceneId` in the cut (by start time),
+ * or null for the first shot.
+ */
+export function previousShot(project, sceneId) {
+  const timed = (project?.scenes || [])
+    .filter((s) => sceneHasAuthoredSpan(s))
+    .sort((a, b) => a.startSec - b.startSec);
+  const idx = timed.findIndex((s) => s.sceneId === sceneId);
+  return idx > 0 ? timed[idx - 1] : null;
+}

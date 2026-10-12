@@ -246,6 +246,19 @@ describe('submitVideoGenJob', () => {
       expect(params.generateAudio).toBeUndefined();
     });
 
+    it('asks for the project aspect and crops the clip frames to it (a 9:16 project)', async () => {
+      mocks.prepareVideoGenParams.mockResolvedValue(falPrepared());
+      mocks.getMusicVideoProject.mockResolvedValue({ id: 'mv-1', scenes: [{ sceneId: 'mvs-1' }], treatment: { brief: { aspectRatio: '9:16' } } });
+      await submitVideoGenJob({ prompt: 'singer', backend: 'fal', falModelId: 'fal-ai/bytedance/omnihuman/v1.5', musicVideo, mode: 'image' }, {});
+      expect(mocks.enqueueJob.mock.calls[0][0].params).toMatchObject({ aspectRatio: '9:16', frameAspect: '9:16' });
+    });
+
+    it('leaves a clip outside a music video at its own aspect', async () => {
+      mocks.prepareVideoGenParams.mockResolvedValue(falPrepared());
+      await submitVideoGenJob({ prompt: 'a fox', backend: 'fal', mode: 'image' }, {});
+      expect(mocks.enqueueJob.mock.calls[0][0].params).not.toHaveProperty('frameAspect');
+    });
+
     it('refuses a performance shot the backend cannot render and releases what was staged', async () => {
       const prepared = { ...falPrepared(), backend: 'grok', grok: { grokPath: '/example/grok' } };
       mocks.prepareVideoGenParams.mockResolvedValue(prepared);
@@ -255,6 +268,51 @@ describe('submitVideoGenJob', () => {
       await expect(submitVideoGenJob({ prompt: 'singer', backend: 'grok', musicVideo }, {})).rejects.toBe(refusal);
       expect(prepared.cleanupStaged).toHaveBeenCalledTimes(1);
       expect(mocks.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    describe('on local LTX', () => {
+      const ltx = { id: 'ltx25-example', name: 'LTX-2.5 Example', runtime: 'ltx25', frameStride: 8, maxNumFrames: 1017 };
+      const slice = '/example/uploads/mv-performance-2.wav';
+      const shotInstruction = {
+        version: 2, shotMode: 'performance', audioWindow: { startSec: 2.003, endSec: 6.203, durationSec: 4.2 },
+        edit: { inSec: 0, outSec: 4.2, targetSec: 4.2 },
+      };
+      beforeEach(() => {
+        mocks.preparePerformanceShot.mockResolvedValue({ audioFilePath: slice, shotInstruction, modelId: null, resolution: null, enableTranscription: false });
+      });
+
+      it('renders the song window as LTX audio-to-video on a canvas that covers it', async () => {
+        mocks.prepareVideoGenParams.mockResolvedValue(localPrepared({
+          effectiveModel: ltx, mode: 'image', sourceImagePath: '/example/images/frame.png', uploadedTempPaths: ['/example/uploads/frame.png'],
+        }));
+        await submitVideoGenJob({ prompt: 'singer', backend: 'local', modelId: ltx.id, mode: 'image', disableAudio: true, fps: 24, musicVideo }, {});
+        const { params } = mocks.enqueueJob.mock.calls[0][0];
+        // 4.2 s at 24 fps needs 102 frames; the LTX 8n+1 grid rounds that to 105.
+        expect(params).toMatchObject({
+          mode: 'a2v', numFrames: 105, audioFilePath: slice, audioStartSec: 0, disableAudio: false, shotInstruction,
+          uploadedTempPaths: ['/example/uploads/frame.png', slice],
+        });
+        expect(params).not.toHaveProperty('lipSync');
+      });
+
+      it('renders a local cutaway silent unless the song conditions it', async () => {
+        mocks.preparePerformanceShot.mockResolvedValue(null);
+        mocks.prepareVideoGenParams.mockResolvedValue(localPrepared({ effectiveModel: ltx, mode: 'image' }));
+        await submitVideoGenJob({ prompt: 'skyline', backend: 'local', mode: 'image', musicVideo }, {});
+        mocks.prepareVideoGenParams.mockResolvedValue(localPrepared({ effectiveModel: ltx, mode: 'a2v' }));
+        await submitVideoGenJob({ prompt: 'skyline', backend: 'local', mode: 'a2v', musicVideo }, {});
+        await submitVideoGenJob({ prompt: 'skyline', backend: 'local', mode: 'a2v' }, {});
+        expect(mocks.enqueueJob.mock.calls.map(([job]) => job.params.disableAudio)).toEqual([true, false, false]);
+      });
+
+      it('refuses a local model without audio-to-video and releases the slice and staged inputs', async () => {
+        const prepared = localPrepared({ effectiveModel: { id: 'wan-example', name: 'Example Wan', runtime: 'wan22' }, mode: 'image' });
+        mocks.prepareVideoGenParams.mockResolvedValue(prepared);
+        await expect(submitVideoGenJob({ prompt: 'singer', backend: 'local', mode: 'image', musicVideo }, {}))
+          .rejects.toMatchObject({ status: 400, code: 'MUSIC_VIDEO_PERFORMANCE_UNSUPPORTED', message: expect.stringMatching(/Example Wan cannot lip-sync/) });
+        expect(prepared.cleanupStaged).toHaveBeenCalledTimes(1);
+        expect(mocks.enqueueJob).not.toHaveBeenCalled();
+      });
     });
 
     it('refuses a kickoff tagged for a revision that has since closed, as the last step before the queue write (#9011)', async () => {
@@ -341,14 +399,22 @@ describe('shot intent at the video submission boundary', () => {
     mocks.getMusicVideoProject.mockResolvedValue(project());
   });
 
-  it('queues current action/reaction, actual words/onsets and immutable intent even when the client omitted it', async () => {
+  it('queues current action/reaction and immutable intent even when the client omitted it', async () => {
     await submitVideoGenJob({ prompt: 'Legacy free text', musicVideo: { projectId: 'p', sceneId: 's' } }, {});
     const { params } = mocks.enqueueJob.mock.calls[0][0];
     expect(params.prompt).toContain('Legacy free text');
     expect(params.prompt).toContain('Reaction 1.000s–2.000s: Listener');
-    expect(params.prompt).toContain('Word 0.500s–1.500s: Stay');
-    expect(params.prompt).toContain('Musical onsets: 0.750s');
     expect(params.shotInstruction.actionContract).toEqual(contract);
+  });
+
+  // Regression: a model that hears no audio acted out song cues and look words ("film falling onto the bed").
+  it('sends a take that hears no audio plain physical motion, without song cues or look words', async () => {
+    mocks.getMusicVideoProject.mockResolvedValue({ ...project(), concept: { style: 'grainy 35mm Kodak look' } });
+    await submitVideoGenJob({ prompt: 'Her head drops onto the pillow on "Sleep", grainy 35mm Kodak look, camera holds', musicVideo: { projectId: 'p', sceneId: 's' } }, {});
+    const { params } = mocks.enqueueJob.mock.calls[0][0];
+    expect(params.prompt).toContain('Her head drops onto the pillow, camera holds');
+    expect(params.prompt).toContain('Action 0.000s–1.000s: Singer — Offers a hand');
+    expect(params.prompt).not.toMatch(/Sleep|Kodak|grain|Word \d|Musical onsets/);
   });
 
   it('shifts contract and words into a padded performance window exactly once', async () => {
@@ -359,6 +425,7 @@ describe('shot intent at the video submission boundary', () => {
     const { params } = mocks.enqueueJob.mock.calls[0][0];
     expect(params.prompt).toContain('Action 1.500s–2.500s: Singer');
     expect(params.prompt).toContain('Word 2.000s–3.000s: Stay');
+    expect(params.prompt).toContain('Musical onsets: 2.250s');
     expect(params.prompt).not.toContain('stale intent');
     expect(params.prompt).toContain('Keep moving');
     expect(params.shotInstruction.edit.inSec).toBe(1.5);

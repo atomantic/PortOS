@@ -5,7 +5,7 @@ import toast from '../ui/Toast';
 import useProviderModels from '../../hooks/useProviderModels.js';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import { shouldIgnoreGlobalKey } from '../../lib/a11yKeyboard.js';
-import { prepareAnimationHtml } from '../codeAnimation/CodeAnimationPreview.jsx';
+import useGeneratedPreview from '../../hooks/useGeneratedPreview.js';
 import { generateMusicVideoCode, getMusicVideoCodeDocument, regenerateMusicVideoCodeSection } from '../../services/apiMusicVideo.js';
 
 const buttonCls = 'flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
@@ -25,7 +25,6 @@ export default function CodeVideoPanel({ project, audioUrl, onProject, productio
   const [t, setT] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [looping, setLooping] = useState(false);
-  const iframeRef = useRef(null);
   const audioRef = useRef(null);
   const tRef = useRef(0);
   const {
@@ -59,17 +58,19 @@ export default function CodeVideoPanel({ project, audioUrl, onProject, productio
     return undefined;
   }, [section, requested, setSearchParams]);
 
-  const srcDoc = useMemo(() => (doc?.html ? prepareAnimationHtml(doc.html, 'MV_CODE_AUDIO', null) : null), [doc]);
+  const revision = String(project.composition?.codeVideo?.generatedAt || '');
+  const request = useMemo(() => ({ kind: 'music-video-code', projectId: project.id, revision }), [project.id, revision]);
+  const preview = useGeneratedPreview({ active: true, request });
 
   const seek = useCallback((time) => {
     const next = Math.min(Math.max(0, time), duration || time);
     tRef.current = next;
     setT(next);
-    iframeRef.current?.contentWindow?.postMessage({ type: 'mv-code:seek', t: next }, '*');
+    preview.seek(next);
     if (audioRef.current && Math.abs((audioRef.current.currentTime || 0) - next) > 0.05) {
       audioRef.current.currentTime = next;
     }
-  }, [duration]);
+  }, [duration, preview.seek]);
 
   useEffect(() => {
     const step = (dir) => seek(tRef.current + dir / fps);
@@ -120,13 +121,13 @@ export default function CodeVideoPanel({ project, audioUrl, onProject, productio
         posted = frameIndex;
         tRef.current = time;
         setT(time);
-        iframeRef.current?.contentWindow?.postMessage({ type: 'mv-code:seek', t: time }, '*');
+        preview.seek(time);
       }
       handle = requestAnimationFrame(tick);
     };
     handle = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(handle);
-  }, [playing, looping, section, fps]);
+  }, [playing, looping, section, fps, preview.seek]);
 
   const providerLabel = selectedProvider?.name || selectedProviderId || 'the active provider';
   const modelLabel = selectedModel ? ` / ${selectedModel}` : '';
@@ -218,11 +219,14 @@ export default function CodeVideoPanel({ project, audioUrl, onProject, productio
       </div>
       {generateDisabledReason && <p className="text-xs text-port-error" role="status">{generateDisabledReason}</p>}
       {error && <p className="text-xs text-port-error" role="alert">{error}</p>}
-      <div className="overflow-hidden rounded border border-port-border bg-black" style={{ aspectRatio: doc?.width && doc?.height ? `${doc.width} / ${doc.height}` : '16 / 9', maxHeight: '70vh' }}>
-        {srcDoc ? (
-          <iframe ref={iframeRef} title="Code-rendered preview" sandbox="allow-scripts" srcDoc={srcDoc} className="h-full w-full" />
+      {(preview.status === 'unavailable' || preview.status === 'error') && (
+        <p className="text-xs text-port-error" role="alert">{preview.reason || 'Isolated preview is unavailable.'}</p>
+      )}
+      <div title="Code-rendered preview" className="overflow-hidden rounded border border-port-border bg-black" style={{ aspectRatio: doc?.width && doc?.height ? `${doc.width} / ${doc.height}` : '16 / 9', maxHeight: '70vh' }}>
+        {preview.frameUrl ? (
+          <img alt="" src={preview.frameUrl} className="h-full w-full object-contain" />
         ) : (
-          <p className="p-3 text-xs text-port-text-muted">{error ? '' : 'Building the preview…'}</p>
+          <p className="p-3 text-xs text-port-text-muted">{error || preview.status === 'error' ? '' : 'Building the preview…'}</p>
         )}
       </div>
       <div className="flex flex-wrap items-center gap-2">

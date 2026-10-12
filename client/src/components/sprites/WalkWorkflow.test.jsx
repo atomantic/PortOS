@@ -256,7 +256,7 @@ describe('WalkWorkflow render-lane picker (#4876)', () => {
   });
 
   it('describes the clip length in LOCAL terms when the local lane is selected', () => {
-    // The grok copy names 6s/10s clips, which is not what H3 renders.
+    // The grok copy names 6/10/15 s clips, which is not what H3 renders.
     renderPanel({ providers: PROVIDERS, provider: 'local', onProviderChange: vi.fn() });
     expect(screen.getByLabelText(/^Clip/).closest('label')).toHaveAttribute(
       'title', expect.stringContaining('fixed frame grid'),
@@ -481,9 +481,9 @@ describe('WalkWorkflow observable render', () => {
 describe('WalkWorkflow authoring controls', () => {
   it('offers a set-level Cycle target, Preview speed, and grok-real Clip options', () => {
     renderRun({ id: 'walk-east-deadbeef', direction: 'east', status: 'error', postprocessError: 'x' });
-    // Clip length is now just grok's real 6s/10s options (shorter was a no-op).
+    // Clip length is now just grok's real 6/10/15 s options (shorter was a no-op).
     const clip = screen.getByRole('combobox', { name: /Clip/ });
-    expect([...clip.options].map((o) => o.value)).toEqual(['6', '10']);
+    expect([...clip.options].map((o) => o.value)).toEqual(['6', '10', '15']);
     // Frame count + speed are ONE set-level target now (#2985), not per-render
     // inputs that can drift between directions.
     expect(screen.getByRole('combobox', { name: /Cycle target/ })).toBeTruthy();
@@ -910,7 +910,7 @@ describe('WalkWorkflow reprocess + reopen', () => {
 });
 
 // The delivered-clip-length readout (#3022). grok's image_to_video offers only
-// 6s/10s and renders 6s for anything shorter, so the requested length is not a
+// 6/10/15 s and renders 6s for anything shorter, so the requested length is not a
 // promise — the card reports what the server probed off the file, and says so
 // loudly when the two disagree.
 describe('delivered clip length', () => {

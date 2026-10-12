@@ -238,3 +238,226 @@ describe('refreshSongStyleFromSuno', () => {
     expect(updateTrack).toHaveBeenCalledWith('track-1', { prompt: 'synth-pop, -metal' });
   });
 });
+
+
+describe('automation respects persisted shot locks (#11218)', () => {
+  it('records run edits, cuts and merges as proposals, allows open edits and director edits', async () => {
+    const { applySceneUpdate, removeScene, mergeNextScene } = await import('./projectsLogic.js');
+    const { setShotLocks, shotLocks } = await import('./productionReview.js');
+    const p = await projects.createProject({ name: 'Locks' });
+    const a = await projects.addProjectScene(p.id, { startSec: 0, endSec: 2, prompt: 'Keep this' });
+    const b = await projects.addProjectScene(p.id, { startSec: 2, endSec: 4, prompt: 'Open shot' });
+    await projects.mutateProjectRecord(p.id, current => ({ project: setShotLocks(current, { sceneIds: [a.sceneId], locked: true }) }));
+    const attempt = await projects.mutateProjectRecord(p.id, current => applySceneUpdate(current, a.sceneId, { prompt: 'Automation edit' }), { source: 'orchestrator' });
+    expect(attempt.project.scenes[0].prompt).toBe('Keep this');
+    expect(attempt.project.productionReview.feedback.at(-1)).toMatchObject({ target: a.sceneId, decision: 'comment', text: expect.stringContaining('Automation edit') });
+    for (const transform of [current => ({ project: removeScene(current, a.sceneId) }), current => mergeNextScene(current, a.sceneId)]) {
+      const out = await projects.mutateProjectRecord(p.id, transform, { source: 'production-run' });
+      expect(out.project.scenes.map(s => s.sceneId)).toEqual([a.sceneId, b.sceneId]);
+      expect(shotLocks(out.project)[a.sceneId]).toBe('locked');
+    }
+    await projects.mutateProjectRecord(p.id, current => applySceneUpdate(current, b.sceneId, { prompt: 'Allowed run edit' }), { source: 'orchestrator' });
+    expect((await projects.getProject(p.id)).scenes[1].prompt).toBe('Allowed run edit');
+    await projects.updateScene(p.id, a.sceneId, { prompt: 'Director edit' });
+    expect(shotLocks(await projects.getProject(p.id))).toEqual({ [a.sceneId]: 'changed', [b.sceneId]: 'open' });
+  });
+
+  it('keeps locked storyboard rows and the original board when a planner replaces its IDs', async () => {
+    const { setShotLocks, shotLocks } = await import('./productionReview.js');
+    const { replaceScenes } = await import('./projectsLogic.js');
+    const p = await projects.createProject({ name: 'Locked plan' });
+    const scene = await projects.addProjectScene(p.id, { startSec: 0, endSec: 4, prompt: 'Original' });
+    await projects.mutateProjectRecord(p.id, current => ({ project: setShotLocks({ ...current,
+      productionReview: { draft: { storyboard: [{ sceneId: scene.sceneId, action: 'Stay' }] } } }, { sceneIds: [scene.sceneId], locked: true }) }));
+    const revised = await projects.mutateProjectRecord(p.id, current => ({ project: { ...current,
+      productionReview: { ...current.productionReview, draft: { storyboard: [{ sceneId: scene.sceneId, action: 'Move' }] } } } }), { source: 'orchestrator' });
+    expect(revised.project.productionReview.draft.storyboard[0].action).toBe('Stay');
+    const replaced = await projects.mutateProjectRecord(p.id, current => {
+      const outcome = replaceScenes(current, [{ startSec: 0, endSec: 2, prompt: 'New span' }]);
+      outcome.project.composition = { ...current.composition, mode: 'composed' };
+      return outcome;
+    }, { source: 'shot-planner' });
+    expect(replaced.project.scenes.map(s => s.sceneId)).toEqual([scene.sceneId]);
+    expect(replaced).toMatchObject({ rejected: true, replaced: 0 });
+    expect(replaced.project.composition?.mode).toBe(p.composition?.mode);
+    expect(replaced.scenes).toEqual((await projects.getProject(p.id)).scenes);
+    expect(shotLocks(await projects.getProject(p.id))[scene.sceneId]).toBe('locked');
+    expect(replaced.project.productionReview.feedback).toHaveLength(2);
+  });
+
+  it('checks fresh locks when an asynchronous repair lands and preserves generated clip output', async () => {
+    const { setShotLocks, shotLocks } = await import('./productionReview.js');
+    const p = await projects.createProject({ name: 'Repair race' });
+    const scene = await projects.addProjectScene(p.id, { startSec: 0, endSec: 2, prompt: 'Approved input' });
+    await projects.mutateProjectRecord(p.id, current => ({ project: setShotLocks(current, { sceneIds: [scene.sceneId], locked: true }) }));
+    const repair = await projects.mutateProjectRecord(p.id, current => ({ project: { ...current, scenes: current.scenes.map(s => ({ ...s, clipFixes: { text: 'New motion' } })) } }), { source: 'orchestrator' });
+    expect(repair.project.scenes[0].clipFixes).toBeUndefined();
+    const frame = await projects.appendSceneTakes(p.id, scene.sceneId, [{ kind: 'image', assetId: 'candidate.png', source: 'generated' }]);
+    expect(frame.scene.referenceImageId).toBeNull();
+    expect(frame.scene.takes.some(take => take.assetId === 'candidate.png')).toBe(true);
+    expect(shotLocks(await projects.getProject(p.id))[scene.sceneId]).toBe('locked');
+    const clip = await projects.mutateProjectRecord(p.id, current => ({ project: { ...current, scenes: current.scenes.map(s => ({ ...s, videoHistoryId: 'new-clip' })) } }), { source: 'production-run' });
+    expect(clip.project.scenes[0].videoHistoryId).toBe('new-clip');
+    expect(shotLocks(clip.project)[scene.sceneId]).toBe('locked');
+  });
+});
+
+describe('a locked shot video', () => {
+  // Uniquely catches a video lock that only labels the shot: edits, split, merge, take choice and a run must all be refused.
+  it('freezes the shot for the director and for automation until its video is unlocked', async () => {
+    const { setShotLocks, clipLocks } = await import('./productionReview.js');
+    const p = await projects.createProject({ name: 'Video lock' });
+    const scene = await projects.addProjectScene(p.id, { startSec: 0, endSec: 2, prompt: 'Approved' });
+    await projects.updateScene(p.id, scene.sceneId, { videoHistoryId: 'clip-1' });
+    const lock = (locked, stage) => projects.mutateProjectRecord(p.id, current => ({ project: setShotLocks(current, { sceneIds: [scene.sceneId], locked, stage }) }));
+    await lock(true, 'still');
+    await lock(true, 'video');
+    expect(clipLocks(await projects.getProject(p.id))[scene.sceneId]).toBe('locked');
+    await expect(projects.updateScene(p.id, scene.sceneId, { prompt: 'Director edit' })).rejects.toMatchObject({ code: 'MUSIC_VIDEO_SHOT_LOCKED' });
+    await expect(projects.updateScene(p.id, scene.sceneId, { videoHistoryId: 'clip-2' })).rejects.toMatchObject({ code: 'MUSIC_VIDEO_SHOT_LOCKED' });
+    await expect(projects.deleteScene(p.id, scene.sceneId)).rejects.toMatchObject({ code: 'MUSIC_VIDEO_SHOT_LOCKED' });
+    await expect(projects.splitProjectScene(p.id, scene.sceneId, { atSec: 1 })).rejects.toMatchObject({ code: 'MUSIC_VIDEO_SHOT_LOCKED' });
+    await expect(projects.selectSceneTake(p.id, scene.sceneId, 'take-1')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_SHOT_LOCKED' });
+    await projects.addProjectScene(p.id, { startSec: 2, endSec: 3, prompt: 'After' });
+    await expect(projects.mergeProjectNextScene(p.id, scene.sceneId)).rejects.toMatchObject({ code: 'MUSIC_VIDEO_SHOT_LOCKED' });
+    // A field that doesn't change what the shot shows stays editable.
+    await projects.updateScene(p.id, scene.sceneId, { prompt: 'Approved', textZone: 'upper' });
+    const run = await projects.mutateProjectRecord(p.id, current => ({ project: { ...current, scenes: current.scenes.map(s => ({ ...s, videoHistoryId: 'run-clip' })) } }), { source: 'production-run' });
+    expect(run.project.scenes[0].videoHistoryId).toBe('clip-1');
+    await lock(false, 'video');
+    await projects.updateScene(p.id, scene.sceneId, { videoHistoryId: 'clip-2' });
+    expect((await projects.getProject(p.id)).scenes[0].videoHistoryId).toBe('clip-2');
+  });
+});
+
+// Hold a public mutation immediately before the real backend acquires its write
+// queue, allowing another request to commit a video lock first. Both old direct
+// backend methods and the generic transactional path pass through this barrier.
+async function pauseSceneWrite(start) {
+  const backend = await import('./projectsFile.js');
+  let entered;
+  let resume;
+  const reached = new Promise(resolve => { entered = resolve; });
+  const released = new Promise(resolve => { resume = resolve; });
+  const spies = ['mutateProjectRecord', 'updateScene', 'deleteScene', 'selectSceneTake', 'reviewSceneTake'].map(name => {
+    const original = backend[name];
+    return vi.spyOn(backend, name).mockImplementationOnce(async (...args) => {
+      entered();
+      await released;
+      return original(...args);
+    });
+  });
+  const result = start();
+  // Attach immediately: rejected service calls must not become unhandled while
+  // the test is committing the intervening lock.
+  const settled = result.then(value => ({ value }), error => ({ error }));
+  await reached;
+  spies.forEach(spy => spy.mockRestore());
+  return { settled, resume };
+}
+
+describe('video lock transactions', () => {
+  // Each case crosses a distinct dispatcher mutation path. A preflight-only
+  // check lets a completed lock be overwritten after this barrier releases.
+  it.each(['edit', 'delete', 'split', 'select'])('refuses a pending %s when another request locks the video first', async (operation) => {
+    const { setShotLocks } = await import('./productionReview.js');
+    const p = await projects.createProject({ name: 'Concurrent video lock' });
+    const scene = await projects.addProjectScene(p.id, { startSec: 0, endSec: 2, prompt: 'Keep this shot' });
+    const { appended } = await projects.appendSceneTakes(p.id, scene.sceneId, [
+      { kind: 'video', assetId: 'approved-clip' }, { kind: 'video', assetId: 'alternate-clip' },
+    ]);
+    const operations = {
+      edit: () => projects.updateScene(p.id, scene.sceneId, { prompt: 'Pending edit' }),
+      delete: () => projects.deleteScene(p.id, scene.sceneId),
+      split: () => projects.splitProjectScene(p.id, scene.sceneId, { atSec: 1 }),
+      select: () => projects.selectSceneTake(p.id, scene.sceneId, appended[1].takeId),
+    };
+    const pending = await pauseSceneWrite(operations[operation]);
+    let locked;
+    try {
+      locked = (await projects.mutateProjectRecord(p.id, current => ({ project: setShotLocks(
+        setShotLocks(current, { sceneIds: [scene.sceneId], locked: true, stage: 'still' }),
+        { sceneIds: [scene.sceneId], locked: true, stage: 'video' },
+      ) }))).project;
+    } finally {
+      pending.resume();
+    }
+    expect(await pending.settled).toMatchObject({ error: { code: 'MUSIC_VIDEO_SHOT_LOCKED' } });
+    expect((await projects.getProject(p.id)).scenes).toEqual(locked.scenes);
+    await projects.mutateProjectRecord(p.id, current => ({ project: setShotLocks(current, { sceneIds: [scene.sceneId], locked: false, stage: 'video' }) }));
+    await expect(operations[operation]()).resolves.toBeDefined();
+  });
+
+  it('checks the actual merge neighbor after a concurrent reorder and lock', async () => {
+    const { setShotLocks } = await import('./productionReview.js');
+    const p = await projects.createProject({ name: 'Merge neighbor race' });
+    const { scenes: [a, b, c] } = await projects.addProjectScenes(p.id, [
+      { startSec: 0, endSec: 1, prompt: 'First' },
+      { startSec: 1, endSec: 2, prompt: 'Original next' },
+      { startSec: 2, endSec: 3, prompt: 'New next' },
+    ]);
+    await projects.updateScene(p.id, c.sceneId, { videoHistoryId: 'keep-clip' });
+    const pending = await pauseSceneWrite(() => projects.mergeProjectNextScene(p.id, a.sceneId));
+    let locked;
+    try {
+      await projects.reorderProjectScenes(p.id, [a.sceneId, c.sceneId, b.sceneId]);
+      locked = (await projects.mutateProjectRecord(p.id, current => ({ project: setShotLocks(
+        setShotLocks(current, { sceneIds: [c.sceneId], locked: true, stage: 'still' }),
+        { sceneIds: [c.sceneId], locked: true, stage: 'video' },
+      ) }))).project;
+    } finally {
+      pending.resume();
+    }
+    expect(await pending.settled).toMatchObject({ error: { code: 'MUSIC_VIDEO_SHOT_LOCKED', context: { sceneId: c.sceneId } } });
+    expect((await projects.getProject(p.id)).scenes).toEqual(locked.scenes);
+    await projects.mutateProjectRecord(p.id, current => ({ project: setShotLocks(current, { sceneIds: [c.sceneId], locked: false, stage: 'video' }) }));
+    const merged = await projects.mergeProjectNextScene(p.id, a.sceneId);
+    expect(merged.project.scenes.map(scene => scene.sceneId)).toEqual([a.sceneId, b.sceneId]);
+    expect(merged.scene.endSec).toBe(locked.scenes[1].endSec);
+  });
+
+  it('refuses a reorder that would retime a locked video, while allowing no-op and unlocked reorders', async () => {
+    const { setShotLocks } = await import('./productionReview.js');
+    const p = await projects.createProject({ name: 'Locked timeline slot' });
+    const { scenes: [a, b] } = await projects.addProjectScenes(p.id, [
+      { startSec: 0, endSec: 1, prompt: 'Keep timing' },
+      { startSec: 1, endSec: 2, prompt: 'Other shot' },
+    ]);
+    await projects.updateScene(p.id, a.sceneId, { videoHistoryId: 'approved-clip' });
+    await projects.mutateProjectRecord(p.id, current => ({ project: setShotLocks(
+      setShotLocks(current, { sceneIds: [a.sceneId], locked: true, stage: 'still' }),
+      { sceneIds: [a.sceneId], locked: true, stage: 'video' },
+    ) }));
+    await expect(projects.reorderProjectScenes(p.id, [b.sceneId, a.sceneId]))
+      .rejects.toMatchObject({ code: 'MUSIC_VIDEO_SHOT_LOCKED' });
+    const unchanged = await projects.reorderProjectScenes(p.id, [a.sceneId, b.sceneId]);
+    expect(unchanged.scenes[0]).toMatchObject({ sceneId: a.sceneId, startSec: 0, endSec: 1, videoHistoryId: 'approved-clip' });
+    await projects.mutateProjectRecord(p.id, current => ({ project: setShotLocks(current, { sceneIds: [a.sceneId], locked: false, stage: 'video' }) }));
+    const reordered = await projects.reorderProjectScenes(p.id, [b.sceneId, a.sceneId]);
+    expect(reordered.scenes[1]).toMatchObject({ sceneId: a.sceneId, startSec: 1, endSec: 2, videoHistoryId: 'approved-clip' });
+  });
+
+  it('keeps a selected locked take when rejected, while allowing notes and other candidate reviews', async () => {
+    const { setShotLocks } = await import('./productionReview.js');
+    const p = await projects.createProject({ name: 'Locked take review' });
+    const scene = await projects.addProjectScene(p.id, { startSec: 0, endSec: 2, prompt: 'Keep this' });
+    const { appended } = await projects.appendSceneTakes(p.id, scene.sceneId, [
+      { kind: 'video', assetId: 'approved-clip' }, { kind: 'video', assetId: 'candidate-clip' },
+    ]);
+    await projects.mutateProjectRecord(p.id, current => ({ project: setShotLocks(
+      setShotLocks(current, { sceneIds: [scene.sceneId], locked: true, stage: 'still' }),
+      { sceneIds: [scene.sceneId], locked: true, stage: 'video' },
+    ) }));
+    await expect(projects.reviewSceneTake(p.id, scene.sceneId, appended[0].takeId, { status: 'rejected' }))
+      .rejects.toMatchObject({ code: 'MUSIC_VIDEO_SHOT_LOCKED' });
+    await projects.reviewSceneTake(p.id, scene.sceneId, appended[0].takeId, { note: 'Keep the approved take' });
+    const reviewed = await projects.reviewSceneTake(p.id, scene.sceneId, appended[1].takeId, { status: 'rejected' });
+    expect(reviewed.videoHistoryId).toBe('approved-clip');
+    expect(reviewed.takes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ takeId: appended[0].takeId, status: 'candidate', note: 'Keep the approved take' }),
+      expect.objectContaining({ takeId: appended[1].takeId, status: 'rejected' }),
+    ]));
+    await projects.mutateProjectRecord(p.id, current => ({ project: setShotLocks(current, { sceneIds: [scene.sceneId], locked: false, stage: 'video' }) }));
+    expect((await projects.reviewSceneTake(p.id, scene.sceneId, appended[0].takeId, { status: 'rejected' })).videoHistoryId).toBeNull();
+  });
+});

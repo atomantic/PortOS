@@ -148,7 +148,7 @@ function directedPrompts(shot, generated = {}, sets = []) {
   ].filter(Boolean).join(' ');
   const motion = generated.prompt || (shot.visualLayer === 'card' ? 'Choreograph the graphic scene around the supplied musical anchors; give subject, props and camera a readable action and payoff. Use a hold only when it serves the chosen energy target.'
     : shot.shotMode === 'performance' ? `Perform to the source audio: ${shot.lyricText}`
-      : `Stage a readable subject action and camera response for ${shot.lyricText || shot.visualIntent || shot.sectionLabel || 'this instrumental passage'}, timed to the supplied musical anchors and chosen energy target.`);
+      : `Stage a readable subject action and camera response for ${shot.visualIntent || shot.sectionLabel || 'this instrumental passage'}, at the chosen energy target.`);
   return { framePrompt: frame.slice(0, SCENE_TEXT_MAX), prompt: motion.slice(0, SCENE_TEXT_MAX) };
 }
 
@@ -229,11 +229,11 @@ ${shotLines}
 
 For EACH shot above, propose a timed composition for its assigned medium (code-authored worlds, selected stills or footage):
 - "framePrompt": the opening reference still — subject, setting, lighting, composition. Keep it concrete and visual.
-- "prompt": the motion for that shot — subject action, staging and mood — building on the frame. Higher-energy sections read more kinetic; calmer sections more lingering.
+- "prompt": the motion for that shot as plain physical action — who moves, how, where the camera goes and the end state — building on the frame. Higher-energy sections read more kinetic; calmer sections more lingering. The video model sees only the frame and usually hears nothing, and it acts out every word: no song times, beats, lyric cues ("on 'Sleep'") or song references, and no look words (film stock, grain, lens, grade, palette), which the frame already carries.
 - "camera": the shot's camera move from the vocabulary below, with its speed, end framing, whether it lands on the downbeat, and (for a static camera) the reason.
 - Shots in the same section are one edited sequence: keep subject and setting continuous, but vary framing (wide / medium / close), angle, or action from shot to shot so consecutive shots cut rather than repeat.
 - The OPENING HOOK shot must grab attention immediately.
-- In each motion prompt, name absolute start/end times and the supplied musical anchors for subject action, prop transformation, camera framing/movement and any permitted graphic typography. Follow the saved energy target; this proposal still needs human review. Repeated choruses must develop the action, scale or staging instead of replaying the same pose. Include anticipation, payoff and recovery; motivated holds and long takes are valid. Do not replace choreography with continuous camera drift, geometry presence, subtitles alone or an arbitrary fast-cut quota.
+- Use each shot's absolute times and musical anchors to decide what happens and when the camera lands (its "onBeat"), but keep them out of the motion prompt text. Follow the saved energy target; this proposal still needs human review. Repeated choruses must develop the action, scale or staging instead of replaying the same pose. Include anticipation, payoff and recovery; motivated holds and long takes are valid. Do not replace choreography with continuous camera drift, geometry presence, subtitles alone or an arbitrary fast-cut quota.
 ${direction ? `- "subject": who the frame shows. "lead" for the protagonist, "none" when no person is in frame (an empty set, a title card, an object insert), or a short description of whoever else is in frame (for example "a desk clerk"). Each frame opens with this subject, and only the lead wears the assigned look, so set it on every shot; a performance is always "lead".
 ${direction.sets?.length ? '- "set": only when a shot belongs in a different listed set than its assigned one, that set\'s exact name; otherwise leave it out.\n' : ''}` : ''}${revising ? '- These shots already exist. Revise each one\'s current frame and motion to address the unresolved review feedback, keeping what the feedback does not ask to change.\n' : ''}- If an energy target or required audio timing is absent, identify it as a director decision to review rather than inventing analysis or claiming the plan is approved.
 ${hasLyrics ? '- Let the lyric lines inform the imagery and emotion of their shot (interpret, do not illustrate word-for-word). Never render the lyrics as on-screen text in footage; assigned card layers use their explicit card text.\n' : ''}${hasDelivery ? '- Follow the delivery directions: spoken or whispered lines play as intimate close-ups; shouts land as hard-hitting cuts or impacts; a silence or stop is a held, frozen or cut-to-black beat.\n' : ''}- Keep the assigned layer and shot mode: performance uses source-audio lip-sync and a frontal medium close-up with the mouth visible; cutaways show narrative action without lip-sync; cards are graphic beats.\n- Honor any director intent given for a shot. Instrumental shots carry no singing or lip-sync.
@@ -383,7 +383,12 @@ export async function planProject(id, { seedPrompts = true, providerId, model, e
   let llmRoute = null;
   let proposedCameras = new Map();
   if (seedPrompts) {
-    const guidance = [project.automation?.guidance?.trim(), directive?.trim()].filter(Boolean).join('\n');
+    // The run's brief comes first; the project's live guidance is edited later
+    // and wins where they disagree (a director's mid-run course change).
+    const live = project.automation?.guidance?.trim();
+    const guidance = directive?.trim()
+      ? [`Run brief:\n${directive.trim()}`, live && `Current project guidance (takes precedence over the brief):\n${live}`].filter(Boolean).join('\n\n')
+      : live;
     const planning = directive?.trim() ? { ...project, automation: { ...project.automation, guidance } } : project;
     const { seeded, reason, route } = await tryProposeScenePrompts(planning, shots, { providerId, model, effort });
     llmRoute = route || null;
@@ -422,11 +427,11 @@ export async function planProject(id, { seedPrompts = true, providerId, model, e
   const hasCards = sceneInputs.some((s) => s.visualLayer === 'card');
   // Persist card scenes and the mode that renders them in the same transaction.
   // Read the current composition under the lock so concurrent edits survive.
-  const { project: persisted, scenes } = await persistPlan(id, sceneInputs, { hasCards, replace: mode === 'replace' });
+  const { project: persisted, scenes, rejected } = await persistPlan(id, sceneInputs, { hasCards, replace: mode === 'replace' });
   // Only a project with an automation brief keeps the route it planned on.
   const updated = (persisted.automation && await recordLlmRoute(id, 'plan', llmRoute)) || persisted;
   console.log(`🪄 Music Video plan: seeded ${scenes.length} scene${scenes.length === 1 ? '' : 's'} for ${id} (prompts ${promptsSeeded ? 'seeded' : `skipped: ${promptsSkippedReason || 'n/a'}`})`);
-  return { project: updated, scenesAdded: scenes.length, promptsSeeded, promptsSkippedReason, pacing, llmRoute };
+  return { project: updated, scenesAdded: rejected ? 0 : scenes.length, promptsSeeded, promptsSkippedReason, pacing, llmRoute };
 }
 
 const castSets = (project) => (project.castAndSets?.status === 'skipped' ? null : project.castAndSets?.direction?.sets) || [];
@@ -504,7 +509,8 @@ export async function proposeShotRevisions(project, feedback, { providerId, mode
 }
 
 async function persistPlan(id, sceneInputs, { hasCards, replace }) {
-  if (!hasCards && !replace) return addProjectScenes(id, sceneInputs);
+  if (!hasCards && !replace) return addProjectScenes(id, sceneInputs, { source: 'shot-planner' });
+
   const { addScenes, replaceScenes } = await import('./projectsLogic.js');
   const { normalizeComposition } = await import('./composition.js');
   return mutateProjectRecord(id, (current) => {
@@ -514,5 +520,5 @@ async function persistPlan(id, sceneInputs, { hasCards, replace }) {
       outcome.project.composition = normalizeComposition({ ...current.composition, mode: 'composed' });
     }
     return outcome;
-  });
+  }, { source: 'shot-planner' });
 }

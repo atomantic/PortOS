@@ -122,10 +122,10 @@ describe('grokVideoJobParams', () => {
   });
 
   it('rounds a local-lane duration UP to a length grok delivers', () => {
-    // An 8s scene must not silently come back 6s — grok only does 6 or 10.
+    // An 8s scene must not silently come back 6s — grok only does 6, 10 or 15.
     expect(grokVideoJobParams(grokOn, { durationSeconds: 8 }).duration).toBe(10);
     expect(grokVideoJobParams(grokOn, { durationSeconds: 4 }).duration).toBe(6);
-    expect(grokVideoJobParams(grokOn, { durationSeconds: 30 }).duration).toBe(10);
+    expect(grokVideoJobParams(grokOn, { durationSeconds: 30 }).duration).toBe(15);
   });
 
   it('defaults the clip length when none is given', () => {

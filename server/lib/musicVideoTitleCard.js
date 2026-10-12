@@ -8,21 +8,48 @@
  * versions the director may have authored); `titleCardRuntimeSource()` is a
  * page script installed beside the document — in the preview's head and in
  * every render browser (`documentRenderInitScripts`) — that draws the card on
- * its own canvas above the page, re-drawn for every seek. It follows the
- * shared lyric type (lyricType.js): cream fill with an ink outline, no plate,
- * inside the same title-safe insets, so it reads like the lyrics.
+ * its own canvas above the page, re-drawn for every seek. Two looks:
+ *   - `outline` follows the shared lyric type (lyricType.js): cream fill with
+ *     an ink outline, no plate, title first, so it reads like the lyrics;
+ *   - `mtv` is the classic 80s lower third: artist over the quoted title in
+ *     its own colour, then the extra line and year, on a dark plate with a
+ *     coloured bar down its leading edge.
+ * Both sit inside the same title-safe insets and shrink to fit the frame.
+ * Text is drawn exactly as typed (no forced case).
+ *
+ * Fonts: four system/lyric stacks plus bundled OFL faces (TITLE_CARD_FONT_FACES,
+ * files in services/musicVideo/titleCardFonts/). The runtime registers the
+ * bundled faces from data URLs its caller passes in, so the card draws the same
+ * face on every page it rides on, whatever that page itself declares.
  *
  * Every frame is a pure function of song time. Browser-safe, no imports.
  */
 
 export const TITLE_CARD_POSITIONS = Object.freeze(['lower-left', 'lower-right', 'upper-left', 'upper-right', 'lower-center', 'center']);
-export const TITLE_CARD_FONTS = Object.freeze(['display', 'sans', 'serif', 'mono']);
+/**
+ * Bundled title-card faces (SIL OFL 1.1, latin subsets from Fontsource): font id
+ * → the family the runtime registers and the file it is loaded from. The
+ * layout's font stacks name the same families.
+ */
+export const TITLE_CARD_FONT_FACES = Object.freeze({
+  oswald: Object.freeze({ family: 'MV Title Oswald', file: 'oswald-700.woff2' }),
+  audiowide: Object.freeze({ family: 'MV Title Audiowide', file: 'audiowide-400.woff2' }),
+  orbitron: Object.freeze({ family: 'MV Title Orbitron', file: 'orbitron-700.woff2' }),
+  righteous: Object.freeze({ family: 'MV Title Righteous', file: 'righteous-400.woff2' }),
+  pacifico: Object.freeze({ family: 'MV Title Pacifico', file: 'pacifico-400.woff2' }),
+  playfair: Object.freeze({ family: 'MV Title Playfair', file: 'playfair-display-700.woff2' }),
+});
+export const TITLE_CARD_FONTS = Object.freeze(['display', 'sans', 'serif', 'mono', ...Object.keys(TITLE_CARD_FONT_FACES)]);
+export const TITLE_CARD_STYLES = Object.freeze(['outline', 'mtv']);
+/** The `mtv` look's title and bar colours when the card names none. */
+export const TITLE_CARD_MTV_COLORS = Object.freeze({ title: '#f5d33a', accent: '#1fc2e5' });
 export const TITLE_CARD_LIMITS = Object.freeze({
   textMax: 120, yearMax: 20, startMax: 600, windowMin: 0.5, fadeMax: 3, sizeMin: 50, sizeMax: 200,
 });
 export const TITLE_CARD_DEFAULTS = Object.freeze({
   enabled: true, title: '', artist: '', year: '', extra: '', quoteTitle: true,
   startSec: 2, endSec: 8, fadeSec: 0.8, position: 'lower-left', font: 'display', size: 100, color: '#f3ead7',
+  style: 'outline', titleColor: '', accentColor: '',
 });
 
 const clampNum = (value, min, max, fallback) => {
@@ -31,6 +58,7 @@ const clampNum = (value, min, max, fallback) => {
 };
 const cleanText = (value, max) => (typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, max) : '');
 const round3 = (n) => Math.round(n * 1000) / 1000;
+const hexOr = (value, fallback) => (typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value) ? value.toLowerCase() : fallback);
 
 /**
  * A stored title card from any input (null for none). Missing fields take
@@ -55,7 +83,11 @@ export function normalizeTitleCard(input) {
     position: TITLE_CARD_POSITIONS.includes(input.position) ? input.position : D.position,
     font: TITLE_CARD_FONTS.includes(input.font) ? input.font : D.font,
     size: Math.round(clampNum(input.size, L.sizeMin, L.sizeMax, D.size)),
-    color: typeof input.color === 'string' && /^#[0-9a-f]{6}$/i.test(input.color) ? input.color.toLowerCase() : D.color,
+    color: hexOr(input.color, D.color),
+    style: TITLE_CARD_STYLES.includes(input.style) ? input.style : D.style,
+    // '' = the look's own colour (the text colour, or the mtv yellow title / cyan bar).
+    titleColor: hexOr(input.titleColor, ''),
+    accentColor: hexOr(input.accentColor, ''),
   };
 }
 
@@ -97,10 +129,12 @@ function titleCardAlpha(card, t) {
 
 /**
  * The card's lines placed on a width × height frame: `[{ text, font, px, x, y,
- * align, outline }]` (y is the alphabetic baseline). The title is the first,
- * larger line; artist, year and the extra line follow. A block wider than its
- * zone shrinks as a whole, so the card never runs off frame. `measure(text,
- * font)` returns a width in pixels. Pure.
+ * align, outline, fill }]` (y is the alphabetic baseline). In the `outline`
+ * look the title is the first, larger line and artist, year and the extra line
+ * follow; in the `mtv` look the artist leads, then the title, the extra
+ * line and the year, and the block is inset by its plate's padding. A block
+ * wider than its zone shrinks as a whole, so the card never runs off frame.
+ * `measure(text, font)` returns a width in pixels. Pure.
  */
 function titleCardLayout(card, { width, height, measure }) {
   const stacks = {
@@ -108,13 +142,24 @@ function titleCardLayout(card, { width, height, measure }) {
     sans: ['"Helvetica Neue", Helvetica, Arial, sans-serif', 700, 400],
     serif: ['Georgia, "Times New Roman", serif', 700, 400],
     mono: ['"MV Mono", Menlo, Consolas, monospace', 500, 500],
+    // Bundled single-weight faces (TITLE_CARD_FONT_FACES), registered by the runtime.
+    oswald: ['"MV Title Oswald", "Arial Narrow", sans-serif', 700, 700],
+    audiowide: ['"MV Title Audiowide", "Arial Black", sans-serif', 400, 400],
+    orbitron: ['"MV Title Orbitron", "Arial Black", sans-serif', 700, 700],
+    righteous: ['"MV Title Righteous", "Arial Black", sans-serif', 400, 400],
+    pacifico: ['"MV Title Pacifico", "Brush Script MT", cursive', 400, 400],
+    playfair: ['"MV Title Playfair", Georgia, serif', 700, 700],
   };
   const [family, titleWeight, metaWeight] = stacks[card.font] || stacks.display;
   const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+  const mtv = card.style === 'mtv';
+  const color = card.color || '#f3ead7';
+  const titleFill = card.titleColor || (mtv ? '#f5d33a' : color);
   const title = clean(card.title);
-  const rows = [];
-  if (title) rows.push({ text: card.quoteTitle ? `“${title}”` : title, title: true });
-  for (const key of ['artist', 'year', 'extra']) if (clean(card[key])) rows.push({ text: clean(card[key]), title: false });
+  const titleRow = title ? { text: card.quoteTitle ? `“${title}”` : title, role: 'title' } : null;
+  const meta = (key) => (clean(card[key]) ? { text: clean(card[key]), role: 'meta' } : null);
+  const artist = clean(card.artist) ? { text: clean(card.artist), role: mtv ? 'lead' : 'meta' } : null;
+  const rows = (mtv ? [artist, titleRow, meta('extra'), meta('year')] : [titleRow, artist, meta('year'), meta('extra')]).filter(Boolean);
   if (!rows.length) return [];
   const unit = Math.min(width, height) / 1080;
   const scale = (Number(card.size) || 100) / 100;
@@ -123,26 +168,33 @@ function titleCardLayout(card, { width, height, measure }) {
   const position = card.position || 'lower-left';
   const centered = position === 'center' || position === 'lower-center';
   const portrait = height > width;
-  const maxW = centered || portrait ? width - 2 * insetX : width * 0.62;
-  const fontOf = (row, px) => `${row.title ? titleWeight : metaWeight} ${Math.floor(px * 100) / 100}px ${family}`;
-  const baseOf = (row) => (row.title ? 50 : 36) * unit * scale;
+  // The mtv plate's padding (and its bar) sit inside the safe insets too.
+  const base = { title: mtv ? 42 : 50, lead: 46, meta: mtv ? 32 : 36 };
+  const padX = mtv ? 26 * unit * scale : 0;
+  const padY = mtv ? 16 * unit * scale : 0;
+  const bar = mtv ? 9 * unit * scale : 0;
+  const maxW = (centered || portrait ? width - 2 * insetX : width * 0.62) - 2 * padX - bar;
+  const weightOf = (row) => (row.role === 'meta' ? metaWeight : titleWeight);
+  const fontOf = (row, px) => `${weightOf(row)} ${Math.floor(px * 100) / 100}px ${family}`;
+  const baseOf = (row) => base[row.role] * unit * scale;
   const widest = Math.max(...rows.map((row) => measure(row.text, fontOf(row, baseOf(row)))));
   const fit = widest > maxW && widest > 0 ? maxW / widest : 1;
   const sized = rows.map((row) => ({ ...row, px: baseOf(row) * fit }));
-  const lineH = (row) => row.px * (row.title ? 1.18 : 1.3);
+  const lineH = (row) => row.px * (row.role === 'meta' ? 1.3 : 1.18);
   const blockH = sized.reduce((sum, row) => sum + lineH(row), 0);
   let top;
   if (position === 'center') top = (height - blockH) / 2;
-  else if (position.startsWith('upper')) top = insetY;
-  else top = height - insetY - blockH;
+  else if (position.startsWith('upper')) top = insetY + padY;
+  else top = height - insetY - padY - blockH;
   const align = centered ? 'center' : position.endsWith('right') ? 'right' : 'left';
-  const x = align === 'left' ? insetX : align === 'right' ? width - insetX : width / 2;
+  const x = align === 'left' ? insetX + bar + padX : align === 'right' ? width - insetX - padX : width / 2;
   const out = [];
   let y = top;
   for (const row of sized) {
     y += lineH(row);
     // The baseline sits a little above the line box's foot, leaving room for descenders.
-    out.push({ text: row.text, font: fontOf(row, row.px), px: row.px, x, y: y - row.px * (row.title ? 0.24 : 0.3), align, outline: Math.max(2, row.px * (row.title ? 0.15 : 0.12)) });
+    out.push({ text: row.text, font: fontOf(row, row.px), px: row.px, x, y: y - row.px * (row.role === 'meta' ? 0.3 : 0.24), align,
+      outline: mtv ? 0 : Math.max(2, row.px * (row.role === 'meta' ? 0.12 : 0.15)), fill: row.role === 'title' ? titleFill : color });
   }
   return out;
 }
@@ -159,13 +211,37 @@ function drawTitleCard(ctx, card, t, { width, height }) {
   ctx.textBaseline = 'alphabetic';
   ctx.lineJoin = 'round';
   ctx.miterLimit = 2;
+  if (card.style === 'mtv') {
+    // The lower third's plate hugs the block; its bar runs down the leading edge.
+    const unit = Math.min(width, height) / 1080;
+    const scale = (Number(card.size) || 100) / 100;
+    const padX = 26 * unit * scale;
+    const padY = 16 * unit * scale;
+    const bar = 9 * unit * scale;
+    let left = Infinity; let right = -Infinity;
+    for (const line of lines) {
+      const w = measure(line.text, line.font);
+      const x0 = line.align === 'left' ? line.x : line.align === 'right' ? line.x - w : line.x - w / 2;
+      left = Math.min(left, x0); right = Math.max(right, x0 + w);
+    }
+    const top = lines[0].y - lines[0].px * 0.94 - padY;
+    const bottom = lines[lines.length - 1].y + lines[lines.length - 1].px * 0.3 + padY;
+    const plateLeft = left - padX - (lines[0].align === 'right' ? 0 : bar);
+    const plateRight = right + padX + (lines[0].align === 'right' ? bar : 0);
+    ctx.fillStyle = 'rgba(12, 12, 18, 0.74)';
+    ctx.fillRect(plateLeft, top, plateRight - plateLeft, bottom - top);
+    ctx.fillStyle = card.accentColor || '#1fc2e5';
+    ctx.fillRect(lines[0].align === 'right' ? plateRight - bar : plateLeft, top, bar, bottom - top);
+  }
   for (const line of lines) {
     ctx.font = line.font;
     ctx.textAlign = line.align;
-    ctx.lineWidth = line.outline;
-    ctx.strokeStyle = '#141217';
-    ctx.strokeText(line.text, line.x, line.y);
-    ctx.fillStyle = card.color || '#f3ead7';
+    if (line.outline > 0) {
+      ctx.lineWidth = line.outline;
+      ctx.strokeStyle = '#141217';
+      ctx.strokeText(line.text, line.x, line.y);
+    }
+    ctx.fillStyle = line.fill || card.color || '#f3ead7';
     ctx.fillText(line.text, line.x, line.y);
   }
   ctx.restore();
@@ -187,12 +263,21 @@ function drawTitleCard(ctx, card, t, { width, height }) {
  * for the frame before the document paints, after its faces have loaded. The
  * canvas is fixed over the viewport, fitted to the render's aspect, and sits
  * under the film look's root filter like the lyrics do.
+ *
+ * `fonts` maps a bundled family (TITLE_CARD_FONT_FACES) to its data URL; each is
+ * registered with `document.fonts` up front and loads only when the card uses it.
  */
-export function titleCardRuntimeSource(card = null) {
+export function titleCardRuntimeSource(card = null, { fonts = {} } = {}) {
+  const faces = Object.entries(fonts).filter(([family, src]) => typeof family === 'string' && /^data:font\/woff2;base64,[a-z0-9+/=]+$/i.test(src));
   return `(() => {
   ${titleCardAlpha.toString()}
   ${titleCardLayout.toString()}
   ${drawTitleCard.toString()}
+  if (typeof FontFace === 'function' && document.fonts && document.fonts.add) {
+    for (const [family, src] of ${JSON.stringify(faces).replace(/</g, '\\u003c')}) {
+      try { document.fonts.add(new FontFace(family, 'url(' + src + ')', { weight: '100 900' })); } catch { /* the stack's fallback draws instead */ }
+    }
+  }
   let card = ${JSON.stringify(normalizeTitleCard(card)).replace(/</g, '\\u003c')};
   let t = 0;
   let canvas = null;

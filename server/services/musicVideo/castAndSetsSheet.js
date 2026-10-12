@@ -3,9 +3,9 @@
  *
  * One self-contained page the director reviews before the storyboard: the
  * logline, the protagonist's facts beside the canonical character sheet, the
- * looks, the expression sheet, the in-set tests, every set plate with the song
- * sections it serves, a song-map bar colored by set, the overlay concept and
- * the questions that need an answer.
+ * looks, the expression sheet, the in-set tests, the supporting cast sheets,
+ * every set plate with the song sections it serves, a song-map bar colored by
+ * set, the overlay concept and the questions that need an answer.
  *
  * Self-contained means no network: every image arrives as a `data:` URI from
  * the caller, the type uses system font stacks (no web fonts), and there is no
@@ -162,6 +162,12 @@ export function renderCastAndSetsSheet({
     return figure(images[`set:${s.id}`], s.name, caption, 'set', procedural ? 'No raster image: drawn in code' : undefined);
   }).join('');
 
+  const cast = procedural ? [] : (d.cast || []);
+  const castFigures = cast.map((c) => {
+    const caption = `<b>${e(c.name)}${c.role ? ` · ${e(c.role)}` : ''}</b><span>${e([c.description, c.face, c.hair, c.wardrobe && `Wearing ${c.wardrobe}`].filter(Boolean).join(' '))}</span>`;
+    return figure(images[`cast:${c.id}`], `${c.name} character reference sheet`, caption, 'set');
+  }).join('');
+
   const bar = sections.map((s) => {
     const setId = setOfSection.get(s.index);
     const color = colorOf.get(setId) || NEUTRAL;
@@ -203,7 +209,8 @@ ${worldFacts ? `<section><h2><small>World</small>How the environments behave</h2
 ${figure(images.looks, 'Wardrobe looks', looksCaption ? `Wardrobe by chapter: ${looksCaption}` : 'Wardrobe', 'wide')}
 <div class="grid2">${figure(images.expressions, 'Expression sheet', `Expression range for lip-sync keyframes.${p.gesture ? ` Includes the gesture: ${e(p.gesture)}` : ''}`)}${tests[0] ? figure(images['test:1'], 'First in-set test', e(tests[0].caption || tests[0].action)) : ''}</div>
 </section>
-<section><h2><small>In-set tests</small>The protagonist, in the world</h2><div class="row">${testFigures}</div></section>`}
+<section><h2><small>In-set tests</small>The protagonist, in the world</h2><div class="row">${testFigures}</div></section>
+${castFigures ? `<section><h2><small>Supporting cast</small>${cast.length} recurring ${cast.length === 1 ? 'character' : 'characters'}</h2><p class="sub">Each shot that names one of them uses their sheet as a reference.</p><div class="sets">${castFigures}</div></section>` : ''}`}
 <section><h2><small>Sets</small>${sets.length} sets</h2><p class="sub">Each set has its own light, so a cut says where we are before anything else.</p><div class="sets">${setFigures}</div></section>
 <section><h2><small>Song map</small>Where each set lives in the track</h2>
 ${sections.length ? `<div class="bar">${bar}</div><div class="ticks"><span>0:00</span><span>${fmtTime(total)}</span></div><div class="tablewrap"><table>${rows}</table></div>` : '<p class="sub">The song has not been sectioned yet.</p>'}

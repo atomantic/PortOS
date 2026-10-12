@@ -402,6 +402,57 @@ describe('Cast & Sets check-in', () => {
     expect(done.productionReview.approvals?.art).toBeUndefined();
   });
 
+  it('reseeds untouched art draft fields from a newer approved revision and keeps edited ones', async () => {
+    const project = await seed();
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
+    await runTo(project.id, 'review');
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({});
+    const first = (await current(project.id)).productionReview.draft;
+    await projects.mutateProjectRecord(project.id, (c) => ({ project: { ...c,
+      productionReview: { ...c.productionReview, draft: { ...c.productionReview.draft, visualLanguage: 'My own look notes' } } } }));
+
+    const revised = { ...DIRECTION, protagonist: { ...DIRECTION.protagonist, name: 'Signalman' },
+      sets: [{ ...DIRECTION.sets[0], name: 'Engine room' }, ...DIRECTION.sets.slice(1)] };
+    runPrompt.mockResolvedValue({ text: JSON.stringify(revised) });
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
+    await runTo(project.id, 'review');
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({});
+
+    const draft = (await current(project.id)).productionReview.draft;
+    expect(draft.cast).toContain('Signalman');
+    expect(draft.environments).toContain('Engine room');
+    expect(draft.environments).not.toContain('Lamp room');
+    expect(draft.visualLanguage).toBe('My own look notes');
+    expect(draft.motionLanguage).toBe(first.motionLanguage);
+  });
+
+  it('never rewrites entered text, keeps equivalent text as written, and lets it follow a newer revision', async () => {
+    const project = await seed();
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
+    await runTo(project.id, 'review');
+    // Entered by hand (no seed record): the current cast as compact JSON in another key
+    // order, and JSON that differs from the direction.
+    const { name, ...rest } = DIRECTION.protagonist;
+    const sameCast = JSON.stringify({ ...rest, name });
+    const ownSets = JSON.stringify([{ name: 'My own set' }]);
+    await projects.mutateProjectRecord(project.id, (c) => ({ project: { ...c,
+      productionReview: { draft: { cast: sameCast, environments: ownSets } } } }));
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({});
+    // Re-preparing the review seeds again; it must not reformat anything.
+    expect((await request(app).post(`/api/music-video/${project.id}/production-review/prepare`).send({})).status).toBe(200);
+    let draft = (await current(project.id)).productionReview.draft;
+    expect(draft.cast).toBe(sameCast);
+    expect(draft.environments).toBe(ownSets);
+
+    runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION, protagonist: { ...DIRECTION.protagonist, name: 'Signalman' } }) });
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
+    await runTo(project.id, 'review');
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({});
+    draft = (await current(project.id)).productionReview.draft;
+    expect(draft.cast).toContain('Signalman');
+    expect(draft.environments).toBe(ownSets);
+  });
+
   it.each(['approved', 'skipped'])('rebuilds a %s check-in as a new revision that keeps the prior sheet as an earlier version', async (end) => {
     const project = await seed();
     await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
@@ -523,6 +574,37 @@ describe('Cast & Sets check-in', () => {
 
     const unknown = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/feedback`).send({ text: 'Brighter', target: 'set:nowhere' });
     expect([unknown.status, unknown.body.code]).toEqual([422, 'CAST_SETS_UNKNOWN_IMAGE']);
+  });
+
+  it('gives each supporting cast member a photographic sheet, shows it on the sheet, and publishes it as a reference on approval', async () => {
+    const cast = [
+      { id: 'rico', name: 'Rico', role: 'drummer', description: 'sweaty, grinning', face: 'stubble, brown eyes', hair: 'wet curls', wardrobe: 'black tank top' },
+      // The protagonist is never listed again as supporting cast.
+      { name: 'Keeper', role: 'lead', face: 'weathered' },
+    ];
+    runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION, cast }) });
+    const project = await seed();
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
+    await runTo(project.id, 'review');
+    expect(runPrompt.mock.calls[0][0].prompt).toMatch(/- cast: the RECURRING supporting characters/);
+    const sheet = jobs.find((j) => keyOf(j) === 'cast:rico');
+    expect(sheet.params.prompt).toMatch(/character reference sheet of ONE consistent person, Rico, the drummer/);
+    expect(sheet.params.prompt).toMatch(/A different person from Keeper/);
+    expect(sheet.params.referenceImagePaths).toBeUndefined();
+    expect(jobs.map(keyOf)).not.toContain('cast:keeper');
+    const reviewing = await current(project.id);
+    const html = readFileSync(join(ROOT(), reviewing.devArtifacts.find((a) => a.id === reviewing.castAndSets.artifactId).file), 'utf8');
+    expect(html).toContain('Supporting cast');
+    expect(html).toContain('Rico · drummer');
+
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({})).status).toBe(200);
+    const done = await current(project.id);
+    expect(done.visualSpec.references.find((r) => r.id === 'mvr-cs-cast-rico'))
+      .toMatchObject({ imageId: `${sheet.id}.png`, role: 'character', condition: false });
+    expect(done.concept.subjects.find((s) => s.id === 'cs-cast-rico')).toMatchObject({ kind: 'character', name: 'Rico', role: 'supporting' });
+    // The planner reads the cast by name and role, so the shots it writes name who they feature.
+    const { musicVideoDirectionContext } = await import('../../lib/musicVideoCreativeContext.js');
+    expect(musicVideoDirectionContext(done.castAndSets.direction)).toContain('Cast Rico (drummer): sweaty, grinning; stubble, brown eyes');
   });
 
   it('approves itself in auto mode, and fails with a reason when no provider can direct', async () => {

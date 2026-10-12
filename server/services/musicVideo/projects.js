@@ -227,9 +227,13 @@ export async function setProjectMidiTranscription(id, midi) {
   return next;
 }
 
+/** Add a director's shot at its time; shots locked before stay locked. */
 export async function addProjectScene(id, sceneInput) {
-  const scene = await (await selectBackend()).addProjectScene(id, sceneInput);
-  emitRecordUpdated('musicVideoProject', id);
+  const [{ addScene }, { carryShotLocks }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
+  const { scene } = await mutateProjectRecord(id, (current) => {
+    const outcome = addScene(current, sceneInput);
+    return { ...outcome, project: carryShotLocks(current, outcome.project) };
+  });
   return scene;
 }
 
@@ -239,38 +243,56 @@ export async function addProjectScene(id, sceneInput) {
  * caller composing a response never has to re-fetch or risk overwriting a
  * concurrent edit with stale state.
  */
-export async function addProjectScenes(id, sceneInputs) {
-  const { project, scenes } = await (await selectBackend()).addProjectScenes(id, sceneInputs);
-  emitRecordUpdated('musicVideoProject', id);
-  return { project, scenes };
+export async function addProjectScenes(id, sceneInputs, { source = null } = {}) {
+  const [{ addScenes }, { carryShotLocks }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
+  return mutateProjectRecord(id, (current) => {
+    const outcome = addScenes(current, sceneInputs);
+    return { ...outcome, project: carryShotLocks(current, outcome.project) };
+  }, { source });
 }
 
+/** Edit against the fresh record so a concurrent video lock cannot be bypassed. */
 export async function updateScene(id, sceneId, patch) {
-  const result = await (await selectBackend()).updateScene(id, sceneId, patch);
-  emitRecordUpdated('musicVideoProject', id);
-  return result;
+  const [{ applySceneUpdate }, { assertClipUnlocked }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
+  const { updated } = await mutateProjectRecord(id, (current) => {
+    assertClipUnlocked(current, sceneId, patch);
+    return applySceneUpdate(current, sceneId, patch);
+  });
+  return updated;
 }
 
 export async function deleteScene(id, sceneId) {
-  const next = await (await selectBackend()).deleteScene(id, sceneId);
-  emitRecordUpdated('musicVideoProject', id);
-  return next;
+  const [{ removeScene }, { assertClipUnlocked }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
+  const { project } = await mutateProjectRecord(id, (current) => {
+    assertClipUnlocked(current, sceneId);
+    return { project: removeScene(current, sceneId) };
+  });
+  return project;
 }
 
 export async function reorderProjectScenes(id, orderedIds) {
-  const next = await (await selectBackend()).reorderProjectScenes(id, orderedIds);
-  emitRecordUpdated('musicVideoProject', id);
-  return next;
+  const [{ reorderScenes }, { assertClipUnlocked }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
+  const { project } = await mutateProjectRecord(id, (current) => {
+    const project = reorderScenes(current, orderedIds);
+    for (const scene of project.scenes) assertClipUnlocked(current, scene.sceneId, scene);
+    return { project };
+  });
+  return project;
 }
 
 /**
  * Split a shot longer than its backend renders in one take into contiguous
- * scenes on lyric/phrase boundaries (#8977, projectsLogic.splitScene).
- * Returns `{ project, scenes }` — the persisted project and the pieces.
+ * scenes on lyric/phrase boundaries (#8977, projectsLogic.splitScene), or in
+ * two at `options.atSec`. A locked still stays locked on every piece. Returns `{ project, scenes }` — the persisted project and the pieces.
  */
 export async function splitProjectScene(id, sceneId, options = {}) {
-  const { splitScene } = await import('./projectsLogic.js');
-  return mutateProjectRecord(id, (current) => splitScene(current, sceneId, options));
+  const [{ splitScene }, { carryShotLocks, assertClipUnlocked }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
+  return mutateProjectRecord(id, (current) => {
+    assertClipUnlocked(current, sceneId);
+    const outcome = splitScene(current, sceneId, options);
+    const from = Object.fromEntries(outcome.scenes.slice(1).map((piece) => [piece.sceneId, sceneId]));
+    return { ...outcome, project: carryShotLocks(current, outcome.project, { from }) };
+  });
 }
 
 /**
@@ -278,14 +300,25 @@ export async function splitProjectScene(id, sceneId, options = {}) {
  * of the split. Returns `{ project, scene }`.
  */
 export async function mergeProjectNextScene(id, sceneId, options = {}) {
-  const { mergeNextScene } = await import('./projectsLogic.js');
-  return mutateProjectRecord(id, (current) => mergeNextScene(current, sceneId, options));
+  const [{ mergeNextScene }, { assertClipUnlocked }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
+  return mutateProjectRecord(id, (current) => {
+    const scenes = current.scenes || [];
+    const index = scenes.findIndex(scene => scene.sceneId === sceneId);
+    assertClipUnlocked(current, sceneId);
+    if (index >= 0 && scenes[index + 1]) assertClipUnlocked(current, scenes[index + 1].sceneId);
+    return mergeNextScene(current, sceneId, options);
+  });
 }
 
 // ---- scene takes (#8965) ----
 // Append candidate takes to one scene: `{ scene, appended }`. A take fills its
 // slot only while the slot is empty — never replaces a selection (takes.js).
 export async function appendSceneTakes(id, sceneId, inputs) {
+  if (inputs.some(input => input.source === 'generated')) {
+    const { appendSceneTakes: append } = await import('./takes.js');
+    const outcome = await mutateProjectRecord(id, current => append(current, sceneId, inputs), { source: 'generation-completion' });
+    return { scene: outcome.project.scenes.find(scene => scene.sceneId === sceneId), appended: outcome.appended };
+  }
   const result = await (await selectBackend()).appendSceneTakes(id, sceneId, inputs);
   emitRecordUpdated('musicVideoProject', id);
   return result;
@@ -309,15 +342,22 @@ export async function appendTakesAcrossScenes(id, items) {
 
 /** Explicitly select a take for its scene slot. Returns the updated scene. */
 export async function selectSceneTake(id, sceneId, takeId) {
-  const scene = await (await selectBackend()).selectSceneTake(id, sceneId, takeId);
-  emitRecordUpdated('musicVideoProject', id);
+  const [{ selectSceneTake: select }, { assertClipUnlocked }] = await Promise.all([import('./takes.js'), import('./productionReview.js')]);
+  const { scene } = await mutateProjectRecord(id, (current) => {
+    assertClipUnlocked(current, sceneId);
+    return select(current, sceneId, takeId);
+  });
   return scene;
 }
 
 /** Reject/restore a take and/or set its note. Returns the updated scene. */
 export async function reviewSceneTake(id, sceneId, takeId, review) {
-  const scene = await (await selectBackend()).reviewSceneTake(id, sceneId, takeId, review);
-  emitRecordUpdated('musicVideoProject', id);
+  const [{ reviewSceneTake: reviewTake }, { assertClipUnlocked }] = await Promise.all([import('./takes.js'), import('./productionReview.js')]);
+  const { scene } = await mutateProjectRecord(id, (current) => {
+    const outcome = reviewTake(current, sceneId, takeId, review);
+    assertClipUnlocked(current, sceneId, outcome.scene);
+    return outcome;
+  });
   return scene;
 }
 
@@ -327,9 +367,21 @@ export async function reviewSceneTake(id, sceneId, takeId, review) {
  * resolves to that outcome with the persisted project. Used by the treatment
  * service (#8980) so its revision checks run against the freshest record.
  */
-export async function mutateProjectRecord(id, transform) {
+export async function mutateProjectRecord(id, transform, { source = null } = {}) {
+  const { preserveAutomatedShotLocks } = source ? await import('./productionReview.js') : {};
   const outcome = await (await selectBackend()).mutateProjectRecord(id, (current) => {
     const outcome = transform(current);
+    if (source) {
+      const guarded = preserveAutomatedShotLocks(current, outcome.project, source);
+      outcome.project = guarded.project;
+      if (guarded.rejected) {
+        outcome.rejected = true;
+        if (outcome.scenes) outcome.scenes = guarded.project.scenes;
+        if (outcome.scene) outcome.scene = guarded.project.scenes.find(scene => scene.sceneId === outcome.scene.sceneId) || null;
+        if (outcome.updated) outcome.updated = guarded.project.scenes.find(scene => scene.sceneId === outcome.updated.sceneId) || null;
+        if ('replaced' in outcome) outcome.replaced = 0;
+      }
+    }
     return { ...outcome, project: retainMusicVideoDependencies(current, outcome.project) };
   });
   emitRecordUpdated('musicVideoProject', id);

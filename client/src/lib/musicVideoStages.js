@@ -12,28 +12,29 @@ import { formatCount, formatDurationSec, formatTimecode } from '../utils/formatt
 import { isNonBlankStr } from './textUtils';
 import { modeLabel } from './imageGenModes.js';
 import { falSceneTake } from './musicVideoShotTiming.js';
+import { getFalVideoModel } from './falVideoModels.js';
 import { latestMusicVideoReviewDraft } from '../../../server/lib/musicVideoReviewDraft.js';
 import { FINISHED_OUTSIDE_RERENDER_NOTE, finishedOutside, finishedOutsideCovers } from '../../../server/lib/musicVideoFinishedOutside.js';
 
 /**
  * The six steps of a music video, in the order the director decides them. The
  * ids are the route's `:stage` values and stay stable across the relabel
- * (#10297 follow-up): Song is `setup`, Look is `cast-sets`, Storyboard is
- * `board`, Make is `produce` (footage and the composition over it; an
- * animated proof is an optional check) and Final render is `review`. `doneWhen` is the one line a step
- * shows under its title.
+ * (#10297 follow-up): Song is `setup`, Look is `cast-sets`, Plan (once
+ * Storyboard) is `board`, Shots (once Make) is `produce` — each shot's still,
+ * clip and locks, then the composition over them — and Final render is
+ * `review`. `doneWhen` is the one line a step shows under its title.
  */
 export const MUSIC_VIDEO_STAGES = [
   { id: 'setup', label: 'Song', title: 'Song', doneWhen: 'Done when the track is analyzed and every lyric word is timed to the vocal.' },
   { id: 'cast-sets', label: 'Look', title: 'Look', doneWhen: 'Done when the art direction is written, a visual guide is chosen, and you approve it.' },
-  { id: 'board', label: 'Storyboard', title: 'Storyboard', doneWhen: 'Done when shots cover the whole song and you approve the timed storyboard.' },
-  { id: 'produce', label: 'Make', title: 'Make', doneWhen: 'Done when every shot has its picture and the composition is ready.' },
+  { id: 'board', label: 'Plan', title: 'Plan', doneWhen: 'Done when timed shots cover the whole song, each with its action, staging, camera and lyric.' },
+  { id: 'produce', label: 'Shots', title: 'Shots', doneWhen: 'Done when every shot is locked (a video shot: its still, then its clip) and the composition is ready.' },
   { id: 'review', label: 'Final render', title: 'Final render', doneWhen: 'Done when the full video is rendered from the approved plan and is up to date.' },
   { id: 'publish', label: 'Publish', title: 'Publish', doneWhen: 'Done when every platform you turned on has a post.' },
 ];
 
-// Old links name the Compose tab, which is now part of Make.
-const LEGACY_STAGE_IDS = { compose: 'produce' };
+// Old links name the Compose tab, which is now part of Shots; the new names work as links too.
+const LEGACY_STAGE_IDS = { compose: 'produce', plan: 'board', shots: 'produce' };
 
 
 export const isStageId = (value) => MUSIC_VIDEO_STAGES.some((stage) => stage.id === value);
@@ -107,6 +108,37 @@ export function projectSpend(project) {
   const briefCap = project?.automation?.budgetUsd;
   const capUsd = runCap != null ? runCap : (briefCap != null ? briefCap : null);
   return { spentUsd, capUsd, autopilot, manual, autoReview, total: spentUsd };
+}
+
+/**
+ * What the project has spent on fal.ai, by model, from the estimates its paid
+ * takes and production-run steps recorded: `{ totalUsd, models: [{ modelId,
+ * label, usd, count }] }`, dearest first. `modelId` is null for spend recorded
+ * before takes named their model. Estimates, not fal's invoice; a take pruned
+ * from a full scene no longer counts.
+ */
+export function projectFalSpend(project) {
+  const byModel = new Map();
+  const add = (modelId, usd) => {
+    if (!(Number.isFinite(usd) && usd > 0)) return;
+    const key = modelId || null;
+    const row = byModel.get(key) || { modelId: key, label: key ? getFalVideoModel(key)?.label || key : 'Model not recorded', usd: 0, count: 0 };
+    row.usd += usd;
+    row.count += 1;
+    byModel.set(key, row);
+  };
+  for (const scene of Array.isArray(project?.scenes) ? project.scenes : []) {
+    for (const take of Array.isArray(scene?.takes) ? scene.takes : []) {
+      if (take?.spendKind) add(take.costModelId, Number(take.costUsd));
+    }
+  }
+  for (const run of Array.isArray(project?.productionRuns) ? project.productionRuns : []) {
+    for (const step of Array.isArray(run?.steps) ? run.steps : []) {
+      if (step?.route?.mode === 'fal' && step.status !== 'refused') add(step.costModelId || step.route.model, Number(step.costUsd));
+    }
+  }
+  const models = [...byModel.values()].map((row) => ({ ...row, usd: Math.round(row.usd * 1e4) / 1e4 })).sort((a, b) => b.usd - a.usd);
+  return { totalUsd: Math.round(models.reduce((sum, row) => sum + row.usd, 0) * 1e4) / 1e4, models };
 }
 
 /**
@@ -343,6 +375,15 @@ const composeDone = (project, mode) => {
 };
 
 /**
+ * Clip locks count toward Shots once the director has started using them: a
+ * board where no clip was ever locked (an autopilot run, say) is not held open.
+ */
+function clipsLockedDone(readiness) {
+  const clips = Object.values(readiness?.storyboard?.clipLocks || {});
+  return !clips.some((state) => state === 'locked' || state === 'changed') || !(readiness.storyboard.clipsUnlocked || []).length;
+}
+
+/**
  * Lyric half of Setup: storyboard approval needs lyrics imported and their word
  * timings verified (or an explicit instrumental exception). `readiness.alignment`
  * is the server's verdict; the draft is the fallback before readiness loads.
@@ -365,9 +406,11 @@ export function lyricSetupState(project, readiness = project?.productionReadines
  * changed since — plus `current`, the first stage that is not done. A live production
  * run owns the project, so it pins `current` to Produce.
  *
- * Make (`produce`) holds the footage and the composition over it. Its animated
- * proof is an optional check: the composition preview already shows the
- * picture, so neither Make nor the final render waits on a proof approval.
+ * Plan (`board`) is done once timed shots cover the song. Shots (`produce`)
+ * is done once every still is locked (the storyboard approval), every clip is
+ * locked once the director has started locking clips, the footage is in and the
+ * composition is ready. Its animated proof is an optional check: neither Shots
+ * nor the final render waits on a proof approval.
  */
 export function deriveStages(project, readiness = project?.productionReadiness, publish = {}) {
   const mode = project?.composition?.mode || 'concat';
@@ -375,15 +418,16 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
   const run = currentProductionRun(project);
   const liveRun = !!run && RESUMABLE_RUN_STATUSES.has(run.status);
   const planned = !!readiness?.storyboard.approved;
+  const shotsPlanned = (project?.scenes || []).length > 0 && !!readiness && !readiness.storyboard.problems?.length;
   const castStopped = castSetsPhase(cast) === 'stopped';
   const castDone = !!readiness?.art.approved;
   // Code and document renders draw the picture themselves; scene footage is optional there.
-  const produceDone = planned && footageReady(project);
+  const produceDone = planned && clipsLockedDone(readiness) && footageReady(project);
 
   const done = {
     setup: projectHasAudio(project) && !!project?.audioAnalysis && lyricSetupState(project, readiness).ok,
     'cast-sets': castDone,
-    board: planned,
+    board: planned || shotsPlanned,
     produce: produceDone && composeDone(project || {}, mode),
     // A render made before later scene edits no longer counts as the final video.
     review: !!project?.renderHistoryId && !isFinalRenderStale(project),
@@ -401,7 +445,7 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
   // reading as never done. The check-in sheet stays approved while stale.
   const stale = external ? {} : {
     'cast-sets': !!readiness?.art?.stale || !!readiness?.castAndSets?.stale,
-    board: !!readiness?.storyboard?.stale,
+    produce: !!readiness?.storyboard?.stale,
   };
   const current = liveRun
     ? 'produce'
@@ -418,10 +462,10 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
 // The approval panel the header sends the director to: unwritten art direction is written on the step, not approved.
 function reviewProductionAction({ art, board, artUnwritten }) {
   if (artUnwritten) return { id: 'review-production', kind: 'goto', stage: 'cast-sets', anchor: ART_DIRECTION_ANCHOR, label: 'Write art direction', shortLabel: 'Write art' };
-  return { id: 'review-production', kind: 'goto', stage: art ? 'cast-sets' : board ? 'board' : 'produce',
+  return { id: 'review-production', kind: 'goto', stage: art ? 'cast-sets' : 'produce',
     anchor: art ? 'mv-review-art' : board ? 'mv-review-storyboard' : 'mv-review-proof',
-    label: art ? 'Review art direction' : board ? 'Review timed storyboard' : 'Review pilot proof',
-    shortLabel: art ? 'Review art' : board ? 'Review storyboard' : 'Review proof' };
+    label: art ? 'Review art direction' : board ? 'Lock the stills' : 'Review pilot proof',
+    shortLabel: art ? 'Review art' : board ? 'Lock stills' : 'Review proof' };
 }
 
 // A live or parked production run offers Stop while it works, else Resume.
@@ -500,6 +544,11 @@ export function deriveNextAction(project, {
   // The animated proof is optional, so the header sends the director to it only
   // when a production run is parked on its pilot proof before paid bulk generation.
   const pilotParked = !!run && RESUMABLE_RUN_STATUSES.has(run.status) && !!run.pilot?.scenes?.length && !readiness?.proof?.approved;
+  // Shots planned with gaps (timing, staging, lyric anchors) are finished on Plan before their stills are locked.
+  const planUnfinished = !art && board && scenes.length > 0 && !documentShots && (readiness?.storyboard?.problems || []).some(notFeedback);
+  if (planUnfinished && !renderActive && !kickoffRunning && !(run && RESUMABLE_RUN_STATUSES.has(run.status))) {
+    return { id: 'finish-plan', kind: 'goto', stage: 'board', label: 'Finish the plan', shortLabel: 'Plan' };
+  }
   if (shouldJumpToReview(project, { run, art, board, pilotParked, busy: renderActive || kickoffRunning, ownAction: castNeedsOwnAction || boardNeedsOwnAction })) {
     return reviewProductionAction({ art, board, artUnwritten });
   }
@@ -538,6 +587,10 @@ export function deriveNextAction(project, {
     case 'produce': {
       if (run?.status === 'needs-human') return { id: 'goto-review', kind: 'goto', stage: 'review', label: 'Review the draft', shortLabel: 'Review' };
       if (!footageReady(project)) return { id: 'goto-produce', kind: 'goto', stage: 'produce', anchor: 'mv-generation', label: 'Make the footage', shortLabel: 'Make' };
+      if (!clipsLockedDone(readiness)) {
+        const left = readiness.storyboard.clipsUnlocked.length;
+        return { id: 'lock-clips', kind: 'goto', stage: 'produce', anchor: 'mv-scene-board', label: `Lock ${formatCount(left)} video${left === 1 ? '' : 's'}`, shortLabel: 'Lock videos' };
+      }
       const label = { document: 'Attach a composition', eidoverse: 'Save the Eidoverse scene', code: 'Generate the code video' }[project.composition?.mode] || 'Add typography';
       const shortLabel = { document: 'Attach', eidoverse: 'Save', code: 'Generate' }[project.composition?.mode] || 'Type';
       return { id: 'goto-compose', kind: 'goto', stage: 'produce', anchor: 'mv-composition', label, shortLabel };
@@ -606,7 +659,7 @@ export function changedFieldsText(changedFields, limit = 4) {
   return `${text.slice(0, limit).join(', ')}${more}`;
 }
 const APPROVAL_ANCHORS = { art: 'mv-review-art', storyboard: 'mv-review-storyboard', proof: 'mv-review-proof' };
-const APPROVAL_STAGES = { art: 'cast-sets', storyboard: 'board', proof: 'produce' };
+const APPROVAL_STAGES = { art: 'cast-sets', storyboard: 'produce', proof: 'produce' };
 const PUBLISH_ANCHOR = 'mv-publish-kit';
 /** The anchor of one platform's row in the posting panel. */
 export const publishRowAnchor = (target) => `mv-post-${target}`;
@@ -633,10 +686,30 @@ export function summarizeStoryboardProblems(problems = []) {
   });
 }
 
+// Once any shot is locked one at a time, the board is approved when every shot is: say how many are left.
+function unlockedDetail(readiness, item) {
+  const left = readiness?.storyboard?.approved ? 0 : (readiness?.storyboard?.unlocked || []).length;
+  if (!left) return item;
+  const count = `${formatCount(left)} shot${left === 1 ? '' : 's'} not locked yet.`;
+  // A stale board keeps its "changed since" text (and Keep approved) after the count.
+  return { ...item, detail: item.stale ? `${count} ${item.detail}` : `${count} Lock each on its card, or lock them all below.` };
+}
+
 // The server names each open change request as a readiness problem; the
 // checklist lists those requests on their own Feedback row instead.
 const FEEDBACK_PROBLEM = /^Resolve (art|storyboard|proof) feedback for /;
 const notFeedback = (text) => !FEEDBACK_PROBLEM.test(text);
+
+/**
+ * Whether Make shows the animated proof: only while something needs it — a
+ * production run parked on its pilot proof before bulk generation, a proof
+ * rendering, or open change requests on one. The final render never waits on it.
+ */
+export function proofReviewInUse(project, readiness, { proofActive = false } = {}) {
+  const run = currentProductionRun(project);
+  return proofActive || openChangeRequests(project, 'proof').length > 0
+    || (!!run && RESUMABLE_RUN_STATUSES.has(run.status) && !!run.pilot?.scenes?.length && !readiness?.proof?.approved);
+}
 
 /** The open change requests on one approval stage ('art' | 'storyboard' | 'proof'). */
 export const openChangeRequests = (project, stage) => (project?.productionReview?.feedback || [])
@@ -821,19 +894,16 @@ export function stageChecklist(stageId, project, readiness = project?.production
       const planned = scenes.length > 0 || (draft.storyboard || []).length > 0;
       const feedback = feedbackItem(project, 'storyboard', readiness);
       const problems = [...storyboardProblemItems(readiness), ...(feedback ? [feedback] : [])];
-      const storyboardApproval = approval('storyboard', 'Timed storyboard', 'Ready for your review below.');
       return [
         { id: 'shots', label: 'Shots planned', done: planned, detail: planned ? null : 'Plan the shots from the header, or add scenes by hand.',
           action: planned ? null : { label: 'Open the treatment', anchor: 'mv-board-treatment' } },
         ...problems,
-        // The problems are listed above, one row per group; the approval row need not repeat the first.
-        // A stale approval keeps its "changed since" text: it is the only place the checklist names what changed.
-        problems.length && !storyboardApproval.stale ? { ...storyboardApproval, detail: 'Approve once the items above are done.' } : storyboardApproval,
       ];
     }
     case 'produce': {
-      // Make: footage (unless the render style draws its own picture), the
-      // composition over it, then the optional proof (see deriveStages).
+      // Shots: the footage (unless the render style draws its own picture), every
+      // still locked (the storyboard approval), every clip locked once clip locks are
+      // in use, the composition over them, then the optional proof while a run needs it.
       const items = [];
       if (!FOOTAGE_OPTIONAL_MODES.has(mode)) {
         const layered = isLayeredComposition(project);
@@ -842,9 +912,24 @@ export function stageChecklist(stageId, project, readiness = project?.production
         items.push({ id: 'footage', label: `Footage for every shot (${formatCount(ready)} of ${formatCount(scenes.length)})`, done: footageDone,
           action: footageDone ? null : { label: 'Make the footage', anchor: 'mv-generation' } });
       }
+      // A document storyboard is approved whole; Board shots lock their stills one by one or all at once.
+      const documentBoard = draft.storyboardSource === 'document';
+      const reviewed = approval('storyboard', 'Timed storyboard', documentBoard ? 'Ready for your review below.' : 'Lock each still on its card, or lock them all below.');
+      const planOpen = (readiness?.storyboard?.problems || []).some(notFeedback) && !reviewed.stale;
+      const stills = documentBoard ? reviewed : { ...unlockedDetail(readiness, reviewed), label: 'Every still locked',
+        ...(reviewed.action && !reviewed.action.run ? { action: { ...reviewed.action, label: 'Lock the stills' } } : {}) };
+      items.push(planOpen && !reviewed.done ? { ...stills, detail: 'Finish the plan first.', action: { label: 'Open the plan', stage: 'board' } } : stills);
+      const clips = Object.values(readiness?.storyboard?.clipLocks || {});
+      if (clips.some((state) => state === 'locked' || state === 'changed')) {
+        const left = (readiness.storyboard.clipsUnlocked || []).length;
+        items.push({ id: 'lock-clips', label: 'Every video locked', done: !left,
+          detail: left ? `${formatCount(left)} video${left === 1 ? '' : 's'} not locked yet. Lock each on its card once its clip is right.` : null,
+          action: left ? { label: 'Open the shots', anchor: 'mv-scene-board' } : null });
+      }
       const proofApproval = approval('proof', 'Animated proof', null);
-      // Optional: shown so it can be found, never counted toward the step being done.
-      const proof = { ...proofApproval, label: proofApproval.done ? proofApproval.label : 'Animated proof (optional)', optional: true, detail: null };
+      // Optional: never counted toward the step being done.
+      const proof = proofReviewInUse(project, readiness)
+        ? [{ ...proofApproval, label: proofApproval.done ? proofApproval.label : 'Animated proof (optional)', optional: true, detail: null }] : [];
       const composition = project.composition || {};
       let work = null;
       if (mode === 'composed') work = { id: 'composition', label: 'Timed typography added', done: (composition.textCues || []).length > 0, action: { label: 'Add typography', anchor: 'mv-typo-font' } };
@@ -859,7 +944,7 @@ export function stageChecklist(stageId, project, readiness = project?.production
           action: done ? null : { label: 'Open Code Video', anchor: 'mv-code-section' } };
       }
       const proofFeedback = feedbackItem(project, 'proof', readiness, { optional: true });
-      return [...items, ...(work ? [work] : []), ...(proofFeedback ? [proofFeedback] : []), proof];
+      return [...items, ...(work ? [work] : []), ...(proofFeedback ? [proofFeedback] : []), ...proof];
     }
     case 'review':
       return [{

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { checkMusicVideoOverlayText, reverifyMusicVideoAlignment, importMusicVideoDocumentShots, getMusicVideoProductionReview, saveMusicVideoProductionDraft, prepareMusicVideoProductionReview,
-  approveMusicVideoProductionReview, renderMusicVideoProductionProof, musicVideoExcerptRenderEventsUrl,
+  approveMusicVideoProductionReview, lockMusicVideoShots, renderMusicVideoProductionProof, musicVideoExcerptRenderEventsUrl,
   cancelMusicVideoExcerptRender, importMusicVideoProductionPlanning, bindMusicVideoProductionShot, addMusicVideoProductionFeedback, resolveMusicVideoProductionFeedback, reviseMusicVideoProductionFromFeedback, revertMusicVideoProductionInput } from '../services/apiMusicVideo.js';
 import useSseJobSlot from './useSseJobSlot.js';
 
@@ -75,6 +75,9 @@ export default function useMusicVideoProductionReview({ project, replaceProject 
     prepare: () => call(() => prepareMusicVideoProductionReview(project.id, {}, { silent: true })),
     approve: (stage, proofReview) => call(() => approveMusicVideoProductionReview(project.id,
       { stage, basis: readiness?.basis[stage], ...(stage === 'proof' ? { proofReview } : {}) }, { silent: true })),
+    // Lock (or unlock) single shots: a locked shot's clip can be made before the whole board is approved.
+    // Not silent: the buttons live on scene cards and the player, away from the review panel's error line.
+    lockShots: (sceneIds, locked, stage = 'still') => call(() => lockMusicVideoShots(project.id, { sceneIds, locked, stage })),
     renderProof: window => proof.start({ id: project.id, window }, project.id),
   };
 }

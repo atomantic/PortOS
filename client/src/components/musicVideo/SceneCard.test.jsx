@@ -3,6 +3,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 vi.mock('../../hooks/useVideoFileSrc.js', () => ({ useVideoFileSrc: () => ({}) }));
 import SceneCard from './SceneCard.jsx';
+import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
+
+const GROK_MAX = GROK_VIDEO_DURATIONS.at(-1);
 
 describe('code shot (#10297)', () => {
   it('offers no frame or clip generation for a code shot in a layered composition', () => {
@@ -12,7 +15,7 @@ describe('code shot (#10297)', () => {
     // A composed render has no code to run, so it says the shot will be black there.
     expect(screen.getByTestId('code-shot-note').textContent).toMatch(/composed render shows it as a black frame/);
     expect(screen.queryByRole('button', { name: 'Generate frame' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Generate video' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Render' })).toBeNull();
     rerender(<SceneCard scene={scene} index={0} layered documentComposition onEditLocal={() => {}} onSave={() => {}} />);
     expect(screen.getByTestId('code-shot-note').textContent).not.toMatch(/black frame/);
     // A plain render plays footage, so the generation controls come back.
@@ -33,7 +36,7 @@ describe('performance speaker save boundary', () => {
     }
     render(<Harness />);
     const input = screen.getByLabelText('Speaker / singer');
-    const generate = screen.getByRole('button', { name: 'Generate video' });
+    const generate = screen.getByRole('button', { name: 'Render' });
     expect(generate.disabled).toBe(false);
     fireEvent.change(input, { target: { value: 'Example Singer' } });
     expect(generate.disabled).toBe(true);
@@ -87,7 +90,7 @@ describe('failed video retry behind the speaker save gate (#11040)', () => {
     render(<Harness onSave={onSave} onGenerateVideo={onGenerateVideo} lastFailure={videoFailure} />);
     const input = screen.getByLabelText('Speaker / singer');
     const retry = screen.getByRole('button', { name: 'Retry' });
-    const generate = screen.getByRole('button', { name: 'Generate video' });
+    const generate = screen.getByRole('button', { name: 'Render' });
     expect(retry.disabled).toBe(false);
     fireEvent.change(input, { target: { value: 'Example Singer' } });
     expect([generate.disabled, retry.disabled]).toEqual([true, true]);
@@ -225,7 +228,7 @@ describe('Merge with next (#10810)', () => {
     const { rerender } = render(<SceneCard scene={scene} {...props} onMergeNext={onMergeNext} nextEndSec={8} lipSyncBackend="grok" />);
     fireEvent.click(screen.getByRole('button', { name: /Merge with next/ }));
     expect(onMergeNext).toHaveBeenCalledWith('s1', 'grok');
-    rerender(<SceneCard scene={scene} {...props} onMergeNext={onMergeNext} nextEndSec={14} lipSyncBackend="grok" />);
+    rerender(<SceneCard scene={scene} {...props} onMergeNext={onMergeNext} nextEndSec={19} lipSyncBackend="grok" />);
     expect(screen.queryByRole('button', { name: /Merge with next/ })).toBeNull();
     rerender(<SceneCard scene={scene} {...props} onMergeNext={onMergeNext} nextEndSec={8} isLast />);
     expect(screen.queryByRole('button', { name: /Merge with next/ })).toBeNull();
@@ -246,18 +249,18 @@ describe('scene timing and provider presentation (#11046)', () => {
     expect(plan()).toContain('song 0:08–0:13');
     expect(plan()).toContain('shot starts 1.52s into the take');
     expect(plan()).toContain('est. $0.81 (5.05s at 1080P)');
-    expect(screen.getByRole('button', { name: 'Generate video' }).title).toContain('est. $0.81');
+    expect(screen.getByRole('button', { name: 'Render' }).title).toContain('est. $0.81');
     rerender(<SceneCard {...props} scene={{ ...performance, startSec: 0, endSec: 6 }} lipSyncBackend="fal"
       falVideoSettings={{ falLipSyncResolution: '768P' }} songDurationSec={null} />);
     expect(plan()).toContain('song 0:00–0:06');
     expect(plan()).not.toContain('shot starts');
     expect(plan()).toContain('est. $0.48 (6s at 768P)');
-    expect(screen.getByRole('button', { name: 'Generate video' }).disabled).toBe(false);
+    expect(screen.getByRole('button', { name: 'Render' }).disabled).toBe(false);
     rerender(<SceneCard {...props} scene={{ ...performance, startSec: 0, endSec: 6 }} lipSyncBackend="fal" />);
-    expect(screen.getByRole('button', { name: 'Generate video' }).disabled).toBe(false);
+    expect(screen.getByRole('button', { name: 'Render' }).disabled).toBe(false);
     rerender(<SceneCard {...props} scene={performance} lipSyncBackend="fal" songDurationSec={11} />);
     expect(screen.getByText('The performance shot runs past the end of the song.')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Generate video' }).disabled).toBe(true);
+    expect(screen.getByRole('button', { name: 'Render' }).disabled).toBe(true);
   });
 
   it('blocks unsupported performance generation and keeps the blocker on the generation control', () => {
@@ -265,7 +268,7 @@ describe('scene timing and provider presentation (#11046)', () => {
     const blocker = screen.getByText(/Grok video is cutaway-only/);
     expect(blocker.closest('[role="alert"]')).toBeTruthy();
     expect(screen.queryByTestId('performance-plan')).toBeNull();
-    const generate = screen.getByRole('button', { name: 'Generate video' });
+    const generate = screen.getByRole('button', { name: 'Render' });
     expect(generate.disabled).toBe(true);
     expect(generate.title).toBe(blocker.textContent);
   });
@@ -282,18 +285,18 @@ describe('scene timing and provider presentation (#11046)', () => {
     expect(screen.queryByTestId('performance-plan')).toBeNull();
     rerender(<SceneCard {...props} scene={{ ...scene, visualLayer: 'still', shotMode: 'performance' }} lipSyncBackend="fal" />);
     expect(screen.queryByTestId('fal-cutaway-plan')).toBeNull();
-    expect(screen.getByRole('button', { name: 'Generate video' }).disabled).toBe(false);
+    expect(screen.getByRole('button', { name: 'Render' }).disabled).toBe(false);
   });
 
   it('warns about uncovered Grok time and splits with the original scene/backend arguments only beyond the epsilon', () => {
     const onSplit = vi.fn();
-    const { rerender } = render(<SceneCard {...props} scene={{ ...scene, startSec: 0, endSec: 13 }} lipSyncBackend="grok" onSplit={onSplit} />);
-    expect(screen.getByText(/Grok renders a 10s clip for this 13.0s cutaway/).textContent).toContain('3.0s uncovered; split the scene rather than loop it');
+    const { rerender } = render(<SceneCard {...props} scene={{ ...scene, startSec: 0, endSec: 18 }} lipSyncBackend="grok" onSplit={onSplit} />);
+    expect(screen.getByText(/Grok renders a 15s clip for this 18.0s cutaway/).textContent).toContain('3.0s uncovered; split the scene rather than loop it');
     fireEvent.click(screen.getByRole('button', { name: 'Split on lyric boundaries' }));
     expect(onSplit).toHaveBeenCalledWith('timing', 'grok');
-    rerender(<SceneCard {...props} scene={{ ...scene, startSec: 0, endSec: 10 + 1e-6 }} lipSyncBackend="grok" onSplit={onSplit} />);
+    rerender(<SceneCard {...props} scene={{ ...scene, startSec: 0, endSec: GROK_MAX + 1e-6 }} lipSyncBackend="grok" onSplit={onSplit} />);
     expect(screen.queryByRole('button', { name: 'Split on lyric boundaries' })).toBeNull();
-    rerender(<SceneCard {...props} scene={{ ...scene, startSec: 0, endSec: 10 + 2e-6 }} lipSyncBackend="grok" onSplit={onSplit} />);
+    rerender(<SceneCard {...props} scene={{ ...scene, startSec: 0, endSec: GROK_MAX + 2e-6 }} lipSyncBackend="grok" onSplit={onSplit} />);
     expect(screen.getByRole('button', { name: 'Split on lyric boundaries' })).toBeTruthy();
     rerender(<SceneCard {...props} scene={{ ...scene, endSec: null }} lipSyncBackend="grok" onSplit={onSplit} />);
     expect(screen.queryByText(/Grok renders/)).toBeNull();
@@ -303,15 +306,37 @@ describe('scene timing and provider presentation (#11046)', () => {
   it('merges at the provider limit including its epsilon, requires the next span for bounded providers, and preserves default-backend arguments', () => {
     const onMergeNext = vi.fn();
     const current = { ...scene, startSec: 0, endSec: 4 };
-    const { rerender } = render(<SceneCard {...props} scene={current} lipSyncBackend="grok" nextEndSec={10 + 1e-6} onMergeNext={onMergeNext} />);
+    const { rerender } = render(<SceneCard {...props} scene={current} lipSyncBackend="grok" nextEndSec={GROK_MAX + 1e-6} onMergeNext={onMergeNext} />);
     fireEvent.click(screen.getByRole('button', { name: 'Merge with next' }));
     expect(onMergeNext).toHaveBeenLastCalledWith('timing', 'grok');
-    rerender(<SceneCard {...props} scene={current} lipSyncBackend="grok" nextEndSec={10 + 2e-6} onMergeNext={onMergeNext} />);
+    rerender(<SceneCard {...props} scene={current} lipSyncBackend="grok" nextEndSec={GROK_MAX + 2e-6} onMergeNext={onMergeNext} />);
     expect(screen.queryByRole('button', { name: 'Merge with next' })).toBeNull();
     rerender(<SceneCard {...props} scene={current} lipSyncBackend="grok" onMergeNext={onMergeNext} />);
     expect(screen.queryByRole('button', { name: 'Merge with next' })).toBeNull();
     rerender(<SceneCard {...props} scene={current} onMergeNext={onMergeNext} />);
     fireEvent.click(screen.getByRole('button', { name: 'Merge with next' }));
     expect(onMergeNext).toHaveBeenLastCalledWith('timing', null);
+  });
+});
+
+describe('Render follows the shot locks', () => {
+  // Uniquely catches Render staying live on a shot whose still is unlocked, or whose video is locked.
+  it('needs the still locked to render, and refuses a locked video until it is unlocked', async () => {
+    const { ShotLockContext } = await import('./ShotLock.jsx');
+    const scene = { sceneId: 's1', prompt: 'She spins the reel', referenceImageId: 'still.png', videoHistoryId: 'clip-1', startSec: 0, endSec: 4, takes: [] };
+    const onGenerateVideo = vi.fn();
+    const card = (still, clip) => (
+      <ShotLockContext.Provider value={{ locks: { s1: still }, clips: { s1: clip }, toggle: () => {}, busy: false }}>
+        <SceneCard scene={scene} index={0} expanded onEditLocal={() => {}} onSave={() => {}} onGenerateVideo={onGenerateVideo} falVideoSettings={{ backend: 'local' }} />
+      </ShotLockContext.Provider>
+    );
+    const { rerender } = render(card('open', 'open'));
+    expect(screen.getByRole('button', { name: 'Render again' })).toHaveProperty('title', 'Lock the still first');
+    rerender(card('locked', 'locked'));
+    expect(screen.getByRole('button', { name: 'Render again' }).disabled).toBe(true);
+    expect(screen.getByRole('button', { name: 'Render again' }).title).toMatch(/^Video locked/);
+    rerender(card('locked', 'open'));
+    fireEvent.click(screen.getByRole('button', { name: 'Render again' }));
+    expect(onGenerateVideo).toHaveBeenCalledWith(scene);
   });
 });

@@ -377,6 +377,16 @@ describe('startAutonomousVideo', () => {
       expect(runOf()).toMatchObject({ status: 'completed', output: expect.objectContaining({ productionDone: true, renderJobId: 'production-render' }) });
     });
 
+    // Uniquely catches a mid-run course change never reaching production's shot planner.
+    it('carries a changed prompt and guidance to the parked production run on resume', async () => {
+      await delegated();
+      store.get('mv-auto').productionRuns[0].status = 'limit-reached';
+      await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'limit-reached', stopReason: 'generation limit' } });
+      await service.resumeAutonomousVideo('mv-auto', { prompt: 'p', guidance: 'Natural chestnut shag, no pencil.' });
+      expect(runOf().brief).toMatchObject({ prompt: 'p', guidance: 'Natural chestnut shag, no pencil.' });
+      expect(doubles.resumeProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-1', { acceptBasis: true, directive: 'p\n\nNatural chestnut shag, no pencil.' });
+    });
+
     it('resumes a parked run with raised limits, and a model swap continues that run with the new pool', async () => {
       await delegated();
       store.get('mv-auto').productionRuns[0].status = 'limit-reached';
@@ -1355,8 +1365,8 @@ describe('autopilot clears the gates it was granted on its own', () => {
     expect(doubles.verifyAlignment).toHaveBeenCalledWith('mv-auto', expect.objectContaining({ notes: expect.stringContaining('source project') }));
   });
 
-  // Uniquely catches a run granted the storyboard parking for the director when a prompt edit stales that approval mid-production.
-  it('approves a storyboard a prompt edit staled again and resumes production', async () => {
+  // Uniquely catches a run granted the storyboard parking for the director when a lyric edit stales that approval mid-production.
+  it('approves a storyboard an edit staled again and resumes production', async () => {
     analyzed({ productionReview: { draft: { ...GUIDE, lyricsMode: 'instrumental', timingNotes: 'Synthetic instrumental master checked.', storyboard: [shot] } } });
     await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], ...GRANT[0] }, GRANT[1]);
     await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
@@ -1516,9 +1526,9 @@ describe('orchestrated mode (brief.orchestrator)', () => {
     await service.resumeAutonomousVideo('mv-auto', { addTools: ['video:local'] });
     expect(runOf().brief).toMatchObject({ tools: ['image:local', 'video:local'], stopBeforeVideo: false });
     expect(store.get('mv-auto').automation.tools).toEqual(['image:local', 'video:local']);
-    // The added local video tool sets the project's renderer, and a performance shot it cannot lip-sync plays as a cutaway.
+    // The added local video tool sets the project's renderer, and a performance shot keeps lip-syncing on local LTX.
     expect(store.get('mv-auto').videoSettings).toMatchObject({ backend: 'local', generationMode: 'suppliedAudio' });
-    expect(store.get('mv-auto').scenes[0].shotMode).toBe('cutaway');
+    expect(store.get('mv-auto').scenes[0].shotMode).toBe('performance');
     expect(doubles.resumeProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-1', expect.objectContaining({
       pool: expect.arrayContaining([expect.objectContaining({ kind: 'video', mode: 'local' })]) }));
     expect(doubles.resumeProduction.mock.calls[0][2].stopBefore).toBeUndefined();
@@ -1603,6 +1613,38 @@ describe('orchestrated mode (brief.orchestrator)', () => {
           machineEvidence: expect.objectContaining({ audioReview: expect.stringContaining('audioSync pass') }) }) }));
       expect(reviews()).toContain('proof:approve');
       expect(doubles.resumeProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-1', { acceptBasis: true });
+    });
+
+    // Uniquely catches an orchestrated run parking on a clip the machine failed to save, or retrying one forever.
+    it('retries a clip that failed on infrastructure, then parks once the slot spent its retries', async () => {
+      await pilotFixture();
+      const busy = 'Timed out waiting for backup publication admission at <data>/backup-admission/cut. No publication writes started.';
+      const failedClip = (n) => ({ key: `clip:mvs-a:base:${n}`, kind: 'clip', sceneId: 'mvs-a', revisionId: null, status: 'failed', error: busy });
+      const production = store.get('mv-auto').productionRuns[0];
+      production.steps = [failedClip(1)];
+      await blocked();
+      expect(doubles.resumeProduction).toHaveBeenLastCalledWith('mv-auto', 'mvpr-1', { acceptBasis: true });
+      expect(runOf().status).toBe('running');
+
+      // The slot's retries are spent: the third failure parks.
+      doubles.resumeProduction.mockClear();
+      production.retryAcknowledged = ['clip:mvs-a:base:1', 'clip:mvs-a:base:2'];
+      production.steps = [failedClip(1), failedClip(2), failedClip(3)];
+      await blocked();
+      expect(doubles.resumeProduction).not.toHaveBeenCalled();
+      expect(runOf()).toMatchObject({ status: 'needs-human', errorCode: 'PRODUCTION_PARKED' });
+    });
+
+    // Uniquely catches a pre-composed-default footage run parking on its draft render instead of composing its shots.
+    it('composes a legacy footage project whose draft review stopped for want of a document', async () => {
+      await pilotFixture();
+      store.get('mv-auto').composition = { mode: 'document', textCues: [{ id: 'cue' }] };
+      const stopped = { status: 'stopped', stopReason: 'The review paused: The draft could not render: This project has no composition document on this machine' };
+      Object.assign(store.get('mv-auto').productionRuns[0], stopped);
+      await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: stopped });
+      expect(store.get('mv-auto').composition).toEqual({ mode: 'composed', textCues: [{ id: 'cue' }] });
+      expect(doubles.resumeProduction).toHaveBeenLastCalledWith('mv-auto', 'mvpr-1', { acceptBasis: true });
+      expect(runOf().status).toBe('running');
     });
   });
 

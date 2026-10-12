@@ -3,7 +3,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { musicVideoEvents } from './events.js';
 import { shotCameraLabel } from '../../lib/cameraMovements.js';
-import { productionReadiness, boardStoryboard, seedArtDraft, productionReviewBasis, productionAlignmentBasis, documentStoryboardBasis, approveProductionStage, assertProductionApproval, recordProductionFeedback, resolveProductionFeedback, revertApprovedInput } from './productionReview.js';
+import { productionReadiness, boardStoryboard, seedArtDraft, productionReviewBasis, productionAlignmentBasis, documentStoryboardBasis, approveProductionStage, assertProductionApproval, assertShotApproval, assertClipUnlocked, setShotLocks, recordProductionFeedback, resolveProductionFeedback, revertApprovedInput } from './productionReview.js';
 
 const reviewProcessId = randomUUID();
 
@@ -25,15 +25,20 @@ export const getProductionReview = async id => present(await requireProject(id))
 /**
  * The approval a scene's media job needs. A still is how the director reviews
  * the storyboard, so a still for a planned shot needs only the art direction;
- * clips, and anything a production run submits, wait for the storyboard. A
+ * a Board shot's own clip needs that shot locked (or the whole storyboard
+ * approved); anything a production run submits waits for the storyboard. A
  * production run's bulk work also waits for the animated proof, except the
  * stills of a run that stops before clips: the proof is made from clips.
  */
 export async function assertMusicVideoSceneReview(tag, kind = null) {
   if (!tag?.projectId || !tag.sceneId) return;
   const project = await requireProject(tag.projectId);
-  const boardStill = kind === 'image' && !tag.productionRunId && (project.scenes || []).some(scene => scene.sceneId === tag.sceneId);
-  assertProductionApproval(project, boardStill ? 'art' : 'storyboard');
+  const boardShot = !tag.productionRunId && (project.scenes || []).some(scene => scene.sceneId === tag.sceneId);
+  // A locked video is final: no new still or clip for that shot, from the director or a run.
+  assertClipUnlocked(project, tag.sceneId);
+  if (boardShot && kind === 'image') assertProductionApproval(project, 'art');
+  else if (boardShot) assertShotApproval(project, tag.sceneId);
+  else assertProductionApproval(project, 'storyboard');
   if (tag.productionRunId) {
     const run = project.productionRuns?.find(r => r.id === tag.productionRunId);
     const stillsOnly = kind === 'image' && run?.stopBefore === 'clips';
@@ -148,6 +153,12 @@ export async function reverifyProductionAlignment(id, { basis, notes, reviewer }
 export async function revertProductionInput(id, input) {
   await requireProject(id);
   const { project } = await mutateProjectRecord(id, current => ({ project: revertApprovedInput(current, input) }));
+  return changed(project);
+}
+
+/** Lock or unlock Board shots for an authenticated reviewer, under the project write lock. */
+export async function lockProductionShots(id, input) {
+  const { project } = await mutateProjectRecord(id, current => ({ project: setShotLocks(current, input) }));
   return changed(project);
 }
 
@@ -335,7 +346,7 @@ export async function reviseProductionFromFeedback(id, { stage, ...route }) {
       });
       return { project: { ...current, scenes, updatedAt: new Date().toISOString(),
         ...(storyboard ? { productionReview: { ...current.productionReview, draft: { ...draft, storyboard } } } : {}) } };
-    });
+    }, { source: 'storyboard-revision' });
     return { ...changed(next), revision: { stage, sceneIds: [...updates.keys()] } };
   }
   const mode = project.composition?.mode;

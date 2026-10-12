@@ -400,6 +400,7 @@ describe('applyProjectPatch', () => {
       falDuration: null,
       falModelId: null,
       falResolution: null,
+      falEndFrameModelId: null,
       falLipSyncResolution: null,
       falMusicModelId: null,
       falMusicResolution: null,
@@ -418,6 +419,7 @@ describe('applyProjectPatch', () => {
       falDuration: null,
       falModelId: null,
       falResolution: null,
+      falEndFrameModelId: null,
       falLipSyncResolution: null,
       falMusicModelId: null,
       falMusicResolution: null,
@@ -868,6 +870,15 @@ describe('composition document (render style `document`)', () => {
     expect(next.composition.document).toEqual(pointer);
     expect(next.composition.overlay.timecode).toBe(true);
     expect(applyProjectPatch(project, { composition: null }).composition).toBeNull();
+  });
+
+  // Uniquely catches a style-only PATCH resetting mode to concat and dropping cutting (staling the approvals).
+  it('merges a composition patch without a mode over the stored manifest, and replaces one that carries it', () => {
+    const project = { ...withDocument(), composition: { ...withDocument().composition, mode: 'composed', cutting: 'intercut' } };
+    const styled = applyProjectPatch(project, { composition: { style: { color: '#ff0000', font: 'serif' } } }).composition;
+    expect(styled).toMatchObject({ mode: 'composed', cutting: 'intercut', overlay: { titleLines: ['EXAMPLE'] }, style: { color: '#ff0000', font: 'serif' } });
+    const { cutting: _drop, ...full } = project.composition;
+    expect(applyProjectPatch(project, { composition: full }).composition).not.toHaveProperty('cutting');
   });
 
   it('carries the pointer to a clone (versions are immutable folders)', () => {

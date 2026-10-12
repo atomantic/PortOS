@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { formatTimecode, formatUsd } from '../../utils/formatters.js';
+import { clipAudioOffsetSec } from '../../lib/musicVideoShotTiming.js';
 
 /** One transport: muted output picture against the take's recorded source.
  * Word windows are clip-relative; temporal evidence is excerpt-relative.
@@ -13,6 +14,8 @@ export default function PerformanceEvidence({ clipSrc, instruction, temporal = n
   const filename = conditioning?.filename;
   const source = filename ? `/data/music/${encodeURIComponent(filename)}` : null;
   const windowStart = instruction?.audioWindow?.startSec;
+  // Word windows and the source are window time; an aligned clip's window starts this far in.
+  const offset = clipAudioOffsetSec(instruction);
   const canSync = source && Number.isFinite(windowStart);
   const cues = Array.isArray(instruction?.cues) ? instruction.cues : [];
 
@@ -25,7 +28,7 @@ export default function PerformanceEvidence({ clipSrc, instruction, temporal = n
 
   const sync = () => {
     if (!canSync || !audio.current || !video.current) return;
-    const target = windowStart + video.current.currentTime;
+    const target = windowStart + video.current.currentTime - offset;
     if (Math.abs(audio.current.currentTime - target) > 0.05) audio.current.currentTime = target;
   };
   const pause = () => audio.current?.pause();
@@ -55,10 +58,10 @@ export default function PerformanceEvidence({ clipSrc, instruction, temporal = n
       {error && <p role="status" className="text-port-warning">{error}</p>}
       <div className="flex flex-wrap gap-1" aria-label="Word windows">
         {cues.flatMap((cue, index) => (cue.words?.length ? cue.words : [cue]).map((word, i) => (
-          <button type="button" key={`${index}-${i}`} onClick={() => seek(word.startSec)}
+          <button type="button" key={`${index}-${i}`} onClick={() => seek(word.startSec + offset)}
             className="rounded border border-port-border px-2 py-1 min-h-[44px] sm:min-h-0"
-            title={`${formatTimecode(word.startSec)}–${formatTimecode(word.endSec)} (clip time)`}>
-            {word.text} · {formatTimecode(word.startSec)}–{formatTimecode(word.endSec)}
+            title={`${formatTimecode(word.startSec + offset)}–${formatTimecode(word.endSec + offset)} (clip time)`}>
+            {word.text} · {formatTimecode(word.startSec + offset)}–{formatTimecode(word.endSec + offset)}
           </button>
         )))}
       </div>

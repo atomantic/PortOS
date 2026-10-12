@@ -1,6 +1,6 @@
 import { musicVideoMediaMode, musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
 import { prepareProductionReview } from './productionReviewService.js';
-import { ALIGNMENT_UNVERIFIED_PROBLEM, assertProductionApproval, productionAlignmentBasis, productionReadiness, productionReviewBasis } from './productionReview.js';
+import { ALIGNMENT_UNVERIFIED_PROBLEM, assertProductionApproval, carryProductionApprovals, productionAlignmentBasis, productionReadiness, productionReviewBasis } from './productionReview.js';
 import { CAST_SETS_WORKING } from './castAndSets.js';
 import { applyTreatmentPatch, applyTreatmentToProject } from './treatment.js';
 import { codeFirstProductionAssets, normalizeMusicVideoProductionPolicy } from '../../lib/musicVideoMediumPlan.js';
@@ -71,7 +71,7 @@ import { getMusicVideoCharacterStyle } from '../../lib/musicVideoCharacterStyles
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { IMAGE_GEN_MODE } from '../../lib/generationModes.js';
 import { assertFootageVideoModelsCapable, loadPoolEnv } from './productionPool.js';
-import { PRODUCTION_RESUMABLE_STATUSES, acceptProductionPilot, productionTargets } from './production.js';
+import { PRODUCTION_RESUMABLE_STATUSES, PRODUCTION_TRANSIENT_RETRIES, acceptProductionPilot, productionTargets, transientProductionRetry } from './production.js';
 import { currentPilotPass, pilotInputBasis, pilotRepair } from './productionPilot.js';
 import {
   AUTONOMOUS_DEFAULT_LIMITS,
@@ -92,7 +92,8 @@ import {
   sunoSongFields,
 } from '../../lib/musicVideoAutonomous.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
-import { getProject, mutateProjectRecord } from './projects.js';
+import { getProject, mutateProjectRecord as mutateRecord } from './projects.js';
+const mutateProjectRecord = (id, transform) => mutateRecord(id, transform, { source: 'orchestrator' });
 import { musicVideoEvents } from './events.js';
 import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
 import { isPerformanceScene, performanceCapability } from '../../lib/musicVideoShotTiming.js';
@@ -699,6 +700,9 @@ async function orchestrateProductionStage(project, run, stage) {
   }
 }
 
+/** The brief's prompt and guidance as production's planning directive. */
+const briefDirective = (brief) => trimTo([brief.prompt, brief.guidance].filter(Boolean).join('\n\n'), 4000);
+
 /** The run renders its film from code alone rather than through production. */
 const rendersFromCode = (project, run) => musicVideoMediaMode(project) === 'code-only' || autonomousMedium(run.brief.tools) === 'code';
 
@@ -1210,7 +1214,7 @@ const STAGES = {
     }
     const pool = briefProductionPool(run.brief, project);
     const started = await deps.startProduction(project.id, {
-      directive: trimTo([run.brief.prompt, run.brief.guidance].filter(Boolean).join('\n\n'), 4000),
+      directive: briefDirective(run.brief),
       pool,
       ...(stopsBeforeClips(project, run, pool) ? { stopBefore: 'clips' } : {}),
       limits: { ...run.brief.limits, ...(run.brief.budgetUsd != null ? { spendCapUsd: run.brief.budgetUsd } : {}) },
@@ -1442,7 +1446,7 @@ const emptyStages = () => Object.fromEntries(AUTONOMOUS_STAGE_IDS.map((id) => [i
  * The project video settings the run's own video tool implies, so the plan and
  * production agree on what can render: its backend and local model, and Supplied
  * song audio when that local model takes a shot's song window. With no video tool
- * it is local video, which plans no lip-sync shots.
+ * it is local video, whose lip-sync shots render as LTX audio-to-video.
  */
 async function briefVideoSettings(tools, models) {
   const route = autonomousPool(tools, models).find((entry) => entry.kind === 'video');
@@ -1634,6 +1638,9 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
   const retake = edits.retakeSong === true;
   if (retake && run.brief.songFrom) throw runError(409, 'SONG_REUSED', 'This run reuses an existing song, so it has no song to retake');
   if (retake) assertAtSongCheckpoint(run);
+  // A changed prompt or guidance reaches production's shot planner on this resume.
+  const directionPatch = Object.fromEntries(['prompt', 'guidance'].filter((key) => typeof edits[key] === 'string' && edits[key] !== (run.brief[key] ?? '')).map((key) => [key, edits[key]]));
+  const directionChanged = Object.keys(directionPatch).length > 0;
   const modelsChanged = toolsPatch !== null || (modelsPatch !== null && JSON.stringify(modelsPatch) !== JSON.stringify(run.brief.models || {}));
   // Approving the stills goes on to the clips, including in any new production run.
   const stillsApproved = run.status === 'awaiting-approval' && run.awaiting === 'stills';
@@ -1659,8 +1666,9 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
     const stage = retake ? 'song' : r.stage;
     return {
       status: 'running', awaiting: null, error: null, errorCode: null, processId: PROCESS_ID,
-      ...(edits.suno || edits.localMusic !== undefined || grant || modelsPatch || toolsPatch || limitsPatch || stillsApproved ? { brief: {
+      ...(edits.suno || edits.localMusic !== undefined || grant || modelsPatch || toolsPatch || limitsPatch || stillsApproved || directionChanged ? { brief: {
         ...r.brief,
+        ...directionPatch,
         ...(toolsPatch ? { tools: toolsPatch } : {}),
         ...(stillsApproved ? { stopBeforeVideo: false } : {}),
         ...(modelsPatch ? { models: modelsPatch } : {}),
@@ -1724,7 +1732,7 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
     return { project: presentProjectAutonomousRun(latest), run: presentAutonomousRun(projectAutonomousRun(latest)) };
   }
   if (resume.kind === 'production') {
-    return resumeDelegatedProduction(projectId, out.run, { swapModels: modelsChanged, limits: edits.limits, stillsApproved });
+    return resumeDelegatedProduction(projectId, out.run, { swapModels: modelsChanged, limits: edits.limits, stillsApproved, directionChanged });
   }
   advanceInBackground(projectId);
   return { project: out.project, run: presentAutonomousRun(out.run) };
@@ -1756,7 +1764,7 @@ const PRODUCTION_LIVE = new Set(['running', 'limit-reached', 'blocked', 'needs-r
  * when that run is already complete. No production run left to follow — or a model
  * swap on one that cannot resume — starts a new one from the brief by re-entering `produce`.
  */
-async function resumeDelegatedProduction(projectId, run, { swapModels = false, limits, stillsApproved = false } = {}) {
+async function resumeDelegatedProduction(projectId, run, { swapModels = false, limits, stillsApproved = false, directionChanged = false } = {}) {
   const project = await getProject(projectId);
   const runs = Array.isArray(project.productionRuns) ? project.productionRuns : [];
   const current = runs.find((r) => r.id === run.output.productionRunId) || null;
@@ -1782,12 +1790,15 @@ async function resumeDelegatedProduction(projectId, run, { swapModels = false, l
     // Only approving the stills goes on to the clips; any other resume reviews them (again).
     settleStills(projectId, run, adopt.id).catch((err) => console.error(`❌ Autonomous music video ${short(run.id)} stills review: ${err.message}`));
   } else {
+    // A footage run started before shots were composed by default renders its drafts from them.
+    if (!rendersFromCode(project, run)) await ensureFootageComposition(projectId);
     // Resuming a "running" run is safe and re-pins one left by a previous server process.
     const productionLimits = limits ? Object.fromEntries(Object.entries(limits).filter(([, v]) => v != null)) : undefined;
     const failure = await deps.resumeProduction(projectId, adopt.id, {
       acceptBasis: true,
       ...(productionLimits ? { limits: productionLimits } : {}),
       ...(swapModels ? { pool: briefProductionPool(run.brief, project) } : {}),
+      ...(directionChanged ? { directive: briefDirective(run.brief) } : {}),
     })
       .then(() => null, (err) => err);
     if (failure) {
@@ -1945,9 +1956,9 @@ async function approvePilotProof(projectId, run, production) {
 }
 
 /**
- * Production stopped (`blocked`) on something a run set to approve can settle
- * itself. Returns true when it settled it and production resumed; false parks
- * the run for the director as before.
+ * Production stopped (`blocked`, or `stopped` by its draft review) on something
+ * the run can settle itself. Returns true when it settled it and production
+ * resumed; false parks the run for the director as before.
  */
 async function settleBlockedProduction(projectId, run, productionRunId) {
   if (settlingProduction.has(productionRunId)) return true;
@@ -1958,8 +1969,17 @@ async function settleBlockedProduction(projectId, run, productionRunId) {
     if (!production) return false;
     const orchestrated = isOrchestratedRun(run);
     const readiness = productionReadiness(project);
+    const retry = production.status === 'blocked' && orchestrated ? transientProductionRetry(production) : null;
     let settled = false;
-    if (!readiness.storyboard.approved && (orchestrated || autoApproves(run, 'storyboard'))) {
+    if (production.status === 'stopped') {
+      // Only the draft review's own refusal, never a director's stop: a footage
+      // project made before it composed its shots has no document to render.
+      settled = /no composition document/i.test(production.stopReason || '') && await ensureFootageComposition(projectId);
+    } else if (retry) {
+      // The machine failed, not the shot: generate it again, within the slot's retries.
+      console.log(`🔁 Autonomous music video ${short(run.id)} retrying ${retry.map((s) => `${s.kind} ${s.sceneId}`).join(', ')} after a transient failure (up to ${PRODUCTION_TRANSIENT_RETRIES} retries)`);
+      settled = true;
+    } else if (!readiness.storyboard.approved && (orchestrated || autoApproves(run, 'storyboard'))) {
       project = await settleProductionStage(project, run, 'art');
       project = await settleProductionStage(project, run, 'storyboard');
       settled = productionReadiness(project).storyboard.approved;
@@ -2012,7 +2032,7 @@ async function onProductionEvent({ projectId, runId, run: production }) {
     if (run.status === 'running') await settleStills(projectId, run, runId);
   } else if (production.status === 'limit-reached' && run.status === 'running' && await raiseSizedLimit(projectId, runId, run, project, production)) {
     // The default generation limit grew to the planned shots and production goes on.
-  } else if (production.status === 'blocked' && run.status === 'running' && await settleBlockedProduction(projectId, run, runId)) {
+  } else if (['blocked', 'stopped'].includes(production.status) && run.status === 'running' && await settleBlockedProduction(projectId, run, runId)) {
     // A run set to approve settled the stop itself and production goes on.
   } else if (PRODUCTION_PARKED.has(production.status) && run.status === 'running') {
     await park(projectId, 'needs-human', { error: reason || `Production is ${production.status}`, errorCode: 'PRODUCTION_PARKED' });
@@ -2152,10 +2172,13 @@ async function ensureFootageComposition(projectId) {
   const project = await getProject(projectId);
   const composition = project?.composition;
   if (composition?.mode !== 'document' || composition.document || composition.documentDraft
-    || normalizeMusicVideoProductionPolicy(project.productionPolicy).strategy === 'code-first') return;
+    || normalizeMusicVideoProductionPolicy(project.productionPolicy).strategy === 'code-first') return false;
   // The manifest is replaced whole, so its cues, cutting and grade ride along.
   await deps.updateProject(projectId, { composition: { ...composition, mode: 'composed' } });
+  // No one reviewed this switch, so the approvals it would stale carry over.
+  await mutateProjectRecord(projectId, (current) => ({ project: carryProductionApprovals(project, current, 'Composed the footage of a project with no composition document') }));
   console.log(`🎬 Autonomous music video set ${short(projectId)} to compose its footage (it had no composition document)`);
+  return true;
 }
 
 /** Render the film (again) and wait for the render's own event. */

@@ -3,11 +3,13 @@ import FilmLookControls from '../media/FilmLookControls.jsx';
 import { isFilmLookNeutral } from '../../lib/filmLook.js';
 
 /**
- * The project's finishing film look: the filter the composition live preview
- * and the final render are viewed through (lib/filmLook.js). Every slider move
- * reaches the docked preview at once (`onEditLocal`); releasing a control saves
- * (`onSave`). Source footage and generated images stay unchanged; to bake the
- * look into a still, open the image and use Film look there.
+ * The project's finishing film look: the filter the docked preview (the
+ * composition document or the storyboard animatic) and the final render are
+ * viewed through (lib/filmLook.js). Every slider move reaches the preview at
+ * once (`onEditLocal`); releasing a control saves (`onSave`). Source footage
+ * and generated images stay unchanged: a document render draws through the
+ * filter, a footage render gets it as a finishing pass over the finished cut,
+ * and a still is baked only from Film look in the image viewer.
  */
 export default function FilmLookPanel({ project, onEditLocal, onSave }) {
   const documentMode = project.composition?.mode === 'document';
@@ -19,7 +21,7 @@ export default function FilmLookPanel({ project, onEditLocal, onSave }) {
         <span className="text-xs text-port-text-muted">{on ? 'Live in the preview · applied to the final render' : 'Off'}</span>
       </div>
       {!documentMode && (
-        <p className="text-xs text-port-text-muted" role="status">The film look is applied by the composition-document render style; this project's render style ignores it. It still works on any image through Film look in the image viewer.</p>
+        <p className="text-xs text-port-text-muted">Applied as a finishing pass after the cut is encoded, so the clips themselves never change; the animatic shows it live.</p>
       )}
       <FilmLookControls look={project.filmLook} compact
         onChange={(look) => onEditLocal({ filmLook: look })}

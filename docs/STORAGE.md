@@ -989,3 +989,17 @@ No age-based expiration is used. Refused/interrupted maintenance work stops unti
 explicit resume acknowledges the outcome. A legacy Deep queued request with no
 queue, task, or receipt likewise stops for explicit resume. Repeating resume on
 an already-running maintenance run does not dispatch or re-evaluate it.
+
+### Browser message cache identity
+
+The existing `data/messages/cache/<account-id>.json` remains machine-local
+`ephemeral-file` provider cache; timeline events remain PostgreSQL records.
+Browser rows and expanded members carry additive identity fields, with a stable
+provider child ID when available and a conservative per-row member discriminator
+otherwise. `activityIdentity` retains an already-established timeline key when a
+legacy summary is upgraded, so the existing event ID and cache evaluation survive.
+Migration 426 pins only unique legacy keys in existing input caches, atomically,
+without a seed or creating missing caches; sync/refresh also reconcile lazily for
+older cache writers. Ambiguous legacy matches are preserved rather than guessed.
+These fields do not add federation or a new store; older cache records remain
+readable and Gmail/API IDs retain their existing meaning.

@@ -22,6 +22,7 @@ export * from './apiContractSchemas.js';
 export * from './codeAnimationPackage.js';
 export * from './codeAnimationAcceptance.js';
 export * from './codeAnimationContainment.js';
+export * from './generatedPreviewSandbox.js';
 export * from './autonomousJobTask.js';
 export * from './asyncApiSpec.js';
 export * from './avatarVariants.js';
@@ -837,6 +838,8 @@ export * from './filmLook.js';
 export * from './filmLookValidation.js';
 export * from './musicVideoTitleCard.js';
 export * from './musicVideoDependencies.js';
+export * from './musicVideoEndFrame.js';
+export * from './musicVideoHandoffFrame.js';
 export * from './musicVideoCrossLinks.js';
 export * from './musicVideoExcerptRange.js';
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { runInNewContext } from 'node:vm';
 import {
-  FILM_LOOK_CONTROLS, FILM_LOOK_PRESETS, describeFilmLook, filmLookFilterMarkup, filmLookPreset, filmLookRuntimeSource,
+  FILM_LOOK_CONTROLS, FILM_LOOK_PRESETS, describeFilmLook, filmLookFilterMarkup, filmLookMotionLayers, filmLookPreset, filmLookRuntimeSource,
   isFilmLookNeutral, normalizeFilmLook,
 } from './filmLook.js';
 import { filmLookSchema } from './filmLookValidation.js';
@@ -86,6 +87,55 @@ describe('film look filter markup', () => {
 });
 
 describe('film look runtime', () => {
+  // Catches motion mode retaining the per-frame SVG chain or pause failing to restore render parity.
+  it('switches the inlined page runtime between cheap reusable motion layers and the exact seek filter', () => {
+    const element = () => ({
+      style: { filter: '', transform: '' }, dataset: {}, children: [], isConnected: false,
+      setAttribute() {},
+      getContext: () => ({ fillRect() {}, createPattern() {} }),
+      get lastElementChild() { return this.children.at(-1); },
+      appendChild(child) { child.remove(); this.children.push(child); child.parent = this; child.parentNode = this; child.isConnected = true; },
+      insertBefore(child, before) { child.remove(); this.children.splice(before ? this.children.indexOf(before) : this.children.length, 0, child); child.parent = this; child.parentNode = this; child.isConnected = true; },
+      remove() { if (this.parent) this.parent.children = this.parent.children.filter((child) => child !== this); this.isConnected = false; },
+    });
+    const root = Object.assign(element(), { clientWidth: 390, clientHeight: 219 });
+    root.style.transform = 'scale(0.9)';
+    const context = { document: { documentElement: root, body: root, readyState: 'complete', createElement: element, createElementNS: element }, addEventListener() {} };
+    context.window = context;
+    const look = filmLookPreset('vhs');
+    runInNewContext(filmLookRuntimeSource(look), context);
+    const api = context.__portosFilmLook;
+    context.portosComposition = { fps: 30, seek: (t) => t };
+    context.portosComposition.seek(0.4);
+    const exact = filmLookFilterMarkup(look, { frame: 12, width: 390, height: 219 });
+    expect(root.style.filter).toBe(exact.css);
+    expect(root.children[0].innerHTML).toBe('<defs>' + exact.filter + '</defs>');
+    api.playback(true);
+    expect(root.style.filter).not.toContain('url(');
+    const overlays = root.lastElementChild;
+    const grain = overlays.children.find((child) => child.dataset.filmLookLayer === 'grain');
+    const canvas = grain.children[0];
+    const originalShift = canvas.style.transform;
+    context.portosComposition.seek(0.5);
+    expect(root.lastElementChild).toBe(overlays);
+    expect(overlays.children.find((child) => child.dataset.filmLookLayer === 'grain')).toBe(grain);
+    expect(grain.children[0]).toBe(canvas);
+    expect(canvas.style.transform).not.toBe(originalShift);
+    expect(overlays.style.cssText).toContain('display:contents;pointer-events:none');
+    expect(overlays.children.every((child) => child.style.zIndex === '2147483647')).toBe(true);
+    expect(overlays.children.every((child) => child.style.pointerEvents === 'none')).toBe(true);
+    api.playback(false);
+    expect(root.style.filter).toBe(exact.css);
+    expect(root.style.transform).toBe('scale(0.9)');
+    expect(overlays.isConnected).toBe(false);
+    expect(root.lastElementChild.innerHTML).toBe('<defs>' + filmLookFilterMarkup(look, { frame: 15, width: 390, height: 219 }).filter + '</defs>');
+    api.playback(true);
+    api.apply(null);
+    expect(root.style.filter).toBe('');
+    expect(root.style.transform).toBe('scale(0.9)');
+    expect(root.children).toHaveLength(0);
+  });
+
   it('carries the markup, the starting look and the composition seek hook into a page', () => {
     const source = filmLookRuntimeSource({ grain: 0.3, preset: 'custom' });
     expect(source).toContain('function filmLookFilterMarkup');
@@ -93,5 +143,47 @@ describe('film look runtime', () => {
     expect(source).toContain("'portosComposition'");
     expect(source).toContain('__portosFilmLook');
     expect(filmLookRuntimeSource(null)).toContain('let look = null;');
+  });
+});
+
+describe('film look motion layers', () => {
+  // Uniquely catches an SVG filter coming back into the playing picture (a browser re-runs it over
+  // every decoded video frame: 30 fps → under 1 on a phone after #11215) and the stages leaving the render's order.
+  it('turns the look into CSS filter functions and blended overlays, with the noise as tiles shifted per frame', () => {
+    const look = normalizeFilmLook({ defocus: 0.3, halation: 0.4, contrast: -0.2, fade: 0.3, saturation: 0.15, warmth: 0.2, cast: 0.2, castColor: '#b9c04a', grain: 0.6, grainSize: 0.5, tapeNoise: 0.5, vignette: 0.4, leak: 0.3, weave: 0.5 });
+    const motion = filmLookMotionLayers(look, { frame: 12, width: 390, height: 219 });
+    expect(motion.filter).toMatch(/^blur\([\d.]+px\) brightness\([\d.]+\) contrast\([\d.]+\) saturate\(1\.15\)$/);
+    expect(motion.filter).not.toContain('url(');
+    expect(motion.transform).toMatch(/^translate\(-?[\d.]+px, -?[\d.]+px\)$/);
+    expect(motion.overlays.map((layer) => [layer.key, layer.kind, layer.blend])).toEqual([
+      ['warmth', 'flat', 'soft-light'], ['cast', 'flat', 'soft-light'], ['grain', 'tile', 'overlay'], ['tape', 'tile', 'soft-light'], ['vignette', 'gradient', 'normal'], ['leak', 'gradient', 'screen'],
+    ]);
+    const grain = motion.overlays.find((layer) => layer.key === 'grain');
+    expect(grain).toMatchObject({ opacity: 0.6, size: [256, 256] });
+    expect(decodeURIComponent(grain.image)).toContain('<feTurbulence type="fractalNoise"');
+    expect(decodeURIComponent(grain.image)).toContain('stitchTiles="stitch"');
+    expect(motion.overlays.find((layer) => layer.key === 'cast')).toMatchObject({ color: '#b9c04a', opacity: 0.2 });
+    expect(motion.overlays.find((layer) => layer.key === 'tape')).toMatchObject({ opacity: 0.4, size: [390, 128] });
+    expect(motion.overlays.find((layer) => layer.key === 'vignette').gradient).toContain('rgba(0,0,0,0.4) 100%');
+    // The tone transfer matches the render's: brightness(b) then contrast(k) = slope·v + intercept.
+    const [, b, k] = /brightness\(([\d.]+)\) contrast\(([\d.]+)\)/.exec(motion.filter).map(Number);
+    const c = 1 - 0.2 * 0.8; const s = 1 - 0.28 * 0.3;
+    expect(b * k).toBeCloseTo(c * s, 3);
+    expect((1 - k) / 2).toBeCloseTo(s * ((1 - c) / 2) + 0.2 * 0.3, 3);
+    // Frames shift the tiles and drift the leak; the tile images stay the same, so they rasterize once.
+    const next = filmLookMotionLayers(look, { frame: 13, width: 390, height: 219 });
+    const grainNext = next.overlays.find((layer) => layer.key === 'grain');
+    expect(grainNext.shift).not.toEqual(grain.shift);
+    expect(grainNext.image).toBe(grain.image);
+    expect(next.transform).not.toBe(motion.transform);
+    expect(filmLookMotionLayers(look, { frame: 12, width: 390, height: 219 })).toEqual(motion);
+  });
+
+  it('carries only what a look uses, and is null for a neutral one', () => {
+    const flat = filmLookMotionLayers({ saturation: -0.4 }, {});
+    expect(flat).toEqual({ filter: 'saturate(0.6)', transform: null, overlays: [] });
+    expect(filmLookMotionLayers({ grain: 0.3 }, {}).filter).toBeNull();
+    expect(filmLookMotionLayers(filmLookPreset('none'), {})).toBeNull();
+    expect(filmLookMotionLayers(null)).toBeNull();
   });
 });

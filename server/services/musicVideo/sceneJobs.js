@@ -21,7 +21,8 @@ export function listInFlightSceneJobs(projectId) {
     const lane = LANE_BY_KIND[job.kind];
     const tag = job.params?.musicVideo;
     if (!lane || tag?.projectId !== projectId || !tag.sceneId) continue;
-    out.push({ jobId: job.id, lane, sceneId: tag.sceneId, status: job.status });
+    // An end-frame render (#11173) restores into the board's end-frame lane.
+    out.push({ jobId: job.id, lane: lane === 'image' && tag.slot === 'end' ? 'endImage' : lane, sceneId: tag.sceneId, status: job.status });
   }
   return out;
 }

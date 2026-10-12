@@ -457,3 +457,16 @@ describe('sendPlaywright', () => {
     expect(submits).toBe(3);
   });
 });
+
+
+it('preserves unknown Teams read state when replaying a cached full body', async () => {
+  const { browserSummaryId } = await import('../lib/messageBrowserIdentity.js');
+  findOrOpenPage.mockResolvedValue({ url: 'https://teams.microsoft.com/' });
+  isAuthPage.mockReturnValue(false);
+  tryReadFile.mockResolvedValue('{}');
+  const row = { from: 'Example Sender', subject: '', date: '2026-01-01T12:00:00Z', isUnread: null };
+  evaluateOnPage.mockResolvedValue([row]);
+  const cached = { id: 'cached', externalId: browserSummaryId(row.date, row.from, row.subject), bodyFull: true, bodyText: 'Cached body' };
+  const result = await syncPlaywright({ id: 'example-account', type: 'teams' }, { messages: [cached] });
+  expect(result.messages).toEqual([expect.objectContaining({ id: cached.id, bodyText: 'Cached body', isRead: null, isUnread: null })]);
+});

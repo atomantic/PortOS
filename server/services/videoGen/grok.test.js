@@ -83,6 +83,7 @@ vi.mock('../../lib/ffmpeg.js', async () => {
     ...actual,
     optimizeForStreaming: vi.fn(async () => {}),
     generateThumbnail: vi.fn(async (_p, jobId) => `${jobId}.jpg`),
+    probeVideoDuration: vi.fn(async () => null),
   };
 });
 
@@ -92,6 +93,7 @@ const { loadHistory } = await import('./history.js');
 const { createMaintenanceAdmission } = await import('../../lib/maintenanceAdmission.js');
 const { rmGuarded, unlinkGuarded } = await import('../../lib/fileUtils.js');
 const realFiles = await vi.importActual('../../lib/fileUtils.js');
+const { probeVideoDuration } = await import('../../lib/ffmpeg.js');
 
 const flush = () => new Promise((r) => setImmediate(r));
 const scratchDirFor = (jobId) => join(tmpdir(), `portos-grok-video-${jobId}`);
@@ -226,6 +228,29 @@ describe('videoGen/grok — harvest and finalize', () => {
     expect(existsSync(scratchDirFor(job.jobId))).toBe(false);
     const history = await loadHistory();
     expect(history[0]).toEqual(expect.objectContaining({ id: job.jobId, modelId: 'grok', mode: 'text', duration: 6 }));
+  });
+
+  it('records the delivered length and warns when a 15 s request comes back short', async () => {
+    probeVideoDuration.mockResolvedValueOnce(10.04);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const completed = vi.fn();
+    videoGenEvents.on('completed', completed);
+
+    const job = await grok.generateVideo({ prompt: 'a fox running', duration: 15 });
+    expect(promptOf()).toContain('for 15 seconds');
+    await mkdir(scratchDirFor(job.jobId), { recursive: true });
+    await writeFile(stagingPathFor(job.jobId), MP4_BYTES);
+    await closeChild(0, 0);
+
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline && completed.mock.calls.length === 0) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(completed).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('grok delivered 10.04s for a 15s request'));
+    const history = await loadHistory();
+    expect(history.find((h) => h.id === job.jobId)).toEqual(expect.objectContaining({ duration: 15, deliveredSec: 10.04 }));
+    warn.mockRestore();
   });
 
   it('rejects a staged file that is not MP4 (signature sniff)', async () => {

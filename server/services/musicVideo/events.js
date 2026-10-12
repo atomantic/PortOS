@@ -3,7 +3,7 @@ import { EventEmitter } from 'events';
 // Event bus for Music Video async side effects that need to reach the client
 // after the originating HTTP request has returned. It carries:
 //
-//   'scene-image' → { projectId, sceneId, referenceImageId, takes, takeId }
+//   'scene-image' → { projectId, sceneId, referenceImageId, endImageId, takes, takeId }
 //   'scene-video' → { projectId, sceneId, videoHistoryId, takes, takeId }
 //
 // emitted by `musicVideoSceneImageHook` / `musicVideoSceneVideoHook` once an

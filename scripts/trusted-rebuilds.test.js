@@ -169,10 +169,17 @@ describe('trusted rebuild allowlist', () => {
   // 3 and the package already ships in Vue 3 mode. Keep the hook blocked rather
   // than expanding the lifecycle-script allowlist for a no-op.
   const VUE_DEMI_VUE3_NOOP = ['vue-demi'];
+  // better-sqlite3-multiple-ciphers publishes `gypfile: false` and ships
+  // prebuilt binaries (macOS, Linux glibc and musl, Windows; x64 and arm64).
+  // `binding.gyp` is the maintainer's source-build recipe, which this scan
+  // still sees. `npm rebuild` is unnecessary and can replace the prebuild the
+  // Signal snapshot loader uses. A missing prebuild fails that capture closed
+  // (setup error) instead of compiling during install.
+  const SIGNAL_SQLCIPHER_PREBUILD = ['better-sqlite3-multiple-ciphers'];
   const DELIBERATELY_UNBUILT = {
     root: FSEVENTS_STALE_FLAG,
     client: [...FSEVENTS_STALE_FLAG, ...VUE_DEMI_VUE3_NOOP],
-    server: FSEVENTS_STALE_FLAG
+    server: [...FSEVENTS_STALE_FLAG, ...SIGNAL_SQLCIPHER_PREBUILD]
   };
 
   it('detects install hooks at all, so the accounting assertion is not vacuous', () => {

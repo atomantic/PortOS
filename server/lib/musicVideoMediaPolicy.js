@@ -14,6 +14,8 @@ export function musicVideoMediaMode(project) {
 }
 export function musicVideoAllowsMedia(project, kind) {
   const mode = musicVideoMediaMode(project);
+  // A style-break end frame (#11173) is an image like the start frame.
+  if (kind === 'endImage') kind = 'image';
   return kind === 'image' ? mode !== 'code-only' : kind === 'video' ? mode === 'code-images-video' : true;
 }
 export function assertMusicVideoMedia(project, kind, purpose = 'asset') {
@@ -25,7 +27,7 @@ export function assertMusicVideoMedia(project, kind, purpose = 'asset') {
 export function assertMusicVideoMediaSelections(project) {
   if (project?.visualSpec?.references?.length || project?.visualSpec?.moodBoardId || project?.styleReferences?.some((ref) => ref.imageId)) assertMusicVideoMedia(project, 'image', 'references');
   for (const scene of project?.scenes || []) {
-    if (scene.referenceImageId) assertMusicVideoMedia(project, 'image', 'selection');
+    if (scene.referenceImageId || scene.endImageId) assertMusicVideoMedia(project, 'image', 'selection');
     if (scene.videoHistoryId) assertMusicVideoMedia(project, 'video', 'selection');
   }
 }

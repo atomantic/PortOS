@@ -51,6 +51,8 @@ import {
 } from './modes.js';
 import { buildNoImageReason } from './noImageReason.js';
 import { rejectDegenerateFrame } from './frameGuard.js';
+import { conformImageAspect } from './aspectConform.js';
+import { aspectRatioPhrase } from '../../lib/aspectRatio.js';
 import { resolveInputImages } from './inputImages.js';
 import { cloudPromptRequired } from './cloudProviderConfig.js';
 
@@ -193,7 +195,7 @@ export async function generateImage({
   const renderStartedAtMs = Date.now();
   await ensureDir(PATHS.images);
 
-  // Ship the cheap gpt-5.6-luna / low-effort path by default (see modes.js).
+  // Ship the cheap gpt-6-luna / low-effort path by default (see modes.js).
   // A caller-supplied model/effort (an explicit Settings → Image Gen override,
   // threaded through the dispatcher) wins; `null`/`''`/absent falls back to the
   // shipped default so a bare install never runs Codex's heaviest tier.
@@ -238,7 +240,11 @@ export async function generateImage({
   // gpt-image-2 supports up to 4K output; the "(high quality)" suffix
   // pushes it off its 1024 default toward whatever native size best fits
   // the requested aspect ratio.
-  const sizeHint = (width && height) ? ` (${width}x${height})` : '';
+  // The ratio is named as well as the pixels: a bare "(1672x941)" left the
+  // model free to return a square close-up, so the frame is also conformed
+  // after harvest (aspectConform.js) — the hint just makes that crop rarer.
+  const ratioPhrase = (width && height) ? aspectRatioPhrase(Number(width), Number(height)) : '';
+  const sizeHint = (width && height) ? ` (${ratioPhrase ? `${ratioPhrase} frame, ` : ''}${width}x${height})` : '';
   const qualityHint = (width >= 1536 || height >= 1536) ? ' (high quality)' : '';
   const avoidHint = negativePrompt?.trim() ? `\nAvoid: ${negativePrompt.trim()}` : '';
   const editPrefix = buildCodexAttachmentPrefix({
@@ -429,6 +435,10 @@ function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA
         if (emptyFrame) {
           return finalizeJobFailure(job, jobId, proc, emptyFrame);
         }
+        // Codex picks its own output size; crop an off-aspect frame to the
+        // requested ratio before anything downstream inherits its shape.
+        const aspectConformed = await conformImageAspect(outputPath, meta.width, meta.height);
+        if (aspectConformed) console.log(`✂️ Conformed codex frame [${jobId.slice(0, 8)}] ${aspectConformed.from} → ${aspectConformed.to}`);
         // Sidecar metadata so the gallery can recover prompt/seed/etc. The
         // codex sessionId is the closest analogue to a seed for gpt-image-2
         // (which doesn't expose one) — uniquely identifies the run and is
@@ -437,7 +447,7 @@ function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA
         // `job.renderStartedAtMs` is the queue-ingestion instant generateImage
         // captured, so the spread measures the render itself — not the time the
         // job spent queued behind other renders.
-        await atomicWrite(sidecar, { ...meta, codexSessionId: sessionId, ...renderTimingFields(job.renderStartedAtMs) });
+        await atomicWrite(sidecar, { ...meta, codexSessionId: sessionId, ...(aspectConformed ? { aspectConformed } : {}), ...renderTimingFields(job.renderStartedAtMs) });
         // Cleaners run BEFORE the SSE complete + completed events so subscribers
         // see the cleaned bytes. codex output is the highest-value target for
         // C2PA stripping because gpt-image is the one provider that embeds

@@ -402,12 +402,12 @@ describe('Per-stage approval sections (#10151)', () => {
     const box = screen.getByRole('region', { name: 'Approve: Lyric-timed storyboard' });
     expect(box.id).toBe('mv-review-storyboard');
     expect(box.tagName).toBe('SECTION');
-    expect(within(box).getByRole('heading', { name: 'Approve the lyric-timed storyboard' })).toBeTruthy();
-    expect(within(box).getByRole('button', { name: 'Approve lyric-timed storyboard' })).toBeTruthy();
+    expect(within(box).getByRole('heading', { name: 'Lock all stills' })).toBeTruthy();
+    expect(within(box).getByRole('button', { name: 'Lock all stills' })).toBeTruthy();
     expect(within(box).getByRole('button', { name: 'Request changes' })).toBeTruthy();
     expect(container.querySelector('details#mv-review-storyboard')).toBeNull();
     // The decision sits at the top of the box, before the shots it is about.
-    const approveButton = within(box).getByRole('button', { name: 'Approve lyric-timed storyboard' });
+    const approveButton = within(box).getByRole('button', { name: 'Lock all stills' });
     expect(approveButton.compareDocumentPosition(within(box).getByRole('region', { name: 'Storyboard review content' })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByText('About production approvals')).toBeNull();
   });
@@ -421,7 +421,7 @@ describe('storyboard camera notes (#10589)', () => {
     render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="storyboard" />);
     const notes = screen.getByRole('note', { name: 'Camera variety notes' });
     expect(within(notes).getByText(note)).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Approve lyric-timed storyboard' }).disabled).toBe(false);
+    expect(screen.getByRole('button', { name: 'Lock all stills' }).disabled).toBe(false);
   });
 
   it('shows nothing when the camera plan is varied', () => {

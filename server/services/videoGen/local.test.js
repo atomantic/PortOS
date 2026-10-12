@@ -300,6 +300,12 @@ vi.mock('../../lib/ffmpeg.js', async () => ({
 // hfChildEnv() carries the resolved token over the inherited child env; mocking here
 // avoids touching the real settings layer (which would await an unmocked
 // `getSettings()` chain and hang the spawn-mock-driven tests).
+// The splice itself (real ffmpeg) is covered by extendSplice.test.js; here it is
+// a spy so the suite can pin WHICH renders ask for it.
+vi.mock('./extendSplice.js', () => ({
+  spliceExtendSource: vi.fn(async () => ({ applied: false, reason: 'mocked' })),
+}));
+
 vi.mock('../hfToken.js', () => ({
   hfChildEnv: vi.fn(async () => ({})),
   getHfToken: vi.fn(async () => null),
@@ -1531,6 +1537,20 @@ describe('generateChainedVideo — continuation strategy (context window vs last
     // that's what kept the chain from growing a copy of itself per hop.
     expect(flagValue(renders[1], '--extend-from-video'))
       .toBe(join(tmpdir(), `chaincontext-${innerJobIds[0]}.mp4`));
+  });
+
+  it('delivers the user clip, not the model\'s decode of it, from chunk 0 of an extend chain only (#11179)', async () => {
+    const sourceVideoPath = join(MOCK_PATHS.videos, 'original-video.mp4');
+    const { spliceExtendSource } = await import('./extendSplice.js');
+    vi.mocked(spliceExtendSource).mockClear();
+
+    const { innerJobIds } = await runChain({ mode: 'extend', extendFromVideoPath: sourceVideoPath }, 2);
+
+    // Chunk 1's "source" is a temp tail window the stitch already holds; only
+    // chunk 0 renders from the user's own clip. A hidden chunk keeps no audio master.
+    expect(spliceExtendSource).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      sourcePath: sourceVideoPath, keepMaster: false, outputPath: join(MOCK_PATHS.videos, `${innerJobIds[0]}.mp4`),
+    }));
   });
 
   // #4875 — a chained render is ONE clip, so a speed profile applies to every
@@ -5152,6 +5172,7 @@ describe('generateVideo — Gemma prompt-encode watchdog relaunch', () => {
   };
 
   let restorePlatform = () => {};
+  let restoreArch = () => {};
   let failures;
   let onFailed;
 
@@ -5161,8 +5182,9 @@ describe('generateVideo — Gemma prompt-encode watchdog relaunch', () => {
     // describe would silently assert "never relaunches" on Windows CI.
     // Pinned inside the hook, never at module scope: local.js is already
     // imported by then.
-    const { pinPlatform } = await import('../../lib/testHelper.js');
+    const { pinPlatform, pinArch } = await import('../../lib/testHelper.js');
     restorePlatform = pinPlatform('darwin');
+    restoreArch = pinArch('arm64');
     failures = [];
     onFailed = (payload) => failures.push(payload);
     videoGenEvents.on('failed', onFailed);
@@ -5171,6 +5193,7 @@ describe('generateVideo — Gemma prompt-encode watchdog relaunch', () => {
   afterEach(() => {
     videoGenEvents.off('failed', onFailed);
     restorePlatform();
+    restoreArch();
   });
 
   const startRender = async (jobId, children) => {
@@ -5227,20 +5250,77 @@ describe('generateVideo — Gemma prompt-encode watchdog relaunch', () => {
     await second.finish();
   });
 
-  // The bypass probe for the phase gate: identical abort, identical signal, one
-  // extra marker line. If the gate were dropped this case would relaunch too.
-  it('does not relaunch once the prompt encode has finished', async () => {
+  // After the encode finished, a shorter prompt cannot help — but smaller MLX
+  // command buffers can. Same abort, one extra marker line: the relaunch carries
+  // the buffer caps in its env and NOT the Gemma flag.
+  it('relaunches once with smaller MLX command buffers when the abort lands after the prompt encode', async () => {
     const first = makeDrivenProc(103);
-    const spawnMock = await startRender('pe-after-encode', [first]);
+    const second = makeDrivenProc(109);
+    const spawnMock = await startRender('pe-after-encode', [first, second]);
 
     first.stderr('STAGE:encode-prompt');
     first.stderr('STAGE:encode-prompt-done');
     first.stderr(TIMEOUT_ABORT);
     await first.abort();
 
-    expect(ltx2Calls(spawnMock)).toHaveLength(1);
+    const calls = ltx2Calls(spawnMock);
+    expect(calls).toHaveLength(2);
+    expect(calls[1][1]).not.toContain('--gemma-max-length');
+    expect(calls[0][2].env.MLX_MAX_OPS_PER_BUFFER).toBeUndefined();
+    expect(calls[1][2].env).toMatchObject({ MLX_MAX_OPS_PER_BUFFER: '4', MLX_MAX_MB_PER_BUFFER: '16' });
+    expect(failures).toHaveLength(0);
+
+    // A second abort at the short setting surfaces the normal error.
+    second.stderr(TIMEOUT_ABORT);
+    await second.abort();
+    expect(ltx2Calls(spawnMock)).toHaveLength(2);
     expect(failures).toHaveLength(1);
     expect(failures[0].error).toMatch(/SIGABRT/);
+  });
+
+  it('spends one relaunch per job — a buffer retry is not followed by a prompt-encode retry', async () => {
+    const first = makeDrivenProc(112);
+    const second = makeDrivenProc(113);
+    const spawnMock = await startRender('pe-buffer-then-encode', [first, second]);
+
+    first.stderr('STAGE:encode-prompt-done');
+    first.stderr(TIMEOUT_ABORT);
+    await first.abort();
+    expect(ltx2Calls(spawnMock)).toHaveLength(2);
+
+    second.stderr('STAGE:encode-prompt');
+    second.stderr(TIMEOUT_ABORT);
+    await second.abort();
+
+    expect(ltx2Calls(spawnMock)).toHaveLength(2);
+    expect(failures).toHaveLength(1);
+  });
+
+  it('does not use smaller command buffers off Apple silicon', async () => {
+    restoreArch();
+    const { pinArch } = await import('../../lib/testHelper.js');
+    restoreArch = pinArch('x64');
+    const first = makeDrivenProc(110);
+    const spawnMock = await startRender('pe-x64', [first]);
+
+    first.stderr('STAGE:encode-prompt-done');
+    first.stderr(TIMEOUT_ABORT);
+    await first.abort();
+
+    expect(ltx2Calls(spawnMock)).toHaveLength(1);
+    expect(failures).toHaveLength(1);
+  });
+
+  it('does not use smaller command buffers on an out-of-memory abort after the encode', async () => {
+    const first = makeDrivenProc(111);
+    const spawnMock = await startRender('pe-oom-after-encode', [first]);
+
+    first.stderr('STAGE:encode-prompt-done');
+    first.stderr(OOM_ABORT);
+    await first.abort();
+
+    expect(ltx2Calls(spawnMock)).toHaveLength(1);
+    expect(failures).toHaveLength(1);
   });
 
   // An OOM abort is not a watchdog timeout: a shorter prompt does not fix it,
@@ -6481,5 +6561,53 @@ describe('generateVideo — post-completion native teardown abort', () => {
     await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
     expect(completed).not.toHaveBeenCalled();
     expect(failed.mock.calls[0][0].results).toHaveLength(1);
+  });
+});
+
+describe('generateVideo — native Extend keeps the original source (#11171)', () => {
+  const extendRender = async (jobId, request) => {
+    const { spliceExtendSource } = await import('./extendSplice.js');
+    vi.mocked(spliceExtendSource).mockClear();
+    await renderToTerminal({
+      jobId,
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'a quiet street at dusk',
+      width: 512, height: 512, numFrames: 25, fps: 24,
+      ...request,
+    });
+    return vi.mocked(spliceExtendSource);
+  };
+
+  it('splices a plain extend of a source clip, sized to the extension the helper was asked for', async () => {
+    const splice = await extendRender('splice-plain-extend', { mode: 'extend', extendFromVideoPath: '/mock/source.mp4' });
+    // numFrames 25 → 3 latents, the same count --extend-frames carries.
+    expect(splice).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      sourcePath: '/mock/source.mp4', extendLatents: 3, keepMaster: true, outputPath: expect.stringContaining('splice-plain-extend'),
+    }));
+  });
+
+  it('splices the first chunk of an extend chain (the user\'s own clip) without keeping an audio master', async () => {
+    const splice = await extendRender('splice-chain-first', {
+      mode: 'extend', extendFromVideoPath: '/mock/source.mp4', hidden: true, keepExtendSource: true,
+    });
+    expect(splice).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      sourcePath: '/mock/source.mp4', extendLatents: 3, keepMaster: false,
+    }));
+  });
+
+  it('leaves a chain chunk alone — the chain trims its own echoed context', async () => {
+    const splice = await extendRender('splice-chain-chunk', { mode: 'extend', extendFromVideoPath: '/mock/tail-window.mp4', hidden: true });
+    expect(splice).not.toHaveBeenCalled();
+  });
+
+  it('leaves a runtime whose extend is last-frame i2v alone — its output holds no source', async () => {
+    const splice = await extendRender('splice-mlx-video', { modelId: 'ltx23_unified', mode: 'extend', extendFromVideoPath: '/mock/source.mp4' });
+    expect(splice).not.toHaveBeenCalled();
+  });
+
+  it('does not splice a render with no source clip', async () => {
+    const splice = await extendRender('splice-text', { mode: 'text' });
+    expect(splice).not.toHaveBeenCalled();
   });
 });

@@ -12,10 +12,10 @@ import { existsSync } from 'fs';
 import { unlink } from 'fs/promises';
 import { pipeline } from 'stream/promises';
 import { Router } from 'express';
-import { musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
+import { musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoShotLockSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoContinueShotSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
 import { productionReadiness } from '../services/musicVideo/productionReview.js';
 import { finishedOutsideBlocker } from '../lib/musicVideoFinishedOutside.js';
-import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, reviseProductionFromFeedback, revertProductionInput } from '../services/musicVideo/productionReviewService.js';
+import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, lockProductionShots, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, reviseProductionFromFeedback, revertProductionInput } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   validateRequest,
@@ -777,6 +777,12 @@ router.post('/:id/production-review/approve', asyncHandler(async (req, res) => {
   const reviewer = await requireProductionReviewer(req);
   res.json(await approveProductionReview(req.params.id, { stage: input.stage, basis: input.basis, proofReview: input.proofReview, reviewer }));
 }));
+// Lock or unlock single Board shots: a locked shot may have its clip made before the whole storyboard is approved.
+router.post('/:id/production-review/shots', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoShotLockSchema, req.body);
+  const reviewer = await requireProductionReviewer(req);
+  res.json(await lockProductionShots(req.params.id, { ...input, reviewer }));
+}));
 router.post('/:id/production-review/proof', asyncHandler(async (req, res) => {
   res.status(202).json(await renderProductionProof(req.params.id, validateRequest(musicVideoProductionProofSchema, req.body)));
 }));
@@ -1483,9 +1489,10 @@ router.post('/:id/scenes/reorder', asyncHandler(async (req, res) => {
 
 // Split a shot its backend cannot render in one take (#8977): a performance
 // longer than the lip-sync window, a Grok cutaway longer than its longest clip.
+// With `atSec`, cut it in two at that song time instead.
 router.post('/:id/scenes/:sceneId/split', asyncHandler(async (req, res) => {
-  const { backend } = validateRequest(musicVideoSceneSplitSchema, req.body ?? {});
-  res.json(await splitProjectScene(req.params.id, req.params.sceneId, { backend }));
+  const { backend, atSec } = validateRequest(musicVideoSceneSplitSchema, req.body ?? {});
+  res.json(await splitProjectScene(req.params.id, req.params.sceneId, { backend, atSec }));
 }));
 
 // Merge a scene with the next one — the inverse of split.
@@ -1501,7 +1508,7 @@ router.post('/:id/scenes/:sceneId/merge-next', asyncHandler(async (req, res) => 
 // a clip in the video history (both reached through the existing upload
 // routes) — so a take can never point at an arbitrary file.
 async function takeAssetExists(kind, assetId) {
-  if (kind === 'image') return Boolean(resolveGalleryImage(assetId));
+  if (kind !== 'video') return Boolean(resolveGalleryImage(assetId));
   return Boolean(await getHistoryItem(assetId));
 }
 
@@ -1510,7 +1517,7 @@ async function takeAssetExists(kind, assetId) {
 router.post('/:id/scenes/:sceneId/takes', asyncHandler(async (req, res) => {
   const { kind, assetId, source = 'imported', provider, originalName, use, sourceImageId, inputAssets } = validateRequest(musicVideoTakeInputSchema, req.body);
   if (!(await takeAssetExists(kind, assetId))) {
-    throw new ServerError(`${kind === 'image' ? 'Image' : 'Video'} not found in this install's media library`, { status: 400, code: 'TAKE_ASSET_NOT_FOUND' });
+    throw new ServerError(`${kind === 'video' ? 'Video' : 'Image'} not found in this install's media library`, { status: 400, code: 'TAKE_ASSET_NOT_FOUND' });
   }
   for (const imageId of [sourceImageId, ...(inputAssets || []).map((input) => input.assetId)].filter(Boolean)) {
     if (!(await takeAssetExists('image', imageId))) throw new ServerError('Dependency image not found', { status: 400, code: 'TAKE_ASSET_NOT_FOUND' });
@@ -1519,6 +1526,13 @@ router.post('/:id/scenes/:sceneId/takes', asyncHandler(async (req, res) => {
     kind, assetId, source, provider: provider ?? (source === 'generated' ? 'portos' : null), originalName, use, sourceImageId, inputAssets,
   }]);
   res.status(201).json({ scene, take: appended[0] });
+}));
+
+// Continuing shot: the previous shot's last on-screen frame becomes this scene's start frame.
+router.post('/:id/scenes/:sceneId/continue-from-previous', asyncHandler(async (req, res) => {
+  const { keepStillAsEnd } = validateRequest(musicVideoContinueShotSchema, req.body ?? {});
+  const { continueFromPreviousShot } = await import('../services/musicVideo/continueShot.js');
+  res.json(await continueFromPreviousShot(req.params.id, req.params.sceneId, { keepStillAsEnd }));
 }));
 
 router.post('/:id/scenes/:sceneId/takes/:takeId/select', asyncHandler(async (req, res) => {

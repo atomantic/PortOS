@@ -1,7 +1,7 @@
 import { MUSIC_VIDEO_MEDIA_MODES } from './musicVideoMediaPolicy.js';
 import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicVideoGrade.js';
 import { filmLookSchema } from './filmLookValidation.js';
-import { TITLE_CARD_FONTS, TITLE_CARD_LIMITS, TITLE_CARD_POSITIONS } from './musicVideoTitleCard.js';
+import { TITLE_CARD_FONTS, TITLE_CARD_LIMITS, TITLE_CARD_POSITIONS, TITLE_CARD_STYLES } from './musicVideoTitleCard.js';
 import { COVER_DESIGN_OPTIONS } from './musicVideoCoverOverlay.js';
 import { DISTROKID_REMEMBERED_OPTIONS } from './distrokidGenres.js';
 import { CROSS_LINK_EDIT_TARGETS } from './musicVideoCrossLinks.js';
@@ -16,6 +16,7 @@ import { CROSS_LINK_EDIT_TARGETS } from './musicVideoCrossLinks.js';
  */
 
 import { z } from 'zod';
+import { GROK_VIDEO_DURATIONS } from './grokVideoClip.js';
 import { knownFilmStyleIdSchema } from './filmStyleGrammars.js';
 
 const makingOfId = z.string().regex(/^[A-Za-z0-9_-]{1,100}$/);
@@ -133,7 +134,7 @@ export const musicVideoVideoSettingsSchema = z.object({
   // (see generationMode below).
   backend: z.enum(['local', 'grok', 'fal']).nullable().optional(),
   modelId: z.string().max(64).nullable().optional(),
-  grokDuration: z.union([z.literal(6), z.literal(10)]).optional(),
+  grokDuration: z.union(GROK_VIDEO_DURATIONS.map((d) => z.literal(d))).optional(),
   // fal.ai clip length in seconds. Loosely bounded (not a closed enum) for the
   // same reason routes/videoGen.js's falDuration is: fal's own model catalog,
   // not PortOS, owns the set of valid durations per model. null/omitted lets
@@ -147,6 +148,9 @@ export const musicVideoVideoSettingsSchema = z.object({
   // null/omitted = the default model (Hailuo-02 image-to-video) / its default.
   falModelId: z.string().min(1).max(200).nullable().optional(),
   falResolution: z.string().min(1).max(16).nullable().optional(),
+  // Upgrade model for shots with a style-break end frame (one that takes an
+  // end frame, e.g. Kling v3 Pro); null/omitted = those shots use falModelId.
+  falEndFrameModelId: z.string().min(1).max(200).nullable().optional(),
   // Output resolution of a performance (lip-sync) take — fal's own alphabet
   // for the lip-sync route. null/omitted = MUSIC_VIDEO_LIPSYNC_DEFAULT_RESOLUTION.
   falLipSyncResolution: z.enum(SOURCE_AUDIO_LIPSYNC.fal.resolutions).nullable().optional(),
@@ -283,7 +287,8 @@ export const musicVideoVisualSpecSchema = z.object({
   { message: `at most ${MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES} references can condition frames`, path: ['references'] },
 );
 
-export const MUSIC_VIDEO_TAKE_KINDS = ['image', 'video'];
+// `endImage` (#11173): a candidate for the scene's optional style-break end frame.
+export const MUSIC_VIDEO_TAKE_KINDS = ['image', 'video', 'endImage'];
 export const MUSIC_VIDEO_TAKE_STATUSES = ['candidate', 'rejected'];
 // A take's intended use (#8980). A `motion-reference` take is scaffolding (e.g.
 // generated footage to trace a hand-drawn pass over): it is kept as a candidate
@@ -308,7 +313,7 @@ export const musicVideoTakeInputSchema = z.object({
   inputAssets: z.array(z.object({ role: z.enum(['crop', 'mask']), assetId: galleryImageName, revision: z.number().int().min(1).max(1000000) }).strict()).max(4).optional(),
   use: z.enum(MUSIC_VIDEO_TAKE_USES).optional(),
 }).strict().superRefine((take, ctx) => {
-  const check = take.kind === 'image' ? galleryImageName : videoHistoryIdSchema;
+  const check = take.kind === 'video' ? videoHistoryIdSchema : galleryImageName;
   const parsed = check.safeParse(take.assetId);
   if (!parsed.success) ctx.addIssue({ code: 'custom', path: ['assetId'], message: parsed.error.issues[0].message });
 });
@@ -560,6 +565,8 @@ const sceneLayerFields = {
   cardText: z.string().max(500).nullable().optional(),
   // #10302: footage that the composition also draws code over; still counts as footage.
   codeOverlay: z.boolean().optional(),
+  // Footage whose clip was rendered from code (an uploaded code render): the board labels it Code.
+  codeClip: z.boolean().optional(),
   cardColor: z.string().regex(/^#[0-9a-f]{6}$/i, 'card color is #rrggbb').nullable().optional(),
   // #10583: where a composition document's lyric type may sit in this shot, and the role of its lines.
   textZone: z.enum(MUSIC_VIDEO_TEXT_ZONES).nullable().optional(),
@@ -1061,6 +1068,9 @@ export const musicVideoAutonomousStartSchema = z.object({
 
 // Resume a parked/failed run, or approve the checkpoint it is waiting on.
 export const musicVideoAutonomousResumeSchema = z.object({
+  // Change course mid-run: the brief's prompt and guidance, which production plans shots from.
+  prompt: z.string().trim().min(1).max(AUTONOMOUS_PROMPT_MAX).optional(),
+  guidance: z.string().max(4000).optional(),
   // Replace the stage output the director edited at a checkpoint.
   lyrics: z.string().max(20000).optional(),
   style: z.string().max(AUTONOMOUS_PROMPT_MAX).optional(),
@@ -1171,7 +1181,7 @@ export const musicVideoCastAndSetsStartSchema = z.object({
 }).strict();
 
 // Regenerate with notes. Omitted notes = the open notes on the sheet. A
-// `target` names an image (`character`, `expressions`, `looks`, `set:<id>`,
+// `target` names an image (`character`, `expressions`, `looks`, `cast:<id>`, `set:<id>`,
 // `test:<n>`); any other note revises the direction.
 export const musicVideoCastAndSetsRegenerateSchema = z.object({
   notes: z.array(z.object({
@@ -1235,6 +1245,10 @@ export const musicVideoTitleCardSchema = z.object({
   font: z.enum(TITLE_CARD_FONTS).optional(),
   size: z.number().min(TITLE_CARD_LIMITS.sizeMin).max(TITLE_CARD_LIMITS.sizeMax).optional(),
   color: z.string().regex(/^#[0-9a-f]{6}$/i, 'color is #rrggbb').optional(),
+  style: z.enum(TITLE_CARD_STYLES).optional(),
+  // '' = the look's own colour.
+  titleColor: z.union([z.literal(''), z.string().regex(/^#[0-9a-f]{6}$/i, 'titleColor is #rrggbb')]).optional(),
+  accentColor: z.union([z.literal(''), z.string().regex(/^#[0-9a-f]{6}$/i, 'accentColor is #rrggbb')]).optional(),
 }).strict();
 
 export const musicVideoProjectCreateSchema = z.object({
@@ -1344,7 +1358,16 @@ export const musicVideoDocumentShotsSchema = z.object({
     ids.add(shot.id);
   }
 });
+// Start a shot from the previous shot's on-screen out-frame; optionally keep
+// the current start frame as its end frame.
+export const musicVideoContinueShotSchema = z.object({ keepStillAsEnd: z.boolean().optional() }).strict();
 export const musicVideoProductionImportSchema = z.object({ source: z.string().min(2).max(250000) }).strict();
+export const musicVideoShotLockSchema = z.object({
+  sceneIds: z.array(z.string().min(1).max(200)).min(1).max(500),
+  locked: z.boolean(),
+  // A video shot locks its still first (ready to render), then its clip.
+  stage: z.enum(['still', 'video']).optional(),
+}).strict();
 export const musicVideoProductionApprovalSchema = z.object({
   stage: z.enum(['art', 'storyboard', 'proof']), basis: z.string().min(1).max(128),
   password: z.string().max(1024).optional(),
@@ -1434,6 +1457,10 @@ export const musicVideoSceneUpdateSchema = z.object({
   performanceStyle: z.enum(MUSIC_VIDEO_PERFORMANCE_STYLES).nullable().optional(),
   referenceImageId: z.string().max(256).nullable().optional(),
   videoHistoryId: z.string().max(64).nullable().optional(),
+  // #11173: an optional style-break end frame (the selected `endImage` take)
+  // and the prompt that renders it from the start frame.
+  endImageId: z.string().max(256).nullable().optional(),
+  endFramePrompt: z.string().max(8000).nullable().optional(),
   // #10154: the last generation failure the render hooks persisted. The board
   // may send `null` to dismiss it; a full object is accepted so a client that
   // round-trips the scene doesn't 400.
@@ -1449,6 +1476,8 @@ export const musicVideoSceneReorderSchema = z.object({
 // the lane the director will render with; omitted/null = the project's pin.
 export const musicVideoSceneSplitSchema = z.object({
   backend: z.enum(['local', 'grok', 'fal']).nullable().optional(),
+  // Split the shot in two at this song time instead of by the backend's longest take.
+  atSec: z.number().finite().nonnegative().optional(),
 }).strict();
 
 // Autonomous shot planner (#1855): propose a scene per analyzed audio section.

@@ -482,7 +482,12 @@ const pendingTransitions = new Map();
 // from staging the terminal row through the hook fan-out, never while rendering
 // or waiting in the queue; failures and cancellations stay unadmitted so a
 // backup never delays them.
-const admitCompletion = (state, commit) => (state === 'completed' ? withBackupAssetPublication(commit) : commit());
+// The output is already rendered, so the commit waits out a whole backup cut
+// rather than stranding a finished job half-terminated.
+const COMPLETION_ADMISSION_MS = 60 * 60 * 1000;
+const admitCompletion = (state, commit) => (state === 'completed'
+  ? withBackupAssetPublication(commit, { timeoutMs: COMPLETION_ADMISSION_MS, onWait: () => console.warn('⏸️ media-job completion waiting for the backup to finish') })
+  : commit());
 function stageTerminalTransition(job, apply, acknowledge) {
   job.terminating = true;
   const target = { ...job };

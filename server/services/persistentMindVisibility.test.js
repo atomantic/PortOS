@@ -69,7 +69,7 @@ describe('persistent mind visibility', () => {
     expect(projection.actions.tools).toBeUndefined();
     expect(projection.actions.capabilityGroups).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'portos.read', granted: true }),
-      expect.objectContaining({ id: 'reports.audit', granted: true }),
+      expect.objectContaining({ id: 'reports.audit', granted: false, access: expect.objectContaining({ reasonCode: 'maintainer-disabled' }) }),
     ]));
     expect(prompt).toContain('NOT callable tools');
     expect(prompt).toContain('tools.activate');

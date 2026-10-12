@@ -68,7 +68,7 @@ export function isVideoModeUsable(settings, mode) {
  * intent, but the FALLBACK differs deliberately: image gen prefers an enabled
  * cloud backend, while video falls back to LOCAL. A local video render is free
  * and fully controllable (model/frames/fps/LoRAs); grok video spends remote
- * quota and only delivers 6s or 10s clips (see lib/grokVideoClip.js). Silently
+ * quota and only delivers 6/10/15 s clips (see lib/grokVideoClip.js). Silently
  * upgrading every unpinned video render to a paid backend because the user
  * enabled grok for IMAGES would be a surprise spend — grok video renders only
  * when a request, record, or explicit user pin names it.

@@ -107,17 +107,23 @@ const DOCK_CLASSES = 'min-w-0 max-xl:order-first max-xl:col-span-full xl:sticky 
  * `lead` (the step checklist) opens the step; `review` is the step's approval.
  * With `playerFirst` the player and the approval sit together at the top of the
  * step; otherwise the player docks at the side and the approval closes the step.
+ * `previewExpanded` gives that side player the main column above the step.
  */
 export default function MusicVideoLayout({
   project, trackLabel, stage, onStageChange, progress, nextAction, onNextAction, spend, status = null,
   attention = null, dock = null, notes = null, autopilot = null, onOpenSettings = null,
-  playerFirst = false, lead = null, review = null, onRename = null, renameForm = null, cancelRender = null, children,
+  playerFirst = false, previewExpanded = false, lead = null, review = null, onRename = null, renameForm = null, cancelRender = null, children,
 }) {
   const headerRef = useRef(null);
   const rootRef = useRef(null);
+  const dockRef = useRef(null);
   // On a step reviewed by watching (Storyboard, Make, Final render) the player is the main
   // element: full width at the top of the step with the approval beside it, not a side column.
   const sideDock = !!dock && !playerFirst;
+  const expandedDock = sideDock && previewExpanded;
+  useEffect(() => {
+    if (expandedDock) dockRef.current?.scrollIntoView?.({ block: 'start' });
+  }, [expandedDock]);
 
   // The dock sticks just under the header, whose height depends on wrapping.
   useEffect(() => {
@@ -184,20 +190,35 @@ export default function MusicVideoLayout({
                     <Pencil size={14} aria-hidden="true" />
                   </button>
                 )}
+                {/* Settings sits with the title's own controls, not on a row of its own. */}
+                {onOpenSettings && (
+                  <button
+                    type="button"
+                    onClick={() => onOpenSettings('project')}
+                    aria-label="Project settings"
+                    title="Project settings"
+                    className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded text-port-text-muted hover:text-port-text sm:min-h-[32px] sm:min-w-[32px]"
+                  >
+                    <Settings size={15} aria-hidden="true" />
+                  </button>
+                )}
               </div>
             )}
-            {/* The song usually shares the project's name; name it only when it differs. */}
+            {/* The song usually shares the project's name; name it only when it differs,
+                and not on a phone, where the line would push the step down (Song shows it). */}
             {trackLabel && trackLabel !== project.name && (
-              <p className="flex min-w-0 items-center gap-1 text-xs text-port-text-muted">
+              <p className="flex min-w-0 items-center gap-1 text-xs text-port-text-muted max-sm:hidden">
                 <Music size={12} className="shrink-0" aria-hidden="true" />
                 <span className="truncate">{trackLabel}</span>
               </p>
             )}
           </div>
           {status && (
-            <p role="status" aria-label="Project status" className={`flex min-h-[36px] min-w-0 items-center rounded-lg border px-2.5 text-xs font-medium sm:text-sm ${TONE_CLASSES[status.tone] || TONE_CLASSES.muted}`}>
+            // With a next action showing, the status is said by that button (and the
+            // step list's "needs you"), so it stays for screen readers only.
+            <p role="status" aria-label="Project status" className={nextAction ? 'sr-only' : `flex min-h-[36px] min-w-0 items-center rounded-lg border px-2.5 text-xs font-medium sm:text-sm ${TONE_CLASSES[status.tone] || TONE_CLASSES.muted}`}>
               {/* A step that needs you is one tap away: from any other step, the status opens it. */}
-              {needsYouStage && needsYouStage !== stage ? (
+              {!nextAction && needsYouStage && needsYouStage !== stage ? (
                 <button type="button" onClick={() => onStageChange(needsYouStage)} className="flex min-h-[36px] items-center gap-1 text-left underline-offset-2 hover:underline">
                   {status.headline} <ArrowRight size={12} aria-hidden="true" />
                 </button>
@@ -241,20 +262,9 @@ export default function MusicVideoLayout({
               </span>
             </Pill>
           )}
-          {onOpenSettings && (
-            <button
-              type="button"
-              onClick={() => onOpenSettings('project')}
-              aria-label="Project settings"
-              title="Project settings"
-              className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg border border-port-border text-port-text-muted hover:text-port-text"
-            >
-              <Settings size={16} aria-hidden="true" />
-            </button>
-          )}
+          {attention}
         </div>
         {nextAction?.disabled && nextAction.reason && <p role="status" className="text-xs text-port-text-muted">{nextAction.reason}</p>}
-        {attention}
         <nav
           aria-label="Steps"
           className="md:hidden max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-40 max-md:border-t max-md:border-port-border max-md:bg-port-bg max-md:pb-[env(safe-area-inset-bottom)]"
@@ -274,8 +284,8 @@ export default function MusicVideoLayout({
       </header>
 
       {/* One column on a phone, capped at the screen width so a wide control can't push the step off screen. */}
-      <div className={`grid grid-cols-[minmax(0,1fr)] items-start gap-4 md:grid-cols-[13rem_minmax(0,1fr)] ${sideDock ? 'xl:grid-cols-[13rem_minmax(0,1fr)_minmax(20rem,24rem)]' : ''}`}>
-        <div className="hidden md:block md:sticky md:top-[calc(var(--mv-header-h,9rem)-0.75rem)]">
+      <div className={`grid grid-cols-[minmax(0,1fr)] items-start gap-4 md:grid-cols-[13rem_minmax(0,1fr)] ${sideDock && !expandedDock ? 'xl:grid-cols-[13rem_minmax(0,1fr)_minmax(20rem,24rem)]' : ''}`}>
+        <div className={`hidden md:block md:sticky md:top-[calc(var(--mv-header-h,9rem)-0.75rem)] ${expandedDock ? 'xl:col-start-1 xl:row-start-1 xl:row-span-2' : ''}`}>
           <StepRail stages={progress.stages} stage={stage} onStageChange={onStageChange} needsYouStage={needsYouStage} notes={notes} />
         </div>
         {/* Labelled by its own heading: from md the phone tab bar is hidden and the step list drives it. */}
@@ -283,7 +293,7 @@ export default function MusicVideoLayout({
           role="tabpanel"
           id={`mv-stage-${stage}`}
           aria-labelledby={`mv-step-title-${stage}`}
-          className="min-w-0 space-y-3"
+          className={`min-w-0 space-y-3 ${expandedDock ? 'xl:col-start-2 xl:row-start-2' : ''}`}
         >
           <div className="space-y-0.5">
             <h3 id={`mv-step-title-${stage}`} className="text-xl font-semibold">{stageEntry?.title || stageEntry?.label}</h3>
@@ -300,7 +310,8 @@ export default function MusicVideoLayout({
           {children}
           {!playerFirst && review}
         </div>
-        {sideDock ? <div className={DOCK_CLASSES}>{dock}</div> : null}
+        {/* Resize the same mounted player with grid placement, preserving playback and preview settings. */}
+        {sideDock ? <div ref={dockRef} className={expandedDock ? 'min-w-0 max-xl:order-first max-xl:col-span-full xl:col-start-2 xl:row-start-1 xl:scroll-mt-[calc(var(--mv-header-h,9rem)+1rem)]' : DOCK_CLASSES}>{dock}</div> : null}
       </div>
     </div>
   );

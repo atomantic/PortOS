@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation, useNavigate } from 'react-router';
 import PromptManager from './PromptManager';
@@ -1310,5 +1310,186 @@ describe.each([
     await act(async () => resolveForward(response('Fresh second content')));
     expect(box().value).toBe('Fresh second content');
     expect(box().disabled).toBe(false);
+  });
+});
+
+describe('PromptManager unavailable catalogues (#11143)', () => {
+  const SKILLS = [{ name: 'code-fixer', jobId: 'job-code-fixer', hasTemplate: true }];
+  const VARS = { 'tone-guide': { name: 'Tone Guide', category: 'style', content: 'Be brief' } };
+  const down = () => Promise.reject(new Error('503'));
+
+  beforeEach(() => {
+    getPrompts.mockReset().mockResolvedValue({ stages: STAGES, systemStages: SYSTEM_STAGES });
+    getPrompt.mockReset().mockResolvedValue({ name: 'Pipeline — Prose Draft', template: 'body', variables: [] });
+    getPromptUsage.mockReset().mockResolvedValue({ isSystemStage: false, usedBy: [], referencedBy: [], canDelete: true });
+    getPromptVariables.mockReset().mockResolvedValue({ variables: VARS });
+    getJobSkills.mockReset().mockResolvedValue({ skills: SKILLS });
+    getJobSkill.mockReset().mockResolvedValue({ content: '# t', jobName: 'Job', jobId: 'job-code-fixer' });
+  });
+
+  it('names a failed stage catalogue without claiming the deep-linked stage was deleted, and recovers on Retry', async () => {
+    getPrompts.mockReset().mockImplementationOnce(down).mockResolvedValue({ stages: STAGES, systemStages: SYSTEM_STAGES });
+    await renderPage('/prompts?stage=pipeline-prose-draft');
+    await screen.findByText(/Stages are unavailable/);
+    expect(screen.queryByText('No prompt stages found')).toBeNull();
+    expect(screen.queryByText(/could not be found/)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry stages' }));
+    await screen.findByText('4 stages');
+    expect(screen.queryByText(/Stages are unavailable/)).toBeNull();
+  });
+
+  it('keeps other catalogues usable when only the variables read fails', async () => {
+    getPromptVariables.mockReset().mockImplementation(down);
+    await renderPage('/prompts?tab=variables&var=tone-guide');
+    await screen.findByText(/Variables are unavailable/);
+    expect(screen.queryByText(/could not be found/)).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'Retry variables' }).length).toBe(2);
+    // Skills were never touched.
+    fireEvent.click(screen.getByRole('button', { name: /Job Skills/i }));
+    await screen.findByText('code-fixer');
+    expect(screen.queryByText(/Job skills are unavailable/)).toBeNull();
+  });
+
+  it('shows the genuine empty state for a successful empty skills read', async () => {
+    getJobSkills.mockReset().mockResolvedValue({ skills: [] });
+    await renderPage('/prompts?tab=job-skills');
+    await screen.findByText('No job skill templates found');
+    expect(screen.queryByText(/Job skills are unavailable/)).toBeNull();
+  });
+
+  it('names a failed skills read instead of "No job skill templates found"', async () => {
+    getJobSkills.mockReset().mockImplementation(down);
+    await renderPage('/prompts?tab=job-skills');
+    await screen.findByText(/Job skills are unavailable/);
+    expect(screen.queryByText('No job skill templates found')).toBeNull();
+  });
+
+  it('keeps rows and the open variable when a refresh fails, flagging them stale', async () => {
+    await renderPage('/prompts?tab=variables&var=tone-guide');
+    await screen.findByText('Edit: tone-guide');
+    getPromptVariables.mockReset().mockImplementation(down);
+    fireEvent.click(screen.getByLabelText('Reload'));
+    await screen.findByText(/Variables may be out of date/);
+    expect(screen.getByText('Edit: tone-guide')).toBeTruthy();
+    expect(screen.getByText('Tone Guide')).toBeTruthy();
+
+    getPromptVariables.mockReset().mockResolvedValue({ variables: VARS });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry variables' }));
+    await waitFor(() => expect(screen.queryByText(/may be out of date/)).toBeNull());
+  });
+});
+
+// Below the split-pane width the selected editor leads and the catalogue moves
+// behind a Drawer (#11142). happy-dom has no layout, so the page's measured
+// content width is injected through a ResizeObserver stand-in.
+describe('PromptManager narrow layout (#11142)', () => {
+  const NARROW_PX = 500;
+  const realResizeObserver = globalThis.ResizeObserver;
+  const VARIABLES = {
+    'tone-guide': { name: 'Tone Guide', category: 'style', content: 'stay wry' },
+    'house-style': { name: 'House Style', category: 'style', content: 'oxford comma' },
+  };
+  const SKILLS = [
+    { name: 'code-fixer', jobId: 'job-code-fixer', hasTemplate: true },
+    { name: 'doc-writer', jobId: 'job-doc-writer', hasTemplate: false },
+  ];
+
+  beforeEach(() => {
+    globalThis.ResizeObserver = class {
+      constructor(cb) { this.cb = cb; }
+      observe() { this.cb([{ contentRect: { width: NARROW_PX } }]); }
+      disconnect() {}
+    };
+    getPrompts.mockReset().mockResolvedValue({ stages: STAGES, systemStages: SYSTEM_STAGES });
+    getPrompt.mockReset().mockImplementation((name) => Promise.resolve({
+      name: STAGES[name]?.name || name, description: STAGES[name]?.description, template: `${name} template`, variables: [],
+    }));
+    getPromptVariables.mockReset().mockResolvedValue({ variables: VARIABLES });
+    getJobSkills.mockReset().mockResolvedValue({ skills: SKILLS });
+    getJobSkill.mockReset().mockImplementation((name) => Promise.resolve({
+      content: `# ${name} template`, jobName: `Job ${name}`, jobId: `job-${name}`, category: 'maintenance', interval: 'daily',
+    }));
+  });
+
+  afterEach(() => {
+    globalThis.ResizeObserver = realResizeObserver;
+  });
+
+  const chooser = (noun) => screen.getByRole('button', { name: new RegExp(`Choose another ${noun}`) });
+
+  it('leads with the selected stage editor and keeps the catalogue out of the page flow', async () => {
+    await renderPage('/prompts?stage=pipeline-prose-draft');
+    await screen.findByDisplayValue('pipeline-prose-draft template');
+
+    expect(screen.getByRole('button', { name: /^save$/i })).toBeTruthy();
+    expect(screen.queryByLabelText('Search prompt stages')).toBeNull();
+    expect(chooser('stage')).toBeTruthy();
+  });
+
+  it('opens the catalogue in a drawer, keeps unsaved edits, and switches stage from it', async () => {
+    await renderPage('/prompts?stage=pipeline-prose-draft');
+    await screen.findByDisplayValue('pipeline-prose-draft template');
+    fireEvent.change(screen.getByLabelText('Template'), { target: { value: 'edited by hand' } });
+
+    fireEvent.click(chooser('stage'));
+    const drawer = screen.getByRole('dialog', { name: 'Prompt Stages' });
+    expect(within(drawer).getByLabelText('Search prompt stages')).toBeTruthy();
+    // Opening the chooser alone must not touch the edit.
+    expect(screen.getByLabelText('Template').value).toBe('edited by hand');
+
+    // The unsaved-edit guard runs inside the drawer, in the clicked row's slot.
+    fireEvent.click(within(drawer).getByText('Pipeline — Comic Book Script'));
+    expect(within(drawer).getByText(/Discard unsaved changes/)).toBeTruthy();
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Keep editing' }));
+    expect(screen.getByLabelText('Template').value).toBe('edited by hand');
+
+    fireEvent.click(within(drawer).getByText('Pipeline — Comic Book Script'));
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Discard' }));
+    await screen.findByDisplayValue('pipeline-comic-script template');
+    expect(currentSearch()).toContain('stage=pipeline-comic-script');
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('shows the catalogue alone when nothing is selected', async () => {
+    await renderPage('/prompts');
+    expect(await screen.findByLabelText('Search prompt stages')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Choose another/ })).toBeNull();
+    expect(screen.queryByText('Select a stage to edit')).toBeNull();
+  });
+
+  it('offers Retry in the active workspace when the selected stage fails to load', async () => {
+    getPrompt.mockReset().mockRejectedValue(new Error('boom'));
+    await renderPage('/prompts?stage=pipeline-prose-draft');
+    expect(await screen.findByRole('button', { name: 'Retry' })).toBeTruthy();
+    expect(screen.queryByLabelText('Search prompt stages')).toBeNull();
+  });
+
+  it('opens a variable editor first, and a blank draft from the catalogue add button', async () => {
+    await renderPage('/prompts?tab=variables');
+    await screen.findByText('Tone Guide');
+    expect(screen.queryByPlaceholderText('Variable content...')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add variable' }));
+    expect(screen.getByText('New Variable')).toBeTruthy();
+    expect(screen.queryByText('Tone Guide')).toBeNull();
+
+    fireEvent.click(chooser('variable'));
+    const drawer = screen.getByRole('dialog', { name: 'Variables' });
+    fireEvent.click(within(drawer).getByText('House Style'));
+    await screen.findByDisplayValue('oxford comma');
+    expect(currentSearch()).toContain('var=house-style');
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('opens a job skill editor first with the skills behind the chooser', async () => {
+    await renderPage('/prompts?tab=job-skills&skill=code-fixer');
+    await screen.findByDisplayValue('# code-fixer template');
+    expect(screen.queryByText('doc-writer')).toBeNull();
+
+    fireEvent.click(chooser('job skill'));
+    fireEvent.click(within(screen.getByRole('dialog')).getByText('doc-writer'));
+    await screen.findByDisplayValue('# doc-writer template');
+    expect(currentSearch()).toContain('skill=doc-writer');
   });
 });

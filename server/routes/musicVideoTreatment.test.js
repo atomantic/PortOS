@@ -94,7 +94,7 @@ afterAll(cleanupTempDataRoots);
 
 describe('treatment compile', () => {
   it('compiles a vocal song into a persisted arc keyed to the planned shot ids, with proofs and explicit gaps', async () => {
-    const project = await plannedProject();
+    const project = await plannedProject({ backend: 'grok' });
     const brief = await patchTreatment(project.id, {
       baseRevision: 0,
       brief: {
@@ -369,7 +369,7 @@ describe('treatment apply', () => {
 
 describe('treatment → scene render fields (#8977 shot mode, #8985 visual layer)', () => {
   it('states the lip-sync gap for a backend without it and never marks scenes as performances there', async () => {
-    const project = await plannedProject();
+    const project = await plannedProject({ backend: 'grok' });
     const { body } = await compile(project.id, { baseRevision: 0, useAi: false });
     const gap = body.treatment.capabilityGaps.find((g) => g.id === 'lip-sync');
     expect(gap.detail).toMatch(/fal\.ai/);

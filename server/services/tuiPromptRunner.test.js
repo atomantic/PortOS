@@ -951,6 +951,39 @@ describe('executeTuiRun', () => {
       expect(runnerMocks.finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({ runId: 'run-unbounded-quiet', success: true }));
     });
 
+    it('does not idle-complete a run whose screen still shows it thinking', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+      const provider = { id: 'claude-tui', type: 'tui', command: 'echo', tuiPromptDelayMs: 50, tuiOneShotIdleMs: 500 };
+      const runId = 'run-claude-silent-thinking';
+      const promise = executeTuiRun({ runId, provider,
+        prompt: 'write the creative direction to the response file', workspacePath: TEST_WORKSPACE, timeout: 60000 });
+      await flushAsync();
+      const pty = ptyInstances[0];
+      pty.emitData('claude code ready> ');
+      await vi.advanceTimersByTimeAsync(2000); // paste
+      await vi.advanceTimersByTimeAsync(4000); // enter
+      // The last paint before a long silent thinking stretch: spinner status
+      // line, then the composer box and footer Claude Code draws beneath it.
+      pty.emitData('✻ Pondering… (55s · ↓ 1.2k tokens · still thinking with medium effort)\n'
+        + '╭────────────────────────╮\n│ >                      │\n╰────────────────────────╯\n  ? for shortcuts\n');
+
+      await vi.advanceTimersByTimeAsync(10000);
+      await flushAsync();
+      expect(runnerMocks.finalizeRunRecord).not.toHaveBeenCalled();
+
+      seedResponseFile(runId, '{"logline":"x"}');
+      await vi.advanceTimersByTimeAsync(1100);
+      await vi.advanceTimersByTimeAsync(1100);
+      await flushAsync();
+      await promise;
+      expect(runnerMocks.finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({
+        runId,
+        success: true,
+        output: '{"logline":"x"}',
+        extras: expect.objectContaining({ completionReason: 'response-file' }),
+      }));
+    });
+
     it('does not reap a quiet Codex reasoning pass before its response file exists', async () => {
       vi.useFakeTimers({
         toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],

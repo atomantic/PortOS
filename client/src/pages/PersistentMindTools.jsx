@@ -39,12 +39,16 @@ export default function PersistentMindTools({ onCapabilitiesChange, onSavingChan
 
   const tools = Array.isArray(data?.tools) ? data.tools : [];
   const managedApps = data?.managedApps;
+  const reportAccess = tools.find((tool) => tool.id === 'reports.audit')?.access;
   const grantedCount = tools.filter((tool) => tool.granted === true).length;
   const handleCapabilitiesSavingChange = (saving) => {
     setCapabilitiesSaving(saving);
     onSavingChange?.(saving);
   };
   const updateCapabilities = (capabilities) => {
+    const reportAccessChanged = capabilities.auditReports !== data?.capabilities?.auditReports
+      || capabilities.readPortos !== data?.capabilities?.readPortos
+      || JSON.stringify(capabilities.allowedAppIds) !== JSON.stringify(data?.capabilities?.allowedAppIds);
     requestVersion.current += 1;
     setData((current) => current ? {
       ...current,
@@ -58,16 +62,19 @@ export default function PersistentMindTools({ onCapabilitiesChange, onSavingChan
       semanticTools: (current.semanticTools || []).map((tool) => ({
         ...tool,
         granted: tool.recipe?.available !== false
-          && tool.policy.requiredCapabilities.every((capability) => capabilities[capability] === true),
+          && tool.policy.requiredCapabilities.every((capability) => capabilities[capability] === true)
+          && (tool.family !== 'reports' || (!reportAccessChanged && tool.access?.granted === true)),
       })),
       tools: (current.tools || []).map((tool) => ({
         ...tool,
-        granted: capabilities[tool.capability] === true,
+        granted: capabilities[tool.capability] === true
+          && (tool.id !== 'reports.audit' || (!reportAccessChanged && capabilities.readPortos === true && tool.access?.granted === true)),
       })),
     } : current);
     onCapabilitiesChange?.(capabilities);
     // The shared app roster arrives only after a task or issue grant is on.
-    if ((capabilities.createTasks || capabilities.fileIssues) && !data?.managedApps) load();
+    if (((capabilities.createTasks || capabilities.fileIssues) && !data?.managedApps)
+      || data?.capabilities?.auditReports || capabilities.auditReports) load();
     else if (!capabilities.createTasks && !capabilities.fileIssues) setLoading(false);
   };
 
@@ -130,6 +137,17 @@ export default function PersistentMindTools({ onCapabilitiesChange, onSavingChan
                 />
               </section>
 
+              {data.capabilities?.auditReports && reportAccess?.granted === false && (
+                <Banner tone="warning" title="Private report access restricted">
+                  {reportAccess.reason}
+                  {reportAccess.apps?.filter((app) => !app.granted).map((app) => (
+                    <p key={app.appId} className="mt-1">
+                      {managedApps?.find((managed) => managed.id === app.appId)?.name || 'Selected app'}: {app.reason}
+                    </p>
+                  ))}
+                </Banner>
+              )}
+
               <PersistentMindRecipeLibrary />
 
               <details className="rounded border border-port-border bg-port-card p-4">
@@ -142,10 +160,11 @@ export default function PersistentMindTools({ onCapabilitiesChange, onSavingChan
                         <div className="flex flex-wrap items-start justify-between gap-2">
                           <h3 className="text-sm font-semibold text-port-text">{tool.name}</h3>
                           <span className={`rounded-full border px-2 py-0.5 text-xs font-medium ${tool.granted ? 'border-port-success/40 text-port-success' : 'border-port-border text-port-text-muted'}`}>
-                            {tool.granted ? 'Granted' : 'Off by default'}
+                            {tool.granted ? 'Granted' : tool.access ? 'Restricted' : 'Off by default'}
                           </span>
                         </div>
                         {tool.description && <p className="mt-1 text-xs text-port-text-muted">{tool.description}</p>}
+                        {tool.access?.reason && <p className="mt-1 text-xs text-port-warning">{tool.access.reason}</p>}
                         {Array.isArray(tool.guardrails) && tool.guardrails.length > 0 && (
                           <ul className="mt-2 space-y-1 text-xs text-port-text-muted">
                             {tool.guardrails.map((guardrail) => <li key={guardrail}>{guardrail}</li>)}

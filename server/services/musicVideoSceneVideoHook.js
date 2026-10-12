@@ -35,6 +35,24 @@ import { basename } from 'path';
 import { appendSceneTakes } from './musicVideo/projects.js';
 import { musicVideoEvents } from './musicVideo/events.js';
 import { recordSceneLastFailure } from './musicVideo/sceneFailure.js';
+import { alignPerformanceInstruction } from './musicVideo/takeAudioAlignment.js';
+import { getHistoryItem } from './videoGen/history.js';
+import { PATHS } from '../lib/fileUtils.js';
+import { safeUnder } from '../lib/ffmpeg.js';
+
+// #11210: a provider that pads the clip's start (fal OmniHuman) would sing
+// late at the planned in-point; the clip's own audio says where the song is.
+async function alignedShotInstruction(instruction, videoHistoryId) {
+  if (instruction?.shotMode !== 'performance') return instruction ?? null;
+  const entry = await getHistoryItem(videoHistoryId).catch(() => null);
+  const clipPath = entry?.filename ? safeUnder(PATHS.videos, entry.filename) : null;
+  const aligned = await alignPerformanceInstruction(instruction, clipPath).catch((err) => {
+    console.warn(`⚠️ music-video take ${videoHistoryId.slice(0, 8)}: could not align its audio to the song: ${err.message}`);
+    return instruction;
+  });
+  if (aligned.alignment?.offsetSec) console.log(`🎤 music-video take ${videoHistoryId.slice(0, 8)} aligned to the song: speech starts ${aligned.alignment.offsetSec.toFixed(3)}s into the clip (r=${aligned.alignment.correlation})`);
+  return aligned;
+}
 
 const hook = createMediaJobImageHook({
   label: 'music-video scene-video',
@@ -62,7 +80,7 @@ const hook = createMediaJobImageHook({
   // takes, and none of them can displace a selection.
   describe: ({ projectId, sceneId }) => `${projectId}/${sceneId}`,
   // A deleted project/scene 404s here, so a late completion can't resurrect it.
-  attach: ({ projectId, sceneId, videoHistoryId, job }) => appendSceneTakes(projectId, sceneId, [{
+  attach: async ({ projectId, sceneId, videoHistoryId, job }) => appendSceneTakes(projectId, sceneId, [{
     kind: 'video',
     assetId: videoHistoryId,
     source: 'generated',
@@ -75,11 +93,12 @@ const hook = createMediaJobImageHook({
     // #8977: a performance take keeps the immutable record of the song slice,
     // edit in/out points and capability it was generated against — the
     // renderer places the take by it, so a later retime can't misalign lips.
-    shotInstruction: job.params?.shotInstruction ?? null,
+    shotInstruction: await alignedShotInstruction(job.params?.shotInstruction, videoHistoryId),
     dependencies: job.params?.musicVideoDependencies ?? null,
     // #10157: the estimate this clip was priced at; a revision-tagged job is
     // an auto-review generation, the rest are manual takes.
     costUsd: job.params?.musicVideoCostUsd ?? null,
+    costModelId: job.params?.musicVideoCostModelId ?? null,
     spendKind: job.params?.musicVideo?.revisionId ? 'autoReview' : 'manual',
   }]),
   onAttached: ({ projectId, sceneId, videoHistoryId }, { scene, appended }) => {
