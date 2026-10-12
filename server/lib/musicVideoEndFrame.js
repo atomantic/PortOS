@@ -38,7 +38,7 @@ export function sceneEndFramePlan(scene, { backend = null, falModelId = null, mo
   if (backend === 'local') {
     return localRuntimeEndsOnFrame(localRuntime)
       ? { endImageId, used: true, reason: null }
-      : ignored('This local model animates from the start frame only; local LTX-2.5 ends on the end frame');
+      : ignored('This local model animates from the start frame only; local LTX-2.x and MiniMax H3 end on the end frame');
   }
   if (backend !== 'fal') return ignored('Only fal.ai models that take an end frame and local LTX use it; this renderer ignores it');
   const model = getFalVideoModel(falModelId || FAL_DEFAULT_IMAGE_VIDEO_MODEL);

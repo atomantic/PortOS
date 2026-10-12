@@ -29,7 +29,7 @@ describe('sceneEndFramePlan (#11173)', () => {
 
   // #11258: a local render anchors the last frame only in first+last-frame mode.
   it('sends it to a local model whose runtime anchors the last frame, in first+last-frame mode', () => {
-    for (const localRuntime of ['ltx25', 'ltx2']) {
+    for (const localRuntime of ['ltx25', 'ltx2', 'minimax_h3']) {
       expect(sceneEndFramePlan(scene, { backend: 'local', localRuntime })).toEqual({ endImageId: 'end.png', used: true, reason: null });
       expect(sceneEndFrameRequestFields(scene, { backend: 'local', localRuntime })).toEqual({ lastImageFile: 'end.png', mode: 'fflf' });
     }
