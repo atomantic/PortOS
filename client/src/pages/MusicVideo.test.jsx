@@ -2503,7 +2503,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
   // Uniquely catches a trimmed clip landing only in Video Gen history, never as this shot's take, or not becoming the shot's clip.
   it('trims the shot clip to a later start frame and makes it the shot\'s selected clip take', async () => {
     const scene = { sceneId: 's1', order: 0, prompt: 'waves', referenceImageId: 'img1', videoHistoryId: 'h1',
-      takes: [{ takeId: 't-v', kind: 'video', assetId: 'h1', source: 'generated', provider: 'portos', status: 'selected', note: null }] };
+      takes: [{ takeId: 't-v', kind: 'video', assetId: 'h1', source: 'generated', provider: 'portos', sourceImageId: 'img1', status: 'selected', note: null }] };
     const trimmedTake = { takeId: 't-trim', kind: 'video', assetId: 'h1-trim', source: 'trimmed', provider: null, status: 'candidate', note: null };
     trimVideoStart.mockResolvedValueOnce({ video: { id: 'h1-trim' } });
     addMusicVideoSceneTake.mockResolvedValueOnce({ scene: { ...scene, takes: [...scene.takes, trimmedTake] }, take: trimmedTake });
@@ -2514,7 +2514,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     fireEvent.click(render.getByRole('button', { name: /Start clip here/ }));
     await waitFor(() => expect(selectMusicVideoSceneTake).toHaveBeenCalledWith('mv-trim', 's1', 't-trim', { silent: true }));
     expect(trimVideoStart).toHaveBeenCalledWith('h1', 0.5, { silent: true });
-    expect(addMusicVideoSceneTake).toHaveBeenCalledWith('mv-trim', 's1', { kind: 'video', assetId: 'h1-trim', source: 'trimmed' }, { silent: true });
+    expect(addMusicVideoSceneTake).toHaveBeenCalledWith('mv-trim', 's1', { kind: 'video', assetId: 'h1-trim', source: 'trimmed', sourceImageId: 'img1', provider: 'portos' }, { silent: true });
   });
 
   it('keeps a new render as a candidate and lets the director explicitly pick and reject takes', async () => {

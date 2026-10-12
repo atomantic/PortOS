@@ -78,12 +78,21 @@ export default function useMusicVideoTakes({ project, applyScenePatch }) {
   );
 
   // "Start clip here": the shot's clip from a later frame becomes a new clip take, and the selected one.
-  const trimClipTake = (scene, startSec) => runTakeOp(
-    (projectId) => trimVideoStart(scene.videoHistoryId, startSec, { silent: true })
-      .then(({ video }) => addMusicVideoSceneTake(projectId, scene.sceneId, { kind: 'video', assetId: video.id, source: 'trimmed' }, { silent: true }))
-      .then(({ take }) => selectMusicVideoSceneTake(projectId, scene.sceneId, take.takeId, { silent: true })),
-    'Failed to trim the clip',
-  );
+  // It keeps the cut clip's still and provider, so a still change still marks it stale and the pool pairs it.
+  const trimClipTake = (scene, startSec) => {
+    const origin = scene.takes?.find((take) => take.kind === 'video' && take.assetId === scene.videoHistoryId);
+    const provenance = {
+      ...(origin?.sourceImageId ? { sourceImageId: origin.sourceImageId } : {}),
+      // Only a slug the take route accepts; an older free-form label is left off rather than failing the trim.
+      ...(/^[a-z0-9][a-z0-9._-]{0,39}$/i.test(origin?.provider || '') ? { provider: origin.provider } : {}),
+    };
+    return runTakeOp(
+      (projectId) => trimVideoStart(scene.videoHistoryId, startSec, { silent: true })
+        .then(({ video }) => addMusicVideoSceneTake(projectId, scene.sceneId, { kind: 'video', assetId: video.id, source: 'trimmed', ...provenance }, { silent: true }))
+        .then(({ take }) => selectMusicVideoSceneTake(projectId, scene.sceneId, take.takeId, { silent: true })),
+      'Failed to trim the clip',
+    );
+  };
 
   // Continuing shot: the previous shot's last on-screen frame becomes this
   // scene's start frame; `keepStillAsEnd` keeps the current one as its end frame.
