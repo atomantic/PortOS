@@ -256,6 +256,48 @@ describe('prepareVideoGenParams', () => {
       expect(unlinkedDurablePaths()).toEqual([posix(prepared.audioFilePath)]);
     });
 
+    // Uniquely catches a local Music Video clip falling back to the model's
+    // 768x512 (3:2) default, which crops its still and leaves side gaps in the
+    // 16:9 video, and an end-frame clip losing length to the FFLF pixel budget.
+    it('sizes an unsized local Music Video clip to the project aspect', async () => {
+      getMusicVideoProject.mockResolvedValue({ treatment: { brief: { aspectRatio: '16:9' } }, scenes: [] });
+      const musicVideo = { projectId: 'project-example', sceneId: 'scene-example' };
+      const body = { prompt: 'a clip', backend: 'local', mode: 'image', sourceImageFile: 'still.png', musicVideo };
+      await prepareVideoGenParams({ body, uploads: {}, localOnlyParamKeys: LOCAL_ONLY_KEYS });
+      expect([body.width, body.height]).toEqual([1024, 576]);
+
+      const endFrame = { ...body, width: undefined, height: undefined, mode: 'fflf', lastImageFile: 'end.png' };
+      await prepareVideoGenParams({ body: endFrame, uploads: {}, localOnlyParamKeys: LOCAL_ONLY_KEYS });
+      expect([endFrame.width, endFrame.height]).toEqual([896, 512]);
+
+      const picked = { ...body, width: 768, height: 512 };
+      await prepareVideoGenParams({ body: picked, uploads: {}, localOnlyParamKeys: LOCAL_ONLY_KEYS });
+      expect([picked.width, picked.height]).toEqual([768, 512]);
+    });
+
+    // Uniquely catches an audio-only model (MiniMax H3 Ref2VA) failing a local
+    // lip-sync shot on the image-mode contract before its song slice exists,
+    // and a cutaway on it failing with the bare mode error instead of the fix.
+    it('lets Ref2VA render a lip-sync shot and points a cutaway at an image model', async () => {
+      listVideoModels.mockReturnValue([{
+        id: 'ref2va_example', name: 'MiniMax H3 Ref2VA', runtime: 'minimax_h3_ref2va', supportedModes: ['a2v'],
+        requiresSourceImageForA2v: true, frameOptions: [124], defaultFrames: 124, supportsDisableAudio: false,
+      }]);
+      const project = (shotMode) => ({ treatment: { brief: { aspectRatio: '16:9' } }, scenes: [{ sceneId: 'scene-example', shotMode }] });
+      const musicVideo = { projectId: 'project-example', sceneId: 'scene-example' };
+      const body = { prompt: 'she sings', backend: 'local', mode: 'image', modelId: 'ref2va_example', sourceImageFile: 'still.png', disableAudio: true, musicVideo };
+
+      getMusicVideoProject.mockResolvedValue(project('performance'));
+      const lipSync = { ...body };
+      const prepared = await prepareVideoGenParams({ body: lipSync, uploads: {}, localOnlyParamKeys: LOCAL_ONLY_KEYS });
+      expect(prepared.backend).toBe('local');
+      expect(lipSync.disableAudio).toBeUndefined();
+
+      getMusicVideoProject.mockResolvedValue(project('cutaway'));
+      await expect(prepareVideoGenParams({ body: { ...body }, uploads: {}, localOnlyParamKeys: LOCAL_ONLY_KEYS }))
+        .rejects.toMatchObject({ code: 'MUSIC_VIDEO_MODEL_NEEDS_PERFORMANCE_SHOT' });
+    });
+
     it('short-circuits for grok without staging local-only inputs', async () => {
       const prepared = await prepare({ backend: 'grok', sourceImageFile: 'still.png' });
       expect(prepared.backend).toBe('grok');

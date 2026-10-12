@@ -840,6 +840,7 @@ export * from './filmLookValidation.js';
 export * from './musicVideoTitleCard.js';
 export * from './musicVideoDependencies.js';
 export * from './musicVideoEndFrame.js';
+export * from './musicVideoLocalModels.js';
 export * from './musicVideoHandoffFrame.js';
 export * from './musicVideoCrossLinks.js';
 export * from './musicVideoExcerptRange.js';
