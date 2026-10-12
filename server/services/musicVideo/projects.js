@@ -311,6 +311,13 @@ export async function mergeProjectNextScene(id, sceneId, options = {}) {
   });
 }
 
+/** Mark unused assets ★ ingredient or ✕ bad (null clears); returns the project's marks. */
+export async function markMediaPoolAssets(id, keys, mark) {
+  const { markPoolAssets } = await import('./mediaPool.js');
+  const { project } = await mutateProjectRecord(id, (current) => markPoolAssets(current, keys, mark));
+  return project.assetMarks || {};
+}
+
 // ---- scene takes (#8965) ----
 // Append candidate takes to one scene: `{ scene, appended }`. A take fills its
 // slot only while the slot is empty — never replaces a selection (takes.js).
