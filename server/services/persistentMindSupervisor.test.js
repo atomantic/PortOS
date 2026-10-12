@@ -917,6 +917,49 @@ describe('persistent mind supervisor', () => {
     expect(mock.root.persistentMind.status).toBe('interrupted');
   });
 
+  it.each([
+    ['alive', { alive: true, reason: 'model loaded' }, false],
+    ['gone', { alive: false, reason: 'Ollama is not responding' }, true],
+  ])('watchdog with a provider call in flight and the provider %s', async (_label, probeResult, interrupts) => {
+    let callStarted = false;
+    const run = vi.fn(({ signal, callBoundary }) => callBoundary({ purpose: 'turn', round: 0 }, () => new Promise((resolve, reject) => {
+      callStarted = true;
+      signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+    })));
+    const probe = vi.fn(async () => probeResult);
+    supervisor.setPersistentMindLivenessProbe(probe);
+    try {
+      await supervisor.registerPersistentMindTurnAdapter({
+        prepare: vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud' } })),
+        run,
+      });
+      await supervisor.setPersistentMindEnabled(true);
+      await supervisor.startPersistentMind();
+      await supervisor.enqueuePersistentMindMessage({ id: 'message-1', text: 'Think for a long time.' });
+      const drain = supervisor.drainPersistentMind();
+      await vi.waitFor(() => expect(callStarted).toBe(true));
+      // Far past the stale window: a long thought, not a suspend.
+      mock.root.persistentMind.activeTurn.heartbeatAt = new Date(
+        Date.now() - 10 * PERSISTENT_MIND_LIMITS.WATCHDOG_STALE_MS
+      ).toISOString();
+      const result = await supervisor.checkPersistentMindWatchdog();
+      expect(probe).toHaveBeenCalledTimes(1);
+      if (interrupts) {
+        expect(result).toEqual({ interrupted: true });
+        await drain;
+        expect(mock.root.persistentMind.activeTurn).toBeNull();
+      } else {
+        expect(result).toEqual({ interrupted: false, inFlight: true });
+        expect(mock.root.persistentMind.activeTurn).not.toBeNull();
+        await supervisor.interruptPersistentMindTurn?.();
+        await supervisor.stopPersistentMind?.();
+        await drain.catch(() => {});
+      }
+    } finally {
+      supervisor.setPersistentMindLivenessProbe(null);
+    }
+  });
+
   it('watchdog restarts the stale window after a host suspend instead of killing the in-flight turn', async () => {
     const run = vi.fn(({ signal }) => new Promise((resolve, reject) => {
       signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
