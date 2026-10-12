@@ -483,6 +483,9 @@ const generateBodySchema = z.object({
       revisionId: z.string().min(1).max(200).optional(),
     }).optional(),
   ),
+  // File the clip into this music video's media collection even when no shot
+  // keeps it (musicVideoCollectionHook). Collection only; the render is unchanged.
+  musicVideoProjectId: z.string().min(1).max(200).optional(),
   // FableLoom scene-video render. The media-job completion hook files the
   // finished history id onto the tagged loom node, even if the editor has
   // unmounted. Video requests are multipart, so parse the JSON tag before

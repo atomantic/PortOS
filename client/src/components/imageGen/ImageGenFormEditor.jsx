@@ -4,6 +4,7 @@ import UniverseStylePicker from '../media/UniverseStylePicker';
 import PromptEnhancer from '../media/PromptEnhancer';
 import PromptFromMedia from '../media/PromptFromMedia';
 import RemoteMediaTargetPicker from '../federatedMedia/RemoteMediaTargetPicker';
+import MusicVideoFilingSelect from '../media/MusicVideoFilingSelect';
 import { FormField } from '../ui/FormField';
 import Banner from '../ui/Banner';
 import AutoSizeTextarea from '../ui/AutoSizeTextarea';
@@ -130,6 +131,8 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
           </span>
         )}
       </div>
+
+      <MusicVideoFilingSelect id="image-gen-music-video" />
 
       {(loraTest.pending || loraTest.error) && (
         <Banner tone={loraTest.error ? 'error' : 'info'}>

@@ -215,6 +215,8 @@ vi.mock('../hooks/useModelDownloadStatus', () => ({
 vi.mock('../hooks/useHfTokenStatus', () => ({
   useHfTokenStatus: () => ({ present: state.hfTokenPresent, refresh: vi.fn() }),
 }));
+// The music-video picker lists projects over the network; its own suite covers it.
+vi.mock('../components/media/MusicVideoFilingSelect', () => ({ default: () => null }));
 vi.mock('../hooks/useAgyModels', () => ({ useAgyModels: () => ({ models: [], error: null }) }));
 vi.mock('../hooks/useMediaCompletionRefresh', () => ({ useMediaCompletionRefresh: vi.fn() }));
 vi.mock('../hooks/useMediaAnnotations', () => ({

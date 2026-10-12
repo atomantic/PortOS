@@ -291,6 +291,8 @@ vi.mock('../components/videoGen/VideoGenGallery', () => ({
   default: (props) => { state.galleryProps = props; return null; },
 }));
 vi.mock('../components/media/MediaPreview', () => ({ default: () => null }));
+// The music-video picker lists projects over the network; its own suite covers it.
+vi.mock('../components/media/MusicVideoFilingSelect', () => ({ default: () => null }));
 vi.mock('../components/media/StylePresetPicker', () => ({ default: () => null }));
 vi.mock('../components/media/MediaJobsQueue', () => ({ default: () => null }));
 vi.mock('../components/imageGen/LoraPicker', () => ({

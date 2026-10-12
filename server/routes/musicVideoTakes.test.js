@@ -281,3 +281,30 @@ describe('swapping a shot from unused takes', () => {
     expect((await reload()).scenes.find((scene) => scene.sceneId === sceneA.sceneId).referenceImageId).toBe('b-2.png');
   });
 });
+
+describe('renders made for a video with no shot', () => {
+  // Uniquely catches a sheet, test or Video Gen render for the video (no shot keeps it) missing from its collection and the picker.
+  it('files completed renders naming the video, and clips stamped with it, into its collection', async () => {
+    const { mediaJobEvents } = await import('../services/mediaJobQueue/index.js');
+    const hook = await import('../services/musicVideoCollectionHook.js');
+    hook.__testing.reset();
+    hook.initMusicVideoCollectionHook();
+    seedImage('sheet.png');
+    seedImage('frame.png');
+    seedVideoHistory([{ id: 'test-clip' }, { id: 'trimmed-copy', musicVideo: { projectId: project.id, sceneId: null } }, { id: 'other-clip' }]);
+    mediaJobEvents.emit('completed', { kind: 'image', id: 'job-sheet', params: { musicVideo: { projectId: project.id, castAndSets: { key: 'cast:lead' } } }, result: { filename: 'sheet.png' } });
+    mediaJobEvents.emit('completed', { kind: 'video', id: 'test-clip', params: { musicVideoProjectId: project.id, sourceImagePath: '/abs/images/frame.png' }, result: { generationId: 'test-clip' } });
+    mediaJobEvents.emit('completed', { kind: 'video', id: 'other-clip', params: {}, result: { generationId: 'other-clip' } });
+    mediaJobEvents.emit('completed', { kind: 'image', id: 'job-gone', params: { musicVideoProjectId: 'mv-missing' }, result: { filename: 'frame.png' } });
+    await hook.__testing.drain();
+    hook.__testing.reset();
+
+    const { getCollection, musicVideoCollectionId } = await import('../services/mediaCollections.js');
+    const filed = async () => (await getCollection(musicVideoCollectionId(project.id))).items.map((item) => `${item.kind}:${item.ref}`).sort();
+    expect(await filed()).toEqual(['image:sheet.png', 'video:test-clip']);
+
+    const pool = (await request(app).get(`${base()}/media-pool`)).body.items;
+    expect(await filed()).toEqual(['image:sheet.png', 'video:test-clip', 'video:trimmed-copy']);
+    expect(pool.find((item) => item.assetId === 'test-clip')).toMatchObject({ kind: 'video', sceneId: null, sourceImageId: 'frame.png' });
+  });
+});

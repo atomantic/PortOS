@@ -3,10 +3,11 @@
  * kept in the project's own media collection (`mvc-<projectId>`) so nothing a
  * shot drops is lost, and listed for the shot card's "Swap from unused" picker.
  *
- * Filing happens when a take lands (projects.js appendSceneTakes), when a
+ * Filing happens when a take lands (projects.js appendSceneTakes), when any
+ * render naming the video completes (musicVideoCollectionHook.js), when a
  * change drops takes from the board (a cut shot, a merge, a re-plan, a pruned
  * take), and on every pool read, which also backfills whatever the project
- * already holds. A clip's still is kept on its video history entry
+ * already holds and every clip stamped with it. A clip's still is kept on its video history entry
  * (`musicVideo.sourceImageId`), so a clip on the floor still pairs with its
  * still after the shot that held both is gone.
  */
@@ -138,12 +139,15 @@ async function stampClipProvenance(clips) {
  * gallery or history) is left out rather than shown as a broken tile.
  */
 export async function getMusicVideoMediaPool(project) {
-  await fileMusicVideoMedia(project, projectTakeAssets(project));
   const [{ getCollection, musicVideoCollectionId }, { loadHistory }, { resolveGalleryImage }] = await Promise.all([
     import('../mediaCollections.js'), import('../videoGen/history.js'), import('../../lib/pathSafety.js'),
   ]);
-  const collection = await getCollection(musicVideoCollectionId(project.id)).catch(() => null);
   const history = new Map((await loadHistory()).filter((entry) => entry?.id).map((entry) => [entry.id, entry]));
+  // A clip stamped with this video (a trim or upscale of one of its clips copies the stamp) belongs here too.
+  const stamped = [...history.values()].filter((entry) => entry.musicVideo?.projectId === project.id)
+    .map((entry) => ({ kind: 'video', ref: entry.id }));
+  await fileMusicVideoMedia(project, [...projectTakeAssets(project), ...stamped]);
+  const collection = await getCollection(musicVideoCollectionId(project.id)).catch(() => null);
   const items = buildMediaPool(project, collection?.items || [], history)
     .filter((item) => (item.kind === 'video' ? history.has(item.assetId) : Boolean(resolveGalleryImage(item.assetId))))
     // A partner that is gone is not offered, so "Use … + its still|clip" always works.
