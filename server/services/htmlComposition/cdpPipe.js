@@ -12,9 +12,11 @@ export function createCdpPipeTransport(proc) {
   const emitter = new EventEmitter();
   let buffer = Buffer.alloc(0);
   let open = true;
+  let failure;
   const fail = (error) => {
     if (!open) return;
-    emitter.emit('error', error);
+    failure ??= error;
+    emitter.emit('error', failure);
   };
   const onData = (chunk) => {
     buffer = Buffer.concat([buffer, chunk]);
@@ -37,6 +39,10 @@ export function createCdpPipeTransport(proc) {
   const transport = {
     readyState: 1,
     send(text, callback) {
+      if (failure) {
+        callback?.(failure);
+        return;
+      }
       if (!open || !input?.writable) {
         callback?.(new Error('CDP pipe is closed'));
         return;

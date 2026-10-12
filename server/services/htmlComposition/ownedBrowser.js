@@ -85,6 +85,11 @@ export async function launchCompositionBrowser({
   const profile = await mkdtemp(join(tmpdir(), 'portos-composition-browser-'));
   let proc;
   let transport;
+  let startupPipeError;
+  let rejectStartupPipe;
+  // Own pipe errors across the startup-to-CDP handoff. The CDP client also
+  // subscribes, so this listener must not consume or replace its error path.
+  const onPipeError = error => { startupPipeError ??= error; rejectStartupPipe?.(error); };
   let exited = false;
   let closed = false;
   let spawned = false;
@@ -132,6 +137,7 @@ export async function launchCompositionBrowser({
     let deadline;
     try {
       transport?.terminate();
+      transport?.removeListener('error', onPipeError);
       if (proc && !closed) {
         terminationStarted = performance.now();
         const tracked = {
@@ -196,11 +202,15 @@ export async function launchCompositionBrowser({
     proc.once('exit', onExit);
     proc.once('close', onClose);
     proc.on('error', onError);
-    if (piped) transport = createCdpPipeTransport(proc);
+    if (piped) {
+      transport = createCdpPipeTransport(proc);
+      transport.on('error', onPipeError);
+    }
     const ready = await new Promise((resolve, reject) => {
       let tail = '';
       const timer = setTimeout(() => finish(new Error('Composition browser startup exceeded its deadline')), startupMs);
       const finish = (error, value) => {
+        rejectStartupPipe = null;
         clearTimeout(timer);
         proc.stderr?.removeListener('data', onData);
         transport?.removeListener('message', onHandshake);
@@ -232,15 +242,16 @@ export async function launchCompositionBrowser({
         else finish(null, message.result || {});
       };
       proc.stderr?.on('data', onData);
+      proc.once('error', fail);
+      proc.once('exit', stopped);
+      signal?.addEventListener('abort', canceled, { once: true });
       if (piped) {
+        rejectStartupPipe = () => finish(new Error('Composition browser failed to start (pipe)'));
         transport.on('message', onHandshake);
         transport.send(JSON.stringify({ id: 0, method: 'Browser.getVersion' }), (error) => {
           if (error) finish(new Error('Composition browser failed to start (pipe)'));
         });
       }
-      proc.once('error', fail);
-      proc.once('exit', stopped);
-      signal?.addEventListener('abort', canceled, { once: true });
       if (signal?.aborted) canceled();
       else if (exited) stopped();
     });
@@ -249,6 +260,7 @@ export async function launchCompositionBrowser({
     proc.stderr?.resume();
     signal?.addEventListener('abort', abort, { once: true });
     signal?.throwIfAborted();
+    if (startupPipeError) throw new Error('Composition browser failed to start (pipe)');
     if (piped) return { transport, close, mechanism: plan.mechanism };
     return { webSocketDebuggerUrl: ready, close };
   } catch (error) {

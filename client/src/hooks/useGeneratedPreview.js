@@ -39,7 +39,6 @@ export default function useGeneratedPreview({ active, request, controls = null }
   const recordingUrl = useRef('');
   const controlsRef = useRef(controls);
   controlsRef.current = controls;
-  const sentControls = useRef(null);
   const [state, setState] = useState(EMPTY);
   const requestKey = active && request ? JSON.stringify(request) : '';
 
@@ -69,22 +68,6 @@ export default function useGeneratedPreview({ active, request, controls = null }
   }, []);
 
   useEffect(() => {
-    sentControls.current = null;
-  }, [requestKey]);
-
-  useEffect(() => {
-    if (state.status !== 'ready' || !pending.current?.sessionId) return undefined;
-    const key = JSON.stringify(controls ?? null);
-    if (sentControls.current === key) return undefined;
-    const first = sentControls.current == null;
-    sentControls.current = key;
-    if (first || !controls) return undefined;
-    if ('look' in controls) command('film-look', { look: controls.look ?? null });
-    if ('card' in controls) command('title-card', { card: controls.card ?? null });
-    return undefined;
-  }, [controls, state.status, command, requestKey]);
-
-  useEffect(() => {
     if (!requestKey) {
       const current = pending.current;
       pending.current = null;
@@ -98,13 +81,14 @@ export default function useGeneratedPreview({ active, request, controls = null }
       return undefined;
     }
     const requestId = newRequestId();
-    pending.current = { requestId, sessionId: null, generation: 0 };
+    const openControls = { look: controlsRef.current?.look ?? null, card: controlsRef.current?.card ?? null };
+    pending.current = { requestId, sessionId: null, generation: 0, controls: openControls };
     if (mounted.current) setState((prev) => ({ ...prev, status: 'opening', ready: false, reason: '', lastEvent: null }));
     const mine = (payload) => payload?.requestId === requestId && pending.current?.requestId === requestId;
 
     const onOpened = (payload) => {
       if (!mine(payload)) return;
-      pending.current = { requestId, sessionId: payload.sessionId, generation: 0 };
+      pending.current = { ...pending.current, sessionId: payload.sessionId };
       if (!mounted.current) return;
       setState((prev) => ({
         ...prev,
@@ -182,7 +166,6 @@ export default function useGeneratedPreview({ active, request, controls = null }
     socket.on('generated-preview:event', onEvent);
     socket.on('generated-preview:recording', onRecording);
     socket.on('generated-preview:closed', onClosed);
-    const openControls = controlsRef.current || {};
     socket.emit('generated-preview:open', {
       requestId,
       ...request,
@@ -208,6 +191,19 @@ export default function useGeneratedPreview({ active, request, controls = null }
     // `request` is read for the payload; requestKey is its identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requestKey, mounted]);
+
+  // Reconcile against what this session actually received. Controls can change
+  // while its open request is in flight; readiness must not mark those edits sent.
+  // This effect follows session setup so a reopen never targets the old session.
+  useEffect(() => {
+    const current = pending.current;
+    if (state.status !== 'ready' || !current?.sessionId) return;
+    const next = { look: controls?.look ?? null, card: controls?.card ?? null };
+    const previous = current.controls;
+    current.controls = next;
+    if (JSON.stringify(previous.look) !== JSON.stringify(next.look)) command('film-look', { look: next.look });
+    if (JSON.stringify(previous.card) !== JSON.stringify(next.card)) command('title-card', { card: next.card });
+  }, [controls, state.status, command, requestKey]);
 
   useEffect(() => () => {
     if (frameUrl.current) URL.revokeObjectURL(frameUrl.current);

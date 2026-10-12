@@ -251,35 +251,33 @@ export async function addProjectScenes(id, sceneInputs, { source = null } = {}) 
   }, { source });
 }
 
-/**
- * A shot whose video is locked keeps what it shows: refuse a change to it
- * (`patch` names the fields a scene edit changes; null replaces the shot).
- */
-async function assertClipsUnlocked(id, sceneIds, patch = null) {
-  const project = await getProject(id);
-  if (!project?.productionReview?.clipApprovals) return;
-  const { assertClipUnlocked } = await import('./productionReview.js');
-  for (const sceneId of sceneIds) assertClipUnlocked(project, sceneId, patch);
-}
-
+/** Edit against the fresh record so a concurrent video lock cannot be bypassed. */
 export async function updateScene(id, sceneId, patch) {
-  await assertClipsUnlocked(id, [sceneId], patch);
-  const result = await (await selectBackend()).updateScene(id, sceneId, patch);
-  emitRecordUpdated('musicVideoProject', id);
-  return result;
+  const [{ applySceneUpdate }, { assertClipUnlocked }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
+  const { updated } = await mutateProjectRecord(id, (current) => {
+    assertClipUnlocked(current, sceneId, patch);
+    return applySceneUpdate(current, sceneId, patch);
+  });
+  return updated;
 }
 
 export async function deleteScene(id, sceneId) {
-  await assertClipsUnlocked(id, [sceneId]);
-  const next = await (await selectBackend()).deleteScene(id, sceneId);
-  emitRecordUpdated('musicVideoProject', id);
-  return next;
+  const [{ removeScene }, { assertClipUnlocked }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
+  const { project } = await mutateProjectRecord(id, (current) => {
+    assertClipUnlocked(current, sceneId);
+    return { project: removeScene(current, sceneId) };
+  });
+  return project;
 }
 
 export async function reorderProjectScenes(id, orderedIds) {
-  const next = await (await selectBackend()).reorderProjectScenes(id, orderedIds);
-  emitRecordUpdated('musicVideoProject', id);
-  return next;
+  const [{ reorderScenes }, { assertClipUnlocked }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
+  const { project } = await mutateProjectRecord(id, (current) => {
+    const project = reorderScenes(current, orderedIds);
+    for (const scene of project.scenes) assertClipUnlocked(current, scene.sceneId, scene);
+    return { project };
+  });
+  return project;
 }
 
 /**
@@ -288,9 +286,9 @@ export async function reorderProjectScenes(id, orderedIds) {
  * two at `options.atSec`. A locked still stays locked on every piece. Returns `{ project, scenes }` — the persisted project and the pieces.
  */
 export async function splitProjectScene(id, sceneId, options = {}) {
-  await assertClipsUnlocked(id, [sceneId]);
-  const [{ splitScene }, { carryShotLocks }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
+  const [{ splitScene }, { carryShotLocks, assertClipUnlocked }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
   return mutateProjectRecord(id, (current) => {
+    assertClipUnlocked(current, sceneId);
     const outcome = splitScene(current, sceneId, options);
     const from = Object.fromEntries(outcome.scenes.slice(1).map((piece) => [piece.sceneId, sceneId]));
     return { ...outcome, project: carryShotLocks(current, outcome.project, { from }) };
@@ -302,10 +300,14 @@ export async function splitProjectScene(id, sceneId, options = {}) {
  * of the split. Returns `{ project, scene }`.
  */
 export async function mergeProjectNextScene(id, sceneId, options = {}) {
-  const scenes = (await getProject(id))?.scenes || [];
-  await assertClipsUnlocked(id, [sceneId, scenes[scenes.findIndex(scene => scene.sceneId === sceneId) + 1]?.sceneId].filter(Boolean));
-  const { mergeNextScene } = await import('./projectsLogic.js');
-  return mutateProjectRecord(id, (current) => mergeNextScene(current, sceneId, options));
+  const [{ mergeNextScene }, { assertClipUnlocked }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
+  return mutateProjectRecord(id, (current) => {
+    const scenes = current.scenes || [];
+    const index = scenes.findIndex(scene => scene.sceneId === sceneId);
+    assertClipUnlocked(current, sceneId);
+    if (index >= 0 && scenes[index + 1]) assertClipUnlocked(current, scenes[index + 1].sceneId);
+    return mergeNextScene(current, sceneId, options);
+  });
 }
 
 // ---- scene takes (#8965) ----
@@ -340,16 +342,22 @@ export async function appendTakesAcrossScenes(id, items) {
 
 /** Explicitly select a take for its scene slot. Returns the updated scene. */
 export async function selectSceneTake(id, sceneId, takeId) {
-  await assertClipsUnlocked(id, [sceneId]);
-  const scene = await (await selectBackend()).selectSceneTake(id, sceneId, takeId);
-  emitRecordUpdated('musicVideoProject', id);
+  const [{ selectSceneTake: select }, { assertClipUnlocked }] = await Promise.all([import('./takes.js'), import('./productionReview.js')]);
+  const { scene } = await mutateProjectRecord(id, (current) => {
+    assertClipUnlocked(current, sceneId);
+    return select(current, sceneId, takeId);
+  });
   return scene;
 }
 
 /** Reject/restore a take and/or set its note. Returns the updated scene. */
 export async function reviewSceneTake(id, sceneId, takeId, review) {
-  const scene = await (await selectBackend()).reviewSceneTake(id, sceneId, takeId, review);
-  emitRecordUpdated('musicVideoProject', id);
+  const [{ reviewSceneTake: reviewTake }, { assertClipUnlocked }] = await Promise.all([import('./takes.js'), import('./productionReview.js')]);
+  const { scene } = await mutateProjectRecord(id, (current) => {
+    const outcome = reviewTake(current, sceneId, takeId, review);
+    assertClipUnlocked(current, sceneId, outcome.scene);
+    return outcome;
+  });
   return scene;
 }
 

@@ -219,6 +219,36 @@ describe('owned composition capture browser lifecycle', () => {
     await owner.close();
   });
 
+  it.each([3, 4])('rejects a startup error on pipe fd %s and disposes its owned browser', async fd => {
+    const pipeIn = new PassThrough();
+    const pipeOut = new PassThrough();
+    child.stdio = [null, null, child.stderr, pipeIn, pipeOut];
+    vi.spyOn(process, 'kill').mockImplementation(() => true);
+    pipeIn.on('data', () => {
+      child.stdio[fd].emit('error', Object.assign(new Error('/private/startup-path'), { code: 'EPIPE' }));
+    });
+    await expect(launchCompositionBrowser({ isolation: 'off' })).rejects.toThrow('Composition browser failed to start (pipe)');
+    expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
+    await expect(access(profile)).rejects.toThrow();
+  });
+
+  it('retains handoff pipe failures for the CDP client and still forwards subsequent errors', async () => {
+    answerHandshake();
+    const owner = await launchCompositionBrowser({ isolation: 'off' });
+    const error = Object.assign(new Error('Synthetic broken pipe'), { code: 'EPIPE' });
+    // The launcher has returned, but the client has not subscribed yet.
+    child.stdio[4].emit('error', error);
+    const callback = vi.fn();
+    owner.transport.send('{}', callback);
+    expect(callback).toHaveBeenCalledExactlyOnceWith(error);
+    const clientError = vi.fn();
+    owner.transport.on('error', clientError);
+    child.stdio[3].emit('error', error);
+    expect(clientError).toHaveBeenCalledExactlyOnceWith(error);
+    await owner.close();
+    await expect(access(profile)).rejects.toThrow();
+  });
+
   it('retries a transient profile removal failure so a resolved close means the profile is gone', async () => {
     const owner = await launchCompositionBrowser();
     vi.mocked(rm).mockRejectedValueOnce(Object.assign(new Error('busy'), { code: 'ENOTEMPTY' }));
