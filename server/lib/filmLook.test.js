@@ -92,8 +92,10 @@ describe('film look runtime', () => {
     const element = () => ({
       style: { filter: '', transform: '' }, dataset: {}, children: [], isConnected: false,
       setAttribute() {},
+      getContext: () => ({ fillRect() {}, createPattern() {} }),
       get lastElementChild() { return this.children.at(-1); },
       appendChild(child) { child.remove(); this.children.push(child); child.parent = this; child.parentNode = this; child.isConnected = true; },
+      insertBefore(child, before) { child.remove(); this.children.splice(before ? this.children.indexOf(before) : this.children.length, 0, child); child.parent = this; child.parentNode = this; child.isConnected = true; },
       remove() { if (this.parent) this.parent.children = this.parent.children.filter((child) => child !== this); this.isConnected = false; },
     });
     const root = Object.assign(element(), { clientWidth: 390, clientHeight: 219 });
@@ -112,14 +114,15 @@ describe('film look runtime', () => {
     expect(root.style.filter).not.toContain('url(');
     const overlays = root.lastElementChild;
     const grain = overlays.children.find((child) => child.dataset.filmLookLayer === 'grain');
-    const originalImage = grain.style.backgroundImage;
-    const originalShift = grain.style.transform;
+    const canvas = grain.children[0];
+    const originalShift = canvas.style.transform;
     context.portosComposition.seek(0.5);
     expect(root.lastElementChild).toBe(overlays);
     expect(overlays.children.find((child) => child.dataset.filmLookLayer === 'grain')).toBe(grain);
-    expect(grain.style.backgroundImage).toBe(originalImage);
-    expect(grain.style.transform).not.toBe(originalShift);
-    expect(overlays.style.cssText).toContain('pointer-events:none;z-index:2147483647');
+    expect(grain.children[0]).toBe(canvas);
+    expect(canvas.style.transform).not.toBe(originalShift);
+    expect(overlays.style.cssText).toContain('display:contents;pointer-events:none');
+    expect(overlays.children.every((child) => child.style.zIndex === '2147483647')).toBe(true);
     expect(overlays.children.every((child) => child.style.pointerEvents === 'none')).toBe(true);
     api.playback(false);
     expect(root.style.filter).toBe(exact.css);

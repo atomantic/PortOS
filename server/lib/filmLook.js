@@ -496,6 +496,34 @@ export function filmLookRuntimeSource(look = null) {
     if (overlays) { overlays.remove(); overlays = null; }
     if (savedTransform !== null) { root.style.transform = savedTransform; savedTransform = null; }
   };
+  const paintTile = (el, layer, size) => {
+    const key = layer.image + ':' + size.width + ':' + size.height;
+    if (el._filmLookTileKey === key) return;
+    el._filmLookTileKey = key;
+    // Rasterize our own SVG filter directly into canvas once. Image URLs are
+    // forbidden by the worker's code-only CSP; no image permission is needed.
+    const id = 'portos-film-look-tile-' + layer.key;
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.style.cssText = 'position:absolute;width:0;height:0;pointer-events:none';
+    svg.innerHTML = decodeURIComponent(layer.image.slice(layer.image.indexOf(',') + 1))
+      .replace(/id="[gt]"/g, 'id="' + id + '"').replace(/url\\(#(?:g|t)\\)/g, 'url(#' + id + ')');
+    document.documentElement.appendChild(svg);
+    const tile = document.createElement('canvas');
+    [tile.width, tile.height] = layer.size;
+    const context = tile.getContext('2d');
+    context.filter = 'url(#' + id + ')';
+    context.fillRect(0, 0, tile.width, tile.height);
+    context.filter = 'none';
+    svg.remove();
+    const canvas = el._filmLookCanvas || document.createElement('canvas');
+    canvas.width = Math.ceil(size.width * 2); canvas.height = Math.ceil(size.height * 2);
+    canvas.style.cssText = 'width:200%;height:200%;pointer-events:none';
+    const paint = canvas.getContext('2d');
+    paint.fillStyle = paint.createPattern(tile, 'repeat');
+    paint.fillRect(0, 0, canvas.width, canvas.height);
+    if (!el._filmLookCanvas) el.appendChild(canvas);
+    el._filmLookCanvas = canvas;
+  };
   const drawMotion = (root, size) => {
     if (host) { host.remove(); host = null; }
     const built = motion(look, size);
@@ -506,7 +534,8 @@ export function filmLookRuntimeSource(look = null) {
       overlays = document.createElement('div');
       overlays.dataset.portosFilmLookMotion = '1';
       overlays.setAttribute('aria-hidden', 'true');
-      overlays.style.cssText = 'position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:2147483647';
+      // A stacking context here would make blends see only the overlay group.
+      overlays.style.cssText = 'display:contents;pointer-events:none';
     }
     // A root child after body also paints after max-z-index lyrics/title layers.
     if (root.lastElementChild !== overlays) root.appendChild(overlays);
@@ -515,22 +544,20 @@ export function filmLookRuntimeSource(look = null) {
     for (const [index, layer] of built.overlays.entries()) {
       let el = [...overlays.children].find((child) => child.dataset.filmLookLayer === layer.key);
       if (!el) { el = document.createElement('div'); el.dataset.filmLookLayer = layer.key; }
-      // Reuse the nodes and tile URLs across frames: only the tile transform changes.
-      el.style.position = 'absolute'; el.style.pointerEvents = 'none';
+      // Each layer blends with the document and all preceding film layers.
+      el.style.position = 'fixed'; el.style.pointerEvents = 'none'; el.style.overflow = 'hidden';
       el.style.opacity = layer.opacity; el.style.mixBlendMode = layer.blend;
       el.style.left = '0'; el.style.top = '0';
-      el.style.width = layer.kind === 'tile' ? '200%' : '100%';
-      el.style.height = layer.kind === 'tile' ? '200%' : '100%';
+      el.style.width = '100%'; el.style.height = '100%';
       if (layer.kind === 'flat') el.style.backgroundColor = layer.color;
       if (layer.kind === 'gradient') el.style.backgroundImage = layer.gradient;
       if (layer.kind === 'tile') {
-        el.style.backgroundImage = 'url("' + layer.image + '")';
-        el.style.backgroundSize = layer.size[0] + 'px ' + layer.size[1] + 'px';
-        el.style.backgroundRepeat = 'repeat';
-        el.style.transform = 'translate(' + (-layer.shift[0] * 50) + '%, ' + (-layer.shift[1] * 50) + '%)';
+        paintTile(el, layer, size);
+        el._filmLookCanvas.style.transform = 'translate(' + (-layer.shift[0] * 50) + '%, ' + (-layer.shift[1] * 50) + '%)';
       }
-      el.style.zIndex = String(index);
-      if (el.parentNode !== overlays) overlays.appendChild(el);
+      el.style.zIndex = '2147483647';
+      // A slider can add an earlier layer after later ones already exist.
+      if (overlays.children[index] !== el) overlays.insertBefore(el, overlays.children[index] || null);
     }
   };
   const draw = () => {
