@@ -100,7 +100,7 @@ ${block('SHOTS', JSON.stringify(shots, null, 2))}
 Judge: does the sequence tell the concept's story across the song, does each shot read clearly, do shots vary in framing and energy with the music, and do lyric lines land on shots that show them? ${RULES}
 ${incomplete.length ? `These shots have blank fields that must be filled: ${incomplete.join(', ')}. Fill them in "fill".\n` : ''}Return JSON only:
 {"verdict":"approve|revise","score":1-10,"notes":"why","changes":[{"sceneId":"a shot id","text":"what must change in that shot"}],"fill":[{"sceneId":"a shot id","action":"","staging":"","camera":"","transition":""}]}
-List changes only when verdict is revise; "fill" only for blank fields.`;
+List changes only when verdict is revise; "fill" only for blank fields. Write "action" as plain physical motion (who moves, how, the end state): the video model usually hears nothing and acts out every word, so no lyric cues, beats, song times or look words.`;
 }
 
 /**

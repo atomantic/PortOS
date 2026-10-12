@@ -354,14 +354,22 @@ describe('shot intent at the video submission boundary', () => {
     mocks.getMusicVideoProject.mockResolvedValue(project());
   });
 
-  it('queues current action/reaction, actual words/onsets and immutable intent even when the client omitted it', async () => {
+  it('queues current action/reaction and immutable intent even when the client omitted it', async () => {
     await submitVideoGenJob({ prompt: 'Legacy free text', musicVideo: { projectId: 'p', sceneId: 's' } }, {});
     const { params } = mocks.enqueueJob.mock.calls[0][0];
     expect(params.prompt).toContain('Legacy free text');
     expect(params.prompt).toContain('Reaction 1.000s–2.000s: Listener');
-    expect(params.prompt).toContain('Word 0.500s–1.500s: Stay');
-    expect(params.prompt).toContain('Musical onsets: 0.750s');
     expect(params.shotInstruction.actionContract).toEqual(contract);
+  });
+
+  // Regression: a model that hears no audio acted out song cues and look words ("film falling onto the bed").
+  it('sends a take that hears no audio plain physical motion, without song cues or look words', async () => {
+    mocks.getMusicVideoProject.mockResolvedValue({ ...project(), concept: { style: 'grainy 35mm Kodak look' } });
+    await submitVideoGenJob({ prompt: 'Her head drops onto the pillow on "Sleep", grainy 35mm Kodak look, camera holds', musicVideo: { projectId: 'p', sceneId: 's' } }, {});
+    const { params } = mocks.enqueueJob.mock.calls[0][0];
+    expect(params.prompt).toContain('Her head drops onto the pillow, camera holds');
+    expect(params.prompt).toContain('Action 0.000s–1.000s: Singer — Offers a hand');
+    expect(params.prompt).not.toMatch(/Sleep|Kodak|grain|Word \d|Musical onsets/);
   });
 
   it('shifts contract and words into a padded performance window exactly once', async () => {
@@ -372,6 +380,7 @@ describe('shot intent at the video submission boundary', () => {
     const { params } = mocks.enqueueJob.mock.calls[0][0];
     expect(params.prompt).toContain('Action 1.500s–2.500s: Singer');
     expect(params.prompt).toContain('Word 2.000s–3.000s: Stay');
+    expect(params.prompt).toContain('Musical onsets: 2.250s');
     expect(params.prompt).not.toContain('stale intent');
     expect(params.prompt).toContain('Keep moving');
     expect(params.shotInstruction.edit.inSec).toBe(1.5);
