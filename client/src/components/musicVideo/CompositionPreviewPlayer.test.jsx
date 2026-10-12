@@ -41,6 +41,8 @@ const socket = vi.hoisted(() => {
 });
 vi.mock('../../services/apiMusicVideo.js', () => api);
 vi.mock('../../services/socket', () => ({ default: socket }));
+const uploadGalleryImage = vi.hoisted(() => vi.fn(async () => ({ filename: 'upload-1234abcd.png' })));
+vi.mock('../../services/apiSystem.js', () => ({ uploadGalleryImage }));
 
 import CompositionPreviewPlayer from './CompositionPreviewPlayer.jsx';
 
@@ -198,5 +200,17 @@ describe('CompositionPreviewPlayer', () => {
     expect(screen.getByLabelText('Scrub the composition preview').id).toBe('mv-doc-scrub');
     expect(screen.getByLabelText('Scrub the composition candidate').id).toBe('mv-doc-draft-scrub');
     expect(document.querySelector('iframe')).toBeNull();
+  });
+
+  it('saves the docked preview frame on screen to the gallery', async () => {
+    const blob = new Blob(['jpeg'], { type: 'image/jpeg' });
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ blob: async () => blob });
+    const { container } = render(<CompositionPreviewPlayer project={{ ...project, scenes: [{ sceneId: 'a', startSec: 0 }] }} audioUrl="/song.mp3" shotNav />);
+    await waitFor(() => expect(container.querySelector('img')?.getAttribute('src')).toBeTruthy());
+    const frameSrc = container.querySelector('img').getAttribute('src');
+    await act(async () => { screen.getByRole('button', { name: /Save frame/ }).click(); });
+    expect(fetchSpy).toHaveBeenCalledWith(frameSrc);
+    expect(uploadGalleryImage).toHaveBeenCalledWith(blob, { silent: true });
+    fetchSpy.mockRestore();
   });
 });
