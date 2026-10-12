@@ -70,15 +70,18 @@ describe('BoardStage thumbnail media badges', () => {
 });
 
 describe('BoardStage thumbnail lock marks', () => {
-  it('marks locked and changed shots, and leaves open ones bare', () => {
-    const scenes = [scene(1), scene(2), scene(3)];
-    render(<MemoryRouter><ShotLockContext.Provider value={{ locks: { s1: 'locked', s2: 'changed', s3: 'open' }, toggle: vi.fn() }}>
+  it('marks locked, still-only and changed shots, and leaves open ones bare', () => {
+    const scenes = [scene(1), scene(2), scene(3), scene(4)];
+    render(<MemoryRouter><ShotLockContext.Provider value={{ locks: { s1: 'locked', s2: 'changed', s3: 'open', s4: 'locked' },
+      clips: { s1: 'locked', s2: 'open', s3: 'open', s4: 'open' }, toggle: vi.fn() }}>
       <BoardStage board={board(scenes)} /></ShotLockContext.Provider></MemoryRouter>);
     const described = (name) => screen.getByRole('button', { name }).getAttribute('aria-describedby').split(' ')
       .map(id => document.getElementById(id).textContent);
     expect(described('Open Shot 1 · Part 1')).toEqual(['Locked', 'Clip']);
     expect(described('Open Shot 2 · Part 2')).toEqual(['Changed since locked', 'Clip']);
     expect(described('Open Shot 3 · Part 3')).toEqual(['Clip']);
+    // A video shot whose still is locked but whose clip is not reads "Still".
+    expect(document.getElementById('scene-lock-s4')).toMatchObject({ title: 'Still locked, video not locked yet' });
   });
 });
 

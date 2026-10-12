@@ -209,7 +209,7 @@ export default function SceneCard({
       <div className="space-y-2 p-3 pt-0">
         {/* A move swaps this shot with its neighbor; the song timing and lyric stay with the slot. */}
         <div className="flex items-center justify-end gap-2">
-          <ShotLockButton sceneId={scene.sceneId} className="mr-auto" />
+          <ShotLockButton scene={scene} className="mr-auto" />
           {documentComposition && (
             <span className="mr-auto text-[11px] text-gray-400">Shot order comes from the composition document, so it can't be reordered here.</span>
           )}

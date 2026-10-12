@@ -249,13 +249,26 @@ export async function addProjectScenes(id, sceneInputs, { source = null } = {}) 
   return { project, scenes };
 }
 
+/**
+ * A shot whose video is locked keeps what it shows: refuse a change to it
+ * (`patch` names the fields a scene edit changes; null replaces the shot).
+ */
+async function assertClipsUnlocked(id, sceneIds, patch = null) {
+  const project = await getProject(id);
+  if (!project?.productionReview?.clipApprovals) return;
+  const { assertClipUnlocked } = await import('./productionReview.js');
+  for (const sceneId of sceneIds) assertClipUnlocked(project, sceneId, patch);
+}
+
 export async function updateScene(id, sceneId, patch) {
+  await assertClipsUnlocked(id, [sceneId], patch);
   const result = await (await selectBackend()).updateScene(id, sceneId, patch);
   emitRecordUpdated('musicVideoProject', id);
   return result;
 }
 
 export async function deleteScene(id, sceneId) {
+  await assertClipsUnlocked(id, [sceneId]);
   const next = await (await selectBackend()).deleteScene(id, sceneId);
   emitRecordUpdated('musicVideoProject', id);
   return next;
@@ -273,6 +286,7 @@ export async function reorderProjectScenes(id, orderedIds) {
  * Returns `{ project, scenes }` — the persisted project and the pieces.
  */
 export async function splitProjectScene(id, sceneId, options = {}) {
+  await assertClipsUnlocked(id, [sceneId]);
   const { splitScene } = await import('./projectsLogic.js');
   return mutateProjectRecord(id, (current) => splitScene(current, sceneId, options));
 }
@@ -282,6 +296,8 @@ export async function splitProjectScene(id, sceneId, options = {}) {
  * of the split. Returns `{ project, scene }`.
  */
 export async function mergeProjectNextScene(id, sceneId, options = {}) {
+  const scenes = (await getProject(id))?.scenes || [];
+  await assertClipsUnlocked(id, [sceneId, scenes[scenes.findIndex(scene => scene.sceneId === sceneId) + 1]?.sceneId].filter(Boolean));
   const { mergeNextScene } = await import('./projectsLogic.js');
   return mutateProjectRecord(id, (current) => mergeNextScene(current, sceneId, options));
 }
@@ -318,6 +334,7 @@ export async function appendTakesAcrossScenes(id, items) {
 
 /** Explicitly select a take for its scene slot. Returns the updated scene. */
 export async function selectSceneTake(id, sceneId, takeId) {
+  await assertClipsUnlocked(id, [sceneId]);
   const scene = await (await selectBackend()).selectSceneTake(id, sceneId, takeId);
   emitRecordUpdated('musicVideoProject', id);
   return scene;

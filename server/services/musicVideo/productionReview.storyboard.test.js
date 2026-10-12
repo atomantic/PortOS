@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { productionReadiness, productionAlignmentBasis, approveProductionStage, carryProductionApprovals, assertShotApproval, setShotLocks } from './productionReview.js';
+import { productionReadiness, productionAlignmentBasis, approveProductionStage, carryProductionApprovals, assertShotApproval, assertClipUnlocked, setShotLocks } from './productionReview.js';
 import { applySceneUpdate, mergeNextScene, removeScene } from './projectsLogic.js';
 
 const WORD_PROBLEM = /bounded, positive-duration word timings/;
@@ -190,6 +190,26 @@ describe('locking shots one at a time', () => {
     const open = setShotLocks(approved, { sceneIds: ['s1', 's2', 's3'], locked: false });
     expect(productionReadiness(open).storyboard.approved).toBe(false);
     expect(() => assertShotApproval(open, 's1')).toThrow(/Lock this shot/);
+  });
+
+  // Uniquely catches a video shot locking in one step, or a still/card shot asking for a video lock.
+  it('locks a video shot still first, then its clip, and a card shot once', () => {
+    const art = artApproved();
+    const composed = { ...art, composition: { mode: 'composed' }, scenes: art.scenes.map(s => s.sceneId === 's3' ? { ...s, visualLayer: 'card' } : s) };
+    const still = setShotLocks(composed, { sceneIds: ['s2', 's3'], locked: true });
+    expect(productionReadiness(still).storyboard).toMatchObject({ clipLocks: { s1: 'open', s2: 'open', s3: null }, clipsUnlocked: ['s1', 's2'] });
+    expect(() => setShotLocks(still, { sceneIds: ['s2'], locked: true, stage: 'video' })).toThrow(/choose this shot's clip/);
+    expect(() => setShotLocks(still, { sceneIds: ['s3'], locked: true, stage: 'video' })).toThrow(/no video/);
+    expect(() => setShotLocks(composed, { sceneIds: ['s1'], locked: true, stage: 'video' })).toThrow(/still before its video/);
+    const { project: rendered } = applySceneUpdate(still, 's2', { videoHistoryId: 'clip-1' });
+    const video = setShotLocks(rendered, { sceneIds: ['s2'], locked: true, stage: 'video' });
+    expect(productionReadiness(video).storyboard).toMatchObject({ clipLocks: { s2: 'locked' }, clipsUnlocked: ['s1'] });
+    expect(() => assertClipUnlocked(video, 's2', { prompt: 'New motion' })).toThrow(/video is locked/);
+    expect(() => assertClipUnlocked(video, 's2', { textZone: 'upper' })).not.toThrow();
+    expect(() => assertClipUnlocked(video, 's1')).not.toThrow();
+    // Unlocking the still takes the clip lock with it.
+    const reopened = setShotLocks(video, { sceneIds: ['s2'], locked: false });
+    expect(productionReadiness(reopened).storyboard.clipLocks.s2).toBe('open');
   });
 });
 

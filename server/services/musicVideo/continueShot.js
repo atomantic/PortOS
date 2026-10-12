@@ -20,6 +20,7 @@ import { findFfmpeg, probeVideoGeometry, runFfmpegProcess, safeUnder } from '../
 import { previousShot, sceneClipOutFrameSec } from '../../lib/musicVideoHandoffFrame.js';
 import { getHistoryItem } from '../videoGen/history.js';
 import { appendSceneTakes, getProject, selectSceneTake } from './projects.js';
+import { assertClipUnlocked } from './productionReview.js';
 
 const refuse = (message, code, status = 409) => new ServerError(message, { status, code });
 
@@ -32,6 +33,7 @@ export async function continueFromPreviousShot(projectId, sceneId, { keepStillAs
   if (!project) throw refuse('Project not found', 'NOT_FOUND', 404);
   const scene = project.scenes?.find((s) => s.sceneId === sceneId);
   if (!scene) throw refuse('Scene not found', 'NOT_FOUND', 404);
+  assertClipUnlocked(project, sceneId);
   const previous = previousShot(project, sceneId);
   if (!previous) throw refuse('This is the first shot, so there is no previous shot to continue from', 'MUSIC_VIDEO_NO_PREVIOUS_SHOT');
   const entry = previous.videoHistoryId ? await getHistoryItem(previous.videoHistoryId) : null;

@@ -5,7 +5,7 @@ import BeatTimeline from '../BeatTimeline.jsx';
 import ContactSheetButton from '../ContactSheetButton.jsx';
 import SceneCard from '../SceneCard.jsx';
 import ScenePoster from '../ScenePoster.jsx';
-import { ShotLockContext, SHOT_LOCK_LABELS } from '../ShotLock.jsx';
+import { ShotLockContext, SHOT_LOCK_LABELS, overallShotLock } from '../ShotLock.jsx';
 import { shotNumbers } from '../ShotStepper.jsx';
 import TreatmentPanel, { treatmentSummary } from '../TreatmentPanel.jsx';
 import StageSection from '../StageSection.jsx';
@@ -34,14 +34,19 @@ function SceneMediaBadges({ scene, layered }) {
   );
 }
 
-/** Top-left mark on a Board thumbnail: locked, or changed since it was locked (an open shot shows none). */
+const LOCK_BADGED = ['locked', 'still', 'changed'];
+
+/**
+ * Top-left mark on a Board thumbnail: locked, a video shot with only its still
+ * locked ("Still"), or changed since it was locked (an open shot shows none).
+ */
 function SceneLockBadge({ sceneId, state }) {
-  if (state !== 'locked' && state !== 'changed') return null;
-  const Icon = state === 'locked' ? Lock : LockOpen;
+  if (!LOCK_BADGED.includes(state)) return null;
+  const Icon = state === 'changed' ? LockOpen : Lock;
   return (
     <span id={`scene-lock-${sceneId}`} title={SHOT_LOCK_LABELS[state]}
-      className={`port-media-overlay-strong absolute left-1 top-1 inline-flex items-center rounded p-0.5 ${state === 'locked' ? 'text-port-success' : 'text-port-warning'}`}>
-      <Icon size={12} aria-hidden="true" /><span className="sr-only">{SHOT_LOCK_LABELS[state]}</span>
+      className={`port-media-overlay-strong absolute left-1 top-1 inline-flex items-center gap-0.5 rounded p-0.5 text-[10px] font-medium leading-none ${state === 'changed' ? 'text-port-warning' : 'text-port-success'}`}>
+      <Icon size={12} aria-hidden="true" />{state === 'still' && <span aria-hidden="true">Still</span>}<span className="sr-only">{SHOT_LOCK_LABELS[state]}</span>
     </span>
   );
 }
@@ -56,7 +61,8 @@ function SceneLockBadge({ sceneId, state }) {
 export default function BoardStage({ board }) {
   const { project, locked, busy, sceneMedia, videoSettings, takes, treatment, activeSceneId, onToggleSceneExpand } = board;
   const scenes = project.scenes || [];
-  const shotLocks = useContext(ShotLockContext)?.locks || {};
+  const lockValue = useContext(ShotLockContext);
+  const shotLocks = Object.fromEntries(Object.entries(lockValue?.locks || {}).map(([id, still]) => [id, overallShotLock(still, lockValue.clips?.[id])]));
   const [searchParams, setSearchParams] = useSearchParams();
   const filter = parseSceneFilter(searchParams.get('scenes'));
   const setFilter = (next) => setSearchParams((prev) => {
@@ -182,7 +188,7 @@ export default function BoardStage({ board }) {
             ref={element => { if (element) thumbnailsRef.current.set(scene.sceneId, element); else thumbnailsRef.current.delete(scene.sceneId); }}
             onClick={() => { board.seekToScene?.(scene); onToggleSceneExpand?.(scene.sceneId, true); }}
             aria-label={`Open ${shotName(scene)}`}
-            aria-describedby={[['locked', 'changed'].includes(shotLocks[scene.sceneId]) && `scene-lock-${scene.sceneId}`,
+            aria-describedby={[LOCK_BADGED.includes(shotLocks[scene.sceneId]) && `scene-lock-${scene.sceneId}`,
               (sceneMediaKind(scene, { layered }) || scene.endImageId) && `scene-media-${scene.sceneId}`].filter(Boolean).join(' ') || undefined}
             className={`min-w-0 rounded border p-2 text-left ${activeSceneId === scene.sceneId ? 'border-port-accent bg-port-accent/10' : 'border-port-border bg-port-card'}`}>
             <span className="relative block">

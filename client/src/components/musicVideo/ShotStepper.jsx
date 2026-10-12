@@ -86,7 +86,7 @@ export default function ShotStepper({ scenes, time, onSeek, range = null, disabl
       <button type="button" onClick={() => onSeek(next)} disabled={disabled || next == null} aria-label="Next shot" title="Next shot" className={buttonCls}>
         <SkipForward size={14} aria-hidden="true" />
       </button>
-      {onScreen && <ShotLockButton sceneId={onScreen.sceneId} />}
+      {onScreen && <ShotLockButton scene={onScreen} />}
     </div>
   );
 }
