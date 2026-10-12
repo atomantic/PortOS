@@ -271,9 +271,13 @@ export async function deleteScene(id, sceneId) {
 }
 
 export async function reorderProjectScenes(id, orderedIds) {
-  const next = await (await selectBackend()).reorderProjectScenes(id, orderedIds);
-  emitRecordUpdated('musicVideoProject', id);
-  return next;
+  const [{ reorderScenes }, { assertClipUnlocked }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
+  const { project } = await mutateProjectRecord(id, (current) => {
+    const project = reorderScenes(current, orderedIds);
+    for (const scene of project.scenes) assertClipUnlocked(current, scene.sceneId, scene);
+    return { project };
+  });
+  return project;
 }
 
 /**
