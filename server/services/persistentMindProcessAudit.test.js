@@ -1,5 +1,8 @@
 import { beforeEach, afterAll, expect, it as vitestIt, vi } from 'vitest';
 import { join } from 'node:path';
+import express from 'express';
+import { request } from '../lib/testHelper.js';
+import { errorMiddleware } from '../lib/errorHandler.js';
 import { mkdir, writeFile, rm } from 'node:fs/promises';
 import { ownTestBodies } from '../lib/mockPathsDataRoot.js';
 const mocks = vi.hoisted(() => ({ root: {}, apps: [], rosterError: false, records: {}, dir: null, file: vi.fn(), list: vi.fn(), git: vi.fn() }));
@@ -28,6 +31,7 @@ vi.mock('../lib/execGit.js', () => ({ execGit: (...args) => mocks.git(...args) }
 vi.mock('./voice/tools.js', () => ({ getToolSpecs: () => [], getToolSpecsForIntent: () => ({ specs: [], activeGroups: new Set() }), dispatchTool: vi.fn() }));
 vi.mock('./persistentMindTaskCapability.js', () => ({ executePersistentMindTaskRequests: vi.fn() }));
 vi.mock('./persistentMindMaintenance.js', () => ({ cleanupPersistentMind: vi.fn() }));
+vi.mock('./settings.js', () => ({ getSettings: async () => ({}) }));
 vi.mock('./apps.js', () => ({ getActiveApps: async () => [] }));
 vi.mock('./persistentMindOrientation.js', () => ({ readPersistentMindOrientation: async () => ({ status: 'unknown' }) }));
 vi.mock('./persistentMindRuntime.js', () => ({ inspectPersistentMindRuntime: async () => ({}) }));
@@ -35,6 +39,7 @@ vi.mock('./persistentMindWorkspacePreflight.js', () => ({ PERSISTENT_MIND_WORKSP
 const audit = await import('./persistentMindProcessAudit.js');
 const registry = await import('./cosToolRegistry.js');
 const visibility = await import('./persistentMindVisibility.js');
+const toolRoutes = (await import('../routes/cosToolRoutes.js')).default;
 const turn = { turnId: 'example-turn' };
 const storePath = () => join(mocks.dir, 'persistent-mind-process-audit.json');
 const addJob = async (id, text = 'unknown tool: example\n', extra = {}) => {
@@ -278,11 +283,21 @@ it('keeps report visibility, family activation and private tool access consisten
   const result = await invoke('reports.next', { appId: 'example' }, 'authorized-next');
   expect(result).toMatchObject({ state: 'completed', result: { jobs: [{ evidence: { excerpt: 'unknown tool: example\n' } }] } });
   await expect(registry.executeCosToolCall({ call: { name: 'reports.next', arguments: { appId: 'example' }, requestId: 'authorized-next' }, authority, context: { turnId: 'another-turn' } })).rejects.toMatchObject({ code: 'TOOL_IDEMPOTENCY_CONFLICT' });
+  const app = express();
+  app.use('/api/cos', toolRoutes);
+  app.use(errorMiddleware);
+  const cached = await request(app).get('/api/cos/tools/calls/authorized-next');
+  expect(cached.status).toBe(200);
+  expect(cached.body.result.jobs[0].evidence.excerpt).toBe('unknown tool: example\n');
   const receiptId = result.result.jobs[0].receiptId;
   expect(await invoke('reports.read', { appId: 'example', receiptId }, 'authorized-read')).toMatchObject({ state: 'completed', result: { evidence: { excerpt: 'unknown tool: example\n' } } });
   await expect(invoke('reports.read', { appId: 'slashdo', receiptId }, 'other-app-read')).rejects.toMatchObject({ code: 'PROCESS_AUDIT_ACCESS_DENIED' });
   await expect(invoke('reports.next', { appId: 'not-maintained' }, 'unselected-next')).rejects.toThrow('app-not-maintained');
   caps.allowedAppIds = ['slashdo'];
+  const deniedCache = await request(app).get('/api/cos/tools/calls/authorized-next');
+  expect(deniedCache.status).toBe(403);
+  expect(deniedCache.body.code).toBe('PROCESS_AUDIT_ACCESS_DENIED');
+  expect(JSON.stringify(deniedCache.body)).not.toContain('unknown tool: example');
   await expect(invoke('reports.next', { appId: 'example' }, 'authorized-next')).rejects.toThrow('app-revoked');
   await expect(invoke('reports.read', { appId: 'example', receiptId }, 'authorized-read')).rejects.toThrow('app-revoked');
   expect(JSON.stringify(reportGroup(await snapshot()))).not.toMatch(/unknown tool|Synthetic task|repoPath|fullName/);
