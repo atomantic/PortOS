@@ -111,6 +111,18 @@ describe('music-driven performance takes', () => {
   });
 });
 
+describe('fal model per shot', () => {
+  it('uses the end-frame upgrade only on shots with an end frame, and only a model that takes one', () => {
+    const KLING = 'fal-ai/kling-video/v3/pro/image-to-video';
+    const shot = { sceneId: 's', startSec: 0, endSec: 2 };
+    const videoSettings = { falEndFrameModelId: KLING };
+    expect(falSceneTake({ scene: shot, videoSettings })).toMatchObject({ modelId: 'fal-ai/minimax/hailuo-02/standard/image-to-video', seconds: 6, costUsd: 0.27 });
+    expect(falSceneTake({ scene: { ...shot, endImageId: 'sketch.png' }, videoSettings })).toMatchObject({ modelId: KLING, seconds: 3, costUsd: 0.42 });
+    expect(falSceneTake({ scene: { ...shot, endImageId: 'sketch.png' }, videoSettings: { falEndFrameModelId: 'fal-ai/veo3.1/fast/image-to-video' } }).modelId)
+      .toBe('fal-ai/minimax/hailuo-02/standard/image-to-video');
+  });
+});
+
 describe('accepted-prefix repair planning', () => {
   const scene = { shotMode: 'performance', sceneId: 'example', videoHistoryId: 'clip', startSec: 10, endSec: 24,
     takes: [{ kind: 'video', assetId: 'clip', shotInstruction: { shotMode: 'performance',

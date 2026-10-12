@@ -52,7 +52,7 @@ const clip = (v, max) => (isNonBlankStr(v) ? trimTo(v, max) : null);
 // A basename only — an imported file's name is provenance, never a path.
 const takeOriginalName = (name) => (isNonBlankStr(name) ? clip(name.split(/[\\/]/).pop(), 200) : null);
 
-function buildTake({ kind, assetId, source, provider = null, jobId = null, prompt = null, sourceImageId = null, originalName = null, shotInstruction = null, use = 'final', dependencies = null, inputAssets = null, costUsd = null, spendKind = null, now }) {
+function buildTake({ kind, assetId, source, provider = null, jobId = null, prompt = null, sourceImageId = null, originalName = null, shotInstruction = null, use = 'final', dependencies = null, inputAssets = null, costUsd = null, spendKind = null, costModelId = null, now }) {
   return {
     takeId: `mvt-${randomUUID()}`,
     kind,
@@ -71,7 +71,11 @@ function buildTake({ kind, assetId, source, provider = null, jobId = null, promp
     note: null,
     createdAt: now,
     // #10157: the quoted generation cost, present only on a priced paid take.
-    ...(Number.isFinite(costUsd) && costUsd >= 0 ? { costUsd, spendKind: spendKind === 'autoReview' ? 'autoReview' : 'manual' } : {}),
+    ...(Number.isFinite(costUsd) && costUsd >= 0 ? {
+      costUsd, spendKind: spendKind === 'autoReview' ? 'autoReview' : 'manual',
+      // The paid model the quote priced, so project spend can say where it went.
+      ...(isNonBlankStr(costModelId) ? { costModelId: clip(costModelId, 200) } : {}),
+    } : {}),
     // #8977: the immutable record of what a performance take was generated
     // against (audio revision, song interval, edit in/out, cues, capability).
     // Present only on takes that carry one, so other takes keep their shape.

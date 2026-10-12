@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { summarizeMusicVideoProject } from '../../../server/lib/musicVideoSummary.js';
 import {
   changedFieldsText,
-  MUSIC_VIDEO_STAGES, currentProductionRun, deriveNextAction, deriveStages, projectSpend, boardJobEstimate, listPreviewSources, describeProjectStatus, resolveStageParam, stageChecklist, stepNotes, autopilotStatus, compareMusicVideoProjectsNewestFirst,
+  MUSIC_VIDEO_STAGES, currentProductionRun, deriveNextAction, deriveStages, projectSpend, projectFalSpend, boardJobEstimate, listPreviewSources, describeProjectStatus, resolveStageParam, stageChecklist, stepNotes, autopilotStatus, compareMusicVideoProjectsNewestFirst,
 } from './musicVideoStages.js';
 
 const APPROVED = { art: { approved: true }, storyboard: { approved: true }, proof: { approved: true }, readyForProduction: true };
@@ -731,5 +731,31 @@ describe('server project summary', () => {
     const stages = projects.map((project, i) => [summarizeMusicVideoProject(project, readinesses[i]).stage, deriveStages(project, readinesses[i]).current]);
     for (const [summary, page] of stages) expect(summary).toBe(page);
     expect(stages.map(([summary]) => summary)).toEqual(['setup', 'cast-sets', 'produce', 'produce', 'review', 'publish']);
+  });
+});
+
+describe('projectFalSpend', () => {
+  it('breaks paid takes and fal production steps down by model, dearest first', () => {
+    const KLING = 'fal-ai/kling-video/v3/pro/image-to-video';
+    const HAILUO = 'fal-ai/minimax/hailuo-02/standard/image-to-video';
+    const project = {
+      scenes: [scene({ takes: [
+        { takeId: 'a', spendKind: 'manual', costUsd: 0.7, costModelId: KLING },
+        { takeId: 'b', spendKind: 'autoReview', costUsd: 0.7, costModelId: KLING },
+        { takeId: 'c', spendKind: 'manual', costUsd: 0.1 },
+        { takeId: 'd' },
+      ] })],
+      productionRuns: [run({ steps: [
+        { route: { kind: 'video', mode: 'fal', model: null }, costModelId: HAILUO, costUsd: 0.27, status: 'completed' },
+        { route: { kind: 'video', mode: 'fal', model: null }, costModelId: HAILUO, costUsd: 0.27, status: 'refused' },
+        { route: { kind: 'video', mode: 'local', model: null }, costUsd: 0, status: 'completed' },
+      ] })],
+    };
+    expect(projectFalSpend(project)).toEqual({ totalUsd: 1.77, models: [
+      { modelId: KLING, label: 'Kling v3 Pro (image)', usd: 1.4, count: 2 },
+      { modelId: HAILUO, label: 'MiniMax Hailuo-02 Standard (image)', usd: 0.27, count: 1 },
+      { modelId: null, label: 'Model not recorded', usd: 0.1, count: 1 },
+    ] });
+    expect(projectFalSpend({})).toEqual({ totalUsd: 0, models: [] });
   });
 });

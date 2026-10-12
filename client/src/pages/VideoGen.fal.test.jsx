@@ -33,11 +33,12 @@ describe('VideoGen curated fal controls (#9232)', () => {
     expect([...resolution.options].map((option) => option.value)).toEqual(['', '720p', '1080p', '4k']);
     expect(resolution.value).toBe('');
     expect(screen.getByLabelText('Provider audio')).not.toBeChecked();
-    expect(screen.getByText(/about \$0.80 at list price/)).toHaveTextContent('provider audio off');
+    expect(screen.getByText(/about \$1.20 at list price/)).toHaveTextContent('provider audio off');
 
     fireEvent.change(resolution, { target: { value: '4k' } });
-    expect(screen.getByText(/about \$2.40 at list price/)).toHaveTextContent('at 4k');
+    expect(screen.getByText(/about \$2.80 at list price/)).toHaveTextContent('at 4k');
     fireEvent.click(screen.getByLabelText('Provider audio'));
+    // fal bills Veo Fast's silent clips at the audio rate, so audio costs nothing extra.
     expect(screen.getByText(/about \$2.80 at list price/)).toHaveTextContent('provider audio on');
     fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'a fox watches the rain' } });
     await findEnabledByRole('button', { name: /Add to queue/ });

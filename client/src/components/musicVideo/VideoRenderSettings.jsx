@@ -1,8 +1,10 @@
 import RenderPoolPicker from './RenderPoolPicker.jsx';
 import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
 import {
-  FAL_AUDIO_VIDEO_MODEL, FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_IMAGE_VIDEO_MODELS, describeFalVideoRate, falVideoResolutions, getFalVideoModel,
+  FAL_AUDIO_VIDEO_MODEL, FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_IMAGE_VIDEO_MODELS, describeFalVideoRate, falImageVideoQuotes, falVideoResolutions, getFalVideoModel,
 } from '../../lib/falVideoModels.js';
+import { projectFalSpend } from '../../lib/musicVideoStages.js';
+import { formatUsd } from '../../utils/formatters.js';
 import { SOURCE_AUDIO_LIPSYNC, SOURCE_AUDIO_MUSIC, performanceCapability } from '../../lib/musicVideoShotTiming.js';
 
 const falSelectCls = 'w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 sm:w-auto min-h-[44px] sm:min-h-0';
@@ -16,7 +18,7 @@ const falOptionLabel = (model) => {
 // persists through useMusicVideoModelSettings' `change`, and locks while a save
 // is in flight or any scene clip is generating, so the job payload and the
 // board's displayed setting cannot disagree.
-export default function VideoRenderSettings({ videoSettings, generating }) {
+export default function VideoRenderSettings({ videoSettings, generating, project = null }) {
   const {
     settings, saving, models, modelsLoading, defaultModel, effectiveModelId,
     audioReactiveModels, audioReactiveLoras, detectedAudioReactiveLora,
@@ -39,6 +41,10 @@ export default function VideoRenderSettings({ videoSettings, generating }) {
   // an audio-to-video model where the song slice drives the whole frame.
   const music = performanceCapability('fal', { scene: { performanceStyle: 'music' }, videoSettings: settings });
   const musicModels = Object.values(SOURCE_AUDIO_MUSIC.fal);
+  // A dearer start+end-frame model is an explicit upgrade for end-frame shots
+  // only; each option shows what a typical short (2 s) shot bills.
+  const endFrameQuotes = falImageVideoQuotes({ seconds: 2, endFrame: true });
+  const falSpend = project ? projectFalSpend(project) : null;
   return (
     <>
       <RenderPoolPicker settings={settings} change={change} disabled={locked} />
@@ -207,6 +213,20 @@ export default function VideoRenderSettings({ videoSettings, generating }) {
               </select>
             </>
           )}
+          <label htmlFor="mv-fal-end-frame-model" className="sr-only">fal.ai model for end-frame shots</label>
+          <select
+            id="mv-fal-end-frame-model"
+            value={settings.falEndFrameModelId || ''}
+            onChange={(e) => change({ falEndFrameModelId: e.target.value || null })}
+            disabled={locked}
+            title="Model for shots with a style-break end frame only. Every other shot keeps the cutaway model above."
+            className={`${falSelectCls} sm:max-w-[280px]`}
+          >
+            <option value="">End-frame shots: same model</option>
+            {endFrameQuotes.map((quote) => (
+              <option key={quote.modelId} value={quote.modelId}>{`End-frame shots: ${quote.label} · ${formatUsd(quote.costUsd)} per short shot`}</option>
+            ))}
+          </select>
           <label htmlFor="mv-fal-duration" className="sr-only">fal.ai scene clip duration</label>
           <input
             id="mv-fal-duration"
@@ -279,6 +299,12 @@ export default function VideoRenderSettings({ videoSettings, generating }) {
             ))}
           </select>
         </>
+      )}
+      {falSpend?.totalUsd > 0 && (
+        <p className="w-full min-w-0 break-words text-xs text-port-text-muted" title="Estimated from the price each fal render was quoted at; fal's own invoice is the final word">
+          {`fal spend (est.) ${formatUsd(falSpend.totalUsd)}: `}
+          {falSpend.models.map((row) => `${row.label} ${formatUsd(row.usd)} (${row.count})`).join(' · ')}
+        </p>
       )}
     </>
   );

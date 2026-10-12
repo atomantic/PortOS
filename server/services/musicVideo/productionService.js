@@ -74,6 +74,7 @@ import {
   chooseProductionRoute,
   loadPoolEnv,
   poolPricing,
+  stepCostModelId,
   stepPriceUsd,
   sceneRequirement,
 } from './productionPool.js';
@@ -312,6 +313,7 @@ async function dispatchSlot(projectId, runId, { stepKind, sceneId, revisionId = 
   const reserved = await mutateProjectRecord(projectId, (current) => reserveProductionStep(current, runId, {
     kind: stepKind, sceneId, revisionId, plateRepairBasis, route: choice.route, rationale: choice.rationale, processId: PROCESS_ID,
     costUsd: stepPriceUsd({ route: choice.route, project: current, scene: (current.scenes || []).find((s) => s.sceneId === sceneId), stepKind }),
+    costModelId: stepCostModelId({ route: choice.route, project: current, scene: (current.scenes || []).find((s) => s.sceneId === sceneId), stepKind }),
   })).catch((err) => ({ error: err }));
   if (reserved.error) {
     const code = reserved.error.code;

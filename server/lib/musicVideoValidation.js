@@ -147,6 +147,9 @@ export const musicVideoVideoSettingsSchema = z.object({
   // null/omitted = the default model (Hailuo-02 image-to-video) / its default.
   falModelId: z.string().min(1).max(200).nullable().optional(),
   falResolution: z.string().min(1).max(16).nullable().optional(),
+  // Upgrade model for shots with a style-break end frame (one that takes an
+  // end frame, e.g. Kling v3 Pro); null/omitted = those shots use falModelId.
+  falEndFrameModelId: z.string().min(1).max(200).nullable().optional(),
   // Output resolution of a performance (lip-sync) take — fal's own alphabet
   // for the lip-sync route. null/omitted = MUSIC_VIDEO_LIPSYNC_DEFAULT_RESOLUTION.
   falLipSyncResolution: z.enum(SOURCE_AUDIO_LIPSYNC.fal.resolutions).nullable().optional(),

@@ -183,7 +183,9 @@ export const FAL_VIDEO_MODELS = Object.freeze([
     aspectRatio: null,
     negativePrompt: 'native',
     audio: { param: 'generate_audio', providerDefault: true },
-    pricing: { perSecond: 0.112, perSecondWithAudio: 0.168 },
+    // What fal actually bills (an invoice, 2026-10-11: $0.14/s with audio off),
+    // not the model page's $0.112; the audio-on rate is scaled by the same 1.25.
+    pricing: { perSecond: 0.14, perSecondWithAudio: 0.21 },
   },
   {
     id: 'fal-ai/veo3.1/fast/image-to-video', kind: 'i2v', label: 'Veo 3.1 Fast (image)', family: 'veo-3.1',
@@ -196,8 +198,10 @@ export const FAL_VIDEO_MODELS = Object.freeze([
     negativePrompt: 'native',
     audio: { param: 'generate_audio', providerDefault: true },
     seed: 'seed',
+    // The same invoice billed a silent (generate_audio: false) 4 s clip at the
+    // audio-on $0.15/s, so silence saves nothing here: priced at what is billed.
     pricing: {
-      perSecond: { '720p': 0.1, '1080p': 0.1, '4k': 0.3 },
+      perSecond: { '720p': 0.15, '1080p': 0.15, '4k': 0.35 },
       perSecondWithAudio: { '720p': 0.15, '1080p': 0.15, '4k': 0.35 },
     },
   },
@@ -281,16 +285,27 @@ function perSecondRate(model, resolution, withAudio) {
 
 const round4 = (n) => Math.round(n * 1e4) / 1e4;
 
+/** The shortest clip fal bills `model` for (seconds): its shortest delivered length, or its audio minimum. */
+function falVideoMinBilledSec(model) {
+  const rule = model?.duration;
+  if (!rule) return null;
+  if (rule.kind === 'audio') return model.audioInput?.minSec ?? null;
+  return rule.kind === 'enum' ? rule.values[0] : rule.min;
+}
+
 /**
- * Estimated USD for one fal render, or null when the model is not curated or
- * the inputs cannot be priced. `seconds` is what the caller asks for; it is
- * coerced exactly as the request body will be (a lip-sync take is billed on
- * its audio length). `width`/`height` only matter for token-priced models
- * (Seedance), where a canvas wider than 16:9 costs proportionally more; a
- * narrower one is still priced at the 16:9 figure so the estimate never
- * undershoots. `generateAudio` selects the audio-on rate where one exists.
+ * What one fal render costs and why, or null when the model is not curated or
+ * the inputs cannot be priced: `{ modelId, label, requestedSec, billedSec,
+ * minBilledSec, resolution, perSec, costUsd }`. `seconds` is what the caller
+ * asks for; `billedSec` is the length fal renders and bills — coerced exactly
+ * as the request body will be, so a 2 s shot on a model whose shortest clip is
+ * 6 s bills 6 s (a lip-sync take is billed on its audio length). `width`/
+ * `height` only matter for token-priced models (Seedance), where a canvas wider
+ * than 16:9 costs proportionally more; a narrower one is still priced at the
+ * 16:9 figure so the estimate never undershoots. `generateAudio` selects the
+ * audio-on rate where one exists.
  */
-export function estimateFalVideoCostUsd({ modelId, seconds, resolution, width, height, generateAudio = false } = {}) {
+export function falVideoClipQuote({ modelId, seconds, resolution, width, height, generateAudio = false } = {}) {
   const model = getFalVideoModel(modelId);
   if (!model) return null;
   let billedSec;
@@ -314,22 +329,56 @@ export function estimateFalVideoCostUsd({ modelId, seconds, resolution, width, h
   if (perSec == null) return null;
   const long = model.pricing.longTake;
   const factor = long && billedSec > long.overSec ? long.factor : 1;
-  return round4(perSec * billedSec * factor);
+  const requested = Number(seconds);
+  return {
+    modelId: model.id,
+    label: model.label,
+    requestedSec: Number.isFinite(requested) && requested > 0 ? requested : null,
+    billedSec,
+    minBilledSec: falVideoMinBilledSec(model),
+    resolution: res,
+    perSec: round4(perSec),
+    costUsd: round4(perSec * billedSec * factor),
+  };
 }
 
-/** A one-line human rate for `model` at `resolution`, e.g. "$0.16/s at 1080P (×1.2 over 15s)". */
+/** Estimated USD for one fal render (`falVideoClipQuote`'s `costUsd`), or null when it cannot be priced. */
+export const estimateFalVideoCostUsd = (options = {}) => falVideoClipQuote(options)?.costUsd ?? null;
+
+/**
+ * Every curated start-frame model priced for one shot of `seconds`, cheapest
+ * first — what a per-shot model picker lists. `endFrame: true` keeps only the
+ * models that take an end frame. Each entry is a `falVideoClipQuote` plus
+ * `endFrame` (whether the model takes one); a model with no price is left out.
+ */
+export function falImageVideoQuotes({ seconds, resolution = null, endFrame = false } = {}) {
+  return FAL_IMAGE_VIDEO_MODELS
+    .filter((model) => !endFrame || model.endImage)
+    .map((model) => {
+      const quote = falVideoClipQuote({ modelId: model.id, seconds, resolution });
+      return quote ? { ...quote, endFrame: Boolean(model.endImage) } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.costUsd - b.costUsd || a.perSec - b.perSec);
+}
+
+/**
+ * A one-line human rate for `model` at `resolution`, with the shortest clip fal
+ * bills, e.g. "$0.045/s at 768P · bills 6s min" or "$0.16/s at 1080P (×1.2 over 15s)".
+ */
 export function describeFalVideoRate(modelId, resolution) {
   const model = getFalVideoModel(modelId);
   if (!model) return null;
   const res = resolveFalVideoResolution(model, resolution);
+  const min = model.duration.kind === 'audio' ? '' : ` · bills ${falVideoMinBilledSec(model)}s min`;
   if (model.pricing.videoTokensPerSec16x9) {
     const perSec = model.pricing.videoTokensPerSec16x9[res];
-    return perSec == null ? null : `≈$${perSec.toFixed(4)}/s at ${res} (16:9)`;
+    return perSec == null ? null : `≈$${perSec.toFixed(4)}/s at ${res} (16:9)${min}`;
   }
   const perSec = perSecondRate(model, res, false);
   if (perSec == null) return null;
   const long = model.pricing.longTake;
-  return `$${perSec}/s${res ? ` at ${res}` : ''}${long ? ` (×${long.factor} over ${long.overSec}s)` : ''}`;
+  return `$${perSec}/s${res ? ` at ${res}` : ''}${long ? ` (×${long.factor} over ${long.overSec}s)` : ''}${min}`;
 }
 
 /**
