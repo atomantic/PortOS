@@ -350,11 +350,13 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    * Returns a promise that always resolves to `{ ok }` — see generateFrame's
    * doc comment. `revisionId` (optional) is the revision hook's kickoff tag (#9011).
    */
-  const generateSceneVideo = (scene, { revisionId, onJob, target = null } = {}) => {
+  const generateSceneVideo = (scene, { revisionId, onJob, target = null, card = null } = {}) => {
     if (!scene.referenceImageId) { toast.error('Generate a reference frame first'); return Promise.resolve({ ok: false }); }
     const problem = shotActionContractProblem(scene.direction?.actionContract, scene);
     if (problem) { toast.error(problem); return Promise.resolve({ ok: false }); }
-    const basePrompt = buildShotPrompt(scene);
+    // `card` is the shot card's Render: its prompt exactly as shown and its input toggles
+    // ({ prompt, endFrame, songAudio }), sent with nothing added (SceneRenderInputs).
+    const basePrompt = card ? card.prompt : buildShotPrompt(scene);
     if (!basePrompt) { toast.error('Add a shot prompt first'); return Promise.resolve({ ok: false }); }
     // `target` renders this one shot elsewhere (a scene card's Render on pick) without changing the saved setting.
     const settings = target ? { ...videoSettings.settings, ...target } : videoSettings.settings;
@@ -375,10 +377,11 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     // whose timing is explicitly approximate. The environmental-motion guard
     // stays exclusive to the audio-reactive lane.
     const motionCues = settings.backend === 'grok' ? approximateMotionCues(project?.phrases, scene.startSec, scene.endSec) : '';
-    const prompt = audioReactiveSelected
+    const prompt = card ? basePrompt : audioReactiveSelected
       ? `${basePrompt}. ${AUDIO_REACTIVE_PERFORMANCE_GUARD}`
       : [basePrompt, motionCues].filter(Boolean).join('. ');
-    const mode = audioReactiveSelected || settings.generationMode === 'suppliedAudio' ? 'a2v' : 'image';
+    const songAudio = typeof card?.songAudio === 'boolean' ? card.songAudio : settings.generationMode === 'suppliedAudio';
+    const mode = audioReactiveSelected || songAudio ? 'a2v' : 'image';
     const falFields = settings.backend === 'fal'
       ? falTakeRequestFields(falSceneTake({ scene, videoSettings: settings, songDurationSec: project?.audioAnalysis?.durationSec ?? null }))
       : null;
@@ -410,16 +413,19 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       sourceImageFile: scene.referenceImageId,
       // A style-break end frame (#11173), when this fal or local model takes one
       // (a local LTX clip then renders first+last frame, #11258).
-      ...sceneEndFrameRequestFields(scene, {
+      ...(card && (card.endFrame === false || songAudio) ? {} : sceneEndFrameRequestFields(scene, {
         backend: settings.backend, falModelId: falFields?.falModelId, mode, // A card's local pick names its own model; else the active one.
         localRuntime: (target?.modelId ? (videoSettings.models || []).find((m) => m.id === target.modelId)?.runtime : videoSettings.activeModel?.runtime) ?? null,
-      }),
+      })),
       ...(audioReactiveSelected ? {
         audioStartSec: scene.startSec || 0,
         loraFilenames: [detectedAudioReactiveLora.filename],
         loraScales: [settings.audioReactiveScale],
       } : {}),
-      musicVideo: JSON.stringify({ projectId: project.id, sceneId: scene.sceneId, ...(revisionId ? { revisionId } : {}) }),
+      musicVideo: JSON.stringify({
+        projectId: project.id, sceneId: scene.sceneId, ...(revisionId ? { revisionId } : {}),
+        ...(card ? { promptAsTyped: true, ...(typeof card.songAudio === 'boolean' && !performance ? { songAudio: card.songAudio } : {}) } : {}),
+      }),
     })
       .then((res) => trackVideoJob(res, scene.sceneId, onJob))
       .catch((err) => handleVideoError(err, scene.sceneId, 'Scene video generation failed'));

@@ -21,3 +21,10 @@ export const localModelRendersPerformance = (model) => !!model
 /** The local models a shot can render on (performance shots, or cutaways). */
 export const localMusicVideoModels = (models, performance) => (Array.isArray(models) ? models : [])
   .filter(performance ? localModelRendersPerformance : localModelRendersCutaway);
+
+/**
+ * Whether `model` can take a song slice for a cutaway (supplied song audio):
+ * the LTX-2 family's PCM window. Other audio-to-video runtimes are not negotiated.
+ */
+export const localModelTakesSongAudio = (model) => !!model
+  && isLtx2FamilyRuntime(model.runtime) && resolveVideoSupportedModes(model).includes('a2v');

@@ -10,23 +10,25 @@ export async function applyProjectRenderPool(body) {
   const { getProject } = await import('./projects.js');
   const project = await getProject(body.musicVideo.projectId);
   const pool = project?.videoSettings?.renderPool;
-  if (project?.videoSettings?.generationMode === 'suppliedAudio'
+  // The shot card's Song audio toggle decides for its own render; else the project's generation mode.
+  const supplied = typeof body.musicVideo.songAudio === 'boolean'
+    ? body.musicVideo.songAudio : project?.videoSettings?.generationMode === 'suppliedAudio';
+  if (supplied
     && ((body.mode && !['image', 'a2v'].includes(body.mode)) || body.extendFromVideoId
       || body.lastImageFile || body.keyframes?.length || body.chunks > 1)) {
     refuse('Supplied song audio does not support continuation, end frames, keyframes or chained clips');
   }
   // A production run's own routes decide: a supplied-audio route sends `_suppliedAudio` itself.
-  if (body.musicVideo.productionRunId && project?.videoSettings?.generationMode === 'suppliedAudio' && !body._suppliedAudio) {
+  if (body.musicVideo.productionRunId && supplied && !body._suppliedAudio) {
     refuse('This production run was started with Prompt motion; start a new run to use Supplied song audio');
   }
   // Existing projects retain their renderer pins until a pool is saved.
   if (!pool || pool.mode === 'local') {
     if (body.mediaProviderPeerId) refuse('Select a peer in the saved project render pool first');
-    if (project?.videoSettings?.generationMode === 'suppliedAudio' && body.backend && body.backend !== 'local') {
+    if (supplied && body.backend && body.backend !== 'local') {
       refuse('Supplied song audio requires Local video; choose that renderer explicitly');
     }
-    return project?.videoSettings?.generationMode === 'suppliedAudio'
-      ? { ...body, backend: 'local', mode: 'a2v', _suppliedAudio: true } : body;
+    return supplied ? { ...body, backend: 'local', mode: 'a2v', _suppliedAudio: true } : body;
   }
   const scene = project.scenes?.find((entry) => entry.sceneId === body.musicVideo.sceneId);
   if (!scene) refuse('The requested scene is no longer in this project');
@@ -42,7 +44,7 @@ export async function applyProjectRenderPool(body) {
     refuse('Audio-reactive LoRA weights cannot cross to peers; use Prompt motion or Supplied song audio');
   }
   if (body.mode && !['image', 'a2v'].includes(body.mode)) refuse('Peer pools do not support video continuation or chain state');
-  const suppliedAudio = project.videoSettings.generationMode === 'suppliedAudio';
+  const suppliedAudio = supplied;
   const requestedMode = suppliedAudio ? 'a2v' : 'image';
   const [{ getPeers }, { resolveFederatedMediaProvider }, { listJobs }] = await Promise.all([
     import('../instances.js'), import('../federatedMediaConsumer.js'), import('../mediaJobQueue/index.js'),

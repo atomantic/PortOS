@@ -426,6 +426,16 @@ describe('shot intent at the video submission boundary', () => {
     expect(params.prompt).not.toMatch(/Sleep|Kodak|grain|Word \d|Musical onsets/);
   });
 
+  // Adam: the shot card's Render sends what the card shows, nothing the director cannot see.
+  it('sends a shot card Render prompt exactly as typed', async () => {
+    mocks.getMusicVideoProject.mockResolvedValue({ ...project(), concept: { style: 'grainy 35mm Kodak look' } });
+    const prompt = 'She shakes her head on "Sleep", grainy 35mm Kodak look';
+    await submitVideoGenJob({ prompt, musicVideo: { projectId: 'p', sceneId: 's', promptAsTyped: true } }, {});
+    const { params } = mocks.enqueueJob.mock.calls[0][0];
+    expect(params.prompt).toBe(prompt);
+    expect(params.shotInstruction.actionContract).toEqual(contract);
+  });
+
   it('shifts contract and words into a padded performance window exactly once', async () => {
     mocks.prepareVideoGenParams.mockResolvedValue({ backend: 'fal', cleanupStaged: vi.fn(), sourceImagePath: '/example/frame.png' });
     mocks.preparePerformanceShot.mockResolvedValue({ audioFilePath: '/example/audio.wav', modelId: 'lip-sync', resolution: '1080P',

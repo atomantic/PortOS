@@ -7,13 +7,11 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { PATHS, ensureDir, sha256File } from '../../lib/fileUtils.js';
 import { isPathInsideDir } from '../../lib/pathSafety.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { isLtx2FamilyRuntime } from '../../lib/runners.js';
-import { resolveVideoSupportedModes } from '../../lib/videoModeProfiles.js';
+import { localModelTakesSongAudio } from '../../lib/musicVideoLocalModels.js';
 
 // This slice uses the LTX PCM input and --no-audio contract. Other A2V
 // runtimes have different output/window controls and are not negotiated yet.
-export const supportsSourceAudioWindow = (model) => isLtx2FamilyRuntime(model?.runtime)
-  && resolveVideoSupportedModes(model).includes('a2v');
+export const supportsSourceAudioWindow = localModelTakesSongAudio;
 
 /** Only this feature's owned copies may be released, never a master recording. */
 export async function discardSourceAudioWindow(path) {

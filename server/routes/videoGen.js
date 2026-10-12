@@ -481,6 +481,12 @@ const generateBodySchema = z.object({
       // revisionGenerationJobs/revisionSectionStates uses it for an exact
       // match instead of the pre-#9011 scene+time heuristic.
       revisionId: z.string().min(1).max(200).optional(),
+      // The shot card's Render: `prompt` is exactly what the director sees and
+      // sends, so the shot-intent lines and the silent-model rewrite are skipped.
+      promptAsTyped: z.boolean().optional(),
+      // The shot card's Song audio toggle: hand a cutaway its song slice (true) or
+      // render it silent (false), whatever the project's generation mode says.
+      songAudio: z.boolean().optional(),
     }).optional(),
   ),
   // File the clip into this music video's media collection even when no shot
