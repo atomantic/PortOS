@@ -281,6 +281,31 @@ export function carryShotLocks(before, after, { from = {} } = {}) {
 }
 
 /**
+ * Keep a shot's still lock through the director's own edit to it: picking or
+ * swapping its still or end frame, or editing its prompts, re-binds the lock to
+ * the shot as it now is, so its clip can be rendered without unlocking and
+ * locking again. A lock already stale is re-bound the same way. Automation
+ * never reaches this (preserveAutomatedShotLocks refuses its edits), and a
+ * locked video refuses the edit before it (assertClipUnlocked). A clip lock
+ * that no longer holds is dropped: its clip was made from the old still.
+ */
+export function keepDirectorStillLock(before, after, sceneId) {
+  const lock = shotLocks(before)?.[sceneId];
+  const scene = after.scenes?.find(s => s.sceneId === sceneId);
+  if ((lock !== 'locked' && lock !== 'changed') || !scene) return after;
+  // A whole-board approval this edit stales would open every other shot it covered.
+  const next = carryShotLocks(before, after);
+  if (shotLocks(next)?.[sceneId] === 'locked') return next;
+  const held = next.productionReview?.shotApprovals?.[sceneId]
+    || { ...before.productionReview?.approvals?.storyboard, fromBoardApproval: true };
+  const shotApprovals = { ...next.productionReview?.shotApprovals,
+    [sceneId]: stillLock(next, scene, { ...held, relockedAt: new Date().toISOString() }) };
+  const { [sceneId]: _stale, ...clipApprovals } = next.productionReview?.clipApprovals || {};
+  return { ...next, productionReview: { ...next.productionReview, shotApprovals,
+    ...(next.productionReview?.clipApprovals ? { clipApprovals } : {}) } };
+}
+
+/**
  * Lock or unlock Board shots for the director. A lock binds to the shot as it is now.
  * `stage: 'video'` locks or unlocks a video shot's selected clip, which needs its
  * still locked first; unlocking a still unlocks its clip too.
