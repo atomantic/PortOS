@@ -11,7 +11,8 @@
  *
  * A route belongs here when it runs a process, git, npm, gh or a CoS agent on
  * the host, or when it sets what one will run (a repo path, a start command, a
- * task prompt, a shell job). Read-only GETs stay open. Mutating routes in the
+ * task prompt, a shell job), or accesses live camera/microphone streams.
+ * Ordinary read-only GETs stay open. Mutating routes in the
  * same families that are deliberately left OUT:
  *   - apps: delete/archive/unarchive, scope-adherence — they
  *     change only PortOS's own records or read files; nothing runs.
@@ -158,6 +159,12 @@ import { LLM_DRILL_TYPES } from './postDrillTypes.js';
 import { escapeRegExp } from './textUtils.js';
 
 export const HOST_CONTROL_ROUTES = Object.freeze([
+  // Capture activation and existing live feeds require operator authority (#11272).
+  // HEAD inherits the GET policy because Express invokes the same handler.
+  'POST /api/media/start',
+  'GET /api/media/video',
+  'GET /api/media/audio',
+
   // Rigging and retargeting spawn Blender/Python workers on the host for up to
   // 20 minutes each (#10922).
   'POST /api/rigging/models/:id',
@@ -996,7 +1003,7 @@ export const changedVoiceConfigHostControlPaths = (paths, body, current) => (
 /** The HOST_CONTROL_ROUTES entry that `method path` (an Express `req.method` / `req.path`) matches, or null. */
 export const hostControlRouteFor = (method, path) => {
   if (typeof method !== 'string' || typeof path !== 'string') return null;
-  const verb = method.toUpperCase();
+  const verb = method.toUpperCase() === 'HEAD' ? 'GET' : method.toUpperCase();
   return COMPILED_ROUTES.find((entry) => entry.method === verb && entry.pattern.test(path))?.route ?? null;
 };
 
