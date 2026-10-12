@@ -56,9 +56,9 @@ function lyricDuringCard(project, card) {
  * Turning it on fills the song title, the artist named for DistroKid under
  * Where you post, this year and a window that ends before the first sung line.
  * Edits reach the preview at once (`onEditLocal`); leaving a field saves.
- * `bare` drops the panel's own heading where a section around it carries one.
+ * Edited on the Look step, under the docked preview (a card of its own there).
  */
-export default function TitleCardPanel({ project, onEditLocal, onSave, onPreview, bare = false }) {
+export default function TitleCardPanel({ project, onEditLocal, onSave, onPreview }) {
   const [starting, setStarting] = useState(false);
   useEffect(addSwatchFaces, []);
   const drawn = DRAWN_BY.includes(project.composition?.mode);
@@ -94,9 +94,9 @@ export default function TitleCardPanel({ project, onEditLocal, onSave, onPreview
   const field = (key) => (raw?.[key] ?? card?.[key] ?? '');
 
   return (
-    <section aria-label="Opening title card" className={bare ? 'space-y-2' : 'space-y-2 border-t border-port-border pt-3'}>
+    <section aria-label="Opening title card" className="space-y-2 rounded-lg border border-port-border bg-port-card p-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        {!bare && <h3 className="inline-flex items-center gap-1.5 text-sm font-medium"><Clapperboard size={14} className="text-port-accent" aria-hidden="true" /> Opening title card</h3>}
+        <h3 className="inline-flex items-center gap-1.5 text-sm font-medium"><Clapperboard size={14} className="text-port-accent" aria-hidden="true" /> Opening title card</h3>
         <label htmlFor="mv-title-card-on" className="inline-flex min-h-[44px] items-center gap-2 text-xs text-port-text-muted sm:min-h-0">
           {on ? `Live in the preview · ${clock(card.startSec)}–${clock(card.endSec)}` : 'Off'}
           <input id="mv-title-card-on" type="checkbox" checked={on} disabled={starting}

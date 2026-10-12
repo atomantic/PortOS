@@ -72,6 +72,7 @@ import ProjectManageActions from '../components/musicVideo/ProjectManageActions.
 import ProjectSettingsDrawer, { SETTINGS_TAB_IDS } from '../components/musicVideo/ProjectSettingsDrawer.jsx';
 import MusicVideoProjectCard from '../components/musicVideo/MusicVideoProjectCard.jsx';
 import PreviewDock from '../components/musicVideo/PreviewDock.jsx';
+import TitleCardPanel from '../components/musicVideo/TitleCardPanel.jsx';
 import NeedsAttentionBanner from '../components/musicVideo/NeedsAttentionBanner.jsx';
 import SetupStage from '../components/musicVideo/stages/SetupStage.jsx';
 import StageChecklist from '../components/musicVideo/StageChecklist.jsx';
@@ -1184,6 +1185,14 @@ export default function MusicVideo() {
 
   // Everything the stage panels need, in one place: stages read what they
   // use, so a panel moving between tabs never changes a signature here.
+  // The opening credit block is part of the look: on the Look step it is edited under the preview that draws it.
+  const withTitleCard = (dock) => (activeStage !== 'cast-sets' || !selected ? dock : (
+    <div className="flex flex-col gap-3">
+      {dock}
+      <TitleCardPanel project={selected} onEditLocal={editProjectLocal} onSave={saveProjectFields}
+        onPreview={(startSec) => seekToScene({ startSec }, { play: true })} />
+    </div>
+  ));
   const board = selected ? {
     project: selected,
     reviewDraftState,
@@ -1596,7 +1605,7 @@ export default function MusicVideo() {
                 }}
               />
             )}
-            dock={(
+            dock={withTitleCard(
               <PreviewDock
                 project={selected}
                 sources={previewSources}
@@ -1604,7 +1613,7 @@ export default function MusicVideo() {
                 seekRequest={seekRequest}
                 collapsed={dockCollapsed ?? !playerFirst}
                 onToggleCollapsed={() => setDockCollapsed(!(dockCollapsed ?? !playerFirst))}
-              />
+              />,
             )}
           >
             <StageView key={selected.id} board={board} />

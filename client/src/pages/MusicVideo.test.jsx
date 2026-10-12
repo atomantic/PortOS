@@ -2674,6 +2674,20 @@ describe('MusicVideo stage tabs (#9243)', () => {
     await waitFor(() => expect(document.getElementById('mv-auto-edit')).toHaveFocus());
   });
 
+  // Uniquely catches the opening title card form leaving the Look step or reappearing on Storyboard/Make.
+  it('edits the opening title card on the Look step only, right under the preview', async () => {
+    listMusicVideoProjects.mockResolvedValue([PROJECT_WITH_CLIP]);
+    renderAt('/music-video/mv-1/cast-sets');
+    await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
+    const preview = screen.getByRole('complementary', { name: 'Preview' });
+    const card = screen.getByRole('region', { name: 'Opening title card' });
+    expect(preview.nextElementSibling).toBe(card);
+    for (const stage of ['board', 'produce']) {
+      await openStage(stage);
+      expect(screen.queryByRole('region', { name: 'Opening title card' })).toBeNull();
+    }
+  });
+
   it('leads Storyboard and Make with the player and their approval, closes Look with its approval, keeps the run in Project settings and unsaved planning edits across steps', async () => {
     listMusicVideoProjects.mockResolvedValue([{ ...PROJECT_WITH_CLIP,
       autonomousRun: { status: 'needs-human', stage: 'video', output: {}, brief: {} },

@@ -344,7 +344,7 @@ still applies inside the ffmpeg encode; the film look follows it.
 
 The MTV-style credit block a video opens with: song title, artist, year and an
 optional extra line (album, director), fading in over the opener and out again.
-**Storyboard → Opening title card** (also under **Compose**) stores it on the project (`project.titleCard`,
+**Look → Opening title card** (under the docked preview) stores it on the project (`project.titleCard`,
 validated by `musicVideoTitleCardSchema`, normalized by `normalizeTitleCard` in
 `server/lib/musicVideoTitleCard.js`; `null` = none, `enabled: false` keeps the
 text). Turning it on fills the song title (the project name without its version
