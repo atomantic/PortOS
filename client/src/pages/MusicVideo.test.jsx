@@ -2511,6 +2511,20 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     }), { silent: true }));
   });
 
+  // Uniquely catches Refine sending the shot prompt or the mood references instead of editing just this frame by the instruction.
+  it('refines the start frame by a short instruction, with that frame as the only reference', async () => {
+    await openProject({ ...SPEC_PROJECT, scenes: [{ ...SPEC_PROJECT.scenes[0], referenceImageId: 'start.png' }] }, 'produce');
+    fireEvent.click(screen.getByRole('button', { name: 'Refine' }));
+    fireEvent.change(screen.getByLabelText('What to change in the start frame'), { target: { value: 'remove the hand' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Render refined start frame' }));
+    await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: expect.stringMatching(/^Edit the reference image: remove the hand\. Keep everything else/),
+      referenceImageFiles: ['start.png'],
+      musicVideo: { projectId: 'mv-spec', sceneId: 's1' },
+    }), { silent: true }));
+    expect(screen.queryByLabelText('What to change in the start frame')).toBeNull();
+  });
+
   // Uniquely catches a trimmed clip landing only in Video Gen history, never as this shot's take, or not becoming the shot's clip.
   it('trims the shot clip to a later start frame and makes it the shot\'s selected clip take', async () => {
     const scene = { sceneId: 's1', order: 0, prompt: 'waves', referenceImageId: 'img1', videoHistoryId: 'h1',

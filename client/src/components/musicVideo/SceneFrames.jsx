@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from 'react';
-import { Activity, ArrowRight, Image as ImageIcon, ImagePlus, Maximize2, Shuffle, SkipForward, Wand2, X } from 'lucide-react';
+import { Activity, ArrowRight, Image as ImageIcon, ImagePlus, Maximize2, PencilLine, Shuffle, SkipForward, Wand2, X } from 'lucide-react';
 import SceneTakeStrip from './SceneTakeStrip.jsx';
 
 const PRIMARY_BUTTON = 'flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap';
@@ -55,7 +55,8 @@ const REFERENCE_LABELS = { '': 'Prompt only', start: 'Start frame', end: 'End fr
  * optional one it ends on (#11173). Each frame shows its prompt and its own
  * Render right under the picture, and can render from the start or end frame
  * as an image reference (`onGenerateFrame` / `onGenerateEndFrame` take
- * `{ referenceImageId }`, null for prompt only). Tapping a frame picks whose
+ * `{ referenceImageId }`, null for prompt only). Refine edits a frame by a
+ * short instruction (`{ referenceImageId, refine }`). Tapping a frame picks whose
  * takes show below, as a grid, with that frame's swap and import actions.
  */
 export default function SceneFrames({
@@ -67,6 +68,9 @@ export default function SceneFrames({
   const [keepStillAsEnd, setKeepStillAsEnd] = useState(false);
   // Which frame each render starts from: the start frame renders from its prompt, the end frame from the start frame.
   const [refs, setRefs] = useState({ start: '', end: 'start' });
+  // Refine: which frame's edit box is open, and the instruction typed into it.
+  const [refining, setRefining] = useState(null);
+  const [instruction, setInstruction] = useState('');
   const frames = { start: scene.referenceImageId || null, end: endFrames ? scene.endImageId || null : null };
   const refOf = (which) => (frames[refs[which]] ? refs[which] : '');
   const lockedTitle = 'Video locked. Unlock the video to change it.';
@@ -83,6 +87,14 @@ export default function SceneFrames({
     const refChoices = ['', ...['start', 'end'].filter((key) => frames[key])];
     const needsPrompt = !start && !scene.endFramePrompt?.trim();
     const render = () => (start ? onGenerateFrame : onGenerateEndFrame)?.(scene, { referenceImageId: ref ? frames[ref] : null });
+    const refineLocked = !!generating || (!start && clipLocked);
+    const refine = (e) => {
+      e.preventDefault();
+      if (!instruction.trim() || refineLocked) return;
+      (start ? onGenerateFrame : onGenerateEndFrame)?.(scene, { referenceImageId: imageId, refine: instruction.trim() });
+      setRefining(null);
+      setInstruction('');
+    };
     return (
       <div key={which} className="min-w-0 space-y-1.5">
         <FrameTile label={label} imageId={imageId} empty={start ? 'No still yet' : 'Optional'} active={endFrames && activeSide === which}
@@ -107,7 +119,25 @@ export default function SceneFrames({
               </select>
             </span>
           )}
+          {imageId && (
+            <button type="button" onClick={() => { setRefining(refining === which ? null : which); setInstruction(''); }} disabled={refineLocked}
+              aria-expanded={refining === which} className={SECONDARY_BUTTON} title="Edit this frame with a short instruction, keeping the rest">
+              <PencilLine size={14} /> Refine
+            </button>
+          )}
         </div>
+        {refining === which && imageId && (
+          <form onSubmit={refine} className="flex min-w-0 gap-2">
+            <label htmlFor={id(`${which}-refine`)} className="sr-only">{`What to change in the ${start ? 'start' : 'end'} frame`}</label>
+            <input id={id(`${which}-refine`)} type="text" value={instruction} onChange={(e) => setInstruction(e.target.value)}
+              placeholder="What to change, e.g. remove the hand"
+              className="min-w-0 flex-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-base sm:text-sm" />
+            <button type="submit" disabled={!instruction.trim() || refineLocked} className={PRIMARY_BUTTON}
+              aria-label={`Render refined ${start ? 'start' : 'end'} frame`}>
+              <Wand2 size={14} /> Render
+            </button>
+          </form>
+        )}
       </div>
     );
   };
