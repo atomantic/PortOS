@@ -2,6 +2,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { stripVTControlCharacters } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -305,7 +306,7 @@ describe('structured failure diagnostics', () => {
       ], { encoding: 'utf8', timeout: 30_000, env });
       expect(result.error).toBeUndefined();
       expect(result.status).toBe(1);
-      expect(result.stdout).toMatch(/Test Files\s+1 passed/);
+      expect(stripVTControlCharacters(result.stdout)).toMatch(/Test Files\s+1 passed/);
       const diagnostic = result.stderr.slice(result.stderr.indexOf('Test launcher exited:'));
       expect(diagnostic).toContain('code=1, signal=none');
       expect(diagnostic).toContain('unhandledErrors=1');
