@@ -357,7 +357,7 @@ const selectProject = async (projectId) => {
 // control is only on screen while its step is open, so tests say which one.
 // Compose is part of Make now. The phone's step bar is the tablist.
 const STAGE_TABS = {
-  setup: /^Song/, 'cast-sets': /^Look/, board: /^Storyboard/, produce: /^Make/, compose: /^Make/, review: /^Final render/,
+  setup: /^Song/, 'cast-sets': /^Look/, board: /^Storyboard/, produce: /^Make/, compose: /^Make/, review: /^Final render/, publish: /^Publish/,
 };
 // Project settings (render style, audio tools, autopilot, files) is a drawer over the step.
 const openSettings = async (tab = 'Project') => {
@@ -2959,6 +2959,39 @@ describe('MusicVideo stage tabs (#9243)', () => {
       await waitFor(() => expect(screen.getByLabelText('Draft excerpt preview').getAttribute('src')).toBe('/data/videos/excerpt-old.mp4'));
       await openStage('board', false);
       await waitFor(() => expect(screen.getByLabelText('Preview source')).toHaveValue('excerpt:mve-1'));
+    });
+
+    // Uniquely catches resizing the Look/Publish preview remounting its player or resetting the chosen source.
+    it('expands the Look and Publish preview into the main column and returns the same player to the sidebar', async () => {
+      const project = {
+        ...PROJECT_WITH_CLIP,
+        renderHistoryId: 'rh-9',
+        excerpts: [{ id: 'mve-1', startSec: 0, endSec: 10, status: 'complete', filename: 'excerpt-old.mp4', notes: [] }],
+      };
+      await openProject(project, 'cast-sets');
+      fireEvent.change(screen.getByLabelText('Preview source'), { target: { value: 'excerpt:mve-1' } });
+      for (const stage of ['cast-sets', 'publish']) {
+        if (stage === 'publish') await openStage(stage, false);
+        const player = await screen.findByLabelText('Draft excerpt preview');
+        player.currentTime = 3;
+        fireEvent.timeUpdate(player);
+        const dock = screen.getByRole('complementary', { name: 'Preview' }).closest('.max-xl\\:order-first');
+        fireEvent.click(screen.getByRole('button', { name: 'Expand preview into main area' }));
+        expect(dock).toHaveClass('xl:col-start-2', 'xl:row-start-1');
+        expect(screen.getByRole('tabpanel')).toHaveClass('xl:row-start-2');
+        expect(screen.getByLabelText('Draft excerpt preview')).toBe(player);
+        expect(player.currentTime).toBe(3);
+        expect(screen.getByLabelText('Preview source')).toHaveValue('excerpt:mve-1');
+        const restore = screen.getByRole('button', { name: 'Return preview to sidebar' });
+        expect(restore).toHaveAttribute('aria-pressed', 'true');
+        fireEvent.click(restore);
+        expect(dock).toHaveClass('xl:sticky');
+        expect(screen.getByRole('tabpanel')).not.toHaveClass('xl:row-start-2');
+        expect(screen.getByLabelText('Draft excerpt preview')).toBe(player);
+        expect(player.currentTime).toBe(3);
+      }
+      await openStage('board', false);
+      expect(screen.queryByRole('button', { name: 'Expand preview into main area' })).toBeNull();
     });
 
     it('plays the final render first and keeps a picked draft across stage tabs', async () => {

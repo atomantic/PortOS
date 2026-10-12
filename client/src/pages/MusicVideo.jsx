@@ -1089,7 +1089,8 @@ export default function MusicVideo() {
   // the director opens it. `dockCollapsed` is null until they toggle it.
   const [seekRequest, setSeekRequest] = useState(null);
   const [dockCollapsed, setDockCollapsed] = useState(null);
-  useEffect(() => { setSeekRequest(null); setDockCollapsed(null); }, [selectedId]);
+  const [dockExpanded, setDockExpanded] = useState(false);
+  useEffect(() => { setSeekRequest(null); setDockCollapsed(null); setDockExpanded(false); }, [selectedId]);
   // `play` starts playback from there (a storyboard row); a scene card only cues the shot.
   const seekToScene = (scene, { play = false } = {}) => {
     if (typeof scene?.startSec !== 'number') return;
@@ -1560,6 +1561,7 @@ export default function MusicVideo() {
             autopilot={autopilotStatus(selected)}
             onOpenSettings={openHeaderSettings}
             playerFirst={playerFirst}
+            previewExpanded={dockExpanded}
             onRename={handleRename}
             renameForm={renameForm}
             cancelRender={renderTargetsSelected && !renderJob.pending ? { onCancel: renderJob.cancel, cancelling: renderJob.cancelling } : null}
@@ -1613,6 +1615,8 @@ export default function MusicVideo() {
                 seekRequest={seekRequest}
                 collapsed={dockCollapsed ?? !playerFirst}
                 onToggleCollapsed={() => setDockCollapsed(!(dockCollapsed ?? !playerFirst))}
+                expanded={dockExpanded}
+                onToggleExpanded={!playerFirst ? () => setDockExpanded((expanded) => !expanded) : undefined}
               />,
             )}
           >
