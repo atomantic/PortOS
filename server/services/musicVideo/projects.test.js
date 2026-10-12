@@ -303,7 +303,7 @@ describe('automation respects persisted shot locks (#11218)', () => {
 });
 
 describe('a locked shot video', () => {
-  // Uniquely catches a video lock that only labels the shot: the director, a run and a new take must all be refused.
+  // Uniquely catches a video lock that only labels the shot: edits, split, merge, take choice and a run must all be refused.
   it('freezes the shot for the director and for automation until its video is unlocked', async () => {
     const { setShotLocks, clipLocks } = await import('./productionReview.js');
     const p = await projects.createProject({ name: 'Video lock' });
@@ -316,6 +316,10 @@ describe('a locked shot video', () => {
     await expect(projects.updateScene(p.id, scene.sceneId, { prompt: 'Director edit' })).rejects.toMatchObject({ code: 'MUSIC_VIDEO_SHOT_LOCKED' });
     await expect(projects.updateScene(p.id, scene.sceneId, { videoHistoryId: 'clip-2' })).rejects.toMatchObject({ code: 'MUSIC_VIDEO_SHOT_LOCKED' });
     await expect(projects.deleteScene(p.id, scene.sceneId)).rejects.toMatchObject({ code: 'MUSIC_VIDEO_SHOT_LOCKED' });
+    await expect(projects.splitProjectScene(p.id, scene.sceneId, { atSec: 1 })).rejects.toMatchObject({ code: 'MUSIC_VIDEO_SHOT_LOCKED' });
+    await expect(projects.selectSceneTake(p.id, scene.sceneId, 'take-1')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_SHOT_LOCKED' });
+    await projects.addProjectScene(p.id, { startSec: 2, endSec: 3, prompt: 'After' });
+    await expect(projects.mergeProjectNextScene(p.id, scene.sceneId)).rejects.toMatchObject({ code: 'MUSIC_VIDEO_SHOT_LOCKED' });
     // A field that doesn't change what the shot shows stays editable.
     await projects.updateScene(p.id, scene.sceneId, { prompt: 'Approved', textZone: 'upper' });
     const run = await projects.mutateProjectRecord(p.id, current => ({ project: { ...current, scenes: current.scenes.map(s => ({ ...s, videoHistoryId: 'run-clip' })) } }), { source: 'production-run' });
