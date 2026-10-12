@@ -480,6 +480,37 @@ describe('fableLoomHosted Socket.IO namespace', () => {
       expect(stt.transcribe).toHaveBeenCalledWith(Buffer.from('aabb'), expect.anything());
     });
 
+    it('drops malformed frames without coercion and keeps the guest session usable', async () => {
+      // Complete the real admission middleware before exercising the listener.
+      audience.handshake = { auth: { role: 'audience', sessionId: session.id, token } };
+      const next = vi.fn();
+      await middleware(audience, next);
+      expect(next).toHaveBeenCalledWith();
+      await audience.listeners['hosted:mic:start']();
+      const declaredLength = vi.fn(() => { throw new Error('array-like length was read'); });
+      const arrayLike = { get length() { return declaredLength(); } };
+      const detached = new ArrayBuffer(8);
+      structuredClone(detached, { transfer: [detached] });
+      for (const payload of [{}, 42, 'audio', [1, 2], { type: 'Buffer', data: [1] }, arrayLike, detached]) {
+        expect(() => audience.listeners['hosted:mic:frame'](payload)).not.toThrow();
+      }
+      expect(declaredLength).not.toHaveBeenCalled();
+      audience.listeners['hosted:mic:frame'](Buffer.from('still usable'));
+      await audience.listeners['hosted:mic:stop']();
+      expect(stt.transcribe).toHaveBeenCalledWith(Buffer.from('still usable'), expect.anything());
+    });
+
+    it('preserves raw bytes and slice offsets of binary microphone frames', async () => {
+      await audience.listeners['hosted:mic:start']();
+      const bytes = Uint8Array.from([0xff, 0x61, 0x62, 0xff]);
+      audience.listeners['hosted:mic:frame'](bytes.subarray(1, 3));
+      audience.listeners['hosted:mic:frame'](new DataView(bytes.buffer, 1, 2));
+      audience.listeners['hosted:mic:frame'](Uint8Array.from([0x63]).buffer);
+      audience.listeners['hosted:mic:frame'](new Uint16Array(bytes.buffer, 0, 1));
+      await audience.listeners['hosted:mic:stop']();
+      expect(stt.transcribe).toHaveBeenCalledWith(Buffer.from([0x61, 0x62, 0x61, 0x62, 0x63, 0xff, 0x61]), expect.anything());
+    });
+
     it('stops buffering mic frames once the session expires mid-listen', async () => {
       await audience.listeners['hosted:mic:start']();
 
@@ -503,6 +534,8 @@ describe('fableLoomHosted Socket.IO namespace', () => {
     it('drops a single mic frame larger than the per-frame cap', async () => {
       await audience.listeners['hosted:mic:start']();
       audience.listeners['hosted:mic:frame'](Buffer.alloc(MAX_MIC_FRAME_BYTES + 1, 0x7a));
+      audience.listeners['hosted:mic:frame'](new ArrayBuffer(MAX_MIC_FRAME_BYTES + 1));
+      audience.listeners['hosted:mic:frame'](new Uint16Array(MAX_MIC_FRAME_BYTES / 2 + 1));
       audience.listeners['hosted:mic:frame'](Buffer.from('aa'));
       await audience.listeners['hosted:mic:stop']();
 
@@ -538,6 +571,18 @@ describe('fableLoomHosted Socket.IO namespace', () => {
       expect(stt.transcribe).not.toHaveBeenCalled();
       expect(audience.emitted.find((e) => e.event === 'hosted:error')?.data)
         .toMatchObject({ code: 'UTTERANCE_TOO_LARGE' });
+    });
+
+    it('rejects a malformed complete buffer and accepts a subsequent sliced binary utterance', async () => {
+      await audience.listeners['hosted:mic:start']();
+      await audience.listeners['hosted:mic:stop']({ length: 2 ** 32 });
+      expect(stt.transcribe).not.toHaveBeenCalled();
+      expect(audience.emitted.find((e) => e.event === 'hosted:error')?.data)
+        .toMatchObject({ code: 'INVALID_AUDIO_FRAME' });
+      await audience.listeners['hosted:mic:start']();
+      const bytes = Uint8Array.from([0xff, 0x61, 0x62, 0xff]);
+      await audience.listeners['hosted:mic:stop'](new DataView(bytes.buffer, 1, 2));
+      expect(stt.transcribe).toHaveBeenCalledWith(Buffer.from('ab'), expect.anything());
     });
 
     it('ignores hosted:mic:stop when the session is not listening', async () => {
