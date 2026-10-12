@@ -1717,7 +1717,7 @@ describe('MusicVideo lyrics and shot coverage (#8964)', () => {
     await waitFor(() => expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-1', 's1', { endSec: 7 }, { silent: true }));
     await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
 
-    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Scene 2' })));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Shot 2' })));
     const legacyPlayers = cardPlayers();
     expect(legacyPlayers).toHaveLength(1);
     expect(legacyPlayers[0]).toHaveAttribute('src', '/data/videos/h2.mp4');
@@ -1771,7 +1771,7 @@ describe('MusicVideo section layers (#8985)', () => {
     expect(renderBtn).toBeDisabled();
 
     await openStage('board');
-    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Scene 2' })));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Shot 2' })));
     const layer = document.getElementById('mv-scene-s2-layer');
     fireEvent.change(layer, { target: { value: 'card' } });
     await waitFor(() => expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-1', 's2', { visualLayer: 'card' }, { silent: true }));
@@ -1788,7 +1788,7 @@ describe('MusicVideo section layers (#8985)', () => {
 
   it('keeps a plain render on footage and says the layer only applies to composed renders', async () => {
     await openProject({ ...PROJECT_WITH_CLIP, scenes: [scenes[0], { ...scenes[1], visualLayer: 'card' }], composition: composition('concat') }, 'board');
-    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Scene 2' })));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Shot 2' })));
     expect(await screen.findByText(/Title card sections render in composed or document mode/)).toBeTruthy();
     await openStage('review');
     expect(screen.getByRole('button', { name: /^Render final$/ })).toBeDisabled();
@@ -2935,9 +2935,9 @@ describe('MusicVideo stage tabs (#9243)', () => {
       await openStage('board');
       expect(screen.getByTitle('Composition document preview')).toBeTruthy();
       await waitFor(() => expect(screen.getByText('0.00s / 60.0s')).toBeTruthy());
-      fireEvent.click(screen.getByRole('button', { name: 'Open Scene 2' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Open Shot 2' }));
       await waitFor(() => expect(screen.getByText('4.00s / 60.0s')).toBeTruthy());
-      fireEvent.click(screen.getByRole('button', { name: 'Open Scene 1' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Open Shot 1' }));
       await waitFor(() => expect(screen.getByText('0.00s / 60.0s')).toBeTruthy());
     });
 

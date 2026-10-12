@@ -4,7 +4,9 @@ import { Plus, Image as ImageIcon, Film, Code2, Type, FlagTriangleRight, Lock, L
 import BeatTimeline from '../BeatTimeline.jsx';
 import ContactSheetButton from '../ContactSheetButton.jsx';
 import SceneCard from '../SceneCard.jsx';
+import ScenePoster from '../ScenePoster.jsx';
 import { ShotLockContext, SHOT_LOCK_LABELS } from '../ShotLock.jsx';
+import { shotNumbers } from '../ShotStepper.jsx';
 import TreatmentPanel, { treatmentSummary } from '../TreatmentPanel.jsx';
 import StageSection from '../StageSection.jsx';
 import { PlanActions } from '../ProjectActionGroups.jsx';
@@ -13,7 +15,6 @@ import { previousShot } from '../../../../../server/lib/musicVideoHandoffFrame.j
 import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
 import { FOOTAGE_OPTIONAL_MODES } from '../../../lib/musicVideoStages.js';
 import { parseSceneFilter, sceneAttention, sceneMatchesFilter, sceneMediaKind, SCENE_ATTENTION_LABELS, SCENE_MEDIA_LABELS } from '../../../lib/musicVideoSceneAttention.js';
-import { musicVideoImageSrc } from '../../../lib/musicVideoPreview.js';
 import { formatTimecode } from '../../../utils/formatters.js';
 
 const FILTER_LABELS = [['all', 'All'], ['attention', 'Needs attention'], ['missing', 'Missing footage']];
@@ -72,7 +73,11 @@ export default function BoardStage({ board }) {
     songReview: project.songRevision?.sceneReview || null,
     videoSettings: videoSettings.settings,
   };
-  const codesById = new Map(scenes.map((scene) => [scene.sceneId, sceneAttention(scene, attentionCtx)]));
+  // A locked shot is settled: its other takes are no longer something to review.
+  const codesById = new Map(scenes.map((scene) => [scene.sceneId, sceneAttention(scene, { ...attentionCtx, locked: shotLocks[scene.sceneId] === 'locked' })]));
+  const numbers = shotNumbers(scenes);
+  const shotName = (scene) => [numbers.has(scene.sceneId) ? `Shot ${numbers.get(scene.sceneId)}` : null,
+    scene.sectionLabel || scene.label].filter(Boolean).join(' · ') || `Scene ${scene.order + 1}`;
   const counts = { all: scenes.length, attention: 0, missing: 0 };
   for (const codes of codesById.values()) {
     if (sceneMatchesFilter(codes, 'attention')) counts.attention += 1;
@@ -176,17 +181,16 @@ export default function BoardStage({ board }) {
           {visible.map(scene => <button key={scene.sceneId} type="button" aria-pressed={activeSceneId === scene.sceneId}
             ref={element => { if (element) thumbnailsRef.current.set(scene.sceneId, element); else thumbnailsRef.current.delete(scene.sceneId); }}
             onClick={() => { board.seekToScene?.(scene); onToggleSceneExpand?.(scene.sceneId, true); }}
-            aria-label={`Open ${scene.sectionLabel || scene.label || `Scene ${scene.order + 1}`}`}
+            aria-label={`Open ${shotName(scene)}`}
             aria-describedby={[['locked', 'changed'].includes(shotLocks[scene.sceneId]) && `scene-lock-${scene.sceneId}`,
               (sceneMediaKind(scene, { layered }) || scene.endImageId) && `scene-media-${scene.sceneId}`].filter(Boolean).join(' ') || undefined}
             className={`min-w-0 rounded border p-2 text-left ${activeSceneId === scene.sceneId ? 'border-port-accent bg-port-accent/10' : 'border-port-border bg-port-card'}`}>
             <span className="relative block">
-              {scene.referenceImageId ? <img src={musicVideoImageSrc(scene.referenceImageId)} alt="" loading="lazy" className="aspect-video w-full rounded object-cover" />
-                : <span className="flex aspect-video items-center justify-center rounded bg-port-bg text-port-text-muted"><ImageIcon size={22} aria-hidden="true" /></span>}
+              <ScenePoster scene={scene} className="aspect-video w-full rounded" />
               <SceneLockBadge sceneId={scene.sceneId} state={shotLocks[scene.sceneId]} />
               <SceneMediaBadges scene={scene} layered={layered} />
             </span>
-            <span className="mt-1 block truncate text-sm">{scene.sectionLabel || scene.label || `Scene ${scene.order + 1}`}</span>
+            <span className="mt-1 block truncate text-sm">{shotName(scene)}</span>
             <span className="block text-xs text-port-text-muted">{formatTimecode(scene.startSec)}–{formatTimecode(scene.endSec)}</span>
             {codesById.get(scene.sceneId).length > 0 && <span className="block text-xs text-port-warning">{SCENE_ATTENTION_LABELS[codesById.get(scene.sceneId)[0]]}</span>}
           </button>)}
@@ -200,6 +204,7 @@ export default function BoardStage({ board }) {
               onToggleExpand={toggleInspector}
               performanceReview={performanceReviews.get(`${scene.sceneId}:${scene.videoHistoryId}`)}
               index={idx}
+              shotNumber={numbers.get(scene.sceneId)}
               isLast={idx === scenes.length - 1}
               generatingFrame={sceneMedia.genScenes[scene.sceneId]}
               generatingVideo={sceneMedia.genVideoScenes[scene.sceneId]}

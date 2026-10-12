@@ -31,6 +31,15 @@ export function shotSteps(scenes, t, range = null) {
   return { back, next, index: current + 1, count: starts.length };
 }
 
+/**
+ * Each shot's number as the player counts it ("Shot n / N"): its place in song
+ * order. A shot with no start time has no number.
+ */
+export function shotNumbers(scenes) {
+  const timed = (scenes || []).filter((scene) => Number.isFinite(scene?.startSec));
+  return new Map([...timed].sort((a, b) => a.startSec - b.startSec).map((scene, i) => [scene.sceneId, i + 1]));
+}
+
 /** The shot playing at song time `t`: the last one that has started. */
 function shotOnScreen(scenes, t) {
   let current = null;

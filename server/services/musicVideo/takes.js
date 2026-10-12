@@ -30,6 +30,13 @@ import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
 // `endImage` (#11173): an optional style-break end frame a fal clip ends on.
 export const TAKE_SLOT = Object.freeze({ image: 'referenceImageId', video: 'videoHistoryId', endImage: 'endImageId' });
 
+/** `codeClip` describes the clip it was set on: another clip in the slot is not code-rendered. */
+export function keepCodeClipWithItsClip(before, after) {
+  if (!after.codeClip || before?.videoHistoryId === after.videoHistoryId) return after;
+  const { codeClip: _stale, ...rest } = after;
+  return rest;
+}
+
 // Per-scene cap. Takes are small pointer records, but an unattended "regenerate
 // until it looks right" loop must not grow one project row without bound. When
 // full, the oldest rejected take is dropped first, then the oldest unselected
@@ -115,7 +122,7 @@ function findSceneIndex(project, sceneId) {
 
 function replaceScene(project, idx, scene) {
   const scenes = project.scenes.slice();
-  scenes[idx] = scene;
+  scenes[idx] = keepCodeClipWithItsClip(project.scenes[idx], scene);
   return retainMusicVideoDependencies(project, { ...project, scenes, updatedAt: new Date().toISOString() });
 }
 

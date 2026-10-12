@@ -11,7 +11,7 @@ vi.mock('../ContactSheetButton.jsx', () => ({ default: () => null }));
 vi.mock('../TreatmentPanel.jsx', () => ({ default: () => null, treatmentSummary: () => '' }));
 vi.mock('../ProjectActionGroups.jsx', () => ({ PlanActions: () => null }));
 
-const scene = (n, extra = {}) => ({ sceneId: `s${n}`, order: n - 1, label: `Shot ${n}`, referenceImageId: 'f.png', videoHistoryId: 'v', startSec: 0, endSec: 3, takes: [], ...extra });
+const scene = (n, extra = {}) => ({ sceneId: `s${n}`, order: n - 1, label: `Part ${n}`, referenceImageId: 'f.png', videoHistoryId: 'v', startSec: (n - 1) * 3, endSec: n * 3, takes: [], ...extra });
 const board = (scenes, over = {}) => ({
   project: { id: 'p', scenes, composition: { mode: 'concat' } }, locked: false, busy: {},
   sceneMedia: { genScenes: {}, genVideoScenes: {}, failedScenes: { frame: {}, video: {} } },
@@ -27,17 +27,17 @@ describe('BoardStage scene filter', () => {
     renderBoard(board(scenes), '/?scenes=missing');
     expect(screen.getByRole('button', { name: 'Needs attention (1)' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Missing footage (1)' }).getAttribute('aria-pressed')).toBe('true');
-    expect(screen.getAllByText('Shot 2').length).toBeGreaterThan(0);
-    expect(screen.queryByText('Shot 1')).toBeNull();
+    expect(screen.getAllByText('Shot 2 · Part 2').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Shot 1 · Part 1')).toBeNull();
     expect(screen.getByText('No clip')).toBeTruthy();
   });
 
   it('writes the filter to the URL and removes it for All', () => {
     renderBoard(board(scenes));
-    expect(screen.getByText('Shot 1')).toBeTruthy();
+    expect(screen.getByText('Shot 1 · Part 1')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Needs attention (1)' }));
     expect(screen.getByTestId('search').textContent).toBe('?scenes=attention');
-    expect(screen.queryByText('Shot 1')).toBeNull();
+    expect(screen.queryByText('Shot 1 · Part 1')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'All (3)' }));
     expect(screen.getByTestId('search').textContent).toBe('');
   });
@@ -63,9 +63,9 @@ describe('BoardStage thumbnail media badges', () => {
     ];
     renderBoard(board(scenes, { project: { id: 'p', scenes, composition: { mode: 'composed' } } }));
     const descriptionOf = (name) => screen.getByRole('button', { name }).getAttribute('aria-describedby');
-    expect(document.getElementById(descriptionOf('Open Shot 1')).textContent).toBe('Clip');
-    expect(document.getElementById(descriptionOf('Open Shot 2')).textContent).toBe('ImageEnd frame');
-    expect(document.getElementById(descriptionOf('Open Shot 3')).textContent).toBe('Code');
+    expect(document.getElementById(descriptionOf('Open Shot 1 · Part 1')).textContent).toBe('Clip');
+    expect(document.getElementById(descriptionOf('Open Shot 2 · Part 2')).textContent).toBe('ImageEnd frame');
+    expect(document.getElementById(descriptionOf('Open Shot 3 · Part 3')).textContent).toBe('Code');
   });
 });
 
@@ -76,8 +76,31 @@ describe('BoardStage thumbnail lock marks', () => {
       <BoardStage board={board(scenes)} /></ShotLockContext.Provider></MemoryRouter>);
     const described = (name) => screen.getByRole('button', { name }).getAttribute('aria-describedby').split(' ')
       .map(id => document.getElementById(id).textContent);
-    expect(described('Open Shot 1')).toEqual(['Locked', 'Clip']);
-    expect(described('Open Shot 2')).toEqual(['Changed since locked', 'Clip']);
-    expect(described('Open Shot 3')).toEqual(['Clip']);
+    expect(described('Open Shot 1 · Part 1')).toEqual(['Locked', 'Clip']);
+    expect(described('Open Shot 2 · Part 2')).toEqual(['Changed since locked', 'Clip']);
+    expect(described('Open Shot 3 · Part 3')).toEqual(['Clip']);
+  });
+});
+
+describe('BoardStage scene cards', () => {
+  // Uniquely catches the board card naming only its section (no shot number), a locked shot still
+  // flagged "Takes to review", and a code-rendered clip labelled Clip with no picture.
+  it('numbers shots in song order, settles a locked shot, and marks a code-rendered clip', () => {
+    const pending = { takes: [{ takeId: 't1', kind: 'video', assetId: 'v', status: 'selected' }, { takeId: 't2', kind: 'video', assetId: 'v2', status: 'candidate' }] };
+    const scenes = [scene(1, { startSec: 3, endSec: 6, sectionLabel: 'Verse', ...pending }), scene(2, { startSec: 0, endSec: 3, sectionLabel: 'Intro' }),
+      scene(3, { startSec: 6, endSec: 9, sectionLabel: 'Code', referenceImageId: null, videoHistoryId: 'upload-1', codeClip: true })];
+    const view = (locks) => render(<MemoryRouter><ShotLockContext.Provider value={{ locks, toggle: vi.fn() }}>
+      <BoardStage board={board(scenes, { project: { id: 'p', scenes, composition: { mode: 'composed' } } })} /></ShotLockContext.Provider></MemoryRouter>);
+    const { unmount } = view({ s1: 'open', s2: 'open', s3: 'open' });
+    expect(screen.getByRole('button', { name: 'Open Shot 1 · Intro' })).toBeTruthy();
+    const verse = screen.getByRole('button', { name: 'Open Shot 2 · Verse' });
+    expect(verse.textContent).toContain('Takes to review');
+    const code = screen.getByRole('button', { name: 'Open Shot 3 · Code' });
+    expect(document.getElementById('scene-media-s3').textContent).toBe('Code');
+    expect(code.querySelector('img').getAttribute('src')).toBe('/data/video-thumbnails/upload-1.jpg');
+    expect(code.textContent).not.toContain('No frame');
+    unmount();
+    view({ s1: 'locked', s2: 'open', s3: 'open' });
+    expect(screen.getByRole('button', { name: 'Open Shot 2 · Verse' }).textContent).not.toContain('Takes to review');
   });
 });

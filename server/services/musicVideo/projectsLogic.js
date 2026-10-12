@@ -34,7 +34,7 @@ import { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 import { isPerformanceScene, planShotSplit, shotSplitLimit } from '../../lib/musicVideoShotTiming.js';
 import { normalizeLyricCues, normalizePhrases, invalidateTimedText } from './timedText.js';
 import { normalizeLyricMarkers } from './lyricMarkers.js';
-import { ensureSceneTakes, TAKE_SLOT } from './takes.js';
+import { ensureSceneTakes, keepCodeClipWithItsClip, TAKE_SLOT } from './takes.js';
 import { normalizeComposition, invalidateCompositionTiming, withStoredCompositionDocument } from './composition.js';
 import { normalizeSoundBed } from './soundBed.js';
 import { normalizeFilmLook } from '../../lib/filmLook.js';
@@ -511,6 +511,7 @@ function buildScene(input, { order }) {
     ...(input.camera ? { camera: input.camera } : {}),
     cardText: input.cardText ?? null,
     ...(input.codeOverlay ? { codeOverlay: true } : {}),
+    ...(input.codeClip ? { codeClip: true } : {}),
     cardColor: input.cardColor ?? null,
     // #8977: cutaway (any image-to-video lane) unless the director asks for a
     // lip-synced performance shot, which only a source-audio provider renders.
@@ -591,7 +592,7 @@ export function replaceScenes(project, sceneInputs) {
 // Scene fields a director edits within an approved shot (its span, wording and
 // selected takes) without adding a shot or lyric the storyboard approval did not cover.
 const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'label', 'prompt', 'framePrompt', 'visualIntent',
-  'referenceImageId', 'videoHistoryId', 'endImageId'];
+  'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip'];
 
 /**
  * Apply a patch to a single scene. Returns `{ project, updated }`. Throws if the
@@ -602,7 +603,7 @@ export function applySceneUpdate(project, sceneId, patch) {
   const scenes = project.scenes || [];
   const idx = scenes.findIndex((s) => s.sceneId === sceneId);
   if (idx < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
-  const merged = { ...scenes[idx], ...data };
+  const merged = 'codeClip' in data ? { ...scenes[idx], ...data } : keepCodeClipWithItsClip(scenes[idx], { ...scenes[idx], ...data });
   // Setting a slot directly (an older client, or a hand edit) still records the
   // asset as a take so the candidate list stays a superset of the selection.
   const touchesSlot = Object.values(TAKE_SLOT).some((field) => typeof data[field] === 'string');
