@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 vi.mock('../../hooks/useVideoFileSrc.js', () => ({ useVideoFileSrc: () => ({}) }));
 import SceneCard from './SceneCard.jsx';
 import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
@@ -210,11 +210,14 @@ describe('move buttons (#10785)', () => {
     const onMove = vi.fn();
     const props = { scene, index: 1, isLast: false, onMove, onEditLocal: () => {}, onSave: () => {} };
     const { rerender } = render(<SceneCard {...props} />);
-    expect(screen.getByRole('button', { name: /Move earlier/ }).disabled).toBe(false);
-    expect(screen.getByRole('button', { name: /Move later/ }).disabled).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Shot actions' }));
+    expect(screen.getByRole('menuitem', { name: /Move earlier/ }).disabled).toBe(false);
+    fireEvent.click(screen.getByRole('menuitem', { name: /Move later/ }));
+    expect(onMove).toHaveBeenCalledWith(1, 1);
     rerender(<SceneCard {...props} documentComposition />);
-    expect(screen.getByRole('button', { name: /Move earlier/ }).disabled).toBe(true);
-    expect(screen.getByRole('button', { name: /Move later/ }).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Shot actions' }));
+    expect(screen.getByRole('menuitem', { name: /Move earlier/ }).disabled).toBe(true);
+    expect(screen.getByRole('menuitem', { name: /Move later/ }).disabled).toBe(true);
     expect(screen.getByText(/comes from the composition document/)).toBeTruthy();
   });
 });
@@ -332,11 +335,36 @@ describe('Render follows the shot locks', () => {
     );
     const { rerender } = render(card('open', 'open'));
     expect(screen.getByRole('button', { name: 'Render again' })).toHaveProperty('title', 'Lock the still first');
+    // On a phone there is no tooltip: the reason and the lock it needs sit under Render.
+    const refusal = screen.getByTestId('render-refusal');
+    expect(refusal.textContent).toContain('Lock the still first');
+    expect(refusal.querySelector('button')).toBeTruthy();
     rerender(card('locked', 'locked'));
     expect(screen.getByRole('button', { name: 'Render again' }).disabled).toBe(true);
     expect(screen.getByRole('button', { name: 'Render again' }).title).toMatch(/^Video locked/);
     rerender(card('locked', 'open'));
     fireEvent.click(screen.getByRole('button', { name: 'Render again' }));
     expect(onGenerateVideo).toHaveBeenCalledWith(scene);
+  });
+});
+
+describe('start and end frames', () => {
+  // Uniquely catches the end frame hiding behind a collapsed row, losing its own actions, or the Render section not saying which renderer ends on it.
+  it('shows the start and end frames as a pair, works on the tapped one, and says which renderer ends on the end frame', () => {
+    const scene = { sceneId: 's1', prompt: 'She looks into the lens', referenceImageId: 'start.png', endImageId: 'end.png', startSec: 0, endSec: 4,
+      takes: [{ takeId: 't1', kind: 'image', assetId: 'start.png', status: 'selected' }, { takeId: 't2', kind: 'endImage', assetId: 'end.png', status: 'selected' }] };
+    render(<SceneCard scene={scene} index={0} expanded onEditLocal={() => {}} onSave={() => {}} onGenerateEndFrame={() => {}} onPlacePoolItem={() => {}}
+      falVideoSettings={{ backend: 'local' }} />);
+    const pair = screen.getByRole('group', { name: 'Start and end frames' });
+    expect(within(pair).getByRole('button', { name: 'Start frame' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.queryByLabelText('End frame prompt')).toBeNull();
+    fireEvent.click(within(pair).getByRole('button', { name: 'End frame' }));
+    expect(screen.getByLabelText('End frame prompt')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Clear scene 1 end frame' })).toBeTruthy();
+    expect(screen.getByTestId('end-frame-plan').textContent).toMatch(/ignores it/);
+    const pick = screen.getByLabelText('Render on');
+    expect(within(pick).getByRole('option', { name: /Kling v3 Pro.*ends on end frame/ })).toBeTruthy();
+    fireEvent.change(pick, { target: { value: 'fal:fal-ai/kling-video/v3/pro/image-to-video' } });
+    expect(screen.getByTestId('end-frame-plan').textContent).toBe('The clip ends on the end frame.');
   });
 });

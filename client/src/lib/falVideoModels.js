@@ -12,6 +12,7 @@ export {
   FAL_DEFAULT_TEXT_VIDEO_MODEL,
   FAL_IMAGE_VIDEO_MODELS,
   FAL_VIDEO_MODELS,
+  coerceFalVideoSeconds,
   describeFalVideoRate,
   estimateFalVideoCostUsd,
   falImageVideoQuotes,

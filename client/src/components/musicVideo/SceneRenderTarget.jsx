@@ -1,4 +1,10 @@
-import { FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_IMAGE_VIDEO_MODELS, describeFalVideoRate, getFalVideoModel } from '../../lib/falVideoModels.js';
+import {
+  FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_IMAGE_VIDEO_MODELS, coerceFalVideoSeconds, describeFalVideoRate, falVideoResolutions, getFalVideoModel,
+} from '../../lib/falVideoModels.js';
+import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
+import { grokCoverage } from '../../lib/musicVideoShotTiming.js';
+import { isAudioToVideoRuntime, isLtx2FamilyRuntime } from '../../lib/runnerFamilies';
+import { frameOptionsForModel } from '../../lib/videoGenParams.js';
 
 /**
  * Where one shot's clip renders, picked on its card: the project's saved
@@ -7,51 +13,185 @@ import { FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_IMAGE_VIDEO_MODELS, describeFalVideo
  * shot renders on fal's source-audio route, so fal is one choice there, and
  * Grok (no audio) renders cutaways only.
  * The pick is a value string: '' (saved), 'local', 'grok', 'fal' or 'fal:<modelId>'.
+ *
+ * A picked lane shows its own options, from the same definitions the Video Gen
+ * form and the project's render settings read: the local model and clip length
+ * (frame counts), Grok's clip lengths, and a fal model's lengths and
+ * resolutions. Each length defaults to the shortest one that covers the shot.
+ * `options` holds only what the director changed: `{ modelId, numFrames,
+ * grokDuration, falDuration, falResolution }`.
  */
 const BACKEND_LABELS = { local: 'Local LTX', grok: 'Grok', fal: 'fal.ai' };
+// The local render's frame rate when the request names none (generateVideo's default).
+const LOCAL_FPS = 24;
+const SELECT = 'min-w-0 max-w-full bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] sm:min-h-0 disabled:opacity-50';
 
 function savedLabel(saved) {
   if (saved.backend === 'fal') return `fal.ai · ${getFalVideoModel(saved.falModelId || FAL_DEFAULT_IMAGE_VIDEO_MODEL)?.label || 'video'}`;
   return BACKEND_LABELS[saved.backend] || 'install default';
 }
 
-export function renderTargetOptions({ performance, saved }) {
+export function renderTargetOptions({ performance, saved, endFrame = false }) {
   return [
     { value: '', label: `Project setting · ${savedLabel(saved)}` },
-    { value: 'local', label: performance ? 'Local LTX-2.5 lip-sync (free)' : 'Local LTX' },
+    { value: 'local', label: performance ? 'Local LTX lip-sync (free)' : 'Local LTX (free)' },
     { value: 'grok', label: performance ? 'Grok (cutaways only)' : 'Grok', disabled: performance },
     ...(performance
       ? [{ value: 'fal', label: 'fal.ai (song-driven)' }]
       : FAL_IMAGE_VIDEO_MODELS.map((model) => {
         const rate = describeFalVideoRate(model.id);
-        return { value: `fal:${model.id}`, label: `fal.ai · ${model.label}${rate ? ` · ${rate}` : ''}` };
+        return { value: `fal:${model.id}`, label: `fal.ai · ${model.label}${rate ? ` · ${rate}` : ''}${endFrame && model.endImage ? ' · ends on end frame' : ''}` };
       })),
   ];
 }
 
-/** The settings overrides a pick makes for this render, or null for the project's saved renderer. */
-export function renderTargetOverrides(value, saved) {
+const isLtx25 = (model) => /^ltx25/.test(model?.runtime || '');
+
+/** Local models a shot can render on: any image-to-video model, or for lip-sync only the LTX audio-to-video ones. */
+export const localModelChoices = (models, performance) => (performance
+  ? models.filter((model) => isLtx2FamilyRuntime(model.runtime) && isAudioToVideoRuntime(model.runtime))
+  : models);
+
+/**
+ * The local model a shot renders on unless the director picks another: the
+ * project's pinned local model, else LTX-2.5, else this install's default.
+ * Never an empty "install default", so the picker always names the model.
+ */
+export function defaultLocalModelId({ models = [], saved = {}, defaultModel = '', performance = false }) {
+  const choices = localModelChoices(models, performance);
+  const has = (id) => !!id && choices.some((model) => model.id === id);
+  if (has(saved.modelId)) return saved.modelId;
+  return choices.find(isLtx25)?.id || (has(defaultModel) ? defaultModel : choices[0]?.id || '');
+}
+
+const shotSpan = (scene) => (typeof scene?.startSec === 'number' && typeof scene?.endSec === 'number' && scene.endSec > scene.startSec
+  ? scene.endSec - scene.startSec : null);
+
+/** The shortest frame count of `model` that covers the shot, else its longest; null for an untimed shot. */
+export function coveringFrames(model, spanSec) {
+  if (!(spanSec > 0)) return null;
+  const frames = frameOptionsForModel(model);
+  return frames.find((count) => count / LOCAL_FPS >= spanSec - 1e-6) ?? frames[frames.length - 1];
+}
+
+const falLengths = (model) => {
+  const rule = model?.duration;
+  if (rule?.kind === 'enum') return rule.values;
+  if (rule?.kind === 'range') return Array.from({ length: rule.max - rule.min + 1 }, (_, i) => rule.min + i);
+  return [];
+};
+
+/**
+ * The settings overrides a pick and its options make for this render, or null
+ * for the project's saved renderer. `context` carries what fills an unpicked
+ * option: the installed local models, this install's default, the shot.
+ */
+export function renderTargetOverrides(value, saved, options = {}, context = {}) {
   if (!value) return null;
-  if (!value.startsWith('fal')) return { backend: value };
+  const spanSec = shotSpan(context.scene);
+  if (value === 'local') {
+    const modelId = options.modelId || defaultLocalModelId({ ...context, saved });
+    const model = (context.models || []).find((m) => m.id === modelId);
+    const numFrames = context.performance ? null : options.numFrames || (model ? coveringFrames(model, spanSec) : null);
+    return { backend: 'local', ...(modelId ? { modelId } : {}), ...(numFrames ? { numFrames } : {}) };
+  }
+  if (value === 'grok') {
+    return { backend: 'grok', ...(options.grokDuration || spanSec != null ? { grokDuration: options.grokDuration || grokCoverage(spanSec).requestSec } : {}) };
+  }
   const falModelId = value.slice(4) || null;
   if (!falModelId) return { backend: 'fal' };
   // Each model has its own resolutions, so the saved one only carries over to the saved model.
   const sameModel = falModelId === (saved.falModelId || FAL_DEFAULT_IMAGE_VIDEO_MODEL);
   // A picked model is the one this render uses, end frame or not.
-  return { backend: 'fal', falModelId, falEndFrameModelId: falModelId, ...(sameModel ? {} : { falResolution: null, falDuration: null }) };
+  return {
+    backend: 'fal', falModelId, falEndFrameModelId: falModelId,
+    ...(sameModel ? {} : { falResolution: null, falDuration: null }),
+    ...(options.falDuration ? { falDuration: options.falDuration } : {}),
+    ...(options.falResolution ? { falResolution: options.falResolution } : {}),
+  };
 }
 
-export default function SceneRenderTarget({ id, value, onChange, performance, saved, disabled = false }) {
+const formatSec = (sec) => `${Math.round(sec * 10) / 10}s`;
+
+function OptionSelect({ id, label, value, onChange, disabled, children }) {
+  return (
+    <span className="flex min-w-0 items-center gap-1">
+      <label htmlFor={id} className="text-xs text-port-text-muted">{label}</label>
+      <select id={id} value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled} className={SELECT}>{children}</select>
+    </span>
+  );
+}
+
+export default function SceneRenderTarget({
+  id, value, onChange, options = {}, onOptionsChange, performance, saved, scene = null, models = [], defaultModel = '', disabled = false,
+}) {
+  const set = (patch) => onOptionsChange?.({ ...options, ...patch });
+  const spanSec = shotSpan(scene);
+  const overrides = renderTargetOverrides(value, saved, options, { models, defaultModel, performance, scene });
+  const localChoices = localModelChoices(models, performance);
+  const localModel = value === 'local' ? models.find((model) => model.id === overrides.modelId) : null;
+  const falModel = value.startsWith('fal:') ? getFalVideoModel(overrides.falModelId) : null;
+  const coversLabel = (sec) => (spanSec != null ? `${formatSec(sec)} · covers shot` : `${formatSec(sec)} · default`);
   return (
     <>
-      <label htmlFor={id} className="text-xs">Render on</label>
-      <select id={id} value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled}
-        title="Where this shot's clip renders. Only this shot; the project setting stays as it is."
-        className="min-w-0 max-w-full flex-1 basis-48 bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] sm:min-h-0 sm:flex-none disabled:opacity-50">
-        {renderTargetOptions({ performance, saved }).map((option) => (
-          <option key={option.value} value={option.value} disabled={option.disabled}>{option.label}</option>
-        ))}
-      </select>
+      <span className="flex min-w-0 flex-1 basis-48 items-center gap-1 sm:flex-none">
+        <label htmlFor={id} className="text-xs">Render on</label>
+        <select id={id} value={value} onChange={(e) => { onChange(e.target.value); onOptionsChange?.({}); }} disabled={disabled}
+          title="Where this shot's clip renders. Only this shot; the project setting stays as it is."
+          className={`${SELECT} flex-1 sm:flex-none`}>
+          {renderTargetOptions({ performance, saved, endFrame: Boolean(scene?.endImageId) }).map((option) => (
+            <option key={option.value} value={option.value} disabled={option.disabled}>{option.label}</option>
+          ))}
+        </select>
+      </span>
+      {value === 'local' && (
+        <>
+          <OptionSelect id={`${id}-model`} label="Model" value={overrides.modelId || ''} disabled={disabled || localChoices.length === 0}
+            onChange={(modelId) => set({ modelId, numFrames: null })}>
+            {localChoices.length === 0 && <option value="">{performance ? 'No lip-sync model installed' : 'No local model installed'}</option>}
+            {localChoices.map((model) => <option key={model.id} value={model.id}>{model.name || model.id}</option>)}
+          </OptionSelect>
+          {localModel && !performance && (
+            <OptionSelect id={`${id}-length`} label="Length" value={overrides.numFrames || ''} disabled={disabled}
+              onChange={(frames) => set({ numFrames: Number(frames) || null })}>
+              {frameOptionsForModel(localModel).map((frames) => (
+                <option key={frames} value={frames}>
+                  {frames === coveringFrames(localModel, spanSec) ? coversLabel(frames / LOCAL_FPS) : formatSec(frames / LOCAL_FPS)}
+                </option>
+              ))}
+            </OptionSelect>
+          )}
+        </>
+      )}
+      {value === 'grok' && (
+        <OptionSelect id={`${id}-length`} label="Length" value={overrides.grokDuration || ''} disabled={disabled}
+          onChange={(sec) => set({ grokDuration: Number(sec) || null })}>
+          {overrides.grokDuration == null && <option value="">Default</option>}
+          {GROK_VIDEO_DURATIONS.map((sec) => (
+            <option key={sec} value={sec}>{spanSec != null && sec === grokCoverage(spanSec).requestSec ? coversLabel(sec) : formatSec(sec)}</option>
+          ))}
+        </OptionSelect>
+      )}
+      {falModel && !performance && (
+        <>
+          {falLengths(falModel).length > 0 && (
+            <OptionSelect id={`${id}-length`} label="Length" value={options.falDuration || ''} disabled={disabled}
+              onChange={(sec) => set({ falDuration: Number(sec) || null })}>
+              <option value="">{coversLabel(coerceFalVideoSeconds(falModel, spanSec))}</option>
+              {falLengths(falModel).map((sec) => <option key={sec} value={sec}>{formatSec(sec)}</option>)}
+            </OptionSelect>
+          )}
+          {falVideoResolutions(falModel).length > 1 && (
+            <OptionSelect id={`${id}-resolution`} label="Size" value={options.falResolution || ''} disabled={disabled}
+              onChange={(falResolution) => set({ falResolution: falResolution || null })}>
+              <option value="">{`${falModel.resolution.default} · default`}</option>
+              {falVideoResolutions(falModel).filter((res) => res !== falModel.resolution.default).map((res) => (
+                <option key={res} value={res}>{`${res} · ${describeFalVideoRate(falModel.id, res)}`}</option>
+              ))}
+            </OptionSelect>
+          )}
+        </>
+      )}
     </>
   );
 }

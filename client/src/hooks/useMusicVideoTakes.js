@@ -3,6 +3,7 @@ import toast from '../components/ui/Toast';
 import {
   addMusicVideoSceneTake,
   selectMusicVideoSceneTake,
+  placeMusicVideoPoolItem,
   continueMusicVideoSceneFromPrevious,
   reviewMusicVideoSceneTake,
   getMusicVideoHandoff,
@@ -56,17 +57,24 @@ export default function useMusicVideoTakes({ project, applyScenePatch }) {
   });
 
   // Serialize take mutations; a failure toasts and leaves the chain usable.
+  // Resolves true when the change landed, false when it was refused.
   const runTakeOp = (work, failMessage) => {
     const projectId = project.id;
     const run = chainRef.current.then(() => work(projectId));
-    chainRef.current = run.then((scene) => { if (scene) applyScene(projectId, scene); })
-      .catch((err) => toast.error(err?.message || failMessage));
+    chainRef.current = run.then((scene) => { if (scene) applyScene(projectId, scene); return true; })
+      .catch((err) => { toast.error(err?.message || failMessage); return false; });
     return chainRef.current;
   };
 
   const selectTake = (scene, take) => runTakeOp(
     (projectId) => selectMusicVideoSceneTake(projectId, scene.sceneId, take.takeId, { silent: true }),
     'Failed to select take',
+  );
+
+  // An unused still or clip from the project's pool becomes this shot's selection (with its partner, when picked).
+  const placePoolItem = (scene, pick) => runTakeOp(
+    (projectId) => placeMusicVideoPoolItem(projectId, scene.sceneId, pick, { silent: true }).then((res) => res.scene),
+    'Failed to use that take',
   );
 
   // Continuing shot: the previous shot's last on-screen frame becomes this
@@ -154,5 +162,5 @@ export default function useMusicVideoTakes({ project, applyScenePatch }) {
     if (failures.length) toast.error(failures.slice(0, 3).join(' · '));
   };
 
-  return { busy, selectTake, reviewTake, continueFromPrevious, importTake, importClipTake, exportHandoff, exportHandoffBundle, importHandoffFiles };
+  return { busy, selectTake, placePoolItem, reviewTake, continueFromPrevious, importTake, importClipTake, exportHandoff, exportHandoffBundle, importHandoffFiles };
 }

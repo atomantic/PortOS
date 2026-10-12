@@ -200,6 +200,8 @@ export default function BoardStage({ board }) {
               failedScenes={sceneMedia.failedScenes}
               songReview={attentionCtx.songReview}
               falVideoSettings={videoSettings.settings}
+              videoModels={videoSettings.models}
+              defaultVideoModel={videoSettings.defaultModel}
               canContinueShot={board.canContinueShot}
               onMove={board.moveScene}
               onDelete={board.onDeleteScene}
@@ -225,6 +227,9 @@ export default function BoardStage({ board }) {
               previousHasClip={Boolean(previousShot(project, scene.sceneId)?.videoHistoryId)}
               onImportTake={(target) => board.setPickerTarget({ type: 'take', sceneId: target.sceneId })}
               onImportClipTake={(target) => board.setPickerTarget({ type: 'clip', sceneId: target.sceneId })}
+              onPlacePoolItem={takes.placePoolItem}
+              projectId={project.id}
+              shotNumbers={numbers}
               layered={layered}
               documentComposition={project.composition?.mode === 'document'}
             />

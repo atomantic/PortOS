@@ -1248,6 +1248,27 @@ describe('MusicVideo project video renderer', () => {
     expect(updateMusicVideoProject.mock.calls.some(([, patch]) => patch?.videoSettings)).toBe(false);
   });
 
+  // Uniquely catches "Local LTX" falling through to the install's default model, and a picked length being dropped.
+  it('renders a Local LTX pick on the model and length its card shows, LTX-2.5 before the install default', async () => {
+    getVideoGenStatus.mockResolvedValueOnce({ connected: true, defaultModel: 'ltx23_distilled_q4', falEnabled: true,
+      models: [{ id: 'ltx23_distilled_q4', name: 'LTX-2.3 Distilled Q4', runtime: 'mlx_video' }, { id: 'ltx25_mlx_q8', name: 'LTX-2.5 Q8', runtime: 'ltx25' }] });
+    generateVideo.mockResolvedValue({ jobId: 'local-pick-job' });
+    await openProject({ ...PROJECT_NO_CLIP, videoSettings: { backend: 'fal' }, scenes: [{ ...PROJECT_NO_CLIP.scenes[0], startSec: 0, endSec: 3 }] }, 'produce');
+    const render = within(await screen.findByRole('region', { name: 'Render' }));
+    fireEvent.change(render.getByLabelText('Render on'), { target: { value: 'local' } });
+    expect(render.getByLabelText('Model').value).toBe('ltx25_mlx_q8');
+    // A 3s shot: the shortest LTX length that covers it (73 frames at 24 fps).
+    const length = render.getByLabelText('Length');
+    expect(length.value).toBe('73');
+    expect(length.selectedOptions[0].textContent).toBe('3s · covers shot');
+    fireEvent.change(length, { target: { value: '121' } });
+    fireEvent.click(await findEnabledByRole('button', { name: /^Render$/ }));
+    await waitFor(() => expect(generateVideo).toHaveBeenCalledWith(expect.objectContaining({
+      backend: 'local', modelId: 'ltx25_mlx_q8', numFrames: 121, mode: 'image',
+    })));
+    expect(updateMusicVideoProject.mock.calls.some(([, patch]) => patch?.videoSettings)).toBe(false);
+  });
+
   it('renders a cutaway on the picked fal.ai model at the shot-covering length, sending exactly the take it prices', async () => {
     getVideoGenStatus.mockResolvedValueOnce({ connected: true, defaultModel: '', falEnabled: true, models: [] });
     generateVideo.mockResolvedValue({ jobId: 'fal-h3-job' });
