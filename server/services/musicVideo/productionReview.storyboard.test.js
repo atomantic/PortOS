@@ -91,18 +91,21 @@ describe('the director trimming an approved storyboard', () => {
     return approveProductionStage(art, { stage: 'storyboard', basis: productionReadiness(art).basis.storyboard });
   }
 
-  // Uniquely catches cutting a shot unlocking the shots it never touched.
-  it('keeps untouched shots locked through a cut and unlocks only the shot stretched over the gap', () => {
+  // Uniquely catches cutting a shot, or moving a cut, unlocking an approved still.
+  it('keeps every still locked through a cut and the shot stretched over the gap, and unlocks only a changed picture', () => {
     const cut = removeScene(approvedBoard(), 's2');
     expect(cut.productionReview.draft.storyboard.map((shot) => shot.sceneId)).toEqual(['s1', 's3']);
     expect(productionReadiness(cut).storyboard.shotLocks).toEqual({ s1: 'locked', s3: 'locked' });
+    // Moving a cut keeps the still approved: its timing is the clip's, which a video lock guards.
     const { project: stretched } = applySceneUpdate(cut, 's1', { endSec: 6 });
-    expect(productionReadiness(stretched).storyboard).toMatchObject({ approved: false, unlocked: ['s1'], shotLocks: { s1: 'changed', s3: 'locked' } });
+    expect(productionReadiness(stretched).storyboard).toMatchObject({ approved: true, unlocked: [], shotLocks: { s1: 'locked', s3: 'locked' } });
+    const { project: redrawn } = applySceneUpdate(stretched, 's1', { framePrompt: 'Close-up, desk lamp' });
+    expect(productionReadiness(redrawn).storyboard).toMatchObject({ approved: false, unlocked: ['s1'], shotLocks: { s1: 'changed', s3: 'locked' } });
   });
 
-  it('unlocks only the merged shot when two shots are joined', () => {
+  it('keeps the merged shot still locked when two shots are joined', () => {
     const { project: merged } = mergeNextScene(approvedBoard(), 's1');
-    expect(productionReadiness(merged).storyboard.shotLocks).toEqual({ s1: 'changed', s3: 'locked' });
+    expect(productionReadiness(merged).storyboard.shotLocks).toEqual({ s1: 'locked', s3: 'locked' });
   });
 
   // Uniquely catches a lyric anchor dropped from a row slipping past the board check.
@@ -173,7 +176,7 @@ describe('locking shots one at a time', () => {
     const legacy = { ...approved, productionReview: review };
     expect(productionReadiness(legacy).storyboard).toMatchObject({ approved: true, unlocked: [] });
     // The shape already saved by the first release: one shot locked on top of the old approval.
-    const s2 = { basis: setShotLocks(legacy, { sceneIds: ['s2'], locked: true }).productionReview.shotApprovals.s2.basis };
+    const s2 = setShotLocks(legacy, { sceneIds: ['s2'], locked: true }).productionReview.shotApprovals.s2;
     expect(productionReadiness({ ...legacy, productionReview: { ...review, shotApprovals: { s2 } } }).storyboard)
       .toMatchObject({ approved: true, unlocked: [] });
     // Locking now carries the approval onto every shot, so it outlives the approval going stale.

@@ -114,9 +114,9 @@ export function seedArtDraft(project, stage = project.castAndSets) {
 /**
  * What one Board shot renders from: its prompts and direction, its span and
  * lyric, its selected frames and performance setup, and its storyboard row.
- * A shot lock (`productionReview.shotApprovals[sceneId]`) holds while this is
- * unchanged, so an edit unlocks only the shot it touches. The selected clip is
- * the shot's output, not an input, so choosing a take keeps the lock.
+ * Automation may not change any of it on a locked shot (preserveAutomatedShotLocks).
+ * The selected clip is the shot's output, not an input. A lock saved before
+ * still locks ignored timing (no `v`) still binds to this whole basis.
  */
 function shotApprovalBasis(project, scene) {
   const row = (project.productionReview?.draft?.storyboard || []).find(shot => shot?.sceneId === scene.sceneId);
@@ -126,6 +126,26 @@ function shotApprovalBasis(project, scene) {
     shotMode, performanceSpeaker, performanceStyle, visualLayer, loop,
     row: row ? { action: row.action, staging: row.staging, camera: row.camera, transition: row.transition, lyricCueIds: row.lyricCueIds } : null });
 }
+
+/**
+ * What a still lock (`productionReview.shotApprovals[sceneId]`, `v: 2`) binds
+ * to: the shot's render inputs without its timing. Moving a cut, and the lyric
+ * that moves with it, keeps the still approved; a locked clip refuses the move
+ * instead (assertClipUnlocked), since its span is part of the clip.
+ */
+function stillLockBasis(project, scene) {
+  const row = (project.productionReview?.draft?.storyboard || []).find(shot => shot?.sceneId === scene.sceneId);
+  const { prompt, framePrompt, visualIntent, camera, direction, referenceImageId, endImageId,
+    shotMode, performanceSpeaker, performanceStyle, visualLayer, loop } = scene;
+  return hash({ prompt, framePrompt, visualIntent, camera, direction, referenceImageId, endImageId,
+    shotMode, performanceSpeaker, performanceStyle, visualLayer, loop,
+    row: row ? { action: row.action, staging: row.staging, camera: row.camera, transition: row.transition } : null });
+}
+
+const STILL_LOCK_VERSION = 2;
+const stillLock = (project, scene, fields) => ({ ...fields, basis: stillLockBasis(project, scene), v: STILL_LOCK_VERSION });
+const stillLockHolds = (project, scene, approval) => approval.v === STILL_LOCK_VERSION
+  ? approval.basis === stillLockBasis(project, scene) : approval.basis === shotApprovalBasis(project, scene);
 
 /** Is the whole-board storyboard approval (given before shots locked one by one, or by Approve all) current? */
 const boardApprovalCovers = project => storyboardApprovalCurrent(project.productionReview?.approvals?.storyboard, productionReviewBasis(project));
@@ -141,7 +161,7 @@ export function shotLocks(project) {
   const covered = (project.scenes || []).some(scene => !approvals[scene.sceneId]) && boardApprovalCovers(project);
   return Object.fromEntries((project.scenes || []).map(scene => {
     const approval = approvals[scene.sceneId];
-    return [scene.sceneId, !approval ? (covered ? 'locked' : 'open') : approval.basis === shotApprovalBasis(project, scene) ? 'locked' : 'changed'];
+    return [scene.sceneId, !approval ? (covered ? 'locked' : 'open') : stillLockHolds(project, scene, approval) ? 'locked' : 'changed'];
   }));
 }
 
@@ -207,7 +227,7 @@ export function preserveAutomatedShotLocks(before, after, source) {
   // that approval. No new approval is granted: these shots were already locked.
   const shotApprovals = { ...after.productionReview?.shotApprovals };
   for (const scene of locked) shotApprovals[scene.sceneId] = before.productionReview?.shotApprovals?.[scene.sceneId]
-    || { ...before.productionReview?.approvals?.storyboard, basis: shotApprovalBasis(before, scene), fromBoardApproval: true };
+    || stillLock(before, scene, { ...before.productionReview?.approvals?.storyboard, fromBoardApproval: true });
   let next = { ...after, productionReview: { ...after.productionReview, shotApprovals } };
   if (!rejected.length) return { project: next, rejected: false };
   // A merge/re-plan may replace IDs or spans. Refuse the whole board mutation
@@ -240,6 +260,12 @@ export function setShotLocks(project, { sceneIds, locked, stage = 'still', revie
   if (scenes.some(scene => !scene)) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
   if (stage === 'video') return setClipLocks(project, scenes, { locked, reviewer, approvedBy });
   const approvals = { ...project.productionReview?.shotApprovals };
+  // A lock saved before timing left the still basis moves to the new basis while it still holds,
+  // so a later cut move keeps it.
+  for (const scene of project.scenes || []) {
+    const held = approvals[scene.sceneId];
+    if (held && held.v !== STILL_LOCK_VERSION && stillLockHolds(project, scene, held)) approvals[scene.sceneId] = stillLock(project, scene, held);
+  }
   const clipApprovals = { ...project.productionReview?.clipApprovals };
   const approvedAt = new Date().toISOString();
   // A current whole-board approval becomes a lock on every shot it covers first, so withdrawing it
@@ -247,16 +273,16 @@ export function setShotLocks(project, { sceneIds, locked, stage = 'still', revie
   if (boardApprovalCovers(project)) {
     const carried = project.productionReview.approvals.storyboard;
     for (const scene of project.scenes || []) {
-      if (!approvals[scene.sceneId]) approvals[scene.sceneId] = { basis: shotApprovalBasis(project, scene), approvedAt: carried.approvedAt || approvedAt, fromBoardApproval: true,
-        ...(carried.approvedBy ? { approvedBy: carried.approvedBy } : {}), ...(carried.reviewer ? { reviewer: structuredClone(carried.reviewer) } : {}) };
+      if (!approvals[scene.sceneId]) approvals[scene.sceneId] = stillLock(project, scene, { approvedAt: carried.approvedAt || approvedAt, fromBoardApproval: true,
+        ...(carried.approvedBy ? { approvedBy: carried.approvedBy } : {}), ...(carried.reviewer ? { reviewer: structuredClone(carried.reviewer) } : {}) });
     }
   }
   for (const scene of scenes) {
     if (!locked) {
       delete approvals[scene.sceneId];
       delete clipApprovals[scene.sceneId];
-    } else approvals[scene.sceneId] = { basis: shotApprovalBasis(project, scene), approvedAt,
-      ...(approvedBy ? { approvedBy } : {}), ...(reviewer ? { reviewer: structuredClone(reviewer) } : {}) };
+    } else approvals[scene.sceneId] = stillLock(project, scene, { approvedAt,
+      ...(approvedBy ? { approvedBy } : {}), ...(reviewer ? { reviewer: structuredClone(reviewer) } : {}) });
   }
   const review = { ...project.productionReview, shotApprovals: approvals,
     ...(project.productionReview?.clipApprovals ? { clipApprovals } : {}) };
