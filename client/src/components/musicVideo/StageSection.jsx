@@ -3,7 +3,7 @@ import { ChevronRight } from 'lucide-react';
 
 /**
  * A stage panel group that folds away: a native `<details>` (so it works
- * without script and reads as a disclosure to assistive tech) with a one-line
+ * without script and reads as a disclosure to assistive tech) with a short (two-line at most)
  * summary beside the title, collapsed unless `defaultOpen`. The summary row is
  * the 44px tap target on a phone. `defaultOpen` sets the first state; a later
  * false → true change unfolds it (something now needs the director), but props
@@ -22,7 +22,7 @@ export default function StageSection({ id, title, summary = null, defaultOpen = 
       <summary className="flex min-h-[44px] cursor-pointer select-none items-center gap-2 px-3 py-2 marker:content-none [&::-webkit-details-marker]:hidden">
         <ChevronRight size={14} aria-hidden="true" className="shrink-0 text-port-text-muted transition-transform group-open:rotate-90" />
         <span className="shrink-0 text-sm font-medium">{title}</span>
-        {summary && <span className="min-w-0 truncate text-xs text-port-text-muted">{summary}</span>}
+        {summary && <span className="min-w-0 line-clamp-2 break-words text-xs text-port-text-muted">{summary}</span>}
       </summary>
       <div className="min-w-0 space-y-2 px-3 pb-3">{children}</div>
     </details>
