@@ -282,6 +282,39 @@ describe('swapping a shot from unused takes', () => {
   });
 });
 
+describe('a director\'s still change keeps the shot locked', () => {
+  // Uniquely catches a swapped still or edited prompt leaving the shot "changed since you locked it", so its clip can't render.
+  it('re-binds the still lock on Use, take select and a prompt edit, and drops a clip lock made from the old still', async () => {
+    for (const name of ['a-1.png', 'a-2.png', 'floor.png']) seedImage(name);
+    seedVideoHistory([{ id: 'clip-a1' }]);
+    await addTake(sceneA.sceneId, { kind: 'image', assetId: 'a-1.png', source: 'generated' });
+    const second = await addTake(sceneA.sceneId, { kind: 'image', assetId: 'a-2.png', source: 'generated' });
+    await addTake(sceneA.sceneId, { kind: 'video', assetId: 'clip-a1', source: 'generated', sourceImageId: 'a-1.png' });
+    await addTake(sceneB.sceneId, { kind: 'image', assetId: 'floor.png', source: 'generated' });
+    await request(app).delete(`${base()}/scenes/${sceneB.sceneId}`);
+    const { setShotLocks, shotLocks, clipLocks } = await import('../services/musicVideo/productionReview.js');
+    const lockA = async (stage) => projects.mutateProjectRecord(project.id, (current) => ({ project: setShotLocks(current, { sceneIds: [sceneA.sceneId], locked: true, stage }) }));
+    await lockA('still');
+    const stillLock = async () => shotLocks(await reload())[sceneA.sceneId];
+
+    expect((await request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/use`).send({ kind: 'image', assetId: 'floor.png' })).status).toBe(200);
+    expect(await stillLock()).toBe('locked');
+    expect((await request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/${second.body.take.takeId}/select`)).status).toBe(200);
+    expect(await stillLock()).toBe('locked');
+    expect((await request(app).patch(`${base()}/scenes/${sceneA.sceneId}`).send({ prompt: 'Slow push toward the reel' })).status).toBe(200);
+    expect(await stillLock()).toBe('locked');
+
+    // A clip lock made from the old still goes stale with it; a director edit then re-locks the still and drops the clip lock.
+    await lockA('video');
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current,
+      scenes: current.scenes.map((scene) => scene.sceneId === sceneA.sceneId ? { ...scene, endImageId: 'a-1.png' } : scene) } }));
+    expect(await stillLock()).toBe('changed');
+    expect((await request(app).patch(`${base()}/scenes/${sceneA.sceneId}`).send({ referenceImageId: 'floor.png' })).status).toBe(200);
+    expect(await stillLock()).toBe('locked');
+    expect(clipLocks(await reload())[sceneA.sceneId]).toBe('open');
+  });
+});
+
 describe('renders made for a video with no shot', () => {
   // Uniquely catches a sheet, test or Video Gen render for the video (no shot keeps it) missing from its collection and the picker.
   it('files completed renders naming the video, and clips stamped with it, into its collection', async () => {

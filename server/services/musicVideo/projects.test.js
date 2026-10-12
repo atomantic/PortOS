@@ -259,7 +259,7 @@ describe('automation respects persisted shot locks (#11218)', () => {
     await projects.mutateProjectRecord(p.id, current => applySceneUpdate(current, b.sceneId, { prompt: 'Allowed run edit' }), { source: 'orchestrator' });
     expect((await projects.getProject(p.id)).scenes[1].prompt).toBe('Allowed run edit');
     await projects.updateScene(p.id, a.sceneId, { prompt: 'Director edit' });
-    expect(shotLocks(await projects.getProject(p.id))).toEqual({ [a.sceneId]: 'changed', [b.sceneId]: 'open' });
+    expect(shotLocks(await projects.getProject(p.id))).toEqual({ [a.sceneId]: 'locked', [b.sceneId]: 'open' });
   });
 
   it('keeps locked storyboard rows and the original board when a planner replaces its IDs', async () => {

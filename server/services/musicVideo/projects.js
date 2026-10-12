@@ -254,10 +254,11 @@ export async function addProjectScenes(id, sceneInputs, { source = null } = {}) 
 
 /** Edit against the fresh record so a concurrent video lock cannot be bypassed. */
 export async function updateScene(id, sceneId, patch) {
-  const [{ applySceneUpdate }, { assertClipUnlocked }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
+  const [{ applySceneUpdate }, { assertClipUnlocked, keepDirectorStillLock }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
   const { updated } = await mutateProjectRecord(id, (current) => {
     assertClipUnlocked(current, sceneId, patch);
-    return applySceneUpdate(current, sceneId, patch);
+    const outcome = applySceneUpdate(current, sceneId, patch);
+    return { ...outcome, project: keepDirectorStillLock(current, outcome.project, sceneId) };
   });
   return updated;
 }
@@ -359,10 +360,11 @@ export async function appendTakesAcrossScenes(id, items) {
 
 /** Explicitly select a take for its scene slot. Returns the updated scene. */
 export async function selectSceneTake(id, sceneId, takeId) {
-  const [{ selectSceneTake: select }, { assertClipUnlocked }] = await Promise.all([import('./takes.js'), import('./productionReview.js')]);
+  const [{ selectSceneTake: select }, { assertClipUnlocked, keepDirectorStillLock }] = await Promise.all([import('./takes.js'), import('./productionReview.js')]);
   const { scene } = await mutateProjectRecord(id, (current) => {
     assertClipUnlocked(current, sceneId);
-    return select(current, sceneId, takeId);
+    const outcome = select(current, sceneId, takeId);
+    return { ...outcome, project: keepDirectorStillLock(current, outcome.project, sceneId) };
   });
   return scene;
 }
@@ -377,7 +379,7 @@ export async function selectSceneTake(id, sceneId, takeId) {
  * Returns the updated scene.
  */
 export async function placeMediaPoolItem(id, sceneId, { kind, assetId, withAssetId = null }) {
-  const [{ appendSceneTakes: append, selectSceneTake: select }, { assertClipUnlocked }, { projectTakeAssets }] = await Promise.all([
+  const [{ appendSceneTakes: append, selectSceneTake: select }, { assertClipUnlocked, keepDirectorStillLock }, { projectTakeAssets }] = await Promise.all([
     import('./takes.js'), import('./productionReview.js'), import('./mediaPool.js'),
   ]);
   const { scene } = await mutateProjectRecord(id, (current) => {
@@ -395,7 +397,7 @@ export async function placeMediaPoolItem(id, sceneId, { kind, assetId, withAsset
       : [...(still ? [input('image', still)] : []), ...(clip ? [input('video', clip)] : [])];
     let outcome = append(current, sceneId, inputs);
     for (const take of outcome.appended) outcome = { ...select(outcome.project, sceneId, take.takeId), appended: outcome.appended };
-    return outcome;
+    return { ...outcome, project: keepDirectorStillLock(current, outcome.project, sceneId) };
   });
   return scene;
 }
