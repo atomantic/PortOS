@@ -345,13 +345,17 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    * Returns a promise that always resolves to `{ ok }` — see generateFrame's
    * doc comment. `revisionId` (optional) is the revision hook's kickoff tag (#9011).
    */
-  const generateSceneVideo = (scene, { revisionId, onJob } = {}) => {
+  const generateSceneVideo = (scene, { revisionId, onJob, target = null } = {}) => {
     if (!scene.referenceImageId) { toast.error('Generate a reference frame first'); return Promise.resolve({ ok: false }); }
     const problem = shotActionContractProblem(scene.direction?.actionContract, scene);
     if (problem) { toast.error(problem); return Promise.resolve({ ok: false }); }
     const basePrompt = buildShotPrompt(scene);
     if (!basePrompt) { toast.error('Add a shot prompt first'); return Promise.resolve({ ok: false }); }
-    const { settings, audioReactiveSelected, detectedAudioReactiveLora, videoBlockedReason } = videoSettings;
+    // `target` renders this one shot elsewhere (a scene card's Render on pick) without changing the saved setting.
+    const settings = target ? { ...videoSettings.settings, ...target } : videoSettings.settings;
+    const { detectedAudioReactiveLora } = videoSettings;
+    const audioReactiveSelected = target ? settings.backend === 'local' && settings.generationMode === 'audioReactive' : videoSettings.audioReactiveSelected;
+    const videoBlockedReason = target && videoSettings.blockedReasonFor ? videoSettings.blockedReasonFor(settings) : videoSettings.videoBlockedReason;
     if (videoBlockedReason) { toast.error(videoBlockedReason); return Promise.resolve({ ok: false }); }
     // #8977: a performance shot lip-syncs to the master recording, which only a
     // verified source-audio provider can do — never a cutaway lane with an

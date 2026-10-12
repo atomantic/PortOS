@@ -105,11 +105,13 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
   // mirrors the general Video Gen page: an unconfigured backend is a clear
   // preflight reason rather than a request that reaches the server only to
   // fail with FAL_NOT_CONFIGURED (#8968) — no silent fallback to local/Grok.
-  const videoBlockedReason = audioReactiveSelected && !audioReactiveReady
+  // `blockedReasonFor` answers the same for a one-shot render with other settings (a scene card's Render on pick).
+  const blockedReasonFor = (pick) => (pick.backend === 'local' && pick.generationMode === 'audioReactive' && !audioReactiveReady
     ? 'Audio-reactive generation requires an installed LTX-2.3 audio-reactive LoRA and an LTX-2.3 local model'
-    : settings.backend === 'fal' && !falEnabled
+    : pick.backend === 'fal' && !falEnabled
       ? 'No fal.ai API key configured — set it in Settings → Video Gen (or the FAL_KEY env var) first'
-      : null;
+      : null);
+  const videoBlockedReason = blockedReasonFor(settings);
 
   const change = (patch) => {
     if (!project || saving) return;
@@ -175,6 +177,7 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
     audioReactiveReady,
     audioReactiveSelected,
     videoBlockedReason,
+    blockedReasonFor,
     change,
     changeFramePin,
   };
