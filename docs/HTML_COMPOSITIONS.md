@@ -313,6 +313,16 @@ what the preview shows and what the render bakes:
   cancel aborts it.
 - **The storyboard animatic** (the docked preview for footage projects) shows
   the look live over the whole picture, lyrics included, on the song frame.
+  Paused, that is the exact filter; **while the song plays** it is the light
+  playback version (`filmLookMotionLayers`, `FilmLookFrame.jsx`): a browser
+  re-runs an SVG filter chain over every decoded video frame, and the full
+  look took a phone's animatic from 30 fps to under 1 after #11215. The playback
+  version is compositor-only: CSS filter functions for focus, tone and
+  saturation, the gate weave as a transform, and the cast, grain, tape bands,
+  vignette and leak as blended overlays (the noise rasterized once as tiles
+  and shifted per song frame). The glows, fringing and split tone wait for the
+  pause. The **Film look** button under the animatic turns the preview look
+  off for that viewer (remembered on the device); the render still applies it.
 
 The filter is an SVG `<filter>` applied to the document root (or to the
 `<img>` for a still). Radii and offsets scale with the filtered element's

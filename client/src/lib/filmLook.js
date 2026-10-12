@@ -11,4 +11,5 @@ export {
   describeFilmLook,
   filmLookControl,
   filmLookFilterMarkup,
+  filmLookMotionLayers,
 } from '../../../server/lib/filmLook.js';

@@ -363,6 +363,103 @@ export function filmLookFilterMarkup(look, { frame = 0, width = 1920, height = 1
   };
 }
 
+const FILM_LOOK_TILE_PX = 256;
+const svgDataUrl = (markup) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" ${markup}</svg>`)}`;
+const frameHash = (seed) => {
+  let x = Math.imul(seed + 0x9e3779b9, 0x85ebca6b) >>> 0;
+  x ^= x >>> 13; x = Math.imul(x, 0xc2b2ae35) >>> 0; x ^= x >>> 16;
+  return (x >>> 0) / 4294967296;
+};
+const hexColor = (value, fallback) => (typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value) ? value : fallback);
+
+/**
+ * The look as a PLAYING picture can afford it: no SVG filter, which a browser
+ * re-runs over every decoded video frame (the full chain drops a phone's
+ * animatic from 30 fps to under 1 after #11215), only what the
+ * compositor does for free. The focus, tone and saturation become CSS filter
+ * functions on the box holding the picture (`filter`, with the gate weave as
+ * its `transform`), and the cast, grain, tape bands, vignette and leak become
+ * blended `overlays` in the render's order, each a flat color, a gradient or a
+ * tile rasterized once (`image`) and shifted per song frame (`shift`, [0, 1)).
+ * The glows, the fringing and the split tone have no cheap stand-in and are
+ * left to the exact filter the paused picture shows. Returns null for a
+ * neutral look.
+ */
+export function filmLookMotionLayers(look, { frame = 0, width = 1920, height = 1080 } = {}) {
+  const settings = normalizeFilmLook(look);
+  if (!settings || isFilmLookNeutral(settings)) return null;
+  const v = (key) => (Number.isFinite(settings[key]) ? settings[key] : 0);
+  const n = (value) => Number(value.toFixed(4));
+  const w = Math.max(1, width);
+  const h = Math.max(1, height);
+  const f = Math.max(0, Math.floor(frame));
+  const filter = [];
+  const defocus = v('defocus');
+  if (defocus > 0) filter.push(`blur(${n(Math.pow(defocus, 1.5) * 0.014 * w)}px)`);
+  // The render's per-channel transfer v' = slope·v + intercept, as brightness(b) then
+  // contrast(k): k·b·v + (1 − k)/2, so k = 1 − 2·intercept and b = slope / k.
+  const exposure = v('exposure'); const contrast = v('contrast'); const fade = v('fade'); const flicker = v('flicker');
+  if (exposure || contrast || fade || flicker) {
+    const e = Math.pow(2, exposure) * (1 + flicker * 0.12 * (frameHash(f) * 2 - 1));
+    const c = 1 + contrast * 0.8;
+    const s = 1 - 0.28 * fade;
+    const slope = e * c * s;
+    const intercept = s * ((1 - c) / 2) + 0.2 * fade;
+    const k = Math.max(0.05, 1 - 2 * intercept);
+    filter.push(`brightness(${n(slope / k)})`, `contrast(${n(k)})`);
+  }
+  const saturation = v('saturation');
+  if (saturation) filter.push(`saturate(${n(Math.max(0, 1 + saturation))})`);
+  const weave = v('weave');
+  const transform = weave > 0
+    ? `translate(${n(weave * 0.004 * w * (Math.sin(f * 0.37) + 0.6 * Math.sin(f * 1.13)) / 1.6)}px, ${n(weave * 0.004 * h * (Math.cos(f * 0.29) + 0.6 * Math.sin(f * 0.91)) / 1.6)}px)`
+    : null;
+
+  const overlays = [];
+  const flat = (key, color, opacity, blend) => overlays.push({ key, kind: 'flat', color, opacity: n(opacity), blend });
+  // Warmth and tint are per-channel scales in the render; a soft-light wash leans the picture the same way.
+  const warmth = v('warmth');
+  if (warmth) flat('warmth', warmth > 0 ? '#ff9a3c' : '#3c9aff', Math.min(1, Math.abs(warmth) * 0.9), 'soft-light');
+  const tint = v('tint');
+  if (tint) flat('tint', tint > 0 ? '#ff3cff' : '#3cff3c', Math.min(1, Math.abs(tint) * 0.6), 'soft-light');
+  const cast = v('cast');
+  if (cast > 0) flat('cast', hexColor(settings.castColor, '#b9c04a'), cast, 'soft-light');
+  const mono = '1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 0 0 0 0 1';
+  const color = '1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 0 1';
+  const grain = v('grain');
+  if (grain > 0) {
+    const size = Number.isFinite(settings.grainSize) ? settings.grainSize : 0.35;
+    const baseFrequency = Math.min(1.5, (0.95 - 0.7 * size) * (1920 / w));
+    const tile = FILM_LOOK_TILE_PX;
+    overlays.push({
+      key: 'grain', kind: 'tile', size: [tile, tile], opacity: n(grain), blend: 'overlay', shift: [n(frameHash(f)), n(frameHash(f + 1))],
+      image: svgDataUrl(`width="${tile}" height="${tile}"><filter id="g" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB"><feTurbulence type="fractalNoise" baseFrequency="${n(baseFrequency)}" numOctaves="2" seed="7" stitchTiles="stitch"/><feColorMatrix type="matrix" values="${settings.grainColor === true ? color : mono}"/></filter><rect width="${tile}" height="${tile}" filter="url(#g)"/>`),
+    });
+  }
+  const tape = v('tapeNoise');
+  if (tape > 0) {
+    const tileW = Math.round(w);
+    const tileH = 128;
+    overlays.push({
+      key: 'tape', kind: 'tile', size: [tileW, tileH], opacity: n(0.8 * tape), blend: 'soft-light', shift: [0, n(frameHash(f * 7))],
+      image: svgDataUrl(`width="${tileW}" height="${tileH}"><filter id="t" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB"><feTurbulence type="fractalNoise" baseFrequency="${n(0.0015 * (1920 / w))} ${n(0.45 * (1080 / h))}" numOctaves="1" seed="11" stitchTiles="stitch"/><feColorMatrix type="matrix" values="${mono}"/></filter><rect width="${tileW}" height="${tileH}" filter="url(#t)"/>`),
+    });
+  }
+  const vignette = v('vignette');
+  if (vignette > 0) {
+    overlays.push({ key: 'vignette', kind: 'gradient', opacity: 1, blend: 'normal',
+      gradient: `radial-gradient(ellipse at center, rgba(0,0,0,0) ${Math.round(58 - 22 * vignette)}%, rgba(0,0,0,${n(vignette)}) 100%)` });
+  }
+  const leak = v('leak');
+  if (leak > 0) {
+    const drift = 0.62 + 0.18 * Math.sin(f * 0.011) + 0.05 * Math.sin(f * 0.047);
+    const breathe = 0.75 + 0.25 * Math.sin(f * 0.023 + 1);
+    overlays.push({ key: 'leak', kind: 'gradient', opacity: n(Math.min(1, leak * breathe)), blend: 'screen',
+      gradient: `radial-gradient(ellipse 40% 140% at ${n((drift + 0.15) * 100)}% 50%, ${hexColor(settings.leakColor, '#ff7a2a')} 0%, rgba(0,0,0,0) 70%)` });
+  }
+  return { filter: filter.join(' ') || null, transform, overlays };
+}
+
 /**
  * A browser script that applies a look to the page it runs in, re-seeding it
  * for every song frame: installed in the composition live preview and in the
