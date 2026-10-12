@@ -158,7 +158,8 @@ export function setShotLocks(project, { sceneIds, locked, reviewer = null, appro
   if (boardApprovalCovers(project)) {
     const carried = project.productionReview.approvals.storyboard;
     for (const scene of project.scenes || []) {
-      if (!approvals[scene.sceneId]) approvals[scene.sceneId] = { basis: shotApprovalBasis(project, scene), approvedAt: carried.approvedAt || approvedAt, fromBoardApproval: true };
+      if (!approvals[scene.sceneId]) approvals[scene.sceneId] = { basis: shotApprovalBasis(project, scene), approvedAt: carried.approvedAt || approvedAt, fromBoardApproval: true,
+        ...(carried.approvedBy ? { approvedBy: carried.approvedBy } : {}), ...(carried.reviewer ? { reviewer: structuredClone(carried.reviewer) } : {}) };
     }
   }
   for (const scene of scenes) {
