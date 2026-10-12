@@ -22,6 +22,13 @@ import { killProcessTree } from '../server/lib/bufferedSpawn.js';
 import { OWNER_FILE, STALE_ROOT_AGE_MS } from './lib/vitestStaleRunRoots.js';
 import { workflowJobs } from './lib/workflowJobs.js';
 
+// Synthetic crash/retry cases must not export a fabricated crash filename to
+// the Actions job's real GITHUB_ENV. Duration/summary tests retain real I/O.
+vi.mock('./lib/githubOutput.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  writeStepEnv: vi.fn(),
+}));
+
 // Keep nested Vitest's own scratch under its separately owned pvt-* root,
 // just like the workspace configs; reporter diagnostics stay outside it.
 const FIXTURE_CONFIG = `
