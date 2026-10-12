@@ -4,13 +4,19 @@ import { join } from 'path';
 import { DIGITAL_TWIN_DIR, generateId, ensureSoulDir } from './digital-twin-helpers.js';
 import { loadMeta, saveMeta, withMetaLock } from './digital-twin-meta.js';
 import { atomicWrite } from '../lib/fileUtils.js';
+import { documentFilenameSchema } from '../lib/digitalTwinValidation.js';
 import { extractVersion } from './digital-twin-meta.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { recordTombstone, clearTombstone, tombstoneTimestamp, supersedingTimestamp } from '../lib/tombstones.js';
 
+// Legacy metadata may bypass schema parsing; reject individual bad records
+// before any filename reaches the filesystem, without hiding valid neighbors.
+const usableDocument = doc => doc && documentFilenameSchema.safeParse(doc.filename).success;
+const documentRecords = meta => Array.isArray(meta.documents) ? meta.documents : [];
+
 export async function getDocuments() {
   const meta = await loadMeta();
-  const existing = meta.documents.filter(doc => existsSync(join(DIGITAL_TWIN_DIR, doc.filename)));
+  const existing = documentRecords(meta).filter(usableDocument).filter(doc => existsSync(join(DIGITAL_TWIN_DIR, doc.filename)));
   const stats = await Promise.all(existing.map(doc => stat(join(DIGITAL_TWIN_DIR, doc.filename))));
   return existing.map((doc, i) => ({
     ...doc,
@@ -21,7 +27,7 @@ export async function getDocuments() {
 
 export async function getDocumentById(id) {
   const meta = await loadMeta();
-  const docMeta = meta.documents.find(d => d.id === id);
+  const docMeta = documentRecords(meta).find(d => usableDocument(d) && d.id === id);
 
   if (!docMeta) return null;
 
@@ -90,7 +96,7 @@ async function createDocumentLeased(data) {
 
 async function updateDocumentLeased(id, updates) {
   const meta = await loadMeta();
-  const docIndex = meta.documents.findIndex(d => d.id === id);
+  const docIndex = documentRecords(meta).findIndex(d => usableDocument(d) && d.id === id);
 
   if (docIndex === -1) return null;
 
@@ -126,7 +132,7 @@ async function updateDocumentLeased(id, updates) {
 
 async function deleteDocumentLeased(id) {
   const meta = await loadMeta();
-  const docIndex = meta.documents.findIndex(d => d.id === id);
+  const docIndex = documentRecords(meta).findIndex(d => usableDocument(d) && d.id === id);
 
   if (docIndex === -1) return false;
 
