@@ -125,6 +125,11 @@ async function dispatchClip({ project, scene, route, tag }) {
     fal: falClipParams(project, scene, route),
     reactor: { disableAudio: true },
   };
+  // A local model ends on the end frame only when its runtime anchors the last
+  // frame (#11258), so the plan needs the model this route actually renders on.
+  const localRuntime = route.mode === 'local' && scene.endImageId
+    ? (await (await import('../videoGen/modelSelection.js')).resolveVideoModelSelection(route.model || undefined)).model?.runtime ?? null
+    : null;
   const { submitVideoGenJob } = await import('../videoGen/submitJob.js');
   // The submit service runs the revision guard itself as its last step before
   // the queue write (submitJob.js), like every board-submitted clip.
@@ -134,8 +139,10 @@ async function dispatchClip({ project, scene, route, tag }) {
     mode: 'image',
     sourceImageFile: scene.referenceImageId,
     ...(byBackend[route.mode] || {}),
-    // A style-break end frame (#11173), when this fal model takes one.
-    ...sceneEndFrameRequestFields(scene, { backend: route.mode, falModelId: byBackend.fal?.falModelId }),
+    // A style-break end frame (#11173), when this fal or local model takes one.
+    ...sceneEndFrameRequestFields(scene, {
+      backend: route.mode, falModelId: byBackend.fal?.falModelId, mode: byBackend[route.mode]?.mode || 'image', localRuntime,
+    }),
     musicVideo: tag,
   }, {});
   return { jobId };

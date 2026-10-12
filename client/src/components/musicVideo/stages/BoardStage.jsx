@@ -200,6 +200,7 @@ export default function BoardStage({ board }) {
               failedScenes={sceneMedia.failedScenes}
               songReview={attentionCtx.songReview}
               falVideoSettings={videoSettings.settings}
+              localVideoRuntime={videoSettings.activeModel?.runtime ?? null}
               canContinueShot={board.canContinueShot}
               onMove={board.moveScene}
               onDelete={board.onDeleteScene}

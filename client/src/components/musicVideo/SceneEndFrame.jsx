@@ -7,17 +7,18 @@ import { sceneEndFramePlan } from '../../../../server/lib/musicVideoEndFrame.js'
  * into from its photographic start frame, such as a pencil-sketch rotoscope or
  * a magazine-cutout collage. The director describes it, renders it from the
  * selected start frame, and picks among its takes like any frame. A fal clip on
- * a model that takes an end frame ends on it; the note says when the current
- * renderer will ignore it.
+ * a model that takes an end frame ends on it, and so does a local LTX clip
+ * (`localVideoRuntime`, the local model's runtime); the note says when the
+ * current renderer will ignore it.
  */
 export default function SceneEndFrame({
   scene, index, generating = false, onGenerate, onEditLocal, onSave, onOpenPreview,
-  takeBusy = false, onSelectTake, onReviewTake, videoSettings = null,
+  takeBusy = false, onSelectTake, onReviewTake, videoSettings = null, localVideoRuntime = null,
 }) {
   const settings = videoSettings || {};
   // Same mode the clip request is built with (useMusicVideoSceneMedia generateSceneVideo).
   const mode = settings.generationMode === 'suppliedAudio' || (settings.backend === 'local' && settings.generationMode === 'audioReactive') ? 'a2v' : 'image';
-  const plan = sceneEndFramePlan(scene, { backend: settings.backend || null, falModelId: settings.falModelId || null, mode });
+  const plan = sceneEndFramePlan(scene, { backend: settings.backend || null, falModelId: settings.falModelId || null, mode, localRuntime: localVideoRuntime });
   const promptId = `mv-scene-${scene.sceneId}-end-frame-prompt`;
   return (
     <details className="rounded border border-port-border bg-port-bg/40 px-2 py-1.5" open={Boolean(scene.endImageId || scene.endFramePrompt)}>

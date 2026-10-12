@@ -10,7 +10,10 @@ describe('sceneEndFramePlan (#11173)', () => {
   it.each([
     ['a performance shot', { ...scene, shotMode: 'performance' }, kling],
     ['a song-driven clip', scene, { ...kling, mode: 'a2v' }],
-    ['a non-fal renderer', scene, { backend: 'local' }],
+    ['a renderer with no end-frame input', scene, { backend: 'grok' }],
+    ['a local model that animates from one frame', scene, { backend: 'local', localRuntime: 'fastmetal' }],
+    ['a local model it cannot identify', scene, { backend: 'local' }],
+    ['a local model that anchors a last frame only in song-driven clips', scene, { backend: 'local', localRuntime: 'minimax_h3_ref2va' }],
     ['a fal model with no end image', scene, { backend: 'fal', falModelId: 'fal-ai/veo3.1/fast/image-to-video' }],
   ])('ignores the end frame for %s and says why', (_label, s, options) => {
     const plan = sceneEndFramePlan(s, options);
@@ -22,6 +25,14 @@ describe('sceneEndFramePlan (#11173)', () => {
   it('sends it to an end-image fal model, including the default when none is named', () => {
     expect(sceneEndFrameRequestFields(scene, kling)).toEqual({ lastImageFile: 'end.png' });
     expect(sceneEndFramePlan(scene, { backend: 'fal' })).toEqual({ endImageId: 'end.png', used: true, reason: null });
+  });
+
+  // #11258: a local render anchors the last frame only in first+last-frame mode.
+  it('sends it to a local model whose runtime anchors the last frame, in first+last-frame mode', () => {
+    for (const localRuntime of ['ltx25', 'ltx2']) {
+      expect(sceneEndFramePlan(scene, { backend: 'local', localRuntime })).toEqual({ endImageId: 'end.png', used: true, reason: null });
+      expect(sceneEndFrameRequestFields(scene, { backend: 'local', localRuntime })).toEqual({ lastImageFile: 'end.png', mode: 'fflf' });
+    }
   });
 
   it('reports nothing for a scene without an end frame', () => {

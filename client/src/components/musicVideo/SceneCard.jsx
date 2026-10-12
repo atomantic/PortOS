@@ -93,7 +93,7 @@ export default function SceneCard({
   onMove, onDelete, onEditLocal, onSave,
   onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
   onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, takeBusy = false, layered = false, documentComposition = false,
-  lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, nextEndSec = null, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
+  lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, nextEndSec = null, falVideoSettings = null, localVideoRuntime = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
   expanded, onToggleExpand, footageOptional = false, failedScenes = null, songReview = null,
 }) {
   const detailsRef = useRef(null);
@@ -473,11 +473,11 @@ export default function SceneCard({
           onSelect={(take) => onSelectTake?.(scene, take)}
           onReview={(take, review) => onReviewTake?.(scene, take, review)}
           onOpenPreview={onOpenPreview} />
-        {/* Style-break end frame (#11173) — what a fal clip ends on */}
+        {/* Style-break end frame (#11173) — what a fal or local LTX clip ends on */}
         {onGenerateEndFrame && layer === 'footage' && (
           <SceneEndFrame scene={scene} index={index} generating={!!generatingEndFrame} onGenerate={onGenerateEndFrame}
             onEditLocal={onEditLocal} onSave={onSave} onOpenPreview={onOpenPreview} takeBusy={takeBusy}
-            onSelectTake={onSelectTake} onReviewTake={onReviewTake} videoSettings={falVideoSettings} />
+            onSelectTake={onSelectTake} onReviewTake={onReviewTake} videoSettings={falVideoSettings} localVideoRuntime={localVideoRuntime} />
         )}
         {/* Render: the motion prompt, where this shot renders and what it costs, then its clip (Phase 1). */}
         <section aria-label="Render" className="space-y-2 rounded border border-port-border p-2">
