@@ -34,6 +34,7 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh start/stop backend 
     root = mkdtempSync(join(tmpdir(), 'portos-db-lifecycle-'));
     mkdirSync(join(root, 'scripts', 'lib'), { recursive: true });
     copyFileSync(join(here, 'lib', 'envFile.cjs'), join(root, 'scripts', 'lib', 'envFile.cjs'));
+    copyFileSync(join(here, 'lib', 'databaseSettings.cjs'), join(root, 'scripts', 'lib', 'databaseSettings.cjs'));
     copyFileSync(join(here, 'db.sh'), join(root, 'scripts', 'db.sh'));
     writeFileSync(join(root, 'package.json'), '{"type":"module"}');
     const binDir = join(root, 'bin');
