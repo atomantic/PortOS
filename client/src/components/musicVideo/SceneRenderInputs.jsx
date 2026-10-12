@@ -1,5 +1,7 @@
 import { getFalVideoModel } from '../../lib/falVideoModels.js';
-import { falSceneTake } from '../../lib/musicVideoShotTiming.js';
+import { AUDIO_REACTIVE_PERFORMANCE_GUARD, silentMotionPrompt } from '../../lib/musicVideoMotion.js';
+import { approximateMotionCues, falSceneTake } from '../../lib/musicVideoShotTiming.js';
+import { shotActionPrompt } from '../../../../server/lib/musicVideoActionContract.js';
 import { shotCameraPrompt } from '../../../../server/lib/cameraMovements.js';
 import { localModelTakesSongAudio } from '../../../../server/lib/musicVideoLocalModels.js';
 import { formatCount } from '../../utils/formatters.js';
@@ -11,10 +13,12 @@ const clock = (sec) => {
 };
 
 /**
- * Exactly what the shot card's Render sends: the prompt as typed (plus the
- * camera move the card sets), and which inputs go with it. Nothing the card
- * does not show is added: the server receives `promptAsTyped` and leaves the
- * prompt alone.
+ * Exactly what the shot card's Render sends: the prompt as typed, then what
+ * the card itself sets (its camera move, its applied shot actions, Grok's
+ * approximate phrase timing, the audio-reactive guard), and which inputs go
+ * with it. The project's style and bible are not added, and the server
+ * receives `promptAsTyped` and leaves the prompt alone (a performance shot's
+ * action times shift to its padded song slice).
  *
  * `settings` is the renderer this render uses (the project's, or the card's
  * Render on pick merged over it); `inputs` holds the card's toggles,
@@ -23,9 +27,8 @@ const clock = (sec) => {
  * input is `{ state: 'on' | 'off' | 'required' | 'unavailable', note }`.
  */
 export function shotCardRenderRequest({
-  scene, settings = {}, performance = false, endFramePlan = null, models = [], defaultModel = '', inputs = {},
+  project = null, scene, settings = {}, performance = false, endFramePlan = null, models = [], defaultModel = '', inputs = {},
 }) {
-  const prompt = [(scene?.prompt?.trim() || scene?.framePrompt?.trim() || ''), shotCameraPrompt(scene?.camera)].filter(Boolean).join('\n');
   const falModel = settings.backend === 'fal' ? getFalVideoModel(falSceneTake({ scene, videoSettings: settings }).modelId) : null;
   const localModel = settings.backend === 'local'
     ? models.find((model) => model.id === (settings.modelId || defaultModel)) || null : null;
@@ -37,6 +40,17 @@ export function shotCardRenderRequest({
     const on = inputs.songAudio ?? settings.generationMode === 'suppliedAudio';
     songAudio = { state: on ? 'on' : 'off', note: `Song ${span}` };
   } else songAudio = { state: 'unavailable', note: 'This model hears no audio' };
+  // An audio-reactive LoRA render hears the song through its own weights.
+  const audioReactive = settings.backend === 'local' && settings.generationMode === 'audioReactive' && !performance;
+  if (audioReactive) songAudio = { state: 'required', note: `Song ${span} drives the motion` };
+
+  // A take that hears nothing gets its shot actions without the lyric and beat lines it cannot hear.
+  const hears = songAudio.state === 'on' || songAudio.state === 'required';
+  const actions = project && scene?.direction?.actionContract != null ? shotActionPrompt(project, scene) : '';
+  const motionCues = settings.backend === 'grok' ? approximateMotionCues(project?.phrases, scene?.startSec, scene?.endSec) : '';
+  const base = [(scene?.prompt?.trim() || scene?.framePrompt?.trim() || ''), shotCameraPrompt(scene?.camera),
+    hears ? actions : silentMotionPrompt(actions)].filter(Boolean).join('\n');
+  const prompt = audioReactive ? `${base}. ${AUDIO_REACTIVE_PERFORMANCE_GUARD}` : [base, motionCues].filter(Boolean).join('. ');
 
   let endFrame = null;
   if (scene?.endImageId) {

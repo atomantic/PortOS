@@ -182,6 +182,7 @@ export default function BoardStage({ board }) {
             <SceneCard
               key={scene.sceneId}
               scene={scene}
+              project={project}
               expanded={activeSceneId === scene.sceneId}
               onToggleExpand={toggleInspector}
               performanceReview={performanceReviews.get(`${scene.sceneId}:${scene.videoHistoryId}`)}

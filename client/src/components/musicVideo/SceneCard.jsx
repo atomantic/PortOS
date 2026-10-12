@@ -105,7 +105,7 @@ export default function SceneCard({
   scene, index, shotNumber = null, isLast, generatingFrame, generatingVideo, frameProgress = null, videoProgress = null,
   settingsSaving, videoBlockedReason, videoBlockedReasonFor = null, canContinueShot,
   onMove, onDelete, onEditLocal, onSave,
-  onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
+  project = null, onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
   onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, onPlacePoolItem, onTrimClip, projectId = null, aspect = '16:9', videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false,
   lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, nextEndSec = null, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
   expanded, onToggleExpand, footageOptional = false, failedScenes = null, songReview = null,
@@ -188,7 +188,7 @@ export default function SceneCard({
   const endFramePlan = sceneEndFramePlanFor(scene, renderSettings || {}, { models: videoModels, defaultModel: defaultVideoModel });
   // Exactly what Render sends: the prompt as typed and the inputs the card toggles.
   const [renderInputs, setRenderInputs] = useState({});
-  const cardRequest = shotCardRenderRequest({ scene, settings: renderSettings || {}, performance, endFramePlan,
+  const cardRequest = shotCardRenderRequest({ project, scene, settings: renderSettings || {}, performance, endFramePlan,
     models: videoModels, defaultModel: defaultVideoModel, inputs: renderInputs });
   const videoRefusal = videoGenerationRefusal({
     settingsSaving, speakerUnsaved: performance && (speakerDirty || speakerSaving),

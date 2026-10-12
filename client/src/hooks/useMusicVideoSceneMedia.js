@@ -14,14 +14,10 @@ import useSceneRenderLifecycle from './useSceneRenderLifecycle.js';
 import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { isLayeredComposition, isSelfDrawnLayer, sceneVisualLayer } from '../lib/musicVideoLayers.js';
 import { musicVideoFrameGenSize } from '../lib/musicVideoAspect.js';
-import { MOTION_CONTINUITY_CLAUSE } from '../lib/musicVideoMotion.js';
+import { AUDIO_REACTIVE_PERFORMANCE_GUARD, MOTION_CONTINUITY_CLAUSE } from '../lib/musicVideoMotion.js';
 import {
   approximateMotionCues, falSceneTake, falTakeRequestFields, grokCoverage, isPerformanceScene, performanceBlockedReason,
 } from '../lib/musicVideoShotTiming.js';
-
-// Audio-reactive generation conditions motion on the song itself, so the prompt
-// has to rule out anything that reads as a performance of it.
-const AUDIO_REACTIVE_PERFORMANCE_GUARD = 'The music drives only environmental motion, lighting, particles, reflections, fabric, and subtle camera accents. No singing, lip-sync, speaking, mouth movement, dancing, instruments, performers, or musical performance.';
 
 // The image backends accept at most four reference images for most models
 // (server imageGen/prepareParams.js), mirrored by the server's
