@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import BoardStage from './BoardStage.jsx';
+import { ShotLockContext } from '../ShotLock.jsx';
 
 vi.mock('../../../hooks/useVideoFileSrc.js', () => ({ useVideoFileSrc: () => ({}) }));
 vi.mock('../BeatTimeline.jsx', () => ({ default: () => null }));
@@ -65,5 +66,18 @@ describe('BoardStage thumbnail media badges', () => {
     expect(document.getElementById(descriptionOf('Open Shot 1')).textContent).toBe('Clip');
     expect(document.getElementById(descriptionOf('Open Shot 2')).textContent).toBe('ImageEnd frame');
     expect(document.getElementById(descriptionOf('Open Shot 3')).textContent).toBe('Code');
+  });
+});
+
+describe('BoardStage thumbnail lock marks', () => {
+  it('marks locked and changed shots, and leaves open ones bare', () => {
+    const scenes = [scene(1), scene(2), scene(3)];
+    render(<MemoryRouter><ShotLockContext.Provider value={{ locks: { s1: 'locked', s2: 'changed', s3: 'open' }, toggle: vi.fn() }}>
+      <BoardStage board={board(scenes)} /></ShotLockContext.Provider></MemoryRouter>);
+    const described = (name) => screen.getByRole('button', { name }).getAttribute('aria-describedby').split(' ')
+      .map(id => document.getElementById(id).textContent);
+    expect(described('Open Shot 1')).toEqual(['Locked', 'Clip']);
+    expect(described('Open Shot 2')).toEqual(['Changed since locked', 'Clip']);
+    expect(described('Open Shot 3')).toEqual(['Clip']);
   });
 });

@@ -381,8 +381,9 @@ describe('human-reviewed Music Video workflow', () => {
     expect(revised.body.project.productionReview.reviewedRevisions[entry.basis].draft.storyboard[0].staging).toBe('Figure foreground, doorway behind');
     expect(revised.body.project.productionReview.feedback.at(-1).resolvedAt).toBeUndefined();
     expect(revised.body.readiness.art.approved).toBe(true);
-    // Rewording an approved shot keeps the storyboard approval; the proof it fed is reviewed again.
-    expect(revised.body.readiness.storyboard.approved).toBe(true);
+    // Rewording an approved shot unlocks that shot, and the board until it is locked again.
+    expect(revised.body.readiness.storyboard.approved).toBe(false);
+    expect(revised.body.readiness.storyboard.unlocked).toHaveLength(1);
     expect(revised.body.readiness.proof.approved).toBe(false);
     const resolution = { feedbackId: entry.id, resolution: 'Reviewed the revised staging.' };
     expect((await request(app).post(`${base}/production-review/feedback/resolve`).set('authorization', 'Bearer expired').send(resolution)).status).toBe(401);
@@ -535,6 +536,24 @@ describe('revising from review feedback', () => {
     expect(refused.status).toBe(409);
     expect(refused.body.code).toBe('MUSIC_VIDEO_REVISION_UNSUPPORTED');
     expect(author.calls).toBe(0);
+  });
+});
+
+describe('locking one shot', () => {
+  const lock = (body, auth) => {
+    const req = request(app).post(`${base}/production-review/shots`);
+    return (auth ? req.set('authorization', auth) : req).send(body);
+  };
+
+  it('locks and unlocks a Board shot for a signed-in reviewer only', async () => {
+    const sceneId = (await store.getProject(project.id)).scenes[0].sceneId;
+    expect((await lock({ sceneIds: [sceneId], locked: true }, 'Bearer expired')).status).toBe(401);
+    const locked = await lock({ sceneIds: [sceneId], locked: true });
+    expect(locked.status).toBe(200);
+    expect(locked.body.readiness.storyboard.shotLocks[sceneId]).toBe('locked');
+    const unlocked = await lock({ sceneIds: [sceneId], locked: false });
+    expect(unlocked.body.readiness.storyboard.shotLocks[sceneId]).toBe('open');
+    expect((await lock({ sceneIds: ['missing-scene'], locked: true })).status).toBe(404);
   });
 });
 

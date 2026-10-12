@@ -500,6 +500,13 @@ describe('stageChecklist', () => {
     const stale = { ...readiness, storyboard: { approved: false, problems: ['Review and approve the current art direction first.'], stale: { changedFields: ['art direction', 'cast'] } } };
     expect(stageChecklist('board', castProject({ scenes: [scene()] }), stale).at(-1).detail).toMatch(/changed since: art direction, cast/);
   });
+  it('counts the shots left to lock once shots are locked one at a time', () => {
+    const readiness = { ...NOT_APPROVED, art: { approved: true, problems: [] }, storyboard: { approved: false, problems: [], unlocked: ['s2', 's3'] } };
+    expect(stageChecklist('board', castProject({ scenes: [scene()] }), readiness).at(-1))
+      .toMatchObject({ id: 'approve-storyboard', detail: '2 shots not locked yet. Lock each on its card, or approve them all here.' });
+    const stale = { ...readiness, storyboard: { ...readiness.storyboard, stale: { changedFields: ['scene 2 prompt'] } } };
+    expect(stageChecklist('board', castProject({ scenes: [scene()] }), stale).at(-1).detail).toMatch(/^2 shots not locked yet\. .*changed since: scene 2 prompt/);
+  });
   it('counts per-scene changes in a stale approval instead of naming every scene', () => {
     const prompts = Array.from({ length: 26 }, (_, i) => `scene ${i + 1} prompt`);
     expect(changedFieldsText(['storyboard shots', ...prompts, 'scene 4 timing'])).toBe('storyboard shots, 26 scene prompts, scene 4 timing');

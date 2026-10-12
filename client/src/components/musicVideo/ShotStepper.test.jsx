@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import ShotStepper, { shotSteps } from './ShotStepper.jsx';
+import { ShotLockContext } from './ShotLock.jsx';
 
 const scenes = [{ startSec: 4 }, { startSec: 0 }, { startSec: 8.5 }, { startSec: null }];
 
@@ -30,5 +31,29 @@ describe('ShotStepper', () => {
     onSeek.mockClear();
     fireEvent.keyDown(screen.getByLabelText('Scrub'), { key: 'ArrowRight' });
     expect(onSeek).not.toHaveBeenCalled();
+  });
+});
+
+describe('ShotStepper shot lock', () => {
+  const shots = [{ sceneId: 'a', startSec: 0 }, { sceneId: 'b', startSec: 4 }];
+  const renderWith = (locks, time) => {
+    const toggle = vi.fn();
+    render(<ShotLockContext.Provider value={{ locks, toggle, busy: false }}><ShotStepper scenes={shots} time={time} onSeek={vi.fn()} /></ShotLockContext.Provider>);
+    return toggle;
+  };
+
+  it('locks the shot on screen in one tap, and unlocks a locked one', () => {
+    const toggle = renderWith({ a: 'locked', b: 'changed' }, 5);
+    fireEvent.click(screen.getByRole('button', { name: 'Lock again' }));
+    expect(toggle).toHaveBeenLastCalledWith('b', true);
+  });
+
+  it('offers Unlock on a locked shot, and no lock button without lockable shots', () => {
+    const toggle = renderWith({ a: 'locked', b: 'open' }, 1);
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock' }));
+    expect(toggle).toHaveBeenLastCalledWith('a', false);
+    document.body.innerHTML = '';
+    render(<ShotStepper scenes={shots} time={1} onSeek={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: /lock/i })).toBeNull();
   });
 });

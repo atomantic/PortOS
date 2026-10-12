@@ -111,6 +111,56 @@ export function seedArtDraft(project, stage = project.castAndSets) {
 }
 
 /**
+ * What one Board shot renders from: its prompts and direction, its span and
+ * lyric, its selected frames and performance setup, and its storyboard row.
+ * A shot lock (`productionReview.shotApprovals[sceneId]`) holds while this is
+ * unchanged, so an edit unlocks only the shot it touches. The selected clip is
+ * the shot's output, not an input, so choosing a take keeps the lock.
+ */
+function shotApprovalBasis(project, scene) {
+  const row = (project.productionReview?.draft?.storyboard || []).find(shot => shot?.sceneId === scene.sceneId);
+  const { prompt, framePrompt, visualIntent, camera, direction, startSec, endSec, lyricText, referenceImageId, endImageId,
+    shotMode, performanceSpeaker, performanceStyle, visualLayer, loop } = scene;
+  return hash({ prompt, framePrompt, visualIntent, camera, direction, startSec, endSec, lyricText, referenceImageId, endImageId,
+    shotMode, performanceSpeaker, performanceStyle, visualLayer, loop,
+    row: row ? { action: row.action, staging: row.staging, camera: row.camera, transition: row.transition, lyricCueIds: row.lyricCueIds } : null });
+}
+
+/** Each Board shot's lock: `locked`, `changed` (locked, then edited) or `open`. Null for a document storyboard. */
+export function shotLocks(project) {
+  if (project.productionReview?.draft?.storyboardSource === 'document') return null;
+  const approvals = project.productionReview?.shotApprovals || {};
+  return Object.fromEntries((project.scenes || []).map(scene => {
+    const approval = approvals[scene.sceneId];
+    return [scene.sceneId, !approval ? 'open' : approval.basis === shotApprovalBasis(project, scene) ? 'locked' : 'changed'];
+  }));
+}
+
+/** Lock or unlock Board shots for the director. A lock binds to the shot as it is now. */
+export function setShotLocks(project, { sceneIds, locked, reviewer = null, approvedBy = null }) {
+  if (project.productionReview?.draft?.storyboardSource === 'document') {
+    throw new ServerError('Document shots are reviewed in their authored source; approve the storyboard instead.', { status: 409, code: 'DOCUMENT_STORYBOARD' });
+  }
+  const scenes = sceneIds.map(id => (project.scenes || []).find(scene => scene.sceneId === id));
+  if (scenes.some(scene => !scene)) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
+  const approvals = { ...project.productionReview?.shotApprovals };
+  const approvedAt = new Date().toISOString();
+  for (const scene of scenes) {
+    if (!locked) delete approvals[scene.sceneId];
+    else approvals[scene.sceneId] = { basis: shotApprovalBasis(project, scene), approvedAt,
+      ...(approvedBy ? { approvedBy } : {}), ...(reviewer ? { reviewer: structuredClone(reviewer) } : {}) };
+  }
+  const review = { ...project.productionReview, shotApprovals: approvals };
+  // Unlocking withdraws the whole-board approval too: with every lock gone, readiness would otherwise
+  // fall back to it and read the board approved with no shot locked.
+  if (!locked && review.approvals?.storyboard) {
+    const { storyboard: _withdrawn, ...rest } = review.approvals;
+    review.approvals = rest;
+  }
+  return { ...project, productionReview: review };
+}
+
+/**
  * Is a storyboard approval current on this revision? Either it was given on
  * exactly this revision, or only the wording, prompts or timing of the shots
  * it covered have changed since (`shotsBasis`; approvals recorded before it
@@ -364,7 +414,12 @@ export function productionReadiness(project) {
     if (overlapping.some(c => !shot?.lyricCueIds?.includes(c.id))
       || shot?.lyricCueIds?.some(id => !cues.some(c => c.id === id))) boardProblems.push(`Review lyric anchors for ${scene.label || 'each shot'}.`);
   }
-  const storyboardApproved = !boardProblems.length && storyboardApprovalCurrent(review.approvals?.storyboard, basis);
+  // Once any shot has been locked, the board is approved exactly when every shot is.
+  const locks = shotLocks(project);
+  const byShot = !!locks && Object.keys(review.shotApprovals || {}).length > 0;
+  const unlocked = locks ? Object.keys(locks).filter(id => locks[id] !== 'locked') : [];
+  const storyboardApproved = !boardProblems.length && (byShot ? scenes.length > 0 && !unlocked.length
+    : storyboardApprovalCurrent(review.approvals?.storyboard, basis));
   const camera = storyboardCameraReport(scenes, documentShots ? null : boardStoryboard(project));
   const proof = review.proof;
   const excerpt = (project.excerpts || []).find(e => e.id === proof?.excerptId);
@@ -379,7 +434,8 @@ export function productionReadiness(project) {
     // The overlay text check is advice on the storyboard, like camera variety; it never blocks approval.
     storyboard: { approved: storyboardApproved, problems: [...new Set(boardProblems)], camera,
       // Board shots as reviewed, derived rows included, so the editor and approval card show what the gate checked.
-      shots: documentShots ? null : boardStoryboard(project), text: overlayTextReport(project, overlayTextBasis), stale: storyboardApproved ? null : staleApproval(project, 'storyboard', basis.storyboard, inputs) },
+      shots: documentShots ? null : boardStoryboard(project), text: overlayTextReport(project, overlayTextBasis), stale: storyboardApproved ? null : staleApproval(project, 'storyboard', basis.storyboard, inputs),
+      shotLocks: locks, unlocked: byShot ? unlocked : [] },
     proof: { approved: proofApproved, problems: proofProblems, excerptId: excerpt?.id || null, stale: proofApproved ? null : staleApproval(project, 'proof', basis.proof, inputs) },
     castAndSets: castAndSetsApproval(project),
     // The animated proof is optional review evidence: the approved storyboard is what the final render needs.
@@ -458,6 +514,21 @@ export function assertProductionApproval(project, stage = 'proof') {
     { status: 409, code: 'MUSIC_VIDEO_APPROVAL_REQUIRED', context: { stage, readiness } });
 }
 
+/**
+ * The approval one Board shot's clip needs: the art direction, and that shot
+ * locked (or the whole storyboard approved, which a board with no shot locks
+ * still uses).
+ */
+export function assertShotApproval(project, sceneId) {
+  const readiness = productionReadiness(project);
+  if (!readiness.art.approved) assertProductionApproval(project, 'art');
+  if (readiness.storyboard.approved || readiness.storyboard.shotLocks?.[sceneId] === 'locked') return;
+  throw new ServerError(readiness.storyboard.shotLocks?.[sceneId] === 'changed'
+    ? 'This shot changed since you locked it. Lock it again to make its clip.'
+    : 'Lock this shot (or approve the storyboard) before making its clip.',
+  { status: 409, code: 'MUSIC_VIDEO_APPROVAL_REQUIRED', context: { stage: 'storyboard', sceneId, readiness } });
+}
+
 /** Evidence is bound to the exact revision and excerpt. Machine review never
  * claims human playback; rendering alone is not a review. */
 export function approveProductionStage(project, { stage, basis, proofReview, approvedBy, reviewer }) {
@@ -487,6 +558,10 @@ export function approveProductionStage(project, { stage, basis, proofReview, app
   const decision = { stage, basis: expected, ...(stage === 'storyboard' ? { shotsBasis: productionReviewBasis(project).storyboardShots } : {}), inputs: productionApprovalInputs(project)[stage], values: productionApprovalValues(project, stage), approvedAt: new Date().toISOString(),
     ...(approvedBy ? { approvedBy } : {}), ...(reviewer ? { reviewer: structuredClone(reviewer) } : {}),
     ...(stage === 'proof' ? { proofReview: structuredClone(proofReview) } : {}) };
+  // Approving the whole board locks every shot on it, so a later edit unlocks only the shot it touches.
+  if (stage === 'storyboard' && project.productionReview?.draft?.storyboardSource !== 'document' && (project.scenes || []).length) {
+    project = setShotLocks(project, { sceneIds: project.scenes.map(scene => scene.sceneId), locked: true, reviewer, approvedBy });
+  }
   return { ...project, productionReview: { ...project.productionReview,
     approvalHistory: [...(project.productionReview?.approvalHistory || []), decision],
     reviewedRevisions: { ...project.productionReview?.reviewedRevisions, [basis]: { draft: structuredClone(project.productionReview?.draft || {}), scenes: structuredClone(project.scenes || []), proof: structuredClone(project.productionReview?.proof || null), capturedAt: new Date().toISOString() } },

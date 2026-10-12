@@ -12,10 +12,10 @@ import { existsSync } from 'fs';
 import { unlink } from 'fs/promises';
 import { pipeline } from 'stream/promises';
 import { Router } from 'express';
-import { musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoContinueShotSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
+import { musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoShotLockSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoContinueShotSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
 import { productionReadiness } from '../services/musicVideo/productionReview.js';
 import { finishedOutsideBlocker } from '../lib/musicVideoFinishedOutside.js';
-import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, reviseProductionFromFeedback, revertProductionInput } from '../services/musicVideo/productionReviewService.js';
+import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, lockProductionShots, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, reviseProductionFromFeedback, revertProductionInput } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   validateRequest,
@@ -776,6 +776,12 @@ router.post('/:id/production-review/approve', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoProductionApprovalSchema, req.body);
   const reviewer = await requireProductionReviewer(req);
   res.json(await approveProductionReview(req.params.id, { stage: input.stage, basis: input.basis, proofReview: input.proofReview, reviewer }));
+}));
+// Lock or unlock single Board shots: a locked shot may have its clip made before the whole storyboard is approved.
+router.post('/:id/production-review/shots', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoShotLockSchema, req.body);
+  const reviewer = await requireProductionReviewer(req);
+  res.json(await lockProductionShots(req.params.id, { ...input, reviewer }));
 }));
 router.post('/:id/production-review/proof', asyncHandler(async (req, res) => {
   res.status(202).json(await renderProductionProof(req.params.id, validateRequest(musicVideoProductionProofSchema, req.body)));

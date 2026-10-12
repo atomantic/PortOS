@@ -633,6 +633,15 @@ export function summarizeStoryboardProblems(problems = []) {
   });
 }
 
+// Once any shot is locked one at a time, the board is approved when every shot is: say how many are left.
+function unlockedDetail(readiness, item) {
+  const left = readiness?.storyboard?.approved ? 0 : (readiness?.storyboard?.unlocked || []).length;
+  if (!left) return item;
+  const count = `${formatCount(left)} shot${left === 1 ? '' : 's'} not locked yet.`;
+  // A stale board keeps its "changed since" text (and Keep approved) after the count.
+  return { ...item, detail: item.stale ? `${count} ${item.detail}` : `${count} Lock each on its card, or approve them all here.` };
+}
+
 // The server names each open change request as a readiness problem; the
 // checklist lists those requests on their own Feedback row instead.
 const FEEDBACK_PROBLEM = /^Resolve (art|storyboard|proof) feedback for /;
@@ -828,7 +837,8 @@ export function stageChecklist(stageId, project, readiness = project?.production
         ...problems,
         // The problems are listed above, one row per group; the approval row need not repeat the first.
         // A stale approval keeps its "changed since" text: it is the only place the checklist names what changed.
-        problems.length && !storyboardApproval.stale ? { ...storyboardApproval, detail: 'Approve once the items above are done.' } : storyboardApproval,
+        problems.length && !storyboardApproval.stale ? { ...storyboardApproval, detail: 'Approve once the items above are done.' }
+          : unlockedDetail(readiness, storyboardApproval),
       ];
     }
     case 'produce': {
