@@ -916,6 +916,13 @@ describe('Image Gen Routes', () => {
       expect(mediaJobQueue.assertMediaQueueRoom).not.toHaveBeenCalled();
     });
 
+    it('prompt-preview refuses a disabled provider the way Generate does', async () => {
+      getSettings.mockResolvedValueOnce({ imageGen: { mode: 'codex', codex: { enabled: false } } });
+      const response = await request(app).post('/api/image-gen/prompt-preview').send({ prompt: 'a tavern at dusk' });
+      expect(response.status).toBe(400);
+      expect(response.body.error).toMatch(/disabled/);
+    });
+
     // Per-request codex override: even when the saved default is external,
     // an explicit `mode: 'codex'` on the payload (e.g. the writers-room
     // storyboard chip strip) flips into queue mode so renders serialize.

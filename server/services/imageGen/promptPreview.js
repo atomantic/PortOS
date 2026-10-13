@@ -53,6 +53,8 @@ export async function previewImagePrompt({ uploadedInitImage = false, uploadedRe
     promptAdditions: carried,
   };
   const cloud = params.mediaProviderPeerId ? null : resolveCloudProviderConfig(settings, mode, { model: params.cloudModel });
+  // The same refusal POST /generate gives a disabled provider, text-to-image included.
+  if (cloud && !cloud.enabled) throw cloud.disabledError;
 
   if (mode === IMAGE_GEN_MODE.CODEX) {
     return { mode, ...codexSentPrompt({ ...common, inputImages: previewInputImages(mode, params) }).record };
