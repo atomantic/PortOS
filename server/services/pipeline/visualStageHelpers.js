@@ -19,6 +19,7 @@ import { buildScenePrompt, buildPlaceByKey, matchScenePlace } from '../../lib/sc
 import { composeStyledPrompt } from '../../lib/composeStyledPrompt.js';
 import { buildVisualStyleClause, mergeNegativePromptTokens } from '../../lib/universeVisualStyle.js';
 import { loraCompatKey } from '../../lib/runners.js';
+import { promptAddition } from '../../lib/modelInput.js';
 import { resolveCharacterLoras } from '../characterLoraResolver.js';
 import { pickCanon } from './seriesCanon.js';
 import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
@@ -229,13 +230,26 @@ const enqueueImageJob = async ({ prompt, world, settings, options, mode, owner, 
   // negative handling so the world's global negative-prompt terms stay in
   // effect even when the caller supplies their own additions. Deduplicated
   // by token so a user repeating a world negative doesn't double-weight it.
-  const negativePrompt = mergeNegativePromptTokens([
+  const negativeTokens = mergeNegativePromptTokens([
     options.negativePrompt,
     world?.influences?.avoid,
-  ]).join(', ') || undefined;
+  ]);
+  const negativePrompt = negativeTokens.join(', ') || undefined;
+  // The universe and series blocks the stage composers fold into the prompt,
+  // listed for the render's sent-prompt record (#11317). Each is listed only
+  // when the text actually went out, so a chip never names a block a composer
+  // left off.
+  const worldAvoid = negativeTokens.slice(mergeNegativePromptTokens([options.negativePrompt]).length).join(', ');
+  const promptAdditions = [
+    promptAddition('universe-style', 'Universe style', buildStyleClause(world, series)),
+    promptAddition('series-style', 'Series style notes', series?.styleNotes),
+  ].filter((item) => item && prompt.includes(item.text));
+  const avoidAddition = promptAddition('universe-avoid', 'Universe avoid (negative prompt)', worldAvoid);
+  if (avoidAddition) promptAdditions.push(avoidAddition);
   const baseParams = {
     prompt,
     negativePrompt,
+    ...(promptAdditions.length ? { promptAdditions } : {}),
     width: options.width,
     height: options.height,
     steps: options.steps,

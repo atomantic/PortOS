@@ -666,6 +666,18 @@ describe('enqueueStoryboardShotStartFrame', () => {
     expect(result.stage.status).toBe('edited');
   });
 
+  // Uniquely catches a pipeline render's universe / series blocks reaching the
+  // model without being listed on its sent-prompt record (#11317).
+  it('lists the universe and series blocks folded into the frame prompt', async () => {
+    useStoryboardScenes([{ description: 'wide', shots: [{ id: 's1', description: 'close on the lock' }] }]);
+    getUniverse.mockResolvedValueOnce({ id: 'u1', influences: { embrace: ['ink wash'], avoid: ['photo'] } });
+    await enqueueStoryboardShotStartFrame('iss-test', 0, 0);
+    const { params } = enqueueJobMock.mock.calls[0][0];
+    expect(params.promptAdditions.map((item) => item.label)).toEqual(['Universe style', 'Series style notes', 'Universe avoid (negative prompt)']);
+    for (const item of params.promptAdditions.slice(0, 2)) expect(params.prompt).toContain(item.text);
+    expect(params.negativePrompt).toContain('photo');
+  });
+
   it('falls back to the parent scene description when the shot description is empty', async () => {
     useStoryboardScenes([{ description: 'wide shot of the bridge at dawn', shots: [{ id: 's1', description: '' }] }]);
     const result = await enqueueStoryboardShotStartFrame('iss-test', 0, 0);
