@@ -24,6 +24,14 @@ describe('shotCardRenderRequest', () => {
     expect(shotCardRenderRequest({ ...base, inputs: { endFrame: false } }).endFrame.state).toBe('off');
   });
 
+  // Adam: song spans, clip lengths and trim notes never reach the model, nor "No lip-sync" for a take that hears nothing.
+  it('leaves render bookkeeping out of the prompt it shows and sends', () => {
+    const typed = '26.45-28.31s (1.87 s). Her palm slams the splicer. No lip-sync. Use the first ~1.9 s.';
+    const base = { scene: scene({ prompt: typed }), settings: { backend: 'local', modelId: 'ltx25_example' }, models };
+    expect(shotCardRenderRequest(base).prompt).toBe('Her palm slams the splicer.');
+    expect(shotCardRenderRequest({ ...base, inputs: { songAudio: true } }).prompt).toBe('Her palm slams the splicer. No lip-sync.');
+  });
+
   // Review on #11280: an audio-reactive render hears the song through its LoRA, so the card must say so and never stack a supplied window.
   it('shows an audio-reactive render as hearing the song, with its guard in the prompt', () => {
     const request = shotCardRenderRequest({ scene: scene(), settings: { backend: 'local', modelId: 'ltx25_example', generationMode: 'audioReactive' }, models,

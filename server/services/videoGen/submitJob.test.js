@@ -436,6 +436,13 @@ describe('shot intent at the video submission boundary', () => {
     expect(params.shotInstruction.actionContract).toEqual(contract);
   });
 
+  // Adam: a song span, a clip length, a trim note or a "No lip-sync" for a model that hears nothing is noise the model cannot act on.
+  it('drops render bookkeeping from any Music Video prompt, and "No lip-sync" when the take hears no audio', async () => {
+    await submitVideoGenJob({ prompt: '26.45-28.31s (1.87 s). Her palm slams the splicer. No lip-sync. Use the first ~1.9 s.',
+      musicVideo: { projectId: 'p', sceneId: 's', promptAsTyped: true } }, {});
+    expect(mocks.enqueueJob.mock.calls[0][0].params.prompt.split('\n')[0]).toBe('Her palm slams the splicer.');
+  });
+
   it('still re-times a card-typed performance prompt to its padded song slice', async () => {
     mocks.prepareVideoGenParams.mockResolvedValue({ backend: 'fal', cleanupStaged: vi.fn(), sourceImagePath: '/example/frame.png' });
     mocks.preparePerformanceShot.mockResolvedValue({ audioFilePath: '/example/audio.wav', modelId: 'lip-sync', resolution: '1080P',
