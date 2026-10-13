@@ -35,6 +35,7 @@ import SceneRenderTarget, { lastRenderTarget, renderTargetOverrides } from './Sc
 import SceneRenderInputs, { shotCardRenderRequest, shotCardRequestProblem } from './SceneRenderInputs.jsx';
 import SceneFrameFit, { sceneFrameFit } from './SceneFrameFit.jsx';
 import SceneTransitions from './SceneTransitions.jsx';
+import SceneImageEffect from './SceneImageEffect.jsx';
 
 // The two timeline-bound scene fields rendered as identical number inputs.
 const SCENE_TIME_FIELDS = [['Start', 'startSec'], ['End', 'endSec']];
@@ -461,6 +462,11 @@ export default function SceneCard({
         {/* Clip: the motion prompt, where this shot renders and what it costs, then its clip (Phase 1). */}
         <section aria-label="Render" className="min-w-0 space-y-2">
           <h4 className="text-xs font-medium">Clip</h4>
+          {/* A clip, the still, or the still playing a code-drawn image effect (no model call). */}
+          {layered && (layer === 'footage' || layer === 'still') && (
+            <SceneImageEffect fieldId={fieldId} scene={scene} onChange={applyPatch}
+              disabled={shotLock?.clip === 'locked'} disabledReason={shotLock?.clip === 'locked' ? 'Video locked. Unlock the video to change it.' : null} />
+          )}
           {scene.videoHistoryId && performance && (
             <PerformanceEvidence key={scene.videoHistoryId} clipSrc={clipSrc} instruction={instruction}
               temporal={performanceReview?.shot} excerptStartSec={performanceReview?.excerptStartSec || 0}

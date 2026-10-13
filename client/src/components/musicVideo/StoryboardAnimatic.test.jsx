@@ -27,6 +27,21 @@ describe('StoryboardAnimatic', () => {
     expect(container.querySelector('img').getAttribute('src')).toBe('/data/images/frame-b.png');
     expect(screen.getByText('Shot 2 / 2')).toBeTruthy();
   });
+
+  // Uniquely catches the animatic showing a clip where the composed render plays a still's image effect.
+  it('plays a still shot\'s camera flash develop over its still, not its clip, from the shot\'s start', () => {
+    const effectShot = { sceneId: 'fx', label: 'Burger', startSec: 0, endSec: 6, referenceImageId: 'burger.png', videoHistoryId: 'clip-1',
+      visualLayer: 'still', imageEffect: 'flash-develop', imageEffectSec: 2 };
+    render(<StoryboardAnimatic project={{ id: 'p', composition: { mode: 'composed' }, scenes: [effectShot] }} audioUrl="/song.mp3" />);
+    const effect = screen.getByTestId('animatic-image-effect');
+    expect(screen.queryByLabelText('Clip for Burger')).toBeNull();
+    const img = effect.querySelector('img');
+    expect(img.style.filter).toBe('contrast(0.55) saturate(0)');
+    const audio = screen.getByLabelText('Song for the storyboard animatic');
+    Object.defineProperty(audio, 'currentTime', { value: 3, configurable: true });
+    fireEvent.timeUpdate(audio);
+    expect(img.style.filter).toBe('contrast(1) saturate(1)');
+  });
 });
 
 vi.mock('../../services/apiMusicVideo.js', () => ({

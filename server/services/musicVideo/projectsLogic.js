@@ -517,6 +517,8 @@ function buildScene(input, { order }) {
     ...(input.frameFit ? { frameFit: input.frameFit } : {}),
     ...(input.transitionIn ? { transitionIn: input.transitionIn } : {}),
     ...(input.transitionOut ? { transitionOut: input.transitionOut } : {}),
+    ...(input.imageEffect ? { imageEffect: input.imageEffect } : {}),
+    ...(input.imageEffectSec ? { imageEffectSec: input.imageEffectSec } : {}),
     cardColor: input.cardColor ?? null,
     // #8977: cutaway (any image-to-video lane) unless the director asks for a
     // lip-synced performance shot, which only a source-audio provider renders.
@@ -600,6 +602,9 @@ export function replaceScenes(project, sceneInputs) {
       ...(prior.frameFit ? { frameFit: prior.frameFit } : {}),
       ...(prior.transitionIn ? { transitionIn: prior.transitionIn } : {}),
       ...(prior.transitionOut ? { transitionOut: prior.transitionOut } : {}),
+      // A still playing an image effect stays one: the effect is the shot's picture.
+      ...(prior.imageEffect && prior.visualLayer === 'still' ? { visualLayer: 'still', imageEffect: prior.imageEffect,
+        ...(prior.imageEffectSec ? { imageEffectSec: prior.imageEffectSec } : {}) } : {}),
       takes: prior.takes || [],
       ...(prior.direction ? { direction: prior.direction } : {}),
     };
@@ -607,10 +612,12 @@ export function replaceScenes(project, sceneInputs) {
   return { project: touch(project, { scenes }), scenes, replaced: existing.length };
 }
 
-// Scene fields a director edits within an approved shot (its span, wording and
-// selected takes) without adding a shot or lyric the storyboard approval did not cover.
+// Scene fields a director edits within an approved shot (its span, wording, selected
+// takes, and whether it plays as a clip or its still with an image effect) without
+// adding a shot or lyric the storyboard approval did not cover.
 const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'label', 'prompt', 'framePrompt', 'visualIntent',
-  'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'transitionIn', 'transitionOut'];
+  'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'transitionIn', 'transitionOut',
+  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec'];
 
 /**
  * Apply a patch to a single scene. Returns `{ project, updated }`. Throws if the

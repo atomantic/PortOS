@@ -13,6 +13,9 @@ import ShotStepper from './ShotStepper.jsx';
 import FrameStepper, { captureMediaFrame } from './FrameStepper.jsx';
 import { sceneFrameFit } from './SceneFrameFit.jsx';
 import TransitionGlitch from './TransitionGlitch.jsx';
+import ImageEffectStill from './ImageEffectStill.jsx';
+import { isLayeredComposition } from '../../lib/musicVideoLayers.js';
+import { sceneImageEffect } from '../../lib/musicVideoImageEffects.js';
 
 const timedShots = (scenes) => scenes.filter((scene) => Number.isFinite(scene?.startSec)).sort((a, b) => a.startSec - b.startSec);
 
@@ -284,9 +287,13 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   const shot = shotAt(scenes, time);
   const timed = timedShots(scenes);
   const index = shot ? timed.indexOf(shot) : -1;
+  // A still shot with an image effect plays the effect over its still, as the composed render does, not its clip.
+  const layered = isLayeredComposition(project);
+  const shotEffect = shot ? sceneImageEffect(shot, { layered }) : null;
   // The shot on screen and the next few: each keeps one mounted clip, so the cut to the
   // next shot shows a clip that has already loaded and sits on its first frame.
-  const clipShots = timed.slice(Math.max(index, 0), Math.max(index, 0) + 1 + CLIP_PRELOAD_SHOTS).filter((scene) => scene.videoHistoryId);
+  const clipShots = timed.slice(Math.max(index, 0), Math.max(index, 0) + 1 + CLIP_PRELOAD_SHOTS)
+    .filter((scene) => scene.videoHistoryId && !sceneImageEffect(scene, { layered }));
   const label = shot ? shot.label || `Shot ${index + 1}` : 'No shots yet';
   // With the lyrics drawn over the picture, a shot without a frame keeps its label and
   // intent under the picture instead, so no stand-in text sits under the sung words.
@@ -299,7 +306,10 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
       <figure ref={figureRef} aria-label="Storyboard animatic" className="relative aspect-video w-full overflow-hidden rounded border border-port-border bg-black">
         {/* The project's film look, as the final render applies it over the whole picture, lyrics included. */}
         <FilmLookFrame look={lookOn ? project.filmLook : null} frame={Math.round(time * ANIMATIC_FPS)} playing={playing} className="h-full w-full">
-        {shot?.referenceImageId ? (
+        {shot?.referenceImageId && shotEffect ? (
+          <ImageEffectStill key={shot.sceneId} src={`/data/images/${shot.referenceImageId}`} effect={shotEffect}
+            startSec={shot.startSec} audioRef={audioRef} time={time} />
+        ) : shot?.referenceImageId ? (
           // Behind a VHS-edged clip the still stands in, blurred and faded, for the render's blur of the clip.
           <img src={`/data/images/${shot.referenceImageId}`} alt=""
             className={`h-full w-full ${vhsEdges ? 'object-cover blur-md saturate-50 brightness-75' : stillEdges ? 'object-cover' : 'object-contain'}`} />

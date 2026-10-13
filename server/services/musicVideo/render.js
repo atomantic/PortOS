@@ -58,6 +58,7 @@ import { projectSoundBed } from './soundBed.js';
 import { intercutClips } from './intercut.js';
 import { musicVideoTransitionFilter, sceneTransitions, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
 import { stillMoveForCamera } from '../../lib/cameraMovements.js';
+import { musicVideoImageEffectFilter, sceneImageEffect } from '../../lib/musicVideoImageEffects.js';
 
 // Per-project render mutex (keyed by projectId so two projects can render in
 // parallel; same-project re-entry returns 409 with the live jobId for re-attach).
@@ -251,7 +252,9 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
       const imagePath = scene.referenceImageId ? safeUnder(PATHS.images, scene.referenceImageId) : null;
       if (!imagePath || !existsSync(imagePath)) { missingStills.push(scene.sceneId); continue; }
       // A planned camera move (#10589) picks the nearest composed still move.
-      clips.push({ ...section, imagePath, move: stillMoveForCamera(scene.camera) || scene.stillMove || 'hold' });
+      // An image effect (a camera flash that develops, musicVideoImageEffects.js) plays over the still.
+      const effect = sceneImageEffect(scene, { layered });
+      clips.push({ ...section, imagePath, move: stillMoveForCamera(scene.camera) || scene.stillMove || 'hold', ...(effect ? { effect } : {}) });
       continue;
     }
     const entry = historyMap.get(scene.videoHistoryId);
@@ -428,7 +431,8 @@ function sectionChain(c, input, { canonW, canonH, fps, frames, frameGrid }) {
       ? `zoompan=z='1+${STILL_PUSH_ZOOM}*on/${frames}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=${canonW}x${canonH}:fps=${fps},setsar=1,`
       : c.move === 'pan' ? `crop=${canonW}:${canonH}:x='(iw-ow)*n/${Math.max(1, frames - 1)}':y='(ih-oh)/2',` : '';
     return `[${input}:v]fps=${fps},scale=${coverW}:${coverH}:force_original_aspect_ratio=increase,crop=${coverW}:${coverH},setsar=1,`
-      + `${move}format=yuv420p,${trim},setpts=PTS-STARTPTS`;
+      + `${move}format=yuv420p,${trim},setpts=PTS-STARTPTS`
+      + musicVideoImageEffectFilter(c.effect, { width: canonW, height: canonH, fps, key: input, atSec: c.effectAtSec || 0 });
   }
   // A non-looping shot a hair longer than its source holds the last frame for
   // the remainder instead of ending early and drifting every later cut. On the
