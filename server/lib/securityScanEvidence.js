@@ -7,7 +7,7 @@ const nullableCost = z.number().finite().nonnegative().nullable();
 // or billing claims cross this boundary; null means not established.
 export const securityScanEvidenceSchema = z.object({
   version: z.literal(1),
-  status: z.enum(['not-run', 'running', 'unavailable', 'completed', 'failed', 'interrupted', 'time-limit', 'budget-limit', 'refused']),
+  status: z.enum(['not-run', 'running', 'invalid-input', 'unavailable', 'completed', 'failed', 'interrupted', 'time-limit', 'budget-limit', 'refused']),
   model: z.string().regex(/^[a-zA-Z0-9_.:-]{1,100}$/).nullable(),
   effort: z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']).nullable(),
   auth: z.enum(['chatgpt', 'api-key', 'unknown']),
@@ -17,6 +17,14 @@ export const securityScanEvidenceSchema = z.object({
   exitCode: z.number().int().nullable(),
   artifacts: z.object({ findings: z.boolean().nullable(), coverage: z.boolean().nullable() }).strict(),
   cleanup: z.enum(['not-needed', 'confirmed', 'unconfirmed']).optional(),
+  preflight: z.object({
+    rejectedRequests: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    lastError: z.object({
+      field: z.enum(['paths', 'knowledgeBase']),
+      index: z.number().int().min(0).max(99),
+      code: z.enum(['path-not-found', 'outside-workspace', 'invalid-path']),
+    }).strict(),
+  }).strict().optional(),
 }).strict().refine(value => value.status !== 'completed' || value.exitCode === 0);
 
 // This grant is set once at agent dispatch, never accepted from the model's

@@ -1,11 +1,28 @@
 # Codex security scanner runtime
 
-Codex security audits request one scanner attempt through the authenticated
+Codex security audits request one scanner execution through the authenticated
 `POST /api/cos/agents/:id/security-scan` host-control endpoint. The request contains
 the actual audit prompt, workspace-relative source paths, and optional knowledge
 base paths. The runner resolves paths inside the assigned workspace and launches
 an already installed `@openai/codex-security` CLI. It never installs a package or
 selects another provider after a failure.
+
+Before execution, missing, malformed or out-of-workspace context paths produce
+`invalid-input` evidence. This records a rejection count and the last field,
+zero-based item index and bounded error code, without publishing paths or raw
+errors. After the receipt is saved, the active audit may verify and resubmit
+corrected paths. Concurrent requests share the current validation result rather
+than queueing executions. Malformed request bodies are rejected by the HTTP
+schema before reserving an execution.
+
+Only explicit `invalid-input` evidence permits correction. Runtime failures,
+transport errors, missing installations and every result after execution
+reservation remain terminal. The `running` receipt is durable before the first
+child spawn; a crash in that gap cannot authorize another launch. Stop revokes
+correction, and a restarted runner never re-registers an existing grant, even
+one with only preflight evidence. A new audit requires a separate grant.
+Input rejection diagnostics remain in subsequent running and terminal receipts
+so a successful correction does not erase validation history.
 
 The immutable dispatch grant uses the effective outer Codex command's model and
 effort, including saved flags and supported-effort clamping. Missing or conflicting

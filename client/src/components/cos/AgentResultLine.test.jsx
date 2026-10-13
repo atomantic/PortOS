@@ -62,3 +62,15 @@ it('distinguishes connection loss from the last trusted runner observation', () 
   expect(screen.getByText(/interrupted \(runner connection lost\)/)).toBeInTheDocument();
   expect(screen.getByText('Process cleanup: unconfirmed')).toBeInTheDocument();
 });
+
+it('keeps input rejection history visible after a corrected scanner execution completes', () => {
+  const scanner = { source: 'runner', status: 'invalid-input', auth: 'chatgpt',
+    preflight: { rejectedRequests: 1, lastError: { field: 'paths', index: 2, code: 'path-not-found' } } };
+  const view = render(<SecurityScanEvidence scanner={scanner} />);
+  expect(screen.getByText('Input rejected before scanner launch')).toBeInTheDocument();
+  expect(screen.getByText('Input rejections: 1 · Last: paths item 3 — path-not-found')).toBeInTheDocument();
+  view.rerender(<SecurityScanEvidence scanner={{ ...scanner, status: 'completed' }} />);
+  expect(screen.getByText('Security scanner (runner observed): completed')).toBeInTheDocument();
+  expect(screen.queryByText('Input rejected before scanner launch')).not.toBeInTheDocument();
+  expect(screen.getByText('Input rejections: 1 · Last: paths item 3 — path-not-found')).toBeInTheDocument();
+});

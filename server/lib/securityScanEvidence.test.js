@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { parseSecurityScanEvidence, securityScanGrantFromArgs } from './securityScanEvidence.js';
+import { parseSecurityScanEvidence, parseRunnerSecurityScanEvidence, securityScanGrantFromArgs } from './securityScanEvidence.js';
 
 const report = {
   version: 1, status: 'time-limit', model: 'example-model', effort: 'low', auth: 'chatgpt',
@@ -25,4 +25,16 @@ it('derives scanner pins from effective argv and refuses conflicting or implicit
   expect(securityScanGrantFromArgs(['--model', 'saved-model', '-c', 'model_reasoning_effort="high"'])).toMatchObject({ model: 'saved-model', effort: 'high' });
   expect(securityScanGrantFromArgs(['--model=selected-model', '--config=model="another-model"', '-cmodel_reasoning_effort=low'])).toMatchObject({ model: null, effort: 'low' });
   expect(securityScanGrantFromArgs([])).toMatchObject({ model: null, effort: null });
+});
+
+it('accepts bounded runner input diagnostics without allowing private paths or errors through', () => {
+  const evidence = { ...report, status: 'invalid-input', source: 'runner', sequence: 2,
+    preflight: { rejectedRequests: 1, lastError: { field: 'paths', index: 0, code: 'path-not-found' } } };
+  expect(parseRunnerSecurityScanEvidence(evidence)).toEqual(evidence);
+  expect(parseRunnerSecurityScanEvidence({ ...evidence, preflight: {
+    ...evidence.preflight, lastError: { ...evidence.preflight.lastError, path: '/private/source.js' },
+  } })).toBeNull();
+  expect(parseRunnerSecurityScanEvidence({ ...evidence, preflight: {
+    ...evidence.preflight, lastError: { ...evidence.preflight.lastError, code: 'raw private error' },
+  } })).toBeNull();
 });
