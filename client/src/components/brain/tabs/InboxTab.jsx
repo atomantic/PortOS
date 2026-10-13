@@ -105,9 +105,9 @@ export default function InboxTab({ onRefresh, settings }) {
     }
     for (const item of paged.items) {
       if (!deleted.has(item.id)) {
-        if (!map.has(item.id)) {
-          map.set(item.id, item);
-        }
+        // Capture acknowledgements bridge pending history; once a row is
+        // fetched, its server state supersedes that initial snapshot.
+        map.set(item.id, item);
       }
     }
     return [...map.values()];
