@@ -1,7 +1,7 @@
 import { shotActionContractProblem } from '../../../server/lib/musicVideoActionContract.js';
 import { isOutsideMusicVideoReference, musicVideoConditioningReferences, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../server/lib/musicVideoConditioning.js';
 import { sceneEndFrameRequestFields } from '../../../server/lib/musicVideoEndFrame.js';
-import { authoredFramePromptText, authoredShotPrompt, visualDirection } from '../../../server/lib/musicVideoShotPrompt.js';
+import { authoredFramePromptText, authoredShotPrompt, musicVideoFrameModelInput, visualDirection } from '../../../server/lib/musicVideoShotPrompt.js';
 import { useEffect, useRef } from 'react';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';
@@ -189,7 +189,8 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     // The director's text (or a refine's instruction); the server composes the still's
     // prompt and lists each block it adds (lib/musicVideoShotPrompt.js, #11317).
     const prompt = refining ? refine.trim() : authoredFramePromptText(scene);
-    if (!prompt) { toast.error('Add a frame prompt or shot prompt first'); return Promise.resolve({ ok: false }); }
+    // A planned shot with no text still renders from its look, frame clause and actions.
+    if (!refining && !musicVideoFrameModelInput(project, scene).prompt) { toast.error('Add a frame prompt or shot prompt first'); return Promise.resolve({ ok: false }); }
     // A frame picked on the card (its start or end frame) leads the references, as the image this render reworks.
     const references = [...(referenceImageId ? [referenceImageId] : []), ...conditioning.map((ref) => ref.imageId).filter((id) => id !== referenceImageId)];
     const projectId = project.id;
@@ -429,7 +430,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   const frameScenes = scenes.filter((scene) => !isSelfDrawnLayer(sceneVisualLayer(scene, { layered })));
   const footageScenes = scenes.filter((scene) => sceneVisualLayer(scene, { layered }) === 'footage');
   const planMissingFrames = () => frameScenes.filter((scene) =>
-    !scene.referenceImageId && !genScenes[scene.sceneId] && authoredFramePromptText(scene));
+    !scene.referenceImageId && !genScenes[scene.sceneId] && musicVideoFrameModelInput(project, scene).prompt);
 
   // The clips a Videos batch would submit: a footage scene with a frame, no clip
   // and nothing in flight. A scene still waiting for its frame never blocks the

@@ -47,7 +47,10 @@ describe('musicVideoFrameModelInput', () => {
     expect(input.promptAdditions).toEqual([expect.objectContaining({ id: 'edit-instructions', text: expect.stringContaining('[instruction]') })]);
   });
 
-  it('sends nothing for a still with no text', () => {
-    expect(musicVideoFrameModelInput(project, { sceneId: 's2' })).toEqual({ prompt: '', promptAdditions: [] });
+  it('still composes a planned start frame with no seeded text, and sends nothing for an empty end frame or refine', () => {
+    expect(musicVideoFrameModelInput(project, { sceneId: 's2' }).prompt.startsWith('grainy 16mm, ')).toBe(true);
+    expect(musicVideoFrameModelInput(project, { sceneId: 's2' }, { slot: 'end' })).toEqual({ prompt: '', promptAdditions: [] });
+    expect(musicVideoFrameModelInput(project, scene, { authored: ' ', refine: true })).toEqual({ prompt: '', promptAdditions: [] });
+    expect(musicVideoFrameModelInput(null, { sceneId: 's2' })).toEqual({ prompt: '', promptAdditions: [] });
   });
 });

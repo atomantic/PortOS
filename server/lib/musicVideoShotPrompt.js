@@ -100,7 +100,9 @@ export function musicVideoFrameModelInput(project, scene, {
   repairs = [], fixes = '',
 } = {}) {
   const text = typeof authored === 'string' ? authored.trim() : '';
-  if (!text) return { prompt: '', promptAdditions: [] };
+  // A refine or an end frame from the start frame says only what changes, so it needs text;
+  // a planned shot with no seeded text still gets its look, frame clause and actions.
+  if (!text && (refine || slot === 'end')) return { prompt: '', promptAdditions: [] };
   if (refine) {
     return { prompt: refineWrapper(text), promptAdditions: [addition('edit-instructions', 'Edit instructions', refineWrapper('[instruction]'))] };
   }
@@ -113,7 +115,7 @@ export function musicVideoFrameModelInput(project, scene, {
     addition('visual-direction', 'Palette and camera rules', visualDirection(project?.visualSpec)),
     ...(slot === 'end' ? [] : [addition('frame-direction', 'Frame direction', scene?.direction?.frameClause)]),
   ].filter(Boolean);
-  const firstLine = [text, ...look.map((item) => item.text)].join(', ');
+  const firstLine = [text, ...look.map((item) => item.text)].filter(Boolean).join(', ');
   if (slot === 'end') return { prompt: firstLine, promptAdditions: look };
   const unmet = [...new Set(repairs)];
   const tail = [
@@ -122,5 +124,5 @@ export function musicVideoFrameModelInput(project, scene, {
     addition('plate-repairs', 'Plate repairs', unmet.length ? `Repair these visible plate mismatches while preserving the shot intent:\n${unmet.join('\n')}` : ''),
     addition('repair-notes', 'Repair notes', fixes ? `Fix these visible problems from the previous still while preserving the shot intent:\n${fixes}` : ''),
   ].filter(Boolean);
-  return { prompt: [firstLine, ...tail.map((item) => item.text)].join('\n'), promptAdditions: [...look, ...tail] };
+  return { prompt: [firstLine, ...tail.map((item) => item.text)].filter(Boolean).join('\n'), promptAdditions: [...look, ...tail] };
 }
