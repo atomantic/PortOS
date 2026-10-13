@@ -288,7 +288,7 @@ function errorExcerpt(err) {
  * to the form git registered it under (macOS /var → /private/var).
  */
 function canonicalPath(p) {
-  try { return realpathSync(p); } catch { /* fall through to the ancestor walk */ }
+  try { return realpathSync.native(p); } catch { /* fall through to the ancestor walk */ }
   const parent = dirname(p);
   return parent === p ? p : join(canonicalPath(parent), p.slice(parent.length).replace(/^[\\/]+/, ''));
 }
@@ -467,12 +467,13 @@ export function classifyWorktreeDirt(porcelain, { ignoredPaths = [] } = {}) {
 
 /**
  * Compare two filesystem paths for equality, resolving symlinks (e.g. macOS
- * /var → /private/var) so normalization differences don't false-negative.
+ * /var → /private/var) and Windows short-name aliases. Native realpath resolves
+ * the latter where the JavaScript implementation can retain the input spelling.
  */
 function pathsEqual(a, b) {
   if (!a || !b) return false;
   if (a === b) return true;
-  const resolved = (p) => { try { return realpathSync(p); } catch { return p; } };
+  const resolved = (p) => { try { return realpathSync.native(p); } catch { return p; } };
   return resolved(a) === resolved(b);
 }
 
@@ -1034,6 +1035,52 @@ async function resolveMergeTarget(sourceWorkspace, defaultBranch) {
   return remote || defaultBranch;
 }
 
+// Branch recovery is independent of checkout recovery. A second cleanup can
+// arrive after the first removed the directory but preserved unpublished work;
+// every successful removal path must apply the same branch-retention policy.
+async function cleanupWorktreeBranch(sourceWorkspace, branchName, {
+  preserveBranchWithCommits = false, hasUnmergedCommits = false, warnings,
+}) {
+  if (!hasUnmergedCommits && preserveBranchWithCommits) {
+    // A prior cleanup may have already deleted a landed branch. Confirmed
+    // absence is a clean no-op; an unreadable ref is still work to preserve.
+    const localRef = await execGit(
+      ['show-ref', '--verify', '--quiet', `refs/heads/${branchName}`],
+      sourceWorkspace, { ignoreExitCode: true },
+    ).catch(() => null);
+    if (localRef?.exitCode === 1) return;
+    const { getDefaultBranch, hasBranchMergeEvidence } = await import('./git.js');
+    const defaultBranch = await getDefaultBranch(sourceWorkspace).catch(() => null) || 'main';
+    const target = await resolveMergeTarget(sourceWorkspace, defaultBranch);
+    // Patch-equivalence recognizes squash/rebase merges; a failed probe keeps
+    // the branch. Ask the refreshed remote target so a landed PR is not resumed
+    // just because this install's local default branch has not advanced.
+    const hasMergeEvidence = localRef?.exitCode === 0
+      && await hasBranchMergeEvidence(sourceWorkspace, branchName, target).catch(() => false);
+    if (!hasMergeEvidence) {
+      hasUnmergedCommits = true;
+      console.log(`🌳 Preserving branch ${branchName} — merge evidence into ${target} was not established, kept so a retry can resume from it`);
+      warnings.push(`Branch ${branchName} preserved — merge evidence was not established; kept for a retry`);
+    } else {
+      const ahead = parseInt((await execGit(
+        ['rev-list', '--count', `${target}..${branchName}`],
+        sourceWorkspace,
+      ).catch(() => ({ stdout: '' }))).stdout.trim(), 10);
+      console.log(ahead === 0
+        ? `🌳 Branch ${branchName} has no commits beyond ${target} — deleting it`
+        : `🌳 Branch ${branchName} is already merged into ${target} — safe to delete`);
+    }
+  }
+  if (hasUnmergedCommits) {
+    console.warn(`⚠️ Preserving worktree branch ${branchName} for manual/automated recovery`);
+  } else {
+    await execGit(['branch', '-D', branchName], sourceWorkspace)
+      .catch(err => {
+        console.warn(`⚠️ Branch delete failed for ${branchName}: ${err.message}`);
+      });
+  }
+}
+
 /**
  * Remove a git worktree and its associated branch.
  *
@@ -1070,7 +1117,9 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
       return { merged: false, removed: false, cleanupIncomplete: true, uncommittedSaved: false, warnings };
     }
     console.log(`🌳 Worktree already removed for ${agentId}, cleaning up branch`);
-    await execGit(['branch', '-D', branchName], sourceWorkspace).catch(() => {});
+    await cleanupWorktreeBranch(sourceWorkspace, branchName, {
+      preserveBranchWithCommits: options.preserveBranchWithCommits || options.merge, warnings,
+    });
     return { merged: false, removed: true, uncommittedSaved: false, warnings };
   }
 
@@ -1094,7 +1143,9 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
       warnings.push(`Worktree cleanup incomplete for ${worktreePath} (broken checkout still present): ${errorExcerpt(rmFailure)} — retryable`);
       return { merged: false, removed: false, cleanupIncomplete: true, uncommittedSaved: false, warnings };
     }
-    await execGit(['branch', '-D', branchName], sourceWorkspace).catch(() => {});
+    await cleanupWorktreeBranch(sourceWorkspace, branchName, {
+      preserveBranchWithCommits: options.preserveBranchWithCommits || options.merge, warnings,
+    });
     return { merged: false, removed: true, uncommittedSaved: false, warnings };
   }
 
@@ -1214,7 +1265,7 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
   // Preserve branch when (a) merge was attempted, failed, and has unmerged commits,
   // OR (b) merge was refused because HEAD is on a non-default branch — the commits
   // are still there and the user / a follow-up task may want to integrate manually.
-  let hasUnmergedCommits = options.merge && !merged && (commitsAhead > 0 || mergeRefused);
+  const hasUnmergedCommits = options.merge && !merged && (commitsAhead > 0 || mergeRefused);
   // ...OR (c) the caller asked us to keep any branch that still holds commits
   // (`preserveBranchWithCommits`). The no-merge path — which is what a FAILED
   // agent's cleanup takes — otherwise deletes the branch unconditionally, taking
@@ -1224,45 +1275,10 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
   // re-dispatched to a fresh agent. Opt-in rather than automatic so the PR flow
   // (which deletes the LOCAL branch after pushing — the remote branch is what the
   // PR points at) keeps cleaning up after itself.
-  if (!hasUnmergedCommits && options.preserveBranchWithCommits && !merged) {
-    const { getDefaultBranch, hasBranchMergeEvidence } = await import('./git.js');
-    const defaultBranch = await getDefaultBranch(sourceWorkspace).catch(() => null) || 'main';
-    const target = await resolveMergeTarget(sourceWorkspace, defaultBranch);
-    // `hasBranchMergeEvidence` — NOT a bare `rev-list --count target..branch`. A branch
-    // whose PR was REBASE- or SQUASH-merged has new SHAs, so rev-list still reports
-    // it ahead and we would preserve an already-landed branch and point a retry at
-    // it. PortOS merges with `--rebase` by default, so that is the COMMON shape of
-    // the very incident this preservation exists for ("PR merged, then reaped").
-    // hasBranchMergeEvidence covers patch-equivalence (`git cherry`) and fails closed,
-    // which is the polarity we want here too: unknown ⇒ keep the work.
-    // Asked against `resolveMergeTarget`, not the local default branch — see there
-    // for why a branch merged on the forge otherwise reads as unmerged here.
-    const hasMergeEvidence = await hasBranchMergeEvidence(sourceWorkspace, branchName, target).catch(() => false);
-    if (!hasMergeEvidence) {
-      hasUnmergedCommits = true;
-      console.log(`🌳 Preserving branch ${branchName} — merge evidence into ${target} was not established, kept so a retry can resume from it`);
-      warnings.push(`Branch ${branchName} preserved — merge evidence was not established; kept for a retry`);
-    } else {
-      // An ancestor of the target includes a branch that never received a commit
-      // of its own. Calling that "already merged" reads as if the agent's work
-      // landed, which is how a startup failure's empty branch looks like churn.
-      const ahead = parseInt((await execGit(
-        ['rev-list', '--count', `${target}..${branchName}`],
-        sourceWorkspace,
-      ).catch(() => ({ stdout: '' }))).stdout.trim(), 10);
-      console.log(ahead === 0
-        ? `🌳 Branch ${branchName} has no commits beyond ${target} — deleting it`
-        : `🌳 Branch ${branchName} is already merged into ${target} — safe to delete`);
-    }
-  }
-  if (hasUnmergedCommits) {
-    console.log(`⚠️ Preserving worktree branch ${branchName} for manual/automated recovery`);
-  } else {
-    await execGit(['branch', '-D', branchName], sourceWorkspace)
-      .catch(err => {
-        console.log(`⚠️ Branch delete failed for ${branchName}: ${err.message}`);
-      });
-  }
+  await cleanupWorktreeBranch(sourceWorkspace, branchName, {
+    preserveBranchWithCommits: options.preserveBranchWithCommits && !merged,
+    hasUnmergedCommits, warnings,
+  });
 
   console.log(`🌳 Removed worktree for ${agentId}${merged ? ' (merged)' : ''}`);
 
