@@ -474,7 +474,7 @@ export function listQueueJobs({ kind, owner, limit = 10 } = {}) {
 // finish out-of-order under concurrent calls, so a slow "start" persist
 // landing after a fast "done" persist would regress the on-disk snapshot
 // (e.g. completed→running). Chaining ensures every snapshot reflects the
-// state at its enqueue time, in submission order.
+// state when each queued write runs, in submission order.
 let persistChain = Promise.resolve();
 // Terminal outcomes stay private until the snapshot containing them succeeds.
 // Recovery commits storage only; it never invokes a generator again.
@@ -535,6 +535,14 @@ function persist() {
   return persistChain;
 }
 async function persistImpl() {
+  trimArchiveForSnapshot();
+  const snapshot = captureQueueSnapshot();
+  await atomicWrite(JOBS_FILE, snapshot.data);
+  await acknowledgeWrittenTransitions(snapshot.transitions);
+  if (snapshot.hasDeferredCompletion) recoverCompletionsUnderAdmission();
+}
+
+function trimArchiveForSnapshot() {
   const cutoff = Date.now() - COMPLETED_TTL_MS;
   const pendingArchive = archive.filter((job) => job.durabilityPending);
   const trimmedArchive = archive
@@ -547,6 +555,10 @@ async function persistImpl() {
   // Mutate `archive` in place so subsequent reads see the trim too.
   archive.length = 0;
   archive.push(...trimmedArchive);
+}
+
+// Capture the rows and eligible acknowledgements together, before storage yields.
+function captureQueueSnapshot() {
   const live = [
     ...(running ? [running] : []),
     ...cloudRunning,
@@ -559,16 +571,20 @@ async function persistImpl() {
   // other write (progress, enqueue, the shutdown flush, or one landing after a
   // completion's own retries gave up) keeps it `running` on disk and leaves it
   // to an admitted recovery commit, never publishing it in the middle of a cut.
-  const admitted = holdsBackupAssetPublication();
-  const commits = (job) => admitted || job.durabilityPending?.status !== 'completed';
-  const deferredCompletion = [...pendingTransitions.keys()].some((job) => !commits(job));
+  const completionAdmitted = holdsBackupAssetPublication();
+  const canWriteOutcome = (job) => completionAdmitted || job.durabilityPending?.status !== 'completed';
+  const hasDeferredCompletion = [...pendingTransitions.keys()].some((job) => !canWriteOutcome(job));
   // Strip non-serializable bits.
-  const serializable = live.map((job) => (commits(job) ? { ...job, ...job.durabilityPending } : job)).map(({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs }) =>
+  const serializable = live.map((job) => (canWriteOutcome(job) ? { ...job, ...job.durabilityPending } : job)).map(({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs }) =>
     ({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs }),
   );
-  const transitions = [...pendingTransitions].filter(([job]) => commits(job));
-  await atomicWrite(JOBS_FILE, { jobs: serializable, videoHolds: videoHolds.snapshot() });
+  const transitions = [...pendingTransitions].filter(([job]) => canWriteOutcome(job));
+  return { data: { jobs: serializable, videoHolds: videoHolds.snapshot() }, transitions, hasDeferredCompletion };
+}
+
+async function acknowledgeWrittenTransitions(transitions) {
   for (const [job, acknowledge] of transitions) {
+    // A replacement staged while storage was pending belongs to a later write.
     if (pendingTransitions.get(job) !== acknowledge) continue;
     pendingTransitions.delete(job);
     Object.assign(job, job.durabilityPending);
@@ -576,7 +592,6 @@ async function persistImpl() {
     delete job.persistenceError;
     await acknowledge();
   }
-  if (deferredCompletion) recoverCompletionsUnderAdmission();
 }
 
 // Storage is writable again, but a completion is still staged. Commit it from
