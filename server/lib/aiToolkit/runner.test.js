@@ -1975,6 +1975,32 @@ describe('AI Toolkit runner — built-in executeCliRun spawn (#1865)', () => {
     return child;
   }
 
+  it('classifies a capacity rejection without scanning the echoed input', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-cli-capacity-'));
+    try {
+      const runner = createRunnerService({ dataDir });
+      const child = makeChild();
+      spawn.mockReturnValue(child);
+      let resolveComplete;
+      const completed = new Promise(resolve => { resolveComplete = resolve; });
+      const prompt = 'Example schema describes authentication, billing, and credit.';
+      await runner.executeCliRun({
+        runId: 'capacity', provider: { id: 'codex', command: 'codex', args: [] },
+        prompt, onComplete: resolveComplete,
+      });
+      const transcript = `OpenAI Codex v1\r\nuser\r\n${prompt}\r\nERROR: Selected model is at capacity. Please try a different model.\r\n`;
+      child.stderr.emit('data', Buffer.from(transcript));
+      child.emit('close', 1);
+      expect(await completed).toMatchObject({
+        success: false, errorCategory: 'rate-limit',
+        error: 'Selected model is at capacity. Please try a different model.',
+      });
+      expect(await readFile(join(dataDir, 'runs', 'capacity', 'output.txt'), 'utf8')).toBe(transcript);
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it('never enables shell:true — resolveWindowsExecutable (not a shell) is the Windows fix', async () => {
     // The shared leaf's input matrix lives in bufferedSpawn.test.js; this
     // caller contract pins shell-free spawning regardless of platform.

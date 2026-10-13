@@ -366,6 +366,35 @@ describe('patchRunMetadata — serialized merges', () => {
 });
 
 describe('executeCliRun — Codex response channel', () => {
+  it.each([
+    ['Selected model is at capacity. Please try a different model.', ERROR_CATEGORIES.RATE_LIMIT, false],
+    ['Authentication failed: invalid API key', ERROR_CATEGORIES.AUTH_ERROR, true],
+  ])('reports the provider rejection after the echoed prompt: %s', async (message, category, actionable) => {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    const onRunFailed = vi.fn();
+    setAIToolkit(fakeToolkit({ analyzeError }), { dataDir: '/tmp/test-runner', hooks: { onRunFailed } });
+    const onComplete = vi.fn();
+    const prompt = 'Example tool schema: {"description":"authentication and billing", "message":"not an error"}';
+    await executeCliRun({
+      runId: 'run-rejected-model',
+      provider: { id: 'codex', command: 'codex', args: [], timeout: 5000 },
+      prompt, workspacePath: TEST_WORKSPACE, onComplete,
+    });
+    const transcript = `OpenAI Codex v1\nuser\n${prompt}\nERROR: ${message}\n`;
+    // The input echo can span arbitrary pipe chunks.
+    child.stderr.emit('data', Buffer.from(transcript.slice(0, 70)));
+    child.stderr.emit('data', Buffer.from(transcript.slice(70)));
+    child.emit('close', 1);
+    await flushMicrotasks();
+    expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({
+      success: false, error: message, errorCategory: category,
+      errorAnalysis: expect.objectContaining({ requiresFallback: true, actionable }),
+    }));
+    expect(onRunFailed).toHaveBeenCalledWith(expect.objectContaining({ errorCategory: category }), message, transcript);
+    expect(writeFile).toHaveBeenCalledWith(expect.stringContaining('output.txt'), transcript);
+  });
+
   it('returns only stdout while retaining diagnostic chunks for observers', async () => {
     const child = makeChild();
     spawn.mockReturnValue(child);

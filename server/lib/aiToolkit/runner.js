@@ -558,7 +558,7 @@ export function createRunnerService(config = {}) {
             metadata.success = code === 0;
             metadata.outputSize = Buffer.byteLength(output);
             if (!metadata.success) {
-              const errorAnalysis = analyzeError(output, code);
+              const errorAnalysis = analyzeError(output, code, { prompt });
               metadata.error = errorAnalysis.message || `Process exited with code ${code}`;
               metadata.errorCategory = errorAnalysis.category;
               metadata.errorAnalysis = errorAnalysis;
