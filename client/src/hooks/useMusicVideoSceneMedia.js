@@ -1,8 +1,7 @@
-import { shotActionContractProblem, shotActionPrompt } from '../../../server/lib/musicVideoActionContract.js';
+import { shotActionContractProblem } from '../../../server/lib/musicVideoActionContract.js';
 import { isOutsideMusicVideoReference, musicVideoConditioningReferences, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../server/lib/musicVideoConditioning.js';
-import { musicVideoCreativeContext, musicVideoDirectorLook } from '../../../server/lib/musicVideoCreativeContext.js';
 import { sceneEndFrameRequestFields } from '../../../server/lib/musicVideoEndFrame.js';
-import { authoredShotPrompt, visualDirection } from '../../../server/lib/musicVideoShotPrompt.js';
+import { authoredFramePromptText, authoredShotPrompt, musicVideoFrameModelInput, visualDirection } from '../../../server/lib/musicVideoShotPrompt.js';
 import { useEffect, useRef } from 'react';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';
@@ -26,9 +25,6 @@ export const MAX_CONDITIONING_REFERENCES = MUSIC_VIDEO_MAX_CONDITIONING_REFERENC
 // Refusals the image route returns when the resolved backend can't consume
 // reference images — surfaced as explicit capability feedback, never retried
 // silently without the references.
-// Refine: edit one frame by a short instruction, keeping the rest of the picture.
-const refineFramePrompt = (instruction) => `Edit the reference image: ${instruction.trim()}. Keep everything else exactly as it is: composition, framing, subject, lighting, color and film look.`;
-
 const REFERENCE_CAPABILITY_CODES = new Set([
   'REFERENCE_IMAGES_FLUX2_ONLY',
   'IMAGE_EDIT_UNSUPPORTED_MODE',
@@ -157,18 +153,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   const genVideoScenes = videoLane.genScenes;
   const failedScenes = { frame: frameLane.failedScenes, video: videoLane.failedScenes };
 
-  const style = project?.concept?.style?.trim();
-  const direction = [musicVideoCreativeContext(project?.concept, { look: musicVideoDirectorLook(project) }), visualDirection(project?.visualSpec)].filter(Boolean).join('; ');
   const conditioning = conditioningReferences(project);
-  // The image prompt for a scene's reference frame: its frame prompt (or the
-  // shot prompt as a fallback) suffixed with the project's global concept style
-  // and the visual spec's palette/camera direction (typography excluded, #8992).
-  // An applied treatment (#8980) adds the scene's composition constraints last:
-  // focal subject, framing, the region reserved for the composited typography,
-  // and no lettering in the generated pixels. Same order as the server's
-  // handoff manifest (handoff.js composePrompt).
-  const buildFramePrompt = (scene) =>
-    [[(scene.framePrompt?.trim() || scene.prompt?.trim() || ''), style, direction, scene.direction?.frameClause?.trim()].filter(Boolean).join(', '), shotActionPrompt(project, scene, { frame: true })].filter(Boolean).join('\n');
 
   /**
    * Render a still reference frame for one scene from its frame prompt. The
@@ -201,10 +186,12 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     const conditioning = refining ? [] : conditioningReferences(project, scene);
     const problem = refining ? null : shotActionContractProblem(scene.direction?.actionContract, scene);
     if (problem) { toast.error(problem); return Promise.resolve({ ok: false }); }
-    const framePrompt = refining ? refineFramePrompt(refine) : buildFramePrompt(scene);
-    if (!framePrompt) { toast.error('Add a frame prompt or shot prompt first'); return Promise.resolve({ ok: false }); }
+    // The director's text (or a refine's instruction); the server composes the still's
+    // prompt and lists each block it adds (lib/musicVideoShotPrompt.js, #11317).
+    const prompt = refining ? refine.trim() : authoredFramePromptText(scene);
+    // A planned shot with no text still renders from its look, frame clause and actions.
+    if (!refining && !musicVideoFrameModelInput(project, scene).prompt) { toast.error('Add a frame prompt or shot prompt first'); return Promise.resolve({ ok: false }); }
     // A frame picked on the card (its start or end frame) leads the references, as the image this render reworks.
-    const prompt = referenceImageId && !refining ? `${framePrompt}\nStart from the first reference image and rework it to match this prompt.` : framePrompt;
     const references = [...(referenceImageId ? [referenceImageId] : []), ...conditioning.map((ref) => ref.imageId).filter((id) => id !== referenceImageId)];
     const projectId = project.id;
     frameLane.startScene(scene.sceneId);
@@ -212,7 +199,10 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       prompt,
       ...musicVideoFrameGenSize(project),
       ...(references.length ? { referenceImageFiles: references } : {}),
-      musicVideo: { projectId, sceneId: scene.sceneId, ...(revisionId ? { revisionId } : {}) },
+      musicVideo: {
+        projectId, sceneId: scene.sceneId, compose: true, ...(revisionId ? { revisionId } : {}),
+        ...(refining ? { refine: true } : referenceImageId ? { fromFrame: true } : {}),
+      },
     }, { silent: true })
       .then((res) => {
         const stillRunning = res?.status === 'queued' || res?.status === 'running';
@@ -263,14 +253,14 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     const projectId = project.id;
     endFrameLane.startScene(scene.sceneId);
     return generateImage({
-      // From a frame, keep its shot and change what the prompt asks; prompt only, render it like a start frame.
-      prompt: refining ? refineFramePrompt(refine)
-        : referenceImageId
-        ? `${endPrompt}. Keep the reference image's composition, subject and framing; change only what this prompt describes.`
-        : [endPrompt, style, direction].filter(Boolean).join(', '),
+      // From a frame the server keeps its shot and changes what the prompt asks; with no frame it renders like a start frame.
+      prompt: refining ? refine.trim() : endPrompt,
       ...musicVideoFrameGenSize(project),
       ...(referenceImageId ? { referenceImageFiles: [referenceImageId] } : {}),
-      musicVideo: { projectId, sceneId: scene.sceneId, slot: 'end' },
+      musicVideo: {
+        projectId, sceneId: scene.sceneId, slot: 'end', compose: true,
+        ...(refining ? { refine: true } : referenceImageId ? { fromFrame: true } : {}),
+      },
     }, { silent: true })
       .then((res) => {
         if (res?.status === 'queued' || res?.status === 'running') {
@@ -440,7 +430,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   const frameScenes = scenes.filter((scene) => !isSelfDrawnLayer(sceneVisualLayer(scene, { layered })));
   const footageScenes = scenes.filter((scene) => sceneVisualLayer(scene, { layered }) === 'footage');
   const planMissingFrames = () => frameScenes.filter((scene) =>
-    !scene.referenceImageId && !genScenes[scene.sceneId] && buildFramePrompt(scene));
+    !scene.referenceImageId && !genScenes[scene.sceneId] && musicVideoFrameModelInput(project, scene).prompt);
 
   // The clips a Videos batch would submit: a footage scene with a frame, no clip
   // and nothing in flight. A scene still waiting for its frame never blocks the
@@ -497,7 +487,6 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     frameBatch,
     videoBatch,
     conditioning,
-    buildFramePrompt,
     generateFrame,
     generateEndFrame,
     generateSceneVideo,

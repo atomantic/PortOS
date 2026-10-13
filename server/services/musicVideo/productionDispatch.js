@@ -30,8 +30,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { resolveGalleryImage } from '../../lib/pathSafety.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { falSceneTake, falTakeRequestFields, grokCoverage } from '../../lib/musicVideoShotTiming.js';
-import { sceneFramePrompt } from './handoff.js';
-import { authoredShotPrompt } from '../../lib/musicVideoShotPrompt.js';
+import { authoredShotPrompt, musicVideoFrameModelInput } from '../../lib/musicVideoShotPrompt.js';
 import { sceneEndFrameRequestFields } from '../../lib/musicVideoEndFrame.js';
 import { conditioningReferences, falRouteVideoSettings } from './productionPool.js';
 import { musicVideoFrameGenSize } from '../../lib/musicVideoAspect.js';
@@ -49,13 +48,11 @@ async function guardRevision(tag, kind) {
 
 /** Enqueue a scene's reference frame on exactly `route`. Returns `{ jobId }`. */
 async function dispatchFrame({ project, scene, route, tag, settings }) {
-  const basePrompt = sceneFramePrompt(project, scene);
   const repairing = project.productionRuns?.find((run) => run.id === tag.productionRunId)?.steps?.find((step) => step.key === tag.productionStepKey)?.plateRepairBasis;
   const unmet = repairing ? (scene.takes || []).flatMap((take) => currentPlateEvidence(scene, take)?.checks.filter((check) => check.status === 'fail').map((check) => `${check.requirement}: ${check.note}`) || []) : [];
   // The autonomous run's stills review names what the last still got wrong (autonomousService.js).
   const fixes = typeof scene.stillFixes?.text === 'string' ? scene.stillFixes.text : '';
-  const prompt = basePrompt && [basePrompt, unmet.length ? `Repair these visible plate mismatches while preserving the shot intent:\n${[...new Set(unmet)].join('\n')}` : '',
-    fixes ? `Fix these visible problems from the previous still while preserving the shot intent:\n${fixes}` : ''].filter(Boolean).join('\n');
+  const { prompt, promptAdditions } = musicVideoFrameModelInput(project, scene, { repairs: unmet, fixes });
   if (!prompt) throw unprompted(scene, 'frame');
   const referenceImagePaths = conditioningReferences(project, scene)
     .map((ref) => resolveGalleryImage(ref.imageId, { mustExist: false })).filter(Boolean);
@@ -72,6 +69,7 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
   const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, route.mode);
   const common = {
     prompt,
+    ...(promptAdditions.length ? { promptAdditions } : {}),
     // The project's aspect, never the backend's per-prompt choice (a portrait
     // close-up pillarboxes in a 16:9 render).
     ...musicVideoFrameGenSize(project),

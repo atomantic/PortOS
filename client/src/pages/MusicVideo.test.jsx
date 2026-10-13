@@ -2435,20 +2435,6 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     scenes: [{ sceneId: 's1', order: 0, prompt: 'waves', framePrompt: 'harbor at dawn', referenceImageId: null, videoHistoryId: null, takes: [] }],
   };
 
-  it('carries authored character identity and source styles into actual frame requests', async () => {
-    await openProject({ ...SPEC_PROJECT, concept: { ...SPEC_PROJECT.concept,
-      universeStyle: 'Ink silhouettes', moodBoardStyle: 'Watercolor', subjects: [
-        { id: 'lead', kind: 'character', role: 'protagonist', name: 'Example singer', description: 'Silver coat' },
-      ],
-    } }, 'produce');
-    fireEvent.click(screen.getByRole('button', { name: /^Generate frame$/ }));
-    await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
-      prompt: expect.stringContaining('character (protagonist): Example singer — Silver coat'),
-    }), { silent: true }));
-    expect(generateImage.mock.calls[0][0].prompt).toContain('Mood board look (palette, lighting and texture only; never its locations, objects or poses): Watercolor');
-    expect(generateImage.mock.calls[0][0].prompt).toContain('Universe style: Ink silhouettes');
-  });
-
   it('sends flagged references as conditioning inputs and names the capability gap when the backend refuses them', async () => {
     generateImage.mockRejectedValueOnce(Object.assign(
       new Error('Reference images are only supported for FLUX.2 and Qwen Image 2.1 models on the local backend'),
@@ -2457,12 +2443,13 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     await openProject(SPEC_PROJECT, 'produce');
     fireEvent.click(screen.getByRole('button', { name: /^Generate frame$/ }));
     await waitFor(() => expect(generateImage).toHaveBeenCalledWith({
-      prompt: 'harbor at dawn, grainy 16mm, color palette #112233; camera: locked-off wides',
+      // The director's text; the server composes the look onto it (lib/musicVideoShotPrompt.js).
+      prompt: 'harbor at dawn',
       // Frames are requested at the project's aspect (16:9 by default).
       width: 1536,
       height: 864,
       referenceImageFiles: ['mood.png'],
-      musicVideo: { projectId: 'mv-spec', sceneId: 's1' },
+      musicVideo: { projectId: 'mv-spec', sceneId: 's1', compose: true },
     }, { silent: true }));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith(
       expect.stringMatching(/can't condition on 1 reference image: Reference images are only supported/),
@@ -2483,7 +2470,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Generate frame$/ }));
     await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
       referenceImageFiles: ['character.png', 'roof.png'],
-      musicVideo: { projectId: 'mv-spec', sceneId: 's1' },
+      musicVideo: { projectId: 'mv-spec', sceneId: 's1', compose: true },
     }), { silent: true }));
   });
 
@@ -2493,8 +2480,9 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     fireEvent.change(screen.getByLabelText('From', { selector: '#mv-scene-s1-start-from' }), { target: { value: 'start' } });
     fireEvent.click(screen.getByRole('button', { name: /^New frame take$/ }));
     await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
-      prompt: expect.stringContaining('Start from the first reference image'),
+      prompt: 'harbor at dawn',
       referenceImageFiles: ['start.png', 'mood.png'],
+      musicVideo: { projectId: 'mv-spec', sceneId: 's1', compose: true, fromFrame: true },
     }), { silent: true }));
   });
 
@@ -2505,9 +2493,9 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     fireEvent.change(screen.getByLabelText('What to change in the start frame'), { target: { value: 'remove the hand' } });
     fireEvent.click(screen.getByRole('button', { name: 'Render refined start frame' }));
     await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
-      prompt: expect.stringMatching(/^Edit the reference image: remove the hand\. Keep everything else/),
+      prompt: 'remove the hand',
       referenceImageFiles: ['start.png'],
-      musicVideo: { projectId: 'mv-spec', sceneId: 's1' },
+      musicVideo: { projectId: 'mv-spec', sceneId: 's1', compose: true, refine: true },
     }), { silent: true }));
     expect(screen.queryByLabelText('What to change in the start frame')).toBeNull();
   });

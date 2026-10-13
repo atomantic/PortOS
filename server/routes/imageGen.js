@@ -241,6 +241,12 @@ const generateSchema = z.object({
     // #11173: 'end' files the render as the scene's style-break end frame
     // (an `endImage` take) instead of its start frame.
     slot: z.enum(['end']).optional(),
+    // #11317: the prompt is the director's text; the server composes the still's
+    // prompt and lists each block it adds. `fromFrame` reworks the first reference
+    // image (a picked frame); `refine` makes the prompt an edit instruction for it.
+    compose: z.boolean().optional(),
+    fromFrame: z.boolean().optional(),
+    refine: z.boolean().optional(),
   }).optional(),
   // File the render into this music video's media collection even when no shot
   // keeps it (sheets, tests, alternates): musicVideoCollectionHook for the
