@@ -52,7 +52,11 @@ case "$1 \${2:-}" in
   'volume inspect') exit "\${STUB_VOLUME_RC:-0}" ;;
   'compose config')
     if [ "$3" = --images ]; then echo "$STUB_IMAGE";
-    else echo '{"services":{"db":{"volumes":[{"type":"volume","source":"db-data","target":"/var/lib/postgresql/data"}]}},"volumes":{"db-data":{"name":"fixture-configured-volume"}}}'; fi ;;
+    else
+      [ "\${STUB_CONFIG_RC:-0}" = 0 ] || exit "$STUB_CONFIG_RC"
+      if [ -n "\${STUB_CONFIG_PAYLOAD:-}" ]; then printf '%s\\n' "$STUB_CONFIG_PAYLOAD";
+      else printf '{"services":{"db":{"volumes":[{"type":"volume","source":"db-data","target":"/var/lib/postgresql/data"}]}},"volumes":{"db-data":{"name":"%s"}}}\\n' "\${STUB_CONFIG_VOLUME:-fixture-recorded-volume}"; fi
+    fi ;;
   'run --rm')
     [ "\${STUB_HELPER_RC:-0}" = 0 ] || exit "$STUB_HELPER_RC"
     # Execute the actual helper command against the fixture directory. A no-op
@@ -124,7 +128,7 @@ esac
 
   it.each([
     ['stopped container', {}, 'fixture-recorded-volume'],
-    ['absent container', { STUB_ABSENT: '1' }, 'fixture-configured-volume'],
+    ['absent container', { STUB_ABSENT: '1', STUB_CONFIG_VOLUME: 'fixture-configured-volume' }, 'fixture-configured-volume'],
   ])('repairs a verified %s using its exact volume and cached pinned image', (_, overrides, volume) => {
     const result = run(overrides);
     expect(result.status, result.stderr).toBe(0);
@@ -132,6 +136,31 @@ esac
     expect(log()).toContain(`docker run --rm --pull=never -v ${volume}:/data ${image} sh -c`);
     expect(result.stdout).toContain('Stale lock files cleaned');
     if (overrides.STUB_ABSENT) expect(log()).not.toMatch(/^docker (rm|compose stop) /m);
+  });
+
+  // Removing a container from a previous Compose project frees its fixed name;
+  // a later `compose up` would create the newly configured volume and boot an
+  // empty database. Keep the old container and its records together instead.
+  it.each([
+    ['a changed project or volume name', { STUB_CONFIG_VOLUME: 'fixture-new-project-volume' }],
+    ['failed configuration inspection', { STUB_CONFIG_RC: '23' }],
+    ['malformed configuration', { STUB_CONFIG_PAYLOAD: '{"password":"fixture-sensitive-config"' }],
+    ['an unsupported bind mount', { STUB_CONFIG_PAYLOAD: JSON.stringify({
+      services: { db: { volumes: [{ type: 'bind', source: '/fixture/database', target: '/var/lib/postgresql/data' }] } },
+    }) }],
+    ['ambiguous data mounts', { STUB_CONFIG_PAYLOAD: JSON.stringify({
+      services: { db: { volumes: Array(2).fill({ type: 'volume', source: 'db-data', target: '/var/lib/postgresql/data' }) } },
+      volumes: { 'db-data': { name: 'fixture-recorded-volume' } },
+    }) }],
+  ])('preserves the existing container and lock after %s', (_, overrides) => {
+    const result = run(overrides);
+
+    expect(result.status, result.stderr).not.toBe(0);
+    expect(existsSync(join(root, 'removed'))).toBe(false);
+    expect(existsSync(lock)).toBe(true);
+    expect(log()).not.toMatch(/^docker (compose stop|rm|run) /m);
+    expect(result.stdout).not.toContain('Stale lock files cleaned');
+    expect(result.stdout + result.stderr).not.toContain('fixture-sensitive-config');
   });
 
   it('automatically repairs once and retries startup successfully', () => {
