@@ -501,7 +501,7 @@ describe('AgentCard agent ID', () => {
 });
 
 describe('AgentCard responsive header', () => {
-  it('keeps the identity and actions rails flexible on narrow cards', () => {
+  it('reserves readable identity width and lets actions wrap on narrow cards', () => {
     const onDelete = vi.fn();
     const onResume = vi.fn();
 
@@ -514,9 +514,9 @@ describe('AgentCard responsive header', () => {
     const actions = screen.getByRole('button', { name: 'Show' }).parentElement;
     const identity = actions.previousElementSibling;
 
-    expect(identity).toHaveClass('basis-0', 'sm:basis-64');
+    expect(identity).toHaveClass('basis-64');
     expect(screen.getByText(agent.id)).toHaveClass('min-w-0');
-    expect(actions).toHaveClass('ml-0', 'sm:ml-auto');
+    expect(actions).toHaveClass('flex-wrap', 'max-w-full', 'ml-0', 'sm:ml-auto');
   });
 
   it('shows the effort used alongside the model on active and completed cards', () => {
