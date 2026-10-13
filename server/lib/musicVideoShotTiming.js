@@ -312,7 +312,7 @@ export function planPerformanceWindow({ startSec, endSec, songDurationSec, capab
  * overlaps (a cue that only touches an edge does not count). A shot over no
  * timed cue keeps its own span.
  */
-export function sungLineSpan(cues, startSec, endSec) {
+function sungLineSpan(cues, startSec, endSec) {
   let lineStart = startSec;
   let lineEnd = endSec;
   for (const cue of Array.isArray(cues) ? cues : []) {
