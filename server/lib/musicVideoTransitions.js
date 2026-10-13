@@ -16,13 +16,16 @@
  * of the frame's width or height, so a glitch reads the same at any size.
  */
 
-export const MUSIC_VIDEO_TRANSITIONS = Object.freeze(['vhs-glitch', 'channel-change', 'vhs-tracking', 'vhs-dropout']);
+import { IMAGE_EFFECT_GLITCH_STYLE, imageEffectChangeFrame, sceneImageEffect } from './musicVideoImageEffects.js';
+
+export const MUSIC_VIDEO_TRANSITIONS = Object.freeze(['vhs-glitch', 'channel-change', 'vhs-tracking', 'vhs-dropout', 'camera-flash']);
 
 export const MUSIC_VIDEO_TRANSITION_LABELS = Object.freeze({
   'vhs-glitch': 'VHS glitch',
   'channel-change': 'Channel change',
   'vhs-tracking': 'Tracking roll',
   'vhs-dropout': 'Dropout flash',
+  'camera-flash': 'Camera flash',
 });
 
 // Each style's frames, in order, and how many of them come before the cut
@@ -69,6 +72,12 @@ export const MUSIC_VIDEO_TRANSITION_STYLES = Object.freeze({
       { tears: [{ y: 0.2, h: 0.1, shift: -0.03 }], chroma: 0.006, noise: 0.3, lines: 0.3, bar: { y: 0.22, h: 0.05, alpha: 0.55 } },
       { chroma: 0.003, noise: 0.15, lines: 0.2, bar: { y: 0.02, h: 0.04, alpha: 0.4 } },
     ],
+  },
+  // A camera flash on the cut: white rises over the outgoing shot's last two
+  // frames, peaks on the cut and fades off the incoming one (a still flashing into a clip).
+  'camera-flash': {
+    lead: 2,
+    frames: [0.35, 0.8, 1, 0.75, 0.5, 0.3, 0.15].map((alpha) => ({ bar: { y: 0, h: 1, alpha } })),
   },
   'vhs-dropout': {
     lead: 1,
@@ -222,4 +231,38 @@ export function musicVideoTransitionFilter(glitches, { width, height }) {
     if (p.noise) add(`noise=alls=${Math.min(100, Math.round(p.noise * 60))}:allf=t`);
   }
   return chain.length ? chain.join(',') : null;
+}
+
+/**
+ * The glitched frames end-frame glitch effects play on their cuts, in the cut
+ * transitions' shape (`[{ frame, style, index }]`, see above)
+ * so both players paint them with the transitions' own code. `pieces` are
+ * timeline sections `{ startFrame, endFrame, effect?, effectAtSec? }`; a
+ * glitch keeps to its own section.
+ */
+export function imageEffectGlitchFrames(pieces, fps) {
+  const style = MUSIC_VIDEO_TRANSITION_STYLES[IMAGE_EFFECT_GLITCH_STYLE];
+  const out = [];
+  for (const piece of Array.isArray(pieces) ? pieces : []) {
+    if (piece?.effect?.effect !== 'end-glitch') continue;
+    const change = piece.startFrame + imageEffectChangeFrame(piece.effect, fps) - Math.round(Math.max(0, piece.effectAtSec || 0) * fps);
+    style.frames.forEach((_, index) => {
+      const frame = change - style.lead + index;
+      if (frame >= piece.startFrame && frame < piece.endFrame) out.push({ frame, style: IMAGE_EFFECT_GLITCH_STYLE, index });
+    });
+  }
+  return out;
+}
+
+/** The storyboard's end-frame glitch frames on `fps` (the animatic's counterpart of the render's pieces). */
+export function sceneImageEffectGlitchFrames(scenes, fps, { layered = false, endSec = null } = {}) {
+  const byId = new Map((Array.isArray(scenes) ? scenes : []).map((scene) => [scene?.sceneId, scene]));
+  return imageEffectGlitchFrames(sceneTransitionSections(scenes, fps, { endSec })
+    .map((section) => ({ ...section, effect: sceneImageEffect(byId.get(section.sceneId), { layered }) })), fps);
+}
+
+/** Cut-transition glitches and image-effect glitches as one list, a transition keeping a frame both reach. */
+export function mergeGlitchFrames(transitions, effects) {
+  const taken = new Set((transitions || []).map((g) => g.frame));
+  return [...(transitions || []), ...(effects || []).filter((g) => !taken.has(g.frame))].sort((a, b) => a.frame - b.frame);
 }

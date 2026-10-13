@@ -499,3 +499,27 @@ describe('image effect picker', () => {
     expect(screen.queryByLabelText('Picture')).toBeNull();
   });
 });
+
+// Uniquely catches an effect shot still showing its old clip and video controls, or an end-frame effect saving the wrong fields.
+describe('a still picture in the clip column', () => {
+  it('previews the still playing its effect instead of the old clip, and an end-frame effect asks for its end frame', () => {
+    const onSave = vi.fn();
+    function Harness() {
+      const [scene, setScene] = useState({ sceneId: 's1', startSec: 0, endSec: 3, referenceImageId: 'start.png', videoHistoryId: 'clip-1', takes: [] });
+      return <SceneCard scene={scene} index={0} layered onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
+    }
+    const { container } = render(<Harness />);
+    expect(container.querySelector('section[aria-label="Render"] video')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Picture'), { target: { value: 'flash-develop' } });
+    expect(screen.getByTestId('scene-picture-preview')).toBeTruthy();
+    expect(container.querySelector('section[aria-label="Render"] video')).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Render/ })).toBeNull();
+    fireEvent.change(screen.getByLabelText('Picture'), { target: { value: 'end-glitch' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { visualLayer: 'still', imageEffect: 'end-glitch', imageEffectSec: null });
+    expect(screen.getByText(/Needs an end frame/)).toBeTruthy();
+    const change = screen.getByLabelText('Changes at');
+    expect([...change.options].map((o) => o.textContent)).toEqual(['Middle', '0.5s', '1s', '1.5s', '2s']);
+    fireEvent.change(change, { target: { value: '1' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { imageEffectSec: 1 });
+  });
+});

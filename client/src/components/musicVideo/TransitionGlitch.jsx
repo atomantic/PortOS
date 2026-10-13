@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
-import { sceneTransitionSections, transitionFrameAt, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
+import {
+  mergeGlitchFrames, sceneImageEffectGlitchFrames, sceneTransitionSections, transitionFrameAt, transitionGlitchFrames,
+} from '../../lib/musicVideoTransitions.js';
 
 // The canvas paints at most this wide; a glitch lasts a few frames, so detail past it is never seen.
 const MAX_CANVAS_PX = 960;
@@ -95,7 +97,7 @@ function paintGlitch(canvas, figure, params, frame) {
   const base = cur.getContext('2d');
   base.fillStyle = '#000';
   base.fillRect(0, 0, width, height);
-  const still = figure?.querySelector('img');
+  const still = figure?.querySelector('img[data-shown="true"]') || figure?.querySelector('img');
   const clip = figure?.querySelector('video[data-ready="true"]:not([aria-hidden="true"])');
   const stillReady = !!still?.complete && still.naturalWidth > 0;
   const clipReady = !!clip && clip.readyState >= 2;
@@ -204,9 +206,11 @@ function paintGlitch(canvas, figure, params, frame) {
  * paints the glitch of what is on screen; every other frame it stays hidden.
  * Below the lyric layer, as the render keeps its typography clean.
  */
-export default function TransitionGlitch({ scenes, figureRef, audioRef, time, endSec = null, fps }) {
+export default function TransitionGlitch({ scenes, figureRef, audioRef, time, endSec = null, fps, layered = false }) {
   const canvasRef = useRef(null);
-  const glitches = useMemo(() => transitionGlitchFrames(sceneTransitionSections(scenes, fps, { endSec })), [scenes, fps, endSec]);
+  // A still's glitch to its end frame (an image effect) paints the same way, on the frames the render repaints.
+  const glitches = useMemo(() => mergeGlitchFrames(transitionGlitchFrames(sceneTransitionSections(scenes, fps, { endSec })),
+    sceneImageEffectGlitchFrames(scenes, fps, { layered, endSec })), [scenes, fps, endSec, layered]);
   const paint = useCallback((t) => {
     const canvas = canvasRef.current;
     if (!canvas) return;

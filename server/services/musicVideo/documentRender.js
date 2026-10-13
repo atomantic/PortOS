@@ -1,5 +1,5 @@
 import { assertMusicVideoMediaSelections, musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
-import { sceneImageEffect } from '../../lib/musicVideoImageEffects.js';
+import { isEndFrameImageEffect, sceneImageEffect } from '../../lib/musicVideoImageEffects.js';
 import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 import { filmLookRuntimeSource, isFilmLookNeutral } from '../../lib/filmLook.js';
 import { titleCardVisible } from '../../lib/musicVideoTitleCard.js';
@@ -58,6 +58,10 @@ const round3 = (n) => Math.round(n * 1000) / 1000;
 const finite = (n) => (typeof n === 'number' && Number.isFinite(n) ? n : null);
 const scriptJson = (value) => JSON.stringify(value).replace(/</g, '\\u003c');
 const safeSegment = (id) => String(id || 'scene').replace(/[^A-Za-z0-9_-]+/g, '-').slice(0, 80) || 'scene';
+const documentImageEffect = (scene) => {
+  const effect = sceneImageEffect(scene, { layered: true });
+  return effect && !isEndFrameImageEffect(effect.effect) ? effect : null;
+};
 
 /** The project's aspect ratio (brief), defaulting to 16:9 (lib/musicVideoAspect.js). */
 export const documentAspect = musicVideoAspect;
@@ -191,7 +195,8 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
         endSec: start != null && end != null && end > start ? end : null,
         shotMode: scene.shotMode === 'performance' ? 'performance' : 'cutaway',
         visualLayer: documentSceneVisualLayer(project, scene, { generated }),
-        imageEffect: sceneImageEffect(scene, { layered: true }),
+        // A document has no end-frame media yet, so a start-to-end effect plays its still.
+        imageEffect: documentImageEffect(scene),
         stillMove: typeof scene.stillMove === 'string' ? scene.stillMove : null,
         // #10589: the planned camera move the template's camera rig follows (only when planned).
         ...(typeof scene.camera?.move === 'string' ? { camera: structuredClone(scene.camera) } : {}),
