@@ -63,16 +63,9 @@ export const updateSettings = settingsStore.update;
 
 // ─── Store ─────────────────────────────────────────────────────────────────
 
-// Serialize every read→mutate→write of a journal entry so a fire-and-forget
-// Obsidian path-persist can't interleave with an appendJournal() and clobber
-// newer segments. PortOS is single-user, but dictation bursts schedule
-// overlapping async tasks (appendJournal → fire-and-forget syncToObsidian →
-// persistObsidianLocation) that all want to rewrite the same entry. This mutex
-// guarantees at most one read-modify-write runs at a time.
-//
-// Entry storage is delegated to brainStorage (type `journals`): getById reads
-// the live record, upsertWithId(date, …) persists it AND appends to the brain
-// sync log so the edit federates. We never touch journals.json directly here.
+// Coordinate local journal writes with the machine-local Obsidian sidecar.
+// Peer applies do not take this mutex: putEntry also runs its read/transform
+// inside brainStorage's per-record queue, shared with every Brain writer.
 const storeMutex = createMutex();
 
 // ── Local Obsidian-location sidecar (NOT synced) ─────────────────────────────
@@ -153,7 +146,10 @@ async function getEntry(date) {
   return { ...entry, obsidianPath: loc.obsidianPath, obsidianVaultId: loc.obsidianVaultId };
 }
 
-// Persist a fully-formed entry under its date key. The inner `id` AND the
+// Transform the fresh entry under brainStorage's per-record write lock, shared
+// with peer applies. A local-only mutex cannot protect a snapshot read before
+// this queue: an accepted peer edit could otherwise be overwritten by it.
+// Returning null leaves the entry unchanged. The inner `id` AND the
 // machine-local Obsidian fields are stripped before storage: the map key IS the
 // id (so an inner `id` would be redundant and pollute the synced record /
 // reconcile checksum), and obsidianPath/obsidianVaultId must never federate
@@ -161,10 +157,16 @@ async function getEntry(date) {
 // because this module emits its own richer bridge-shaped events (journals:upserted
 // with the segment, journals:appended, etc.) right after, and we don't want the
 // generic brainStorage `journals:upserted` to double-fire.
-async function putEntry(date, entry) {
-  // eslint-disable-next-line no-unused-vars
-  const { id: _id, obsidianPath: _op, obsidianVaultId: _ov, ...rest } = entry;
-  const saved = await brainStorage.upsertWithId('journals', date, rest, { emitEvent: false });
+async function putEntry(date, transform) {
+  const saved = await brainStorage.upsertWithId('journals', date, async (existing) => {
+    const loc = await getObsidianLocation(date);
+    const entry = await transform(existing ? { ...existing, ...loc } : null);
+    if (!entry) return null;
+    // eslint-disable-next-line no-unused-vars
+    const { id: _id, obsidianPath: _op, obsidianVaultId: _ov, ...rest } = entry;
+    return rest;
+  }, { emitEvent: false });
+  if (!saved) return null;
   // Re-attach the local location so the returned entry shape is unchanged for callers.
   const loc = await getObsidianLocation(date);
   return { ...saved, obsidianPath: loc.obsidianPath, obsidianVaultId: loc.obsidianVaultId };
@@ -287,8 +289,7 @@ function scheduleObsidianSync(entry) {
  */
 export async function setJournalContent(date, content, { ifMatchUpdatedAt } = {}) {
   if (!isIsoDate(date)) throw new Error(`invalid date: ${date}`);
-  const entry = await storeMutex(async () => {
-    const existing = await getEntry(date);
+  const entry = await storeMutex(() => putEntry(date, (existing) => {
     // Precondition: a full rewrite based on a known updatedAt must not clobber
     // a concurrent append (voice dictation is the common case — the client
     // autosave and the append share the same day key). When the on-disk entry
@@ -318,8 +319,8 @@ export async function setJournalContent(date, content, { ifMatchUpdatedAt } = {}
       // to a single 'edit' segment that represents the rewrite.
       segments: clean ? [{ text: clean, at: now(), source: 'edit' }] : [],
     };
-    return putEntry(date, next);
-  });
+    return next;
+  }));
   scheduleObsidianSync(entry);
   // Per-entry event so downstream syncers (memory bridge) can update the
   // single affected day without iterating the whole store.
@@ -345,17 +346,18 @@ export async function appendJournal(date, text, { source = 'text' } = {}) {
   const segmentSource = normalizeSource(source);
 
   const { entry, segment } = await storeMutex(async () => {
-    const existing = await getEntry(date);
-    const base = existing || newEntry(date);
-    const segmentLocal = { text: clean, at: now(), source: segmentSource };
-    const next = {
-      ...base,
-      segments: [...(Array.isArray(base.segments) ? base.segments : []), segmentLocal],
-      content: base.content
-        ? `${base.content.trimEnd()}\n\n${clean}`
-        : clean,
-    };
-    const saved = await putEntry(date, next);
+    let segmentLocal;
+    const saved = await putEntry(date, (existing) => {
+      const base = existing || newEntry(date);
+      segmentLocal = { text: clean, at: now(), source: segmentSource };
+      return {
+        ...base,
+        segments: [...(Array.isArray(base.segments) ? base.segments : []), segmentLocal],
+        content: base.content
+          ? `${base.content.trimEnd()}\n\n${clean}`
+          : clean,
+      };
+    });
     return { entry: saved, segment: segmentLocal };
   });
   scheduleObsidianSync(entry);
@@ -382,18 +384,19 @@ export async function appendJournal(date, text, { source = 'text' } = {}) {
  */
 export async function upsertAutoSection(date, body, markers) {
   if (!isIsoDate(date)) throw new Error(`invalid date: ${date}`);
-  const entry = await storeMutex(async () => {
-    const existing = await getEntry(date);
+  let changed = false;
+  const entry = await storeMutex(() => putEntry(date, (existing) => {
     const base = existing || newEntry(date);
     const nextContent = replaceMarkedSection(base.content || '', body, markers);
     // Idempotent re-run against an unchanged day: skip the write, sync-log
     // append, and Obsidian round-trip entirely.
-    if (existing && nextContent === (base.content || '')) return existing;
+    if (existing && nextContent === (base.content || '')) return null;
     // Nothing to persist: no prior entry and the draft produced no section.
     if (!existing && !nextContent.trim()) return null;
-    return putEntry(date, { ...base, content: nextContent });
-  });
-  if (!entry) return null;
+    changed = true;
+    return { ...base, content: nextContent };
+  }));
+  if (!changed) return entry;
   scheduleObsidianSync(entry);
   brainEvents.emit('journals:upserted', { entry });
   return entry;
