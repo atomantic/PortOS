@@ -779,8 +779,8 @@ export default function MusicVideo() {
   // commit, same as commitSceneTiming below. Sends only the changed sub-field;
   // the server merges it into the existing concept (applyProjectPatch), so a
   // stale local copy can't clobber a sibling sub-field. Consumed by
-  // buildScenePlanPrompt (AI Plan) and by buildFramePrompt/buildShotPrompt's
-  // style suffix, both already reading concept.
+  // buildScenePlanPrompt (AI Plan) and by the server's frame and clip composers
+  // (lib/musicVideoShotPrompt.js), both already reading concept.
   const commitConcept = (patch) => {
     replaceProject({ ...selected, concept: { ...selected.concept, ...patch } });
     updateMusicVideoProject(selected.id, { concept: patch }, { silent: true })

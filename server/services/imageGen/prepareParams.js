@@ -29,6 +29,7 @@
 
 import { randomUUID } from 'crypto';
 import { musicVideoStyleImages, musicVideoStylePrompt, musicVideoStyleReferenceCapacity } from '../../lib/musicVideoConditioning.js';
+import { musicVideoFrameModelInput } from '../../lib/musicVideoShotPrompt.js';
 import { join } from 'node:path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, ensureDir, resolveGalleryImage, copyFileGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
@@ -231,6 +232,17 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   const localModel = mode === IMAGE_GEN_MODE.LOCAL ? selectLocalImageModelFromSettings(settings, data.modelId, getImageModels(), localModelCandidates) : null;
   if (data.musicVideo?.sceneId) {
     if (!musicVideoProjectLoaded) musicVideoProject = await getMusicVideoProject(data.musicVideo.projectId).catch(() => null);
+    if (data.musicVideo.compose) {
+      // The director's text plus each labeled block PortOS adds (#11317), from the
+      // composer the server's production run uses for the same still.
+      const scene = musicVideoProject?.scenes?.find((entry) => entry.sceneId === data.musicVideo.sceneId);
+      const composed = musicVideoFrameModelInput(musicVideoProject, scene, {
+        slot: data.musicVideo.slot === 'end' ? 'end' : 'start', authored: data.prompt || '',
+        fromFrame: data.musicVideo.fromFrame === true, refine: data.musicVideo.refine === true,
+      });
+      data.prompt = composed.prompt;
+      if (composed.promptAdditions.length) data.promptAdditions = [...(data.promptAdditions || []), ...composed.promptAdditions];
+    }
     const reservedSlots = referenceUploads.length + (initUpload || data.initImageFile ? 1 : 0);
     const capacity = Math.max(0, musicVideoStyleReferenceCapacity(mode, localModel) - reservedSlots);
     const styles = musicVideoStyleImages(musicVideoProject, namedReferenceFiles, capacity);

@@ -3,7 +3,7 @@ import { shotCameraPrompt } from '../../lib/cameraMovements.js';
 import { musicVideoCreativeContext, musicVideoDirectorLook } from '../../lib/musicVideoCreativeContext.js';
 import { MOTION_CONTINUITY_CLAUSE } from '../../lib/musicVideoMotion.js';
 import { isOutsideMusicVideoReference } from '../../lib/musicVideoConditioning.js';
-import { visualDirection } from '../../lib/musicVideoShotPrompt.js';
+import { musicVideoFrameModelInput, visualDirection } from '../../lib/musicVideoShotPrompt.js';
 /**
  * Music Video external-asset handoff (#8965) — provider-neutral export/import
  * for tools PortOS does not drive, such as Midjourney.
@@ -107,7 +107,7 @@ export function authoredFramePrompt(project, prompt) {
 }
 
 /** A scene's composed reference-frame prompt (also the server-owned production run's, #9066). */
-export const sceneFramePrompt = (project, scene) => [composePrompt(scene.framePrompt, scene.prompt, project, scene.direction?.frameClause), shotActionPrompt(project, scene, { frame: true })].filter(Boolean).join('\n');
+export const sceneFramePrompt = (project, scene) => musicVideoFrameModelInput(project, scene).prompt;
 
 /**
  * A scene's composed shot (motion) prompt. A planned shot (#10589) carries its
