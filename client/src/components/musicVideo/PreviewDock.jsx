@@ -9,7 +9,7 @@ import FrameStepper, { captureMediaFrame } from './FrameStepper.jsx';
 // A rendered file (the final render or a draft excerpt). Its clock starts at
 // the clip's own start, so a seek to song time `t` lands at `t - startSec` and
 // is ignored outside it. Back and Next step through the shots inside it.
-function VideoPreview({ source, scenes, projectName, seekRequest, collapsed }) {
+function VideoPreview({ source, scenes, projectName, seekRequest, collapsed, onEditShot = null }) {
   const videoRef = useRef(null);
   const [time, setTime] = useState(0);
   const [duration, setDuration] = useState(null);
@@ -56,6 +56,7 @@ function VideoPreview({ source, scenes, projectName, seekRequest, collapsed }) {
         scenes={scenes}
         time={songTime}
         onSeek={(t) => { seekTo(t - startSec); setTime(t - startSec); }}
+        onEditShot={onEditShot ? (sceneId) => { videoRef.current?.pause?.(); onEditShot(sceneId); } : null}
         range={range}
         keys
       />
@@ -80,7 +81,7 @@ function VideoPreview({ source, scenes, projectName, seekRequest, collapsed }) {
  * nothing to play yet it says what makes something playable. `seekRequest`
  * (`{ t, n }`) is the scene-card seek.
  */
-export default function PreviewDock({ project, sources, audioUrl, seekRequest, collapsed, onToggleCollapsed, expanded = false, onToggleExpanded }) {
+export default function PreviewDock({ project, sources, audioUrl, seekRequest, collapsed, onToggleCollapsed, expanded = false, onToggleExpanded, onEditShot = null }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const requested = searchParams.get('play');
   const source = sources.find((entry) => entry.id === requested) || sources[0] || null;
@@ -146,10 +147,10 @@ export default function PreviewDock({ project, sources, audioUrl, seekRequest, c
         </p>
       )}
       {/* Folded below xl, the dock is one row: the player and its controls wait for the expand. */}
-      {source?.kind === 'document' && <div className={collapsed ? 'max-xl:hidden' : ''}><CompositionPreviewPlayer project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} shotNav /></div>}
-      {source?.kind === 'lyrics' && <div className={collapsed ? 'max-xl:hidden' : ''}><CompositionPreviewPlayer project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} lyrics shotNav /></div>}
-      {source?.kind === 'animatic' && <StoryboardAnimatic project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} />}
-      {source?.kind === 'video' && <VideoPreview key={source.id} source={source} scenes={project.scenes} projectName={project.name} seekRequest={seekRequest} collapsed={collapsed} />}
+      {source?.kind === 'document' && <div className={collapsed ? 'max-xl:hidden' : ''}><CompositionPreviewPlayer project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} shotNav onEditShot={onEditShot} /></div>}
+      {source?.kind === 'lyrics' && <div className={collapsed ? 'max-xl:hidden' : ''}><CompositionPreviewPlayer project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} lyrics shotNav onEditShot={onEditShot} /></div>}
+      {source?.kind === 'animatic' && <StoryboardAnimatic project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} onEditShot={onEditShot} />}
+      {source?.kind === 'video' && <VideoPreview key={source.id} source={source} scenes={project.scenes} projectName={project.name} seekRequest={seekRequest} collapsed={collapsed} onEditShot={onEditShot} />}
     </aside>
   );
 }

@@ -2752,6 +2752,25 @@ describe('MusicVideo stage tabs (#9243)', () => {
     await waitFor(() => expect(document.getElementById('mv-auto-edit')).toHaveFocus());
   });
 
+  // Uniquely catches Edit shot losing its route (Shots, the shot's card) or its scroll to the card.
+  it('opens the shot playing in the preview on Shots and scrolls to its card', async () => {
+    listMusicVideoProjects.mockResolvedValue([{ ...PROJECT_WITH_CLIP, scenes: [{ ...PROJECT_WITH_CLIP.scenes[0], startSec: 0 }] }]);
+    const scrolled = [];
+    const scroll = vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(function record() { scrolled.push(this.id); });
+    renderAt('/music-video/mv-1/board');
+    await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
+    const dock = screen.getByRole('complementary', { name: 'Preview' });
+    fireEvent.click(within(dock).getByRole('button', { name: 'Edit shot' }));
+    await waitFor(() => expect(screen.getByTestId('loc')).toHaveTextContent('/music-video/mv-1/produce/scene/s1'));
+    expect(selectedTab()).toHaveAccessibleName(STAGE_TABS.produce);
+    await waitFor(() => expect(scrolled).toContain('scene-s1'));
+    // Already open, the card still comes back into view.
+    scrolled.length = 0;
+    fireEvent.click(within(dock).getByRole('button', { name: 'Edit shot' }));
+    await waitFor(() => expect(scrolled).toContain('scene-s1'));
+    scroll.mockRestore();
+  });
+
   // Uniquely catches the opening title card form leaving the Look step or reappearing on Plan/Shots.
   it('edits the opening title card on the Look step only, right under the preview', async () => {
     listMusicVideoProjects.mockResolvedValue([PROJECT_WITH_CLIP]);

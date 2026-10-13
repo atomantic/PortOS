@@ -156,6 +156,18 @@ describe('StoryboardAnimatic clips', () => {
     expect(audio.currentTime).toBe(0);
   });
 
+  it('pauses the song and opens the shot playing from Edit shot', () => {
+    const stills = clipScenes.map(({ videoHistoryId, ...scene }) => scene);
+    const onEditShot = vi.fn();
+    render(<StoryboardAnimatic project={{ id: 'p', scenes: stills }} audioUrl="/song.mp3" onEditShot={onEditShot} />);
+    const audio = screen.getByLabelText('Song for the storyboard animatic');
+    audio.pause = vi.fn();
+    fireEvent.click(screen.getByRole('button', { name: 'Next shot' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit shot' }));
+    expect(audio.pause).toHaveBeenCalled();
+    expect(onEditShot).toHaveBeenCalledWith(stills[1].sceneId);
+  });
+
   it('saves the shot\'s still, then its clip once that shows', async () => {
     render(<StoryboardAnimatic project={{ id: 'p', name: 'Example Song', scenes: clipScenes }} audioUrl="/song.mp3" />);
     const clip = await screen.findByLabelText('Clip for Opening');
