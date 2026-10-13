@@ -111,6 +111,27 @@ describe('extractXPostMedia', () => {
     expect(video).toEqual({ url: 'https://video.twimg.com/high.mp4', poster: 'https://pbs.twimg.com/poster.jpg' });
   });
 
+  it('picks the sharpest mp4 when the syndication variants carry no bitrate', () => {
+    // video.variants lists the smallest mp4 first with no bitrate; mediaDetails has the bitrates.
+    const json = {
+      video: {
+        poster: 'https://pbs.twimg.com/poster.jpg',
+        variants: [
+          { type: 'application/x-mpegURL', src: 'https://video.twimg.com/pl/x.m3u8' },
+          { type: 'video/mp4', src: 'https://video.twimg.com/vid/avc1/320x568/a.mp4' },
+          { type: 'video/mp4', src: 'https://video.twimg.com/vid/avc1/720x1280/c.mp4' },
+          { type: 'video/mp4', src: 'https://video.twimg.com/vid/avc1/480x852/b.mp4' },
+        ],
+      },
+    };
+    expect(extractXPostMedia(json).video.url).toBe('https://video.twimg.com/vid/avc1/720x1280/c.mp4');
+    json.mediaDetails = [{ video_info: { variants: [
+      { content_type: 'video/mp4', url: 'https://video.twimg.com/vid/avc1/720x1280/c.mp4', bitrate: 2176000 },
+      { content_type: 'video/mp4', url: 'https://video.twimg.com/vid/avc1/1080x1920/d.mp4', bitrate: 10368000 },
+    ] } }];
+    expect(extractXPostMedia(json).video).toEqual({ url: 'https://video.twimg.com/vid/avc1/1080x1920/d.mp4', poster: 'https://pbs.twimg.com/poster.jpg' });
+  });
+
   it('returns a null video when only a non-mp4 variant is present', () => {
     const { video } = extractXPostMedia({
       video: { variants: [{ type: 'application/x-mpegURL', src: 'https://video.twimg.com/x.m3u8' }] },

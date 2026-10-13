@@ -203,12 +203,15 @@ describe('mood-board routes', () => {
       expect(bad.status).toBe(400);
     });
 
-    it('requires a count for per-item frame extraction', async () => {
+    it('takes a count or picked times for per-item frame extraction', async () => {
       svc.extractItemFrames.mockResolvedValueOnce({ added: 4 });
       const ok = await request(makeApp()).post('/api/mood-boards/mb-1/items/i1/extract-frames').send({ count: 4 });
       expect(ok.status).toBe(200);
       expect(svc.extractItemFrames).toHaveBeenCalledWith('mb-1', 'i1', { count: 4 });
       expect((await request(makeApp()).post('/api/mood-boards/mb-1/items/i1/extract-frames').send({})).status).toBe(400);
+      expect((await request(makeApp()).post('/api/mood-boards/mb-1/items/i1/extract-frames').send({ times: [1.25, 3] })).status).toBe(200);
+      expect(svc.extractItemFrames).toHaveBeenLastCalledWith('mb-1', 'i1', { times: [1.25, 3] });
+      expect((await request(makeApp()).post('/api/mood-boards/mb-1/items/i1/extract-frames').send({ count: 2, times: [1] })).status).toBe(400);
     });
 
     it('queues a note render (202) on an optional backend pin', async () => {

@@ -78,23 +78,42 @@ export function buildSyndicationUrl(statusId) {
  * both (X's own constraint), but this reads whichever is present without
  * assuming which. `video.variants` may list multiple encodings (mp4 +
  * HLS/`application/x-mpegURL`); only mp4 is downloadable via a plain fetch, so
- * the highest-bitrate mp4 variant is picked. Returns `{ images: [], video:
+ * the sharpest mp4 (by bitrate, then URL resolution) is picked. Returns `{ images: [], video:
  * null }` for a malformed/empty payload rather than throwing — the caller
  * decides that's "no media" (400), not a parse crash.
  */
+// Pixel count from a CDN path like `/vid/avc1/720x1280/…mp4`, 0 when absent.
+const variantPixels = (url) => {
+  const m = String(url).match(/\/(\d{2,5})x(\d{2,5})\//);
+  return m ? Number(m[1]) * Number(m[2]) : 0;
+};
+
+// The syndication `video.variants` list carries no bitrate (and lists the
+// smallest mp4 first); `mediaDetails[].video_info.variants` does. Rank every
+// mp4 by bitrate, then by the resolution in its URL, so the sharpest wins.
+function bestMp4(json) {
+  const candidates = [
+    ...(Array.isArray(json.video?.variants) ? json.video.variants : [])
+      .filter((v) => v?.type === 'video/mp4').map((v) => ({ url: v.src, bitrate: v.bitrate })),
+    ...(Array.isArray(json.mediaDetails) ? json.mediaDetails : [])
+      .flatMap((m) => (Array.isArray(m?.video_info?.variants) ? m.video_info.variants : []))
+      .filter((v) => v?.content_type === 'video/mp4').map((v) => ({ url: v.url, bitrate: v.bitrate })),
+  ].filter((v) => typeof v.url === 'string' && v.url);
+  if (!candidates.length) return null;
+  const rank = (v) => [Number(v.bitrate) || 0, variantPixels(v.url)];
+  return candidates.reduce((a, b) => {
+    const [ra, rb] = [rank(a), rank(b)];
+    return rb[0] > ra[0] || (rb[0] === ra[0] && rb[1] > ra[1]) ? b : a;
+  }).url;
+}
+
 export function extractXPostMedia(json) {
   if (!json || typeof json !== 'object') return { images: [], video: null };
   const images = Array.isArray(json.photos)
     ? json.photos.map((p) => p?.url).filter((u) => typeof u === 'string' && u)
     : [];
-  let video = null;
-  const variants = json.video?.variants;
-  if (Array.isArray(variants)) {
-    const mp4Variants = variants.filter((v) => v?.type === 'video/mp4' && typeof v.src === 'string' && v.src);
-    if (mp4Variants.length) {
-      const best = mp4Variants.reduce((a, b) => ((b.bitrate || 0) > (a.bitrate || 0) ? b : a));
-      video = { url: best.src, poster: typeof json.video.poster === 'string' ? json.video.poster : null };
-    }
-  }
-  return { images, video };
+  const url = bestMp4(json);
+  const poster = typeof json.video?.poster === 'string' ? json.video.poster
+    : (Array.isArray(json.mediaDetails) ? json.mediaDetails.find((m) => m?.video_info)?.media_url_https : null) || null;
+  return { images, video: url ? { url, poster } : null };
 }
