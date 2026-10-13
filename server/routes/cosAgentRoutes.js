@@ -9,9 +9,16 @@ import * as cos from '../services/cos.js';
 import * as agentOrchestrator from '../services/agentOrchestrator.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { toAgentListItems } from '../lib/cosAgentListProjection.js';
+import { securityScanRequestSchema } from '../lib/securityScanEvidence.js';
 import { validateRequest, resumeCosAgentSchema, relaunchCosAgentSchema, cosAgentFeedbackBodySchema, cosAgentBtwBodySchema } from '../lib/validation.js';
 
 const router = Router();
+
+router.post('/agents/:id/security-scan', asyncHandler(async (req, res) => {
+  const input = validateRequest(securityScanRequestSchema, req.body ?? {});
+  const { runAgentSecurityScan } = await import('../services/agentSecurityScan.js');
+  res.json(await runAgentSecurityScan(req.params.id, input));
+}));
 
 const mergeAdmissionSchema = z.object({
   agentId: z.string().min(1).max(200),

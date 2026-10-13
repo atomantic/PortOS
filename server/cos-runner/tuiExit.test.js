@@ -90,4 +90,11 @@ describe('runner TUI exit handoff', () => {
     await failed.onExit({ exitCode: 1, signal: 0 });
     expect(failed.persistCompletion.mock.calls[0][1]).toBe('Usage limit reached');
   });
+  it('publishes transport completion even when scanner evidence settlement fails', async () => {
+    const run = setup({ stopSecurityScan: vi.fn().mockRejectedValue(new Error('synthetic disk outage')) });
+    await run.onExit({ exitCode: 143, signal: 15 });
+    expect(run.io.emit).toHaveBeenCalledWith('tui:exit', expect.objectContaining({ exitCode: 143 }));
+    expect(run.emitToServer).toHaveBeenCalledWith('agent:completed', expect.objectContaining({ success: false }));
+  });
+
 });

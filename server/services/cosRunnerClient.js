@@ -157,6 +157,7 @@ export function initCosRunnerConnection() {
   socket.on('agent:output', (data) => dispatch('agent:output', data));
   socket.on('agent:completed', (data) => dispatch('agent:completed', data));
   socket.on('agent:error', (data) => dispatch('agent:error', data));
+  socket.on('agent:security-scan', (data) => dispatch('agent:security-scan', data));
   socket.on('agent:btw', (data) => dispatch('agent:btw', data));
   socket.on('tui:output', (data) => dispatchTuiEvent('tui:output', data));
   socket.on('tui:exit', (data) => dispatchTuiEvent('tui:exit', data));
@@ -413,6 +414,7 @@ export async function spawnAgentViaRunner(options) {
     model,
     envVars,
     providerAuth,
+    securityScanGrant,
     // New: CLI-agnostic parameters
     cliCommand,
     cliArgs,
@@ -428,6 +430,7 @@ export async function spawnAgentViaRunner(options) {
     model,
     envVars,
     providerAuth,
+    securityScanGrant,
     cliCommand,
     cliArgs,
     claudePath
@@ -447,6 +450,17 @@ export async function spawnAgentViaRunner(options) {
   }
 
   return readRunnerJson(response);
+}
+
+export async function requestSecurityScanViaRunner(agentId, { input, stop = false } = {}) {
+  const path = `/agents/${encodeURIComponent(agentId)}/security-scan${stop ? '/stop' : ''}`;
+  const response = await fetchWithTimeout(`${COS_RUNNER_URL}${path}`, {
+    method: input || stop ? 'POST' : 'GET',
+    ...(input ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) } : {}),
+  }, input ? 190000 : 15000);
+  const result = await readRunnerJson(response);
+  if (!response.ok) throw Object.assign(new Error(result.error || 'Scanner runner unavailable'), { status: response.status });
+  return result;
 }
 
 /**

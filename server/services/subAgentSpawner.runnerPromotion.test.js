@@ -35,6 +35,7 @@ vi.mock('./cosEvents.js', () => ({
 vi.mock('./providerStatus.js', () => ({ initProviderStatus: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('./agentRunnerSync.js', () => ({ syncRunnerAgents: vi.fn().mockResolvedValue(0) }));
 vi.mock('./cosAgentLifecycle.js', () => ({ updateAgent: vi.fn() }));
+vi.mock('./agentSecurityScan.js', () => ({ persistAgentSecurityScan: vi.fn() }));
 vi.mock('./agentRunnerOutputBatchers.js', () => ({
   getRunnerOutputBatcher: vi.fn(),
   flushRunnerOutputBatcher: vi.fn().mockResolvedValue(undefined),
@@ -60,6 +61,7 @@ import { initSpawner } from './subAgentSpawner.js';
 import { initCosRunnerConnection } from './cosRunnerClient.js';
 import { syncRunnerAgents } from './agentRunnerSync.js';
 import { cosEvents, emitLog } from './cosEvents.js';
+import { persistAgentSecurityScan } from './agentSecurityScan.js';
 import * as agentState from './agentState.js';
 
 // Read through the module namespace: `useRunner` is reassigned by `setUseRunner`,
@@ -107,6 +109,25 @@ describe('subAgentSpawner — runner promotion (#4134)', () => {
     }
   });
 
+  it('owns refusal finalization even when saving the same receipt also fails', async () => {
+    const refusalError = new Error('synthetic refusal finalization outage');
+    const refuseScanner = vi.fn().mockRejectedValue(refusalError);
+    agentState.activeAgents.set('agent-scanner-example', { refuseScanner });
+    vi.mocked(persistAgentSecurityScan).mockRejectedValueOnce(new Error('synthetic receipt outage'));
+    try {
+      await expect(runnerHandlers.get('agent:security-scan')({ agentId: 'agent-scanner-example', evidence: {
+        version: 1, source: 'runner', sequence: 2, status: 'refused', model: 'example-model', effort: 'medium', auth: 'chatgpt',
+        maxCostUsd: 2, estimatedCostUsd: null, timeLimitSeconds: 180, exitCode: null,
+        artifacts: { findings: null, coverage: null }, cleanup: 'confirmed'
+      } })).rejects.toBe(refusalError);
+      await new Promise(resolve => setImmediate(resolve));
+      expect(refuseScanner).toHaveBeenCalledOnce();
+      expect(persistAgentSecurityScan).toHaveBeenCalledOnce();
+    } finally {
+      agentState.activeAgents.delete('agent-scanner-example');
+    }
+  });
+
   it('promotes to runner mode when the runner comes up after the server', () => {
     expect(currentMode()).toBe(false);
 
@@ -125,21 +146,22 @@ describe('subAgentSpawner — runner promotion (#4134)', () => {
     expect(promotions[0][0]).toBe('info');
   });
 
-  it('reconciles agents a runner that was already up owns, on promotion', () => {
+  it('reconciles agents a runner that was already up owns, on promotion', async () => {
     runnerHandlers.get('connection:ready')();
 
     // Adopts only agents this process does not already own, so an agent spawned
     // DIRECTLY before the promotion keeps completing through its own close
     // handler (`isAgentOwnedLocally`, covered in agentRunnerSync.test.js).
-    expect(syncRunnerAgents).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(syncRunnerAgents).toHaveBeenCalledTimes(1));
   });
 
-  it('promotes once — a later reconnect in runner mode does not re-reconcile', () => {
+  it('refreshes runner receipts on each reconnect without promoting twice', async () => {
     runnerHandlers.get('connection:ready')();
     runnerHandlers.get('connection:ready')();
     runnerHandlers.get('connection:ready')();
 
-    expect(syncRunnerAgents).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(syncRunnerAgents).toHaveBeenCalledTimes(3));
+    expect(vi.mocked(emitLog).mock.calls.filter(([, message]) => /promoting/.test(message))).toHaveLength(1);
   });
 
   it('survives a reconciliation failure without leaving the process unpromoted', async () => {

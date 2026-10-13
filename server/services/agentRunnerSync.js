@@ -67,6 +67,10 @@ export async function syncRunnerAgents() {
 
   let syncedCount = 0;
   for (const agent of agents) {
+    if (agent.securityScan) {
+      const { persistAgentSecurityScan } = await import('./agentSecurityScan.js');
+      await persistAgentSecurityScan(agent.id, agent.securityScan);
+    }
     // A stale runner handle (listed, process gone) is not a survivor to
     // re-adopt — adopting it would put it in runnerAgents and the orphan
     // sweep would treat that local map as ownership. Live rows still sync.

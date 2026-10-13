@@ -32,7 +32,7 @@ import toast from '../../ui/Toast';
 import { copyToClipboard } from '../../../lib/clipboard';
 import { estimateCosDuration } from '../../../lib/cosDurationEstimate';
 import { isAgentFeedbackUpdateTarget, isSystemAgent as isSystemAgentRecord } from '../../../lib/cosAgentFeedback';
-import AgentResultLine from '../AgentResultLine';
+import AgentResultLine, { SecurityScanEvidence } from '../AgentResultLine';
 import AuditSourceEvidence from '../AuditSourceEvidence';
 import { DEFAULT_REVIEWER, normalizeReviewers } from '../constants';
 import { formatBytes, formatCount, formatDurationMs, formatDateTime, formatTimeOfDay, shortClaudeModelName } from '../../../utils/formatters';
@@ -1126,6 +1126,8 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
         />
 
         <AuditSourceEvidence evidence={agent.metadata?.auditSourceEvidence} />
+
+        {!agent.result && <SecurityScanEvidence scanner={agent.metadata?.securityScan} control={agent.metadata?.securityScanControl} />}
 
         {agent.result && (
           <div className="flex items-center gap-4 flex-wrap">

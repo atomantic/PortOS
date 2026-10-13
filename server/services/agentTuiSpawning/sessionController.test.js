@@ -284,6 +284,19 @@ describe('Codex terminal model-access rejection (#9319)', () => {
     return subject;
   };
 
+  it('stops all recovery when a trusted scanner refusal arrives before the outer TUI exits', async () => {
+    const { controller, ...seams } = await submitted();
+    seams.write.mockClear();
+    seams.paste.mockClear();
+    await controller.refuseScanner();
+    await vi.advanceTimersByTimeAsync(STALL_NUDGE_IDLE_MS + 10000);
+    expect(seams.write).not.toHaveBeenCalled();
+    expect(seams.paste).not.toHaveBeenCalled();
+    expect(seams.finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({ success: false,
+      executionInterruption: { category: 'content-refusal', source: 'security-scanner' },
+      errorAnalysis: expect.objectContaining({ requiresFallback: false }) }));
+  });
+
   it('latches a policy refusal while persistence is pending, outranking a concurrent success without nudges', async () => {
     const { controller, updateAgent, paste, write, finalizeAgent, kill } = await submitted();
     let rejectWrite;

@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { parseSecurityScanEvidence } from './securityScanEvidence.js';
+import { parseSecurityScanEvidence, securityScanGrantFromArgs } from './securityScanEvidence.js';
 
 const report = {
   version: 1, status: 'time-limit', model: 'example-model', effort: 'low', auth: 'chatgpt',
@@ -19,4 +19,10 @@ it('rejects fabricated completion, ambiguous reports and fields that could discl
   expect(parse({ ...report, model: '/private/model' })).toBeNull();
   expect(parseSecurityScanEvidence('Completed successfully')).toBeNull();
   expect(parseSecurityScanEvidence(`SCANNER_STATUS_JSON: ${JSON.stringify(report)}\nSCANNER_STATUS_JSON: ${JSON.stringify(report)}`)).toBeNull();
+});
+
+it('derives scanner pins from effective argv and refuses conflicting or implicit defaults', () => {
+  expect(securityScanGrantFromArgs(['--model', 'saved-model', '-c', 'model_reasoning_effort="high"'])).toMatchObject({ model: 'saved-model', effort: 'high' });
+  expect(securityScanGrantFromArgs(['--model=selected-model', '--config=model="another-model"', '-cmodel_reasoning_effort=low'])).toMatchObject({ model: null, effort: 'low' });
+  expect(securityScanGrantFromArgs([])).toMatchObject({ model: null, effort: null });
 });

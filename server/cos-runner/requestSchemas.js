@@ -15,6 +15,7 @@
  */
 
 import { z } from 'zod';
+import { securityScanGrantSchema } from '../lib/securityScanEvidence.js';
 
 const optionalString = z.string().nullish();
 // Free-form maps composed server-side (provider env, auth descriptor); the
@@ -23,6 +24,7 @@ const optionalString = z.string().nullish();
 const looseRecord = z.record(z.string(), z.unknown()).nullish();
 
 export const spawnTuiBodySchema = z.object({
+  securityScanGrant: securityScanGrantSchema.nullish(),
   agentId: optionalString,
   maintenanceParentId: z.string().uuid().nullish(),
   taskId: optionalString,
@@ -38,6 +40,7 @@ export const spawnTuiBodySchema = z.object({
 });
 
 export const spawnBodySchema = z.object({
+  securityScanGrant: securityScanGrantSchema.nullish(),
   agentId: optionalString,
   maintenanceParentId: z.string().uuid().nullish(),
   taskId: optionalString,
