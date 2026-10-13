@@ -602,7 +602,9 @@ export function replaceScenes(project, sceneInputs) {
       ...(prior.frameFit ? { frameFit: prior.frameFit } : {}),
       ...(prior.transitionIn ? { transitionIn: prior.transitionIn } : {}),
       ...(prior.transitionOut ? { transitionOut: prior.transitionOut } : {}),
-      ...(prior.imageEffect ? { imageEffect: prior.imageEffect, ...(prior.imageEffectSec ? { imageEffectSec: prior.imageEffectSec } : {}) } : {}),
+      // A still playing an image effect stays one: the effect is the shot's picture.
+      ...(prior.imageEffect && prior.visualLayer === 'still' ? { visualLayer: 'still', imageEffect: prior.imageEffect,
+        ...(prior.imageEffectSec ? { imageEffectSec: prior.imageEffectSec } : {}) } : {}),
       takes: prior.takes || [],
       ...(prior.direction ? { direction: prior.direction } : {}),
     };

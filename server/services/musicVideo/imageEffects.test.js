@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { findFfmpeg } from '../../lib/ffmpeg.js';
 import { imageEffectState, sceneImageEffect } from '../../lib/musicVideoImageEffects.js';
 import { buildMusicVideoFfmpegArgs } from './render.js';
-import { applySceneUpdate } from './projectsLogic.js';
+import { applySceneUpdate, replaceScenes } from './projectsLogic.js';
 
 const ffmpeg = await findFfmpeg();
 const dir = mkdtempSync(join(tmpdir(), 'portos-mv-image-effects-'));
@@ -98,5 +98,11 @@ describe('a shot\'s image effect on the board', () => {
     expect(applySceneUpdate(set, 's1', { imageEffect: null }).project.scenes[0].imageEffect).toBeNull();
     expect(() => applySceneUpdate(project, 's1', { imageEffect: 'sparkle' })).toThrow();
     expect(() => applySceneUpdate(project, 's1', { imageEffectSec: 120 })).toThrow();
+  });
+
+  it('keeps a shot\'s image effect, and the still it plays on, through a re-plan of the same span', () => {
+    const { project: set } = applySceneUpdate(project, 's1', { visualLayer: 'still', imageEffect: 'flash-develop', imageEffectSec: 4 });
+    const { scenes } = replaceScenes(set, [{ startSec: 0, endSec: 4, prompt: 'Re-planned' }]);
+    expect(scenes[0]).toMatchObject({ sceneId: 's1', visualLayer: 'still', imageEffect: 'flash-develop', imageEffectSec: 4 });
   });
 });

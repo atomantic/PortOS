@@ -44,8 +44,8 @@ export default function SceneImageEffect({ fieldId, scene, onChange, disabled = 
         {effect && (
           <span className="flex min-w-0 items-center gap-1">
             <label htmlFor={fieldId('develop')} className="text-port-text-muted">Develops in</label>
-            <select id={fieldId('develop')} value={developSec} onChange={(e) => pickSec(Number(e.target.value))}
-              className="min-w-0 bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] sm:min-h-0">
+            <select id={fieldId('develop')} value={developSec} disabled={disabled} title={disabledReason || undefined} onChange={(e) => pickSec(Number(e.target.value))}
+              className="min-w-0 bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] sm:min-h-0 disabled:opacity-50">
               {IMAGE_EFFECT_DEVELOP_SECS.map((sec) => <option key={sec} value={sec}>{sec}s</option>)}
             </select>
           </span>
