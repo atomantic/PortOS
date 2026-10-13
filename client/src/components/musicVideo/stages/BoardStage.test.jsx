@@ -35,6 +35,8 @@ describe('BoardStage scene filter', () => {
   it('writes the filter to the URL and removes it for All', () => {
     renderBoard(board(scenes));
     expect(screen.getByText('Shot 1 · Part 1')).toBeTruthy();
+    // Each card reads its run time beside where it sits in the song.
+    expect(screen.getAllByText('3.00s ·')[0].parentElement.textContent).toBe('3.00s · 0:00.00–0:03.00');
     fireEvent.click(screen.getByRole('button', { name: 'Needs attention (1)' }));
     expect(screen.getByTestId('search').textContent).toBe('?scenes=attention');
     expect(screen.queryByText('Shot 1 · Part 1')).toBeNull();
