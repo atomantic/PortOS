@@ -10,6 +10,7 @@
 
 import { Sparkles, CheckCircle2, Download, Trash2, X, Film } from 'lucide-react';
 import Modal from '../ui/Modal';
+import SentPromptPanel from '../media/SentPromptPanel';
 import { formatTimecode, timeAgo } from '../../utils/formatters';
 import { trackAudioUrl } from '../../services/api';
 import { renderSourceLabel } from '../../lib/trackProvenance';
@@ -72,6 +73,8 @@ export default function TrackRenderModal({ render, active = false, onClose, onSe
             <p className="text-xs text-gray-300 whitespace-pre-wrap break-words bg-port-bg border border-port-border rounded p-2.5">{prompt}</p>
           </div>
         ) : null}
+
+        <SentPromptPanel prompt={render.authoredPrompt || prompt} sentPrompt={render.sentPrompt} additions={render.promptAdditions || []} />
 
         {lyrics ? (
           <div>

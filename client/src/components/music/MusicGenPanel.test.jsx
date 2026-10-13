@@ -24,6 +24,7 @@ vi.mock('../../services/api', () => ({
   listMusicEngines: vi.fn(),
   getInstances: vi.fn(),
   generateMusic: vi.fn(),
+  previewMusicPrompt: vi.fn(),
   getActiveProcessing: vi.fn(),
   getMediaJob: vi.fn(),
   getTrack: vi.fn(),
@@ -87,8 +88,28 @@ const minimax = (overrides) => engine({
 describe('MusicGenPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    api.previewMusicPrompt.mockResolvedValue({});
     api.getActiveProcessing.mockResolvedValue({ jobs: [] });
     api.getInstances.mockResolvedValue({ peers: [] });
+  });
+
+  it('shows the server instrumental addition while submitting the authored caption unchanged', async () => {
+    const prompt = '  **warm** folk\n';
+    api.listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
+    api.previewMusicPrompt.mockImplementation(async (body) => body.instrumentalOnly ? {
+      sentPrompt: `${body.prompt}\n\nNo vocals.`,
+      promptAdditions: [{ id: 'instrumental-only', label: 'Instrumental only', text: 'No vocals.' }],
+    } : { sentPrompt: body.prompt });
+    api.generateMusic.mockResolvedValue({ track: { id: 'track-1' } });
+    render(<MusicGenPanel track={{ id: 'track-1' }} prompt={prompt} />);
+    fireEvent.click(await screen.findByRole('checkbox', { name: /instrumental only/i }));
+    fireEvent.click(await screen.findByRole('button', { name: '+ Instrumental only' }));
+    expect(screen.getByText('No vocals.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Show full prompt' }));
+    expect(screen.getByRole('button', { name: 'Copy full prompt' })).toBeInTheDocument();
+    expect(api.previewMusicPrompt).toHaveBeenCalledWith({ prompt, instrumentalOnly: true }, { silent: true });
+    fireEvent.click(screen.getByRole('button', { name: /^generate$/i }));
+    await waitFor(() => expect(api.generateMusic).toHaveBeenCalledWith(expect.objectContaining({ prompt, instrumentalOnly: true }), { silent: true }));
   });
 
   // `clearAllMocks` resets calls but leaves a spy installed. A test that pins

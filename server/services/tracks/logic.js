@@ -56,6 +56,7 @@ import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import { sanitizeChiptuneScore } from '../../lib/chiptuneScore.js';
 import { normalizeWaveSketch } from '../../lib/waveSketch.js';
 import { isStr, trimTo } from '../../lib/textUtils.js';
+import { promptAdditionsSchema } from '../../lib/modelInput.js';
 import { TITLE_MAX, ALBUM_ID_MAX, ARTIST_ID_MAX, ARTIST_NAME_MAX, CONCEPT_MAX, LYRICS_MAX, PROMPT_MAX, ENGINE_MAX, MODEL_ID_MAX, EXECUTION_PROFILE_MAX, AUDIO_FILENAME_MAX, RENDER_ID_MAX, RENDER_SOURCE_MAX, RENDERS_MAX } from '../../lib/trackLimits.js';
 export { TITLE_MAX, ALBUM_ID_MAX, ARTIST_ID_MAX, ARTIST_NAME_MAX, CONCEPT_MAX, LYRICS_MAX, PROMPT_MAX, ENGINE_MAX, MODEL_ID_MAX, EXECUTION_PROFILE_MAX, AUDIO_FILENAME_MAX, RENDER_ID_MAX, RENDER_SOURCE_MAX, RENDERS_MAX };
 
@@ -137,6 +138,12 @@ export function sanitizeRender(raw) {
   if (!audioFilename) return null;
   const id = isStr(raw.id) && RENDER_ID_RE.test(raw.id) ? raw.id : legacyRenderId(audioFilename);
   const codeProvenance = sanitizeCodeProvenance(raw.codeProvenance);
+  const additions = promptAdditionsSchema.safeParse(raw.promptAdditions);
+  // Optional provenance on new local audio takes. Keep the exact caption,
+  // including whitespace and the directive beyond the authored 8,000-char cap.
+  const sent = typeof raw.sentPrompt === 'string' && raw.sentPrompt.length <= 20000
+    ? { sentPrompt: raw.sentPrompt, ...(additions.success && additions.data ? { promptAdditions: additions.data } : {}) }
+    : {};
   return {
     id,
     audioFilename,
@@ -153,6 +160,7 @@ export function sanitizeRender(raw) {
     durationSec: sanitizeDuration(raw.durationSec),
     createdAt: isStr(raw.createdAt) && raw.createdAt ? raw.createdAt : new Date().toISOString(),
     ...(codeProvenance ? { codeProvenance } : {}),
+    ...sent,
   };
 }
 
@@ -364,7 +372,17 @@ export function mergeTrackRecord(local, remoteRaw) {
     // Same for the drawn wave sketch (#8376): a ≤v6 peer's payload lacks the keys.
     if (!('waveSketch' in remoteRaw) && local.waveSketch) carry.waveSketch = local.waveSketch;
     if (!('waveSketchPrompt' in remoteRaw) && local.waveSketchPrompt) carry.waveSketchPrompt = local.waveSketchPrompt;
-    if (Object.keys(carry).length) next = { ...remote, ...carry };
+    // A sender-behind peer may edit the track while omitting caption
+    // provenance from its existing takes. Carry only matching take ids; never
+    // resurrect a take that the incoming record deliberately deleted.
+    const localTakes = new Map((local.renders || []).map((take) => [take.id, take]));
+    carry.renders = remote.renders.map((take) => {
+      const previous = localTakes.get(take.id);
+      return !('sentPrompt' in take) && typeof previous?.sentPrompt === 'string'
+        ? { ...take, sentPrompt: previous.sentPrompt, ...(previous.promptAdditions ? { promptAdditions: previous.promptAdditions } : {}) }
+        : take;
+    });
+    next = { ...remote, ...carry };
   }
   const changed = JSON.stringify(next) !== JSON.stringify(local);
   return { next, inserted: false, remoteWins, changed };

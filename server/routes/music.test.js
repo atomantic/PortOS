@@ -673,6 +673,35 @@ describe('music routes', () => {
     expect(models.remove).toHaveBeenCalledWith({ engine: 'musicgen', id: 'facebook/musicgen-large' });
   });
 
+  it('previews the instrumental caption without queueing and records exactly that caption on submit', async () => {
+    const prompt = '  **warm** `analog` folk\n';
+    const body = { prompt, instrumentalOnly: true };
+    const preview = await request(app).post('/api/music/prompt-preview').send(body);
+    expect(preview.status).toBe(200);
+    expect(mediaQueue.enqueue).not.toHaveBeenCalled();
+    expect(preview.body).toEqual({
+      sentPrompt: `${prompt}\n\nInstrumental only. Do not include sung, spoken, chanted, choir, or background vocals. Carry the lead melody with the described instruments or textures.`,
+      promptAdditions: [{
+        id: 'instrumental-only', label: 'Instrumental only',
+        text: 'Instrumental only. Do not include sung, spoken, chanted, choir, or background vocals. Carry the lead melody with the described instruments or textures.',
+      }],
+    });
+    const submitted = await request(app).post('/api/music/generate').send(body);
+    expect(submitted.status).toBe(202);
+    const params = mediaQueue.enqueue.mock.calls[0][0].params;
+    expect(params.prompt).toBe(preview.body.sentPrompt);
+    expect(params.musicStudio).toMatchObject({ authoredPrompt: prompt, ...preview.body });
+    const { buildSidecarArgs } = await vi.importActual('../services/pipeline/musicGen.js');
+    const { args } = buildSidecarArgs({ engineId: 'musicgen', prompt: params.prompt });
+    expect(args[args.indexOf('--text') + 1]).toBe(preview.body.sentPrompt);
+  });
+
+  it('refuses over-limit caption previews instead of returning a shortened caption', async () => {
+    const preview = await request(app).post('/api/music/prompt-preview').send({ prompt: 'x'.repeat(8001) });
+    expect(preview.status).toBe(400);
+    expect(mediaQueue.enqueue).not.toHaveBeenCalled();
+  });
+
   it('POST /generate queues a new track render', async () => {
     const r = await request(app).post('/api/music/generate').send({
       prompt: 'warm folk', lyrics: '[verse] hi', engine: 'acestep', title: 'My Song',

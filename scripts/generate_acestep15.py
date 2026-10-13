@@ -51,8 +51,8 @@ def main():
     parser.add_argument("--runtime-dir", default="")
     args = parser.parse_args()
 
-    text = args.text.strip()
-    if not text:
+    text = args.text
+    if not text.strip():
         print("ERROR: --text is required", file=sys.stderr, flush=True)
         return 2
     if args.model != MODEL_ID:

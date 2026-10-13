@@ -54,7 +54,7 @@ import { createInstallLogger } from '../lib/installLogger.js';
 import { inspectModelCache } from '../lib/hfCache.js';
 import { getCudaCapability } from '../lib/cudaCapability.js';
 import { federatedMediaAudioProfileSchema } from '../lib/federatedMediaWire.js';
-import { queueMusicGeneration } from '../services/musicGeneration.js';
+import { composeMusicPrompt, queueMusicGeneration } from '../services/musicGeneration.js';
 
 const router = Router();
 
@@ -391,8 +391,10 @@ router.post('/code', asyncHandler(async (req, res) => {
   res.json(await writeMusicCode(body));
 }));
 
+const captionField = z.string().max(8000).refine((value) => value.trim().length > 0, 'prompt is required');
+
 const generateSchema = z.object({
-  prompt: z.string().trim().min(1, 'prompt is required').max(8000),
+  prompt: captionField,
   // No default: distinguish ABSENT (don't touch the track's lyrics) from a
   // present '' (the user cleared them and generated without — persist the clear).
   lyrics: z.string().trim().max(20000).optional(),
@@ -443,6 +445,15 @@ const generateSchema = z.object({
   // build accepts them on the wire — neither of which this schema can see.
   // The check moved into the handler, below the capability resolve.
 });
+
+// Local caption preview: pure composition, no queue, peer probe or provider work.
+router.post('/prompt-preview', asyncHandler(async (req, res) => {
+  const body = validateRequest(z.object({
+    prompt: captionField,
+    instrumentalOnly: z.boolean().optional().default(false),
+  }), req.body ?? {});
+  res.json(composeMusicPrompt(body));
+}));
 
 router.post('/generate', asyncHandler(async (req, res) => {
   const body = validateRequest(generateSchema, req.body ?? {});

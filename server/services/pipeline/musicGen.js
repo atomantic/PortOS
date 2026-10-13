@@ -57,7 +57,6 @@ import {
 import { getCudaCapability } from '../../lib/cudaCapability.js';
 import { inspectModelCache } from '../../lib/hfCache.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { stripMarkdownEmphasis } from '../../lib/markdownText.js';
 import { recommendMinimaxDurationSec } from '../../lib/musicDuration.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
@@ -623,11 +622,8 @@ export function buildSidecarArgs({ engineId = DEFAULT_ENGINE_ID, pythonPath, scr
     scriptPath ?? engine.scriptPath,
     '--model', repo,
     ...(engine.supportsModelRevision && revision ? ['--revision', revision] : []),
-    // Prompts are authored in a plain textarea that many users type markdown
-    // into out of habit. Every backend's text encoder tokenizes `**` and `_`
-    // as literal content, so the emphasis markers become conditioning noise —
-    // strip them and keep the words.
-    '--text', stripMarkdownEmphasis(prompt).trim(),
+    // Preserve the caption shown in the server's prompt preview.
+    '--text', prompt,
     '--duration', String(seconds),
     '--output', outputPath,
     '--runtime-dir', runtimeDir ?? engine.runtimeDir,
@@ -684,8 +680,8 @@ export async function generateMusic(options = {}) {
 }
 
 async function generateMusicAdmitted({ prompt, lyrics, engine: engineId = DEFAULT_ENGINE_ID, durationSec, durationMode, modelId, repo, provenance, signal, onActivity }) {
-  const text = (prompt || '').trim();
-  if (!text) {
+  const text = prompt || '';
+  if (!text.trim()) {
     throw new ServerError('prompt is required', { status: 400, code: 'PIPELINE_MUSIC_EMPTY_PROMPT' });
   }
   const engine = getEngine(engineId);

@@ -32,6 +32,7 @@ const hook = createMediaJobImageHook({
       executionProfile: typeof job.result?.executionProfile === 'string' ? job.result.executionProfile : null,
       prompt: remotePrompt || job.params.prompt,
       authoredPrompt,
+      ...(typeof tag.sentPrompt === 'string' ? { sentPrompt: tag.sentPrompt, promptAdditions: tag.promptAdditions } : {}),
       lyrics: remotePrompt ? '' : job.params.lyrics,
       authoredLyrics,
       lyricsEnabled: tag.lyricsEnabled === true,
@@ -43,7 +44,7 @@ const hook = createMediaJobImageHook({
       albumId: tag.albumId,
     };
   },
-  attach: async ({ job, trackId, filename, durationSec, engine, modelId, executionProfile, prompt, authoredPrompt, lyrics, authoredLyrics, lyricsEnabled, lyricsProvided, instrumentalOnly, title, artistId, artist, albumId }) => {
+  attach: async ({ job, trackId, filename, durationSec, engine, modelId, executionProfile, prompt, authoredPrompt, sentPrompt, promptAdditions, lyrics, authoredLyrics, lyricsEnabled, lyricsProvided, instrumentalOnly, title, artistId, artist, albumId }) => {
     const current = trackId ? await tracks.getTrack(trackId) : null;
     // A deleted target is a successful render but no longer an attach target.
     if (trackId && !current) return null;
@@ -51,6 +52,8 @@ const hook = createMediaJobImageHook({
       audioFilename: filename,
       prompt,
       authoredPrompt,
+      sentPrompt,
+      promptAdditions,
       lyrics: lyricsEnabled ? lyrics : '',
       instrumentalOnly,
       engine,
