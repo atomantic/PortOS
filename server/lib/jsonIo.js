@@ -572,6 +572,9 @@ export async function writeJSONLines(filePath, values) {
  * `load → fn → persist` cycle under the same tail, so a `load` always sees the
  * previous cycle's committed result and one writer can't clobber the other
  * (AGENTS.md: "serialize writes server-side… a single tail per shared file").
+ * `mutate` edits a private clone and publishes it to the cache only after the
+ * atomic write succeeds. A rejected callback or write leaves committed reads
+ * intact and cannot leak rejected changes into the next queued mutation.
  * A bare `load()` + `save()` pair does NOT get that guarantee; reach for
  * `mutate()` whenever the new value depends on the current one.
  */
@@ -615,7 +618,7 @@ export function createCachedStore(filePath, defaultValue, { ttl = 2000, context 
   // `fn`, then persist. `fn` may mutate the loaded object in place and/or return
   // the value to write (returning `undefined` persists the mutated input).
   const mutate = (fn) => queueWrite(async () => {
-    const data = await load();
+    const data = structuredClone(await load());
     const result = await fn(data);
     return persist(result === undefined ? data : result);
   });
