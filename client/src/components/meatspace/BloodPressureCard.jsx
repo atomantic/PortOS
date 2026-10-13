@@ -7,7 +7,7 @@ import * as api from '../../services/api';
 import BrailleSpinner from '../BrailleSpinner';
 import LoadFailureNotice from './LoadFailureNotice';
 import useChartColors from '../../hooks/useChartColors.js';
-import { formatMonthDay } from '../../utils/formatters.js';
+import { formatMonthDay, localDateKey } from '../../utils/formatters.js';
 import { classifyBP, bpLongevityImpact, BP_CATEGORIES } from './bpClassification';
 
 // Stage 1 hypertension reference line sits between the warning (elevated) and
@@ -43,7 +43,7 @@ export default function BloodPressureCard() {
   useEffect(() => { fetchData(); }, [fetchData]);
 
   const openForm = () => {
-    setForm({ ...EMPTY_FORM, date: new Date().toISOString().split('T')[0] });
+    setForm({ ...EMPTY_FORM, date: localDateKey() });
     setShowForm(true);
   };
 
