@@ -604,8 +604,9 @@ export const restoreRecommendationSchema = z.object({
   id: z.string().min(1),
 });
 
+// weekId becomes the digest filename (`<weekId>.json`), so it must be exactly an ISO week id.
 export const generateWeeklyDigestSchema = z.object({
-  weekId: z.string().optional(),
+  weekId: z.string().regex(/^\d{4}-W\d{2}$/, 'Invalid weekId format. Use YYYY-WXX (e.g., 2026-W02)').optional(),
 });
 
 // =============================================================================

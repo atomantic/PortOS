@@ -106,6 +106,17 @@ export function createRunnerService(config = {}) {
   const RUNS_PATH = join(dataDir, runsDir);
   const activeRuns = new Map();
 
+  // A run id arrives from an HTTP route param (`DELETE /api/runs/:id`), and
+  // Express decodes `%2F`, so `..%2Fbrain` would otherwise `join` out of
+  // RUNS_PATH and `rm -r` a sibling data directory. Minted ids are UUIDs; accept
+  // only a single plain segment and treat anything else as "no such run".
+  const SAFE_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+  const existingRunDir = (runId) => {
+    if (typeof runId !== 'string' || !SAFE_RUN_ID.test(runId)) return null;
+    const runDir = join(RUNS_PATH, runId);
+    return existsSync(runDir) ? runDir : null;
+  };
+
   // ── Declared extension points ────────────────────────────────────────────
   // PortOS supplies a CLI runner that knows per-CLI argv conventions (Codex
   // `exec -`, Antigravity `agy --print`, Claude Code `-p -`) and a TUI runner
@@ -939,23 +950,23 @@ export function createRunnerService(config = {}) {
     },
 
     async getRun(runId) {
-      const runDir = join(RUNS_PATH, runId);
-      if (!existsSync(runDir)) return null;
+      const runDir = existingRunDir(runId);
+      if (!runDir) return null;
 
       const metadata = safeJsonParse(await readFile(join(runDir, 'metadata.json'), 'utf-8').catch(() => '{}'));
       return metadata;
     },
 
     async getRunOutput(runId) {
-      const runDir = join(RUNS_PATH, runId);
-      if (!existsSync(runDir)) return null;
+      const runDir = existingRunDir(runId);
+      if (!runDir) return null;
 
       return readFile(join(runDir, 'output.txt'), 'utf-8');
     },
 
     async getRunPrompt(runId) {
-      const runDir = join(RUNS_PATH, runId);
-      if (!existsSync(runDir)) return null;
+      const runDir = existingRunDir(runId);
+      if (!runDir) return null;
 
       return readFile(join(runDir, 'prompt.txt'), 'utf-8');
     },
@@ -998,8 +1009,8 @@ export function createRunnerService(config = {}) {
         await service.stopRun(runId);
       }
 
-      const runDir = join(RUNS_PATH, runId);
-      if (!existsSync(runDir)) return false;
+      const runDir = existingRunDir(runId);
+      if (!runDir) return false;
 
       await withAssetPublication(() => rm(runDir, { recursive: true }));
       return true;

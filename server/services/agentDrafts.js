@@ -8,10 +8,17 @@
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { atomicWrite, ensureDir, PATHS, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { isTopLevelEntryName } from '../lib/pathSafety.js';
+import { ServerError } from '../lib/errorHandler.js';
 
 const DRAFTS_DIR = join(PATHS.agentPersonalities, 'drafts');
 
 async function getDraftsPath(agentId) {
+  // agentId comes straight from a query string / body; it names the file, so it
+  // must be a single path segment (no `../` walk out of the drafts directory).
+  if (!isTopLevelEntryName(agentId)) {
+    throw new ServerError('Invalid agentId', { status: 400, code: 'VALIDATION_ERROR' });
+  }
   await ensureDir(DRAFTS_DIR);
   return join(DRAFTS_DIR, `${agentId}.json`);
 }

@@ -33,6 +33,7 @@ import { ensureDir, expandHome, PATHS } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { applyAppPlaceholders } from '../lib/appPromptPlaceholders.js';
 import { execGit } from '../lib/execGit.js';
+import { isSafeGitRef } from '../lib/gitArgs.js';
 import {
   getAppById,
   updateApp,
@@ -125,6 +126,21 @@ const rejectCredentialedUrl = (url) => {
   }
 };
 
+// `repoUrl` and `branch` are caller text that becomes bare git argv. A value
+// shaped like an option (`--upload-pack=<cmd>` as the branch of
+// `git fetch --prune origin <branch>`) is executed by git's local/ssh
+// transport — host code execution from a route that only edits a record.
+// Validated when written AND when used, since apps.json already holds records
+// saved before this check (and is hand-editable).
+const assertGitArgsSafe = ({ repoUrl, branch }) => {
+  if (typeof repoUrl === 'string' && repoUrl.trim().startsWith('-')) {
+    throw new ServerError('repoUrl must not start with "-"', { status: 400, code: 'REFERENCE_REPO_BAD_URL' });
+  }
+  if (typeof branch === 'string' && branch.trim() && !isSafeGitRef(branch.trim())) {
+    throw new ServerError('branch is not a valid git branch name', { status: 400, code: 'REFERENCE_REPO_BAD_BRANCH' });
+  }
+};
+
 // Patterns that indicate the user's config is wrong (so the right HTTP
 // status is 4xx, not 5xx). Order matters — first match wins. Codes here
 // surface to the UI via `lastError`, so the strings are user-facing.
@@ -198,10 +214,11 @@ const ensureClone = async (ref) => {
   await ensureDir(REFERENCE_REPOS_ROOT);
   const dest = cloneDir(ref.id);
   if (existsSync(join(dest, '.git'))) return dest;
+  assertGitArgsSafe(ref);
   // No clone yet → bring one down. --depth 1 would lose the diff window we
   // need for `git log lastReviewedSha..HEAD`, so do a full clone.
   console.log(`📦 Cloning reference repo "${ref.name}" → ${dest}`);
-  await runGit(REFERENCE_REPOS_ROOT, ['clone', ref.repoUrl, ref.id], { timeoutMs: 600_000 });
+  await runGit(REFERENCE_REPOS_ROOT, ['clone', '--', ref.repoUrl, ref.id], { timeoutMs: 600_000 });
   return dest;
 };
 
@@ -211,13 +228,14 @@ const ensureClone = async (ref) => {
  */
 const fetchHead = async (ref) => {
   const cwd = await ensureClone(ref);
+  assertGitArgsSafe(ref);
   const branch = ref.branch || 'main';
   // For URL-based refs, fetch the latest from origin so rev-parse picks
   // up new commits. Local-path refs are the user's own working tree —
   // skip fetch (the user manages their tree directly) and read the
   // branch tip in place.
   if (!isLocalPath(ref.repoUrl)) {
-    await runGit(cwd, ['fetch', '--prune', 'origin', branch]);
+    await runGit(cwd, ['fetch', '--prune', 'origin', '--', branch]);
   }
   const headRef = isLocalPath(ref.repoUrl) ? branch : `origin/${branch}`;
   const head = await runGit(cwd, ['rev-parse', headRef]);
@@ -331,6 +349,7 @@ export async function addReferenceRepo(appId, { name, repoUrl, branch, notes }) 
   if (!app) throw new ServerError(`App not found: ${appId}`, { status: 404, code: 'APP_NOT_FOUND' });
   const trimmedUrl = repoUrl.trim();
   rejectCredentialedUrl(trimmedUrl);
+  assertGitArgsSafe({ repoUrl: trimmedUrl, branch });
   const existing = Array.isArray(app.referenceRepos) ? app.referenceRepos : [];
   const ref = {
     id: uuidv4(),
@@ -371,6 +390,7 @@ export async function updateReferenceRepo(appId, refId, patch) {
   // PATCH must enforce the same credential-in-URL rejection as POST —
   // otherwise a user could sidestep the ingest check by editing the URL
   // afterwards and persisting `https://token@host/repo` into apps.json.
+  assertGitArgsSafe(patch);
   if (typeof patch.repoUrl === 'string') {
     rejectCredentialedUrl(patch.repoUrl.trim());
   }
@@ -435,7 +455,7 @@ export async function updateReferenceRepo(appId, refId, patch) {
   if (typeof patch.repoUrl === 'string' && patch.repoUrl.trim() !== oldRef.repoUrl && !isLocalPath(patch.repoUrl)) {
     const dest = cloneDir(oldRef.id);
     if (existsSync(join(dest, '.git'))) {
-      const result = await execGit(['remote', 'set-url', 'origin', patch.repoUrl.trim()], dest, { timeout: 10_000 })
+      const result = await execGit(['remote', 'set-url', 'origin', '--', patch.repoUrl.trim()], dest, { timeout: 10_000 })
         .catch((err) => ({ error: err }));
       if (result && result.error) {
         // Don't fail the patch outright — the user can manually delete
