@@ -46,7 +46,7 @@ import { getSettings } from '../settings.js';
 import { nearestAspectRatio } from '../imageGen/modes.js';
 import { frameDataUriAtAspect } from './falFrameAspect.js';
 import {
-  FAL_QUEUE_BASE, awaitFalCompletion, cancelFalRequest, createFalRequestEntry, fileToDataUri,
+  FAL_QUEUE_BASE, awaitFalCompletion, cancelFalRequest, createFalRequestEntry, fileToDataUri, hostFalDataUri,
   readCompletedFalResult, resolveFalApiKey, submitFalRequest,
 } from '../falQueue.js';
 import { carriedPromptAdditions, promptAddition, sentPromptRecord } from '../../lib/modelInput.js';
@@ -327,11 +327,17 @@ async function runFalVideo(job, jobId, {
     const audioDataUri = audioFilePath
       ? `data:${audioMimeType(audioFilePath)};base64,${(await readFile(audioFilePath)).toString('base64')}`
       : null;
+    // Most routes read inputs inline; a model that downloads them gets fal-hosted URLs.
+    const hosted = getFalVideoModel(modelId)?.hostedInputs === true;
+    const host = (dataUri, name) => (hosted && dataUri ? hostFalDataUri({ apiKey, dataUri, fileName: `${jobId}-${name}` }) : dataUri);
+    const [imageUrl, endImageUrl, audioUrl] = await Promise.all([
+      host(imageDataUri, 'start'), host(endImageDataUri, 'end'), host(audioDataUri, 'audio'),
+    ]);
     const body = requestSpec
-      ? buildFalVideoRequest({ ...requestSpec, imageUrl: imageDataUri, endImageUrl: endImageDataUri, audioUrl: audioDataUri }).body
+      ? buildFalVideoRequest({ ...requestSpec, imageUrl, endImageUrl, audioUrl }).body
       : audioFilePath
-        ? buildLipSyncRequestBody({ imageDataUri, audioDataUri, enableTranscription })
-        : buildRequestBody({ prompt, negativePrompt, duration, aspectRatio, imageDataUri });
+        ? buildLipSyncRequestBody({ imageDataUri: imageUrl, audioDataUri: audioUrl, enableTranscription })
+        : buildRequestBody({ prompt, negativePrompt, duration, aspectRatio, imageDataUri: imageUrl });
     // Cancelled while the inputs were being read: nothing was submitted, so
     // there is nothing to pay for or cancel remotely.
     if (entry.aborted) return finalizeCanceled(job, jobId);
