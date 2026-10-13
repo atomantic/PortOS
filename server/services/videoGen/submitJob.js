@@ -319,9 +319,6 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
           params.prompt = withShotActionPrompt(params.prompt, project, scene, { offsetSec: performance?.shotInstruction?.edit?.inSec || 0 });
         }
         if (!hearsAudio && !body.musicVideo.promptAsTyped) params.prompt = await silentMusicVideoMotionPrompt(params.prompt, project, scene);
-        // Song spans, clip lengths and trim notes are render bookkeeping the model cannot act on.
-        const { videoModelPrompt } = await import('../../lib/musicVideoMotion.js');
-        params.prompt = videoModelPrompt(params.prompt, { hearsAudio });
         const interval = performance?.shotInstruction?.songInterval || prepared.audio?.songInterval;
         if (params.audioConditioning && Math.round(scene?.startSec * 48000) !== params.audioConditioning.startSample) {
           throw new ServerError('Scene timing changed while source audio was prepared', { status: 409, code: 'MUSIC_VIDEO_SHOT_TIMING_CHANGED' });

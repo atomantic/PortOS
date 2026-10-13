@@ -1,5 +1,5 @@
 import { getFalVideoModel } from '../../lib/falVideoModels.js';
-import { AUDIO_REACTIVE_PERFORMANCE_GUARD, silentMotionPrompt, videoModelPrompt } from '../../lib/musicVideoMotion.js';
+import { AUDIO_REACTIVE_PERFORMANCE_GUARD, silentMotionPrompt } from '../../lib/musicVideoMotion.js';
 import { approximateMotionCues, falSceneTake } from '../../lib/musicVideoShotTiming.js';
 import { shotActionContractProblem, shotActionPrompt } from '../../../../server/lib/musicVideoActionContract.js';
 import { shotCameraPrompt } from '../../../../server/lib/cameraMovements.js';
@@ -13,9 +13,7 @@ const clock = (sec) => {
 };
 
 /**
- * Exactly what the shot card's Render sends: the prompt as typed (less song
- * spans, clip lengths, trim notes and, when the take hears nothing, "No
- * lip-sync", which the model cannot act on), then what
+ * Exactly what the shot card's Render sends: the prompt as typed, then what
  * the card itself sets (its camera move, its applied shot actions, Grok's
  * approximate phrase timing, the audio-reactive guard), and which inputs go
  * with it. The project's style and bible are not added, and the server
@@ -55,8 +53,7 @@ export function shotCardRenderRequest({
   const motionCues = settings.backend === 'grok' ? approximateMotionCues(project?.phrases, scene?.startSec, scene?.endSec) : '';
   const base = [(scene?.prompt?.trim() || scene?.framePrompt?.trim() || ''), shotCameraPrompt(scene?.camera),
     hears ? actions : silentMotionPrompt(actions)].filter(Boolean).join('\n');
-  // The server applies the same cut at submit, so this stays what is sent.
-  const prompt = videoModelPrompt(audioReactive ? `${base}. ${AUDIO_REACTIVE_PERFORMANCE_GUARD}` : [base, motionCues].filter(Boolean).join('. '), { hearsAudio: hears });
+  const prompt = audioReactive ? `${base}. ${AUDIO_REACTIVE_PERFORMANCE_GUARD}` : [base, motionCues].filter(Boolean).join('. ');
 
   let endFrame = null;
   if (scene?.endImageId) {
