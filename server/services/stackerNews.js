@@ -243,23 +243,28 @@ export async function createAccount({
 }
 
 export async function updateAccount(id, updates) {
-  const existing = await getAccountRow(id);
-  if (!existing) return null;
-  await withTransaction(async (client) => {
-    await client.query(
-      `UPDATE stacker_news_accounts SET label=$2,username=$3,enabled=$4,monitoring_enabled=$5,
-       monitoring_interval_minutes=$6,sync_item_limit=$7,analysis_enabled=$8,text_model=$9,vision_model=$10,rules=$11,policy_version=$12,read_transport=$13,updated_at=NOW()
-       WHERE id=$1`,
-      [id, updates.label ?? existing.label, (updates.username ?? existing.username).toLowerCase(), updates.enabled ?? existing.enabled,
-        updates.monitoringEnabled ?? existing.monitoring_enabled, updates.monitoringIntervalMinutes ?? existing.monitoring_interval_minutes,
-        normalizeSyncItemLimit(updates.syncItemLimit ?? existing.sync_item_limit), updates.analysisEnabled ?? existing.analysis_enabled,
-        updates.textModel ?? existing.text_model, updates.visionModel ?? existing.vision_model,
-        updates.rules === undefined ? existing.rules : normalizeStackerNewsRules(updates.rules), POLICY_VERSION,
-        normalizeReadTransport(updates.readTransport ?? existing.read_transport)],
+  // Merge omitted fields in SQL against the locked current row, not a snapshot
+  // read before this transaction. Concurrent PATCHes must keep each other's edits.
+  const updated = await withTransaction(async (client) => {
+    const result = await client.query(
+      `UPDATE stacker_news_accounts SET label=COALESCE($2,label),username=COALESCE($3,username),
+       enabled=COALESCE($4,enabled),monitoring_enabled=COALESCE($5,monitoring_enabled),
+       monitoring_interval_minutes=COALESCE($6,monitoring_interval_minutes),sync_item_limit=COALESCE($7,sync_item_limit),
+       analysis_enabled=COALESCE($8,analysis_enabled),text_model=COALESCE($9,text_model),vision_model=COALESCE($10,vision_model),
+       rules=COALESCE($11,rules),policy_version=$12,read_transport=COALESCE($13,read_transport),updated_at=NOW()
+       WHERE id=$1 RETURNING id`,
+      [id, updates.label ?? null, updates.username?.toLowerCase() ?? null, updates.enabled ?? null,
+        updates.monitoringEnabled ?? null, updates.monitoringIntervalMinutes ?? null,
+        updates.syncItemLimit == null ? null : normalizeSyncItemLimit(updates.syncItemLimit), updates.analysisEnabled ?? null,
+        updates.textModel ?? null, updates.visionModel ?? null,
+        updates.rules === undefined ? null : normalizeStackerNewsRules(updates.rules), POLICY_VERSION,
+        updates.readTransport == null ? null : normalizeReadTransport(updates.readTransport)],
     );
+    if (!result.rows.length) return false;
     if (updates.apiKey !== undefined) await saveCredential(client, id, updates.apiKey);
+    return true;
   });
-  return getAccount(id);
+  return updated ? getAccount(id) : null;
 }
 
 export async function deleteAccount(id) {
@@ -282,22 +287,21 @@ export async function createTerritory({ accountId, slug, label = '', isOwned = f
 }
 
 export async function updateTerritory(id, updates) {
-  const previous = await query('SELECT * FROM stacker_news_territories WHERE id=$1', [id]);
-  const existing = previous.rows[0];
-  if (!existing) return null;
-  const nextSlug = updates.slug ?? existing.slug;
-  const slugChanged = nextSlug !== existing.slug;
+  // Remote evidence belongs to the current slug. Preserve a sync's latest
+  // evidence on ordinary edits; invalidate it atomically when renaming.
   const result = await query(
-    `UPDATE stacker_news_territories SET slug=$2,label=$3,is_owned=$4,monitoring_enabled=$5,
-     inherit_account_rules=$6,rules=$7,remote_settings=$8,remote_refreshed_at=$9,updated_at=NOW() WHERE id=$1 RETURNING *`,
-    [id, nextSlug, updates.label ?? existing.label, updates.isOwned ?? existing.is_owned,
-      updates.monitoringEnabled === undefined ? existing.monitoring_enabled : updates.monitoringEnabled,
-      updates.inheritAccountRules ?? existing.inherit_account_rules,
-      updates.rules === undefined ? existing.rules : normalizeStackerNewsRuleOverrides(updates.rules),
-      slugChanged ? {} : existing.remote_settings,
-      slugChanged ? null : existing.remote_refreshed_at],
+    `UPDATE stacker_news_territories SET slug=COALESCE($2,slug),label=COALESCE($3,label),is_owned=COALESCE($4,is_owned),
+     monitoring_enabled=CASE WHEN $8 THEN $5 ELSE monitoring_enabled END,
+     inherit_account_rules=COALESCE($6,inherit_account_rules),rules=COALESCE($7,rules),
+     remote_settings=CASE WHEN $2 IS NOT NULL AND slug IS DISTINCT FROM $2 THEN '{}'::jsonb ELSE remote_settings END,
+     remote_refreshed_at=CASE WHEN $2 IS NOT NULL AND slug IS DISTINCT FROM $2 THEN NULL ELSE remote_refreshed_at END,
+     updated_at=NOW() WHERE id=$1 RETURNING *`,
+    [id, updates.slug ?? null, updates.label ?? null, updates.isOwned ?? null,
+      updates.monitoringEnabled ?? null, updates.inheritAccountRules ?? null,
+      updates.rules === undefined ? null : normalizeStackerNewsRuleOverrides(updates.rules),
+      updates.monitoringEnabled !== undefined],
   );
-  return territoryView(result.rows[0]);
+  return result.rows[0] ? territoryView(result.rows[0]) : null;
 }
 
 export async function deleteTerritory(id) {
@@ -588,10 +592,13 @@ async function syncAccountUnlocked(accountId, { force = false } = {}) {
     // profile-link fallback legitimately has no user ID. Ownership evidence
     // gates territory-settings execution, so it fails closed.
     const ownershipVerified = Boolean(remote && remote.userId != null && me.id != null && String(remote.userId) === String(me.id));
-    await query(
-      'UPDATE stacker_news_territories SET remote_settings=$2,remote_refreshed_at=NOW(),updated_at=NOW() WHERE id=$1',
-      [territory.id, { ...(remote || {}), ownershipVerified }],
+    const refreshed = await query(
+      'UPDATE stacker_news_territories SET remote_settings=$2,remote_refreshed_at=NOW(),updated_at=NOW() WHERE id=$1 AND slug=$3',
+      [territory.id, { ...(remote || {}), ownershipVerified }, territory.slug],
     );
+    // A rename/delete while the provider was responding invalidates this read.
+    // Discard this stale evidence and skip its item fetch.
+    if (refreshed.rowCount === 0) continue;
     let cursor = null;
     const seenCursors = new Set();
     const syncItemLimit = normalizeSyncItemLimit(account.sync_item_limit);
