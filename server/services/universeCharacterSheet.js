@@ -21,6 +21,7 @@ import { getSettings } from './settings.js';
 import { getUniverse, updateUniverse } from './universeBuilder.js';
 import { purgeReferenceSheetFromAllUniverses } from './universeCanon.js';
 import { universeAestheticLine } from '../lib/universeVisualStyle.js';
+import { promptAddition } from '../lib/modelInput.js';
 import { enqueueJob, mediaJobEvents } from './mediaJobQueue/index.js';
 import { buildUniverseRunTag } from './universeRunTag.js';
 import { IMAGE_GEN_MODE } from './imageGen/modes.js';
@@ -423,10 +424,19 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
   // user zooms. resolveSheetDimensions bumps codex up to 4K landscape while
   // local FLUX keeps its memory-tuned 2048×1536 defaults.
   const { width, height } = resolveSheetDimensions(activeMode, built.width, built.height);
+  // The sheet template is PortOS's own text around the character's fields; the
+  // universe style and the sheet negatives it carries are listed on the
+  // render's sent-prompt record (#11317). A typed override is sent as written.
+  const styleLine = universeAestheticLine(universe);
+  const promptAdditions = [
+    prompt === built.prompt && styleLine && prompt.includes(styleLine.trim()) ? promptAddition('universe-style', 'Universe style', styleLine) : null,
+    negativePrompt === built.negativePrompt ? promptAddition('sheet-negatives', 'Character sheet negatives', built.negativePrompt) : null,
+  ].filter(Boolean);
   const baseParams = {
     mode: activeMode,
     prompt,
     negativePrompt,
+    ...(promptAdditions.length ? { promptAdditions } : {}),
     width,
     height,
     cleanC2PA,

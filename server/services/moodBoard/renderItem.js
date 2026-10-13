@@ -14,12 +14,12 @@
 import { ServerError } from '../../lib/errorHandler.js';
 import { QUEUEABLE_IMAGE_MODES } from '../../lib/generationModes.js';
 import { isNonBlankStr } from '../../lib/textUtils.js';
+import { promptAddition } from '../../lib/modelInput.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
 import * as store from './db.js';
 
 export const MOOD_BOARD_RENDER_TAG = 'moodBoardRender';
 const RENDER_SIZE = Object.freeze({ width: 1024, height: 1024 });
-const PROMPT_MAX = 8000;
 
 // Overridable for tests (queue, settings and socket are process singletons).
 const deps = {
@@ -33,12 +33,21 @@ const deps = {
 };
 export const __setDepsForTests = (overrides) => Object.assign(deps, overrides);
 
-/** The image prompt for a note: its words, then the board's composed look. */
+/**
+ * The image prompt for a note: its words, then the board's composed look, sent
+ * whole, with each block PortOS adds listed as a labeled addition (#11317).
+ */
 function buildItemRenderPrompt(board, item) {
   const text = String(item?.text || '').trim();
   const style = isNonBlankStr(board?.style?.prompt) ? board.style.prompt.trim() : '';
   const subject = `Mood board reference image: ${text}`;
-  return (style ? `${subject}\n\nVisual style: ${style}` : subject).slice(0, PROMPT_MAX);
+  return {
+    prompt: style ? `${subject}\n\nVisual style: ${style}` : subject,
+    promptAdditions: [
+      promptAddition('mood-board-note', 'Mood board reference', 'Mood board reference image: [note]'),
+      promptAddition('board-style', 'Board style', style && `Visual style: ${style}`),
+    ].filter(Boolean),
+  };
 }
 
 /** Job params for the chosen backend: a cloud provider bag, or the local model. */
@@ -96,12 +105,13 @@ export async function renderBoardItem(boardId, itemId, route = {}) {
     options: route,
   });
 
-  const prompt = buildItemRenderPrompt(board, claimed);
+  const { prompt, promptAdditions } = buildItemRenderPrompt(board, claimed);
   const negativePrompt = isNonBlankStr(board.style?.negativePrompt) ? board.style.negativePrompt.trim() : undefined;
   let jobId;
   try {
     const params = await prepareBoardRenderParams(route, {
       prompt,
+      promptAdditions,
       ...(negativePrompt ? { negativePrompt } : {}),
       width: route.width ?? RENDER_SIZE.width,
       height: route.height ?? RENDER_SIZE.height,

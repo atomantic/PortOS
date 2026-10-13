@@ -371,7 +371,18 @@ export function composeCardRenderPrompt(deck, card) {
   const identityNegative = identity ? 'wrong card rank, wrong card suit, incorrect pip count, missing pips, extra pips, extra suit symbols, suit symbols in the border or background, pips disguised as scene objects' : '';
   const cardNegative = [trimmed(card?.negativePrompt), orientationNegative, identityNegative].filter(Boolean).join(', ');
   const composed = composeStyledPrompt(body, cardNegative, { prompt: style, negativePrompt: avoid });
-  return { ...composed, parts: { style, layout, orientation, subject } };
+  // The deck's blocks around the card's own words, for the render's sent-prompt
+  // record (#11317). The card's own negative is the user's text, so it is not one.
+  const promptAdditions = [
+    ['deck-style', 'Deck style', style],
+    ['deck-layout', 'Deck layout', layout],
+    ['card-orientation', 'Card orientation', orientation],
+    ['card-identity', 'Card identity', identity],
+    ['deck-avoid', 'Deck avoid (negative prompt)', avoid],
+    ['card-orientation-negatives', 'Card orientation negatives', orientationNegative],
+    ['card-identity-negatives', 'Card identity negatives', identityNegative],
+  ].filter(([, , text]) => text).map(([id, label, text]) => ({ id, label, text }));
+  return { ...composed, promptAdditions, parts: { style, layout, orientation, subject } };
 }
 
 const IN_FLIGHT_RENDER = new Set(['queued', 'running']);

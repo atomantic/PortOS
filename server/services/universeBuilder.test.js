@@ -1795,6 +1795,15 @@ describe("universeBuilder service", () => {
       expect(compiled[0].negativePrompt).toBe(
         "blurry, lowres, color photo, low quality",
       );
+      // Each block PortOS folds around the variation is listed; the batch's
+      // own negative is the user's text, so it is not (#11317).
+      expect(compiled[0].promptAdditions).toEqual([
+        { id: "universe-style", label: "Universe style", text: "moebius linework, scavengers reign palette" },
+        { id: "style-preset", label: "Style preset", text: "noir cinematography" },
+        { id: "extra-style", label: "Batch extra style", text: "high contrast" },
+        { id: "universe-avoid", label: "Universe avoid (negative prompt)", text: "blurry, lowres" },
+        { id: "style-preset-negatives", label: "Style preset negatives", text: "color photo" },
+      ]);
     });
 
     it("override fields default to baseline influences when omitted", async () => {

@@ -11,6 +11,7 @@
 
 import { composeStyledPrompt } from '../../lib/composeStyledPrompt.js';
 import { joinInfluenceList } from '../../lib/universeVisualStyle.js';
+import { promptAddition } from '../../lib/modelInput.js';
 import { flattenCanonDescriptorFragments, richCanonDescriptorFragments } from '../../lib/canonPrompt.js';
 import { getWorldCategoryKeys, normalizeCategoryKey, ENTRY_REF_KIND } from './sanitize.js';
 
@@ -157,6 +158,16 @@ export function compilePrompts(universe, options = {}) {
     prompt: embraceParts.join(', '),
     negativePrompt: avoidParts.join(', '),
   };
+  // Each block folded around an entry's own prompt, listed so the render's
+  // sent-prompt record shows what PortOS added (#11317). The batch's own
+  // negative is the user's text, so it is not an addition.
+  const promptAdditions = [
+    promptAddition('universe-style', 'Universe style', baselineEmbrace),
+    promptAddition('style-preset', options.stylePresetLabel ? `Style preset: ${options.stylePresetLabel}` : 'Style preset', options.stylePresetPrompt),
+    promptAddition('extra-style', 'Batch extra style', options.extraStyle),
+    promptAddition('universe-avoid', 'Universe avoid (negative prompt)', baselineAvoid),
+    promptAddition('style-preset-negatives', 'Style preset negatives', options.stylePresetNegative),
+  ].filter(Boolean);
   const compiled = [];
 
   if (promptMode === 'variations' || promptMode === 'all') {
@@ -175,6 +186,7 @@ export function compilePrompts(universe, options = {}) {
             label: variation.label,
             prompt,
             negativePrompt,
+            promptAdditions,
             batchIndex: i,
             // `entryRef` lets the collection hook stamp the rendered filename
             // back onto this exact variation regardless of subsequent label
@@ -206,6 +218,7 @@ export function compilePrompts(universe, options = {}) {
           label: sheet.label,
           prompt,
           negativePrompt,
+          promptAdditions,
           batchIndex: i,
           ...(sheet.id ? { entryRef: { kind: ENTRY_REF_KIND.SHEET, id: sheet.id } } : {}),
         });
@@ -249,6 +262,7 @@ export function compilePrompts(universe, options = {}) {
               label: entry.name || entry.slugline || trunk.key,
               prompt,
               negativePrompt,
+              promptAdditions,
               batchIndex: i,
               ...(entry.id ? { entryRef: { kind: ENTRY_REF_KIND.CANON, kindKey: trunk.key, id: entry.id } } : {}),
             });

@@ -81,10 +81,11 @@ export async function renderDeckCards(deckId, { cardIds, onlyMissing = false, mo
   const jobs = [];
   const stamps = [];
   for (const card of targets) {
-    const { prompt, negativePrompt } = composeCardRenderPrompt(deck, card);
+    const { prompt, negativePrompt, promptAdditions } = composeCardRenderPrompt(deck, card);
     const base = {
       prompt,
       negativePrompt: negativePrompt || undefined,
+      ...(promptAdditions.length ? { promptAdditions } : {}),
       width: deck.cardSize.width,
       height: deck.cardSize.height,
       ...(seed != null ? { seed } : {}),
