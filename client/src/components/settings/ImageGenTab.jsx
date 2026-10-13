@@ -37,6 +37,7 @@ import { useAgyModels } from '../../hooks/useAgyModels';
 import { useHfTokenStatus } from '../../hooks/useHfTokenStatus';
 import useLocalImageModels from '../../hooks/useLocalImageModels';
 import { effortLevelsForProvider, isCodexSubscriptionProvider, providerModelList } from '../../utils/providers';
+import { formatCount } from '../../utils/formatters';
 
 const SDAPI_TOOL_ID = 'sdapi';
 const CODEX_TOOL_ID = 'codex-imagegen';
@@ -50,7 +51,7 @@ const normalizeUrl = (url) => (url || '').trim().replace(/\/+$/, '');
 // Fallback bounds used until /api/settings has been fetched once. The server
 // is the source of truth (returns `imageGen.codex.parallelLimitBounds` with
 // the real min/max/default), so these only matter for the first paint.
-const PARALLEL_FALLBACK = { min: 1, max: 10, default: 1 };
+const PARALLEL_FALLBACK = { min: 1, max: Number.MAX_SAFE_INTEGER, default: 1 };
 const clampParallel = (n, bounds = PARALLEL_FALLBACK) =>
   Math.max(bounds.min, Math.min(bounds.max, Math.floor(Number(n) || bounds.default)));
 
@@ -1363,12 +1364,11 @@ export function ImageGenTab() {
                 className="w-24 bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
               />
               <p className="text-xs text-gray-500 mt-1">
-                How many Codex renders the queue runs in parallel. Default <code>{parallelBounds.default}</code>. Hard capped at <code>{parallelBounds.max}</code>.
-                Higher values let large batches finish faster but burn OpenAI credits non-linearly — a runaway {parallelBounds.max}-wide
-                batch can rack up real money in minutes.
-                {codexParallelLimit > Math.ceil(parallelBounds.max / 2) && (
+                How many Codex renders the queue runs in parallel. Default <code>{formatCount(parallelBounds.default)}</code>.
+                Higher values let large batches finish faster, subject to your provider&apos;s rate limits, and increase simultaneous usage.
+                {codexParallelLimit > 5 && (
                   <span className="block mt-1 text-port-warning">
-                    ⚠️ {codexParallelLimit} concurrent renders can burn credits quickly during a long batch. Watch usage.
+                    ⚠️ {formatCount(codexParallelLimit)} concurrent renders can burn credits quickly during a long batch. Watch usage.
                   </span>
                 )}
               </p>

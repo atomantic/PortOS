@@ -1890,6 +1890,33 @@ describe('Audio kind (#1928)', () => {
 });
 
 describe('Codex lane', () => {
+  it('runs more than ten renders while enforcing the saved limit and cleaning up listeners', async () => {
+    // Kickoff resolves; terminal events keep each render active until completed.
+    stubs.generateImageCodex.mockResolvedValue({});
+    await mediaJobQueue.initMediaJobQueue();
+    mediaJobQueue.setCodexParallelLimit(12);
+    const events = ['progress', 'status', 'completed', 'failed'];
+    const listenerCounts = () => events.map((event) => imageGenEvents.listenerCount(event));
+    const before = listenerCounts();
+    const jobs = [];
+    for (let i = 0; i < 13; i++) {
+      jobs.push(await mediaJobQueue.enqueueJob({
+        kind: 'image', params: { prompt: `Example render ${i}`, mode: 'codex' },
+      }));
+    }
+    await waitFor(() => stubs.generateImageCodex.mock.calls.length === 12);
+    expect(mediaJobQueue.getQueueCapacity().lanes.cloud.limit).toBe(12);
+    expect(mediaJobQueue.getJob(jobs[12].jobId).status).toBe('queued');
+
+    imageGenEvents.emit('completed', { generationId: jobs[0].jobId, filename: 'example.png' });
+    await waitFor(() => stubs.generateImageCodex.mock.calls.length === 13);
+    for (const job of jobs.slice(1)) {
+      imageGenEvents.emit('completed', { generationId: job.jobId, filename: 'example.png' });
+    }
+    await waitFor(() => jobs.every((job) => mediaJobQueue.getJob(job.jobId).status === 'completed'));
+    expect(listenerCounts()).toEqual(before);
+  });
+
   it('dispatches a Codex job to imageGen/codex.js#generateImage, not local', async () => {
     // Allow the codex job to resolve immediately so the worker can settle.
     stubs.generateImageCodex.mockResolvedValue({ jobId: 'whatever' });
