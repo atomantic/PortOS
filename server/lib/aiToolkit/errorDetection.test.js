@@ -1105,3 +1105,13 @@ describe('terminal content refusals', () => {
       .toMatchObject({ category: 'content-refusal', requiresFallback: false, permanent: true });
   });
 });
+
+describe('detectModelAtCapacity', () => {
+  it('flags the Codex capacity rejection, even hard-wrapped, with a fixed non-echoing message', async () => {
+    const { detectModelAtCapacity } = await import('./errorDetection.js');
+    const hit = detectModelAtCapacity('■ Selected model is at capacity. Please try\na different model.');
+    expect(hit).toMatchObject({ category: 'rate-limit', requiresFallback: true, actionable: false });
+    expect(detectModelAtCapacity(hit.message)).toBeNull();
+    expect(detectModelAtCapacity('the parking lot is at capacity')).toBeNull();
+  });
+});

@@ -110,6 +110,8 @@ export const LIFECYCLE_LINES = Object.freeze({
   permissionDeclineNudged: lifecycleLine`🔁 Nudged the session to continue after declined permission prompt ${'declined'}`,
   localOomPending: lifecycleLine`⏳ Local runtime out of GPU memory — will nudge the session to continue if it goes quiet`,
   localOomNudged: lifecycleLine`🔁 Local runtime OOM — nudged the session to continue (attempt ${'attempt'}/${'max'})`,
+  capacityPending: lifecycleLine`⏳ Selected model is at capacity — will nudge the session to continue after it has been quiet a while`,
+  capacityNudged: lifecycleLine`🔁 Selected model was at capacity — nudged the session to continue (attempt ${'attempt'}/${'max'})`,
   truncationPending: lifecycleLine`⏳ Response was truncated before completion — will nudge the session to continue if it goes quiet`,
   truncationNudged: lifecycleLine`🔁 Response was truncated before completion — nudged the session to continue (attempt ${'attempt'}/${'max'})`,
   stallNudged: lifecycleLine`🔁 Session idle with the task unfinished — nudged it to continue (attempt ${'attempt'}/${'max'}, ${'sent'}/${'total'} this run)`,

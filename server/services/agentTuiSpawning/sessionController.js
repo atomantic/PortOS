@@ -37,7 +37,7 @@ import { missingSentinelLogMessage, parseSentinelPayload } from '../../lib/agent
 import { LIFECYCLE_LINES, SENTINEL_COMPLETION_MARKER } from '../../lib/agentOutputMarkers.js';
 import { resolveMergeGateVerdict, buildMergeGateReprompt } from '../../lib/mergeGateContract.js';
 import { createStreamingAnsiStripper, stripAnsi } from '../../lib/ansiStrip.js';
-import { createContentRefusalDetector, createClaudeSessionLimitBannerDetector, createImmediateFallbackSignalDetector, createLocalRuntimeOomDetector, createTruncatedResponseDetector } from '../../lib/aiToolkit/errorDetection.js';
+import { createContentRefusalDetector, createClaudeSessionLimitBannerDetector, createImmediateFallbackSignalDetector, createLocalRuntimeOomDetector, createTruncatedResponseDetector, createModelAtCapacityDetector } from '../../lib/aiToolkit/errorDetection.js';
 import { isAntigravityCommand } from '../../lib/antigravity.js';
 import { isCodexCommand } from '../../lib/codex.js';
 import { isClaudeCommand } from '../../lib/providerModels.js';
@@ -56,6 +56,9 @@ import {
   OOM_NUDGE_MAX_ATTEMPTS,
   OOM_NUDGE_TEXT,
   createTruncationNudgeGate,
+  createModelCapacityNudgeGate,
+  CAPACITY_NUDGE_MAX_ATTEMPTS,
+  CAPACITY_NUDGE_TEXT,
   TRUNCATION_NUDGE_MAX_ATTEMPTS,
   TRUNCATION_NUDGE_TEXT,
   createStallNudgeGate,
@@ -559,6 +562,10 @@ export function createTuiSessionController({
   // createTruncationNudgeGate.
   const detectTruncatedResponse = createTruncatedResponseDetector();
   const truncationNudgeGate = createTruncationNudgeGate();
+  // A provider-side `model is at capacity` rejection (Codex). Dead turn, intact
+  // session — nudged with `continue`, but only after a much longer quiet spell.
+  const detectModelAtCapacity = createModelAtCapacityDetector();
+  const capacityNudgeGate = createModelCapacityNudgeGate();
   // agy quitting back to its launch shell (see createAgyResumeGate). Only a
   // login-shell launch has a shell to fall back to; runner/direct PTYs die with
   // agy and finish through handleExit instead.
@@ -1489,6 +1496,18 @@ export function createTuiSessionController({
         }
       }
 
+      // Model at capacity: arm a delayed nudge; fail over once they run out.
+      const capacitySignal = promptSubmittedAt ? detectModelAtCapacity(stripped) : null;
+      if (capacitySignal) {
+        const armed = capacityNudgeGate.arm(capacitySignal, now);
+        if (armed === 'armed') {
+          appendLine(LIFECYCLE_LINES.capacityPending());
+        } else if (armed === 'exhausted') {
+          await failOverToFallback(capacitySignal);
+          return;
+        }
+      }
+
       // Same gating as the OOM nudge above: before the prompt is in there is no
       // request of ours for the provider to be retrying. Acted on by the
       // provider-signal timer, on its own poll, like the other gates.
@@ -1875,6 +1894,14 @@ export function createTuiSessionController({
       if (truncationNudge) {
         if (pasteController?.resubmit({ text: TRUNCATION_NUDGE_TEXT, label: 'truncated-response nudge' })) {
           appendLine(LIFECYCLE_LINES.truncationNudged({ attempt: truncationNudge, max: TRUNCATION_NUDGE_MAX_ATTEMPTS }));
+        }
+        return;
+      }
+      // Nudge a session parked by a model-at-capacity rejection, after a long quiet.
+      const capacityNudge = capacityNudgeGate.takeNudge(now, lastOutputAt);
+      if (capacityNudge) {
+        if (pasteController?.resubmit({ text: CAPACITY_NUDGE_TEXT, label: 'model-capacity nudge' })) {
+          appendLine(LIFECYCLE_LINES.capacityNudged({ attempt: capacityNudge, max: CAPACITY_NUDGE_MAX_ATTEMPTS }));
         }
         return;
       }
