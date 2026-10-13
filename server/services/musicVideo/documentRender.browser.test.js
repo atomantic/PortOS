@@ -113,7 +113,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
   });
 
   // Uniquely catches dropped effect data, missing staged modules and preview/export curve drift.
-  it('develops a still from white identically in the document render and live preview', async () => {
+  it('develops a still from white in the encoded document render and live preview', async () => {
     await mkdir(PATHS.images, { recursive: true });
     const image = await sharp({ create: { width: 64, height: 36, channels: 3, background: '#ee6721' } }).png().toBuffer();
     await writeFile(join(PATHS.images, 'effect-still.png'), image);
@@ -125,8 +125,14 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     } }));
     await importDocumentTemplate(created.id);
     const project = await projects.getProject(created.id);
-    const { openIsolatedDocumentPreview } = await import('./documentRender.js');
-    const capture = await openIsolatedDocumentPreview({ project, jobId: 'still-effect', signal: testSignal });
+    await mkdir(PATHS.music, { recursive: true });
+    await mkdir(PATHS.videos, { recursive: true });
+    const master = join(PATHS.music, 'still-effect.wav');
+    const output = join(PATHS.videos, 'still-effect.mp4');
+    execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=2', master]);
+    await encodeDocumentComposition({ project, plan: await prepareDocumentRender(project), jobId: 'still-effect',
+      audioPath: master, outputPath: output, windowStart: 0.25, windowEnd: 1.25 + 1 / 24 });
+    const renderedFrames = execFileSync(ffmpeg, ['-v', 'error', '-i', output, '-vf', 'scale=64:36', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
     const page = await browser.newPage();
     try {
       const loadPreview = async current => {
@@ -151,8 +157,11 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
           return [...canvas.getContext('2d').getImageData(canvas.width / 2, canvas.height / 2, 1, 1).data].slice(0, 3);
         })()`;
         const live = await page.evaluate(sample);
-        const rendered = await capture.page.evaluate(sample);
-        expect(rendered).toEqual(live);
+        const offset = (Math.round((t - 0.25) * 24) * 64 * 36 + 18 * 64 + 32) * 3;
+        const rendered = [...renderedFrames.subarray(offset, offset + 3)];
+        expect(rendered).toHaveLength(3);
+        // H.264/YUV conversion and downscaling can change a pixel slightly.
+        rendered.forEach((channel, index) => expect(Math.abs(channel - live[index])).toBeLessThan(16));
         pixels.push(live);
       }
       expect(pixels[0]).toEqual([255, 255, 255]);
@@ -169,8 +178,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
       expect(held).toEqual(pixels[3]);
     } finally {
       await page.close();
-      await capture.page.close();
-      await rm(capture.scratchRoot, { recursive: true, force: true });
+      await rm(output, { force: true });
     }
   }, 60000);
 
