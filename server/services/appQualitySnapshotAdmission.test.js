@@ -57,6 +57,7 @@ const makeDeps = ({ glab = false, onBranch = false, mergeFails = false, ...overr
   addWorktree: vi.fn(async () => true),
   execGlab: vi.fn(async () => ''),
   queuePendingMerge: vi.fn(async () => true),
+  checkSnapshotPublicationOwnership: vi.fn(async () => ({ admitted: true })),
   probePrForBranch: vi.fn(async () => (onBranch
     ? { prState: 'OPEN', prUrl: glab ? glabUrl : prUrl, prNumber: glab ? 7 : 42, cli: glab ? 'glab' : 'gh', readable: true }
     : { prState: null, readable: true })),

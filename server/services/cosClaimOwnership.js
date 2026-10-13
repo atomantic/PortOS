@@ -119,3 +119,27 @@ export async function checkReconcileOwnership(input, deps = {}) {
     return admission;
   }));
 }
+
+/** Read-only snapshot publication gate. Registered review work remains owned
+ * even between checkouts; neither an absent process nor a missing tree releases
+ * it. The safety reader must not default corrupt runtime state to an empty list.
+ */
+export async function checkSnapshotPublicationOwnership({ appId, branch, prUrl }, deps = {}) {
+  const readAgents = deps.readAgentsStateForSafetyCheck
+    || (await import('./cosState.js')).readAgentsStateForSafetyCheck;
+  const snapshot = await readAgents().catch(() => null);
+  if (snapshot?.trusted !== true || !snapshot.agents || typeof snapshot.agents !== 'object' || Array.isArray(snapshot.agents)) {
+    return { admitted: false, reason: 'ownership-unreadable' };
+  }
+  const entries = Object.entries(snapshot.agents);
+  if (entries.some(([id, agent]) => !agent || agent.id !== id || !['running', 'paused', 'completed'].includes(agent.status))) {
+    return { admitted: false, reason: 'ownership-unreadable' };
+  }
+  const agents = entries.map(([, agent]) => agent);
+  if (prUrl && agents.some(agent => agent.status !== 'completed'
+    && agent.metadata?.reviewLoopMergeTarget?.url === prUrl
+    && agent.metadata.reviewLoopMergeTarget.branch === branch)) {
+    return { admitted: false, reason: 'review-owner-active' };
+  }
+  return checkReconcileOwnership({ appId, branch }, { ...deps, getAgents: async () => agents });
+}

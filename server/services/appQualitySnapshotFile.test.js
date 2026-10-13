@@ -31,7 +31,7 @@ const gitDouble = (overrides = {}) => ({
   fetchOrigin: vi.fn(async () => true),
   getDefaultBranch: vi.fn(async () => 'main'),
   execGit: vi.fn(async (args) => {
-    if (args[0] === 'show' || (args[0] === 'rev-parse' && String(args[1] || '').includes(QUALITY_SNAPSHOT_BRANCH))) {
+    if (args[0] === 'show' || args[0] === 'rev-parse') {
       return missingShow;
     }
     return { exitCode: 0, stdout: '', stderr: '' };
@@ -52,6 +52,7 @@ const testDeps = (overrides = {}) => ({
   rm: vi.fn(async () => {}),
   addWorktree: vi.fn(async () => true),
   queuePendingMerge: vi.fn(async () => true),
+  checkSnapshotPublicationOwnership: vi.fn(async () => ({ admitted: true })),
   // Admission itself is pinned in appQualitySnapshotAdmission.test.js.
   getOriginInfo: vi.fn(async () => ({ host: 'github.com', fullName: 'example/app' })),
   withMergeAdmission: vi.fn(async (_origin, work) => ({ admitted: true, result: await work() })),
@@ -107,7 +108,7 @@ it('lands a changed snapshot from a detached worktree so the PR branch stays att
   expect(deps.git.commit).toHaveBeenCalledWith(worktreePath,
     'chore: publish PortOS quality snapshot (1 measurements)', { paths: ['.quality.json'] });
   expect(deps.git.execGit).toHaveBeenCalledWith(
-    ['push', '-u', 'origin', 'HEAD:refs/heads/portos/quality-snapshot'], worktreePath);
+    ['push', '--force-with-lease=refs/heads/portos/quality-snapshot:', 'origin', 'HEAD:refs/heads/portos/quality-snapshot'], worktreePath);
   expect(deps.git.createPR).toHaveBeenCalledWith(worktreePath, expect.objectContaining({
     title: 'chore: publish quality snapshot',
     base: 'main',
@@ -248,7 +249,7 @@ it('force-with-lease updates an existing snapshot branch rather than committing 
     git: gitDouble({
       execGit: vi.fn(async (args) => {
         if (args[0] === 'show') return missingShow;
-        if (args[0] === 'rev-parse' && args[1] === `origin/${QUALITY_SNAPSHOT_BRANCH}`) {
+        if (args[0] === 'rev-parse' && args.at(-1) === `refs/remotes/origin/${QUALITY_SNAPSHOT_BRANCH}`) {
           return { exitCode: 0, stdout: 'aa'.repeat(20), stderr: '' };
         }
         return { exitCode: 0, stdout: '', stderr: '' };
@@ -354,7 +355,7 @@ it('does not retry a stale lease when the refreshed PR state cannot be read', as
   });
   const deps = testDeps({
     git,
-    probePrForBranch: vi.fn(async () => ({ readable: false })),
+    probePrForBranch: vi.fn().mockResolvedValueOnce({ readable: true, prState: null }).mockResolvedValueOnce({ readable: true, prState: null }).mockResolvedValue({ readable: false }),
   });
   await expect(publishAppQualitySnapshot(app, deps)).rejects.toThrow('publish PR state unavailable');
   expect(deps.probePrForBranch).toHaveBeenCalledWith(app.repoPath, QUALITY_SNAPSHOT_BRANCH);
@@ -690,4 +691,170 @@ it('preserves open-branch history during explicit format migration without apply
   const written = JSON.parse(deps.writeFile.mock.calls[0][1]);
   expect(written.categories).toEqual(['privacy', 'security']);
   expect(written.measurements).toHaveLength(2);
+});
+
+// #11324: exported publication workflow with the real read-only ownership
+// boundary. Only persisted state, worktrees and forge/git I/O are synthetic.
+const ownedPublicationDeps = ({ agents = {}, trusted = true, worktrees = [], ...overrides } = {}) => {
+  const ownership = { agents, trusted, worktrees };
+  const deps = testDeps({
+    checkSnapshotPublicationOwnership: async input => {
+      const { checkSnapshotPublicationOwnership } = await import('./cosClaimOwnership.js');
+      return checkSnapshotPublicationOwnership(input, {
+        readAgentsStateForSafetyCheck: async () => ({ trusted: ownership.trusted, agents: ownership.agents }),
+        getAppById: async () => app,
+        listWorktrees: async () => ownership.worktrees,
+        getActiveAgentIds: () => [],
+      });
+    },
+    probePrForBranch: vi.fn(async () => ({ readable: true, prState: 'OPEN', prUrl, prNumber: 42, cli: 'gh' })),
+    ...overrides,
+  });
+  return { deps, ownership };
+};
+const reviewOwner = status => ({
+  id: 'reviewer', status,
+  metadata: { reviewLoopMergeTarget: { url: prUrl, branch: QUALITY_SNAPSHOT_BRANCH } },
+});
+const branchGit = (changes = '.quality.json\0') => gitDouble({
+  execGit: vi.fn(async args => {
+    if (args[0] === 'show') return missingShow;
+    if (args[0] === 'rev-parse') return { exitCode: 0, stdout: 'aa'.repeat(20) };
+    if (args[0] === 'diff') return { exitCode: 0, stdout: changes };
+    return { exitCode: 0, stdout: '' };
+  }),
+});
+const expectNoPublication = deps => {
+  expect(deps.git.execGit.mock.calls.filter(([args]) => args[0] === 'push')).toEqual([]);
+  expect(deps.git.createPR).not.toHaveBeenCalled();
+  expect(deps.git.mergePR).not.toHaveBeenCalled();
+  expect(deps.queuePendingMerge).not.toHaveBeenCalled();
+};
+
+it('retains deferred measurements through active and paused review, then publishes when the review completes', async () => {
+  const { deps, ownership } = ownedPublicationDeps({ agents: { reviewer: reviewOwner('running') }, git: branchGit() });
+  const original = structuredClone(ownership.agents);
+  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({
+    published: false, deferredPublication: true, reason: 'review-owner-active',
+  });
+  expect(ownership.agents).toEqual(original);
+  ownership.agents.reviewer.status = 'paused';
+  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({ reason: 'review-owner-active' });
+  expectNoPublication(deps);
+  expect(deps.addWorktree).not.toHaveBeenCalled();
+
+  ownership.agents.reviewer.status = 'completed';
+  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({ published: true, merged: true });
+  expect(deps.buildQualitySnapshot).toHaveBeenCalledTimes(3);
+  expect(deps.writeFile).toHaveBeenCalledWith(join(worktreePath, '.quality.json'), canonical());
+});
+
+it('rechecks ownership before pushing and retries an unchanged body after a late owner releases it', async () => {
+  const { deps, ownership } = ownedPublicationDeps({ git: branchGit() });
+  deps.git.commit.mockImplementationOnce(async () => {
+    ownership.agents.reviewer = reviewOwner('running');
+    return { hash: 'abc1234' };
+  });
+  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({ reason: 'review-owner-active', deferredPublication: true });
+  expectNoPublication(deps);
+  expect(deps.rm).toHaveBeenCalledWith(worktreePath, { recursive: true, force: true });
+  ownership.agents = {};
+  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({ published: true });
+  expect(deps.git.commit).toHaveBeenCalledTimes(2);
+});
+
+it('preserves a live review checkout even when no PR owner target was registered', async () => {
+  const holder = { path: '/tmp/agent-reviewer', branch: `refs/heads/${QUALITY_SNAPSHOT_BRANCH}` };
+  const { deps, ownership } = ownedPublicationDeps({
+    worktrees: [holder], agents: { reviewer: { id: 'reviewer', status: 'running', metadata: { workspacePath: holder.path } } },
+  });
+  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({ published: false, deferredPublication: true });
+  expectNoPublication(deps);
+  expect(ownership.worktrees).toEqual([holder]);
+  expect(deps.rm).not.toHaveBeenCalled();
+});
+
+it.each([
+  { trusted: false, agents: {} },
+  { trusted: true, agents: null },
+  { trusted: true, agents: { broken: 'unreadable' } },
+])('fails closed on unreadable ownership %#', async input => {
+  const { deps } = ownedPublicationDeps(input);
+  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({ reason: 'ownership-unreadable', deferredPublication: true });
+  expectNoPublication(deps);
+});
+
+it('defers an unreadable forge or rejected ownership lookup without marking the body delivered', async () => {
+  const deps = testDeps({ probePrForBranch: vi.fn().mockRejectedValueOnce(new Error('forge offline')).mockResolvedValue({ readable: true, prState: null }) });
+  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({ reason: 'publish-pr-unreadable' });
+  deps.checkSnapshotPublicationOwnership.mockRejectedValueOnce(new Error('state read failed'));
+  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({ reason: 'ownership-unreadable' });
+  expectNoPublication(deps);
+  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({ published: true });
+});
+
+it('preserves foreign review code without a local owner, including when snapshot bytes already match', async () => {
+  const git = branchGit('.quality.json\0server/reviewFix.js\0');
+  const originalExec = git.execGit.getMockImplementation();
+  git.execGit.mockImplementation(args => args[0] === 'show' && args[1].includes(QUALITY_SNAPSHOT_BRANCH)
+    ? Promise.resolve({ exitCode: 0, stdout: canonical() }) : originalExec(args));
+  const { deps } = ownedPublicationDeps({ git });
+  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({ reason: 'non-snapshot-changes', deferredPublication: true });
+  expectNoPublication(deps);
+  expect(deps.addWorktree).not.toHaveBeenCalled();
+});
+
+it('does not discard foreign review code discovered during a stale-lease retry', async () => {
+  let pushes = 0;
+  const git = branchGit();
+  const originalExec = git.execGit.getMockImplementation();
+  git.execGit.mockImplementation(async args => {
+    if (args[0] === 'push') { pushes++; throw new Error('! [rejected] (stale info)'); }
+    if (args[0] === 'diff' && pushes) return { exitCode: 0, stdout: '.quality.json\0server/reviewFix.js\0' };
+    return originalExec(args);
+  });
+  const { deps } = ownedPublicationDeps({ git });
+  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({ reason: 'non-snapshot-changes', deferredPublication: true });
+  expect(pushes).toBe(1);
+  expect(deps.addWorktree).toHaveBeenCalledTimes(1);
+  expect(git.createPR).not.toHaveBeenCalled();
+});
+
+it('defers unreadable branch contents rather than treating a failed inspection as an empty diff', async () => {
+  const git = branchGit();
+  const originalExec = git.execGit.getMockImplementation();
+  git.execGit.mockImplementation(args => args[0] === 'diff'
+    ? Promise.resolve({ exitCode: 128, stdout: '' }) : originalExec(args));
+  const deps = testDeps({ git });
+  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({ reason: 'publish-branch-unreadable', deferredPublication: true });
+  expectNoPublication(deps);
+});
+
+it('re-inspects a ref moved by another fetch during preparation instead of leasing its unchecked head', async () => {
+  let moved = false;
+  const git = branchGit();
+  const originalExec = git.execGit.getMockImplementation();
+  git.commit.mockImplementation(async () => { moved = true; return { hash: 'abc1234' }; });
+  git.execGit.mockImplementation(args => args[0] === 'rev-parse' && moved
+    ? Promise.resolve({ exitCode: 0, stdout: 'bb'.repeat(20) }) : originalExec(args));
+  const deps = testDeps({ git });
+  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({ published: true });
+  expect(deps.addWorktree).toHaveBeenCalledTimes(2);
+  const pushes = git.execGit.mock.calls.filter(([args]) => args[0] === 'push');
+  expect(pushes).toEqual([[[
+    'push', `--force-with-lease=refs/heads/${QUALITY_SNAPSHOT_BRANCH}:${'bb'.repeat(20)}`,
+    'origin', `HEAD:refs/heads/${QUALITY_SNAPSHOT_BRANCH}`,
+  ], worktreePath]]);
+});
+
+it('applies the same ownership protection to explicit snapshot migrations', async () => {
+  const git = branchGit();
+  const originalExec = git.execGit.getMockImplementation();
+  git.execGit.mockImplementation(args => args[0] === 'show' && args[1] === 'origin/main:.quality.json'
+    ? Promise.resolve({ exitCode: 0, stdout: serialized(snapshot()) }) : originalExec(args));
+  const { deps, ownership } = ownedPublicationDeps({ git, agents: { reviewer: reviewOwner('running') } });
+  expect(await migrateAppQualitySnapshot(app, deps)).toMatchObject({ reason: 'review-owner-active', deferredPublication: true });
+  expectNoPublication(deps);
+  ownership.agents = {};
+  expect(await migrateAppQualitySnapshot(app, deps)).toMatchObject({ published: true });
 });
