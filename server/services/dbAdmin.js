@@ -85,10 +85,16 @@ export async function beginDatabaseCutoverRecovery(id) {
 /**
  * Run a command and return { stdout, stderr, exitCode }.
  */
-function runCmd(cmd, args, timeout = 120_000, env = process.env) {
+function runCmd(cmd, args, timeout = 120_000, env = process.env, { redactFailureOutput = false } = {}) {
   return new Promise((resolve) => {
     execFile(cmd, args, { cwd: rootDir, timeout, env }, (err, stdout, stderr) => {
       const exitCode = err ? (typeof err.code === 'number' ? err.code : 1) : 0;
+      // Resolved Compose configuration may contain credentials even when its
+      // command fails. Do not put introspection payloads in logs or API errors.
+      if (exitCode !== 0 && redactFailureOutput) {
+        stdout = '';
+        stderr = 'Docker resource inspection failed';
+      }
       if (exitCode !== 0) {
         const detail = stripAnsi(stderr || stdout || err.message || '').replace(/\s+/g, ' ').trim();
         console.error(`🗄️ ${cmd} ${args.join(' ')} exited ${exitCode}: ${detail}`);
@@ -685,7 +691,45 @@ async function stopDatabaseImpl(backend) {
   return { success: true, output: requireCommandSuccess(result, 'Failed to stop native database').stdout };
 }
 
-const DOCKER_VOLUMES = ['portos_portos-pgdata', 'portos-pgdata'];
+/** Resolve the selected Compose service's data before any destructive command. */
+async function resolveDockerDataTarget() {
+  const listed = requireCommandSuccess(await runCmd('docker', ['compose', 'ps', '-a', '-q', 'db'], 15_000), 'Could not identify the Docker database container');
+  const ids = listed.stdout.trim().split(/\s+/).filter(Boolean);
+  if (ids.length > 1 || (ids.length === 1 && !/^[a-f\d]{12,64}$/i.test(ids[0]))) {
+    throw new ServerError('Cannot identify one Docker database container. No data was destroyed.', { status: 500, code: 'DATABASE_COMMAND_FAILED' });
+  }
+  const container = ids[0] || null;
+  const result = await runCmd('docker', container
+    ? ['inspect', '--type', 'container', '--format', '{{json .Mounts}}', container]
+    : ['compose', 'config', '--format', 'json'], 15_000, process.env, { redactFailureOutput: true });
+  requireCommandSuccess(result, 'Could not identify the Docker database data volume');
+  let volume;
+  try {
+    const data = JSON.parse(result.stdout);
+    // A mounted volume is authoritative even if Compose configuration changed.
+    // With no container, use Compose's resolved name (including project/name
+    // overrides), never a guessed project prefix or a historical alternative.
+    const mounts = container ? data : data.services?.db?.volumes;
+    if (!Array.isArray(mounts)) throw new Error('Missing mounts');
+    const matching = mounts.filter(mount => (container ? mount?.Destination : mount?.target) === '/var/lib/postgresql/data');
+    if (matching.length !== 1) throw new Error('Ambiguous data mount');
+    const mount = matching[0];
+    if ((container ? mount.Type : mount.type) !== 'volume') throw new Error('Not a named volume');
+    volume = container ? mount.Name : data.volumes?.[mount.source]?.name;
+    if (typeof volume !== 'string' || !/^[a-z\d][a-z\d_.-]*$/i.test(volume)) throw new Error('Invalid volume name');
+  } catch {
+    throw new ServerError('Cannot identify one named Docker database data volume. No data was destroyed.', { status: 500, code: 'DATABASE_COMMAND_FAILED' });
+  }
+  return { container, volume };
+}
+
+/** Do not delete data until the captured container is provably absent. */
+async function requireDockerContainerAbsent(container) {
+  const result = await runCmd('docker', ['inspect', '--type', 'container', '--format', '{{.Id}}', container], 15_000);
+  if (result.exitCode !== 0 && /no such (?:object|container)/i.test(`${result.stderr} ${result.stdout}`)) return;
+  requireCommandSuccess(result, 'Could not verify the Docker database container was removed');
+  throw new ServerError('Docker database container still exists after removal. Data was not destroyed.', { status: 500, code: 'DATABASE_COMMAND_FAILED' });
+}
 
 /** True when `docker volume inspect` proves the volume is gone; throws on any other failure. */
 async function dockerVolumeAbsent(name) {
@@ -723,28 +767,19 @@ async function destroyDatabaseImpl(backend) {
   }
 
   if (backend === 'docker') {
-    // Stop and remove container + volumes. `rm -f` already treats an absent
-    // container/volume as success (the alternate volume name usually is), so any
-    // nonzero exit is a genuine failure and aborts before claiming deletion.
-    requireCommandSuccess(await runCmd('docker', ['compose', 'stop', 'db'], 15_000), 'Failed to stop Docker database before deletion');
-    requireCommandSuccess(await runCmd('docker', ['compose', 'rm', '-f', 'db'], 15_000), 'Failed to remove Docker database container');
-    let output = '';
-    for (const volume of DOCKER_VOLUMES) {
-      const result = requireCommandSuccess(await runCmd('docker', ['volume', 'rm', '-f', volume], 15_000), `Failed to remove Docker volume ${volume}`);
-      output ||= result.stdout;
+    const { container, volume } = await resolveDockerDataTarget();
+    if (container) {
+      requireCommandSuccess(await runCmd('docker', ['stop', container], 15_000), 'Failed to stop Docker database before deletion');
+      // Do not force-remove a container that restarted after stop. Captured IDs
+      // also keep a Compose configuration change from selecting another service.
+      requireCommandSuccess(await runCmd('docker', ['rm', container], 15_000), 'Failed to remove Docker database container');
+      await requireDockerContainerAbsent(container);
     }
-    // Success only once the selected resources are provably gone.
-    const remaining = await runCmd('docker', ['compose', 'ps', '-a', '-q', 'db'], 15_000);
-    requireCommandSuccess(remaining, 'Could not verify the Docker database container was removed');
-    if (remaining.stdout.trim()) {
-      throw new ServerError('Docker database container still exists after removal. Data was not fully destroyed.', { status: 500, code: 'DATABASE_COMMAND_FAILED' });
+    const result = requireCommandSuccess(await runCmd('docker', ['volume', 'rm', '-f', volume], 15_000), `Failed to remove Docker volume ${volume}`);
+    if (!(await dockerVolumeAbsent(volume))) {
+      throw new ServerError(`Docker volume ${volume} still exists after removal. Data was not fully destroyed.`, { status: 500, code: 'DATABASE_COMMAND_FAILED' });
     }
-    for (const volume of DOCKER_VOLUMES) {
-      if (!(await dockerVolumeAbsent(volume))) {
-        throw new ServerError(`Docker volume ${volume} still exists after removal. Data was not fully destroyed.`, { status: 500, code: 'DATABASE_COMMAND_FAILED' });
-      }
-    }
-    return { success: true, output };
+    return { success: true, output: result.stdout };
   }
 
   // Native: drop the portos database (system pg stays running)
