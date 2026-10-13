@@ -624,7 +624,7 @@ async function executeAdmittedCliRun({ runId, provider, prompt, workspacePath, s
         const timedOut = !!timeoutError && !immediateFallbackAnalysis;
         if (timedOut) metadata.completionReason = 'timeout';
         const errorAnalysis = immediateFallbackAnalysis
-          || toolkit.services.errorDetection.analyzeError(timedOut ? timeoutError : output, exitCode);
+          || toolkit.services.errorDetection.analyzeError(timedOut ? timeoutError : output, exitCode, { prompt: promptInput });
         metadata.error = errorAnalysis.message || `Process exited with code ${exitCode}`;
         metadata.errorCategory = errorAnalysis.category;
         metadata.errorAnalysis = errorAnalysis;

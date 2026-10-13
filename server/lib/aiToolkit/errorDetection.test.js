@@ -30,6 +30,17 @@ const QUOTA_BANNER_LINE = '⚠ Individual quota reached. Please upgrade your sub
 
 describe('Error Detection', () => {
   describe('analyzeError', () => {
+    it('excludes only a complete known prompt echo, preserving real errors with the same words', () => {
+      const prompt = 'authentication\nuser\ncredit  \n';
+      const echoed = `OpenAI Codex v1\nuser\n${prompt}\nERROR: Unrecognized provider failure\n`;
+      expect(analyzeError(echoed, 1, { prompt }).category).toBe(ERROR_CATEGORIES.UNKNOWN);
+      // No framing or an incomplete body is not proof of an input echo.
+      expect(analyzeError('ERROR: authentication failed', 1, { prompt: 'authentication' })).toMatchObject({
+        category: ERROR_CATEGORIES.AUTH_ERROR, message: 'authentication failed',
+      });
+      expect(analyzeError('OpenAI Codex v1\nuser\nauthentication failed\n', 1, { prompt }).category).toBe(ERROR_CATEGORIES.AUTH_ERROR);
+    });
+
     it('detects a Codex/OpenAI content-safety refusal', () => {
       const result = analyzeError(
         "Invalid prompt: we've limited access to this content for safety reasons. This type of information may be used to benefit or to harm people."

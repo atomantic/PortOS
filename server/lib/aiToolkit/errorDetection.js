@@ -119,6 +119,15 @@ const ERROR_PATTERNS = [
     suggestedFix: 'The local inference runtime ran out of GPU memory. Retry once the device drains, shrink the context/KV cache, or run a smaller model.'
   },
   {
+    // Codex's transient model-capacity rejection is not a credential or
+    // billing problem. Let the existing rate-limit recovery choose a fallback.
+    pattern: /^(?:ERROR:\s*)?Selected model is at capacity\. Please try a different model\.[ \t]*$/im,
+    category: ERROR_CATEGORIES.RATE_LIMIT,
+    requiresFallback: true,
+    actionable: false,
+    suggestedFix: 'Selected model is temporarily at capacity. Retry later or use a different model.'
+  },
+  {
     pattern: /billing|payment|credit|insufficient funds/i,
     category: ERROR_CATEGORIES.QUOTA_EXCEEDED,
     requiresFallback: true,
@@ -782,7 +791,7 @@ export function extractWaitTime(text) {
   return null;
 }
 
-export function analyzeError(errorText, exitCode = null) {
+export function analyzeError(errorText, exitCode = null, { prompt } = {}) {
   if (!errorText && exitCode === 0) {
     return {
       hasError: false,
@@ -795,7 +804,16 @@ export function analyzeError(errorText, exitCode = null) {
     };
   }
 
-  const text = String(errorText || '');
+  let text = String(errorText || '');
+  if (typeof prompt === 'string' && prompt.trim()) {
+    // Codex prints `user` followed by the complete input on its diagnostic
+    // stream. Match the KNOWN submitted body, not guessed transcript markers:
+    // tool schemas and quoted errors in that body are not provider failures.
+    // Keep the original transcript on disk and normalize only this scan.
+    text = text.replace(/\r\n/g, '\n');
+    const echo = `\nuser\n${prompt.replace(/\r\n/g, '\n').replace(/\n+$/, '')}\n`;
+    text = text.replace(echo, '\n');
+  }
 
   for (const errorPattern of ERROR_PATTERNS) {
     if (errorPattern.pattern.test(text)) {
