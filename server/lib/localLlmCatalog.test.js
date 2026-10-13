@@ -214,6 +214,9 @@ describe('localLlmCatalog', () => {
       expect(ollama.find((m) => m.key === 'gemma4-e4b')?.id).toBe('gemma4:e4b');
       expect(ollama.find((m) => m.key === 'translategemma-12b')?.id).toBe('translategemma:12b');
       expect(ollama.find((m) => m.key === 'aya-expanse-8b')?.id).toBe('aya-expanse:8b');
+      expect(ollama.find((m) => m.key === 'qwen3.6-27b')?.id).toBe('qwen3.6:27b');
+      expect(ollama.find((m) => m.key === 'magistral-small-24b')?.id).toBe('magistral:24b');
+      expect(ollama.find((m) => m.key === 'nemotron-3.5-lightning')?.id).toBe('nemotron-3.5-lightning:30b');
     });
   });
 
@@ -240,18 +243,27 @@ describe('localLlmCatalog', () => {
         .toEqual({ targetId: 'lmstudio-community/gemma-4-E4B-it-GGUF', exact: true });
       expect(mapModelToBackend('ollama', 'translategemma:12b', 'lmstudio'))
         .toEqual({ targetId: 'lmstudio-community/TranslateGemma-12B-IT-GGUF', exact: true });
+      expect(mapModelToBackend('ollama', 'qwen3.6:27b', 'lmstudio'))
+        .toEqual({ targetId: 'lmstudio-community/Qwen3.6-27B-GGUF', exact: true });
+      expect(mapModelToBackend('ollama', 'magistral:24b', 'lmstudio'))
+        .toEqual({ targetId: 'lmstudio-community/Magistral-Small-2509-GGUF', exact: true });
+      expect(mapModelToBackend('ollama', 'nemotron-3.5-lightning:30b', 'lmstudio'))
+        .toEqual({ targetId: 'lmstudio-community/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF', exact: true });
     });
 
     it('still maps models retired from the suggested-install catalog', () => {
       // Retiring an entry from LOCAL_LLM_CATALOG must not downgrade an existing
       // install's migrate to a guessed stem — RETIRED_MODEL_MAPPINGS keeps it exact.
       expect(getCatalog('ollama').some((m) => m.key === 'llama3.2')).toBe(false);
+      expect(getCatalog('ollama').some((m) => m.key === 'nemotron-3-nano-30b-a3b')).toBe(false);
       expect(mapModelToBackend('ollama', 'llama3.2:latest', 'lmstudio'))
         .toEqual({ targetId: 'lmstudio-community/Llama-3.2-3B-Instruct-GGUF', exact: true });
       expect(mapModelToBackend('lmstudio', 'lmstudio-community/Llama-3.2-3B-Instruct-GGUF', 'ollama'))
         .toEqual({ targetId: 'llama3.2', exact: true });
       expect(mapModelToBackend('ollama', 'qwen2.5vl:32b', 'lmstudio'))
         .toEqual({ targetId: 'lmstudio-community/Qwen2.5-VL-32B-Instruct-GGUF', exact: true });
+      expect(mapModelToBackend('ollama', 'nemotron-3-nano:30b', 'lmstudio'))
+        .toEqual({ targetId: 'lmstudio-community/NVIDIA-Nemotron-3-Nano-30B-A3B-GGUF', exact: true });
     });
 
     it('best-effort derives an Ollama name for an unknown LM Studio model', () => {
