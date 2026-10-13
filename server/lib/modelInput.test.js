@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentInstructionsAddition, promptAdditionsSchema, sentPromptRecord } from './modelInput.js';
+import { agentInstructionsAddition, promptAddition, promptAdditionsSchema, sentPromptRecord } from './modelInput.js';
 
 describe('promptAdditionsSchema', () => {
   // A multipart image request (an uploaded reference) carries the list as one JSON string.
@@ -13,6 +13,16 @@ describe('promptAdditionsSchema', () => {
   it('refuses a malformed string rather than dropping it', () => {
     expect(() => promptAdditionsSchema.parse('not json')).toThrow();
     expect(() => promptAdditionsSchema.parse([{ id: 'x', label: 'X', text: '' }])).toThrow();
+  });
+});
+
+describe('promptAddition', () => {
+  // #11317: a chip used to stop at 20,000 characters, so a long bible showed cut off.
+  it('keeps a long block whole and round-trips it through the request schema', () => {
+    const text = 'b'.repeat(50000);
+    const addition = promptAddition('bible', 'Production bible', text);
+    expect(addition.text).toHaveLength(50000);
+    expect(promptAdditionsSchema.parse([addition])[0].text).toHaveLength(50000);
   });
 });
 

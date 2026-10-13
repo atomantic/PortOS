@@ -11,12 +11,15 @@ import { z } from 'zod';
  * the fact even when nothing showed it before the send (autopilot, batch).
  */
 
-const ADDITION_TEXT_MAX = 20000;
+// A request-size guard for additions a client sends back, not a display cap: a chip
+// always holds its block whole (a long production bible included), so the server
+// never cuts one and only refuses a request too large to be a real addition.
+const ADDITION_TEXT_MAX = 1_000_000;
 
 /** One labeled block PortOS adds to a model's input, or null when it adds nothing. */
 export function promptAddition(id, label, text) {
   const trimmed = typeof text === 'string' ? text.trim() : '';
-  return trimmed ? { id, label, text: trimmed.slice(0, ADDITION_TEXT_MAX) } : null;
+  return trimmed ? { id, label, text: trimmed } : null;
 }
 
 /** The additions a request already carries (from the composer that built it). */
