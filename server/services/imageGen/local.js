@@ -712,29 +712,32 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   // per inference step here; we watch and stream the latest as `currentImage`.
   const stepwiseDir = await mkdtemp(join(tmpdir(), 'portos-stepwise-'));
 
-  // `renderPrompt` — the user's prompt plus any LoRA activation tokens it was
-  // missing (#4665). Identical to `prompt` when nothing was woven.
-  const { bin, args } = buildArgs({ pythonPath, model, prompt: renderPrompt, negativePrompt, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, seed: actualSeed, quantize, outputPath, loraPaths: validLoras, loraScales, stepwiseDir, initImagePath: validInitImagePath, initImageStrength: validInitImageStrength, referenceImagePaths: validReferenceImagePaths, referenceImageStrengths: validReferenceImageStrengths });
-  const heavyClaim = await claimHeavyLocalJob({ kind: 'local image generation', id: jobId });
-  if (!heavyClaim.ok) {
-    jobs.delete(jobId);
-    await rmGuarded(stepwiseDir, { recursive: true, force: true });
-    throw new ServerError(heavyClaim.message, { status: 409, code: 'HEAVY_LOCAL_JOB_BUSY', context: { holder: heavyClaim.holder } });
-  }
-  const releaseHeavyClaim = () => maintenance.continueSettlement(() => heavyClaim.release())
-    .catch((err) => {
-      maintenance.markCurrentUnsettled();
-      console.error(`❌ Image generation claim release [${jobId.slice(0, 8)}]: ${err.message}`);
-    });
+  let heavyClaim = null;
+  const releaseHeavyClaim = () => {
+    if (!heavyClaim?.release) return Promise.resolve();
+    return maintenance.continueSettlement(() => heavyClaim.release())
+      .catch((err) => {
+        maintenance.markCurrentUnsettled();
+        console.error(`❌ Image generation claim release [${jobId.slice(0, 8)}]: ${err.message}`);
+      });
+  };
   const removeStepwise = () => maintenance.continueSettlement(
     () => rmGuarded(stepwiseDir, { recursive: true, force: true }),
   ).catch((err) => {
     maintenance.markCurrentUnsettled();
     console.error(`❌ Image generation scratch cleanup [${jobId.slice(0, 8)}]: ${err.message}`);
   });
+  let bin, args;
   let proc;
   let claimHandedOff = false;
   try {
+    // `renderPrompt` — the user's prompt plus any LoRA activation tokens it was
+    // missing (#4665). Identical to `prompt` when nothing was woven.
+    ({ bin, args } = buildArgs({ pythonPath, model, prompt: renderPrompt, negativePrompt, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, seed: actualSeed, quantize, outputPath, loraPaths: validLoras, loraScales, stepwiseDir, initImagePath: validInitImagePath, initImageStrength: validInitImageStrength, referenceImagePaths: validReferenceImagePaths, referenceImageStrengths: validReferenceImageStrengths }));
+    heavyClaim = await claimHeavyLocalJob({ kind: 'local image generation', id: jobId });
+    if (!heavyClaim.ok) {
+      throw new ServerError(heavyClaim.message, { status: 409, code: 'HEAVY_LOCAL_JOB_BUSY', context: { holder: heavyClaim.holder } });
+    }
     const { prepareLocalMemory, gpuBlockersMessage } = await import('../localMemory.js');
     const memoryReport = await prepareLocalMemory();
     // Something the unload above cannot evict already owns the GPU (today: the
