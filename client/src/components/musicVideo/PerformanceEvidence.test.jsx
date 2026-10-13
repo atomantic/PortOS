@@ -31,7 +31,6 @@ describe('PerformanceEvidence', () => {
     expect(video.currentTime).toBe(3);
     fireEvent.pause(video);
     expect(pause.mock.instances).toContain(audio);
-    expect(screen.getByText(/Voice isolation is unverified/)).toBeTruthy();
     expect(screen.getByText(/example-analyzer 1/)).toBeTruthy();
     play.mockRejectedValueOnce(new Error('blocked'));
     fireEvent.play(video);
@@ -39,10 +38,40 @@ describe('PerformanceEvidence', () => {
     vi.restoreAllMocks();
   });
 
-  it('keeps legacy takes without source metadata or analyzer evidence visibly unverified', () => {
+  it('says when the recorded source is missing', () => {
     render(<PerformanceEvidence clipSrc="/example.mp4" instruction={{}} />);
-    expect(screen.getByText(/Temporal lip-sync: unverified/)).toBeTruthy();
     expect(screen.getByText(/Recorded source unavailable/)).toBeTruthy();
+  });
+
+  // Shot 19 of a music video: a 2.33 s shot inside a 5 s take showed blank word chips, the
+  // next line's words, and "review needed" lines no one could act on without an analyzer.
+  it('lists only the shot\'s own words, explains the longer take, stops at the out point and stays quiet without an analyzer', () => {
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
+    const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+    const take = {
+      audio: { conditioning: { source: 'vocal-stem', filename: 'singer.wav' } },
+      audioWindow: { startSec: 40, durationSec: 5 }, edit: { inSec: 1, outSec: 3.33 }, capability: { minAudioSec: 5 },
+      cues: [
+        { text: 'this line', startSec: 0.9, endSec: 3.2, words: [{ w: 'this', startSec: 0.9, endSec: 1.6 }, { text: 'line', startSec: 1.7, endSec: 3.2 }] },
+        { text: 'the next line', startSec: 4.3, endSec: 5 },
+      ],
+    };
+    const { container } = render(<PerformanceEvidence clipSrc="/example.mp4" instruction={take}
+      repair={{ ok: false, message: 'Review needed: complete measured temporal evidence is required' }} onRepair={vi.fn()} />);
+    expect(screen.getByRole('button', { name: 'this' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'line' })).toBeTruthy();
+    expect(screen.queryByText(/the next line/)).toBeNull();
+    expect(screen.getByText(/needs at least 5 s of song/)).toBeTruthy();
+    expect(screen.getByText(/Audio: vocal stem/)).toBeTruthy();
+    expect(screen.queryByText(/Review needed|unverified/i)).toBeNull();
+    const video = container.querySelector('video');
+    fireEvent.loadedMetadata(video);
+    fireEvent.play(video);
+    pause.mockClear();
+    video.currentTime = 3.4;
+    fireEvent.timeUpdate(video);
+    expect(pause.mock.instances).toContain(video);
+    vi.restoreAllMocks();
   });
 });
 
@@ -58,7 +87,8 @@ it('shows the accepted boundary and next spend, disables duplicate clicks, and r
   expect(onRepair).toHaveBeenCalledTimes(1);
   view.rerender(<PerformanceEvidence instruction={instruction} repair={repair} onRepair={onRepair} repairBusy />);
   expect(screen.getByRole('button', { name: 'Repairing…' }).disabled).toBe(true);
-  view.rerender(<PerformanceEvidence instruction={instruction} repair={{ ok: false, message: 'Review needed: evidence is inconclusive' }} onRepair={onRepair} />);
+  view.rerender(<PerformanceEvidence instruction={instruction} temporal={{ status: 'unverified', analyzer: { id: 'example-analyzer', version: '1' }, spans: [] }}
+    repair={{ ok: false, message: 'Review needed: evidence is inconclusive' }} onRepair={onRepair} />);
   expect(screen.queryByRole('button', { name: 'Repair from here' })).toBeNull();
   expect(screen.getByText(/evidence is inconclusive/)).toBeTruthy();
 });
