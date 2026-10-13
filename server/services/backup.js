@@ -617,6 +617,7 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
 
   let changedFiles = [];
   let manifest;
+  let previousSnapshotId;
 
   const removeMarker = (path, marker) => unlink(path).catch(cause => {
     if (cause.code === 'ENOENT') return;
@@ -655,7 +656,10 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
     if (failureRecorded) await clearInProgressMarkers().catch(() => {});
     releaseActiveSnapshot();
     setBackupRunning(false, 'failure');
-    const failureState = { lastRun: new Date().toISOString(), status: 'error', error: err.message, pgBackup: null };
+    const failureState = {
+      lastRun: new Date().toISOString(), status: 'error', error: err.message, pgBackup: null,
+      ...(previousSnapshotId !== undefined ? { lastSnapshotId: previousSnapshotId } : {}),
+    };
     await saveState(failureState, (cause) => {
       const code = ['EACCES', 'EPERM', 'EIO', 'ENOSPC', 'EROFS', 'ENOENT', 'EMFILE', 'ENFILE'].includes(cause.code) ? cause.code : 'UNKNOWN';
       failedStateProjection = { ...failureState, error: `Backup failed; status persistence failed (${code}). See server logs.` };
@@ -745,13 +749,14 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
     }
 
     // A backup is not complete while its durable guards still block restore.
-    // Keep activeSnapshotId and the run lock until success is persisted, but
-    // settle these markers before publishing success or allowing retention.
+    // Keep the reservation guard until success is persisted: if both the
+    // status write and failure-marker write fail, it must survive a restart.
     await removeMarker(failedMarkerPath(snapshotDir), 'failed');
-    await clearInProgressMarkers();
+    await removeMarker(markerPath(snapshotDir), 'snapshot');
 
     const status = backupStatusForPg(pgResult);
     const lastRun = new Date().toISOString();
+    previousSnapshotId = (await getState()).lastSnapshotId;
     await saveState({
       lastRun,
       lastSnapshotId: snapshotId,
@@ -761,6 +766,8 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
       assetConsistency,
       error: pgResult.status === 'failed' ? `DB dump ${pgResult.reason}` : null
     });
+
+    await removeMarker(parentMarker, 'reservation');
 
     if (io) io.emit('backup:completed', { snapshotId, filesChanged: changedFiles.length, status, pgBackup: pgResult });
 

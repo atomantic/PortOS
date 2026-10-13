@@ -4471,6 +4471,37 @@ describe('runBackup lifecycle', () => {
     expect(spawn).toHaveBeenCalledTimes(1);
   });
 
+  it('retains a durable guard when completion state and failure-marker persistence both fail', async () => {
+    const fsp = await actualFs();
+    const { atomicWrite } = await import('../lib/fileUtils.js');
+    const io = { emit: vi.fn() };
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    const pending = runBackup(destRoot, io);
+    await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+    const snapshotId = io.emit.mock.calls[0][1].snapshotId;
+    const snapshotDir = await findSnapshotDir();
+    atomicWrite.mockImplementationOnce(async (path, ...args) => {
+      if (path.endsWith('manifest.json')) return (await vi.importActual('../lib/fileUtils.js')).atomicWrite(path, ...args);
+      throw new Error('unexpected write');
+    }).mockRejectedValueOnce(new Error('completion status unavailable'));
+    fs.writeFile.mockImplementation((path, ...args) => path === joinPath(snapshotDir, '.failed')
+      ? Promise.reject(Object.assign(new Error('failure marker unavailable'), { code: 'EACCES' }))
+      : fsp.writeFile(path, ...args));
+    const rejected = expect(pending).rejects.toThrow('completion status unavailable');
+    proc.emit('close', 0);
+    await rejected;
+    expect(isBackupInProgress()).toBe(false);
+    expect(io.emit.mock.calls.some(([event]) => event === 'backup:completed')).toBe(false);
+    await expect(fsp.access(joinPath(destRoot, 'snapshots', machineHost, `.${snapshotId}.in-progress`)))
+      .resolves.toBeUndefined();
+    // The on-disk guard, not process state, must block restore after restart.
+    vi.resetModules();
+    const { restoreSnapshot: restoreAfterRestart } = await import('./backup.js');
+    await expect(restoreAfterRestart(destRoot, snapshotId, { dryRun: true }))
+      .rejects.toMatchObject({ code: 'SNAPSHOT_INCOMPLETE' });
+  });
+
   it('retains incomplete guards when the failed marker cannot be written while releasing the process lock', async () => {
     const io = { emit: vi.fn() };
     const proc = fakeProc();
