@@ -31,11 +31,15 @@ const SERVER_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 //   rejected BEFORE uploads are staged to PATHS.imageRefs. Rejecting later, in
 //   the route, strands those staged copies — the route's res.on('close') sweep
 //   covers only multer temps.
+// - services/imageGen/promptPreview.js — the compose preview of routes/imageGen.js's
+//   POST /generate (#11317). It reads the mode prepareGenerateParams already
+//   resolved and resolves the same provider knobs the route dispatches with.
 const ALLOWED = new Set([
   'services/imageGen/cloudProviderConfig.js',
   'routes/imageGen.js',
   'services/imageGen/index.js',
   'services/imageGen/prepareParams.js',
+  'services/imageGen/promptPreview.js',
 ]);
 
 describe('render-target resolver guard (#3231)', () => {

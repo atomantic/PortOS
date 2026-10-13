@@ -172,6 +172,7 @@ export * from './useSeriesRunLifecycle.js';
 export * from './useSseProgress.js';
 export * from './useStoryStepRuns.jsx';
 export * from './useModelDownloadStatus.js';
+export * from './useModelInputPreview.js';
 
 // === Media (annotations, completion, attachments) ===
 export * from './useAvatarCapabilities.js';

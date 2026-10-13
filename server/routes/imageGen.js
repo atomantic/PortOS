@@ -30,6 +30,7 @@ import { PATHS, ensureDir, resolveGalleryImage, unlinkGuarded, copyFileGuarded }
 import { prepareGenerateParams, resolveLocalImageModel, selectLocalImageModelFromSettings } from '../services/imageGen/prepareParams.js';
 import { applyImageClean, applyWatermarkRemoval, applyLightRegenVariant } from '../services/imageGen/variants.js';
 import { applyFilmLookBake } from '../services/imageGen/filmLookBake.js';
+import { previewImagePrompt } from '../services/imageGen/promptPreview.js';
 import { filmLookBakeSchema } from '../lib/filmLookValidation.js';
 import { join, basename } from 'node:path';
 import { STYLE_PRESETS } from '../lib/writersRoomStylePresets.js';
@@ -454,6 +455,18 @@ const queuedImageResponse = ({ jobId, position, status, mode, model, mediaProvid
   // federated render precisely because no local backend is running it.
   mediaProviderPeerId,
 });
+
+// What the render would send, before it is sent (#11317). Same preparation and
+// prompt builders as POST /generate; the form says which uploads it holds by
+// count rather than sending their bytes, and nothing is staged or queued.
+const promptPreviewSchema = generateSchema.safeExtend({
+  uploadedInitImage: z.boolean().optional(),
+  uploadedReferenceCount: z.number().int().min(0).max(MAX_REFERENCE_IMAGES).optional(),
+});
+
+router.post('/prompt-preview', asyncHandler(async (req, res) => {
+  res.json(await previewImagePrompt(validateRequest(promptPreviewSchema, req.body ?? {})));
+}));
 
 router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
   const data = validateRequest(generateSchema, coerceFormFields(req.body));

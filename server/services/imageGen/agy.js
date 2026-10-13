@@ -260,6 +260,22 @@ async function resolveAgyDriverModel(model, shippedDefault) {
   return { model, models };
 }
 
+/**
+ * The exact message agy receives and the record of what PortOS added to the
+ * user's prompt (#11317). Shared by the render and the compose preview.
+ */
+export function agySentPrompt({ prompt = '', negativePrompt, width, height, stagingPath, inputImages, initImageStrength, promptAdditions = [] }) {
+  const buildWith = (text) => buildAgyPrompt({
+    prompt: text, negativePrompt, width, height, stagingPath, inputImages, initImageStrength,
+  });
+  const fullPrompt = buildWith(prompt);
+  return {
+    fullPrompt,
+    record: sentPromptRecord({ sentPrompt: fullPrompt, carried: carriedPromptAdditions({ promptAdditions }),
+      added: [agentInstructionsAddition('Antigravity image tool instructions', buildWith)] }),
+  };
+}
+
 export async function generateImage({
   promptAdditions = [],
   agyPath,
@@ -302,10 +318,9 @@ export async function generateImage({
   const scratchDir = join(tmpdir(), `portos-agy-${jobId}`);
   const stagingPath = join(scratchDir, 'output.png');
 
-  const buildWith = (text) => buildAgyPrompt({
-    prompt: text, negativePrompt, width, height, stagingPath, inputImages, initImageStrength,
+  const { fullPrompt, record: sentRecord } = agySentPrompt({
+    prompt, negativePrompt, width, height, stagingPath, inputImages, initImageStrength, promptAdditions,
   });
-  const fullPrompt = buildWith(prompt);
   // `driverModel` is what agy actually runs on — a retired shipped default is
   // re-pointed here, so every record below reports the model that rendered
   // rather than the one the caller asked for. See resolveAgyDriverModel.
@@ -327,8 +342,7 @@ export async function generateImage({
     // provenance names the model that actually produced the pixels (#3231).
     imageModel: AGY_IMAGEGEN_IMAGE_MODEL,
     ...(visualConditioning ? { visualConditioning } : {}),
-    ...sentPromptRecord({ sentPrompt: fullPrompt, carried: carriedPromptAdditions({ promptAdditions }),
-      added: [agentInstructionsAddition('Antigravity image tool instructions', buildWith)] }),
+    ...sentRecord,
     createdAt: new Date().toISOString(),
   };
   // The scratch dir is the last fallible step before the job exists, so a

@@ -569,6 +569,21 @@ export function parseImageExecutionMarker(line) {
   };
 }
 
+/**
+ * What the local runner would receive for this prompt — the LoRA trigger weave
+ * included — as the compose preview's record (#11317). Same buildSidecarMeta
+ * the render calls.
+ */
+export async function localSentPrompt({ model, modelId, prompt = '', negativePrompt = '', loraFilenames = [], loraPaths = [], promptAdditions = [] }) {
+  const loraTriggerWords = await readTriggerWordsByFilename([...loraFilenames, ...loraPaths]);
+  const { meta } = buildSidecarMeta({
+    jobId: 'preview', model: model || { id: modelId }, prompt, negativePrompt, modelId,
+    loraFilenames, loraPaths, loraTriggerWords, promptAdditions,
+    resolveInputPath: resolveImageInputPath, loraExists: existsSync,
+  });
+  return sentPromptRecord({ sentPrompt: meta.sentPrompt, sentNegativePrompt: meta.sentNegativePrompt, carried: meta.promptAdditions || [] });
+}
+
 export async function generateImage({ pythonPath, prompt = '', negativePrompt = '', modelId = LOCAL_IMAGEGEN_DEFAULT_MODEL, width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, referenceImagePaths = [], referenceImageStrengths = [], visualConditioning = null, jobId: providedJobId = null, cleanC2PA = false, denoise = false, regenOf = null, upscaleTo = null, outputTarget = null, promptAdditions = [] }) {
   // The ingestion instant `renderTimingFields` measures from — the queue calls
   // generateImage the moment it picks this job up. See lib/renderTiming.js.

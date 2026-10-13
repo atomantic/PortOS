@@ -180,6 +180,38 @@ export function buildCodexAttachmentPrefix({ initPath, referenceCount, initImage
   return '';
 }
 
+/**
+ * The exact message `codex exec` receives and the record of what PortOS added
+ * to the user's prompt (#11317). Shared by the render and the compose preview.
+ */
+export function codexSentPrompt({ prompt = '', negativePrompt, width, height, inputImages, initImageStrength, promptAdditions = [] }) {
+  // Width/height/negative aren't first-class args for Codex's built-in
+  // image_gen tool — pass them as natural-language hints inside the prompt.
+  // Codex's imagegen skill is prompt-driven; the model decides resolution.
+  // gpt-image-2 supports up to 4K output; the "(high quality)" suffix
+  // pushes it off its 1024 default toward whatever native size best fits
+  // the requested aspect ratio.
+  // The ratio is named as well as the pixels: a bare "(1672x941)" left the
+  // model free to return a square close-up, so the frame is also conformed
+  // after harvest (aspectConform.js) — the hint just makes that crop rarer.
+  const ratioPhrase = (width && height) ? aspectRatioPhrase(Number(width), Number(height)) : '';
+  const sizeHint = (width && height) ? ` (${ratioPhrase ? `${ratioPhrase} frame, ` : ''}${width}x${height})` : '';
+  const qualityHint = (width >= 1536 || height >= 1536) ? ' (high quality)' : '';
+  const avoidHint = negativePrompt?.trim() ? `\nAvoid: ${negativePrompt.trim()}` : '';
+  const editPrefix = buildCodexAttachmentPrefix({
+    initPath: inputImages.initPath,
+    referenceCount: inputImages.referencePaths.length,
+    initImageStrength,
+  });
+  const buildWith = (text) => `$imagegen ${editPrefix}${text.trim()}${sizeHint}${qualityHint}${avoidHint}`;
+  const fullPrompt = buildWith(prompt);
+  return {
+    fullPrompt,
+    record: sentPromptRecord({ sentPrompt: fullPrompt, carried: carriedPromptAdditions({ promptAdditions }),
+      added: [agentInstructionsAddition('Codex image tool instructions', buildWith)] }),
+  };
+}
+
 // Input images are attached via codex CLI's `-i <FILE>` flag (variadic, so all
 // of them ride one flag) and the prompt is reshaped so the `$imagegen` skill
 // feeds the attachments to `image_gen` as references.
@@ -236,26 +268,9 @@ export async function generateImage({
   const filename = `${jobId}.png`;
   const outputPath = join(PATHS.images, filename);
 
-  // Width/height/negative aren't first-class args for Codex's built-in
-  // image_gen tool — pass them as natural-language hints inside the prompt.
-  // Codex's imagegen skill is prompt-driven; the model decides resolution.
-  // gpt-image-2 supports up to 4K output; the "(high quality)" suffix
-  // pushes it off its 1024 default toward whatever native size best fits
-  // the requested aspect ratio.
-  // The ratio is named as well as the pixels: a bare "(1672x941)" left the
-  // model free to return a square close-up, so the frame is also conformed
-  // after harvest (aspectConform.js) — the hint just makes that crop rarer.
-  const ratioPhrase = (width && height) ? aspectRatioPhrase(Number(width), Number(height)) : '';
-  const sizeHint = (width && height) ? ` (${ratioPhrase ? `${ratioPhrase} frame, ` : ''}${width}x${height})` : '';
-  const qualityHint = (width >= 1536 || height >= 1536) ? ' (high quality)' : '';
-  const avoidHint = negativePrompt?.trim() ? `\nAvoid: ${negativePrompt.trim()}` : '';
-  const editPrefix = buildCodexAttachmentPrefix({
-    initPath: inputImages.initPath,
-    referenceCount: inputImages.referencePaths.length,
-    initImageStrength,
+  const { fullPrompt, record: sentRecord } = codexSentPrompt({
+    prompt, negativePrompt, width, height, inputImages, initImageStrength, promptAdditions,
   });
-  const buildWith = (text) => `$imagegen ${editPrefix}${text.trim()}${sizeHint}${qualityHint}${avoidHint}`;
-  const fullPrompt = buildWith(prompt);
 
   const bin = codexPath || DEFAULT_BIN;
   // `codex exec` treats `-i, --image <FILE>...` as VARIADIC, so it greedily
@@ -288,8 +303,7 @@ export async function generateImage({
     width: width ? Number(width) : null, height: height ? Number(height) : null,
     filename, mode: IMAGE_GEN_MODE.CODEX, model: effectiveModel,
     ...(visualConditioning ? { visualConditioning } : {}),
-    ...sentPromptRecord({ sentPrompt: fullPrompt, carried: carriedPromptAdditions({ promptAdditions }),
-      added: [agentInstructionsAddition('Codex image tool instructions', buildWith)] }),
+    ...sentRecord,
     createdAt: new Date().toISOString(),
   };
   const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
