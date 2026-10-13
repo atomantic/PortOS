@@ -73,6 +73,21 @@ describe('buildPortosMeta', () => {
     }
   });
 
+  it('advertises lyric provenance to pause track transfers to caption-only peers', async () => {
+    const meta = await buildPortosMeta();
+    expect(meta.schemaVersions.tracks).toBe(12);
+    const olderPeer = { ...meta.schemaVersions, tracks: 11 };
+    const diff = compareSchemaVersions(meta.schemaVersions, olderPeer);
+    expect(scopeVersionDiff(diff, RECORD_KIND_SCHEMA_CATEGORIES.track)).toEqual({
+      compatible: false,
+      ahead: [{ category: 'tracks', senderV: 12, receiverV: 11 }],
+      behind: [],
+    });
+    // This upgrade pauses only tracks; unrelated artist/album sync still works.
+    expect(scopeVersionDiff(diff, RECORD_KIND_SCHEMA_CATEGORIES.artist).compatible).toBe(true);
+    expect(scopeVersionDiff(diff, RECORD_KIND_SCHEMA_CATEGORIES.album).compatible).toBe(true);
+  });
+
   it('returns { portosVersion, schemaVersions } with the live registry', async () => {
     const meta = await buildPortosMeta();
     expect(meta.portosVersion).toMatch(/^\d+\.\d+\.\d+/);

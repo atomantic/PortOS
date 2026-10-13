@@ -139,6 +139,10 @@ export function sanitizeRender(raw) {
   const id = isStr(raw.id) && RENDER_ID_RE.test(raw.id) ? raw.id : legacyRenderId(audioFilename);
   const codeProvenance = sanitizeCodeProvenance(raw.codeProvenance);
   const additions = promptAdditionsSchema.safeParse(raw.promptAdditions);
+  const lyricAdditions = promptAdditionsSchema.safeParse(raw.lyricAdditions);
+  const sentLyrics = typeof raw.sentLyrics === 'string' && raw.sentLyrics.length <= LYRICS_MAX + 1000
+    ? { sentLyrics: raw.sentLyrics, ...(lyricAdditions.success && lyricAdditions.data ? { lyricAdditions: lyricAdditions.data } : {}) }
+    : {};
   // Optional provenance on new local audio takes. Keep the exact caption,
   // including whitespace and the directive beyond the authored 8,000-char cap.
   const sent = typeof raw.sentPrompt === 'string' && raw.sentPrompt.length <= 20000
@@ -149,7 +153,7 @@ export function sanitizeRender(raw) {
     audioFilename,
     prompt: trimTo(raw.prompt, PROMPT_MAX),
     authoredPrompt: trimTo(raw.authoredPrompt, PROMPT_MAX),
-    lyrics: trimTo(raw.lyrics, LYRICS_MAX),
+    lyrics: isStr(raw.lyrics) ? raw.lyrics.slice(0, LYRICS_MAX) : '',
     // null means a legacy/uploaded render never recorded the choice. Preserve
     // that sentinel so remixing cannot infer vocal intent from empty lyrics.
     instrumentalOnly: typeof raw.instrumentalOnly === 'boolean' ? raw.instrumentalOnly : null,
@@ -161,6 +165,7 @@ export function sanitizeRender(raw) {
     createdAt: isStr(raw.createdAt) && raw.createdAt ? raw.createdAt : new Date().toISOString(),
     ...(codeProvenance ? { codeProvenance } : {}),
     ...sent,
+    ...sentLyrics,
   };
 }
 
@@ -189,7 +194,7 @@ export function sanitizeTrack(raw) {
   const createdAt = isStr(raw.createdAt) ? raw.createdAt : new Date().toISOString();
   const updatedAt = isStr(raw.updatedAt) ? raw.updatedAt : createdAt;
   const deleted = raw.deleted === true;
-  const lyrics = trimTo(raw.lyrics, LYRICS_MAX);
+  const lyrics = isStr(raw.lyrics) ? raw.lyrics.slice(0, LYRICS_MAX) : '';
   const prompt = trimTo(raw.prompt, PROMPT_MAX);
   const engine = trimTo(raw.engine, ENGINE_MAX);
   const modelId = trimTo(raw.modelId, MODEL_ID_MAX);
@@ -378,9 +383,13 @@ export function mergeTrackRecord(local, remoteRaw) {
     const localTakes = new Map((local.renders || []).map((take) => [take.id, take]));
     carry.renders = remote.renders.map((take) => {
       const previous = localTakes.get(take.id);
-      return !('sentPrompt' in take) && typeof previous?.sentPrompt === 'string'
-        ? { ...take, sentPrompt: previous.sentPrompt, ...(previous.promptAdditions ? { promptAdditions: previous.promptAdditions } : {}) }
-        : take;
+      return {
+        ...take,
+        ...(!('sentPrompt' in take) && typeof previous?.sentPrompt === 'string'
+          ? { sentPrompt: previous.sentPrompt, ...(previous.promptAdditions ? { promptAdditions: previous.promptAdditions } : {}) } : {}),
+        ...(!('sentLyrics' in take) && typeof previous?.sentLyrics === 'string'
+          ? { sentLyrics: previous.sentLyrics, ...(previous.lyricAdditions ? { lyricAdditions: previous.lyricAdditions } : {}) } : {}),
+      };
     });
     next = { ...remote, ...carry };
   }

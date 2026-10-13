@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { StrictMode } from 'react';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import MusicGenPanel from './MusicGenPanel';
 import * as api from '../../services/api';
 import toast from '../ui/Toast';
@@ -107,9 +107,30 @@ describe('MusicGenPanel', () => {
     expect(screen.getByText('No vocals.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Show full prompt' }));
     expect(screen.getByRole('button', { name: 'Copy full prompt' })).toBeInTheDocument();
-    expect(api.previewMusicPrompt).toHaveBeenCalledWith({ prompt, instrumentalOnly: true }, { silent: true });
+    expect(api.previewMusicPrompt).toHaveBeenCalledWith(expect.objectContaining({ prompt, instrumentalOnly: true }), { silent: true });
     fireEvent.click(screen.getByRole('button', { name: /^generate$/i }));
     await waitFor(() => expect(api.generateMusic).toHaveBeenCalledWith(expect.objectContaining({ prompt, instrumentalOnly: true }), { silent: true }));
+  });
+
+  it('shows lyric additions from the server and submits the authored sheet without trimming it', async () => {
+    const lyrics = '  [verse]\nKeep these spaces \n';
+    const sentLyrics = `${lyrics}\n[outro]`;
+    api.listMusicEngines.mockResolvedValue({ defaultEngine: 'minimax-music3', engines: [minimax({ ready: true, modelReady: true })] });
+    api.previewMusicPrompt.mockResolvedValue({
+      sentPrompt: 'folk', sentLyrics,
+      lyricAdditions: [{ id: 'closing-section', label: 'Closing section', text: '[outro]' }],
+    });
+    api.generateMusic.mockResolvedValue({ track: { id: 'track-1' } });
+    render(<MusicGenPanel track={{ id: 'track-1' }} prompt="folk" lyrics={lyrics} />);
+    const region = await screen.findByRole('region', { name: 'Lyrics sent to the model' });
+    fireEvent.click(within(region).getByRole('button', { name: '+ Closing section' }));
+    expect(within(region).getByText('[outro]')).toBeInTheDocument();
+    fireEvent.click(within(region).getByRole('button', { name: 'Show full prompt' }));
+    expect(region.querySelector('pre').textContent).toBe(sentLyrics);
+    expect(within(region).getByRole('button', { name: 'Copy full prompt' })).toBeInTheDocument();
+    expect(api.previewMusicPrompt).toHaveBeenCalledWith(expect.objectContaining({ lyrics, engine: 'minimax-music3' }), { silent: true });
+    fireEvent.click(screen.getByRole('button', { name: /^generate$/i }));
+    await waitFor(() => expect(api.generateMusic).toHaveBeenCalledWith(expect.objectContaining({ lyrics }), { silent: true }));
   });
 
   // `clearAllMocks` resets calls but leaves a spy installed. A test that pins
