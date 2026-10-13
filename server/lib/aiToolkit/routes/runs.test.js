@@ -3,6 +3,7 @@ import express from 'express';
 import { request } from '../../testHelper.js';
 import { createRunsRoutes } from './runs.js';
 import { asyncHandler as portosAsyncHandler, errorMiddleware, ServerError } from '../../errorHandler.js';
+import { buildCliArgs } from '../../cliProviderArgs.js';
 
 // Route-level harness for POST /api/runs fallback-model execution.
 //
@@ -49,15 +50,15 @@ function runData({ providerType, defaultModel, usedFallback = false, fallbackMod
 // Sends BOTH workspace fields, as the real client does — a name without a path
 // means "app selected but its Repository Path is unset" and is now a 400 (see
 // the selected-app-without-a-path suite at the bottom of this file).
-const post = (app) =>
+const post = (app, overrides = {}) =>
   request(app)
     .post('/api/runs')
-    .send({ providerId: 'p1', model: REQUEST_MODEL, prompt: 'hello', workspaceName: 'ws', workspacePath: '/srv/repos/ws' });
+    .send({ providerId: 'p1', model: REQUEST_MODEL, prompt: 'hello', workspaceName: 'ws', workspacePath: '/srv/repos/ws', ...overrides });
 
-describe('POST /api/runs — fallback-model execution', () => {
+describe('POST /api/runs — model execution', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  describe('(a) non-fallback runs honor the request model where the type threads it', () => {
+  describe('(a) non-fallback runs honor the request model', () => {
     it('API: passes the request model as the 3rd executeApiRun arg', async () => {
       const { app, runnerService } = makeApp(
         runData({ providerType: 'api', defaultModel: 'provider-default' })
@@ -80,17 +81,56 @@ describe('POST /api/runs — fallback-model execution', () => {
       expect(runnerService.executeTuiRun.mock.calls[0][0].provider.defaultModel).toBe(REQUEST_MODEL);
     });
 
-    it('CLI: leaves the provider untouched (request model is never threaded into CLI runs)', async () => {
-      const provider = runData({ providerType: 'cli', defaultModel: 'provider-default' });
-      const { app, runnerService } = makeApp(provider);
+    it('CLI: executes the requested model while preserving the saved default', async () => {
+      const run = runData({ providerType: 'cli', defaultModel: 'provider-default' });
+      Object.assign(run.provider, { id: 'claude-code', command: 'claude', args: [] });
+      const { app, runnerService } = makeApp(run);
       const res = await post(app);
       expect(res.status).toBe(202);
       expect(runnerService.executeCliRun).toHaveBeenCalledTimes(1);
-      // executeCliRun({ runId, provider: cliProvider, prompt, ... }): no clone, keeps provider's own default
       const cliProvider = runnerService.executeCliRun.mock.calls[0][0].provider;
-      expect(cliProvider).toBe(provider.provider);
+      expect(buildCliArgs(cliProvider)).toEqual(['-p', '-', '--model', REQUEST_MODEL]);
+      expect(cliProvider).not.toBe(run.provider);
+      expect(run.provider.defaultModel).toBe('provider-default');
+    });
+
+    it('CLI: retains the configured default when the request omits a model', async () => {
+      const run = runData({ providerType: 'cli', defaultModel: 'provider-default' });
+      const { app, runnerService } = makeApp(run);
+      const res = await post(app, { model: undefined });
+      expect(res.status).toBe(202);
+      const cliProvider = runnerService.executeCliRun.mock.calls[0][0].provider;
+      expect(cliProvider).toBe(run.provider);
       expect(cliProvider.defaultModel).toBe('provider-default');
     });
+
+    it('CLI: preserves the configured argv model pin when selecting a model', async () => {
+      const run = runData({ providerType: 'cli', defaultModel: 'provider-default' });
+      Object.assign(run.provider, { id: 'claude-code', command: 'claude', args: ['--model', 'configured-pin'] });
+      const { app, runnerService } = makeApp(run);
+      const res = await post(app);
+      expect(res.status).toBe(202);
+      const cliProvider = runnerService.executeCliRun.mock.calls[0][0].provider;
+      expect(buildCliArgs(cliProvider)).toEqual(['--model', 'configured-pin', '-p', '-']);
+    });
+  });
+
+  it.each([
+    ['cli', false, null, REQUEST_MODEL],
+    ['tui', true, 'fallback-pinned', 'fallback-pinned'],
+  ])('%s: model overrides preserve execution-only gateway credentials', async (providerType, usedFallback, fallbackModel, expectedModel) => {
+    const run = runData({ providerType, defaultModel: 'provider-default', usedFallback, fallbackModel });
+    Object.defineProperty(run.provider, 'apiKey', { value: 'synthetic-gateway-key', enumerable: false, configurable: true });
+    const { app, runnerService } = makeApp(run);
+    const res = await post(app);
+    expect(res.status).toBe(202);
+    const execute = providerType === 'cli' ? runnerService.executeCliRun : runnerService.executeTuiRun;
+    const executionProvider = execute.mock.calls[0][0].provider;
+    expect(executionProvider.defaultModel).toBe(expectedModel);
+    expect(executionProvider.apiKey).toBe('synthetic-gateway-key');
+    expect(Object.getOwnPropertyDescriptor(executionProvider, 'apiKey').enumerable).toBe(false);
+    expect(JSON.stringify(executionProvider)).not.toContain('synthetic-gateway-key');
+    expect(run.provider.defaultModel).toBe('provider-default');
   });
 
   describe('(b) fallback swap with a configured fallbackModel runs that pinned model', () => {
@@ -136,7 +176,7 @@ describe('POST /api/runs — fallback-model execution', () => {
       expect(runnerService.executeApiRun.mock.calls[0][0].model).not.toBe(REQUEST_MODEL);
     });
 
-    it('TUI: clones the fallback provider with its own default, never the request model', async () => {
+    it('TUI: uses the fallback provider with its own default, never the request model', async () => {
       const { app, runnerService } = makeApp(
         runData({ providerType: 'tui', defaultModel: FALLBACK_DEFAULT, usedFallback: true, fallbackModel: null })
       );

@@ -88,19 +88,26 @@ export function createRunsRoutes(runnerService, options = {}) {
     const runModel = runData.usedFallback
       ? (runData.fallbackModel || provider.defaultModel || null)
       : model;
-    // executeCliRun reads `provider.defaultModel` for `--model` injection, so a
-    // fallback pin must be threaded in via a clone (mirrors the TUI branch and
-    // promptRunner's `providerForRun`). Only on the fallback path — non-fallback
-    // CLI runs keep their existing behavior of using the provider's own default
-    // (the request `model` has never been threaded into CLI runs here).
-    const cliProvider = (runData.usedFallback && runModel && runModel !== provider.defaultModel)
+    // CLI/TUI executors read defaultModel for their argv and run-started hooks.
+    // Pin the requested (or fallback) model without changing the saved provider.
+    const executionProvider = (runModel && runModel !== provider.defaultModel)
       ? { ...provider, defaultModel: runModel }
       : provider;
+    // Gateway credentials are attached non-enumerably on provider reads. A
+    // spread drops them; retain that execution-only key without exposing it to
+    // JSON serialization or persistence (same contract as the host prompt runner).
+    if (executionProvider !== provider && !executionProvider.apiKey && provider.apiKey) {
+      Object.defineProperty(executionProvider, 'apiKey', {
+        value: provider.apiKey,
+        enumerable: false,
+        configurable: true,
+      });
+    }
 
     if (provider.type === 'cli') {
       void Promise.resolve(runnerService.executeCliRun({
         runId,
-        provider: cliProvider,
+        provider: executionProvider,
         prompt,
         workspacePath,
         onData: (data) => {
@@ -135,18 +142,9 @@ export function createRunsRoutes(runnerService, options = {}) {
         io?.emit(`run:${runId}:complete`, { id: runId, success: false, error: error.message });
       });
     } else if (provider.type === 'tui' && typeof runnerService.executeTuiRun === 'function') {
-      // Honor the user-picked model from the Runs UI — `executeTuiRun` reads
-      // `provider.defaultModel` for its `--model` injection, so without the
-      // clone every TUI run would silently fall back to the provider's saved
-      // default even when the user picked something else. Uses `runModel` so a
-      // fallback swap runs the fallback's model rather than leaking the
-      // primary's request model onto the fallback.
-      const effectiveProvider = runModel
-        ? { ...provider, defaultModel: runModel }
-        : provider;
       void Promise.resolve(runnerService.executeTuiRun({
         runId,
-        provider: effectiveProvider,
+        provider: executionProvider,
         prompt,
         workspacePath,
         onData: (data) => {
