@@ -267,10 +267,13 @@ vi.mock('../lib/fileUtils.js', () => ({
     videos: '/mock/videos',
     uploads: '/mock/uploads',
     music: '/mock/music',
+    loras: '/mock/loras',
   },
   // Route awaits ensureDir before staging the upload; no-op for tests since
   // we mock copyFile too.
   ensureDir: vi.fn(async () => {}),
+  // The LoRA filename guard (services/loras.js) the preview's LoRA check runs.
+  assertSafeFilename: vi.fn(),
   copyFileGuarded: fsMock.copyFile,
   unlinkGuarded: fsMock.unlink,
   // The route resolves user-supplied basenames through this helper before
@@ -1161,6 +1164,14 @@ describe('videoGen routes', () => {
       const r = await request(app).post('/api/video-gen/prompt-preview').send({ backend: 'fal', prompt: 'x'.repeat(2001) });
       expect(r.status).toBe(400);
       expect(r.body.error).toMatch(/2,001 characters/);
+    });
+
+    it('refuses a LoRA the local render would refuse', async () => {
+      const { existsSync } = await import('fs');
+      vi.mocked(existsSync).mockReturnValueOnce(false);
+      const r = await request(app).post('/api/video-gen/prompt-preview').send({ prompt: 'a fox', loraFilenames: ['missing-example.safetensors'] });
+      expect(r.status).toBe(400);
+      expect(r.body.code).toBe('LORA_NOT_FOUND');
     });
 
     it('refuses a backend that is switched off, as Generate does', async () => {

@@ -18,6 +18,9 @@ import { VIDEO_GEN_LOCAL_ONLY_FIELD_NAMES } from './requestFields.js';
 import { grokVideoSentPrompt } from './grok.js';
 import { falVideoSentPrompt } from './fal.js';
 import { localVideoSentPrompt } from './generateVideo.js';
+import { defaultVideoModelId, listVideoModels } from './local.js';
+import { resolveVideoLoras } from './renderArgs.js';
+import { captureSystemCapabilities } from '../../lib/systemCapabilities.js';
 
 export const PREVIEW_UPLOAD_FIELDS = ['sourceImage', 'lastImage', 'audioFile', 'icReference'];
 const UPLOADED_SOURCE_IMAGE = '(uploaded image)';
@@ -68,8 +71,16 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
     }).record };
   }
   if (backend === VIDEO_GEN_MODE.LOCAL) {
+    const loraFilenames = body.loraFilenames || [];
+    // The render's own LoRA refusals (missing file, not a video LoRA), minus
+    // its one-time effect probe, which spawns Python and is cached for the render.
+    if (loraFilenames.length) {
+      const modelId = body.modelId || defaultVideoModelId(captureSystemCapabilities(), settings?.videoGen?.defaultModelId);
+      const runtime = listVideoModels().find((model) => model.id === modelId)?.runtime ?? null;
+      await resolveVideoLoras(loraFilenames.map((filename) => ({ filename })), { runtime });
+    }
     return { backend, ...(await localVideoSentPrompt({
-      prompt: body.prompt, negativePrompt: body.negativePrompt, loraFilenames: body.loraFilenames || [], promptAdditions,
+      prompt: body.prompt, negativePrompt: body.negativePrompt, loraFilenames, promptAdditions,
     })).record };
   }
   // reactor.inc receives the trimmed prompt with nothing added.
