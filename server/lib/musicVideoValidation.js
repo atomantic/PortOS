@@ -1299,6 +1299,10 @@ export const musicVideoTitleCardSchema = z.object({
   // '' = the look's own colour.
   titleColor: z.union([z.literal(''), z.string().regex(/^#[0-9a-f]{6}$/i, 'titleColor is #rrggbb')]).optional(),
   accentColor: z.union([z.literal(''), z.string().regex(/^#[0-9a-f]{6}$/i, 'accentColor is #rrggbb')]).optional(),
+  // The optional second showing at the end of the video (null = not timed yet).
+  outro: z.boolean().optional(),
+  outroStartSec: z.number().min(0).max(TITLE_CARD_LIMITS.outroMax).nullable().optional(),
+  outroEndSec: z.number().min(0).max(TITLE_CARD_LIMITS.outroMax + 60).nullable().optional(),
 }).strict();
 
 export const musicVideoProjectCreateSchema = z.object({

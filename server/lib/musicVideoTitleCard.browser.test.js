@@ -124,6 +124,18 @@ describe.skipIf(!canRun)('title card runtime in Chrome', () => {
     await other.close();
   }, 30000);
 
+  it('shows again in its end window when the end showing is on', async () => {
+    const other = await browser.newPage({ viewport: { width: W, height: H } });
+    const card = { title: 'Example Song', artist: 'Example Artist', startSec: 2, endSec: 5, fadeSec: 0.5, outro: true, outroStartSec: 14, outroEndSec: 18 };
+    await other.setContent(`<!doctype html><html><head><style>html,body{margin:0;background:#000}</style>
+<script>${titleCardRuntimeSource(card)}</script></head><body>${DOCUMENT}</body></html>`);
+    const at = async (t) => { await other.evaluate((s) => globalThis.portosComposition.seek(s), t); return brightIn(await other.screenshot(), lowerLeft); };
+    expect(await at(10)).toBe(0);
+    expect(await at(16)).toBeGreaterThan(200);
+    expect(await at(19)).toBe(0);
+    await other.close();
+  }, 30000);
+
   it('takes a live change from the panel and redraws the paused frame, and clears on null', async () => {
     await shotAt(5);
     await page.evaluate(() => globalThis.__portosTitleCard.apply({ ...globalThis.__portosTitleCard.card, position: 'upper-right' }));

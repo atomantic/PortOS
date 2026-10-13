@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { TITLE_CARD_DEFAULTS, TITLE_CARD_FONT_FACES, TITLE_CARD_FONTS, normalizeTitleCard, titleCardPrefill, titleCardVisible } from './musicVideoTitleCard.js';
+import { TITLE_CARD_DEFAULTS, TITLE_CARD_FONT_FACES, TITLE_CARD_FONTS, normalizeTitleCard, titleCardOutroWindow, titleCardPrefill, titleCardVisible, titleCardWindows } from './musicVideoTitleCard.js';
 
 describe('normalizeTitleCard', () => {
   it('fills defaults, clamps ranges and keeps the window open', () => {
@@ -19,6 +19,27 @@ describe('normalizeTitleCard', () => {
     expect(titleCardVisible(normalizeTitleCard({ title: 'Song' }))).toBe(true);
     expect(titleCardVisible(normalizeTitleCard({ title: 'Song', enabled: false }))).toBe(false);
     expect(titleCardVisible(normalizeTitleCard({ title: '  ' }))).toBe(false);
+  });
+});
+
+describe('end showing', () => {
+  it('is off and untimed by default, keeps a timed window open, and adds a second window only when on', () => {
+    const card = normalizeTitleCard({ title: 'Song', startSec: 2, endSec: 6 });
+    expect(card).toMatchObject({ outro: false, outroStartSec: null, outroEndSec: null });
+    expect(titleCardWindows(card)).toEqual([{ startSec: 2, endSec: 6 }]);
+    const timed = normalizeTitleCard({ title: 'Song', startSec: 2, endSec: 6, outro: true, outroStartSec: 190 });
+    expect(timed).toMatchObject({ outroStartSec: 190, outroEndSec: 194 });
+    expect(titleCardWindows(timed)).toEqual([{ startSec: 2, endSec: 6 }, { startSec: 190, endSec: 194 }]);
+    expect(normalizeTitleCard({ outroStartSec: 10, outroEndSec: 3 }).outroEndSec).toBe(10.5);
+    expect(titleCardWindows({ ...timed, outro: false })).toHaveLength(1);
+    expect(titleCardWindows({ ...timed, enabled: false })).toEqual([]);
+  });
+
+  it('defaults the end window to the opening one\'s length, a second before the song ends', () => {
+    const card = normalizeTitleCard({ title: 'Song', startSec: 2, endSec: 6 });
+    expect(titleCardOutroWindow(card, 200)).toEqual({ outroStartSec: 195, outroEndSec: 199 });
+    expect(titleCardOutroWindow(card, 3)).toEqual({ outroStartSec: 0, outroEndSec: 2 });
+    expect(titleCardOutroWindow(card, undefined)).toBeNull();
   });
 });
 
