@@ -2,6 +2,7 @@ import { MUSIC_VIDEO_MEDIA_MODES } from './musicVideoMediaPolicy.js';
 import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicVideoGrade.js';
 import { filmLookSchema } from './filmLookValidation.js';
 import { TITLE_CARD_FONTS, TITLE_CARD_LIMITS, TITLE_CARD_POSITIONS, TITLE_CARD_STYLES } from './musicVideoTitleCard.js';
+import { STATS_OUTRO_LIMITS } from './musicVideoStatsOutro.js';
 import { COVER_DESIGN_OPTIONS } from './musicVideoCoverOverlay.js';
 import { DISTROKID_REMEMBERED_OPTIONS } from './distrokidGenres.js';
 import { CROSS_LINK_EDIT_TARGETS } from './musicVideoCrossLinks.js';
@@ -1278,6 +1279,13 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
   }).strict()).max(8).optional(),
 }).strict();
 
+// The cutting room floor outro (lib/musicVideoStatsOutro.js): an optional scene
+// after the song tallying the director's choices; null on the project = off.
+export const musicVideoStatsOutroSchema = z.object({
+  enabled: z.boolean().optional(),
+  durationSec: z.number().min(STATS_OUTRO_LIMITS.durationMin).max(STATS_OUTRO_LIMITS.durationMax).optional(),
+}).strict();
+
 // The opening title card (lib/musicVideoTitleCard.js): song title, artist, year
 // in a corner over the opener. Every field is optional (the normalizer fills
 // defaults); null on the project = none.
@@ -1331,6 +1339,8 @@ export const musicVideoProjectCreateSchema = z.object({
   filmLook: filmLookSchema.nullable().optional(),
   // The opening title card (lib/musicVideoTitleCard.js); null = none.
   titleCard: musicVideoTitleCardSchema.nullable().optional(),
+  // The cutting room floor outro after the song (lib/musicVideoStatsOutro.js); null = off.
+  statsOutro: musicVideoStatsOutroSchema.nullable().optional(),
 }).strict();
 
 export const musicVideoProjectUpdateSchema = z.object({
@@ -1359,6 +1369,8 @@ export const musicVideoProjectUpdateSchema = z.object({
   filmLook: filmLookSchema.nullable().optional(),
   // The opening title card (lib/musicVideoTitleCard.js); null = none.
   titleCard: musicVideoTitleCardSchema.nullable().optional(),
+  // The cutting room floor outro after the song (lib/musicVideoStatsOutro.js); null = off.
+  statsOutro: musicVideoStatsOutroSchema.nullable().optional(),
 }).strict();
 
 // Mark a project finished outside PortOS (or clear the marker). The server

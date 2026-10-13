@@ -8,6 +8,7 @@ vi.mock('./productionReview.js', async load => ({ ...await load(), assertProduct
 vi.mock('../../lib/ffmpeg.js', async load => ({ ...await load(), generateThumbnail: vi.fn(async () => 'thumb.jpg') }));
 vi.mock('../instanceIdentity.js', () => ({ ensureInstanceId: vi.fn(async () => 'test-instance') }));
 vi.mock('../videoGen/local.js', () => ({ loadHistory: vi.fn(async () => []), mutateVideoHistory: vi.fn(async () => {}) }));
+vi.mock('./statsOutro.js', () => ({ appendStatsOutro: vi.fn(async () => 0), sweepStatsOutroScratch: vi.fn(async () => {}) }));
 vi.mock('./codeRender.js', async load => ({ ...await load(), writeCodeProofSheet: vi.fn(async () => null) }));
 vi.mock('./eidoverseRender.js', async load => ({
   ...await load(),
@@ -23,6 +24,7 @@ const { renderMusicVideo } = await import('./render.js');
 const { startExcerptRender } = await import('./excerptRender.js');
 const { encodeEidoverseComposition } = await import('./eidoverseRender.js');
 const { mutateVideoHistory } = await import('../videoGen/local.js');
+const { appendStatsOutro } = await import('./statsOutro.js');
 const { musicVideoEvents } = await import('./events.js');
 afterAll(cleanupTempDataRoots);
 async function create(scene = { inlineScript: 'example source' }) {
@@ -40,6 +42,8 @@ it('routes both the final film and song-window proof through Eidoverse without r
   expect((await projects.getProject(id)).renderHistoryId).toBe(jobId);
   expect(mutateVideoHistory).toHaveBeenCalled();
   expect(encodeEidoverseComposition.mock.calls.at(-1)[0]).toMatchObject({ audioPath: join(PATHS.music, 'song.wav'), project: { composition: { mode: 'eidoverse' } } });
+  // Eidoverse never grades the song, so its outro page must not grade the ending either.
+  expect(appendStatsOutro.mock.calls.at(-1)[0]).toMatchObject({ withFilmLook: false });
   const excerptRendered = once(musicVideoEvents, 'excerpt-render');
   const { excerptId } = await startExcerptRender(id, { startSec: 2, endSec: 5 });
   expect((await excerptRendered)[0]).toMatchObject({ projectId: id, excerptId, status: 'complete' });

@@ -73,6 +73,7 @@ import ProjectSettingsDrawer, { SETTINGS_TAB_IDS } from '../components/musicVide
 import MusicVideoProjectCard from '../components/musicVideo/MusicVideoProjectCard.jsx';
 import PreviewDock from '../components/musicVideo/PreviewDock.jsx';
 import TitleCardPanel from '../components/musicVideo/TitleCardPanel.jsx';
+import StatsOutroPanel from '../components/musicVideo/StatsOutroPanel.jsx';
 import NeedsAttentionBanner from '../components/musicVideo/NeedsAttentionBanner.jsx';
 import SetupStage from '../components/musicVideo/stages/SetupStage.jsx';
 import StageChecklist from '../components/musicVideo/StageChecklist.jsx';
@@ -1200,6 +1201,7 @@ export default function MusicVideo() {
       {dock}
       <TitleCardPanel project={selected} onEditLocal={editProjectLocal} onSave={saveProjectFields}
         onPreview={(startSec) => seekToScene({ startSec }, { play: true })} />
+      <StatsOutroPanel project={selected} onEditLocal={editProjectLocal} onSave={saveProjectFields} />
     </div>
   ));
   const board = selected ? {

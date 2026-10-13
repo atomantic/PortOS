@@ -251,6 +251,8 @@ export const DEFAULT_EXCLUDES = [
   { path: '/code-animation-workspaces/', reason: 'In-flight sandboxed Code Animation worker workspaces — removed when each run ends', overridable: false },
   { path: '/code-animation-exports/', reason: 'Code Animation frame-exact export staging — the stored HTML plus render shim, staged once per export', overridable: true },
   { path: '/music-video-compositions/', reason: 'In-flight music-video typography overlay scratch — removed when its render ends and swept at boot', overridable: false },
+  { path: '/music-video-film-look/', reason: 'In-flight music-video film look pass (a staged link to the finished render) — removed when the pass ends', overridable: false },
+  { path: '/music-video-stats-outro/', reason: 'In-flight music-video outro page (fonts and floor stills) — removed when its render ends and swept at boot', overridable: false },
   { path: '/music-video-song-renders/', reason: 'In-flight music-video composition renders (a staged copy of the document plus scene media) — removed when the render ends and swept at boot', overridable: false },
   { path: '/launch-videos/*/*/proofs/', reason: 'Launch-video critique-loop contact sheets — re-rendered from the run composition', overridable: true },
   { path: '/cache/', reason: 'Remote-API metadata and licensed reading caches — regenerable on demand, and stale on restore anyway', overridable: false },

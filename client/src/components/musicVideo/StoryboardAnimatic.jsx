@@ -2,13 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import FilmLookFrame from '../media/FilmLookFrame.jsx';
 import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage.js';
 import { isFilmLookNeutral } from '../../lib/filmLook.js';
-import { Captions, Film } from 'lucide-react';
+import { Captions, Film, Scissors } from 'lucide-react';
 import { formatDurationSec } from '../../utils/formatters.js';
-import { getMusicVideoLyricOverlayPreview } from '../../services/apiMusicVideo.js';
+import { getMusicVideoLyricOverlayPreview, getMusicVideoOutroStats } from '../../services/apiMusicVideo.js';
 import { playthroughVersion } from './CompositionPreviewPlayer.jsx';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
 import { normalizeTitleCard } from '../../../../server/lib/musicVideoTitleCard.js';
+import { statsOutroSeconds } from '../../../../server/lib/musicVideoStatsOutro.js';
+import StatsOutroCanvas from './StatsOutroCanvas.jsx';
 import ShotStepper from './ShotStepper.jsx';
 import FrameStepper, { captureMediaFrame } from './FrameStepper.jsx';
 import { sceneFrameFit } from './SceneFrameFit.jsx';
@@ -238,6 +240,53 @@ function ShotClip({ scene, audioRef, time, current }) {
 }
 
 /**
+ * The cutting room floor outro after the song (lib/musicVideoStatsOutro.js):
+ * when the song ends it plays for its own length on a clock of its own, and
+ * Ending plays it straight away. Playing or seeking the song leaves it. The
+ * tally is fetched each time it starts, so it counts the latest choices.
+ * Returns `{ seconds, t, active, start, stop }` (`t` null while it is off screen).
+ */
+function useStatsOutro({ project, audioRef }) {
+  const seconds = statsOutroSeconds(project.statsOutro);
+  const [t, setT] = useState(null);
+  const [stats, setStats] = useState(null);
+  const run = useRef({ handle: 0, startedAt: 0, generation: 0 });
+  const stop = useCallback(() => {
+    cancelAnimationFrame(run.current.handle);
+    run.current.generation += 1;
+    setT(null);
+  }, []);
+  const start = useCallback(() => {
+    if (!(seconds > 0)) return;
+    cancelAnimationFrame(run.current.handle);
+    const generation = ++run.current.generation;
+    run.current.startedAt = performance.now();
+    setT(0);
+    getMusicVideoOutroStats(project.id, { silent: true })
+      .then((next) => { if (run.current.generation === generation) setStats(next?.stats || null); })
+      .catch(() => {});
+    const tick = () => {
+      if (run.current.generation !== generation) return;
+      const elapsed = (performance.now() - run.current.startedAt) / 1000;
+      // It holds on its last (black) frame once it has run its length.
+      setT(Math.min(elapsed, seconds));
+      if (elapsed < seconds) run.current.handle = requestAnimationFrame(tick);
+    };
+    run.current.handle = requestAnimationFrame(tick);
+  }, [seconds, project.id]);
+  // A different video, or the outro turned off, leaves it.
+  useEffect(() => { stop(); setStats(null); }, [project.id, seconds, stop]);
+  useEffect(() => () => cancelAnimationFrame(run.current.handle), []);
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !(seconds > 0)) return undefined;
+    audio.addEventListener('ended', start);
+    return () => audio.removeEventListener('ended', start);
+  }, [audioRef, seconds, start]);
+  return { seconds, t, stats, active: t != null, start, stop };
+}
+
+/**
  * Something to watch before anything is rendered: the master song under the
  * storyboard, showing each shot's selected video clip (muted, in step with the
  * song) or else its selected frame (or, without either, its label, time and
@@ -261,6 +310,8 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   const scenes = project.scenes || [];
   const lyricsAvailable = hasTimedLyrics(project);
   const { overlay, failed } = useLyricOverlay({ project, enabled: lyricsAvailable && lyricsOn, audioRef, time });
+  const outro = useStatsOutro({ project, audioRef });
+  const songEndSec = Number(project.audioAnalysis?.durationSec) || 0;
   useEffect(() => {
     if (!seekRequest || applied.current === seekRequest.n || !audioRef.current) return;
     applied.current = seekRequest.n;
@@ -306,7 +357,8 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
     <div className={`space-y-2 ${collapsed ? 'max-xl:hidden' : ''}`}>
       <figure ref={figureRef} aria-label="Storyboard animatic" className="relative aspect-video w-full overflow-hidden rounded border border-port-border bg-black">
         {/* The project's film look, as the final render applies it over the whole picture, lyrics included. */}
-        <FilmLookFrame look={lookOn ? project.filmLook : null} frame={Math.round(time * ANIMATIC_FPS)} playing={playing} className="h-full w-full">
+        <FilmLookFrame look={lookOn ? project.filmLook : null} frame={Math.round((outro.active ? songEndSec + outro.t : time) * ANIMATIC_FPS)}
+          playing={playing || (outro.active && outro.t < outro.seconds)} className="h-full w-full">
         {shot?.referenceImageId && shotEffect ? (
           <ImageEffectStill key={shot.sceneId} src={`/data/images/${shot.referenceImageId}`} effect={shotEffect}
             endSrc={shot.endImageId ? `/data/images/${shot.endImageId}` : null}
@@ -328,6 +380,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
         <TransitionGlitch scenes={scenes} figureRef={figureRef} audioRef={audioRef} time={time} layered={layered}
           endSec={Number(project.audioAnalysis?.durationSec) || null} fps={ANIMATIC_FPS} />
         {overlay}
+        {outro.active && <StatsOutroCanvas stats={outro.stats} t={outro.t} durationSec={outro.seconds} />}
         </FilmLookFrame>
       </figure>
       <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -345,6 +398,21 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
           )}
           {lyricsOn && failed && <p className="text-port-error">The lyrics could not be drawn over the animatic.</p>}
         </div>
+        {outro.seconds > 0 && (
+          <button
+            type="button"
+            onClick={() => {
+              if (outro.active) { outro.stop(); return; }
+              audioRef.current?.pause?.();
+              outro.start();
+            }}
+            aria-pressed={outro.active}
+            title={`The cutting room floor scene that plays for ${outro.seconds}s after the song`}
+            className={`flex min-h-[44px] shrink-0 items-center gap-1 rounded border px-2 text-xs sm:min-h-0 sm:py-1 ${outro.active ? 'border-port-accent text-port-accent' : 'border-port-border text-port-text-muted'}`}
+          >
+            <Scissors size={14} aria-hidden="true" /> Ending
+          </button>
+        )}
         {lookAvailable && (
           <button
             type="button"
@@ -385,8 +453,8 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
         preload="metadata"
         aria-label="Song for the storyboard animatic"
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
-        onSeeked={(e) => setTime(e.currentTarget.currentTime)}
-        onPlay={() => setPlaying(true)}
+        onSeeked={(e) => { outro.stop(); setTime(e.currentTarget.currentTime); }}
+        onPlay={() => { outro.stop(); setPlaying(true); }}
         onPause={() => setPlaying(false)}
         onEnded={() => setPlaying(false)}
         className="w-full"

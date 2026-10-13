@@ -1545,6 +1545,14 @@ router.get('/:id/media-pool', asyncHandler(async (req, res) => {
   res.json(await getMusicVideoMediaPool(project));
 }));
 
+// The cutting room floor outro's tally: what was made, kept and turned down for this video.
+router.get('/:id/stats-outro', asyncHandler(async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const { getMusicVideoOutroStats } = await import('../services/musicVideo/statsOutro.js');
+  res.json({ stats: await getMusicVideoOutroStats(project) });
+}));
+
 // The asset manager: mark unused stills and clips ★ ingredient / ✕ bad, or delete them from the library.
 router.patch('/:id/media-pool/marks', asyncHandler(async (req, res) => {
   const { items, mark } = validateRequest(musicVideoPoolMarkSchema, req.body);
