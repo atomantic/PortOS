@@ -71,6 +71,19 @@ import { updateSettingsWith } from './settings.js'
 
 // Preserve the real transport for the explicitly requested local-model evaluation.
 const nativeFetch = global.fetch
+// Public PR #11371 and a reconstructed one-finding audit objective, never live run data.
+const observabilityCase = JSON.parse(readFileSync(new URL('../test/fixtures/goal-fidelity-observability.json', import.meta.url), 'utf8'))
+const observabilityTestsOnly = observabilityCase.diff.split(/(?=^diff --git )/m)
+  .filter(part => part.startsWith('diff --git a/server/services/sharing/peerSync.test.js')).join('')
+const observabilityCases = [
+  ['one implemented observability finding', observabilityCase.objective, observabilityCase.diff, 'ship'],
+  ['tests without production repair', observabilityCase.objective, observabilityTestsOnly, 'fix-first'],
+  ['unrelated production change still holds', observabilityCase.objective, 'diff --git a/client/src/components/Example.jsx b/client/src/components/Example.jsx\n--- a/client/src/components/Example.jsx\n+++ b/client/src/components/Example.jsx\n@@ -1 +1 @@\n-export const title = "Example";\n+export const title = "Example page";\n', 'rethink'],
+  ['explicit additional metric still required', `${observabilityCase.objective}\nAlso implement a persisted per-peer rejected-push counter and expose it through a status endpoint in this PR.`, observabilityCase.diff, 'fix-first'],
+  ['rejection logging helper disconnected', `${observabilityCase.objective}\nThe selected finding is silent HTTP push rejections: pushRecordToPeer must log rejected HTTP responses with record/subscription/peer/status context, deduplicate repeats and log recovery.`, observabilityCase.diff.replace('+    reportPushFailure(sub, peer, reason, detail);\n', ''), 'fix-first'],
+  ['actual rejection still on stdout', `${observabilityCase.objective}\nThe selected finding is rejected HTTP push failures logged to stdout; move them to stderr.`, observabilityCase.diff.replace('+  else console.error(', '+  else console.log('), 'fix-first'],
+  ['explicit removal of every console.log still required', `${observabilityCase.objective}\nAlso remove every console.log use from peerSyncPush.js, including successful recovery diagnostics.`, observabilityCase.diff, 'fix-first'],
+]
 const processManifestCase = JSON.parse(readFileSync(new URL('../test/fixtures/goal-fidelity-process-manifest.json', import.meta.url), 'utf8'))
 const manifestDiffParts = processManifestCase.diff.split(/(?=^diff --git )/m).filter(Boolean)
 const manifestCases = [
@@ -1388,6 +1401,65 @@ describe('codeReview helpers', () => {
       expect(await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective, diff }))
         .toMatchObject({ ok: true, verdict, ...(verdict === 'ship' ? { missing: [], unrequested: [] } : {}) })
     })
+
+    // Transport pins rubric selection and verdict preservation, not model judgement.
+    it.each(observabilityCases)('sends the one-finding audit rubric without overriding the model verdict: %s', async (_name, objective, diff, verdict) => {
+      global.fetch = vi.fn(async (_url, init) => {
+        const { messages, tools } = JSON.parse(init.body)
+        expect(tools).toBeUndefined()
+        if (messages[0].content.startsWith('Check potential contradictions')) {
+          expect(messages[0].content).toContain('a successful recovery message on stdout is compatible')
+          expect(messages[0].content).toContain('an actual failure still logged to stdout')
+          expect(messages[0].content).toContain('an explicit request to remove all console.log uses remains a contradiction')
+          expect(messages[1].content).toContain('SURVIVING PRODUCTION USES')
+          return completion({ verdict: 'ship', missing: [], unrequested: [], evidence: 'Success diagnostics are compatible with the objective.' })
+        }
+        expect(messages[0].content).toContain('Search categories are candidate-discovery guidance')
+        expect(messages[0].content).toContain('not proof those execution steps occurred')
+        expect(messages[0].content).toContain('Cross-check any allegedly missing file against the actual diff headers')
+        expect(messages[0].content).toContain('test-only changes, disconnected logging helpers')
+        expect(messages[0].content).toContain('explicit requirements to commit a report or implement additional outcomes remain requirements')
+        expect(messages[0].content).toContain('find the actual call to the failure reporter in the HTTP-rejection branch')
+        expect(messages[0].content).toContain('NOT a persisted rejection counter or a status endpoint')
+        expect(messages[0].content).not.toContain('suitability assessment')
+        expect(messages[1].content).toContain(taskObjective({ description: objective }))
+        expect(messages[1].content).toContain(diff.trim())
+        return completion({ verdict, missing: verdict === 'ship' ? [] : ['requested production outcome absent'], unrequested: [], evidence: 'Regression assertions are present; execution is not established.' })
+      })
+      expect(await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective, diff }))
+        .toMatchObject({ ok: true, verdict, ...(verdict === 'ship' ? { missing: [], unrequested: [] } : {}) })
+    })
+
+    it.each([
+      'Audit observability and implement all needed fixes.',
+      'Implement ONE finding: fix the uploader retry.',
+      `Deep audit — extended regular audit\n${observabilityCase.objective}`,
+    ])('keeps objectives outside the one-finding audit shape on the general rubric: %s', async objective => {
+      global.fetch = vi.fn(async (_url, init) => {
+        const { messages } = JSON.parse(init.body)
+        expect(messages[0].content).not.toContain('Search categories are candidate-discovery guidance')
+        expect(messages[0].content).toContain('suitability assessment')
+        return completion({ verdict: 'rethink', missing: ['requested outcome'], unrequested: [], evidence: 'No matching delivery.' })
+      })
+      expect(await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective, diff: observabilityTestsOnly }))
+        .toMatchObject({ ok: true, verdict: 'rethink' })
+    })
+
+    // Actual judgement pin: explicitly opt-in so ordinary CI makes zero provider calls.
+    it.runIf(Boolean(process.env.GOAL_FIDELITY_EVAL_MODEL)).each(observabilityCases)('judges the one-finding observability audit with a real local model: %s', async (_name, objective, diff, expected) => {
+      global.fetch = nativeFetch
+      const result = await runLocalGoalFidelityReview({
+        backend: 'ollama', model: process.env.GOAL_FIDELITY_EVAL_MODEL,
+        objective: taskObjective({ description: objective }), diff, timeoutMs: 180_000,
+      })
+      expect(result.ok, result.error).toBe(true)
+      if (expected === 'ship') expect(result).toMatchObject({ verdict: 'ship', missing: [], unrequested: [] })
+      else {
+        expect(['fix-first', 'rethink'], JSON.stringify(result)).toContain(result.verdict)
+        expect(expected === 'rethink' ? result.missing.length + result.unrequested.length : result.missing.length, JSON.stringify(result)).toBeGreaterThan(0)
+      }
+      if (expected === 'rethink') expect(result.verdict).toBe('rethink')
+    }, 190_000)
 
     // Actual judgement pin: explicitly opt-in so ordinary CI makes zero provider calls.
     it.runIf(Boolean(process.env.GOAL_FIDELITY_EVAL_MODEL)).each(audioAssessmentCases)('judges the audio assessment with a real local model: %s', async (name, objective, diff, expected) => {
