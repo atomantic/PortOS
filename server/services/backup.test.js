@@ -144,6 +144,7 @@ vi.mock('fs/promises', async (importOriginal) => {
     stat: vi.fn(actual.stat),
     readFile: vi.fn(actual.readFile),
     access: vi.fn(actual.access),
+    unlink: vi.fn(actual.unlink),
     writeFile: vi.fn(actual.writeFile),
   };
 });
@@ -181,6 +182,7 @@ import { EXCLUDE_PATTERN_MAX_LENGTH, anchorUserExclude, anchorUserExcludes, isSa
 beforeEach(async () => {
   const actual = await vi.importActual('fs/promises');
   fs.access.mockImplementation(actual.access);
+  fs.unlink.mockImplementation(actual.unlink);
   fs.writeFile.mockImplementation(actual.writeFile);
 });
 
@@ -4422,6 +4424,51 @@ describe('runBackup lifecycle', () => {
     const stream = await openAfterRestart(destRoot, snapshotId);
     expect(stream).toBeDefined();
     stream.destroy();
+  });
+
+  it.each(['snapshot', 'reservation', 'failed'])('reports %s marker cleanup failure instead of publishing a completed backup', async (marker) => {
+    const fsp = await actualFs();
+    const { saveState, getState } = await import('./backup.js');
+    const oldIds = ['2020-01-01T00-00-00', '2020-01-02T00-00-00'];
+    const snapshotsRoot = joinPath(destRoot, 'snapshots', machineHost);
+    for (const id of oldIds) {
+      await fsp.mkdir(joinPath(snapshotsRoot, id, 'data'), { recursive: true });
+      await fsp.writeFile(joinPath(snapshotsRoot, id, 'manifest.json'), '{}');
+    }
+    await saveState({ status: 'ok', lastSnapshotId: oldIds[1], error: null });
+    const io = { emit: vi.fn() };
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    const pending = runBackup(destRoot, io, { retentionCount: 1 });
+    await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+    const snapshotId = io.emit.mock.calls.find(([event]) => event === 'backup:started')[1].snapshotId;
+    const snapshotDir = joinPath(snapshotsRoot, snapshotId);
+    const target = marker === 'reservation' ? joinPath(snapshotsRoot, `.${snapshotId}.in-progress`)
+      : joinPath(snapshotDir, marker === 'failed' ? '.failed' : '.in-progress');
+    fs.unlink.mockImplementation((path, ...args) => path === target
+      ? Promise.reject(Object.assign(new Error('private destination details'), { code: 'EACCES' }))
+      : fsp.unlink(path, ...args));
+    const rejection = expect(pending).rejects.toMatchObject({
+      code: 'BACKUP_SNAPSHOT_FINALIZATION_FAILED',
+      message: `Backup snapshot finalization failed (${marker} marker, EACCES)`,
+    });
+    proc.emit('close', 0);
+    await rejection;
+
+    expect(await getState()).toMatchObject({
+      status: 'error', lastSnapshotId: oldIds[1],
+      error: `Backup snapshot finalization failed (${marker} marker, EACCES)`,
+    });
+    expect(io.emit.mock.calls.some(([event]) => event === 'backup:completed')).toBe(false);
+    expect(io.emit).toHaveBeenCalledWith('backup:failed', {
+      snapshotId, error: `Backup snapshot finalization failed (${marker} marker, EACCES)`,
+    });
+    expect(isBackupInProgress()).toBe(false);
+    for (const id of oldIds) await expect(fsp.access(joinPath(snapshotsRoot, id))).resolves.toBeUndefined();
+    await expect(fsp.access(joinPath(snapshotDir, '.failed'))).resolves.toBeUndefined();
+    await expect(restoreSnapshot(destRoot, snapshotId, { dryRun: true }))
+      .rejects.toMatchObject({ code: 'SNAPSHOT_FAILED' });
+    expect(spawn).toHaveBeenCalledTimes(1);
   });
 
   it('retains incomplete guards when the failed marker cannot be written while releasing the process lock', async () => {
