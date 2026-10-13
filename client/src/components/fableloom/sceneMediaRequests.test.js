@@ -4,15 +4,16 @@ import { buildFableLoomImageRequest, buildFableLoomVideoRequest } from './sceneM
 const loom = { id: 'loom-1', styleNotes: 'cool rim light' };
 
 describe('FableLoom scene media request composition', () => {
-  it('prefixes the canonical universe style and carries its avoid list into image generation', () => {
+  // Uniquely catches the browser copying canon style into the scene's prompt again, or
+  // adding the loom's style without listing it (#11317): the compiler adds universe style.
+  it('sends the scene\'s text and lists the loom style it adds', () => {
     expect(buildFableLoomImageRequest({
       loom,
       episodeId: 'ep-1',
       node: { id: 'node-1', imagePrompt: 'a scout wakes in alien grass' },
-      stylePreset: { prompt: 'painted graphic novel', negativePrompt: 'photorealism' },
     })).toEqual({
-      prompt: 'painted graphic novel. a scout wakes in alien grass\n\nStyle: cool rim light',
-      negativePrompt: 'photorealism',
+      prompt: 'a scout wakes in alien grass\n\nStyle: cool rim light',
+      promptAdditions: [{ id: 'loom-style', label: 'Loom style', text: 'Style: cool rim light' }],
       width: 1024,
       height: 576,
       fableLoom: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' },
@@ -67,10 +68,12 @@ describe('FableLoom scene media request composition', () => {
         cameraMovement: 'slow-dolly-in',
         image: 'scene.png',
       },
-      stylePreset: { prompt: 'painted graphic novel', negativePrompt: 'photorealism' },
     })).toEqual({
-      prompt: 'painted graphic novel. One continuous reveal.\n\nCamera direction: Camera slowly moves forward toward the subject.\n\nStyle: cool rim light',
-      negativePrompt: 'photorealism',
+      prompt: 'One continuous reveal.\n\nCamera direction: Camera slowly moves forward toward the subject.\n\nStyle: cool rim light',
+      promptAdditions: [
+        { id: 'camera-direction', label: 'Camera direction', text: 'Camera direction: Camera slowly moves forward toward the subject.' },
+        { id: 'loom-style', label: 'Loom style', text: 'Style: cool rim light' },
+      ],
       backend: 'local',
       mode: 'image',
       sourceImageFile: 'scene.png',

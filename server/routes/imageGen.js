@@ -533,6 +533,8 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     if (compiled) {
       params.prompt = compiled.prompt;
       params.negativePrompt = compiled.negativePrompt;
+      // The compiler's canon blocks, listed beside what the scene's own request listed (#11317).
+      if (compiled.promptAdditions?.length) params.promptAdditions = [...(params.promptAdditions || []), ...compiled.promptAdditions];
       params.referenceImagePaths = compiled.referenceImagePaths;
       params.referenceImageStrengths = compiled.referenceImageStrengths;
       params.loraFilenames = compiled.loraFilenames;

@@ -386,7 +386,7 @@ describe('FableLoomStory scene media lifecycle', () => {
     expect(await screen.findByRole('button', { name: 'Canvas generate image' })).toBeDisabled();
   });
 
-  it('queues with canonical universe style and notifies when the render later fails', async () => {
+  it('queues a linked scene for the compiler to style and notifies when the render later fails', async () => {
     const user = userEvent.setup();
     api.getLoom.mockResolvedValue(loom({
       universeId: 'universe-1',
@@ -413,8 +413,9 @@ describe('FableLoomStory scene media lifecycle', () => {
 
     await waitFor(() => expect(api.generateImage).toHaveBeenCalledTimes(1));
     expect(api.generateImage).toHaveBeenCalledWith({
-      prompt: 'painted ink. an ancient gate in alien grass\n\nStyle: blue dusk lighting',
-      negativePrompt: 'photorealism',
+      // The server's compiler adds the universe style ("painted ink") and its avoid list.
+      prompt: 'an ancient gate in alien grass\n\nStyle: blue dusk lighting',
+      promptAdditions: [{ id: 'loom-style', label: 'Loom style', text: 'Style: blue dusk lighting' }],
       width: 1024,
       height: 576,
       fableLoom: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' },

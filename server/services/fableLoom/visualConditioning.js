@@ -330,7 +330,7 @@ export async function compileFableLoomVisualRequest({
     failures.push('required canon assets exceed or are unsupported by the backend capability manifest');
   }
 
-  const { prompt: positive, negativePrompt } = buildFableLoomVisualPrompts({
+  const { prompt: positive, negativePrompt, promptAdditions } = buildFableLoomVisualPrompts({
     node, universe, series, bindings, references: allocation.accepted, temporalSourceNode: temporal.node,
     adapterTriggerWords, kind, capability, authoredPrompt, authoredNegativePrompt,
   });
@@ -370,6 +370,7 @@ export async function compileFableLoomVisualRequest({
   return {
     prompt: positive,
     negativePrompt,
+    promptAdditions,
     referenceImagePaths: allocation.accepted.map((asset) => asset.path),
     referenceImageStrengths: allocation.accepted.map((asset) => asset.role === 'temporal-predecessor' ? 0.4 : 1),
     loraFilenames: adapters.map((adapter) => adapter.filename),

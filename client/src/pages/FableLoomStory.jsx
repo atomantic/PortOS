@@ -47,7 +47,6 @@ import { fieldClass, labelClass } from '../components/fableloom/fieldStyles';
 import {
   buildFableLoomImageRequest, buildFableLoomVideoRequest,
 } from '../components/fableloom/sceneMediaRequests';
-import { universeStylePreset } from '../lib/universeStylePreset';
 import { fableLoomMediaReadiness } from '../lib/fableLoomReadiness';
 import { buildFalH3MaxPrompt } from '../lib/falVideoHandoff';
 import { LOOM_ORIENTATION, LOOM_STACK_WIDTH } from '../lib/loomLayout';
@@ -170,10 +169,6 @@ export default function FableLoomStory({ view = 'graph' }) {
     : styleContextUnavailable
       ? 'Linked universe style is unavailable'
       : '';
-  const sceneStylePreset = useMemo(
-    () => universeStylePreset(linkedUniverse, linkedSeries),
-    [linkedSeries, linkedUniverse],
-  );
 
   const episode = seriesPlanOpen ? null : loom?.episodes.find((e) => e.id === episodeId) || null;
   const node = episode?.nodes.find((n) => n.id === nodeId) || null;
@@ -269,7 +264,6 @@ export default function FableLoomStory({ view = 'graph' }) {
       loom,
       episodeId,
       node: targetNode,
-      stylePreset: sceneStylePreset,
     });
     const queued = await generateImage(imageRequest, { silent: true })
       .catch((err) => {
@@ -308,7 +302,7 @@ export default function FableLoomStory({ view = 'graph' }) {
     });
     toast.success('Scene image queued');
     return queued;
-  }, [applySceneMedia, episode, episodeId, generationDisabledReason, loom, mediaReadiness.reason, mediaWorkflowBlocked, sceneStylePreset, setSceneMediaJob, styleContextLoading, styleContextUnavailable]);
+  }, [applySceneMedia, episode, episodeId, generationDisabledReason, loom, mediaReadiness.reason, mediaWorkflowBlocked, setSceneMediaJob, styleContextLoading, styleContextUnavailable]);
 
   const queueSceneVideo = useCallback(async (targetNode) => {
     const prompt = (targetNode?.videoPrompt || '').trim() || (targetNode?.prose || '').trim();
@@ -327,7 +321,7 @@ export default function FableLoomStory({ view = 'graph' }) {
 
     setSceneMediaJob(targetNode.id, 'video', { jobId: null, status: 'submitting', progress: 0 });
     const queued = await generateVideo(buildFableLoomVideoRequest({
-      loom, episodeId, node: targetNode, stylePreset: sceneStylePreset,
+      loom, episodeId, node: targetNode,
     })).catch((err) => {
       setSceneMediaJob(targetNode.id, 'video', {
         jobId: null, status: 'failed', progress: 0, error: err.message || 'Could not start the render',
@@ -348,7 +342,7 @@ export default function FableLoomStory({ view = 'graph' }) {
     });
     toast.success('Scene video queued');
     return queued;
-  }, [episodeId, generationDisabledReason, loom, mediaReadiness.reason, mediaWorkflowBlocked, sceneStylePreset, setSceneMediaJob, styleContextLoading, styleContextUnavailable]);
+  }, [episodeId, generationDisabledReason, loom, mediaReadiness.reason, mediaWorkflowBlocked, setSceneMediaJob, styleContextLoading, styleContextUnavailable]);
 
   const automateFalSceneVideo = useCallback(async (targetNode) => {
     const prompt = (targetNode?.videoPrompt || '').trim() || (targetNode?.prose || '').trim();
@@ -369,7 +363,7 @@ export default function FableLoomStory({ view = 'graph' }) {
       return null;
     }
     const request = buildFableLoomVideoRequest({
-      loom, episodeId, node: targetNode, stylePreset: sceneStylePreset,
+      loom, episodeId, node: targetNode,
     });
     const fullPrompt = buildFalH3MaxPrompt(request.prompt, request.negativePrompt);
     const render = asFableLoomRenderSettings(loom?.renderSettings);
@@ -399,7 +393,7 @@ export default function FableLoomStory({ view = 'graph' }) {
     setSceneMediaJob(targetNode.id, 'video', { ...queued, jobId: queued.id });
     toast.success(queued.status === 'queued' ? 'fal.ai scene video queued' : 'fal.ai scene video already running');
     return queued;
-  }, [episodeId, generationDisabledReason, loom, mediaReadiness.reason, mediaWorkflowBlocked, sceneStylePreset, setSceneMediaJob, styleContextLoading, styleContextUnavailable]);
+  }, [episodeId, generationDisabledReason, loom, mediaReadiness.reason, mediaWorkflowBlocked, setSceneMediaJob, styleContextLoading, styleContextUnavailable]);
 
   const basePath = `/fableloom/${loomId}`;
   const episodePath = useCallback(

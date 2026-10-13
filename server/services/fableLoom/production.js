@@ -541,6 +541,7 @@ async function prepareImageJob(run, asset) {
       params: {
         pythonPath: local.pythonPath,
         prompt: conditioned?.prompt || asset.prompt,
+        ...(conditioned?.promptAdditions?.length ? { promptAdditions: conditioned.promptAdditions } : {}),
         negativePrompt: conditioned?.negativePrompt || '',
         modelId: local.selectedModel.id,
         width: geometry.width,
@@ -583,6 +584,7 @@ async function prepareImageJob(run, asset) {
       mode,
       ...providerParams,
       prompt: conditioned?.prompt || asset.prompt,
+      ...(conditioned?.promptAdditions?.length ? { promptAdditions: conditioned.promptAdditions } : {}),
       negativePrompt: conditioned?.negativePrompt || '',
       width: geometry.width,
       height: geometry.height,
@@ -648,6 +650,7 @@ async function prepareVideoJob(run, asset) {
       params: {
         pythonPath: settings.imageGen?.local?.pythonPath || null,
         prompt: conditioned?.prompt || asset.prompt,
+        ...(conditioned?.promptAdditions?.length ? { promptAdditions: conditioned.promptAdditions } : {}),
         negativePrompt: conditioned?.negativePrompt || '',
         modelId: model.id,
         width: geometry.width,
@@ -675,6 +678,7 @@ async function prepareVideoJob(run, asset) {
     // The compiler owns prompt compaction; never truncate dialogue at this boundary.
     const request = validateReactorRequest({
       prompt: conditioned?.prompt || asset.prompt,
+      ...(conditioned?.promptAdditions?.length ? { promptAdditions: conditioned.promptAdditions } : {}),
       seconds: replayParameters.seconds ?? node?.shot?.durationSeconds ?? 6,
       seed: replayParameters.seed,
     });
@@ -700,6 +704,7 @@ async function prepareVideoJob(run, asset) {
         mode: VIDEO_GEN_MODE.FAL,
         videoMode: sourceImagePath ? 'image' : 'text',
         prompt: conditioned?.prompt || asset.prompt,
+        ...(conditioned?.promptAdditions?.length ? { promptAdditions: conditioned.promptAdditions } : {}),
         negativePrompt: conditioned?.negativePrompt || '',
         ...replayParameters,
         sourceImagePath,
@@ -729,6 +734,7 @@ async function prepareVideoJob(run, asset) {
       videoMode: sourceImagePath ? 'image' : 'text',
       ...cloud.providerParams,
       prompt: conditioned?.prompt || asset.prompt,
+      ...(conditioned?.promptAdditions?.length ? { promptAdditions: conditioned.promptAdditions } : {}),
       negativePrompt: conditioned?.negativePrompt || '',
       width: geometry.width,
       height: geometry.height,
