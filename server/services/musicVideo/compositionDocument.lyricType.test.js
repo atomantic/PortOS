@@ -38,12 +38,13 @@ async function uploaded(name, files) {
 describe('shared lyric-type assets in composition documents', () => {
   it('ships lyricType.js, its stylesheet and OFL faces with the layered template', async () => {
     const { id } = await projects.createProject({ name: 'Example Song' });
-    const { files } = await listed((await importDocumentTemplate(id)).document);
+    const { root, files } = await listed((await importDocumentTemplate(id)).document);
     expect(files).toEqual(expect.arrayContaining([
       'lyricType.js', 'lyricType.css', 'fonts/archivo-variable.woff2', 'fonts/ibm-plex-mono-500.woff2',
-      'fonts/LICENSE-Archivo.txt', 'fonts/LICENSE-IBM-Plex.txt', 'engine.js', 'index.html',
+      'fonts/LICENSE-Archivo.txt', 'fonts/LICENSE-IBM-Plex.txt', 'engine.js', 'index.html', 'musicVideoImageEffects.js',
     ]));
     expect(files.filter((file) => file.endsWith('.test.js'))).toEqual([]);
+    expect(await readFile(join(root, 'musicVideoImageEffects.js'), 'utf8')).toBe(await readFile(new URL('../../lib/musicVideoImageEffects.js', import.meta.url), 'utf8'));
   });
 
   it('adds the module and faces to an uploaded document that imports it, and keeps a document\'s own copy', async () => {
