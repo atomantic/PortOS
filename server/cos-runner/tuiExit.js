@@ -30,6 +30,10 @@ export function createTuiExitHandler({ agentId, taskId, sessionId, agent, active
       const current = agent;
       if (current.exited) return;
       current.exited = true;
+      await current.stopSecurityScan?.().catch(err => {
+        console.error(`❌ Scanner settlement failed during TUI exit: ${err.message}`);
+        onError?.(err);
+      });
       // Drop the handle before the awaited state write so GET /agents cannot
       // publish processActive:false for a TUI whose completion event is still
       // in flight (completeAgent keeps the first terminal verdict).
@@ -55,6 +59,7 @@ export function createTuiExitHandler({ agentId, taskId, sessionId, agent, active
           taskId, completedAt: new Date().toISOString(), exitCode: effectiveExitCode,
           signal: effectiveSignal, success: !!success, duration,
           completionReason: success ? 'agent-signaled-done' : 'tui-exit',
+          securityScan: current.securityScan,
         });
         io.emit('tui:exit', {
           sessionId,
@@ -75,6 +80,7 @@ export function createTuiExitHandler({ agentId, taskId, sessionId, agent, active
           duration,
           outputLength: completionOutput.length,
           completionReason: current.completedBySentinel ? 'agent-signaled-done' : 'tui-exit',
+          securityScan: current.securityScan,
         });
         await withState((state) => {
           state.stats.completed++;

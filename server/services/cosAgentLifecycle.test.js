@@ -61,6 +61,7 @@ vi.mock('fs/promises', async (importOriginal) => {
 
 vi.mock('./cosRunnerClient.js', () => ({
   getActiveAgentsFromRunner: vi.fn().mockResolvedValue([]),
+  requestSecurityScanViaRunner: vi.fn(),
 }));
 
 import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
@@ -68,7 +69,8 @@ import { saveState, loadState, readAgentsStateForSafetyCheck } from './cosState.
 import { recordDomainUsage } from './domainUsage.js';
 import { cosEvents } from './cosEvents.js';
 import { loadAgentIndex } from './cosAgentIndex.js';
-import { getActiveAgentsFromRunner } from './cosRunnerClient.js';
+import { getActiveAgentsFromRunner, requestSecurityScanViaRunner } from './cosRunnerClient.js';
+import { persistAgentSecurityScan } from './agentSecurityScan.js';
 import { activeAgents, runnerAgents, spawningTasks } from './agentState.js';
 
 describe('cosAgentLifecycle', () => {
@@ -83,6 +85,38 @@ describe('cosAgentLifecycle', () => {
 
   afterEach(async () => {
     await rm(mockCosState.agentsDir, { recursive: true, force: true });
+  });
+
+  it('keeps trusted terminal scanner receipts across stale reconnects, agent claims and missing completion', async () => {
+    mockCosState.state.stats = { agentsSpawned: 0, agentsCompleted: 0, agentsFailed: 0 };
+    await registerAgent('agent-scanner', 'task-example', { taskAnalysisType: 'security', useRunner: true });
+    const evidence = { version: 1, source: 'runner', sequence: 3, status: 'refused', model: 'example-model', effort: 'medium', auth: 'chatgpt',
+      maxCostUsd: 2, estimatedCostUsd: null, timeLimitSeconds: 180, exitCode: 143,
+      artifacts: { findings: false, coverage: false }, cleanup: 'confirmed' };
+    await persistAgentSecurityScan('agent-scanner', evidence);
+    await persistAgentSecurityScan('agent-scanner', { ...evidence, sequence: 2, status: 'running', exitCode: null });
+    await updateAgent('agent-scanner', { metadata: { securityScan: { ...evidence, source: 'agent-report', status: 'completed', exitCode: 0 } } });
+    vi.mocked(requestSecurityScanViaRunner).mockResolvedValue({ evidence });
+    await completeAgent('agent-scanner', { success: true });
+    const agent = await getAgent('agent-scanner');
+    expect(agent.metadata.securityScan).toEqual(evidence);
+    expect(agent.metadata.executionInterruption.category).toBe('content-refusal');
+    expect(agent.result.success).toBe(false);
+    expect(agent.result.error).toContain('safety refusal');
+  });
+
+  it('records uncertain cleanup if the runner disappears before outer completion', async () => {
+    mockCosState.state.stats = { agentsSpawned: 0, agentsCompleted: 0, agentsFailed: 0 };
+    await registerAgent('agent-scanner', 'task-example', { taskAnalysisType: 'security', useRunner: true });
+    await persistAgentSecurityScan('agent-scanner', { version: 1, source: 'runner', sequence: 2, status: 'running', model: 'example-model', effort: 'medium', auth: 'chatgpt',
+      maxCostUsd: 2, estimatedCostUsd: null, timeLimitSeconds: 180, exitCode: null,
+      artifacts: { findings: null, coverage: null }, cleanup: 'unconfirmed' });
+    vi.mocked(requestSecurityScanViaRunner).mockRejectedValue(new Error('synthetic runner loss'));
+    await completeAgent('agent-scanner', { success: false, error: 'Terminated' });
+    expect((await getAgent('agent-scanner')).metadata).toMatchObject({ securityScan: { sequence: 2, status: 'running', exitCode: null }, securityScanControl: { status: 'interrupted', cleanup: 'unconfirmed' } });
+    const observed = (await getAgent('agent-scanner')).metadata.securityScan;
+    await persistAgentSecurityScan('agent-scanner', { ...observed, sequence: 3, status: 'refused', exitCode: 143, cleanup: 'confirmed' });
+    expect((await getAgent('agent-scanner')).metadata).toMatchObject({ securityScan: { status: 'refused', cleanup: 'confirmed' }, securityScanControl: null });
   });
 
   it('keeps archived prompts readable after state eviction, with UTF-8 byte counts', async () => {

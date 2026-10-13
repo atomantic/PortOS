@@ -1154,6 +1154,12 @@ export function dispatchRecoveredTaskOutputHook({ agentId, task, success, worksp
  *   private-security override), so callers that branch on it don't have to re-derive it
  */
 export async function retireDeadAgent({ agent, task, success, exitCode, duration, errorMessage, category, agentResultExtra = {} }) {
+  if (agent.metadata?.taskAnalysisType === 'security' && agent.metadata.useRunner) {
+    const { settleAgentSecurityScan } = await import('./agentSecurityScan.js');
+    const scanner = await settleAgentSecurityScan(agent.id);
+    if (scanner?.status === 'refused') agent = { ...agent, metadata: { ...agent.metadata,
+      executionInterruption: { category: 'content-refusal', source: 'security-scanner' } } };
+  }
   const isPrivateSecurity = isPrivateSecurityTask(task) || isPrivateSecurityTask(agent);
   const interruption = agent.metadata?.executionInterruption;
   const refused = ['content-refusal', 'content-filtered'].includes(interruption?.category);
@@ -1335,6 +1341,16 @@ export async function finalizeAgent({
   prExpected = false,
   startedAt = null,
 }) {
+  if (resolveTaskHookType(task) === 'security') {
+    const { settleAgentSecurityScan } = await import('./agentSecurityScan.js');
+    const scanner = await settleAgentSecurityScan(agentId);
+    if (scanner?.status === 'refused') {
+      reportedSuccess = false;
+      reportedErrorAnalysis = { category: 'content-refusal', origin: 'provider', permanent: true, actionable: false,
+        requiresFallback: false, message: 'Security scanner safety refusal; automatic continuation, retries and provider fallback are disabled.' };
+      executionInterruption = { category: 'content-refusal', source: 'security-scanner' };
+    }
+  }
   if (['content-refusal', 'content-filtered'].includes(reportedErrorAnalysis?.category)) {
     executionInterruption ||= { category: reportedErrorAnalysis.category, source: reportedErrorAnalysis.origin || 'provider' };
     reportedSuccess = false;
@@ -1997,7 +2013,8 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, a
       const evidence = parseSecurityScanEvidence(summary);
       // Record even on failed delivery; absence must not erase earlier evidence
       // during completion replay. This stays in the machine-local agent record.
-      if (evidence) await updateAgent(agentId, { metadata: { securityScan: evidence } }).catch(err => {
+      const existing = await getAgentRecord(agentId);
+      if (evidence && existing?.metadata?.securityScan?.source !== 'runner') await updateAgent(agentId, { metadata: { securityScan: evidence } }).catch(err => {
         emitLog('warn', `⚠️ Scanner diagnostics were not saved for ${agentId}: ${err.message}`, { agentId });
       });
     }

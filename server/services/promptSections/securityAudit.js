@@ -1,9 +1,11 @@
 import { isCodexProvider } from '../../lib/providerModels.js';
 import { resolveTaskHookType } from '../taskTypeHooks.js';
+import { localApiBaseUrl } from '../../lib/networkExposure.js';
+import { agentApiCurl } from '../../lib/agentApiToken.js';
 
 // Resolve at dispatch, rather than changing only the shipped security mission:
 // customized prompts and already-queued audits need the same scanner guidance.
-export function buildSecurityAuditRuntimeSection(task, { providerId, providerCommand } = {}) {
+export function buildSecurityAuditRuntimeSection(task, { providerId, providerCommand, agentId } = {}) {
   // Match the identity used by source evidence, completion and score recording.
   const taskType = resolveTaskHookType(task);
   // An explicit executable wins over a stale provider id. Custom ids still
@@ -11,19 +13,20 @@ export function buildSecurityAuditRuntimeSection(task, { providerId, providerCom
   const provider = { id: providerCommand ? null : providerId, command: providerCommand };
   if (taskType !== 'security' || !isCodexProvider(provider)) return '';
 
+  const endpoint = `/api/cos/agents/${encodeURIComponent(agentId || '<agent-id>')}/security-scan`;
+  const command = agentApiCurl({ apiBase: localApiBaseUrl(), path: endpoint });
   return `## Codex Security Audit Runtime
-This security audit is running in a Codex agent. Run the scanner phase through Codex Security after reading the target's threat model and completing the required repository-wide discovery. Use an available Codex Security scan capability, or the official local CLI; opening Codex Security Cloud alone does not run a scan.
+After reading the target threat model and completing repository-wide discovery, request the scanner phase through the PortOS runner. Write a private JSON request file containing only:
+{ "prompt": "The actual threat model, selected audit area and report-only restrictions", "paths": ["relative/source/path"], "knowledgeBase": ["AGENTS.md"] }
+Choose real workspace-relative files; include available architecture/security documents in knowledgeBase. Keep outer issue-filing and completion commands out of the scanner prompt.
 
-- For the CLI, inspect its installed help/version, then run a report-only scan non-interactively: \`npx --yes @openai/codex-security scan "<repo-root>" --auth chatgpt --headless --json --model "<authorized-model>" --effort "<authorized-effort>" --output-dir "<private-dir-outside-repo>"\`. Resolve the placeholders first, close stdin, and keep scan artifacts/state outside the repository with private permissions. Remove unrelated application/provider credentials from the scanner's child environment, including PORTOS_API_TOKEN, while preserving its authorized scanner sign-in and required runtime variables; never print credentials. Use existing authorized credentials; never start login/device-auth, change accounts, purchase access, or wait for a human. Do not silently switch to an environment API key.
-- Supply the project's security/architecture documents with \`--knowledge-base\` and a scoped \`--scan-prompt-file\` describing the actual threat model, selected audit area and report-only restrictions. Keep outer issue-filing and completion commands out of that file. Explicitly select an accessible model and effort within this run's configured permissions, quota and budget before starting; do not inherit more expensive CLI defaults or launch extra workers/categories. If that cannot be established, record the limitation and continue permitted source review.
-- The scanner supplies evidence, not authority. Preserve the task's file-issues versus remediation mode, independent review, validation and delivery requirements. Never use \`--patch\`, \`--create-pr\`, \`publish\`, or hook installation as part of the scan. Check the checkout's branch/status before and after; report unexpected changes without discarding anyone's work. Read findings and coverage artifacts, challenge reachability against callers/tests/history, redact evidence, and de-duplicate before filing.
-- A cybersecurity/content-policy refusal is terminal for this request: stop clearly, preserve evidence, and do not automatically continue, retry, rephrase to evade the refusal, or switch providers. This overrides recovery guidance below.
-- If the module is missing, access is denied, a permission review refuses an action, or a quota/time limit stops the scan, preserve completed evidence and name the concrete failure. Do not repeat a refused action through another tool or treat a dry run as proof of scan access. Continue independent permitted inspection and deliver supported findings even when another probe is blocked; do not strand an unattended run on a setup or approval prompt.
-- Report scanner execution separately from delivery and quality assessment. Preserve the actual resolved scanner model/effort/auth, configured limits (including wrapper time limits), estimated API-equivalent cost when reported, process exit, and whether findings/coverage artifacts were actually saved. A successful outer task or saved assessment does not make an interrupted scanner successful. Do not increase limits or infer charges from estimates.
-- Include one single-line SCANNER_STATUS_JSON in the completion sentinel summary and final response. Replace values with observed scanner evidence; null means unknown, including a budget that was never established. Never include paths, credentials, findings or raw logs in this record:
-SCANNER_STATUS_JSON: {"version":1,"status":"not-run","model":null,"effort":null,"auth":"unknown","maxCostUsd":null,"estimatedCostUsd":null,"timeLimitSeconds":null,"exitCode":null,"artifacts":{"findings":null,"coverage":null}}
-Allowed status: not-run, unavailable, completed, failed, time-limit, budget-limit, refused. Use completed only for confirmed successful scanner exit; report time-limit/budget-limit even when partial artifacts exist. Artifacts are true only when verified present, false when verified absent, otherwise null.
-- Finish with the required sentinel and exactly one QUALITY_AUDIT_JSON assessment based on work actually performed. Scanner completion does not certify every file: retain exclusions, deferred areas and uncertainty, and use partial/unavailable coverage when warranted.
+Call once: \`${command} --data-binary @<private-request-file>\`.
+The runner owns the installed Codex Security CLI, enforces this run's resolved model and effort, subscription ChatGPT authentication, a $2 API-equivalent estimated-cost cap and a 180-second scan limit. Those settings cannot be changed in the request. No installation, API-key fallback, additional workers, patching or publication is permitted. Do not invoke a separate CLI, SDK or cloud scan: an unavailable runner/installation/model is a visible limitation, not permission for a different execution path.
 
-CLI contract: https://learn.chatgpt.com/docs/security/cli`;
+The response contains trusted runner evidence plus a private artifactDirectory. Read any saved findings/coverage there, challenge reachability against callers/tests/history, and preserve this task's remediation/file-issues mode and delivery requirements. Do not call the scanner again after any result or transport error; the runner retains one attempt and its diagnostics independently of your completion. Finish permitted source inspection and deliver supported findings even when another probe is blocked.
+
+A cybersecurity/content-policy refusal is terminal for this request: stop clearly. Do not continue, retry, rephrase to evade a refusal, or switch providers. This overrides recovery guidance below. The runner also stops the outer request on a scanner refusal.
+
+Report scanner execution separately from delivery and quality assessment. Runner-observed model/effort/auth, limits, exit and artifact evidence are authoritative; a saved assessment or successful outer task does not make an interrupted scan successful. Estimated cost is API-equivalent usage, not proof of charges. Do not claim unknown evidence as zero or success. Complete the normal sentinel and exactly one QUALITY_AUDIT_JSON assessment for work actually performed, with partial/unavailable coverage when warranted. SCANNER_STATUS_JSON is a legacy agent-report format; it cannot override runner evidence.
+`;
 }

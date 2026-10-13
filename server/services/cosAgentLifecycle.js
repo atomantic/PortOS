@@ -53,6 +53,15 @@ export async function updateAgent(agentId, updates) {
       return null;
     }
 
+    // Socket events, reconnect snapshots and finalization may arrive out of
+    // order. Runner receipts outrank agent claims and only advance revision.
+    const previousScan = state.agents[agentId].metadata?.securityScan;
+    const incomingScan = updates.metadata?.securityScan;
+    if (previousScan?.source === 'runner' && incomingScan
+      && (incomingScan.source !== 'runner' || incomingScan.sequence <= previousScan.sequence)) {
+      updates = { ...updates, metadata: { ...updates.metadata, securityScan: previousScan } };
+    }
+
     // Merge metadata if present in updates
     if (updates.metadata) {
       state.agents[agentId] = {
@@ -127,6 +136,12 @@ async function archiveCompletedAgent(agentId, agent) {
 }
 
 export async function completeAgent(agentId, result = {}) {
+  const existing = await getAgentRecord(agentId);
+  if (existing?.metadata?.taskAnalysisType === 'security' && existing.metadata.useRunner) {
+    const { settleAgentSecurityScan } = await import('./agentSecurityScan.js');
+    const scanner = await settleAgentSecurityScan(agentId);
+    if (scanner?.status === 'refused') result = { ...result, success: false, error: 'Security scanner safety refusal; automatic retry stopped' };
+  }
   // Set inside the lock when the record is already terminal, so the post-lock
   // tail below (budget ledger + `agent:completed`) is skipped too — see #3384.
   let alreadyCompleted = false;

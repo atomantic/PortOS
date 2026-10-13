@@ -1,5 +1,7 @@
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { persistRunnerCompletion } from './completion.js';
+import { createSecurityScanManager } from './securityScan.js';
+import { securityScanRequestSchema } from '../lib/securityScanEvidence.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import '../services/databaseBootFence.js';
 /**
@@ -132,6 +134,35 @@ io.use((socket, next) => next(lifecycle.isStopping() ? new Error('Runner is shut
 
 const persistCompletion = (agentId, output, metadata) => persistRunnerCompletion(AGENTS_DIR, agentId, output, metadata);
 
+const securityScans = createSecurityScanManager({
+  agentsDir: AGENTS_DIR,
+  getAgent: id => activeAgents.get(id),
+  trackWork: work => lifecycle.trackWork(work),
+  emitEvidence: async (agentId, evidence) => {
+    const agent = activeAgents.get(agentId);
+    if (agent) agent.securityScan = evidence;
+    emitToServer('agent:security-scan', { agentId, evidence });
+  },
+});
+
+app.post('/agents/:agentId/security-scan', async (req, res) => {
+  const parsed = securityScanRequestSchema.safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ error: bodyErrorMessage(parsed.error) });
+  if (lifecycle.rejectSpawn(res)) return;
+  try {
+    assertDatabaseAdmission();
+    res.json(await securityScans.start(req.params.agentId, parsed.data));
+  } catch (err) { res.status(err.status || 500).json({ error: err.message }); }
+});
+app.post('/agents/:agentId/security-scan/stop', async (req, res) => {
+  try { res.json({ evidence: await securityScans.stop(req.params.agentId) }); }
+  catch (err) { res.status(err.status || 500).json({ error: err.message }); }
+});
+app.get('/agents/:agentId/security-scan', async (req, res) => {
+  try { res.json({ evidence: await securityScans.read(req.params.agentId) }); }
+  catch (err) { res.status(err.status || 500).json({ error: err.message }); }
+});
+
 /**
  * Emit event to connected portos-server instances
  */
@@ -183,6 +214,7 @@ app.get('/agents', async (req, res) => {
       sessionId: agent.sessionId || null,
       command: agent.command || null,
       workspacePath: agent.workspacePath || null,
+      securityScan: agent.securityScan || null,
     });
   }
   res.json(agents);
@@ -272,6 +304,7 @@ app.post('/spawn-tui', lifecycle.spawnRoute(async (req, res) => {
   // Use the same safe wrapper for the actual PTY launch. In particular, this
   // preserves the shared escaping contract for paths/args passed to cmd.exe.
   const { command: ptyCommand, args: ptyArgs } = prepareCliSpawn(executable, args, childEnv);
+  await securityScans.register(agentId, body.data.securityScanGrant);
   // Both checks above cleared the executable, so a throw here is about the PTY
   // layer or the workspace — not the command. node-pty collapses those into one
   // opaque `posix_spawn failed: No such file or directory`, which read as a
@@ -316,6 +349,8 @@ app.post('/spawn-tui', lifecycle.spawnRoute(async (req, res) => {
     // node-pty reports pid 0 for ConPTY on Windows, so a pid probe is not a
     // liveness signal. onExit is the runner's authority; GET /agents reads this.
     exited: false,
+    securityScan: await securityScans.read(agentId),
+    stopSecurityScan: () => securityScans.stop(agentId).catch(err => lifecycle.reportFailure(err)),
   };
   activeAgents.set(agentId, agent);
   const sentinelAccess = createAgentSentinelAccess({
@@ -403,6 +438,7 @@ app.post('/spawn-tui', lifecycle.spawnRoute(async (req, res) => {
       sessionId,
       workspacePath: cwd,
       doneSentinelPath,
+      securityScanGrant: body.data.securityScanGrant,
     };
     state.stats.spawned++;
   });
@@ -528,6 +564,7 @@ app.post('/spawn', lifecycle.spawnRoute(async (req, res) => {
   }
 
   // Spawn the CLI process
+  await securityScans.register(agentId, body.data.securityScanGrant);
   const claudeProcess = spawn(spawnCommand, finalSpawnArgs, {
     cwd,
     shell: false,
@@ -558,7 +595,9 @@ app.post('/spawn', lifecycle.spawnRoute(async (req, res) => {
     // A stream-json stdout is NDJSON with no raw ESC byte, so it skips the scan.
     stripStdoutAnsi: isStreamJson ? (text) => text : createStreamingAnsiStripper(),
     stripStderrAnsi: createStreamingAnsiStripper(),
-    workspacePath: cwd
+    workspacePath: cwd,
+    securityScan: await securityScans.read(agentId),
+    stopSecurityScan: () => securityScans.stop(agentId).catch(err => lifecycle.reportFailure(err)),
   };
   activeAgents.set(agentId, agent);
 
@@ -634,6 +673,7 @@ app.post('/spawn', lifecycle.spawnRoute(async (req, res) => {
     cleanupPromptFile();
     try {
       agent.exited = true;
+      await agent.stopSecurityScan?.();
       // Cancel any pending SIGKILL timer — process already exited.
       if (agent?.killTimer) {
         clearTimeout(agent.killTimer);
@@ -680,6 +720,7 @@ app.post('/spawn', lifecycle.spawnRoute(async (req, res) => {
           exitCode: code,
           success: code === 0,
           duration,
+          securityScan: agent.securityScan,
         });
         if (paused) {
           activeAgents.delete(agentId);
@@ -693,7 +734,8 @@ app.post('/spawn', lifecycle.spawnRoute(async (req, res) => {
           exitCode: code,
           success: code === 0,
           duration,
-          outputLength: output.length
+          outputLength: output.length,
+          securityScan: agent.securityScan,
         });
 
         // Update state — serialize with the spawn write path via withState.
@@ -717,6 +759,7 @@ app.post('/spawn', lifecycle.spawnRoute(async (req, res) => {
   await withState((state) => {
     state.agents[agentId] = {
       pid: claudeProcess.pid,
+      securityScanGrant: body.data.securityScanGrant,
       taskId,
       startedAt: Date.now()
     };
@@ -733,7 +776,7 @@ app.post('/spawn', lifecycle.spawnRoute(async (req, res) => {
 /**
  * Terminate an agent (graceful with SIGTERM, then SIGKILL after timeout)
  */
-app.post('/terminate/:agentId', (req, res) => {
+app.post('/terminate/:agentId', async (req, res) => {
   const { agentId } = req.params;
   const agent = activeAgents.get(agentId);
 
@@ -742,7 +785,7 @@ app.post('/terminate/:agentId', (req, res) => {
   }
 
   console.log(`🔪 Terminating agent ${agentId}`);
-
+  await agent.stopSecurityScan?.();
   killProcessTree(agent.process, 'SIGTERM');
   armForceKill(agentId, agent);
 
@@ -761,7 +804,7 @@ app.post('/kill/:agentId', async (req, res) => {
   }
 
   console.log(`💀 Force killing agent ${agentId} (PID: ${agent.pid})`);
-
+  await agent.stopSecurityScan?.();
   killProcessTree(agent.process, 'SIGKILL');
 
   // Clean up immediately
@@ -797,7 +840,7 @@ app.post('/pause/:agentId', async (req, res) => {
   agent.paused = true;
   agent.pausedAt = pausedAt;
   agent.pauseReason = reason;
-
+  await agent.stopSecurityScan?.();
   killProcessTree(agent.process, 'SIGTERM');
   // NOT armForceKill: a pause keeps its map entry (the agent is meant to be
   // resumable) and only escalates while the pause is still in force.
@@ -823,6 +866,7 @@ app.post('/terminate-all', async (req, res) => {
   for (const agentId of agentIds) {
     const agent = activeAgents.get(agentId);
     if (agent) {
+      await agent.stopSecurityScan?.();
       killProcessTree(agent.process, 'SIGTERM');
       armForceKill(agentId, agent);
     }
@@ -915,13 +959,14 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('tui:kill', ({ sessionId, signal = 'SIGTERM' }) => {
+  socket.on('tui:kill', async ({ sessionId, signal = 'SIGTERM' }) => {
     try {
       if (!TUI_SIGNALS.has(signal)) return;
       const entry = [...activeAgents.entries()].find(([, candidate]) => candidate.sessionId === sessionId);
       if (!entry) return;
       const [agentId, agent] = entry;
       if (agent.kind !== 'tui') return;
+      await agent.stopSecurityScan?.();
       killProcessTree(agent.process, signal);
       // `dropState` only for an agent the server has already FINALIZED. A pause
       // also relays a kill (the server stops a TUI session through this socket),
@@ -949,6 +994,7 @@ async function cleanupOrphanedAgents() {
   // write in the same queue so an old snapshot cannot resurrect completed runs.
   await withState(async (state) => {
     for (const [agentId, agentInfo] of Object.entries(state.agents)) {
+      if (agentInfo.securityScanGrant) await securityScans.recover(agentId);
       const isRunning = await checkProcessRunning(agentInfo.pid);
       if (!isRunning) {
         orphaned.push({ agentId, taskId: agentInfo.taskId });

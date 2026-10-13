@@ -101,6 +101,7 @@ export function createRunnerShutdown({
       // Arm first so a synchronous exit from a process double can cancel it.
       armForceKill(new Map([[agentId, agent]]), agentId, agent, { graceMs });
       try {
+        if (agent.stopSecurityScan) trackWork(() => agent.stopSecurityScan());
         killProcessTree(agent.process, 'SIGTERM');
       } catch (err) {
         reportFailure(err);

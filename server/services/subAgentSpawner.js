@@ -45,7 +45,7 @@ import { handleAgentCompletion } from './agentLifecycle.js';
 import { cleanupOrphanedAgents } from './agentManagement.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { appendRunEvent } from './agentRunEventLog.js';
-import { runnerAgents, setUseRunner, useRunner } from './agentState.js';
+import { activeAgents, runnerAgents, setUseRunner, useRunner } from './agentState.js';
 import { releaseAppReviewMarker } from './appActivity.js';
 import { isUpdateInProgress } from './updateChecker.js';
 import { loadState } from './cosState.js';
@@ -322,8 +322,9 @@ async function runInitSpawner() {
       // in the CoS log stream the UI reads, or a remote install sees the outage
       // reported and never its resolution.
       emitLog('info', '🔼 CoS Runner came up — promoting agent spawning from direct to runner mode');
-      runnerRecovery = recoverRunnerAgents();
     }
+    // Refresh receipts even for locally owned agents after a brief socket gap.
+    runnerRecovery = runnerRecovery.then(() => recoverRunnerAgents());
     clearTimeout(reconnectDequeueTimer);
     reconnectDequeueTimer = setTimeout(() => {
       // Resume only once reconciliation has settled, so the dequeue counts the
@@ -383,6 +384,14 @@ async function runInitSpawner() {
       await updateAgent(agentId, { metadata: { phase: 'working' } });
       emitLog('info', `Agent ${agentId} working...`, { agentId, phase: 'working' });
     }
+  });
+
+  onCosRunnerEvent('agent:security-scan', async ({ agentId, evidence }) => {
+    const { persistAgentSecurityScan } = await import('./agentSecurityScan.js');
+    const { parseRunnerSecurityScanEvidence } = await import('../lib/securityScanEvidence.js');
+    const observed = parseRunnerSecurityScanEvidence(evidence);
+    const refusal = observed?.status === 'refused' ? activeAgents.get(agentId)?.refuseScanner?.() : null;
+    await Promise.all([refusal, persistAgentSecurityScan(agentId, evidence)]);
   });
 
   onCosRunnerEvent('agent:completed', async (data) => {

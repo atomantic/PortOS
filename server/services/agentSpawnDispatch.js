@@ -11,7 +11,7 @@ import { isAuditTaskType } from '../lib/auditCatalog.js';
 import { resolveTaskHookType } from './taskTypeHooks.js';
 import { capturePrimaryCheckoutState } from '../lib/primaryCheckoutGuard.js';
 import { buildAgentPrompt, getAppWorkspace, isClaimFlowTask, promptOpensOwnPr } from './agentPromptBuilder.js';
-import { isOllamaClaudeProvider, isClaudeCommand } from '../lib/providerModels.js';
+import { isOllamaClaudeProvider, isClaudeCommand, isCodexProvider } from '../lib/providerModels.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { buildCliSpawnConfig, isClaudeCliProvider, isTuiProvider, getClaudeSettingsEnv, spawnDirectly } from './agentCliSpawning.js';
 import { dropUnsupportedOllamaThinking } from './ollamaAgentContext.js';
@@ -25,7 +25,8 @@ import { PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE } from '../lib/agentExecutionPr
 import { formatPublicReviewInputPrompt } from '../lib/modelAbuseGuard.js';
 import { validatePublicReviewModel } from './modelAbuseGuard.js';
 import { loadPublicReviewSpawnInput } from './publicReviewSpawnInput.js';
-import { registerAgent } from './cosAgentLifecycle.js';
+import { securityScanGrantFromArgs } from '../lib/securityScanEvidence.js';
+import { registerAgent, updateAgent } from './cosAgentLifecycle.js';
 import { createAgentRun } from './agentRunTracking.js';
 import { useRunner } from './agentState.js';
 import { cloudSwarmThreadCapacity, localEndpointOfProvider, providerBaseUrl } from './cosLocalEndpointSlots.js';
@@ -269,6 +270,10 @@ export async function dispatchAgentRun(context, { spawnViaRunner } = {}) {
   const cliConfig = !spawnHeadless
     ? buildTuiSpawnConfig(runProvider, selectedModel, { systemPromptFile, effort: taskEffort, maxConcurrentThreads, safetyProfile })
     : buildCliSpawnConfig(runProvider, selectedModel, cliSettingsEnv, { systemPromptFile, effort: taskEffort, maxConcurrentThreads, safetyProfile });
+  const securityScanGrant = dispatchUseRunner && resolveTaskHookType(task) === 'security' && isCodexProvider(runProvider)
+    ? securityScanGrantFromArgs(cliConfig.args)
+    : null;
+  if (securityScanGrant) await updateAgent(agentId, { metadata: { securityScanGrant, taskAnalysisType: 'security' } });
 
   emitLog('success', `Spawning agent for task ${task.id}`, {
     agentId,
@@ -297,10 +302,11 @@ export async function dispatchAgentRun(context, { spawnViaRunner } = {}) {
       prOpenedBy,
       useDurableRunner: dispatchUseRunner,
       safetyProfile,
+      securityScanGrant,
     });
   }
   if (dispatchUseRunner) {
-    return await spawnViaRunner(agentId, task, { prompt, workspacePath, model: selectedModel, provider: runProvider, runId, cliConfig, executionId: toolExecution.id, laneName });
+    return await spawnViaRunner(agentId, task, { prompt, workspacePath, model: selectedModel, provider: runProvider, runId, cliConfig, executionId: toolExecution.id, laneName, securityScanGrant });
   }
   return await spawnDirectly({
     agentId,

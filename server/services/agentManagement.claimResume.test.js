@@ -4,7 +4,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 
-const f = vi.hoisted(() => ({ tasks: {}, state: null, disk: null, prompt: null }));
+const f = vi.hoisted(() => ({ tasks: {}, state: null, disk: null, prompt: null, cliConfig: null }));
 const persist = () => { f.disk = structuredClone(f.state); };
 vi.mock('./cosState.js', () => ({
   withStateLock: createFileWriteQueue(),
@@ -62,7 +62,7 @@ vi.mock('./agentWorkspacePrep.js', () => ({ prepareAgentWorkspace: async () => (
   workspacePath: '/repos/example', worktreeInfo: null,
 }) }));
 vi.mock('./agentCliSpawning.js', () => ({
-  buildCliSpawnConfig: () => ({ command: 'codex' }), isClaudeCliProvider: () => false,
+  buildCliSpawnConfig: () => f.cliConfig || ({ command: 'codex' }), isClaudeCliProvider: () => false,
   isTuiProvider: () => false, getClaudeSettingsEnv: async () => ({}),
   spawnDirectly: vi.fn(async ({ prompt }) => { f.prompt = prompt; return 'replacement-agent'; }),
 }));
@@ -107,7 +107,7 @@ vi.mock('./creativeDirector/completionHook.js', () => ({ advanceAfterSceneSettle
 import { resumeAgent } from './agentManagement.js';
 import { dispatchAgentRun } from './agentSpawnDispatch.js';
 import { forceSpawnTask, addTask, getTaskById } from './cos.js';
-import { completeAgent } from './cosAgentLifecycle.js';
+import { completeAgent, updateAgent } from './cosAgentLifecycle.js';
 import { spawnDirectly } from './agentCliSpawning.js';
 import { setUseRunner } from './agentState.js';
 import { updateClaimOwnership } from './cosClaimOwnership.js';
@@ -118,7 +118,7 @@ const reviewers = ['provider:antigravity-cli'];
 const reviewConfig = { reviewers, optionalReviewers: reviewers, reviewerMaxRounds: { 'provider:antigravity-cli': 2 },
   reviewerModels: { 'provider:antigravity-cli': 'gemini-3.8-flash' }, reviewerEfforts: { 'provider:antigravity-cli': 'low' } };
 beforeEach(() => {
-  vi.clearAllMocks(); setUseRunner(false); f.prompt = null;
+  vi.clearAllMocks(); setUseRunner(false); f.prompt = null; f.cliConfig = null;
   f.tasks = { original: { id: 'original', taskType: 'user', status: 'blocked', description: CLAIM_PROSE,
     metadata: { claimFlow: true, swarmCount: 6, ...reviewConfig, reviewLoop: true, useWorktree: false, openPR: false,
       prompt: CLAIM_PROSE, blockedCategory: 'agent-paused', pausedAgentId: 'prior', app: 'example' } } };
@@ -195,4 +195,19 @@ describe('claim resume contract through spawn', () => {
     expect(spawnDirectly).not.toHaveBeenCalled();
     expect(f.state).toEqual(before);
   });
+});
+
+it('pins a security scanner grant to effective CLI settings and registers aliased task eligibility', async () => {
+  setUseRunner(true);
+  f.cliConfig = { command: 'codex', args: ['--model', 'saved-model', '-c', 'model_reasoning_effort=high'] };
+  const task = f.tasks.original = { id: 'original', taskType: 'security', description: 'Synthetic source audit',
+    metadata: { useWorktree: false, openPR: false, effort: 'medium' } };
+  const spawnViaRunner = vi.fn();
+  await dispatchAgentRun({ task, agentId: 'agent-scanner', instanceId: 'instance-example', toolExecution: { id: 'exec-example' }, laneName: 'standard',
+    blockAndBail: message => { throw new Error(JSON.stringify(message)); }, cleanupOnError: message => { throw new Error(message); },
+  }, { spawnViaRunner });
+  expect(spawnViaRunner).toHaveBeenCalledWith('agent-scanner', task, expect.objectContaining({
+    securityScanGrant: { model: 'saved-model', effort: 'high', auth: 'chatgpt', maxCostUsd: 2, timeLimitSeconds: 180 },
+  }));
+  expect(updateAgent).toHaveBeenCalledWith('agent-scanner', { metadata: expect.objectContaining({ taskAnalysisType: 'security', securityScanGrant: expect.any(Object) }) });
 });

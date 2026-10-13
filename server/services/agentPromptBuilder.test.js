@@ -693,7 +693,9 @@ describe('buildLightContextPrompt', () => {
 
       expect(prompt.userPrompt).toContain('Custom security mission');
       expect(prompt.systemPrompt).toContain('## Codex Security Audit Runtime');
-      expect(prompt.systemPrompt).toContain('--auth chatgpt --headless --json');
+      expect(prompt.systemPrompt).toContain('/security-scan');
+      expect(prompt.systemPrompt).toContain('subscription ChatGPT authentication');
+      expect(prompt.systemPrompt).not.toContain('npx --yes');
       expect(prompt.systemPrompt).toContain('deliver supported findings even when another probe is blocked');
       expect(prompt.systemPrompt).toContain('## Completion (No Code Output)');
       expect(prompt.systemPrompt).toContain('## Required audit assessment handoff');

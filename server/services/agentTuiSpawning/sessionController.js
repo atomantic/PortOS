@@ -1948,6 +1948,14 @@ export function createTuiSessionController({
   return {
     handleData,
     handleExit,
+    refuseScanner: () => {
+      terminalRefusal = { category: 'content-refusal', origin: 'provider', permanent: true, actionable: false, requiresFallback: false,
+        message: 'Security scanner safety refusal; automatic continuation, retries and provider fallback are disabled.' };
+      executionInterruption = { category: 'content-refusal', source: 'security-scanner' };
+      immediateFallbackAnalysis = terminalRefusal;
+      pasteController?.cancel();
+      return finish({ success: false, exitCode: 1, error: terminalRefusal.message, reason: 'content-refusal' });
+    },
     markCommandInjected: () => { commandInjected = true; },
     isTerminal,
     finish,

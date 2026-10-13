@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import { expect, it } from 'vitest';
-import AgentResultLine from './AgentResultLine';
+import AgentResultLine, { SecurityScanEvidence } from './AgentResultLine';
 
 it('separates clean execution, assessment persistence and delivery validation', () => {
   const agent = { result: { success: true, validationPassed: false, auditAssessment: { status: 'persistence-failed' } } };
@@ -48,4 +48,17 @@ it('retains refusal and scanner interruption evidence alongside successful deliv
   expect(screen.getByText(/Budget: \$0.00/)).toBeInTheDocument();
   expect(screen.getByText(/Exit: unknown/)).toBeInTheDocument();
   expect(screen.getByText(/findings: saved; coverage: unknown/)).toBeInTheDocument();
+});
+
+it('shows runner observations during execution without requiring an agent completion summary', () => {
+  render(<SecurityScanEvidence scanner={{ source: 'runner', status: 'interrupted', cleanup: 'unconfirmed', model: 'example-model', effort: 'medium', auth: 'chatgpt' }} />);
+  expect(screen.getByText('Security scanner (runner observed): interrupted')).toBeInTheDocument();
+  expect(screen.getByText('Process cleanup: unconfirmed')).toBeInTheDocument();
+  expect(screen.queryByText('Completed successfully')).not.toBeInTheDocument();
+});
+
+it('distinguishes connection loss from the last trusted runner observation', () => {
+  render(<SecurityScanEvidence scanner={{ source: 'runner', status: 'running', auth: 'chatgpt' }} control={{ status: 'interrupted', cleanup: 'unconfirmed' }} />);
+  expect(screen.getByText(/interrupted \(runner connection lost\)/)).toBeInTheDocument();
+  expect(screen.getByText('Process cleanup: unconfirmed')).toBeInTheDocument();
 });
