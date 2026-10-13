@@ -1259,8 +1259,19 @@ crash. Nexus can report `runtime_data_disk_pressure` or
 `runtime_data_disk_critical` (capacity of the filesystem holding runtime data),
 `memory_pressure` or `memory_critical`, `backup_failure`, `review_alerts`, and
 `cos_paused`. These come from the same predicates that determine source status;
-health does not alarm on not-started apps, while App Arcade does. Other sources
-and older reason-less inputs use `source_attention` or `source_error`: these
+health does not alarm on not-started apps, while App Arcade does.
+
+Agent Foundry task errors mean **blocked internal CoS queue entries**, not
+necessarily failed executions. `task_user_terminated` means the entry records
+intentional user termination; `task_blocked` covers every other block category,
+including absent or unknown categories. Each task row represents one entry, so
+these reason counts aggregate entries. Recorded user intent does not authorize
+retrying, restarting or mutating stopped work. Ordinary pending work stays
+steady, approval-gated and challenged work stays attention, in-progress work
+stays active, and terminal entries are excluded. No task names, raw block
+reasons or arbitrary category strings enter the observation.
+
+Other sources and older reason-less inputs use `source_attention` or `source_error`: these
 say only that a coarse source status requires attention, without inventing a
 cause. Error sources remain identifiable even though district status is attention.
 

@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   worldProject: vi.fn(),
   worldAugment: vi.fn(),
   worldSay: vi.fn(),
+  observeWorld: vi.fn(),
   listUserActions: vi.fn(),
   fileIssue: vi.fn(),
   listIssues: vi.fn(),
@@ -70,6 +71,9 @@ vi.mock('./persistentMindContext.js', () => ({ choosePersistentMindName: (...arg
 vi.mock('./persistentMindMaintenance.js', () => ({
   cleanupPersistentMind: (...args) => mocks.cleanupMind(...args),
 }));
+vi.mock('./eidoverseObservationLedger.js', () => ({
+  observeEidoverseWorld: (...args) => mocks.observeWorld(...args),
+}));
 vi.mock('./eidoverseWorld.js', () => ({
   getEidoverseWorldStatus: (...args) => mocks.worldStatus(...args),
   projectEidoverseWorld: (...args) => mocks.worldProject(...args),
@@ -99,6 +103,8 @@ vi.mock('./cosState.js', () => ({
   withStateLock: vi.fn(async (fn) => fn()),
 }));
 
+import { buildEidoverseWorldSignals } from '../lib/eidoverseWorldSignals.js';
+import { buildEidoverseObservation } from '../lib/eidoverseObservation.js';
 import { DEFAULT_TOOL_ACTIVATION_RETENTION_TURNS } from '../lib/persistentMindToolActivation.js';
 import {
   __testing,
@@ -123,6 +129,27 @@ beforeEach(() => {
 });
 
 describe('cosToolRegistry', () => {
+  it('delivers bounded stopped-task reasons under the observation grant without enabling reports', async () => {
+    const tasks = Array.from({ length: 2 }, (_, index) => ({ id: `invented-task-${index}`,
+      status: 'blocked', metadata: { blockedCategory: 'user-terminated' } }));
+    mocks.observeWorld.mockImplementation(async () => buildEidoverseObservation({
+      source: buildEidoverseWorldSignals({ agents: [], taskState: { tasks } }, { includeAttentionReasons: true }),
+    }).report);
+    const call = { requestId: 'observe-stopped-tasks', name: 'eidoverse.observe', arguments: {} };
+    await expect(executeCosToolCall({ call, authority: { scope: 'mind', capabilities: {} } }))
+      .rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
+    expect(mocks.observeWorld).not.toHaveBeenCalled();
+    const authority = { scope: 'mind', capabilities: { manageEidoverse: true }, reportAccess: false };
+    const observed = await executeCosToolCall({ call, authority });
+    expect(observed.result.places.find((place) => place.id === 'agents').attentionSignals).toEqual([
+      { source: 'tasks', severity: 'error', signalCount: 2,
+        reasons: [{ code: 'task_user_terminated', affectedCount: 2 }] },
+    ]);
+    await expect(executeCosToolCall({ call: { requestId: 'report-still-disabled', name: 'reports.read',
+      arguments: {} }, authority })).rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
+    expect(tasks.every((task) => task.status === 'blocked')).toBe(true);
+  });
+
   it('requires the independent delegation grant, validates the packet, and replays one accepted proposal', async () => {
     const call = { requestId: 'sandbox-1', name: 'sandbox.delegate', arguments: {
       providerId: 'free-api', model: 'openrouter/free', kind: 'text', task: 'Write a greeting',

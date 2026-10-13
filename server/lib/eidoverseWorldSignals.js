@@ -30,6 +30,7 @@ export const EIDOVERSE_ATTENTION_REASON_CODES = Object.freeze([
   'backup_failure', 'review_alerts', 'cos_paused',
   'runtime_data_disk_pressure', 'runtime_data_disk_critical',
   'memory_pressure', 'memory_critical',
+  'task_user_terminated', 'task_blocked',
 ]);
 
 const coarseStatus = (value) => {
@@ -415,9 +416,16 @@ export function buildEidoverseWorldSignals({
   const projectedTasks = Array.isArray(taskState?.tasks)
     ? taskState.tasks
       .filter((task) => !['completed', 'done', 'archived'].includes(String(task?.status || '').toLowerCase()))
-      .map((task, index) => ({
-        id: opaqueId('task', task.id, `task-${index}`), label: 'Active task', status: taskSignalStatus(task),
-      }))
+      .map((task, index) => {
+        const status = taskSignalStatus(task);
+        return {
+          id: opaqueId('task', task.id, `task-${index}`), label: 'Active task', status,
+          ...(includeAttentionReasons && status === 'error' ? { attentionReasons: [{
+            code: task.metadata?.blockedCategory === 'user-terminated' ? 'task_user_terminated' : 'task_blocked',
+            affectedCount: 1,
+          }] } : {}),
+        };
+      })
     : null;
   const projectedFeatures = Array.isArray(featuresState?.features)
     ? featuresState.features.map((feature) => ({

@@ -386,7 +386,9 @@ describe('bounded attention projection', () => {
     const rows = ['error', 'attention'].map((status) => ({ status,
       name: 'Example Secret App', path: '/invented/private/path', error: 'invented-error-token',
       attentionReasons: [
-        ...EIDOVERSE_ATTENTION_REASON_CODES.map((code) => ({ code, affectedCount: 2, secret: 'invented-token' })),
+        // Keep each contributor below the cap so truncation crosses sources,
+        // independently of future additions to the closed reason vocabulary.
+        ...EIDOVERSE_ATTENTION_REASON_CODES.slice(0, 10).map((code) => ({ code, affectedCount: 2, secret: 'invented-token' })),
         { code: 'invented-secret-reason', affectedCount: 42 },
       ],
     }));
