@@ -354,8 +354,8 @@ describe('Render follows the shot locks', () => {
 });
 
 describe('start and end frames', () => {
-  // Uniquely catches a frame's prompt or Render hiding away from its picture, a frame reference not reaching the render, or the Render section not saying which renderer ends on the end frame.
-  it('shows each frame with its prompt and Render, renders from a picked frame, and shows the tapped frame\'s takes', async () => {
+  // Uniquely catches a frame's prompt, Render, Swap or takes hiding away from its picture, a frame reference not reaching the render, or the Render section not saying which renderer ends on the end frame.
+  it('shows each frame with its prompt, Render, Swap and takes, and renders from a picked frame', async () => {
     const scene = { sceneId: 's1', prompt: 'She looks into the lens', referenceImageId: 'start.png', endImageId: 'end.png', endFramePrompt: 'Head thrown back', startSec: 0, endSec: 4,
       takes: [{ takeId: 't1', kind: 'image', assetId: 'start.png', status: 'selected' }, { takeId: 't2', kind: 'endImage', assetId: 'end.png', status: 'selected' }] };
     const onGenerateFrame = vi.fn();
@@ -378,9 +378,9 @@ describe('start and end frames', () => {
     fireEvent.click(within(pair).getByRole('button', { name: 'New frame take' }));
     expect(onGenerateFrame).toHaveBeenLastCalledWith(scene, { referenceImageId: 'end.png' });
 
-    expect(screen.getByRole('list', { name: /^Frame takes/ })).toBeTruthy();
-    fireEvent.click(within(pair).getByRole('button', { name: 'End frame' }));
-    expect(screen.getByRole('list', { name: /^End frame takes/ })).toBeTruthy();
+    // Both frames' takes show at once, each under its own frame.
+    expect(within(pair).getByRole('list', { name: /^Frame takes/ })).toBeTruthy();
+    expect(within(pair).getByRole('list', { name: /^End frame takes/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Clear scene 1 end frame' })).toBeTruthy();
 
     expect(screen.getByTestId('end-frame-plan').textContent).toMatch(/animates from the start frame only/);
