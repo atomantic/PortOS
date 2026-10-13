@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Sparkles } from 'lucide-react';
-import { isAuthoringOneShotProvider } from '../../../../server/lib/providerVendors.js';
+import { isVisionCapableCliProvider } from '../../utils/providers';
 import ProviderModelSelector from '../ProviderModelSelector';
 import ResolutionField from '../media/ResolutionField';
 import MediaJobThumb from '../pipeline/MediaJobThumb';
@@ -14,7 +14,7 @@ import { formatCount } from '../../utils/formatters';
 import { generateMoodBoardImages, getMoodBoardGeneration } from '../../services/api';
 import socket from '../../services/socket';
 
-const providerFilter = (p) => p.enabled !== false && isAuthoringOneShotProvider(p);
+const providerFilter = (p) => p.enabled !== false && (p.type === 'api' || isVisionCapableCliProvider(p));
 const presets = RESOLUTIONS.filter((r) => !r.compatible);
 const fieldClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-2 text-sm text-white';
 
