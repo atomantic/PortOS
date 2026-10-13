@@ -27,7 +27,7 @@ import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 
 import { spawn } from '../../lib/childProcess.js';
 import { existsSync } from 'fs';
-import { rm, unlink } from 'fs/promises';
+import { unlink } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
@@ -48,7 +48,7 @@ import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from '.
 import { documentRenderInitScripts, encodeDocumentComposition, prepareDocumentRender, sweepDocumentScratch } from './documentRender.js';
 import { renderTypographyOverlays, removeCompositionScratch, sweepCompositionScratch } from './compositionRender.js';
 import { applyFilmLookFinish, filmLookFinishNeeded } from './filmLookFinish.js';
-import { STATS_OUTRO_SCRATCH_DIR, appendStatsOutro } from './statsOutro.js';
+import { appendStatsOutro, sweepStatsOutroScratch } from './statsOutro.js';
 import { statsOutroSeconds } from '../../lib/musicVideoStatsOutro.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
 import { captureMusicVideoEvidence, musicVideoTakeChanges } from '../../lib/musicVideoDependencies.js';
@@ -1185,7 +1185,7 @@ export async function recoverStuckMusicVideoRenders() {
     console.warn(`⚠️ Music Video recovery: could not remove stale composition-document scratch: ${err.message}`);
   });
   // Nor the outro scene's staged page.
-  await rm(join(PATHS.data, STATS_OUTRO_SCRATCH_DIR), { recursive: true, force: true }).catch((err) => {
+  await sweepStatsOutroScratch().catch((err) => {
     console.warn(`⚠️ Music Video recovery: could not remove stale outro scratch: ${err.message}`);
   });
   const instanceId = await ensureInstanceId();

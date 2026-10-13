@@ -18,6 +18,9 @@ import { STATS_OUTRO_FONTS, musicVideoOutroStats, normalizeStatsOutro, statsOutr
 
 export const STATS_OUTRO_SCRATCH_DIR = 'music-video-stats-outro';
 
+/** Boot sweep: no render survives a restart, so every staged outro page is stale. */
+export const sweepStatsOutroScratch = async () => rm(join(PATHS.data, STATS_OUTRO_SCRATCH_DIR), { recursive: true, force: true });
+
 const FONT_DIR = new URL('./documentTemplates/shared/fonts/', import.meta.url);
 
 /**

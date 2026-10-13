@@ -69,6 +69,7 @@ vi.mock('../videoGen/local.js', () => ({
   mutateVideoHistory: vi.fn(async (fn) => fn([])),
 }));
 vi.mock('../tracks/index.js', () => ({ getTrack: vi.fn() }));
+vi.mock('./statsOutro.js', () => ({ appendStatsOutro: vi.fn(async () => 0), sweepStatsOutroScratch: vi.fn(async () => {}) }));
 vi.mock('./compositionRender.js', () => ({
   renderTypographyOverlays: h.renderTypographyOverlays,
   removeCompositionScratch: vi.fn(async () => {}),
