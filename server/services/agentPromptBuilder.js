@@ -41,6 +41,7 @@ import {
   buildActionOutputCompletionSection,
   buildAuditOutputCompletionSection,
   buildClaimFlowCompletionSection,
+  buildMergeAdmissionSection,
   buildClaimResumeOverride,
   claimResumeContext,
   buildReleaseFlowCompletionSection,
@@ -750,6 +751,7 @@ After your task completes, the system will spawn a follow-up agent that runs the
     // top of buildAgentPrompt under the same reviewLoopFollowUp guard — reuse it
     // rather than re-reading the lib a second time.
     reviewLoopFollowUpSection = buildReviewLoopFollowUpSection(task.metadata || {}, { verbose: true, rprBody, localAgentLoopBody });
+    if (!isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)) reviewLoopFollowUpSection += '\n\n' + buildMergeAdmissionSection(agentId);
     if (isTui) {
       const sentinelPath = resolveSentinelPath(worktreeInfo, workspaceDir, agentId);
       const branchName = worktreeInfo?.branchName || task.metadata?.reviewLoopPRBranch || null;
@@ -1110,6 +1112,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
     [COMPLETION_MODES.READ_ONLY]: () => contractSections.push(buildReadOnlyCompletionSection({ isTui, sentinelPath: lightSentinelPath() })),
     [COMPLETION_MODES.REVIEW_LOOP_FOLLOW_UP]: () => {
       contractSections.push(buildReviewLoopFollowUpSection(task.metadata || {}, { verbose: false, localAgentLoopBody, forgeCli: resolvedForgeCli }));
+      if (!isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)) contractSections.push(buildMergeAdmissionSection(agentId));
       if (!isTui) return;
       const branchName = worktreeInfo?.branchName || task.metadata?.reviewLoopPRBranch || null;
       const sentinelTail = branchName ? `   ## Branch\n   ${branchName}` : '   ## Branch\n   <branch name>';

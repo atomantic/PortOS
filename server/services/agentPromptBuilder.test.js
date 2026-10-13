@@ -1130,6 +1130,7 @@ describe('buildLightContextPrompt', () => {
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' });
       expect(prompt).toMatch(/## Review-Loop Follow-up/);
+      expect(prompt).not.toContain('## Repository merge admission');
       // The review still runs — only the merge is withheld.
       expect(prompt).toMatch(/codex/);
       expect(prompt).toMatch(/leave the PR open/i);
@@ -1953,8 +1954,11 @@ describe('buildLightContextPrompt', () => {
         }}),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
-        { defaultReviewers: ['copilot'] });
+        { defaultReviewers: ['copilot'], agentId: 'registered-coordinator' });
       expect(prompt).toMatch(/## Review-Loop Follow-up/);
+      expect(prompt).toContain('## Repository merge admission');
+      expect(prompt).toContain('--match-head-commit <sha>');
+      expect(prompt).toContain('/api/cos/merge-admission');
       expect(prompt).toMatch(/task-src-1/);
       expect(prompt).toMatch(/gh pr merge "https:\/\/github\.com\/o\/r\/pull\/9" --merge --delete-branch/);
       // --auto must NOT appear inside any `gh pr merge` invocation — it defers
