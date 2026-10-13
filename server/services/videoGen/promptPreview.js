@@ -17,10 +17,6 @@ import { resolveRequestedVideoBackend } from './prepareParams.js';
 import { VIDEO_GEN_LOCAL_ONLY_FIELD_NAMES } from './requestFields.js';
 import { grokVideoSentPrompt } from './grok.js';
 import { falVideoSentPrompt } from './fal.js';
-import { localVideoSentPrompt } from './generateVideo.js';
-import { defaultVideoModelId, listVideoModels } from './local.js';
-import { resolveVideoLoras } from './renderArgs.js';
-import { captureSystemCapabilities } from '../../lib/systemCapabilities.js';
 
 export const PREVIEW_UPLOAD_FIELDS = ['sourceImage', 'lastImage', 'audioFile', 'icReference'];
 const UPLOADED_SOURCE_IMAGE = '(uploaded image)';
@@ -71,6 +67,10 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
     }).record };
   }
   if (backend === VIDEO_GEN_MODE.LOCAL) {
+    // The local runner's modules load only for a local preview.
+    const [{ defaultVideoModelId, listVideoModels }, { resolveVideoLoras }, { captureSystemCapabilities }] = await Promise.all([
+      import('./local.js'), import('./renderArgs.js'), import('../../lib/systemCapabilities.js'),
+    ]);
     const loraFilenames = body.loraFilenames || [];
     // The render's own LoRA refusals (missing file, not a video LoRA), minus
     // its one-time effect probe, which spawns Python and is cached for the render.
@@ -79,6 +79,7 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
       const runtime = listVideoModels().find((model) => model.id === modelId)?.runtime ?? null;
       await resolveVideoLoras(loraFilenames.map((filename) => ({ filename })), { runtime });
     }
+    const { localVideoSentPrompt } = await import('./generateVideo.js');
     return { backend, ...(await localVideoSentPrompt({
       prompt: body.prompt, negativePrompt: body.negativePrompt, loraFilenames, promptAdditions,
     })).record };
