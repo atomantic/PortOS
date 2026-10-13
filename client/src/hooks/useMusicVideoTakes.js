@@ -72,8 +72,14 @@ export default function useMusicVideoTakes({ project, applyScenePatch }) {
   );
 
   // An unused still or clip from the project's pool becomes this shot's selection (with its partner, when picked).
+  // The still's frame prompt comes with it, so the start or end prompt shows what made the picture.
   const placePoolItem = (scene, pick) => runTakeOp(
-    (projectId) => placeMusicVideoPoolItem(projectId, scene.sceneId, pick, { silent: true }).then((res) => res.scene),
+    (projectId) => placeMusicVideoPoolItem(projectId, scene.sceneId, pick, { silent: true }).then(({ scene: placed }) => {
+      const field = pick.kind === 'endImage' ? 'endFramePrompt' : 'framePrompt';
+      const stillPlaced = pick.kind !== 'video' || Boolean(pick.withAssetId);
+      if (stillPlaced && placed[field] !== scene[field]) applyScenePatch?.(projectId, placed.sceneId, { [field]: placed[field] ?? null });
+      return placed;
+    }),
     'Failed to use that take',
   );
 

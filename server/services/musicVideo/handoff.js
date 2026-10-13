@@ -100,6 +100,27 @@ function composePrompt(primary, fallback, project, clause, { motion = false } = 
   ].filter(Boolean).join(', ');
 }
 
+/**
+ * The authored frame prompt inside a still's rendered prompt: its first line,
+ * cut where the project-wide look (concept style, mood-board context, visual
+ * spec) was appended and before an end frame's keep-the-reference clause, so a
+ * still swapped onto another shot shows the prompt it was made from without
+ * the look being appended twice on the next render. Null for a refine edit
+ * (its text is an instruction, not a frame) or an empty prompt.
+ */
+export function authoredFramePrompt(project, prompt) {
+  const line = typeof prompt === 'string' ? prompt.split('\n')[0].trim() : '';
+  if (!line || line.startsWith('Edit the reference image:')) return null;
+  const look = [
+    project?.concept?.style?.trim(),
+    musicVideoCreativeContext(project?.concept, { look: musicVideoDirectorLook(project) }),
+    visualDirection(project?.visualSpec),
+  ].filter(Boolean);
+  const cuts = [...look.map((piece) => line.indexOf(`, ${piece}`)), line.indexOf('. Keep the reference image\'s composition')].filter((at) => at > 0);
+  const authored = (cuts.length ? line.slice(0, Math.min(...cuts)) : line).trim();
+  return authored || null;
+}
+
 /** A scene's composed reference-frame prompt (also the server-owned production run's, #9066). */
 export const sceneFramePrompt = (project, scene) => [composePrompt(scene.framePrompt, scene.prompt, project, scene.direction?.frameClause), shotActionPrompt(project, scene, { frame: true })].filter(Boolean).join('\n');
 
