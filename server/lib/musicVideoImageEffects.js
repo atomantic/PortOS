@@ -139,11 +139,10 @@ export function musicVideoImageEffectFilter(effectSpec, { width, height, fps, ke
     const change = imageEffectChangeFrame(effectSpec, fps) - Math.round(startFrame);
     if (effectSpec.effect === 'end-fade') {
       const frames = Math.max(1, Math.round(FADE_SEC * fps));
-      const from = Math.max(0, change);
-      const left = change >= 0 ? frames : frames + change;
-      // Past the dissolve the end frame simply covers the start.
-      const fade = left > 0 ? `,fade=t=in:start_frame=${from}:nb_frames=${left}:alpha=1` : '';
-      return `[fxa${key}];[${end}]format=yuva420p${fade}[fxb${key}];[fxa${key}][fxb${key}]overlay=shortest=1:format=auto,format=yuv420p`;
+      // The dissolve by frame number, so a piece starting mid-dissolve picks it up where it stands.
+      const mix = `clip((N-(${change}))/${frames},0,1)`;
+      return `[fxa${key}];[fxa${key}]format=yuv420p[fxs${key}];[${end}]format=yuv420p[fxb${key}];`
+        + `[fxs${key}][fxb${key}]blend=all_expr='A+(B-A)*${mix}':shortest=1,format=yuv420p`;
     }
     let chain = `[fxa${key}];[fxa${key}][${end}]overlay=shortest=1:format=auto:enable='gte(n,${change})'`;
     if (effectSpec.effect === 'end-flash') {
@@ -154,9 +153,10 @@ export function musicVideoImageEffectFilter(effectSpec, { width, height, fps, ke
         ...(change > 0 ? [`fade=t=in:start_frame=${Math.max(0, rise)}:nb_frames=${Math.min(up, change)}:alpha=1`] : []),
         ...(change + down > 0 ? [`fade=t=out:start_frame=${Math.max(0, change)}:nb_frames=${change >= 0 ? down : change + down}:alpha=1`] : []),
       ];
-      // Before its rise the flash layer is clear; from the cut it fades to nothing.
+      // Before its rise the flash layer is clear; from the cut it fades to nothing,
+      // from where it stands when a piece starts mid-fade.
       if (change + down > 0) {
-        chain += `[fxcut${key}];color=c=white@1:s=${width}x${height}:r=${fps},format=yuva420p,${fades.join(',')}[fxflash${key}];`
+        chain += `[fxcut${key}];color=c=white@${num(change >= 0 ? 1 : (change + down) / down)}:s=${width}x${height}:r=${fps},format=yuva420p,${fades.join(',')}[fxflash${key}];`
           + `[fxcut${key}][fxflash${key}]overlay=shortest=1:format=auto`;
       }
     }

@@ -26,8 +26,8 @@ export default function SceneImageEffect({ fieldId, scene, onChange, disabled = 
   const value = effect || (scene.visualLayer === 'still' ? 'still' : 'clip');
   const developSec = IMAGE_EFFECT_DEVELOP_SECS.includes(scene.imageEffectSec) ? scene.imageEffectSec : DEFAULT_IMAGE_EFFECT_SEC;
   const spanSec = typeof scene.startSec === 'number' && typeof scene.endSec === 'number' ? scene.endSec - scene.startSec : null;
-  // Change points inside the shot; a saved one keeps its row even if the shot was later shortened.
-  const changeSecs = IMAGE_EFFECT_CHANGE_SECS.filter((sec) => spanSec == null || sec < spanSec || sec === scene.imageEffectSec);
+  // Change points inside the shot; a saved one past a shortened shot reads Middle, as it plays.
+  const changeSecs = IMAGE_EFFECT_CHANGE_SECS.filter((sec) => spanSec == null || sec < spanSec);
   const pick = (next) => {
     if (next === 'clip') onChange({ visualLayer: 'footage', ...(scene.imageEffect ? { imageEffect: null } : {}) });
     else if (next === 'still') onChange({ visualLayer: 'still', ...(scene.imageEffect ? { imageEffect: null } : {}) });

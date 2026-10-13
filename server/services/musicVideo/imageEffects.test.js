@@ -135,6 +135,20 @@ describe.skipIf(!ffmpeg)('end-frame effects in the final render', () => {
     if (effect === 'end-flash') expect(stats[24].luma).toBeGreaterThan(230);
     expect(isRed(stats[20]) || stats[20].chroma === start.chroma).toBe(true);
   });
+  // Uniquely catches an intercut piece restarting the fade or flash instead of continuing it.
+  it('picks a fade or flash up mid-way when a piece starts just after the change', () => {
+    const solid = renderStill('fade-whole', clipFor('end-fade'), 2);
+    const fade = renderStill('fade-piece', { ...clipFor('end-fade'), effectAtSec: 1.3 }, 1);
+    const red = solid[10];
+    const blue = solid[47];
+    // Half-way through the dissolve, between the two frames, not back on the start frame.
+    expect(fade[0].luma).toBeGreaterThan(Math.min(red.luma, blue.luma) + 3);
+    expect(fade[0].luma).toBeLessThan(Math.max(red.luma, blue.luma) - 3);
+    const flash = renderStill('flash-piece', { ...clipFor('end-flash'), effectAtSec: 1.1 }, 1);
+    // Two frames into its fade the flash is fading, not a full white frame again.
+    expect(flash[0].luma).toBeLessThan(220);
+    expect(flash[0].luma).toBeGreaterThan(blue.luma + 30);
+  });
 });
 
 // Uniquely catches the scene PATCH refusing the effect fields or an out-of-range develop.
