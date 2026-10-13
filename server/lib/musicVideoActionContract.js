@@ -48,8 +48,12 @@ export function assertShotActionContract(scene) {
   }
 }
 
-/** Compile intent and actual song cues to provider clip time. offsetSec is the performance edit in-point. */
-export function shotActionPrompt(project, scene, { frame = false, offsetSec = 0 } = {}) {
+/**
+ * Compile intent and actual song cues to provider clip time. offsetSec is the
+ * performance edit in-point. A take that hears no audio (`heard: false`) gets
+ * no lyric, word or onset timings: it has nothing to time them against.
+ */
+export function shotActionPrompt(project, scene, { frame = false, offsetSec = 0, heard = true } = {}) {
   const contract = scene?.direction?.actionContract;
   if (contract == null) return '';
   assertShotActionContract(scene);
@@ -66,7 +70,7 @@ export function shotActionPrompt(project, scene, { frame = false, offsetSec = 0 
   for (const [key, label] of [['cameraConstraints', 'Camera'], ['continuityRequirements', 'Must preserve'], ['acceptanceCriteria', 'Acceptance']]) {
     for (const item of contract[key] || []) lines.push(`${label}: ${item}`);
   }
-  if (!frame) {
+  if (!frame && heard) {
     const window = (item) => Number.isFinite(item.startSec) && Number.isFinite(item.endSec) && item.endSec > scene.startSec && item.startSec < scene.endSec;
     for (const cue of (project.lyricCues || []).filter(window).slice(0, 32)) {
       lines.push(`Lyric ${time(Math.max(0, cue.startSec - scene.startSec))}–${time(Math.min(scene.endSec, cue.endSec) - scene.startSec)}: ${cue.text}`);

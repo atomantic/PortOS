@@ -487,6 +487,11 @@ const generateBodySchema = z.object({
       // The shot card's Render: `prompt` is exactly what the director sees and
       // sends, so the shot-intent lines and the silent-model rewrite are skipped.
       promptAsTyped: z.boolean().optional(),
+      // `prompt` is the director's own text and the server composes the rest as
+      // labeled additions (lib/musicVideoShotPrompt.js, #11317); `audioReactive`
+      // names an audio-reactive LoRA take, which gets its guard clause.
+      compose: z.boolean().optional(),
+      audioReactive: z.boolean().optional(),
       // The shot card's Song audio toggle: hand a cutaway its song slice (true) or
       // render it silent (false), whatever the project's generation mode says.
       songAudio: z.boolean().optional(),

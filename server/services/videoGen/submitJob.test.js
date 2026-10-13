@@ -253,6 +253,35 @@ describe('submitVideoGenJob', () => {
       expect(mocks.enqueueJob.mock.calls[0][0].params).toMatchObject({ aspectRatio: '9:16', frameAspect: '9:16' });
     });
 
+    // Uniquely catches the server composing a shot clip differently from the shot card, or
+    // adding look words and song timing a take that hears nothing would act out (#11317).
+    it('composes a board clip from the director\'s text, adding each block as a labeled addition', async () => {
+      const scene = {
+        sceneId: 'mvs-1', startSec: 0, endSec: 4, camera: { move: 'locked-off' },
+        direction: { motionClause: 'slow drift', actionContract: { version: 1, purpose: 'She leaves',
+          actions: [{ startSec: 0, endSec: 1, subject: 'Singer', description: 'Offers a hand' }] } },
+      };
+      const project = { id: 'mv-1', scenes: [scene], concept: { style: 'grainy 16mm' },
+        lyricCues: [{ startSec: 0.5, endSec: 1.5, text: 'hold on', words: [] }] };
+      mocks.getMusicVideoProject.mockResolvedValue(project);
+      mocks.prepareVideoGenParams.mockResolvedValue(falPrepared());
+      await submitVideoGenJob({ prompt: 'she turns away', backend: 'fal', mode: 'image', musicVideo: { ...musicVideo, compose: true } }, {});
+      const silent = mocks.enqueueJob.mock.calls[0][0].params;
+      expect(silent.prompt.startsWith('she turns away, slow drift, ')).toBe(true);
+      expect(silent.prompt).toContain('Action 0.000s–1.000s: Singer');
+      expect(silent.prompt).not.toContain('grainy 16mm');
+      expect(silent.prompt).not.toContain('Lyric');
+      expect(silent.promptAdditions.map((item) => item.id)).toEqual(['shot-direction', 'lighting-continuity', 'camera-move', 'shot-actions']);
+
+      // A take that hears the song gets the project look and the lyric timing, each listed.
+      mocks.prepareVideoGenParams.mockResolvedValue({ ...falPrepared(), audioFilePath: '/example/uploads/song.wav' });
+      await submitVideoGenJob({ prompt: 'she turns away', backend: 'fal', mode: 'image', musicVideo: { ...musicVideo, compose: true } }, {});
+      const hearing = mocks.enqueueJob.mock.calls[1][0].params;
+      expect(hearing.prompt).toContain('grainy 16mm');
+      expect(hearing.prompt).toContain('Lyric 0.500s–1.500s: hold on');
+      expect(hearing.promptAdditions.map((item) => item.id)).toContain('project-style');
+    });
+
     it('leaves a clip outside a music video at its own aspect', async () => {
       mocks.prepareVideoGenParams.mockResolvedValue(falPrepared());
       await submitVideoGenJob({ prompt: 'a fox', backend: 'fal', mode: 'image' }, {});

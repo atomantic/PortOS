@@ -29,8 +29,9 @@ import { withMusicVideoStyle } from './styleReferences.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { resolveGalleryImage } from '../../lib/pathSafety.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
-import { approximateMotionCues, falSceneTake, falTakeRequestFields, grokCoverage } from '../../lib/musicVideoShotTiming.js';
-import { sceneFramePrompt, sceneShotPrompt } from './handoff.js';
+import { falSceneTake, falTakeRequestFields, grokCoverage } from '../../lib/musicVideoShotTiming.js';
+import { sceneFramePrompt } from './handoff.js';
+import { authoredShotPrompt } from '../../lib/musicVideoShotPrompt.js';
 import { sceneEndFrameRequestFields } from '../../lib/musicVideoEndFrame.js';
 import { conditioningReferences, falRouteVideoSettings } from './productionPool.js';
 import { musicVideoFrameGenSize } from '../../lib/musicVideoAspect.js';
@@ -109,15 +110,13 @@ async function dispatchClip({ project, scene, route, tag }) {
   if (!scene.referenceImageId) {
     throw new ServerError(`"${scene.label || scene.sceneId}" has no reference frame yet`, { status: 409, code: 'PRODUCTION_FRAME_MISSING' });
   }
-  const base = sceneShotPrompt(project, scene);
-  if (!base) throw unprompted(scene, 'shot');
+  // The director's text; the submit service composes the rest as labeled additions (#11317).
+  const prompt = authoredShotPrompt(scene);
+  if (!prompt) throw unprompted(scene, 'shot');
   const spanSec = typeof scene.startSec === 'number' && typeof scene.endSec === 'number' && scene.endSec > scene.startSec
     ? scene.endSec - scene.startSec : null;
-  const isGrok = route.mode === 'grok';
   // The autonomous run's pilot repair names what the last clip got wrong (autonomousService.js).
   const fixes = typeof scene.clipFixes?.text === 'string' ? scene.clipFixes.text : '';
-  const prompt = [base, isGrok ? approximateMotionCues(project.phrases, scene.startSec, scene.endSec) : '',
-    fixes ? `Fix these problems from the previous take while preserving the shot intent: ${fixes}` : ''].filter(Boolean).join('. ');
   const byBackend = {
     // A supplied-audio route animates the frame from its shot's own song window.
     local: route.audio === 'supplied' ? { modelId: route.model, mode: 'a2v', _suppliedAudio: true } : { modelId: route.model, disableAudio: true },
@@ -143,7 +142,8 @@ async function dispatchClip({ project, scene, route, tag }) {
     ...sceneEndFrameRequestFields(scene, {
       backend: route.mode, falModelId: byBackend.fal?.falModelId, mode: byBackend[route.mode]?.mode || 'image', localRuntime,
     }),
-    musicVideo: tag,
+    musicVideo: { ...tag, compose: true },
+    ...(fixes ? { _clipFixes: fixes } : {}),
   }, {});
   return { jobId };
 }
