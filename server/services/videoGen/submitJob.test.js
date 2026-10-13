@@ -257,7 +257,7 @@ describe('submitVideoGenJob', () => {
     // adding look words and song timing a take that hears nothing would act out (#11317).
     it('composes a board clip from the director\'s text, adding each block as a labeled addition', async () => {
       const scene = {
-        sceneId: 'mvs-1', startSec: 0, endSec: 4, camera: { move: 'locked-off' },
+        sceneId: 'mvs-1', startSec: 0, endSec: 4, camera: { move: 'fast-dolly-in', speed: 'fast', onBeat: true },
         direction: { motionClause: 'slow drift', actionContract: { version: 1, purpose: 'She leaves',
           actions: [{ startSec: 0, endSec: 1, subject: 'Singer', description: 'Offers a hand' }] } },
       };
@@ -271,6 +271,7 @@ describe('submitVideoGenJob', () => {
       expect(silent.prompt).toContain('Action 0.000s–1.000s: Singer');
       expect(silent.prompt).not.toContain('grainy 16mm');
       expect(silent.prompt).not.toContain('Lyric');
+      expect(silent.prompt).not.toContain('downbeat');
       expect(silent.promptAdditions.map((item) => item.id)).toEqual(['shot-direction', 'lighting-continuity', 'camera-move', 'shot-actions']);
 
       // A take that hears the song gets the project look and the lyric timing, each listed.
@@ -279,6 +280,7 @@ describe('submitVideoGenJob', () => {
       const hearing = mocks.enqueueJob.mock.calls[1][0].params;
       expect(hearing.prompt).toContain('grainy 16mm');
       expect(hearing.prompt).toContain('Lyric 0.500s–1.500s: hold on');
+      expect(hearing.prompt).toContain('land the move exactly on the downbeat');
       expect(hearing.promptAdditions.map((item) => item.id)).toContain('project-style');
     });
 

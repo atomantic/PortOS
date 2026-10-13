@@ -59,7 +59,9 @@ export function musicVideoShotModelInput(project, scene, {
     addition('shot-direction', 'Shot direction', scene?.direction?.motionClause),
     addition('lighting-continuity', 'Lighting continuity', MOTION_CONTINUITY_CLAUSE),
   ];
-  const camera = addition('camera-move', 'Camera move', shotCameraPrompt(scene?.camera));
+  // A take that hears no audio cannot land a move on the downbeat; the shot card's camera stays as shown.
+  const cameraSpec = !hears && !asTyped && scene?.camera?.onBeat ? { ...scene.camera, onBeat: false } : scene?.camera;
+  const camera = addition('camera-move', 'Camera move', shotCameraPrompt(cameraSpec));
   const actions = addition('shot-actions', 'Shot actions', project ? shotActionPrompt(project, scene, { offsetSec, heard: hears }) : '');
   const tail = audioReactive
     ? [addition('audio-reactive-guard', 'Audio-reactive guard', AUDIO_REACTIVE_PERFORMANCE_GUARD)]
