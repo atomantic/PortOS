@@ -282,6 +282,37 @@ describe('swapping a shot from unused takes', () => {
   });
 });
 
+describe('a swapped still brings its frame prompt', () => {
+  // Uniquely catches a still placed from another shot or the floor leaving the start or end prompt describing the old picture, or carrying the look twice.
+  it('sets the start or end frame prompt to the one the placed still was made from, without the project look', async () => {
+    const prompts = {
+      'diner.png': 'A neon diner at night, grainy 16mm\nShe enters from the left.',
+      'smile.png': 'She smiles. Keep the reference image\'s composition, subject and framing; change only what this prompt describes.',
+      'edit.png': 'Edit the reference image: remove the hand. Keep everything else exactly as it is.',
+      'booth.png': 'An empty red booth, grainy 16mm',
+    };
+    for (const [name, prompt] of Object.entries(prompts)) {
+      seedImage(name);
+      writeFileSync(join(ROOT(), 'images', name.replace('.png', '.metadata.json')), JSON.stringify({ prompt }));
+    }
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, concept: { ...current.concept, style: 'grainy 16mm' } } }));
+    await addTake(sceneB.sceneId, { kind: 'image', assetId: 'booth.png', source: 'generated' });
+    for (const name of ['diner.png', 'edit.png']) await addTake(sceneB.sceneId, { kind: 'image', assetId: name, source: 'generated' });
+    await addTake(sceneB.sceneId, { kind: 'endImage', assetId: 'smile.png', source: 'generated' });
+    // Cut shot B: its stills land on the floor, where only their image records still name a prompt.
+    await request(app).delete(`${base()}/scenes/${sceneB.sceneId}`);
+    const use = (body) => request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/use`).send(body);
+
+    expect((await use({ kind: 'image', assetId: 'diner.png' })).body.scene.framePrompt).toBe('A neon diner at night');
+    expect((await use({ kind: 'endImage', assetId: 'smile.png' })).body.scene).toMatchObject({ framePrompt: 'A neon diner at night', endFramePrompt: 'She smiles' });
+    // A refined still's prompt is an edit instruction, not a frame: the shot keeps its prompt.
+    expect((await use({ kind: 'image', assetId: 'edit.png' })).body.scene.framePrompt).toBe('A neon diner at night');
+    const booth = await use({ kind: 'image', assetId: 'booth.png' });
+    expect(booth.body.scene.framePrompt).toBe('An empty red booth');
+    expect(booth.body.scene.takes.find((take) => take.assetId === 'booth.png').prompt).toBe(prompts['booth.png']);
+  });
+});
+
 describe('a director\'s still change keeps the shot locked', () => {
   // Uniquely catches a swapped still or edited prompt leaving the shot "changed since you locked it", so its clip can't render.
   it('re-binds the still lock on Use, take select and a prompt edit, and drops a clip lock made from the old still', async () => {

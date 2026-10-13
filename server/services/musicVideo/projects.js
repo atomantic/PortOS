@@ -374,14 +374,21 @@ export async function selectSceneTake(id, sceneId, takeId) {
  * card's "Swap from unused"): it becomes a take of the shot and its selection.
  * `withAssetId` brings its partner too: a still's clip, or a clip's still.
  * `kind: 'endImage'` puts a still on the shot's end frame instead.
- * The take keeps the prompt and provider of the take it came from. A shot
+ * The take keeps the prompt and provider of the take it came from, and the
+ * shot's start or end frame prompt becomes the one that still was made from. A shot
  * whose video is locked refuses, as it does any other new selection.
  * Returns the updated scene.
  */
 export async function placeMediaPoolItem(id, sceneId, { kind, assetId, withAssetId = null }) {
-  const [{ appendSceneTakes: append, selectSceneTake: select }, { assertClipUnlocked, keepDirectorStillLock }, { projectTakeAssets }] = await Promise.all([
-    import('./takes.js'), import('./productionReview.js'), import('./mediaPool.js'),
+  const [{ appendSceneTakes: append, selectSceneTake: select }, { assertClipUnlocked, keepDirectorStillLock }, { projectTakeAssets }, { authoredFramePrompt }] = await Promise.all([
+    import('./takes.js'), import('./productionReview.js'), import('./mediaPool.js'), import('./handoff.js'),
   ]);
+  // A still off the floor has no take left to name its prompt; its image sidecar still does.
+  const placedStill = kind === 'video' ? withAssetId : assetId;
+  const sidecarPrompt = placedStill
+    ? await import('../imageGen/local.js').then(({ readImageSidecar }) => readImageSidecar(placedStill))
+      .then(({ metadata }) => (typeof metadata?.prompt === 'string' ? metadata.prompt : null)).catch(() => null)
+    : null;
   const { scene } = await mutateProjectRecord(id, (current) => {
     assertClipUnlocked(current, sceneId);
     const origin = new Map(projectTakeAssets(current).filter(asset => asset.take).map(asset => [`${asset.kind}:${asset.ref}`, asset.take]));
@@ -389,7 +396,8 @@ export async function placeMediaPoolItem(id, sceneId, { kind, assetId, withAsset
     const clip = kind === 'video' ? assetId : withAssetId;
     const input = (takeKind, ref) => {
       const from = origin.get(`${takeKind === 'video' ? 'video' : 'image'}:${ref}`);
-      return { kind: takeKind, assetId: ref, source: 'reused', provider: from?.provider || null, prompt: from?.prompt || null,
+      return { kind: takeKind, assetId: ref, source: 'reused', provider: from?.provider || null,
+        prompt: from?.prompt || (takeKind !== 'video' && ref === placedStill ? sidecarPrompt : null),
         ...(takeKind === 'video' && still ? { sourceImageId: still } : {}) };
     };
     const inputs = kind === 'endImage'
@@ -397,6 +405,14 @@ export async function placeMediaPoolItem(id, sceneId, { kind, assetId, withAsset
       : [...(still ? [input('image', still)] : []), ...(clip ? [input('video', clip)] : [])];
     let outcome = append(current, sceneId, inputs);
     for (const take of outcome.appended) outcome = { ...select(outcome.project, sceneId, take.takeId), appended: outcome.appended };
+    // The placed still's frame prompt comes with it, so the start or end prompt matches the picture.
+    const stillTake = outcome.appended.find((take) => take.kind !== 'video');
+    const framePrompt = authoredFramePrompt(current, stillTake?.prompt);
+    if (framePrompt) {
+      const field = stillTake.kind === 'endImage' ? 'endFramePrompt' : 'framePrompt';
+      const scenes = outcome.project.scenes.map((scene) => (scene.sceneId === sceneId ? { ...scene, [field]: framePrompt } : scene));
+      outcome = { ...outcome, project: { ...outcome.project, scenes }, scene: scenes.find((scene) => scene.sceneId === sceneId) };
+    }
     return { ...outcome, project: keepDirectorStillLock(current, outcome.project, sceneId) };
   });
   return scene;
