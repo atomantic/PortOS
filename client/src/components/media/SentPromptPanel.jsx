@@ -6,15 +6,19 @@ import { copyToClipboard } from '../../lib/clipboard';
  * What a model actually received, beside the prompt the user wrote (#11317):
  * one chip per block PortOS added (tap to read it), and a "Show full prompt"
  * view of the exact final text with Copy. Renders nothing for a record made
- * before sent prompts were recorded.
+ * before sent prompts were recorded. The Image Gen form shows the same panel
+ * from the server's preview before the render (`asWrittenText` names the tense).
  */
-export default function SentPromptPanel({ prompt = '', sentPrompt = null, sentNegativePrompt = null, additions = [] }) {
+export default function SentPromptPanel({
+  prompt = '', sentPrompt = null, sentNegativePrompt = null, additions = [],
+  asWrittenText = 'Sent to the model exactly as written.',
+}) {
   const [openChip, setOpenChip] = useState(null);
   const [showFull, setShowFull] = useState(false);
   if (typeof sentPrompt !== 'string') return null;
 
   const asWritten = !additions.length && !sentNegativePrompt && sentPrompt.trim() === (prompt || '').trim();
-  if (asWritten) return <p className="text-[11px] text-gray-500">Sent to the model exactly as written.</p>;
+  if (asWritten) return <p className="text-[11px] text-gray-500">{asWrittenText}</p>;
 
   const fullText = sentNegativePrompt ? `${sentPrompt}\n\nNegative prompt: ${sentNegativePrompt}` : sentPrompt;
   const opened = additions.find((addition) => addition.id === openChip);

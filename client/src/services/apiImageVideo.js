@@ -163,6 +163,14 @@ export const generateImageMultipart = (formData, options = {}) => request('/imag
   ...options,
 });
 
+// What an Image Gen render would send to its model, before it is sent (#11317).
+// Same body as /generate, with uploads named by count instead of attached.
+export const previewImagePrompt = (body, options = {}) => request('/image-gen/prompt-preview', {
+  method: 'POST',
+  body: JSON.stringify(body),
+  ...options,
+});
+
 // Local Python-runtime setup probes (LocalSetupPanel). These use fetch() rather
 // than request() because the caller distinguishes intentional AbortError (a
 // superseded/unmounted probe) from a real failure — request()'s catch collapses

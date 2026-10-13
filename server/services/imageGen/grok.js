@@ -209,6 +209,33 @@ export function buildGrokPrompt({
   return lines.join('\n');
 }
 
+/**
+ * The exact message grok receives and the record of what PortOS added to the
+ * user's prompt (#11317). Shared by the render and the compose preview.
+ */
+export function grokSentPrompt({ prompt = '', negativePrompt, width, height, aspectRatio, stagingPath, inputImages, initImageStrength, promptAdditions = [] }) {
+  // Caller dimensions win (mapped to the closest supported ratio); the saved
+  // per-provider default applies when no dimensions were sent; otherwise the
+  // tool's own default. Validate the saved value against the known ratios so
+  // a hand-edited settings.json can't inject arbitrary prompt text.
+  const derived = deriveAspectRatio(width, height);
+  const configured = GROK_ASPECT_RATIOS.includes(aspectRatio) ? aspectRatio : null;
+  const effectiveRatio = derived || configured;
+
+  const buildWith = (text) => buildGrokPrompt({
+    prompt: text, negativePrompt, aspectRatio: effectiveRatio, stagingPath,
+    initImagePath: inputImages.initPath, initImageStrength,
+    referenceImagePaths: inputImages.referencePaths,
+  });
+  const fullPrompt = buildWith(prompt);
+  return {
+    fullPrompt,
+    effectiveRatio,
+    record: sentPromptRecord({ sentPrompt: fullPrompt, carried: carriedPromptAdditions({ promptAdditions }),
+      added: [agentInstructionsAddition('Grok image tool instructions', buildWith)] }),
+  };
+}
+
 // `initImageStrength` maps to a fidelity phrase (grok's image_edit has no
 // numeric denoise knob, same constraint as codex).
 export async function generateImage({
@@ -250,20 +277,9 @@ export async function generateImage({
   const scratchDir = join(tmpdir(), `portos-grok-${jobId}`);
   const stagingPath = join(scratchDir, 'output.png');
 
-  // Caller dimensions win (mapped to the closest supported ratio); the saved
-  // per-provider default applies when no dimensions were sent; otherwise the
-  // tool's own default. Validate the saved value against the known ratios so
-  // a hand-edited settings.json can't inject arbitrary prompt text.
-  const derived = deriveAspectRatio(width, height);
-  const configured = GROK_ASPECT_RATIOS.includes(aspectRatio) ? aspectRatio : null;
-  const effectiveRatio = derived || configured;
-
-  const buildWith = (text) => buildGrokPrompt({
-    prompt: text, negativePrompt, aspectRatio: effectiveRatio, stagingPath,
-    initImagePath: inputImages.initPath, initImageStrength,
-    referenceImagePaths: inputImages.referencePaths,
+  const { fullPrompt, effectiveRatio, record: sentRecord } = grokSentPrompt({
+    prompt, negativePrompt, width, height, aspectRatio, stagingPath, inputImages, initImageStrength, promptAdditions,
   });
-  const fullPrompt = buildWith(prompt);
 
   const bin = grokPath || DEFAULT_BIN;
   // No model arg — grok's image tools run on xAI's fixed image backend and
@@ -276,8 +292,7 @@ export async function generateImage({
     width: width ? Number(width) : null, height: height ? Number(height) : null,
     filename, mode: IMAGE_GEN_MODE.GROK,
     ...(visualConditioning ? { visualConditioning } : {}),
-    ...sentPromptRecord({ sentPrompt: fullPrompt, carried: carriedPromptAdditions({ promptAdditions }),
-      added: [agentInstructionsAddition('Grok image tool instructions', buildWith)] }),
+    ...sentRecord,
     ...(effectiveRatio ? { aspectRatio: effectiveRatio } : {}),
     createdAt: new Date().toISOString(),
   };

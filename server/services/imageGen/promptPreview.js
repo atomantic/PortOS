@@ -1,0 +1,86 @@
+/**
+ * Compose-time preview of what an Image Gen render sends to its model (#11317):
+ * the same request preparation and the same per-backend prompt builders the
+ * render runs, without staging uploads or queueing anything. Uploads the form
+ * holds are named by `previewUploadLabel` in place of their staged path, and
+ * the grok/agy output path names the job folder it will get.
+ */
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { IMAGE_GEN_MODE } from '../../lib/generationModes.js';
+import { carriedPromptAdditions, sentPromptRecord } from '../../lib/modelInput.js';
+import { FAL_IMAGE_DEFAULT_MODEL, falImageFamily } from '../../lib/falImageModels.js';
+import { maxInputImages, resolveCloudProviderConfig } from './cloudProviderConfig.js';
+import { resolveInputImages } from './inputImages.js';
+import { prepareGenerateParams, previewUploadLabel, resolveLocalImageModel } from './prepareParams.js';
+import { codexSentPrompt } from './codex.js';
+import { grokSentPrompt } from './grok.js';
+import { agySentPrompt } from './agy.js';
+import { falImageSentPrompt } from './fal.js';
+import { localSentPrompt } from './local.js';
+
+const isUploadLabel = (path) => typeof path === 'string' && path.startsWith('(uploaded image ');
+
+// The input images in the order the render attaches them: gallery images
+// resolved as the backend resolves them, the form's uploads by label.
+function previewInputImages(mode, params, modelId) {
+  const init = params.initImagePath || null;
+  const refs = params.referenceImagePaths || [];
+  const named = resolveInputImages({
+    mode, modelId,
+    initImagePath: isUploadLabel(init) ? null : init,
+    referenceImagePaths: refs.filter((path) => !isUploadLabel(path)),
+  });
+  const initPath = isUploadLabel(init) ? init : named.initPath;
+  const ordered = [...(initPath ? [initPath] : []), ...named.referencePaths, ...refs.filter(isUploadLabel)];
+  const paths = ordered.slice(0, maxInputImages(mode, modelId) ?? ordered.length);
+  return { paths, initPath, referencePaths: initPath ? paths.slice(1) : paths };
+}
+
+const jobOutputPath = (prefix) => join(tmpdir(), `${prefix}-<job>`, 'output.png');
+
+export async function previewImagePrompt({ uploadedInitImage = false, uploadedReferenceCount = 0, ...body }) {
+  const referenceImageFields = Array.from({ length: uploadedReferenceCount }, (_, index) => `referenceImage${index + 1}`);
+  const files = {
+    ...(uploadedInitImage ? { initImage: {} } : {}),
+    ...Object.fromEntries(referenceImageFields.map((field) => [field, {}])),
+  };
+  const { data: params, mode, settings } = await prepareGenerateParams({ data: body, files, referenceImageFields, preview: true });
+  const carried = carriedPromptAdditions(params);
+  const common = {
+    prompt: params.prompt || '', negativePrompt: params.negativePrompt || '',
+    width: params.width, height: params.height, initImageStrength: params.initImageStrength,
+    promptAdditions: carried,
+  };
+  const cloud = params.mediaProviderPeerId ? null : resolveCloudProviderConfig(settings, mode, { model: params.cloudModel });
+  // The same refusal POST /generate gives a disabled provider, text-to-image included.
+  if (cloud && !cloud.enabled) throw cloud.disabledError;
+
+  if (mode === IMAGE_GEN_MODE.CODEX) {
+    return { mode, ...codexSentPrompt({ ...common, inputImages: previewInputImages(mode, params) }).record };
+  }
+  if (mode === IMAGE_GEN_MODE.GROK) {
+    return { mode, ...grokSentPrompt({
+      ...common, aspectRatio: cloud?.providerParams.aspectRatio, stagingPath: jobOutputPath('portos-grok'),
+      inputImages: previewInputImages(mode, params),
+    }).record };
+  }
+  if (mode === IMAGE_GEN_MODE.AGY) {
+    return { mode, ...agySentPrompt({ ...common, stagingPath: jobOutputPath('portos-agy'), inputImages: previewInputImages(mode, params) }).record };
+  }
+  if (mode === IMAGE_GEN_MODE.FAL) {
+    const family = falImageFamily(cloud?.providerParams.model || FAL_IMAGE_DEFAULT_MODEL) || falImageFamily(FAL_IMAGE_DEFAULT_MODEL);
+    return { mode, ...falImageSentPrompt({ ...common, family, inputImages: previewInputImages(mode, params, family.textEndpoint) }).record };
+  }
+  if (mode === IMAGE_GEN_MODE.LOCAL && !params.mediaProviderPeerId) {
+    const { selectedModel } = resolveLocalImageModel(settings, params);
+    return { mode, ...await localSentPrompt({ ...params, ...common, model: selectedModel, modelId: selectedModel?.id || params.modelId }) };
+  }
+  // The SD-API backend and a federated provider receive the prompt and negative
+  // as written; a provider machine's own backend may add its own lines there.
+  return {
+    mode,
+    ...(params.mediaProviderPeerId ? { remote: true } : {}),
+    ...sentPromptRecord({ sentPrompt: common.prompt, sentNegativePrompt: common.negativePrompt, carried }),
+  };
+}
