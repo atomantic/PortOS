@@ -265,7 +265,7 @@ import {
   __drainForTests,
 } from './peerSync.js';
 
-import { buildPushPayload } from './peerSyncPush.js';
+import { buildPushPayload, __resetPushFailureLogForTests } from './peerSyncPush.js';
 import { ENVELOPE_EXTENSIONS, ENVELOPE_PENDING_KEYS } from './peerSyncShared.js';
 import { getPeers } from '../instances.js';
 import { getInstanceId } from '../instanceIdentity.js';
@@ -2074,6 +2074,31 @@ describe('peerSync', () => {
       });
       expect(result.pushed).toBe(false);
       expect(result.reason).toBe('network');
+    });
+
+    it('logs a rejected push once per peer and cause, then logs recovery', async () => {
+      // Every automatic caller discards the result, so this line is the only
+      // trace that an edit never reached the peer.
+      __resetPushFailureLogForTests();
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+        vi.mocked(peerFetch).mockResolvedValue({ ok: false, status: 401, json: async () => ({ error: 'Authentication required', code: 'AUTH_REQUIRED' }) });
+        const sub = { id: 's1', peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' };
+        expect(await pushRecordToPeer(sub)).toMatchObject({ pushed: false, reason: 'http-401' });
+        await pushRecordToPeer({ ...sub, id: 's2', recordId: 'u2' });
+        const failures = errorSpy.mock.calls.map(([line]) => line).filter((line) => line.includes('peerSync: push'));
+        expect(failures).toHaveLength(1);
+        expect(failures[0]).toMatch(/universe\/u1 \(sub s1\).*rejected with http-401: AUTH_REQUIRED: Authentication required/);
+
+        vi.mocked(peerFetch).mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
+        expect((await pushRecordToPeer(sub)).pushed).toBe(true);
+        expect(logSpy.mock.calls.some(([line]) => /pushes to .* landing again after http-401/.test(line))).toBe(true);
+      } finally {
+        errorSpy.mockRestore();
+        logSpy.mockRestore();
+      }
     });
 
     it('does NOT short-circuit when the parent series record is identical but a bundled issue changed', async () => {

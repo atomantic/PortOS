@@ -74,6 +74,38 @@ import { isStr, isNonBlankStr } from '../../lib/textUtils.js';
 // upgrade?" probe point.
 const SCHEMA_BLOCK_RETRY_COOLDOWN_MS = 5 * 60_000;
 
+// The failure cause last logged per peer. Every automatic caller (debounced
+// edit push, initial push, `peer:online` retry walk) discards the result, so a
+// peer answering every push with a rejection (rotated credentials, a receiver
+// fault) used to strand each edit with no log line at all. One line per peer
+// per distinct cause, plus one when pushes land again, keeps a retry walk over
+// hundreds of subscriptions from repeating the same line hundreds of times.
+const loggedPushFailures = new Map();
+
+const flattenLogText = (value) => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, 200);
+
+function reportPushFailure(sub, peer, reason, detail) {
+  if (loggedPushFailures.get(sub.peerId) === reason) return;
+  loggedPushFailures.set(sub.peerId, reason);
+  const target = `${sub.recordKind}/${sub.recordId} (sub ${sub.id}) to ${flattenLogText(peer.name || peer.instanceId)}`;
+  const suffix = `${detail ? `: ${flattenLogText(detail)}` : ''} — record not delivered; repeat ${reason} failures for this peer are logged once until a push lands`;
+  // An unreachable peer is routine (asleep, off the tailnet) and `peer:online`
+  // retries it; a peer that answered and refused the push is a real failure.
+  if (reason === 'network') console.warn(`⚠️ peerSync: push ${target} unreachable${suffix}`);
+  else console.error(`❌ peerSync: push ${target} rejected with ${reason}${suffix}`);
+}
+
+function reportPushRecovered(sub, peer) {
+  const prior = loggedPushFailures.get(sub.peerId);
+  if (!prior) return;
+  loggedPushFailures.delete(sub.peerId);
+  console.log(`✅ peerSync: pushes to ${flattenLogText(peer.name || peer.instanceId)} landing again after ${prior}`);
+}
+
+export function __resetPushFailureLogForTests() {
+  loggedPushFailures.clear();
+}
+
 async function isSubscriptionRecordTombstone(sub) {
   const desc = RECORD_KINDS[sub.recordKind];
   if (!desc) return false;
@@ -151,6 +183,7 @@ export async function pushRecordToPeer(sub, options = {}) {
   // push promise pending forever and block subsequent debounced pushes for the
   // same sub. (The shared `fetchWithTimeout` helper can't be reused — it always
   // calls global fetch with no custom-client hook for the insecure agent.)
+  let networkError = null;
   const postPayload = async (body) => {
     return withAbortTimeout(PUSH_TIMEOUT_MS, (signal) => peerFetch(url, {
       method: 'POST',
@@ -158,7 +191,7 @@ export async function pushRecordToPeer(sub, options = {}) {
       body: JSON.stringify(body),
       signal,
     }, peer)).catch((err) => {
-      console.log(`⚠️ peerSync: push to ${peer.name || peer.instanceId} failed: ${err.message}`);
+      networkError = err;
       return null;
     });
   };
@@ -224,9 +257,20 @@ export async function pushRecordToPeer(sub, options = {}) {
       return { pushed: false, reason: 'peer-schema-behind', blockedBySchema: true };
     }
   }
-  if (!res || !res.ok) {
-    return { pushed: false, reason: res ? `http-${res.status}` : 'network' };
+  if (!res) {
+    reportPushFailure(sub, peer, 'network', networkError?.message);
+    return { pushed: false, reason: 'network' };
   }
+  if (!res.ok) {
+    const reason = `http-${res.status}`;
+    // A body already consumed (the 409 probe above) or not JSON just leaves
+    // the line without the receiver's code.
+    const errBody = await Promise.resolve().then(() => res.json()).catch(() => null);
+    const detail = [errBody?.code, errBody?.error].filter(isNonBlankStr).join(': ');
+    reportPushFailure(sub, peer, reason, detail);
+    return { pushed: false, reason };
+  }
+  reportPushRecovered(sub, peer);
   const body = await res.json().catch(() => null);
 
   // Push succeeded — clear any prior schema-version block so the sub goes
@@ -310,7 +354,9 @@ export async function pushRecordToPeer(sub, options = {}) {
   };
   await persistPushDeliveryEvidence(sub.id, deliveryEvidence);
   if (Number.isFinite(body?.ackedDeletesUpTo) && body.ackedDeletesUpTo > 0) {
-    await ackDeletesUpTo(sub.peerId, body.ackedDeletesUpTo).catch(() => {});
+    await ackDeletesUpTo(sub.peerId, body.ackedDeletesUpTo).catch((err) => {
+      console.warn(`⚠️ peerSync: tombstone cursor ack for ${sub.peerId} after push of ${sub.recordKind}/${sub.recordId} failed (retried on the next push): ${err?.message || err}`);
+    });
   }
   // Conflict-journal base hash: this record's content now lives on the peer too
   // (the record always lands even when assets are still pulling), so stamp the
