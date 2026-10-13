@@ -31,6 +31,7 @@ import { checkHealth, ensureSchema, close, query, withTransaction } from '../lib
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import { mockNoPeers, mockTestIdentity, mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 import { DEFAULT_MEMORY_CONFIG } from './memoryConfig.js';
+import { up as upgradeMemorySearch } from '../scripts/db-migrations/017-memory-search-vector.js';
 
 // Keep every filesystem side effect this module graph can reach (notifications
 // pruning on approve/reject, the instance registry) inside a temp dir.
@@ -421,6 +422,61 @@ describe.skipIf(!runDb)('memoryDB listing filters (#3447)', () => {
 // ---------------------------------------------------------------------------
 // Search
 // ---------------------------------------------------------------------------
+
+describe.skipIf(!runDb)('stored memory search lexemes', () => {
+  it('upgrades populated legacy tables idempotently and retires their expression index', async () => {
+    await withTransaction(async (client) => {
+      // A transaction-local shadow exercises the old layout without altering
+      // the shared test schema (or depending on which migrations CI applied).
+      await client.query('SET LOCAL search_path = pg_temp');
+      await client.query(`CREATE TEMP TABLE memories (
+        id integer PRIMARY KEY, content text NOT NULL, summary text
+      ) ON COMMIT DROP`);
+      await client.query("INSERT INTO memories VALUES (1, 'river otters', NULL), (2, '', 'quasar')");
+      await client.query(`CREATE INDEX idx_memories_fts ON memories USING gin (
+        to_tsvector('english', coalesce(content, '') || ' ' || coalesce(summary, ''))
+      )`);
+      await upgradeMemorySearch(client);
+      await upgradeMemorySearch(client);
+
+      const { rows } = await client.query(`SELECT id, search_tsv::text AS lexemes,
+        search_tsv = to_tsvector('english', coalesce(content, '') || ' ' || coalesce(summary, '')) AS unchanged
+        FROM memories ORDER BY id`);
+      expect(rows).toEqual([
+        { id: 1, lexemes: "'otter':2 'river':1", unchanged: true },
+        { id: 2, lexemes: "'quasar':1", unchanged: true },
+      ]);
+      const indexes = await client.query(`SELECT relname FROM pg_class
+        WHERE relnamespace = pg_my_temp_schema() AND relkind = 'i' ORDER BY relname`);
+      expect(indexes.rows.map(row => row.relname)).toEqual(['idx_memories_search_tsv', 'memories_pkey']);
+    });
+  });
+
+  it('preserves text ranking and filters while refreshing lexemes after content and summary edits', async () => {
+    await resetMemories();
+    const strongest = await memoryDB.createMemory({ type: 'fact', content: 'Otter otter otter.', summary: 'Otter', sourceAppId: 'brain' });
+    const weaker = await memoryDB.createMemory({ type: 'preference', content: 'An otter beside the river.', summary: 'River', sourceAppId: 'studio' });
+    await memoryDB.createMemory({ type: 'fact', content: 'Otter otter otter otter.', status: 'archived' });
+
+    const legacy = await query(`SELECT id FROM memories WHERE status = 'active'
+      AND to_tsvector('english', coalesce(content, '') || ' ' || coalesce(summary, '')) @@ websearch_to_tsquery('english', 'otters')
+      ORDER BY ts_rank(to_tsvector('english', coalesce(content, '') || ' ' || coalesce(summary, '')),
+        websearch_to_tsquery('english', 'otters')) DESC`);
+    const searched = await memoryDB.hybridSearchMemories('otters', null);
+    expect(legacy.rows.map(row => row.id)).toEqual([strongest.id, weaker.id]);
+    expect(searched.memories.map(row => row.id)).toEqual(legacy.rows.map(row => row.id));
+    expect(searched.memories.map(row => row.ftsRank)).toEqual([1, 2]);
+    const scoped = await memoryDB.hybridSearchMemories('otters', null, { appId: '__not_brain', types: ['preference'], limit: 1 });
+    expect(scoped.memories.map(row => row.id)).toEqual([weaker.id]);
+
+    await memoryDB.updateMemory(strongest.id, { content: 'Lighthouse.', summary: 'Coast' });
+    expect((await memoryDB.hybridSearchMemories('otter', null)).memories.map(row => row.id)).toEqual([weaker.id]);
+    expect((await memoryDB.hybridSearchMemories('lighthouse', null)).memories.map(row => row.id)).toEqual([strongest.id]);
+    await memoryDB.updateMemory(strongest.id, { summary: 'Aurora' });
+    expect((await memoryDB.hybridSearchMemories('aurora', null)).memories.map(row => row.id)).toEqual([strongest.id]);
+    expect((await memoryDB.hybridSearchMemories('coast', null)).memories).toEqual([]);
+  });
+});
 
 describe.skipIf(!runDb)('memoryDB search (#3447)', () => {
   let quasar;      // VEC_A,      app 'brain'

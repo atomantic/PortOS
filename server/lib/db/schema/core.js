@@ -18,6 +18,17 @@ export const restoreReceiptsDdl = [
     )`,
 ];
 
+// Store the same lexemes the old expression index used so ranking does not
+// tokenize every matching memory body again on every agent/search request.
+// PostgreSQL backfills existing rows and maintains the value after text edits.
+export const memorySearchDdl = [
+    `ALTER TABLE memories ADD COLUMN IF NOT EXISTS search_tsv tsvector
+      GENERATED ALWAYS AS (
+        to_tsvector('english', coalesce(content, '') || ' ' || coalesce(summary, ''))
+      ) STORED`,
+    `CREATE INDEX IF NOT EXISTS idx_memories_search_tsv ON memories USING gin (search_tsv)`,
+];
+
 // Local history also captures current-row replacements arriving through federation.
 export const memoryHistoryDdl = [
     `ALTER TABLE memory_links ADD COLUMN IF NOT EXISTS id UUID NOT NULL DEFAULT gen_random_uuid()`,
@@ -79,6 +90,7 @@ END$$`,
 ];
 
 export const coreDdl = [
+    ...memorySearchDdl,
     // Deliberately no FK: the bridge repairs a purged target on its next sync.
     `CREATE TABLE IF NOT EXISTS brain_memory_links (
       bridge_key TEXT PRIMARY KEY,

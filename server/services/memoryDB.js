@@ -627,12 +627,10 @@ export async function hybridSearchMemories(queryText, queryEmbedding, options = 
   if (queryText) {
     const ftsResult = await query(
       `SELECT id, type, category, tags, summary, importance, created_at, status, source_app_id,
-              ts_rank(to_tsvector('english', coalesce(content, '') || ' ' || coalesce(summary, '')),
-                      websearch_to_tsquery('english', $${paramIdx})) AS fts_score
+              ts_rank(search_tsv, websearch_to_tsquery('english', $${paramIdx})) AS fts_score
        FROM memories
        WHERE ${filterWhere}
-         AND to_tsvector('english', coalesce(content, '') || ' ' || coalesce(summary, ''))
-             @@ websearch_to_tsquery('english', $${paramIdx})
+         AND search_tsv @@ websearch_to_tsquery('english', $${paramIdx})
        ORDER BY fts_score DESC
        LIMIT $${paramIdx + 1}`,
       [...filterParams, queryText, fetchLimit]

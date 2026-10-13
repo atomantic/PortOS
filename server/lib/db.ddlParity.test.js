@@ -26,6 +26,7 @@
 import { describe, it, expect } from 'vitest';
 import { FTS_PAYLOAD_FIELDS } from './catalogTypes.js';
 import { syncFeedDdl, syncFeedTables, buildSyncFeedTriggers } from './db/schema/syncFeed.js';
+import { memorySearchDdl } from './db/schema/core.js';
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -274,6 +275,15 @@ describe('DDL parity (init-db.sql ↔ db/schema ensureSchema)', () => {
   });
 
   // ── Targeted pins: contracts a two-sided set comparison cannot see ──────────
+
+  // memories is SQL_ONLY_TOLERATED, so the shared-table comparison cannot
+  // catch fresh-install drift in its generated expression or matching index.
+  it('stores the same memory search lexemes on fresh installs and upgrades', () => {
+    for (const statement of memorySearchDdl) {
+      expect(normalize(INIT_SQL)).toContain(normalize(statement));
+    }
+    expect(sqlIndexes.get('memories').get('idx_memories_search_tsv')).toBe('using gin (search_tsv)');
+  });
 
   // The operator-action ledger (#5594) and the human-activity timeline (#2150)
   // rely on their dedupe index as the ON CONFLICT idempotency contract, and on
