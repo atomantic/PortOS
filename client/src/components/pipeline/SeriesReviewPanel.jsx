@@ -5,6 +5,7 @@ import {
   ThumbsUp, X, MessageSquarePlus, ChevronRight,
 } from 'lucide-react';
 import toast from '../ui/Toast';
+import SentPromptPanel from '../media/SentPromptPanel';
 import { usePipelineProgress } from '../../hooks/usePipelineProgress';
 import { severityRank } from '../../lib/editorialChecks';
 import { reviewFrameLabel, summarizeReviewProgress } from '../../lib/seriesReviewProgress';
@@ -394,6 +395,15 @@ export default function SeriesReviewPanel({ series, onSeriesUpdate, onIssuesUpda
               </span></>
             )}
           </div>
+
+          {/* What the user's note went out as, beside the routing instructions
+              and policy clause PortOS wrapped it in (#11317). */}
+          {review.feedbackInput ? (
+            <div className="text-xs">
+              <span className="block mb-1 text-gray-500">Your note was sent to the AI</span>
+              <SentPromptPanel sentPrompt={review.feedbackInput.sentPrompt} additions={review.feedbackInput.promptAdditions || []} />
+            </div>
+          ) : null}
 
           {/* Stale banner — either the findings changed since this verdict (e.g. a
               finding was fixed/dismissed via "Fix here") or the reviewed sources

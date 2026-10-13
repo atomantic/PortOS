@@ -87,7 +87,7 @@ describe('describeMusic', () => {
 
     const result = await describeMusic({ concept: 'a rainy downtempo loop', providerId: 'fake-provider', model: 'fake-model' });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       description: 'Lush analog pads over a broken beat.',
       llm: { provider: 'fake-provider', model: 'ran-model' },
     });
@@ -98,6 +98,20 @@ describe('describeMusic', () => {
   it('passes effort through to the runner', async () => {
     await describeMusic({ concept: 'x', effort: 'high' });
     expect(lastRunArgs().effort).toBe('high');
+  });
+
+  // Uniquely catches the designer's instructions or the policy clause reaching
+  // the LLM unlisted, or a typed template being labeled as PortOS's (#11317).
+  it('returns the exact sent prompt with each block PortOS wrapped around the user\'s words', async () => {
+    const shipped = await describeMusic({ concept: 'a rainy downtempo loop' });
+    expect(shipped.sentPrompt).toBe(lastRunArgs().prompt);
+    expect(shipped.sentPrompt.startsWith('## Creative latitude (operator policy)')).toBe(true);
+    expect(shipped.promptAdditions.map((item) => item.label)).toEqual(['Creative latitude (operator policy)', 'Describe instructions', 'Caption format']);
+    const custom = await describeMusic({ concept: 'x', template: 'my own brief' });
+    expect(custom.promptAdditions.map((item) => item.label)).toEqual(['Creative latitude (operator policy)', 'Caption format']);
+    const lyrics = await writeLyrics({ description: 'slow piano' });
+    expect(lyrics.promptAdditions.map((item) => item.label)).toEqual(['Creative latitude (operator policy)', 'Lyrics instructions', 'Target length', 'Lyrics format']);
+    for (const item of lyrics.promptAdditions) expect(lyrics.sentPrompt).toContain(item.text);
   });
 
   it('unwraps a fully fenced response', async () => {
@@ -138,7 +152,7 @@ describe('writeLyrics', () => {
 
     const result = await writeLyrics({ description: 'warm rhodes soul', guidance: 'about leaving at dawn' });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       lyrics: '[verse]\nrain on the window',
       llm: { provider: 'fake-provider', model: 'ran-model' },
     });

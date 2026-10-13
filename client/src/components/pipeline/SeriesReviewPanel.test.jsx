@@ -115,3 +115,23 @@ describe('SeriesReviewPanel — fix kickoff conflict', () => {
     expect(toast.error).not.toHaveBeenCalled();
   });
 });
+
+// Uniquely catches the note's routing instructions and policy clause staying
+// hidden on the verdict (#11317).
+describe('SeriesReviewPanel — sent note', () => {
+  it('lists what the reviewer note was sent to the AI as', async () => {
+    getPipelineSeriesReview.mockResolvedValue({
+      review: {
+        ...ISSUES_VERDICT,
+        feedbackInput: {
+          sentPrompt: 'policy\n\nReader note: the middle sags',
+          promptAdditions: [{ id: 'note-routing', label: 'Note routing instructions', text: 'Reader note: [your note]' }],
+        },
+      },
+      fix: { mode: 'execute', canFix: true },
+    });
+    await renderPanel();
+    expect(await screen.findByRole('button', { name: '+ Note routing instructions' })).toBeInTheDocument();
+    expect(screen.getByText('Your note was sent to the AI')).toBeInTheDocument();
+  });
+});

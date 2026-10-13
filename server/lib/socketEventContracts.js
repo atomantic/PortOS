@@ -396,6 +396,13 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
         items: { type: 'array', items: { type: 'object', properties: {
           itemId: { type: ['string', 'null'] }, jobId: { type: ['string', 'null'] },
         }, required: ['itemId', 'jobId'], additionalProperties: false } },
+        // The exact prompt-writing request and the blocks PortOS added (#11317).
+        sentInput: { type: 'object', properties: {
+          sentPrompt: { type: 'string' },
+          promptAdditions: { type: 'array', items: { type: 'object', properties: {
+            id: { type: 'string' }, label: { type: 'string' }, text: { type: 'string' },
+          }, required: ['id', 'label', 'text'], additionalProperties: false } },
+        }, required: ['sentPrompt', 'promptAdditions'], additionalProperties: false },
       },
       required: ['boardId', 'requestId', 'status', 'revision', 'epoch', 'items'], additionalProperties: false,
     },

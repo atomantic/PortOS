@@ -38,6 +38,7 @@ import WaveformPanel from './WaveformPanel';
 import { FIELD_CLASS, GHOST_BTN, LABEL_CLASS, PRIMARY_BTN } from './designerStyles';
 import ProviderModelSelector from '../ProviderModelSelector';
 import TabPills from '../ui/TabPills';
+import SentPromptPanel from '../media/SentPromptPanel';
 import toast from '../ui/Toast';
 import useMounted from '../../hooks/useMounted';
 import useProviderModels from '../../hooks/useProviderModels';
@@ -100,6 +101,10 @@ export default function MusicDesigner() {
   const [description, setDescription] = useState('');
   const [lyricsGuidance, setLyricsGuidance] = useState('');
   const [lyrics, setLyrics] = useState('');
+  // What the last Describe / Write lyrics run sent the AI: the user's words
+  // inside the designer's instructions and policy clause, as chips (#11317).
+  const [describeSent, setDescribeSent] = useState(null);
+  const [lyricsSent, setLyricsSent] = useState(null);
   const [title, setTitle] = useState('');
   const [trackId, setTrackId] = useState('');
   const [draftLoading, setDraftLoading] = useState(true);
@@ -262,6 +267,7 @@ export default function MusicDesigner() {
     saveDraft({ concept: concept.trim(), prompt: res.description });
     if (!mountedRef.current) return;
     setDescription(res.description);
+    setDescribeSent(typeof res.sentPrompt === 'string' ? { sentPrompt: res.sentPrompt, additions: res.promptAdditions || [] } : null);
     persistDesignerPrefs({ providerId: selectedProviderId || '', model: selectedModel || '', effort: effort || '' });
     if (advance) goTo('description');
   };
@@ -283,6 +289,7 @@ export default function MusicDesigner() {
     saveDraft({ lyrics: res.lyrics });
     if (!mountedRef.current) return;
     setLyrics(res.lyrics);
+    setLyricsSent(typeof res.sentPrompt === 'string' ? { sentPrompt: res.sentPrompt, additions: res.promptAdditions || [] } : null);
     persistDesignerPrefs({ providerId: selectedProviderId || '', model: selectedModel || '', effort: effort || '' });
   };
 
@@ -464,6 +471,12 @@ export default function MusicDesigner() {
               className={FIELD_CLASS}
             />
           </label>
+          {describeSent && (
+            <div className="text-xs">
+              <span className="block mb-1 text-gray-500">Last sent to the AI</span>
+              <SentPromptPanel sentPrompt={describeSent.sentPrompt} additions={describeSent.additions} />
+            </div>
+          )}
           <div className="rounded border border-port-border bg-port-bg/60 p-3 text-xs text-gray-400">
             <p className="mb-2 font-medium text-gray-300">MiniMax structured caption</p>
             <ul className="list-disc space-y-1 pl-4">
@@ -546,6 +559,12 @@ export default function MusicDesigner() {
               className={`${FIELD_CLASS} font-mono`}
             />
           </label>
+          {lyricsSent && (
+            <div className="text-xs">
+              <span className="block mb-1 text-gray-500">Last sent to the AI</span>
+              <SentPromptPanel sentPrompt={lyricsSent.sentPrompt} additions={lyricsSent.additions} />
+            </div>
+          )}
           <button type="button" onClick={() => { saveDraft({ prompt: description.trim(), lyrics: lyrics.trim() }); goTo('render'); }} disabled={busy || !draftReady} className={PRIMARY_BTN}>
             {lyrics.trim() ? 'Next: render' : 'Continue without lyrics'}
           </button>

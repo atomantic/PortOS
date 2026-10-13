@@ -269,6 +269,21 @@ describe('<MusicDesigner>', () => {
       ));
     });
 
+    // Uniquely catches the designer's instructions and policy clause staying
+    // hidden after Describe (#11317).
+    it('lists what Describe sent the AI under the description', async () => {
+      api.describeMusic.mockResolvedValue({
+        description: 'Lush pads.', llm: {},
+        sentPrompt: 'policy\n\nbrief\n\nMUSICAL REFERENCE / VIBE:\nx',
+        promptAdditions: [{ id: 'creative-latitude', label: 'Creative latitude (operator policy)', text: 'policy' }],
+      });
+      renderAt('/music/generate/concept');
+      fireEvent.change(await findEnabledByLabelText(/what do you want to hear/i), { target: { value: 'x' } });
+      fireEvent.click(screen.getByRole('button', { name: /describe it/i }));
+      expect(await screen.findByRole('button', { name: '+ Creative latitude (operator policy)' })).toBeInTheDocument();
+      expect(screen.getByText('Last sent to the AI')).toBeInTheDocument();
+    });
+
     it('persists the provider pin after a successful describe', async () => {
       api.describeMusic.mockResolvedValue({ description: 'Lush pads.', llm: {} });
       renderAt('/music/generate/concept');

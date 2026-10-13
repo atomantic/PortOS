@@ -326,7 +326,7 @@ const lyricsSchema = z.object({
 // call; nothing here runs unprompted.
 router.post('/describe', asyncHandler(async (req, res) => {
   const body = validateRequest(describeSchema, req.body ?? {});
-  const { description, llm } = await describeMusic({
+  const { description, llm, sentPrompt, promptAdditions } = await describeMusic({
     concept: body.concept,
     guidance: body.guidance,
     template: body.template,
@@ -334,7 +334,7 @@ router.post('/describe', asyncHandler(async (req, res) => {
     model: body.model,
     effort: body.effort,
   });
-  res.json({ description, llm });
+  res.json({ description, llm, sentPrompt, promptAdditions });
 }));
 
 // POST /api/music/lyrics — write original lyrics from that description plus the
@@ -342,7 +342,7 @@ router.post('/describe', asyncHandler(async (req, res) => {
 // engines expect.
 router.post('/lyrics', asyncHandler(async (req, res) => {
   const body = validateRequest(lyricsSchema, req.body ?? {});
-  const { lyrics, llm } = await writeLyrics({
+  const { lyrics, llm, sentPrompt, promptAdditions } = await writeLyrics({
     description: body.description,
     guidance: body.guidance,
     template: body.template,
@@ -350,7 +350,7 @@ router.post('/lyrics', asyncHandler(async (req, res) => {
     model: body.model,
     effort: body.effort,
   });
-  res.json({ lyrics, llm });
+  res.json({ lyrics, llm, sentPrompt, promptAdditions });
 }));
 
 const waveformSchema = z.object({
