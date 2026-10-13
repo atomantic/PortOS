@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
+import { statSync } from 'fs';
 import { mkdtemp, mkdir, readFile, writeFile, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -20,9 +21,10 @@ function setup({ finish, ...overrides } = {}) {
   outerAgents.push(agent);
   const evidence = [];
   const spawnProcess = vi.fn((command, args, options) => {
+    const outputDirectoryMode = statSync(args[1]).mode & 0o777;
     child = Object.assign(new EventEmitter(), { pid: 99999999, stdout: new PassThrough(), stderr: new PassThrough() });
     child.send = ({ command: scannerCommand, args: scannerArgs }, done) => {
-      onSpawn({ child, command: scannerCommand, args: scannerArgs, options });
+      onSpawn({ child, command: scannerCommand, args: scannerArgs, options, outputDirectoryMode });
       done();
       if (finish) setImmediate(() => finish(child, scannerArgs));
     };
@@ -44,6 +46,21 @@ function setup({ finish, ...overrides } = {}) {
 const input = { prompt: 'Report-only source audit of the selected boundary.', paths: ['.'], knowledgeBase: [] };
 
 describe.skipIf(process.platform === 'win32')('runner-owned scanner lifecycle', () => {
+  it('makes the results directory owner-only before spawning with a normal umask', async () => {
+    const previousUmask = process.umask(0o022);
+    try {
+      const h = setup();
+      await h.manager.register('agent-example', grant);
+      const run = h.manager.start('agent-example', input);
+      const { child, outputDirectoryMode } = await h.spawned;
+      child.emit('close', 0, null);
+      await run;
+      expect(outputDirectoryMode).toBe(0o700);
+    } finally {
+      process.umask(previousUmask);
+    }
+  });
+
   it.each(['paths', 'knowledgeBase'])('retains %s rejection evidence while allowing one corrected execution', async field => {
     const h = setup();
     await h.manager.register('agent-example', grant);
