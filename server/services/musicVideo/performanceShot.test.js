@@ -325,7 +325,18 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     execFileSync(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'color=blue:s=64x64:r=24:d=1.5', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-y', deliveredPath]);
     const delivered = await readFile(deliveredPath);
     const posts = [];
+    // OmniHuman downloads its inputs, so the frame and audio go up to fal's
+    // CDN first and the request carries their URLs (#11381).
+    const uploads = new Map();
     vi.stubGlobal('fetch', vi.fn(async (url, opts) => {
+      if (url.startsWith('https://rest.fal.ai/storage/upload/initiate')) {
+        const { file_name: name } = JSON.parse(opts.body);
+        return jsonResponse({ upload_url: `https://upload.example.com/${name}`, file_url: `https://cdn.example.com/${name}` });
+      }
+      if (url.startsWith('https://upload.example.com/')) {
+        uploads.set(url.replace('https://upload.example.com/', 'https://cdn.example.com/'), Buffer.from(opts.body));
+        return { ok: opts.method === 'PUT', status: 200 };
+      }
       if (opts?.method === 'POST') {
         posts.push({ url, body: JSON.parse(opts.body) });
         return jsonResponse({ request_id: 'r2', status_url: 'https://queue.fal.run/s2', response_url: 'https://queue.fal.run/r2' });
@@ -346,8 +357,9 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     expect(posts[0].body).toMatchObject({
       prompt: 'drummer hits on the beat', resolution: '1080p',
     });
-    expect(posts[0].body.image_url).toMatch(/^data:image\//);
-    expect(posts[0].body.audio_url).toMatch(/^data:audio\/wav;base64,/);
+    expect(posts[0].body.image_url).toMatch(/^https:\/\/cdn\.example\.com\/.+-start\.[a-z]+$/);
+    expect(posts[0].body.audio_url).toMatch(/^https:\/\/cdn\.example\.com\/.+-audio\.wav$/);
+    expect(uploads.get(posts[0].body.audio_url)).toEqual(await readFile(prepared.audioFilePath));
     const { loadHistory } = await import('../videoGen/history.js');
     // 1.5s at $0.16/s.
     expect((await loadHistory()).find((h) => h.id === job.jobId)).toMatchObject({
