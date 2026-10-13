@@ -19,6 +19,7 @@ vi.mock('../../../services/api', () => ({
   resetToDefaultBranch: vi.fn(),
   createSlashdoTask: vi.fn(),
   forceCosEvaluate: vi.fn(),
+  triggerCosOnDemandTask: vi.fn(),
 }));
 vi.mock('./RepositorySourcePanel', () => ({
   default: ({ appId, refreshKey }) => (
@@ -55,6 +56,7 @@ beforeEach(() => {
   api.resetToDefaultBranch.mockResolvedValue({ success: true, branch: 'main', previousBranch: 'main', previousHead: 'b'.repeat(40), head: 'a'.repeat(40), discardedFiles: 1, fetched: true });
   api.createSlashdoTask.mockResolvedValue({ id: 'task-pr-1' });
   api.forceCosEvaluate.mockResolvedValue({ success: true });
+  api.triggerCosOnDemandTask.mockResolvedValue({ success: true });
 });
 
 afterEach(() => {
@@ -77,6 +79,18 @@ describe('GitTab managed repository sources', () => {
         // the repository, so the path is part of the contract, not prose.
         overrideContext: expect.stringContaining('repository at /srv/example-app'),
       }),
+      { silent: true },
+    ));
+  });
+
+  it('queues a branch-reconcile task for the app from Local Branches', async () => {
+    render(<GitTab appId="app-example" appName="Example App" repoPath="/srv/example-app" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Reconcile' }));
+
+    await waitFor(() => expect(api.triggerCosOnDemandTask).toHaveBeenCalledWith(
+      'branch-reconcile',
+      'app-example',
       { silent: true },
     ));
   });
