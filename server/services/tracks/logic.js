@@ -195,7 +195,7 @@ export function sanitizeTrack(raw) {
   const updatedAt = isStr(raw.updatedAt) ? raw.updatedAt : createdAt;
   const deleted = raw.deleted === true;
   const lyrics = isStr(raw.lyrics) ? raw.lyrics.slice(0, LYRICS_MAX) : '';
-  const prompt = trimTo(raw.prompt, PROMPT_MAX);
+  const prompt = isStr(raw.prompt) ? raw.prompt.slice(0, PROMPT_MAX) : '';
   const engine = trimTo(raw.engine, ENGINE_MAX);
   const modelId = trimTo(raw.modelId, MODEL_ID_MAX);
   const durationSec = sanitizeDuration(raw.durationSec);
@@ -233,7 +233,7 @@ export function sanitizeTrack(raw) {
     albumId: trimTo(raw.albumId, ALBUM_ID_MAX),
     artistId: trimTo(raw.artistId, ARTIST_ID_MAX),
     artist: trimTo(raw.artist, ARTIST_NAME_MAX),
-    concept: trimTo(raw.concept, CONCEPT_MAX),
+    concept: isStr(raw.concept) ? raw.concept.slice(0, CONCEPT_MAX) : '',
     lyrics,
     prompt,
     engine,

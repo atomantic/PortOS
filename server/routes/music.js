@@ -33,7 +33,7 @@
 import { Router } from 'express';
 import { existsSync } from 'fs';
 import { z } from 'zod';
-import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { failValidation, asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { createLineReader } from '../lib/streamLines.js';
 import { SETUP_IMAGE_VIDEO_SCRIPT, spawnSetupScript, stopSetupScript } from '../lib/setupScriptRunner.js';
@@ -55,6 +55,8 @@ import { inspectModelCache } from '../lib/hfCache.js';
 import { getCudaCapability } from '../lib/cudaCapability.js';
 import { federatedMediaAudioProfileSchema } from '../lib/federatedMediaWire.js';
 import { composeMusicPrompt, queueMusicGeneration } from '../services/musicGeneration.js';
+
+import { musicDescribeInputSchema, musicLyricsInputSchema, musicDesignerFields } from '../lib/musicDesignerValidation.js';
 
 const router = Router();
 
@@ -302,8 +304,7 @@ const blankToUndefined = (s) => {
 // template cap matches the description cap — an override is an instruction
 // block, not a document.
 const designerPickerShape = {
-  guidance: z.string().trim().max(4000).optional(),
-  template: z.string().trim().max(8000).optional(),
+  ...musicDesignerFields,
   providerId: z.string().max(128).optional().transform(blankToUndefined),
   model: z.string().max(256).optional().transform(blankToUndefined),
   effort: z.string().max(64).optional().transform(blankToUndefined),
@@ -311,21 +312,16 @@ const designerPickerShape = {
 
 // Caps mirror the Generate form's own limits: a concept/description feeds the
 // prompt field (≤8000), lyrics feed the lyrics field (≤20000).
-const describeSchema = z.object({
-  concept: z.string().trim().min(1, 'concept is required').max(8000),
-  ...designerPickerShape,
-});
-
-const lyricsSchema = z.object({
-  description: z.string().trim().min(1, 'description is required').max(8000),
-  ...designerPickerShape,
-});
+const describeSchema = musicDescribeInputSchema.extend(designerPickerShape);
+const lyricsSchema = musicLyricsInputSchema.extend(designerPickerShape);
 
 // POST /api/music/describe — expand a short reference/vibe into a rich musical
 // description the audio engine can condition on. One explicit user action per
 // call; nothing here runs unprompted.
 router.post('/describe', asyncHandler(async (req, res) => {
-  const body = validateRequest(describeSchema, req.body ?? {});
+  const parsed = describeSchema.safeParse(req.body ?? {});
+  if (!parsed.success) failValidation(parsed);
+  const body = parsed.data;
   const { description, llm, sentPrompt, promptAdditions } = await describeMusic({
     concept: body.concept,
     guidance: body.guidance,
@@ -341,9 +337,13 @@ router.post('/describe', asyncHandler(async (req, res) => {
 // user's extra guidance, in the `[verse]`/`[chorus]` syntax the lyric-aware
 // engines expect.
 router.post('/lyrics', asyncHandler(async (req, res) => {
-  const body = validateRequest(lyricsSchema, req.body ?? {});
+  const parsed = lyricsSchema.safeParse(req.body ?? {});
+  if (!parsed.success) failValidation(parsed);
+  const body = parsed.data;
   const { lyrics, llm, sentPrompt, promptAdditions } = await writeLyrics({
     description: body.description,
+    request: body.request,
+    targetSeconds: body.targetSeconds,
     guidance: body.guidance,
     template: body.template,
     providerId: body.providerId,

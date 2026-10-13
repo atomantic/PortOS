@@ -225,6 +225,62 @@ describe('music routes', () => {
     designer.writeLyrics.mockReset().mockResolvedValue({ lyrics: '[verse]\nrain on the window', llm: { provider: 'fake-provider', model: 'fake-model' } });
   });
 
+  // Uniquely catches route/schema or composer rewrites of authored text, and
+  // ensures generated overflow is refused by the real workflow at its HTTP boundary.
+  it('preserves authored designer fields through routes and provider composition', async () => {
+    const real = await vi.importActual('../services/musicDesigner.js');
+    designer.describeMusic.mockImplementation(real.describeMusic);
+    designer.writeLyrics.mockImplementation(real.writeLyrics);
+    promptRunner.resolveProviderAndModel.mockResolvedValue({ provider: { id: 'p', type: 'api' }, selectedModel: 'm' });
+    promptRunner.runPromptThroughProvider.mockResolvedValue({ text: 'Valid generated text', model: 'm' });
+    const concept = '  A fictional twilight loop\n\t';
+    const guidance = '  Keep the pulse soft\t ';
+    const template = ' \nMy authored instruction.\n  ';
+    const described = await request(app).post('/api/music/describe').send({ concept, guidance, template });
+    expect(described.status).toBe(200);
+    expect(described.body.sentPrompt).toBe(promptRunner.runPromptThroughProvider.mock.calls.at(-1)[0].prompt);
+    expect(described.body.sentPrompt).toContain(`${template}\n\nMUSICAL REFERENCE / VIBE:\n${concept}\n\nADDITIONAL GUIDANCE FROM THE USER:\n${guidance}`);
+    const description = '  An airy fictional arrangement.\n ';
+    const requestText = '  Chorus about paper moons\n  ';
+    const written = await request(app).post('/api/music/lyrics').send({ description, guidance, template, request: requestText });
+    expect(written.status).toBe(200);
+    expect(written.body.sentPrompt).toContain(`:\n${requestText}\n\nMUSICAL DESCRIPTION:\n${description}\n\nADDITIONAL GUIDANCE FROM THE USER:\n${guidance}`);
+    expect(written.body.sentPrompt).toContain(template);
+    const reset = await request(app).post('/api/music/describe').send({ concept, template: ' \n\t' });
+    expect(reset.body.sentPrompt).toContain(real.DEFAULT_DESCRIBE_TEMPLATE);
+    expect(reset.body.promptAdditions.map((item) => item.label)).toContain('Describe instructions');
+  });
+
+  it.each([
+    ['/describe', { concept: 'x' }, 'description', 8000],
+    ['/lyrics', { description: 'x' }, 'lyrics', 20000],
+  ])('rejects oversized generated output from %s without another provider call', async (path, body, field, limit) => {
+    const real = await vi.importActual('../services/musicDesigner.js');
+    designer.describeMusic.mockImplementation(real.describeMusic);
+    designer.writeLyrics.mockImplementation(real.writeLyrics);
+    promptRunner.resolveProviderAndModel.mockResolvedValue({ provider: { id: 'p', type: 'api' }, selectedModel: 'm' });
+    promptRunner.runPromptThroughProvider.mockReset().mockResolvedValue({ text: 'x'.repeat(limit + 1), model: 'm' });
+    const response = await request(app).post(`/api/music${path}`).send(body);
+    expect(response.status).toBe(502);
+    expect(response.body.code).toBe('LLM_OUTPUT_TOO_LONG');
+    expect(response.body.error).toContain(`${limit + 1} characters; limit is ${limit}`);
+    expect(response.body).not.toHaveProperty(field);
+    expect(promptRunner.runPromptThroughProvider).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['/describe', { concept: 'x' + ' '.repeat(8000) }, 8001, 8000],
+    ['/lyrics', { description: 'x', guidance: ' '.repeat(4001) }, 4001, 4000],
+    ['/lyrics', { description: 'x', template: ' '.repeat(8001) }, 8001, 8000],
+    ['/lyrics', { description: 'x', request: ' '.repeat(4001) }, 4001, 4000],
+  ])('counts authored whitespace before rejecting %s', async (path, body, count, limit) => {
+    const response = await request(app).post(`/api/music${path}`).send(body);
+    expect(response.status).toBe(400);
+    expect(response.body.error).toContain(`${count} characters; limit is ${limit}`);
+    expect(designer.describeMusic).not.toHaveBeenCalled();
+    expect(designer.writeLyrics).not.toHaveBeenCalled();
+  });
+
   describe('POST /describe', () => {
     it('passes every designer field through to describeMusic and returns text + attribution', async () => {
       const r = await request(app).post('/api/music/describe').send({
@@ -288,6 +344,8 @@ describe('music routes', () => {
     it('passes every designer field through to writeLyrics and returns lyrics + attribution', async () => {
       const r = await request(app).post('/api/music/lyrics').send({
         description: 'warm rhodes soul',
+        request: undefined,
+        targetSeconds: undefined,
         guidance: 'about leaving at dawn',
         template: 'Two verses only.',
         providerId: 'fake-provider',
@@ -298,6 +356,8 @@ describe('music routes', () => {
       expect(r.body).toEqual({ lyrics: '[verse]\nrain on the window', llm: { provider: 'fake-provider', model: 'fake-model' } });
       expect(designer.writeLyrics).toHaveBeenCalledWith({
         description: 'warm rhodes soul',
+        request: undefined,
+        targetSeconds: undefined,
         guidance: 'about leaving at dawn',
         template: 'Two verses only.',
         providerId: 'fake-provider',

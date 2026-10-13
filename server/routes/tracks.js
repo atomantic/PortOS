@@ -72,9 +72,9 @@ const titleField = z.string().trim().min(1).max(tracks.TITLE_MAX);
 const albumIdField = z.string().trim().max(tracks.ALBUM_ID_MAX);
 const artistIdField = z.string().trim().max(tracks.ARTIST_ID_MAX);
 const artistNameField = z.string().trim().max(tracks.ARTIST_NAME_MAX);
-const conceptField = z.string().trim().max(tracks.CONCEPT_MAX);
+const conceptField = z.string().max(tracks.CONCEPT_MAX);
 const lyricsField = z.string().max(tracks.LYRICS_MAX);
-const promptField = z.string().trim().max(tracks.PROMPT_MAX);
+const promptField = z.string().max(tracks.PROMPT_MAX);
 const engineField = z.string().trim().max(tracks.ENGINE_MAX);
 const modelIdField = z.string().trim().max(tracks.MODEL_ID_MAX);
 // On the generic save path, `audioFilename` must be a bare, safe music-library
