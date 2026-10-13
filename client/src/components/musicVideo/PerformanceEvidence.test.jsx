@@ -73,6 +73,30 @@ describe('PerformanceEvidence', () => {
     expect(pause.mock.instances).toContain(video);
     vi.restoreAllMocks();
   });
+
+  // Review on #11377: a "Whole sung line" take is longer by request, not by the model's minimum.
+  it('reviews a whole-sung-line take as the whole line', () => {
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
+    const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+    const take = {
+      audio: { conditioning: { source: 'master', filename: 'song.wav' } },
+      audioWindow: { startSec: 40, durationSec: 8, wholeLine: { startSec: 40, endSec: 48 } }, edit: { inSec: 2, outSec: 5 }, capability: { minAudioSec: 5 },
+      cues: [{ text: 'early words late', startSec: 0, endSec: 8, words: [{ text: 'early', startSec: 0.2, endSec: 1 }, { text: 'words', startSec: 3, endSec: 4 }, { text: 'late', startSec: 6, endSec: 7 }] }],
+    };
+    const { container } = render(<PerformanceEvidence clipSrc="/example.mp4" instruction={take} />);
+    expect(screen.getByRole('button', { name: 'early' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'late' })).toBeTruthy();
+    expect(screen.getByText(/holds the whole sung line/)).toBeTruthy();
+    expect(screen.queryByText(/needs at least/)).toBeNull();
+    const video = container.querySelector('video');
+    fireEvent.loadedMetadata(video);
+    fireEvent.play(video);
+    pause.mockClear();
+    video.currentTime = 5.5;
+    fireEvent.timeUpdate(video);
+    expect(pause.mock.instances).not.toContain(video);
+    vi.restoreAllMocks();
+  });
 });
 
 // This interaction verifies the spend/boundary shown before the explicit

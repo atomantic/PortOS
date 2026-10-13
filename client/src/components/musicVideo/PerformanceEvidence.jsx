@@ -26,7 +26,14 @@ export default function PerformanceEvidence({ clipSrc, instruction, temporal = n
   // take holds song on either side of it; the edit points are the shot inside the clip.
   const inSec = Number.isFinite(instruction?.edit?.inSec) ? instruction.edit.inSec : 0;
   const outSec = Number.isFinite(instruction?.edit?.outSec) ? instruction.edit.outSec : null;
-  const inShot = (startSec, endSec) => endSec + offset > inSec + 1e-3 && (outSec == null || startSec + offset < outSec - 1e-3);
+  // A "Whole sung line" take (#11364) is meant to be reviewed whole, so its words and playback
+  // cover the line; any other take covers just the shot.
+  const wholeLine = instruction?.audioWindow?.wholeLine;
+  const lineFrom = wholeLine && Number.isFinite(windowStart) ? wholeLine.startSec - windowStart + offset : null;
+  const lineTo = lineFrom != null ? wholeLine.endSec - windowStart + offset : null;
+  const spanFrom = lineFrom ?? inSec;
+  const spanTo = lineFrom != null ? lineTo : outSec;
+  const inShot = (startSec, endSec) => endSec + offset > spanFrom + 1e-3 && (spanTo == null || startSec + offset < spanTo - 1e-3);
   // Only the shot's own words, by name; takes made before the text was carried have none to show.
   const words = cues.flatMap((cue) => (cue.words?.length ? cue.words : [cue]))
     .filter((word) => Number.isFinite(word.startSec) && Number.isFinite(word.endSec) && inShot(word.startSec, word.endSec))
@@ -37,7 +44,7 @@ export default function PerformanceEvidence({ clipSrc, instruction, temporal = n
   const measured = !!temporal?.analyzer;
   const playFrom = useRef(null);
   const windowSec = instruction?.audioWindow?.durationSec;
-  const padded = outSec != null && Number.isFinite(windowSec) && outSec - inSec < windowSec - 0.05;
+  const padded = lineFrom == null && outSec != null && Number.isFinite(windowSec) && outSec - inSec < windowSec - 0.05;
 
   useEffect(() => {
     const picture = video.current;
@@ -56,7 +63,7 @@ export default function PerformanceEvidence({ clipSrc, instruction, temporal = n
   const stopAtOut = () => {
     sync();
     const picture = video.current;
-    if (picture && outSec != null && playFrom.current != null && playFrom.current < outSec - 0.05 && picture.currentTime >= outSec) {
+    if (picture && lineFrom == null && outSec != null && playFrom.current != null && playFrom.current < outSec - 0.05 && picture.currentTime >= outSec) {
       playFrom.current = null;
       picture.pause();
     }
@@ -83,6 +90,7 @@ export default function PerformanceEvidence({ clipSrc, instruction, temporal = n
       {canSync && <button type="button" aria-pressed={sourceMuted} onClick={() => setSourceMuted((value) => !value)}
         className="rounded border border-port-border px-2 py-1 min-h-[44px] sm:min-h-0">{sourceMuted ? 'Unmute source' : 'Mute source'}</button>}
       <p>Speaker: {instruction?.speaker || 'Unspecified'} · Audio: {CONDITIONING_LABELS[conditioning?.source] || conditioning?.source || 'Unknown'}</p>
+      {lineFrom != null && outSec != null && <p className="text-port-text-muted">This take holds the whole sung line ({formatTimecode(wholeLine.startSec)}–{formatTimecode(wholeLine.endSec)} of the song). The final render uses {formatTimecode(inSec)}–{formatTimecode(outSec)} of it.</p>}
       {padded && <p className="text-port-text-muted">The model needs at least {formatSeconds(instruction?.capability?.minAudioSec)} of song, so this take runs longer than the shot. The final render uses {formatTimecode(inSec)}–{formatTimecode(outSec)} of it, and play stops there.</p>}
       {!canSync && <p className="text-port-warning">Recorded source unavailable — review needed</p>}
       {error && <p role="status" className="text-port-warning">{error}</p>}
