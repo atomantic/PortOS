@@ -150,6 +150,7 @@ export default function GitTab({ appId, appName, repoPath }) {
   const [syncing, setSyncing] = useState(null);
   const [pushingAll, setPushingAll] = useState(false);
   const [openingPullRequest, setOpeningPullRequest] = useState(false);
+  const [reconciling, setReconciling] = useState(false);
   const [remoteBranches, setRemoteBranches] = useState([]);
   const [_defaultBranch, setDefaultBranch] = useState('main');
   const [loadingRemote, setLoadingRemote] = useState(false);
@@ -359,6 +360,20 @@ export default function GitTab({ appId, appName, repoPath }) {
     setOpeningPullRequest(false);
     if (result) {
       toast.success(`Pull request agent queued for ${appName} — check CoS Agents`);
+      await api.forceCosEvaluate().catch(() => null);
+    }
+  };
+
+  const handleReconcileBranches = async () => {
+    if (!appId || reconciling) return;
+    setReconciling(true);
+    const result = await api.triggerCosOnDemandTask('branch-reconcile', appId, { silent: true }).catch((err) => {
+      toast.error(`Could not queue branch reconcile: ${err.message}`);
+      return null;
+    });
+    setReconciling(false);
+    if (result) {
+      toast.success(`Branch reconcile queued for ${appName} — check CoS Agents`);
       await api.forceCosEvaluate().catch(() => null);
     }
   };
@@ -767,6 +782,17 @@ export default function GitTab({ appId, appName, repoPath }) {
                 <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
                   <h3 className="text-sm font-medium text-gray-400">Local Branches</h3>
                   <div className="flex flex-wrap items-center gap-2">
+                    {appId && (
+                      <button
+                        onClick={handleReconcileBranches}
+                        disabled={reconciling}
+                        title="Queue a branch-reconcile agent to merge, push, or retire this app's leftover branches"
+                        className={`flex items-center gap-1 text-xs ${touchBtnCls} text-port-accent hover:text-white disabled:opacity-50`}
+                      >
+                        <GitMerge size={12} />
+                        {reconciling ? 'Queuing...' : 'Reconcile'}
+                      </button>
+                    )}
                     {localMergedCount > 0 && !cleanupConfirm && (
                       <button
                         onClick={() => setCleanupConfirm('local')}
