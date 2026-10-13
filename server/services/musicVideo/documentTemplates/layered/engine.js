@@ -294,14 +294,14 @@
   let lyricType = null;
   // lyricType.js is a module, so it runs after this classic script; it publishes
   // itself on globalThis before DOMContentLoaded.
-  const lyricTypeModule = () => new Promise((resolve, reject) => {
-    const check = () => (globalThis.PORTOS_LYRIC_TYPE ? resolve(globalThis.PORTOS_LYRIC_TYPE)
-      : reject(new Error('lyricType.js did not load — the layered template needs it beside index.html')));
-    if (globalThis.PORTOS_LYRIC_TYPE || document.readyState !== 'loading') check();
+  const documentModule = (key, filename) => new Promise((resolve, reject) => {
+    const check = () => (globalThis[key] ? resolve(globalThis[key])
+      : reject(new Error(`${filename} did not load — the layered template needs it beside index.html`)));
+    if (globalThis[key] || document.readyState !== 'loading') check();
     else document.addEventListener('DOMContentLoaded', check, { once: true });
   });
   async function buildLyricType() {
-    const { createLyricType } = await lyricTypeModule();
+    const { createLyricType } = await documentModule('PORTOS_LYRIC_TYPE', 'lyricType.js');
     const words = { palette: { fill: C.paper, ink: C.ink, accent: C.accent, strike: C.alert } };
     // Subtitles: the director's subtitle cues when there are any, else the lyrics.
     const lines = SUBTITLE_CUES.length ? [...HERO_LINES, ...SUBTITLE_CUES] : null;
@@ -500,9 +500,13 @@
   };
   let footageVisibility = null;
 
+  let imageEffects = null;
+
   function render(t, scene, source, state, reviewFootage = false) {
     ctx.fillStyle = C.ink; ctx.fillRect(0, 0, W, H);
     const authored = sectionFunction(t);
+    const effect = source && scene?.visualLayer === 'still' && scene.media?.kind === 'image' && scene.imageEffect
+      ? imageEffects?.imageEffectState(scene.imageEffect, t - scene.startSec) : null;
     if (scene) {
       const lt = t - scene.startSec; const d = scene.endSec - scene.startSec;
       const card = authored?.fn ? null : cardFor(scene);
@@ -510,7 +514,11 @@
       else if (source) {
         const energetic = isHighEnergy(t) || scene.shotMode === 'performance';
         const punch = 1 + 0.018 * pulse(t, energetic ? beats : downs, 8) * state.reactiveGain;
+        ctx.save();
+        if (effect) ctx.filter = `contrast(${effect.contrast}) saturate(${effect.saturation})`;
         drawCover(source, cameraView(scene, seg(t, scene.startSec, scene.endSec)), punch);
+        ctx.restore();
+        if (effect) _flash(effect.fog, imageEffects.IMAGE_EFFECT_FOG_COLOR);
       }
       if (isHighEnergy(t)) glitch(t, pulse(t, downs, 8) * state.reactiveGain);
     }
@@ -532,6 +540,7 @@
     }
     vignette(0.5);
     grain(t, 0.09);
+    if (effect) _flash(effect.flash);
     drawHud(t);
     drawNarrativeEvents(state);
     if (lyricType) lyricType.draw(ctx, t, { width: W, height: H });
@@ -543,6 +552,9 @@
     if (window.PORTOS_MV_ASSETS) assetUrls = await window.PORTOS_MV_ASSETS;
     await Promise.all([F.stencil(40), F.mono(20), F.mono(20, 600), F.cond(20), F.cond(20, 700)].map((font) => document.fonts.load(font)));
     await buildLyricType();
+    if (SCENES.some(scene => scene.imageEffect && scene.visualLayer === 'still')) {
+      imageEffects = await documentModule('PORTOS_MV_IMAGE_EFFECTS', 'musicVideoImageEffects.js');
+    }
     buildGrain();
   })();
   globalThis.portosComposition = {

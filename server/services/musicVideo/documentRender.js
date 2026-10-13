@@ -1,4 +1,5 @@
 import { assertMusicVideoMediaSelections, musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
+import { sceneImageEffect } from '../../lib/musicVideoImageEffects.js';
 import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 import { filmLookRuntimeSource, isFilmLookNeutral } from '../../lib/filmLook.js';
 import { titleCardVisible } from '../../lib/musicVideoTitleCard.js';
@@ -190,6 +191,7 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
         endSec: start != null && end != null && end > start ? end : null,
         shotMode: scene.shotMode === 'performance' ? 'performance' : 'cutaway',
         visualLayer: documentSceneVisualLayer(project, scene, { generated }),
+        imageEffect: sceneImageEffect(scene, { layered: true }),
         stillMove: typeof scene.stillMove === 'string' ? scene.stillMove : null,
         // #10589: the planned camera move the template's camera rig follows (only when planned).
         ...(typeof scene.camera?.move === 'string' ? { camera: structuredClone(scene.camera) } : {}),

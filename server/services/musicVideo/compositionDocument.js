@@ -50,6 +50,11 @@ const SHARED_ROOT = join(TEMPLATE_ROOT, 'shared');
 const LYRIC_TYPE_REF = /\blyricType\.(?:js|css)\b/;
 const LYRIC_TYPE_SCAN_MAX = 2 * 1024 * 1024;
 const LAYERED_ENGINE_TAG = '<script src="engine.js"></script>';
+const IMAGE_EFFECT_TAG = `<script type="module">
+import { imageEffectState, IMAGE_EFFECT_FOG_COLOR } from './musicVideoImageEffects.js';
+globalThis.PORTOS_MV_IMAGE_EFFECTS = { imageEffectState, IMAGE_EFFECT_FOG_COLOR };
+</script><!-- portos-allow-hidden-content: shared still-image effect curves -->
+`;
 const LYRIC_TYPE_TAGS = '<link rel="stylesheet" href="lyricType.css">\n'
   + '<script type="module" src="lyricType.js"></script><!-- portos-allow-hidden-content: the shared PortOS lyric-type module -->\n';
 
@@ -152,13 +157,15 @@ function storeVersion(projectId, files, source, options = {}) {
 }
 
 /**
- * A layered page from before #10583 loads the engine through the template's own
- * tag; it gains the lyric-type stylesheet and module in front of that tag. A page
- * that already names lyricType, or loads its engine some other way, is unchanged.
+ * On explicit engine adoption, a template-shaped page gains the shared module
+ * tags the current engine needs. Existing module tags and authored entrypoints
+ * are preserved.
  */
-function withLyricTypeTags(page) {
-  if (!page.includes(LAYERED_ENGINE_TAG) || LYRIC_TYPE_REF.test(page)) return page;
-  return page.replace(LAYERED_ENGINE_TAG, () => LYRIC_TYPE_TAGS + LAYERED_ENGINE_TAG);
+function withLayeredModuleTags(page) {
+  if (!page.includes(LAYERED_ENGINE_TAG)) return page;
+  const tags = (LYRIC_TYPE_REF.test(page) ? '' : LYRIC_TYPE_TAGS)
+    + (page.includes('PORTOS_MV_IMAGE_EFFECTS') ? '' : IMAGE_EFFECT_TAG);
+  return page.replace(LAYERED_ENGINE_TAG, () => tags + LAYERED_ENGINE_TAG);
 }
 
 /**
@@ -179,6 +186,19 @@ async function withSharedLyricType(files) {
   const { files: shared } = await collectTree(SHARED_ROOT, { excludeTests: true });
   const missing = shared.filter((file) => file.rel !== 'toonWorld.js' && !rels.has(file.rel));
   return missing.length ? [...files, ...missing] : files;
+}
+
+// Ship the actual browser-safe effect definition, preserving an authored copy.
+async function withSharedImageEffects(files) {
+  if (files.some(file => file.rel === 'musicVideoImageEffects.js')) return files;
+  for (const file of files) {
+    if (!/\.(?:html?|m?js)$/i.test(file.rel) || (file.size ?? file.data?.length ?? 0) > LYRIC_TYPE_SCAN_MAX) continue;
+    const text = file.data ? file.data.toString('utf8') : await readFile(file.abs, 'utf8');
+    if (!/\bmusicVideoImageEffects\.js\b/.test(text)) continue;
+    const abs = fileURLToPath(new URL('../../lib/musicVideoImageEffects.js', import.meta.url));
+    return [...files, { rel: 'musicVideoImageEffects.js', abs, size: (await stat(abs)).size }];
+  }
+  return files;
 }
 
 // Shared toon kit remains a local static graph, including its vendored geometry
@@ -205,7 +225,7 @@ async function withSharedToonWorld(files) {
 
 async function storeVersionNow(projectId, inputFiles, source, { draft = false, verifyCurrent = () => {} } = {}) {
   assertDocumentShape(inputFiles.map((file) => file.rel));
-  const files = await withSharedToonWorld(await withSharedLyricType(inputFiles));
+  const files = await withSharedToonWorld(await withSharedImageEffects(await withSharedLyricType(inputFiles)));
   const totalBytes = files.reduce((sum, file) => sum + (file.data?.length ?? file.size), 0);
   if (files.length > DOCUMENT_MAX_FILES || totalBytes > DOCUMENT_MAX_BYTES) {
     throw refuse('Shared document assets exceed the document file or byte limit', 'COMPOSITION_DOCUMENT_TOO_LARGE', 413);
@@ -364,7 +384,7 @@ export async function importDocumentTemplate(projectId, templateId = 'layered') 
 export async function readTemplateDocumentFiles(templateId = 'layered') {
   if (!MUSIC_VIDEO_DOCUMENT_TEMPLATES.includes(templateId)) throw refuse('Unknown composition template', 'VALIDATION_ERROR', 400);
   const { files } = await collectTree(join(TEMPLATE_ROOT, templateId), { excludeTests: true });
-  return new Map((await withSharedLyricType(files)).map((file) => [file.rel, { abs: file.abs, size: file.size }]));
+  return new Map((await withSharedImageEffects(await withSharedLyricType(files))).map((file) => [file.rel, { abs: file.abs, size: file.size }]));
 }
 
 /**
@@ -374,7 +394,7 @@ export async function readTemplateDocumentFiles(templateId = 'layered') {
  */
 export async function readLyricOverlayDocumentFiles() {
   const { files } = await collectTree(join(TEMPLATE_ROOT, 'lyricOverlay'), { excludeTests: true });
-  return new Map((await withSharedLyricType(files)).map((file) => [file.rel, { abs: file.abs, size: file.size }]));
+  return new Map((await withSharedImageEffects(await withSharedLyricType(files))).map((file) => [file.rel, { abs: file.abs, size: file.size }]));
 }
 
 /** Stage a host-assembled generated document for review before selection. */
@@ -409,6 +429,8 @@ export async function stageGeneratedDocument(projectId, generatedFiles, { verify
 // Known compatible shipped layered engines. Recognition only;
 // customized engines belong to the author and are never silently replaced.
 const UPGRADABLE_LAYERED_ENGINES = new Set([
+  // Last shipped engine before document still-image effects (#11319).
+  '9581bb2d190e62ea2eb6a709bc989b1f913c501236554cd0301379877dc8a5fc',
   'dc27611ebaa429c28bd467b003495d2a1c7dc0ede73be0cfc28db4b97c964dcf',
   '2556a0905a85958b9107cfa75ab0c5bfde167a708e29b511d577065bb530ea58',
   'e2267a068c92a3c7dee49db5f3e57caff1ac11aee1312c0d82e28352850aad3b',
@@ -423,7 +445,7 @@ const engineDigest = bytes => createHash('sha256').update(bytes.toString('utf8')
 /**
  * Explicitly adopt the shipped layered engine in a new immutable document.
  * All authored scripts, HTML, fonts and assets retain their exact bytes, except
- * that a template-shaped index.html gains the shared lyric-type tags the shipped
+ * that a template-shaped index.html gains the shared module tags the shipped
  * engine needs (see below). The
  * new pointer invalidates revision-bound render/review evidence naturally.
  */
@@ -451,12 +473,11 @@ export function upgradeDocumentEngine(projectId, directory) {
     const loaded = await Promise.all(files.map(async file => ({
       rel: file.rel, data: file.rel === 'engine.js' ? shipped : await readFile(file.abs),
     })));
-    // The shipped engine draws its words with the shared lyricType.js (#10583). A page that
-    // loads the engine through the template's own tag gets the module's two tags in front
-    // of it (storeVersionNow adds the module and its faces); a page that doesn't is the
-    // author's and is left alone.
+    // Add the shared lyric-type and still-effect modules only to a template-shaped
+    // page. storeVersionNow supplies missing module files and fonts; authored
+    // entrypoints keep their bytes.
     const index = loaded.find(file => file.rel === 'index.html');
-    if (index) index.data = Buffer.from(withLyricTypeTags(index.data.toString('utf8')));
+    if (index) index.data = Buffer.from(withLayeredModuleTags(index.data.toString('utf8')));
     const result = await storeVersionNow(projectId, loaded, project.composition.document.source || { kind: 'directory', name: null }, { verifyCurrent });
     return { ...result, changed: true };
   });

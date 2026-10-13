@@ -80,7 +80,7 @@ async function fixture({ shipped = {} } = {}) {
     composition: { mode: 'document', textCues: [{ id: 'c1', text: 'hero', startSec: 1, endSec: 2, emphasis: 'hero' }], overlay: { enabled: true, ticker: ['a'] } },
     scenes: [
       { sceneId: 'a', order: 0, startSec: 0, endSec: 4, videoHistoryId: 'vh-a', referenceImageId: 'still-b.png' },
-      { sceneId: 'b', order: 1, startSec: 4, endSec: 8, videoHistoryId: 'vh-gone', referenceImageId: 'still-b.png', visualLayer: 'still', stillMove: 'push' },
+      { sceneId: 'b', order: 1, startSec: 4, endSec: 8, videoHistoryId: 'vh-gone', referenceImageId: 'still-b.png', visualLayer: 'still', stillMove: 'push', imageEffect: 'flash-develop', imageEffectSec: 6 },
       { sceneId: 'c', order: 2, startSec: 8, endSec: 9, visualLayer: 'card', cardText: 'Title' },
       { sceneId: 'd', order: 3, startSec: 9, endSec: 12, shotMode: 'performance', videoHistoryId: 'vh-a', takes: [performanceTake('vh-a')] },
     ],
@@ -138,8 +138,9 @@ describe('composition document staging', () => {
     const byId = Object.fromEntries(data.scenes.map((s) => [s.sceneId, s]));
     expect(byId.a.media).toMatchObject({ kind: 'video', src: 'media/scene-a.mp4', inSec: 0, outSec: 4, fps: 24 });
     expect(byId.b.media).toMatchObject({ kind: 'image', src: 'media/scene-b.png' });
-    expect(byId.b).toMatchObject({ visualLayer: 'still', stillMove: 'push' });
-    expect(byId.c).toMatchObject({ media: null, visualLayer: 'card', cardText: 'Title' });
+    expect(byId.b).toMatchObject({ visualLayer: 'still', stillMove: 'push', imageEffect: { effect: 'flash-develop', developSec: 6 } });
+    expect(byId.a.imageEffect).toBeNull();
+    expect(byId.c).toMatchObject({ imageEffect: null, media: null, visualLayer: 'card', cardText: 'Title' });
     expect(byId.d.media).toMatchObject({ kind: 'video', src: 'media/scene-d.mp4', inSec: 0.5, outSec: 3.5 });
     expect(data.render).toEqual({ width: 1920, height: 1080, fps: 24, frames: 720, durationSec: 30 });
     expect(data.song).toMatchObject({ durationSec: 30, beats: [0, 0.5], downbeats: [0] });

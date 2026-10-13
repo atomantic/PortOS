@@ -112,6 +112,68 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     } finally { await _cleanupTestBrowser({ browser, proc, cleanup: () => {} }); }
   });
 
+  // Uniquely catches dropped effect data, missing staged modules and preview/export curve drift.
+  it('develops a still from white identically in the document render and live preview', async () => {
+    await mkdir(PATHS.images, { recursive: true });
+    const image = await sharp({ create: { width: 64, height: 36, channels: 3, background: '#ee6721' } }).png().toBuffer();
+    await writeFile(join(PATHS.images, 'effect-still.png'), image);
+    const created = await projects.createProject({ name: 'Synthetic image effect' });
+    await projects.mutateProjectRecord(created.id, current => ({ project: { ...current,
+      audioAnalysis: { durationSec: 2, sections: [] },
+      scenes: [{ sceneId: 'develop', startSec: 0.25, endSec: 2, visualLayer: 'still', stillMove: 'hold',
+        referenceImageId: 'effect-still.png', imageEffect: 'flash-develop', imageEffectSec: 0.5 }],
+    } }));
+    await importDocumentTemplate(created.id);
+    const project = await projects.getProject(created.id);
+    const { openIsolatedDocumentPreview } = await import('./documentRender.js');
+    const capture = await openIsolatedDocumentPreview({ project, jobId: 'still-effect', signal: testSignal });
+    const page = await browser.newPage();
+    try {
+      const loadPreview = async current => {
+        const preview = await buildDocumentPreview(current);
+        await page.setContent(preview.html);
+        await page.evaluate(({ key, encoded }) => {
+          addEventListener('message', ({ data }) => {
+            if (data?.type !== 'portos-mv:request') return;
+            const blob = new Blob([Uint8Array.from(atob(encoded), c => c.charCodeAt(0))], { type: 'image/png' });
+            window.postMessage({ type: 'portos-mv:asset', key, blob }, '*');
+          });
+          window.postMessage({ type: 'portos-mv:manifest', keys: [key] }, '*');
+        }, { key: preview.assets[0].key, encoded: image.toString('base64') });
+        await page.waitForFunction(() => globalThis.portosComposition);
+      };
+      await loadPreview(project);
+      const pixels = [];
+      for (const t of [0.25, 0.5, 0.75, 1.25]) {
+        const sample = `(async () => {
+          await portosComposition.seek(${t});
+          const canvas = document.getElementById('stage');
+          return [...canvas.getContext('2d').getImageData(canvas.width / 2, canvas.height / 2, 1, 1).data].slice(0, 3);
+        })()`;
+        const live = await page.evaluate(sample);
+        const rendered = await capture.page.evaluate(sample);
+        expect(rendered).toEqual(live);
+        pixels.push(live);
+      }
+      expect(pixels[0]).toEqual([255, 255, 255]);
+      expect(pixels[1][0] - pixels[1][2]).toBeLessThan(pixels[2][0] - pixels[2][2]);
+      expect(pixels[2][0]).toBeGreaterThan(pixels[2][1] + 80);
+      expect(pixels[2][1]).toBeGreaterThan(pixels[2][2] + 40);
+      // A developed still is exactly the no-effect picture at the same song time.
+      await loadPreview({ ...project, scenes: project.scenes.map(scene => ({ ...scene, imageEffect: null })) });
+      const held = await page.evaluate(async () => {
+        await globalThis.portosComposition.seek(1.25);
+        const canvas = document.getElementById('stage');
+        return [...canvas.getContext('2d').getImageData(canvas.width / 2, canvas.height / 2, 1, 1).data].slice(0, 3);
+      });
+      expect(held).toEqual(pixels[3]);
+    } finally {
+      await page.close();
+      await capture.page.close();
+      await rm(capture.scratchRoot, { recursive: true, force: true });
+    }
+  }, 60000);
+
   it('keeps network refusal inside the owned capture browser and leaves the browsing session alive', async () => {
     const { openComposition } = await import('../htmlComposition/browser.js');
     const directory = 'compositions/synthetic-owned-refusal';
