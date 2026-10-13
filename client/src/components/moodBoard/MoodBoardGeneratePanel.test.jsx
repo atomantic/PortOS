@@ -9,15 +9,24 @@ vi.mock('../../services/api', () => ({
 vi.mock('../../services/socket', () => ({ default: {
   on: (name, fn) => mocks.events.set(name, fn), off: (name) => mocks.events.delete(name),
 } }));
-vi.mock('../../hooks/useProviderModels', () => ({ default: () => ({
-  providers: [{ id: 'writer', type: 'api', enabled: true }], selectedProviderId: 'writer',
+vi.mock('../../hooks/useProviderModels', () => ({ default: ({ filter }) => ({
+  providers: [
+    { id: 'writer', type: 'api', enabled: true },
+    { id: 'tool-free-cli', type: 'cli', toolFreeOneShot: true },
+    { id: 'authoring-cli', type: 'cli', authoringOneShot: true },
+    { id: 'unverified-cli', type: 'cli' },
+    { id: 'tui-session', type: 'tui' },
+  ].filter(filter), selectedProviderId: 'writer',
   selectedModel: 'chosen-model', availableModels: ['chosen-model'], loading: false,
   setSelectedProviderId: vi.fn(), setSelectedModel: vi.fn(),
 }) }));
 vi.mock('../../hooks/useImageRenderSettings', () => ({ default: () => ({
   imageCfg: { mode: 'grok' }, backends: [{ id: 'grok', label: 'Grok' }, { id: 'codex', label: 'Codex' }],
 }) }));
-vi.mock('../ProviderModelSelector', () => ({ default: ({ selectedModel }) => <div>{selectedModel}</div> }));
+vi.mock('../ProviderModelSelector', () => ({ default: ({ selectedModel, providers, selectionPolicy }) => <div>
+  {selectedModel}
+  {providers.filter(selectionPolicy.provider).map((p) => <span key={p.id}>{p.id}</span>)}
+</div> }));
 vi.mock('../pipeline/MediaJobThumb', () => ({ default: ({ jobId }) => <div>Render {jobId}</div> }));
 import MoodBoardGeneratePanel from './MoodBoardGeneratePanel';
 
@@ -42,6 +51,10 @@ describe('Generate more', () => {
     const button = screen.getByRole('button', { name: 'Generate images' });
     await waitFor(() => expect(button).toBeEnabled());
     expect(screen.getByText(/text, not image pixels/)).toBeInTheDocument();
+    expect(screen.getByText('tool-free-cli')).toBeInTheDocument();
+    expect(screen.getByText('authoring-cli')).toBeInTheDocument();
+    expect(screen.queryByText('unverified-cli')).not.toBeInTheDocument();
+    expect(screen.queryByText('tui-session')).not.toBeInTheDocument();
     fireEvent.click(button); fireEvent.click(button);
     expect(mocks.generate).toHaveBeenCalledTimes(1);
     expect(mocks.generate.mock.calls[0][1]).toMatchObject({ providerId: 'writer', model: 'chosen-model', count: 1, render: { width: 1024, height: 576 } });

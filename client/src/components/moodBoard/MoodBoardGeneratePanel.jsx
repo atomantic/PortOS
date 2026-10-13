@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Sparkles } from 'lucide-react';
-import { isVisionCapableCliProvider } from '../../utils/providers';
+import { supportsToolFreeOneShot, toolFreeOneShotSelectionPolicy } from '../../utils/providerSelection';
 import ProviderModelSelector from '../ProviderModelSelector';
 import ResolutionField from '../media/ResolutionField';
 import MediaJobThumb from '../pipeline/MediaJobThumb';
@@ -14,7 +14,6 @@ import { formatCount } from '../../utils/formatters';
 import { generateMoodBoardImages, getMoodBoardGeneration } from '../../services/api';
 import socket from '../../services/socket';
 
-const providerFilter = (p) => p.enabled !== false && (p.type === 'api' || isVisionCapableCliProvider(p));
 const presets = RESOLUTIONS.filter((r) => !r.compatible);
 const fieldClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-2 text-sm text-white';
 
@@ -33,7 +32,7 @@ export default function MoodBoardGeneratePanel({ board, disabled = false }) {
   const [error, setError] = useState(null);
   const pending = useRef(false);
   const request = useRef(null);
-  const providers = useProviderModels({ filter: providerFilter, silent: true, withEffort: true });
+  const providers = useProviderModels({ filter: supportsToolFreeOneShot, silent: true, withEffort: true });
   const { backends, imageCfg } = useImageRenderSettings();
   const busy = submitting || job?.status === 'running';
 
@@ -121,7 +120,7 @@ export default function MoodBoardGeneratePanel({ board, disabled = false }) {
             selectedProviderId={providers.selectedProviderId} selectedModel={providers.selectedModel}
             availableModels={providers.availableModels} onProviderChange={providers.setSelectedProviderId}
             onModelChange={providers.setSelectedModel} effort={effort} onEffortChange={setEffort}
-            disabled={busy || providers.loading} layout="row" />
+            selectionPolicy={toolFreeOneShotSelectionPolicy} disabled={busy || providers.loading} layout="row" />
           {!providers.loading && !providers.providers.length && <p className="text-xs text-port-warning">Enable an API or supported one-shot provider in Settings → Providers.</p>}
         </div>
         <FormField label="Direction (optional)">
