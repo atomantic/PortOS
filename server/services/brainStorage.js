@@ -21,9 +21,9 @@
  * read a stale snapshot and drop the other write (the AGENTS.md-sanctioned
  * "serialize two write paths that mutate the same record" case). Writes to
  * different records no longer serialize against each other. brainJournal layers
- * its own storeMutex ON TOP for the read→mutate→write of a single journal entry;
- * that only ever nests storeMutex → this per-id queue (one direction), so no
- * deadlock.
+ * its own storeMutex ON TOP for local sidecar coordination; journal transforms
+ * run inside this per-id queue too, so peer applies cannot invalidate their
+ * snapshot. Locks only nest storeMutex → this queue (one direction).
  *
  * FEDERATION is unaffected by the layout. Brain federates strictly per-record
  * through this module's API seams (`getRawRecords` / `applyRemoteRecord`) plus
@@ -558,6 +558,11 @@ export async function updateWith(type, id, fn) {
  * pass the FULL desired record (this does not merge unknown fields the way
  * `update()` does). `emitEvent:false` lets a caller (e.g. brainJournal) emit its
  * own richer, bridge-shaped event instead of the generic one.
+ * A function receives the fresh live `{ id, ...record }` (or null) INSIDE the
+ * per-id queue and returns the full replacement. Returning null/undefined
+ * leaves storage, events and the sync log untouched and returns the live record.
+ * Use this form for derived content and preconditions that must serialize with
+ * peer applies as well as other local writes.
  * createOnly:true returns null for any existing record, including tombstones.
  */
 export async function upsertWithId(type, id, recordData, { emitEvent = true, createOnly = false } = {}) {
@@ -574,11 +579,15 @@ export async function upsertWithId(type, id, recordData, { emitEvent = true, cre
     // Test presence inside the queue so a peer or local write cannot race.
     if (createOnly && existing) return null;
     const live = existing && !isTombstone(existing) ? existing : null;
+    const input = typeof recordData === 'function'
+      ? await recordData(live ? { id, ...live } : null)
+      : recordData;
+    if (typeof recordData === 'function' && input == null) return live ? { id, ...live } : null;
     const timestamp = now();
     const originInstanceId = live?.originInstanceId ?? fallbackOrigin;
 
     const record = {
-      ...recordData,
+      ...input,
       originInstanceId,
       createdAt: live?.createdAt ?? timestamp,
       updatedAt: timestamp
