@@ -469,12 +469,12 @@ async function handleAIProviderError(error) {
 
   // A content/safety refusal is not a provider fault — we know exactly why it
   // failed (the model declined the prompt), so there's nothing for a CoS agent
-  // to investigate. promptRunner.js already retries with a fallback and the UI
+  // to investigate. promptRunner.js stops without fallback and the UI
   // is told what happened. Bail before deferring/creating a task. (server's
   // onRunFailed already emits a distinct code for refusals so this handler
   // normally isn't even reached; this guard covers any other emitter.)
   if (ctx.errorAnalysis?.category === ERROR_CATEGORIES.CONTENT_REFUSAL) {
-    console.log(`🛟 AI model refused prompt on content/safety grounds: ${ctx.provider} (${ctx.model}) — no investigation task (fallback handles it)`);
+    console.warn(`🛟 AI model refused prompt on content/safety grounds: ${ctx.provider} (${ctx.model}) — no investigation task or automatic fallback`);
     return;
   }
 

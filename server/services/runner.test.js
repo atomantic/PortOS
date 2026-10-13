@@ -135,6 +135,16 @@ beforeEach(() => {
 });
 
 describe('finalizeRunRecord — authoritative timeout classification', () => {
+  it('preserves a structured refusal even when output contains a competing error or partial result', async () => {
+    setAIToolkit(fakeToolkit({ analyzeError }), { dataDir: '/tmp/test-runner' });
+    const errorAnalysis = { category: 'content-refusal', hasError: true, requiresFallback: false, message: 'Stopped' };
+    const executionInterruption = { category: 'content-refusal', source: 'provider' };
+    const result = await finalizeRunRecord({ runId: 'run-refusal', output: 'Partial result mentions billing',
+      exitCode: 1, success: false, error: 'Stopped', startTime: Date.now(),
+      extras: { errorAnalysis, executionInterruption } });
+    expect(result).toMatchObject({ success: false, errorCategory: 'content-refusal', errorAnalysis, executionInterruption });
+  });
+
   it('does not let story text misclassify exit 124 as a provider quota failure', async () => {
     setAIToolkit(fakeToolkit({ analyzeError }), { dataDir: '/tmp/test-runner' });
 

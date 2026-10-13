@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   analyzeError,
+  createContentRefusalDetector,
   analyzeHttpError,
   normalizeRateLimitHeaders,
   createClaudeSessionLimitBannerDetector,
@@ -47,7 +48,7 @@ describe('Error Detection', () => {
       );
       expect(result.hasError).toBe(true);
       expect(result.category).toBe(ERROR_CATEGORIES.CONTENT_REFUSAL);
-      expect(result.requiresFallback).toBe(true);
+      expect(result.requiresFallback).toBe(false);
       expect(result.actionable).toBe(false);
     });
 
@@ -1084,5 +1085,23 @@ describe('Error Detection', () => {
       expect(isRunCanceledError(null)).toBe(false);
       expect(isRunCanceledError(undefined)).toBe(false);
     });
+  });
+});
+
+
+describe('terminal content refusals', () => {
+  it.each(['cyber_policy', 'cyberPolicy', 'misalignment_policy_violation'])('classifies structured %s without fallback', tag => {
+    expect(analyzeError(JSON.stringify({ type: 'task_complete', error: { codex_error_info: tag } })))
+      .toMatchObject({ category: 'content-refusal', requiresFallback: false });
+  });
+
+  it('detects split cursor-positioned chrome without treating quoted content as a live refusal', () => {
+    const detect = createContentRefusalDetector();
+    expect(detect('Quoted: "ⓘ This content can’t be shown"\n')).toBeNull();
+    expect(detect('{"error":{"codex_error_info":"cyber_policy"}}\n')).toBeNull();
+    expect(detect('tool output\x1b[12;')).toBeNull();
+    expect(detect('1H\x1b[1mⓘ Thiscontentcan’t')).toBeNull();
+    expect(detect('beshown\x1b[13;1HSome cybersecurity requests may still be limited.'))
+      .toMatchObject({ category: 'content-refusal', requiresFallback: false, permanent: true });
   });
 });

@@ -155,7 +155,8 @@ export async function finalizeRunRecord({ runId, output, exitCode, success, erro
       // output because their provider banner is often the only useful signal.
       const analyzeError = toolkit.services.errorDetection.analyzeError;
       const analysisInput = exitCode === 124 ? (error || 'Process timed out') : output;
-      let errorAnalysis = analyzeError(analysisInput, exitCode);
+      let errorAnalysis = extras?.errorAnalysis?.category === ERROR_CATEGORIES.CONTENT_REFUSAL
+        ? extras.errorAnalysis : analyzeError(analysisInput, exitCode);
       // When that scan lands on nothing, the caller's own `error` is the better
       // evidence — and the run that proved it was a local-LLM playground timeout:
       // the host aborted its OWN deadline, finalized with exit 1 + `Timed out after

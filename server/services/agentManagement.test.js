@@ -449,6 +449,30 @@ describe('handleOrphanedTask — duplicate-investigation guard', () => {
     pausedAgents.clear();
   });
 
+  it.each(['content-refusal', 'content-filtered'])('keeps persisted %s terminal after a restart', category => {
+    const task = { id: 'task-refused', taskType: 'internal', status: 'in_progress', metadata: {} };
+    const executionInterruption = { category, source: 'provider', at: '2026-01-01T00:00:00Z' };
+    return handleOrphanedTask(task.id, 'agent-refused', vi.fn().mockResolvedValue(task), {
+      interrupted: true, agentMetadata: { executionInterruption },
+    }).then(() => {
+      expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'blocked',
+        metadata: expect.objectContaining({ blockedCategory: category, executionInterruption }),
+      }), 'internal');
+      expect(addTask).not.toHaveBeenCalled();
+      expect(resolveTaskResumePatch).not.toHaveBeenCalled();
+      expect(committedDuringRun).not.toHaveBeenCalled();
+      expect(forceSpawnTask).not.toHaveBeenCalled();
+    });
+  });
+
+  it('does not revive a refused task when a later sweep lacks the agent record', async () => {
+    const task = { id: 'task-refused', status: 'blocked', metadata: { blockedCategory: 'content-refusal' } };
+    await handleOrphanedTask(task.id, 'agent-refused', vi.fn().mockResolvedValue(task), { interrupted: true });
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+    expect(resolveTaskResumePatch).not.toHaveBeenCalled();
+  });
+
   it('blocks an interrupted private assessment without retrying or investigating its transcript', async () => {
     const task = { id: 'task-private', taskType: 'internal', status: 'in_progress',
       metadata: { analysisType: 'private-security-assessment', orphanRetryCount: 4 } };

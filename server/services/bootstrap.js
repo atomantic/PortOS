@@ -217,14 +217,14 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
       // provider fault. Emit a distinct code + warning severity so (a) the
       // autofixer skips it (it only spawns investigation tasks for
       // AI_PROVIDER_EXECUTION_FAILED) and (b) the client shows a calm "model
-      // declined, trying a fallback" notice instead of a red error toast. The
-      // fallback retry itself is driven by promptRunner.js.
+      // declined, stopped" notice instead of a red error toast. Automatic retry
+      // and provider fallback are disabled.
       const isBudget = metadata.errorAnalysis?.category === ERROR_CATEGORIES.RUNTIME_BUDGET_EXHAUSTED;
       const isRefusal = metadata.errorAnalysis?.category === ERROR_CATEGORIES.CONTENT_REFUSAL;
       errorEvents.emit('error', {
         code: isBudget ? 'AI_RUNTIME_BUDGET_EXHAUSTED' : (isRefusal ? 'AI_PROVIDER_CONTENT_REFUSED' : 'AI_PROVIDER_EXECUTION_FAILED'),
         message: isBudget ? errorMessage : isRefusal
-          ? `${metadata.providerName} declined this prompt on content/safety grounds — trying a fallback model if one is configured.`
+          ? `${metadata.providerName} declined this prompt on content/safety grounds — stopped without automatic retry or provider fallback.`
           : `AI provider ${metadata.providerName} execution failed: ${errorMessage}`,
         severity: isBudget || isRefusal ? 'warning' : 'error',
         canAutoFix: !isBudget && !isRefusal,

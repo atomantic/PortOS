@@ -1480,3 +1480,32 @@ it.each(['draft', 'leave-open'])('keeps failed %s tasks from spawning an unrestr
   await maybeCreateInvestigationTask('a1', { id: 't1', metadata: { prCompletion } }, { category: 'test-failure', actionable: true });
   expect(addTask).not.toHaveBeenCalled();
 });
+
+
+it.each([
+  'Reviewing a source pattern: may be used to benefit or to harm',
+  'Quoted JSON: {"codex_error_info":"cyber_policy"}',
+  JSON.stringify({ type: 'response_item', payload: { type: 'function_call_output', output: '{"codex_error_info":"cyber_policy"}' } }),
+])('does not override the runner verdict with quoted refusal text: %s', output => {
+  expect(analyzeAgentFailure(output, {}, 'example-model', { completionReason: 'idle-no-activity' }))
+    .toMatchObject({ category: 'startup-failure', origin: 'runner', completionReason: 'idle-no-activity' });
+});
+
+it.each([
+  { type: 'event_msg', payload: { type: 'task_complete', error: { codex_error_info: 'cyber_policy' } } },
+  { type: 'turn.failed', error: { codexErrorInfo: 'cyberPolicy' } },
+  { method: 'turn/completed', params: { turn: { error: { codexErrorInfo: 'cyberPolicy' } } } },
+])('retains structured policy refusals over a later idle verdict', event => {
+  expect(analyzeAgentFailure(JSON.stringify(event), {}, 'example-model', { completionReason: 'idle-no-activity' }))
+    .toMatchObject({ category: 'content-refusal', origin: 'provider', permanent: true, requiresFallback: false });
+});
+
+it('retains a current provider banner over a later idle verdict', () => {
+  expect(analyzeAgentFailure('Work output\u001b[12;1Hⓘ This content can’t be shown', {}, 'example-model', { completionReason: 'idle-no-activity' }))
+    .toMatchObject({ category: 'content-refusal', origin: 'provider', permanent: true });
+});
+
+it.each(['content-refusal', 'content-filtered'])('blocks %s without automatic retry or investigation', category => {
+  expect(resolveFailedTaskDecision({ id: 'example-task', metadata: {} }, { category, actionable: false, message: 'Stopped' }))
+    .toMatchObject({ status: 'blocked', investigationAnalysis: null, metadataUpdates: { blockedCategory: category } });
+});

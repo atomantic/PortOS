@@ -32,3 +32,20 @@ it('does not present blocked publication as completed delivery', () => {
   expect(screen.getByText('Publication blocked; worktree preserved')).toBeInTheDocument();
   expect(screen.queryByText('Completed successfully')).not.toBeInTheDocument();
 });
+
+
+it('retains refusal and scanner interruption evidence alongside successful delivery and assessment', () => {
+  render(<AgentResultLine agent={{ result: { success: true, auditAssessment: { status: 'recorded' } }, metadata: {
+    executionInterruption: { category: 'content-refusal' },
+    securityScan: { status: 'time-limit', model: 'example-model', effort: 'low', auth: 'chatgpt',
+      estimatedCostUsd: null, maxCostUsd: 0, timeLimitSeconds: 600, exitCode: null,
+      artifacts: { findings: true, coverage: null } },
+  } }} />);
+  expect(screen.getByText('Execution completed')).toBeInTheDocument();
+  expect(screen.getByText('Assessment saved')).toBeInTheDocument();
+  expect(screen.getByText(/provider safety refusal; automatic retry stopped/)).toBeInTheDocument();
+  expect(screen.getByText('Security scanner (agent reported): time-limit')).toBeInTheDocument();
+  expect(screen.getByText(/Budget: \$0.00/)).toBeInTheDocument();
+  expect(screen.getByText(/Exit: unknown/)).toBeInTheDocument();
+  expect(screen.getByText(/findings: saved; coverage: unknown/)).toBeInTheDocument();
+});

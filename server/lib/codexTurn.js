@@ -248,7 +248,7 @@ const RATE_LIMIT_ERROR_INFO = new Set(['rateLimitExceeded', 'serverOverloaded'])
 const AUTH_ERROR_INFO = new Set(['unauthorized']);
 
 const errorInfoTag = (error) => {
-  const info = error?.codexErrorInfo;
+  const info = error?.codexErrorInfo ?? error?.codex_error_info;
   if (typeof info === 'string') return info;
   if (info && typeof info === 'object') return Object.keys(info)[0] ?? null;
   return null;
@@ -275,7 +275,7 @@ export const classifyCodexTurnError = (error) => {
   // than an ERROR_CATEGORIES member: an oversized prompt is REQUEST-specific, so
   // it must shrink and retry, never bench the subscription for every other call.
   if (tag === 'contextWindowExceeded') return { category: 'context-length', message };
-  if (tag === 'cyberPolicy' || tag === 'misalignmentPolicyViolation') {
+  if (['cyberPolicy', 'cyber_policy', 'misalignmentPolicyViolation', 'misalignment_policy_violation'].includes(tag)) {
     return { category: ERROR_CATEGORIES.CONTENT_REFUSAL, message };
   }
   if (tag === 'httpConnectionFailed' || tag === 'responseStreamConnectionFailed'

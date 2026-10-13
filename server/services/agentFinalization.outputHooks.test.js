@@ -1,3 +1,8 @@
+vi.mock('../lib/fileUtils.js', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, tryReadFile: vi.fn(actual.tryReadFile) };
+});
+import { tryReadFile } from '../lib/fileUtils.js';
 const deep = vi.hoisted(() => ({ checkpointDeepAudit: vi.fn(async () => ({ id: 'deep-1', complete: false, reason: 'Checkpoint partial' })), settleDeepAuditDelivery: vi.fn(async () => ({ id: 'deep-1', complete: false, reason: 'Checkpoint partial' })) }));
 vi.mock('./deepAudit.js', () => deep);
 vi.mock('../lib/gitCommitProbe.js', () => ({ committedDuringRun: vi.fn(async () => false) }));
@@ -117,6 +122,21 @@ describe('recovery output-hook dispatch (#3182)', () => {
     getTaskOutputHook.mockResolvedValue(hook);
   });
 
+  it('persists scanner limits independently of successful assessment delivery and completion replay', async () => {
+    const scanner = { version: 1, status: 'time-limit', model: 'example-model', effort: 'low', auth: 'chatgpt',
+      maxCostUsd: null, estimatedCostUsd: null, timeLimitSeconds: 600, exitCode: 130,
+      artifacts: { findings: true, coverage: false } };
+    const task = { ...TASK, metadata: { ...TASK.metadata, analysisType: 'security', prCompletion: 'draft' } };
+    persistedAgent.metadata.executionInterruption = { category: 'content-refusal', source: 'provider' };
+    tryReadFile.mockResolvedValueOnce(`Delivered a fix.\nSCANNER_STATUS_JSON: ${JSON.stringify(scanner)}`);
+    const args = { agentId: 'agent-scanner', task, success: true, workspacePath: '/worktree' };
+    await dispatchTaskOutputHookOnce(args);
+    expect(persistedAgent.metadata).toMatchObject({ securityScan: { ...scanner, source: 'agent-report' },
+      auditAssessment: { status: 'recorded' }, executionInterruption: { category: 'content-refusal' } });
+    await dispatchTaskOutputHookOnce(args);
+    expect(persistedAgent.metadata.securityScan.status).toBe('time-limit');
+  });
+
   it('captures audit telemetry on the shared completion path without waiving fix-mode delivery criteria', async () => {
     const task = { ...TASK, metadata: { ...TASK.metadata, analysisType: 'better-complexity' } };
     await expect(dispatchTaskOutputHookOnce({ agentId: 'agent-audit', task, success: true, workspacePath: '/worktree' }))
@@ -124,6 +144,20 @@ describe('recovery output-hook dispatch (#3182)', () => {
     expect(recordAuditQuality).toHaveBeenCalledWith({ task, taskType: 'better-complexity', agentId: 'agent-audit', success: true, workspacePath: '/worktree', assessedAt: persistedAgent.startedAt });
     expect(hook).not.toHaveBeenCalled();
     expect(updateAgent).toHaveBeenCalledWith('agent-audit', { metadata: { auditAssessment: { status: 'recorded' } } });
+  });
+
+  it('saves the assessment when scanner diagnostic persistence fails', async () => {
+    const scanner = { version: 1, status: 'time-limit', model: null, effort: null, auth: 'unknown',
+      maxCostUsd: null, estimatedCostUsd: null, timeLimitSeconds: 600, exitCode: null,
+      artifacts: { findings: null, coverage: null } };
+    const task = { ...TASK, metadata: { ...TASK.metadata, analysisType: 'security', prCompletion: 'draft' } };
+    tryReadFile.mockResolvedValueOnce(`SCANNER_STATUS_JSON: ${JSON.stringify(scanner)}`);
+    updateAgent.mockRejectedValueOnce(new Error('diagnostic storage unavailable'));
+    await expect(dispatchTaskOutputHookOnce({ agentId: 'agent-diagnostic-failure', task, success: true, workspacePath: '/worktree' }))
+      .resolves.toMatchObject({ auditAssessment: { status: 'recorded' } });
+    expect(recordAuditQuality).toHaveBeenCalledWith(expect.objectContaining({ task, success: true }));
+    expect(persistedAgent.metadata.auditAssessment).toEqual({ status: 'recorded' });
+    expect(emitLog).toHaveBeenCalledWith('warn', expect.stringContaining('Scanner diagnostics were not saved'), expect.any(Object));
   });
 
   // Landing the app's `.quality.json` PR is opt-in and runs outside the request
