@@ -887,6 +887,91 @@ describe('mounted host-control trailing slashes (#8950)', () => {
   });
 });
 
+// A remote caller who picks where PortOS sends audio, prompts or a stored
+// token can read them, answer with forged results, or 307 the request back to
+// PortOS's own loopback port, where it counts as a local operator. Picking a
+// store's host file path lets them rewrite any JSON file the host user owns.
+describe('outbound endpoint and host file settings authority', () => {
+  const buildApp = async (remoteAddress = '192.0.2.10') => {
+    const { authGate, hostControlRouteGate, hostControlBodyGate } = await import('./authGate.js');
+    const persist = vi.fn();
+    const ok = (req, res) => { persist(req.body); res.json({ saved: true }); };
+    const app = express();
+    app.use((req, res, next) => {
+      Object.defineProperty(req.socket, 'remoteAddress', { value: remoteAddress, configurable: true });
+      next();
+    });
+    app.use(authGate);
+    app.use(hostControlRouteGate);
+    app.use(express.json());
+    app.use(hostControlBodyGate);
+    app.put('/api/settings', ok);
+    app.patch('/api/settings/slice', ok);
+    app.put('/api/voice/config', ok);
+    app.put('/api/lmstudio/config', ok);
+    return { app, persist };
+  };
+  const attacker = 'http://attacker.example:7860';
+  const redirects = [
+    ['put', '/api/settings', { imageGen: { mode: 'external', external: { sdapiUrl: attacker } } }],
+    ['put', '/api/settings', { imageGen: { sdapiUrl: attacker } }],
+    ['patch', '/api/settings/slice', { slicePath: 'imageGen.external', partial: { sdapiUrl: attacker } }],
+    ['put', '/api/settings', { beeper: { baseUrl: attacker, allowNonLoopbackBaseUrl: true } }],
+    ['patch', '/api/settings/slice', { slicePath: 'beeper', partial: { baseUrl: attacker } }],
+    ['put', '/api/settings', { mortalloom: { enabled: true, path: '/example/target.json' } }],
+    ['put', '/api/voice/config', { stt: { endpoint: attacker } }],
+    ['put', '/api/lmstudio/config', { baseUrl: attacker }],
+  ];
+  const stored = {
+    imageGen: { mode: 'external', sdapiUrl: 'http://192.0.2.20:7860', external: { sdapiUrl: 'http://192.0.2.20:7860' } },
+    beeper: { enabled: true, baseUrl: 'http://localhost:23373', allowNonLoopbackBaseUrl: false },
+    mortalloom: { enabled: true, path: '/example/MortalLoom.json' },
+  };
+
+  it('refuses a remote password-free caller before any write', async () => {
+    mergeSettingsFile(stored);
+    const { app, persist } = await buildApp();
+    for (const [method, path, body] of redirects) {
+      const response = await request(app)[method](path).send(body);
+      expect(response.status, `${method} ${path}`).toBe(403);
+      expect(response.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+    }
+    expect(persist).not.toHaveBeenCalled();
+  });
+
+  it('keeps unchanged resends, clears and unrelated fields open to a remote caller', async () => {
+    mergeSettingsFile(stored);
+    const { app, persist } = await buildApp();
+    const open = [
+      ['put', '/api/settings', { imageGen: { ...stored.imageGen, external: { sdapiUrl: stored.imageGen.external.sdapiUrl, denoise: true } } }],
+      ['put', '/api/settings', { beeper: { ...stored.beeper, intervalMinutes: 30 } }],
+      ['put', '/api/settings', { mortalloom: { enabled: true, path: '' } }],
+      ['put', '/api/voice/config', { stt: { endpoint: 'http://127.0.0.1:5562', language: 'en' } }],
+    ];
+    for (const [method, path, body] of open) {
+      expect((await request(app)[method](path).send(body)).status, JSON.stringify(body)).toBe(200);
+    }
+    expect(persist).toHaveBeenCalledTimes(open.length);
+  });
+
+  it('preserves local and delegated agent operators', async () => {
+    mergeSettingsFile(stored);
+    const local = await buildApp('127.0.0.1');
+    for (const [method, path, body] of redirects) {
+      expect((await request(local.app)[method](path).send(body)).status, `${method} ${path}`).toBe(200);
+    }
+    await (await import('./auth.js')).setPassword({ newPassword: 'example-password' });
+    const { PORTOS_API_TOKEN: token } = await (await import('./agentApiAuth.js')).resolveAgentApiEnv();
+    expect(token).toBeTruthy();
+    const agent = await buildApp();
+    for (const [method, path, body] of redirects) {
+      expect((await request(agent.app)[method](path).set('Authorization', `Bearer ${token}`).send(body)).status, `${method} ${path}`).toBe(200);
+    }
+    expect(local.persist).toHaveBeenCalledTimes(redirects.length);
+    expect(agent.persist).toHaveBeenCalledTimes(redirects.length);
+  });
+});
+
 describe('outbound mail dispatch authority (#11273)', () => {
   let mailDependencies;
 
