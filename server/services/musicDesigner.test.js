@@ -185,6 +185,35 @@ describe('writeLyrics', () => {
   });
 });
 
+// Service callers include autonomous media work: they must obey the same
+// preservation and refusal contract without relying on an HTTP validator.
+describe('designer service input boundaries', () => {
+  it('refuses missing, blank, and oversized inputs before provider resolution', async () => {
+    await expect(describeMusic({ concept: '  ' })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+    await expect(writeLyrics({ description: 'x', request: 'x'.repeat(4001) })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+    await expect(reviewLyrics({ lyrics: 'x'.repeat(20001) })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+    expect(resolveProviderAndModel).not.toHaveBeenCalled();
+    expect(ai.runPromptThroughProvider).not.toHaveBeenCalled();
+  });
+
+  it('preserves review draft, description, guidance and request in the sent blocks', async () => {
+    const lyrics = '  [verse]\nPaper moons\n  ';
+    const description = '  Soft piano\n ';
+    const guidance = '  Keep the ending\n ';
+    const request = '  Sing of paper moons\n ';
+    await reviewLyrics({ lyrics, description, guidance, request });
+    expect(lastRunArgs().prompt).toContain(`:\n${request}\n\nMUSICAL DESCRIPTION:\n${description}\n\nADDITIONAL GUIDANCE FROM THE USER:\n${guidance}\n\nDRAFT LYRICS:\n${lyrics}`);
+  });
+
+  it('rejects an oversized revision or critique rather than cutting it', async () => {
+    ai.runPromptThroughProvider.mockResolvedValueOnce({ text: 'x'.repeat(20001) + '\n---\nA note.' });
+    await expect(reviewLyrics({ lyrics: '[verse]\nPaper moons' })).rejects.toMatchObject({ code: 'LLM_OUTPUT_TOO_LONG', context: { count: 20001, limit: 20000 } });
+    ai.runPromptThroughProvider.mockResolvedValueOnce({ text: '[verse]\nPaper moons\n---\n' + 'x'.repeat(4001) });
+    await expect(reviewLyrics({ lyrics: '[verse]\nPaper moons' })).rejects.toMatchObject({ code: 'LLM_OUTPUT_TOO_LONG', context: { count: 4001, limit: 4000 } });
+    expect(ai.runPromptThroughProvider).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('reviewLyrics', () => {
   const DRAFT = '[verse]\nrain on the glass\n[chorus]\nhold on';
 

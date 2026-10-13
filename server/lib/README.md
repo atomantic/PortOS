@@ -900,3 +900,5 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `deepAudit.js` | Strict Deep audit checkpoint schema, scope invalidation, server-assigned passes and mechanical completion rules. |
 
 - `auditWorkflow.js`: versioned extended Deep execution and historical certification classification.
+
+| `musicDesignerValidation.js` | Non-transforming authored input schemas and character limits for Music Designer composition and routes. |

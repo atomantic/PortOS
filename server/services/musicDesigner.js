@@ -25,19 +25,25 @@
  * press in the same request (AI Provider Usage Policy — no cold bootstrap).
  */
 
-import { ServerError } from '../lib/errorHandler.js';
+import { ServerError, failValidation } from '../lib/errorHandler.js';
 import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from './promptRunner.js';
-import { trimTo } from '../lib/textUtils.js';
+import { isNonBlankStr } from '../lib/textUtils.js';
+import { musicDescribeInputSchema, musicLyricsInputSchema, musicLyricsReviewInputSchema, MUSIC_DESIGNER_GUIDANCE_MAX } from '../lib/musicDesignerValidation.js';
+import { PROMPT_MAX, LYRICS_MAX } from '../lib/trackLimits.js';
 import { CREATIVE_LATITUDE_ADDITION, withCreativeLatitude } from '../lib/creativeLatitude.js';
 import { promptAddition } from '../lib/modelInput.js';
 
+// Service callers also compose directly, so route validation alone is not enough.
+const validateInput = (schema, input) => {
+  const parsed = schema.safeParse(input);
+  if (!parsed.success) failValidation(parsed);
+  return parsed.data;
+};
+
 // Caps mirror the Generate form's own field limits so a designer round-trip
 // can't produce text the generate route would then reject.
-const MAX_CONCEPT = 8000;
-const MAX_GUIDANCE = 4000;
-const MAX_TEMPLATE = 8000;
-const MAX_DESCRIPTION = 8000;
-const MAX_LYRICS = 20000;
+const MAX_DESCRIPTION = PROMPT_MAX;
+const MAX_LYRICS = LYRICS_MAX;
 
 // Caption shape follows MiniMax Music 3's official music-caption-rewriter
 // contract. Keep it model-neutral enough to remain useful for ACE-Step and the
@@ -60,7 +66,7 @@ export const DEFAULT_LYRICS_TEMPLATE = [
 ].join(' ');
 
 const DESCRIBE_OUTPUT_CONTRACT = [
-  'Return ONLY the structured caption as plain text, normally 250–450 English words.',
+  `Return ONLY the structured caption as plain text, normally 250–450 English words, never more than ${MAX_DESCRIPTION} characters including whitespace.`,
   'Use exactly these three top-level headings in this order, each alone on its own line and without markdown markers:',
   'Global Metadata',
   'Cover basic attributes (genre, tempo, meter/groove, and only deliberate key/scale details), the global emotional progression, application imagery, and the sonic/production profile.',
@@ -74,18 +80,19 @@ const DESCRIBE_OUTPUT_CONTRACT = [
 // A blank/whitespace override means "use the shipped default" — the UI clears
 // the field to reset, and an empty instruction block would otherwise leave the
 // provider with nothing but the raw concept text.
-const pickTemplate = (template, fallback) => trimTo(template, MAX_TEMPLATE) || fallback;
+const pickTemplate = (template, fallback) => isNonBlankStr(template) ? template : fallback;
 
 // The output instruction lives OUTSIDE the overridable template on purpose: a
 // user editing the meta-prompt is tuning the creative brief, not the wire
 // format, and a fenced/preambled response would land verbatim in the textarea.
 const section = (label, body) => (body ? `\n\n${label}:\n${body}` : '');
 
-export function buildDescribePrompt({ concept, guidance, template } = {}) {
+export function buildDescribePrompt(input = {}) {
+  const { concept, guidance, template } = validateInput(musicDescribeInputSchema, input);
   return [
     pickTemplate(template, DEFAULT_DESCRIBE_TEMPLATE),
-    section('MUSICAL REFERENCE / VIBE', trimTo(concept, MAX_CONCEPT) || '(none given)'),
-    section('ADDITIONAL GUIDANCE FROM THE USER', trimTo(guidance, MAX_GUIDANCE)),
+    section('MUSICAL REFERENCE / VIBE', concept),
+    section('ADDITIONAL GUIDANCE FROM THE USER', guidance),
     `\n\n${DESCRIBE_OUTPUT_CONTRACT}`,
   ].join('');
 }
@@ -106,14 +113,15 @@ const lengthContract = (targetSeconds) => {
 // phrase, subject and imagery the user asked for never reach the lyricist.
 const SONG_REQUEST_LABEL = 'SONG REQUEST (what the lyrics must deliver: honour every hook phrase, subject and image it names; ignore its purely musical or production details such as genre, tempo, instruments or artist names, which the musical description owns and which never belong in a lyric line)';
 
-const LYRICS_OUTPUT_CONTRACT = 'Return ONLY the lyrics with their section tags. No preamble, no commentary, no markdown fence.';
+const LYRICS_OUTPUT_CONTRACT = `Return ONLY the lyrics with their section tags, never more than ${MAX_LYRICS} characters including whitespace. No preamble, no commentary, no markdown fence.`;
 
-export function buildLyricsPrompt({ description, guidance, request, template, targetSeconds } = {}) {
+export function buildLyricsPrompt(input = {}) {
+  const { description, guidance, request, template, targetSeconds } = validateInput(musicLyricsInputSchema, input);
   return [
     pickTemplate(template, DEFAULT_LYRICS_TEMPLATE),
-    section(SONG_REQUEST_LABEL, trimTo(request, MAX_GUIDANCE)),
-    section('MUSICAL DESCRIPTION', trimTo(description, MAX_DESCRIPTION) || '(none given)'),
-    section('ADDITIONAL GUIDANCE FROM THE USER', trimTo(guidance, MAX_GUIDANCE)),
+    section(SONG_REQUEST_LABEL, request),
+    section('MUSICAL DESCRIPTION', description || '(none given)'),
+    section('ADDITIONAL GUIDANCE FROM THE USER', guidance),
     lengthContract(targetSeconds),
     `\n\n${LYRICS_OUTPUT_CONTRACT}`,
   ].join('');
@@ -124,7 +132,7 @@ export function buildLyricsPrompt({ description, guidance, request, template, ta
 // default is listed as an addition.
 const designerAdditions = ({ template, defaultTemplate, instructionsLabel, extra }) => [
   CREATIVE_LATITUDE_ADDITION,
-  trimTo(template, MAX_TEMPLATE) ? null : promptAddition('designer-instructions', instructionsLabel, defaultTemplate),
+  isNonBlankStr(template) ? null : promptAddition('designer-instructions', instructionsLabel, defaultTemplate),
   ...extra,
 ].filter(Boolean);
 
@@ -141,20 +149,21 @@ const LYRICS_REVIEW_INSTRUCTIONS = [
 // Only with a request, so a review without one (Music Studio) keeps its original prompt.
 const LYRICS_REVIEW_REQUEST_CHECK = ' Exception: check the draft against the SONG REQUEST first. Any hook phrase, title phrase or required image it names that the draft lacks must appear in the revision (a named hook belongs in the chorus), and your notes must say what was missing.';
 const LYRICS_REVIEW_OUTPUT_CONTRACT = [
-  'Return the complete revised lyric sheet first, with its section tags.',
+  `Return the complete revised lyric sheet first, with its section tags, never more than ${MAX_LYRICS} characters including whitespace.`,
   `Then a line containing only ${LYRICS_REVIEW_SEPARATOR}`,
-  'Then two to four short sentences of notes: what was weak in the draft and what you changed.',
+  `Then two to four short sentences of notes: what was weak in the draft and what you changed. Keep notes within ${MUSIC_DESIGNER_GUIDANCE_MAX} characters.`,
   'No preamble, no other commentary, no markdown fence.',
 ].join('\n');
 
-function buildLyricsReviewPrompt({ lyrics, description, guidance, request } = {}) {
+function buildLyricsReviewPrompt(input = {}) {
+  const { lyrics, description, guidance, request } = validateInput(musicLyricsReviewInputSchema, input);
   return [
     LYRICS_REVIEW_INSTRUCTIONS,
-    trimTo(request, MAX_GUIDANCE) ? LYRICS_REVIEW_REQUEST_CHECK : '',
-    section(SONG_REQUEST_LABEL, trimTo(request, MAX_GUIDANCE)),
-    section('MUSICAL DESCRIPTION', trimTo(description, MAX_DESCRIPTION) || '(none given)'),
-    section('ADDITIONAL GUIDANCE FROM THE USER', trimTo(guidance, MAX_GUIDANCE)),
-    section('DRAFT LYRICS', trimTo(lyrics, MAX_LYRICS)),
+    request ? LYRICS_REVIEW_REQUEST_CHECK : '',
+    section(SONG_REQUEST_LABEL, request),
+    section('MUSICAL DESCRIPTION', description || '(none given)'),
+    section('ADDITIONAL GUIDANCE FROM THE USER', guidance),
+    section('DRAFT LYRICS', lyrics),
     `\n\n${LYRICS_REVIEW_OUTPUT_CONTRACT}`,
   ].join('');
 }
@@ -181,6 +190,16 @@ function unfence(text) {
   return match ? match[1] : (text || '');
 }
 
+// Never turn an invalid provider result into a shorter, apparently valid draft.
+function validateGeneratedText(text, field, limit) {
+  if (text.length > limit) {
+    throw new ServerError(`The AI returned ${field} with ${text.length} characters; limit is ${limit}. Revise the instructions or choose another model.`, {
+      status: 502, code: 'LLM_OUTPUT_TOO_LONG', context: { field, count: text.length, limit },
+    });
+  }
+  return text;
+}
+
 /**
  * Expand a short reference/vibe into a rich musical description.
  *
@@ -194,11 +213,10 @@ function unfence(text) {
  * @returns {Promise<{ description: string, llm: { provider: string, model: string|null } }>}
  */
 export async function describeMusic({ concept, guidance, template, providerId, model, effort } = {}) {
+  const prompt = withCreativeLatitude(buildDescribePrompt({ concept, guidance, template }));
   const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
   assertProvider(provider, { message: 'No AI provider available to describe the music', code: 'NO_PROVIDER' });
 
-  // Stamped here (idempotent) so the response carries the exact text sent.
-  const prompt = withCreativeLatitude(buildDescribePrompt({ concept, guidance, template }));
   const promptAdditions = designerAdditions({
     template, defaultTemplate: DEFAULT_DESCRIBE_TEMPLATE, instructionsLabel: 'Describe instructions',
     extra: [promptAddition('caption-format', 'Caption format', DESCRIBE_OUTPUT_CONTRACT)],
@@ -207,7 +225,7 @@ export async function describeMusic({ concept, guidance, template, providerId, m
     provider, model: selectedModel, effort, prompt, source: 'music-describe',
   });
 
-  const description = trimTo(unfence(text), MAX_DESCRIPTION);
+  const description = validateGeneratedText(unfence(text), 'description', MAX_DESCRIPTION).trim();
   if (!description) {
     throw new ServerError('The AI returned an empty description. Try rerunning or picking a stronger model.', { status: 502, code: 'LLM_EMPTY' });
   }
@@ -230,14 +248,14 @@ export async function describeMusic({ concept, guidance, template, providerId, m
  * @returns {Promise<{ lyrics: string, llm: { provider: string, model: string|null } }>}
  */
 export async function writeLyrics({ description, guidance, request, template, targetSeconds, providerId, model, effort } = {}) {
+  const prompt = withCreativeLatitude(buildLyricsPrompt({ description, guidance, request, template, targetSeconds }));
   const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
   assertProvider(provider, { message: 'No AI provider available to write lyrics', code: 'NO_PROVIDER' });
 
-  const prompt = withCreativeLatitude(buildLyricsPrompt({ description, guidance, request, template, targetSeconds }));
   const promptAdditions = designerAdditions({
     template, defaultTemplate: DEFAULT_LYRICS_TEMPLATE, instructionsLabel: 'Lyrics instructions',
     extra: [
-      promptAddition('song-request', 'Song request', trimTo(request, MAX_GUIDANCE) && `${SONG_REQUEST_LABEL}:\n${trimTo(request, MAX_GUIDANCE)}`),
+      promptAddition('song-request', 'Song request', request && `${SONG_REQUEST_LABEL}:\n${request}`),
       promptAddition('target-length', 'Target length', lengthContract(targetSeconds)),
       promptAddition('lyrics-format', 'Lyrics format', LYRICS_OUTPUT_CONTRACT),
     ],
@@ -246,7 +264,7 @@ export async function writeLyrics({ description, guidance, request, template, ta
     provider, model: selectedModel, effort, prompt, source: 'music-lyrics',
   });
 
-  const lyrics = trimTo(unfence(text), MAX_LYRICS);
+  const lyrics = validateGeneratedText(unfence(text), 'lyrics', MAX_LYRICS).trim();
   if (!lyrics) {
     throw new ServerError('The AI returned empty lyrics. Try rerunning or picking a stronger model.', { status: 502, code: 'LLM_EMPTY' });
   }
@@ -268,23 +286,20 @@ export async function writeLyrics({ description, guidance, request, template, ta
  * @returns {Promise<{ lyrics: string, notes: string, llm: { provider: string, model: string|null } }>}
  */
 export async function reviewLyrics({ lyrics, description, guidance, request, providerId, model, effort } = {}) {
-  if (!trimTo(lyrics, MAX_LYRICS)) {
-    throw new ServerError('There are no lyrics to review.', { status: 400, code: 'VALIDATION_ERROR' });
-  }
+  const prompt = buildLyricsReviewPrompt({ lyrics, description, guidance, request });
   const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
   assertProvider(provider, { message: 'No AI provider available to review lyrics', code: 'NO_PROVIDER' });
 
-  const prompt = buildLyricsReviewPrompt({ lyrics, description, guidance, request });
   const { text, model: ranModel } = await runPromptThroughProvider({
     provider, model: selectedModel, effort, prompt, source: 'music-lyrics-review',
   });
 
   const parsed = parseLyricsReview(text);
-  const revised = trimTo(parsed.lyrics, MAX_LYRICS);
+  const revised = validateGeneratedText(parsed.lyrics, 'revised lyrics', MAX_LYRICS);
   if (!revised) {
     throw new ServerError('The AI returned empty revised lyrics. Try rerunning or picking a stronger model.', { status: 502, code: 'LLM_EMPTY' });
   }
-  const notes = trimTo(parsed.notes, MAX_GUIDANCE);
+  const notes = validateGeneratedText(parsed.notes, 'review notes', MUSIC_DESIGNER_GUIDANCE_MAX);
   console.log(`🎤 Reviewed lyrics via ${provider.id}/${ranModel || 'default'} (${revised.length} chars${notes ? ', with notes' : ''})`);
   return { lyrics: revised, notes, llm: { provider: provider.id, model: ranModel || null } };
 }

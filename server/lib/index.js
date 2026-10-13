@@ -884,3 +884,5 @@ export * from './musicVideoTransitions.js';
 export * from './musicVideoImageEffects.js';
 
 export * from './securityScanEvidence.js';
+
+export * from './musicDesignerValidation.js';

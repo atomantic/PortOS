@@ -315,6 +315,14 @@ describe('tracks routes', () => {
     expect(tracks.updateTrack).toHaveBeenCalledWith('track-1', { prompt: 'warm folk' });
   });
 
+  it('PATCH /:id preserves authored designer text before persistence', async () => {
+    tracks.getTrack.mockResolvedValue({ id: 'track-1', title: 'Fictional draft' });
+    const patch = { concept: '  Paper moons\n ', prompt: ' \nSoft piano\t ', lyrics: '  [verse]\nPaper moons\n  ' };
+    const response = await request(app).patch('/api/tracks/track-1').send(patch);
+    expect(response.status).toBe(200);
+    expect(tracks.updateTrack).toHaveBeenCalledWith('track-1', patch);
+  });
+
   it('PATCH /:id accepts a saved music-designer concept', async () => {
     tracks.getTrack.mockResolvedValue({ id: 'track-1', title: 'Intro' });
     const r = await request(app).patch('/api/tracks/track-1').send({ concept: 'A dusk-time pulse' });
