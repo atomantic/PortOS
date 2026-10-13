@@ -698,6 +698,8 @@ describe('buildLightContextPrompt', () => {
       expect(prompt.systemPrompt).toContain('## Completion (No Code Output)');
       expect(prompt.systemPrompt).toContain('## Required audit assessment handoff');
       expect(prompt.systemPrompt).toContain('QUALITY_AUDIT_JSON');
+      expect(prompt.systemPrompt).toContain('SCANNER_STATUS_JSON');
+      expect(prompt.systemPrompt).toContain('refusal is terminal for this request');
     });
 
     it.each([

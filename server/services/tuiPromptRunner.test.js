@@ -1241,6 +1241,32 @@ describe('executeTuiRun', () => {
       }));
     });
 
+    it('stops a Codex policy refusal even when a response file is already available', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+      const runId = 'run-refusal';
+      const provider = { id: 'codex', type: 'tui', command: 'codex', tuiPromptDelayMs: 50 };
+      const onComplete = vi.fn();
+      const promise = executeTuiRun({ runId, provider, prompt: 'a prompt long enough to submit',
+        workspacePath: TEST_WORKSPACE, onComplete, timeout: 60000 });
+      await flushAsync();
+      const pty = ptyInstances[0];
+      pty.emitData('› Ask Codex to do anything\n? for shortcuts');
+      await vi.advanceTimersByTimeAsync(6000);
+      responseFiles.set(resolve(runsTmpDirRef.current, runId, 'tui-response.txt'), 'partial response');
+      pty.emitData('Ordinary output');
+      pty.emitData('\x1b[12;1H');
+      pty.emitData('ⓘ This content can’t be shown');
+      await promise;
+      expect(pty.kill).toHaveBeenCalled();
+      expect(runnerMocks.finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({
+        success: false, extras: expect.objectContaining({ completionReason: 'content-refusal',
+          errorAnalysis: expect.objectContaining({ category: 'content-refusal' }),
+          executionInterruption: { category: 'content-refusal', source: 'provider' },
+        }),
+      }));
+      expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
+    });
+
     it('early-fails with reason "fallback-signal" when Claude switches to extra usage', async () => {
       const provider = { id: 'claude', type: 'tui', command: 'claude' };
       const onComplete = vi.fn();

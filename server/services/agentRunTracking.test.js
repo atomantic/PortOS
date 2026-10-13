@@ -215,6 +215,21 @@ describe('completeAgentRun lifecycle ledger', () => {
     }));
   });
 
+  it('keeps a policy interruption independent of exit code and commit rescue', async () => {
+    vi.resetModules();
+    const atomicWrite = vi.fn();
+    vi.doMock('../lib/fileUtils.js', async importOriginal => ({ ...(await importOriginal()), atomicWrite,
+      readJSONFile: vi.fn().mockResolvedValue({ id: 'run-refused', endTime: null, agentId: 'agent-example',
+        taskId: 'task-example', workspacePath: '/example/repo', startTime: '2026-01-01T00:00:00Z' }),
+    }));
+    const { completeAgentRun } = await import('./agentRunTracking.js');
+    await completeAgentRun('run-refused', 'Partial work', 0, 100, { category: 'content-refusal', message: 'Stopped' });
+    expect(atomicWrite).toHaveBeenCalledWith(expect.stringContaining('metadata.json'), expect.objectContaining({
+      success: false, exitCode: 0, errorCategory: 'content-refusal',
+      executionInterruption: expect.objectContaining({ category: 'content-refusal', source: 'provider' }),
+    }));
+  });
+
   it('appends nothing for a run that was already closed', async () => {
     vi.resetModules();
     appendRunEvent.mockClear();

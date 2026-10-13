@@ -881,3 +881,5 @@ export * from './auditWorkflow.js';
 
 export * from './musicVideoTransitions.js';
 export * from './musicVideoImageEffects.js';
+
+export * from './securityScanEvidence.js';

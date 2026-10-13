@@ -17,11 +17,8 @@ export const ERROR_CATEGORIES = {
   // An explicitly shortened caller spending cap, not provider health.
   RUNTIME_BUDGET_EXHAUSTED: 'runtime-budget-exhausted',
   QUOTA_EXCEEDED: 'quota-exceeded',
-  // A frontier model declined the prompt on content/safety grounds. NOT a
-  // provider fault — the provider is healthy and other prompts still work, so
-  // this must not bench the provider or spawn an investigation task. We do try
-  // a fallback (a local model often doesn't refuse) and tell the UI what
-  // happened. See server/index.js#onRunFailed + autoFixer.handleAIProviderError.
+  // A model safety refusal is terminal for this request. Never retry it or
+  // switch providers; it says nothing about provider health.
   CONTENT_REFUSAL: 'content-refusal',
   // A LOCAL inference runtime ran out of accelerator memory mid-request (Metal
   // on Apple silicon, CUDA elsewhere). Distinct from QUOTA_EXCEEDED (money) and
@@ -61,6 +58,39 @@ export const isRuntimeBudgetError = (err) => (
   || err?.errorAnalysis?.category === ERROR_CATEGORIES.RUNTIME_BUDGET_EXHAUSTED
 );
 
+// Provider error vocabulary, shared by streaming chrome and terminal analysis.
+const CONTENT_REFUSAL_PATTERN = /limited access to this content for safety|may be used to benefit or to harm|content[_ ]policy[_ ]violation|stop_reason["']?\s*:\s*["']?refusal|"type"\s*:\s*"refusal"|"codex(?:_error_info|ErrorInfo)"\s*:\s*"(?:cyber_policy|cyberPolicy|misalignment_policy_violation|misalignmentPolicyViolation)"|This\s*content\s*(?:was\s*flagged\s*for\s*possible\s*cybersecurity\s*risk|can[’']t\s*be\s*shown)/i;
+
+export const isContentRefusalError = (err) => (
+  err?.errorAnalysis?.category === ERROR_CATEGORIES.CONTENT_REFUSAL
+  || err?.context?.category === ERROR_CATEGORIES.CONTENT_REFUSAL
+  || CONTENT_REFUSAL_PATTERN.test(err?.message || '')
+);
+
+/** A bounded Codex chrome detector; ordinary mentions/quoted JSON are not chrome. */
+export function createContentRefusalDetector() {
+  let buffer = '';
+  let truncated = false;
+  return (chunk) => {
+    const next = `${buffer}${String(chunk || '')}`;
+    if (next.length > 4096) truncated = true;
+    buffer = next.slice(-4096);
+    // Keep cursor moves to column 1 as row boundaries before removing styles.
+    // Flattening the PTY first loses the distinction between chrome and quoted
+    // text. Buffer raw bytes so a split escape sequence remains parseable.
+    const screen = buffer.replace(/\x1b\[\d+;1H/g, '\n').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
+    const bounded = truncated ? `x${screen}` : screen;
+    if (!/^[ \t]*ⓘ\s*This\s*content\s*can[’']t\s*be\s*shown/im.test(bounded)) return null;
+    return {
+      hasError: true, category: ERROR_CATEGORIES.CONTENT_REFUSAL,
+      message: 'Codex stopped this request on cybersecurity/content policy grounds.',
+      requiresFallback: false, actionable: false, permanent: true,
+      origin: 'provider',
+      suggestedFix: 'Review the refusal. Automatic continuation, retries and provider fallback are disabled.',
+    };
+  };
+}
+
 // A LOCAL inference runtime that ran out of accelerator memory mid-request.
 //
 // Observed shape (MTPLX/MLX behind an OpenAI-compatible server, rendered inside
@@ -99,11 +129,11 @@ const ERROR_PATTERNS = [
     // Anthropic surfaces a `refusal` stop reason. Matched FIRST so a refusal is
     // never misclassified as an auth/unknown failure that would bench the
     // provider and queue a CoS investigation task.
-    pattern: /limited access to this content for safety|may be used to benefit or to harm|content[_ ]policy[_ ]violation|stop_reason["']?\s*:\s*["']?refusal|"type"\s*:\s*"refusal"/i,
+    pattern: CONTENT_REFUSAL_PATTERN,
     category: ERROR_CATEGORIES.CONTENT_REFUSAL,
-    requiresFallback: true,
+    requiresFallback: false,
     actionable: false,
-    suggestedFix: 'Model declined the prompt on content/safety grounds — retrying with a fallback model.'
+    suggestedFix: 'Stopped after a content/safety refusal. Review the refusal; no automatic retry or provider fallback.'
   },
   {
     // A local inference server (MTPLX/MLX, vLLM, llama.cpp, Ollama) whose device

@@ -97,6 +97,7 @@ export const LIFECYCLE_LINES = Object.freeze({
   startupDialogAnswered: lifecycleLine`📟 ${'message'} for session ${'session'}`,
   handshakeResubmitted: lifecycleLine`🔁 Provider handshake still open — re-submitted the prompt (attempt ${'attempt'})`,
   // Provider signals
+  contentRefused: lifecycleLine`🛑 Provider refused this request on content/safety grounds — stopped without automatic continuation, retry or fallback.`,
   providerFallbackSignal: lifecycleLine`⚡ Provider fallback signal: ${'message'}`,
   providerSignalHolding: lifecycleLine`⏳ Provider signal (self-clearing): ${'message'} — holding the session up to ${'seconds'}s for it to clear`,
   providerSignalCleared: lifecycleLine`✅ Provider signal cleared — ${'command'} is generating again; continuing the run`,

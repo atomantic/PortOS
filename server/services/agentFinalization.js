@@ -1155,7 +1155,14 @@ export function dispatchRecoveredTaskOutputHook({ agentId, task, success, worksp
  */
 export async function retireDeadAgent({ agent, task, success, exitCode, duration, errorMessage, category, agentResultExtra = {} }) {
   const isPrivateSecurity = isPrivateSecurityTask(task) || isPrivateSecurityTask(agent);
-  const effectiveSuccess = isPrivateSecurity ? false : success;
+  const interruption = agent.metadata?.executionInterruption;
+  const refused = ['content-refusal', 'content-filtered'].includes(interruption?.category);
+  const effectiveSuccess = isPrivateSecurity || refused ? false : success;
+  const errorAnalysis = refused ? {
+    category: interruption.category, origin: interruption.source || 'provider',
+    message: 'Provider safety refusal; automatic continuation, retries and provider fallback are disabled.',
+    permanent: true, actionable: false, requiresFallback: false,
+  } : { message: errorMessage, category };
 
   await dispatchRecoveredTaskOutputHook({
     agentId: agent.id,
@@ -1183,7 +1190,7 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
       isPrivateSecurity ? 'Private security assessment interrupted; inspect its local assessment archive.' : output,
       exitCode,
       duration,
-      { message: errorMessage, category },
+      errorAnalysis,
     );
   }
 
@@ -1194,6 +1201,7 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
     orphaned: true,
     error: errorMessage,
     ...agentResultExtra,
+    ...(refused ? { success: false, error: errorAnalysis.message, errorAnalysis, executionInterruption: interruption } : {}),
   });
 
   return { success: effectiveSuccess };
@@ -1319,6 +1327,7 @@ export async function finalizeAgent({
   outputBuffer,
   finalSummary = null,
   errorAnalysis: reportedErrorAnalysis,
+  executionInterruption = null,
   terminatedByUser = false,
   error,
   completionReason,
@@ -1326,6 +1335,14 @@ export async function finalizeAgent({
   prExpected = false,
   startedAt = null,
 }) {
+  if (['content-refusal', 'content-filtered'].includes(reportedErrorAnalysis?.category)) {
+    executionInterruption ||= { category: reportedErrorAnalysis.category, source: reportedErrorAnalysis.origin || 'provider' };
+    reportedSuccess = false;
+  }
+  if (executionInterruption) {
+    await updateAgent(agentId, { metadata: { executionInterruption } })
+      .catch(err => emitLog('warn', `Could not persist execution interruption for ${agentId}: ${err.message}`, { agentId }));
+  }
   // The run window the commit criterion is evaluated against (#3637). Callers
   // that don't track their own start timestamp still know how long the run took,
   // and `duration` is measured from the same instant, so derive it — a missing
@@ -1672,6 +1689,7 @@ export async function finalizeAgent({
     duration,
     outputLength: outputBuffer?.length ?? 0,
     errorAnalysis: verdict.errorAnalysis,
+    ...(executionInterruption ? { executionInterruption } : {}),
     // Recorded whatever the verdict — a `ship` is the evidence that the gate ran
     // and cleared the run, which is what makes a run with no `goalFidelity` block
     // legible as "never judged" rather than "judged fine".
@@ -1970,6 +1988,19 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, a
       workspacePath: hookPayloadDir({ task, workspacePath, recovery }) }) : null;
   if (!taskType) return { ran: false, ...(deepAudit ? { deepAudit } : {}) };
   if (isAuditTaskType(taskType)) {
+    if (taskType === 'security') {
+      const { parseSecurityScanEvidence } = await import('../lib/securityScanEvidence.js');
+      const { doneSentinelPath, parseSentinelPayload } = await import('../lib/agentSentinel.js');
+      const cwd = hookPayloadDir({ task, workspacePath, recovery });
+      const path = doneSentinelPath(cwd, agentId);
+      const summary = path ? parseSentinelPayload(await tryReadFile(path)).summary : null;
+      const evidence = parseSecurityScanEvidence(summary);
+      // Record even on failed delivery; absence must not erase earlier evidence
+      // during completion replay. This stays in the machine-local agent record.
+      if (evidence) await updateAgent(agentId, { metadata: { securityScan: evidence } }).catch(err => {
+        emitLog('warn', `⚠️ Scanner diagnostics were not saved for ${agentId}: ${err.message}`, { agentId });
+      });
+    }
     const { recordAuditQuality } = await import('./appQuality.js');
     const auditAssessment = await recordAuditQuality({ task, taskType, agentId, success, assessedAt,
       ...(isLegacyDeepAudit(task.metadata) ? { deepDiscoveryComplete: deepAudit?.discoveryComplete === true } : {}),

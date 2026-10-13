@@ -14,6 +14,12 @@ describe('resolveAgentFinalVerdict', () => {
     reportedSuccess: true, errorAnalysis: null, error: undefined, completionReason: undefined, prEvidence: PR_OK, ...overrides,
   });
 
+  it('keeps refusal terminal even when delivery and output checks disagree', () => {
+    const errorAnalysis = { category: 'content-refusal', message: 'Stopped' };
+    expect(resolve({ errorAnalysis, prEvidence: PR_MISSING, hookResult: rejected({ permanent: true }) }))
+      .toMatchObject({ source: 'reported', success: false, errorAnalysis, completionReason: 'content-refusal' });
+  });
+
   it('applies drift ahead of a missing PR, and only to an otherwise-successful run', () => {
     expect(resolve({ drift: DRIFT, prEvidence: PR_MISSING })).toMatchObject({ source: 'drift', success: false, error: 'Primary moved' });
     expect(resolve({ reportedSuccess: false, errorAnalysis: { category: 'unknown' }, drift: DRIFT }).source).toBe('reported');

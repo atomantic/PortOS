@@ -44,6 +44,7 @@ import { ensureDir, PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { createStreamingAnsiStripper, stripAnsi } from '../lib/ansiStrip.js';
 import {
   createClaudeSessionLimitBannerDetector,
+  createContentRefusalDetector,
   createImmediateFallbackSignalDetector,
   createTerminalModelErrorDetector,
   createTerminalRequestTimeoutDetector,
@@ -415,6 +416,7 @@ ${prompt}`;
   let firstResponseAt = null;
   let finalized = false;
   const detectImmediateFallbackSignal = createImmediateFallbackSignalDetector();
+  const detectContentRefusal = createContentRefusalDetector();
   const detectClaudeSessionLimitBanner = createClaudeSessionLimitBannerDetector();
   const mayUseClaudeLowPriority = provider.type === 'tui'
     && provider.lowPriorityOnUsageLimit === true
@@ -510,7 +512,7 @@ ${prompt}`;
   };
 
   return new Promise((resolve) => {
-    const finish = async ({ success, exitCode = 0, error = null, reason = 'completed', canceled = false }) => {
+    const finish = async ({ success, exitCode = 0, error = null, reason = 'completed', canceled = false, errorAnalysis = null }) => {
       if (finalized) return;
       finalized = true;
       // Tracks whether the normal-path onComplete was reached, so the catch
@@ -556,6 +558,7 @@ ${prompt}`;
           reportFailure,
           extras: {
             completionReason: reason,
+            ...(errorAnalysis ? { errorAnalysis, executionInterruption: { category: errorAnalysis.category, source: 'provider' } } : {}),
             usedResponseFile,
             outputTruncated: outputBufferTruncated,
             ...(canceled ? { canceled: true } : {}),
@@ -566,6 +569,7 @@ ${prompt}`;
           return {
             exitCode, success, error: error || err.message,
             duration: Date.now() - startTime, completionReason: reason,
+            ...(errorAnalysis ? { errorAnalysis } : {}),
             ...(canceled ? { canceled: true } : {}),
           };
         });
@@ -598,6 +602,7 @@ ${prompt}`;
             onComplete?.({
               runId, success: false, exitCode, error: `finish() failed: ${err?.message || err}`,
               duration: Date.now() - startTime, completionReason: reason,
+              ...(errorAnalysis ? { errorAnalysis } : {}),
               ...(canceled ? { canceled: true } : {}),
             });
           } catch (cbErr) {
@@ -649,6 +654,13 @@ ${prompt}`;
       if (rawBuffer.length > RAW_BUFFER_HEADROOM) rawBuffer = rawBuffer.slice(-RAW_BUFFER_CAP);
 
       const stripped = streamingStrip(text);
+      const refusal = isCodexCommand(command) && promptSubmittedAt ? detectContentRefusal(text) : null;
+      if (refusal) {
+        void finish({ success: false, exitCode: 1, error: refusal.message,
+          reason: 'content-refusal', errorAnalysis: refusal });
+        return;
+      }
+
       // The readiness tracker needs both streams: bracketed-paste transitions
       // survive only in raw output, while startup dialog text is ANSI-stripped.
       inputReady.observe(text, stripped);
