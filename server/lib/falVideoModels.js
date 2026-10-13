@@ -26,7 +26,7 @@
  */
 
 /** Date the schemas and prices below were last verified against fal.ai. */
-export const FAL_VIDEO_PRICING_VERIFIED_AT = '2026-10-11';
+export const FAL_VIDEO_PRICING_VERIFIED_AT = '2026-10-13';
 
 /**
  * What an entry renders from: text, a start frame, reference assets, a frame +
@@ -137,7 +137,10 @@ export const FAL_VIDEO_MODELS = Object.freeze([
     // No prompt field at all: the frame and the audio are the whole request.
     prompt: 'none',
     image: { param: 'image_url', required: true },
-    // fal accepts 5s to 15 minutes; the output length follows the audio.
+    // fal accepts 5s to 15 minutes; the output length follows the audio. The queue
+    // OpenAPI schema (checked 2026-10-13) says so; the h3-max-lip-sync marketing page
+    // claims a 15s clip and $0.255/s at 2K, which contradicts the schema and the model
+    // page. $0.32 stays: the higher figure is the safe side for the autopilot dollar cap.
     audioInput: { param: 'audio_url', minSec: 5, maxSec: 900 },
     duration: { kind: 'audio' },
     resolution: { param: 'resolution', options: [...H3_RESOLUTIONS, '2K'], default: '768P' },
