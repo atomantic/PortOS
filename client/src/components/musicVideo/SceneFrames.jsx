@@ -1,29 +1,28 @@
 import { useLayoutEffect, useRef, useState } from 'react';
-import { Activity, ArrowRight, Image as ImageIcon, ImagePlus, Maximize2, PencilLine, Shuffle, SkipForward, Wand2, X } from 'lucide-react';
+import { Activity, ArrowRight, Image as ImageIcon, ImagePlus, PencilLine, Shuffle, SkipForward, Wand2, X } from 'lucide-react';
 import SceneTakeStrip from './SceneTakeStrip.jsx';
 
 const PRIMARY_BUTTON = 'flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap';
 const SECONDARY_BUTTON = 'flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap';
 const SELECT = 'min-w-0 bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] sm:min-h-0 disabled:opacity-50';
 
-/** One of a shot's two frames: tap to work on its takes, the corner button to see it full size. */
-function FrameTile({ label, imageId, empty, active, onPick, onOpen, openLabel }) {
+/** One of a shot's two frames: tap it to see it full size. */
+function FrameTile({ label, imageId, empty, onOpen, openLabel }) {
+  const tag = <span className="port-media-overlay-strong absolute left-1 top-1 rounded px-1 text-[10px] leading-tight">{label}</span>;
+  if (!imageId) {
+    return (
+      <div className="relative min-w-0 overflow-hidden rounded border border-dashed border-port-border">
+        <span className="flex aspect-video w-full items-center justify-center text-[11px] text-port-text-muted">{empty}</span>
+        {tag}
+      </div>
+    );
+  }
   return (
-    <div className="relative min-w-0">
-      <button type="button" onClick={onPick} aria-pressed={active} aria-label={`${label} frame${imageId ? '' : `: ${empty}`}`}
-        className={`block w-full overflow-hidden rounded border ${active ? 'border-port-accent ring-2 ring-port-accent' : 'border-port-border'} focus:outline-none focus:ring-2 focus:ring-port-accent`}>
-        {imageId
-          ? <img src={`/data/images/${encodeURIComponent(imageId)}`} alt="" className="block aspect-video w-full bg-black object-cover" />
-          : <span className="flex aspect-video w-full items-center justify-center text-[11px] text-port-text-muted">{empty}</span>}
-        <span className="port-media-overlay-strong absolute left-1 top-1 rounded px-1 text-[10px] leading-tight">{label}</span>
-      </button>
-      {imageId && (
-        <button type="button" onClick={onOpen} aria-label={openLabel} title={openLabel}
-          className="port-media-overlay-strong absolute right-1 top-1 flex min-h-[44px] min-w-[44px] items-center justify-center rounded p-1 sm:min-h-0 sm:min-w-0">
-          <Maximize2 className="h-3 w-3" />
-        </button>
-      )}
-    </div>
+    <button type="button" onClick={onOpen} aria-label={openLabel} title={openLabel}
+      className="relative block w-full min-w-0 overflow-hidden rounded border border-port-border focus:outline-none focus:ring-2 focus:ring-port-accent">
+      <img src={`/data/images/${encodeURIComponent(imageId)}`} alt="" className="block aspect-video w-full bg-black object-cover" />
+      {tag}
+    </button>
   );
 }
 
@@ -56,15 +55,15 @@ const REFERENCE_LABELS = { '': 'Prompt only', start: 'Start frame', end: 'End fr
  * Render right under the picture, and can render from the start or end frame
  * as an image reference (`onGenerateFrame` / `onGenerateEndFrame` take
  * `{ referenceImageId }`, null for prompt only). Refine edits a frame by a
- * short instruction (`{ referenceImageId, refine }`). Tapping a frame picks whose
- * takes show below, as a grid, with that frame's swap and import actions.
+ * short instruction (`{ referenceImageId, refine }`), and Swap puts one of the
+ * video's unused stills on it. Each frame's own takes sit under it as a grid,
+ * so both frames' actions and takes show at once; tapping a frame opens it full size.
  */
 export default function SceneFrames({
   scene, index, endFrames, generatingFrame = false, generatingEndFrame = false, onGenerateFrame, onGenerateEndFrame,
   onEditLocal, onSave, onOpenPreview, takeBusy = false, onSelectTake, onReviewTake, onSwap = null, onImportTake = null,
   onContinueFromPrevious = null, previousHasClip = false, clipLocked = false,
 }) {
-  const [side, setSide] = useState('start');
   const [keepStillAsEnd, setKeepStillAsEnd] = useState(false);
   // Which frame each render starts from: the start frame renders from its prompt, the end frame from the start frame.
   const [refs, setRefs] = useState({ start: '', end: 'start' });
@@ -75,7 +74,6 @@ export default function SceneFrames({
   const refOf = (which) => (frames[refs[which]] ? refs[which] : '');
   const lockedTitle = 'Video locked. Unlock the video to change it.';
   const id = (name) => `mv-scene-${scene.sceneId}-${name}`;
-  const activeSide = endFrames ? side : 'start';
 
   const column = (which) => {
     const start = which === 'start';
@@ -97,8 +95,7 @@ export default function SceneFrames({
     };
     return (
       <div key={which} className="min-w-0 space-y-1.5">
-        <FrameTile label={label} imageId={imageId} empty={start ? 'No still yet' : 'Optional'} active={endFrames && activeSide === which}
-          onPick={() => setSide(which)} onOpen={() => onOpenPreview?.(`image:${imageId}`)}
+        <FrameTile label={label} imageId={imageId} empty={start ? 'No still yet' : 'Optional'} onOpen={() => onOpenPreview?.(`image:${imageId}`)}
           openLabel={`View scene ${index + 1} ${start ? 'reference' : 'end'} frame full size`} />
         <FramePrompt id={id(`${which}-prompt`)} label={start ? 'Reference frame prompt' : 'End frame prompt'} value={scene[field] || ''}
           onChange={(e) => onEditLocal(scene.sceneId, { [field]: e.target.value })}
@@ -125,6 +122,13 @@ export default function SceneFrames({
               <PencilLine size={14} /> Refine
             </button>
           )}
+          {onSwap && (
+            <button type="button" onClick={() => onSwap(start ? 'image' : 'endImage')} disabled={takeBusy || clipLocked} className={SECONDARY_BUTTON}
+              aria-label={`Swap ${start ? 'start' : 'end'} frame from unused`}
+              title={clipLocked ? lockedTitle : `Pick a still made for this video that no shot uses as the ${start ? 'start' : 'end'} frame`}>
+              <Shuffle size={14} /> Swap
+            </button>
+          )}
         </div>
         {refining === which && imageId && (
           <form onSubmit={refine} className="flex min-w-0 gap-2">
@@ -138,6 +142,40 @@ export default function SceneFrames({
             </button>
           </form>
         )}
+        {(start ? onImportTake || onContinueFromPrevious : scene.endImageId) && (
+          <div className="flex flex-wrap gap-2">
+            {start && onImportTake && (
+              <button type="button" onClick={() => onImportTake(scene)} disabled={takeBusy} className={SECONDARY_BUTTON}
+                title="Add a frame from the gallery or an upload (e.g. made in an external tool) as a take">
+                <ImagePlus size={14} /> Import take
+              </button>
+            )}
+            {start && onContinueFromPrevious && (
+              <button type="button" onClick={() => onContinueFromPrevious(scene, { keepStillAsEnd: keepStillAsEnd && Boolean(scene.referenceImageId) })}
+                disabled={takeBusy || !previousHasClip} className={SECONDARY_BUTTON}
+                title={previousHasClip ? 'Start this shot from the last frame the previous shot shows in the cut' : 'The previous shot needs a clip first'}>
+                <SkipForward size={14} /> From previous shot
+              </button>
+            )}
+            {!start && scene.endImageId && (
+              <button type="button" onClick={() => { onEditLocal(scene.sceneId, { endImageId: null }); onSave(scene.sceneId, { endImageId: null }); }}
+                disabled={clipLocked} className={SECONDARY_BUTTON}
+                aria-label={`Clear scene ${index + 1} end frame`} title="The clip ends where the model takes it; the end frame's takes stay">
+                <X size={14} /> No end frame
+              </button>
+            )}
+          </div>
+        )}
+        {start && onContinueFromPrevious && scene.referenceImageId && (
+          <label htmlFor={id('keep-still-end')} className="flex items-center gap-1 text-[11px] text-port-text-muted min-h-[44px] sm:min-h-0">
+            <input id={id('keep-still-end')} type="checkbox" checked={keepStillAsEnd} onChange={(e) => setKeepStillAsEnd(e.target.checked)} />
+            From previous shot: keep this frame as the end frame
+          </label>
+        )}
+        <SceneTakeStrip scene={scene} kind={start ? 'image' : 'endImage'} busy={takeBusy} grid
+          onSelect={(take) => onSelectTake?.(scene, take)}
+          onReview={(take, review) => onReviewTake?.(scene, take, review)}
+          onOpenPreview={onOpenPreview} />
       </div>
     );
   };
@@ -152,44 +190,6 @@ export default function SceneFrames({
           {column('end')}
         </div>
       ) : column('start')}
-      <div className="flex flex-wrap gap-2">
-        {onSwap && (
-          <button type="button" onClick={() => onSwap(activeSide === 'end' ? 'endImage' : 'image')} disabled={takeBusy || clipLocked} className={SECONDARY_BUTTON}
-            title={clipLocked ? lockedTitle : `Pick a still made for this video that no shot uses as the ${activeSide === 'end' ? 'end' : 'start'} frame`}>
-            <Shuffle size={14} /> Swap from unused
-          </button>
-        )}
-        {activeSide === 'start' && onImportTake && (
-          <button type="button" onClick={() => onImportTake(scene)} disabled={takeBusy} className={SECONDARY_BUTTON}
-            title="Add a frame from the gallery or an upload (e.g. made in an external tool) as a take">
-            <ImagePlus size={14} /> Import take
-          </button>
-        )}
-        {activeSide === 'start' && onContinueFromPrevious && (
-          <button type="button" onClick={() => onContinueFromPrevious(scene, { keepStillAsEnd: keepStillAsEnd && Boolean(scene.referenceImageId) })}
-            disabled={takeBusy || !previousHasClip} className={SECONDARY_BUTTON}
-            title={previousHasClip ? 'Start this shot from the last frame the previous shot shows in the cut' : 'The previous shot needs a clip first'}>
-            <SkipForward size={14} /> From previous shot
-          </button>
-        )}
-        {activeSide === 'end' && scene.endImageId && (
-          <button type="button" onClick={() => { onEditLocal(scene.sceneId, { endImageId: null }); onSave(scene.sceneId, { endImageId: null }); }}
-            disabled={clipLocked} className={SECONDARY_BUTTON}
-            aria-label={`Clear scene ${index + 1} end frame`} title="The clip ends where the model takes it; the end frame's takes stay">
-            <X size={14} /> No end frame
-          </button>
-        )}
-      </div>
-      {activeSide === 'start' && onContinueFromPrevious && scene.referenceImageId && (
-        <label htmlFor={id('keep-still-end')} className="flex items-center gap-1 text-[11px] text-port-text-muted min-h-[44px] sm:min-h-0">
-          <input id={id('keep-still-end')} type="checkbox" checked={keepStillAsEnd} onChange={(e) => setKeepStillAsEnd(e.target.checked)} />
-          From previous shot: keep this frame as the end frame
-        </label>
-      )}
-      <SceneTakeStrip scene={scene} kind={activeSide === 'end' ? 'endImage' : 'image'} busy={takeBusy} grid
-        onSelect={(take) => onSelectTake?.(scene, take)}
-        onReview={(take, review) => onReviewTake?.(scene, take, review)}
-        onOpenPreview={onOpenPreview} />
     </section>
   );
 }

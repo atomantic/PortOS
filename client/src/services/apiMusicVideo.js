@@ -131,9 +131,10 @@ export const reorderMusicVideoScenes = (id, sceneIds, options = {}) =>
   });
 // Split a shot its backend cannot render in one take on lyric/phrase
 // boundaries (#8977) → { project, scenes }. `backend` omitted = project pin.
-export const splitMusicVideoScene = (id, sceneId, backend, options = {}) =>
+// `atSec` cuts it in two at that song time instead.
+export const splitMusicVideoScene = (id, sceneId, backend, { atSec = null, ...options } = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/split`, {
-    method: 'POST', body: JSON.stringify(backend ? { backend } : {}), ...options,
+    method: 'POST', body: JSON.stringify({ ...(backend ? { backend } : {}), ...(atSec != null ? { atSec } : {}) }), ...options,
   });
 // Join a scene with the next one, the inverse of split → { project, scene }.
 export const mergeMusicVideoNextScene = (id, sceneId, backend, options = {}) =>

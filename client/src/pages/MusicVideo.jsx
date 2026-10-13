@@ -939,8 +939,9 @@ export default function MusicVideo() {
 
   // #8977: split a shot its backend cannot render in one take on lyric/phrase
   // boundaries. `backend` is the lane the card measured against.
-  const handleSplitScene = (sceneId, backend) => {
-    splitMusicVideoScene(selected.id, sceneId, backend, { silent: true })
+  // `atSec` cuts the shot in two at that song time instead (the card's "Split shot").
+  const handleSplitScene = (sceneId, backend, atSec = null) => {
+    splitMusicVideoScene(selected.id, sceneId, backend, { atSec, silent: true })
       .then(({ project, scenes }) => {
         replaceProject(project);
         toast.success(`Split into ${pluralize(scenes.length, 'shot')}`);

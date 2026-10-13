@@ -7,7 +7,7 @@ import { Trash2, Activity, ArrowUp, ArrowDown, ChevronRight, Video, Maximize2, A
 import OverflowMenu from '../ui/OverflowMenu.jsx';
 import SceneTakePicker from './SceneTakePicker.jsx';
 import VideoStartTrimControl from '../media/VideoStartTrimControl.jsx';
-import { formatDurationSec } from '../../utils/formatters.js';
+import { formatTimecode } from '../../utils/formatters.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 import PerformanceEvidence from './PerformanceEvidence.jsx';
 import { isPerformanceScene, planPerformanceRepair } from '../../lib/musicVideoShotTiming.js';
@@ -232,7 +232,8 @@ export default function SceneCard({
   const shotSettings = (
     <>
         {/* What this shot's render covers and costs, and what blocks it, stays in view. */}
-        <SceneTimingPlan timing={timing} sceneId={scene.sceneId} lipSyncBackend={renderLane} onSplit={onSplit} onMergeNext={onMergeNext} />
+        <SceneTimingPlan timing={timing} sceneId={scene.sceneId} lipSyncBackend={renderLane} onSplit={onSplit} onMergeNext={onMergeNext}
+          span={sceneHasAuthoredSpan(scene) ? { startSec: scene.startSec, endSec: scene.endSec } : null} />
         {/* A VHS glitch riding on the cut into or out of this shot; never moves the cut. */}
         <SceneTransitions fieldId={fieldId} scene={scene} onChange={applyPatch} />
         {/* Everything set once and rarely revisited: timing, shot mode, layer, camera. */}
@@ -377,7 +378,7 @@ export default function SceneCard({
           </div>
           <div className="truncate text-[11px] text-port-text-muted">
             {typeof scene.startSec === 'number' && typeof scene.endSec === 'number'
-              ? `${formatDurationSec(scene.endSec - scene.startSec)} · ${formatDurationSec(scene.startSec)}–${formatDurationSec(scene.endSec)}`
+              ? `${(scene.endSec - scene.startSec).toFixed(2)}s · ${formatTimecode(scene.startSec)}–${formatTimecode(scene.endSec)}`
               : `#${scene.order + 1}`}
             {scene.referenceImageId ? ' · frame ready' : ''}
             {scene.videoHistoryId ? ' · video ready' : ''}

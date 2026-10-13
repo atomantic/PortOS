@@ -173,7 +173,11 @@ export default function BoardStage({ board }) {
               <SceneMediaBadges scene={scene} layered={layered} />
             </span>
             <span className="mt-1 block truncate text-sm">{shotName(scene)}</span>
-            <span className="block text-xs text-port-text-muted">{formatTimecode(scene.startSec)}–{formatTimecode(scene.endSec)}</span>
+            {/* Run time first, then where it sits in the song. */}
+            <span className="block text-xs text-port-text-muted">
+              {Number.isFinite(scene.startSec) && Number.isFinite(scene.endSec) && <span className="font-medium text-port-text">{(scene.endSec - scene.startSec).toFixed(2)}s · </span>}
+              {formatTimecode(scene.startSec)}–{formatTimecode(scene.endSec)}
+            </span>
             {codesById.get(scene.sceneId).length > 0 && <span className="block text-xs text-port-warning">{SCENE_ATTENTION_LABELS[codesById.get(scene.sceneId)[0]]}</span>}
           </button>)}
         </div>

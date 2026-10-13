@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 vi.mock('../../hooks/useVideoFileSrc.js', () => ({ useVideoFileSrc: () => ({}) }));
+vi.mock('../../services/apiMusicVideo.js', async (importOriginal) => ({ ...(await importOriginal()), getMusicVideoMediaPool: vi.fn(async () => ({ items: [] })) }));
 import SceneCard from './SceneCard.jsx';
 import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
 
@@ -62,6 +63,8 @@ describe('music-driven performance', () => {
         onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
     }
     render(<Harness />);
+    // The header reads the shot's precise run time, then where it sits in the song.
+    expect(screen.getByText(/^3\.50s · 0:10\.00–0:13\.50/)).toBeTruthy();
     const shot = screen.getByLabelText('Shot');
     fireEvent.change(shot, { target: { value: 'music' } });
     expect(onSave).toHaveBeenLastCalledWith('s1', { shotMode: 'performance', performanceStyle: 'music' });
@@ -353,8 +356,8 @@ describe('Render follows the shot locks', () => {
 });
 
 describe('start and end frames', () => {
-  // Uniquely catches a frame's prompt or Render hiding away from its picture, a frame reference not reaching the render, or the Render section not saying which renderer ends on the end frame.
-  it('shows each frame with its prompt and Render, renders from a picked frame, and shows the tapped frame\'s takes', () => {
+  // Uniquely catches a frame's prompt, Render, Swap or takes hiding away from its picture, a frame reference not reaching the render, or the Render section not saying which renderer ends on the end frame.
+  it('shows each frame with its prompt, Render, Swap and takes, and renders from a picked frame', async () => {
     const scene = { sceneId: 's1', prompt: 'She looks into the lens', referenceImageId: 'start.png', endImageId: 'end.png', endFramePrompt: 'Head thrown back', startSec: 0, endSec: 4,
       takes: [{ takeId: 't1', kind: 'image', assetId: 'start.png', status: 'selected' }, { takeId: 't2', kind: 'endImage', assetId: 'end.png', status: 'selected' }] };
     const onGenerateFrame = vi.fn();
@@ -364,6 +367,11 @@ describe('start and end frames', () => {
     const pair = screen.getByRole('group', { name: 'Start and end frames' });
     expect(within(pair).getByLabelText('Reference frame prompt')).toBeTruthy();
     expect(within(pair).getByLabelText('End frame prompt').value).toBe('Head thrown back');
+    // Each frame swaps from the unused stills on its own, without tapping it first.
+    fireEvent.click(within(pair).getByRole('button', { name: 'Swap end frame from unused' }));
+    expect(await screen.findByRole('dialog', { name: /^Swap end frame for/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(within(pair).getByRole('button', { name: 'Swap start frame from unused' })).toBeTruthy();
 
     // The end frame renders from the start frame unless another frame is picked; the start frame from its prompt.
     fireEvent.click(within(pair).getByRole('button', { name: 'New end frame take' }));
@@ -372,9 +380,9 @@ describe('start and end frames', () => {
     fireEvent.click(within(pair).getByRole('button', { name: 'New frame take' }));
     expect(onGenerateFrame).toHaveBeenLastCalledWith(scene, { referenceImageId: 'end.png' });
 
-    expect(screen.getByRole('list', { name: /^Frame takes/ })).toBeTruthy();
-    fireEvent.click(within(pair).getByRole('button', { name: 'End frame' }));
-    expect(screen.getByRole('list', { name: /^End frame takes/ })).toBeTruthy();
+    // Both frames' takes show at once, each under its own frame.
+    expect(within(pair).getByRole('list', { name: /^Frame takes/ })).toBeTruthy();
+    expect(within(pair).getByRole('list', { name: /^End frame takes/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Clear scene 1 end frame' })).toBeTruthy();
 
     expect(screen.getByTestId('end-frame-plan').textContent).toMatch(/animates from the start frame only/);

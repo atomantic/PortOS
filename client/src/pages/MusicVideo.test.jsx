@@ -1374,6 +1374,23 @@ describe('MusicVideo project video renderer', () => {
       expect(screen.queryByRole('button', { name: /Split on lyric boundaries/ })).toBeNull();
     });
 
+    // Uniquely catches a shot with no way to be cut in two at a picked time (only merge, or the lyric-boundary split on a too-long shot).
+    it('splits a shot in two at the time picked on its slider', async () => {
+      const scene = { ...PROJECT_NO_CLIP.scenes[0], startSec: 10, endSec: 14 };
+      const pieces = [{ ...scene, endSec: 11.5, label: 'Shot · 1/2' }, { ...scene, sceneId: 's1b', order: 1, startSec: 11.5, label: 'Shot · 2/2' }];
+      splitMusicVideoScene.mockResolvedValue({ project: { ...PROJECT_NO_CLIP, scenes: pieces }, scenes: pieces });
+      await openProject({ ...PROJECT_NO_CLIP, scenes: [scene] }, 'produce');
+
+      fireEvent.click(await screen.findByRole('button', { name: /Split shot/ }));
+      const slider = screen.getByLabelText('Split at');
+      expect(slider.value).toBe('12');
+      fireEvent.change(slider, { target: { value: '11.5' } });
+      expect(screen.getByText(/1\.5s in/)).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: /Split here/ }));
+      await waitFor(() => expect(splitMusicVideoScene).toHaveBeenCalledWith('mv-2', 's1', null, expect.objectContaining({ atSec: 11.5 })));
+      expect((await screen.findAllByText(/Shot · 2\/2$/, { selector: ':not(option)' })).length).toBeGreaterThan(0);
+    });
+
     it('requests the Grok clip that covers a cutaway and adds approximate motion timing', async () => {
       generateVideo.mockResolvedValue({ jobId: 'grok-job' });
       await openProject({
