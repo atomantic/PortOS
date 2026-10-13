@@ -233,8 +233,14 @@ const round6 = (n) => Math.round(n * 1e6) / 1e6;
  * editInSec, editOutSec }` — the window is absolute song time; the edit in/out
  * points are relative to the generated clip (whose length follows the window).
  * Returns `{ ok: false, code, message }` when the shot cannot be planned.
+ *
+ * `lineCues` (the project's lyric cues) asks for the whole sung line: the
+ * window grows to cover every timed cue the shot overlaps, so the take holds
+ * the full line and can be played whole or cut down. The edit points still
+ * frame the shot. A line too long for one take keeps the shot's own window and
+ * says so (`lineTooLong`); `lineStartSec` / `lineEndSec` are the span covered.
  */
-export function planPerformanceWindow({ startSec, endSec, songDurationSec, capability }) {
+export function planPerformanceWindow({ startSec, endSec, songDurationSec, capability, lineCues = null }) {
   if (!capability) {
     return { ok: false, code: 'MUSIC_VIDEO_PERFORMANCE_UNSUPPORTED', message: performanceBlockedReason(null) };
   }
@@ -263,12 +269,26 @@ export function planPerformanceWindow({ startSec, endSec, songDurationSec, capab
   }
   let windowStartSec = startSec;
   let windowEndSec = endSec;
-  if (spanSec < minSec) {
-    // Pad a short shot to a supported contextual window, centered on the shot
-    // where the song allows, then shifted to stay inside it. The edit in-point
-    // records exactly where the shot starts inside the generated clip.
-    const pad = minSec - spanSec;
-    windowStartSec = Math.max(0, startSec - pad / 2);
+  let lineTooLong = false;
+  if (lineCues) {
+    const line = sungLineSpan(lineCues, startSec, endSec);
+    const lineStart = Math.max(0, line.startSec);
+    const lineEnd = Math.min(songDurationSec, line.endSec);
+    if (lineEnd - lineStart > maxSec) lineTooLong = true;
+    else {
+      windowStartSec = lineStart;
+      windowEndSec = lineEnd;
+    }
+  }
+  const lineStartSec = windowStartSec;
+  const lineEndSec = windowEndSec;
+  const coveredSec = windowEndSec - windowStartSec;
+  if (coveredSec < minSec) {
+    // Pad a short shot (or line) to a supported contextual window, centered on
+    // it where the song allows, then shifted to stay inside it. The edit
+    // in-point records exactly where the shot starts inside the generated clip.
+    const pad = minSec - coveredSec;
+    windowStartSec = Math.max(0, windowStartSec - pad / 2);
     windowEndSec = windowStartSec + minSec;
     if (windowEndSec > songDurationSec) {
       windowEndSec = songDurationSec;
@@ -283,7 +303,26 @@ export function planPerformanceWindow({ startSec, endSec, songDurationSec, capab
     windowSec: round6(windowEndSec - windowStartSec),
     editInSec: round6(startSec - windowStartSec),
     editOutSec: round6(endSec - windowStartSec),
+    ...(lineCues ? { lineStartSec: round6(lineStartSec), lineEndSec: round6(lineEndSec), lineTooLong } : {}),
   };
+}
+
+/**
+ * `[startSec, endSec]` widened to the whole of every timed lyric cue it
+ * overlaps (a cue that only touches an edge does not count). A shot over no
+ * timed cue keeps its own span.
+ */
+function sungLineSpan(cues, startSec, endSec) {
+  let lineStart = startSec;
+  let lineEnd = endSec;
+  for (const cue of Array.isArray(cues) ? cues : []) {
+    if (!timedNumber(cue?.startSec)) continue;
+    const cueEnd = timedNumber(cue.endSec) ? cue.endSec : cue.startSec;
+    if (cueEnd <= startSec + 1e-6 || cue.startSec >= endSec - 1e-6) continue;
+    lineStart = Math.min(lineStart, cue.startSec);
+    lineEnd = Math.max(lineEnd, cueEnd);
+  }
+  return { startSec: lineStart, endSec: lineEnd };
 }
 
 /**
@@ -481,11 +520,14 @@ export function planShotSplit({ startSec, endSec, maxSec, lyricCues, phrases, be
  * the footage default. An uncurated model keeps the legacy contract (only an
  * explicit pin is sent) and reports cost unknown.
  *
+ * `lineCues` prices a performance take that covers the whole sung line
+ * (planPerformanceWindow).
+ *
  * Returns `{ performance, modelId, seconds, resolution, costUsd }`; `seconds`
  * and `costUsd` are null when unknown (an untimed or unplannable performance,
  * an uncurated model).
  */
-export function falSceneTake({ scene, videoSettings = {}, songDurationSec = null } = {}) {
+export function falSceneTake({ scene, videoSettings = {}, songDurationSec = null, lineCues = null } = {}) {
   const settings = videoSettings || {};
   if (isPerformanceScene(scene)) {
     const capability = performanceCapability('fal', { scene, videoSettings: settings });
@@ -493,7 +535,7 @@ export function falSceneTake({ scene, videoSettings = {}, songDurationSec = null
     const pinned = capability.style === 'music' ? settings.falMusicResolution : settings.falLipSyncResolution;
     const resolution = resolveFalVideoResolution(model, pinned || capability.defaultResolution);
     const plan = planPerformanceWindow({
-      startSec: scene.startSec, endSec: scene.endSec, songDurationSec: songDurationSec ?? Infinity, capability,
+      startSec: scene.startSec, endSec: scene.endSec, songDurationSec: songDurationSec ?? Infinity, capability, lineCues,
     });
     const seconds = plan.ok ? plan.windowSec : null;
     return {

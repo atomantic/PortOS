@@ -322,7 +322,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     const problem = shotActionContractProblem(scene.direction?.actionContract, scene);
     if (problem) { toast.error(problem); return Promise.resolve({ ok: false }); }
     // `card` is the shot card's Render: the director's text and its input toggles
-    // ({ prompt, endFrame, songAudio }), composed as the card shows it (SceneRenderInputs).
+    // ({ prompt, endFrame, songAudio, wholeLine }), composed as the card shows it (SceneRenderInputs).
     // The server composes every addition from the director's text (musicVideoShotPrompt.js).
     const prompt = card ? card.prompt : authoredShotPrompt(scene);
     if (!prompt) { toast.error('Add a shot prompt first'); return Promise.resolve({ ok: false }); }
@@ -387,6 +387,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         projectId: project.id, sceneId: scene.sceneId, ...(revisionId ? { revisionId } : {}),
         compose: true, ...(audioReactiveSelected ? { audioReactive: true } : {}),
         ...(card ? { promptAsTyped: true, ...(typeof card.songAudio === 'boolean' && !performance ? { songAudio: card.songAudio } : {}) } : {}),
+        ...(card?.wholeLine && performance ? { wholeLine: true } : {}),
       }),
     })
       .then((res) => trackVideoJob(res, scene.sceneId, onJob))

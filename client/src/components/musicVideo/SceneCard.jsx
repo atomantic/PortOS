@@ -163,12 +163,15 @@ export default function SceneCard({
   const renderOverrides = renderTargetOverrides(renderPick, falVideoSettings || {}, renderOptions,
     { models: videoModels, defaultModel: defaultVideoModel, performance: isPerformanceScene(scene), scene });
   const renderSettings = renderOverrides ? { ...falVideoSettings, ...renderOverrides } : falVideoSettings;
+  // The card's input toggles (SceneRenderInputs); Whole sung line also re-plans the take below.
+  const [renderInputs, setRenderInputs] = useState({});
   const renderLane = renderOverrides
     ? (renderSettings.backend === 'local' && renderSettings.generationMode === 'audioReactive' ? 'local' : renderSettings.backend)
     : lipSyncBackend;
   const timing = buildSceneTimingPresentation({
     scene, layer, lipSyncBackend: renderLane, songDurationSec, falVideoSettings: renderSettings,
     nextEndSec, isLast, documentComposition, hasMergeNext: !!onMergeNext,
+    lineCues: isPerformanceScene(scene) && renderInputs.wholeLine === true ? project?.lyricCues || [] : null,
   });
   const { performance, capability, performanceBlocked, performanceCost } = timing;
   const instruction = scene.takes?.find((take) => take.kind === 'video' && take.assetId === scene.videoHistoryId)?.shotInstruction;
@@ -191,9 +194,8 @@ export default function SceneCard({
     ? scene.lastFailure : null;
   const endFramePlan = sceneEndFramePlanFor(scene, renderSettings || {}, { models: videoModels, defaultModel: defaultVideoModel });
   // Exactly what Render sends: the prompt as typed and the inputs the card toggles.
-  const [renderInputs, setRenderInputs] = useState({});
   const cardRequest = shotCardRenderRequest({ project, scene, settings: renderSettings || {}, performance, endFramePlan,
-    models: videoModels, defaultModel: defaultVideoModel, inputs: renderInputs });
+    models: videoModels, defaultModel: defaultVideoModel, inputs: renderInputs, plan: timing.plan });
   const videoRefusal = videoGenerationRefusal({
     settingsSaving, speakerUnsaved: performance && (speakerDirty || speakerSaving),
     referenceImageId: scene.referenceImageId, generatingVideo, performanceBlocked, lockBlocked,
@@ -201,10 +203,11 @@ export default function SceneCard({
   }) || shotCardRequestProblem(cardRequest);
   const generateVideo = () => {
     if (videoRefusal) return;
-    const { songAudio, endFrame } = cardRequest;
+    const { songAudio, endFrame, wholeLine } = cardRequest;
     const card = {
       prompt: cardRequest.authored,
       ...(endFrame ? { endFrame: endFrame.state === 'on' } : {}),
+      ...(wholeLine?.state === 'on' ? { wholeLine: true } : {}),
       ...(songAudio.state === 'on' || songAudio.state === 'off' ? { songAudio: songAudio.state === 'on' } : {}),
     };
     onGenerateVideo?.(scene, { ...(renderOverrides ? { target: renderOverrides } : {}), card });
