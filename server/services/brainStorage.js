@@ -42,6 +42,7 @@ import { getInstanceId } from './instanceIdentity.js';
 import * as brainSyncLog from './brainSyncLog.js';
 import { createCollectionStore } from '../lib/collectionStore.js';
 import { linkIsRepo, normalizeRepoLinkFields } from '../lib/repoLinkFields.js';
+import { supersedingTimestamp } from '../lib/tombstones.js';
 
 const DATA_DIR = PATHS.brain;
 
@@ -483,7 +484,9 @@ export async function update(type, id, updates) {
       // Preserve immutable fields — originInstanceId tracks the creating instance
       originInstanceId: existing.originInstanceId,
       createdAt: existing.createdAt,
-      updatedAt: now()
+      // Local edits must outrank the version read inside this queue, even
+      // within one millisecond or after receiving a peer's faster clock.
+      updatedAt: supersedingTimestamp(existing.updatedAt, now())
     };
 
     await store.saveOneNow(id, record);
@@ -531,7 +534,7 @@ export async function updateWith(type, id, fn) {
       // Preserve immutable fields — originInstanceId tracks the creating instance
       originInstanceId: existing.originInstanceId,
       createdAt: existing.createdAt,
-      updatedAt: now()
+      updatedAt: supersedingTimestamp(existing.updatedAt, now())
     };
 
     await store.saveOneNow(id, record);
@@ -590,7 +593,7 @@ export async function upsertWithId(type, id, recordData, { emitEvent = true, cre
       ...input,
       originInstanceId,
       createdAt: live?.createdAt ?? timestamp,
-      updatedAt: timestamp
+      updatedAt: supersedingTimestamp(existing?.updatedAt, timestamp)
     };
 
     await store.saveOneNow(id, record);
@@ -632,7 +635,7 @@ export async function updateMany(type, updates) {
         // Preserve immutable fields, exactly as update() does.
         originInstanceId: existing.originInstanceId,
         createdAt: existing.createdAt,
-        updatedAt: now()
+        updatedAt: supersedingTimestamp(existing.updatedAt, now())
       };
       await store.saveOneNow(id, next);
       return next;
@@ -672,7 +675,7 @@ async function updateManyWithBatchLog(type, updates) {
         // Preserve immutable fields, exactly as update() does.
         originInstanceId: existing.originInstanceId,
         createdAt: existing.createdAt,
-        updatedAt: now()
+        updatedAt: supersedingTimestamp(existing.updatedAt, now())
       };
 
       await store.saveOneNow(id, record);
@@ -722,7 +725,7 @@ export async function remove(type, id) {
 
     const originInstanceId = existing.originInstanceId ?? 'unknown';
     const deletedRecord = { id, ...existing };
-    const ts = now();
+    const ts = supersedingTimestamp(existing.updatedAt, now());
     // Retain a tombstone in place (save it as the record's value, not a hard
     // delete of the record dir) so a stale `create` echoed from a peer is
     // rejected by the LWW guard in applyRemoteRecord.
