@@ -948,6 +948,60 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
     expect(result.warnings.join(' ')).toMatch(/preserved/i);
   });
 
+  describe.each(['missing', 'broken'])('when the checkout is %s', checkout => {
+    beforeEach(() => {
+      if (checkout === 'missing') existsSync.mockReturnValue(false);
+      else scriptGit({ detectedToplevel: '/repo' });
+    });
+
+    it.each([
+      ['unmerged', false],
+      ['unknown', null],
+      ['landed', true],
+    ])('honors the retry branch policy when merge evidence is %s', async (_label, evidence) => {
+      if (evidence === null) hasBranchMergeEvidenceMock.mockRejectedValue(new Error('ref probe failed'));
+      else hasBranchMergeEvidenceMock.mockResolvedValue(evidence);
+
+      const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', {
+        merge: false, preserveBranchWithCommits: true,
+      });
+
+      expect(result.removed).toBe(true);
+      expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(evidence === true);
+      if (evidence !== true) expect(result.warnings.join(' ')).toMatch(/preserved/);
+    });
+
+    it('preserves unlanded commits when the requested merge cannot use a checkout', async () => {
+      const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', { merge: true });
+
+      expect(result).toMatchObject({ merged: false, removed: true });
+      expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(false);
+      expect(result.warnings.join(' ')).toMatch(/preserved/);
+    });
+
+    it('keeps explicit no-preservation cleanup behavior', async () => {
+      await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', { merge: false });
+
+      expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(true);
+      expect(hasBranchMergeEvidenceMock).not.toHaveBeenCalled();
+    });
+
+    it('preserves the branch when its existence probe fails', async () => {
+      hasBranchMergeEvidenceMock.mockResolvedValue(true);
+      const scripted = execGitMock.getMockImplementation();
+      execGitMock.mockImplementation((args, ...rest) => args[0] === 'show-ref'
+        ? Promise.resolve({ stdout: '', stderr: 'cannot read refs', exitCode: 128 })
+        : scripted(args, ...rest));
+
+      const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', {
+        merge: false, preserveBranchWithCommits: true,
+      });
+
+      expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(false);
+      expect(result.warnings.join(' ')).toMatch(/preserved/);
+    });
+  });
+
   // Patch-equivalence matters here: PortOS merges with `--rebase`, so a landed
   // branch has new SHAs. `hasBranchMergeEvidence` is what sees through that — a bare
   // `rev-list --count` would report it ahead and preserve a merged branch forever.
