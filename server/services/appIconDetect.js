@@ -1,6 +1,6 @@
 import { existsSync } from 'fs';
 import { readdir, realpath, stat } from 'fs/promises';
-import { join, extname } from 'path';
+import { isAbsolute, join, extname, relative } from 'path';
 import { isPathInsideDir, isTopLevelEntryName, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 
 /**
@@ -59,10 +59,27 @@ const CONTENT_TYPES = {
 const ICON_EXTENSIONS = new Set(Object.keys(CONTENT_TYPES));
 
 /**
+ * Spell `realFile` under the caller's `repoPath` after containment has been
+ * decided on real paths. Native realpath expands Windows 8.3 names
+ * (`RUNNER~1` → `runneradmin`) and a symlinked repository root; storing that
+ * expanded spelling would no longer sit on the path the app was registered with.
+ * @param {string} repoPath
+ * @param {string} realRoot
+ * @param {string} realFile
+ * @returns {string|null}
+ */
+function pathSpelledUnderRepo(repoPath, realRoot, realFile) {
+  const rel = relative(realRoot, realFile);
+  if (!rel || isAbsolute(rel) || rel.split(/[\\/]/).includes('..')) return null;
+  return join(repoPath, rel);
+}
+
+/**
  * Real path of a regular file that stays inside `repoPath` after symlinks are
  * resolved. A stored icon, an Xcode manifest, or a repo symlink can otherwise
  * name a host file and the icon route will return its bytes. `extensions`
  * limits the resolved target, so `favicon.svg -> .env` is not an icon.
+ * The returned path keeps the caller's repository spelling.
  * @param {string} repoPath
  * @param {string} candidatePath
  * @param {Set<string>} extensions lowercase extensions including the dot
@@ -80,7 +97,7 @@ async function resolveContainedFile(repoPath, candidatePath, extensions) {
     if (!info.isFile()) return null;
     if (!extensions.has(extname(resolved).toLowerCase())) return null;
     if (!isPathInsideDir(root, resolved)) return null;
-    return resolved;
+    return pathSpelledUnderRepo(repoPath, root, resolved);
   } catch {
     return null;
   }

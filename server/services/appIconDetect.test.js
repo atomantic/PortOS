@@ -25,6 +25,15 @@ describe('detectAppIcon', () => {
     expect(await detectAppIcon('/no/such/path', 'express')).toBe(null);
   });
 
+  it('keeps the caller repository spelling when the root is a symlink', async () => {
+    mkdirSync(join(repoPath, 'public'), { recursive: true });
+    writeFileSync(join(repoPath, 'public', 'favicon.svg'), '<svg><circle/></svg>');
+    const linked = join(scratch, 'linked-repo');
+    symlinkSync(repoPath, linked, process.platform === 'win32' ? 'junction' : 'dir');
+
+    expect(await detectAppIcon(linked, 'express')).toBe(join(linked, 'public', 'favicon.svg'));
+  });
+
   it('finds favicon.svg in client/public', async () => {
     mkdirSync(join(repoPath, 'client', 'public'), { recursive: true });
     writeFileSync(join(repoPath, 'client', 'public', 'favicon.svg'), '<svg><circle/></svg>');
