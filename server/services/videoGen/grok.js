@@ -119,6 +119,28 @@ export function buildGrokVideoPrompt({ prompt, negativePrompt, aspectRatio, dura
   return `${steps}\nSave the resulting video as an MP4 file at exactly this path: ${stagingPath}\nDo not create any other files, do not modify any code, and do not run any other tools beyond what is needed to generate the image/video and write the MP4 to that path. When the file is written, you are done.`;
 }
 
+/**
+ * The agent prompt a grok video render sends and its record (#11317): shared by
+ * the render and the Video Gen form's preview so both show the same text.
+ */
+export function grokVideoSentPrompt({
+  prompt = '', negativePrompt, aspectRatio, width, height, duration, sourceImagePath = null, scratchDir, promptAdditions = [],
+}) {
+  const effectiveDuration = resolveGrokDuration(duration);
+  const configured = GROK_ASPECT_RATIOS.includes(aspectRatio) ? aspectRatio : null;
+  const effectiveRatio = deriveAspectRatio(width, height) || configured;
+  const buildWith = (text) => buildGrokVideoPrompt({
+    prompt: text, negativePrompt, aspectRatio: effectiveRatio, duration: effectiveDuration,
+    stagingPath: join(scratchDir, 'output.mp4'), sourceImagePath, scratchDir,
+  });
+  const fullPrompt = buildWith(prompt);
+  return {
+    fullPrompt, effectiveRatio, effectiveDuration,
+    record: sentPromptRecord({ sentPrompt: fullPrompt, carried: carriedPromptAdditions({ promptAdditions }),
+      added: [agentInstructionsAddition('Grok video tool instructions', buildWith)] }),
+  };
+}
+
 export async function generateVideo({
   grokPath, aspectRatio, prompt = '', negativePrompt, width, height,
   sourceImagePath = null, duration,
@@ -139,8 +161,6 @@ export async function generateVideo({
     throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
-  const effectiveDuration = resolveGrokDuration(duration);
-
   const jobId = providedJobId || randomUUID();
   const filename = `${jobId}.mp4`;
   const outputPath = join(PATHS.videos, filename);
@@ -151,15 +171,9 @@ export async function generateVideo({
   const stagingPath = join(scratchDir, 'output.mp4');
   await mkdir(scratchDir, { recursive: true });
 
-  const derived = deriveAspectRatio(width, height);
-  const configured = GROK_ASPECT_RATIOS.includes(aspectRatio) ? aspectRatio : null;
-  const effectiveRatio = derived || configured;
-
-  const buildWith = (text) => buildGrokVideoPrompt({
-    prompt: text, negativePrompt, aspectRatio: effectiveRatio, duration: effectiveDuration,
-    stagingPath, sourceImagePath, scratchDir,
+  const { fullPrompt, effectiveRatio, effectiveDuration, record: sentRecord } = grokVideoSentPrompt({
+    prompt, negativePrompt, aspectRatio, width, height, duration, sourceImagePath, scratchDir, promptAdditions,
   });
-  const fullPrompt = buildWith(prompt);
 
   const bin = grokPath || DEFAULT_BIN;
   const baseArgs = ensureGrokHeadlessArgs([], null);
@@ -180,8 +194,7 @@ export async function generateVideo({
     filename,
     createdAt: new Date().toISOString(),
     mode: sourceImagePath ? 'image' : 'text',
-    ...sentPromptRecord({ sentPrompt: fullPrompt, carried: carriedPromptAdditions({ promptAdditions }),
-      added: [agentInstructionsAddition('Grok video tool instructions', buildWith)] }),
+    ...sentRecord,
   };
   const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
   jobs.set(jobId, job);

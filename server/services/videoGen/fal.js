@@ -141,6 +141,42 @@ function buildRequestBody({ prompt, negativePrompt, duration, aspectRatio, image
   return body;
 }
 
+/**
+ * Dry-run the curated request body with placeholder media before anything is
+ * read or paid for: a missing required input or an over-cap prompt refuses here
+ * as a 400, and the plan carries the coerced length, resolution and estimate the
+ * history records. Returns the plan with the record of the text fal receives
+ * (#11317); the Video Gen form's preview calls it with the same inputs.
+ */
+export function falVideoSentPrompt({ hasImage = false, hasEndImage = false, hasAudio = false, promptAdditions = [], ...spec }) {
+  const modelId = spec.modelId || (hasImage ? FAL_DEFAULT_IMAGE_MODEL : FAL_DEFAULT_TEXT_MODEL);
+  const { prompt = '', negativePrompt } = spec;
+  let planned = null;
+  try {
+    planned = buildFalVideoRequest({
+      ...spec, modelId,
+      imageUrl: hasImage ? 'pending:image' : null,
+      endImageUrl: hasEndImage ? 'pending:end-image' : null,
+      audioUrl: hasAudio ? 'pending:audio' : null,
+    });
+  } catch (err) {
+    if (err?.code !== 'FAL_MODEL_INPUT') throw err;
+    throw new ServerError(err.message, { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (hasEndImage && !planned) {
+    throw new ServerError('End frames require a fal.ai model with catalogued end-frame support', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  // The text fal receives: a negative prompt the model has no field for rides folded in as "Avoid:".
+  const record = sentPromptRecord({
+    sentPrompt: planned ? (planned.body.prompt ?? '') : buildRequestBody({ prompt, negativePrompt }).prompt,
+    sentNegativePrompt: planned?.body.negative_prompt ?? null,
+    carried: carriedPromptAdditions({ promptAdditions }),
+    added: [(!planned || planned.model.negativePrompt === 'fold') && planned?.model.prompt !== 'none'
+      ? promptAddition('avoid', 'Negative prompt, sent as "Avoid:"', negativePrompt) : null],
+  });
+  return { planned, record };
+}
+
 export async function generateVideo({
   apiKey: providedApiKey, settings, modelId: requestedModelId,
   prompt = '', negativePrompt, duration, aspectRatio, width, height,
@@ -195,25 +231,10 @@ export async function generateVideo({
     modelId, prompt, negativePrompt, seconds: duration, audioSec, aspectRatio, width, height, resolution,
     generateAudio: generateAudio === true, enableTranscription: lipSync?.enableTranscription === true,
   };
-  // Dry-run the curated body with placeholder media before anything is read or
-  // paid for: a missing required input refuses here as a 400, and the result
-  // carries the coerced length, resolution and estimate the history records.
-  let planned = null;
-  try {
-    planned = buildFalVideoRequest({
-      ...requestSpec,
-      imageUrl: sourceImagePath ? 'pending:image' : null,
-      endImageUrl: lastImagePath ? 'pending:end-image' : null,
-      audioUrl: audioFilePath ? 'pending:audio' : null,
-    });
-  } catch (err) {
-    if (err?.code !== 'FAL_MODEL_INPUT') throw err;
-    throw new ServerError(err.message, { status: 400, code: 'VALIDATION_ERROR' });
-  }
-
-  if (lastImagePath && !planned) {
-    throw new ServerError('End frames require a fal.ai model with catalogued end-frame support', { status: 400, code: 'VALIDATION_ERROR' });
-  }
+  const { planned, record: sentRecord } = falVideoSentPrompt({
+    ...requestSpec, promptAdditions,
+    hasImage: !!sourceImagePath, hasEndImage: !!lastImagePath, hasAudio: !!audioFilePath,
+  });
 
   const meta = {
     id: jobId,
@@ -234,14 +255,7 @@ export async function generateVideo({
     // What PortOS expected this render to cost at fal's list price, or null for
     // an uncurated model — recorded so spend can be audited per clip.
     estimatedCostUsd: planned?.estimatedCostUsd ?? null,
-    // The text fal receives: a negative prompt the model has no field for rides folded in as "Avoid:".
-    ...sentPromptRecord({
-      sentPrompt: planned ? (planned.body.prompt ?? '') : buildRequestBody({ prompt, negativePrompt }).prompt,
-      sentNegativePrompt: planned?.body.negative_prompt ?? null,
-      carried: carriedPromptAdditions({ promptAdditions }),
-      added: [(!planned || planned.model.negativePrompt === 'fold') && planned?.model.prompt !== 'none'
-        ? promptAddition('avoid', 'Negative prompt, sent as "Avoid:"', negativePrompt) : null],
-    }),
+    ...sentRecord,
     filename,
     createdAt: new Date().toISOString(),
     mode: sourceImagePath ? 'image' : 'text',

@@ -82,9 +82,11 @@ import usePreviewRoute from '../hooks/usePreviewRoute';
 import useMediaPreviewActions from '../hooks/useMediaPreviewActions';
 import { useVideoGenForm } from '../hooks/useVideoGenForm.js';
 import { useFederatedMediaTarget } from '../hooks/useFederatedMediaTarget';
+import { useModelInputPreview } from '../hooks/useModelInputPreview';
+import ModelInputPreview from '../components/media/ModelInputPreview';
 import RemoteMediaTargetPicker from '../components/federatedMedia/RemoteMediaTargetPicker';
 import {
-  getVideoGenStatus, getVideoGenModelContext, generateVideo, cancelVideoGen,
+  getVideoGenStatus, getVideoGenModelContext, generateVideo, cancelVideoGen, previewVideoPrompt,
   listVideoHistory, deleteVideoHistoryItem, setVideoHidden,
   patchSettingsSlice,
   getActiveVideoJob,
@@ -880,6 +882,15 @@ export default function VideoGen() {
   // The form's request plus the music video it is filed under, if one is picked.
   const generatePayload = () => ({ ...buildGeneratePayload(), ...musicVideoFilingFields(searchParams) });
 
+  // The same request as Generate, each upload named instead of attached (#11317).
+  const previewBody = (() => {
+    const payload = generatePayload();
+    const previewUploads = Object.keys(payload).filter((key) => payload[key] instanceof Blob);
+    const fields = Object.fromEntries(Object.entries(payload).filter(([, value]) => !(value instanceof Blob)));
+    return previewUploads.length ? { ...fields, previewUploads } : fields;
+  })();
+  const modelInputPreview = useModelInputPreview(previewVideoPrompt, previewBody, { enabled: prompt.trim().length > 0 });
+
   const handleGenerate = async (e) => {
     e?.preventDefault?.();
     if (generating) {
@@ -1271,6 +1282,9 @@ export default function VideoGen() {
                 Reactor will reject this — shorten the prompt. Style presets count toward the limit.
               </p>
             )}
+            <div className="mt-2">
+              <ModelInputPreview preview={modelInputPreview} prompt={prompt} />
+            </div>
             {!negativePromptSupported && !isFal && !isReactor && (
               <p className="mt-1 text-[11px] text-gray-500 leading-snug">
                 This model does not use a negative prompt.

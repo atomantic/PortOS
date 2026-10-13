@@ -1,0 +1,77 @@
+/**
+ * Compose-time preview of what a Video Gen render sends to its model (#11317):
+ * the same backend resolution and the same per-backend prompt builders the
+ * render runs, without staging uploads or queueing anything. An upload the form
+ * holds is named in place of its staged path, and the grok scratch folder names
+ * the job folder it will get.
+ */
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { ServerError } from '../../lib/errorHandler.js';
+import { resolveGalleryImage } from '../../lib/fileUtils.js';
+import { carriedPromptAdditions, sentPromptRecord } from '../../lib/modelInput.js';
+import { getSettings } from '../settings.js';
+import { VIDEO_GEN_MODE } from './modes.js';
+import { HOSTED_VIDEO_SUBMISSIONS } from './hostedSubmission.js';
+import { resolveRequestedVideoBackend } from './prepareParams.js';
+import { VIDEO_GEN_LOCAL_ONLY_FIELD_NAMES } from './requestFields.js';
+import { grokVideoSentPrompt } from './grok.js';
+import { falVideoSentPrompt } from './fal.js';
+import { localVideoSentPrompt } from './generateVideo.js';
+
+export const PREVIEW_UPLOAD_FIELDS = ['sourceImage', 'lastImage', 'audioFile', 'icReference'];
+const UPLOADED_SOURCE_IMAGE = '(uploaded image)';
+
+const asWritten = (body, extra = {}) => ({
+  ...extra,
+  ...sentPromptRecord({
+    sentPrompt: body.prompt || '', sentNegativePrompt: body.negativePrompt || null,
+    carried: carriedPromptAdditions(body),
+  }),
+});
+
+export async function previewVideoPrompt({ previewUploads = [], ...body }) {
+  // A shot card and a FableLoom scene rebuild the prompt from their project on
+  // submit; their own previews belong to those surfaces, not this form's.
+  if (body.musicVideo || body.fableLoom) {
+    throw new ServerError('Preview a music video shot or FableLoom scene from its own card', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const uploads = Object.fromEntries(previewUploads.map((field) => [field, {}]));
+  const settings = await getSettings();
+  const backend = resolveRequestedVideoBackend({ body, uploads, settings, localOnlyParamKeys: VIDEO_GEN_LOCAL_ONLY_FIELD_NAMES });
+  // A federated provider receives the prompt as written; its own backend may add lines there.
+  if (body.mediaProviderPeerId) return asWritten(body, { backend: 'remote', remote: true });
+
+  const hosted = HOSTED_VIDEO_SUBMISSIONS[backend];
+  // The same refusal POST /video-gen gives a backend that is off or has no key.
+  if (hosted && !hosted.prepare(settings).usable) {
+    throw new ServerError(hosted.errorMessage, { status: 400, code: hosted.errorCode });
+  }
+  const hasSourceImage = !!uploads.sourceImage || !!body.sourceImageFile;
+  const sourceImagePath = uploads.sourceImage ? UPLOADED_SOURCE_IMAGE
+    : body.sourceImageFile ? resolveGalleryImage(body.sourceImageFile) : null;
+  const promptAdditions = carriedPromptAdditions(body);
+
+  if (backend === VIDEO_GEN_MODE.GROK) {
+    return { backend, ...grokVideoSentPrompt({
+      prompt: body.prompt, negativePrompt: body.negativePrompt,
+      aspectRatio: settings.imageGen?.grok?.aspectRatio, width: body.width, height: body.height,
+      duration: body.grokDuration, sourceImagePath, scratchDir: join(tmpdir(), 'portos-grok-video-<job>'), promptAdditions,
+    }).record };
+  }
+  if (backend === VIDEO_GEN_MODE.FAL) {
+    return { backend, ...falVideoSentPrompt({
+      modelId: body.falModelId, prompt: body.prompt, negativePrompt: body.negativePrompt,
+      seconds: body.falDuration, width: body.width, height: body.height, resolution: body.falResolution,
+      generateAudio: body.falGenerateAudio === true, promptAdditions,
+      hasImage: hasSourceImage, hasEndImage: !!uploads.lastImage || !!body.lastImageFile, hasAudio: !!uploads.audioFile,
+    }).record };
+  }
+  if (backend === VIDEO_GEN_MODE.LOCAL) {
+    return { backend, ...(await localVideoSentPrompt({
+      prompt: body.prompt, negativePrompt: body.negativePrompt, loraFilenames: body.loraFilenames || [], promptAdditions,
+    })).record };
+  }
+  // reactor.inc receives the trimmed prompt with nothing added.
+  return asWritten(body, { backend });
+}
