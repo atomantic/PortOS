@@ -113,6 +113,37 @@ the worker runs right before its first mutation, because a run can take the
 branch after the scan. A refusal, an unreadable registry, or a moved checkout
 leaves the branch untouched; a completed or released owner admits recovery.
 
+### Ownership response investigation (#11348)
+
+The 2026-10-13 reconciliation observation `{"admitted":true}}` could not be
+reproduced at the generated-command/HTTP boundary. The original capture had
+neither HTTP status nor headers, so it does not identify whether the extra
+byte came from the server, transport, or the tool that displayed the output.
+No production producer fix is claimed.
+
+`server/routes/cosAgentRoutes.ownershipResponse.test.js` runs the actual
+generated recheck command through a shell and curl against a loopback Express
+server with the real ownership service. All agents, repository paths, state
+and authorization are synthetic; it never reserves an existing install's
+branch. Status and headers are captured with the exact body bytes. Successful
+admission returns HTTP 200, JSON content type, Content-Length 17, and body hex
+`7b2261646d6974746564223a747275657d` (`{"admitted":true}`). Strict parsing of
+the complete body succeeds, and a subsequent competing claim bind is refused.
+Live-owner, unreadable-registry and unknown-coordinator refusals each return
+one complete JSON document with their service reason and leave state unchanged.
+The synthetic authentication gate's HTTP 401 remains a separate error envelope.
+
+If this recurs, capture the **first** authorized recheck using curl's
+`--dump-header <private-header-file>`, `--output <private-body-file>` and
+`--write-out '%{http_code}'` options, retaining its exit code separately.
+Use a private scratch directory outside the repository; do not enable verbose
+request logging or store the bearer token. Parse the whole body file without
+trimming or extracting a JSON substring. Compare its byte count and hex with
+the tool-displayed output before attributing the fault; headers and bodies
+remain private until redacted. A failed HTTP request, refusal, or malformed
+body leaves the branch untouched. A second request cannot retroactively
+authorize an unreadable first result.
+
 ## Task File Format
 
 ```markdown
