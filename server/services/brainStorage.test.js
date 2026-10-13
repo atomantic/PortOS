@@ -231,6 +231,77 @@ async function relayedEntries(sinceSeq, id) {
   return changes.filter((c) => c.id === id);
 }
 
+describe('local Brain mutations advance the persisted LWW clock', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-13T12:00:00.000Z'));
+  });
+
+  afterEach(() => vi.useRealTimers());
+
+  it('keeps a local edit when a peer with an ahead clock replays its older content', async () => {
+    const incoming = {
+      op: 'create', type: 'threads', id: 'clock-peer-edit', originInstanceId: 'peer-clock',
+      record: { title: 'Peer original', updatedAt: ISO('2026-10-13T12:01:00Z') },
+    };
+    await applyRemoteChanges([incoming]);
+
+    const edited = await brainStorage.update('threads', incoming.id, { title: 'Local edit' });
+    const replay = await applyRemoteChanges([incoming]);
+
+    expect(await brainStorage.getById('threads', incoming.id)).toMatchObject({ title: 'Local edit' });
+    expect(edited.updatedAt > incoming.record.updatedAt).toBe(true);
+    expect(replay).toMatchObject({ inserted: 0, updated: 0, skipped: 1 });
+  });
+
+  it('federates ordered same-millisecond edits, deletion, and recreation of a journal', async () => {
+    const sourceId = 'clock-journal-source';
+    const receiverId = 'clock-journal-receiver';
+    await brainStorage.upsertWithId('journals', sourceId, { content: 'Original' });
+    // Use a second persisted record as the receiver, remapping only the id;
+    // the delta service and its production LWW/relay paths remain real.
+    const deliver = async () => {
+      const record = await rawRecord('journals', sourceId);
+      await applyRemoteChanges([{
+        op: record._deleted ? 'delete' : 'update', type: 'journals', id: receiverId,
+        record, originInstanceId: 'local-instance',
+      }]);
+      return (await brainStorage.getById('journals', receiverId))?.content ?? null;
+    };
+    await deliver();
+
+    const received = [];
+    await brainStorage.updateWith('journals', sourceId, () => ({ content: 'Appended' }));
+    received.push(await deliver());
+    await brainStorage.upsertWithId('journals', sourceId, { content: 'Rewritten' });
+    received.push(await deliver());
+    await brainStorage.remove('journals', sourceId);
+    received.push(await deliver());
+    const tombstone = await rawRecord('journals', sourceId);
+    const recreated = await brainStorage.upsertWithId('journals', sourceId, { content: 'Recreated' });
+    received.push(await deliver());
+
+    expect(received).toEqual(['Appended', 'Rewritten', null, 'Recreated']);
+    expect(recreated.updatedAt > tombstone.updatedAt).toBe(true);
+  });
+
+  it('preserves both link and bucket reorders when ahead-clock peer rows replay', async () => {
+    const incoming = ['links', 'buckets'].map(type => ({
+      op: 'create', type, id: `clock-order-${type}`, originInstanceId: 'peer-clock',
+      record: { name: type, order: 0, updatedAt: ISO('2026-10-13T12:01:00Z') },
+    }));
+    await applyRemoteChanges(incoming);
+
+    await brainStorage.updateMany('links', [{ id: incoming[0].id, order: 1 }]);
+    await brainStorage.reorderBuckets([{ id: incoming[1].id, order: 2 }]);
+    await applyRemoteChanges(incoming);
+
+    const orders = await Promise.all(incoming.map(async ({ type, id }) =>
+      (await brainStorage.getById(type, id)).order));
+    expect(orders).toEqual([1, 2]);
+  });
+});
+
 describe('inbound brain changes keep relaying across a crash (#8316)', () => {
   it('relays a saved-but-unrelayed change when the source re-serves it', async () => {
     const sinceSeq = brainSyncLog.getCurrentSeq();
