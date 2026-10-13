@@ -2238,3 +2238,22 @@ describe('screenShowsInFlightChrome', () => {
     expect(screenShowsInFlightChrome(screen)).toBe(false);
   });
 });
+
+describe('createModelCapacityNudgeGate', () => {
+  it('waits for a long quiet spell, nudges, then reports exhaustion after the budget', async () => {
+    const { createModelCapacityNudgeGate, CAPACITY_NUDGE_SETTLE_MS, CAPACITY_NUDGE_COOLDOWN_MS, CAPACITY_NUDGE_MAX_ATTEMPTS } = await import('./tuiHandshake.js');
+    const gate = createModelCapacityNudgeGate();
+    let now = 1_000_000;
+    expect(gate.arm({ hasError: true }, now)).toBe('armed');
+    // Output still fresh: no nudge yet.
+    expect(gate.takeNudge(now + 1000, now)).toBe(0);
+    expect(gate.takeNudge(now + CAPACITY_NUDGE_SETTLE_MS + 1, now)).toBe(1);
+    for (let i = 2; i <= CAPACITY_NUDGE_MAX_ATTEMPTS; i += 1) {
+      now += CAPACITY_NUDGE_COOLDOWN_MS + 1;
+      expect(gate.arm({ hasError: true }, now)).toBe('armed');
+      expect(gate.takeNudge(now + CAPACITY_NUDGE_SETTLE_MS + 1, now)).toBe(i);
+    }
+    now += CAPACITY_NUDGE_COOLDOWN_MS + 1;
+    expect(gate.arm({ hasError: true }, now)).toBe('exhausted');
+  });
+});

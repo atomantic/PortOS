@@ -1394,6 +1394,37 @@ export function createTruncationNudgeGate() {
   return createOomNudgeGate();
 }
 
+// ─── Model-at-capacity nudge — "the provider is overloaded, try again later" ──
+//
+// Codex halts the turn on `Selected model is at capacity.` and waits at the
+// composer for a human to type `continue`. Same dead-turn/intact-session shape
+// as the OOM gate, but the cause is provider load, which clears in minutes
+// rather than seconds — so the session must be quiet far longer before the
+// nudge, the window waiting for that quiet is wider, and more attempts are
+// allowed before the run fails over to a fallback provider.
+export const CAPACITY_NUDGE_SETTLE_MS = 90000;
+export const CAPACITY_NUDGE_ARM_WINDOW_MS = 300000;
+export const CAPACITY_NUDGE_COOLDOWN_MS = 180000;
+export const CAPACITY_NUDGE_MAX_ATTEMPTS = 6;
+export const CAPACITY_NUDGE_TEXT = OOM_NUDGE_TEXT;
+
+/**
+ * State machine for "nudge a TUI session a model-at-capacity rejection parked".
+ * See `createSilenceNudgeGate` for the semantics of `arm` / `takeNudge`.
+ */
+export function createModelCapacityNudgeGate() {
+  const gate = createSilenceNudgeGate({
+    cooldownMs: CAPACITY_NUDGE_COOLDOWN_MS,
+    settleMs: CAPACITY_NUDGE_SETTLE_MS,
+    armWindowMs: CAPACITY_NUDGE_ARM_WINDOW_MS,
+    maxAttempts: CAPACITY_NUDGE_MAX_ATTEMPTS,
+  });
+  return {
+    arm: (analysis, nowMs) => (analysis ? gate.arm(nowMs) : null),
+    takeNudge: gate.takeNudge,
+  };
+}
+
 /**
  * The "wait for silence, then nudge" policy the OOM gate and the
  * tool-permission gate share: dedupe sightings inside `cooldownMs` (a TUI

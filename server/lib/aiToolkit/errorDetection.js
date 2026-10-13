@@ -737,6 +737,48 @@ export function createTruncatedResponseDetector({ maxBuffer = 512 } = {}) {
   };
 }
 
+// A provider that rejected the turn because the selected model is overloaded
+// (Codex: `Selected model is at capacity. Please try a different model.`). The
+// turn is dead but the session still holds the conversation, and a human typing
+// `continue` a little later resumes it. Unattended, nothing types it: the run
+// sits at the composer holding its lane (agent-9322c230). Same remedy as the
+// truncation banner, but the cause is load on the provider, so the consumer's
+// gate waits much longer between nudges (createModelCapacityNudgeGate).
+//
+// `\s+` joins survive a TUI hard-wrap. Not an IMMEDIATE_FALLBACK_SIGNALS entry
+// for the same reason as the truncation banner: the remedy is a continuation,
+// not a restart or an instant provider swap.
+const MODEL_AT_CAPACITY_PATTERN = /selected\s+model\s+is\s+at\s+capacity/i;
+
+export function detectModelAtCapacity(text) {
+  if (!text) return null;
+  if (!MODEL_AT_CAPACITY_PATTERN.test(String(text))) return null;
+  return {
+    hasError: true,
+    category: ERROR_CATEGORIES.RATE_LIMIT,
+    // FIXED sentence, not the banner wording: it becomes the run error and a
+    // task description can quote it back through this detector.
+    message: 'Provider reported the selected model is overloaded',
+    waitTime: null,
+    requiresFallback: true,
+    actionable: false,
+    graceMs: 0,
+    suggestedFix: 'The selected model is temporarily at capacity. A delayed continue nudge resumes the session; if it stays overloaded, route the task to a fallback provider.',
+    origin: 'provider',
+  };
+}
+
+export function createModelAtCapacityDetector({ maxBuffer = 512 } = {}) {
+  let buffer = '';
+  const cap = Number.isFinite(maxBuffer) && maxBuffer > 0 ? maxBuffer : 512;
+
+  return (chunk) => {
+    if (!chunk) return null;
+    buffer = `${buffer}${String(chunk)}`.slice(-cap);
+    return detectModelAtCapacity(buffer);
+  };
+}
+
 // Claude Code's in-TUI retry banner, painted while it re-sends a failed request:
 // `API error · Retrying in 0s · attempt 1/10` (the prefix varies — `Request timed
 // out`, `Overloaded` — so only the retry suffix is matched). The whitespace is
