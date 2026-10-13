@@ -790,6 +790,10 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // destination, so require operator authority before persisting the URL.
   'POST /api/jira/instances',
 
+  // Datadog instance updates can retain both saved keys while changing their
+  // destination, so require operator authority before persisting the hostname.
+  'POST /api/datadog/instances',
+
   // Self-update (#8742): runs git + npm and restarts the process, or `gh repo
   // sync` against the fork. `check` and `ignore`/DELETE-`ignore` only read or
   // record a preference — left open.
