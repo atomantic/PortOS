@@ -33,8 +33,11 @@ describe('sentPromptRecord', () => {
 });
 
 describe('agentInstructionsAddition', () => {
-  it('shows the wrapper with the user prompt marked as [prompt]', () => {
-    const addition = agentInstructionsAddition('Codex image tool instructions', 'Generate an image of: a red kite. Save it as PNG.', 'a red kite');
-    expect(addition.text).toBe('Generate an image of: [prompt]. Save it as PNG.');
+  // Review on #11326: replacing the prompt text by search garbled the chip when a
+  // short prompt ("image") also appeared inside the wrapper ("$imagegen").
+  it('marks only the spot the builder puts the prompt, even when the wrapper repeats its words', () => {
+    const buildWith = (text) => `$imagegen ${text} of a cat. Aspect ratio 16:9`;
+    expect(agentInstructionsAddition('Codex image tool instructions', buildWith).text)
+      .toBe('$imagegen [prompt] of a cat. Aspect ratio 16:9');
   });
 });

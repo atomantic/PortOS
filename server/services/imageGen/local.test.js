@@ -898,7 +898,14 @@ describe('imageGen local.buildSidecarMeta', () => {
       ...baseMetaInput,
       loraFilenames: ['aria.safetensors'],
       loraTriggerWords: { 'aria.safetensors': ['aria_tok', 'portrait'] },
+      promptAdditions: [{ id: 'style-1', label: 'Universe style', text: 'muted earth tones' }],
     });
+    // The record of what went out (#11317): exact text, carried additions, then the weave.
+    expect(meta.sentPrompt).toBe('a red cube, aria_tok');
+    expect(meta.promptAdditions).toEqual([
+      { id: 'style-1', label: 'Universe style', text: 'muted earth tones' },
+      { id: 'lora-triggers', label: 'LoRA trigger words', text: 'aria_tok' },
+    ]);
     // What the runner renders.
     expect(renderPrompt).toBe('a red cube, aria_tok');
     expect(addedTriggerWords).toEqual(['aria_tok']);

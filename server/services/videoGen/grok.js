@@ -155,10 +155,11 @@ export async function generateVideo({
   const configured = GROK_ASPECT_RATIOS.includes(aspectRatio) ? aspectRatio : null;
   const effectiveRatio = derived || configured;
 
-  const fullPrompt = buildGrokVideoPrompt({
-    prompt, negativePrompt, aspectRatio: effectiveRatio, duration: effectiveDuration,
+  const buildWith = (text) => buildGrokVideoPrompt({
+    prompt: text, negativePrompt, aspectRatio: effectiveRatio, duration: effectiveDuration,
     stagingPath, sourceImagePath, scratchDir,
   });
+  const fullPrompt = buildWith(prompt);
 
   const bin = grokPath || DEFAULT_BIN;
   const baseArgs = ensureGrokHeadlessArgs([], null);
@@ -180,7 +181,7 @@ export async function generateVideo({
     createdAt: new Date().toISOString(),
     mode: sourceImagePath ? 'image' : 'text',
     ...sentPromptRecord({ sentPrompt: fullPrompt, carried: carriedPromptAdditions({ promptAdditions }),
-      added: [agentInstructionsAddition('Grok video tool instructions', fullPrompt, prompt)] }),
+      added: [agentInstructionsAddition('Grok video tool instructions', buildWith)] }),
   };
   const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
   jobs.set(jobId, job);

@@ -258,11 +258,12 @@ export async function generateImage({
   const configured = GROK_ASPECT_RATIOS.includes(aspectRatio) ? aspectRatio : null;
   const effectiveRatio = derived || configured;
 
-  const fullPrompt = buildGrokPrompt({
-    prompt, negativePrompt, aspectRatio: effectiveRatio, stagingPath,
+  const buildWith = (text) => buildGrokPrompt({
+    prompt: text, negativePrompt, aspectRatio: effectiveRatio, stagingPath,
     initImagePath: inputImages.initPath, initImageStrength,
     referenceImagePaths: inputImages.referencePaths,
   });
+  const fullPrompt = buildWith(prompt);
 
   const bin = grokPath || DEFAULT_BIN;
   // No model arg — grok's image tools run on xAI's fixed image backend and
@@ -276,7 +277,7 @@ export async function generateImage({
     filename, mode: IMAGE_GEN_MODE.GROK,
     ...(visualConditioning ? { visualConditioning } : {}),
     ...sentPromptRecord({ sentPrompt: fullPrompt, carried: carriedPromptAdditions({ promptAdditions }),
-      added: [agentInstructionsAddition('Grok image tool instructions', fullPrompt, prompt)] }),
+      added: [agentInstructionsAddition('Grok image tool instructions', buildWith)] }),
     ...(effectiveRatio ? { aspectRatio: effectiveRatio } : {}),
     createdAt: new Date().toISOString(),
   };

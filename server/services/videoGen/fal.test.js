@@ -170,6 +170,9 @@ describe('videoGen/fal — generateVideo', () => {
     const [entry] = await loadHistory();
     // 8s (the covering length) × $0.14/s audio off.
     expect(entry).toMatchObject({ modelId: 'fal:fal-ai/kling-video/v3/pro/image-to-video', duration: 8, generateAudio: false, estimatedCostUsd: 1.12 });
+    // Kling takes the negative natively, so the record shows it apart and no "Avoid:" chip (#11317).
+    expect(entry).toMatchObject({ sentPrompt: 'waves roll in', sentNegativePrompt: 'text' });
+    expect(entry.promptAdditions).toBeUndefined();
     if (input === 'upload') {
       await vi.waitFor(async () => {
         await expect(readFile(framePath)).rejects.toMatchObject({ code: 'ENOENT' });

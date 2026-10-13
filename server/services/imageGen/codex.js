@@ -254,7 +254,8 @@ export async function generateImage({
     referenceCount: inputImages.referencePaths.length,
     initImageStrength,
   });
-  const fullPrompt = `$imagegen ${editPrefix}${prompt.trim()}${sizeHint}${qualityHint}${avoidHint}`;
+  const buildWith = (text) => `$imagegen ${editPrefix}${text.trim()}${sizeHint}${qualityHint}${avoidHint}`;
+  const fullPrompt = buildWith(prompt);
 
   const bin = codexPath || DEFAULT_BIN;
   // `codex exec` treats `-i, --image <FILE>...` as VARIADIC, so it greedily
@@ -288,7 +289,7 @@ export async function generateImage({
     filename, mode: IMAGE_GEN_MODE.CODEX, model: effectiveModel,
     ...(visualConditioning ? { visualConditioning } : {}),
     ...sentPromptRecord({ sentPrompt: fullPrompt, carried: carriedPromptAdditions({ promptAdditions }),
-      added: [agentInstructionsAddition('Codex image tool instructions', fullPrompt, prompt)] }),
+      added: [agentInstructionsAddition('Codex image tool instructions', buildWith)] }),
     createdAt: new Date().toISOString(),
   };
   const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };

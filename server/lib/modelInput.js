@@ -53,10 +53,9 @@ export const promptAdditionsSchema = z.preprocess((value) => {
 
 /**
  * An agent backend's instructions around the prompt (Codex, Grok, Antigravity), as one
- * addition: the full message with the prompt itself shown as "[prompt]".
+ * addition: the backend's own builder run with "[prompt]" in the prompt's place, so
+ * the marker lands exactly where the prompt goes and nowhere else.
  */
-export function agentInstructionsAddition(label, fullPrompt, prompt) {
-  const own = typeof prompt === 'string' ? prompt.trim() : '';
-  const text = own ? String(fullPrompt).split(own).join('[prompt]') : String(fullPrompt);
-  return promptAddition('agent-instructions', label, text);
+export function agentInstructionsAddition(label, buildWithPrompt) {
+  return promptAddition('agent-instructions', label, buildWithPrompt('[prompt]'));
 }
