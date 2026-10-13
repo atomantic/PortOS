@@ -320,7 +320,7 @@ export const soulMetaSchema = digitalTwinMetaSchema; // Alias for backwards comp
 
 // Create document input
 export const createDocumentInputSchema = z.object({
-  filename: z.string().min(1).max(100).regex(/^[\w\-]+\.md$/, 'Filename must be a valid markdown filename'),
+  filename: documentFilenameSchema.max(100).regex(/^[\w\-]+\.md$/, 'Filename must be a valid markdown filename'),
   title: z.string().min(1).max(200),
   category: documentCategoryEnum,
   content: z.string().min(1).max(1000000),

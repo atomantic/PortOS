@@ -13,6 +13,7 @@ import {
   parseTraitsResponse
 } from './digital-twin-analysis.js';
 import { digitalTwinEvents } from './digital-twin-meta.js';
+import { documentFilenameSchema } from '../lib/digitalTwinValidation.js';
 
 /**
  * Parse Goodreads CSV export
@@ -429,7 +430,8 @@ export async function analyzeImportedData(source, rawData, providerId, model) {
  * Save imported analysis as a document
  */
 export async function saveImportAsDocument(source, suggestedDoc) {
-  const { filename, title, category, content } = suggestedDoc;
+  const { title, category, content } = suggestedDoc;
+  const filename = documentFilenameSchema.parse(suggestedDoc.filename);
 
   // Check if document already exists
   const meta = await loadMeta();
