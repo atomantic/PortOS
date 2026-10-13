@@ -92,7 +92,10 @@ describe('cosAgentLifecycle', () => {
     await registerAgent('agent-scanner', 'task-example', { taskAnalysisType: 'security', useRunner: true });
     const evidence = { version: 1, source: 'runner', sequence: 3, status: 'refused', model: 'example-model', effort: 'medium', auth: 'chatgpt',
       maxCostUsd: 2, estimatedCostUsd: null, timeLimitSeconds: 180, exitCode: 143,
-      artifacts: { findings: false, coverage: false }, cleanup: 'confirmed' };
+      artifacts: { findings: false, coverage: false }, cleanup: 'confirmed',
+      preflight: { rejectedRequests: 1, lastError: { field: 'paths', index: 0, code: 'path-not-found' } } };
+    await persistAgentSecurityScan('agent-scanner', { ...evidence, sequence: 1, status: 'invalid-input', exitCode: null, cleanup: 'not-needed' });
+    expect((await getAgent('agent-scanner')).metadata.securityScan).toMatchObject({ status: 'invalid-input', preflight: evidence.preflight });
     await persistAgentSecurityScan('agent-scanner', evidence);
     await persistAgentSecurityScan('agent-scanner', { ...evidence, sequence: 2, status: 'running', exitCode: null });
     await updateAgent('agent-scanner', { metadata: { securityScan: { ...evidence, source: 'agent-report', status: 'completed', exitCode: 0 } } });
@@ -108,14 +111,17 @@ describe('cosAgentLifecycle', () => {
   it('records uncertain cleanup if the runner disappears before outer completion', async () => {
     mockCosState.state.stats = { agentsSpawned: 0, agentsCompleted: 0, agentsFailed: 0 };
     await registerAgent('agent-scanner', 'task-example', { taskAnalysisType: 'security', useRunner: true });
-    await persistAgentSecurityScan('agent-scanner', { version: 1, source: 'runner', sequence: 2, status: 'running', model: 'example-model', effort: 'medium', auth: 'chatgpt',
+    await persistAgentSecurityScan('agent-scanner', { version: 1, source: 'runner', sequence: 3, status: 'running', model: 'example-model', effort: 'medium', auth: 'chatgpt',
       maxCostUsd: 2, estimatedCostUsd: null, timeLimitSeconds: 180, exitCode: null,
       artifacts: { findings: null, coverage: null }, cleanup: 'unconfirmed' });
     vi.mocked(requestSecurityScanViaRunner).mockRejectedValue(new Error('synthetic runner loss'));
     await completeAgent('agent-scanner', { success: false, error: 'Terminated' });
-    expect((await getAgent('agent-scanner')).metadata).toMatchObject({ securityScan: { sequence: 2, status: 'running', exitCode: null }, securityScanControl: { status: 'interrupted', cleanup: 'unconfirmed' } });
+    expect((await getAgent('agent-scanner')).metadata).toMatchObject({ securityScan: { sequence: 3, status: 'running', exitCode: null }, securityScanControl: { status: 'interrupted', cleanup: 'unconfirmed' } });
     const observed = (await getAgent('agent-scanner')).metadata.securityScan;
-    await persistAgentSecurityScan('agent-scanner', { ...observed, sequence: 3, status: 'refused', exitCode: 143, cleanup: 'confirmed' });
+    await persistAgentSecurityScan('agent-scanner', { ...observed, sequence: 2, status: 'invalid-input', cleanup: 'not-needed',
+      preflight: { rejectedRequests: 1, lastError: { field: 'paths', index: 0, code: 'path-not-found' } } });
+    expect((await getAgent('agent-scanner')).metadata).toMatchObject({ securityScan: { sequence: 3, status: 'running' }, securityScanControl: { status: 'interrupted', cleanup: 'unconfirmed' } });
+    await persistAgentSecurityScan('agent-scanner', { ...observed, sequence: 4, status: 'refused', exitCode: 143, cleanup: 'confirmed' });
     expect((await getAgent('agent-scanner')).metadata).toMatchObject({ securityScan: { status: 'refused', cleanup: 'confirmed' }, securityScanControl: null });
   });
 

@@ -702,6 +702,8 @@ describe('buildLightContextPrompt', () => {
       expect(prompt.systemPrompt).toContain('QUALITY_AUDIT_JSON');
       expect(prompt.systemPrompt).toContain('SCANNER_STATUS_JSON');
       expect(prompt.systemPrompt).toContain('refusal is terminal for this request');
+      expect(prompt.systemPrompt).toContain('Only an explicit runner status of invalid-input permits correction');
+      expect(prompt.systemPrompt).toContain('Do not resubmit after any other result or transport error');
     });
 
     it.each([

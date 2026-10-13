@@ -35,19 +35,27 @@ async function resolveInstalledSecurityScanner({ home = homedir(), root = proces
   return null;
 }
 
-async function scopePaths(cwd, values) {
+async function scopePaths(cwd, values, field) {
   const root = await realpath(cwd);
-  return Promise.all(values.map(async value => {
-    const path = await realpath(resolve(root, value));
+  return Promise.all(values.map(async (value, index) => {
+    const invalid = code => Object.assign(failure('Invalid scanner context path', 400), {
+      preflight: { field, index, code },
+    });
+    if (value.includes('\0')) throw invalid('invalid-path');
+    const path = await realpath(resolve(root, value)).catch(err => {
+      if (['ENOENT', 'ENOTDIR'].includes(err.code)) throw invalid('path-not-found');
+      if (['ENAMETOOLONG', 'ELOOP'].includes(err.code)) throw invalid('invalid-path');
+      throw err;
+    });
     const rel = relative(root, path);
     if (rel === '..' || rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(rel)) {
-      throw failure('Scanner context must stay inside the agent workspace', 400);
+      throw invalid('outside-workspace');
     }
     return path;
   }));
 }
 
-/** One scanner attempt, owned by the runner rather than by an agent shell. */
+/** One scanner execution, with correctable input checks owned by the runner. */
 export function createSecurityScanManager({ agentsDir, getAgent, emitEvidence, trackWork = fn => fn(),
   resolveCli = resolveInstalledSecurityScanner, spawnProcess = spawn, kill = killProcessTree,
   environment = process.env, tempRoot = tmpdir(), graceMs = 5000, cleanupGroup = cleanupSecurityScanGroup } = {}) {
@@ -110,6 +118,13 @@ export function createSecurityScanManager({ agentsDir, getAgent, emitEvidence, t
     if (!entry.terminal) entry.stopReason ||= reason;
     entry.cancel?.();
     await entry.promise;
+    // An idle correctable grant has no request-finally left to publish Stop.
+    if (!entry.promise && !entry.terminal) {
+      entry.evidence.status = entry.stopReason;
+      entry.terminal = true;
+      await persist(id, entry);
+    }
+    await entry.writes;
     return entry.evidence;
   };
   const start = (id, input) => {
@@ -117,19 +132,20 @@ export function createSecurityScanManager({ agentsDir, getAgent, emitEvidence, t
     const agent = getAgent(id);
     const entry = entries.get(id);
     if (!agent || agent.exited || agent.paused || !entry) throw failure('No active runner-owned security scan grant');
-    // Synchronous reservation before any I/O. Replays share the same promise;
-    // request loss and duplicate POSTs never authorize another provider call.
-    if (entry.attempted) return entry.promise;
+    // Reserve validation synchronously too: overlapping inputs share its result.
+    // Only a durably recorded input rejection releases this reservation. Once
+    // launch is reserved, duplicate/lost-response requests replay that attempt.
+    if (entry.promise) return entry.promise;
     if (entry.stopReason) throw failure('The scanner grant has been stopped');
-    entry.attempted = true;
     entry.promise = trackWork(async () => {
       let directory;
       let forceTimer;
       let deadline;
       let drainTimer;
+      let invalidInput = false;
       try {
         const [paths, knowledgeBase, cli] = await Promise.all([
-          scopePaths(agent.workspacePath, request.paths), scopePaths(agent.workspacePath, request.knowledgeBase), resolveCli(),
+          scopePaths(agent.workspacePath, request.paths, 'paths'), scopePaths(agent.workspacePath, request.knowledgeBase, 'knowledgeBase'), resolveCli(),
         ]);
         if (entry.stopReason) { entry.evidence.status = entry.stopReason; return { evidence: entry.evidence, artifactDirectory: null }; }
         if (!cli || !entry.grant.model || !entry.grant.effort || process.platform === 'win32') { entry.evidence.status = 'unavailable'; return { evidence: entry.evidence, artifactDirectory: null }; }
@@ -146,6 +162,9 @@ export function createSecurityScanManager({ agentsDir, getAgent, emitEvidence, t
         const env = Object.fromEntries(Object.entries(environment).filter(([key]) => ENV_KEYS.has(key)));
         env.CODEX_SECURITY_STATE_DIR = join(directory, 'state');
         env.PORTOS_SECURITY_SCAN_OWNER = randomUUID();
+        // Durable reservation precedes the first child spawn. A crash in this
+        // gap stays fail-closed; recovery never grants another execution.
+        entry.attempted = true;
         entry.evidence.status = 'running';
         entry.evidence.cleanup = 'unconfirmed';
         await persist(id, entry);
@@ -246,9 +265,16 @@ export function createSecurityScanManager({ agentsDir, getAgent, emitEvidence, t
           const confirmed = await cleanupGroup(entry.owner).catch(() => false);
           entry.evidence.cleanup = confirmed ? 'confirmed' : 'unconfirmed';
         }
-        entry.evidence.status = entry.stopReason || 'unavailable';
+        invalidInput = Boolean(err.preflight && !entry.attempted);
+        if (invalidInput) {
+          entry.evidence.preflight = {
+            rejectedRequests: (entry.evidence.preflight?.rejectedRequests || 0) + 1,
+            lastError: err.preflight,
+          };
+        }
+        entry.evidence.status = entry.stopReason || (invalidInput ? 'invalid-input' : 'unavailable');
         // No provider text, paths or credentials in shared logs.
-        console.warn(`⚠️ Security scanner ${id} could not complete (${err.code || 'runtime-error'})`);
+        console.warn(`⚠️ Security scanner ${id} could not complete (${err.preflight?.code || err.code || 'runtime-error'})`);
       } finally {
         clearTimeout(forceTimer);
         clearTimeout(deadline);
@@ -258,15 +284,25 @@ export function createSecurityScanManager({ agentsDir, getAgent, emitEvidence, t
         entry.child?.stdout.destroy();
         entry.child?.stderr.destroy();
         entry.child?.unref?.();
-        entry.terminal = true;
+        entry.terminal = !invalidInput || Boolean(entry.stopReason);
         entry.cancel = null;
-        try { await persist(id, entry); }
+        try {
+          await persist(id, entry);
+          // Stop can arrive while an input rejection is being saved. Preserve
+          // it before releasing the request, rather than reopening the grant.
+          if (invalidInput && entry.stopReason && entry.evidence.status !== entry.stopReason) {
+            entry.evidence.status = entry.stopReason;
+            entry.terminal = true;
+            await persist(id, entry);
+          }
+          if (invalidInput && !entry.stopReason) entry.promise = null;
+        }
         finally {
           // A disk failure must never prevent stopping a refused outer request.
           if (entry.evidence.status === 'refused') terminateRefusedOuter(id);
         }
       }
-      return { evidence: entry.evidence, artifactDirectory: directory || null };
+      return { evidence: structuredClone(entry.evidence), artifactDirectory: directory || null };
     });
     return entry.promise;
   };

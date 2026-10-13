@@ -9,7 +9,7 @@ import { ServerError } from '../lib/errorHandler.js';
 export async function persistAgentSecurityScan(agentId, value) {
   const evidence = parseRunnerSecurityScanEvidence(value);
   if (!evidence) return null;
-  const terminal = !['not-run', 'running'].includes(evidence.status);
+  const terminal = !['not-run', 'running', 'invalid-input'].includes(evidence.status);
   const executionInterruption = evidence.status === 'refused'
     ? { category: 'content-refusal', source: 'security-scanner', at: new Date().toISOString() } : null;
   const updated = await updateAgent(agentId, { metadata: { securityScan: evidence, ...(terminal ? { securityScanControl: null } : {}), ...(executionInterruption ? { executionInterruption } : {}) } });
