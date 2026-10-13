@@ -273,6 +273,13 @@ export function buildAgentRegistration({
     // agent, so `workspacePath` never names it; a later relaunch of that claim
     // reads these at launch to see that a live owner holds the checkout.
     ...claimOwnershipBinding(task),
+    // Snapshot the assigned follow-up target at registration. Admission also
+    // checks the persisted internal task and checkout; a prompt is never a grant.
+    reviewLoopMergeTarget: task.taskType === 'internal'
+      && isTruthyMeta(task.metadata?.reviewLoopFollowUp)
+      && !isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)
+      ? { url: task.metadata.reviewLoopPRUrl, branch: task.metadata.reviewLoopPRBranch }
+      : null,
     configSimplify: isTruthyMeta(task.metadata?.simplify),
     configReviewLoop: isTruthyMeta(task.metadata?.reviewLoop),
     configReviewers: normalizeReviewers(task.metadata),
