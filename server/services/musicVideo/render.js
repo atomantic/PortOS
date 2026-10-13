@@ -27,7 +27,7 @@ import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 
 import { spawn } from '../../lib/childProcess.js';
 import { existsSync } from 'fs';
-import { unlink } from 'fs/promises';
+import { rm, unlink } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
@@ -48,6 +48,8 @@ import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from '.
 import { documentRenderInitScripts, encodeDocumentComposition, prepareDocumentRender, sweepDocumentScratch } from './documentRender.js';
 import { renderTypographyOverlays, removeCompositionScratch, sweepCompositionScratch } from './compositionRender.js';
 import { applyFilmLookFinish, filmLookFinishNeeded } from './filmLookFinish.js';
+import { STATS_OUTRO_SCRATCH_DIR, appendStatsOutro } from './statsOutro.js';
+import { statsOutroSeconds } from '../../lib/musicVideoStatsOutro.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
 import { captureMusicVideoEvidence, musicVideoTakeChanges } from '../../lib/musicVideoDependencies.js';
 import { assertCurrentPerformanceTakes, withDraftPerformanceFallbacks } from './performanceShot.js';
@@ -803,10 +805,13 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
   Promise.resolve().then(async () => {
     await assertCurrentRenderApproval(projectId, project, options);
     if (signal.aborted) throw Object.assign(new Error('Render cancelled'), { code: 'CANCELED' });
-    return renderer.encode({
+    const encoded = await renderer.encode({
       plan, project, projectId, jobId, audioPath, soundBed, outputPath, signal,
       onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: fraction }),
     });
+    // The cutting room floor outro (when on) joins after the song.
+    const outroSec = await appendStatsOutro({ project, path: outputPath, jobId, signal });
+    return outroSec > 0 ? { ...encoded, durationSec: encoded.durationSec + outroSec } : encoded;
   }).then(async (encoded) => {
     job.overlayAbort = null;
     job.status = 'complete';
@@ -970,6 +975,8 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
     // look after ffmpeg (filmLookFinish.js); the pass takes the second half of
     // whatever the encode's share of the bar is.
     const finishing = filmLookFinishNeeded(project);
+    // Seconds the outro scene adds after the song (0 when it is off).
+    const outroSec = statsOutroSeconds(project.statsOutro);
     // A composed render first captures its overlay (progress 0–50%), then
     // encodes (50–100%); a plain render encodes across the whole bar.
     const startEncode = (encodeArgs, progressBase = 0) => {
@@ -1038,6 +1045,19 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
             await settleFailure(canceled, canceled ? 'Render cancelled' : signal ? `Killed by signal ${signal}` : `ffmpeg exit ${code}`);
             return;
           }
+          // The cutting room floor outro (when on) joins after the song, before
+          // the film look so the look grades it with the rest of the film.
+          if (outroSec > 0) {
+            job.overlayAbort = new AbortController();
+            const { signal: outroSignal } = job.overlayAbort;
+            try {
+              await appendStatsOutro({ project, path: outputPath, jobId, signal: outroSignal });
+            } catch (err) {
+              await settleFailure(outroSignal.aborted, outroSignal.aborted ? 'Render cancelled' : `Outro scene failed: ${err.message}`);
+              return;
+            }
+            job.overlayAbort = null;
+          }
           // The cut is encoded; a film look re-encodes it in place through the
           // look before it is published. A cancel here aborts the pass.
           if (finishing) {
@@ -1077,7 +1097,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
                 seed: 0,
                 width: canonW,
                 height: canonH,
-                numFrames: Math.round(totalDuration * (fps || 24)),
+                numFrames: Math.round((totalDuration + outroSec) * (fps || 24)),
                 fps: fps || 24,
                 filename,
                 thumbnail: poster,
@@ -1163,6 +1183,10 @@ export async function recoverStuckMusicVideoRenders() {
   // Nor a composition-document render's staged copy (document + scene media).
   await sweepDocumentScratch().catch((err) => {
     console.warn(`⚠️ Music Video recovery: could not remove stale composition-document scratch: ${err.message}`);
+  });
+  // Nor the outro scene's staged page.
+  await rm(join(PATHS.data, STATS_OUTRO_SCRATCH_DIR), { recursive: true, force: true }).catch((err) => {
+    console.warn(`⚠️ Music Video recovery: could not remove stale outro scratch: ${err.message}`);
   });
   const instanceId = await ensureInstanceId();
   const stuck = (await listProjects()).filter((p) => p?.status === 'rendering'

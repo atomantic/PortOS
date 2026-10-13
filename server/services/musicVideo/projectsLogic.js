@@ -39,6 +39,7 @@ import { normalizeComposition, invalidateCompositionTiming, withStoredCompositio
 import { normalizeSoundBed } from './soundBed.js';
 import { normalizeFilmLook } from '../../lib/filmLook.js';
 import { normalizeTitleCard } from '../../lib/musicVideoTitleCard.js';
+import { normalizeStatsOutro } from '../../lib/musicVideoStatsOutro.js';
 import { remapTreatmentForClone, scenesFingerprint } from './treatment.js';
 import { carryStoryboardApproval } from './productionReview.js';
 import { normalizeMusicVideoAutomation } from '../../lib/musicVideoAutomation.js';
@@ -172,6 +173,8 @@ export function buildProjectRecord(input, { id, now }) {
     filmLook: input.filmLook ? normalizeFilmLook(input.filmLook) : null,
     // The opening title card (song, artist, year over the opener); null = none.
     titleCard: normalizeTitleCard(input.titleCard),
+    // The cutting room floor outro after the song; null = off.
+    statsOutro: normalizeStatsOutro(input.statsOutro),
     // #8980 — optional pre-production treatment (brief, arc, shot direction,
     // proof checklist); null until the director starts one. See treatment.js.
     treatment: null,
@@ -379,6 +382,8 @@ export function applyProjectPatch(project, patch) {
     ...('filmLook' in patch ? { filmLook: normalizeFilmLook(patch.filmLook) } : {}),
     // The title card is replaced whole (one bounded record); null clears it.
     ...('titleCard' in patch ? { titleCard: normalizeTitleCard(patch.titleCard) } : {}),
+    // The outro after the song is replaced whole; null turns it off.
+    ...('statsOutro' in patch ? { statsOutro: normalizeStatsOutro(patch.statsOutro) } : {}),
   };
   // #8988: a bed is mixed UNDER the song — the song itself can't be its bed.
   const masterTrackId = 'trackId' in patch ? patch.trackId : project.trackId;
