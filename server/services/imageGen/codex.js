@@ -55,6 +55,7 @@ import { conformImageAspect } from './aspectConform.js';
 import { aspectRatioPhrase } from '../../lib/aspectRatio.js';
 import { resolveInputImages } from './inputImages.js';
 import { cloudPromptRequired } from './cloudProviderConfig.js';
+import { agentInstructionsAddition, carriedPromptAdditions, sentPromptRecord } from '../../lib/modelInput.js';
 
 // 20 minutes — built-in `image_gen` typically returns in 30–90s, but with the
 // parallel codex lane several renders share OpenAI throughput and a single
@@ -183,6 +184,7 @@ export function buildCodexAttachmentPrefix({ initPath, referenceCount, initImage
 // of them ride one flag) and the prompt is reshaped so the `$imagegen` skill
 // feeds the attachments to `image_gen` as references.
 export async function generateImage({
+  promptAdditions = [],
   codexPath, model, effort, prompt = '', width, height, negativePrompt,
   initImagePath, initImageStrength, referenceImagePaths = [],
   visualConditioning = null,
@@ -252,7 +254,8 @@ export async function generateImage({
     referenceCount: inputImages.referencePaths.length,
     initImageStrength,
   });
-  const fullPrompt = `$imagegen ${editPrefix}${prompt.trim()}${sizeHint}${qualityHint}${avoidHint}`;
+  const buildWith = (text) => `$imagegen ${editPrefix}${text.trim()}${sizeHint}${qualityHint}${avoidHint}`;
+  const fullPrompt = buildWith(prompt);
 
   const bin = codexPath || DEFAULT_BIN;
   // `codex exec` treats `-i, --image <FILE>...` as VARIADIC, so it greedily
@@ -285,6 +288,8 @@ export async function generateImage({
     width: width ? Number(width) : null, height: height ? Number(height) : null,
     filename, mode: IMAGE_GEN_MODE.CODEX, model: effectiveModel,
     ...(visualConditioning ? { visualConditioning } : {}),
+    ...sentPromptRecord({ sentPrompt: fullPrompt, carried: carriedPromptAdditions({ promptAdditions }),
+      added: [agentInstructionsAddition('Codex image tool instructions', buildWith)] }),
     createdAt: new Date().toISOString(),
   };
   const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };

@@ -55,6 +55,7 @@ import { IMAGE_GEN_MODE, describeFidelity, visualReferenceRole } from './modes.j
 import { resolveInputImages } from './inputImages.js';
 import { cloudPromptRequired } from './cloudProviderConfig.js';
 import { rejectDegenerateFrame } from './frameGuard.js';
+import { carriedPromptAdditions, promptAddition, sentPromptRecord } from '../../lib/modelInput.js';
 
 const MODE = IMAGE_GEN_MODE.FAL;
 
@@ -195,6 +196,7 @@ const firstImageUrl = (result) => {
 };
 
 export async function generateImage({
+  promptAdditions = [],
   model, prompt = '', negativePrompt, width, height, seed,
   initImagePath, initImageStrength, referenceImagePaths = [],
   visualConditioning = null,
@@ -257,6 +259,13 @@ export async function generateImage({
     modelFamily: family.id,
     ...(inputImages.paths.length ? { inputImageCount: inputImages.paths.length } : {}),
     ...(visualConditioning ? { visualConditioning } : {}),
+    // The text runFal sends: the image-role prose plus the negative prompt folded in as "Avoid:".
+    ...sentPromptRecord({
+      sentPrompt: buildFalImageRequest({ modelId: family.textEndpoint, prompt: fullPrompt, negativePrompt }).body.prompt,
+      carried: carriedPromptAdditions({ promptAdditions }),
+      added: [promptAddition('image-roles', 'How to read the attached images', fullPrompt.slice(prompt.trim().length)),
+        promptAddition('avoid', 'Negative prompt, sent as "Avoid:"', negativePrompt)],
+    }),
     createdAt: new Date().toISOString(),
   };
   const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };

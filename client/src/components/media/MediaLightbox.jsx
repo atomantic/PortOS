@@ -20,6 +20,7 @@ import { copyToClipboard } from '../../lib/clipboard';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 import { formatDateTime, formatDateNumeric, formatDurationMs } from '../../utils/formatters';
 import AttributionList from './AttributionList';
+import SentPromptPanel from './SentPromptPanel';
 
 // Intentionally NOT migrated to <ui/Modal> or <components/Drawer>. The
 // prev/next buttons sit as viewport-edge siblings of the card (not children
@@ -733,6 +734,15 @@ function SettingsPane({
             <p className="text-gray-200 whitespace-pre-wrap">{item.prompt}</p>
           </div>
         ) : null}
+
+        {!item.compact && (
+          <SentPromptPanel
+            prompt={item.prompt === '(no prompt)' ? '' : item.prompt}
+            sentPrompt={item.sentPrompt}
+            sentNegativePrompt={item.sentNegativePrompt}
+            additions={item.promptAdditions}
+          />
+        )}
 
         {onAnnotationChange && (
           <div>

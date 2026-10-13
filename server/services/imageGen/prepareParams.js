@@ -45,6 +45,7 @@ import { getUniverseRenderPin } from '../universeBuilder/crud.js';
 import { getImageModels, isFlux2, isEditOnly } from '../../lib/mediaModels.js';
 import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/systemCapabilities.js';
 import { usesDiffusersRunner } from '../../lib/runners.js';
+import { promptAddition } from '../../lib/modelInput.js';
 
 // The job tags that name the record owning a render, each mapped to the record
 // loader and the render target whose `renderDefaults` pin backs it. A generate
@@ -232,7 +233,10 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
     // Named inputs precede uploads. Keep the latter's packed strength positions intact.
     if (!referenceUploads.length) namedReferenceFiles.push(...styles);
     const look = musicVideoStylePrompt(musicVideoProject, referenceUploads.length ? 0 : styles.length);
-    if (look) data.prompt = [data.prompt, look].filter(Boolean).join('. ');
+    if (look) {
+      data.prompt = [data.prompt, look].filter(Boolean).join('. ');
+      data.promptAdditions = [...(data.promptAdditions || []), promptAddition('mood-board-style', 'Mood board style', look)];
+    }
   }
   const referenceImageCount = namedReferenceFiles.length + referenceUploads.length;
   const inputImageCount = (initUpload || data.initImageFile ? 1 : 0) + referenceImageCount;

@@ -56,6 +56,7 @@ import { GROK_ASPECT_RATIOS } from '../../lib/imageGenCapabilities.js';
 import { resolveInputImages } from './inputImages.js';
 import { cloudPromptRequired } from './cloudProviderConfig.js';
 import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
+import { agentInstructionsAddition, carriedPromptAdditions, sentPromptRecord } from '../../lib/modelInput.js';
 
 // 20 minutes — grok's image_gen typically returns in well under a minute, but
 // the agent turn wrapping it (skill load, tool call, file write) has no
@@ -211,6 +212,7 @@ export function buildGrokPrompt({
 // `initImageStrength` maps to a fidelity phrase (grok's image_edit has no
 // numeric denoise knob, same constraint as codex).
 export async function generateImage({
+  promptAdditions = [],
   grokPath, aspectRatio, prompt = '', width, height, negativePrompt,
   initImagePath, initImageStrength, referenceImagePaths = [],
   visualConditioning = null,
@@ -256,11 +258,12 @@ export async function generateImage({
   const configured = GROK_ASPECT_RATIOS.includes(aspectRatio) ? aspectRatio : null;
   const effectiveRatio = derived || configured;
 
-  const fullPrompt = buildGrokPrompt({
-    prompt, negativePrompt, aspectRatio: effectiveRatio, stagingPath,
+  const buildWith = (text) => buildGrokPrompt({
+    prompt: text, negativePrompt, aspectRatio: effectiveRatio, stagingPath,
     initImagePath: inputImages.initPath, initImageStrength,
     referenceImagePaths: inputImages.referencePaths,
   });
+  const fullPrompt = buildWith(prompt);
 
   const bin = grokPath || DEFAULT_BIN;
   // No model arg — grok's image tools run on xAI's fixed image backend and
@@ -273,6 +276,8 @@ export async function generateImage({
     width: width ? Number(width) : null, height: height ? Number(height) : null,
     filename, mode: IMAGE_GEN_MODE.GROK,
     ...(visualConditioning ? { visualConditioning } : {}),
+    ...sentPromptRecord({ sentPrompt: fullPrompt, carried: carriedPromptAdditions({ promptAdditions }),
+      added: [agentInstructionsAddition('Grok image tool instructions', buildWith)] }),
     ...(effectiveRatio ? { aspectRatio: effectiveRatio } : {}),
     createdAt: new Date().toISOString(),
   };

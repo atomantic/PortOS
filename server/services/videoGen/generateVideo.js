@@ -78,6 +78,7 @@ import {
 } from '../../lib/videoDraftDecoders.js';
 import { isDefaultVideoStreamingMode } from '../../lib/videoStreamingMode.js';
 import { extendLatentFrames, supportsContextWindow } from '../../lib/videoContinuity.js';
+import { carriedPromptAdditions, promptAddition, sentPromptRecord } from '../../lib/modelInput.js';
 // Re-export the extracted runtime + history surface so existing deep imports
 // (`from '../videoGen/local.js'`) keep resolving every symbol they used to.
 export * from './runtimes.js';
@@ -153,7 +154,7 @@ export const listVideoModels = () => getVideoModels().map(decorateVideoModel);
 
 export const defaultVideoModelId = (capabilities, preferredId) => getDefaultVideoModelId(capabilities, preferredId);
 
-export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId, width = null, height = null, numFrames = null, fps = 24, steps, guidanceScale, seed, batchSize = 1, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, audioStartSec = null, audioConditioning = null, mode = null, imageStrength = null, i2vReferenceMode = null, loras = null, icReferencePaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, textEncoderId = null, speedProfileId = null, draftDecode = null, streamingMode = null, visualConditioning = null, hidden = false, keepExtendSource = false, displaySleep = null, jobId: providedJobId = null }) {
+export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId, width = null, height = null, numFrames = null, fps = 24, steps, guidanceScale, seed, batchSize = 1, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, audioStartSec = null, audioConditioning = null, mode = null, imageStrength = null, i2vReferenceMode = null, loras = null, icReferencePaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, textEncoderId = null, speedProfileId = null, draftDecode = null, streamingMode = null, visualConditioning = null, hidden = false, keepExtendSource = false, displaySleep = null, jobId: providedJobId = null, promptAdditions = [] }) {
   const sourceAudioProvenance = audioConditioning == null ? null : federatedSourceAudioSchema.parse(audioConditioning);
   uploadedTempPaths = Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [];
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
@@ -622,6 +623,8 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     // was actually rendered. Present only when something was woven, so every
     // other history row stays byte-identical to pre-feature renders.
     ...(addedTriggerWords.length ? { renderPrompt, addedTriggerWords } : {}),
+    ...sentPromptRecord({ sentPrompt: renderPrompt, sentNegativePrompt: negativePrompt, carried: carriedPromptAdditions({ promptAdditions }),
+      added: [promptAddition('lora-triggers', 'LoRA trigger words', addedTriggerWords.join(', '))] }),
     ...(hidden ? { hidden: true } : {}),
   };
   // Each render gets one private preview directory. Runners overwrite the

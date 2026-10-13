@@ -55,6 +55,7 @@ import {
 } from '../services/fableLoom/visualConditioning.js';
 import { loraCompatKey } from '../lib/runners.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
+import { promptAdditionsSchema } from '../lib/modelInput.js';
 
 const router = Router();
 
@@ -105,6 +106,7 @@ const galleryImageFilenameSchema = (label) => z.string().max(256)
 router.get('/style-presets', (_req, res) => res.json(STYLE_PRESETS));
 
 const generateSchema = z.object({
+  promptAdditions: promptAdditionsSchema,
   // Empty prompt allowed — i2i / edit / unconditional generation don't require
   // one. The multipart FormData builder drops empty-string fields, so an empty
   // prompt arrives as `undefined`; default it to '' rather than rejecting.

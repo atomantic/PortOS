@@ -49,6 +49,7 @@ import { weaveLoraTriggers } from '../../lib/loraTriggers.js';
 import { provenanceForRender } from '../../lib/assetProvenance.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { readTriggerWordsByFilename, readLoraLicensesByFilename } from '../loras.js';
+import { carriedPromptAdditions, promptAddition, sentPromptRecord } from '../../lib/modelInput.js';
 
 // Read the registry lazily — callers below hit getImageModels() at request
 // time. A prior `IMAGE_MODELS = Object.fromEntries(getImageModels()...)`
@@ -343,6 +344,8 @@ export function buildSidecarMeta({
   // License map keyed by LoRA basename, read from sidecars by generateImage
   // so this stays pure. Missing entries stamp license: null (unknown).
   loraLicenses = null,
+  // The labeled additions the composer put around the user's text (lib/modelInput.js).
+  promptAdditions = [],
   initImagePath = null,
   initImageStrength = null,
   referenceImagePaths = [],
@@ -466,6 +469,10 @@ export function buildSidecarMeta({
     meta.renderPrompt = renderPrompt;
     meta.addedTriggerWords = addedTriggerWords;
   }
+  Object.assign(meta, sentPromptRecord({
+    sentPrompt: renderPrompt, sentNegativePrompt: negativePrompt, carried: carriedPromptAdditions({ promptAdditions }),
+    added: [promptAddition('lora-triggers', 'LoRA trigger words', addedTriggerWords.join(', '))],
+  }));
   // Stamp the licenses known at THIS render. A later re-read of the LoRA
   // sidecar or model card must not rewrite what was true when the pixels
   // were made (#5638). Unknown stays null.
@@ -562,7 +569,7 @@ export function parseImageExecutionMarker(line) {
   };
 }
 
-export async function generateImage({ pythonPath, prompt = '', negativePrompt = '', modelId = LOCAL_IMAGEGEN_DEFAULT_MODEL, width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, referenceImagePaths = [], referenceImageStrengths = [], visualConditioning = null, jobId: providedJobId = null, cleanC2PA = false, denoise = false, regenOf = null, upscaleTo = null, outputTarget = null }) {
+export async function generateImage({ pythonPath, prompt = '', negativePrompt = '', modelId = LOCAL_IMAGEGEN_DEFAULT_MODEL, width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, referenceImagePaths = [], referenceImageStrengths = [], visualConditioning = null, jobId: providedJobId = null, cleanC2PA = false, denoise = false, regenOf = null, upscaleTo = null, outputTarget = null, promptAdditions = [] }) {
   // The ingestion instant `renderTimingFields` measures from — the queue calls
   // generateImage the moment it picks this job up. See lib/renderTiming.js.
   const renderStartedAtMs = Date.now();
@@ -676,6 +683,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     regenOf,
     loraTriggerWords,
     loraLicenses,
+    promptAdditions,
     resolveInputPath: resolveImageInputPath,
     loraExists: existsSync,
   });

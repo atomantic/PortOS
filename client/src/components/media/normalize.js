@@ -39,6 +39,7 @@ export function normalizeImage(i) {
     downloadUrl: originalUrl,
     prompt: i.prompt || i.metadata?.prompt || '(no prompt)',
     negativePrompt: i.negativePrompt || i.negative_prompt || null,
+    ...sentPromptFields(i),
     modelId,
     width: i.width,
     height: i.height,
@@ -137,6 +138,7 @@ export function normalizeVideo(v) {
     downloadUrl: `/data/videos/${v.filename}`,
     prompt: v.prompt || '(no prompt)',
     negativePrompt: v.negativePrompt || v.negative_prompt || null,
+    ...sentPromptFields(v),
     modelId: v.modelId,
     width: v.width,
     height: v.height,
@@ -154,6 +156,16 @@ export function normalizeVideo(v) {
     provenance: v.provenance || null,
     compact: v.compact === true,
     raw: v,
+  };
+}
+
+// The exact text the model received and what PortOS added around the prompt
+// (#11317). Absent on records made before they were recorded.
+function sentPromptFields(raw) {
+  return {
+    sentPrompt: typeof raw.sentPrompt === 'string' ? raw.sentPrompt : null,
+    sentNegativePrompt: typeof raw.sentNegativePrompt === 'string' ? raw.sentNegativePrompt : null,
+    promptAdditions: Array.isArray(raw.promptAdditions) ? raw.promptAdditions.filter((item) => item?.label && typeof item.text === 'string') : [],
   };
 }
 
