@@ -483,6 +483,10 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // directly, by fallback or after a checkpoint (#9869). Gate each operation
   // uniformly, including deterministic plan/compile options. Creative approval
   // and toolFree authoring flags do not grant network execution authority.
+  // Revision entry points reach the same authoring runners, including fallback.
+  // Song-revision /scenes gates only action=replan in the body registry; remove and
+  // dismiss remain record-only operations.
+  'POST /api/music-video/:id/production-review/revise',
   'POST /api/music-video/:id/plan',
   'POST /api/music-video/:id/treatment/compile',
   'POST /api/music-video/:id/publish-kit/copy',
@@ -925,6 +929,9 @@ const bodyKeys = (body) => (body && typeof body === 'object' && !Array.isArray(b
 // `hostControlBodyGate` in services/authGate.js applies these after the body
 // parser, since `hostControlRouteGate` runs before it.
 const COMPILED_BODY_ROUTES = [
+  // Song revision replanning uses the tool-capable shot planner. The other
+  // actions (remove/dismiss) edit records without dispatching a provider.
+  ['POST /api/music-video/:id/song-revision/scenes', (body) => body?.action === 'replan' ? ['action'] : []],
   // Enabling this feature now launches its registered host executable.
   ['PUT /api/settings/features/eidoverse', (body) => bodyKeys(body)],
   ['POST /api/local-llm/capability-tests/run', (body) => body?.testId === 'sandbox-repair' ? ['testId'] : []],

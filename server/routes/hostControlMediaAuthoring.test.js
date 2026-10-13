@@ -108,6 +108,12 @@ vi.mock('../services/musicVideo/productionService.js', () => ({
   startProduction: vi.fn(async () => ({ status: 'running' })),
   resumeProduction: vi.fn(async () => ({ status: 'running' })),
 }));
+vi.mock('../services/musicVideo/songRevision.js', () => ({
+  resolveSongRevisionScenes: vi.fn(async () => ({ project: {} })),
+}));
+vi.mock('../services/musicVideo/productionReviewService.js', () => ({
+  reviseProductionFromFeedback: vi.fn(async () => ({ project: {} })),
+}));
 vi.mock('../services/musicVideo/planner.js', () => ({
   planProject: vi.fn(async () => ({ project: {}, promptsSeeded: false })),
 }));
@@ -134,7 +140,7 @@ vi.mock('../services/musicVideo/castAndSetsService.js', () => ({
   applyCastAndSetsFeedback: vi.fn(async () => ({ status: 'running' })),
 }));
 
-import { authGate, hostControlRouteGate } from '../services/authGate.js';
+import { authGate, hostControlRouteGate, hostControlBodyGate } from '../services/authGate.js';
 import codeAnimationRoutes from './codeAnimation.js';
 import musicRoutes from './music.js';
 import tracksRoutes from './tracks.js';
@@ -147,6 +153,8 @@ import { writeMusicCode } from '../services/musicCode.js';
 import { startAutonomousVideo, resumeAutonomousVideo } from '../services/musicVideo/autonomousService.js';
 
 import { createSession, revokeSessionById } from '../services/auth.js';
+import { resolveSongRevisionScenes } from '../services/musicVideo/songRevision.js';
+import { reviseProductionFromFeedback } from '../services/musicVideo/productionReviewService.js';
 import { planProject } from '../services/musicVideo/planner.js';
 import { compileTreatment } from '../services/musicVideo/treatmentService.js';
 import { draftPublishKitCopy } from '../services/musicVideo/publishKit.js';
@@ -172,6 +180,8 @@ const authoring = [
   [`/api/music-video/${id}/autonomous/resume`, {}, resumeAutonomousVideo, 200],
 ];
 const musicVideoAuthoring = [
+  [`/api/music-video/${id}/song-revision/scenes`, { revisionId: 'example-revision', action: 'replan', ...picker }, resolveSongRevisionScenes, 200, 'post'],
+  [`/api/music-video/${id}/production-review/revise`, { stage: 'storyboard', ...picker }, reviseProductionFromFeedback, 200, 'post'],
   [`/api/music-video/${id}/plan`, { ...picker }, planProject, 200, 'post'],
   [`/api/music-video/${id}/treatment/compile`, { baseRevision: 0, ...picker }, compileTreatment, 200, 'post'],
   [`/api/music-video/${id}/publish-kit/copy`, { notes: 'Example copy', ...picker }, draftPublishKitCopy, 200, 'post'],
@@ -197,7 +207,7 @@ const appFor = (address = '192.0.2.10') => {
     Object.defineProperty(req.socket, 'remoteAddress', { value: address });
     next();
   });
-  app.use(authGate, hostControlRouteGate, express.json());
+  app.use(authGate, hostControlRouteGate, express.json(), hostControlBodyGate);
   app.use('/api/code-animation', codeAnimationRoutes);
   app.use('/api/music', musicRoutes);
   app.use('/api/tracks', tracksRoutes);
@@ -273,6 +283,16 @@ describe('media authoring operator authority (#9512, #9869)', () => {
         expect(options.reviewer || options).toEqual(expect.objectContaining(picker));
       }
     }
+  });
+
+  it('keeps song-revision remove and dismiss available without host authority', async () => {
+    for (const action of ['remove', 'dismiss']) {
+      const body = { revisionId: 'example-revision', action };
+      const response = await request(appFor()).post(`/api/music-video/${id}/song-revision/scenes`).send(body);
+      expect(response.status).toBe(200);
+      expect(resolveSongRevisionScenes).toHaveBeenLastCalledWith(id, body);
+    }
+    expect(reviseProductionFromFeedback).not.toHaveBeenCalled();
   });
 
   it('preserves pinned and default authoring/reviewer choices for delegated agents', async () => {
