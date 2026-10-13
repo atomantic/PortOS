@@ -30,6 +30,8 @@ describe('shotCardRenderRequest', () => {
     const base = { scene: scene({ prompt: typed }), settings: { backend: 'local', modelId: 'ltx25_example' }, models };
     expect(shotCardRenderRequest(base).prompt).toBe('Her palm slams the splicer.');
     expect(shotCardRenderRequest({ ...base, inputs: { songAudio: true } }).prompt).toBe('Her palm slams the splicer. No lip-sync.');
+    // A leading count is action, not a song span.
+    expect(shotCardRenderRequest({ ...base, scene: scene({ prompt: '2-3: two dancers spin' }) }).prompt).toBe('2-3: two dancers spin');
   });
 
   // Review on #11280: an audio-reactive render hears the song through its LoRA, so the card must say so and never stack a supplied window.

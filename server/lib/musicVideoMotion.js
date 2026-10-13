@@ -83,7 +83,8 @@ export function silentMotionPrompt(prompt, { styleParts = [], keep = [] } = {}) 
 
 // Render bookkeeping a video model cannot act on: a leading song span with its length
 // ("26.45-28.31s (1.87 s)." or "0:26.4–0:28.3:"), and a trim note ("Use the first ~1.9 s.").
-const SONG_SPAN_PREFIX = /^\s*(?:\d{1,2}:)?\d+(?:\.\d+)?\s*s?\s*[-–—]\s*(?:\d{1,2}:)?\d+(?:\.\d+)?\s*s?\s*(?:\(\s*~?\d+(?:\.\d+)?\s*s(?:ec(?:onds?)?)?\s*\))?\s*[.:]\s*/;
+// A span has a decimal, a seconds unit or a m:ss clock, so a leading count ("2-3: two dancers") stays.
+const SONG_SPAN_PREFIX = /^\s*(?=[\d:.]*[.:]\d|[\d\s:.–—-]*\ds)(?:\d{1,2}:)?\d+(?:\.\d+)?\s*s?\s*[-–—]\s*(?:\d{1,2}:)?\d+(?:\.\d+)?\s*s?\s*(?:\(\s*~?\d+(?:\.\d+)?\s*s(?:ec(?:onds?)?)?\s*\))?\s*[.:]\s*/;
 const TRIM_NOTE = /(^|[.!?;]\s+)(?:Use|Keep)\s+(?:only\s+)?the\s+(?:first|last|opening|final)\s+~?\d+(?:\.\d+)?\s*s(?:ec(?:onds?)?)?\b(?:\s+of\s+(?:the\s+)?(?:clip|take|output|render|shot))?\s*(?:[.!?]|$)/gi;
 // "No lip-sync." tells a model that hears nothing to avoid what it cannot do.
 const NO_LIP_SYNC = /(^|[.!?;]\s+)No\s+(?:singing\s*(?:,|or)\s*)?lip[- ]?sync(?:ing)?(?:\s*(?:,|or)\s*(?:singing|speaking|talking))?\s*(?:[.!?]|$)/gi;
