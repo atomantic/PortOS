@@ -1,7 +1,7 @@
 import { existsSync } from 'fs';
-import { readdir } from 'fs/promises';
+import { readdir, realpath, stat } from 'fs/promises';
 import { join, extname } from 'path';
-import { safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { isPathInsideDir, isTopLevelEntryName, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 
 /**
  * Well-known icon paths to check, ordered by priority.
@@ -55,6 +55,52 @@ const CONTENT_TYPES = {
   '.icns': 'image/x-icns',
   '.webp': 'image/webp',
 };
+
+const ICON_EXTENSIONS = new Set(Object.keys(CONTENT_TYPES));
+
+/**
+ * Real path of a regular file that stays inside `repoPath` after symlinks are
+ * resolved. A stored icon, an Xcode manifest, or a repo symlink can otherwise
+ * name a host file and the icon route will return its bytes. `extensions`
+ * limits the resolved target, so `favicon.svg -> .env` is not an icon.
+ * @param {string} repoPath
+ * @param {string} candidatePath
+ * @param {Set<string>} extensions lowercase extensions including the dot
+ * @returns {Promise<string|null>}
+ */
+async function resolveContainedFile(repoPath, candidatePath, extensions) {
+  if (typeof repoPath !== 'string' || !repoPath || typeof candidatePath !== 'string' || !candidatePath) {
+    return null;
+  }
+  if (!(extensions instanceof Set) || extensions.size === 0) return null;
+  try {
+    const root = await realpath(repoPath);
+    const resolved = await realpath(candidatePath);
+    const info = await stat(resolved);
+    if (!info.isFile()) return null;
+    if (!extensions.has(extname(resolved).toLowerCase())) return null;
+    if (!isPathInsideDir(root, resolved)) return null;
+    return resolved;
+  } catch {
+    return null;
+  }
+}
+
+/** @param {string} repoPath @param {string} candidatePath @returns {Promise<string|null>} */
+export function resolveContainedIcon(repoPath, candidatePath) {
+  return resolveContainedFile(repoPath, candidatePath, ICON_EXTENSIONS);
+}
+
+async function isContainedDirectory(repoPath, candidatePath) {
+  try {
+    const root = await realpath(repoPath);
+    const resolved = await realpath(candidatePath);
+    const info = await stat(resolved);
+    return info.isDirectory() && isPathInsideDir(root, resolved);
+  } catch {
+    return false;
+  }
+}
 
 // SVGs that embed an external <image href="..."> won't render under the icon
 // endpoint's strict `default-src 'none'` CSP, so they are unusable as app icons
@@ -110,56 +156,68 @@ async function findXcodeAppIcon(repoPath) {
     }
 
     for (const iconSetPath of appIconSetPaths) {
-      if (!existsSync(iconSetPath)) continue;
+      if (!await isContainedDirectory(repoPath, iconSetPath)) continue;
 
-      // Read Contents.json to find actual icon filenames and sizes
-      const contentsPath = join(iconSetPath, 'Contents.json');
-      if (existsSync(contentsPath)) {
-        const contents = await tryReadFile(contentsPath);
-        if (contents) {
-          const parsed = safeJSONParse(contents, {})?.images || [];
-          // Find the largest icon by parsing size (prefer 1024x1024, then smaller)
-          let bestIcon = null;
-          let bestSize = 0;
+      const bestFromManifest = await bestManifestIcon(repoPath, iconSetPath);
+      if (bestFromManifest) return bestFromManifest;
 
-          for (const img of parsed) {
-            if (!img.filename) continue;
-            const filePath = join(iconSetPath, img.filename);
-            if (!existsSync(filePath)) continue;
-
-            // Parse size from the "size" field (e.g., "1024x1024")
-            const sizeMatch = img.size?.match(/(\d+)x(\d+)/);
-            const scale = parseFloat(img.scale) || 1;
-            const size = sizeMatch ? parseInt(sizeMatch[1]) * scale : 0;
-
-            if (size > bestSize) {
-              bestSize = size;
-              bestIcon = filePath;
-            }
-          }
-
-          // If Contents.json didn't yield results, fall back to scanning files
-          if (!bestIcon) {
-            const files = await readdir(iconSetPath).catch(() => []);
-            const pngs = files.filter(f => f.endsWith('.png')).sort().reverse();
-            if (pngs.length > 0) {
-              bestIcon = join(iconSetPath, pngs[0]);
-            }
-          }
-
-          if (bestIcon) return bestIcon;
-        }
-      }
-
-      // Fallback: just grab the largest PNG by filename
-      const files = await readdir(iconSetPath).catch(() => []);
-      const pngs = files.filter(f => f.endsWith('.png')).sort().reverse();
-      if (pngs.length > 0) {
-        return join(iconSetPath, pngs[0]);
-      }
+      const fallback = await firstContainedPng(repoPath, iconSetPath);
+      if (fallback) return fallback;
     }
   }
 
+  return null;
+}
+
+/**
+ * Largest contained icon named by Contents.json. A manifest that itself
+ * resolves outside the repo is ignored: its filenames are attacker-controlled
+ * even when they point back at local images. Non-array `images` is the same
+ * as no manifest so the PNG filename fallback can still run.
+ * @param {string} repoPath
+ * @param {string} iconSetPath
+ * @returns {Promise<string|null>}
+ */
+async function bestManifestIcon(repoPath, iconSetPath) {
+  const manifestPath = await resolveContainedFile(
+    repoPath,
+    join(iconSetPath, 'Contents.json'),
+    new Set(['.json'])
+  );
+  if (!manifestPath) return null;
+  const contents = await tryReadFile(manifestPath);
+  if (!contents) return null;
+  const images = safeJSONParse(contents, {})?.images;
+  if (!Array.isArray(images)) return null;
+
+  let bestIcon = null;
+  let bestSize = 0;
+  for (const img of images) {
+    // Basename only: `join` treats an absolute filename as the whole path,
+    // and `../` walks out of the asset catalog.
+    if (!isTopLevelEntryName(img?.filename)) continue;
+    const resolved = await resolveContainedIcon(repoPath, join(iconSetPath, img.filename));
+    if (!resolved) continue;
+    const sizeMatch = typeof img.size === 'string' ? img.size.match(/(\d+)x(\d+)/) : null;
+    const scale = parseFloat(img.scale) || 1;
+    const size = sizeMatch ? parseInt(sizeMatch[1], 10) * scale : 0;
+    if (size > bestSize) {
+      bestSize = size;
+      bestIcon = resolved;
+    }
+  }
+  return bestIcon;
+}
+
+/** Reverse-sorted contained PNG in the icon set, for a missing or unusable manifest. */
+async function firstContainedPng(repoPath, iconSetPath) {
+  const files = await readdir(iconSetPath).catch(() => []);
+  const pngs = files.filter(f => f.endsWith('.png')).sort().reverse();
+  for (const name of pngs) {
+    if (!isTopLevelEntryName(name)) continue;
+    const resolved = await resolveContainedIcon(repoPath, join(iconSetPath, name));
+    if (resolved) return resolved;
+  }
   return null;
 }
 
@@ -179,12 +237,13 @@ export async function detectAppIcon(repoPath, appType) {
     if (xcodeIcon) return xcodeIcon;
   }
 
-  // Check well-known paths
+  // Check well-known paths. Resolve symlinks before accepting the file so
+  // `public/` or the icon itself cannot point at a file outside the repo.
   for (const relPath of ICON_SEARCH_PATHS) {
-    const fullPath = join(repoPath, relPath);
-    if (!existsSync(fullPath)) continue;
-    if (extname(fullPath).toLowerCase() === '.svg' && !await isUsableSvg(fullPath)) continue;
-    return fullPath;
+    const contained = await resolveContainedIcon(repoPath, join(repoPath, relPath));
+    if (!contained) continue;
+    if (extname(contained).toLowerCase() === '.svg' && !await isUsableSvg(contained)) continue;
+    return contained;
   }
 
   // For any project type, also try Xcode icon detection as a fallback

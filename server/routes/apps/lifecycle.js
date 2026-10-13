@@ -26,7 +26,7 @@ import { logAction } from '../../services/history.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { parseEcosystemFromPath } from '../../services/streamingDetect.js';
 import { usesPm2, isDesktopType } from '../../services/appProcessTypes.js';
-import { detectAppIcon, isUsableSvg } from '../../services/appIconDetect.js';
+import { detectAppIcon, isUsableSvg, resolveContainedIcon } from '../../services/appIconDetect.js';
 import { loadApp, pathExists, deriveUiPort } from './shared.js';
 import { EIDOVERSE_PROCESS_NAME, EIDOVERSE_MAX_MEMORY_RESTART } from '../../services/eidoverse.js';
 
@@ -355,12 +355,12 @@ router.post('/:id/refresh-config', loadApp, asyncHandler(async (req, res) => {
     updates.uiPort = deriveUiPort(updates.uiPort, updates.apiPort, updates.devUiPort || app.devUiPort);
   }
 
-  // Detect app icon if not already set, missing on disk, or stored as an
-  // unusable external-image SVG (won't render under the icon route's CSP).
+  // Same containment rule as the icon route: a stored path outside the repo
+  // is stale and must not be opened just to test whether the SVG is usable.
+  const containedIcon = await resolveContainedIcon(app.repoPath, app.appIconPath);
   const iconStale =
-    !app.appIconPath ||
-    !await pathExists(app.appIconPath) ||
-    (extname(app.appIconPath).toLowerCase() === '.svg' && !await isUsableSvg(app.appIconPath));
+    !containedIcon ||
+    (extname(containedIcon).toLowerCase() === '.svg' && !await isUsableSvg(containedIcon));
   if (iconStale) {
     const detectedIcon = await detectAppIcon(app.repoPath, app.type);
     if (detectedIcon) updates.appIconPath = detectedIcon;

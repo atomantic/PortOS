@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'fs';
+import { mkdtempSync, realpathSync, rmSync, mkdirSync, writeFileSync, symlinkSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { detectAppIcon } from './appIconDetect.js';
@@ -8,13 +8,16 @@ const PNG_BYTES = Buffer.from('89504e470d0a1a0a', 'hex');
 
 describe('detectAppIcon', () => {
   let repoPath;
+  let scratch;
 
   beforeEach(() => {
-    repoPath = mkdtempSync(join(tmpdir(), 'icon-detect-'));
+    scratch = realpathSync(mkdtempSync(join(tmpdir(), 'icon-detect-')));
+    repoPath = join(scratch, 'repo');
+    mkdirSync(repoPath);
   });
 
   afterEach(() => {
-    rmSync(repoPath, { recursive: true, force: true });
+    rmSync(scratch, { recursive: true, force: true });
   });
 
   it('returns null for missing repoPath', async () => {
@@ -55,5 +58,42 @@ describe('detectAppIcon', () => {
     );
     const result = await detectAppIcon(repoPath, 'express');
     expect(result).toBe(join(repoPath, 'public', 'favicon.svg'));
+  });
+
+  it('ranks only contained PNG members in an Xcode manifest', async () => {
+    const iconSet = join(repoPath, 'Assets.xcassets', 'AppIcon.appiconset');
+    mkdirSync(iconSet, { recursive: true });
+    writeFileSync(join(scratch, 'outside.png'), PNG_BYTES);
+    writeFileSync(join(iconSet, 'small.png'), PNG_BYTES);
+    writeFileSync(join(iconSet, 'large.png'), PNG_BYTES);
+    writeFileSync(join(iconSet, 'Contents.json'), JSON.stringify({ images: [
+      { filename: '../../../outside.png', size: '4096x4096', scale: '1x' },
+      { filename: 'small.png', size: '128x128', scale: '1x' },
+      { filename: 'large.png', size: '256x256', scale: '2x' },
+    ] }));
+
+    expect(await detectAppIcon(repoPath, 'xcode')).toBe(join(iconSet, 'large.png'));
+  });
+
+  it('falls back to contained PNG files when a manifest has the wrong images shape', async () => {
+    const iconSet = join(repoPath, 'Assets.xcassets', 'AppIcon.appiconset');
+    mkdirSync(iconSet, { recursive: true });
+    writeFileSync(join(iconSet, 'icon.png'), PNG_BYTES);
+    writeFileSync(join(iconSet, 'Contents.json'), JSON.stringify({ images: { filename: 'icon.png' } }));
+
+    expect(await detectAppIcon(repoPath, 'xcode')).toBe(join(iconSet, 'icon.png'));
+  });
+
+  it('ignores an external manifest symlink and uses the local fallback', async () => {
+    const iconSet = join(repoPath, 'Assets.xcassets', 'AppIcon.appiconset');
+    mkdirSync(iconSet, { recursive: true });
+    writeFileSync(join(iconSet, 'a.png'), PNG_BYTES);
+    writeFileSync(join(iconSet, 'z.png'), PNG_BYTES);
+    const externalManifest = join(scratch, 'manifest.json');
+    writeFileSync(externalManifest, JSON.stringify({ images: [{ filename: 'a.png', size: '1024x1024' }] }));
+    symlinkSync(externalManifest, join(iconSet, 'Contents.json'), 'file');
+
+    // The external manifest would pick a.png; filename fallback picks z.png.
+    expect(await detectAppIcon(repoPath, 'xcode')).toBe(join(iconSet, 'z.png'));
   });
 });

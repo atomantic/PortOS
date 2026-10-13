@@ -58,7 +58,9 @@ vi.mock('../../services/appUpdater.js', () => ({
 
 vi.mock('../../services/appIconDetect.js', () => ({
   detectAppIcon: vi.fn(),
-  isUsableSvg: vi.fn().mockResolvedValue(true)
+  isUsableSvg: vi.fn().mockResolvedValue(true),
+  // Tests store synthetic paths; treat a non-empty one as already inside the repo.
+  resolveContainedIcon: vi.fn(async (_repoPath, iconPath) => iconPath || null)
 }));
 
 import * as appsService from '../../services/apps.js';

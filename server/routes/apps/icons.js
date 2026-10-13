@@ -12,7 +12,7 @@ import sharp from 'sharp';
 import * as appsService from '../../services/apps.js';
 import { notifyAppsChanged } from '../../services/apps.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
-import { detectAppIcon, getIconContentType, isUsableSvg } from '../../services/appIconDetect.js';
+import { detectAppIcon, getIconContentType, isUsableSvg, resolveContainedIcon } from '../../services/appIconDetect.js';
 import { loadApp, pathExists } from './shared.js';
 
 const router = Router();
@@ -41,25 +41,22 @@ router.get('/:id/icon', loadApp, asyncHandler(async (req, res) => {
   const { appIconQuerySchema, validateRequest } = await import('../../lib/validation.js');
   const { size } = validateRequest(appIconQuerySchema, req.query);
 
-  // Use stored appIconPath, or detect on-the-fly. Stored SVGs that embed an
-  // external <image href="..."> render blank under the route's `default-src
-  // 'none'` CSP, so re-detect when the cached path is an unusable SVG (e.g.
-  // PortOS's own favicon.svg, which wraps a /portos-logo.png reference) —
-  // otherwise installs that resolved an icon BEFORE the detector learned to
-  // skip these stay broken until the user manually re-detects.
-  let iconPath = app.appIconPath;
-  const stale =
-    !iconPath ||
-    !await pathExists(iconPath) ||
-    (extname(iconPath).toLowerCase() === '.svg' && !await isUsableSvg(iconPath));
-  if (stale) {
-    iconPath = await detectAppIcon(app.repoPath, app.type);
-    if (iconPath && iconPath !== app.appIconPath) {
-      await appsService.updateApp(app.id, { appIconPath: iconPath });
+  // Use a stored path only when it still resolves to an icon inside the
+  // repo. Re-detect when it is missing, escapes through `..` or a symlink,
+  // or is an SVG that embeds an external <image href="..."> (those render
+  // blank under this route's CSP — PortOS's own favicon.svg is the example).
+  // Containment is checked before ETag so a symlink swapped onto a host file
+  // cannot answer 304 with the escaped file's metadata.
+  let iconPath = await resolveContainedIcon(app.repoPath, app.appIconPath);
+  if (!iconPath || (extname(iconPath).toLowerCase() === '.svg' && !await isUsableSvg(iconPath))) {
+    const detected = await detectAppIcon(app.repoPath, app.type);
+    if (detected && detected !== app.appIconPath) {
+      await appsService.updateApp(app.id, { appIconPath: detected });
     }
+    iconPath = detected;
   }
 
-  if (!iconPath || !await pathExists(iconPath)) {
+  if (!iconPath) {
     throw new ServerError('No app icon found', { status: 404 });
   }
 

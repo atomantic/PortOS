@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import { closeLoopbackServer, request, startLoopbackServer } from '../../lib/testHelper.js';
 import iconRoutes from './icons.js';
@@ -12,15 +12,8 @@ vi.mock('../../services/apps.js', () => ({
   PORTOS_APP_ID: 'portos-default'
 }));
 
-vi.mock('../../services/appIconDetect.js', () => ({
-  detectAppIcon: vi.fn(),
-  getIconContentType: vi.fn(),
-  isUsableSvg: vi.fn().mockResolvedValue(true)
-}));
-
 import * as appsService from '../../services/apps.js';
-import { detectAppIcon, getIconContentType, isUsableSvg } from '../../services/appIconDetect.js';
-import { writeFileSync, mkdirSync, rmSync, utimesSync } from 'fs';
+import { mkdtempSync, realpathSync, writeFileSync, mkdirSync, rmSync, utimesSync, symlinkSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -49,19 +42,23 @@ describe('Apps Icon Routes', () => {
   });
 
   describe('GET /api/apps/:id/icon', () => {
-    const iconDir = join(tmpdir(), 'portos-test-icon');
-    const iconPath = join(iconDir, 'icon.png');
-    const mockApp = { id: 'app-001', name: 'Test App', appIconPath: iconPath, repoPath: '/tmp/test', pm2ProcessNames: [] };
+    let scratch;
+    let iconDir;
+    let iconPath;
+    let mockApp;
 
     beforeEach(async () => {
+      scratch = realpathSync(mkdtempSync(join(tmpdir(), 'portos-test-icon-')));
+      iconDir = join(scratch, 'repo');
+      iconPath = join(iconDir, 'icon.png');
       mkdirSync(iconDir, { recursive: true });
       await sharp({ create: { width: 512, height: 512, channels: 3, background: '#ff0000' } }).png().toFile(iconPath);
+      mockApp = { id: 'app-001', name: 'Test App', appIconPath: iconPath, repoPath: iconDir, pm2ProcessNames: [] };
       appsService.getAppById.mockResolvedValue(mockApp);
-      getIconContentType.mockImplementation((path) => path.endsWith('.svg') ? 'image/svg+xml' : 'image/png');
     });
 
-    afterAll(() => {
-      rmSync(iconDir, { recursive: true, force: true });
+    afterEach(() => {
+      rmSync(scratch, { recursive: true, force: true });
     });
 
     it('should return icon with ETag header', async () => {
@@ -140,22 +137,127 @@ describe('Apps Icon Routes', () => {
       // Simulate the bad-state PortOS install: appIconPath stored as an SVG
       // that exists on disk but embeds <image href="/portos-logo.png"> — CSP
       // blocks the embed, so it renders blank. The route must re-detect.
-      const badSvgPath = join(iconDir, 'favicon.svg');
-      const goodPngPath = join(iconDir, 'redetected.png');
+      mkdirSync(join(iconDir, 'public'));
+      const badSvgPath = join(iconDir, 'public', 'favicon.svg');
+      const goodPngPath = join(iconDir, 'public', 'apple-touch-icon.png');
       writeFileSync(badSvgPath, '<svg><image href="/logo.png"/></svg>');
       await sharp({ create: { width: 64, height: 64, channels: 3, background: '#00ff00' } }).png().toFile(goodPngPath);
       appsService.getAppById.mockResolvedValue({
         ...mockApp,
         appIconPath: badSvgPath,
       });
-      isUsableSvg.mockResolvedValueOnce(false);
-      detectAppIcon.mockResolvedValueOnce(goodPngPath);
+      const response = await request(app).get('/api/apps/app-001/icon');
+
+      expect(response.status).toBe(200);
+      expect(appsService.updateApp).toHaveBeenCalledWith('app-001', { appIconPath: goodPngPath });
+    });
+
+    it('replaces a cached outside path with a safe detected icon without serving outside bytes', async () => {
+      const outside = join(scratch, 'outside.svg');
+      writeFileSync(outside, 'synthetic-private-marker');
+      mockApp.appIconPath = outside;
+
+      const response = await requestBinary(app, '/api/apps/app-001/icon');
+
+      expect(response.status).toBe(200);
+      expect(response.body.toString()).not.toContain('synthetic-private-marker');
+      expect(await sharp(response.body).metadata()).toMatchObject({ width: 128, height: 128 });
+      expect(appsService.updateApp).toHaveBeenCalledWith('app-001', { appIconPath: iconPath });
+    });
+
+    it('does not expose a host file selected by a traversing Xcode icon manifest', async () => {
+      unlinkSync(iconPath);
+      const iconSet = join(iconDir, 'Assets.xcassets', 'AppIcon.appiconset');
+      mkdirSync(iconSet, { recursive: true });
+      writeFileSync(join(scratch, 'outside.txt'), 'synthetic-private-marker');
+      writeFileSync(join(iconSet, 'Contents.json'), JSON.stringify({
+        images: [{ filename: '../../../outside.txt', size: '1024x1024', scale: '1x' }],
+      }));
+      mockApp.appIconPath = null;
+      mockApp.type = 'xcode';
+
+      const response = await request(app).get('/api/apps/app-001/icon');
+
+      expect(response.status).toBe(404);
+      expect(response.text).not.toContain('synthetic-private-marker');
+      expect(appsService.updateApp).not.toHaveBeenCalled();
+    });
+
+    it('revalidates a cached symlink before returning a matching conditional response', async () => {
+      unlinkSync(iconPath);
+      mkdirSync(join(iconDir, 'public'));
+      mkdirSync(join(iconDir, 'assets'));
+      const inside = join(iconDir, 'assets', 'safe.svg');
+      const outside = join(scratch, 'outside.svg');
+      const link = join(iconDir, 'public', 'favicon.svg');
+      const svg = '<svg xmlns="http://www.w3.org/2000/svg"><circle r="3"/></svg>';
+      writeFileSync(inside, svg);
+      writeFileSync(outside, 'synthetic-private-marker'.padEnd(Buffer.byteLength(svg), ' '));
+      const timestamp = new Date(Date.now() - 60_000);
+      utimesSync(inside, timestamp, timestamp);
+      utimesSync(outside, timestamp, timestamp);
+      symlinkSync(inside, link, 'file');
+      mockApp.appIconPath = link;
+
+      const first = await request(app).get('/api/apps/app-001/icon');
+      expect(first.status).toBe(200);
+      expect(first.text).toBe(svg);
+      unlinkSync(link);
+      symlinkSync(outside, link, 'file');
+
+      const second = await request(app).get('/api/apps/app-001/icon').set('If-None-Match', first.headers.etag);
+
+      expect(second.status).toBe(404);
+      expect(second.text).not.toContain('synthetic-private-marker');
+    });
+
+    it('refuses an icon beneath an escaping directory symlink', async () => {
+      unlinkSync(iconPath);
+      const outsideDir = join(scratch, 'outside');
+      mkdirSync(outsideDir);
+      writeFileSync(join(outsideDir, 'favicon.svg'), 'synthetic-private-marker');
+      symlinkSync(outsideDir, join(iconDir, 'public'), process.platform === 'win32' ? 'junction' : 'dir');
+      mockApp.appIconPath = join(iconDir, 'public', 'favicon.svg');
+
+      const response = await request(app).get('/api/apps/app-001/icon');
+
+      expect(response.status).toBe(404);
+      expect(response.text).not.toContain('synthetic-private-marker');
+    });
+
+    it('does not serve an in-repository private file through an icon-shaped symlink', async () => {
+      unlinkSync(iconPath);
+      mkdirSync(join(iconDir, 'public'));
+      const privateFile = join(iconDir, '.env');
+      const link = join(iconDir, 'public', 'favicon.svg');
+      writeFileSync(privateFile, 'synthetic-private-marker');
+      symlinkSync(privateFile, link, 'file');
+      mockApp.appIconPath = link;
+
+      const response = await request(app).get('/api/apps/app-001/icon');
+
+      expect(response.status).toBe(404);
+      expect(response.text).not.toContain('synthetic-private-marker');
+    });
+
+    it('detects and serves an internal icon symlink when the repository root is also a symlink', async () => {
+      unlinkSync(iconPath);
+      mkdirSync(join(iconDir, 'assets'));
+      mkdirSync(join(iconDir, 'public'));
+      const realIcon = join(iconDir, 'assets', 'logo.svg');
+      const svg = '<svg xmlns="http://www.w3.org/2000/svg"><rect width="4" height="4"/></svg>';
+      writeFileSync(realIcon, svg);
+      symlinkSync(realIcon, join(iconDir, 'public', 'favicon.svg'), 'file');
+      const linkedRepo = join(scratch, 'linked-repo');
+      symlinkSync(iconDir, linkedRepo, process.platform === 'win32' ? 'junction' : 'dir');
+      mockApp.repoPath = linkedRepo;
+      mockApp.appIconPath = null;
 
       const response = await request(app).get('/api/apps/app-001/icon');
 
       expect(response.status).toBe(200);
-      expect(detectAppIcon).toHaveBeenCalledWith('/tmp/test', undefined);
-      expect(appsService.updateApp).toHaveBeenCalledWith('app-001', { appIconPath: goodPngPath });
+      expect(response.text).toBe(svg);
+      expect(response.headers['content-security-policy']).toBe("default-src 'none'; style-src 'unsafe-inline'");
     });
   });
 });
