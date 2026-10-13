@@ -380,6 +380,16 @@ dump/import tools are used only for the selected local Docker endpoint; a
 host/port override cannot silently fall back to the local container. Maintenance
 `--endpoint` transfers remain bound to their explicitly recorded endpoint.
 
+**Docker repair preserves volume identity.** Before `scripts/db.sh fix` stops
+or removes an existing database container, it compares that container's data
+volume with the named volume resolved by `docker compose config`. A changed
+checkout directory, `COMPOSE_PROJECT_NAME`, or volume override can select a
+different volume for the next startup. Repair refuses a mismatch or an
+unresolved volume without changing the container or its data; restore the
+original Compose project/volume configuration before retrying. With no
+container, repair requires the configured named volume to already exist and
+never creates one.
+
 **Endpoint binding (#10757).** The resolved host, port, user and database are
 passed as explicit arguments, but libpq also honors inherited variables that
 choose where a client really connects: `PGHOSTADDR` overrides the network
