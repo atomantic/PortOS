@@ -256,6 +256,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   // While the song plays the look is the light playback version; paused, the exact render filter.
   const [playing, setPlaying] = useState(false);
   const lookAvailable = !isFilmLookNeutral(project.filmLook);
+  const songTime = useCallback(() => audioRef.current?.currentTime || 0, []);
   const toggleLook = () => setLookOn((on) => { safeWriteStorage(ANIMATIC_LOOK_KEY, on ? 'off' : 'on'); return !on; });
   const scenes = project.scenes || [];
   const lyricsAvailable = hasTimedLyrics(project);
@@ -308,7 +309,8 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
         <FilmLookFrame look={lookOn ? project.filmLook : null} frame={Math.round(time * ANIMATIC_FPS)} playing={playing} className="h-full w-full">
         {shot?.referenceImageId && shotEffect ? (
           <ImageEffectStill key={shot.sceneId} src={`/data/images/${shot.referenceImageId}`} effect={shotEffect}
-            startSec={shot.startSec} audioRef={audioRef} time={time} />
+            endSrc={shot.endImageId ? `/data/images/${shot.endImageId}` : null}
+            startSec={shot.startSec} time={time} playing={playing} getTime={songTime} fps={ANIMATIC_FPS} />
         ) : shot?.referenceImageId ? (
           // Behind a VHS-edged clip the still stands in, blurred and faded, for the render's blur of the clip.
           <img src={`/data/images/${shot.referenceImageId}`} alt=""
@@ -323,7 +325,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
           <ShotClip key={`${scene.sceneId}:${scene.videoHistoryId}`} scene={scene} audioRef={audioRef} time={time} current={scene === shot} />
         ))}
         {/* The shots' VHS glitches on their cuts, on the frames the final render repaints. */}
-        <TransitionGlitch scenes={scenes} figureRef={figureRef} audioRef={audioRef} time={time}
+        <TransitionGlitch scenes={scenes} figureRef={figureRef} audioRef={audioRef} time={time} layered={layered}
           endSec={Number(project.audioAnalysis?.durationSec) || null} fps={ANIMATIC_FPS} />
         {overlay}
         </FilmLookFrame>

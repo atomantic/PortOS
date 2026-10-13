@@ -4,11 +4,14 @@
  */
 export {
   DEFAULT_IMAGE_EFFECT_SEC,
+  END_FRAME_IMAGE_EFFECTS,
+  IMAGE_EFFECT_CHANGE_SECS,
   IMAGE_EFFECT_DEVELOP_SECS,
   IMAGE_EFFECT_FOG_COLOR,
   IMAGE_EFFECT_SEC_RANGE,
   MUSIC_VIDEO_IMAGE_EFFECTS,
   MUSIC_VIDEO_IMAGE_EFFECT_LABELS,
   imageEffectState,
+  isEndFrameImageEffect,
   sceneImageEffect,
 } from '../../../server/lib/musicVideoImageEffects.js';

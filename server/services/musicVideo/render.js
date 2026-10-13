@@ -56,9 +56,9 @@ import { AUDIO_NORM, buildAudioBedMix } from '../videoTimeline/audioBedMix.js';
 import { musicVideoEvents } from './events.js';
 import { projectSoundBed } from './soundBed.js';
 import { intercutClips } from './intercut.js';
-import { musicVideoTransitionFilter, sceneTransitions, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
+import { imageEffectGlitchFrames, mergeGlitchFrames, musicVideoTransitionFilter, sceneTransitions, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
 import { stillMoveForCamera } from '../../lib/cameraMovements.js';
-import { musicVideoImageEffectFilter, sceneImageEffect } from '../../lib/musicVideoImageEffects.js';
+import { isEndFrameImageEffect, musicVideoImageEffectFilter, sceneImageEffect } from '../../lib/musicVideoImageEffects.js';
 
 // Per-project render mutex (keyed by projectId so two projects can render in
 // parallel; same-project re-entry returns 409 with the live jobId for re-attach).
@@ -253,8 +253,12 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
       if (!imagePath || !existsSync(imagePath)) { missingStills.push(scene.sceneId); continue; }
       // A planned camera move (#10589) picks the nearest composed still move.
       // An image effect (a camera flash that develops, musicVideoImageEffects.js) plays over the still.
+      // An end-frame effect also reads the shot's end frame; without it on disk the still plays alone.
       const effect = sceneImageEffect(scene, { layered });
-      clips.push({ ...section, imagePath, move: stillMoveForCamera(scene.camera) || scene.stillMove || 'hold', ...(effect ? { effect } : {}) });
+      const endImagePath = effect && isEndFrameImageEffect(effect.effect) ? safeUnder(PATHS.images, scene.endImageId) : null;
+      const playable = effect && (!isEndFrameImageEffect(effect.effect) || (endImagePath && existsSync(endImagePath)));
+      clips.push({ ...section, imagePath, move: stillMoveForCamera(scene.camera) || scene.stillMove || 'hold',
+        ...(playable ? { effect, ...(endImagePath ? { endImagePath } : {}) } : {}) });
       continue;
     }
     const entry = historyMap.get(scene.videoHistoryId);
@@ -430,9 +434,13 @@ function sectionChain(c, input, { canonW, canonH, fps, frames, frameGrid }) {
       // Rendered from a 2x cover so the slow zoom does not step pixel by pixel.
       ? `zoompan=z='1+${STILL_PUSH_ZOOM}*on/${frames}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=${canonW}x${canonH}:fps=${fps},setsar=1,`
       : c.move === 'pan' ? `crop=${canonW}:${canonH}:x='(iw-ow)*n/${Math.max(1, frames - 1)}':y='(ih-oh)/2',` : '';
-    return `[${input}:v]fps=${fps},scale=${coverW}:${coverH}:force_original_aspect_ratio=increase,crop=${coverW}:${coverH},setsar=1,`
-      + `${move}format=yuv420p,${trim},setpts=PTS-STARTPTS`
-      + musicVideoImageEffectFilter(c.effect, { width: canonW, height: canonH, fps, key: input, atSec: c.effectAtSec || 0 });
+    // An end frame (an end-frame image effect) is fitted and moved exactly like the still.
+    const fitted = (id) => `[${id}:v]fps=${fps},scale=${coverW}:${coverH}:force_original_aspect_ratio=increase,crop=${coverW}:${coverH},setsar=1,`
+      + `${move}format=yuv420p,${trim},setpts=PTS-STARTPTS`;
+    const id = typeof input === 'object' ? input.clip : input;
+    const end = typeof input === 'object' && input.end != null ? `${fitted(input.end)}[fxend${id}];` : '';
+    return end + fitted(id)
+      + musicVideoImageEffectFilter(c.effect, { width: canonW, height: canonH, fps, key: id, atSec: c.effectAtSec || 0, end: end ? `fxend${id}` : null });
   }
   // A non-looping shot a hair longer than its source holds the last frame for
   // the remainder instead of ending early and drifting every later cut. On the
@@ -522,8 +530,14 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
   for (const { c } of plan) {
     if (c.layer === 'card') { inputOf.push(null); continue; }
     const clipInput = nextInput++;
-    if (c.layer === 'still') inputs.push('-loop', '1', '-framerate', String(fps), '-i', c.imagePath);
-    else {
+    if (c.layer === 'still') {
+      inputs.push('-loop', '1', '-framerate', String(fps), '-i', c.imagePath);
+      if (c.endImagePath) {
+        inputOf.push({ clip: clipInput, end: nextInput++ });
+        inputs.push('-loop', '1', '-framerate', String(fps), '-i', c.endImagePath);
+        continue;
+      }
+    } else {
       if (c.loop !== false) inputs.push('-stream_loop', '-1');
       inputs.push('-i', c.videoPath);
     }
@@ -540,10 +554,12 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
   const filters = plan.map(({ c, frames }, i) => `${sectionChain(c, inputOf[i], { canonW, canonH, fps, frames, frameGrid })}[v${i}]`);
   const gradeFilter = musicVideoGradeFilter(grade, plan.map(({ c, startSec, endSec }) => ({ sceneId: c.sceneId, startSec, endSec })), { fps });
   // Cut transitions repaint a few frames around their cuts, under the typography, and add no time.
-  const glitches = transitionGlitchFrames(plan.map(({ c, startSec, endSec }) => ({
+  const pieces = plan.map(({ c, startSec, endSec }) => ({
     sceneId: c.sceneId, startFrame: Math.round(startSec * fps), endFrame: Math.round(endSec * fps),
-    partner: !!c.intercutOf, transitionIn: c.transitionIn, transitionOut: c.transitionOut,
-  })));
+    partner: !!c.intercutOf, transitionIn: c.transitionIn, transitionOut: c.transitionOut, effect: c.effect, effectAtSec: c.effectAtSec,
+  }));
+  // A still's glitch to its end frame paints with the same frames.
+  const glitches = mergeGlitchFrames(transitionGlitchFrames(pieces), imageEffectGlitchFrames(pieces, fps));
   const glitchFilter = musicVideoTransitionFilter(glitches, { width: canonW, height: canonH });
   const cutLabel = overlays.length > 0 ? 'cut0' : 'outv';
   const finishing = [gradeFilter, glitchFilter].filter(Boolean).join(',');

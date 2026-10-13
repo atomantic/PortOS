@@ -36,6 +36,8 @@ import SceneRenderInputs, { shotCardRenderRequest, shotCardRequestProblem } from
 import SceneFrameFit, { sceneFrameFit } from './SceneFrameFit.jsx';
 import SceneTransitions from './SceneTransitions.jsx';
 import SceneImageEffect from './SceneImageEffect.jsx';
+import ScenePicturePreview from './ScenePicturePreview.jsx';
+import { isEndFrameImageEffect } from '../../lib/musicVideoImageEffects.js';
 
 // The two timeline-bound scene fields rendered as identical number inputs.
 const SCENE_TIME_FIELDS = [['Start', 'startSec'], ['End', 'endSec']];
@@ -208,8 +210,11 @@ export default function SceneCard({
     onGenerateVideo?.(scene, { ...(renderOverrides ? { target: renderOverrides } : {}), card });
   };
   const renderCost = performance ? performanceCost : timing.falCost;
-  // A footage shot's start and end frames show as a pair; the end frame is optional.
-  const endFrames = Boolean(onGenerateEndFrame) && layer === 'footage';
+  // A composed still shows its picture (the still, or the still playing its image effect) in place of a clip.
+  const stillPicture = layered && layer === 'still';
+  // A footage shot's start and end frames show as a pair, the end frame optional; an effect
+  // from the start frame to the end frame needs both.
+  const endFrames = Boolean(onGenerateEndFrame) && (layer === 'footage' || (stillPicture && isEndFrameImageEffect(scene.imageEffect)));
   const shotModeValue = performance ? (scene.performanceStyle === 'music' ? 'music' : 'performance') : 'cutaway';
   // The collapsed Shot settings row says what is set, so it rarely needs opening.
   const settingsSummary = [
@@ -467,6 +472,8 @@ export default function SceneCard({
             <SceneImageEffect fieldId={fieldId} scene={scene} onChange={applyPatch}
               disabled={shotLock?.clip === 'locked'} disabledReason={shotLock?.clip === 'locked' ? 'Video locked. Unlock the video to change it.' : null} />
           )}
+          {stillPicture ? <ScenePicturePreview scene={scene} /> : (
+          <>
           {scene.videoHistoryId && performance && (
             <PerformanceEvidence key={scene.videoHistoryId} clipSrc={clipSrc} instruction={instruction}
               temporal={performanceReview?.shot} excerptStartSec={performanceReview?.excerptStartSec || 0}
@@ -581,6 +588,8 @@ export default function SceneCard({
             onSelect={(take) => onSelectTake?.(scene, take)}
             onReview={(take, review) => onReviewTake?.(scene, take, review)}
             onOpenPreview={onOpenPreview} />
+          </>
+          )}
           {/* The render's settings sit with the render: what it covers and costs, then timing, shot mode, layer and camera. */}
           {shotSettings}
         </section>

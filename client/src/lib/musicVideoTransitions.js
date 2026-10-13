@@ -7,6 +7,8 @@ export {
   MUSIC_VIDEO_TRANSITIONS,
   MUSIC_VIDEO_TRANSITION_LABELS,
   MUSIC_VIDEO_TRANSITION_STYLES,
+  mergeGlitchFrames,
+  sceneImageEffectGlitchFrames,
   sceneTransitions,
   sceneTransitionSections,
   transitionFrameAt,

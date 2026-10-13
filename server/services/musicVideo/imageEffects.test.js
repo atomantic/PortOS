@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { findFfmpeg } from '../../lib/ffmpeg.js';
 import { imageEffectState, sceneImageEffect } from '../../lib/musicVideoImageEffects.js';
+import { sceneImageEffectGlitchFrames } from '../../lib/musicVideoTransitions.js';
 import { buildMusicVideoFfmpegArgs } from './render.js';
 import { applySceneUpdate, replaceScenes } from './projectsLogic.js';
 
@@ -69,7 +70,7 @@ describe.skipIf(!ffmpeg)('camera flash develop in the final render', () => {
     expect(Math.abs(stats[60].luma - held.luma)).toBeLessThan(1);
     // The animatic paints the same moments.
     expect(imageEffectState(effect, 0)).toMatchObject({ flash: 1, fog: 1, saturation: 0 });
-    expect(imageEffectState(effect, 1)).toEqual({ flash: 0, fog: 0, contrast: 1, saturation: 1 });
+    expect(imageEffectState(effect, 1)).toEqual({ flash: 0, fog: 0, contrast: 1, saturation: 1, end: 0 });
   });
 
   it('picks up a shot cut into pieces where the piece before it left off', () => {
@@ -86,6 +87,53 @@ describe.skipIf(!ffmpeg)('camera flash develop in the final render', () => {
     // A second in, the flash is long gone and the picture is part-developed.
     expect(first.luma).toBeLessThan(200);
     expect(first.chroma).toBeGreaterThan(2);
+  });
+});
+
+// Uniquely catches an end-frame effect playing without its end frame, changing at the wrong time, or its glitch landing off its cut.
+describe('end-frame effects on the storyboard', () => {
+  const shot = { sceneId: 'e', startSec: 10, endSec: 13, visualLayer: 'still', imageEffect: 'end-glitch', endImageId: 'end.png' };
+  it('changes in the middle by default or at its chosen time, and needs an end frame', () => {
+    expect(sceneImageEffect(shot, { layered: true })).toEqual({ effect: 'end-glitch', changeSec: 1.5 });
+    expect(sceneImageEffect({ ...shot, imageEffectSec: 1 }, { layered: true }).changeSec).toBe(1);
+    expect(sceneImageEffect({ ...shot, imageEffectSec: 6 }, { layered: true }).changeSec).toBe(1.5);
+    expect(sceneImageEffect({ ...shot, endImageId: null }, { layered: true })).toBeNull();
+  });
+  it('places the glitch on the cut to the end frame, inside the shot', () => {
+    expect(sceneImageEffectGlitchFrames([shot], 24, { layered: true }).map((g) => g.frame)).toEqual([275, 276, 277]);
+    expect(sceneImageEffectGlitchFrames([shot], 24, { layered: false })).toEqual([]);
+  });
+});
+
+const renderStill = (name, clip, sec) => {
+  const song = join(dir, `${name}.wav`);
+  run(['-f', 'lavfi', '-i', `sine=frequency=440:duration=${sec}`, '-y', song]);
+  const output = join(dir, `${name}.mp4`);
+  const plan = buildMusicVideoFfmpegArgs([clip], song, output, { audioDurationSec: sec });
+  run(plan.args.filter((arg, i) => !(arg === '-progress' || plan.args[i - 1] === '-progress')));
+  return frameStats(output);
+};
+
+// Uniquely catches an end-frame effect's filter graph failing in ffmpeg or changing on the wrong frame.
+describe.skipIf(!ffmpeg)('end-frame effects in the final render', () => {
+  const still = (name, color) => {
+    const path = join(dir, `${name}.png`);
+    run(['-f', 'lavfi', '-i', `color=${color}:s=${W}x${H}`, '-frames:v', '1', '-y', path]);
+    return path;
+  };
+  const clipFor = (effect) => ({ sceneId: 's1', layer: 'still', imagePath: still('red', '0xd02020'), endImagePath: still('blue', '0x2040d0'), move: 'hold',
+    inSec: 0, outSec: 2, duration: 2, sourceSec: 2, effect: { effect, changeSec: 1 } });
+  const isRed = (f) => f.chroma > 40 && f.luma < 120 && f.luma > 50;
+  it.each([['end-fade'], ['end-flash'], ['end-glitch']])('%s plays the start frame, then the end frame from the change on', (effect) => {
+    const stats = renderStill(effect, clipFor(effect), 2);
+    expect(stats).toHaveLength(48);
+    const start = stats[10];
+    const end = stats[47];
+    expect(Math.abs(start.luma - end.luma) + Math.abs(start.chroma - end.chroma)).toBeGreaterThan(10);
+    if (effect === 'end-fade') expect(stats[31].luma).not.toBeCloseTo(start.luma, 0);
+    // The flash peaks white on the cut.
+    if (effect === 'end-flash') expect(stats[24].luma).toBeGreaterThan(230);
+    expect(isRed(stats[20]) || stats[20].chroma === start.chroma).toBe(true);
   });
 });
 
