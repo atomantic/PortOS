@@ -423,6 +423,21 @@ export const LOCAL_LLM_CATALOG = [
     lmstudio: 'lmstudio-community/gpt-oss-20b-GGUF'
   },
   {
+    key: 'magistral-small-24b',
+    name: 'Magistral Small 24B',
+    category: 'reasoning',
+    recommendedFor: ['reasoning', 'multilingual'],
+    params: '24B',
+    size: '14 GB',
+    family: 'magistral',
+    description: "Mistral AI's open-weights reasoning model with explicit thinking mode, tools, and strong multilingual capabilities for complex multi-step reasoning.",
+    repository: 'mistralai/Magistral-Small-2509',
+    capabilities: ['chat', 'reasoning', 'tools', 'multilingual'],
+    context: 40960,
+    ollama: 'magistral:24b',
+    lmstudio: 'lmstudio-community/Magistral-Small-2509-GGUF'
+  },
+  {
     key: 'gemma3-27b-it',
     name: 'Gemma 3 27B IT',
     category: 'general',
@@ -510,6 +525,21 @@ export const LOCAL_LLM_CATALOG = [
     ollama: 'hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M',
     ollamaAliases: ['hf.co/unsloth/Qwen3.8-27B-GGUF:Q4_K_M'],
     lmstudio: 'unsloth/Qwen3.8-27B-GGUF'
+  },
+  {
+    key: 'qwen3.6-27b',
+    name: 'Qwen3.6 27B',
+    category: 'general',
+    recommendedFor: ['general', 'coding', 'reasoning', 'vision', 'multilingual'],
+    params: '27B',
+    size: '18 GB',
+    family: 'qwen',
+    description: "Alibaba's dense 27B multimodal model with native vision, tools, thinking preservation, and a 262K context window — strong general, coding, and reasoning capability.",
+    repository: 'Qwen/Qwen3.6-27B',
+    capabilities: ['chat', 'code', 'reasoning', 'tools', 'vision', 'multilingual'],
+    context: 262144,
+    ollama: 'qwen3.6:27b',
+    lmstudio: 'lmstudio-community/Qwen3.6-27B-GGUF'
   },
   {
     key: 'gemma4-26b-a4b',
@@ -664,18 +694,19 @@ export const LOCAL_LLM_CATALOG = [
     lmstudio: 'lmstudio-community/gemma-4-31B-it-GGUF'
   },
   {
-    key: 'nemotron-3-nano-30b-a3b',
-    name: 'Nemotron 3 Nano 30B-A3B',
+    key: 'nemotron-3.5-lightning',
+    name: 'Nemotron 3.5 Lightning 30B-A3B',
     category: 'reasoning',
-    recommendedFor: ['reasoning'],
+    recommendedFor: ['reasoning', 'coding'],
     params: '30B / 3B active',
-    size: '24 GB',
+    size: '25 GB',
     family: 'nemotron',
-    description: "NVIDIA's agentic MoE with a 1M-token context — by far the longest window here, for whole-corpus review rather than a single manuscript. Only 3B active, so it stays fast.",
-    capabilities: ['chat', 'reasoning', 'tools'],
+    description: "NVIDIA's hybrid Mamba-Transformer agentic MoE with a 1M-token context — ultra-fast long-context reasoning, coding, and tool calling with only 3B active parameters.",
+    repository: 'nvidia/Nemotron-3.5-Lightning-30B-A3B',
+    capabilities: ['chat', 'reasoning', 'code', 'tools'],
     context: 1048576,
-    ollama: 'nemotron-3-nano:30b',
-    lmstudio: 'lmstudio-community/NVIDIA-Nemotron-3-Nano-30B-A3B-GGUF'
+    ollama: 'nemotron-3.5-lightning:30b',
+    lmstudio: 'lmstudio-community/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF'
   },
   {
     key: 'llama3.3-70b',
@@ -1117,7 +1148,11 @@ const RETIRED_MODEL_MAPPINGS = [
   { ollama: 'phi3', lmstudio: 'lmstudio-community/Phi-3.1-mini-128k-instruct-GGUF' },
   { ollama: 'deepseek-r1', lmstudio: 'lmstudio-community/DeepSeek-R1-Distill-Qwen-7B-GGUF' },
   { ollama: 'minicpm-v', lmstudio: 'openbmb/MiniCPM-V-2_6-gguf' },
-  { ollama: 'smollm2', lmstudio: 'lmstudio-community/SmolLM2-1.7B-Instruct-GGUF' }
+  { ollama: 'smollm2', lmstudio: 'lmstudio-community/SmolLM2-1.7B-Instruct-GGUF' },
+  {
+    ollama: 'nemotron-3-nano:30b',
+    lmstudio: 'lmstudio-community/NVIDIA-Nemotron-3-Nano-30B-A3B-GGUF'
+  }
 ];
 
 // Strip only the implicit `:latest` tag (`llama3.2:latest` → `llama3.2`) and

@@ -232,7 +232,7 @@ const EDITORIAL_FAMILY_RANK = [
   'llama',                                   // Llama 3.x instruct
   'gemma',                                   // Gemma 2/3/4 instruct
   'glm',                                     // GLM-4.x — strong prose, tight instruction-following
-  'mixtral', 'ministral', 'mistral',         // Mistral family
+  'mixtral', 'ministral', 'magistral', 'mistral', // Mistral family
   'granite',                                 // IBM Granite — constrained, clean structured output
   'olmo',                                    // AI2 Olmo — fully-open instruct
   'command-r-plus', 'command-r', 'command',  // Cohere Command — capable but chatty/RAG-tuned
