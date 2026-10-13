@@ -341,7 +341,8 @@ export function clipRelativeCues(cues, windowStartSec, windowEndSec) {
       endSec: round6(Math.min(windowEndSec, end) - windowStartSec),
       ...(Array.isArray(cue.words) ? { words: cue.words
         .filter((word) => word && Number.isFinite(word.startSec) && Number.isFinite(word.endSec) && word.endSec > word.startSec && word.endSec > windowStartSec && word.startSec < windowEndSec)
-        .map((word) => ({ text: word.text, startSec: round6(Math.max(windowStartSec, word.startSec) - windowStartSec), endSec: round6(Math.min(windowEndSec, word.endSec) - windowStartSec) })) } : {}),
+        // Aligned lyric words keep their text as `w` (lyricAlignCore), transcribed ones as `text`.
+        .map((word) => ({ text: typeof word.text === 'string' ? word.text : typeof word.w === 'string' ? word.w : '', startSec: round6(Math.max(windowStartSec, word.startSec) - windowStartSec), endSec: round6(Math.min(windowEndSec, word.endSec) - windowStartSec) })) } : {}),
     });
   }
   return out;

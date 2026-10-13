@@ -76,7 +76,9 @@ const project = (sceneOver) => ({
   id: 'mv-1',
   uploadedAudioFilename: 'song.wav',
   lyricCues: [
-    { id: 'c1', text: 'hold on', startSec: 19, endSec: 20.5, words: [{ text: 'hold', startSec: 19, endSec: 20 }, { text: 'on', startSec: 20, endSec: 20.5 }] },
+    // Aligned words carry their text as `w` (lyricAlignCore); the take records it as `text`.
+    { id: 'c1', text: 'hold on', startSec: 19, endSec: 20.5,
+      words: [{ w: 'hold', startSec: 19, endSec: 20, conf: 'matched' }, { text: 'on', startSec: 20, endSec: 20.5 }] },
     { id: 'c2', text: 'later line', startSec: 40, endSec: 42 },
     { id: 'c3', text: 'untimed', startSec: null, endSec: null },
   ],
