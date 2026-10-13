@@ -21,7 +21,9 @@
  * like every other final merge: while a claim holds the lease the PR is left
  * open and handed to the local pending-merge queue, which takes admission at
  * its own later attempt. Reads never write. A v1 file or historical
- * `quality-snapshot.json` is explicit legacy input.
+ * `quality-snapshot.json` is explicit legacy input. Before publication, live
+ * review ownership and non-snapshot branch changes defer replacement; the push
+ * lease pins only the exact head this invocation inspected.
  */
 import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -183,7 +185,8 @@ function sameSnapshot(stored, next) {
 async function repoBase(app, git) {
   if (!await git.isRepo(app.repoPath)) return { skip: skipped(app, 'not-a-repo') };
   if (!hasOrigin(await git.getRemote(app.repoPath))) return { skip: skipped(app, 'no-remote') };
-  await git.fetchOrigin(app.repoPath).catch(() => {});
+  // A failed fetch cannot authorize replacing a branch from stale local refs.
+  await git.fetchOrigin(app.repoPath, { prune: true });
   const defaultBranch = await git.getDefaultBranch(app.repoPath);
   if (!defaultBranch) return { skip: skipped(app, 'no-default-branch') };
   return { defaultBranch };
@@ -283,7 +286,43 @@ function mergeRemoteRows(next, stored, deps, options) {
   return serializeQualitySnapshot(candidate.repository, [...candidate.records, ...(stored.records || [])]);
 }
 
+async function publicationGuard(app, git, defaultBranch, deps) {
+  const probe = deps.probePrForBranch || (await import('./prProbe.js')).probePrForBranch;
+  const pr = await probe(app.repoPath, QUALITY_SNAPSHOT_BRANCH).catch(() => null);
+  if (pr?.readable !== true || (pr.prState !== null && !['OPEN', 'MERGED', 'CLOSED'].includes(pr.prState))
+    || (pr.prState === 'OPEN' && (!pr.prUrl || !pr.prNumber))) {
+    return { reason: 'publish-pr-unreadable' };
+  }
+  const check = deps.checkSnapshotPublicationOwnership
+    || (await import('./cosClaimOwnership.js')).checkSnapshotPublicationOwnership;
+  const ownership = await check({ appId: app.id, branch: QUALITY_SNAPSHOT_BRANCH, prUrl: pr.prUrl }).catch(() => null);
+  if (ownership?.admitted !== true) return { reason: ownership?.reason || 'ownership-unreadable' };
+  const remote = await git.execGit(
+    ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${QUALITY_SNAPSHOT_BRANCH}`],
+    app.repoPath, { ignoreExitCode: true },
+  ).catch(() => null);
+  if (remote?.exitCode === 1) return { remoteSha: '' };
+  const remoteSha = remote?.stdout?.trim();
+  if (remote?.exitCode !== 0 || !/^[0-9a-f]{40,64}$/i.test(remoteSha || '')) return { reason: 'publish-branch-unreadable' };
+  // Three-dot comparison excludes unrelated base movement, but retains every
+  // change the remote branch would lose when rebuilt from the default branch.
+  const diff = await git.execGit(
+    ['diff', '--name-only', '-z', `origin/${defaultBranch}...${remoteSha}`, '--'],
+    app.repoPath, { ignoreExitCode: true },
+  ).catch(() => null);
+  if (diff?.exitCode !== 0 || typeof diff.stdout !== 'string') return { reason: 'publish-branch-unreadable' };
+  const allowed = new Set([APP_QUALITY_SNAPSHOT_FILENAME, APP_QUALITY_LEGACY_SNAPSHOT_FILENAME]);
+  if (diff.stdout.split('\0').filter(Boolean).some(path => !allowed.has(path))) return { reason: 'non-snapshot-changes' };
+  return { remoteSha };
+}
+
+function deferredPublication(app, reason) {
+  return { ...skipped(app, reason), deferredPublication: true };
+}
+
 async function landOrReuse(app, git, defaultBranch, deps, next, count, options = {}) {
+  const guard = await publicationGuard(app, git, defaultBranch, deps);
+  if (guard.reason) return deferredPublication(app, guard.reason);
   const onBranch = await readGitSnapshot(
     git, app.repoPath, `origin/${QUALITY_SNAPSHOT_BRANCH}:${APP_QUALITY_SNAPSHOT_FILENAME}`,
   );
@@ -306,7 +345,7 @@ async function landOrReuse(app, git, defaultBranch, deps, next, count, options =
   try {
     result = await landSnapshotPr(app, {
       body: next, count, defaultBranch, git, deps,
-      message: options.message, removeLegacy: options.removeLegacy === true,
+      message: options.message, removeLegacy: options.removeLegacy === true, remoteSha: guard.remoteSha,
     });
   } catch (error) {
     // Another install can advance the shared publish branch after our ref read.
@@ -342,6 +381,7 @@ async function landOrReuse(app, git, defaultBranch, deps, next, count, options =
 // stay retryable: remembering the body would turn the next unchanged cycle
 // into a 'no-changes' skip and strand the open PR.
 function rememberPublished(app, body, result) {
+  if (result.published !== true) return;
   if (result.deferredMerge === true && result.queuedMerge !== true) return;
   lastPublishedBody.set(app.repoPath, body);
 }
@@ -379,7 +419,7 @@ async function landExistingBranchPr(app, git, defaultBranch, deps) {
   };
 }
 
-async function landSnapshotPr(app, { body, count, defaultBranch, git, deps, message, removeLegacy = false }) {
+async function landSnapshotPr(app, { body, count, defaultBranch, git, deps, message, removeLegacy = false, remoteSha }) {
   const makeTemp = deps.mkdtemp || mkdtemp;
   const worktreePath = await makeTemp(join(tmpdir(), 'portos-quality-'));
   const addWorktree = deps.addWorktree || (async (args, repo) => {
@@ -413,7 +453,12 @@ async function landSnapshotPr(app, { body, count, defaultBranch, git, deps, mess
     ).catch(err => git.unstageFiles(worktreePath, commitPaths)
       .catch(() => {}).then(() => Promise.reject(err)));
 
-    await pushSnapshotBranch(git, app.repoPath, worktreePath).catch(error => {
+    const guard = await publicationGuard(app, git, defaultBranch, deps);
+    if (guard.reason) return deferredPublication(app, guard.reason);
+    if (guard.remoteSha !== remoteSha) {
+      throw Object.assign(new Error('Quality snapshot branch changed during preparation'), { qualitySnapshotStaleLease: true });
+    }
+    await pushSnapshotBranch(git, worktreePath, remoteSha).catch(error => {
       if (/stale info/i.test(error?.message || '')) error.qualitySnapshotStaleLease = true;
       throw error;
     });
@@ -466,26 +511,13 @@ async function cleanupSnapshotWorktree(app, git, worktreePath, removeTemp) {
   console.warn(`⚠️ Quality snapshot worktree cleanup incomplete for app ${app.id}: ${reasons}`);
 }
 
-async function pushSnapshotBranch(git, repoPath, worktreePath) {
-  const remote = await git.execGit(
-    ['rev-parse', `origin/${QUALITY_SNAPSHOT_BRANCH}`],
-    repoPath,
-    { ignoreExitCode: true },
-  ).catch(() => null);
-  const remoteSha = remote?.exitCode === 0 ? String(remote.stdout || '').trim() : '';
-  if (remoteSha && /^[0-9a-f]{7,40}$/i.test(remoteSha)) {
-    await git.execGit([
-      'push',
-      `--force-with-lease=refs/heads/${QUALITY_SNAPSHOT_BRANCH}:${remoteSha}`,
-      'origin',
-      `HEAD:refs/heads/${QUALITY_SNAPSHOT_BRANCH}`,
-    ], worktreePath);
-    return;
-  }
-  await git.execGit(
-    ['push', '-u', 'origin', `HEAD:refs/heads/${QUALITY_SNAPSHOT_BRANCH}`],
-    worktreePath,
-  );
+async function pushSnapshotBranch(git, worktreePath, remoteSha) {
+  // Pin the exact ref whose contents were inspected, including its absence.
+  // Re-reading a newer ref here would authorize discarding uninspected work.
+  await git.execGit([
+    'push', `--force-with-lease=refs/heads/${QUALITY_SNAPSHOT_BRANCH}:${remoteSha}`,
+    'origin', `HEAD:refs/heads/${QUALITY_SNAPSHOT_BRANCH}`,
+  ], worktreePath);
 }
 
 async function openOrAdoptPr(git, cwd, base, deps) {
