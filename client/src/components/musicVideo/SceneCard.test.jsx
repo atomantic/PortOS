@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 vi.mock('../../hooks/useVideoFileSrc.js', () => ({ useVideoFileSrc: () => ({}) }));
+vi.mock('../../services/apiMusicVideo.js', async (importOriginal) => ({ ...(await importOriginal()), getMusicVideoMediaPool: vi.fn(async () => ({ items: [] })) }));
 import SceneCard from './SceneCard.jsx';
 import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
 
@@ -354,7 +355,7 @@ describe('Render follows the shot locks', () => {
 
 describe('start and end frames', () => {
   // Uniquely catches a frame's prompt or Render hiding away from its picture, a frame reference not reaching the render, or the Render section not saying which renderer ends on the end frame.
-  it('shows each frame with its prompt and Render, renders from a picked frame, and shows the tapped frame\'s takes', () => {
+  it('shows each frame with its prompt and Render, renders from a picked frame, and shows the tapped frame\'s takes', async () => {
     const scene = { sceneId: 's1', prompt: 'She looks into the lens', referenceImageId: 'start.png', endImageId: 'end.png', endFramePrompt: 'Head thrown back', startSec: 0, endSec: 4,
       takes: [{ takeId: 't1', kind: 'image', assetId: 'start.png', status: 'selected' }, { takeId: 't2', kind: 'endImage', assetId: 'end.png', status: 'selected' }] };
     const onGenerateFrame = vi.fn();
@@ -364,6 +365,11 @@ describe('start and end frames', () => {
     const pair = screen.getByRole('group', { name: 'Start and end frames' });
     expect(within(pair).getByLabelText('Reference frame prompt')).toBeTruthy();
     expect(within(pair).getByLabelText('End frame prompt').value).toBe('Head thrown back');
+    // Each frame swaps from the unused stills on its own, without tapping it first.
+    fireEvent.click(within(pair).getByRole('button', { name: 'Swap end frame from unused' }));
+    expect(await screen.findByRole('dialog', { name: /^Swap end frame for/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(within(pair).getByRole('button', { name: 'Swap start frame from unused' })).toBeTruthy();
 
     // The end frame renders from the start frame unless another frame is picked; the start frame from its prompt.
     fireEvent.click(within(pair).getByRole('button', { name: 'New end frame take' }));

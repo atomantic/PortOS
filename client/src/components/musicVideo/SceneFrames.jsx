@@ -57,7 +57,8 @@ const REFERENCE_LABELS = { '': 'Prompt only', start: 'Start frame', end: 'End fr
  * as an image reference (`onGenerateFrame` / `onGenerateEndFrame` take
  * `{ referenceImageId }`, null for prompt only). Refine edits a frame by a
  * short instruction (`{ referenceImageId, refine }`). Tapping a frame picks whose
- * takes show below, as a grid, with that frame's swap and import actions.
+ * takes show below, as a grid, with that frame's import actions. Each frame
+ * has its own Swap from the video's unused stills.
  */
 export default function SceneFrames({
   scene, index, endFrames, generatingFrame = false, generatingEndFrame = false, onGenerateFrame, onGenerateEndFrame,
@@ -125,6 +126,13 @@ export default function SceneFrames({
               <PencilLine size={14} /> Refine
             </button>
           )}
+          {onSwap && (
+            <button type="button" onClick={() => onSwap(start ? 'image' : 'endImage')} disabled={takeBusy || clipLocked} className={SECONDARY_BUTTON}
+              aria-label={`Swap ${start ? 'start' : 'end'} frame from unused`}
+              title={clipLocked ? lockedTitle : `Pick a still made for this video that no shot uses as the ${start ? 'start' : 'end'} frame`}>
+              <Shuffle size={14} /> Swap
+            </button>
+          )}
         </div>
         {refining === which && imageId && (
           <form onSubmit={refine} className="flex min-w-0 gap-2">
@@ -153,12 +161,6 @@ export default function SceneFrames({
         </div>
       ) : column('start')}
       <div className="flex flex-wrap gap-2">
-        {onSwap && (
-          <button type="button" onClick={() => onSwap(activeSide === 'end' ? 'endImage' : 'image')} disabled={takeBusy || clipLocked} className={SECONDARY_BUTTON}
-            title={clipLocked ? lockedTitle : `Pick a still made for this video that no shot uses as the ${activeSide === 'end' ? 'end' : 'start'} frame`}>
-            <Shuffle size={14} /> Swap from unused
-          </button>
-        )}
         {activeSide === 'start' && onImportTake && (
           <button type="button" onClick={() => onImportTake(scene)} disabled={takeBusy} className={SECONDARY_BUTTON}
             title="Add a frame from the gallery or an upload (e.g. made in an external tool) as a take">
