@@ -364,6 +364,14 @@ export async function generateVideo(fields) {
   return res.json();
 }
 
+// The Video Gen form's preview of what Generate would send (#11317): the same
+// multipart fields, each upload the form holds named in `previewUploads`.
+export const previewVideoPrompt = (fields, options = {}) => request('/video-gen/prompt-preview', {
+  method: 'POST',
+  body: buildFormData(fields),
+  ...options,
+});
+
 // Video timeline projects (non-linear editor)
 export const listTimelineProjects = () => request('/video-timeline/projects');
 export const getTimelineProject = (id, options) => request(`/video-timeline/projects/${encodeURIComponent(id)}`, options);

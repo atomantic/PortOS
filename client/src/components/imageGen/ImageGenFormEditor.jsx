@@ -8,7 +8,7 @@ import MusicVideoFilingSelect from '../media/MusicVideoFilingSelect';
 import { FormField } from '../ui/FormField';
 import Banner from '../ui/Banner';
 import AutoSizeTextarea from '../ui/AutoSizeTextarea';
-import SentPromptPanel from '../media/SentPromptPanel';
+import ModelInputPreview from '../media/ModelInputPreview';
 import HfTokenBanner from './HfTokenBanner';
 import ImageGenControls from './ImageGenControls';
 import InitImagePicker from './InitImagePicker';
@@ -24,25 +24,6 @@ const ERROR_HEADINGS = {
   hf_unauthorized: 'HuggingFace token rejected',
   repo_not_found: 'Model repo not found',
 };
-
-// What Generate will send (#11317): the server's preview, built by the same
-// code as the render. The box above keeps only the user's words.
-function ModelInputPreview({ preview, prompt }) {
-  if (preview?.error) return <p role="alert" className="text-xs text-port-warning">{preview.error}</p>;
-  const sent = preview?.preview;
-  if (!sent) return null;
-  return (
-    <div className="text-xs">
-      <SentPromptPanel
-        prompt={prompt}
-        sentPrompt={sent.sentPrompt}
-        sentNegativePrompt={sent.sentNegativePrompt}
-        additions={sent.promptAdditions || []}
-        asWrittenText="Sent to the model as written."
-      />
-    </div>
-  );
-}
 
 export default function ImageGenFormEditor({ form, backend, generation }) {
   const {

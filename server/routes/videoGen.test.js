@@ -267,10 +267,13 @@ vi.mock('../lib/fileUtils.js', () => ({
     videos: '/mock/videos',
     uploads: '/mock/uploads',
     music: '/mock/music',
+    loras: '/mock/loras',
   },
   // Route awaits ensureDir before staging the upload; no-op for tests since
   // we mock copyFile too.
   ensureDir: vi.fn(async () => {}),
+  // The LoRA filename guard (services/loras.js) the preview's LoRA check runs.
+  assertSafeFilename: vi.fn(),
   copyFileGuarded: fsMock.copyFile,
   unlinkGuarded: fsMock.unlink,
   // The route resolves user-supplied basenames through this helper before
@@ -1130,6 +1133,53 @@ describe('videoGen routes', () => {
       expect(r.status).toBe(200);
       const [call] = mediaJobQueue.enqueueJob.mock.calls;
       expect(call[0].params.mode).not.toBe('grok');
+    });
+  });
+
+  describe('POST /prompt-preview (#11317)', () => {
+    const settings = {
+      imageGen: { grok: { enabled: true, grokPath: '/example/grok', aspectRatio: '16:9' } },
+      videoGen: { fal: { apiKey: 'example-fal-key' } },
+    };
+    const style = { id: 'style-preset', label: 'Style preset', text: 'film grain' };
+
+    it('shows the grok agent prompt, its instructions chip and the form\'s chips without queueing', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce(settings);
+      const r = await request(app).post('/api/video-gen/prompt-preview').send({
+        backend: 'grok', prompt: 'a fox running, film grain', grokDuration: '10', promptAdditions: [style],
+      });
+      expect(r.status).toBe(200);
+      expect(r.body.sentPrompt).toContain('a fox running, film grain');
+      expect(r.body.sentPrompt).toContain('for 10 seconds');
+      expect(r.body.promptAdditions).toEqual([style, expect.objectContaining({ label: 'Grok video tool instructions' })]);
+      expect(r.body.promptAdditions[1].text).toContain('[prompt]');
+      expect(r.body.promptAdditions[1].text).not.toContain('a fox running');
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it('refuses a fal prompt over the model cap with the same count the render gives', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce(settings);
+      const r = await request(app).post('/api/video-gen/prompt-preview').send({ backend: 'fal', prompt: 'x'.repeat(2001) });
+      expect(r.status).toBe(400);
+      expect(r.body.error).toMatch(/2,001 characters/);
+    });
+
+    it('refuses a LoRA the local render would refuse', async () => {
+      const { existsSync } = await import('fs');
+      vi.mocked(existsSync).mockReturnValueOnce(false);
+      const r = await request(app).post('/api/video-gen/prompt-preview').send({ prompt: 'a fox', loraFilenames: ['missing-example.safetensors'] });
+      expect(r.status).toBe(400);
+      expect(r.body.code).toBe('LORA_NOT_FOUND');
+    });
+
+    it('refuses a backend that is switched off, as Generate does', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce({ imageGen: { grok: { enabled: false } } });
+      const r = await request(app).post('/api/video-gen/prompt-preview').send({ backend: 'grok', prompt: 'a fox' });
+      expect(r.status).toBe(400);
+      expect(r.body.error).toMatch(/disabled/i);
     });
   });
 

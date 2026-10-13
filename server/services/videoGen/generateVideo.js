@@ -154,6 +154,24 @@ export const listVideoModels = () => getVideoModels().map(decorateVideoModel);
 
 export const defaultVideoModelId = (capabilities, preferredId) => getDefaultVideoModelId(capabilities, preferredId);
 
+/**
+ * The prompt a local video render sends, with each selected LoRA's trigger word
+ * woven in, and its record (#11317). Shared by the render and the Video Gen
+ * form's preview.
+ */
+export async function localVideoSentPrompt({ prompt = '', negativePrompt, loraFilenames = [], promptAdditions = [] }) {
+  const triggerWordsByLora = await readTriggerWordsByFilename(loraFilenames);
+  const { prompt: renderPrompt, added: addedTriggerWords } = weaveLoraTriggers(
+    prompt,
+    loraFilenames.map((filename) => triggerWordsByLora[filename]),
+  );
+  return {
+    renderPrompt, addedTriggerWords,
+    record: sentPromptRecord({ sentPrompt: renderPrompt, sentNegativePrompt: negativePrompt, carried: carriedPromptAdditions({ promptAdditions }),
+      added: [promptAddition('lora-triggers', 'LoRA trigger words', addedTriggerWords.join(', '))] }),
+  };
+}
+
 export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId, width = null, height = null, numFrames = null, fps = 24, steps, guidanceScale, seed, batchSize = 1, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, audioStartSec = null, audioConditioning = null, mode = null, imageStrength = null, i2vReferenceMode = null, loras = null, icReferencePaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, textEncoderId = null, speedProfileId = null, draftDecode = null, streamingMode = null, visualConditioning = null, hidden = false, keepExtendSource = false, displaySleep = null, jobId: providedJobId = null, promptAdditions = [] }) {
   const sourceAudioProvenance = audioConditioning == null ? null : federatedSourceAudioSchema.parse(audioConditioning);
   uploadedTempPaths = Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [];
@@ -360,12 +378,10 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // prompt is never duplicated. Done here rather than in the route so the chain
   // orchestrator's per-chunk beats (`chunkPrompts`) get the tokens too — each
   // chunk re-enters through this function with its own prompt.
-  const triggerWordsByLora = await readTriggerWordsByFilename(resolvedLoras.map((l) => l.filename));
   const loraLicenses = await readLoraLicensesByFilename(resolvedLoras.map((l) => l.filename));
-  const { prompt: renderPrompt, added: addedTriggerWords } = weaveLoraTriggers(
-    prompt,
-    resolvedLoras.map((l) => triggerWordsByLora[l.filename]),
-  );
+  const { renderPrompt, addedTriggerWords, record: sentRecord } = await localVideoSentPrompt({
+    prompt, negativePrompt, loraFilenames: resolvedLoras.map((l) => l.filename), promptAdditions,
+  });
   if (addedTriggerWords.length) {
     console.log(`🔤 Video LoRA trigger words woven [${jobId.slice(0, 8)}]: ${addedTriggerWords.join(', ')}`);
   }
@@ -623,8 +639,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     // was actually rendered. Present only when something was woven, so every
     // other history row stays byte-identical to pre-feature renders.
     ...(addedTriggerWords.length ? { renderPrompt, addedTriggerWords } : {}),
-    ...sentPromptRecord({ sentPrompt: renderPrompt, sentNegativePrompt: negativePrompt, carried: carriedPromptAdditions({ promptAdditions }),
-      added: [promptAddition('lora-triggers', 'LoRA trigger words', addedTriggerWords.join(', '))] }),
+    ...sentRecord,
     ...(hidden ? { hidden: true } : {}),
   };
   // Each render gets one private preview directory. Runners overwrite the

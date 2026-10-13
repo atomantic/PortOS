@@ -58,6 +58,7 @@ import { enqueueLtxUpscale } from '../services/videoGen/upscaleJob.js';
 import { trimHistoryItemStart } from '../services/videoGen/trimStart.js';
 import { cleanupMultipartTemp } from '../services/videoGen/prepareParams.js';
 import { submitVideoGenJob } from '../services/videoGen/submitJob.js';
+import { PREVIEW_UPLOAD_FIELDS, previewVideoPrompt } from '../services/videoGen/promptPreview.js';
 import { resolveReactorApiKey, mintReactorToken } from '../services/videoGen/reactor.js';
 import { isVideoModeUsable, VIDEO_GEN_MODE } from '../services/videoGen/modes.js';
 import { MAX_VIDEO_BATCH_SIZE } from '../services/videoGen/batch.js';
@@ -525,6 +526,12 @@ const generateBodySchema = z.object({
   mediaProviderEngine: z.string().trim().min(1).max(80).optional(),
 });
 
+// The Video Gen form's preview (#11317): the generate body as the form would
+// post it, with each upload it holds named instead of attached.
+const promptPreviewBodySchema = generateBodySchema.safeExtend({
+  previewUploads: z.preprocess((v) => (typeof v === 'string' ? [v] : v), z.array(z.enum(PREVIEW_UPLOAD_FIELDS)).max(PREVIEW_UPLOAD_FIELDS.length)).optional(),
+});
+
 // Probes required-package imports on each call so a half-installed Python
 // can't masquerade as connected. /status isn't polled (mount + manual
 // refresh only), so the ~1-2s subprocess cost is acceptable.
@@ -938,6 +945,11 @@ router.get('/text-encoder/download', asyncHandler(async (req, res) => {
   // the repo still looks cached — a deleted shard from a multi-file encoder
   // would otherwise be skipped.
   await startHfDownloadStream({ req, res, repo, force: req.query.force === '1' });
+}));
+
+// What Generate would send to the model, built by the render's own code (#11317).
+router.post('/prompt-preview', uploadFields([]), asyncHandler(async (req, res) => {
+  res.json(await previewVideoPrompt(validateRequest(promptPreviewBodySchema, req.body ?? {})));
 }));
 
 router.post('/', frameImageUpload, asyncHandler(async (req, res) => {

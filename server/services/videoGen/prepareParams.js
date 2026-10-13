@@ -229,26 +229,11 @@ export const withStagedRollback = async (cleanupStaged, fn) => {
 };
 
 /**
- * @param {object} opts
- * @param {object} opts.body    - validated + coerced body from Zod (mutated in place)
- * @param {object} opts.uploads - `req.files` from multer (may be empty)
- * @param {string[]} opts.localOnlyParamKeys - field names only the local runtimes
- *   consume; a request carrying any of them is not grok-deliverable. Passed in
- *   from the route (which owns their Zod schemas) so this module never has to
- *   import back into `routes/`.
- * @returns {Promise<object>} On the grok lane:
- *   `{ backend, grok, effectiveModel, sourceImagePath, uploadedTempPath,
- *   discardSourceImage, cleanupStaged }`.
- *   On the local lane, additionally `{ pythonPath, effectiveModelId, mode,
- *   lastImagePath, audioFilePath, icReferencePaths, resolvedKeyframes,
- *   extendFromVideoPath, uploadedTempPaths, loras, effectiveChunks,
- *   effectiveChunkPrompts }`.
- *   `cleanupStaged` is the caller's rollback hook for anything that can still
- *   throw after this resolves (today: `enqueueJob`) — pass it to
- *   `withStagedRollback`.
+ * The backend a video request renders on: an explicit `body.backend`, else the
+ * pin ladder (below). Shared by the submit path and the Video Gen form's
+ * prompt preview, which passes the uploads the form holds as present fields.
  */
-export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys }) {
-  const settings = await getSettings();
+export function resolveRequestedVideoBackend({ body, uploads, settings, localOnlyParamKeys }) {
   // #3231 Phase 4 — the video pin ladder. An explicit `body.backend` always
   // wins (the VideoGen page and the MV director board both send one); when
   // absent, consult the music-video target pin (for director-board renders)
@@ -273,10 +258,34 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
     && !body.keyframes?.length
     && !body.loraFilenames?.length
     && !(body.chunks != null && Number(body.chunks) > 1);
-  const backend = body.backend
+  return body.backend
     || (grokDeliverable
       ? resolveVideoMode(null, settings, { target: body.musicVideo ? RENDER_TARGET.MUSIC_VIDEO : null })
       : VIDEO_GEN_MODE.LOCAL);
+}
+
+/**
+ * @param {object} opts
+ * @param {object} opts.body    - validated + coerced body from Zod (mutated in place)
+ * @param {object} opts.uploads - `req.files` from multer (may be empty)
+ * @param {string[]} opts.localOnlyParamKeys - field names only the local runtimes
+ *   consume; a request carrying any of them is not grok-deliverable. Passed in
+ *   from the route (which owns their Zod schemas) so this module never has to
+ *   import back into `routes/`.
+ * @returns {Promise<object>} On the grok lane:
+ *   `{ backend, grok, effectiveModel, sourceImagePath, uploadedTempPath,
+ *   discardSourceImage, cleanupStaged }`.
+ *   On the local lane, additionally `{ pythonPath, effectiveModelId, mode,
+ *   lastImagePath, audioFilePath, icReferencePaths, resolvedKeyframes,
+ *   extendFromVideoPath, uploadedTempPaths, loras, effectiveChunks,
+ *   effectiveChunkPrompts }`.
+ *   `cleanupStaged` is the caller's rollback hook for anything that can still
+ *   throw after this resolves (today: `enqueueJob`) — pass it to
+ *   `withStagedRollback`.
+ */
+export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys }) {
+  const settings = await getSettings();
+  const backend = resolveRequestedVideoBackend({ body, uploads, settings, localOnlyParamKeys });
   // A loose reference (#4874) is a LOCAL-runtime capability. The model gate
   // further down asks whether the chosen model's runtime can honor it — but an
   // explicit `backend: 'grok'` never reaches that runtime at all: grok's
