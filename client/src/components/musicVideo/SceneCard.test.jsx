@@ -468,3 +468,26 @@ describe('VHS glitch transitions', () => {
     expect(screen.getByLabelText('Glitch in').value).toBe('');
   });
 });
+
+// Uniquely catches the picture picker saving the wrong layer or effect fields, or offering the effect where the render ignores it.
+describe('image effect picker', () => {
+  it('turns a shot into a still playing camera flash develop, sets its develop length, and back to a clip', () => {
+    const onSave = vi.fn();
+    function Harness({ layered = true }) {
+      const [scene, setScene] = useState({ sceneId: 's1', startSec: 0, endSec: 4, referenceImageId: 'burger.png', takes: [] });
+      return <SceneCard scene={scene} index={0} layered={layered} onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
+    }
+    const { unmount } = render(<Harness />);
+    const picture = screen.getByLabelText('Picture');
+    fireEvent.change(picture, { target: { value: 'flash-develop' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { visualLayer: 'still', imageEffect: 'flash-develop', imageEffectSec: 3 });
+    fireEvent.change(screen.getByLabelText('Develops in'), { target: { value: '6' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { imageEffectSec: 6 });
+    expect(screen.getByText('The shot ends at 4.0s, before the photo finishes developing.')).toBeTruthy();
+    fireEvent.change(picture, { target: { value: 'clip' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { visualLayer: 'footage', imageEffect: null });
+    unmount();
+    render(<Harness layered={false} />);
+    expect(screen.queryByLabelText('Picture')).toBeNull();
+  });
+});
