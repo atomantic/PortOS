@@ -207,7 +207,7 @@ it('pins a security scanner grant to effective CLI settings and registers aliase
     blockAndBail: message => { throw new Error(JSON.stringify(message)); }, cleanupOnError: message => { throw new Error(message); },
   }, { spawnViaRunner });
   expect(spawnViaRunner).toHaveBeenCalledWith('agent-scanner', task, expect.objectContaining({
-    securityScanGrant: { model: 'saved-model', effort: 'high', auth: 'chatgpt', maxCostUsd: 2, timeLimitSeconds: 180 },
+    securityScanGrant: { model: 'saved-model', effort: 'high', auth: 'chatgpt', maxCostUsd: 25, timeLimitSeconds: 1200 },
   }));
   expect(updateAgent).toHaveBeenCalledWith('agent-scanner', { metadata: expect.objectContaining({ taskAnalysisType: 'security', securityScanGrant: expect.any(Object) }) });
 });
