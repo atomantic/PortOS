@@ -56,6 +56,45 @@ export async function fileToDataUri(filePath) {
   return `data:${mime};base64,${buf.toString('base64')}`;
 }
 
+export const FAL_STORAGE_INITIATE_URL = 'https://rest.fal.ai/storage/upload/initiate?storage_type=fal-cdn-v3';
+// A hosted input only has to outlive the render that reads it.
+const FAL_HOSTED_INPUT_TTL_SEC = 24 * 60 * 60;
+const FAL_UPLOAD_TIMEOUT_MS = 60_000;
+const FILE_EXTENSIONS = { 'audio/mpeg': 'mp3', 'audio/mp4': 'm4a', 'image/jpeg': 'jpg' };
+
+/**
+ * Host a `data:` URI on fal.ai's CDN and return its https URL, for the models
+ * that download their inputs rather than reading them inline (OmniHuman v1.5
+ * answers a data URI with "Failed to download the file", #11381). Same two
+ * steps as fal's own client: initiate (names the upload and file URLs), then
+ * PUT the bytes. The file expires after a day.
+ */
+export async function hostFalDataUri({ apiKey, dataUri, fileName }) {
+  const match = /^data:([^;,]+);base64,(.*)$/s.exec(typeof dataUri === 'string' ? dataUri : '');
+  if (!match) throw new ServerError('fal.ai input is not a base64 data URI', { status: 500, code: 'FAL_UPLOAD_INPUT' });
+  const [, contentType, base64] = match;
+  const initiated = await fetchWithTimeout(FAL_STORAGE_INITIATE_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Key ${apiKey}`,
+      'Content-Type': 'application/json',
+      'X-Fal-Object-Lifecycle': JSON.stringify({ expiration_duration_seconds: FAL_HOSTED_INPUT_TTL_SEC }),
+    },
+    body: JSON.stringify({ content_type: contentType, file_name: `${fileName}.${FILE_EXTENSIONS[contentType] || contentType.split('/')[1] || 'bin'}` }),
+  }, FAL_SUBMIT_TIMEOUT_MS);
+  const target = await initiated.json().catch(() => null);
+  if (!initiated.ok || typeof target?.upload_url !== 'string' || typeof target?.file_url !== 'string') {
+    throw new ServerError(`fal.ai upload could not start: HTTP ${initiated.status}`, { status: 502, code: 'FAL_UPLOAD_FAILED' });
+  }
+  const put = await fetchWithTimeout(target.upload_url, {
+    method: 'PUT',
+    headers: { 'Content-Type': contentType },
+    body: Buffer.from(base64, 'base64'),
+  }, FAL_UPLOAD_TIMEOUT_MS);
+  if (!put.ok) throw new ServerError(`fal.ai upload failed: HTTP ${put.status}`, { status: 502, code: 'FAL_UPLOAD_FAILED' });
+  return target.file_url;
+}
+
 /**
  * The per-request bookkeeping `cancelFalRequest` and `awaitFalCompletion`
  * share. `cancelUrl` is filled in once the submit returns.

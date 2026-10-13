@@ -784,3 +784,39 @@ describe('standalone lip-sync take', () => {
     expect(JSON.stringify(posted[1])).toContain('data:audio/webm;base64,');
   });
 });
+
+// #11381: OmniHuman v1.5 downloads its inputs and answers a data URI with
+// "Failed to download the file", so its frame and audio go up to fal's CDN first.
+describe('hosted inputs', () => {
+  it('uploads the frame and audio for a model that downloads its inputs and sends their URLs', async () => {
+    const frame = join(TEST_ROOT, 'singer.png');
+    const audio = join(TEST_ROOT, 'line.wav');
+    await writeFile(frame, 'png'); await writeFile(audio, 'wav');
+    const model = 'fal-ai/bytedance/omnihuman/v1.5';
+    const uploads = [];
+    let posted = null;
+    vi.stubGlobal('fetch', vi.fn(async (url, opts) => {
+      if (url.startsWith('https://rest.fal.ai/storage/upload/initiate')) {
+        const { content_type: type, file_name: name } = JSON.parse(opts.body);
+        uploads.push({ type, name, auth: opts.headers.Authorization });
+        return jsonResponse({ upload_url: `https://upload.example.com/${name}`, file_url: `https://cdn.example.com/${name}` });
+      }
+      if (url.startsWith('https://upload.example.com/')) return { ok: opts.method === 'PUT', status: 200 };
+      if (url === `https://queue.fal.run/${model}`) {
+        posted = JSON.parse(opts.body);
+        return jsonResponse({ request_id: 'req-hosted', status_url: 'https://queue.fal.run/s', response_url: 'https://queue.fal.run/r' });
+      }
+      if (url === 'https://queue.fal.run/s') return jsonResponse({ status: 'COMPLETED' });
+      if (url === 'https://queue.fal.run/r') return jsonResponse({ video: { url: 'https://cdn.fal.ai/hosted.mp4' } });
+      if (url === 'https://cdn.fal.ai/hosted.mp4') return { ok: true, status: 200, arrayBuffer: async () => Uint8Array.from(Buffer.from('mp4')).buffer };
+      throw new Error(`unexpected fetch: ${url}`);
+    }));
+    const job = await fal.generateVideo({ apiKey: 'test-key', modelId: model, prompt: 'she sings', sourceImagePath: frame, audioFilePath: audio });
+    expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'completed' });
+    expect(uploads.map((u) => u.type).sort()).toEqual(['audio/wav', 'image/png']);
+    expect(uploads.every((u) => u.auth === 'Key test-key')).toBe(true);
+    expect(posted.image_url).toMatch(/^https:\/\/cdn\.example\.com\/.+-start\.png$/);
+    expect(posted.audio_url).toMatch(/^https:\/\/cdn\.example\.com\/.+-audio\.wav$/);
+    expect(JSON.stringify(posted)).not.toContain('data:');
+  });
+});

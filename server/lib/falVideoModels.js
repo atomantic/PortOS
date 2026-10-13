@@ -165,6 +165,9 @@ export const FAL_VIDEO_MODELS = Object.freeze([
     // the audio, not just the mouth. Expects a person in the frame.
     id: FAL_AUDIO_VIDEO_MODEL, kind: 'a2v', label: 'OmniHuman v1.5 (audio-driven person)', family: 'omnihuman',
     prompt: 'optional',
+    // Downloads its inputs: a data URI fails with "Failed to download the file"
+    // (#11381), so the frame and audio are hosted on fal's CDN first.
+    hostedInputs: true,
     image: { param: 'image_url', required: true },
     // "Audio must be under 30s long for 1080p generation and under 60s long for 720p".
     audioInput: { param: 'audio_url', minSec: 1, maxSec: 30 },
