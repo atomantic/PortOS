@@ -731,6 +731,8 @@ const SEEKED_RENDERERS = Object.freeze({
   code: {
     label: 'code',
     modelId: 'music-video-code',
+    // Draws the film look in its page, so the outro page draws it too.
+    filmLookInPage: true,
     prepare: async (project) => prepareCodeRender(project),
     encode: async ({ plan, project, projectId, jobId, audioPath, outputPath, signal, onProgress }) => {
       await encodeCodeComposition({
@@ -743,6 +745,7 @@ const SEEKED_RENDERERS = Object.freeze({
   document: {
     label: 'composition document',
     modelId: 'music-video-document',
+    filmLookInPage: true,
     soundBed: true,
     // A document draws the scenes' selected takes, so it runs the same
     // performance-take gate as a footage render (#9266).
@@ -810,7 +813,7 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
       onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: fraction }),
     });
     // The cutting room floor outro (when on) joins after the song.
-    const outroSec = await appendStatsOutro({ project, path: outputPath, jobId, signal, withFilmLook: true });
+    const outroSec = await appendStatsOutro({ project, path: outputPath, jobId, signal, withFilmLook: !!renderer.filmLookInPage });
     return outroSec > 0 ? { ...encoded, durationSec: encoded.durationSec + outroSec } : encoded;
   }).then(async (encoded) => {
     job.overlayAbort = null;
