@@ -5,8 +5,9 @@
  *
  * The pass captures the outro page (the same painter the animatic draws with)
  * through the shared composition encoder, then joins it to the finished cut
- * with silence under it. It runs before the film look pass, so the look grades
- * the outro with the rest of the film.
+ * with silence under it. In a footage render it runs before the film look pass,
+ * so the look grades the outro with the rest of the film; a seeked render draws
+ * its look in the page, so there the outro page draws it too (`withFilmLook`).
  */
 
 import { copyFile, link, mkdir, rename, rm, writeFile } from 'node:fs/promises';
@@ -14,6 +15,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PATHS } from '../../lib/paths.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { filmLookRuntimeSource, isFilmLookNeutral, normalizeFilmLook } from '../../lib/filmLook.js';
 import { STATS_OUTRO_FONTS, musicVideoOutroStats, normalizeStatsOutro, statsOutroPageSource } from '../../lib/musicVideoStatsOutro.js';
 
 export const STATS_OUTRO_SCRATCH_DIR = 'music-video-stats-outro';
@@ -55,7 +57,7 @@ html,body{margin:0;width:${width}px;height:${height}px;overflow:hidden;backgroun
  * untouched). Rejects on failure or when `signal` aborts, leaving `path` as
  * it was.
  */
-export async function appendStatsOutro({ project, path, jobId, signal, onProgress }) {
+export async function appendStatsOutro({ project, path, jobId, signal, onProgress, withFilmLook = false }) {
   const outro = normalizeStatsOutro(project?.statsOutro);
   if (!outro?.enabled) return 0;
   if (typeof jobId !== 'string' || !/^[A-Za-z0-9_-]+$/.test(jobId)) throw new Error('Invalid outro job id');
@@ -83,17 +85,24 @@ export async function appendStatsOutro({ project, path, jobId, signal, onProgres
     // The floor's stills ride as their small gallery thumbnails; one that is gone leaves a film offcut in its place.
     const imageSrcs = [];
     for (const [i, imageId] of stats.floorImages.entries()) {
-      const thumb = imageId.replace(/\.(png|jpe?g|webp)$/i, '.webp');
-      const ok = /\.png$/i.test(imageId) && await ensureImageThumbnail(thumb).catch(() => false);
-      const source = ok ? join(PATHS.imageThumbnails, thumb) : null;
-      const target = join(scratch, 'media', `floor-${i}.webp`);
+      // A gallery PNG has a small WebP beside it; any other still rides as itself, as the animatic shows it.
+      const png = /\.png$/i.test(imageId);
+      const thumb = imageId.replace(/\.png$/i, '.webp');
+      const ok = png ? await ensureImageThumbnail(thumb).catch(() => false) : /^[^/\\]+\.(jpe?g|webp)$/i.test(imageId);
+      const source = !ok ? null : png ? join(PATHS.imageThumbnails, thumb) : join(PATHS.images, imageId);
+      const name = `floor-${i}${png ? '.webp' : imageId.slice(imageId.lastIndexOf('.')).toLowerCase()}`;
+      const target = join(scratch, 'media', name);
       const staged = source && await link(source, target).then(() => true, () => copyFile(source, target).then(() => true, () => false));
-      imageSrcs.push(staged ? `media/floor-${i}.webp` : '');
+      imageSrcs.push(staged ? `media/${name}` : '');
     }
     await writeFile(join(scratch, 'index.html'), statsOutroPage({ stats, imageSrcs, width, height, fps, durationSec }));
     await writeFile(join(scratch, 'app.js'), statsOutroPageSource({ stats, imageSrcs, width, height, fps, durationSec }));
     signal?.throwIfAborted();
-    page = await openComposition(directory, { signal, ownedBrowser: true });
+    // A render whose film look is drawn in its page (the seeked modes) has no later
+    // pass to grade the outro, so the outro page draws the look itself.
+    const look = withFilmLook ? normalizeFilmLook(project?.filmLook) : null;
+    const initScripts = look && !isFilmLookNeutral(look) ? [filmLookRuntimeSource(look)] : [];
+    page = await openComposition(directory, { signal, ownedBrowser: true, initScripts });
     await encodeComposition(page, { width, height, fps, durationSec }, clip, {
       signal, onProgress: (fraction) => onProgress?.(fraction * 0.6),
     });

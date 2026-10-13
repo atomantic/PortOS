@@ -810,7 +810,7 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
       onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: fraction }),
     });
     // The cutting room floor outro (when on) joins after the song.
-    const outroSec = await appendStatsOutro({ project, path: outputPath, jobId, signal });
+    const outroSec = await appendStatsOutro({ project, path: outputPath, jobId, signal, withFilmLook: true });
     return outroSec > 0 ? { ...encoded, durationSec: encoded.durationSec + outroSec } : encoded;
   }).then(async (encoded) => {
     job.overlayAbort = null;

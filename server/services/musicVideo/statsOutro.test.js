@@ -28,7 +28,7 @@ vi.mock('../../lib/ffmpeg.js', () => ({
 vi.mock('../../lib/imageThumbnail.js', () => ({ ensureImageThumbnail: async () => false }));
 vi.mock('../mediaCollections.js', () => ({
   musicVideoCollectionId: (id) => `mvc-${id}`,
-  getCollection: async () => ({ items: [{ kind: 'image', ref: 'floor.png' }, { kind: 'video', ref: 'clip-floor' }] }),
+  getCollection: async () => ({ items: [{ kind: 'image', ref: 'floor.png' }, { kind: 'image', ref: 'photo.jpg' }, { kind: 'video', ref: 'clip-floor' }] }),
 }));
 vi.mock('../videoGen/history.js', () => ({ loadHistory: async () => [{ id: 'clip-stamped', musicVideo: { projectId: 'mv-1' } }] }));
 vi.mock('../htmlComposition/browser.js', () => ({
@@ -37,7 +37,7 @@ vi.mock('../htmlComposition/browser.js', () => ({
     const { join: joinPath } = await import('node:path');
     const { PATHS: paths } = await import('../../lib/paths.js');
     const dir = joinPath(paths.data, directory);
-    seen.opened.push({ directory, options, index: await read(joinPath(dir, 'index.html'), 'utf8'), app: await read(joinPath(dir, 'app.js'), 'utf8'), fonts: await readdir(joinPath(dir, 'fonts')) });
+    seen.opened.push({ directory, options, index: await read(joinPath(dir, 'index.html'), 'utf8'), app: await read(joinPath(dir, 'app.js'), 'utf8'), fonts: await readdir(joinPath(dir, 'fonts')), media: await readdir(joinPath(dir, 'media')) });
     return { check() {}, async close() {} };
   },
 }));
@@ -63,6 +63,8 @@ beforeEach(async () => {
   await mkdir(PATHS.videos, { recursive: true });
   path = join(PATHS.videos, 'music-video-example.mp4');
   await writeFile(path, 'render');
+  await mkdir(PATHS.images, { recursive: true });
+  await writeFile(join(PATHS.images, 'photo.jpg'), 'jpeg');
 });
 afterAll(() => cleanupTempDataRoots());
 
@@ -78,11 +80,13 @@ describe('cutting room floor outro pass', () => {
     expect(await appendStatsOutro({ project, path, jobId: 'job-on' })).toBe(6);
     const [opened] = seen.opened;
     expect(opened.directory).toBe(`${STATS_OUTRO_SCRATCH_DIR}/job-on`);
-    expect(opened.options).toMatchObject({ ownedBrowser: true });
+    expect(opened.options).toMatchObject({ ownedBrowser: true, initScripts: [] });
+    // A JPEG still rides as itself (as the animatic shows it); a PNG with no thumbnail is a film offcut.
+    expect(opened.media).toEqual(['floor-1.jpg']);
     expect(opened.fonts.sort()).toEqual(['archivo-variable.woff2', 'ibm-plex-mono-500.woff2']);
     expect(opened.index).toContain('<canvas id="outro">');
     // The counts the page draws are the project's: its shot, its collection and the clip stamped with it.
-    expect(opened.app).toContain('"stills":{"made":2,"kept":1},"clips":{"made":2,"kept":0}');
+    expect(opened.app).toContain('"stills":{"made":3,"kept":1},"clips":{"made":2,"kept":0}');
     expect(seen.contract).toEqual({ width: 1920, height: 1080, fps: 24, durationSec: 6 });
     const [join2] = seen.ffmpeg;
     expect(join2).toEqual(expect.arrayContaining(['-i', path, '-i', `${path}.outro.mp4`, 'anullsrc=r=48000:cl=stereo']));
@@ -90,6 +94,12 @@ describe('cutting room floor outro pass', () => {
     expect(await readFile(path, 'utf8')).toBe('render-with-outro');
     expect(existsSync(join(PATHS.data, STATS_OUTRO_SCRATCH_DIR, 'job-on'))).toBe(false);
     expect(existsSync(`${path}.outro.mp4`)).toBe(false);
+  });
+
+  it('draws the film look in the outro page for a render that has no later look pass', async () => {
+    await appendStatsOutro({ project: { ...project, filmLook: { preset: 'super8', grain: 0.5 } }, path, jobId: 'job-look', withFilmLook: true });
+    expect(seen.opened[0].options.initScripts).toHaveLength(1);
+    expect(seen.opened[0].options.initScripts[0]).toContain('__portosFilmLook');
   });
 
   it('keeps the render as it was when the capture fails, and cleans up', async () => {
