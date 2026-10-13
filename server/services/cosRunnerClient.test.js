@@ -24,6 +24,7 @@ vi.mock('../lib/fetchWithTimeout.js', () => ({
 
 import { io } from 'socket.io-client';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+import { streamTransportDispatcher } from '../lib/aiToolkit/internal/streamTransport.js';
 import {
   initCosRunnerConnection,
   onCosRunnerEvent,
@@ -40,6 +41,7 @@ import {
   classifyRunnerSpawnFailure,
   RUNNER_SPAWN_REFUSED,
   RUNNER_SPAWN_AMBIGUOUS,
+  requestSecurityScanViaRunner,
 } from './cosRunnerClient.js';
 
 // The client reads the body via text() and tolerantly JSON.parses it, so a
@@ -56,6 +58,30 @@ const mockResponse = (ok, data, status = ok ? 200 : 500) => ({
 describe('cosRunnerClient', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('keeps one silent scanner request open through its grant and cleanup without shorter transport ceilings', async () => {
+    const { fetchWithTimeout: actualFetch } = await vi.importActual('../lib/fetchWithTimeout.js');
+    const evidence = { status: 'time-limit', timeLimitSeconds: 1200, cleanup: 'confirmed' };
+    let finish;
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    fetchWithTimeout.mockImplementationOnce(actualFetch);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const pending = requestSecurityScanViaRunner('agent-example', { input: { prompt: 'Audit source.', paths: ['.'] } });
+      await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledOnce());
+      const options = fetchSpy.mock.calls[0][1];
+      expect(options.dispatcher).toBe(streamTransportDispatcher());
+      expect(fetchWithTimeout).toHaveBeenCalledWith(expect.stringContaining('/security-scan'), expect.any(Object), 1210000);
+      await vi.advanceTimersByTimeAsync(1205000);
+      expect(options.signal.aborted).toBe(false);
+      finish(mockResponse(true, { evidence }));
+      expect(await pending).toEqual({ evidence });
+      expect(fetchSpy).toHaveBeenCalledOnce();
+    } finally {
+      fetchSpy.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   // ===========================================================================

@@ -26,11 +26,21 @@ so a successful correction does not erase validation history.
 
 The immutable dispatch grant uses the effective outer Codex command's model and
 effort, including saved flags and supported-effort clamping. Missing or conflicting
-pins make the scanner unavailable. The bounded workflow retains explicit ChatGPT
-authentication, a $2 API-equivalent estimated-cost ceiling, and a 180-second scan
-deadline. API-key environment variables are not passed to this subprocess. These
-estimates do not establish billing charges. A cybersecurity-policy refusal stops
-the scanner and outer request without automatic continuation, retry or fallback.
+pins make the scanner unavailable. New dispatches receive a $25 API-equivalent
+short-context estimate cap and a 1,200-second process-group deadline. Existing
+$2/180-second grants retain their original limits; no receipt is reset or upgraded.
+Both policies require explicit ChatGPT authentication. API-key environment variables
+are not passed to this subprocess. The cap uses the scanner's short-context baseline;
+in-flight work can exceed it. These estimates measure neither billed charges nor
+ChatGPT subscription quota, and cannot be converted to a weekly usage percentage.
+A cybersecurity-policy refusal stops the scanner and outer request without automatic
+continuation, retry or fallback.
+
+The server waits up to 1,210 seconds for the scanner POST, allowing the longest
+grant plus cleanup to complete. That request uses the existing transport dispatcher
+without undici's shorter header/body inactivity ceilings; the whole-exchange timeout
+still applies and the request is never automatically retried. Status and Stop calls
+retain their 15-second transport timeout. None of these waits extends a saved grant.
 
 The runner owns a separate POSIX process group. A small IPC supervisor waits until
 its ownership receipt is durable before launching the scanner. Losing the runner

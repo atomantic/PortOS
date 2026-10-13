@@ -10,6 +10,7 @@ import { io } from 'socket.io-client';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { readResponseJson } from '../lib/readResponseJson.js';
 import { PORTS } from '../lib/ports.js';
+import { SECURITY_SCAN_REQUEST_TIMEOUT_MS } from '../lib/securityScanEvidence.js';
 
 const COS_RUNNER_URL = process.env.COS_RUNNER_URL || `http://localhost:${PORTS.COS}`;
 
@@ -454,10 +455,14 @@ export async function spawnAgentViaRunner(options) {
 
 export async function requestSecurityScanViaRunner(agentId, { input, stop = false } = {}) {
   const path = `/agents/${encodeURIComponent(agentId)}/security-scan${stop ? '/stop' : ''}`;
+  // A scanner may be silent through its entire grant. Keep undici's default
+  // five-minute ceiling below this path from preempting our bounded exchange.
+  const dispatcher = input ? (await import('../lib/aiToolkit/internal/streamTransport.js')).streamTransportDispatcher() : null;
   const response = await fetchWithTimeout(`${COS_RUNNER_URL}${path}`, {
     method: input || stop ? 'POST' : 'GET',
+    ...(dispatcher ? { dispatcher } : {}),
     ...(input ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) } : {}),
-  }, input ? 190000 : 15000);
+  }, input ? SECURITY_SCAN_REQUEST_TIMEOUT_MS : 15000);
   const result = await readRunnerJson(response);
   if (!response.ok) throw Object.assign(new Error(result.error || 'Scanner runner unavailable'), { status: response.status });
   return result;

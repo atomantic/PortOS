@@ -45,7 +45,8 @@ it('retains refusal and scanner interruption evidence alongside successful deliv
   expect(screen.getByText('Assessment saved')).toBeInTheDocument();
   expect(screen.getByText(/provider safety refusal; automatic retry stopped/)).toBeInTheDocument();
   expect(screen.getByText('Security scanner (agent reported): time-limit')).toBeInTheDocument();
-  expect(screen.getByText(/Budget: \$0.00/)).toBeInTheDocument();
+  expect(screen.getByText(/Estimated baseline: unknown · Estimate cap: \$0.00 \(API-equivalent USD\)/)).toBeInTheDocument();
+  expect(screen.getByText('Short-context estimates do not measure billed charges or ChatGPT subscription quota.')).toBeInTheDocument();
   expect(screen.getByText(/Exit: unknown/)).toBeInTheDocument();
   expect(screen.getByText(/findings: saved; coverage: unknown/)).toBeInTheDocument();
 });

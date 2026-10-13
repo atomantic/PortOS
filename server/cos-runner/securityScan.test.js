@@ -7,7 +7,8 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { createSecurityScanManager } from './securityScan.js';
 
-const grant = { model: 'example-model', effort: 'medium', auth: 'chatgpt', maxCostUsd: 2, timeLimitSeconds: 180 };
+const grant = { model: 'example-model', effort: 'medium', auth: 'chatgpt', maxCostUsd: 25, timeLimitSeconds: 1200 };
+const legacyGrant = { ...grant, maxCostUsd: 2, timeLimitSeconds: 180 };
 let root;
 const outerAgents = [];
 beforeEach(async () => { root = await mkdtemp(join(tmpdir(), 'scanner-runtime-test-')); await mkdir(join(root, 'repo')); });
@@ -205,25 +206,26 @@ describe.skipIf(process.platform === 'win32')('runner-owned scanner lifecycle', 
     expect(h.spawnProcess).not.toHaveBeenCalled();
   });
 
-  it('pins the launch grant, strips API credentials and records successful evidence without an agent sentinel', async () => {
+  it.each([grant, legacyGrant])('pins the $maxCostUsd / $timeLimitSeconds launch grant and records successful evidence without API credentials', async launchGrant => {
     const h = setup();
-    await h.manager.register('agent-example', grant);
+    await h.manager.register('agent-example', launchGrant);
     const run = h.manager.start('agent-example', input);
     const { child, args, options } = await h.spawned;
     expect(args).toContain('--auth');
     expect(args.slice(args.indexOf('--auth'), args.indexOf('--auth') + 2)).toEqual(['--auth', 'chatgpt']);
     expect(args.slice(args.indexOf('--model'), args.indexOf('--model') + 4)).toEqual(['--model', 'example-model', '--effort', 'medium']);
+    expect(args.slice(args.indexOf('--max-cost'), args.indexOf('--max-cost') + 2)).toEqual(['--max-cost', String(launchGrant.maxCostUsd)]);
     expect(options.env).not.toHaveProperty('OPENAI_API_KEY');
     expect(options.env).not.toHaveProperty('PORTOS_API_TOKEN');
     expect(options.stdio[0]).toBe('ignore');
     const output = args[args.indexOf('--output-dir') + 1];
     await writeFile(join(output, 'findings.json'), '[]');
     await writeFile(join(output, 'coverage.json'), '{}');
-    child.stdout.write('short-context budget baseline: $0.25 of $2.00 limit\n');
+    child.stdout.write(`short-context budget baseline: $0.25 of $${launchGrant.maxCostUsd}.00 limit\n`);
     child.emit('close', 0, null);
     const result = await run;
     expect(result.evidence).toMatchObject({ source: 'runner', status: 'completed', model: 'example-model', effort: 'medium',
-      maxCostUsd: 2, timeLimitSeconds: 180, estimatedCostUsd: 0.25, exitCode: 0, artifacts: { findings: true, coverage: true } });
+      maxCostUsd: launchGrant.maxCostUsd, timeLimitSeconds: launchGrant.timeLimitSeconds, estimatedCostUsd: 0.25, exitCode: 0, artifacts: { findings: true, coverage: true } });
     expect(JSON.parse(await readFile(join(root, 'agents/agent-example/security-scan.json'), 'utf8'))).toEqual(result.evidence);
     expect(h.evidence.map(e => e.status)).toEqual(['not-run', 'running', 'completed']);
   });
@@ -315,14 +317,21 @@ describe.skipIf(process.platform === 'win32')('runner-owned scanner lifecycle', 
     await h.manager.stop('agent-example');
     await run;
   });
-  it('bounds a stuck child with the existing deadline and records unconfirmed cleanup without claiming success', async () => {
-    const h = setup({ kill: vi.fn(), cleanupGroup: async () => false });
-    await h.manager.register('agent-example', grant);
+  it.each([grant, legacyGrant])('enforces the saved $timeLimitSeconds second deadline without renewing a stuck child', async launchGrant => {
+    const kill = vi.fn();
+    const h = setup({ kill, cleanupGroup: async () => false });
+    await h.manager.register('agent-example', launchGrant);
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const run = h.manager.start('agent-example', input);
     await h.spawned;
-    await vi.advanceTimersByTimeAsync(185000);
-    expect((await run).evidence).toMatchObject({ status: 'time-limit', exitCode: null, cleanup: 'unconfirmed' });
+    await vi.advanceTimersByTimeAsync(launchGrant.timeLimitSeconds * 1000 - 1);
+    expect(kill).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(kill).toHaveBeenCalledWith(expect.anything(), 'SIGTERM', { processGroup: true });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect((await run).evidence).toMatchObject({ status: 'time-limit', timeLimitSeconds: launchGrant.timeLimitSeconds, exitCode: null, cleanup: 'unconfirmed' });
+    expect(await h.manager.start('agent-example', input)).toEqual(await run);
+    expect(h.spawnProcess).toHaveBeenCalledOnce();
   });
 
   it('does not treat quoted policy findings as a provider refusal', async () => {
