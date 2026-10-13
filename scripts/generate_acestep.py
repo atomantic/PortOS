@@ -109,8 +109,8 @@ def main():
     parser.add_argument("--guidance", type=float, default=15.0, help="Classifier-free guidance scale")
     args = parser.parse_args()
 
-    text = (args.text or "").strip()
-    if not text:
+    text = args.text or ""
+    if not text.strip():
         print("ERROR: --text is required", file=sys.stderr, flush=True)
         return 2
 

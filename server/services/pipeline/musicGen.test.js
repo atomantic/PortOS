@@ -282,16 +282,15 @@ describe('buildSidecarArgs', () => {
     outputPath: '/data/music/music-gen-abc.wav',
   };
 
-  it('strips markdown emphasis out of the prompt for every engine', () => {
-    // The prompt box is a plain textarea; users type markdown into it out of
-    // habit and the text encoders tokenize `**`/`_` as literal content.
+  it('preserves the caption including Markdown and whitespace for every engine', () => {
+    // Regression: the sidecar must receive the caption shown by prompt preview.
     const textArg = (args) => args[args.indexOf('--text') + 1];
     for (const engineId of Object.keys(ENGINES)) {
       const { args } = buildSidecarArgs({
         ...base, engineId, repo: 'some/repo',
-        prompt: 'slow-burning, cinematic instrumental with a **dark** `analog` pulse',
+        prompt: '  slow-burning, cinematic instrumental with a **dark** `analog` pulse\n',
       });
-      expect(textArg(args), engineId).toBe('slow-burning, cinematic instrumental with a dark analog pulse');
+      expect(textArg(args), engineId).toBe('  slow-burning, cinematic instrumental with a **dark** `analog` pulse\n');
     }
   });
 
