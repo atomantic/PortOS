@@ -332,6 +332,8 @@ export function buildFormData(fields) {
   for (const [k, v] of Object.entries(fields)) {
     if (v == null || v === '') continue;
     if (v instanceof Blob) fd.append(k, v);
+    // A list of records (promptAdditions) travels as one JSON field the route parses.
+    else if (Array.isArray(v) && v.some((item) => item !== null && typeof item === 'object')) fd.append(k, JSON.stringify(v));
     else if (Array.isArray(v)) v.forEach((item) => fd.append(k, String(item)));
     else fd.append(k, String(v));
   }

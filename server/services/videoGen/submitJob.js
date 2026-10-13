@@ -387,6 +387,8 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
         params.remoteMedia.request = buildFederatedMediaRequest({ kind: 'video', params: { ...params.remoteMedia.request, prompt: params.prompt } });
       }
       if (params.remoteMedia && !params.musicVideo) delete params.prompt;
+      // The labeled additions the composer put around the user's text ride with the job to its record.
+      if (body.promptAdditions?.length) params.promptAdditions = body.promptAdditions;
       return enqueueJob({ kind: 'video', params });
     },
   );

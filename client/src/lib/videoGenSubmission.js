@@ -1,5 +1,5 @@
-import { composeStyledPrompt } from './composeStyledPrompt';
-import { universeStylePreset } from './universeStylePreset.js';
+import { composeStyledPrompt, stylePromptAdditions } from './composeStyledPrompt';
+import { universeStylePreset, withUniverseLabel } from './universeStylePreset.js';
 import { isLtx2FamilyRuntime } from './runnerFamilies';
 import { isDefaultI2vReferenceMode } from './videoReferenceModes';
 import { clampImageEdge } from './imageGenResolutions';
@@ -20,7 +20,7 @@ import { isDefaultVideoStreamingMode } from './videoStreamingMode.js';
 // The form owns state transitions and validation. This module owns the three
 // request contracts the video route accepts: Grok, federated, and local.
 const stylePresetsFor = (selectedUniverse, stylePreset) => [
-  selectedUniverse ? universeStylePreset(selectedUniverse) : null,
+  selectedUniverse ? withUniverseLabel(universeStylePreset(selectedUniverse)) : null,
   stylePreset,
 ].filter(Boolean);
 
@@ -38,10 +38,29 @@ export function envelopVideoPrompt(text, {
   currentModel, negativePrompt, stylePreset, selectedUniverse, noMusic, disableAudio,
 }) {
   const composed = composeStyledPrompt(text, negativePrompt, stylePresetsFor(selectedUniverse, stylePreset));
-  const effectiveDisableAudio = supportsVideoAudioControls(currentModel) && disableAudio;
-  return (supportsVideoAudioPromptControls(currentModel) && noMusic && !effectiveDisableAudio && !/no music/i.test(composed.prompt))
-    ? `${composed.prompt}\n\nno music, no soundtrack`
+  return addsNoMusic(composed.prompt, { currentModel, noMusic, disableAudio })
+    ? `${composed.prompt}\n\n${NO_MUSIC_LINE}`
     : composed.prompt;
+}
+
+const NO_MUSIC_LINE = 'no music, no soundtrack';
+
+// The "No music" toggle's line, added only on a model that takes audio prompt
+// controls while its audio is on, and only once.
+const addsNoMusic = (composedPrompt, { currentModel, noMusic, disableAudio }) => {
+  const effectiveDisableAudio = supportsVideoAudioControls(currentModel) && disableAudio;
+  return supportsVideoAudioPromptControls(currentModel) && noMusic && !effectiveDisableAudio && !/no music/i.test(composedPrompt);
+};
+
+/** Everything the form adds around the typed prompt, as labeled chips (#11317). */
+export function videoPromptAdditions({ prompt, negativePrompt, stylePreset, selectedUniverse, currentModel, noMusic, disableAudio, isLocal = true }) {
+  const presets = stylePresetsFor(selectedUniverse, stylePreset);
+  const composed = composeStyledPrompt(prompt, negativePrompt, presets);
+  return [
+    ...stylePromptAdditions(presets),
+    ...(isLocal && addsNoMusic(composed.prompt, { currentModel, noMusic, disableAudio })
+      ? [{ id: 'no-music', label: 'No music', text: NO_MUSIC_LINE }] : []),
+  ];
 }
 
 // Hosted lanes (Grok, fal, reactor) take only text or image mode, and the
@@ -296,14 +315,17 @@ export function buildVideoGenSubmission(args) {
   });
   const shared = { ...args, composed };
 
-  if (isGrok) return grokVideoSubmission(shared);
-  if (isFal) return falVideoSubmission(shared);
-  if (isReactor) return reactorVideoSubmission(shared);
-  if (remoteSubmissionFields) return remoteVideoSubmission(shared);
-  return localVideoSubmission(args, {
-    composed,
-    withEnvelope,
-    effectiveDisableAudio: supportsVideoAudioControls(currentModel) && disableAudio,
-    beats: liveBeats(chainingActive, chunkPrompts, chunks, withEnvelope),
-  });
+  const isLocal = !isGrok && !isFal && !isReactor && !remoteSubmissionFields;
+  const additions = videoPromptAdditions({ ...args, isLocal });
+  const payload = isGrok ? grokVideoSubmission(shared)
+    : isFal ? falVideoSubmission(shared)
+    : isReactor ? reactorVideoSubmission(shared)
+    : remoteSubmissionFields ? remoteVideoSubmission(shared)
+    : localVideoSubmission(args, {
+      composed,
+      withEnvelope,
+      effectiveDisableAudio: supportsVideoAudioControls(currentModel) && disableAudio,
+      beats: liveBeats(chainingActive, chunkPrompts, chunks, withEnvelope),
+    });
+  return additions.length ? { ...payload, promptAdditions: additions } : payload;
 }

@@ -92,6 +92,7 @@ import {
 } from '../services/videoGen/runtimeInstaller.js';
 import { detectSystemCapabilities, withHardwareCompatibility } from '../lib/systemCapabilities.js';
 import { isDisplaySleepEnabled } from '../services/videoGen/displayPower.js';
+import { promptAdditionsSchema } from '../lib/modelInput.js';
 
 const router = Router();
 
@@ -279,6 +280,7 @@ export const LOCAL_ONLY_VIDEO_PARAMS = Object.freeze({
 });
 
 const generateBodySchema = z.object({
+  promptAdditions: promptAdditionsSchema,
   // Render backend: the local runtimes (default), the Grok Build CLI's
   // image-first image_to_video flow (#2859 phase 2), fal.ai's queue REST API
   // (#6213), or reactor.inc's fast-h3 API (#6214). Grok, fal, and reactor all

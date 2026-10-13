@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { composeStyledPrompt } from '../lib/composeStyledPrompt';
+import { composeStyledPrompt, stylePromptAdditions } from '../lib/composeStyledPrompt';
 import {
   FAL_IMAGE_MODEL_IDS,
   IMAGE_GEN_MODE,
@@ -32,6 +32,12 @@ import {
   regenerateGalleryImage,
 } from '../services/api';
 import { musicVideoFilingFields } from '../lib/musicVideoFiling';
+
+// The style presets folded into the prompt, recorded beside it on the render (#11317).
+const promptAdditionsField = (presets) => {
+  const additions = stylePromptAdditions(presets);
+  return additions.length ? { promptAdditions: additions } : {};
+};
 
 const IMAGE_QUEUE_EVENTS = ['media-jobs:changed'];
 
@@ -292,7 +298,7 @@ export function useImageGenPageRuntime() {
       cleanC2PA: fields.cleanC2PA,
       denoise: fields.denoise,
     };
-    Object.assign(payload, musicVideoFilingFields(searchParams));
+    Object.assign(payload, musicVideoFilingFields(searchParams), promptAdditionsField(derived.activeStylePresets));
     const hasInitImage = derived.i2iCapable && images.initImage.source != null;
     const hasReferenceImages = derived.populatedRefs.length > 0;
     if (hasInitImage || hasReferenceImages) {
@@ -416,7 +422,7 @@ export function useImageGenPageRuntime() {
           denoise: fields.denoise,
         };
         if (fields.seed && Number(fields.seed) >= 0) payload.seed = Number(fields.seed);
-        Object.assign(payload, musicVideoFilingFields(searchParams));
+        Object.assign(payload, musicVideoFilingFields(searchParams), promptAdditionsField(derived.activeStylePresets));
         const data = await generateImage(payload, { silent: true });
         setResult({
           ...data,

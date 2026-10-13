@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getNavPageForPath } from '../../../server/lib/navManifest.js';
 import { appendTriggerWords } from '../lib/loraTriggers';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt';
-import { universeStylePreset } from '../lib/universeStylePreset';
+import { universeStylePreset, withUniverseLabel } from '../lib/universeStylePreset';
 import { RUNNER_FAMILIES, loraCompatKey, loraCompatKeysMatch, loraFamilyOf, usesDiffusersRunner } from '../lib/runnerFamilies';
 import {
   FAL_IMAGE_DEFAULT_MODEL,
@@ -483,7 +483,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
     cloudModelId: isFalMode ? (falModel || savedFalModel || FAL_IMAGE_DEFAULT_MODEL) : null,
   });
   const activeStylePresets = useMemo(() => [
-    selectedUniverse ? universeStylePreset(selectedUniverse) : null,
+    selectedUniverse ? withUniverseLabel(universeStylePreset(selectedUniverse)) : null,
     stylePreset,
   ].filter(Boolean), [selectedUniverse, stylePreset]);
   const styledPrompt = useMemo(

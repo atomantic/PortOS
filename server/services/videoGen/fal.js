@@ -49,6 +49,7 @@ import {
   FAL_QUEUE_BASE, awaitFalCompletion, cancelFalRequest, createFalRequestEntry, fileToDataUri,
   readCompletedFalResult, resolveFalApiKey, submitFalRequest,
 } from '../falQueue.js';
+import { carriedPromptAdditions, promptAddition, sentPromptRecord } from '../../lib/modelInput.js';
 
 // The queue transport (submit / poll / retrieve / cancel) is shared with the
 // fal.ai image backend in `services/falQueue.js`. Re-exported so existing
@@ -146,7 +147,7 @@ export async function generateVideo({
   sourceImagePath = null, lastImagePath = null, jobId: providedJobId = null,
   audioFilePath = null, lipSync = null, shotInstruction = null,
   uploadedTempPath = null, uploadedTempPaths = [],
-  resolution = null, generateAudio = false, frameAspect = null,
+  resolution = null, generateAudio = false, frameAspect = null, promptAdditions = [],
 }) {
   await ensureDir(PATHS.videos);
   const renderStartedAtMs = Date.now();
@@ -210,11 +211,6 @@ export async function generateVideo({
     throw new ServerError(err.message, { status: 400, code: 'VALIDATION_ERROR' });
   }
 
-  if (planned?.promptClipped) {
-    const { from, to, max } = planned.promptClipped;
-    console.warn(`✂️ fal prompt for ${modelId} shortened ${from} → ${to} chars (model limit ${max})`);
-  }
-
   if (lastImagePath && !planned) {
     throw new ServerError('End frames require a fal.ai model with catalogued end-frame support', { status: 400, code: 'VALIDATION_ERROR' });
   }
@@ -238,6 +234,14 @@ export async function generateVideo({
     // What PortOS expected this render to cost at fal's list price, or null for
     // an uncurated model — recorded so spend can be audited per clip.
     estimatedCostUsd: planned?.estimatedCostUsd ?? null,
+    // The text fal receives: a negative prompt the model has no field for rides folded in as "Avoid:".
+    ...sentPromptRecord({
+      sentPrompt: planned ? (planned.body.prompt ?? '') : buildRequestBody({ prompt, negativePrompt }).prompt,
+      sentNegativePrompt: planned?.body.negative_prompt ?? null,
+      carried: carriedPromptAdditions({ promptAdditions }),
+      added: [(!planned || planned.model.negativePrompt === 'fold') && planned?.model.prompt !== 'none'
+        ? promptAddition('avoid', 'Negative prompt, sent as "Avoid:"', negativePrompt) : null],
+    }),
     filename,
     createdAt: new Date().toISOString(),
     mode: sourceImagePath ? 'image' : 'text',

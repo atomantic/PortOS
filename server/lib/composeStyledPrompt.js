@@ -30,3 +30,21 @@ export function composeStyledPrompt(userPrompt, userNegative, preset) {
     negativePrompt: [negative, styleNeg].filter(Boolean).join(', '),
   };
 }
+
+/**
+ * The labeled additions `composeStyledPrompt` folds around the user's text, for
+ * the "added to your prompt" chips and the sent-prompt record (#11317). A preset
+ * names itself with `additionLabel` (the universe style) or its picker `label`.
+ */
+export function stylePromptAdditions(preset) {
+  const presets = (Array.isArray(preset) ? preset : [preset]).filter(Boolean);
+  const additions = presets
+    .filter((item) => (item.prompt || '').trim())
+    .map((item, index) => ({
+      id: `style-${index + 1}`,
+      label: item.additionLabel || (item.label ? `Style preset: ${item.label}` : 'Style'),
+      text: item.prompt.trim(),
+    }));
+  const styleNeg = presets.map((item) => (item.negativePrompt || '').trim()).filter(Boolean).join(', ');
+  return styleNeg ? [...additions, { id: 'style-negatives', label: 'Style negatives', text: styleNeg }] : additions;
+}

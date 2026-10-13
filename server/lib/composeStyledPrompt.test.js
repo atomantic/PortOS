@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { composeStyledPrompt } from './composeStyledPrompt.js';
+import { composeStyledPrompt, stylePromptAdditions } from './composeStyledPrompt.js';
 
 describe('composeStyledPrompt', () => {
   it('returns the bare prompt + negative when no preset is supplied', () => {
@@ -39,5 +39,18 @@ describe('composeStyledPrompt', () => {
     expect(composeStyledPrompt('x', '', { prompt: 's', negativePrompt: 'bad' })).toEqual({
       prompt: 's. x', negativePrompt: 'bad',
     });
+  });
+});
+
+describe('stylePromptAdditions', () => {
+  it('lists each preset the compose folds in, and their negatives once', () => {
+    const universe = { additionLabel: 'Universe style', prompt: 'muted earth tones', negativePrompt: 'neon' };
+    const preset = { label: 'Film noir', prompt: 'cinematic noir', negativePrompt: 'color' };
+    expect(stylePromptAdditions([universe, preset, null])).toEqual([
+      { id: 'style-1', label: 'Universe style', text: 'muted earth tones' },
+      { id: 'style-2', label: 'Style preset: Film noir', text: 'cinematic noir' },
+      { id: 'style-negatives', label: 'Style negatives', text: 'neon, color' },
+    ]);
+    expect(stylePromptAdditions(null)).toEqual([]);
   });
 });

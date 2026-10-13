@@ -40,6 +40,7 @@ import { resolveGrokDuration } from '../../lib/grokVideoClip.js';
 import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
 import { probeVideoDuration } from '../../lib/ffmpeg.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
+import { agentInstructionsAddition, carriedPromptAdditions, sentPromptRecord } from '../../lib/modelInput.js';
 
 // 30 minutes — an image-first video turn is two sequential tool calls
 // (image_gen then image_to_video render + download), so it runs meaningfully
@@ -123,6 +124,7 @@ export async function generateVideo({
   sourceImagePath = null, duration,
   uploadedTempPath = null,
   jobId: providedJobId = null,
+  promptAdditions = [],
 }) {
   await ensureDir(PATHS.videos);
 
@@ -177,6 +179,8 @@ export async function generateVideo({
     filename,
     createdAt: new Date().toISOString(),
     mode: sourceImagePath ? 'image' : 'text',
+    ...sentPromptRecord({ sentPrompt: fullPrompt, carried: carriedPromptAdditions({ promptAdditions }),
+      added: [agentInstructionsAddition('Grok video tool instructions', fullPrompt, prompt)] }),
   };
   const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
   jobs.set(jobId, job);

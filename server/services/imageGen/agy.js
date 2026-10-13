@@ -49,6 +49,7 @@ import {
 import { resolveInputImages } from './inputImages.js';
 import { cloudPromptRequired } from './cloudProviderConfig.js';
 import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
+import { agentInstructionsAddition, carriedPromptAdditions, sentPromptRecord } from '../../lib/modelInput.js';
 
 const AGY_TIMEOUT_MS = (() => {
   const n = Number(process.env.AGY_IMAGEGEN_TIMEOUT_MS);
@@ -260,6 +261,7 @@ async function resolveAgyDriverModel(model, shippedDefault) {
 }
 
 export async function generateImage({
+  promptAdditions = [],
   agyPath,
   model,
   modelIsShippedDefault = false,
@@ -324,6 +326,8 @@ export async function generateImage({
     // provenance names the model that actually produced the pixels (#3231).
     imageModel: AGY_IMAGEGEN_IMAGE_MODEL,
     ...(visualConditioning ? { visualConditioning } : {}),
+    ...sentPromptRecord({ sentPrompt: fullPrompt, carried: carriedPromptAdditions({ promptAdditions }),
+      added: [agentInstructionsAddition('Antigravity image tool instructions', fullPrompt, prompt)] }),
     createdAt: new Date().toISOString(),
   };
   // The scratch dir is the last fallible step before the job exists, so a
