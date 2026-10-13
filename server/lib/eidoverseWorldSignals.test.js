@@ -101,6 +101,55 @@ describe('local attention reasons through builder-to-observation', () => {
   const project = (input) => buildEidoverseWorldSignals(input, { includeAttentionReasons: true });
   const place = (source, id) => buildEidoverseObservation({ source }).report.places.find((row) => row.id === id);
 
+  it('distinguishes blocked task categories without changing status, exposing private data or retaining stale reasons', () => {
+    const tasks = [
+      { id: 'invented-private-id', status: 'blocked', name: 'Invented private task',
+        description: 'invented-secret-token', metadata: { blockedCategory: 'user-terminated',
+          blockedReason: '/invented/private/path', hostname: 'host-XXXX' } },
+      { status: 'BLOCKED', metadata: { blockedCategory: 'provider-config' } },
+      { status: 'blocked', metadata: { blockedCategory: 'invented-private-category' } },
+      { status: 'blocked' },
+      { status: 'blocked', metadata: { blockedCategory: 'USER-TERMINATED' } },
+      { status: 'pending', metadata: { blockedCategory: 'user-terminated' } },
+      { status: 'pending', approvalRequired: true },
+      { status: 'challenged' },
+      { status: 'in_progress' },
+      ...['completed', 'done', 'archived'].map((status) => ({ status,
+        metadata: { blockedCategory: 'user-terminated' } })),
+    ];
+    const input = { taskState: { tasks }, agents: [] };
+    const source = project(input);
+    expect(source.tasks.map((task) => task.status)).toEqual([
+      'error', 'error', 'error', 'error', 'error', 'steady', 'attention', 'attention', 'active',
+    ]);
+    expect(place(source, 'agents').attentionSignals).toEqual([
+      { source: 'tasks', severity: 'error', signalCount: 5, reasons: [
+        { code: 'task_blocked', affectedCount: 4 }, { code: 'task_user_terminated', affectedCount: 1 },
+      ] },
+      { source: 'tasks', severity: 'attention', signalCount: 2,
+        reasons: [{ code: 'source_attention', affectedCount: null }] },
+    ]);
+    const serialized = JSON.stringify(place(source, 'agents'));
+    for (const secret of ['invented-private', 'Invented private task', 'invented-secret-token',
+      '/invented/private/path', 'host-XXXX', 'provider-config', 'USER-TERMINATED']) {
+      expect(serialized).not.toContain(secret);
+    }
+    const normal = buildEidoverseWorldSignals(input);
+    expect(normal.tasks).toEqual(source.tasks.map(({ attentionReasons, ...row }) => row));
+    expect(JSON.stringify(normal)).not.toContain('attentionReasons');
+    expect(place(normal, 'agents').attentionSignals[0].reasons).toEqual([
+      { code: 'source_error', affectedCount: null },
+    ]);
+    const disabled = buildEidoverseObservation({ source, includes: { tasks: false } }).report.places
+      .find((row) => row.id === 'agents');
+    expect(disabled.attentionSignals).toEqual([]);
+    expect(disabled.disabledSources).toContain('tasks');
+    expect(place(project({ agents: [], taskState: { tasks: null } }), 'agents'))
+      .toMatchObject({ attentionSignals: [], unreadableSources: ['tasks'] });
+    expect(place(project({ agents: [], taskState: { tasks: [] } }), 'agents'))
+      .toMatchObject({ attentionSignals: [], unreadableSources: [], status: 'quiet' });
+  });
+
   it.each(['not_started', 'stopped', 'unknown'])('explains %s while preserving district totals and status', (status) => {
     const input = snapshots(status);
     const source = project(input);
