@@ -366,6 +366,7 @@ export async function spawnDirectly({
   }
 
   let outputBuffer = '';
+  let outputRevision = 0;
   let rawStreamBuffer = ''; // Raw stdout for stream-json (used for error analysis)
   let hasStartedWorking = false;
   // Deliberately NOT `hasStartedWorking`: that flag also flips on a 3s
@@ -417,6 +418,30 @@ export async function spawnDirectly({
   let immediateFallbackAnalysis = null;
   const detectImmediateFallbackSignal = createImmediateFallbackSignalDetector();
 
+  let persistedOutputRevision = -1;
+  let persistedOutputLength = 0;
+  let transcriptFileWriteTail = Promise.resolve();
+  const persistTranscript = (bytes, revision) => {
+    // Serialize timer/manual drains. Only a successful write establishes the
+    // prefix that the next snapshot can extend; an append may fail partway.
+    const write = transcriptFileWriteTail.then(async () => {
+      const append = persistedOutputRevision === revision && persistedOutputLength <= bytes.length;
+      const delta = append ? bytes.slice(persistedOutputLength) : bytes;
+      if (append && !delta) return;
+      await writeFileGuarded(outputFile, delta, { flag: append ? 'a' : 'w' });
+      persistedOutputRevision = revision;
+      persistedOutputLength = bytes.length;
+    }).catch(err => {
+      // Rewrite the next snapshot after any failure: retrying an uncertain
+      // append could duplicate bytes, while skipping it could lose output.
+      persistedOutputRevision = -1;
+      maintenance.markResourceUnsettled('agent', agentId);
+      return transcriptWriteReporter.report('output.txt', err);
+    });
+    transcriptFileWriteTail = write;
+    return write;
+  };
+
   // Debounced state-write batcher for streamed output. stdout/stderr `data`
   // events fire per chunk (and stream-json yields many lines per chunk), so a
   // per-line/per-chunk appendAgentOutput would round-trip a full state
@@ -428,11 +453,9 @@ export async function spawnDirectly({
     // Capture bytes at the same instant as this batch, before waiting for the
     // cut. Chunks received during I/O belong to the next flush, not this pair.
     const bytes = outputBuffer;
+    const revision = outputRevision;
     return withBackupAssetPublication(() => Promise.all([
-      writeFileGuarded(outputFile, bytes).catch(err => {
-        maintenance.markResourceUnsettled('agent', agentId);
-        return transcriptWriteReporter.report('output.txt', err);
-      }),
+      persistTranscript(bytes, revision),
       isPrivateSecurityTask(task) ? undefined : appendAgentOutputLines(agentId, batch)
         .catch(err => transcriptWriteReporter.report('state', err)),
     ]));
@@ -451,6 +474,7 @@ export async function spawnDirectly({
   if (cliAgentEntry) cliAgentEntry.flushOutput = async () => {
     await drainTranscriptWrites();
     await outputBatcher.flush();
+    await transcriptFileWriteTail;
   };
 
   // Serialize stdout/stderr buffer updates before their shared debounced file
@@ -603,6 +627,7 @@ export async function spawnDirectly({
       // the run so outputBuffer reflects everything that streamed (#2384).
       await drainTranscriptWrites();
       await outputBatcher.flush();
+      await transcriptFileWriteTail;
       await completeAgent(agentId, { success: false, error: err.message });
       await completeAgentRun(runId, isPrivateSecurityTask(task) ? 'Private security assessment failed; inspect its local assessment archive.' : outputBuffer, 1, 0, { message: err.message, category: 'spawn-error' });
       unregisterSpawnedAgent(claudeProcess.pid);
@@ -715,6 +740,7 @@ export async function spawnDirectly({
       const finalResult = streamParser.getFinalResult();
       if (finalResult) {
         outputBuffer = finalResult;
+        outputRevision++;
       }
     }
     if (codexStderrFormatter) {
@@ -729,6 +755,7 @@ export async function spawnDirectly({
     // below too, since output.txt is written next).
     await withBackupAssetPublication(async () => {
       await outputBatcher.flush();
+      await transcriptFileWriteTail;
       await writeFileGuarded(outputFile, outputBuffer).catch((err) => {
         maintenance.markResourceUnsettled('agent', agentId);
         return transcriptWriteReporter.report('output.txt', err);
