@@ -283,6 +283,7 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
   } : null;
 
   let repairReserved = false;
+  let composedAdditions = [];
   const enqueue = (params) => withStagedRollback(
     async () => {
       if (repairReserved) {
@@ -299,8 +300,8 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
           body.musicVideo.productionStepKey, { sceneId: body.musicVideo.sceneId, kind: 'video' });
       }
       if (body.musicVideo) {
-        const [{ getProject }, { assertShotActionContract, withShotActionPrompt }] = await Promise.all([
-          import('../musicVideo/projects.js'), import('../../lib/musicVideoActionContract.js'),
+        const [{ getProject }, { assertShotActionContract, withShotActionPrompt }, { musicVideoShotModelInput }] = await Promise.all([
+          import('../musicVideo/projects.js'), import('../../lib/musicVideoActionContract.js'), import('../../lib/musicVideoShotPrompt.js'),
         ]);
         const project = await getProject(body.musicVideo.projectId);
         // A brief that names tools and no video tool never dispatches generated footage;
@@ -313,12 +314,25 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
         // A take that hears nothing (no lip-sync or supplied song audio) gets plain physical
         // motion: the model would act out song cues and look words instead of reading them.
         const hearsAudio = !!(performance || prepared.audio || params.audioConditioning || params.audioFilePath);
-        // A shot card's prompt is sent as shown, its shot actions included; only a performance
-        // take re-times them to its padded song slice.
-        if (!body.musicVideo.promptAsTyped || performance) {
-          params.prompt = withShotActionPrompt(params.prompt, project, scene, { offsetSec: performance?.shotInstruction?.edit?.inSec || 0 });
+        const offsetSec = performance?.shotInstruction?.edit?.inSec || 0;
+        if (body.musicVideo.compose) {
+          // The director's text plus each labeled block PortOS adds (#11317), from the same
+          // composer the shot card shows; a take that hears nothing gets no look or song timing.
+          const composed = musicVideoShotModelInput(project, scene, {
+            authored: params.prompt, asTyped: body.musicVideo.promptAsTyped === true, hears: hearsAudio, backend,
+            audioReactive: body.musicVideo.audioReactive === true, offsetSec, fixes: body._clipFixes || '',
+          });
+          params.prompt = composed.prompt;
+          composedAdditions = composed.promptAdditions;
+        } else {
+          // A client from before the composer sends its prompt already composed.
+          // A shot card's prompt is sent as shown, its shot actions included; only a performance
+          // take re-times them to its padded song slice.
+          if (!body.musicVideo.promptAsTyped || performance) {
+            params.prompt = withShotActionPrompt(params.prompt, project, scene, { offsetSec });
+          }
+          if (!hearsAudio && !body.musicVideo.promptAsTyped) params.prompt = await silentMusicVideoMotionPrompt(params.prompt, project, scene);
         }
-        if (!hearsAudio && !body.musicVideo.promptAsTyped) params.prompt = await silentMusicVideoMotionPrompt(params.prompt, project, scene);
         const interval = performance?.shotInstruction?.songInterval || prepared.audio?.songInterval;
         if (params.audioConditioning && Math.round(scene?.startSec * 48000) !== params.audioConditioning.startSample) {
           throw new ServerError('Scene timing changed while source audio was prepared', { status: 409, code: 'MUSIC_VIDEO_SHOT_TIMING_CHANGED' });
@@ -387,8 +401,9 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
         params.remoteMedia.request = buildFederatedMediaRequest({ kind: 'video', params: { ...params.remoteMedia.request, prompt: params.prompt } });
       }
       if (params.remoteMedia && !params.musicVideo) delete params.prompt;
-      // The labeled additions the composer put around the user's text ride with the job to its record.
-      if (body.promptAdditions?.length) params.promptAdditions = body.promptAdditions;
+      // The labeled additions the composers put around the user's text ride with the job to its record.
+      const additions = [...(body.promptAdditions || []), ...composedAdditions];
+      if (additions.length) params.promptAdditions = additions;
       return enqueueJob({ kind: 'video', params });
     },
   );

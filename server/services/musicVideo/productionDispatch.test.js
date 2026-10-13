@@ -157,7 +157,7 @@ describe('production scene dispatch (#9066)', () => {
     const clipTag = { ...tag, productionStepKey: 'clip:mvs-a:base:1' };
     await dispatchProductionStep({ stepKind: 'clip', project, scene, route: { kind: 'video', mode: 'grok', model: null }, tag: clipTag, settings });
     expect(submitVideoGenJob).toHaveBeenCalledWith(expect.objectContaining({
-      backend: 'grok', mode: 'image', sourceImageFile: 'frame-example.png', grokDuration: 6, musicVideo: clipTag,
+      backend: 'grok', mode: 'image', sourceImageFile: 'frame-example.png', grokDuration: 6, musicVideo: { ...clipTag, compose: true }, prompt: 'waves roll',
     }), {});
   });
 

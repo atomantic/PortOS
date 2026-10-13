@@ -1,10 +1,10 @@
 import { getFalVideoModel } from '../../lib/falVideoModels.js';
-import { AUDIO_REACTIVE_PERFORMANCE_GUARD, silentMotionPrompt } from '../../lib/musicVideoMotion.js';
-import { approximateMotionCues, falSceneTake } from '../../lib/musicVideoShotTiming.js';
-import { shotActionContractProblem, shotActionPrompt } from '../../../../server/lib/musicVideoActionContract.js';
-import { shotCameraPrompt } from '../../../../server/lib/cameraMovements.js';
+import { falSceneTake } from '../../lib/musicVideoShotTiming.js';
+import { shotActionContractProblem } from '../../../../server/lib/musicVideoActionContract.js';
+import { authoredShotPrompt, musicVideoShotModelInput } from '../../../../server/lib/musicVideoShotPrompt.js';
 import { localModelTakesSongAudio } from '../../../../server/lib/musicVideoLocalModels.js';
 import { formatCount } from '../../utils/formatters.js';
+import SentPromptPanel from '../media/SentPromptPanel';
 
 const clock = (sec) => {
   const whole = Math.max(0, sec || 0);
@@ -13,17 +13,18 @@ const clock = (sec) => {
 };
 
 /**
- * Exactly what the shot card's Render sends: the prompt as typed, then what
- * the card itself sets (its camera move, its applied shot actions, Grok's
- * approximate phrase timing, the audio-reactive guard), and which inputs go
- * with it. The project's style and bible are not added, and the server
- * receives `promptAsTyped` and leaves the prompt alone (a performance shot's
- * action times shift to its padded song slice).
+ * Exactly what the shot card's Render sends: the director's text, then what
+ * the card itself adds (its camera move, its applied shot actions, Grok's
+ * approximate phrase timing, the audio-reactive guard) as labeled additions,
+ * and which inputs go with it. The composer is the server's own
+ * (lib/musicVideoShotPrompt.js): Render sends the director's text and the
+ * server composes the same prompt (a performance shot's action times shift to
+ * its padded song slice). The project's style and bible are not added.
  *
  * `settings` is the renderer this render uses (the project's, or the card's
  * Render on pick merged over it); `inputs` holds the card's toggles,
  * `{ endFrame, songAudio }`, each undefined until the director flips it.
- * Returns `{ prompt, promptUsed, maxChars, endFrame, songAudio, contractProblem }`, where each
+ * Returns `{ authored, prompt, promptAdditions, promptUsed, maxChars, endFrame, songAudio, contractProblem }`, where each
  * input is `{ state: 'on' | 'off' | 'required' | 'unavailable', note }`.
  */
 export function shotCardRenderRequest({
@@ -49,11 +50,10 @@ export function shotCardRenderRequest({
   // A saved contract can outgrow its scene (a split piece, a retimed shot); the card shows the problem rather than throwing.
   const contract = scene?.direction?.actionContract;
   const contractProblem = contract != null ? shotActionContractProblem(contract, scene) : null;
-  const actions = project && contract != null && !contractProblem ? shotActionPrompt(project, scene) : '';
-  const motionCues = settings.backend === 'grok' ? approximateMotionCues(project?.phrases, scene?.startSec, scene?.endSec) : '';
-  const base = [(scene?.prompt?.trim() || scene?.framePrompt?.trim() || ''), shotCameraPrompt(scene?.camera),
-    hears ? actions : silentMotionPrompt(actions)].filter(Boolean).join('\n');
-  const prompt = audioReactive ? `${base}. ${AUDIO_REACTIVE_PERFORMANCE_GUARD}` : [base, motionCues].filter(Boolean).join('. ');
+  const authored = authoredShotPrompt(scene);
+  const { prompt, promptAdditions } = musicVideoShotModelInput(contractProblem ? null : project, scene, {
+    authored, asTyped: true, hears, backend: settings.backend, audioReactive,
+  });
 
   let endFrame = null;
   if (scene?.endImageId) {
@@ -64,7 +64,9 @@ export function shotCardRenderRequest({
   }
 
   return {
+    authored,
     prompt,
+    promptAdditions,
     promptUsed: falModel?.prompt !== 'none',
     maxChars: falModel?.promptMaxChars ?? null,
     endFrame,
@@ -87,14 +89,21 @@ function InputToggle({ id, label, input, onChange }) {
 
 /** The card's "Sent to the model" block: the exact prompt and the inputs going with it. */
 export default function SceneRenderInputs({ id, request, onChange }) {
-  const { prompt, promptUsed, maxChars, endFrame, songAudio } = request;
+  const { authored, prompt, promptAdditions, promptUsed, maxChars, endFrame, songAudio } = request;
   const over = maxChars != null && prompt.length > maxChars;
   return (
     <div className="min-w-0 space-y-1 rounded border border-port-border p-2 text-xs" data-testid="render-inputs">
       <div className="text-port-text-muted">Sent to the model</div>
-      {promptUsed
-        ? <p className="whitespace-pre-wrap break-words">{prompt || <span className="text-port-text-muted">No prompt</span>}</p>
-        : <p className="text-port-text-muted">No prompt: this model takes the still and the song only.</p>}
+      {!promptUsed
+        ? <p className="text-port-text-muted">No prompt: this model takes the still and the song only.</p>
+        : prompt
+          ? (
+            <>
+              <p className="whitespace-pre-wrap break-words">{authored || prompt}</p>
+              {promptAdditions.length > 0 && <SentPromptPanel prompt={authored} sentPrompt={prompt} additions={promptAdditions} />}
+            </>
+          )
+          : <p className="text-port-text-muted">No prompt</p>}
       {promptUsed && maxChars != null && (
         <p className={over ? 'text-port-warning' : 'text-port-text-muted'}>
           {formatCount(prompt.length)} of {formatCount(maxChars)} characters{over ? ' · shorten the prompt to render' : ''}

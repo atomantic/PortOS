@@ -201,7 +201,7 @@ export default function SceneCard({
     if (videoRefusal) return;
     const { songAudio, endFrame } = cardRequest;
     const card = {
-      prompt: cardRequest.prompt,
+      prompt: cardRequest.authored,
       ...(endFrame ? { endFrame: endFrame.state === 'on' } : {}),
       ...(songAudio.state === 'on' || songAudio.state === 'off' ? { songAudio: songAudio.state === 'on' } : {}),
     };

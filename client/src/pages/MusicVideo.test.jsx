@@ -995,7 +995,7 @@ describe('MusicVideo selective section revision (#8987)', () => {
     await waitFor(() => expect(resumeMusicVideoRevision).toHaveBeenCalledWith('mv-1', 'mvr-1', { silent: true }));
     expect(startMusicVideoRevision).toHaveBeenCalledWith('mv-1', 'mve-1', {}, { silent: true });
     await waitFor(() => expect(generateVideo).toHaveBeenCalledTimes(1));
-    expect(JSON.parse(generateVideo.mock.calls[0][0].musicVideo)).toEqual({ projectId: 'mv-1', sceneId: 's2', revisionId: 'mvr-1' });
+    expect(JSON.parse(generateVideo.mock.calls[0][0].musicVideo)).toEqual({ projectId: 'mv-1', sceneId: 's2', revisionId: 'mvr-1', compose: true });
     const panel = screen.getByLabelText('Section revision');
     expect(within(panel).getByText('Kept')).toBeInTheDocument();
   });
@@ -1131,8 +1131,9 @@ describe('MusicVideo project video renderer', () => {
       disableAudio: true,
       loraFilenames: ['audio-reactive-v2.safetensors'],
       loraScales: [1.2],
-      prompt: expect.stringMatching(/No singing, lip-sync, speaking, mouth movement/i),
     })));
+    // The server adds the audio-reactive guard as a labeled addition.
+    expect(JSON.parse(generateVideo.mock.calls.at(-1)[0].musicVideo)).toMatchObject({ compose: true, audioReactive: true });
   });
 
   it('lets the project pin an exact installed audio-reactive LoRA version', async () => {
@@ -1178,21 +1179,6 @@ describe('MusicVideo project video renderer', () => {
       { silent: true },
     ));
     expect(await screen.findByLabelText('fal.ai scene clip duration')).toBeTruthy();
-  });
-
-  it('carries applied action and reaction into a manually submitted clip prompt', async () => {
-    getVideoGenStatus.mockResolvedValueOnce({ connected: true, defaultModel: '', falEnabled: true, models: [] });
-    generateVideo.mockResolvedValue({ jobId: 'intent-job' });
-    const actionContract = { version: 1, purpose: 'The listener decides to stay',
-      actions: [{ startSec: 0, endSec: 1, subject: 'Singer', description: 'Offers a hand' }],
-      reactions: [{ startSec: 1, endSec: 2, subject: 'Listener', description: 'Turns back' }] };
-    await openProject({ ...PROJECT_NO_CLIP, videoSettings: { backend: 'fal', falDuration: 6 },
-      scenes: [{ ...PROJECT_NO_CLIP.scenes[0], startSec: 0, endSec: 4, direction: { actionContract } }] }, 'produce');
-    fireEvent.click(await findEnabledByRole('button', { name: /^Render$/ }));
-    await waitFor(() => expect(generateVideo).toHaveBeenCalled());
-    const prompt = generateVideo.mock.calls.at(-1)[0].prompt;
-    expect(prompt).toContain('Action 0.000s–1.000s: Singer');
-    expect(prompt).toContain('Reaction 1.000s–2.000s: Listener');
   });
 
   it('renders a scene image-to-video through a saved fal.ai pin (#8968)', async () => {
@@ -1401,8 +1387,9 @@ describe('MusicVideo project video renderer', () => {
       fireEvent.click(await findEnabledByRole('button', { name: /^Render$/ }));
       await waitFor(() => expect(generateVideo).toHaveBeenCalledWith(expect.objectContaining({
         backend: 'grok', grokDuration: 10,
-        prompt: expect.stringContaining('around 2.0s: camera pushes in'),
       })));
+      // The server composes Grok's approximate phrase timing onto the director's text.
+      expect(JSON.parse(generateVideo.mock.calls.at(-1)[0].musicVideo)).toMatchObject({ compose: true });
     });
   });
 

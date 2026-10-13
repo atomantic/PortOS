@@ -82,6 +82,6 @@ describe('useMusicVideoSceneMedia shot card Render', () => {
     const request = generateVideo.mock.calls[0][0];
     expect(request.prompt).toBe('exactly this');
     expect(request.mode).toBe('a2v');
-    expect(JSON.parse(request.musicVideo)).toEqual({ projectId: 'p1', sceneId: 's0', promptAsTyped: true, songAudio: true });
+    expect(JSON.parse(request.musicVideo)).toEqual({ projectId: 'p1', sceneId: 's0', compose: true, promptAsTyped: true, songAudio: true });
   });
 });

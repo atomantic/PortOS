@@ -1,8 +1,8 @@
 import { shotActionContractProblem, shotActionPrompt } from '../../../server/lib/musicVideoActionContract.js';
-import { shotCameraPrompt } from '../../../server/lib/cameraMovements.js';
 import { isOutsideMusicVideoReference, musicVideoConditioningReferences, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../server/lib/musicVideoConditioning.js';
 import { musicVideoCreativeContext, musicVideoDirectorLook } from '../../../server/lib/musicVideoCreativeContext.js';
 import { sceneEndFrameRequestFields } from '../../../server/lib/musicVideoEndFrame.js';
+import { authoredShotPrompt, visualDirection } from '../../../server/lib/musicVideoShotPrompt.js';
 import { useEffect, useRef } from 'react';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';
@@ -14,9 +14,8 @@ import useSceneRenderLifecycle from './useSceneRenderLifecycle.js';
 import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { isLayeredComposition, isSelfDrawnLayer, sceneVisualLayer } from '../lib/musicVideoLayers.js';
 import { musicVideoFrameGenSize } from '../lib/musicVideoAspect.js';
-import { AUDIO_REACTIVE_PERFORMANCE_GUARD, MOTION_CONTINUITY_CLAUSE } from '../lib/musicVideoMotion.js';
 import {
-  approximateMotionCues, falSceneTake, falTakeRequestFields, grokCoverage, isPerformanceScene, performanceBlockedReason,
+  falSceneTake, falTakeRequestFields, grokCoverage, isPerformanceScene, performanceBlockedReason,
 } from '../lib/musicVideoShotTiming.js';
 
 // The image backends accept at most four reference images for most models
@@ -37,27 +36,8 @@ const REFERENCE_CAPABILITY_CODES = new Set([
   'TOO_MANY_INPUT_IMAGES',
 ]);
 
-/**
- * The project-wide visual direction appended to every generated prompt —
- * palette and camera rules from the visual spec (#8965). Kept in step with
- * `visualDirection` in server/services/musicVideo/handoff.js, which composes
- * the same suffix for the external-tool handoff manifest.
- *
- * Typography is deliberately excluded from this suffix (#8992): the visual
- * spec's font/caption guidance belongs to the separately composited text
- * layer (#8984), not to the image/video model's prompt — describing a font
- * style there works against the "no text, letters, captions" guard the
- * applied treatment adds and encourages text baked into the generated
- * pixels. `spec.typography` still reaches the composition/typography lane
- * directly and the external handoff manifest (`visualSpec.typography`).
- */
-export function visualDirection(spec) {
-  if (!spec) return '';
-  return [
-    spec.palette?.length ? `color palette ${spec.palette.join(' ')}` : '',
-    spec.cameraRules?.trim() ? `camera: ${spec.cameraRules.trim()}` : '',
-  ].filter(Boolean).join('; ');
-}
+/** The project-wide palette and camera rules, shared with the server's composers. */
+export { visualDirection };
 
 /** Shared scene-aware frame conditioning, with the legacy capped fallback. */
 export const conditioningReferences = musicVideoConditioningReferences;
@@ -179,8 +159,6 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
 
   const style = project?.concept?.style?.trim();
   const direction = [musicVideoCreativeContext(project?.concept, { look: musicVideoDirectorLook(project) }), visualDirection(project?.visualSpec)].filter(Boolean).join('; ');
-  // The i2v prompt leaves the mood-board look out (handoff.js composePrompt): the frame already carries it.
-  const motionDirection = [musicVideoCreativeContext(project?.concept, { moodBoard: false }), visualDirection(project?.visualSpec)].filter(Boolean).join('; ');
   const conditioning = conditioningReferences(project);
   // The image prompt for a scene's reference frame: its frame prompt (or the
   // shot prompt as a fallback) suffixed with the project's global concept style
@@ -191,12 +169,6 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   // handoff manifest (handoff.js composePrompt).
   const buildFramePrompt = (scene) =>
     [[(scene.framePrompt?.trim() || scene.prompt?.trim() || ''), style, direction, scene.direction?.frameClause?.trim()].filter(Boolean).join(', '), shotActionPrompt(project, scene, { frame: true })].filter(Boolean).join('\n');
-  // The i2v prompt for a scene's clip: its shot prompt (or the frame prompt as a
-  // fallback) suffixed the same way. The reference frame already fixes the
-  // look; this prompt guides the motion. A planned camera move (#10589) follows
-  // as the four-part camera block, same as handoff.js sceneShotPrompt.
-  const buildShotPrompt = (scene) =>
-    [[(scene.prompt?.trim() || scene.framePrompt?.trim() || ''), style, motionDirection, scene.direction?.motionClause?.trim(), MOTION_CONTINUITY_CLAUSE].filter(Boolean).join(', '), shotCameraPrompt(scene.camera), shotActionPrompt(project, scene)].filter(Boolean).join('\n');
 
   /**
    * Render a still reference frame for one scene from its frame prompt. The
@@ -359,10 +331,11 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     if (!scene.referenceImageId) { toast.error('Generate a reference frame first'); return Promise.resolve({ ok: false }); }
     const problem = shotActionContractProblem(scene.direction?.actionContract, scene);
     if (problem) { toast.error(problem); return Promise.resolve({ ok: false }); }
-    // `card` is the shot card's Render: its prompt exactly as shown and its input toggles
-    // ({ prompt, endFrame, songAudio }), sent with nothing added (SceneRenderInputs).
-    const basePrompt = card ? card.prompt : buildShotPrompt(scene);
-    if (!basePrompt) { toast.error('Add a shot prompt first'); return Promise.resolve({ ok: false }); }
+    // `card` is the shot card's Render: the director's text and its input toggles
+    // ({ prompt, endFrame, songAudio }), composed as the card shows it (SceneRenderInputs).
+    // The server composes every addition from the director's text (musicVideoShotPrompt.js).
+    const prompt = card ? card.prompt : authoredShotPrompt(scene);
+    if (!prompt) { toast.error('Add a shot prompt first'); return Promise.resolve({ ok: false }); }
     // `target` renders this one shot elsewhere (a scene card's Render on pick) without changing the saved setting.
     const settings = target ? { ...videoSettings.settings, ...target } : videoSettings.settings;
     const { detectedAudioReactiveLora } = videoSettings;
@@ -378,13 +351,6 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       : null;
     if (performanceBlocked) { toast.error(performanceBlocked); return Promise.resolve({ ok: false }); }
     const spanSec = sceneSpanSec(scene);
-    // Grok's CLI lane takes no timed controls: phrase intents ride as prose
-    // whose timing is explicitly approximate. The environmental-motion guard
-    // stays exclusive to the audio-reactive lane.
-    const motionCues = settings.backend === 'grok' ? approximateMotionCues(project?.phrases, scene.startSec, scene.endSec) : '';
-    const prompt = card ? basePrompt : audioReactiveSelected
-      ? `${basePrompt}. ${AUDIO_REACTIVE_PERFORMANCE_GUARD}`
-      : [basePrompt, motionCues].filter(Boolean).join('. ');
     const songAudio = typeof card?.songAudio === 'boolean' ? card.songAudio : settings.generationMode === 'suppliedAudio';
     const mode = audioReactiveSelected || songAudio ? 'a2v' : 'image';
     const falFields = settings.backend === 'fal'
@@ -429,6 +395,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       } : {}),
       musicVideo: JSON.stringify({
         projectId: project.id, sceneId: scene.sceneId, ...(revisionId ? { revisionId } : {}),
+        compose: true, ...(audioReactiveSelected ? { audioReactive: true } : {}),
         ...(card ? { promptAsTyped: true, ...(typeof card.songAudio === 'boolean' && !performance ? { songAudio: card.songAudio } : {}) } : {}),
       }),
     })
@@ -453,14 +420,14 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     if (videoBlockedReason) { toast.error(videoBlockedReason); return; }
     videoLane.startScene(scene.sceneId);
     generateVideo({
-      prompt: buildShotPrompt(scene),
+      prompt: authoredShotPrompt(scene),
       backend: 'local',
       modelId: effectiveModelId || undefined,
       disableAudio: true,
       mode: 'extend',
       extendFromVideoId: scene.videoHistoryId,
       sourceImageFile: scene.referenceImageId,
-      musicVideo: JSON.stringify({ projectId: project.id, sceneId: scene.sceneId }),
+      musicVideo: JSON.stringify({ projectId: project.id, sceneId: scene.sceneId, compose: true }),
     })
       .then((res) => trackVideoJob(res, scene.sceneId))
       .catch((err) => handleVideoError(err, scene.sceneId, 'Shot continuation failed'));
@@ -481,7 +448,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   // dropped here and reported once (#8977).
   const planMissingVideos = () => {
     const candidates = footageScenes.filter((scene) =>
-      scene.referenceImageId && !scene.videoHistoryId && !genVideoScenes[scene.sceneId] && buildShotPrompt(scene));
+      scene.referenceImageId && !scene.videoHistoryId && !genVideoScenes[scene.sceneId] && authoredShotPrompt(scene));
     const { settings, audioReactiveSelected } = videoSettings;
     const lipSyncBlocked = performanceBlockedReason(audioReactiveSelected ? 'local' : settings.backend);
     const pending = lipSyncBlocked ? candidates.filter((scene) => !isPerformanceScene(scene)) : candidates;
@@ -531,7 +498,6 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     videoBatch,
     conditioning,
     buildFramePrompt,
-    buildShotPrompt,
     generateFrame,
     generateEndFrame,
     generateSceneVideo,

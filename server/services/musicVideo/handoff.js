@@ -3,6 +3,7 @@ import { shotCameraPrompt } from '../../lib/cameraMovements.js';
 import { musicVideoCreativeContext, musicVideoDirectorLook } from '../../lib/musicVideoCreativeContext.js';
 import { MOTION_CONTINUITY_CLAUSE } from '../../lib/musicVideoMotion.js';
 import { isOutsideMusicVideoReference } from '../../lib/musicVideoConditioning.js';
+import { visualDirection } from '../../lib/musicVideoShotPrompt.js';
 /**
  * Music Video external-asset handoff (#8965) — provider-neutral export/import
  * for tools PortOS does not drive, such as Midjourney.
@@ -64,24 +65,8 @@ export function matchSceneByFileTag(scenes, originalName) {
   return matched.size === 1 ? [...matched][0] : null;
 }
 
-/**
- * The project-wide visual direction appended to generated prompts — palette
- * and camera rules from the visual spec. Kept in step with `visualDirection`
- * in client/src/hooks/useMusicVideoSceneMedia.js, which composes the same
- * suffix for PortOS's own renders.
- *
- * Typography is deliberately excluded from this suffix (#8992): it belongs
- * to the separately composited text layer (#8984), not the image/video
- * prompt handed to an external tool. `visualSpec.typography` still exports
- * on the manifest below for the typography lane and other external tools.
- */
-export function visualDirection(spec) {
-  if (!spec) return '';
-  return [
-    spec.palette?.length ? `color palette ${spec.palette.join(' ')}` : '',
-    spec.cameraRules?.trim() ? `camera: ${spec.cameraRules.trim()}` : '',
-  ].filter(Boolean).join('; ');
-}
+/** The project-wide palette and camera rules (shared with the board and the video submit). */
+export { visualDirection };
 
 // `clause` is the scene's applied treatment direction (#8980) — the composition
 // constraints for a frame or a motion prompt. Same order as the client's
