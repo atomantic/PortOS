@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { join } from 'path';
+import { dirname, join } from 'path';
 
 // Stub every git operation; lifecycle tests exercise the real service without
 // creating, changing or removing a live repository.
@@ -7,10 +7,11 @@ const execGitMock = vi.fn();
 vi.mock('../lib/execGit.js', () => ({ execGit: (...args) => execGitMock(...args) }));
 
 // Stub filesystem effects as well as git so destructive cleanup stays in fixtures.
-vi.mock('fs', () => ({
-  existsSync: vi.fn().mockReturnValue(true),
-  realpathSync: vi.fn((p) => p),
-}));
+vi.mock('fs', () => {
+  const realpathSync = vi.fn(p => p);
+  realpathSync.native = realpathSync;
+  return { existsSync: vi.fn().mockReturnValue(true), realpathSync };
+});
 vi.mock('fs/promises', () => ({
   lstat: vi.fn().mockResolvedValue({}),
   readdir: vi.fn().mockResolvedValue([]),
@@ -710,6 +711,7 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
     hasBranchMergeEvidenceMock.mockResolvedValue(false);
     existsSync.mockReset().mockReturnValue(true);
     realpathSync.mockReset().mockImplementation(p => p);
+    realpathSync.native = realpathSync;
     // Removal is verified against the real directory afterwards; scripted removals
     // succeed, so the worktree directory reads as gone (and `worktree list` as empty).
     lstat.mockReset().mockRejectedValue(Object.assign(new Error('gone'), { code: 'ENOENT' }));
@@ -778,6 +780,7 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
 
   afterEach(() => {
     realpathSync.mockReset().mockImplementation(p => p);
+    realpathSync.native = realpathSync;
     lstat.mockReset().mockResolvedValue({});
   });
 
@@ -894,6 +897,50 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
     expect(result.removed).toBe(false);
     expect(result.warnings.join(' ')).toContain('src/index.js');
     expect(rm).not.toHaveBeenCalled();
+    expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(false);
+  });
+
+  it('preserves authored work when only native realpath unifies the Git and Node directory spellings', async () => {
+    const worktreePath = join(PATHS.worktrees, 'agent-x');
+    const alias = join('/git-alias', 'agent-x');
+    // Windows short names can survive JS realpath unchanged while Git reports
+    // their long spelling. Native realpath resolves the filesystem identity.
+    realpathSync.native = vi.fn(p => p === alias ? worktreePath : p);
+    scriptGit({ detectedToplevel: alias, porcelain: ' M src/recoverable.js' });
+
+    const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x');
+
+    expect(result.removed).toBe(false);
+    expect(result.warnings.join(' ')).toContain('src/recoverable.js');
+    expect(rm).not.toHaveBeenCalled();
+    expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(false);
+  });
+
+  it('prunes a missing checkout registered through an alias of its surviving parent', async () => {
+    const worktreePath = join(PATHS.worktrees, 'agent-x');
+    const alias = join('/git-alias', 'agent-x');
+    existsSync.mockReturnValue(false);
+    realpathSync.native = vi.fn(p => {
+      if ([worktreePath, alias].includes(p)) throw Object.assign(new Error('gone'), { code: 'ENOENT' });
+      return p === dirname(alias) ? PATHS.worktrees : p;
+    });
+    let pruned = false;
+    const scripted = execGitMock.getMockImplementation();
+    execGitMock.mockImplementation((args, ...rest) => {
+      if (args[0] === 'worktree' && args[1] === 'list') {
+        return Promise.resolve({ stdout: pruned ? '' : `worktree ${alias}\nbranch refs/heads/cos/task-1/agent-x\nprunable\n`, exitCode: 0 });
+      }
+      if (args[0] === 'worktree' && args[1] === 'remove') return Promise.reject(new Error('missing checkout'));
+      if (args[0] === 'worktree' && args[1] === 'prune') pruned = true;
+      return scripted(args, ...rest);
+    });
+
+    const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', {
+      merge: false, preserveBranchWithCommits: true,
+    });
+
+    expect(result.removed).toBe(true);
+    expect(pruned).toBe(true);
     expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(false);
   });
 

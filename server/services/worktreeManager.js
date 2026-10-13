@@ -288,7 +288,7 @@ function errorExcerpt(err) {
  * to the form git registered it under (macOS /var → /private/var).
  */
 function canonicalPath(p) {
-  try { return realpathSync(p); } catch { /* fall through to the ancestor walk */ }
+  try { return realpathSync.native(p); } catch { /* fall through to the ancestor walk */ }
   const parent = dirname(p);
   return parent === p ? p : join(canonicalPath(parent), p.slice(parent.length).replace(/^[\\/]+/, ''));
 }
@@ -467,12 +467,13 @@ export function classifyWorktreeDirt(porcelain, { ignoredPaths = [] } = {}) {
 
 /**
  * Compare two filesystem paths for equality, resolving symlinks (e.g. macOS
- * /var → /private/var) so normalization differences don't false-negative.
+ * /var → /private/var) and Windows short-name aliases. Native realpath resolves
+ * the latter where the JavaScript implementation can retain the input spelling.
  */
 function pathsEqual(a, b) {
   if (!a || !b) return false;
   if (a === b) return true;
-  const resolved = (p) => { try { return realpathSync(p); } catch { return p; } };
+  const resolved = (p) => { try { return realpathSync.native(p); } catch { return p; } };
   return resolved(a) === resolved(b);
 }
 
