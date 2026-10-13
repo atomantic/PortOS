@@ -63,6 +63,8 @@ describe('music-driven performance', () => {
         onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
     }
     render(<Harness />);
+    // The header reads the shot's precise run time, then where it sits in the song.
+    expect(screen.getByText(/^3\.50s · 0:10\.00–0:13\.50/)).toBeTruthy();
     const shot = screen.getByLabelText('Shot');
     fireEvent.change(shot, { target: { value: 'music' } });
     expect(onSave).toHaveBeenLastCalledWith('s1', { shotMode: 'performance', performanceStyle: 'music' });

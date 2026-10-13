@@ -7,7 +7,7 @@ import { Trash2, Activity, ArrowUp, ArrowDown, ChevronRight, Video, Maximize2, A
 import OverflowMenu from '../ui/OverflowMenu.jsx';
 import SceneTakePicker from './SceneTakePicker.jsx';
 import VideoStartTrimControl from '../media/VideoStartTrimControl.jsx';
-import { formatDurationSec } from '../../utils/formatters.js';
+import { formatTimecode } from '../../utils/formatters.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 import PerformanceEvidence from './PerformanceEvidence.jsx';
 import { isPerformanceScene, planPerformanceRepair } from '../../lib/musicVideoShotTiming.js';
@@ -378,7 +378,7 @@ export default function SceneCard({
           </div>
           <div className="truncate text-[11px] text-port-text-muted">
             {typeof scene.startSec === 'number' && typeof scene.endSec === 'number'
-              ? `${formatDurationSec(scene.endSec - scene.startSec)} · ${formatDurationSec(scene.startSec)}–${formatDurationSec(scene.endSec)}`
+              ? `${(scene.endSec - scene.startSec).toFixed(2)}s · ${formatTimecode(scene.startSec)}–${formatTimecode(scene.endSec)}`
               : `#${scene.order + 1}`}
             {scene.referenceImageId ? ' · frame ready' : ''}
             {scene.videoHistoryId ? ' · video ready' : ''}
