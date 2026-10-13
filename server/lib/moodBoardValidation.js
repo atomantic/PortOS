@@ -196,9 +196,12 @@ export const moodBoardCollageSchema = z.object({
   cellSize: z.number().int().min(128).max(1024).optional().default(512),
 }).strict();
 
+// Either `count` evenly spaced frames, or the exact `times` (seconds) picked
+// in the frame picker.
 export const moodBoardExtractFramesSchema = z.object({
-  count: z.number().int().min(1).max(24),
-}).strict();
+  count: z.number().int().min(1).max(24).optional(),
+  times: z.array(z.number().finite().min(0).max(86400)).min(1).max(24).optional(),
+}).strict().refine((v) => (v.count == null) !== (v.times == null), { message: 'Send either count or times' });
 
 // Render a text note into an image (#10531). Both optional: an omitted backend
 // renders on the install's default image backend.
