@@ -18,7 +18,8 @@ const cuda = vi.hoisted(() => ({ status: 'available', maxVramGb: 40 }));
 vi.mock('../lib/cudaCapability.js', () => ({
   getCudaCapability: vi.fn(async () => ({ status: cuda.status, gpus: [], maxVramGb: cuda.maxVramGb, error: null })),
 }));
-vi.mock('../services/pipeline/musicGen.js', () => {
+vi.mock('../services/pipeline/musicGen.js', async () => {
+  const actual = await vi.importActual('../services/pipeline/musicGen.js');
   const ENGINES = {
     musicgen: { id: 'musicgen', name: 'MusicGen', models: [{ id: 'm', name: 'M' }], defaultModelId: 'm', minDurationSec: 1, maxDurationSec: 30, defaultDurationSec: 12, installEnv: 'INSTALL_MUSICGEN', venvDefault: '/v/mg', resolvePython: () => (gen.ready ? '/v/mg/bin/python3' : null), customModels: true },
     acestep: { id: 'acestep', name: 'ACE-Step', models: [{ id: 'a', name: 'A' }], defaultModelId: 'a', minDurationSec: 1, maxDurationSec: 240, defaultDurationSec: 60, installEnv: 'INSTALL_ACESTEP', venvDefault: '/v/ace', resolvePython: () => (gen.ready ? '/v/ace/bin/python3' : null), lyrics: true, customModels: false },
@@ -30,6 +31,7 @@ vi.mock('../services/pipeline/musicGen.js', () => {
     ], defaultModelId: 'minimax-music3-mlx-8bit', minDurationSec: 1, maxDurationSec: 300, defaultDurationSec: 60, installEnv: 'INSTALL_MINIMAX_MUSIC3_MLX', venvDefault: '/v/minimax-mlx', resolvePython: () => (gen.ready ? '/v/minimax-mlx/bin/python3' : null), lyrics: true, customModels: false, fixedModelInstall: true, autoDuration: true },
   };
   return {
+    composeMusicLyrics: actual.composeMusicLyrics,
     ENGINES,
     DEFAULT_ENGINE_ID: 'musicgen',
     getEngine: (id) => ENGINES[id] || ENGINES.musicgen,
@@ -694,6 +696,40 @@ describe('music routes', () => {
     const { buildSidecarArgs } = await vi.importActual('../services/pipeline/musicGen.js');
     const { args } = buildSidecarArgs({ engineId: 'musicgen', prompt: params.prompt });
     expect(args[args.indexOf('--text') + 1]).toBe(preview.body.sentPrompt);
+  });
+
+  it('previews exact lyric bytes and additions that the sidecar sends, without changing the authored sheet', async () => {
+    const actual = await vi.importActual('../services/pipeline/musicGen.js');
+    for (const body of [
+      { prompt: 'folk', engine: 'minimax-music3', lyrics: '  [verse]\nKeep these words\n \t', durationMode: 'auto' },
+      { prompt: 'folk', engine: 'minimax-music3-mlx', lyrics: '', durationSec: 180, instrumentalOnly: true },
+      { prompt: 'folk', engine: 'acestep15', lyrics: '  [verse]\nKeep the ending \n', durationSec: 60 },
+      { prompt: 'folk', engine: 'acestep15', lyrics: '  \n', durationSec: 60 },
+    ]) {
+      mediaQueue.enqueue.mockClear();
+      const preview = await request(app).post('/api/music/prompt-preview').send(body);
+      expect(preview.status).toBe(200);
+      expect(mediaQueue.enqueue).not.toHaveBeenCalled();
+      const submitted = await request(app).post('/api/music/generate').send(body);
+      expect(submitted.status).toBe(202);
+      const params = mediaQueue.enqueue.mock.calls[0][0].params;
+      expect(params.musicStudio.authoredLyrics).toBe(body.lyrics);
+      expect(params.musicStudio.sentLyrics).toBe(preview.body.sentLyrics);
+      expect(params.musicStudio.lyricAdditions).toEqual(preview.body.lyricAdditions);
+      const { args } = actual.buildSidecarArgs({
+        engineId: params.engine, prompt: params.prompt, lyrics: params.lyrics,
+        durationSec: body.durationSec ?? 60,
+      });
+      expect(args[args.indexOf('--lyrics') + 1]).toBe(preview.body.sentLyrics);
+      if (!body.instrumentalOnly) expect(preview.body.sentLyrics.startsWith(body.lyrics)).toBe(true);
+    }
+  });
+
+  it('refuses lyrics beyond the authored cap before preview or queueing', async () => {
+    const body = { prompt: 'folk', engine: 'minimax-music3', lyrics: ' '.repeat(20001) };
+    expect((await request(app).post('/api/music/prompt-preview').send(body)).status).toBe(400);
+    expect((await request(app).post('/api/music/generate').send(body)).status).toBe(400);
+    expect(mediaQueue.enqueue).not.toHaveBeenCalled();
   });
 
   it('refuses over-limit caption previews instead of returning a shortened caption', async () => {

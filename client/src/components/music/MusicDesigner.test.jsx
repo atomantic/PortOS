@@ -163,6 +163,17 @@ describe('<MusicDesigner>', () => {
       expect(window.localStorage.getItem('portos.musicDesigner.activeDraft')).toBe('track-draft');
     });
 
+    it('saves the lyric editor exactly as authored before proceeding to render', async () => {
+      const lyrics = '  [verse]\nKeep these spaces \n';
+      api.getTrack.mockResolvedValue({ id: 'track-saved', title: 'Named Track', concept: '', prompt: 'folk', lyrics: '' });
+      renderAt('/music/generate/lyrics?trackId=track-saved');
+      const editor = await findEnabledByLabelText('Lyrics');
+      fireEvent.change(editor, { target: { value: lyrics } });
+      fireEvent.blur(editor);
+      await waitFor(() => expect(api.updateTrack).toHaveBeenCalledWith('track-saved', { lyrics }, { silent: true }));
+      expect(editor).toHaveValue(lyrics);
+    });
+
     it('keeps the render prompt visible and editable for a saved draft', async () => {
       api.getTrack.mockResolvedValue({
         id: 'track-saved', title: 'Named Track', concept: 'A dusk-time pulse',

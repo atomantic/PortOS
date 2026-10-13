@@ -91,7 +91,7 @@ def main():
 
     output_dir = os.path.dirname(os.path.abspath(args.output))
     os.makedirs(output_dir, exist_ok=True)
-    lyrics = args.lyrics.strip() or "[Instrumental]"
+    lyrics = args.lyrics if args.lyrics.strip() else "[Instrumental]"
     params = GenerationParams(
         task_type="text2music",
         caption=text,

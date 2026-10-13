@@ -76,6 +76,13 @@ export default function TrackRenderModal({ render, active = false, onClose, onSe
 
         <SentPromptPanel prompt={render.authoredPrompt || prompt} sentPrompt={render.sentPrompt} additions={render.promptAdditions || []} />
 
+        {typeof render.sentLyrics === 'string' && (
+          <section aria-label="Lyrics sent to the model" className="text-xs space-y-1">
+            <p className="text-gray-500">Lyrics sent to the model</p>
+            <SentPromptPanel prompt={lyrics} sentPrompt={render.sentLyrics} additions={render.lyricAdditions || []} />
+          </section>
+        )}
+
         {lyrics ? (
           <div>
             <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">Lyrics (conditioning)</div>

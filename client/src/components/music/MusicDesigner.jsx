@@ -551,7 +551,7 @@ export default function MusicDesigner() {
               id="music-designer-lyrics"
               value={lyrics}
               onChange={(event) => setLyrics(event.target.value)}
-              onBlur={() => saveDraft({ lyrics: lyrics.trim() })}
+              onBlur={() => saveDraft({ lyrics })}
               disabled={draftLoading}
               rows={10}
               maxLength={20000}
@@ -565,7 +565,7 @@ export default function MusicDesigner() {
               <SentPromptPanel sentPrompt={lyricsSent.sentPrompt} additions={lyricsSent.additions} />
             </div>
           )}
-          <button type="button" onClick={() => { saveDraft({ prompt: description.trim(), lyrics: lyrics.trim() }); goTo('render'); }} disabled={busy || !draftReady} className={PRIMARY_BTN}>
+          <button type="button" onClick={() => { saveDraft({ prompt: description.trim(), lyrics }); goTo('render'); }} disabled={busy || !draftReady} className={PRIMARY_BTN}>
             {lyrics.trim() ? 'Next: render' : 'Continue without lyrics'}
           </button>
           {!lyrics.trim() && (

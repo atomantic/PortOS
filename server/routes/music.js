@@ -38,7 +38,7 @@ import { validateRequest } from '../lib/validation.js';
 import { createLineReader } from '../lib/streamLines.js';
 import { SETUP_IMAGE_VIDEO_SCRIPT, spawnSetupScript, stopSetupScript } from '../lib/setupScriptRunner.js';
 import {
-  ENGINES, isEngineHealthy, isEnginePlatformSupported,
+  ENGINES, composeMusicLyrics, isEngineHealthy, isEnginePlatformSupported,
   enginePlatformLabel, resolveEngineVramReadiness, MUSIC_VRAM_READINESS,
   formatEngineVramReadinessMessage,
 } from '../services/pipeline/musicGen.js';
@@ -397,7 +397,7 @@ const generateSchema = z.object({
   prompt: captionField,
   // No default: distinguish ABSENT (don't touch the track's lyrics) from a
   // present '' (the user cleared them and generated without — persist the clear).
-  lyrics: z.string().trim().max(20000).optional(),
+  lyrics: z.string().max(20000).optional(),
   // A render-level override: ignore even supplied lyrics without clearing the
   // track's saved lyric field when the completed audio is attached.
   instrumentalOnly: z.boolean().optional().default(false),
@@ -448,11 +448,14 @@ const generateSchema = z.object({
 
 // Local caption preview: pure composition, no queue, peer probe or provider work.
 router.post('/prompt-preview', asyncHandler(async (req, res) => {
-  const body = validateRequest(z.object({
-    prompt: captionField,
-    instrumentalOnly: z.boolean().optional().default(false),
-  }), req.body ?? {});
-  res.json(composeMusicPrompt(body));
+  const body = validateRequest(generateSchema, req.body ?? {});
+  if (body.engine !== undefined && !ENGINES[body.engine]) {
+    throw new ServerError(`Unknown audio engine: ${body.engine}`, { status: 400, code: 'PIPELINE_MUSIC_UNKNOWN_ENGINE' });
+  }
+  res.json({
+    ...composeMusicPrompt(body),
+    ...composeMusicLyrics({ ...body, lyrics: body.instrumentalOnly ? '' : body.lyrics }),
+  });
 }));
 
 router.post('/generate', asyncHandler(async (req, res) => {

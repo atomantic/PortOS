@@ -12,7 +12,7 @@
  */
 
 import { ServerError } from '../lib/errorHandler.js';
-import { ENGINES, getEngine } from './pipeline/musicGen.js';
+import { ENGINES, getEngine, composeMusicLyrics } from './pipeline/musicGen.js';
 import { listEngineModels } from './audioModels.js';
 import {
   FEDERATED_MEDIA_WIRE_VERSION,
@@ -176,6 +176,7 @@ export async function queueMusicGeneration(input) {
   const promptRecord = composeMusicPrompt(body);
   const usedPrompt = promptRecord.sentPrompt;
   const usedLyrics = engine.lyrics && !body.instrumentalOnly ? (body.lyrics ?? '') : '';
+  const lyricRecord = !remoteMedia ? composeMusicLyrics({ ...body, engine: engine.id, lyrics: usedLyrics }) : {};
   if (remoteMedia) {
     // Lyrics ride the marker, not the top-level params, for the same reason the
     // profile does: `params.lyrics` stays blank so a build rolled back past
@@ -216,7 +217,7 @@ export async function queueMusicGeneration(input) {
         // Keep editable source text distinct from the augmented prompt and
         // empty lyric payload that actually condition an instrumental render.
         authoredPrompt: body.prompt,
-        ...(!remoteMedia ? promptRecord : {}),
+        ...(!remoteMedia ? { ...promptRecord, ...lyricRecord } : {}),
         authoredLyrics: engine.lyrics === true ? body.lyrics : undefined,
         lyricsEnabled: engine.lyrics === true,
         lyricsProvided: engine.lyrics === true && body.lyrics !== undefined,

@@ -240,9 +240,9 @@ describe('tracks routes', () => {
   });
 
   it('POST / creates a track', async () => {
-    const r = await request(app).post('/api/tracks').send({ title: 'Intro', engine: 'acestep' });
+    const r = await request(app).post('/api/tracks').send({ title: 'Intro', engine: 'acestep', lyrics: '  [verse]\nKeep the spaces \n' });
     expect(r.status).toBe(201);
-    expect(tracks.createTrack).toHaveBeenCalledWith(expect.objectContaining({ title: 'Intro', engine: 'acestep' }));
+    expect(tracks.createTrack).toHaveBeenCalledWith(expect.objectContaining({ title: 'Intro', engine: 'acestep', lyrics: '  [verse]\nKeep the spaces \n' }));
     expect(r.body.id).toBe('track-new');
   });
 
