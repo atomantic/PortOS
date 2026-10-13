@@ -155,6 +155,7 @@ export function createSecurityScanManager({ agentsDir, getAgent, emitEvidence, t
         const promptFile = join(directory, 'prompt.md');
         await writeFileGuarded(promptFile, request.prompt, { mode: 0o600 });
         await ensureDir(outputDir);
+        await chmod(outputDir, 0o700);
         const args = [...cli.args, 'scan', agent.workspacePath, '--mode', 'standard', '--auth', 'chatgpt', '--headless', '--json',
           '--model', entry.grant.model, '--effort', entry.grant.effort, '--max-cost', String(entry.grant.maxCostUsd),
           '--output-dir', outputDir, '--scan-prompt-file', promptFile,
