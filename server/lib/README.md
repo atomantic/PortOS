@@ -118,6 +118,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `cronValidation.js` | Cron syntax + field-range validation (pure, import-free, browser-safe). `isValidCronExpression` / `findCronExpressionError` (a user-facing reason string) / `isValidCronField` / `isCronShaped` (5-token SHAPE only — the named-cadence detector, never a stand-in for validity), plus `CRON_FIELD_NAMES` / `CRON_FIELD_BOUNDS`. ONE implementation shared by `services/eventScheduler.js`, the CoS schedule + per-app task-type save routes, the app-override schema in `validation.js`, and the browser cron editor via `client/src/utils/cronHelpers.js` (#6634). Syntax validity is deliberately separate from whether an occurrence exists in the scheduler bounded search window — a leap-day cron is valid. |
 | `recurrenceValidation.js` | Shared Zod shape and vocabulary for anchored calendar recurrences that cannot be represented faithfully by five-field cron. |
 | `appleHealthValidation.js` | Apple Health import payloads. |
+| `appleHealthPoints.js` | `healthPointOrigin` and `healthPointKey`: legacy-aware importer/source identity shared by health ingestion and daily source selection. |
 | `brainValidation.js` | Brain/memory route schemas (search, ingest, edit). |
 | `catalogExtractionDraft.js` | Extraction-only six-type graph schema, strict grounded-output parsing, and conservative chunk identity/edge reconciliation. |
 | `catalogValidation.js` | Creative ingredients catalog route schemas (scraps, ingredients, links, relations, tags, revisions, sync envelope). |

@@ -31,6 +31,7 @@ export * as managedVisitorValidation from './managedVisitorValidation.js';
 export * as agentValidation from './agentValidation.js';
 export * as agentContextValidation from './agentContextValidation.js';
 export * as appleHealthValidation from './appleHealthValidation.js';
+export * from './appleHealthPoints.js';
 export * as brainValidation from './brainValidation.js';
 export * from './brainThreads.js';
 export * from './humanActions.js';
