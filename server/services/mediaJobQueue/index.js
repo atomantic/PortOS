@@ -272,7 +272,8 @@ const videoHolds = createVideoHolds();
 export const REMOTE_MEDIA_PARALLEL_LIMIT = 20;
 
 export const CODEX_PARALLEL_MIN = 1;
-export const CODEX_PARALLEL_MAX = 10;
+// Keep counts exactly representable without imposing a provider throughput cap.
+export const CODEX_PARALLEL_MAX = Number.MAX_SAFE_INTEGER;
 export const CODEX_PARALLEL_DEFAULT = 1;
 let codexParallelLimit = CODEX_PARALLEL_DEFAULT;
 const clampParallel = (n) => {

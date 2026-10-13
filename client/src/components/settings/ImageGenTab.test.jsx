@@ -94,6 +94,25 @@ beforeEach(() => {
 });
 
 describe('ImageGenTab grouped tabs', () => {
+  it.each([undefined, { min: 1, max: Number.MAX_SAFE_INTEGER, default: 1 }])(
+    'loads and saves render limits above ten with bounds %j', async (parallelLimitBounds) => {
+      getSettings.mockResolvedValue({
+        imageGen: {
+          mode: 'codex', codex: { enabled: true, parallelLimit: 25, parallelLimitBounds },
+        },
+      });
+      await renderTab(['/media/image?mediaTab=codex']);
+      const input = screen.getByLabelText('Parallel render limit');
+      expect(input.value).toBe('25');
+      fireEvent.change(input, { target: { value: '50' } });
+      fireEvent.blur(input);
+      expect(input.value).toBe('50');
+      fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+      await waitFor(() => expect(updateSettings).toHaveBeenCalled());
+      expect(updateSettings.mock.calls[0][0].imageGen.codex.parallelLimit).toBe(50);
+    },
+  );
+
   it('renders a pills sub-nav with all media-settings groups', async () => {
     await renderTab();
     const tabs = screen.getAllByRole('tab').map((t) => t.textContent);
