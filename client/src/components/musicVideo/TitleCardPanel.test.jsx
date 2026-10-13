@@ -74,6 +74,24 @@ describe('TitleCardPanel', () => {
     expect(screen.getByLabelText('Bar')).toBeInTheDocument();
   });
 
+  it('optionally shows the card again at the end, timed from the song length', () => {
+    const onSave = vi.fn().mockResolvedValue({});
+    const card = { enabled: true, title: 'Example Song', startSec: 2, endSec: 6 };
+    const { unmount } = render(<Harness initial={{ ...base, titleCard: card }} onSave={onSave} />);
+    expect(screen.getByLabelText(/Also at the end/)).toBeDisabled();
+    unmount();
+    render(<Harness initial={{ ...base, audioAnalysis: { durationSec: 200 }, titleCard: card }} onSave={onSave} />);
+    const outro = screen.getByLabelText(/Also at the end · Optional/);
+    expect(outro).not.toBeChecked();
+    expect(screen.queryByLabelText('End in (s)')).toBeNull();
+    fireEvent.click(outro);
+    expect(onSave).toHaveBeenLastCalledWith({ titleCard: expect.objectContaining({ outro: true, outroStartSec: 195, outroEndSec: 199 }) });
+    expect(screen.getByLabelText('End in (s)')).toHaveValue(195);
+    fireEvent.change(screen.getByLabelText('End out (s)'), { target: { value: '198' } });
+    fireEvent.blur(screen.getByLabelText('End out (s)'));
+    expect(onSave).toHaveBeenLastCalledWith({ titleCard: expect.objectContaining({ outroStartSec: 195, outroEndSec: 198 }) });
+  });
+
   it('picks a font from swatches drawn in each face', () => {
     const onSave = vi.fn().mockResolvedValue({});
     render(<Harness initial={{ ...base, titleCard: { enabled: true, title: 'Example Song', startSec: 1, endSec: 5 } }} onSave={onSave} />);

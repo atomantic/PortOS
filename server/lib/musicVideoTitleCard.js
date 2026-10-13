@@ -15,6 +15,8 @@
  *     its own colour, then the extra line and year, on a dark plate with a
  *     coloured bar down its leading edge.
  * Both sit inside the same title-safe insets and shrink to fit the frame.
+ * Optionally (`outro`) the same card shows again at the end of the video, in
+ * its own window (`outroStartSec`–`outroEndSec`, absolute song time).
  * Text is drawn exactly as typed (no forced case).
  *
  * Fonts: four system/lyric stacks plus bundled OFL faces (TITLE_CARD_FONT_FACES,
@@ -44,12 +46,13 @@ export const TITLE_CARD_STYLES = Object.freeze(['outline', 'mtv']);
 /** The `mtv` look's title and bar colours when the card names none. */
 export const TITLE_CARD_MTV_COLORS = Object.freeze({ title: '#f5d33a', accent: '#1fc2e5' });
 export const TITLE_CARD_LIMITS = Object.freeze({
-  textMax: 120, yearMax: 20, startMax: 600, windowMin: 0.5, fadeMax: 3, sizeMin: 50, sizeMax: 200,
+  textMax: 120, yearMax: 20, startMax: 600, windowMin: 0.5, fadeMax: 3, sizeMin: 50, sizeMax: 200, outroMax: 3600,
 });
 export const TITLE_CARD_DEFAULTS = Object.freeze({
   enabled: true, title: '', artist: '', year: '', extra: '', quoteTitle: true,
   startSec: 2, endSec: 8, fadeSec: 0.8, position: 'lower-left', font: 'display', size: 100, color: '#f3ead7',
   style: 'outline', titleColor: '', accentColor: '',
+  outro: false, outroStartSec: null, outroEndSec: null,
 });
 
 const clampNum = (value, min, max, fallback) => {
@@ -70,6 +73,12 @@ export function normalizeTitleCard(input) {
   const L = TITLE_CARD_LIMITS;
   const startSec = round3(clampNum(input.startSec, 0, L.startMax, D.startSec));
   const endSec = round3(Math.max(startSec + L.windowMin, clampNum(input.endSec, 0, L.startMax + 60, Math.max(D.endSec, startSec + 6))));
+  // The end showing keeps its window once timed; untimed (null) it shows nowhere.
+  const timedOutro = typeof input.outroStartSec === 'number' && Number.isFinite(input.outroStartSec);
+  const outroStartSec = timedOutro ? round3(clampNum(input.outroStartSec, 0, L.outroMax, 0)) : null;
+  const outroEndSec = timedOutro
+    ? round3(Math.max(outroStartSec + L.windowMin, clampNum(input.outroEndSec, 0, L.outroMax + 60, outroStartSec + (endSec - startSec))))
+    : null;
   return {
     enabled: typeof input.enabled === 'boolean' ? input.enabled : D.enabled,
     title: cleanText(input.title, L.textMax),
@@ -88,7 +97,33 @@ export function normalizeTitleCard(input) {
     // '' = the look's own colour (the text colour, or the mtv yellow title / cyan bar).
     titleColor: hexOr(input.titleColor, ''),
     accentColor: hexOr(input.accentColor, ''),
+    outro: typeof input.outro === 'boolean' ? input.outro : D.outro,
+    outroStartSec,
+    outroEndSec,
   };
+}
+
+/**
+ * The windows the card shows in: the opening one, then the end one when it is
+ * on and timed. `[{ startSec, endSec }]`, empty for a hidden card.
+ */
+export function titleCardWindows(card) {
+  if (!titleCardVisible(card)) return [];
+  const windows = [{ startSec: card.startSec, endSec: card.endSec }];
+  if (card.outro && typeof card.outroStartSec === 'number' && typeof card.outroEndSec === 'number') {
+    windows.push({ startSec: card.outroStartSec, endSec: card.outroEndSec });
+  }
+  return windows;
+}
+
+/**
+ * The end showing's default window: as long as the opening one, ending a
+ * second before the song does (never before 0). Null without a song length.
+ */
+export function titleCardOutroWindow(card, songDurationSec) {
+  if (!card || !(typeof songDurationSec === 'number' && songDurationSec > 0)) return null;
+  const endSec = round3(Math.max(TITLE_CARD_LIMITS.windowMin, songDurationSec - 1));
+  return { outroStartSec: round3(Math.max(0, endSec - (card.endSec - card.startSec))), outroEndSec: endSec };
 }
 
 /** True when the card would draw something (enabled, with at least one line). */
@@ -119,12 +154,18 @@ export function titleCardPrefill(project, { artist = '', year = new Date().getFu
  * (titleCardRuntimeSource), so each must stay self-contained: no references
  * to module scope, only to each other by name. */
 
-/** The card's opacity at song time t: a linear fade in and out inside its window (0 outside). */
+/** The card's opacity at song time t: a linear fade in and out inside its window, or its end window (0 outside). */
 function titleCardAlpha(card, t) {
-  if (!card || !card.enabled || !(t >= card.startSec) || !(t < card.endSec)) return 0;
-  const fade = Math.min(Math.max(0, card.fadeSec || 0), (card.endSec - card.startSec) / 2);
-  if (fade <= 0) return 1;
-  return Math.max(0, Math.min(1, (t - card.startSec) / fade, (card.endSec - t) / fade));
+  if (!card || !card.enabled) return 0;
+  const inWindow = (startSec, endSec) => {
+    if (!(t >= startSec) || !(t < endSec)) return 0;
+    const fade = Math.min(Math.max(0, card.fadeSec || 0), (endSec - startSec) / 2);
+    if (fade <= 0) return 1;
+    return Math.max(0, Math.min(1, (t - startSec) / fade, (endSec - t) / fade));
+  };
+  const outro = card.outro && typeof card.outroStartSec === 'number' && typeof card.outroEndSec === 'number'
+    ? inWindow(card.outroStartSec, card.outroEndSec) : 0;
+  return Math.max(inWindow(card.startSec, card.endSec), outro);
 }
 
 /**

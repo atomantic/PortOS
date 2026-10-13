@@ -116,6 +116,15 @@ describe('opening title card in composed renders', () => {
     expect(projectTypographyPlan({ composition: { mode: 'footage' }, titleCard }, [], [], 10).cues).toEqual([]);
     expect(projectTypographyPlan({ composition: { mode: 'composed' }, titleCard: { ...titleCard, enabled: false } }, [], [], 10).cues).toEqual([]);
   });
+
+  it('adds the end showing as a second window when it is on, clipped to the cut', () => {
+    const withEnd = { ...titleCard, outro: true, outroStartSec: 7, outroEndSec: 12 };
+    const cues = projectTypographyPlan({ composition: { mode: 'composed' }, titleCard: withEnd }, [], [], 10).cues.filter((c) => c.titleCard);
+    expect(cues.map(({ id, startSec, endSec }) => ({ id, startSec, endSec }))).toEqual([
+      { id: 'title-card', startSec: 1, endSec: 6 }, { id: 'title-card-end', startSec: 7, endSec: 10 }]);
+    const past = { ...withEnd, outroStartSec: 11, outroEndSec: 14 };
+    expect(projectTypographyPlan({ composition: { mode: 'composed' }, titleCard: past }, [], [], 10).cues.filter((c) => c.titleCard)).toHaveLength(1);
+  });
 });
 
 describe('buildTypographyDocument (#8984)', () => {

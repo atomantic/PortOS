@@ -366,7 +366,12 @@ Audiowide, Orbitron, Righteous, Pacifico, Playfair Display, files and licences
 in `server/services/musicVideo/titleCardFonts/`), picked from swatches drawn in
 each face. Text is drawn exactly as typed;
 the panel flags a sung line that starts while the card is up and offers to end the
-card before it.
+card before it. **Also at the end** (optional, off by default: `outro`) shows the
+same card again in its own window (`outroStartSec`–`outroEndSec`, song time);
+turning it on times that window from the song's length (`titleCardOutroWindow`:
+as long as the opening one, ending a second before the song does). The runtime's
+fade covers both windows, and a composed cut gets one capture cue per window
+(`titleCardWindows`).
 
 The card is not part of the composition document. `titleCardRuntimeSource()`
 is a page script installed beside it, in the live preview's head (live edits
