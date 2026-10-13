@@ -573,4 +573,30 @@ describe('FableLoomStory scene media lifecycle', () => {
     expect(screen.getByTestId('canvas-video-status')).toHaveTextContent('idle');
     expect(toastMocks.success).toHaveBeenCalledWith('Scene video ready from fal.ai');
   });
+
+  // Uniquely catches the fal.ai browser handoff, which has no server compile, losing a
+  // linked loom's universe style and avoid list (#11317).
+  it('hands fal.ai a linked loom\'s universe style and avoid list', async () => {
+    const user = userEvent.setup();
+    api.getLoom.mockResolvedValue(loom({
+      universeId: 'universe-1',
+      episodes: [episode({
+        nodes: [{
+          id: 'node-1', title: 'Threshold', prose: 'You stand before the first door.',
+          videoPrompt: 'The door opens.', image: 'threshold.png', transitions: [],
+        }],
+      })],
+    }));
+    api.getUniverse.mockResolvedValue({ id: 'universe-1', influences: { embrace: ['painted ink'], avoid: ['photorealism'] } });
+    api.startLoomFalVideo.mockResolvedValue({ id: 'fal-job-1', source: 'fal-browser', loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1', status: 'queued' });
+    renderEditor('/fableloom/loom-1/ep-1');
+
+    await user.click(await findEnabledByRole('button', { name: 'Canvas automate fal.ai' }));
+
+    await waitFor(() => expect(api.startLoomFalVideo).toHaveBeenCalledWith(
+      'loom-1', 'ep-1', 'node-1',
+      { prompt: 'painted ink. The door opens.\n\nAvoid: photorealism', aspectRatio: '16:9' },
+      { silent: true },
+    ));
+  });
 });
