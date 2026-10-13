@@ -23,12 +23,14 @@ const clock = (sec) => {
  *
  * `settings` is the renderer this render uses (the project's, or the card's
  * Render on pick merged over it); `inputs` holds the card's toggles,
- * `{ endFrame, songAudio }`, each undefined until the director flips it.
- * Returns `{ authored, prompt, promptAdditions, promptUsed, maxChars, endFrame, songAudio, contractProblem }`, where each
- * input is `{ state: 'on' | 'off' | 'required' | 'unavailable', note }`.
+ * `{ endFrame, songAudio, wholeLine }`, each undefined until the director flips it.
+ * `plan` is the performance shot's planned song window (planPerformanceWindow),
+ * which names the line a Whole sung line take covers.
+ * Returns `{ authored, prompt, promptAdditions, promptUsed, maxChars, endFrame, songAudio, wholeLine, contractProblem }`, where each
+ * input is `{ state: 'on' | 'off' | 'required' | 'unavailable', note }` (`wholeLine` is null off a performance shot).
  */
 export function shotCardRenderRequest({
-  project = null, scene, settings = {}, performance = false, endFramePlan = null, models = [], defaultModel = '', inputs = {},
+  project = null, scene, settings = {}, performance = false, endFramePlan = null, models = [], defaultModel = '', inputs = {}, plan = null,
 }) {
   const falModel = settings.backend === 'fal' ? getFalVideoModel(falSceneTake({ scene, videoSettings: settings }).modelId) : null;
   const localModel = settings.backend === 'local'
@@ -63,6 +65,17 @@ export function shotCardRenderRequest({
     else endFrame = { state: 'unavailable', note: null };
   }
 
+  // A performance take can hear the whole lyric line the shot sits in, so the
+  // clip can play the full line or be cut down to the shot.
+  let wholeLine = null;
+  if (performance) {
+    const on = inputs.wholeLine === true;
+    const note = !on || !plan?.ok || plan.lineStartSec == null ? null
+      : plan.lineTooLong ? 'Line too long for one take; renders the shot'
+        : `Song ${clock(plan.lineStartSec)}–${clock(plan.lineEndSec)}`;
+    wholeLine = { state: on ? 'on' : 'off', note };
+  }
+
   return {
     authored,
     prompt,
@@ -71,6 +84,7 @@ export function shotCardRenderRequest({
     maxChars: falModel?.promptMaxChars ?? null,
     endFrame,
     songAudio,
+    wholeLine,
     contractProblem,
   };
 }
@@ -89,7 +103,7 @@ function InputToggle({ id, label, input, onChange }) {
 
 /** The card's "Sent to the model" block: the exact prompt and the inputs going with it. */
 export default function SceneRenderInputs({ id, request, onChange }) {
-  const { authored, prompt, promptAdditions, promptUsed, maxChars, endFrame, songAudio } = request;
+  const { authored, prompt, promptAdditions, promptUsed, maxChars, endFrame, songAudio, wholeLine } = request;
   const over = maxChars != null && prompt.length > maxChars;
   return (
     <div className="min-w-0 space-y-1 rounded border border-port-border p-2 text-xs" data-testid="render-inputs">
@@ -113,6 +127,7 @@ export default function SceneRenderInputs({ id, request, onChange }) {
         <InputToggle id={`${id}-still`} label="Still" input={{ state: 'required', note: null }} />
         {endFrame && <InputToggle id={`${id}-end`} label="End frame" input={endFrame} onChange={(on) => onChange({ endFrame: on })} />}
         <InputToggle id={`${id}-audio`} label="Song audio" input={songAudio} onChange={(on) => onChange({ songAudio: on })} />
+        {wholeLine && <InputToggle id={`${id}-line`} label="Whole sung line" input={wholeLine} onChange={(on) => onChange({ wholeLine: on })} />}
       </div>
     </div>
   );

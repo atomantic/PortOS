@@ -2,7 +2,7 @@ import {
   FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_IMAGE_VIDEO_MODELS, coerceFalVideoSeconds, describeFalVideoRate, falVideoResolutions, getFalVideoModel,
 } from '../../lib/falVideoModels.js';
 import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
-import { grokCoverage } from '../../lib/musicVideoShotTiming.js';
+import { grokCoverage, performanceCapability } from '../../lib/musicVideoShotTiming.js';
 import { localMusicVideoModels } from '../../../../server/lib/musicVideoLocalModels.js';
 import { frameOptionsForModel } from '../../lib/videoGenParams.js';
 import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage.js';
@@ -30,18 +30,27 @@ const BACKEND_LABELS = { local: 'Local LTX', grok: 'Grok', fal: 'fal.ai' };
 const LOCAL_FPS = 24;
 const SELECT = 'min-w-0 max-w-full bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] sm:min-h-0 disabled:opacity-50';
 
-function savedLabel(saved) {
-  if (saved.backend === 'fal') return `fal.ai · ${getFalVideoModel(saved.falModelId || FAL_DEFAULT_IMAGE_VIDEO_MODEL)?.label || 'video'}`;
+// The fal model a performance shot renders on: the lip-sync route, or the
+// project's music-driven model for a music-driven shot. Never the cutaway model.
+const falPerformanceLabel = (saved, scene) => {
+  const capability = performanceCapability('fal', { scene, videoSettings: saved });
+  return getFalVideoModel(capability?.modelId)?.label || 'lip-sync';
+};
+
+function savedLabel(saved, performance, scene) {
+  if (saved.backend === 'fal') {
+    return `fal.ai · ${performance ? falPerformanceLabel(saved, scene) : getFalVideoModel(saved.falModelId || FAL_DEFAULT_IMAGE_VIDEO_MODEL)?.label || 'video'}`;
+  }
   return BACKEND_LABELS[saved.backend] || 'install default';
 }
 
-export function renderTargetOptions({ performance, saved, endFrame = false }) {
+export function renderTargetOptions({ performance, saved, endFrame = false, scene = null }) {
   return [
-    { value: '', label: `Project setting · ${savedLabel(saved)}` },
+    { value: '', label: `Project setting · ${savedLabel(saved, performance, scene)}` },
     { value: 'local', label: performance ? 'Local LTX lip-sync (free)' : 'Local LTX (free)' },
     { value: 'grok', label: performance ? 'Grok (cutaways only)' : 'Grok', disabled: performance },
     ...(performance
-      ? [{ value: 'fal', label: 'fal.ai (song-driven)' }]
+      ? [{ value: 'fal', label: `fal.ai · ${falPerformanceLabel(saved, scene)}` }]
       : FAL_IMAGE_VIDEO_MODELS.map((model) => {
         const rate = describeFalVideoRate(model.id);
         return { value: `fal:${model.id}`, label: `fal.ai · ${model.label}${rate ? ` · ${rate}` : ''}${endFrame && model.endImage ? ' · ends on end frame' : ''}` };
@@ -175,7 +184,7 @@ export default function SceneRenderTarget({
         <select id={id} value={value} onChange={(e) => { onChange(e.target.value); onOptionsChange?.({}); rememberRenderTarget(e.target.value); }} disabled={disabled}
           title="Where this shot's clip renders. Only this shot; the project setting stays as it is."
           className={`${SELECT} flex-1 sm:flex-none`}>
-          {renderTargetOptions({ performance, saved, endFrame: Boolean(scene?.endImageId) }).map((option) => (
+          {renderTargetOptions({ performance, saved, endFrame: Boolean(scene?.endImageId), scene }).map((option) => (
             <option key={option.value} value={option.value} disabled={option.disabled}>{option.label}</option>
           ))}
         </select>

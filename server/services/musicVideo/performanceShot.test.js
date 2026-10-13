@@ -369,6 +369,19 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     expect((await preparePerformanceShot({ ...args, resolution: '720p' })).resolution).toBe('768P');
   });
 
+  // Catches a Whole sung line render slicing only the shot, or a continuation widening its accepted interval.
+  it('slices the whole sung line when the card asks for it, keeping the edit on the shot', async () => {
+    getProject.mockResolvedValue({ ...project(), lyricCues: [{ id: 'c1', text: 'the whole line', startSec: 16, endSec: 24 }] });
+    const args = { musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1', wholeLine: true }, backend: 'fal', sourceImagePath: '/x/frame.png', mode: 'image' };
+    const { shotInstruction: si } = await preparePerformanceShot(args);
+    expect(si.audioWindow).toEqual({ startSec: 16, endSec: 24, durationSec: 8, wholeLine: { startSec: 16, endSec: 24 } });
+    expect(si.edit).toMatchObject({ inSec: 4, outSec: 5.5, targetSec: 1.5 });
+    expect(si.songInterval).toEqual({ startSec: 20, endSec: 21.5 });
+    const plain = await preparePerformanceShot({ ...args, musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1' } });
+    expect(plain.shotInstruction.audioWindow.wholeLine).toBeUndefined();
+    expect(plain.shotInstruction.audioWindow.durationSec).toBeCloseTo(5.05, 6);
+  });
+
   it('asks for transcript guidance by default and skips it when the project turns it off', async () => {
     const args = { musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1' }, backend: 'fal', sourceImagePath: '/x/frame.png', mode: 'image' };
     getProject.mockResolvedValue(project());

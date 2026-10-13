@@ -104,6 +104,39 @@ describe('local LTX lip-sync lane', () => {
   });
 });
 
+// Whole sung line: the take hears the full line while the edit still frames
+// the shot. Catches a window that drops the line's start or end, counts a cue
+// that only touches the shot, or overruns the per-take limit.
+describe('whole sung line windows', () => {
+  const capability = performanceCapability('fal');
+  const cues = [
+    { text: 'before', startSec: 30, endSec: 39.2 },
+    { text: 'the line', startSec: 39.2, endSec: 45.6 },
+    { text: 'after', startSec: 45.6, endSec: 50 },
+  ];
+
+  it('covers every lyric line the shot overlaps and keeps the shot as the edit', () => {
+    expect(planPerformanceWindow({ startSec: 40.5, endSec: 42.8, songDurationSec: 60, capability, lineCues: cues })).toMatchObject({
+      ok: true, windowStartSec: 39.2, windowEndSec: 45.6, windowSec: 6.4, editInSec: 1.3, editOutSec: 3.6,
+      lineStartSec: 39.2, lineEndSec: 45.6, lineTooLong: false,
+    });
+  });
+
+  it('pads a line shorter than the provider minimum around the line, and keeps the shot window for an over-long line', () => {
+    const short = [{ text: 'hey', startSec: 10, endSec: 12 }];
+    expect(planPerformanceWindow({ startSec: 10.5, endSec: 11, songDurationSec: 60, capability, lineCues: short }))
+      .toMatchObject({ ok: true, windowStartSec: 8.475, windowEndSec: 13.525, lineStartSec: 10, lineEndSec: 12, editInSec: 2.025 });
+    const long = [{ text: 'a very long line', startSec: 0, endSec: 40 }];
+    expect(planPerformanceWindow({ startSec: 10, endSec: 16, songDurationSec: 60, capability, lineCues: long }))
+      .toMatchObject({ ok: true, windowStartSec: 10, windowEndSec: 16, editInSec: 0, lineTooLong: true });
+  });
+
+  it('prices the whole-line take', () => {
+    const scene = { shotMode: 'performance', startSec: 40.5, endSec: 42.8 };
+    expect(falSceneTake({ scene, songDurationSec: 60, lineCues: cues })).toMatchObject({ seconds: 6.4, costUsd: 1.024 });
+  });
+});
+
 // Each failure variant is a distinct admission regression: evidence, word
 // gap, provider minimum, or timebase mismatch must never resubmit a prefix.
 describe('music-driven performance takes', () => {

@@ -471,6 +471,29 @@ describe('Sent to the model', () => {
   });
 });
 
+// Uniquely catches a Whole sung line take priced or sent for the shot alone, and the
+// render target naming the project's cutaway model for a lip-sync shot.
+describe('Whole sung line', () => {
+  it('re-plans and prices the take over the full line, sends it with Render, and names the lip-sync model', () => {
+    const scene = { sceneId: 's19', prompt: '', shotMode: 'performance', referenceImageId: 'start.png', startSec: 40.5, endSec: 42.8,
+      takes: [{ takeId: 't1', kind: 'image', assetId: 'start.png', status: 'selected' }] };
+    const project = { id: 'p1', lyricCues: [{ text: 'the whole line', startSec: 39.2, endSec: 45.6 }] };
+    const onGenerateVideo = vi.fn();
+    render(<SceneCard scene={scene} project={project} index={0} expanded onEditLocal={() => {}} onSave={() => {}} onGenerateVideo={onGenerateVideo}
+      lipSyncBackend="fal" songDurationSec={60} falVideoSettings={{ backend: 'fal' }} />);
+    expect(screen.getByLabelText('Render on').textContent).toContain('Project setting · fal.ai · MiniMax H3 Max lip-sync');
+    expect(screen.getByLabelText('Render on').textContent).not.toContain('Hailuo');
+    const plan = () => screen.getByTestId('performance-plan').textContent;
+    expect(plan()).toContain('est. $0.81 (5.05s at 1080P)');
+    fireEvent.click(within(screen.getByTestId('render-inputs')).getByLabelText('Whole sung line'));
+    expect(within(screen.getByTestId('render-inputs')).getByText('· Song 0:39.2–0:45.6')).toBeTruthy();
+    expect(plan()).toContain('shot starts 1.30s into the take');
+    expect(plan()).toContain('est. $1.02 (6.4s at 1080P)');
+    fireEvent.click(screen.getByRole('button', { name: 'Render' }));
+    expect(onGenerateVideo).toHaveBeenCalledWith(scene, expect.objectContaining({ card: expect.objectContaining({ wholeLine: true }) }));
+  });
+});
+
 // Uniquely catches the glitch picker saving the wrong field or failing to clear it.
 describe('VHS glitch transitions', () => {
   it('sets a glitch on the cut out of a shot and clears it with Off', () => {
