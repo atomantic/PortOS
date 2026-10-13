@@ -294,7 +294,7 @@ function useStatsOutro({ project, audioRef }) {
  * it once the words are timed (a toggle hides them). `seekRequest`
  * (`{ t, n }`) is the scene-card seek the other preview sources honour too.
  */
-export default function StoryboardAnimatic({ project, audioUrl, seekRequest, collapsed }) {
+export default function StoryboardAnimatic({ project, audioUrl, seekRequest, collapsed, onEditShot = null }) {
   const audioRef = useRef(null);
   const figureRef = useRef(null);
   const applied = useRef(null);
@@ -330,6 +330,8 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
     audioRef.current?.pause?.();
     seekTo(t);
   }, [seekTo]);
+  // Edit shot pauses the song so the shot stays on screen while its card opens.
+  const editShot = onEditShot ? (sceneId) => { audioRef.current?.pause?.(); onEditShot(sceneId); } : null;
   // Save frame keeps the shot's picture: its clip's frame once that shows, else its still.
   const captureFrame = () => {
     const figure = figureRef.current;
@@ -387,7 +389,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
         <div className="min-w-0 basis-full text-[11px] text-port-text-muted @min-[32rem]/mv-preview:flex-1 @min-[32rem]/mv-preview:basis-auto">
           {shot && (
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <ShotStepper scenes={timed} time={time} onSeek={seekTo} keys />
+              <ShotStepper scenes={timed} time={time} onSeek={seekTo} onEditShot={editShot} keys />
               <span className="tabular-nums">{formatDurationSec(shot.startSec)}</span>
             </div>
           )}

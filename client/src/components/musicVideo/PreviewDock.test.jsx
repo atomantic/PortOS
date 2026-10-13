@@ -32,4 +32,16 @@ describe('PreviewDock video shot steps', () => {
     expect(video.currentTime).toBeCloseTo(1.5 / 24);
     expect(screen.getByLabelText('Frame').value).toBe('481');
   });
+
+  it('pauses the video and opens the shot on screen from Edit shot', () => {
+    const project = { id: 'p', scenes: [{ sceneId: 'a', startSec: 18 }, { sceneId: 'b', startSec: 22 }] };
+    const sources = [{ id: 'draft-1', kind: 'video', label: 'Draft', src: '/data/videos/draft.mp4', startSec: 20, endSec: 30 }];
+    const onEditShot = vi.fn();
+    render(<MemoryRouter><PreviewDock project={project} sources={sources} audioUrl="/song.mp3" onEditShot={onEditShot} /></MemoryRouter>);
+    const video = screen.getByLabelText('Draft excerpt preview');
+    video.pause = vi.fn();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit shot' }));
+    expect(video.pause).toHaveBeenCalled();
+    expect(onEditShot).toHaveBeenCalledWith('a');
+  });
 });
