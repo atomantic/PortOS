@@ -86,6 +86,10 @@ vi.mock('../services/moodBoardStyleSynthesis.js', () => ({
 vi.mock('../services/moodBoardCompositeStyle.js', () => ({
   composeBoardPrompt: vi.fn(async () => ({ prompt: 'Example' })),
 }));
+vi.mock('../services/moodBoard/generateMore.js', () => ({
+  startGenerateJob: vi.fn(async () => ({ status: 'running' })),
+  getGenerateJob: vi.fn(() => null),
+}));
 vi.mock('../services/moodBoard/analyzeJob.js', () => ({
   startAnalyzeJob: vi.fn(() => ({ status: 'running' })),
   getAnalyzeJob: vi.fn(() => ({ status: 'idle' })),
@@ -107,6 +111,7 @@ import { generateAgentPersonality } from '../services/agentPersonalityGenerator.
 import { triageSystemResources } from '../services/systemResources.js';
 import { synthesizeBoardStyle } from '../services/moodBoardStyleSynthesis.js';
 import { composeBoardPrompt } from '../services/moodBoardCompositeStyle.js';
+import { startGenerateJob } from '../services/moodBoard/generateMore.js';
 import { startAnalyzeJob } from '../services/moodBoard/analyzeJob.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
 
@@ -124,6 +129,7 @@ const operations = [
   [`/api/mood-boards/${id}/synthesize-style`, { styleNotes: 'Example notes', ...picker }, synthesizeBoardStyle, 200],
   [`/api/mood-boards/${id}/compose-prompt`, { ...picker }, composeBoardPrompt, 200],
   [`/api/mood-boards/${id}/analyze`, { ...picker }, startAnalyzeJob, 202],
+  [`/api/mood-boards/${id}/generate`, { ...picker, requestId: id }, startGenerateJob, 202],
   ['/api/cos/tasks/enhance', { description: 'Example task' }, enhanceTaskPrompt, 200],
 ];
 // Distinct services touched by the table, so the "never ran" check covers each once.

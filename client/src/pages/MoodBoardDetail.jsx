@@ -20,6 +20,7 @@ import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
 import GalleryVideoPicker from '../components/videoGen/GalleryVideoPicker';
 import { PromptFromMediaModal } from '../components/media/PromptFromMedia';
 import MediaLightbox from '../components/media/MediaLightbox';
+import MoodBoardGeneratePanel from '../components/moodBoard/MoodBoardGeneratePanel';
 import MoodBoardStylePanel from '../components/moodBoard/MoodBoardStylePanel';
 import MoodBoardCollagePanel from '../components/moodBoard/MoodBoardCollagePanel';
 import usePreviewRoute from '../hooks/usePreviewRoute';
@@ -154,17 +155,24 @@ function MoodBoardEditor({ id }) {
     // A refetch still in flight when this effect is disposed must not write
     // its board's items into whatever board the page shows next.
     let active = true;
+    let sequence = 0;
     const onRender = async (evt) => {
       if (evt?.boardId !== id) return;
+      const current = ++sequence;
       const fresh = await getMoodBoard(id, { silent: true }).catch(() => null);
-      if (!active || !mountedRef.current || !fresh) return;
+      if (!active || current !== sequence || !mountedRef.current || !fresh) return;
       setBoard((prev) => (prev ? { ...prev, items: fresh.items, updatedAt: fresh.updatedAt } : fresh));
-      if (evt.status === 'failed' && evt.error && renderRequestRef.current !== evt.itemId) toast.error(`Render failed: ${evt.error}`);
+      if (evt.itemId && evt.status === 'failed' && evt.error && renderRequestRef.current !== evt.itemId) toast.error(`Render failed: ${evt.error}`);
     };
     socket.on('mood-board:item-render', onRender);
+    socket.on('mood-board:generate', onRender);
+    const onReconnect = () => onRender({ boardId: id });
+    socket.on('connect', onReconnect);
     return () => {
       active = false;
       socket.off('mood-board:item-render', onRender);
+      socket.off('mood-board:generate', onRender);
+      socket.off('connect', onReconnect);
     };
   }, [id, mountedRef]);
 
@@ -553,6 +561,7 @@ function MoodBoardEditor({ id }) {
       {/* Style + collage share a row on wide boards so pinned items stay above the fold */}
       <div className="grid grid-cols-1 @4xl/board:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-4 items-start">
         <MoodBoardStylePanel board={board} onBoardChange={setBoard} />
+        <MoodBoardGeneratePanel key={id} board={board} disabled={Boolean(metaDirty || savingMeta)} />
         <MoodBoardCollagePanel board={board} onBoardChange={setBoard} />
       </div>
 

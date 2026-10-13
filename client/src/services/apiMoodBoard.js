@@ -150,3 +150,11 @@ export const renderMoodBoardItem = (id, itemId, options) =>
     body: JSON.stringify({}),
     ...options,
   });
+
+// Server-owned prompt writing + queue admission survives navigation.
+export const generateMoodBoardImages = (id, data, options) =>
+  request(`/mood-boards/${encodeURIComponent(id)}/generate`, {
+    method: 'POST', body: JSON.stringify(data), ...options,
+  });
+export const getMoodBoardGeneration = (id, options) =>
+  request(`/mood-boards/${encodeURIComponent(id)}/generate`, options);

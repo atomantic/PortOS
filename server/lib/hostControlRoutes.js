@@ -688,6 +688,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/mood-boards/:id/synthesize-style',
   'POST /api/mood-boards/:id/compose-prompt',
   'POST /api/mood-boards/:id/analyze',
+  'POST /api/mood-boards/:id/generate',
   'POST /api/cos/tasks/enhance',
   // Music Video cover design/generation and promotion planning, and POST LLM
   // drills (#10989). Each hands free text and/or a caller-chosen provider to

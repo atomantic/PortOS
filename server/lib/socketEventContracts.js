@@ -383,6 +383,23 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
       additionalProperties: false,
     },
   },
+  'mood-board:generate': {
+    direction: 'server-to-client',
+    summary: 'Mood board prompt-writing and image enqueue progress; render progress uses media jobs.',
+    payloadSchema: {
+      type: 'object',
+      properties: {
+        boardId: { type: 'string' }, requestId: { type: 'string' },
+        status: { type: 'string', enum: ['running', 'queued', 'failed'] },
+        phase: { type: ['string', 'null'] }, total: { type: 'integer' },
+        error: { type: ['string', 'null'] }, revision: { type: 'integer' }, epoch: { type: 'string' },
+        items: { type: 'array', items: { type: 'object', properties: {
+          itemId: { type: ['string', 'null'] }, jobId: { type: ['string', 'null'] },
+        }, required: ['itemId', 'jobId'], additionalProperties: false } },
+      },
+      required: ['boardId', 'requestId', 'status', 'revision', 'epoch', 'items'], additionalProperties: false,
+    },
+  },
   'mood-board:item-render': {
     direction: 'server-to-client',
     summary: 'A mood board text note render was queued, finished (the note is now an image item) or failed; reload the board.',

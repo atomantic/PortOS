@@ -21,6 +21,7 @@ import {
   moodBoardCollageSchema,
   moodBoardExtractFramesSchema,
   moodBoardItemRenderSchema,
+  moodBoardGenerateSchema,
   isPaginationRequested,
   paginateArray,
 } from '../lib/validation.js';
@@ -51,7 +52,18 @@ import {
   renderBoardItem,
 } from '../services/moodBoard/index.js';
 
+import { getGenerateJob, startGenerateJob } from '../services/moodBoard/generateMore.js';
+
 const router = Router();
+
+router.post('/:id/generate', asyncHandler(async (req, res) => {
+  const input = validateRequest(moodBoardGenerateSchema, req.body ?? {});
+  res.status(202).json(await startGenerateJob(req.params.id, input));
+}));
+
+router.get('/:id/generate', asyncHandler(async (req, res) => {
+  res.json(getGenerateJob(req.params.id));
+}));
 
 // Backward-compatible by default: returns the full boards array. When a client
 // passes `limit`/`offset`, the response becomes the bounded

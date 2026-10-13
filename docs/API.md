@@ -789,7 +789,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/fableloom` | FableLoom interactive story generation |
 | `/api/music-video` | Music video projects; [one-prompt autonomous runs](./features/music-video-autonomous.md) at `/api/music-video/autonomous` |
 | `/api/music-video/character-styles` | Built-in character styles a project loads via `concept.characterStyleId`: list with each style's sheet prompt and this install's sheet (`GET /`), full style (`GET /:id`), set or clear the install's character sheet (`PUT /:id/reference` `{ imageId }`) |
-| `/api/mood-boards` | Mood boards |
+| `/api/mood-boards` | Mood boards; `POST /:id/generate` writes 1–4 prompts with the chosen LLM and queues new image items using saved imagegen settings (1024×576 default). Body: `requestId` (UUID), `providerId`, optional `model`, `effort`, `direction`, `count`, `render` (`mode`, `model`, `width`, `height`), `retry`. `GET /:id/generate` restores transient status; `mood-board:generate` pushes progress. Retry reuses the original batch and only queues unfinished slots. Prompt writing uses stored text, not pixels; saved prompts and references survive navigation and server restart, while transient batch status and recent request receipts reset on restart. |
 | `/api/decks` | Decks (playing-card / tarot designer) |
 | `/api/writers-room` | Writers Room |
 | `/api/universe-builder` | Universe Builder |

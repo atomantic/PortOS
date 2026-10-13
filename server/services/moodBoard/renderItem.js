@@ -43,10 +43,9 @@ function buildItemRenderPrompt(board, item) {
 
 /** Job params for the chosen backend: a cloud provider bag, or the local model. */
 async function itemRenderParams(settings, { mode = null, model = null, target = null }, common) {
-  const [{ resolveRenderTargetConfig }, { resolveImageCleaners }, { resolveLocalImageModel }] = await Promise.all([
+  const [{ resolveRenderTargetConfig }, { resolveImageCleaners }] = await Promise.all([
     import('../imageGen/cloudProviderConfig.js'),
     import('../../lib/imageCleanDefaults.js'),
-    import('../imageGen/prepareParams.js'),
   ]);
   const resolved = resolveRenderTargetConfig(settings, target, { mode, model, usableInstallFallback: true });
   if ((mode && resolved.mode !== mode) || !QUEUEABLE_IMAGE_MODES.includes(resolved.mode)) {
@@ -57,8 +56,14 @@ async function itemRenderParams(settings, { mode = null, model = null, target = 
   if (resolved.cloud && !resolved.cloud.enabled) throw resolved.cloud.disabledError;
   const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, resolved.mode);
   if (resolved.cloud) return { ...resolved.cloud.jobParams, ...common, cleanC2PA, denoise };
+  const { resolveLocalImageModel } = await import('../imageGen/prepareParams.js');
   const { pythonPath, selectedModel } = resolveLocalImageModel(settings, { modelId: model || undefined });
   return { ...common, cleanC2PA, denoise, pythonPath, ...(selectedModel?.id ? { modelId: selectedModel.id } : {}) };
+}
+
+// Also used before prompt writing, so a disabled renderer never spends an LLM run.
+export async function prepareBoardRenderParams(route, common = {}) {
+  return deps.imageParams(await deps.getSettings(), route, common);
 }
 
 function announce(boardId, itemId, status, error = null) {
@@ -80,23 +85,26 @@ const isLiveStatus = (job) => job?.status === 'queued' || job?.status === 'runni
 export async function renderBoardItem(boardId, itemId, route = {}) {
   const board = await store.getBoard(boardId);
   if (!board) throw new ServerError('Mood board not found', { status: 404, code: 'NOT_FOUND' });
-  const priorJobId = board.items?.find((it) => it?.id === itemId)?.render?.jobId;
+  const previous = board.items?.find((it) => it?.id === itemId)?.render;
+  route = { ...previous?.options, ...route };
+  const priorJobId = previous?.jobId;
   const priorLive = priorJobId ? isLiveStatus(await deps.getJob(priorJobId)) : false;
   // A job id this request never saw (a concurrent render settled it after the
   // read above) counts as live, so the lock can't let a duplicate through.
   const claimed = await store.claimBoardItemRender(boardId, itemId, {
     isLive: (jobId) => jobId !== priorJobId || priorLive,
+    options: route,
   });
 
   const prompt = buildItemRenderPrompt(board, claimed);
   const negativePrompt = isNonBlankStr(board.style?.negativePrompt) ? board.style.negativePrompt.trim() : undefined;
   let jobId;
   try {
-    const settings = await deps.getSettings();
-    const params = await deps.imageParams(settings, route, {
+    const params = await prepareBoardRenderParams(route, {
       prompt,
       ...(negativePrompt ? { negativePrompt } : {}),
-      ...RENDER_SIZE,
+      width: route.width ?? RENDER_SIZE.width,
+      height: route.height ?? RENDER_SIZE.height,
       [MOOD_BOARD_RENDER_TAG]: { boardId, itemId },
     });
     ({ jobId } = await deps.enqueue({ kind: 'image', params, owner: `mood-board-render:${boardId}` }));
