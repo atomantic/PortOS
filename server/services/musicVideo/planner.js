@@ -229,7 +229,7 @@ ${shotLines}
 
 For EACH shot above, propose a timed composition for its assigned medium (code-authored worlds, selected stills or footage):
 - "framePrompt": the opening reference still — subject, setting, lighting, composition. Keep it concrete and visual.
-- "prompt": the motion for that shot as plain physical action — who moves, how, where the camera goes and the end state — building on the frame. Higher-energy sections read more kinetic; calmer sections more lingering. The video model sees only the frame and usually hears nothing, and it acts out every word: no song times, beats, lyric cues ("on 'Sleep'") or song references, and no look words (film stock, grain, lens, grade, palette), which the frame already carries.
+- "prompt": the motion for that shot as plain physical action — who moves, how, where the camera goes and the end state — building on the frame. Higher-energy sections read more kinetic; calmer sections more lingering. The video model sees only the frame and usually hears nothing, and it acts out every word: no song times or timestamps ("on the 9.6s downbeat", "at 10.573"), clip lengths, trim notes ("use the first 2 s"), beats, lyric cues ("on 'Sleep'") or song references, no "no lip-sync" line, and no look words (film stock, grain, lens, grade, palette), which the frame already carries.
 - "camera": the shot's camera move from the vocabulary below, with its speed, end framing, whether it lands on the downbeat, and (for a static camera) the reason.
 - Shots in the same section are one edited sequence: keep subject and setting continuous, but vary framing (wide / medium / close), angle, or action from shot to shot so consecutive shots cut rather than repeat.
 - The OPENING HOOK shot must grab attention immediately.
