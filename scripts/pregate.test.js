@@ -69,7 +69,7 @@ describe('resolvePlanStages', () => {
       lint: { mode: 'files', files: ['client/src/App.jsx'] },
       client: { mode: 'files', files: ['client/src/App.test.jsx'], sources: [] },
     }), { baseSha: 'resolved-base' });
-    expect(stages.map((stage) => stage.name)).toEqual(['hidden-content scan', 'client lint', 'server tests', 'client tests']);
+    expect(stages.map((stage) => stage.name)).toEqual(['hidden-content scan', 'client/server lint', 'server tests', 'client tests']);
     expect(stages[0]).toEqual({
       name: 'hidden-content scan', script: 'scan-diff-hidden-content.js',
       args: ['--base', 'resolved-base', '--worktree'], env: {},

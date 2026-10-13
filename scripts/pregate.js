@@ -21,7 +21,7 @@
  *   --base <ref>  compare against <ref> instead of the remote default branch
  *   --full        actually run the complete suite when the plan demands it
  *                 (without this, a full plan runs the always-run guards only)
- *   --skip-lint   skip the client lint stage
+ *   --skip-lint   skip linting in both client and server workspaces
  *   --plan-only   print the plan and the stages, run nothing
  *
  * What it deliberately does NOT cover, because each needs a resource this
@@ -83,7 +83,7 @@ export function resolvePlanStages(plan, { skipLint = false, baseSha } = {}) {
 
   if (!skipLint && plan.lint.mode !== 'skip') {
     stages.push({
-      name: 'client lint',
+      name: 'client/server lint',
       script: 'run-ci-lint.js',
       args: [],
       env: { CI_LINT_MODE: plan.lint.mode, CI_LINT_FILES: JSON.stringify(plan.lint.files) },
