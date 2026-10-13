@@ -127,6 +127,24 @@ describe('persistent mind visibility', () => {
     expect(JSON.stringify(visibility)).not.toContain('/private/example-app');
   });
 
+  // The prompt budget keeps only the first workspaces that fit, so diagnosing
+  // every active app in registry order hid a granted app that sat further down
+  // the list — the app the mind was authorized to develop never showed up.
+  it('inspects only the apps the mind is granted, keeping every app for the legacy no-allowlist grant', async () => {
+    const apps = [
+      ...Array.from({ length: 8 }, (_, index) => ({ id: `other-${index}`, name: `Other ${index}`, repoPath: `/private/other-${index}` })),
+      { id: 'granted-app', name: 'Granted App', repoPath: '/private/granted-app' },
+    ];
+    await readPersistentMindVisibility({
+      root: { config: { persistentMindCapabilities: { createTasks: true, allowedAppIds: ['granted-app'] } } },
+      apps,
+    });
+    expect(mocks.readPreflights.mock.calls[0][0].map((app) => app.id)).toEqual(['granted-app']);
+
+    await readPersistentMindVisibility({ root: { config: { persistentMindCapabilities: { createTasks: true } } }, apps });
+    expect(mocks.readPreflights.mock.calls[1][0].map((app) => app.id)).toEqual(apps.map((app) => app.id));
+  });
+
   it('bounds large workspace projections while retaining an explicit truncation signal', async () => {
     const apps = Array.from({ length: 30 }, (_, index) => ({
       id: `example-${index}`,

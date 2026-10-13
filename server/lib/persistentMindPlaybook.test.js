@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { COS_TOOL_CALL_LIMITS } from './cosToolContracts.js';
+import { renderVisitContinuationPrompt } from './persistentMindVisitReceipts.js';
 import {
   CONTINUOUS_PLAY_PLAYBOOK_INSTRUCTIONS,
   PERSISTENT_MIND_PLAYBOOK_PHASE_INSTRUCTIONS,
@@ -69,6 +71,34 @@ describe('persistentMindPlaybook', () => {
     expect(opening).not.toMatch(/peers waiting|worth your attention/i);
     expect(opening).toMatch(/since (this mind|you) last (observed|looked)/i);
     expect(opening).toMatch(/arrived|new peer/i);
+  });
+
+  // Maintain is also the steady state of every mature, healthy Commons (no
+  // failures, nothing unread from a peer). Opening with "something is broken"
+  // there is the same unmeasured claim as above, and it sent a healthy mind to
+  // re-project and re-test every wake instead of building or visiting.
+  it('does not tell a healthy mature Commons that something is broken', () => {
+    const maintain = PERSISTENT_MIND_PLAYBOOK_PHASE_INSTRUCTIONS.maintain;
+    const opening = maintain.split('\n\n').slice(0, 2).join(' ');
+    expect(opening).not.toMatch(/something is broken|needs upkeep/i);
+    expect(maintain).toMatch(/If nothing needs repair[^\n]*eidoverse\.visit/);
+  });
+
+  // A wake has COS_TOOL_CALL_LIMITS.maxCallsPerTurn calls. A fixed
+  // status → observe preamble (plus destinations before a visit) left too few
+  // for visit → visit-chat → leave, so the mind announced the same visit as its
+  // "next curiosity" wake after wake and never made it.
+  it('spends one orientation call per wake and resumes an open visit first', () => {
+    const openVisitHeading = renderVisitContinuationPrompt(
+      [{ visitId: 'a'.repeat(48), peerId: 'example-peer', expiresAt: 2_000 }],
+      { isLive: () => true, now: 1_000 },
+    ).split('\n')[0].replace(/^# /, '');
+    for (const block of [CONTINUOUS_PLAY_PLAYBOOK_INSTRUCTIONS, ...Object.values(PERSISTENT_MIND_PLAYBOOK_PHASE_INSTRUCTIONS)]) {
+      expect(block).toContain(`${COS_TOOL_CALL_LIMITS.maxCallsPerTurn} semantic tool calls per wake`);
+      expect(block).toContain('Run eidoverse.observe once');
+      expect(block).not.toMatch(/check eidoverse\.status/i);
+      expect(block).toContain(`"${openVisitHeading}"`);
+    }
   });
 
   it('appends custom instructions after the phase template, not instead of it', () => {
