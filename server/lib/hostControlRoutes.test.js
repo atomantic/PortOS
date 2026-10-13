@@ -658,6 +658,7 @@ describe('Caller-prompted AI outside Pipeline policy (#10908)', () => {
     'POST /api/mood-boards/:id/synthesize-style',
     'POST /api/mood-boards/:id/compose-prompt',
     'POST /api/mood-boards/:id/analyze',
+    'POST /api/mood-boards/:id/generate',
     'POST /api/cos/tasks/enhance',
   ];
 
@@ -680,6 +681,7 @@ describe('Caller-prompted AI outside Pipeline policy (#10908)', () => {
       ['GET', '/api/system-resources/models/manifest'],
       ['PATCH', '/api/mood-boards/:id'],
       ['GET', '/api/mood-boards/:id/analyze'],
+      ['GET', '/api/mood-boards/:id/generate'],
     ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
   });
 });

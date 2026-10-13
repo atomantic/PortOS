@@ -303,7 +303,7 @@ function replaceItem(board, items, idx, item) {
 // claim that never got its job id (the process died mid-enqueue) expires.
 const RENDER_CLAIM_TTL_MS = 10 * 60 * 1000;
 
-export function claimItemRender(board, itemId, { isLive = () => false, now = nowIso() } = {}) {
+export function claimItemRender(board, itemId, { isLive = () => false, now = nowIso(), options } = {}) {
   const { items, idx } = findItemIndex(board, itemId);
   const current = items[idx];
   if (current.type !== 'text') {
@@ -316,7 +316,7 @@ export function claimItemRender(board, itemId, { isLive = () => false, now = now
   if (pending) {
     throw new ServerError('This note is already rendering', { status: 409, code: 'MOOD_BOARD_RENDER_BUSY' });
   }
-  const item = { ...current, render: { status: 'queued', jobId: null, error: null, queuedAt: now } };
+  const item = { ...current, render: { status: 'queued', jobId: null, error: null, queuedAt: now, ...(options ? { options } : {}) } };
   return { board: replaceItem(board, items, idx, item), item };
 }
 
