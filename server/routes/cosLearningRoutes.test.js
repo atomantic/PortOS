@@ -425,6 +425,17 @@ describe('CoS Learning Routes', () => {
       expect(response.status).toBe(200);
     });
 
+    it('rejects a weekId that is not an ISO week id before it can name a file', async () => {
+      weeklyDigest.generateWeeklyDigest.mockClear();
+
+      const response = await request(app)
+        .post('/api/cos/digest/generate')
+        .send({ weekId: '../../brain/memory' });
+
+      expect(response.status).toBe(400);
+      expect(weeklyDigest.generateWeeklyDigest).not.toHaveBeenCalled();
+    });
+
     it('should generate for current week if weekId not provided', async () => {
       weeklyDigest.generateWeeklyDigest.mockResolvedValue({ weekId: '2026-W14' });
 
