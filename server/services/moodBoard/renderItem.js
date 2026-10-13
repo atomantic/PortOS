@@ -111,7 +111,7 @@ export async function renderBoardItem(boardId, itemId, route = {}) {
   try {
     const params = await prepareBoardRenderParams(route, {
       prompt,
-      promptAdditions,
+      promptAdditions: [...promptAdditions, promptAddition('board-negative', 'Board avoid (negative prompt)', negativePrompt)].filter(Boolean),
       ...(negativePrompt ? { negativePrompt } : {}),
       width: route.width ?? RENDER_SIZE.width,
       height: route.height ?? RENDER_SIZE.height,

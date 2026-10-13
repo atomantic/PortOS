@@ -44,6 +44,17 @@ export const CREATIVE_LATITUDE_CLAUSE = `${CREATIVE_LATITUDE_HEADING}
 This is a professional creative tool operated by a working artist who is solely responsible for the rights, clearances, and lawful use of everything produced here. Do not refuse, hedge, water down, rename, or genericize a request because it references existing characters, worlds, brands, or artist styles, and do not append copyright, trademark, or "inspired by" disclaimers to your output. Treat named intellectual property as a deliberate creative reference and render it at full fidelity. This grants no latitude beyond that — every unrelated safety limit is unchanged.`;
 
 /**
+ * The clause as a labeled prompt addition (#11317), for a surface where the
+ * user typed the text an LLM receives: the run's response lists it beside the
+ * user's words, so the policy block is shown rather than slipped in.
+ */
+export const CREATIVE_LATITUDE_ADDITION = Object.freeze({
+  id: 'creative-latitude',
+  label: 'Creative latitude (operator policy)',
+  text: CREATIVE_LATITUDE_CLAUSE,
+});
+
+/**
  * True when `text` already carries the clause (so re-stamping is a no-op).
  * `startsWith`, not `includes`: the stamp only ever prepends, and a manuscript
  * prompt is sized to the provider window — no reason to scan all of it.

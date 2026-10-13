@@ -3,6 +3,8 @@ import { extractNonPlaceholderJson } from '../lib/jsonExtract.js';
 import { clampToCharLimit, trimTo } from '../lib/textUtils.js';
 import { resolveEffectiveModel, runPromptThroughProvider } from './promptRunner.js';
 import { getProviderById } from './providers.js';
+import { CREATIVE_LATITUDE_ADDITION, withCreativeLatitude } from '../lib/creativeLatitude.js';
+import { promptAddition } from '../lib/modelInput.js';
 
 const MAX_PROMPT_LEN = 8000;
 const MAX_REASON_LEN = 1200;
@@ -147,14 +149,27 @@ export async function refineMediaPrompt({
     throw new ServerError('Model is required for prompt refinement', { status: 400, code: 'MODEL_REQUIRED' });
   }
 
-  const llmPrompt = buildMediaPromptRefinePrompt({
+  const userPrompt = trimTo(prompt, MAX_PROMPT_LEN);
+  const userNegative = trimTo(negativePrompt, MAX_PROMPT_LEN);
+  const userFeedback = trimTo(feedback, 3000);
+  // Stamped here rather than by the runner (the stamp is idempotent) so the
+  // response can show the exact text the LLM received, with the instructions
+  // and the policy clause listed beside the user's own words (#11317).
+  const llmPrompt = withCreativeLatitude(buildMediaPromptRefinePrompt({
+    kind, prompt: userPrompt, negativePrompt: userNegative, feedback: userFeedback, renderConfig, maxPromptLength,
+  }));
+  const instructions = buildMediaPromptRefinePrompt({
     kind,
-    prompt: trimTo(prompt, MAX_PROMPT_LEN),
-    negativePrompt: trimTo(negativePrompt, MAX_PROMPT_LEN),
-    feedback: trimTo(feedback, 3000),
+    prompt: '[your prompt]',
+    negativePrompt: userNegative && '[your negative prompt]',
+    feedback: userFeedback && '[your feedback]',
     renderConfig,
     maxPromptLength,
   });
+  const promptAdditions = [
+    CREATIVE_LATITUDE_ADDITION,
+    promptAddition('refine-instructions', userFeedback ? 'Refine instructions' : 'Enhance instructions', instructions),
+  ];
 
   const { text, runId } = await runRefinePrompt(provider, selectedModel, llmPrompt, effort);
 
@@ -197,5 +212,7 @@ export async function refineMediaPrompt({
     providerId: provider.id,
     model: selectedModel,
     truncated,
+    sentPrompt: llmPrompt,
+    promptAdditions,
   };
 }

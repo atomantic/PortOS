@@ -5,6 +5,7 @@ import useProviderModels from '../../hooks/useProviderModels';
 import { refineMediaPrompt } from '../../services/api';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
+import SentPromptPanel from './SentPromptPanel';
 import { safeReadStorage, safeRemoveStorage, safeWriteStorage } from '../../lib/safeStorage';
 
 const LS_KEY_PROVIDER = 'portos_enhance_prompt_provider';
@@ -29,6 +30,9 @@ export default function PromptEnhancer({
   const [isOpen, setIsOpen] = useState(false);
   const [effort, setEffort] = useState(() => safeReadStorage(LS_KEY_EFFORT) || '');
   const [enhancing, setEnhancing] = useState(false);
+  // What the last Enhance sent the AI: the user's prompt inside PortOS's
+  // instructions and policy clause, each listed as a chip (#11317).
+  const [lastSent, setLastSent] = useState(null);
 
   const {
     providers,
@@ -98,6 +102,9 @@ export default function PromptEnhancer({
         maxPromptLength: maxPromptLength > 0 ? maxPromptLength : undefined,
       });
 
+      setLastSent(typeof result?.sentPrompt === 'string'
+        ? { prompt: prompt.trim(), sentPrompt: result.sentPrompt, additions: result.promptAdditions || [] }
+        : null);
       if (result?.prompt) {
         setPrompt(result.prompt);
         if (setNegativePrompt && result.negativePrompt != null) {
@@ -202,6 +209,12 @@ export default function PromptEnhancer({
               )}
             </button>
           </div>
+        </div>
+      )}
+      {lastSent && (
+        <div className="text-xs">
+          <span className="block mb-1 text-gray-500">Last sent to the AI</span>
+          <SentPromptPanel prompt={lastSent.prompt} sentPrompt={lastSent.sentPrompt} additions={lastSent.additions} />
         </div>
       )}
     </div>
