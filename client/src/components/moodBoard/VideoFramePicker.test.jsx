@@ -28,6 +28,14 @@ describe('VideoFramePicker', () => {
     expect(onAdd).toHaveBeenCalledWith([0, 0.033]);
   });
 
+  it('rolls a time that rounds up into the next minute', () => {
+    render(<VideoFramePicker src="/data/videos/clip.mp4" onAdd={vi.fn()} onClose={() => {}} />);
+    const video = screen.getByTestId('frame-picker-video');
+    Object.defineProperty(video, 'duration', { configurable: true, value: 59.996 });
+    fireEvent.loadedMetadata(video);
+    expect(screen.getByText('0:00.00 / 1:00.00')).toBeInTheDocument();
+  });
+
   it('removes a picked frame', () => {
     openWithDuration(vi.fn());
     fireEvent.click(screen.getByRole('button', { name: 'Pick this frame' }));

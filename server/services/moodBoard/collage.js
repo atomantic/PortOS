@@ -103,7 +103,11 @@ async function storePickedFramesInGallery(frames, videoFile) {
   return names;
 }
 
-const clock = (sec) => `${Math.floor(sec / 60)}:${(sec % 60).toFixed(2).padStart(5, '0')}`;
+// Rounded to centiseconds before splitting, so 59.996 s reads 1:00.00, not 0:60.00.
+const clock = (sec) => {
+  const cs = Math.round(sec * 100);
+  return `${Math.floor(cs / 6000)}:${((cs % 6000) / 100).toFixed(2).padStart(5, '0')}`;
+};
 
 /**
  * Extract frames from one video pin and append them to the board as image

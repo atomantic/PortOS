@@ -95,8 +95,8 @@ function bestMp4(json) {
   const candidates = [
     ...(Array.isArray(json.video?.variants) ? json.video.variants : [])
       .filter((v) => v?.type === 'video/mp4').map((v) => ({ url: v.src, bitrate: v.bitrate })),
-    ...(Array.isArray(json.mediaDetails) ? json.mediaDetails : [])
-      .flatMap((m) => (Array.isArray(m?.video_info?.variants) ? m.video_info.variants : []))
+    // Only the first video's encodings: `json.video` describes that one.
+    ...((Array.isArray(json.mediaDetails) ? json.mediaDetails : []).find((m) => Array.isArray(m?.video_info?.variants))?.video_info.variants || [])
       .filter((v) => v?.content_type === 'video/mp4').map((v) => ({ url: v.url, bitrate: v.bitrate })),
   ].filter((v) => typeof v.url === 'string' && v.url);
   if (!candidates.length) return null;

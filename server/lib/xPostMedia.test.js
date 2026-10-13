@@ -130,6 +130,9 @@ describe('extractXPostMedia', () => {
       { content_type: 'video/mp4', url: 'https://video.twimg.com/vid/avc1/1080x1920/d.mp4', bitrate: 10368000 },
     ] } }];
     expect(extractXPostMedia(json).video).toEqual({ url: 'https://video.twimg.com/vid/avc1/1080x1920/d.mp4', poster: 'https://pbs.twimg.com/poster.jpg' });
+    // A second video's encodings never stand in for the first's.
+    json.mediaDetails.push({ video_info: { variants: [{ content_type: 'video/mp4', url: 'https://video.twimg.com/other/2160x3840/e.mp4', bitrate: 20000000 }] } });
+    expect(extractXPostMedia(json).video.url).toBe('https://video.twimg.com/vid/avc1/1080x1920/d.mp4');
   });
 
   it('returns a null video when only a non-mp4 variant is present', () => {

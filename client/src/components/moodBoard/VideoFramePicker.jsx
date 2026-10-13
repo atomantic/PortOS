@@ -16,7 +16,11 @@ const FRAME_SEC = 1 / 30;
 const ZOOMS = [1, 2, 4, 8];
 const THUMB_HEIGHT = 56;
 
-const formatFrameTime = (sec) => `${Math.floor(sec / 60)}:${(sec % 60).toFixed(2).padStart(5, '0')}`;
+// Rounded to centiseconds before splitting, so 59.996 s reads 1:00.00, not 0:60.00.
+const formatFrameTime = (sec) => {
+  const cs = Math.round(sec * 100);
+  return `${Math.floor(cs / 6000)}:${((cs % 6000) / 100).toFixed(2).padStart(5, '0')}`;
+};
 
 // Draw evenly spaced thumbnails from a second, hidden video so the preview
 // never jumps while the strip fills in. `isCurrent` drops a superseded run.
