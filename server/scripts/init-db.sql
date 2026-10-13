@@ -81,11 +81,12 @@ CREATE INDEX IF NOT EXISTS idx_memories_embedding
   ON memories USING hnsw (embedding vector_cosine_ops)
   WITH (m = 16, ef_construction = 64);
 
--- Full-text search index (replaces BM25)
-CREATE INDEX IF NOT EXISTS idx_memories_fts
-  ON memories USING gin (
+-- Reuse stored lexemes for both matching and ranking. ADD also backfills upgrades.
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS search_tsv tsvector
+  GENERATED ALWAYS AS (
     to_tsvector('english', coalesce(content, '') || ' ' || coalesce(summary, ''))
-  );
+  ) STORED;
+CREATE INDEX IF NOT EXISTS idx_memories_search_tsv ON memories USING gin (search_tsv);
 
 -- Filtered queries
 CREATE INDEX IF NOT EXISTS idx_memories_status ON memories (status);
