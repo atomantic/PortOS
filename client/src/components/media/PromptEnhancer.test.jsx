@@ -72,6 +72,27 @@ describe('PromptEnhancer', () => {
     expect(setNegativePrompt).toHaveBeenCalledWith('low resolution');
   });
 
+  // Uniquely catches the AI's instructions and policy clause staying hidden
+  // after an Enhance (#11317).
+  it('lists what the last Enhance sent the AI as chips with the full prompt', async () => {
+    vi.mocked(api.refineMediaPrompt).mockResolvedValue({
+      prompt: 'an enhanced detailed prompt',
+      sentPrompt: '## Creative latitude (operator policy)\n\nEnhance: a simple cat',
+      promptAdditions: [
+        { id: 'creative-latitude', label: 'Creative latitude (operator policy)', text: 'policy text' },
+        { id: 'refine-instructions', label: 'Enhance instructions', text: 'Enhance: [your prompt]' },
+      ],
+    });
+    render(<PromptEnhancer kind="image" prompt="a simple cat" setPrompt={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /^enhance$/i }));
+    const chip = await screen.findByRole('button', { name: '+ Enhance instructions' });
+    expect(screen.getByRole('button', { name: '+ Creative latitude (operator policy)' })).toBeInTheDocument();
+    fireEvent.click(chip);
+    expect(screen.getByText('Enhance: [your prompt]')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Show full prompt' }));
+    expect(screen.getByText(/Enhance: a simple cat/)).toBeInTheDocument();
+  });
+
   // reactor.inc rejects a prompt over its cap outright, so the enhancer has to
   // be told the budget rather than handing back a richer, unrenderable prompt.
   it('forwards the render backend prompt cap and reports a trimmed result', async () => {
