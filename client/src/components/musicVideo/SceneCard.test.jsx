@@ -174,6 +174,19 @@ describe('planned camera move (#10589)', () => {
     expect(onSave).toHaveBeenLastCalledWith('s1', { camera: null });
   });
 
+  it('puts a footage shot\'s camera beside its motion prompt and shows the text it adds', () => {
+    render(<Harness initial={{ sceneId: 's1', visualLayer: 'footage', prompt: 'a hand turns the dial', startSec: 0, endSec: 5, takes: [] }} onSave={vi.fn()} />);
+    const camera = screen.getByLabelText('Camera');
+    expect(camera.closest('details').querySelector('summary').textContent).not.toMatch(/Shot settings/);
+    expect(screen.queryByTestId('camera-adds')).toBeNull();
+    fireEvent.change(camera, { target: { value: 'slow-dolly-in' } });
+    const adds = screen.getByTestId('camera-adds').textContent.replace(/^Adds to the prompt: /, '');
+    expect(adds.length).toBeGreaterThan(0);
+    // The same text is what Sent to the model lists as its Camera move addition.
+    fireEvent.click(within(screen.getByTestId('render-inputs')).getByRole('button', { name: '+ Camera move' }));
+    expect(screen.getByTestId('render-inputs').textContent).toContain(adds);
+  });
+
   it('asks why a static camera holds, and offers no camera on a title card', () => {
     const onSave = vi.fn();
     const { unmount } = render(<Harness initial={{ sceneId: 's1', startSec: 0, endSec: 5, takes: [], camera: { move: 'slow-dolly-in' } }} onSave={onSave} />);

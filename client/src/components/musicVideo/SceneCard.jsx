@@ -222,7 +222,7 @@ export default function SceneCard({
     typeof scene.startSec === 'number' && typeof scene.endSec === 'number' ? `${scene.startSec.toFixed(2)}–${scene.endSec.toFixed(2)}s` : null,
     scene.beatAligned ? 'beat-aligned' : null,
     layer === 'footage' && loops && !performance ? 'loops' : null,
-    scene.camera?.move ? `camera ${scene.camera.move}` : null,
+    layer !== 'footage' && scene.camera?.move ? `camera ${scene.camera.move}` : null,
   ].filter(Boolean).join(' · ');
   const promptField = (
     <textarea
@@ -241,7 +241,7 @@ export default function SceneCard({
           span={sceneHasAuthoredSpan(scene) ? { startSec: scene.startSec, endSec: scene.endSec } : null} />
         {/* A VHS glitch riding on the cut into or out of this shot; never moves the cut. */}
         <SceneTransitions fieldId={fieldId} scene={scene} onChange={applyPatch} />
-        {/* Everything set once and rarely revisited: timing, shot mode, layer, camera. */}
+        {/* Everything set once and rarely revisited: timing, shot mode, layer, and a non-footage shot's camera. */}
         <details className="group/settings rounded border border-port-border">
           <summary className="flex min-h-[44px] cursor-pointer items-center gap-2 px-2 text-xs marker:content-none sm:min-h-[32px] [&::-webkit-details-marker]:hidden">
             <ChevronRight size={12} aria-hidden="true" className="shrink-0 transition-transform group-open/settings:rotate-90" />
@@ -340,7 +340,7 @@ export default function SceneCard({
             {LAYER_LABELS[layer]} sections render in composed or document mode — a plain render plays this scene&apos;s footage.
           </p>
         )}
-        {layer !== 'card' && <SceneCameraControls scene={scene} fieldId={fieldId} onEditLocal={onEditLocal} onSave={onSave} />}
+        {layer !== 'card' && layer !== 'footage' && <SceneCameraControls scene={scene} fieldId={fieldId} onEditLocal={onEditLocal} onSave={onSave} />}
           </div>
         </details>
         {/* A music-driven shot follows the whole mix, not one voice; a lip-sync needs its singer before it renders. */}
@@ -531,6 +531,11 @@ export default function SceneCard({
             <div className="flex aspect-video w-full items-center justify-center rounded border border-dashed border-port-border text-xs text-port-text-muted">No clip yet</div>
           )}
           {layer === 'footage' && promptField}
+          {/* The camera move sits with the motion prompt and shows the text it adds to it. */}
+          {layer === 'footage' && (
+            <SceneCameraControls scene={scene} fieldId={fieldId} onEditLocal={onEditLocal} onSave={onSave}
+              adds={cardRequest.promptAdditions.find((item) => item.id === 'camera-move')?.text || null} />
+          )}
           <div className="flex flex-wrap items-center gap-2">
             <SceneRenderTarget id={fieldId('render-on')} value={renderPick} onChange={setRenderPick} performance={performance}
               options={renderOptions} onOptionsChange={setRenderOptions} scene={scene} models={videoModels} defaultModel={defaultVideoModel}
@@ -591,7 +596,7 @@ export default function SceneCard({
             onOpenPreview={onOpenPreview} />
           </>
           )}
-          {/* The render's settings sit with the render: what it covers and costs, then timing, shot mode, layer and camera. */}
+          {/* The render's settings sit with the render: what it covers and costs, then timing, shot mode and layer. */}
           {shotSettings}
         </section>
         </div>
