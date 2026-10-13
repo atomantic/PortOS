@@ -11,7 +11,7 @@
  */
 import { isPlainObject } from '../../lib/objects.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
-import { peerFetch } from '../../lib/peerHttpClient.js';
+import { peerFetch, readPeerBody } from '../../lib/peerHttpClient.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { sanitizeRecordForWire } from '../../lib/syncWire.js';
 import { setSyncBaseHash, contentHashForRecord, flushBaseHashes } from '../../lib/conflictJournal.js';
@@ -263,9 +263,12 @@ export async function pushRecordToPeer(sub, options = {}) {
   }
   if (!res.ok) {
     const reason = `http-${res.status}`;
-    // A body already consumed (the 409 probe above) or not JSON just leaves
-    // the line without the receiver's code.
-    const errBody = await Promise.resolve().then(() => res.json()).catch(() => null);
+    // Native fetch resolved at the headers, so PUSH_TIMEOUT_MS no longer covers
+    // this read: cap it so a stalled or oversized error body cannot hang the
+    // push (or the sequential peer:online retry walk). A body already consumed
+    // (the 409 probe above), stalled, or not JSON just leaves the line without
+    // the receiver's code.
+    const errBody = await readPeerBody(res, 'json', { maxBytes: 64 * 1024, idleTimeoutMs: 5000 }).catch(() => null);
     const detail = [errBody?.code, errBody?.error].filter(isNonBlankStr).join(': ');
     reportPushFailure(sub, peer, reason, detail);
     return { pushed: false, reason };
