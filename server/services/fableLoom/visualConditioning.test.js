@@ -98,6 +98,12 @@ describe('FableLoom visual conditioning compiler', () => {
       'A cautious arrival',
     ].join('\n\n'));
     expect(result.negativePrompt).toBe('subtitles, captions, dialogue lettering, speech balloons, text overlays, photoreal, gore, wrong aria face');
+    // Every block around the scene's text is listed for the render's chips (#11317).
+    expect(result.promptAdditions.map((item) => item.label)).toEqual([
+      'Universe style', 'Environment', 'Character: Aria', 'Object: Compass', 'No on-screen text',
+      'Previous image continuity', 'Added to the negative prompt',
+    ]);
+    expect(result.promptAdditions.at(-1).text).toBe(result.negativePrompt);
     expect(result.visualConditioning.compiledPrompt).toBe(result.prompt);
     expect(result.visualConditioning.compiledNegativePrompt).toBe(result.negativePrompt);
     expect(result.visualConditioning).toMatchObject({
@@ -109,6 +115,18 @@ describe('FableLoom visual conditioning compiler', () => {
     expect(result.visualConditioning.assets[0]).toMatchObject({ role: 'temporal-predecessor', filename: 'opening.png' });
     expect(result.referenceImagePaths.every((path) => path.startsWith('/approved/'))).toBe(true);
     expect(JSON.stringify(result.visualConditioning)).not.toContain('/approved/');
+  });
+
+  // Uniquely catches the compiler cutting a long scene prompt instead of sending it whole (#11317).
+  it('sends a long scene prompt whole', async () => {
+    const loom = loomWith(lockedBinding);
+    const authoredPrompt = 'a long careful shot description. '.repeat(400);
+    const result = await compileFableLoomVisualRequest({
+      tag: { loomId: loom.id, episodeId: 'episode-1', nodeId: 'shot' }, kind: 'image',
+      capability: fableLoomImageCapabilities({ mode: 'codex', inputBudget: 6 }), authoredPrompt, ...deps(loom),
+    });
+    expect(result.prompt.length).toBeGreaterThan(8000);
+    expect(result.prompt.endsWith(authoredPrompt.trim())).toBe(true);
   });
 
   it('keeps a shared set across camera cuts without carrying that room into another scene', async () => {

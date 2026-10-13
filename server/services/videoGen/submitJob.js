@@ -199,6 +199,7 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
     if (compiled) {
       body.prompt = compiled.prompt;
       body.negativePrompt = compiled.negativePrompt;
+      if (compiled.promptAdditions?.length) body.promptAdditions = [...(body.promptAdditions || []), ...compiled.promptAdditions];
       if (prepared.sourceImagePath && !compiled.sourceImagePath) {
         await prepared.discardSourceImage();
         prepared.uploadedTempPath = null;
