@@ -228,32 +228,34 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
       zIndexClassName="z-[9999]"
       backdropClassName="bg-black/60"
       ariaLabelledBy="layout-editor-title"
-      panelClassName="bg-port-card rounded-xl border border-port-border shadow-2xl overflow-hidden"
+      panelClassName="flex flex-col bg-port-card rounded-xl border border-port-border shadow-2xl overflow-hidden"
     >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-port-border">
+        <div className="flex shrink-0 items-center justify-between px-5 py-4 border-b border-port-border">
           <h2 id="layout-editor-title" className="text-sm font-semibold text-white">Edit Layouts</h2>
           <button ref={closeRef} onClick={close} className="p-1 text-gray-500 hover:text-white transition-colors rounded min-h-[44px] min-w-[44px] flex items-center justify-center" aria-label="Close">
             <X size={16} />
           </button>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-0 max-h-[70vh] overflow-hidden">
-          <div className="border-r border-port-border overflow-y-auto">
+        {/* The modal owns the viewport cap. Scroll the stacked phone body as
+            one region; desktop columns scroll independently within that cap. */}
+        <div className="min-h-0 flex-1 overflow-y-auto sm:grid sm:grid-cols-3 sm:overflow-hidden">
+          <div className="min-w-0 border-b sm:border-b-0 sm:border-r border-port-border sm:min-h-0 sm:overflow-y-auto">
             {layouts.map((l) => (
               <button
                 key={l.id}
                 onClick={() => requestSwitch(l.id)}
-                className={`w-full text-left px-4 py-2 text-sm border-l-2 ${
+                className={`w-full min-w-0 min-h-[44px] text-left px-4 py-2 text-sm border-l-2 ${
                   l.id === editingId ? 'border-port-accent bg-white/5 text-white' : 'border-transparent text-gray-400 hover:bg-white/5 hover:text-white'
                 }`}
               >
-                <div className="truncate">{l.name}</div>
+                <div className="break-words">{l.name}</div>
                 {l.builtIn && <div className="text-[10px] text-gray-500 uppercase">Built-in</div>}
               </button>
             ))}
           </div>
 
-          <div className="sm:col-span-2 p-4 overflow-y-auto space-y-4">
+          <div className="min-w-0 sm:min-h-0 sm:col-span-2 p-4 sm:overflow-y-auto space-y-4">
             <div>
               <label htmlFor="layout-editor-name" className="block text-xs text-gray-400 mb-1">Name</label>
               <input
@@ -262,12 +264,12 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
                 value={name}
                 onChange={(e) => { setName(e.target.value); setDirty(true); }}
                 maxLength={nameMax}
-                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:border-port-accent outline-hidden"
+                className="w-full min-h-[44px] bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:border-port-accent outline-hidden"
               />
             </div>
 
             <div>
-              <div className="flex items-center justify-between mb-1">
+              <div className="flex flex-wrap items-center justify-between gap-x-2 mb-1">
                 <label htmlFor="layout-editor-window-start" className="text-xs text-gray-400 flex items-center gap-1.5">
                   <Clock size={12} aria-hidden="true" />
                   Auto-activate window
@@ -276,7 +278,7 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
                   <button
                     type="button"
                     onClick={setMorningDefault}
-                    className="text-xs text-port-accent hover:text-port-accent/80"
+                    className="min-h-[44px] text-xs text-port-accent hover:text-port-accent/80"
                   >
                     Set as morning default
                   </button>
@@ -285,20 +287,20 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
                   <button
                     type="button"
                     onClick={clearWindow}
-                    className="text-xs text-gray-500 hover:text-port-error"
+                    className="min-h-[44px] min-w-[44px] text-xs text-gray-500 hover:text-port-error"
                   >
                     Clear
                   </button>
                 )}
               </div>
               {activateWindow ? (
-                <div className="flex items-center gap-2 text-sm">
+                <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 text-sm">
                   <input
                     id="layout-editor-window-start"
                     type="time"
                     value={activateWindow.start}
                     onChange={(e) => updateWindowField('start', e.target.value)}
-                    className="bg-port-bg border border-port-border rounded-lg px-2 py-1.5 text-white focus:border-port-accent outline-hidden"
+                    className="w-full min-w-0 min-h-[44px] bg-port-bg border border-port-border rounded-lg px-2 py-1.5 text-white focus:border-port-accent outline-hidden"
                   />
                   <span className="text-gray-500">to</span>
                   <input
@@ -307,9 +309,9 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
                     aria-label="Auto-activate window end time"
                     value={activateWindow.end}
                     onChange={(e) => updateWindowField('end', e.target.value)}
-                    className="bg-port-bg border border-port-border rounded-lg px-2 py-1.5 text-white focus:border-port-accent outline-hidden"
+                    className="w-full min-w-0 min-h-[44px] bg-port-bg border border-port-border rounded-lg px-2 py-1.5 text-white focus:border-port-accent outline-hidden"
                   />
-                  <span className="text-xs text-gray-500 ml-2">Activates on dashboard load if now is in this window.</span>
+                  <span className="col-span-3 text-xs text-gray-500">Activates on dashboard load if now is in this window.</span>
                 </div>
               ) : (
                 <p className="text-xs text-gray-500">No auto-activation. Set a window to make this layout the default during specific hours.</p>
@@ -323,7 +325,7 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
                   const meta = WIDGETS_BY_ID[id];
                   return (
                     <li key={id} className="flex items-center gap-2 bg-port-bg border border-port-border rounded-lg px-3 py-2">
-                      <span className="flex-1 text-sm text-white truncate">
+                      <span className="min-w-0 flex-1 text-sm text-white truncate">
                         {meta?.label ?? id}
                         {!meta && <span className="ml-2 text-xs text-port-warning">(unknown — skipped)</span>}
                       </span>
@@ -347,7 +349,7 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
                     <button
                       key={w.id}
                       onClick={() => add(w.id)}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-port-bg border border-port-border text-xs text-gray-300 hover:border-port-accent hover:text-white transition-colors"
+                      className="flex min-h-[44px] items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-port-bg border border-port-border text-xs text-gray-300 hover:border-port-accent hover:text-white transition-colors"
                     >
                       <Plus size={12} />
                       <span>{w.label}</span>
@@ -359,9 +361,9 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
           </div>
         </div>
 
-        <div className="flex flex-col gap-2 px-5 py-3 border-t border-port-border">
+        <div className="flex shrink-0 flex-col gap-2 px-5 py-3 border-t border-port-border">
           {mode === 'duplicate' && (
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <input
                 type="text"
                 value={dupName}
@@ -374,39 +376,39 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
                 maxLength={nameMax}
                 placeholder="Name for new layout"
                 aria-label="Name for new layout"
-                className="flex-1 bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:border-port-accent outline-hidden"
+                className="w-full min-w-0 min-h-[44px] sm:w-auto sm:flex-1 bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:border-port-accent outline-hidden"
               />
-              <button onClick={commitDuplicate} className="px-3 py-1.5 text-sm rounded-lg bg-port-accent text-white hover:bg-port-accent/80">Create</button>
-              <button onClick={() => setMode('idle')} className="px-3 py-1.5 text-sm text-gray-300 hover:text-white rounded-lg border border-port-border">Cancel</button>
+              <button onClick={commitDuplicate} className="min-h-[44px] px-3 py-1.5 text-sm rounded-lg bg-port-accent text-white hover:bg-port-accent/80">Create</button>
+              <button onClick={() => setMode('idle')} className="min-h-[44px] px-3 py-1.5 text-sm text-gray-300 hover:text-white rounded-lg border border-port-border">Cancel</button>
             </div>
           )}
           {mode === 'delete' && (
-            <div className="flex items-center gap-2">
-              <span className="flex-1 text-sm text-port-error">Delete &ldquo;{editing?.name}&rdquo;? This can&apos;t be undone.</span>
-              <button onClick={commitDelete} className="px-3 py-1.5 text-sm rounded-lg bg-port-error text-white hover:bg-port-error/80">Delete</button>
-              <button onClick={() => setMode('idle')} className="px-3 py-1.5 text-sm text-gray-300 hover:text-white rounded-lg border border-port-border">Cancel</button>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="w-full min-w-0 break-words sm:w-auto sm:flex-1 text-sm text-port-error">Delete &ldquo;{editing?.name}&rdquo;? This can&apos;t be undone.</span>
+              <button onClick={commitDelete} className="min-h-[44px] px-3 py-1.5 text-sm rounded-lg bg-port-error text-white hover:bg-port-error/80">Delete</button>
+              <button onClick={() => setMode('idle')} className="min-h-[44px] px-3 py-1.5 text-sm text-gray-300 hover:text-white rounded-lg border border-port-border">Cancel</button>
             </div>
           )}
           {mode === 'switch' && (
-            <div className="flex items-center gap-2">
-              <span className="flex-1 text-sm text-port-warning">Discard unsaved changes to &ldquo;{editing?.name}&rdquo;?</span>
-              <button onClick={confirmSwitch} className="px-3 py-1.5 text-sm rounded-lg bg-port-warning text-black hover:bg-port-warning/80">Discard</button>
-              <button onClick={cancelSwitch} className="px-3 py-1.5 text-sm text-gray-300 hover:text-white rounded-lg border border-port-border">Cancel</button>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="w-full min-w-0 break-words sm:w-auto sm:flex-1 text-sm text-port-warning">Discard unsaved changes to &ldquo;{editing?.name}&rdquo;?</span>
+              <button onClick={confirmSwitch} className="min-h-[44px] px-3 py-1.5 text-sm rounded-lg bg-port-warning text-black hover:bg-port-warning/80">Discard</button>
+              <button onClick={cancelSwitch} className="min-h-[44px] px-3 py-1.5 text-sm text-gray-300 hover:text-white rounded-lg border border-port-border">Cancel</button>
             </div>
           )}
           {mode === 'idle' && (
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   onClick={() => { setDupName(`${name} (copy)`); setMode('duplicate'); }}
-                  className="px-3 py-1.5 text-sm text-gray-300 hover:text-white rounded-lg border border-port-border hover:border-gray-600"
+                  className="min-h-[44px] px-3 py-1.5 text-sm text-gray-300 hover:text-white rounded-lg border border-port-border hover:border-gray-600"
                 >
                   Save as new…
                 </button>
                 {editing && !editing.builtIn && (
                   <button
                     onClick={() => setMode('delete')}
-                    className="px-3 py-1.5 text-sm text-port-error hover:bg-port-error/10 rounded-lg border border-port-border"
+                    className="min-h-[44px] px-3 py-1.5 text-sm text-port-error hover:bg-port-error/10 rounded-lg border border-port-border"
                   >
                     Delete
                   </button>
@@ -415,7 +417,7 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
               <button
                 onClick={save}
                 disabled={!dirty}
-                className="flex items-center gap-1.5 px-4 py-1.5 text-sm rounded-lg bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-40"
+                className="flex min-h-[44px] items-center gap-1.5 px-4 py-1.5 text-sm rounded-lg bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-40"
               >
                 <Save size={14} />
                 <span>Save</span>
