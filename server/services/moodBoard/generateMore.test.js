@@ -90,6 +90,18 @@ describe('generate more workflow', () => {
     expect(mocks.enqueue).toHaveBeenCalledTimes(4);
   });
 
+  // Uniquely catches the prompt-writing instructions and policy clause staying
+  // hidden from the Generate more panel (#11317).
+  it('reports the exact prompt-writing request with the blocks PortOS added', async () => {
+    const id = mocks.board.id;
+    await startGenerateJob(id, input({ direction: 'rainy harbor' }));
+    const { sentInput } = await settled(id);
+    expect(sentInput.sentPrompt).toBe(mocks.run.mock.calls[0][0].prompt);
+    expect(sentInput.sentPrompt).toContain('rainy harbor');
+    expect(sentInput.promptAdditions.map((item) => item.label)).toEqual(['Creative latitude (operator policy)', 'Prompt-writing instructions']);
+    expect(sentInput.promptAdditions[1].text).not.toContain('rainy harbor');
+  });
+
   it('inherits the configured cloud image model independently of the selected prompt-writing model', async () => {
     mocks.settings = { imageGen: { mode: 'codex', codex: { enabled: true, model: 'example-image-model', effort: 'medium' } } };
     const id = mocks.board.id;

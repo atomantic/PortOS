@@ -4,6 +4,7 @@ import { supportsToolFreeOneShot, toolFreeOneShotSelectionPolicy } from '../../u
 import ProviderModelSelector from '../ProviderModelSelector';
 import ResolutionField from '../media/ResolutionField';
 import MediaJobThumb from '../pipeline/MediaJobThumb';
+import SentPromptPanel from '../media/SentPromptPanel';
 import FormField from '../ui/FormField';
 import useProviderModels from '../../hooks/useProviderModels';
 import useImageRenderSettings from '../../hooks/useImageRenderSettings';
@@ -162,6 +163,10 @@ export default function MoodBoardGeneratePanel({ board, disabled = false }) {
         </p>
         {queued > 0 && <div className="flex flex-wrap gap-3">
           {job.items.filter((it) => it.jobId).map((it) => <MediaJobThumb key={it.jobId} jobId={it.jobId} label="Generated image" size="md" />)}
+        </div>}
+        {job.sentInput && <div className="text-xs">
+          <span className="block mb-1 text-gray-500">Sent to the prompt-writing AI</span>
+          <SentPromptPanel sentPrompt={job.sentInput.sentPrompt} additions={job.sentInput.promptAdditions || []} />
         </div>}
       </div>}
     </section>

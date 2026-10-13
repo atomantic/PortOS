@@ -64,3 +64,21 @@ describe('PromptRefineModal video queue payload', () => {
     expect(api.generateVideo).toHaveBeenCalledWith(expect.objectContaining({ tiling: 'spatial' }));
   });
 });
+
+// Uniquely catches the modal hiding what Refine sent the AI, or keeping one
+// record's sent prompt on another (#11317).
+describe('PromptRefineModal sent prompt', () => {
+  it('lists what Refine sent and clears it when the record changes', async () => {
+    vi.mocked(api.refineMediaPrompt).mockResolvedValue({
+      prompt: 'a paper boat drifting', negativePrompt: '', rationale: 'Added motion.',
+      sentPrompt: 'policy\n\nUSER FEEDBACK:\nAdd motion',
+      promptAdditions: [{ id: 'refine-instructions', label: 'Refine instructions', text: 'USER FEEDBACK:\n[your feedback]' }],
+    });
+    const { rerender } = render(<PromptRefineModal item={videoRecord('spatial')} open onClose={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText('Feedback'), { target: { value: 'Add motion' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Refine Prompt' }));
+    expect(await screen.findByRole('button', { name: '+ Refine instructions' })).toBeInTheDocument();
+    rerender(<PromptRefineModal item={{ ...videoRecord('spatial'), key: 'another-video' }} open onClose={vi.fn()} />);
+    await waitFor(() => expect(screen.queryByRole('button', { name: '+ Refine instructions' })).not.toBeInTheDocument());
+  });
+});

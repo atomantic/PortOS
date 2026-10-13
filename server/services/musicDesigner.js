@@ -28,6 +28,8 @@
 import { ServerError } from '../lib/errorHandler.js';
 import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from './promptRunner.js';
 import { trimTo } from '../lib/textUtils.js';
+import { CREATIVE_LATITUDE_ADDITION, withCreativeLatitude } from '../lib/creativeLatitude.js';
+import { promptAddition } from '../lib/modelInput.js';
 
 // Caps mirror the Generate form's own field limits so a designer round-trip
 // can't produce text the generate route would then reject.
@@ -104,6 +106,8 @@ const lengthContract = (targetSeconds) => {
 // phrase, subject and imagery the user asked for never reach the lyricist.
 const SONG_REQUEST_LABEL = 'SONG REQUEST (what the lyrics must deliver: honour every hook phrase, subject and image it names; ignore its purely musical or production details such as genre, tempo, instruments or artist names, which the musical description owns and which never belong in a lyric line)';
 
+const LYRICS_OUTPUT_CONTRACT = 'Return ONLY the lyrics with their section tags. No preamble, no commentary, no markdown fence.';
+
 export function buildLyricsPrompt({ description, guidance, request, template, targetSeconds } = {}) {
   return [
     pickTemplate(template, DEFAULT_LYRICS_TEMPLATE),
@@ -111,9 +115,18 @@ export function buildLyricsPrompt({ description, guidance, request, template, ta
     section('MUSICAL DESCRIPTION', trimTo(description, MAX_DESCRIPTION) || '(none given)'),
     section('ADDITIONAL GUIDANCE FROM THE USER', trimTo(guidance, MAX_GUIDANCE)),
     lengthContract(targetSeconds),
-    '\n\nReturn ONLY the lyrics with their section tags. No preamble, no commentary, no markdown fence.',
+    `\n\n${LYRICS_OUTPUT_CONTRACT}`,
   ].join('');
 }
+
+// The blocks the designer wraps around the user's words, listed beside them
+// (#11317). A template the user typed is their own text, so only the shipped
+// default is listed as an addition.
+const designerAdditions = ({ template, defaultTemplate, instructionsLabel, extra }) => [
+  CREATIVE_LATITUDE_ADDITION,
+  trimTo(template, MAX_TEMPLATE) ? null : promptAddition('designer-instructions', instructionsLabel, defaultTemplate),
+  ...extra,
+].filter(Boolean);
 
 // The review pass is not user-overridable (no `template`): it edits a draft in
 // place, so its constraints are the contract rather than a creative brief.
@@ -184,7 +197,12 @@ export async function describeMusic({ concept, guidance, template, providerId, m
   const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
   assertProvider(provider, { message: 'No AI provider available to describe the music', code: 'NO_PROVIDER' });
 
-  const prompt = buildDescribePrompt({ concept, guidance, template });
+  // Stamped here (idempotent) so the response carries the exact text sent.
+  const prompt = withCreativeLatitude(buildDescribePrompt({ concept, guidance, template }));
+  const promptAdditions = designerAdditions({
+    template, defaultTemplate: DEFAULT_DESCRIBE_TEMPLATE, instructionsLabel: 'Describe instructions',
+    extra: [promptAddition('caption-format', 'Caption format', DESCRIBE_OUTPUT_CONTRACT)],
+  });
   const { text, model: ranModel } = await runPromptThroughProvider({
     provider, model: selectedModel, effort, prompt, source: 'music-describe',
   });
@@ -194,7 +212,7 @@ export async function describeMusic({ concept, guidance, template, providerId, m
     throw new ServerError('The AI returned an empty description. Try rerunning or picking a stronger model.', { status: 502, code: 'LLM_EMPTY' });
   }
   console.log(`🎼 Described music via ${provider.id}/${ranModel || 'default'} (${description.length} chars)`);
-  return { description, llm: { provider: provider.id, model: ranModel || null } };
+  return { description, llm: { provider: provider.id, model: ranModel || null }, sentPrompt: prompt, promptAdditions };
 }
 
 /**
@@ -215,7 +233,15 @@ export async function writeLyrics({ description, guidance, request, template, ta
   const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
   assertProvider(provider, { message: 'No AI provider available to write lyrics', code: 'NO_PROVIDER' });
 
-  const prompt = buildLyricsPrompt({ description, guidance, request, template, targetSeconds });
+  const prompt = withCreativeLatitude(buildLyricsPrompt({ description, guidance, request, template, targetSeconds }));
+  const promptAdditions = designerAdditions({
+    template, defaultTemplate: DEFAULT_LYRICS_TEMPLATE, instructionsLabel: 'Lyrics instructions',
+    extra: [
+      promptAddition('song-request', 'Song request', trimTo(request, MAX_GUIDANCE) && `${SONG_REQUEST_LABEL}:\n${trimTo(request, MAX_GUIDANCE)}`),
+      promptAddition('target-length', 'Target length', lengthContract(targetSeconds)),
+      promptAddition('lyrics-format', 'Lyrics format', LYRICS_OUTPUT_CONTRACT),
+    ],
+  });
   const { text, model: ranModel } = await runPromptThroughProvider({
     provider, model: selectedModel, effort, prompt, source: 'music-lyrics',
   });
@@ -225,7 +251,7 @@ export async function writeLyrics({ description, guidance, request, template, ta
     throw new ServerError('The AI returned empty lyrics. Try rerunning or picking a stronger model.', { status: 502, code: 'LLM_EMPTY' });
   }
   console.log(`🎤 Wrote lyrics via ${provider.id}/${ranModel || 'default'} (${lyrics.length} chars)`);
-  return { lyrics, llm: { provider: provider.id, model: ranModel || null } };
+  return { lyrics, llm: { provider: provider.id, model: ranModel || null }, sentPrompt: prompt, promptAdditions };
 }
 
 /**

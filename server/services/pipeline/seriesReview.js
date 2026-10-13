@@ -45,6 +45,8 @@ import { PATHS, atomicWrite, ensureDir, tryReadFile, safeJSONParse, sha256Text }
 import { canonicalStringify } from '../../lib/objects.js';
 import { createSseRunner } from '../../lib/sseUtils.js';
 import { runStageScopedInlineLLM } from '../stageRunner.js';
+import { CREATIVE_LATITUDE_ADDITION, withCreativeLatitude } from '../../lib/creativeLatitude.js';
+import { promptAddition } from '../../lib/modelInput.js';
 import { getDomainMode } from '../../lib/domainAutonomy.js';
 import { readReadinessGate, mergeSeverityWeights } from '../../lib/editorial/index.js';
 import { loadState } from '../cosState.js';
@@ -310,7 +312,16 @@ export function shapeFeedbackFinding(parsed, { feedback, validNumbers } = {}) {
 async function routeFeedbackToFinding(seriesId, feedback, { providerOverride, modelOverride, issues }) {
   const trimmed = String(feedback || '').trim();
   if (!trimmed) return null;
-  const prompt = buildFeedbackRoutePrompt(trimmed.slice(0, FEEDBACK_MAX), issues);
+  // Stamped here (idempotent) so the verdict can show the exact text the note
+  // went out in, with the routing instructions and policy clause listed (#11317).
+  const prompt = withCreativeLatitude(buildFeedbackRoutePrompt(trimmed.slice(0, FEEDBACK_MAX), issues));
+  const sentInput = {
+    sentPrompt: prompt,
+    promptAdditions: [
+      CREATIVE_LATITUDE_ADDITION,
+      promptAddition('note-routing', 'Note routing instructions', buildFeedbackRoutePrompt('[your note]', issues)),
+    ].filter(Boolean),
+  };
   // Never fail the whole review on a bad routing call — fall back to a
   // series-level finding carrying the raw note so the observation still lands.
   let parsed = null;
@@ -325,7 +336,7 @@ async function routeFeedbackToFinding(seriesId, feedback, { providerOverride, mo
   const validNumbers = new Set((Array.isArray(issues) ? issues : []).map((i) => i.number).filter(Number.isInteger));
   const finding = shapeFeedbackFinding(parsed, { feedback: trimmed, validNumbers });
   const review = await seedReviewFromFindings(seriesId, [finding], { mode: 'merge', checkId: 'user-feedback' });
-  return { finding, review };
+  return { finding, review, sentInput };
 }
 
 // ---------------------------------------------------------------------------
@@ -419,9 +430,11 @@ export async function runSeriesReview(seriesId, {
 
   // 1. Optional free-text feedback → anchored finding (before the checks pass so
   //    it merges into the same review the verdict reads).
+  let feedbackInput = null;
   if (feedback && String(feedback).trim()) {
     onProgress({ type: 'step:start', kind: 'feedback' });
     await routeFeedbackToFinding(seriesId, feedback, { providerOverride, modelOverride, issues })
+      .then((routed) => { feedbackInput = routed?.sentInput ?? null; })
       .catch((err) => { console.error(`⚠️ series-review feedback seed failed — series=${seriesId.slice(0, 12)} ${err.message}`); });
     onProgress({ type: 'step:complete', kind: 'feedback' });
     if (aborted()) return canceledResult();
@@ -518,6 +531,8 @@ export async function runSeriesReview(seriesId, {
     // inputs couldn't be fully read; a null hash is never flagged stale.
     sourceInputsHash,
     hadFeedback: !!(feedback && String(feedback).trim()),
+    // What the note was sent to the AI as, for the panel's chips (#11317).
+    ...(feedbackInput ? { feedbackInput } : {}),
   };
   // Don't persist (or return) a verdict for a run the user canceled mid-flight —
   // the SSE wrapper will broadcast `canceled`, and a reload must not restore a
