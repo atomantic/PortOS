@@ -1757,7 +1757,7 @@ describe('releaseRetryHold', () => {
           retryPendingCleanup: undefined,
           retryPendingSince: undefined,
         }
-      }, 'user');
+      }, 'user', { expectedStatus: 'in_progress', expectedMetadata: { retryPendingCleanup: 'agent-x' } });
     });
 
     // Nothing survived cleanup — the task still has to become spawnable, it just
@@ -1771,7 +1771,7 @@ describe('releaseRetryHold', () => {
       expect(updateTask).toHaveBeenCalledWith('task-1', {
         status: 'pending',
         metadata: { retryPendingCleanup: undefined, retryPendingSince: undefined }
-      }, 'user');
+      }, 'user', { expectedStatus: 'in_progress', expectedMetadata: { retryPendingCleanup: 'agent-x' } });
     });
 
     // A hold armed before the marker carried an id (legacy shape) is releasable by
@@ -1781,7 +1781,7 @@ describe('releaseRetryHold', () => {
 
       await releaseRetryHold({ agentId: 'agent-x', task: task(), success: false, agentMetadata });
 
-      expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'pending' }), 'user');
+      expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'pending' }), 'user', { expectedStatus: 'in_progress', expectedMetadata: { retryPendingCleanup: 'true' } });
     });
 
     // The whole point of stamping the owner: attempt A's slow cleanup lands after

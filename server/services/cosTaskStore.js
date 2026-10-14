@@ -782,7 +782,14 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
 
   if (updates.status === 'pending' && isLegacyDeepAudit(current.metadata)) return { error: 'Historical Deep certification tasks are read-only; start a new Deep audit' };
   if (updates.status === 'pending' && current.metadata?.auditDepth === 'deep' && isRetryHeld(current.metadata)) {
-    return { error: 'Deep checkpoint cleanup is still pending; resume after cleanup finishes' };
+    // Extended audits retry normally after cleanup. Only the guarded release of
+    // this exact persisted hold may make one spawnable; a bare Resume/Run must
+    // still wait, and legacy certification records remain read-only above.
+    const releasesCurrentHold = expectedStatus === 'in_progress'
+      && expectedMetadata?.[RETRY_HOLD_KEY] === current.metadata[RETRY_HOLD_KEY]
+      && Object.hasOwn(updates.metadata || {}, RETRY_HOLD_KEY)
+      && updates.metadata[RETRY_HOLD_KEY] === undefined;
+    if (!releasesCurrentHold) return { error: 'Deep checkpoint cleanup is still pending; resume after cleanup finishes' };
   }
 
   const updatedMetadata = mergeUpdateMetadata(tasks[taskIndex].metadata, updates);
