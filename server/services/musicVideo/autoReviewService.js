@@ -428,7 +428,7 @@ function advanceInBackground(projectId, runId) {
     console.error(`❌ Music Video auto-review ${short(runId)} step failed: ${err.message}`);
     await halt(projectId, runId, { status: 'stopped', reason: `A step failed: ${err.message}`, error: err.message })
       .then((out) => publish(projectId, out.project, out.run, { type: 'idle' }))
-      .catch(() => {});
+      .catch((haltErr) => console.error(`❌ Music Video auto-review halt after step failure failed (projectId=${projectId}, runId=${runId}): ${haltErr.message}`));
   }));
 }
 
