@@ -1622,30 +1622,32 @@ describe('Settings routes — atomic partial saves (#11045)', () => {
   });
 });
 
+const guardedSettingsApp = (authority) => {
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    Object.defineProperty(req.socket, 'remoteAddress', { value: authority === 'local' ? '127.0.0.1' : '192.0.2.10', configurable: true });
+    // authGate supplies this verified context for both human and agent sessions.
+    req.portosAuthContext = authority === 'session'
+      ? { enabled: true, authenticated: true, method: 'session' }
+      : { enabled: false, authenticated: false, method: null };
+    next();
+  });
+  app.use(hostControlBodyGate);
+  app.use('/api/settings', settingsRoutes);
+  return app;
+};
+
 // Regression: generic settings writes must not let a remote caller repoint,
 // disable or prune the backups that hold the install's private records.
 describe('backup settings operator authority', () => {
   beforeEach(() => { store = { backup: { destPath: '/example-backups', enabled: true } }; vi.clearAllMocks(); });
-  const guardedApp = (authority) => {
-    const app = express();
-    app.use(express.json());
-    app.use((req, _res, next) => {
-      Object.defineProperty(req.socket, 'remoteAddress', { value: authority === 'local' ? '127.0.0.1' : '192.0.2.10', configurable: true });
-      // authGate supplies this verified context for both human and agent sessions.
-      req.portosAuthContext = authority === 'session'
-        ? { enabled: true, authenticated: true, method: 'session' }
-        : { enabled: false, authenticated: false, method: null };
-      next();
-    });
-    app.use(hostControlBodyGate);
-    app.use('/api/settings', settingsRoutes);
-    return app;
-  };
+
 
   it.each([{ destPath: '/example-other-backups' }, { enabled: false }, { retentionCount: 1 }, null])(
     'refuses unauthorized backup policy changes before persistence: %j', async (backup) => {
       const previous = structuredClone(store);
-      const res = await request(guardedApp('remote')).put('/api/settings').send({ backup });
+      const res = await request(guardedSettingsApp('remote')).put('/api/settings').send({ backup });
       expect(res.status).toBe(403);
       expect(res.body.code).toBe('HOST_CONTROL_FORBIDDEN');
       expect(updateSettingsWith).not.toHaveBeenCalled();
@@ -1654,8 +1656,41 @@ describe('backup settings operator authority', () => {
   );
 
   it.each(['local', 'session'])('preserves authorized backup configuration: %s', async (authority) => {
-    const res = await request(guardedApp(authority)).put('/api/settings').send({ backup: { destPath: '/example-other-backups' } });
+    const res = await request(guardedSettingsApp(authority)).put('/api/settings').send({ backup: { destPath: '/example-other-backups' } });
     expect(res.status).toBe(200);
     expect(store.backup.destPath).toBe('/example-other-backups');
+  });
+});
+
+// A generic settings PUT replaces the whole voice root. Even an empty or null
+// value can reset protected instructions; it is not the dedicated deep-merge API.
+describe('generic voice settings operator authority', () => {
+  const original = { stt: { endpoint: 'https://example.com/trusted-stt' }, llm: { systemPrompt: 'Synthetic trusted instructions', tools: { enabled: false } }, tts: { rate: 1 } };
+  beforeEach(() => { store = { voice: structuredClone(original) }; vi.clearAllMocks(); });
+
+  it.each([
+    { stt: { endpoint: 'https://example.com/other-stt' } },
+    { llm: { systemPrompt: 'Synthetic replacement', tools: { enabled: true } } },
+    {},
+    null,
+  ])('refuses an unauthorized root replacement or reset before persistence: %j', async voice => {
+    const res = await request(guardedSettingsApp('remote')).put('/api/settings').send({ voice });
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+    expect(updateSettingsWith).not.toHaveBeenCalled();
+    expect(store.voice).toEqual(original);
+  });
+
+  it.each(['local', 'session'])('preserves authorized voice replacement: %s', async authority => {
+    const voice = { ...original, stt: { endpoint: 'https://example.com/other-stt' } };
+    const res = await request(guardedSettingsApp(authority)).put('/api/settings').send({ voice });
+    expect(res.status).toBe(200);
+    expect(store.voice).toEqual(voice);
+  });
+
+  it('keeps unrelated generic settings writes open without changing voice policy', async () => {
+    const res = await request(guardedSettingsApp('remote')).put('/api/settings').send({ theme: 'dark' });
+    expect(res.status).toBe(200);
+    expect(store.voice).toEqual(original);
   });
 });
