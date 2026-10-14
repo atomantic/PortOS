@@ -36,6 +36,7 @@ import ScenePoster from './ScenePoster.jsx';
 import SceneRenderTarget, { lastRenderTarget, renderTargetOverrides } from './SceneRenderTarget.jsx';
 import SceneRenderInputs, { shotCardRenderRequest, shotCardRequestProblem } from './SceneRenderInputs.jsx';
 import SceneFrameFit, { sceneFrameFit } from './SceneFrameFit.jsx';
+import SceneGlitches from './SceneGlitches.jsx';
 import SceneTransitions from './SceneTransitions.jsx';
 import SceneImageEffect from './SceneImageEffect.jsx';
 import ScenePicturePreview from './ScenePicturePreview.jsx';
@@ -256,6 +257,8 @@ export default function SceneCard({
           span={sceneHasAuthoredSpan(scene) ? { startSec: scene.startSec, endSec: scene.endSec } : null} />
         {/* A VHS glitch riding on the cut into or out of this shot; never moves the cut. */}
         <SceneTransitions fieldId={fieldId} scene={scene} onChange={applyPatch} />
+        {/* Glitches at moments inside the shot, set and moved on a slider; they add no time. */}
+        <SceneGlitches fieldId={fieldId} scene={scene} onChange={applyPatch} />
         {/* Everything set once and rarely revisited: timing, shot mode, layer, and a non-footage shot's camera. */}
         <details className="group/settings rounded border border-port-border">
           <summary className="flex min-h-[44px] cursor-pointer items-center gap-2 px-2 text-xs marker:content-none sm:min-h-[32px] [&::-webkit-details-marker]:hidden">
