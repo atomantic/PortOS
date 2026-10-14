@@ -73,6 +73,7 @@ import {
   CLAUDE_LOW_PRIORITY_RESUBMIT_DELAY_MS,
   buildTuiInvocation,
   createInputReadyTracker,
+  OPENCODE_INPUT_READY_PATTERN,
   detectMissingTuiBinary,
   createSelfClearingSignalGate,
   screenShowsInFlightChrome,
@@ -80,7 +81,7 @@ import {
 } from '../lib/tuiHandshake.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { isCodexCommand } from '../lib/codex.js';
-import { isClaudeCommand } from '../lib/providerModels.js';
+import { isClaudeCommand, isOpencodeCommand } from '../lib/providerModels.js';
 import { applyCredentialBootstrap, needsProcessGroup, processGroupKillable } from '../lib/credentialBootstrap.js';
 import { killProcessTree } from '../lib/bufferedSpawn.js';
 
@@ -440,10 +441,14 @@ ${prompt}`;
 
   const streamingStrip = createStreamingAnsiStripper();
   // This PTY spawns the TUI directly, so the TUI's first paste-mode ON is the
-  // positive ready signal. Claude gets that positive gate; other providers
-  // retain their existing idle/deadline behavior.
-  const inputReady = createInputReadyTracker({ launchShape: 'direct' });
-  const requiresInputReady = isClaudeCommand(command);
+  // positive ready signal for Claude. OpenCode also requires its composer
+  // placeholder and a settled repaint; terminal queries alone are not ready.
+  const isOpencodeSession = isOpencodeCommand(command);
+  const inputReady = createInputReadyTracker({
+    launchShape: 'direct',
+    ...(isOpencodeSession ? { readyTextPattern: OPENCODE_INPUT_READY_PATTERN } : {}),
+  });
+  const requiresInputReady = isClaudeCommand(command) || isOpencodeSession;
   // Keep local one-shot flags alongside the tracker's terminal acknowledgements
   // so a failed/delayed PTY write cannot cause repeated selector navigation.
   let trustAccepted = false;
@@ -1027,6 +1032,13 @@ ${prompt}`;
       // keystroke makes delivery wait for what the dismissal reveals;
       // PASTE_DEADLINE_MS still backstops a dismissal the TUI ignores entirely.
 
+      if (isOpencodeSession && inputReady.needsOpencodeUpdate) {
+        if (dismissStartupDialog('\x1b', 'OpenCode update offer')) inputReady.ackOpencodeUpdate();
+        lastOutputAt = now;
+        firstOutputAt = null;
+        return;
+      }
+
       // A managed-app worktree nested below PortOS can make Claude discover the
       // parent PortOS CLAUDE.md and offer to import its external AGENTS.md.
       // Decline option 1 rather than crossing that repository boundary. The
@@ -1095,7 +1107,8 @@ ${prompt}`;
           }
           return;
         }
-        if (inputReady.ready && elapsed >= promptDelayMs) {
+        if (inputReady.ready && elapsed >= promptDelayMs
+          && (!isOpencodeSession || (firstOutputAt !== null && now - lastOutputAt >= READY_IDLE_THRESHOLD_MS))) {
           sendPrompt('input-ready');
           return;
         }
