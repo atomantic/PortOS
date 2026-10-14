@@ -67,7 +67,7 @@ async function loadHealthSettings() {
   };
 }
 
-// Last observed availability per CoS read ('cos-queue' / 'cos-agents'), so a
+// Last observed availability per CoS read ('cos-status' / 'cos-queue' / 'cos-agents'), so a
 // persistent failure logs once on entry and once on recovery, not on every read.
 const cosProbeAvailability = new Map();
 
@@ -94,10 +94,10 @@ export async function getSystemHealthSnapshot() {
       console.error(`❌ App health probe failed (operation=getAppStatusSummary, code=${code})`);
       return failedProbe;
     }),
-    cos.getStatus().catch((error) => {
-      console.error(`❌ Chief of Staff health probe failed: ${error.message}`);
-      return failedProbe;
-    }),
+    cos.getStatus().then(
+      (status) => { noteCosProbe('cos-status', true); return status; },
+      (error) => { noteCosProbe('cos-status', false, error); return failedProbe; }
+    ),
     // Queue depth is read here rather than taken off `getStatus()`, which has no
     // such field — `cosStatus.queueLength` never existed, so the widget's
     // "N queued" was dead and always rendered 0. Both reads ride the same

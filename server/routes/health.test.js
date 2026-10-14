@@ -271,6 +271,43 @@ describe('System Health Routes', () => {
     }
   });
 
+  it('transition-logs CoS status probe failure once on entry and once on recovery without poll noise', async () => {
+    // Ensure healthy initial state
+    getStatus.mockResolvedValueOnce({ running: true, paused: false, activeAgents: 0 });
+    await request(app).get('/api/system/health/details');
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      // First failure logs unavailable once
+      getStatus.mockRejectedValueOnce(Object.assign(new Error('connection refused'), { code: 'ECONNREFUSED' }));
+      const first = await request(app).get('/api/system/health/details');
+      expect(first.status).toBe(200);
+      expect(first.body.cos).toBeNull();
+      expect(errorSpy).toHaveBeenCalledWith('❌ CoS health probe unavailable (source=cos-status, code=ECONNREFUSED)');
+
+      errorSpy.mockClear();
+
+      // Second consecutive failure does NOT emit an error (deduplicated / throttled)
+      getStatus.mockRejectedValueOnce(Object.assign(new Error('connection refused'), { code: 'ECONNREFUSED' }));
+      const second = await request(app).get('/api/system/health/details');
+      expect(second.status).toBe(200);
+      expect(second.body.cos).toBeNull();
+      expect(errorSpy).not.toHaveBeenCalled();
+
+      // Recovery logs once
+      getStatus.mockResolvedValueOnce({ running: true, paused: false, activeAgents: 1 });
+      const third = await request(app).get('/api/system/health/details');
+      expect(third.status).toBe(200);
+      expect(third.body.cos).toMatchObject({ running: true });
+      expect(logSpy).toHaveBeenCalledWith('✅ CoS health probe recovered (source=cos-status)');
+    } finally {
+      errorSpy.mockRestore();
+      logSpy.mockRestore();
+    }
+  });
+
   it('reports an unreadable PM2 as unavailable rather than zero processes (#8431)', async () => {
     listProcessesStrict.mockResolvedValueOnce(null);
     checkHealth.mockResolvedValueOnce({ connected: true, hasSchema: true });
