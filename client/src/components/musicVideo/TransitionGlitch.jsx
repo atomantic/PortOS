@@ -92,6 +92,22 @@ function swapBlocks(ctx, src, sw, width, height) {
   ctx.drawImage(src, b.x, b.y, w, h, a.x, a.y, w, h);
 }
 
+// The render's smeared band: slipped like a tear, then blurred sideways. Squeezing the band
+// narrow and stretching it back smears it horizontally, as the render's sideways blur does.
+function smear(ctx, src, sm, width, height) {
+  const y = Math.round(sm.y * height);
+  const h = Math.min(Math.round(sm.h * height), height - y);
+  if (h < 1) return;
+  slip(ctx, src, sm.shift * width, y, h, width);
+  const narrow = Math.max(1, Math.round(width / Math.max(1, (sm.blur || 0) * width * 1.5)));
+  const band = scratchCanvas('smear', narrow, h);
+  const bctx = band.getContext('2d');
+  bctx.imageSmoothingEnabled = true;
+  bctx.drawImage(ctx.canvas, 0, y, width, h, 0, 0, narrow, h);
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(band, 0, 0, narrow, h, 0, y, width, h);
+}
+
 /** Paint one glitch frame (`params` from musicVideoTransitions.js) of what the figure shows. */
 function paintGlitch(canvas, figure, params, frame) {
   const box = canvas.getBoundingClientRect();
@@ -122,6 +138,7 @@ function paintGlitch(canvas, figure, params, frame) {
     ...(params.roll ? [{ roll: params.roll * height }] : []),
     ...(params.shift ? [{ a: params.shift * width, y: 0, h: height }] : []),
     ...(params.tears || []).map((t) => ({ a: t.shift * width, y: Math.round(t.y * height), h: Math.round(t.h * height) })),
+    ...(params.smears || []).map((sm) => ({ smear: sm })),
     ...(params.swaps || []).map((sw) => ({ swap: sw })),
   ];
   slips.forEach((s, i) => {
@@ -130,6 +147,7 @@ function paintGlitch(canvas, figure, params, frame) {
     ctx.drawImage(cur, 0, 0);
     if (s.roll) roll(ctx, cur, s.roll, width, height);
     else if (s.swap) swapBlocks(ctx, cur, s.swap, width, height);
+    else if (s.smear) smear(ctx, cur, s.smear, width, height);
     else slip(ctx, cur, s.a, s.y, Math.min(s.h, height - s.y), width);
     cur = next;
   });
@@ -188,9 +206,9 @@ function paintGlitch(canvas, figure, params, frame) {
     out.fillRect(box.x, box.y, box.w, box.h);
   }
   out.globalAlpha = 1;
-  if (params.bar) {
-    out.fillStyle = `rgba(255,255,255,${params.bar.alpha})`;
-    out.fillRect(0, Math.round(params.bar.y * height), width, Math.max(2, Math.round(params.bar.h * height)));
+  for (const bar of [...(params.bar ? [params.bar] : []), ...(params.bars || [])]) {
+    out.fillStyle = `rgba(255,255,255,${bar.alpha})`;
+    out.fillRect(0, Math.round(bar.y * height), width, Math.max(2, Math.round(bar.h * height)));
   }
   if (params.lines) {
     const gap = Math.max(2, Math.round(height / 270));
