@@ -54,6 +54,7 @@ export default function SceneFrameReferences({ project, scene, onEditLocal, onSa
           </li>
         )}
       </ul>
+      {full && <p className="text-[11px] text-port-text-muted">Refines and end frames send the frame plus the first {MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES - 1}.</p>}
       {chosen.length === 0 && <p className="text-[11px] text-port-text-muted">No references: frames render from the prompt alone.</p>}
       {adding && !full && (
         <ul aria-label="References to add" className="grid grid-cols-2 gap-1 sm:grid-cols-3 lg:grid-cols-4">

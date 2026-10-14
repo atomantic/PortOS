@@ -37,6 +37,14 @@ export { visualDirection };
 
 /** Shared scene-aware frame conditioning, with the legacy capped fallback. */
 export const conditioningReferences = musicVideoConditioningReferences;
+/**
+ * A render's reference files: the frame it reworks leads, then the shot's references, kept
+ * within the backends' reference cap (a leading frame leaves room for the first 3).
+ */
+const frameReferenceFiles = (leadImageId, references) => [
+  ...(leadImageId ? [leadImageId] : []),
+  ...references.map((ref) => ref.imageId).filter((id) => id !== leadImageId),
+].slice(0, MAX_CONDITIONING_REFERENCES);
 /** A mood board / Pinterest reference: look text only, never a conditioning image. */
 export const isOutsideReference = isOutsideMusicVideoReference;
 
@@ -193,7 +201,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     // A planned shot with no text still renders from its look, frame clause and actions.
     if (!refining && !musicVideoFrameModelInput(project, scene).prompt) { toast.error('Add a frame prompt or shot prompt first'); return Promise.resolve({ ok: false }); }
     // A frame picked on the card (its start or end frame) leads the references, as the image this render reworks.
-    const references = [...(referenceImageId ? [referenceImageId] : []), ...conditioning.map((ref) => ref.imageId).filter((id) => id !== referenceImageId)];
+    const references = frameReferenceFiles(referenceImageId, conditioning);
     const projectId = project.id;
     frameLane.startScene(scene.sceneId);
     return generateImage({
@@ -253,8 +261,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     if (!endPrompt && !refining) { toast.error('Describe the end frame first'); return Promise.resolve({ ok: false }); }
     const projectId = project.id;
     // The frame it renders from leads, then the shot's references (the card's References row).
-    const references = [...(referenceImageId ? [referenceImageId] : []),
-      ...conditioningReferences(project, scene).map((ref) => ref.imageId).filter((id) => id !== referenceImageId)];
+    const references = frameReferenceFiles(referenceImageId, conditioningReferences(project, scene));
     endFrameLane.startScene(scene.sceneId);
     return generateImage({
       // From a frame the server keeps its shot and changes what the prompt asks; with no frame it renders like a start frame.
