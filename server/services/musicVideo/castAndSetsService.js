@@ -485,7 +485,7 @@ async function advanceOnce(projectId) {
 function inBackground(label, projectId, fn) {
   const work = Promise.resolve().then(fn).catch(async (err) => {
     console.error(`❌ Music Video Cast & Sets ${short(projectId)} ${label} failed: ${err.message}`);
-    await fail(projectId, `${label} failed: ${err.message}`).catch(() => {});
+    await fail(projectId, `${label} failed: ${err.message}`).catch((recordErr) => console.error(`❌ Music Video Cast & Sets ${projectId} ${label} failed and its failure could not be recorded: ${recordErr.message}`));
   }).finally(() => backgroundWork.delete(work));
   backgroundWork.add(work);
 }
