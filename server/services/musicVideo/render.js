@@ -58,7 +58,7 @@ import { AUDIO_NORM, buildAudioBedMix } from '../videoTimeline/audioBedMix.js';
 import { musicVideoEvents } from './events.js';
 import { projectSoundBed } from './soundBed.js';
 import { intercutClips } from './intercut.js';
-import { imageEffectGlitchFrames, mergeGlitchFrames, musicVideoTransitionFilter, sceneTransitions, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
+import { imageEffectGlitchFrames, mergeGlitchFrames, musicVideoTransitionFilter, sceneTransitions, shotGlitchFrames, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
 import { stillMoveForCamera } from '../../lib/cameraMovements.js';
 import { isEndFrameImageEffect, musicVideoImageEffectFilter, sceneImageEffect } from '../../lib/musicVideoImageEffects.js';
 
@@ -559,9 +559,11 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
   const pieces = plan.map(({ c, startSec, endSec }) => ({
     sceneId: c.sceneId, startFrame: Math.round(startSec * fps), endFrame: Math.round(endSec * fps),
     partner: !!c.intercutOf, transitionIn: c.transitionIn, transitionOut: c.transitionOut, effect: c.effect, effectAtSec: c.effectAtSec,
+    shotGlitches: c.shotGlitches,
   }));
   // A still's glitch to its end frame paints with the same frames.
-  const glitches = mergeGlitchFrames(transitionGlitchFrames(pieces), imageEffectGlitchFrames(pieces, fps));
+  // So do the glitches a shot sets at moments inside it.
+  const glitches = mergeGlitchFrames(transitionGlitchFrames(pieces), imageEffectGlitchFrames(pieces, fps), shotGlitchFrames(pieces, fps));
   const glitchFilter = musicVideoTransitionFilter(glitches, { width: canonW, height: canonH });
   const cutLabel = overlays.length > 0 ? 'cut0' : 'outv';
   const finishing = [gradeFilter, glitchFilter].filter(Boolean).join(',');

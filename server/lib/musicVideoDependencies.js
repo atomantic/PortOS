@@ -22,6 +22,7 @@ const layerRef = (scene) => ({ role: 'layer', sceneId: scene.sceneId, assetId: s
     .concat(scene.frameFit && scene.frameFit !== 'fill' ? [['frameFit', scene.frameFit]] : [])
     // A glitch over its cuts changes the render; a shot without one keeps its evidence.
     .concat(['transitionIn', 'transitionOut'].filter((key) => scene[key]).map((key) => [key, scene[key]]))
+    .concat(scene.glitches?.length ? [['glitches', scene.glitches]] : [])
     // An image effect over a still changes the render; a still without one keeps its evidence.
     .concat(scene.imageEffect ? [['imageEffect', scene.imageEffect], ['imageEffectSec', scene.imageEffectSec ?? null]] : [])
     // An effect from the start frame to the end frame renders the end frame too.

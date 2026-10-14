@@ -513,6 +513,29 @@ describe('VHS glitch transitions', () => {
   });
 });
 
+// Uniquely catches the in-shot glitch control saving the wrong shape, losing a
+// slider move, or leaving an empty list behind when the last glitch goes.
+describe('In-shot glitches', () => {
+  it('adds a color block glitch halfway through, moves it on release and removes it', () => {
+    const onSave = vi.fn();
+    function Harness() {
+      const [scene, setScene] = useState({ sceneId: 's1', startSec: 10, endSec: 14, takes: [] });
+      return <SceneCard scene={scene} index={0} onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
+    }
+    render(<Harness />);
+    fireEvent.click(screen.getByRole('button', { name: /Add glitch/ }));
+    expect(onSave).toHaveBeenLastCalledWith('s1', { glitches: [{ atSec: 2, style: 'color-block' }] });
+    const slider = screen.getByLabelText(/^at /);
+    fireEvent.change(slider, { target: { value: '2.5' } });
+    fireEvent.pointerUp(slider);
+    expect(onSave).toHaveBeenLastCalledWith('s1', { glitches: [{ atSec: 2.5, style: 'color-block' }] });
+    fireEvent.change(screen.getByLabelText('Glitch 1 length'), { target: { value: '0.5' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { glitches: [{ atSec: 2.5, style: 'color-block', lengthSec: 0.5 }] });
+    fireEvent.click(screen.getByRole('button', { name: 'Remove glitch 1' }));
+    expect(onSave).toHaveBeenLastCalledWith('s1', { glitches: null });
+  });
+});
+
 // Uniquely catches the picture picker saving the wrong layer or effect fields, or offering the effect where the render ignores it.
 describe('image effect picker', () => {
   it('turns a shot into a still playing camera flash develop, sets its develop length, and back to a clip', () => {

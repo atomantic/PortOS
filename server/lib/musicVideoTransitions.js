@@ -18,7 +18,7 @@
 
 import { IMAGE_EFFECT_GLITCH_STYLE, imageEffectChangeFrame, sceneImageEffect } from './musicVideoImageEffects.js';
 
-export const MUSIC_VIDEO_TRANSITIONS = Object.freeze(['vhs-glitch', 'channel-change', 'vhs-tracking', 'vhs-dropout', 'camera-flash']);
+export const MUSIC_VIDEO_TRANSITIONS = Object.freeze(['vhs-glitch', 'channel-change', 'vhs-tracking', 'vhs-dropout', 'camera-flash', 'color-block']);
 
 export const MUSIC_VIDEO_TRANSITION_LABELS = Object.freeze({
   'vhs-glitch': 'VHS glitch',
@@ -26,7 +26,14 @@ export const MUSIC_VIDEO_TRANSITION_LABELS = Object.freeze({
   'vhs-tracking': 'Tracking roll',
   'vhs-dropout': 'Dropout flash',
   'camera-flash': 'Camera flash',
+  'color-block': 'Color blocks',
 });
+
+// A shot also carries glitches at any moment inside it (`scene.glitches`):
+// `{ atSec, style, lengthSec? }`, `atSec` counted from the shot's start and
+// `lengthSec` stretching the style's frames (unset plays them once).
+export const MUSIC_VIDEO_SHOT_GLITCH_LIMIT = 8;
+export const MUSIC_VIDEO_GLITCH_LENGTHS = Object.freeze([0.125, 0.25, 0.5, 1, 2]);
 
 // Each style's frames, in order, and how many of them come before the cut
 // (`lead`, the outgoing shot's last frames). Per frame:
@@ -38,6 +45,8 @@ export const MUSIC_VIDEO_TRANSITION_LABELS = Object.freeze({
 //   noise   snow strength: 0..1 over the picture, up to 1.6 for a dead channel's static
 //   lines   scanline darkness, 0..1
 //   bar     a bright tracking band { y, h, alpha }
+//   swaps   macroblocks traded places: { x1, y1, x2, y2, w, h } fractions of the frame
+//   blocks  solid colour macroblocks: { x, y, w, h } fractions, color 'rrggbb', alpha
 export const MUSIC_VIDEO_TRANSITION_STYLES = Object.freeze({
   'vhs-glitch': {
     lead: 1,
@@ -86,15 +95,58 @@ export const MUSIC_VIDEO_TRANSITION_STYLES = Object.freeze({
       { tears: [{ y: 0.3, h: 0.06, shift: 0.03 }], chroma: 0.01, bright: 1.2, sat: 0.6, noise: 0.5, lines: 0.35 },
     ],
   },
+  // A digital decoder losing the stream: macroblocks trade places and some
+  // decode as flat green, magenta or grey squares, on a 16 x 9 block grid.
+  'color-block': {
+    lead: 2,
+    frames: [
+      { swaps: [{ x1: 0.25, y1: 0.3333, x2: 0.5625, y2: 0.4444, w: 0.125, h: 0.1111 }], chroma: 0.006, sat: 1.2,
+        blocks: [{ x: 0.625, y: 0.2222, w: 0.0625, h: 0.1111, color: '2fbf4f', alpha: 0.85 }, { x: 0.3125, y: 0.5556, w: 0.125, h: 0.1111, color: 'c02cc0', alpha: 0.7 }] },
+      { swaps: [{ x1: 0.0625, y1: 0.1111, x2: 0.5, y2: 0.6667, w: 0.25, h: 0.2222 }, { x1: 0.6875, y1: 0.3333, x2: 0.375, y2: 0.1111, w: 0.1875, h: 0.1111 }],
+        chroma: 0.012, bright: 1.05, sat: 1.4,
+        blocks: [
+          { x: 0.125, y: 0.4444, w: 0.375, h: 0.1111, color: '808080', alpha: 0.6 },
+          { x: 0.75, y: 0.5556, w: 0.0625, h: 0.2222, color: '2fbf4f', alpha: 0.9 },
+          { x: 0.5625, y: 0.2222, w: 0.125, h: 0.1111, color: 'c02cc0', alpha: 0.8 },
+          { x: 0.25, y: 0.7778, w: 0.0625, h: 0.1111, color: '1fa0a0', alpha: 0.85 },
+        ] },
+      { swaps: [{ x1: 0.4375, y1: 0.5556, x2: 0.125, y2: 0.2222, w: 0.125, h: 0.2222 }], chroma: 0.008, sat: 1.25,
+        blocks: [{ x: 0.75, y: 0.1111, w: 0.125, h: 0.1111, color: '2fbf4f', alpha: 0.75 }, { x: 0.0625, y: 0.6667, w: 0.1875, h: 0.1111, color: '808080', alpha: 0.55 }] },
+      { chroma: 0.004, sat: 1.1, blocks: [{ x: 0.5, y: 0.4444, w: 0.0625, h: 0.1111, color: 'c02cc0', alpha: 0.6 }] },
+    ],
+  },
 });
 
 const isTransition = (value) => MUSIC_VIDEO_TRANSITIONS.includes(value);
 
-/** A scene's chosen transitions, only the ones that are set: `{ transitionIn?, transitionOut? }`. */
+/**
+ * A shot's in-shot glitches on the song's clock, valid ones only:
+ * `[{ atSec, style, lengthSec? }]` with `atSec` in song seconds, kept inside
+ * the shot when its end is known.
+ */
+function shotGlitchesOnSong(scene) {
+  if (!Array.isArray(scene?.glitches) || !Number.isFinite(scene.startSec)) return [];
+  const span = Number.isFinite(scene.endSec) ? scene.endSec - scene.startSec : Infinity;
+  return scene.glitches
+    .filter((g) => g && isTransition(g.style) && Number.isFinite(g.atSec))
+    .slice(0, MUSIC_VIDEO_SHOT_GLITCH_LIMIT)
+    .map((g) => ({
+      atSec: scene.startSec + Math.min(Math.max(0, g.atSec), Math.max(0, span - 0.001)),
+      style: g.style,
+      ...(Number.isFinite(g.lengthSec) && g.lengthSec > 0 ? { lengthSec: g.lengthSec } : {}),
+    }));
+}
+
+/**
+ * A scene's chosen glitches, only the ones that are set:
+ * `{ transitionIn?, transitionOut?, shotGlitches? }` (`shotGlitches` on the song's clock).
+ */
 export function sceneTransitions(scene) {
+  const shotGlitches = shotGlitchesOnSong(scene);
   return {
     ...(isTransition(scene?.transitionIn) ? { transitionIn: scene.transitionIn } : {}),
     ...(isTransition(scene?.transitionOut) ? { transitionOut: scene.transitionOut } : {}),
+    ...(shotGlitches.length ? { shotGlitches } : {}),
   };
 }
 
@@ -178,6 +230,13 @@ function roll(px, width, height) {
   return `swaprect=w=${width}:h=${height - a}:x1=0:y1=${y1}:x2=0:y2=${y2}`;
 }
 
+/** A block given in fractions of the frame as even pixels kept inside it: `{ x, y, w, h }`. */
+export function blockBox(x, y, w, h, width, height) {
+  const px = Math.max(0, Math.min(width - 2, even(x * width)));
+  const py = Math.max(0, Math.min(height - 2, even(y * height)));
+  return { x: px, y: py, w: Math.max(0, Math.min(width - px, even(w * width))), h: Math.max(0, Math.min(height - py, even(h * height))) };
+}
+
 /** Inclusive frame runs as a timeline expression: `between(n,4,6)+between(n,90,90)`. */
 function framesExpr(frames) {
   const sorted = [...new Set(frames)].sort((a, b) => a - b);
@@ -215,6 +274,13 @@ export function musicVideoTransitionFilter(glitches, { width, height }) {
       const y = rows(tear.y);
       add(slip(tear.shift * width, y, Math.min(rows(tear.h), height - y), width));
     }
+    for (const sw of p.swaps || []) {
+      const box = blockBox(sw.x1, sw.y1, sw.w, sw.h, width, height);
+      const to = blockBox(sw.x2, sw.y2, sw.w, sw.h, width, height);
+      const w = Math.min(box.w, to.w);
+      const h = Math.min(box.h, to.h);
+      if (w >= 2 && h >= 2) add(`swaprect=w=${w}:h=${h}:x1=${box.x}:y1=${box.y}:x2=${to.x}:y2=${to.y}`);
+    }
     const fringe = Math.min(255, Math.round((p.chroma || 0) * width / 2));
     if (fringe > 0) add(`chromashift=cbh=${fringe}:crh=${-fringe}`);
     const bright = p.bright ?? 1;
@@ -222,6 +288,10 @@ export function musicVideoTransitionFilter(glitches, { width, height }) {
     if (bright !== 1 || sat !== 1) {
       const chroma = `'clip((val-128)*${num(bright * sat)}+128,0,255)'`;
       add(`lutyuv=y='clip(val*${num(bright)},0,255)':u=${chroma}:v=${chroma}`);
+    }
+    for (const b of p.blocks || []) {
+      const box = blockBox(b.x, b.y, b.w, b.h, width, height);
+      if (box.w >= 2 && box.h >= 2) add(`drawbox=x=${box.x}:y=${box.y}:w=${box.w}:h=${box.h}:color=0x${b.color}@${num(b.alpha)}:t=fill`);
     }
     if (p.bar) add(`drawbox=x=0:y=${rows(p.bar.y)}:w=iw:h=${Math.max(2, rows(p.bar.h))}:color=white@${num(p.bar.alpha)}:t=fill`);
     if (p.lines) {
@@ -261,8 +331,42 @@ export function sceneImageEffectGlitchFrames(scenes, fps, { layered = false, end
     .map((section) => ({ ...section, effect: sceneImageEffect(byId.get(section.sceneId), { layered }) })), fps);
 }
 
-/** Cut-transition glitches and image-effect glitches as one list, a transition keeping a frame both reach. */
-export function mergeGlitchFrames(transitions, effects) {
-  const taken = new Set((transitions || []).map((g) => g.frame));
-  return [...(transitions || []), ...(effects || []).filter((g) => !taken.has(g.frame))].sort((a, b) => a.frame - b.frame);
+/**
+ * The glitched frames of the shots' in-shot glitches, in the cut transitions'
+ * shape (`[{ frame, style, index }]`). `pieces` are timeline sections carrying
+ * `sceneId`, `partner?` and `shotGlitches` (song seconds, from
+ * `sceneTransitions`); a shot cut into several pieces counts once, and an
+ * intercut partner borrowing its footage adds none. A `lengthSec` stretches
+ * the style's frames over that many frames, holding each a little longer.
+ */
+export function shotGlitchFrames(pieces, fps) {
+  const seen = new Set();
+  const out = [];
+  for (const piece of Array.isArray(pieces) ? pieces : []) {
+    if (!piece || piece.partner || seen.has(piece.sceneId) || !Array.isArray(piece.shotGlitches)) continue;
+    seen.add(piece.sceneId);
+    for (const g of piece.shotGlitches) {
+      const style = MUSIC_VIDEO_TRANSITION_STYLES[g.style];
+      if (!style) continue;
+      const count = style.frames.length;
+      const length = g.lengthSec ? Math.max(1, Math.round(g.lengthSec * fps)) : count;
+      const start = Math.round(g.atSec * fps);
+      for (let i = 0; i < length; i++) {
+        if (start + i >= 0) out.push({ frame: start + i, style: g.style, index: Math.floor((i * count) / length) });
+      }
+    }
+  }
+  return out;
+}
+
+/** The storyboard's in-shot glitch frames on `fps` (the animatic's counterpart of the render's pieces). */
+export function sceneShotGlitchFrames(scenes, fps, { endSec = null } = {}) {
+  return shotGlitchFrames(sceneTransitionSections(scenes, fps, { endSec }), fps);
+}
+
+/** Glitch frame lists as one, sorted by frame: an earlier list keeps a frame two of them reach. */
+export function mergeGlitchFrames(...lists) {
+  const taken = new Map();
+  for (const list of lists) for (const g of list || []) if (!taken.has(g.frame)) taken.set(g.frame, g);
+  return [...taken.values()].sort((a, b) => a.frame - b.frame);
 }

@@ -53,7 +53,7 @@ import { shotActionContractProblem } from './musicVideoActionContract.js';
 import { NARRATIVE_EVENT_KINDS } from './musicVideoNarrativeEvents.js';
 import { MUSIC_VIDEO_MEDIA } from './musicVideoMediumPlan.js';
 import { MUSIC_VIDEO_FRAME_FITS, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_STILL_MOVES, MUSIC_VIDEO_TEXT_ZONES, MUSIC_VIDEO_VISUAL_LAYERS } from './musicVideoLayers.js';
-import { MUSIC_VIDEO_TRANSITIONS } from './musicVideoTransitions.js';
+import { MUSIC_VIDEO_SHOT_GLITCH_LIMIT, MUSIC_VIDEO_TRANSITIONS } from './musicVideoTransitions.js';
 import { IMAGE_EFFECT_SEC_RANGE, MUSIC_VIDEO_IMAGE_EFFECTS } from './musicVideoImageEffects.js';
 import { CAMERA_FRAMINGS, CAMERA_MOVEMENT_VALUES, CAMERA_SPEEDS } from './cameraMovements.js';
 import { MUSIC_VIDEO_PERFORMANCE_STYLES, MUSIC_VIDEO_SHOT_MODES, SOURCE_AUDIO_LIPSYNC } from './musicVideoShotTiming.js';
@@ -609,6 +609,12 @@ const sceneLayerFields = {
   // A VHS glitch over the cut into / out of this shot (musicVideoTransitions.js); null clears it.
   transitionIn: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),
   transitionOut: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),
+  // Glitches at moments inside the shot: `atSec` from the shot's start, `lengthSec` stretching the style; null clears them.
+  glitches: z.array(z.object({
+    atSec: z.number().min(0).max(3600),
+    style: z.enum(MUSIC_VIDEO_TRANSITIONS),
+    lengthSec: z.number().positive().max(4).nullable().optional(),
+  })).max(MUSIC_VIDEO_SHOT_GLITCH_LIMIT).nullable().optional(),
   // A code-drawn effect a still shot plays instead of a clip (musicVideoImageEffects.js) and how long
   // it takes to finish; null clears it.
   imageEffect: z.enum(MUSIC_VIDEO_IMAGE_EFFECTS).nullable().optional(),
