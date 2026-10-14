@@ -762,7 +762,8 @@ function feedbackItem(project, stage, readiness, { optional = false } = {}) {
 // Storyboard readiness problems, grouped by what the user has to go fix. The
 // server returns plain sentences; the first matching rule picks the group.
 const STORYBOARD_PROBLEM_GROUPS = [
-  { id: 'art', label: 'Art direction', test: /art direction|art feedback/i, action: { label: 'Review art direction', anchor: APPROVAL_ANCHORS.art } },
+  // The art approval lives on the Look step, so the button goes there.
+  { id: 'art', label: 'Art direction', test: /art direction|art feedback/i, action: { label: 'Review art direction', stage: APPROVAL_STAGES.art, anchor: APPROVAL_ANCHORS.art } },
   // A document storyboard needs a manifest from its current build; its message mentions timing, so it is matched first.
   { id: 'manifest', label: 'Document shot manifest', test: /shot manifest/i, action: { label: 'Import the shot manifest', anchor: 'mv-review-planning' } },
   { id: 'lyrics', label: 'Lyrics', test: /lyrics|instrumental/i, action: { label: 'Import lyrics', stage: 'setup', anchor: 'mv-lyrics-import' } },
@@ -782,11 +783,16 @@ function storyboardProblemItems(readiness, scenes = []) {
   return [...STORYBOARD_PROBLEM_GROUPS.flatMap((group, index) => {
     const earlier = STORYBOARD_PROBLEM_GROUPS.slice(0, index);
     const mine = problems.filter((text) => group.test.test(text) && !earlier.some((g) => g.test.test(text)));
-    return mine.length ? [{ id: `board-${group.id}`, label: group.label, done: false, details: mine, action: group.action }] : [];
+    if (!mine.length) return [];
+    // An art approval that went stale says what changed, so the row is not a bare "approve first".
+    const stale = group.id === 'art' && staleApprovalText(readiness?.art?.stale);
+    const details = stale ? mine.map((text) => (ART_APPROVAL_PROBLEM.test(text) ? `${stale} Approve it again on the Look step.` : text)) : mine;
+    return [{ id: `board-${group.id}`, label: group.label, done: false, details, action: group.action }];
   }), ...(anchors ? [anchors] : [])];
 }
 
 const ANCHOR_PROBLEM = /^Review lyric anchors for /;
+const ART_APPROVAL_PROBLEM = /^Review and approve the current art direction/;
 const quoted = (lines) => (lines.length ? lines.map((line) => `“${line}”`).join(' / ') : 'nothing');
 
 /**
