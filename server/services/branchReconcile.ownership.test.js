@@ -20,7 +20,8 @@ const injected = vi.hoisted(() => ({ statusPath: null, statusThrows: false, befo
 vi.mock('../lib/execGit.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, execGit: async (args, cwd, options) => {
-    if (args[0] === 'status' && cwd === injected.statusPath) {
+    // Git reports forward slashes even when path.join uses Windows separators.
+    if (args[0] === 'status' && injected.statusPath && cwd?.replaceAll('\\', '/') === injected.statusPath.replaceAll('\\', '/')) {
       if (injected.statusThrows || !options?.ignoreExitCode) throw new Error('synthetic unreadable index');
       return { stdout: '', stderr: 'synthetic unreadable index', exitCode: 128 };
     }
@@ -168,7 +169,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
   it.each([false, true])('preserves authored files when status is unreadable (throws=%s)', async (throws) => {
     const path = await addTree(join(repo, '.claude', 'worktrees', 'claim-unreadable'), 'claim/issue-31', { ageMs: 30 * DAY });
     await writeFile(join(path, 'unfinished.txt'), 'keep this work\n');
-    injected.statusPath = path;
+    injected.statusPath = throws ? path : path.replaceAll('/', '\\');
     injected.statusThrows = throws;
     const result = await reconcile(repo, { activeAgentIds: new Set() });
     expect(result.cleaned).not.toContain('claim/issue-31');
