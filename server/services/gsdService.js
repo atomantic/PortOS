@@ -9,6 +9,7 @@ import { readFile, readdir, stat } from 'fs/promises'
 import { join } from 'path'
 import { createHash } from 'crypto'
 import { getActiveApps } from './apps.js'
+import { resolveGsdPath } from './gsdPaths.js'
 
 // 30-second TTL cache per app
 const projectCache = new Map()
@@ -46,7 +47,9 @@ function hashId(section, text) {
 /**
  * Safely read a file, returning null if it doesn't exist
  */
-async function safeReadFile(filePath) {
+async function safeReadFile(repoPath, relativePath) {
+  const filePath = await resolveGsdPath(repoPath, relativePath)
+  if (!filePath) return null
   const content = await readFile(filePath, 'utf-8').catch(err => {
     if (err.code === 'ENOENT') return null
     throw err
@@ -74,13 +77,14 @@ export async function scanForGsdProjects() {
 
   for (const app of apps) {
     if (!app.repoPath) continue
-    const planningPath = join(app.repoPath, '.planning')
+    const planningPath = await resolveGsdPath(app.repoPath, '', 'dir')
+    if (!planningPath) continue
     const planningInfo = await safeStat(planningPath)
 
     if (planningInfo?.isDirectory()) {
-      const roadmapInfo = await safeStat(join(planningPath, 'ROADMAP.md'))
-      const stateInfo = await safeStat(join(planningPath, 'STATE.md'))
-      const concernsInfo = await safeStat(join(planningPath, 'CONCERNS.md'))
+      const roadmapInfo = await safeStat(await resolveGsdPath(app.repoPath, 'ROADMAP.md'))
+      const stateInfo = await safeStat(await resolveGsdPath(app.repoPath, 'STATE.md'))
+      const concernsInfo = await safeStat(await resolveGsdPath(app.repoPath, 'CONCERNS.md'))
 
       projects.push({
         appId: app.id,
@@ -101,8 +105,8 @@ export async function scanForGsdProjects() {
 /**
  * Parse ROADMAP.md to extract milestone table rows
  */
-export async function parseRoadmapMd(filePath) {
-  const content = await safeReadFile(filePath)
+export async function parseRoadmapMd(repoPath, relativePath) {
+  const content = await safeReadFile(repoPath, relativePath)
   if (!content) return null
 
   const milestones = []
@@ -131,8 +135,8 @@ export async function parseRoadmapMd(filePath) {
 /**
  * Parse STATE.md to extract YAML frontmatter
  */
-export async function parseStateMd(filePath) {
-  const content = await safeReadFile(filePath)
+export async function parseStateMd(repoPath, relativePath) {
+  const content = await safeReadFile(repoPath, relativePath)
   if (!content) return null
 
   const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/)
@@ -154,8 +158,8 @@ export async function parseStateMd(filePath) {
 /**
  * Parse CONCERNS.md to extract sections with severity
  */
-export async function parseConcernsMd(filePath) {
-  const content = await safeReadFile(filePath)
+export async function parseConcernsMd(repoPath, relativePath) {
+  const content = await safeReadFile(repoPath, relativePath)
   if (!content) return null
 
   const sections = []
@@ -235,14 +239,15 @@ function parsePlanContent(content) {
  * Scan phase directory for *-PLAN.md files (e.g. 01-01-PLAN.md, 03-02-PLAN.md)
  * Returns array of sub-plans sorted by filename
  */
-export async function parsePhasePlans(phasePath) {
+export async function parsePhasePlans(repoPath, relativePath) {
+  const phasePath = await resolveGsdPath(repoPath, relativePath, 'dir')
   const entries = await readdir(phasePath).catch(() => [])
   const planFiles = entries.filter(f => f.endsWith('-PLAN.md')).sort()
   if (planFiles.length === 0) return []
 
   const plans = []
   for (const filename of planFiles) {
-    const content = await safeReadFile(join(phasePath, filename))
+    const content = await safeReadFile(repoPath, join(relativePath, filename))
     if (!content) continue
     plans.push({ filename, ...parsePlanContent(content) })
   }
@@ -252,14 +257,15 @@ export async function parsePhasePlans(phasePath) {
 /**
  * Parse SUMMARY.md files in a phase directory
  */
-export async function parsePhaseSummaries(phasePath) {
+export async function parsePhaseSummaries(repoPath, relativePath) {
+  const phasePath = await resolveGsdPath(repoPath, relativePath, 'dir')
   const entries = await readdir(phasePath).catch(() => [])
   const summaryFiles = entries.filter(f => f.endsWith('-SUMMARY.md')).sort()
   if (summaryFiles.length === 0) return []
 
   const summaries = []
   for (const filename of summaryFiles) {
-    const content = await safeReadFile(join(phasePath, filename))
+    const content = await safeReadFile(repoPath, join(relativePath, filename))
     if (!content) continue
     summaries.push({ filename, ...parsePlanContent(content) })
   }
@@ -269,12 +275,13 @@ export async function parsePhaseSummaries(phasePath) {
 /**
  * Scan phase directory for *-VERIFICATION.md (e.g. 01-VERIFICATION.md)
  */
-export async function parseVerification(phasePath) {
+export async function parseVerification(repoPath, relativePath) {
+  const phasePath = await resolveGsdPath(repoPath, relativePath, 'dir')
   const entries = await readdir(phasePath).catch(() => [])
   const verifyFile = entries.find(f => f.endsWith('-VERIFICATION.md'))
   if (!verifyFile) return null
 
-  const content = await safeReadFile(join(phasePath, verifyFile))
+  const content = await safeReadFile(repoPath, join(relativePath, verifyFile))
   if (!content) return null
 
   let status = 'unknown'
@@ -292,12 +299,13 @@ export async function parseVerification(phasePath) {
 /**
  * Scan phase directory for *-RESEARCH.md (e.g. 01-RESEARCH.md)
  */
-export async function parsePhaseResearch(phasePath) {
+export async function parsePhaseResearch(repoPath, relativePath) {
+  const phasePath = await resolveGsdPath(repoPath, relativePath, 'dir')
   const entries = await readdir(phasePath).catch(() => [])
   const researchFile = entries.find(f => f.endsWith('-RESEARCH.md'))
   if (!researchFile) return null
 
-  const content = await safeReadFile(join(phasePath, researchFile))
+  const content = await safeReadFile(repoPath, join(relativePath, researchFile))
   if (!content) return null
   return { filename: researchFile, raw: content }
 }
@@ -313,28 +321,29 @@ export async function getGsdProject(appIdOrPath) {
   const app = apps.find(a => a.id === appIdOrPath || a.repoPath === appIdOrPath)
   if (!app) return null
 
-  const planningPath = join(app.repoPath, '.planning')
+  const planningPath = await resolveGsdPath(app.repoPath, '', 'dir')
+  if (!planningPath) return null
   const planningInfo = await safeStat(planningPath)
   if (!planningInfo?.isDirectory()) return null
 
-  const roadmap = await parseRoadmapMd(join(planningPath, 'ROADMAP.md'))
-  const state = await parseStateMd(join(planningPath, 'STATE.md'))
-  const concerns = await parseConcernsMd(join(planningPath, 'CONCERNS.md'))
-  const projectDoc = await safeReadFile(join(planningPath, 'PROJECT.md'))
+  const roadmap = await parseRoadmapMd(app.repoPath, 'ROADMAP.md')
+  const state = await parseStateMd(app.repoPath, 'STATE.md')
+  const concerns = await parseConcernsMd(app.repoPath, 'CONCERNS.md')
+  const projectDoc = await safeReadFile(app.repoPath, 'PROJECT.md')
 
   // Scan for phase directories
   const phases = []
-  const phasesDir = join(planningPath, 'phases')
+  const phasesDir = await resolveGsdPath(app.repoPath, 'phases', 'dir')
   const phasesDirInfo = await safeStat(phasesDir)
   if (phasesDirInfo?.isDirectory()) {
     const entries = await readdir(phasesDir, { withFileTypes: true })
     for (const entry of entries) {
       if (!entry.isDirectory()) continue
-      const phasePath = join(phasesDir, entry.name)
-      const plans = await parsePhasePlans(phasePath)
-      const summaries = await parsePhaseSummaries(phasePath)
-      const verification = await parseVerification(phasePath)
-      const research = await parsePhaseResearch(phasePath)
+      const phasePath = join('phases', entry.name)
+      const plans = await parsePhasePlans(app.repoPath, phasePath)
+      const summaries = await parsePhaseSummaries(app.repoPath, phasePath)
+      const verification = await parseVerification(app.repoPath, phasePath)
+      const research = await parsePhaseResearch(app.repoPath, phasePath)
       const totalTasks = plans.reduce((sum, p) => sum + p.tasks.length, 0)
       const completedTasks = plans.reduce((sum, p) => sum + p.tasks.filter(t => t.completed).length, 0)
       phases.push({
@@ -351,7 +360,7 @@ export async function getGsdProject(appIdOrPath) {
   }
 
   // Read config if present
-  const configContent = await safeReadFile(join(planningPath, 'config.json'))
+  const configContent = await safeReadFile(app.repoPath, 'config.json')
   const config = configContent ? JSON.parse(configContent) : null
 
   const result = {
