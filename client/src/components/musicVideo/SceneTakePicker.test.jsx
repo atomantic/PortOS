@@ -59,6 +59,28 @@ describe('Swap from unused', () => {
     expect(await screen.findByRole('button', { name: '✕ Bad 0' })).toBeTruthy();
   });
 
+  // Uniquely catches a frame another shot uses dropping out of the picker, or one this slot holds being offered back.
+  it('offers a still another shot uses, says where, and never offers to delete it', async () => {
+    api.getMusicVideoMediaPool.mockImplementationOnce(async () => ({ items: [
+      { kind: 'image', assetId: 'start-12.png', sceneId: 's12', prompt: 'Splicer close-up', clipIds: [], inUseBy: ['s12'], mark: 'bad' },
+      { kind: 'image', assetId: 'mine-now.png', sceneId: 's8', prompt: 'Current still', clipIds: [], inUseBy: ['s8'] },
+    ] }));
+    const onPlace = vi.fn(async () => {});
+    render(<SceneTakePicker open projectId="mv-1" scene={{ sceneId: 's8', referenceImageId: 'mine-now.png' }} kind="image" onPlace={onPlace}
+      shotNumbers={new Map([['s8', 8], ['s12', 12]])} />);
+    fireEvent.click(await screen.findByRole('tab', { name: /Other shots/ }));
+    fireEvent.click(screen.getByRole('button', { name: /still from shot 12, used on #12/ }));
+    expect(screen.getByText('Used on #12')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '✕ Bad 1' }));
+    expect(screen.queryByRole('button', { name: /Delete 1 bad/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Use still' }));
+    expect(onPlace).toHaveBeenCalledWith({ kind: 'image', assetId: 'start-12.png' });
+    // The still already in this slot isn't offered back.
+    fireEvent.click(screen.getByRole('tab', { name: /This shot/ }));
+    expect(screen.queryByRole('button', { name: /Current still/ })).toBeNull();
+  });
+
   // Uniquely catches the grid stopping at its first page instead of loading more as its bottom scrolls into view.
   it('loads the next page of stills when the bottom of the grid comes into view', async () => {
     const many = Array.from({ length: 70 }, (_, i) => ({ kind: 'image', assetId: `f${i}.png`, sceneId: null, prompt: `Frame ${i}`, clipIds: [] }));

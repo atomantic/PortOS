@@ -54,6 +54,17 @@ describe('BoardStage scene filter', () => {
     fireEvent.keyDown(window, { key: 'k' });
     expect(second.onToggleSceneExpand).toHaveBeenLastCalledWith('s1', true);
   });
+
+  it('the open card steps to the neighboring shots in song order, past the filter', () => {
+    // Listed out of song order, and shot 2 has its clip so ?scenes=missing hides it.
+    const shuffled = [scene(3), scene(1), scene(2)];
+    const b = board(shuffled, { activeSceneId: 's1', seekToScene: vi.fn() });
+    renderBoard(b, '/?scenes=missing');
+    expect(screen.getByRole('button', { name: 'Previous shot' }).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Next shot' }));
+    expect(b.seekToScene).toHaveBeenLastCalledWith(expect.objectContaining({ sceneId: 's2' }));
+    expect(b.onToggleSceneExpand).toHaveBeenLastCalledWith('s2', true);
+  });
 });
 
 describe('BoardStage thumbnail media badges', () => {
