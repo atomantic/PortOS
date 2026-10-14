@@ -520,6 +520,8 @@ function buildScene(input, { order }) {
     ...(input.codeOverlay ? { codeOverlay: true } : {}),
     ...(input.codeClip ? { codeClip: true } : {}),
     ...(input.frameFit ? { frameFit: input.frameFit } : {}),
+    ...(input.speedFps ? { speedFps: input.speedFps } : {}),
+    ...(input.offsetFrames ? { offsetFrames: input.offsetFrames } : {}),
     ...(input.transitionIn ? { transitionIn: input.transitionIn } : {}),
     ...(input.transitionOut ? { transitionOut: input.transitionOut } : {}),
     ...(input.imageEffect ? { imageEffect: input.imageEffect } : {}),
@@ -605,6 +607,8 @@ export function replaceScenes(project, sceneInputs) {
       ...(prior.endImageId ? { endImageId: prior.endImageId } : {}),
       ...(prior.endFramePrompt ? { endFramePrompt: prior.endFramePrompt } : {}),
       ...(prior.frameFit ? { frameFit: prior.frameFit } : {}),
+      ...(prior.speedFps ? { speedFps: prior.speedFps } : {}),
+      ...(prior.offsetFrames ? { offsetFrames: prior.offsetFrames } : {}),
       ...(prior.transitionIn ? { transitionIn: prior.transitionIn } : {}),
       ...(prior.transitionOut ? { transitionOut: prior.transitionOut } : {}),
       // A still playing an image effect stays one: the effect is the shot's picture.
@@ -621,7 +625,7 @@ export function replaceScenes(project, sceneInputs) {
 // takes, and whether it plays as a clip or its still with an image effect) without
 // adding a shot or lyric the storyboard approval did not cover.
 const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'label', 'prompt', 'framePrompt', 'visualIntent',
-  'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'transitionIn', 'transitionOut',
+  'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'transitionIn', 'transitionOut',
   'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec'];
 
 /**

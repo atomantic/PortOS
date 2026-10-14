@@ -199,6 +199,19 @@ describe('StoryboardAnimatic clips', () => {
     expect(clipTimeAt({ startSec: 10 }, 16, 4)).toBe(2);
     expect(clipTimeAt({ startSec: 10, loop: false }, 16, 4)).toBeCloseTo(3.95);
   });
+
+  // Uniquely catches the preview playing a shot's hand-set speed or offset differently from the render.
+  it('plays a hand-set speed and frame offset from the same clip, as the render does', () => {
+    // 48 fps on the 24 fps grid: twice as fast, starting 12 frames (0.5s) in.
+    const fast = { startSec: 10, speedFps: 24, offsetFrames: 12 };
+    expect(clipTimeAt(fast, 11, 6)).toBeCloseTo(2.5);
+    expect(clipTimeAt(fast, 13, 6)).toBeCloseTo(0.5);
+    expect(clipTimeAt({ ...fast, loop: false }, 13, 6)).toBeCloseTo(5.95);
+    // Six frames early: the first frame holds a quarter second, then the clip runs.
+    const early = { startSec: 10, offsetFrames: -6 };
+    expect(clipTimeAt(early, 10.2, 6)).toBe(0);
+    expect(clipTimeAt(early, 11.25, 6)).toBeCloseTo(1);
+  });
 });
 
 describe('StoryboardAnimatic film look', () => {

@@ -15,4 +15,9 @@ export {
   sceneRenderReady,
   isLayeredComposition,
   LAYERED_COMPOSITION_MODES,
+  CLIP_TIMING_FPS,
+  CLIP_SPEED_FPS_RANGE,
+  CLIP_OFFSET_FRAMES_RANGE,
+  clipSpeedRate,
+  clipOffsetSec,
 } from '../../../server/lib/musicVideoLayers.js';
