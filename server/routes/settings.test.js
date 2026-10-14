@@ -128,6 +128,7 @@ vi.mock('../services/itermBridge.js', () => ({
 }));
 
 import settingsRoutes from './settings.js';
+import { hostControlBodyGate } from '../services/authGate.js';
 import codeReviewRoutes from './codeReview.js';
 import { reconcileBeeperIngestion } from '../services/beeperArming.js';
 import { reconcileItermBridge } from '../services/itermBridge.js';
@@ -1618,5 +1619,43 @@ describe('Settings routes — atomic partial saves (#11045)', () => {
     const response = await request(buildApp()).put('/api/settings').send({ localLlm: { mtplx: { idleMinutes: 5 } } });
     expect(response.status).toBe(200);
     expect(persisted().localLlm).toEqual({ mtplx: { idleMinutes: 5 } });
+  });
+});
+
+// Regression: generic settings writes must not let a remote caller repoint,
+// disable or prune the backups that hold the install's private records.
+describe('backup settings operator authority', () => {
+  beforeEach(() => { store = { backup: { destPath: '/example-backups', enabled: true } }; vi.clearAllMocks(); });
+  const guardedApp = (authority) => {
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => {
+      Object.defineProperty(req.socket, 'remoteAddress', { value: authority === 'local' ? '127.0.0.1' : '192.0.2.10', configurable: true });
+      // authGate supplies this verified context for both human and agent sessions.
+      req.portosAuthContext = authority === 'session'
+        ? { enabled: true, authenticated: true, method: 'session' }
+        : { enabled: false, authenticated: false, method: null };
+      next();
+    });
+    app.use(hostControlBodyGate);
+    app.use('/api/settings', settingsRoutes);
+    return app;
+  };
+
+  it.each([{ destPath: '/example-other-backups' }, { enabled: false }, { retentionCount: 1 }, null])(
+    'refuses unauthorized backup policy changes before persistence: %j', async (backup) => {
+      const previous = structuredClone(store);
+      const res = await request(guardedApp('remote')).put('/api/settings').send({ backup });
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+      expect(updateSettingsWith).not.toHaveBeenCalled();
+      expect(store).toEqual(previous);
+    },
+  );
+
+  it.each(['local', 'session'])('preserves authorized backup configuration: %s', async (authority) => {
+    const res = await request(guardedApp(authority)).put('/api/settings').send({ backup: { destPath: '/example-other-backups' } });
+    expect(res.status).toBe(200);
+    expect(store.backup.destPath).toBe('/example-other-backups');
   });
 });
