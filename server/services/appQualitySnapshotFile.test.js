@@ -700,8 +700,12 @@ const ownedPublicationDeps = ({ agents = {}, trusted = true, worktrees = [], ...
   const deps = testDeps({
     checkSnapshotPublicationOwnership: async input => {
       const { checkSnapshotPublicationOwnership } = await import('./cosClaimOwnership.js');
+      const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
       return checkSnapshotPublicationOwnership(input, {
         readAgentsStateForSafetyCheck: async () => ({ trusted: ownership.trusted, agents: ownership.agents }),
+        readCompletionHold: policy => readBranchCompletionHold({ ...policy, tip: 'a'.repeat(40) }, {
+          readPolicies: async () => Object.values(ownership.agents),
+        }),
         getAppById: async () => app,
         listWorktrees: async () => ownership.worktrees,
         getActiveAgentIds: () => [],
@@ -761,6 +765,32 @@ it('rechecks ownership before pushing and retries an unchanged body after a late
   ownership.agents = {};
   expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({ published: true });
   expect(deps.git.commit).toHaveBeenCalledTimes(2);
+});
+
+it('keeps completed review delivery from overriding its registered completion policy', async () => {
+  const reviewer = reviewOwner('completed');
+  reviewer.metadata = { ...reviewer.metadata, sourceWorkspace: app.repoPath,
+    worktreeBranch: QUALITY_SNAPSHOT_BRANCH, prCompletionPolicy: 'review-then-merge' };
+  const { deps } = ownedPublicationDeps({ agents: { reviewer }, git: branchGit() });
+  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({
+    published: false, deferredPublication: true, reason: 'pr-completion-review-required',
+  });
+  expectNoPublication(deps);
+});
+
+it('applies a saved handoff only to the exact current PR when the snapshot branch is reused', async () => {
+  const agent = { id: 'prior', status: 'completed', metadata: {
+    sourceWorkspace: app.repoPath, branchCompletionPolicy: {
+      branch: QUALITY_SNAPSHOT_BRANCH, prUrl, completion: 'leave-open', tip: null,
+    },
+  } };
+  const { deps } = ownedPublicationDeps({ agents: { prior: agent }, git: branchGit() });
+  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({
+    published: false, deferredPublication: true, reason: 'pr-completion-human-handoff',
+  });
+  expectNoPublication(deps);
+  deps.probePrForBranch.mockResolvedValue({ readable: true, prState: 'OPEN', prUrl: 'https://github.com/example/app/pull/43', prNumber: 43, cli: 'gh' });
+  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({ published: true, merged: true });
 });
 
 it('preserves a live review checkout even when no PR owner target was registered', async () => {

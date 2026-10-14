@@ -1,3 +1,8 @@
+vi.mock('./branchCompletionPolicy.js', async () => ({
+  ...await vi.importActual('./branchCompletionPolicy.js'),
+  readBranchCompletionPolicies: vi.fn(async () => []),
+  readBranchCompletionHold: vi.fn(async () => null),
+}));
 /**
  * Worktree ownership through branch-reconcile's real cleanup boundary (#10270).
  *

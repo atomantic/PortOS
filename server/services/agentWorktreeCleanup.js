@@ -396,6 +396,9 @@ async function handlePrCreationFailure({ agentId, sourceWorkspace, worktreeBranc
 async function completeOpenedPullRequest(context, prResult) {
   const { agentId, sourceWorkspace, worktreeBranch, warnings, prCompletion,
     legacyRequestCopilotReview, reviewers, originalTask } = context;
+  const { recordBranchCompletionPolicy } = await import('./branchCompletionPolicy.js');
+  await recordBranchCompletionPolicy({ agentId, task: originalTask, repoPath: sourceWorkspace,
+    branch: worktreeBranch, prUrl: prResult.url });
   const cliName = prResult.cli || 'gh';
   emitLog('success', `🌳 Created PR: ${prResult.url} (${cliName}${prResult.account ? ` authed as ${prResult.account}` : ''})`, { agentId, branchName: worktreeBranch, cli: prResult.cli, account: prResult.account, owner: prResult.owner, host: prResult.host });
 
@@ -1204,6 +1207,7 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
       simplify: false,
       // Marker flags consumed by the agent prompt + completion handler
       reviewLoopFollowUp: true,
+      prCompletion,
       // Merge-only run: no reviewers, the prompt is a CI-gate-and-merge procedure.
       reviewLoopMergeOnly: mergeOnly,
       // …and, on that same path, whether the agent owes the change its OWN

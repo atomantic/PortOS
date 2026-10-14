@@ -66,15 +66,20 @@ export async function updateClaimOwnership({ agentId, action, branch }) {
  * read-only. A named run that is not a live registered agent is refused: the
  * reservation could not be recorded.
  *
- * @param {{ appId: string, branch: string, worktreePath?: string, agentId?: string }} input
+ * @param {{ appId: string, branch: string, prUrl?: string, worktreePath?: string, agentId?: string }} input
  * @param {object} [deps] - injected for tests
  * @returns {Promise<{ admitted: true }|{ admitted: false, reason: string }>}
  */
 export async function checkReconcileOwnership(input, deps = {}) {
-  const { appId, branch, worktreePath, agentId } = input;
+  const { appId, branch, prUrl, worktreePath, agentId } = input;
   const getAppById = deps.getAppById ?? (await import('./apps.js')).getAppById;
   const listWorktrees = deps.listWorktrees ?? (await import('./worktreeManager.js')).listWorktrees;
-  const getAgents = deps.getAgents ?? (await import('./cosAgentLifecycle.js')).getAgents;
+  const getAgents = deps.getAgents ?? (async () => {
+    const { readAgentsStateForSafetyCheck } = await import('./cosState.js');
+    const snapshot = await readAgentsStateForSafetyCheck();
+    return snapshot.trusted && snapshot.agents ? Object.values(snapshot.agents) : null;
+  });
+  const readCompletionHold = deps.readCompletionHold ?? (await import('./branchCompletionPolicy.js')).readBranchCompletionHold;
   const getActiveAgentIds = deps.getActiveAgentIds ?? (await import('./agentState.js')).getActiveAgentIds;
   const { buildActiveOwnerIds, resolveLiveOwnerReason } = await import('./branchReconcile.js');
 
@@ -88,6 +93,8 @@ export async function checkReconcileOwnership(input, deps = {}) {
   const admit = async () => {
     const agents = await getAgents().catch(() => null);
     if (!Array.isArray(worktrees) || !Array.isArray(agents)) return { admitted: false, reason: 'ownership-unreadable' };
+    const completionHold = await readCompletionHold({ repoPath, branch, prUrl }).catch(() => 'pr-completion-policy-unavailable');
+    if (completionHold) return { admitted: false, reason: completionHold };
     const holder = worktrees.find((wt) => branchOf(wt) === branch) || null;
     if (worktreePath && !samePath(holder?.path, worktreePath)) return { admitted: false, reason: 'holder-changed' };
     const others = agentId ? agents.filter((a) => a?.id !== agentId) : agents;
@@ -141,5 +148,5 @@ export async function checkSnapshotPublicationOwnership({ appId, branch, prUrl }
     && agent.metadata.reviewLoopMergeTarget.branch === branch)) {
     return { admitted: false, reason: 'review-owner-active' };
   }
-  return checkReconcileOwnership({ appId, branch }, { ...deps, getAgents: async () => agents });
+  return checkReconcileOwnership({ appId, branch, prUrl }, { ...deps, getAgents: async () => agents });
 }
