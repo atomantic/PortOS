@@ -1104,8 +1104,8 @@ export async function getDueTasks(appId = null, { continuingTaskType = null } = 
  * When `perpetualOnly` is true, return a due perpetual drain or null; never a
  * cron type that would mask it.
  */
-export async function getNextTaskType(appId = null, { perpetualOnly = false, continuingTaskType = null } = {}) {
-  const dueTasks = await getDueTasks(appId, { continuingTaskType });
+export async function getNextTaskType(appId = null, { perpetualOnly = false, continuingTaskType = null, dueTasks = null } = {}) {
+  dueTasks ??= await getDueTasks(appId, { continuingTaskType });
 
   const perpetualDue = dueTasks.filter(t => t.interval.perpetual === true);
   if (perpetualOnly) {

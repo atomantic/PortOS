@@ -987,10 +987,13 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata }
   const result = await updateTask(task.id, {
     status: 'pending',
     metadata: { ...patch, ...clearedRetryHoldMetadata() }
-  }, taskType).catch(err => {
+  }, taskType, {
+    expectedStatus: 'in_progress', expectedMetadata: { retryPendingCleanup: persisted.metadata.retryPendingCleanup },
+  }).catch(err => {
     emitLog('warn', `Failed to release retry hold on task ${task.id}: ${err.message}`, { taskId: task.id, agentId });
     return { error: err.message };
   });
+  if (result?.statusChanged) return {};
   if (result?.error) {
     // The hold is still on disk, so the orphan sweep finishes the transition —
     // the task is delayed, never stranded.

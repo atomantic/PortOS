@@ -1559,13 +1559,20 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
       return {};
     });
     const targetBranch = resolveTaskTargetBranch(resumePatch);
-    emitLog('info', `🔓 Completing interrupted retry transition for task ${taskId}${targetBranch ? ` — resuming ${targetBranch}` : ''}`, {
-      taskId, agentId, branchName: targetBranch
-    });
-    await updateTask(taskId, {
+    const result = await updateTask(taskId, {
       status: 'pending',
       metadata: { ...resumePatch, ...clearedRetryHoldMetadata() }
-    }, task.taskType || 'user');
+    }, task.taskType || 'user', {
+      expectedStatus: 'in_progress', expectedMetadata: { [RETRY_HOLD_KEY]: task.metadata[RETRY_HOLD_KEY] },
+    });
+    if (result?.error) {
+      emitLog('error', `Interrupted retry transition for task ${taskId} failed: ${result.error}`, { taskId, agentId });
+      return;
+    }
+    if (result?.statusChanged) return;
+    emitLog('info', `🔓 Completed interrupted retry transition for task ${taskId}${targetBranch ? ` — resuming ${targetBranch}` : ''}`, {
+      taskId, agentId, branchName: targetBranch
+    });
     return;
   }
 

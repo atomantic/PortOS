@@ -93,9 +93,15 @@ vi.mock('./cosState.js', () => ({
   ROOT_DIR: '/root'
 }));
 
-vi.mock('./cos.js', () => ({ isRunning: vi.fn(() => false) }));
+vi.mock('./cos.js', () => ({
+  isRunning: vi.fn(() => false),
+  getAgentRecord: vi.fn(),
+  getTaskById: (...args) => getTaskById(...args),
+  updateTask: (...args) => updateTask(...args),
+}));
 
 vi.mock('./cosEvents.js', () => ({
+  emitLog: vi.fn(),
   cosEvents: { emit: (name, payload) => mock.events.push({ name, payload }) }
 }));
 
@@ -244,6 +250,27 @@ describe('cosTaskStore.updateTask expectedStatus', () => {
     expect(resumed).toMatchObject({ status: 'pending', metadata: {
       existingBranch: 'cos/retained', resumedFromAgentId: 'agent-current', resumeWorktreePath: '/fixture/retained',
     } });
+  });
+
+  it('releases an extended Deep retry through the real persisted adapter, preserving the branch', async () => {
+    const { releaseRetryHold } = await import('./agentWorktreeCleanup.js');
+    await addTask({ id: 'sys-extended-retry', description: 'Example audit' }, 'internal');
+    const task = await updateTask('sys-extended-retry', { status: 'in_progress', metadata: {
+      auditDepth: 'deep', auditWorkflow: 'extended-v1', retryPendingCleanup: 'agent-owner',
+      retryPendingSince: '2026-01-01T00:00:00.000Z', existingBranch: 'cos/retained',
+    } }, 'internal');
+    expect(await updateTask(task.id, { status: 'pending', metadata: { retryPendingCleanup: undefined } }, 'internal'))
+      .toMatchObject({ error: expect.stringContaining('cleanup') });
+    const patch = { status: 'pending', metadata: { retryPendingCleanup: undefined } };
+    expect(await updateTask(task.id, patch, 'internal', {
+      expectedStatus: 'in_progress', expectedMetadata: { retryPendingCleanup: 'agent-stale' },
+    })).toMatchObject({ statusChanged: true });
+    await releaseRetryHold({ agentId: 'agent-owner', task: { ...task, taskType: 'internal' }, success: false, agentMetadata: {} });
+    const persisted = await getTaskById(task.id);
+    expect(persisted).toMatchObject({ status: 'pending', metadata: { existingBranch: 'cos/retained', auditWorkflow: 'extended-v1' } });
+    expect(persisted.metadata).not.toHaveProperty('retryPendingCleanup');
+    expect(persisted.metadata).not.toHaveProperty('retryPendingSince');
+    expect(mock.events).toContainEqual(expect.objectContaining({ name: 'tasks:changed', payload: expect.objectContaining({ action: 'requeued' }) }));
   });
 
   it('does not apply a stale terminal update after a task has been claimed', async () => {
