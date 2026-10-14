@@ -396,7 +396,7 @@ export default function SceneCard({
     >
       <summary
         onClick={() => onSeek?.(scene)}
-        className="flex min-h-[44px] cursor-pointer select-none items-center gap-3 p-2 marker:content-none flex-wrap group-open:pr-52 sm:group-open:pr-72 [&::-webkit-details-marker]:hidden"
+        className="flex min-h-[44px] cursor-pointer select-none items-center gap-3 p-2 marker:content-none flex-wrap sm:group-open:pr-72 [&::-webkit-details-marker]:hidden"
       >
         <ChevronRight size={14} aria-hidden="true" className="shrink-0 text-port-text-muted transition-transform group-open:rotate-90" />
         <ScenePoster scene={scene} iconSize={14} className="aspect-video w-16 shrink-0 rounded border border-port-border sm:w-20 max-sm:group-open:hidden" />
@@ -437,11 +437,12 @@ export default function SceneCard({
           </span>
         )}
       </summary>
-      {/* The open card's lock and "…" menu sit in its top-right corner. A move swaps this
-          shot with its neighbor; the song timing and lyric stay with the slot. */}
-      <div className="absolute right-2 top-2 z-10 flex items-center gap-1">
+      {/* The open card's shot arrows, lock and "…" menu: their own row under the title on a
+          phone, the top-right corner from sm up. A move swaps this shot with its neighbor;
+          the song timing and lyric stay with the slot. */}
+      <div className="flex items-center justify-end gap-1 px-2 pb-2 sm:absolute sm:right-2 sm:top-2 sm:z-10 sm:p-0">
         {stepShot && (
-          <>
+          <span className="mr-auto flex items-center gap-1 sm:mr-0">
             <button type="button" onClick={stepShot.prev || undefined} disabled={!stepShot.prev} aria-label="Previous shot" title="Previous shot"
               className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-port-border text-port-text hover:bg-port-border disabled:opacity-40 sm:min-h-[32px] sm:min-w-[32px]">
               <ChevronLeft size={16} aria-hidden="true" />
@@ -450,7 +451,7 @@ export default function SceneCard({
               className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-port-border text-port-text hover:bg-port-border disabled:opacity-40 sm:min-h-[32px] sm:min-w-[32px]">
               <ChevronRight size={16} aria-hidden="true" />
             </button>
-          </>
+          </span>
         )}
         <ShotLockButton scene={scene} compact />
         <OverflowMenu label="Shot actions" items={[

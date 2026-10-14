@@ -46,7 +46,7 @@ export default function SceneTakeStrip({
       <div className="text-[11px] text-port-text-muted">
         {KIND_LABEL[kind]} ({takes.length})
       </div>
-      <ul className={grid ? 'grid grid-cols-[repeat(auto-fill,minmax(6rem,1fr))] gap-2' : 'flex gap-2 overflow-x-auto pb-1'} aria-label={`${KIND_LABEL[kind]} for ${scene.label || `scene ${scene.order + 1}`}`}>
+      <ul className={grid ? 'grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-2 sm:grid-cols-[repeat(auto-fill,minmax(6rem,1fr))]' : 'flex gap-2 overflow-x-auto pb-1'} aria-label={`${KIND_LABEL[kind]} for ${scene.label || `scene ${scene.order + 1}`}`}>
         {takes.map((take) => {
           const isSelected = take.assetId === selected;
           const rejected = take.status === 'rejected';
@@ -82,10 +82,10 @@ export default function SceneTakeStrip({
                 )}
               </button>
               {/* Only what the director acts on: how a take was made stays in the hover title. */}
-              {(verdict || isSelected || rejected) && (
+              {/* "In use" is already on the thumbnail. */}
+              {(verdict || rejected) && (
                 <div className="text-[10px] text-port-text-muted truncate" title={take.originalName || take.prompt || takeProvenance(take)}>
                   {verdict && <span className={`mr-1 rounded px-1 ${VERDICT_TONE[verdict.tone]}`} title="Plate preflight verdict">{verdict.label}</span>}
-                  {isSelected ? <span className="font-semibold text-port-accent">In use</span> : null}
                   {rejected ? 'Not for this shot' : ''}
                 </div>
               )}
