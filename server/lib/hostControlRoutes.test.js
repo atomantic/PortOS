@@ -960,3 +960,48 @@ describe('Importer, Brain and analytics AI policy (#11036)', () => {
     ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
   });
 });
+
+describe('Media process execution policy', () => {
+  const protectedRoutes = [
+    'POST /api/devtools/video-download',
+    'POST /api/tracks/import/youtube',
+    'POST /api/rounds/reference-audio/import',
+    'POST /api/music-video/:id/transcribe-midi',
+    'POST /api/rounds/reference-audio/transcribe-midi',
+    'POST /api/music-video/:id/vocal-stem/separate',
+    'POST /api/music-video/:id/lyrics/align',
+    'POST /api/loras/:filename/effect',
+  ];
+
+  it('gates each route and maps every entry to a mounted route', () => {
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => method + ' ' + path));
+    for (const route of protectedRoutes) {
+      const [method, path] = route.split(' ');
+      expect(mounted.has(route), route).toBe(true);
+      expect(hostControlRouteFor(method, path), route).toBe(route);
+      expect(hostControlRouteFor(method, path.toUpperCase() + '/'), route).toBe(route);
+    }
+  });
+
+  it('keeps reads, progress SSE, and cancellations open', () => {
+    for (const [method, path] of [
+      ['GET', '/api/devtools/video-download/downloads'],
+      ['GET', '/api/devtools/video-download/yt-dlp'],
+      ['GET', '/api/devtools/video-download/:jobId/events'],
+      ['POST', '/api/devtools/video-download/:jobId/cancel'],
+      ['GET', '/api/tracks/import/:jobId/events'],
+      ['POST', '/api/tracks/import/:jobId/cancel'],
+      ['GET', '/api/rounds/reference-audio/import/:jobId/events'],
+      ['POST', '/api/rounds/reference-audio/import/:jobId/cancel'],
+      ['GET', '/api/rounds/reference-audio/transcribe-midi/:jobId/events'],
+      ['POST', '/api/rounds/reference-audio/transcribe-midi/:jobId/cancel'],
+      ['GET', '/api/music-video/:id/transcribe-midi/:jobId/events'],
+      ['POST', '/api/music-video/transcribe-midi/:jobId/cancel'],
+      ['GET', '/api/music-video/vocal-stem/separate/:jobId/events'],
+      ['POST', '/api/music-video/vocal-stem/separate/:jobId/cancel'],
+      ['GET', '/api/music-video/lyrics/align/:jobId/events'],
+      ['POST', '/api/music-video/lyrics/align/:jobId/cancel'],
+      ['GET', '/api/loras'],
+    ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
+  });
+});
