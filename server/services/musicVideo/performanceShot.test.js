@@ -428,6 +428,16 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     expect((await loadHistory()).find((h) => h.id === job.jobId)).toMatchObject({ modelId: `fal:${url}`, estimatedCostUsd: costUsd, audioDriven: true });
   }, 60_000);
 
+  // Review on #11413: a stale card's cutaway model id must not replace the project's music pin.
+  it('keeps the project\'s music pin when the request names a model that is not a music lane', async () => {
+    getProject.mockResolvedValue({ ...project({ performanceStyle: 'music' }), videoSettings: { backend: 'fal', falMusicModelId: 'fal-ai/bytedance/omnihuman/v1.5' } });
+    const prepared = await preparePerformanceShot({
+      musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1' }, backend: 'fal', sourceImagePath: '/x/frame.png', mode: 'image',
+      musicModelId: 'minimax/h3-max/image-to-video',
+    });
+    expect(prepared.modelId).toBe('fal-ai/bytedance/omnihuman/v1.5');
+  });
+
   it('uses the full span of a long shot in one take, at the project\'s lip-sync resolution pin', async () => {
     // 26s: past the old 14.8s cap (fal accepts up to 15 minutes; PortOS keeps
     // a take to 30s so it stays one editable phrase).

@@ -48,6 +48,7 @@ import {
   performanceCapability,
   planPerformanceWindow,
   selectedPerformanceInstruction,
+  SOURCE_AUDIO_MUSIC,
 } from '../../lib/musicVideoShotTiming.js';
 import { getProject } from './projects.js';
 import { assertVocalStemTimebase, resolveVocalStemPath } from './vocalStem.js';
@@ -285,7 +286,8 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
   // A music-driven scene renders on the project's audio-to-video model; a
   // lip-sync scene on the lip-sync route.
   // A shot card can pick another music-driven model for this take (one PortOS curates, else the project's).
-  const videoSettings = musicModelId ? { ...project.videoSettings, falMusicModelId: musicModelId } : project.videoSettings;
+  const picked = backend === 'fal' && musicModelId && Object.hasOwn(SOURCE_AUDIO_MUSIC.fal, musicModelId);
+  const videoSettings = picked ? { ...project.videoSettings, falMusicModelId: musicModelId } : project.videoSettings;
   const capability = performanceCapability(backend, { scene, videoSettings });
   if (!capability) throw refuse(performanceBlockedReason(backend), 'MUSIC_VIDEO_PERFORMANCE_UNSUPPORTED');
   const musicDriven = capability.style === 'music';
