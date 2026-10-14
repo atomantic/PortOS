@@ -22,6 +22,7 @@ import { captureMusicVideoEvidence } from '../../lib/musicVideoDependencies.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { unlink } from 'fs/promises';
 import { join } from 'path';
+import { tmpdir } from 'os';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { spawn } from '../../lib/childProcess.js';
@@ -30,6 +31,7 @@ import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '
 import { attachFfmpegRenderGuard } from '../../lib/ffmpegRenderGuard.js';
 import { cancelMusicVideoRenderJob, isMusicVideoRenderCanceled } from './renderCancellation.js';
 import { safeUnder } from '../../lib/ffmpeg.js';
+import { filterGraphViaFile } from '../../lib/ffmpegFilterGraph.js';
 import { encodeFileContactSheetAtTimes } from '../htmlComposition/encode.js';
 import { getProject, listProjects, mutateProjectRecord } from './projects.js';
 import { assertCurrentPerformanceTakes, withDraftPerformanceFallbacks } from './performanceShot.js';
@@ -327,6 +329,9 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
     const composition = cues.length > 0 ? project.composition : null;
 
     const totalDuration = endClamped - startSec;
+    // A long filter graph goes to ffmpeg in this file, removed once ffmpeg exits.
+    const graphPath = join(tmpdir(), `portos-music-video-${jobId}.filtergraph`);
+    const plainEncode = composition ? null : await filterGraphViaFile(ffmpeg, buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, frameGrid: composed, excerpt: { startSec, endSec: endClamped }, soundBed, grade: composed ? project.composition?.grade : null, beats: project.audioAnalysis?.beats, aspect: canvasAspect }).args, graphPath);
     const job = { id: jobId, projectId, excerptId, status: 'running', clients: [], process: null, totalDuration };
     jobs.set(jobId, job);
     projectExcerptRenders.set(projectId, jobId);
@@ -386,10 +391,11 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
     // the look after ffmpeg (filmLookFinish.js), on song time so the grain
     // matches the final render's frames.
     const finishing = filmLookFinishNeeded(project);
-    const startEncode = (encodeArgs, progressBase = 0) => {
+    const startEncode = (encode, progressBase = 0) => {
       const encodeTop = finishing ? progressBase + (1 - progressBase) / 2 : 1;
       const encodeProgress = (fraction) => progressBase + (encodeTop - progressBase) * fraction;
-      const proc = spawn(ffmpeg, encodeArgs, safeChildProcessOptions({ stdio: ['ignore', 'ignore', 'pipe'] }));
+      const dropGraphFile = () => (encode.file ? unlink(encode.file).catch(() => {}) : null);
+      const proc = spawn(ffmpeg, encode.args, safeChildProcessOptions({ stdio: ['ignore', 'ignore', 'pipe'] }));
       job.process = proc;
 
       let stderrBuf = '';
@@ -421,6 +427,7 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
           console.log(`⚠️ Music-video excerpt render post-spawn error [${jobId.slice(4, 12)}]: ${err.message}`);
         },
         onSpawnError: async (err) => {
+          await dropGraphFile();
           job.process = null;
           job.status = 'error';
           const reason = `Failed to spawn ffmpeg: ${err.message}`;
@@ -434,6 +441,7 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
         },
         onClose: async (code, signal) => {
           job.process = null;
+          await dropGraphFile();
           if (code !== 0) {
             const canceled = isMusicVideoRenderCanceled(job, signal);
             await settleFailure(canceled, canceled ? 'Render cancelled' : signal ? `Killed by signal ${signal}` : `ffmpeg exit ${code}`);
@@ -478,8 +486,7 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
     };
 
     if (!composition) {
-      const { args } = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, frameGrid: composed, excerpt: { startSec, endSec: endClamped }, soundBed, grade: composed ? project.composition?.grade : null, beats: project.audioAnalysis?.beats, aspect: canvasAspect });
-      startEncode(args);
+      startEncode(plainEncode);
       return { jobId, excerptId };
     }
 
@@ -494,11 +501,11 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
     renderTypographyOverlays({
       jobId, cues: captureCues, style, width: probe.canonW, height: probe.canonH, fps: probe.fps, durationSec: endClamped, signal,
       onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: 0.5 * fraction }),
-    }).then((overlays) => {
+    }).then(async (overlays) => {
       signal.throwIfAborted();
       job.overlayAbort = null;
       const layered = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, overlays, frameGrid: true, excerpt: { startSec, endSec: endClamped }, soundBed, grade: composed ? project.composition?.grade : null, beats: project.audioAnalysis?.beats, aspect: canvasAspect });
-      startEncode(layered.args, 0.5);
+      startEncode(await filterGraphViaFile(ffmpeg, layered.args, graphPath), 0.5);
     }).catch(async (err) => {
       const canceled = signal.aborted;
       job.status = canceled ? 'canceled' : 'error';

@@ -342,31 +342,30 @@ export function blockBox(x, y, w, h, width, height) {
   return { x: px, y: py, w: Math.max(0, Math.min(width - px, even(w * width))), h: Math.max(0, Math.min(height - py, even(h * height))) };
 }
 
-// A glow is laid down as this many strips, each fainter than the one nearer its edge.
-const GLOW_STRIPS = 20;
-
 /**
- * A style frame's glows as solid strips, `{ x, y, w, h, color, alpha }` in
- * fractions of the frame: each glow's band from its edge is cut into strips that
- * stack, so the light is strongest at the edge and fades inward. Both players
- * paint these strips, so a glow looks the same in each.
+ * A style frame's glows, `{ side, size, color, alpha }`: light at `alpha` on its
+ * `side` edge that fades evenly to nothing `size` (a fraction of the frame) in.
+ * Both players paint each as one smooth ramp, so a glow looks the same in each.
  */
-export function glowStrips(glows) {
-  const out = [];
-  for (const g of Array.isArray(glows) ? glows : []) {
-    const size = Math.min(1, Math.max(0, g.size || 0));
-    if (!size || !(g.alpha > 0)) continue;
-    for (let k = 0; k < GLOW_STRIPS; k++) {
-      // Strip k reaches from the edge to (k + 1) / GLOW_STRIPS of the band, so the strips overlap nearest the edge.
-      const reach = (size * (k + 1)) / GLOW_STRIPS;
-      const alpha = Math.round((g.alpha / GLOW_STRIPS) * 1000) / 1000;
-      const box = g.side === 'left' ? { x: 0, y: 0, w: reach, h: 1 }
-        : g.side === 'right' ? { x: 1 - reach, y: 0, w: reach, h: 1 }
-          : g.side === 'top' ? { x: 0, y: 0, w: 1, h: reach } : { x: 0, y: 1 - reach, w: 1, h: reach };
-      out.push({ ...box, color: g.color, alpha });
-    }
-  }
-  return out;
+export function edgeGlows(glows) {
+  return (Array.isArray(glows) ? glows : [])
+    .map((g) => ({ side: g.side, size: Math.min(1, Math.max(0, g.size || 0)), color: g.color, alpha: Math.min(1, Math.max(0, g.alpha || 0)) }))
+    .filter((g) => g.size > 0 && g.alpha > 0);
+}
+
+// One `geq` per glow: each pixel moves toward the glow's color by the ramp's strength there.
+// The color goes in as limited-range BT.601 YUV, as drawbox paints it.
+function glowFilter({ side, size, color, alpha }) {
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(color.slice(i, i + 2), 16) / 255);
+  const yuv = [
+    16 + 65.481 * r + 128.553 * g + 24.966 * b,
+    128 - 37.797 * r - 74.203 * g + 112 * b,
+    128 + 112 * r - 93.786 * g - 18.214 * b,
+  ].map((v) => Math.round(v));
+  const from = side === 'left' ? 'X/W' : side === 'right' ? '(W-1-X)/W' : side === 'top' ? 'Y/H' : '(H-1-Y)/H';
+  const strength = `${num(alpha)}*max(0,1-${from}/${num(size)})`;
+  const [lum, cb, cr] = yuv.map((v) => `'p(X,Y)+(${v}-p(X,Y))*${strength}'`);
+  return `geq=lum=${lum}:cb=${cb}:cr=${cr}`;
 }
 
 /** Inclusive frame runs as a timeline expression: `between(n,4,6)+between(n,90,90)`. */
@@ -439,10 +438,7 @@ export function musicVideoTransitionFilter(glitches, { width, height }) {
       const box = blockBox(b.x, b.y, b.w, b.h, width, height);
       if (box.w >= 2 && box.h >= 2) add(`drawbox=x=${box.x}:y=${box.y}:w=${box.w}:h=${box.h}:color=0x${b.color}@${num(b.alpha)}:t=fill`);
     }
-    for (const strip of glowStrips(p.glows)) {
-      const box = blockBox(strip.x, strip.y, strip.w, strip.h, width, height);
-      if (box.w >= 2 && box.h >= 2) add(`drawbox=x=${box.x}:y=${box.y}:w=${box.w}:h=${box.h}:color=0x${strip.color}@${num(strip.alpha)}:t=fill`);
-    }
+    for (const glow of edgeGlows(p.glows)) add(glowFilter(glow));
     for (const bar of [...(p.bar ? [p.bar] : []), ...(p.bars || [])]) {
       add(`drawbox=x=0:y=${rows(bar.y)}:w=iw:h=${Math.max(2, rows(bar.h))}:color=white@${num(bar.alpha)}:t=fill`);
     }

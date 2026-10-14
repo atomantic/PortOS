@@ -1,9 +1,10 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { findFfmpeg } from '../../lib/ffmpeg.js';
+import { FILTER_GRAPH_ARG_LIMIT, filterGraphViaFile } from '../../lib/ffmpegFilterGraph.js';
 import { MUSIC_VIDEO_TRANSITION_STYLES, sceneTransitions, shotGlitchFrames, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
 import { buildMusicVideoFfmpegArgs } from './render.js';
 import { applySceneUpdate } from './projectsLogic.js';
@@ -137,6 +138,33 @@ describe.skipIf(!ffmpeg)('film and camera effects on a cut in the final render',
     const { lead, frames } = MUSIC_VIDEO_TRANSITION_STYLES[style];
     expect(changed.length).toBeGreaterThan(0);
     expect(changed.every((f) => f >= FPS - lead && f < FPS - lead + frames.length)).toBe(true);
+  });
+});
+
+// Uniquely catches a long edit's filter graph reaching ffmpeg as one argument
+// Linux refuses over 128 KiB (E2BIG): the graph must go by file and still render.
+describe.skipIf(!ffmpeg)('effects on every cut of a long edit', () => {
+  it('passes the filter graph to ffmpeg in a file and renders every frame', async () => {
+    const song = join(dir, 'long-song.wav');
+    run(['-f', 'lavfi', '-i', 'sine=frequency=440:duration=30', '-y', song]);
+    const videoPath = join(dir, 'long-clip.mp4');
+    run(['-f', 'lavfi', '-i', `testsrc2=s=${W}x${H}:r=${FPS}:d=1`, '-pix_fmt', 'yuv420p', '-y', videoPath]);
+    const styles = ['light-leak', 'vhs-rewind', 'film-burn'];
+    const clips = Array.from({ length: 30 }, (_, i) => ({
+      videoPath, width: W, height: H, fps: FPS, duration: 1, sourceSec: 1, loop: false, inSec: 0, outSec: 1, frameFit: 'fill',
+      ...sceneTransitions({ sceneId: `s${i}`, startSec: i, endSec: i + 1, transitionIn: styles[i % 3], transitionOut: styles[(i + 1) % 3], glitches: [{ atSec: 0.5, style: styles[(i + 2) % 3] }] }),
+      sceneId: `s${i}`,
+    }));
+    const output = join(dir, 'long-edit.mp4');
+    const plan = buildMusicVideoFfmpegArgs(clips, song, output, { audioDurationSec: 30, frameGrid: true });
+    const graph = plan.args[plan.args.indexOf('-filter_complex') + 1];
+    expect(Buffer.byteLength(graph)).toBeGreaterThan(FILTER_GRAPH_ARG_LIMIT);
+    const encode = await filterGraphViaFile(ffmpeg, plan.args, join(dir, 'long-edit.filtergraph'));
+    expect(encode.args).not.toContain('-filter_complex');
+    expect(encode.args).not.toContain(graph);
+    expect(readFileSync(encode.file, 'utf8')).toBe(graph);
+    run(encode.args.filter((arg, i) => !(arg === '-progress' || encode.args[i - 1] === '-progress')));
+    expect(frameSpreads(output)).toHaveLength(30 * FPS);
   });
 });
 

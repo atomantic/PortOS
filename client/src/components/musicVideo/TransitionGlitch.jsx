@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
-  blockBox, glowStrips, mergeGlitchFrames, sceneImageEffectGlitchFrames, sceneShotGlitchFrames, sceneTransitionSections, transitionFrameAt, transitionGlitchFrames,
+  blockBox, edgeGlows, mergeGlitchFrames, sceneImageEffectGlitchFrames, sceneShotGlitchFrames, sceneTransitionSections, transitionFrameAt, transitionGlitchFrames,
 } from '../../lib/musicVideoTransitions.js';
 
 // The canvas paints at most this wide; a glitch lasts a few frames, so detail past it is never seen.
@@ -205,11 +205,16 @@ function paintGlitch(canvas, figure, params, frame) {
     out.fillStyle = `#${b.color}`;
     out.fillRect(box.x, box.y, box.w, box.h);
   }
-  for (const strip of glowStrips(params.glows)) {
-    const box = blockBox(strip.x, strip.y, strip.w, strip.h, width, height);
-    out.globalAlpha = strip.alpha;
-    out.fillStyle = `#${strip.color}`;
-    out.fillRect(box.x, box.y, box.w, box.h);
+  for (const glow of edgeGlows(params.glows)) {
+    const reach = glow.size * (glow.side === 'left' || glow.side === 'right' ? width : height);
+    const [x0, y0, x1, y1] = glow.side === 'left' ? [0, 0, reach, 0] : glow.side === 'right' ? [width, 0, width - reach, 0]
+      : glow.side === 'top' ? [0, 0, 0, reach] : [0, height, 0, height - reach];
+    const ramp = out.createLinearGradient(x0, y0, x1, y1);
+    ramp.addColorStop(0, `#${glow.color}`);
+    ramp.addColorStop(1, `#${glow.color}00`);
+    out.globalAlpha = glow.alpha;
+    out.fillStyle = ramp;
+    out.fillRect(0, 0, width, height);
   }
   out.globalAlpha = 1;
   for (const bar of [...(params.bar ? [params.bar] : []), ...(params.bars || [])]) {
