@@ -109,7 +109,7 @@ export async function backfillFromHistory() {
       // Count only records that actually landed, and name the failing agent/task
       // so a partial backfill is diagnosable instead of reporting a full count.
       const recorded = await recordTaskCompletion(withoutStaleCoordinatorVerdict(agent, task), task)
-        .then(() => true)
+        .then(result => result !== null) // null = deliberately skipped, nothing written
         .catch(err => {
           failed++;
           console.error(`❌ 📚 TaskLearning: Backfill failed to record agent ${agent.id} (task ${agent.taskId}): ${err.message}`);
