@@ -206,6 +206,12 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/messages/gmail/enable-api',
   // Archive and delete act on mail items in the external account (#11434).
   'POST /api/messages/:accountId/:messageId/action',
+  // Selector tests drive the host CDP browser against live Outlook/Teams tabs,
+  // selector edits change that automation, and token extraction intercepts
+  // bearer tokens from those sessions (#11449).
+  'POST /api/messages/selectors/:provider/test',
+  'PUT /api/messages/selectors/:provider',
+  'POST /api/messages/debug/test-token',
 
   // Capture activation and existing live feeds require operator authority (#11272).
   // HEAD inherits the GET policy because Express invokes the same handler.
