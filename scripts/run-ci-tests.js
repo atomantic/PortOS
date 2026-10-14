@@ -113,7 +113,7 @@ export function relatedInputs(sourceFiles, selectedFiles) {
 }
 
 /**
- * Vitest selector flags for this runner's slice of a full suite. `CI_SHARD` is
+ * Vitest selector flags for this runner's slice of the selected suite. `CI_SHARD` is
  * `<index>/<count>` from the job matrix (ci.yml). A single shard passes nothing,
  * so the one-runner invocation stays identical to a local `npm run test:ci`.
  */
@@ -377,7 +377,7 @@ async function main() {
   process.exitCode = await spawnNpm(
     scope,
     'test:ci:related',
-    relatedInputs(sourceFiles, selectedFiles),
+    [...relatedInputs(sourceFiles, selectedFiles), ...shardArgs(process.env.CI_SHARD)],
     'related and contract tests',
   );
 }

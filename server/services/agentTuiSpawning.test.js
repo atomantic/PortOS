@@ -1213,7 +1213,7 @@ describe('spawnTuiAgent runtime', () => {
       tuiConfig: { ...defaultTuiConfig, command: 'opencode', spawnCommand: 'opencode', commandLine: 'opencode' },
     });
     await flushMicrotasks();
-    await capturedOnData(Buffer.from('OpenCode booting...\n'));
+    await capturedOnData(Buffer.from('\x1b[?2004l\x1b[?2004hAsk anything…\n'));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
@@ -1491,6 +1491,42 @@ describe('spawnTuiAgent runtime', () => {
     await vi.advanceTimersByTimeAsync(400);
     await flushMicrotasks();
     expect(pasteCount()).toBe(1);
+  });
+
+  it('waits through OpenCode terminal negotiation and skips its update modal before submitting once', async () => {
+    const spawnPromise = runSpawn({
+      provider: { ...defaultProvider, id: 'opencode-tui', name: 'OpenCode TUI' },
+      tuiConfig: { ...defaultTuiConfig, command: '/opt/bin/opencode', spawnCommand: 'opencode', commandLine: 'opencode' },
+    });
+    await flushMicrotasks();
+    // A quiet terminal-capability query used to trigger the idle paste, then
+    // exhaust every retry before the composer and update offer even appeared.
+    await capturedOnData(Buffer.from('\x1bP+q4d73\x1b\\'));
+    await vi.advanceTimersByTimeAsync(15000);
+    expect(pasteCount()).toBe(0);
+    expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
+
+    await capturedOnData(Buffer.from('\x1b[?2004l\x1b[?2004hAsk anything…\n'));
+    await vi.advanceTimersByTimeAsync(600);
+    expect(pasteCount()).toBe(0);
+    await capturedOnData(Buffer.from('Update\x1b[8;29H Available esc\nA new release v9.9.9 is avail'));
+    await capturedOnData(Buffer.from('able. Would you like to update now?\nSkip Confirm\n'));
+    await vi.advanceTimersByTimeAsync(400);
+    expect(vi.mocked(shellService.writeToSession).mock.calls.map(([, data]) => data)).toEqual(['\x1b']);
+    expect(pasteCount()).toBe(0);
+    // Even beyond the old blind-paste deadline, require fresh output after Esc.
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(pasteCount()).toBe(0);
+    await capturedOnData(Buffer.from('Ask anything…\n'));
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(pasteCount()).toBe(1);
+    await capturedOnData(Buffer.from('[Pasted ~42 lines]'));
+    await vi.advanceTimersByTimeAsync(8000);
+    expect(vi.mocked(shellService.writeToSession).mock.calls.map(([, data]) => data)).toContain('\r');
+    expect(pasteCount()).toBe(1);
+    expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
+    await capturedOnExit({ exitCode: 0, killed: false });
+    await spawnPromise;
   });
 
   it('codex hook-review offer: continues without trusting hooks before pasting the prompt', async () => {

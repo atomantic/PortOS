@@ -493,17 +493,21 @@ minutes. Roughly half of all PR runs went full, so most PRs waited on the
 longest of those.
 
 The three test-runner jobs are therefore matrices. The impact job emits
-`server_shards`, `client_shards`, and `windows_shards` — `[1]` for a scoped
-plan and `[1..n]` for a full one, sized by `FULL_SUITE_SHARDS` in
+`server_shards`, `client_shards`, and `windows_shards` — `[1]` for exact-file
+plans and `[1..n]` for full plans. Windows also uses its full matrix for
+related-test plans: a single shared source can select most of the server graph
+and exceed the 15-minute test-step budget on one Windows runner. Matrices are
+sized by `FULL_SUITE_SHARDS` in
 `scripts/ci-test-plan.js` (client 3, Windows 3, server 2) — and each job builds
 its matrix from that output. The decision has to be made in the planner: a
 job-level `if` cannot read the `matrix` context, so a job cannot skip its own
 extra shards. `scripts/run-ci-tests.js` turns `CI_SHARD=<index>/<count>` into
 Vitest's `--shard`, which slices the file list by path hash — every shard is a
-fixed, disjoint subset, and their union is the complete suite. A scoped plan
-never shards (its handful of files would trip Vitest's shard-count guard) and
-passes no flag at all, so its invocation stays identical to a local
-`npm run test:ci`. Once-only steps — smoke boot, the client build, the
+fixed, disjoint subset, and their union is the complete selected suite. Windows
+related plans retain the same source graph and explicit contracts on every
+shard; only execution is partitioned. Exact-file plans stay on one runner
+(their handful of files can trip Vitest's shard-count guard), and scoped Linux
+plans also retain one runner. Once-only steps — smoke boot, the client build, the
 Scalar-removal bundle pin — pin themselves to shard 1; lint is not among them,
 because it has its own job (see above). `CI Gate` sees a matrix job as one
 `needs` result, so nothing downstream changes; public-repo runner minutes are

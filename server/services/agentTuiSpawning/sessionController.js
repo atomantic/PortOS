@@ -40,7 +40,7 @@ import { createStreamingAnsiStripper, stripAnsi } from '../../lib/ansiStrip.js';
 import { createContentRefusalDetector, createClaudeSessionLimitBannerDetector, createImmediateFallbackSignalDetector, createLocalRuntimeOomDetector, createTruncatedResponseDetector, createModelAtCapacityDetector } from '../../lib/aiToolkit/errorDetection.js';
 import { isAntigravityCommand } from '../../lib/antigravity.js';
 import { isCodexCommand } from '../../lib/codex.js';
-import { isClaudeCommand } from '../../lib/providerModels.js';
+import { isClaudeCommand, isOpencodeCommand } from '../../lib/providerModels.js';
 import { createCodexModelRejectionGate } from './codexModelRejection.js';
 import {
   READY_POLL_INTERVAL_MS,
@@ -75,6 +75,7 @@ import {
   createStartupDialogAnswers,
   answerStartupDialogs,
   AGY_INPUT_READY_PATTERN,
+  OPENCODE_INPUT_READY_PATTERN,
   PASTE_TO_ENTER_MIN_DELAY_MS,
   PASTE_TO_ENTER_FALLBACK_MS,
   PASTE_COMMIT_PATIENCE_MS,
@@ -651,6 +652,7 @@ export function createTuiSessionController({
   // not `spawnCommand` — a credential-bootstrap wrap makes the latter the
   // bootstrap CLI.
   const isCodexSession = isCodexCommand(tuiConfig.command);
+  const isOpencodeSession = isOpencodeCommand(tuiConfig.command);
   const codexModelRejectionGate = isCodexSession ? createCodexModelRejectionGate() : null;
   // Latches once codex's composer placeholder paints — the positive "the input
   // box exists" signal the idle heuristic lacks. See
@@ -662,9 +664,12 @@ export function createTuiSessionController({
   // paste into a startup banner, a trust menu, or a returned shell prompt.
   // agy enables bracketed paste on alt-screen entry, before its composer (and
   // before its trust gate) exists, so it needs the extra composer-footer gate.
+  // OpenCode also enables paste mode before the composer. Require its
+  // placeholder and a settled repaint so terminal queries cannot trigger paste.
   // Runner/direct shapes pty.spawn the TUI itself (no launch shell), so the
   // tracker must not wait for a shell paste-mode OFF that will never come.
   const inputReady = createInputReadyTracker({
+    ...(isOpencodeSession ? { readyTextPattern: OPENCODE_INPUT_READY_PATTERN } : {}),
     ...(isAntigravityCommand(tuiConfig.command) ? { readyTextPattern: AGY_INPUT_READY_PATTERN } : {}),
     launchShape,
   });
@@ -1692,7 +1697,7 @@ export function createTuiSessionController({
     // via TUI_TRUST_PROMPT_PATTERN. If agy ever fails to signal ready, the
     // requireInputReady path fails fast with a surfaced startup error instead of
     // silently failing at startup.
-    const requireInputReady = isClaudeCommand(tuiConfig.command) || isAntigravityCommand(tuiConfig.command);
+    const requireInputReady = isClaudeCommand(tuiConfig.command) || isAntigravityCommand(tuiConfig.command) || isOpencodeSession;
     // sendPrompt / finishStartupFailure are async and dispatched fire-and-forget
     // from the interval below. A setInterval callback can't await, and an
     // unhandled rejection there (e.g. a finalizeAgent throw inside finish())
@@ -1716,7 +1721,7 @@ export function createTuiSessionController({
 
       // Answer whatever startup dialog the TUI is showing — one per tick, in the
       // order answerStartupDialogs declares (external imports, hook review,
-      // folder trust). These run for EVERY provider, not only the positive
+      // folder trust, OpenCode updates). These run for EVERY provider, not only the positive
       // input-ready ones below, because codex takes the idle/deadline paste path
       // and a dialog is at its quietest right after it paints.
       //
@@ -1776,7 +1781,8 @@ export function createTuiSessionController({
           appendLine(LIFECYCLE_LINES.startupDialogAnswered({ message: answeredAtComposer.message, session: sessionLabel }));
           return;
         }
-        if (inputReady.ready && elapsed >= tuiConfig.promptDelayMs) {
+        if (inputReady.ready && elapsed >= tuiConfig.promptDelayMs
+          && (!isOpencodeSession || (firstOutputAt !== null && now - lastOutputAt >= READY_IDLE_THRESHOLD_MS))) {
           safeSendPrompt('input-ready');
           clearInterval(promptTimer);
           promptTimer = null;
