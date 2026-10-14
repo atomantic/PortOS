@@ -49,7 +49,7 @@ function frameMeans(path) {
 // Uniquely catches the toggle's filters failing in ffmpeg, flipping on the wrong
 // frames, adding time, or the incoming clip jumping back to its start at the cut.
 describe.skipIf(!ffmpeg)('a beat toggle across a cut in the final render', () => {
-  it('shows the incoming clip on its beats, keeps every frame and carries the clip on through the cut', () => {
+  const render = (incomingExtra = {}) => {
     const song = join(dir, 'song.wav');
     run(['-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-y', song]);
     const outgoing = join(dir, 'outgoing.mp4');
@@ -59,20 +59,32 @@ describe.skipIf(!ffmpeg)('a beat toggle across a cut in the final render', () =>
     run(['-f', 'lavfi', '-i', `color=black:s=${W}x${H}:r=${FPS}:d=2,geq=lum='40+8*N':cb=128:cr=128`, '-pix_fmt', 'yuv420p', '-y', incoming]);
     const clip = (videoPath, i, extra = {}) => ({ sceneId: `s${i}`, videoPath, width: W, height: H, fps: FPS, duration: i ? 2 : 1, sourceSec: i ? 2 : 1, loop: false, inSec: 0, outSec: 1, frameFit: 'fill', ...extra });
     const output = join(dir, 'toggle.mp4');
-    const plan = buildMusicVideoFfmpegArgs([clip(outgoing, 0, { cutEffect: toggle() }), clip(incoming, 1)], song, output,
+    const plan = buildMusicVideoFfmpegArgs([clip(outgoing, 0, { cutEffect: toggle() }), clip(incoming, 1, incomingExtra)], song, output,
       { audioDurationSec: 2, frameGrid: true, beats: [0.5, 0.75, 1, 1.25] });
     run(plan.args.filter((arg, i) => !(arg === '-progress' || plan.args[i - 1] === '-progress')));
     expect(plan.totalDuration).toBe(2);
-    const means = frameMeans(output);
+    return frameMeans(output);
+  };
+  // The clip's Y levels read back as full-range gray.
+  const clipFrame = (n) => ((40 + 8 * n - 16) * 255) / 219;
+
+  it('shows the incoming clip on its beats, keeps every frame and carries the clip on through the cut', () => {
+    const means = render();
     expect(means).toHaveLength(2 * FPS);
     const white = (f) => means[f] > 200;
-    // The clip's Y levels read back as full-range gray.
-    const clipFrame = (n) => ((40 + 8 * n - 16) * 255) / 219;
     // Outgoing until the first beat, the incoming clip from its start on frames 6-8, outgoing again on 9-11.
     expect([0, 5, 9, 11].every(white)).toBe(true);
     [6, 7, 8].forEach((f, k) => expect(Math.abs(means[f] - clipFrame(k))).toBeLessThan(4));
     // At the cut the incoming clip is 6 frames in, as far as the toggle ran it.
     expect(Math.abs(means[12] - clipFrame(6))).toBeLessThan(4);
+  });
+
+  // Uniquely catches a non-looping clip with no spare footage running out before its shot ends.
+  it('starts a clip with no footage to spare from its in-point at the cut', () => {
+    const means = render({ duration: 1, sourceSec: 1 });
+    [6, 7, 8].forEach((f, k) => expect(Math.abs(means[f] - clipFrame(k))).toBeLessThan(4));
+    expect(Math.abs(means[12] - clipFrame(0))).toBeLessThan(4);
+    expect(Math.abs(means[23] - clipFrame(11))).toBeLessThan(4);
   });
 });
 

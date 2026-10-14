@@ -569,8 +569,13 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
   const prerolls = toggles.map((t) => {
     const incoming = plan[t.index + 1];
     const clip = { ...incoming.c, outSec: incoming.c.inSec + t.windowFrames / fps };
-    if (t.leadFrames > 0 && !incoming.c.layer) {
-      const lead = t.leadFrames / fps;
+    // A clip that doesn't loop only runs on as far as its spare footage allows, so
+    // the shot never runs out early and freezes on its last frame.
+    const spare = incoming.c.loop === false
+      ? Math.max(0, (incoming.c.sourceSec ?? incoming.c.duration) - (incoming.c.outSec - incoming.c.inSec))
+      : Infinity;
+    const lead = Math.min(t.leadFrames / fps, spare);
+    if (lead > 0 && !incoming.c.layer) {
       incoming.c = { ...incoming.c, inSec: incoming.c.inSec + lead, outSec: incoming.c.outSec + lead, sourceSec: (incoming.c.sourceSec ?? incoming.c.duration) - lead };
     }
     return { ...t, clip };
@@ -588,7 +593,7 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
     const pad = Math.max(0, frames - p.windowFrames);
     const shown = p.incoming.map(([a, b]) => `between(n,${a - start},${b - start - 1})`).join('+');
     filters.push(`${sectionChain(p.clip, p.input, { canonW, canonH, fps, frames: p.windowFrames, frameGrid })}[pre${p.index}]`);
-    filters.push(`[pre${p.index}]tpad=start=${pad}:color=black[prepad${p.index}]`);
+    filters.push(`[pre${p.index}]tpad=start=${pad}:color=black,setpts=N/(${fps}*TB)[prepad${p.index}]`);
     filters.push(`[vraw${p.index}][prepad${p.index}]overlay=eof_action=pass:enable='${shown}'[v${p.index}]`);
   }
   const gradeFilter = musicVideoGradeFilter(grade, plan.map(({ c, startSec, endSec }) => ({ sceneId: c.sceneId, startSec, endSec })), { fps });
