@@ -943,7 +943,7 @@ describe('CI test impact planner', () => {
     expect(re.test("'generate_ltx2xpy'")).toBe(false);
   });
 
-  it('fans a full plan out across the configured shards and leaves a scoped plan on one', () => {
+  it('shards full plans and Windows related graphs while keeping exact-file plans on one runner', () => {
     expect(shardIndexes('full', 3)).toEqual([1, 2, 3]);
     expect(shardIndexes('related', 3)).toEqual([1]);
     expect(shardIndexes('files', 3)).toEqual([1]);
@@ -960,6 +960,13 @@ describe('CI test impact planner', () => {
     });
     const scoped = buildCiTestPlan(['server/services/auth.js'], { trackedFiles: TRACKED });
     expect(scoped.shards).toEqual({ server: [1], client: [1], windows: [1] });
+    const relatedWindows = buildCiTestPlan(['server/lib/bufferedSpawn.js'], { trackedFiles: TRACKED });
+    expect(relatedWindows).toMatchObject({ full: false, windowsMode: 'related',
+      windowsSources: ['server/lib/bufferedSpawn.js'],
+      shards: { server: [1], client: [1], windows: [1, 2, 3] } });
+    expect(relatedWindows.windowsFiles).toEqual(WINDOWS_CONTRACT_TESTS.filter(path => TRACKED.includes(path)).sort());
+    const exactWindows = buildCiTestPlan(['server/lib/bufferedSpawn.test.js'], { trackedFiles: TRACKED });
+    expect(exactWindows).toMatchObject({ windowsMode: 'files', shards: { windows: [1] } });
     const docsOnly = buildCiTestPlan(['docs/README.md'], { trackedFiles: TRACKED });
     expect(docsOnly.shards).toEqual({ server: [1], client: [1], windows: [1] });
   });

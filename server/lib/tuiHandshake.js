@@ -30,11 +30,11 @@ export const PASTE_DEADLINE_MS = 10000;
 // Give Claude Code time to switch into /low-priority mode before retrying a
 // prompt rejected by its session limit. Shared by both TUI execution paths.
 export const CLAUDE_LOW_PRIORITY_RESUBMIT_DELAY_MS = 1500;
-// How long to wait for claude's POSITIVE input-ready footer (createInputReadyTracker)
+// How long to wait for a positive input-ready signal (createInputReadyTracker)
 // before giving up and surfacing a startup failure. Generous because a cold
 // claude start can spend many seconds on banner + MCP-server + model init
 // (well within the normal startup budget). Used only on the input-ready-gated
-// path; the non-claude providers use PASTE_DEADLINE_MS.
+// path (Claude, Antigravity, OpenCode); other providers use PASTE_DEADLINE_MS.
 export const TUI_INPUT_READY_DEADLINE_MS = 45000;
 
 // Claude Code emits `[Pasted text #N +M lines]`, Codex emits
@@ -458,6 +458,13 @@ export const TUI_HOOK_REVIEW_PROMPT_PATTERN = /hooksneedreview/i;
 // it, same as claude's.)
 export const AGY_INPUT_READY_PATTERN = /\?forshortcuts/i;
 
+// OpenCode emits terminal-capability queries and enables paste mode before its
+// composer exists. Silence after those bytes is not input readiness.
+export const OPENCODE_INPUT_READY_PATTERN = /askanything/i;
+// The update offer overlays the composer and defaults to Confirm. Escape
+// closes it without installing software or changing the operator's settings.
+const OPENCODE_UPDATE_PROMPT_PATTERN = /updateavailable.*anewreleasev[\d.]+isavailable\.wouldyouliketoupdatenow\?/i;
+
 // Handshake markers are matched against a rolling window of whitespace-stripped
 // output rather than a single chunk, so a marker split across two PTY reads
 // (`? for short` | `cuts`) still matches. Sized to a few screens of chrome.
@@ -520,6 +527,8 @@ export function createInputReadyTracker({ readyTextPattern = null, launchShape =
   // from re-arming the dialog and blocking delivery forever.
   let needsHookReview = false;
   let hookReviewAnswered = false;
+  let needsOpencodeUpdate = false;
+  let opencodeUpdateAnswered = false;
   let tail = '';
   // node-pty can split `ESC[?2004h` across reads. Keep only the trailing
   // prefix of that exact toggle so the next chunk can complete it without
@@ -538,7 +547,7 @@ export function createInputReadyTracker({ readyTextPattern = null, launchShape =
     // spawner has answered it.
     get ready() {
       return sawCommandRun && pasteModeOn && !needsTrust && !needsAutoModeChoice
-        && !needsExternalImportsChoice && !needsHookReview
+        && !needsExternalImportsChoice && !needsHookReview && !needsOpencodeUpdate
         && (!readyTextPattern || sawReadyText);
     },
     get needsTrust() { return needsTrust; },
@@ -547,6 +556,7 @@ export function createInputReadyTracker({ readyTextPattern = null, launchShape =
     get needsAutoModeChoice() { return needsAutoModeChoice; },
     get needsExternalImportsChoice() { return needsExternalImportsChoice; },
     get needsHookReview() { return needsHookReview; },
+    get needsOpencodeUpdate() { return needsOpencodeUpdate; },
     /** Spawner selected the affirmative trust choice. */
     ackTrustChoice() { needsTrust = false; trustAnswered = true; },
     /** Spawner reports the dismissal keystrokes went out; re-arms `ready`. */
@@ -555,6 +565,7 @@ export function createInputReadyTracker({ readyTextPattern = null, launchShape =
     ackExternalImportsChoice() { needsExternalImportsChoice = false; externalImportsAnswered = true; },
     /** Spawner selected Codex's safe "Continue without trusting" option. */
     ackHookReview() { needsHookReview = false; hookReviewAnswered = true; },
+    ackOpencodeUpdate() { needsOpencodeUpdate = false; opencodeUpdateAnswered = true; },
     // rawText: un-stripped chunk (paste-mode toggles live here);
     // strippedText: ANSI-stripped chunk (the trust-gate / composer text).
     observe(rawText, strippedText) {
@@ -600,6 +611,7 @@ export function createInputReadyTracker({ readyTextPattern = null, launchShape =
           needsExternalImportsChoice = true;
         }
         if (!needsHookReview && !hookReviewAnswered && TUI_HOOK_REVIEW_PROMPT_PATTERN.test(tail)) needsHookReview = true;
+        if (!needsOpencodeUpdate && !opencodeUpdateAnswered && OPENCODE_UPDATE_PROMPT_PATTERN.test(tail)) needsOpencodeUpdate = true;
         if (readyTextPattern && !sawReadyText && readyTextPattern.test(tail)) sawReadyText = true;
       }
     },
@@ -630,6 +642,15 @@ export function createInputReadyTracker({ readyTextPattern = null, launchShape =
 // to highlight (which can be "No, exit", or rewriting the user's global
 // permission default).
 const STARTUP_DIALOGS = [
+  {
+    id: 'opencode-update',
+    stage: 'before-composer',
+    answered: 'opencodeUpdateSkipped',
+    asks: (inputReady) => inputReady.needsOpencodeUpdate,
+    keys: () => '\x1b',
+    ack: (inputReady) => inputReady.ackOpencodeUpdate(),
+    describe: (command) => `Skipped ${command} startup update offer`,
+  },
   // Claude can discover PortOS's parent AGENTS.md (via CLAUDE.md) from a
   // managed-app worktree nested under data/cos/worktrees, then ask whether to
   // allow that file's external AGENTS.md import. Decline it: the parent
