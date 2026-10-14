@@ -88,7 +88,8 @@ function frameSpreads(path) {
 // Uniquely catches the glitch filter chain failing in ffmpeg, landing on the
 // wrong frames, or adding time to the edit.
 describe.skipIf(!ffmpeg)('a VHS glitch on a cut in the final render', () => {
-  it.each([['vhs-glitch', [11, 12, 13]], ['channel-change', [9, 10, 11, 12, 13, 14, 15]]])('%s repaints only the frames around the cut and keeps every frame of the edit', (style, expected) => {
+  // A rewind's smeared bands also split the stream inside the chain and lay it back.
+  it.each([['vhs-glitch', [11, 12, 13]], ['channel-change', [9, 10, 11, 12, 13, 14, 15]], ['vhs-rewind', [8, 9, 10, 11, 12, 13, 14, 15]]])('%s repaints only the frames around the cut and keeps every frame of the edit', (style, expected) => {
     const song = join(dir, 'song.wav');
     const clips = ['0x2050a0', '0xa05020'].map((color, i) => {
       const videoPath = join(dir, `clip${i}.mp4`);

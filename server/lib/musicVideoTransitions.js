@@ -18,7 +18,7 @@
 
 import { IMAGE_EFFECT_GLITCH_STYLE, imageEffectChangeFrame, sceneImageEffect } from './musicVideoImageEffects.js';
 
-export const MUSIC_VIDEO_TRANSITIONS = Object.freeze(['vhs-glitch', 'channel-change', 'vhs-tracking', 'vhs-dropout', 'camera-flash', 'color-block']);
+export const MUSIC_VIDEO_TRANSITIONS = Object.freeze(['vhs-glitch', 'channel-change', 'vhs-tracking', 'vhs-dropout', 'camera-flash', 'color-block', 'vhs-rewind']);
 
 export const MUSIC_VIDEO_TRANSITION_LABELS = Object.freeze({
   'vhs-glitch': 'VHS glitch',
@@ -27,6 +27,7 @@ export const MUSIC_VIDEO_TRANSITION_LABELS = Object.freeze({
   'vhs-dropout': 'Dropout flash',
   'camera-flash': 'Camera flash',
   'color-block': 'Color blocks',
+  'vhs-rewind': 'Rewind / fast-forward',
 });
 
 // A shot also carries glitches at any moment inside it (`scene.glitches`):
@@ -44,7 +45,9 @@ export const MUSIC_VIDEO_GLITCH_LENGTHS = Object.freeze([0.125, 0.25, 0.5, 1, 2]
 //   bright  brightness multiplier; sat a saturation multiplier
 //   noise   snow strength: 0..1 over the picture, up to 1.6 for a dead channel's static
 //   lines   scanline darkness, 0..1
-//   bar     a bright tracking band { y, h, alpha }
+//   bar     a bright tracking band { y, h, alpha }; bars, several thin ones
+//   smears  bands slipped sideways and smeared: { y, h } fractions of height,
+//           shift of width, blur the horizontal smear (a fraction of width)
 //   swaps   macroblocks traded places: { x1, y1, x2, y2, w, h } fractions of the frame
 //   blocks  solid colour macroblocks: { x, y, w, h } fractions, color 'rrggbb', alpha
 export const MUSIC_VIDEO_TRANSITION_STYLES = Object.freeze({
@@ -113,6 +116,31 @@ export const MUSIC_VIDEO_TRANSITION_STYLES = Object.freeze({
       { swaps: [{ x1: 0.4375, y1: 0.5556, x2: 0.125, y2: 0.2222, w: 0.125, h: 0.2222 }], chroma: 0.008, sat: 1.25,
         blocks: [{ x: 0.75, y: 0.1111, w: 0.125, h: 0.1111, color: '2fbf4f', alpha: 0.75 }, { x: 0.0625, y: 0.6667, w: 0.1875, h: 0.1111, color: '808080', alpha: 0.55 }] },
       { chroma: 0.004, sat: 1.1, blocks: [{ x: 0.5, y: 0.4444, w: 0.0625, h: 0.1111, color: 'c02cc0', alpha: 0.6 }] },
+    ],
+  },
+  // A tape scanning in rewind or fast-forward: a wide band of noisy tracking
+  // lines rolls through the middle of the picture, slipped sideways and
+  // smeared, with thin bright lines along its edges.
+  'vhs-rewind': {
+    lead: 4,
+    frames: [
+      { smears: [{ y: 0.46, h: 0.08, shift: 0.06, blur: 0.008 }], bars: [{ y: 0.455, h: 0.008, alpha: 0.7 }, { y: 0.535, h: 0.006, alpha: 0.5 }],
+        tears: [{ y: 0.3, h: 0.04, shift: -0.015 }], chroma: 0.006, sat: 0.85, noise: 0.3, lines: 0.3 },
+      { smears: [{ y: 0.42, h: 0.14, shift: -0.08, blur: 0.012 }], bars: [{ y: 0.415, h: 0.01, alpha: 0.75 }, { y: 0.555, h: 0.006, alpha: 0.55 }],
+        tears: [{ y: 0.64, h: 0.05, shift: 0.02 }], chroma: 0.01, bright: 1.05, sat: 0.8, noise: 0.45, lines: 0.35 },
+      { smears: [{ y: 0.44, h: 0.16, shift: 0.1, blur: 0.016 }, { y: 0.66, h: 0.03, shift: -0.04, blur: 0.006 }],
+        bars: [{ y: 0.435, h: 0.01, alpha: 0.8 }, { y: 0.5, h: 0.004, alpha: 0.45 }, { y: 0.595, h: 0.008, alpha: 0.65 }],
+        chroma: 0.012, bright: 1.1, sat: 0.75, noise: 0.55, lines: 0.4 },
+      { smears: [{ y: 0.4, h: 0.18, shift: -0.12, blur: 0.018 }], bars: [{ y: 0.395, h: 0.012, alpha: 0.8 }, { y: 0.575, h: 0.008, alpha: 0.7 }],
+        tears: [{ y: 0.24, h: 0.04, shift: 0.02 }], chroma: 0.012, bright: 1.1, sat: 0.75, noise: 0.6, lines: 0.4 },
+      { smears: [{ y: 0.43, h: 0.17, shift: 0.11, blur: 0.016 }, { y: 0.3, h: 0.03, shift: 0.03, blur: 0.006 }],
+        bars: [{ y: 0.425, h: 0.01, alpha: 0.8 }, { y: 0.52, h: 0.004, alpha: 0.45 }, { y: 0.59, h: 0.01, alpha: 0.7 }],
+        chroma: 0.012, bright: 1.1, sat: 0.75, noise: 0.55, lines: 0.4 },
+      { smears: [{ y: 0.45, h: 0.12, shift: -0.08, blur: 0.012 }], bars: [{ y: 0.445, h: 0.008, alpha: 0.7 }, { y: 0.565, h: 0.006, alpha: 0.55 }],
+        tears: [{ y: 0.7, h: 0.04, shift: -0.02 }], chroma: 0.01, bright: 1.05, sat: 0.8, noise: 0.45, lines: 0.35 },
+      { smears: [{ y: 0.49, h: 0.08, shift: 0.05, blur: 0.008 }], bars: [{ y: 0.485, h: 0.006, alpha: 0.6 }],
+        chroma: 0.006, sat: 0.9, noise: 0.3, lines: 0.3 },
+      { smears: [{ y: 0.52, h: 0.04, shift: -0.02, blur: 0.005 }], chroma: 0.003, noise: 0.15, lines: 0.2 },
     ],
   },
 });
@@ -250,10 +278,12 @@ function framesExpr(frames) {
 }
 
 /**
- * The ffmpeg filter chain (comma-joined, no labels) that paints `glitches` on
- * a `width`x`height` yuv420p stream counting frames from 0, or null when there
- * are none. Each filter is enabled only on its frames, so every other frame
- * passes through untouched and the stream keeps its length.
+ * The ffmpeg filter chain (comma-joined, one stream in and one out) that paints
+ * `glitches` on a `width`x`height` yuv420p stream counting frames from 0, or null
+ * when there are none. Each filter is enabled only on its frames, so every other
+ * frame passes through untouched and the stream keeps its length. A smeared band
+ * splits off a strip and lays it back with internal `smr…` labels, so the chain
+ * appears once in a filter graph.
  */
 export function musicVideoTransitionFilter(glitches, { width, height }) {
   if (!Array.isArray(glitches) || glitches.length === 0) return null;
@@ -264,6 +294,7 @@ export function musicVideoTransitionFilter(glitches, { width, height }) {
     groups.get(key).frames.push(g.frame);
   }
   const chain = [];
+  let smearId = 0;
   const rows = (fraction) => Math.max(0, Math.min(height, even(fraction * height)));
   for (const { params: p, frames } of groups.values()) {
     const enable = `:enable='${framesExpr(frames)}'`;
@@ -273,6 +304,17 @@ export function musicVideoTransitionFilter(glitches, { width, height }) {
     for (const tear of p.tears || []) {
       const y = rows(tear.y);
       add(slip(tear.shift * width, y, Math.min(rows(tear.h), height - y), width));
+    }
+    // A smeared band: slipped like a tear, then cut out, blurred sideways and laid back on its frames.
+    for (const sm of p.smears || []) {
+      const y = rows(sm.y);
+      const h = Math.min(rows(sm.h), height - y);
+      if (h < 2) continue;
+      add(slip(sm.shift * width, y, h, width));
+      const sigma = Math.max(0.5, Math.round((sm.blur || 0) * width * 10) / 10);
+      const id = `smr${smearId++}`;
+      chain.push(`split[${id}a][${id}b];[${id}b]crop=w=${width}:h=${h}:x=0:y=${y},gblur=sigma=${num(sigma)}:sigmaV=0.5${enable}[${id}c];`
+        + `[${id}a][${id}c]overlay=x=0:y=${y}${enable}`);
     }
     for (const sw of p.swaps || []) {
       const box = blockBox(sw.x1, sw.y1, sw.w, sw.h, width, height);
@@ -293,7 +335,9 @@ export function musicVideoTransitionFilter(glitches, { width, height }) {
       const box = blockBox(b.x, b.y, b.w, b.h, width, height);
       if (box.w >= 2 && box.h >= 2) add(`drawbox=x=${box.x}:y=${box.y}:w=${box.w}:h=${box.h}:color=0x${b.color}@${num(b.alpha)}:t=fill`);
     }
-    if (p.bar) add(`drawbox=x=0:y=${rows(p.bar.y)}:w=iw:h=${Math.max(2, rows(p.bar.h))}:color=white@${num(p.bar.alpha)}:t=fill`);
+    for (const bar of [...(p.bar ? [p.bar] : []), ...(p.bars || [])]) {
+      add(`drawbox=x=0:y=${rows(bar.y)}:w=iw:h=${Math.max(2, rows(bar.h))}:color=white@${num(bar.alpha)}:t=fill`);
+    }
     if (p.lines) {
       const gap = Math.max(2, Math.round(height / 270));
       add(`drawgrid=w=iw:h=${gap}:t=${Math.max(1, Math.floor(gap / 2))}:c=black@${num(p.lines)}`);
