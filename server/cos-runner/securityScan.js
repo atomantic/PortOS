@@ -51,7 +51,7 @@ async function scopePaths(cwd, values, field) {
     if (rel === '..' || rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(rel)) {
       throw invalid('outside-workspace');
     }
-    return path;
+    return resolve(root, value);
   }));
 }
 
@@ -142,6 +142,8 @@ export function createSecurityScanManager({ agentsDir, getAgent, emitEvidence, t
       let forceTimer;
       let deadline;
       let drainTimer;
+      let owner;
+      let finished = false;
       let invalidInput = false;
       try {
         const [paths, knowledgeBase, cli] = await Promise.all([
@@ -156,12 +158,6 @@ export function createSecurityScanManager({ agentsDir, getAgent, emitEvidence, t
         await writeFileGuarded(promptFile, request.prompt, { mode: 0o600 });
         await ensureDir(outputDir);
         await chmod(outputDir, 0o700);
-        const args = [...cli.args, 'scan', agent.workspacePath, '--mode', 'standard', '--auth', 'chatgpt', '--headless', '--json',
-          '--model', entry.grant.model, '--effort', entry.grant.effort,
-          // codex-security documents omission as no cap; 0/null are not CLI limits.
-          ...(typeof entry.grant.maxCostUsd === 'number' ? ['--max-cost', String(entry.grant.maxCostUsd)] : []),
-          '--output-dir', outputDir, '--scan-prompt-file', promptFile,
-          ...paths.flatMap(path => ['--path', path]), ...knowledgeBase.flatMap(path => ['--knowledge-base', path])];
         const env = Object.fromEntries(Object.entries(environment).filter(([key]) => ENV_KEYS.has(key)));
         env.CODEX_SECURITY_STATE_DIR = join(directory, 'state');
         env.PORTOS_SECURITY_SCAN_OWNER = randomUUID();
@@ -182,10 +178,10 @@ export function createSecurityScanManager({ agentsDir, getAgent, emitEvidence, t
         let logError;
         const logPath = join(directory, 'scan.log');
         const child = spawnProcess(process.execPath, [CHILD, outputDir], {
-          cwd: agent.workspacePath, env, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+          cwd: directory, env, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
         });
         entry.child = child;
-        entry.owner = { pid: child.pid, startedAt: Date.now(), marker: env.PORTOS_SECURITY_SCAN_OWNER, outputDir };
+        owner = { pid: child.pid, startedAt: Date.now(), marker: env.PORTOS_SECURITY_SCAN_OWNER, outputDir };
         // Private ownership receipt allows restart cleanup to verify identity,
         // including descendants whose group leader exited. Never signal by a
         // persisted PID alone.
@@ -198,7 +194,7 @@ export function createSecurityScanManager({ agentsDir, getAgent, emitEvidence, t
           // Independent of the outer agent map and of child.killed. A wrapper
           // may exit before descendants; the process-group escalation survives.
           forceTimer = setTimeout(() => {
-            exitCleanup = cleanupGroup(entry.owner).catch(() => false);
+            exitCleanup = cleanupGroup(owner).catch(() => false);
             // Do not wait forever for inherited pipes or a missing close event.
             exitCleanup.then(() => resolveExit({ code: null, failed: true }));
           }, graceMs);
@@ -243,8 +239,9 @@ export function createSecurityScanManager({ agentsDir, getAgent, emitEvidence, t
           resolveExit = resolve;
           child.once('error', () => resolveExit({ code: null, failed: true }));
           child.once('exit', (code, signal) => {
+            if (finished) return;
             clearTimeout(deadline);
-            exitCleanup = cleanupGroup(entry.owner).catch(() => false);
+            exitCleanup = cleanupGroup(owner).catch(() => false);
             // Exit can precede the last stderr refusal. Drain both streams,
             // bounded for a descendant holding inherited pipes open.
             drainTimer = setTimeout(() => resolveExit({ code, signal }), graceMs);
@@ -256,15 +253,36 @@ export function createSecurityScanManager({ agentsDir, getAgent, emitEvidence, t
           }
           if (entry.stopReason) cancel();
         });
-        await atomicWrite(join(agentsDir, id, 'security-scan-process.json'), entry.owner);
+        await atomicWrite(join(agentsDir, id, 'security-scan-process.json'), owner);
         if (!entry.stopReason) {
-          await new Promise((resolve, reject) => child.send({ command: cli.command, args }, err => err ? reject(err) : resolve()));
+          // Preparation belongs to the same durable process-group reservation.
+          // Stop/IPC loss/recovery retire Git too, before any provider launch.
+          const prepared = new Promise((resolve, reject) => {
+            child.once('message', message => {
+              if (message.snapshotError) reject(Object.assign(new Error('Snapshot unavailable'), message.snapshotError));
+              else resolve(message.snapshot);
+            });
+            child.send({ prepare: { source: agent.workspacePath, directory, paths, knowledgeBase } }, err => { if (err) reject(err); });
+          });
+          const snapshot = await Promise.race([prepared, exitPromise.then(() => { throw failure('Snapshot preparation stopped'); })]);
+          entry.evidence.baseline = snapshot.baseline;
+          await persist(id, entry);
+          const args = [...cli.args, 'scan', snapshot.repository, '--mode', 'standard', '--auth', 'chatgpt', '--headless', '--json',
+            '--model', entry.grant.model, '--effort', entry.grant.effort,
+            // Omission means no cap; 0/null are not CLI limits.
+            ...(typeof entry.grant.maxCostUsd === 'number' ? ['--max-cost', String(entry.grant.maxCostUsd)] : []),
+            '--output-dir', outputDir, '--scan-prompt-file', promptFile,
+            ...snapshot.paths.flatMap(path => ['--path', path]), ...snapshot.knowledgeBase.flatMap(path => ['--knowledge-base', path])];
+          if (!entry.stopReason) {
+            entry.providerLaunched = true;
+            await new Promise((resolve, reject) => child.send({ command: cli.command, args, cwd: snapshot.repository }, err => err ? reject(err) : resolve()));
+          }
         }
         const exit = await exitPromise;
         clearTimeout(deadline);
         // Retire a still-owned group even on normal wrapper exit. Never leave
         // a scanner worker consuming quota after its CLI's completion.
-        entry.evidence.cleanup = await (exitCleanup || cleanupGroup(entry.owner).catch(() => false)) ? 'confirmed' : 'unconfirmed';
+        entry.evidence.cleanup = await (exitCleanup || cleanupGroup(owner).catch(() => false)) ? 'confirmed' : 'unconfirmed';
         clearTimeout(forceTimer);
         entry.evidence.exitCode = exit.code ?? (exit.signal === 'SIGTERM' ? 143 : exit.signal === 'SIGKILL' ? 137 : null);
         entry.evidence.status = entry.stopReason || (exit.code === 0 && !exit.failed && entry.evidence.cleanup === 'confirmed' ? 'completed' : 'failed');
@@ -282,11 +300,11 @@ export function createSecurityScanManager({ agentsDir, getAgent, emitEvidence, t
         if (logError) throw logError;
       } catch (err) {
         if (entry.child) {
-          const confirmed = await cleanupGroup(entry.owner).catch(() => false);
+          const confirmed = await cleanupGroup(owner).catch(() => false);
           entry.evidence.cleanup = confirmed ? 'confirmed' : 'unconfirmed';
         }
-        invalidInput = Boolean(err.preflight && !entry.attempted);
-        if (invalidInput) {
+        invalidInput = Boolean(err.preflight && (!entry.attempted || (!entry.providerLaunched && entry.evidence.cleanup === 'confirmed')));
+        if (err.preflight) {
           entry.evidence.preflight = {
             rejectedRequests: (entry.evidence.preflight?.rejectedRequests || 0) + 1,
             lastError: err.preflight,
@@ -296,6 +314,7 @@ export function createSecurityScanManager({ agentsDir, getAgent, emitEvidence, t
         // No provider text, paths or credentials in shared logs.
         console.warn(`⚠️ Security scanner ${id} could not complete (${err.preflight?.code || err.code || 'runtime-error'})`);
       } finally {
+        finished = true;
         clearTimeout(forceTimer);
         clearTimeout(deadline);
         clearTimeout(drainTimer);
@@ -315,7 +334,12 @@ export function createSecurityScanManager({ agentsDir, getAgent, emitEvidence, t
             entry.terminal = true;
             await persist(id, entry);
           }
-          if (invalidInput && !entry.stopReason) entry.promise = null;
+          if (invalidInput && !entry.stopReason) {
+            entry.child = null;
+            entry.attempted = false;
+            entry.cancelling = false;
+            entry.promise = null;
+          }
         }
         finally {
           // A disk failure must never prevent stopping a refused outer request.

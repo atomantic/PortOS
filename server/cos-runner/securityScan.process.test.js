@@ -4,13 +4,16 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
-import { spawn } from '../lib/childProcess.js';
+import { execFileSync, spawn } from '../lib/childProcess.js';
 import { createSecurityScanManager } from './securityScan.js';
 import { cleanupSecurityScanGroup } from './securityScanRecovery.js';
 
 let root;
 const owners = [];
-beforeEach(async () => { root = await mkdtemp(join(tmpdir(), 'scanner-process-test-')); await mkdir(join(root, 'repo')); });
+beforeEach(async () => { root = await mkdtemp(join(tmpdir(), 'scanner-process-test-')); await mkdir(join(root, 'repo'));
+  execFileSync('git', ['init', '--template='], { cwd: join(root, 'repo') });
+  execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-m', 'Synthetic baseline'], { cwd: join(root, 'repo') });
+});
 afterEach(async () => {
   for (const owner of owners.splice(0)) await cleanupSecurityScanGroup(owner);
   await rm(root, { recursive: true, force: true });

@@ -353,6 +353,17 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
     expect(removeWorktree).toHaveBeenCalledWith('agent-1', '/mock/workspace', 'cos/task-abc123', { merge: false });
   });
 
+  it('passes saved scanner observations independently of a truncated successful audit summary', async () => {
+    const securityScan = { source: 'runner', sequence: 4, status: 'failed', exitCode: 2 };
+    const securityScanControl = { status: 'interrupted', cleanup: 'unconfirmed' };
+    getAgent.mockResolvedValue(mockWorktreeAgent({ securityScan, securityScanControl }));
+    git.push.mockResolvedValue(undefined);
+    git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/1' });
+    const agentOutput = 'Summary '.repeat(512) + '\n…[truncated]';
+    await cleanupAgentWorktree('agent-1', true, { prCreation: 'always', agentOutput });
+    expect(git.generatePRDescription).toHaveBeenCalledWith(expect.any(String), 'main', 'cos/task-abc123', agentOutput, securityScan, securityScanControl);
+  });
+
   it('should call removeWorktree with merge: false after successful push and PR', async () => {
     git.push.mockResolvedValue(undefined);
     git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/2' });

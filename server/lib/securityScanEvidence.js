@@ -18,12 +18,18 @@ export const securityScanEvidenceSchema = z.object({
   exitCode: z.number().int().nullable(),
   artifacts: z.object({ findings: z.boolean().nullable(), coverage: z.boolean().nullable() }).strict(),
   cleanup: z.enum(['not-needed', 'confirmed', 'unconfirmed']).optional(),
+  baseline: z.object({
+    kind: z.literal('git-commit'),
+    commit: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
+    tree: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
+    uncommitted: z.literal('excluded'), submodules: z.literal('excluded'), symlinks: z.literal('link-text'),
+  }).strict().optional(),
   preflight: z.object({
     rejectedRequests: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
     lastError: z.object({
       field: z.enum(['paths', 'knowledgeBase']),
       index: z.number().int().min(0).max(99),
-      code: z.enum(['path-not-found', 'outside-workspace', 'invalid-path']),
+      code: z.enum(['path-not-found', 'outside-workspace', 'invalid-path', 'not-in-commit', 'submodule-excluded']),
     }).strict(),
   }).strict().optional(),
 }).strict().refine(value => value.status !== 'completed' || value.exitCode === 0);
@@ -67,6 +73,27 @@ export function parseRunnerSecurityScanEvidence(value) {
   if (!Number.isSafeInteger(sequence) || sequence < 1) return null;
   const parsed = securityScanEvidenceSchema.safeParse(data);
   return parsed.success ? { ...parsed.data, source, sequence } : null;
+}
+
+/** Fixed-size public disclosure, independent of the bounded assistant summary. */
+export function securityScanPRDisclosure(value, control) {
+  if (value == null && control == null) return '';
+  const scan = parseRunnerSecurityScanEvidence(value);
+  if (!scan) return '## Security scanner\n\nRunner evidence unavailable; audit delivery does not establish scanner completion.\n\n';
+  const known = value => value ?? 'unknown';
+  const artifact = value => value == null ? 'unknown' : value ? 'saved' : 'absent';
+  const limit = value => value === 'unlimited' ? 'none' : known(value);
+  return [
+    '## Security scanner (runner observed)', '',
+    `Status: **${scan.status}**. Audit delivery and assessment success are separate from scanner completion.`,
+    ...(control?.status === 'interrupted' ? ['Runner connection lost: interrupted; process cleanup unconfirmed. The status above is the last runner observation.'] : []),
+    `Model: ${known(scan.model)}; effort: ${known(scan.effort)}; auth: ${scan.auth}.`,
+    `API-equivalent estimated USD: ${known(scan.estimatedCostUsd)}; estimate cap: ${limit(scan.maxCostUsd)}; time limit (seconds): ${limit(scan.timeLimitSeconds)}. These estimates do not establish billed charges or subscription usage.`,
+    `Exit: ${known(scan.exitCode)}; process cleanup: ${known(scan.cleanup)}; findings artifact: ${artifact(scan.artifacts.findings)}; coverage artifact: ${artifact(scan.artifacts.coverage)}. Artifact presence does not establish a clean scan.`,
+    scan.baseline ? `Baseline commit: \`${scan.baseline.commit}\`; tree: \`${scan.baseline.tree}\`. Uncommitted files and submodules excluded; symlinks represented as link text. This does not certify subsequent repairs.` : 'Scanned revision: unknown.',
+    ...(scan.preflight ? [`Input rejections: ${scan.preflight.rejectedRequests}; last: ${scan.preflight.lastError.field} item ${scan.preflight.lastError.index + 1}, ${scan.preflight.lastError.code}.`] : []),
+    '', '',
+  ].join('\n');
 }
 
 /** Invalid/absent evidence stays unreported; delivery success cannot fill it in. */
