@@ -71,7 +71,7 @@ export default function VideoStartTrimControl({ videoRef, fps, onTrim, sourceKey
         <ChevronRight className="w-4 h-4" />
       </button>
       <button type="button" disabled={busy || frame < 1} onClick={trim}
-        className="min-h-[44px] flex items-center gap-1.5 px-2 rounded bg-port-border text-white disabled:opacity-50">
+        className="min-h-[44px] flex items-center gap-1.5 px-2 rounded bg-port-border text-sm text-port-text disabled:opacity-50">
         <Scissors className="w-3.5 h-3.5" /> {saving ? 'Trimming…' : 'Start clip here'}
       </button>
       {error && <p role="alert" className="w-full text-xs text-port-error">{error}</p>}
