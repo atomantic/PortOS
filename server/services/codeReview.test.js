@@ -67,6 +67,7 @@ import {
 } from './codeReview.js'
 import { MODEL_SELECTABLE_REVIEWERS, EFFORT_SELECTABLE_REVIEWERS, codeReviewSettingsSchema } from '../lib/cosValidation.js'
 import { taskObjective } from '../lib/goalFidelity.js'
+import { extractJson } from '../lib/jsonExtract.js'
 import { updateSettingsWith } from './settings.js'
 
 // Preserve the real transport for the explicitly requested local-model evaluation.
@@ -96,6 +97,31 @@ const backfillObservabilityCases = [
   ['failed records still counted despite positive regression assertions', backfillRequirement, backfillObservabilityCase.diff.replace('+      if (recorded) backfilled++;', '+      backfilled++;'), 'fix-first'],
   ['failure summary still reports info despite positive regression assertions', backfillRequirement, backfillObservabilityCase.diff.replace("+  emitLog(failed ? 'warn' : 'info',", "+  emitLog('info',"), 'fix-first'],
 ]
+// Exact public PR #11400 diff; mutations leave the positive test untouched.
+const backfillCase = { ...backfillObservabilityCase, objective: backfillObservabilityCase.requirements }
+const backfillTestsOnly = backfillCase.diff.split(/(?=^diff --git )/m)
+  .filter(part => part.startsWith('diff --git a/server/services/taskLearning/lifecycle.test.js')).join('')
+const backfillCases = [
+  ['original public repair', backfillCase.diff, 'ship', null],
+  ['failed writes counted as successes', backfillCase.diff.replace('+      if (recorded) backfilled++;', '+      backfilled++;'), 'fix-first', /count|account|success|increment/i],
+  ['failure summary remains info', backfillCase.diff.replace("+  emitLog(failed ? 'warn' : 'info',", "+  emitLog('info',"), 'fix-first', /warn|severity|level|summary/i],
+  ['missing per-record logging', backfillCase.diff.replace(/^\+          console.error.*\n/m, ''), 'fix-first', /log|error|context|agent|task/i],
+  ['tests without backfill production', backfillTestsOnly, 'fix-first', null],
+  ['unrelated production', observabilityCases[2][2], 'rethink', null],
+]
+
+const guardedBackfillSummaryDiff = backfillCase.diff.replace(/^\+  emitLog\(failed.*$/m, line => {
+  const call = line.slice(1).trim()
+  return [
+    '+  if (failed) {',
+    `+    ${call.replace("failed ? 'warn' : 'info'", "'warn'")}`,
+    '+  } else {',
+    `+    ${call.replace("failed ? 'warn' : 'info'", "'info'")}`,
+    '+  }',
+    "+  emitLog('info', 'Finished scanning history', {}, 'TaskLearning');",
+  ].join('\n')
+}).replace('@@ -105,11 +106,19 @@', '@@ -105,11 +106,24 @@')
+
 const processManifestCase = JSON.parse(readFileSync(new URL('../test/fixtures/goal-fidelity-process-manifest.json', import.meta.url), 'utf8'))
 const manifestDiffParts = processManifestCase.diff.split(/(?=^diff --git )/m).filter(Boolean)
 const manifestCases = [
@@ -1419,12 +1445,15 @@ describe('codeReview helpers', () => {
       global.fetch = vi.fn(async (_url, init) => {
         const { messages, tools } = JSON.parse(init.body)
         expect(tools).toBeUndefined()
+        if (messages[0].content.startsWith('Check each explicitly requested production outcome independently')) {
+          expect(messages[1].content).toContain('AFTER-CHANGE PRODUCTION HUNKS')
+          expect(messages[1].content).toContain('[]')
+          return completion(shipVerdict)
+        }
         if (messages[0].content.startsWith('Check potential contradictions')) {
           expect(messages[0].content).toContain('a successful recovery message on stdout is compatible')
-          expect(messages[0].content).toContain('an actual failure still logged to stdout')
-          expect(messages[0].content).toContain('an explicit request to remove all console.log uses remains a contradiction')
           expect(messages[1].content).toContain('SURVIVING PRODUCTION USES')
-          return completion({ verdict: 'ship', missing: [], unrequested: [], evidence: 'Success diagnostics are compatible with the objective.' })
+          return completion(shipVerdict)
         }
         expect(messages[0].content).toContain('Search categories are candidate-discovery guidance')
         expect(messages[0].content).toContain('not proof those execution steps occurred')
@@ -1441,6 +1470,202 @@ describe('codeReview helpers', () => {
       expect(await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective, diff }))
         .toMatchObject({ ok: true, verdict, ...(verdict === 'ship' ? { missing: [], unrequested: [] } : {}) })
     })
+
+    it('keeps the public fixture provenance and positive tests unchanged in both production mutants', () => {
+      expect(backfillCase.provenance).toMatchObject({
+        pullRequest: 'https://github.com/atomantic/PortOS/pull/11400',
+        base: '53d2074eb3', head: '84050218d09cdabc3769489e4c57e61bb243bf86',
+      })
+      for (const [, diff] of backfillCases.slice(1, 3)) {
+        expect(diff.split(/(?=^diff --git )/m).find(part => part.includes('+++ b/server/services/taskLearning/lifecycle.test.js')))
+          .toBe(backfillTestsOnly)
+        expect(diff).not.toBe(backfillCase.diff)
+      }
+    })
+
+    it.each(backfillCases)('sends source-derived backfill evidence despite positive tests: %s', async (name, diff) => {
+      let productionReviewed = false
+      global.fetch = vi.fn(async (_url, init) => {
+        const { messages, tools } = JSON.parse(init.body)
+        expect(tools).toBeUndefined()
+        if (messages[0].content.includes('Check each explicitly requested production outcome independently')) {
+          productionReviewed = true
+          const rows = JSON.parse(messages[1].content.match(/AFTER-CHANGE PRODUCTION HUNKS[^\n]*\n(`+)json\n([\s\S]*)\n\1$/)[2])
+          if (name !== 'unrelated production') expect(rows.every(row => row.file === 'server/services/taskLearning/lifecycle.js')).toBe(true)
+          const scenarios = rows.flatMap(row => row.handledRejectionScenarios)
+          if (name === 'tests without backfill production') expect(rows).toEqual([])
+          else if (name !== 'unrelated production') {
+            expect(rows.map(row => row.hunk)).toEqual([
+              '@@ -92,6 +92,7 @@ export async function backfillFromHistory() {',
+              '@@ -105,11 +106,19 @@ export async function backfillFromHistory() {',
+            ])
+            expect(scenarios).toContainEqual(expect.objectContaining({
+              binding: 'recorded', handledRejectionValue: false,
+              write: 'backfilled++', writeReached: name === 'failed writes counted as successes',
+            }))
+            const level = rows.flatMap(row => row.statements.flatMap(statement => statement.facts))
+              .find(fact => fact.kind === 'call' && fact.callee === 'emitLog')
+            expect(level.arguments[0]).toBe(name === 'failure summary remains info' ? "'info'" : "failed ? 'warn' : 'info'")
+          }
+          expect(messages[1].content).not.toContain('expect(')
+          expect(messages[0].content).toContain('An unconditional increment counts failures')
+          expect(messages[0].content).toContain("A literal 'info' remains info for failures")
+          expect(messages[0].content).toContain('enclosing context outside each statement is unavailable')
+        }
+        return completion(shipVerdict)
+      })
+      const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective: backfillCase.objective, diff })
+      const contradicted = ['failed writes counted as successes', 'failure summary remains info'].includes(name)
+      expect(result).toMatchObject({ ok: true, verdict: contradicted ? 'fix-first' : 'ship', evidence: shipVerdict.evidence })
+      if (contradicted) expect(result.missing.join(' ')).toMatch(/backfillFromHistory.*(?:count|summary)/)
+      expect(productionReviewed).toBe(true) // Even when primary ship ignores a mutant.
+    })
+
+    it.each([
+      [backfillCases[1], 'HANDLED-REJECTION ACCOUNTING', 'failed writes counted as successes'],
+      [backfillCases[2], 'SUMMARY LEVEL ARGUMENTS', 'failure summary does not emit a warning'],
+    ])('adds the independently reviewed outcome for %s', async ([, diff], label, missing) => {
+      global.fetch = vi.fn(async (_url, init) => {
+        const { messages } = JSON.parse(init.body)
+        if (messages[1].content.includes(label)) {
+          expect(messages[1].content).toContain('REQUESTED OUTCOME')
+          expect(messages[1].content).toContain('server/services/taskLearning/lifecycle.js')
+          expect(messages[1].content).toContain('@@ -105,11 +106,19 @@')
+          expect(messages[1].content).not.toContain('expect(')
+          expect(messages[1].content).not.toContain('silently swallowing')
+          if (label === 'HANDLED-REJECTION ACCOUNTING') expect(messages[1].content).toContain('REACHED')
+          else expect(messages[1].content).toContain("Level argument: 'info'")
+          return completion({ verdict: 'fix-first', missing: [missing], unrequested: [], evidence: 'Production contradiction.' })
+        }
+        return completion(shipVerdict)
+      })
+      const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective: backfillCase.objective, diff })
+      expect(result).toMatchObject({ verdict: 'fix-first', evidence: shipVerdict.evidence })
+      expect(result.missing).toContain(missing)
+      expect(global.fetch).toHaveBeenCalledTimes(4)
+    })
+
+    it('preserves summary guards and distinguishes other informational logging in focused severity evidence', async () => {
+      let severityReviewed = false
+      global.fetch = vi.fn(async (_url, init) => {
+        const { messages } = JSON.parse(init.body)
+        if (messages[1].content.includes('SUMMARY LEVEL ARGUMENTS')) {
+          severityReviewed = true
+          expect(messages[1].content).toContain('Complete statement:   if (failed) {')
+          expect(messages[1].content).toContain('Parsed conditions: ["failed"]')
+          expect(messages[1].content).toContain('Parsed conditions: ["!(failed)"]')
+          expect(messages[1].content).toContain('Finished scanning history')
+          expect(messages[1].content).toContain('Logging call:')
+          expect(messages[1].content).not.toContain('Summary call:')
+          expect(messages[0].content).toContain('other informational progress calls are not failure summaries')
+        }
+        return completion(shipVerdict)
+      })
+      expect(await runLocalGoalFidelityReview({
+        backend: 'ollama', model: 'example-model',
+        objective: backfillCase.objective, diff: guardedBackfillSummaryDiff,
+      })).toMatchObject({ verdict: 'ship', missing: [] })
+      expect(severityReviewed).toBe(true)
+    })
+
+    it('does not impose accounting exclusion or a warning summary on a backfill logging-only objective', async () => {
+      global.fetch = vi.fn().mockResolvedValue(completion(shipVerdict))
+      expect(await runLocalGoalFidelityReview({
+        backend: 'ollama', model: 'example-model',
+        objective: 'Audit backfill observability and implement ONE finding: log failures with agent/task IDs. Keep success messages and existing warnings.',
+        diff: backfillCase.diff,
+      })).toMatchObject({ verdict: 'ship' })
+      expect(global.fetch).toHaveBeenCalledTimes(2)
+    })
+
+    it.each(['ship', 'fix-first', 'rethink'])('preserves a primary %s while an audit production pass can only add findings', async verdict => {
+      const primary = { verdict, missing: verdict === 'ship' ? [] : ['primary finding'], unrequested: ['primary scope'], evidence: 'Assertions are coverage, not a test result.' }
+      global.fetch = vi.fn().mockResolvedValueOnce(completion(primary))
+        .mockResolvedValue(completion({ verdict: 'fix-first', missing: ['failed writes counted as successes'], unrequested: ['ignored secondary scope'], evidence: 'secondary note' }))
+      const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', ...backfillCase })
+      expect(result).toMatchObject({ verdict: verdict === 'ship' ? 'fix-first' : verdict, unrequested: primary.unrequested, evidence: primary.evidence })
+      if (verdict === 'rethink') expect(global.fetch).toHaveBeenCalledTimes(1)
+      else expect(result.missing).toEqual(['failed writes counted as successes', ...primary.missing])
+    })
+
+    it('does not clear a primary audit finding with a production ship', async () => {
+      const primary = { verdict: 'fix-first', missing: ['another requested outcome'], unrequested: [], evidence: 'No execution evidence.' }
+      global.fetch = vi.fn().mockResolvedValueOnce(completion(primary)).mockResolvedValue(completion(shipVerdict))
+      expect(await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', ...backfillCase }))
+        .toMatchObject(primary)
+    })
+
+    it.each(['transport', 'malformed'])('declines when the independent audit production verdict is unavailable: %s', async failure => {
+      global.fetch = vi.fn().mockResolvedValueOnce(completion(shipVerdict))
+      if (failure === 'transport') global.fetch.mockRejectedValueOnce(new Error('connection lost'))
+      else global.fetch.mockResolvedValueOnce(completion({ explanation: 'no verdict' }))
+      const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', ...backfillCase })
+      expect(result.ok).toBe(false)
+      expect(result).not.toHaveProperty('verdict')
+    })
+
+    it('declines oversized audit syntax evidence before dispatching a partial production check', async () => {
+      const diff = [
+        'diff --git a/source.js b/source.js', '+++ b/source.js',
+        '@@ -1 +1 @@', `+const label = '${'x'.repeat(20_000)}';`,
+      ].join('\n')
+      global.fetch = vi.fn().mockResolvedValue(completion(shipVerdict))
+      expect(await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective: backfillCase.objective, diff }))
+        .toMatchObject({ ok: false, error: 'After-change production evidence exceeds the goal-fidelity context limit.' })
+      expect(global.fetch).toHaveBeenCalledTimes(1)
+    })
+
+    it('uses the original total deadline for audit production verification', async () => {
+      let now = 0
+      const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+      global.fetch = vi.fn(async () => { now = 101; return completion(shipVerdict) })
+      const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', ...backfillCase, timeoutMs: 100 })
+      clock.mockRestore()
+      expect(result).toMatchObject({ ok: false })
+      expect(result.error).toContain('timed out')
+      expect(global.fetch).toHaveBeenCalledTimes(1)
+    })
+
+    // Opt-in actual judgements, never an ordinary CI provider call.
+    it.runIf(Boolean(process.env.GOAL_FIDELITY_EVAL_MODEL)).each([
+      ...backfillCases,
+      ['guarded warning summary with unrelated info', guardedBackfillSummaryDiff, 'ship', null],
+      ['original broad audit scope', backfillObservabilityCase.diff, 'ship', null, backfillObservabilityCase.objective],
+      ['explicit catch repair scope', backfillObservabilityCase.diff, 'ship', null, backfillRequirement],
+    ])('judges backfill accounting and warning outcomes with a real local model: %s', async (name, diff, expected, missingOutcome, objective = backfillCase.objective) => {
+      const focusedJudgements = []
+      global.fetch = async (url, init) => {
+        const response = await nativeFetch(url, init)
+        const messages = JSON.parse(init.body).messages
+        if (/^You check only/.test(messages[0].content)) {
+          const content = (await response.clone().json()).choices?.[0]?.message?.content
+          focusedJudgements.push({ focus: messages[0].content, verdict: extractJson(content || '').value })
+        }
+        return response
+      }
+      const result = await runLocalGoalFidelityReview({
+        backend: 'ollama', model: process.env.GOAL_FIDELITY_EVAL_MODEL,
+        objective, diff, timeoutMs: 180_000,
+      })
+      console.log(`🔍 Backfill evaluation ${name}: ${JSON.stringify(result)}`)
+      expect(result.ok, result.error).toBe(true)
+      if (expected === 'ship') expect(result).toMatchObject({ verdict: 'ship', missing: [], unrequested: [] })
+      else {
+        expect(['fix-first', 'rethink'], JSON.stringify(result)).toContain(result.verdict)
+        expect(result.missing.length + (expected === 'rethink' ? result.unrequested.length : 0), JSON.stringify(result)).toBeGreaterThan(0)
+        if (missingOutcome) expect(result.missing.join(' ')).toMatch(missingOutcome)
+      }
+      // The incoming fail-only floor must not hide a model false approval.
+      if (missingOutcome && name !== 'missing per-record logging') {
+        const focus = name.startsWith('failed writes') ? 'success-accounting' : 'warning-summary'
+        const judged = focusedJudgements.find(row => row.focus.includes(focus))?.verdict
+        expect(['fix-first', 'rethink'], JSON.stringify(focusedJudgements)).toContain(judged?.verdict)
+        expect(judged.missing.join(' ')).toMatch(missingOutcome)
+      }
+      // A diff carries coverage, never a passing test execution result.
+      if (expected === 'ship') expect(result.evidence).toMatch(/(?:execution|executed|test.run|test result|tests? (?:ran|run|passed))/i)
+      expect(result.evidence).not.toMatch(/tests? (?:have |were |was |are )?(?:run|ran|passed|passing)|verified by (?:the )?(?:passing )?tests/i)
+    }, 190_000)
 
     it.each([
       'Audit observability and implement all needed fixes.',
@@ -1501,27 +1726,8 @@ describe('codeReview helpers', () => {
       expect(result).toMatchObject({ ok: true, verdict: expected })
       if (expected === 'ship') expect(result.missing).toEqual([])
       else expect(result.missing.join(' ')).toMatch(/backfillFromHistory.*(?:count|summary)/)
-      expect(global.fetch).toHaveBeenCalledTimes(2)
+      expect(global.fetch).toHaveBeenCalledTimes(4)
     })
-
-    // Actual judgement pin: explicitly opt-in so ordinary CI makes zero provider calls.
-    it.runIf(Boolean(process.env.GOAL_FIDELITY_EVAL_MODEL)).each(backfillObservabilityCases)('judges the backfill catch replacement with a real local model: %s', async (_name, objective, diff, expected) => {
-      global.fetch = nativeFetch
-      const result = await runLocalGoalFidelityReview({
-        backend: 'ollama', model: process.env.GOAL_FIDELITY_EVAL_MODEL,
-        objective: taskObjective({ description: objective }), diff, timeoutMs: 180_000,
-      })
-      console.log(`🔍 Backfill evaluation ${_name}: ${JSON.stringify(result)}`)
-      expect(result.ok, result.error).toBe(true)
-      if (expected === 'ship') expect(result, JSON.stringify(result)).toMatchObject({ verdict: 'ship', missing: [], unrequested: [] })
-      else {
-        expect(['fix-first', 'rethink'], JSON.stringify(result)).toContain(result.verdict)
-        expect(expected === 'rethink' ? result.missing.length + result.unrequested.length : result.missing.length, JSON.stringify(result)).toBeGreaterThan(0)
-      }
-      if (expected === 'rethink') expect(result.verdict).toBe('rethink')
-      if (_name.startsWith('failed records still counted')) expect(result.missing.join(' ')).toMatch(/count|success/i)
-      if (_name.startsWith('failure summary still reports info')) expect(result.missing.join(' ')).toMatch(/warn|summary|level/i)
-    }, 190_000)
 
     // Actual judgement pin: explicitly opt-in so ordinary CI makes zero provider calls.
     it.runIf(Boolean(process.env.GOAL_FIDELITY_EVAL_MODEL)).each(observabilityCases)('judges the one-finding observability audit with a real local model: %s', async (_name, objective, diff, expected) => {
