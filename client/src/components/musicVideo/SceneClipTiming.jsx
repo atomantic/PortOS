@@ -21,7 +21,7 @@ function Stepper({ id, label, value, range, disabled, onSet, readout, less, more
         </button>
         <input id={id} type="number" inputMode="numeric" min={range.min} max={range.max} step={1} value={draft ?? value} disabled={disabled}
           onChange={(e) => setDraft(e.target.value)}
-          onBlur={(e) => commit(Number(e.target.value))}
+          onBlur={(e) => (e.target.value.trim() === '' ? setDraft(null) : commit(Number(e.target.value)))}
           onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
           className="w-16 bg-port-bg border border-port-border rounded px-1 py-1 text-base sm:text-xs tabular-nums min-h-[44px] sm:min-h-0 disabled:opacity-50" />
         <button type="button" onClick={() => commit(value + 1)} disabled={disabled || value >= range.max} className={STEP} aria-label={more}>

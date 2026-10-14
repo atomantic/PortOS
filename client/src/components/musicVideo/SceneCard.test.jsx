@@ -584,6 +584,13 @@ describe('clip speed and offset by hand', () => {
     fireEvent.blur(offset);
     expect(onSave).toHaveBeenLastCalledWith('s1', { offsetFrames: null });
     expect(screen.getByText('on the cut')).toBeTruthy();
+    // An emptied field is no change, not zero: the speed stays at +2.
+    const speed = screen.getByLabelText('Speed');
+    const saves = onSave.mock.calls.length;
+    fireEvent.change(speed, { target: { value: '' } });
+    fireEvent.blur(speed);
+    expect(onSave).toHaveBeenCalledTimes(saves);
+    expect(speed.value).toBe('2');
   });
 
   it('is off while the video is locked', async () => {

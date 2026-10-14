@@ -451,7 +451,7 @@ export default function SceneCard({
           <div role="alert" className="flex flex-wrap items-center gap-2 rounded border border-port-warning/40 bg-port-warning/10 px-2 py-1.5 text-xs text-port-warning">
             <AlertTriangle size={13} className="shrink-0" />
             <span className="min-w-0 flex-1 basis-48">
-              Shot runs {spanSec.toFixed(1)}s but its clip plays {playedSec.toFixed(1)}s — the render won&apos;t repeat it.
+              Shot runs {spanSec.toFixed(1)}s but its clip is {playedSec.toFixed(1)}s — the render won&apos;t repeat it.
               Trim the shot, continue or regenerate a longer clip, or loop it on purpose.
             </span>
             <button type="button" onClick={() => applyPatch({ endSec: Math.round((scene.startSec + playedSec) * 1000) / 1000 })}
