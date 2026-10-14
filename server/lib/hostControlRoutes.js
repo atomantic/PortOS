@@ -204,6 +204,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Gmail enable helper navigates it to Google Cloud Console (#11433).
   'POST /api/messages/launch/:accountId',
   'POST /api/messages/gmail/enable-api',
+  // Archive and delete act on mail items in the external account (#11434).
+  'POST /api/messages/:accountId/:messageId/action',
 
   // Capture activation and existing live feeds require operator authority (#11272).
   // HEAD inherits the GET policy because Express invokes the same handler.
