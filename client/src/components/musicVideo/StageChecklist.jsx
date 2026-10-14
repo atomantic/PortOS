@@ -12,7 +12,8 @@ import StaleApprovalActions from './StaleApprovalActions.jsx';
  * (folded behind "See N changes" when there are several).
  * An `optional` item is listed but never counted toward the step being done.
  * An item's `notes` (open change requests) each get a Mark resolved button,
- * which calls `onAction({ run: 'resolve-feedback', feedbackId })`.
+ * which calls `onAction({ run: 'resolve-feedback', feedbackId })`. An item's `shots`
+ * each get a button that calls `onAction({ editShot: sceneId })`.
  */
 export default function StageChecklist({ items, onAction, onRevert, headerAnchor = null, busy = false }) {
   if (!items?.length) return null;
@@ -51,6 +52,22 @@ export default function StageChecklist({ items, onAction, onRevert, headerAnchor
               {!item.done && item.details?.length > 0 && (
                 <ul className="list-disc space-y-0.5 pl-4 text-xs text-port-text-muted">
                   {item.details.map((text) => <li key={text} className="break-words">{text}</li>)}
+                </ul>
+              )}
+              {/* Shots the row is about: each opens its card, beside what the row says about it. */}
+              {!item.done && item.shots?.length > 0 && (
+                <ul aria-label={`${item.label} shots`} className="mt-1 space-y-1">
+                  {item.shots.map((shot) => (
+                    <li key={shot.sceneId} className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+                      {onAction ? (
+                        <button type="button" onClick={() => onAction({ label: shot.label, editShot: shot.sceneId })}
+                          className="min-h-[44px] shrink-0 rounded border border-port-border px-2 py-1 text-port-accent sm:min-h-0">
+                          {shot.label}
+                        </button>
+                      ) : <strong className="shrink-0">{shot.label}</strong>}
+                      <span className="min-w-0 flex-1 basis-40 break-words text-port-text-muted">{shot.text}</span>
+                    </li>
+                  ))}
                 </ul>
               )}
               {/* Open change requests: each note names its target and settles with its own button. */}

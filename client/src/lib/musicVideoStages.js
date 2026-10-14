@@ -773,14 +773,40 @@ const STORYBOARD_PROBLEM_GROUPS = [
 ];
 
 /** One open checklist item per group of storyboard readiness problems, per-shot problems counted rather than listed. */
-function storyboardProblemItems(readiness) {
-  const problems = summarizeStoryboardProblems(readiness?.storyboard?.problems?.filter(notFeedback));
-  if (readiness?.storyboard?.approved || !problems.length) return [];
-  return STORYBOARD_PROBLEM_GROUPS.flatMap((group, index) => {
+function storyboardProblemItems(readiness, scenes = []) {
+  // Shots whose lyric anchors differ from the singing get a row of their own that names each shot.
+  const anchors = lyricAnchorItem(readiness, scenes);
+  const problems = summarizeStoryboardProblems(readiness?.storyboard?.problems?.filter(notFeedback)
+    .filter((text) => !anchors || !ANCHOR_PROBLEM.test(text)));
+  if (readiness?.storyboard?.approved || (!problems.length && !anchors)) return [];
+  return [...STORYBOARD_PROBLEM_GROUPS.flatMap((group, index) => {
     const earlier = STORYBOARD_PROBLEM_GROUPS.slice(0, index);
     const mine = problems.filter((text) => group.test.test(text) && !earlier.some((g) => g.test.test(text)));
     return mine.length ? [{ id: `board-${group.id}`, label: group.label, done: false, details: mine, action: group.action }] : [];
-  });
+  }), ...(anchors ? [anchors] : [])];
+}
+
+const ANCHOR_PROBLEM = /^Review lyric anchors for /;
+const quoted = (lines) => (lines.length ? lines.map((line) => `“${line}”`).join(' / ') : 'nothing');
+
+/**
+ * The Lyric anchors row: each flagged shot by number (a button to its card),
+ * what is sung over it and what it is anchored to, and one button that anchors
+ * them all to the singing.
+ */
+function lyricAnchorItem(readiness, scenes) {
+  const flagged = readiness?.storyboard?.lyricAnchors;
+  if (!flagged?.length || readiness?.storyboard?.approved) return null;
+  const number = (sceneId) => scenes.findIndex((scene) => scene.sceneId === sceneId) + 1;
+  return {
+    id: 'board-anchors', label: 'Lyric anchors', done: false,
+    detail: 'These shots are anchored to lyrics other than the ones sung over them.',
+    shots: flagged.map(({ sceneId, sung, anchored }) => ({
+      sceneId, label: number(sceneId) > 0 ? `Shot ${number(sceneId)}` : 'Shot',
+      text: `Sung: ${quoted(sung)} · anchored: ${quoted(anchored)}`,
+    })),
+    action: { label: 'Anchor to the sung lyrics', run: 'sync-lyric-anchors' },
+  };
 }
 
 // The art-direction row's detail and action for each Cast & Sets phase, while fields are still unwritten.
@@ -893,7 +919,7 @@ export function stageChecklist(stageId, project, readiness = project?.production
     case 'board': {
       const planned = scenes.length > 0 || (draft.storyboard || []).length > 0;
       const feedback = feedbackItem(project, 'storyboard', readiness);
-      const problems = [...storyboardProblemItems(readiness), ...(feedback ? [feedback] : [])];
+      const problems = [...storyboardProblemItems(readiness, scenes), ...(feedback ? [feedback] : [])];
       return [
         { id: 'shots', label: 'Shots planned', done: planned, detail: planned ? null : 'Plan the shots from the header, or add scenes by hand.',
           action: planned ? null : { label: 'Open the treatment', anchor: 'mv-board-treatment' } },

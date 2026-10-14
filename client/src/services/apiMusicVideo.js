@@ -197,6 +197,8 @@ export const continueMusicVideoSceneFromPrevious = (id, sceneId, body = {}, opti
   request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/continue-from-previous`, {
     method: 'POST', body: JSON.stringify(body), ...options,
   });
+export const rejectUnusedMusicVideoSceneTakes = (id, sceneId, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/takes/reject-unused`, { method: 'POST', ...options });
 export const reviewMusicVideoSceneTake = (id, sceneId, takeId, review, options = {}) =>
   request(`${takesPath(id, sceneId)}/${encodeURIComponent(takeId)}`, {
     method: 'PATCH', body: JSON.stringify(review), ...options,
@@ -587,6 +589,7 @@ export const addMusicVideoProductionFeedback = (id, body, options = {}) => reque
 // Write one changed input of a stale approval back to its approved value (#10241). `stage` is art | storyboard | proof | castAndSets.
 export const revertMusicVideoProductionInput = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/revert`, { method: 'POST', body: JSON.stringify(body), ...options });
 export const reviseMusicVideoProductionFromFeedback = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/revise`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const syncMusicVideoLyricAnchors = (id, body = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/lyric-anchors`, { method: 'POST', body: JSON.stringify(body), ...options });
 export const resolveMusicVideoProductionFeedback = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/feedback/resolve`, { method: 'POST', body: JSON.stringify(body), ...options });
 // Drafting is free; generation and candidate selection are separate explicit actions.
 export const saveMusicVideoSongRevision = (id, fields, options = {}) => request(`/music-video/${encodeURIComponent(id)}/song-revision`, { method: 'POST', body: JSON.stringify(fields), ...options });

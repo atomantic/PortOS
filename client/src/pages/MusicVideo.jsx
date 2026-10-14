@@ -1189,6 +1189,8 @@ export default function MusicVideo() {
     if (action.run === 'resolve-feedback') { productionReview.resolveFeedback(action.feedbackId, ''); return; }
     if (action.run === 'revise-feedback') { reviseFromFeedback(action.stage); return; }
     if (action.run === 'keep-approval') { keepApproval(action.stage); return; }
+    if (action.run === 'sync-lyric-anchors') { productionReview.syncLyricAnchors(); return; }
+    if (action.editShot) { editShot(action.editShot); return; }
     goToStage(action.stage || activeStage, action.anchor, action.params);
   };
   const runNextAction = () => {

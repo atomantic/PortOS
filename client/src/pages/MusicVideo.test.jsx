@@ -38,7 +38,7 @@ const { sseState, ytSseStates, getYtSseState } = vi.hoisted(() => {
 
 // This page suite exercises existing controls with production approvals already granted.
 // ProductionReviewPanel and route integration suites exercise the real approval refusals.
-const feedbackCalls = vi.hoisted(() => ({ resolveFeedback: vi.fn(async () => null), revise: vi.fn(async () => ({ revision: { sceneIds: ['s-a'] } })) }));
+const feedbackCalls = vi.hoisted(() => ({ resolveFeedback: vi.fn(async () => null), syncLyricAnchors: vi.fn(async () => null), revise: vi.fn(async () => ({ revision: { sceneIds: ['s-a'] } })) }));
 vi.mock('../hooks/useMusicVideoProductionReview.js', () => ({ default: ({ project }) => ({
   ...feedbackCalls,
   readiness: project?.productionReadiness || { readyForProduction: true, basis: {}, art: { approved: true, problems: [] }, storyboard: { approved: true, problems: [] }, proof: { approved: true, problems: [] } },
@@ -2577,7 +2577,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     fireEvent.click(within(strip).getByRole('button', { name: /Use/ }));
     await waitFor(() => expect(selectMusicVideoSceneTake).toHaveBeenCalledWith('mv-takes', 's1', 't-b', { silent: true }));
     // The server's answer moves the selection; the other take now offers "Use".
-    await waitFor(() => expect(within(strip).getAllByText(/Selected/)).toHaveLength(1));
+    await waitFor(() => expect(within(strip).getAllByText(/In use ·/)).toHaveLength(1));
     const items = within(strip).getAllByRole('listitem');
     expect(within(items[1]).queryByRole('button', { name: /Use/ })).toBeNull();
 
@@ -3393,6 +3393,24 @@ describe('stage checklist and project options', () => {
     // Lock all stills, on Shots, waits on the same request.
     await openStage('produce', false);
     expect(screen.getByRole('region', { name: 'Approve: Lyric-timed storyboard' })).toHaveTextContent('Resolve the change request on Chorus first.');
+  });
+
+  // Uniquely catches a lyric anchor problem the director cannot find or settle from the checklist.
+  it('names each shot whose lyric anchors differ from the singing, opens it, and anchors them all in one tap', async () => {
+    const project = { ...PROJECT_ANALYZED, scenes: [{ sceneId: 's-a', label: 'Drummer', startSec: 0, endSec: 4 }, { sceneId: 's-b', label: 'Singer', startSec: 4, endSec: 8 }],
+      productionReview: { draft: { storyboard: [] } },
+      productionReadiness: { readyForProduction: false, basis: {}, art: { approved: true, problems: [] },
+        storyboard: { approved: false, problems: ['Review lyric anchors for Singer.'],
+          lyricAnchors: [{ sceneId: 's-b', sung: ['If you think this is slop'], anchored: [] }] }, proof: { approved: false, problems: [] } } };
+    await openProject(project, 'board');
+    const checklist = screen.getByRole('region', { name: 'What this step needs' });
+    expect(checklist).not.toHaveTextContent('need lyric anchors reviewed');
+    const shots = within(checklist).getByRole('list', { name: 'Lyric anchors shots' });
+    expect(shots).toHaveTextContent('Shot 2Sung: “If you think this is slop” · anchored: nothing');
+    fireEvent.click(within(checklist).getByRole('button', { name: /Anchor to the sung lyrics/ }));
+    expect(feedbackCalls.syncLyricAnchors).toHaveBeenCalledWith();
+    fireEvent.click(within(shots).getByRole('button', { name: 'Shot 2' }));
+    await waitFor(() => expect(document.getElementById('scene-s-b')).toBeTruthy());
   });
 
   it('builds the cast & sets from the Look checklist when nothing is written yet', async () => {

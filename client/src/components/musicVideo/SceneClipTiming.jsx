@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Minus, Plus } from 'lucide-react';
-import { CLIP_OFFSET_FRAMES_RANGE, CLIP_SPEED_FPS_RANGE, CLIP_TIMING_FPS, clipSpeedRate } from '../../lib/musicVideoLayers.js';
+import { CLIP_OFFSET_FRAMES_RANGE, CLIP_SPEED_FPS_RANGE, CLIP_TIMING_FPS, clipReversed, clipSpeedRate } from '../../lib/musicVideoLayers.js';
 
 const STEP = 'flex items-center justify-center rounded bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 min-h-[44px] min-w-[44px] sm:min-h-[28px] sm:min-w-[28px]';
 const plural = (n) => `${n} frame${n === 1 ? '' : 's'}`;
@@ -36,8 +36,8 @@ function Stepper({ id, label, value, range, disabled, onSet, readout, less, more
 /**
  * A footage shot's clip timing, set by hand and played the same way by the
  * player and the final render, from the one clip file: Speed in frames per
- * second over the 24 fps grid, and Offset in frames against the song.
- * `onChange(patch)` saves `{ speedFps }` or `{ offsetFrames }` (0 clears it).
+ * second over the 24 fps grid, Offset in frames against the song, and Reverse.
+ * `onChange(patch)` saves `{ speedFps }`, `{ offsetFrames }` (0 clears it) or `{ reverse }`.
  */
 export default function SceneClipTiming({ fieldId, scene, disabled = false, disabledReason = null, onChange }) {
   const speed = Number.isInteger(scene.speedFps) ? scene.speedFps : 0;
@@ -55,6 +55,14 @@ export default function SceneClipTiming({ fieldId, scene, disabled = false, disa
         less="Start the clip one frame later" more="Start the clip one frame further in"
         onSet={(next) => onChange({ offsetFrames: next || null })}
         readout={offsetText} />
+      {/* A lip-sync performance never reverses: its mouth follows the song. */}
+      {scene.shotMode !== 'performance' && (
+        <label htmlFor={fieldId('reverse')} className="flex min-h-[44px] items-center gap-2 text-xs sm:min-h-0">
+          <input id={fieldId('reverse')} type="checkbox" checked={clipReversed(scene)} disabled={disabled}
+            onChange={(e) => onChange({ reverse: e.target.checked || null })} />
+          Reverse <span className="text-port-text-muted">plays backwards, no loop</span>
+        </label>
+      )}
     </div>
   );
 }

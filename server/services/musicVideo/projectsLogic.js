@@ -41,7 +41,8 @@ import { normalizeFilmLook } from '../../lib/filmLook.js';
 import { normalizeTitleCard } from '../../lib/musicVideoTitleCard.js';
 import { normalizeStatsOutro } from '../../lib/musicVideoStatsOutro.js';
 import { remapTreatmentForClone, scenesFingerprint } from './treatment.js';
-import { carryStoryboardApproval } from './productionReview.js';
+import { anchorShotsToSungLyrics, carryStoryboardApproval } from './productionReview.js';
+import { cuesSungWithin } from '../../lib/musicVideoLyricAnchors.js';
 import { normalizeMusicVideoAutomation } from '../../lib/musicVideoAutomation.js';
 
 export { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
@@ -522,6 +523,7 @@ function buildScene(input, { order }) {
     ...(input.frameFit ? { frameFit: input.frameFit } : {}),
     ...(input.speedFps ? { speedFps: input.speedFps } : {}),
     ...(input.offsetFrames ? { offsetFrames: input.offsetFrames } : {}),
+    ...(input.reverse ? { reverse: true } : {}),
     ...(input.transitionIn ? { transitionIn: input.transitionIn } : {}),
     ...(input.transitionOut ? { transitionOut: input.transitionOut } : {}),
     ...(input.glitches?.length ? { glitches: input.glitches } : {}),
@@ -611,6 +613,7 @@ export function replaceScenes(project, sceneInputs) {
       ...(prior.frameFit ? { frameFit: prior.frameFit } : {}),
       ...(prior.speedFps ? { speedFps: prior.speedFps } : {}),
       ...(prior.offsetFrames ? { offsetFrames: prior.offsetFrames } : {}),
+      ...(prior.reverse ? { reverse: true } : {}),
       ...(prior.transitionIn ? { transitionIn: prior.transitionIn } : {}),
       ...(prior.transitionOut ? { transitionOut: prior.transitionOut } : {}),
       ...(prior.glitches?.length ? { glitches: prior.glitches } : {}),
@@ -629,7 +632,7 @@ export function replaceScenes(project, sceneInputs) {
 // takes, and whether it plays as a clip or its still with an image effect) without
 // adding a shot or lyric the storyboard approval did not cover.
 const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'label', 'prompt', 'framePrompt', 'visualIntent',
-  'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'transitionIn', 'transitionOut', 'glitches', 'cutEffect',
+  'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'reverse', 'transitionIn', 'transitionOut', 'glitches', 'cutEffect',
   'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec'];
 
 /**
@@ -651,10 +654,17 @@ export function applySceneUpdate(project, sceneId, patch) {
   if (updated.startSec != null && updated.endSec != null && updated.endSec < updated.startSec) {
     throw new ServerError('endSec must be >= startSec', { status: 400, code: 'VALIDATION_ERROR' });
   }
+  // A retimed shot shows, and anchors, the lyric lines now sung over it.
+  const retimed = (('startSec' in data && data.startSec !== scenes[idx].startSec) || ('endSec' in data && data.endSec !== scenes[idx].endSec))
+    && (project.lyricCues || []).some((cue) => typeof cue?.startSec === 'number');
+  if (retimed && !('lyricText' in data)) {
+    const sung = cuesSungWithin(project.lyricCues, updated.startSec, updated.endSec).map((cue) => cue.text?.trim()).filter(Boolean);
+    updated.lyricText = sung.length ? sung.join(' / ').slice(0, 2000) : null;
+  }
   assertMusicVideoMediaSelections({ ...project, scenes: [updated], visualSpec: null });
   const nextScenes = scenes.slice();
   nextScenes[idx] = updated;
-  const next = touch(project, { scenes: nextScenes });
+  const next = retimed ? anchorShotsToSungLyrics(touch(project, { scenes: nextScenes }), [sceneId]) : touch(project, { scenes: nextScenes });
   // Retiming or rewording a shot, or picking another take, keeps the storyboard approval it was judged on.
   const shotEdit = Object.keys(data).every((key) => SCENE_SHOT_EDIT_FIELDS.includes(key));
   return { project: shotEdit ? carryStoryboardApproval(project, next, 'Edited a shot') : next, updated };

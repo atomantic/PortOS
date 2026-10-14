@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { productionReadiness, productionAlignmentBasis, approveProductionStage, carryProductionApprovals, carryShotLocks, assertShotApproval, assertClipUnlocked, setShotLocks } from './productionReview.js';
+import { anchorShotsToSungLyrics, productionReadiness, productionAlignmentBasis, approveProductionStage, carryProductionApprovals, carryShotLocks, assertShotApproval, assertClipUnlocked, setShotLocks } from './productionReview.js';
 import { addScenes, applySceneUpdate, mergeNextScene, removeScene } from './projectsLogic.js';
 
 const WORD_PROBLEM = /bounded, positive-duration word timings/;
@@ -233,5 +233,38 @@ describe('derived shot transitions', () => {
     const { storyboard } = productionReadiness(photographic);
     expect(storyboard.shots.map(s => s.transition)).toEqual(['Entry: match cut from the monitor glow. Exit: whip to the reel', 'Cut']);
     expect(storyboard.problems.filter(p => SHOT_PROBLEM.test(p))).toEqual([]);
+  });
+});
+
+describe('lyric anchors follow the singing', () => {
+  // The line window opens at 3.5 (where the line before ended); its first word is sung at 5.
+  const cue = { id: 'c2', text: 'if you think this is slop', startSec: 3.5, endSec: 7, words: [{ w: 'if', startSec: 5, endSec: 5.4 }, { w: 'slop', startSec: 6, endSec: 6.8 }] };
+  function board(shots) {
+    const base = project({ draftShots: shots });
+    return { ...base, lyricCues: [...base.lyricCues, cue], scenes: [base.scenes[0], { ...base.scenes[1], startSec: 4, endSec: 4.9, sceneId: 's2', label: 'Drummer' },
+      { ...base.scenes[1], sceneId: 's3', label: 'Singer', startSec: 4.9, endSec: 8 }] };
+  }
+  const row = (sceneId, lyricCueIds) => ({ sceneId, lyricCueIds, action: 'a', staging: 'b', camera: 'c', transition: 'Cut' });
+
+  // Uniquely catches a shot in the instrumental gap before a line being held to that line's anchor.
+  it('anchors a line to the shots its words are sung over, not the gap before them, and names what to fix', () => {
+    const stale = board([row('s1', ['c1']), row('s2', ['c2']), row('s3', [])]);
+    const { storyboard } = productionReadiness(stale);
+    expect(storyboard.problems.filter((p) => ANCHOR_PROBLEM.test(p))).toEqual(['Review lyric anchors for Singer.']);
+    expect(storyboard.lyricAnchors).toEqual([{ sceneId: 's3', sung: ['if you think this is slop'], anchored: [] }]);
+    const fixed = anchorShotsToSungLyrics(stale, ['s3']);
+    expect(fixed.productionReview.draft.storyboard.find((shot) => shot.sceneId === 's3').lyricCueIds).toEqual(['c2']);
+    expect(productionReadiness(fixed).storyboard.lyricAnchors).toEqual([]);
+  });
+
+  // Uniquely catches a retimed shot keeping the lyric and anchor of the span it left.
+  it('moves the lyric and its anchor with a retimed shot', () => {
+    const swapped = board([row('s1', ['c1']), row('s2', []), row('s3', ['c2'])]);
+    const { project: next } = applySceneUpdate(swapped, 's2', { endSec: 6 });
+    expect(next.scenes.find((scene) => scene.sceneId === 's2').lyricText).toBe('if you think this is slop');
+    expect(next.productionReview.draft.storyboard.find((shot) => shot.sceneId === 's2').lyricCueIds).toEqual(['c2']);
+    const { project: back } = applySceneUpdate(next, 's2', { endSec: 4.9 });
+    expect(back.scenes.find((scene) => scene.sceneId === 's2').lyricText).toBeNull();
+    expect(back.productionReview.draft.storyboard.find((shot) => shot.sceneId === 's2').lyricCueIds).toEqual([]);
   });
 });

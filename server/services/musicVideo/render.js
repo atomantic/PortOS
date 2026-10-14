@@ -41,7 +41,7 @@ import { loadHistory, mutateVideoHistory } from '../videoGen/local.js';
 import { getTrack } from '../tracks/index.js';
 import { getProject, listProjects, updateProject, mutateProjectRecord } from './projects.js';
 import { applyProjectPatch } from './projectsLogic.js';
-import { MUSIC_VIDEO_FRAME_FITS, clipOffsetSec, clipSpeedRate, isSelfDrawnLayer, sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { MUSIC_VIDEO_FRAME_FITS, clipOffsetSec, clipReversed, clipSpeedRate, isSelfDrawnLayer, sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { musicVideoAspect, musicVideoRenderCanvas } from '../../lib/musicVideoAspect.js';
 import { projectTypographyPlan } from './composition.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
@@ -311,7 +311,9 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
       // below (which rewrites `duration` to the rendered span) so coverage can
       // be judged against it.
       sourceSec,
-      loop: edit ? false : sceneLoops(scene),
+      // A reversed clip is read once, backwards, and holds its last frame rather than looping.
+      loop: edit || clipReversed(scene) ? false : sceneLoops(scene),
+      ...(clipReversed(scene) ? { reverse: true } : {}),
       ...(rate !== 1 ? { rate } : {}),
       ...(leadSec > 0 ? { leadSec } : {}),
       inSec,
@@ -478,7 +480,9 @@ function sectionChain(c, input, { canonW, canonH, fps, frames, frameGrid }) {
   // A hand-set speed retimes the clip and a negative offset holds its first frame, both before the trim.
   const speed = c.rate && c.rate !== 1 ? `setpts=(PTS-STARTPTS)/${Number(c.rate.toFixed(6))},` : '';
   const lead = c.leadSec > 0 ? `tpad=start_mode=clone:start_duration=${round3(c.leadSec)},` : '';
-  const timed = `${speed}${lead}fps=${fps},${hold}${trim},setpts=PTS-STARTPTS`;
+  // A reversed clip plays from its last frame, before any speed, offset or trim.
+  const reverse = c.reverse ? 'reverse,setpts=PTS-STARTPTS,' : '';
+  const timed = `${reverse}${speed}${lead}fps=${fps},${hold}${trim},setpts=PTS-STARTPTS`;
   const cover = `scale=${canonW}:${canonH}:force_original_aspect_ratio=increase,crop=${canonW}:${canonH},setsar=1`;
   const fit = `scale=${canonW}:${canonH}:force_original_aspect_ratio=decrease,setsar=1`;
   const centered = `overlay=(W-w)/2:(H-h)/2:shortest=1`;

@@ -58,14 +58,20 @@ export default function SceneTakeStrip({
                 onFocus={() => setPlayingId(playKey)}
                 onBlur={() => setPlayingId(null)}
                 aria-label={`View ${kind === 'video' ? 'clip' : 'frame'} take full size`}
-                className={`relative block w-full rounded overflow-hidden border focus:outline-none focus:ring-2 focus:ring-port-accent ${isSelected ? 'border-port-accent ring-2 ring-port-accent' : 'border-port-border'} ${rejected ? 'opacity-40' : ''}`}
+                className={`relative block w-full rounded overflow-hidden focus:outline-none focus:ring-2 focus:ring-port-accent ${isSelected ? 'border-2 border-port-accent ring-4 ring-port-accent/50' : 'border border-port-border'} ${rejected ? 'opacity-40' : ''}`}
               >
                 <img src={takeThumbUrl(take)} alt="" loading="lazy" className="w-full aspect-video object-cover block bg-black" />
                 {playing && <video src={takeClipUrl(take)} autoPlay muted loop playsInline className="absolute inset-0 w-full h-full object-cover bg-black" />}
+                {/* The take the render uses wears a badge, so it reads at a glance among the others. */}
+                {isSelected && (
+                  <span className="absolute left-1 top-1 inline-flex items-center gap-0.5 rounded bg-port-accent px-1.5 py-0.5 text-[10px] font-semibold text-white shadow">
+                    <Check size={11} aria-hidden="true" /> In use
+                  </span>
+                )}
               </button>
               <div className="text-[10px] text-port-text-muted truncate" title={take.originalName || take.prompt || takeProvenance(take)}>
                 {verdict && <span className={`mr-1 rounded px-1 ${VERDICT_TONE[verdict.tone]}`} title="Plate preflight verdict">{verdict.label}</span>}
-                {isSelected ? <span className="text-port-accent">Selected · </span> : null}
+                {isSelected ? <span className="font-semibold text-port-accent">In use · </span> : null}
                 {rejected ? 'rejected · ' : ''}{takeProvenance(take)}
               </div>
               {take.note && noteFor !== take.takeId && (

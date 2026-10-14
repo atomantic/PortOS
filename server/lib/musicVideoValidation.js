@@ -610,6 +610,8 @@ const sceneLayerFields = {
   // A footage clip played faster or slower by whole frames a second, and slid against the song by whole frames; null clears it.
   speedFps: z.number().int().min(CLIP_SPEED_FPS_RANGE.min).max(CLIP_SPEED_FPS_RANGE.max).nullable().optional(),
   offsetFrames: z.number().int().min(CLIP_OFFSET_FRAMES_RANGE.min).max(CLIP_OFFSET_FRAMES_RANGE.max).nullable().optional(),
+  // The clip plays backwards (a footage shot; never a lip-sync performance).
+  reverse: z.boolean().nullable().optional(),
   // A VHS glitch over the cut into / out of this shot (musicVideoTransitions.js); null clears it.
   transitionIn: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),
   transitionOut: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),
@@ -1707,6 +1709,10 @@ export const musicVideoProductionReviseSchema = musicVideoCastAndSetsStartSchema
 // The input label a stale approval names (`concept`, `scene 3 prompt`, …) — the server finds its stored value.
 export const musicVideoProductionRevertSchema = z.object({
   stage: z.enum(['art', 'storyboard', 'proof', 'castAndSets']), field: z.string().trim().min(1).max(100),
+}).strict();
+// Anchor these storyboard shots (every flagged shot when absent) to the lyric lines sung over them.
+export const musicVideoLyricAnchorSyncSchema = z.object({
+  sceneIds: z.array(z.string().min(1).max(64)).min(1).max(2000).optional(),
 }).strict();
 export const musicVideoProductionFeedbackResolutionSchema = z.object({
   feedbackId: z.string().min(1).max(128), resolution: z.string().trim().max(8000).default(''), password: z.string().max(1024).optional(),
