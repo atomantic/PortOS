@@ -188,7 +188,7 @@ The coding-agent CLIs/TUIs PortOS drives (`opencode`, `kilo`, `openchamber`, `cl
 |--------|----------|-------------|
 | GET | `/agents` | List running AI agent processes |
 | GET | `/agents/:pid` | Get agent process details |
-| DELETE | `/agents/:pid` | Kill agent process |
+| DELETE | `/agents/:pid` | Force-kill the named host process (host control) |
 
 ### Agent Tools (MCP)
 
