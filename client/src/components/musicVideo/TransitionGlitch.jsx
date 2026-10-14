@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
-  mergeGlitchFrames, sceneImageEffectGlitchFrames, sceneTransitionSections, transitionFrameAt, transitionGlitchFrames,
+  blockBox, mergeGlitchFrames, sceneImageEffectGlitchFrames, sceneShotGlitchFrames, sceneTransitionSections, transitionFrameAt, transitionGlitchFrames,
 } from '../../lib/musicVideoTransitions.js';
 
 // The canvas paints at most this wide; a glitch lasts a few frames, so detail past it is never seen.
@@ -81,6 +81,17 @@ function roll(ctx, src, a, width, height) {
   }
 }
 
+// The render's macroblock swap (one ffmpeg swaprect): two blocks trade places.
+function swapBlocks(ctx, src, sw, width, height) {
+  const a = blockBox(sw.x1, sw.y1, sw.w, sw.h, width, height);
+  const b = blockBox(sw.x2, sw.y2, sw.w, sw.h, width, height);
+  const w = Math.min(a.w, b.w);
+  const h = Math.min(a.h, b.h);
+  if (w < 2 || h < 2) return;
+  ctx.drawImage(src, a.x, a.y, w, h, b.x, b.y, w, h);
+  ctx.drawImage(src, b.x, b.y, w, h, a.x, a.y, w, h);
+}
+
 /** Paint one glitch frame (`params` from musicVideoTransitions.js) of what the figure shows. */
 function paintGlitch(canvas, figure, params, frame) {
   const box = canvas.getBoundingClientRect();
@@ -111,12 +122,14 @@ function paintGlitch(canvas, figure, params, frame) {
     ...(params.roll ? [{ roll: params.roll * height }] : []),
     ...(params.shift ? [{ a: params.shift * width, y: 0, h: height }] : []),
     ...(params.tears || []).map((t) => ({ a: t.shift * width, y: Math.round(t.y * height), h: Math.round(t.h * height) })),
+    ...(params.swaps || []).map((sw) => ({ swap: sw })),
   ];
   slips.forEach((s, i) => {
     const next = scratchCanvas(i % 2 ? 'a' : 'b', width, height);
     const ctx = next.getContext('2d');
     ctx.drawImage(cur, 0, 0);
     if (s.roll) roll(ctx, cur, s.roll, width, height);
+    else if (s.swap) swapBlocks(ctx, cur, s.swap, width, height);
     else slip(ctx, cur, s.a, s.y, Math.min(s.h, height - s.y), width);
     cur = next;
   });
@@ -168,6 +181,13 @@ function paintGlitch(canvas, figure, params, frame) {
   }
   out.globalCompositeOperation = 'source-over';
   out.globalAlpha = 1;
+  for (const b of params.blocks || []) {
+    const box = blockBox(b.x, b.y, b.w, b.h, width, height);
+    out.globalAlpha = b.alpha;
+    out.fillStyle = `#${b.color}`;
+    out.fillRect(box.x, box.y, box.w, box.h);
+  }
+  out.globalAlpha = 1;
   if (params.bar) {
     out.fillStyle = `rgba(255,255,255,${params.bar.alpha})`;
     out.fillRect(0, Math.round(params.bar.y * height), width, Math.max(2, Math.round(params.bar.h * height)));
@@ -209,8 +229,9 @@ function paintGlitch(canvas, figure, params, frame) {
 export default function TransitionGlitch({ scenes, figureRef, audioRef, time, endSec = null, fps, layered = false }) {
   const canvasRef = useRef(null);
   // A still's glitch to its end frame (an image effect) paints the same way, on the frames the render repaints.
+  // So do the glitches a shot sets at moments inside it.
   const glitches = useMemo(() => mergeGlitchFrames(transitionGlitchFrames(sceneTransitionSections(scenes, fps, { endSec })),
-    sceneImageEffectGlitchFrames(scenes, fps, { layered, endSec })), [scenes, fps, endSec, layered]);
+    sceneImageEffectGlitchFrames(scenes, fps, { layered, endSec }), sceneShotGlitchFrames(scenes, fps, { endSec })), [scenes, fps, endSec, layered]);
   const paint = useCallback((t) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
