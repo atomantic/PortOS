@@ -2578,7 +2578,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     fireEvent.click(within(strip).getByRole('button', { name: /Use/ }));
     await waitFor(() => expect(selectMusicVideoSceneTake).toHaveBeenCalledWith('mv-takes', 's1', 't-b', { silent: true }));
     // The server's answer moves the selection; the other take now offers "Use".
-    await waitFor(() => expect(within(strip).getAllByText('In use', { selector: 'div > span' })).toHaveLength(1));
+    await waitFor(() => expect(within(strip).getAllByText('In use', { selector: 'button > span' })).toHaveLength(1));
     const items = within(strip).getAllByRole('listitem');
     expect(within(items[1]).queryByRole('button', { name: /Use/ })).toBeNull();
 
