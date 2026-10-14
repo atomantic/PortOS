@@ -26,11 +26,41 @@ so a successful correction does not erase validation history.
 
 The immutable dispatch grant uses the effective outer Codex command's model and
 effort, including saved flags and supported-effort clamping. Missing or conflicting
-pins make the scanner unavailable. The bounded workflow retains explicit ChatGPT
-authentication, a $2 API-equivalent estimated-cost ceiling, and a 180-second scan
-deadline. API-key environment variables are not passed to this subprocess. These
-estimates do not establish billing charges. A cybersecurity-policy refusal stops
-the scanner and outer request without automatic continuation, retry or fallback.
+pins make the scanner unavailable. New dispatches explicitly save `"unlimited"`
+for both `maxCostUsd` and `timeLimitSeconds`: PortOS imposes neither an estimate cap
+nor an elapsed-time deadline. `null` remains unknown and numeric zero remains zero;
+omitted fields cannot create a grant. Existing $2/180-second and $25/1,200-second
+grants retain their original limits; no receipt is reset or upgraded. All policies
+require explicit ChatGPT authentication, with no API fallback. API-key and scanner
+project-config environment variables are not passed to the subprocess.
+
+The installed Codex Security 0.2.0 configuration schema documents omission of
+`maxCostUsd` as no limit. PortOS omits `--max-cost` for unlimited grants; it never
+passes zero, null or an invented large budget. The CLI loads a project file only
+when explicitly selected by `--config` or `CODEX_SECURITY_PROJECT_CONFIG`; neither
+is provided. Thus a repository configuration cannot silently reinstate a cap.
+The adapter retains its existing `--mode standard` and does not pass `--max-time`.
+Provider quota, rate and safety limits still apply. For saved bounded grants the
+cap uses the short-context API-equivalent baseline; in-flight work can exceed it.
+These estimates measure neither billed charges nor ChatGPT subscription quota,
+and cannot be converted to a weekly usage percentage. The final CLI JSON supplies
+`cost.estimatedUsd` as the baseline even without a cap; a missing, malformed or
+oversized result remains unknown. A cybersecurity-policy
+refusal stops the scanner and outer request without continuation, retry or fallback.
+
+The scanner POST has no elapsed timeout and uses the existing transport dispatcher
+without undici's header/body inactivity ceilings. The canonical loopback curl request
+also disables its elapsed timeout. The HTTP servers and dev proxy impose no response
+wait cutoff on this route; incoming-request/header and keep-alive limits do not
+limit a scan after its request body has arrived. Status and Stop calls retain their
+15-second transport timeout. Requests are never automatically retried, and none of
+these waits extends a saved bounded grant.
+
+For an unlimited grant, the whole outer audit session also skips silence-based
+continue nudges and stalled badges, including later validation or fix work. Startup
+readiness, explicit provider failures/refusals, completion signals, manual Stop and
+actual process exit remain active. Job maintenance/recovery checks process ownership
+and liveness; quiet work is not an elapsed-time failure.
 
 The runner owns a separate POSIX process group. A small IPC supervisor waits until
 its ownership receipt is durable before launching the scanner. Losing the runner

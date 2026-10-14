@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { parseSecurityScanEvidence, parseRunnerSecurityScanEvidence, securityScanGrantFromArgs } from './securityScanEvidence.js';
+import { parseSecurityScanEvidence, parseRunnerSecurityScanEvidence, securityScanGrantFromArgs, securityScanGrantSchema } from './securityScanEvidence.js';
 
 const report = {
   version: 1, status: 'time-limit', model: 'example-model', effort: 'low', auth: 'chatgpt',
@@ -11,6 +11,9 @@ const parse = value => parseSecurityScanEvidence(`Delivered the requested change
 it('retains timeout evidence and distinguishes a zero budget from unknown values', () => {
   expect(parse(report)).toEqual({ ...report, source: 'agent-report' });
   expect(parse({ ...report, maxCostUsd: null }).maxCostUsd).toBeNull();
+  const unlimited = { ...report, maxCostUsd: 'unlimited', timeLimitSeconds: 'unlimited' };
+  expect(parseRunnerSecurityScanEvidence({ ...JSON.parse(JSON.stringify(unlimited)), source: 'runner', sequence: 1 })).toEqual({ ...unlimited, source: 'runner', sequence: 1 });
+  expect(parse({ ...report, maxCostUsd: undefined })).toBeNull();
 });
 
 it('rejects fabricated completion, ambiguous reports and fields that could disclose private data', () => {
@@ -22,9 +25,19 @@ it('rejects fabricated completion, ambiguous reports and fields that could discl
 });
 
 it('derives scanner pins from effective argv and refuses conflicting or implicit defaults', () => {
-  expect(securityScanGrantFromArgs(['--model', 'saved-model', '-c', 'model_reasoning_effort="high"'])).toMatchObject({ model: 'saved-model', effort: 'high' });
+  expect(securityScanGrantFromArgs(['--model', 'saved-model', '-c', 'model_reasoning_effort="high"'])).toEqual({ model: 'saved-model', effort: 'high', auth: 'chatgpt', maxCostUsd: 'unlimited', timeLimitSeconds: 'unlimited' });
   expect(securityScanGrantFromArgs(['--model=selected-model', '--config=model="another-model"', '-cmodel_reasoning_effort=low'])).toMatchObject({ model: null, effort: 'low' });
-  expect(securityScanGrantFromArgs([])).toMatchObject({ model: null, effort: null });
+  expect(securityScanGrantFromArgs([])).toEqual({ model: null, effort: null, auth: 'chatgpt', maxCostUsd: 'unlimited', timeLimitSeconds: 'unlimited' });
+});
+
+it('preserves legacy grants and rejects mixed limits or authentication overrides', () => {
+  const legacy = { model: 'saved-model', effort: 'medium', auth: 'chatgpt', maxCostUsd: 2, timeLimitSeconds: 180 };
+  expect(securityScanGrantSchema.parse(legacy)).toEqual(legacy);
+  const bounded = { ...legacy, maxCostUsd: 25, timeLimitSeconds: 1200 };
+  expect(securityScanGrantSchema.parse(bounded)).toEqual(bounded);
+  for (const override of [{ maxCostUsd: 25 }, { maxCostUsd: 'unlimited' }, { timeLimitSeconds: 'unlimited' }, { maxCostUsd: null, timeLimitSeconds: null }, { maxCostUsd: undefined, timeLimitSeconds: undefined }, { maxCostUsd: 0, timeLimitSeconds: 0 }, { timeLimitSeconds: 0 }, { timeLimitSeconds: 1200 }, { maxCostUsd: 25, timeLimitSeconds: null }, { maxCostUsd: 100, timeLimitSeconds: 3600 }, { auth: 'api-key' }, { auth: 'auto' }]) {
+    expect(securityScanGrantSchema.safeParse({ ...legacy, ...override }).success).toBe(false);
+  }
 });
 
 it('accepts bounded runner input diagnostics without allowing private paths or errors through', () => {

@@ -45,6 +45,7 @@ function makeController({
   provider = { id: 'codex-tui', name: 'Codex' },
   tuiConfig = TUI_CONFIG,
   prompt = 'do the work',
+  securityScanGrant = null,
   sentinelRead = async () => sentinelSummary ?? '',
 } = {}) {
   // A DISTINCT closer per arm: the merge-gate case below has to tell the
@@ -75,6 +76,7 @@ function makeController({
     runId: 'run-1',
     model: 'gpt-5-codex',
     provider,
+    securityScanGrant,
     prompt,
     tuiConfig,
     cwd: '/tmp/workspace',
@@ -285,7 +287,7 @@ describe('Codex terminal model-access rejection (#9319)', () => {
   };
 
   it('stops all recovery when a trusted scanner refusal arrives before the outer TUI exits', async () => {
-    const { controller, ...seams } = await submitted();
+    const { controller, ...seams } = await submitted({ securityScanGrant: { model: 'example-model', effort: 'medium', auth: 'chatgpt', maxCostUsd: 'unlimited', timeLimitSeconds: 'unlimited' } });
     seams.write.mockClear();
     seams.paste.mockClear();
     await controller.refuseScanner();

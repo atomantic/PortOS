@@ -454,10 +454,14 @@ export async function spawnAgentViaRunner(options) {
 
 export async function requestSecurityScanViaRunner(agentId, { input, stop = false } = {}) {
   const path = `/agents/${encodeURIComponent(agentId)}/security-scan${stop ? '/stop' : ''}`;
+  // A scanner may validly stay silent indefinitely. Its owned process lifecycle
+  // settles this request; neither fetch nor undici may impose an elapsed/idle cap.
+  const dispatcher = input ? (await import('../lib/aiToolkit/internal/streamTransport.js')).streamTransportDispatcher() : null;
   const response = await fetchWithTimeout(`${COS_RUNNER_URL}${path}`, {
     method: input || stop ? 'POST' : 'GET',
+    ...(dispatcher ? { dispatcher } : {}),
     ...(input ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) } : {}),
-  }, input ? 190000 : 15000);
+  }, input ? 0 : 15000);
   const result = await readRunnerJson(response);
   if (!response.ok) throw Object.assign(new Error(result.error || 'Scanner runner unavailable'), { status: response.status });
   return result;

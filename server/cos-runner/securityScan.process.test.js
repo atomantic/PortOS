@@ -28,7 +28,7 @@ it.skipIf(process.platform === 'win32')('reaps a real inherited worker after the
     getAgent: () => ({ workspacePath: join(root, 'repo') }),
     resolveCli: async () => ({ command: process.execPath, args: [fixture] }),
   });
-  await manager.register('agent-example', { model: 'example-model', effort: 'medium', auth: 'chatgpt', maxCostUsd: 2, timeLimitSeconds: 180 });
+  await manager.register('agent-example', { model: 'example-model', effort: 'medium', auth: 'chatgpt', maxCostUsd: 'unlimited', timeLimitSeconds: 'unlimited' });
   const result = await manager.start('agent-example', { prompt: 'Synthetic lifecycle fixture', paths: ['.'] });
   owners.push(JSON.parse(await readFile(join(root, 'agents/agent-example/security-scan-process.json'), 'utf8')));
   const workerPid = Number(await readFile(join(result.artifactDirectory, 'results/worker.pid'), 'utf8'));

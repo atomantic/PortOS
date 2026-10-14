@@ -45,7 +45,8 @@ it('retains refusal and scanner interruption evidence alongside successful deliv
   expect(screen.getByText('Assessment saved')).toBeInTheDocument();
   expect(screen.getByText(/provider safety refusal; automatic retry stopped/)).toBeInTheDocument();
   expect(screen.getByText('Security scanner (agent reported): time-limit')).toBeInTheDocument();
-  expect(screen.getByText(/Budget: \$0.00/)).toBeInTheDocument();
+  expect(screen.getByText(/Estimated baseline: unknown · Estimate cap: \$0.00 \(API-equivalent USD\)/)).toBeInTheDocument();
+  expect(screen.getByText('Short-context estimates do not measure billed charges or ChatGPT subscription quota.')).toBeInTheDocument();
   expect(screen.getByText(/Exit: unknown/)).toBeInTheDocument();
   expect(screen.getByText(/findings: saved; coverage: unknown/)).toBeInTheDocument();
 });
@@ -55,6 +56,22 @@ it('shows runner observations during execution without requiring an agent comple
   expect(screen.getByText('Security scanner (runner observed): interrupted')).toBeInTheDocument();
   expect(screen.getByText('Process cleanup: unconfirmed')).toBeInTheDocument();
   expect(screen.queryByText('Completed successfully')).not.toBeInTheDocument();
+});
+
+it('distinguishes explicit unlimited grants from unknown, zero and saved bounded limits', () => {
+  const scanner = { source: 'runner', status: 'running', auth: 'chatgpt', maxCostUsd: 'unlimited', timeLimitSeconds: 'unlimited' };
+  const view = render(<SecurityScanEvidence scanner={scanner} />);
+  expect(screen.getByText(/Time limit: none \(no elapsed-time deadline\)/)).toBeInTheDocument();
+  expect(screen.getByText(/Estimate cap: none \(no estimate cap\)/)).toBeInTheDocument();
+  view.rerender(<SecurityScanEvidence scanner={{ ...scanner, maxCostUsd: null, timeLimitSeconds: null }} />);
+  expect(screen.getByText(/Estimate cap: unknown/)).toBeInTheDocument();
+  expect(screen.getByText(/Time limit: unknown/)).toBeInTheDocument();
+  view.rerender(<SecurityScanEvidence scanner={{ ...scanner, maxCostUsd: 0, timeLimitSeconds: 0 }} />);
+  expect(screen.getByText(/Estimate cap: \$0.00/)).toBeInTheDocument();
+  expect(screen.getByText(/Time limit: 0s/)).toBeInTheDocument();
+  view.rerender(<SecurityScanEvidence scanner={{ ...scanner, maxCostUsd: 25, timeLimitSeconds: 1200 }} />);
+  expect(screen.getByText(/Estimate cap: \$25.00/)).toBeInTheDocument();
+  expect(screen.getByText(/Time limit: 1,200s/)).toBeInTheDocument();
 });
 
 it('distinguishes connection loss from the last trusted runner observation', () => {

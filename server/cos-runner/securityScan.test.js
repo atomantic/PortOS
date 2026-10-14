@@ -7,7 +7,9 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { createSecurityScanManager } from './securityScan.js';
 
-const grant = { model: 'example-model', effort: 'medium', auth: 'chatgpt', maxCostUsd: 2, timeLimitSeconds: 180 };
+const grant = { model: 'example-model', effort: 'medium', auth: 'chatgpt', maxCostUsd: 'unlimited', timeLimitSeconds: 'unlimited' };
+const legacyGrant = { ...grant, maxCostUsd: 2, timeLimitSeconds: 180 };
+const boundedGrant = { ...grant, maxCostUsd: 25, timeLimitSeconds: 1200 };
 let root;
 const outerAgents = [];
 beforeEach(async () => { root = await mkdtemp(join(tmpdir(), 'scanner-runtime-test-')); await mkdir(join(root, 'repo')); });
@@ -38,7 +40,7 @@ function setup({ finish, ...overrides } = {}) {
     emitEvidence: async (_id, value) => { evidence.push(value); },
     resolveCli: async () => ({ command: 'installed-scanner', args: [] }), spawnProcess, kill,
     cleanupGroup: async () => true, tempRoot: root,
-    environment: { PATH: '/example/bin', HOME: root, OPENAI_API_KEY: 'example-not-a-key', PORTOS_API_TOKEN: 'example-not-a-token' },
+    environment: { PATH: '/example/bin', HOME: root, OPENAI_API_KEY: 'example-not-a-key', PORTOS_API_TOKEN: 'example-not-a-token', CODEX_SECURITY_PROJECT_CONFIG: '/example/ambient-budget.yaml' },
     ...overrides });
   return { manager, agent, spawnProcess, kill, spawned, evidence };
 }
@@ -205,27 +207,55 @@ describe.skipIf(process.platform === 'win32')('runner-owned scanner lifecycle', 
     expect(h.spawnProcess).not.toHaveBeenCalled();
   });
 
-  it('pins the launch grant, strips API credentials and records successful evidence without an agent sentinel', async () => {
+  it.each([grant, legacyGrant, boundedGrant])('pins the $maxCostUsd / $timeLimitSeconds launch grant and records successful evidence without API credentials', async launchGrant => {
     const h = setup();
-    await h.manager.register('agent-example', grant);
+    await h.manager.register('agent-example', launchGrant);
     const run = h.manager.start('agent-example', input);
     const { child, args, options } = await h.spawned;
     expect(args).toContain('--auth');
     expect(args.slice(args.indexOf('--auth'), args.indexOf('--auth') + 2)).toEqual(['--auth', 'chatgpt']);
     expect(args.slice(args.indexOf('--model'), args.indexOf('--model') + 4)).toEqual(['--model', 'example-model', '--effort', 'medium']);
+    if (launchGrant.maxCostUsd === 'unlimited') expect(args).not.toContain('--max-cost');
+    else expect(args.slice(args.indexOf('--max-cost'), args.indexOf('--max-cost') + 2)).toEqual(['--max-cost', String(launchGrant.maxCostUsd)]);
+    expect(args).not.toContain('--max-time');
+    expect(args).not.toContain('--config');
+    expect(options.env).not.toHaveProperty('CODEX_SECURITY_PROJECT_CONFIG');
     expect(options.env).not.toHaveProperty('OPENAI_API_KEY');
     expect(options.env).not.toHaveProperty('PORTOS_API_TOKEN');
     expect(options.stdio[0]).toBe('ignore');
     const output = args[args.indexOf('--output-dir') + 1];
     await writeFile(join(output, 'findings.json'), '[]');
     await writeFile(join(output, 'coverage.json'), '{}');
-    child.stdout.write('short-context budget baseline: $0.25 of $2.00 limit\n');
+    if (launchGrant.maxCostUsd === 'unlimited') {
+      child.stderr.write('Synthetic progress on stderr.\n');
+      child.stdout.write('{\n  \"cost\": {\n    \"estimatedUsd\":');
+      child.stdout.write(' 0.25, \"estimatedUsdRange\": {\"min\":0.25,\"max\":0.5} }\n}\n');
+    } else child.stdout.write(`short-context budget baseline: $0.25 of $${launchGrant.maxCostUsd}.00 limit\n`);
     child.emit('close', 0, null);
     const result = await run;
     expect(result.evidence).toMatchObject({ source: 'runner', status: 'completed', model: 'example-model', effort: 'medium',
-      maxCostUsd: 2, timeLimitSeconds: 180, estimatedCostUsd: 0.25, exitCode: 0, artifacts: { findings: true, coverage: true } });
+      maxCostUsd: launchGrant.maxCostUsd, timeLimitSeconds: launchGrant.timeLimitSeconds, estimatedCostUsd: 0.25, exitCode: 0, artifacts: { findings: true, coverage: true } });
     expect(JSON.parse(await readFile(join(root, 'agents/agent-example/security-scan.json'), 'utf8'))).toEqual(result.evidence);
     expect(h.evidence.map(e => e.status)).toEqual(['not-run', 'running', 'completed']);
+  });
+
+  it.each([
+    ['zero baseline', '{"data":{"cost":{"estimatedUsd":0}}}', 0],
+    ['missing baseline', '{"cost":{"estimatedUsdRange":{"min":1,"max":2}}}', null],
+    ['unknown baseline', '{"cost":{"estimatedUsd":null}}', null],
+    ['invalid numeric string', '{"cost":{"estimatedUsd":"2"}}', null],
+    ['negative baseline', '{"cost":{"estimatedUsd":-1}}', null],
+    ['nonfinite baseline', '{"cost":{"estimatedUsd":1e400}}', null],
+    ['truncated JSON', '{"cost":{"estimatedUsd":2}', null],
+    ['oversized JSON', JSON.stringify({ padding: 'x'.repeat(1024 * 1024), cost: { estimatedUsd: 2 } }), null],
+  ])('records only a known numeric final estimate: %s', async (_name, output, estimatedCostUsd) => {
+    const h = setup();
+    await h.manager.register('agent-example', grant);
+    const run = h.manager.start('agent-example', input);
+    const { child } = await h.spawned;
+    child.stdout.write(output);
+    child.emit('close', 0, null);
+    expect((await run).evidence).toMatchObject({ status: 'completed', maxCostUsd: 'unlimited', estimatedCostUsd });
   });
 
   it('rejects request overrides and shares a single attempt across duplicate or lost-response requests', async () => {
@@ -315,14 +345,51 @@ describe.skipIf(process.platform === 'win32')('runner-owned scanner lifecycle', 
     await h.manager.stop('agent-example');
     await run;
   });
-  it('bounds a stuck child with the existing deadline and records unconfirmed cleanup without claiming success', async () => {
-    const h = setup({ kill: vi.fn(), cleanupGroup: async () => false });
+  it('leaves a quiet no-deadline scan running until manual Stop and never renews it', async () => {
+    const h = setup();
     await h.manager.register('agent-example', grant);
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const run = h.manager.start('agent-example', input);
+    const { child } = await h.spawned;
+    await vi.advanceTimersByTimeAsync(48 * 60 * 60 * 1000);
+    expect(h.kill).not.toHaveBeenCalled();
+    expect((await h.manager.read('agent-example'))).toMatchObject({ status: 'running', timeLimitSeconds: 'unlimited' });
+    child.stdout.write('Still reviewing source.\n');
+    const stopped = await h.manager.stop('agent-example');
+    expect(stopped).toMatchObject({ status: 'interrupted', cleanup: 'confirmed', timeLimitSeconds: 'unlimited' });
+    expect(h.kill).toHaveBeenCalledWith(child, 'SIGTERM', { processGroup: true });
+    expect(await h.manager.start('agent-example', input)).toEqual(await run);
+    expect(h.spawnProcess).toHaveBeenCalledOnce();
+  });
+
+  it('preserves a saved estimate cap and terminal budget evidence without retry', async () => {
+    const h = setup();
+    await h.manager.register('agent-example', boundedGrant);
+    const run = h.manager.start('agent-example', input);
+    const { child, args } = await h.spawned;
+    expect(args.slice(args.indexOf('--max-cost'), args.indexOf('--max-cost') + 2)).toEqual(['--max-cost', '25']);
+    child.stdout.write('short-context budget baseline: $25.01\nBudget limit reached\n');
+    child.emit('close', 2, null);
+    expect((await run).evidence).toMatchObject({ status: 'budget-limit', maxCostUsd: 25, estimatedCostUsd: 25.01, timeLimitSeconds: 1200, exitCode: 2 });
+    expect(await h.manager.start('agent-example', input)).toEqual(await run);
+    expect(h.spawnProcess).toHaveBeenCalledOnce();
+  });
+
+  it.each([boundedGrant, legacyGrant])('enforces the saved $timeLimitSeconds second deadline without renewing a stuck child', async launchGrant => {
+    const kill = vi.fn();
+    const h = setup({ kill, cleanupGroup: async () => false });
+    await h.manager.register('agent-example', launchGrant);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const run = h.manager.start('agent-example', input);
     await h.spawned;
-    await vi.advanceTimersByTimeAsync(185000);
-    expect((await run).evidence).toMatchObject({ status: 'time-limit', exitCode: null, cleanup: 'unconfirmed' });
+    await vi.advanceTimersByTimeAsync(launchGrant.timeLimitSeconds * 1000 - 1);
+    expect(kill).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(kill).toHaveBeenCalledWith(expect.anything(), 'SIGTERM', { processGroup: true });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect((await run).evidence).toMatchObject({ status: 'time-limit', timeLimitSeconds: launchGrant.timeLimitSeconds, exitCode: null, cleanup: 'unconfirmed' });
+    expect(await h.manager.start('agent-example', input)).toEqual(await run);
+    expect(h.spawnProcess).toHaveBeenCalledOnce();
   });
 
   it('does not treat quoted policy findings as a provider refusal', async () => {

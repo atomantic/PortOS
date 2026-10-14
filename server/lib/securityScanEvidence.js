@@ -11,9 +11,10 @@ export const securityScanEvidenceSchema = z.object({
   model: z.string().regex(/^[a-zA-Z0-9_.:-]{1,100}$/).nullable(),
   effort: z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']).nullable(),
   auth: z.enum(['chatgpt', 'api-key', 'unknown']),
-  maxCostUsd: nullableCost,
+  maxCostUsd: z.union([nullableCost, z.literal('unlimited')]),
   estimatedCostUsd: nullableCost,
-  timeLimitSeconds: z.number().int().nonnegative().nullable(),
+  // Explicit unlimited values survive JSON; null still means unknown, zero is zero.
+  timeLimitSeconds: z.union([z.number().int().nonnegative().nullable(), z.literal('unlimited')]),
   exitCode: z.number().int().nullable(),
   artifacts: z.object({ findings: z.boolean().nullable(), coverage: z.boolean().nullable() }).strict(),
   cleanup: z.enum(['not-needed', 'confirmed', 'unconfirmed']).optional(),
@@ -27,15 +28,27 @@ export const securityScanEvidenceSchema = z.object({
   }).strict().optional(),
 }).strict().refine(value => value.status !== 'completed' || value.exitCode === 0);
 
-// This grant is set once at agent dispatch, never accepted from the model's
-// scan request. These ceilings preserve the bounded existing scanner workflow.
-export const securityScanGrantSchema = z.object({
+// New dispatches impose neither an estimate cap nor an elapsed-time deadline.
+// Provider quota, rate and safety limits remain in force.
+const NEW_SCAN_LIMITS = Object.freeze({ maxCostUsd: 'unlimited', timeLimitSeconds: 'unlimited' });
+const legacySecurityScanGrantSchema = z.object({
   model: z.string().regex(/^[a-zA-Z0-9_.:-]{1,100}$/).nullable(),
   effort: z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']).nullable(),
   auth: z.literal('chatgpt'),
   maxCostUsd: z.literal(2),
   timeLimitSeconds: z.literal(180),
 }).strict();
+
+// Saved grants retain their original pair of limits; accepting them must never
+// upgrade an existing attempt. No policy is accepted from a scan request.
+export const securityScanGrantSchema = z.union([
+  legacySecurityScanGrantSchema.extend({
+    maxCostUsd: z.literal(NEW_SCAN_LIMITS.maxCostUsd),
+    timeLimitSeconds: z.literal(NEW_SCAN_LIMITS.timeLimitSeconds),
+  }),
+  legacySecurityScanGrantSchema.extend({ maxCostUsd: z.literal(25), timeLimitSeconds: z.literal(1200) }),
+  legacySecurityScanGrantSchema,
+]);
 
 export const securityScanRequestSchema = z.object({
   prompt: z.string().min(1).max(32000),
@@ -88,6 +101,6 @@ export function securityScanGrantFromArgs(args = []) {
   }
   const model = models.size === 1 ? [...models][0] : null;
   const effort = efforts.size === 1 ? [...efforts][0] : null;
-  const parsed = securityScanGrantSchema.safeParse({ model, effort, auth: 'chatgpt', maxCostUsd: 2, timeLimitSeconds: 180 });
-  return parsed.success ? parsed.data : { model: null, effort: null, auth: 'chatgpt', maxCostUsd: 2, timeLimitSeconds: 180 };
+  const parsed = securityScanGrantSchema.safeParse({ model, effort, auth: 'chatgpt', ...NEW_SCAN_LIMITS });
+  return parsed.success ? parsed.data : { model: null, effort: null, auth: 'chatgpt', ...NEW_SCAN_LIMITS };
 }

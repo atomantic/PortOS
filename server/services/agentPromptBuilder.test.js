@@ -695,6 +695,10 @@ describe('buildLightContextPrompt', () => {
       expect(prompt.systemPrompt).toContain('## Codex Security Audit Runtime');
       expect(prompt.systemPrompt).toContain('/security-scan');
       expect(prompt.systemPrompt).toContain('subscription ChatGPT authentication');
+      expect(prompt.systemPrompt).toContain('saved grants retain their original limits');
+      expect(prompt.systemPrompt).toContain('Wait for the single request to finish');
+      expect(prompt.systemPrompt).toContain('--max-time 0');
+      expect(prompt.systemPrompt).toContain('no PortOS estimate cap or elapsed-time deadline');
       expect(prompt.systemPrompt).not.toContain('npx --yes');
       expect(prompt.systemPrompt).toContain('deliver supported findings even when another probe is blocked');
       expect(prompt.systemPrompt).toContain('## Completion (No Code Output)');
