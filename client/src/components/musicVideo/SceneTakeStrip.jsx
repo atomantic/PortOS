@@ -17,7 +17,8 @@ const KIND_LABEL = { image: 'Frame takes', video: 'Clip takes', endImage: 'End f
  *
  * Rejecting a take only says it is not for this shot: it stays available to
  * other shots in Swap. Bad is a separate mark (`marks`, the project's
- * assetMarks; `onMark(take, 'bad' | null)`) for files to clean up later.
+ * assetMarks; `onMark(take, 'bad' | null)`) for files to clean up later; the
+ * server also rejects a bad file's takes on the shots not using it.
  *
  * A legacy take (a pre-takes selection the server hasn't materialized yet) is
  * shown but has no actions — it has no take id to address. `grid` lays the
@@ -117,7 +118,7 @@ export default function SceneTakeStrip({
                   {onMark && (
                     <button type="button" disabled={busy} onClick={() => onMark(take, bad ? null : 'bad')} aria-pressed={bad}
                       className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] min-h-[32px] sm:min-h-0 disabled:opacity-50 ${bad ? 'bg-port-error/20 text-port-error' : 'bg-port-border'}`}
-                      title={bad ? 'Clear the bad mark' : 'Mark this file bad, to clean up when the project is done. It stays counted in the stats.'}>
+                      title={bad ? 'Clear the bad mark' : 'Mark this file bad, to clean up when the project is done. It is also rejected on every shot not using it, and stays counted in the stats.'}>
                       <Ban size={11} /> Bad
                     </button>
                   )}

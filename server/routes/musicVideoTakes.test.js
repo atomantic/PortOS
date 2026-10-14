@@ -285,6 +285,25 @@ describe('swapping a shot from unused takes', () => {
   });
 });
 
+describe('locking a shot\'s video', () => {
+  // Uniquely catches a video lock leaving the shot's other takes as open candidates, or rejecting the ones it uses.
+  it('rejects the shot\'s unused frame and clip takes', async () => {
+    for (const name of ['lock-a.png', 'lock-b.png']) seedImage(name);
+    seedVideoHistory([{ id: 'lock-clip', filename: 'lock-clip.mp4' }, { id: 'lock-other', filename: 'lock-other.mp4' }]);
+    for (const [kind, assetId] of [['image', 'lock-a.png'], ['image', 'lock-b.png'], ['video', 'lock-clip'], ['video', 'lock-other']]) {
+      await addTake(sceneA.sceneId, { kind, assetId, source: 'generated' });
+    }
+    const { setShotLocks } = await import('../services/musicVideo/productionReview.js');
+    const { lockProductionShots } = await import('../services/musicVideo/productionReviewService.js');
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: setShotLocks(current, { sceneIds: [sceneA.sceneId], locked: true, stage: 'still' }) }));
+    await lockProductionShots(project.id, { sceneIds: [sceneA.sceneId], locked: true, stage: 'video' });
+    const scene = (await reload()).scenes.find((s) => s.sceneId === sceneA.sceneId);
+    expect(Object.fromEntries(scene.takes.map((take) => [take.assetId, take.status])))
+      .toEqual({ 'lock-a.png': 'candidate', 'lock-b.png': 'rejected', 'lock-clip': 'candidate', 'lock-other': 'rejected' });
+    expect(scene).toMatchObject({ referenceImageId: 'lock-a.png', videoHistoryId: 'lock-clip' });
+  });
+});
+
 describe('a swapped still brings its frame prompt', () => {
   // Uniquely catches a still placed from another shot or the floor leaving the start or end prompt describing the old picture, or carrying the look twice.
   it('sets the start or end frame prompt to the one the placed still was made from, without the project look', async () => {
@@ -387,6 +406,24 @@ describe('the shot asset manager', () => {
     expect(await listed()).toMatchObject({ takeStatus: 'rejected', mark: null });
     await request(app).patch(`${base()}/media-pool/marks`).send({ items: [{ kind: 'image', assetId: 'second.png' }], mark: 'bad' });
     expect((await listed()).mark).toBe('bad');
+  });
+
+  // Uniquely catches a Bad mark leaving the file offered as a candidate on shots, or clearing a shot's selection.
+  it('rejects a bad file on every shot not using it, and keeps it where it is in use', async () => {
+    for (const name of ['a-pick.png', 'spare.png']) seedImage(name);
+    await addTake(sceneA.sceneId, { kind: 'image', assetId: 'a-pick.png', source: 'generated' });
+    await addTake(sceneA.sceneId, { kind: 'image', assetId: 'spare.png', source: 'generated' });
+    await addTake(sceneB.sceneId, { kind: 'image', assetId: 'spare.png', source: 'generated' });
+    await addTake(sceneB.sceneId, { kind: 'endImage', assetId: 'a-pick.png', source: 'generated' });
+    const marked = await request(app).patch(`${base()}/media-pool/marks`).send({ items: [{ kind: 'image', assetId: 'spare.png' }, { kind: 'image', assetId: 'a-pick.png' }], mark: 'bad' });
+    expect(marked.status).toBe(200);
+    // Shot A uses a-pick and shot B uses spare (its first take), so only A's spare changes.
+    expect(marked.body.scenes.map((scene) => scene.sceneId)).toEqual([sceneA.sceneId]);
+    const statuses = (scene) => Object.fromEntries(scene.takes.map((take) => [`${take.kind}:${take.assetId}`, take.status]));
+    expect(statuses(marked.body.scenes[0])).toEqual({ 'image:a-pick.png': 'candidate', 'image:spare.png': 'rejected' });
+    const saved = (await reload()).scenes;
+    expect(statuses(saved.find((scene) => scene.sceneId === sceneB.sceneId))).toEqual({ 'image:spare.png': 'candidate', 'endImage:a-pick.png': 'candidate' });
+    expect(saved.find((scene) => scene.sceneId === sceneA.sceneId).referenceImageId).toBe('a-pick.png');
   });
 
   // Uniquely catches a deleted still or clip leaving a take, mark or collection row pointing at a file that is gone, and a shot's own still being deletable.

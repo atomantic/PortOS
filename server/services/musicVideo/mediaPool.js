@@ -55,6 +55,9 @@ export function droppedTakeAssets(before, after) {
  * Mark assets ★ ingredient (good, unplaced) or ✕ bad (to clean up); null
  * clears the mark. Marks live on the project (`assetMarks`, keyed
  * `<image|video>:<ref>`), so a still bad for one video stays fine in another.
+ * Bad also rejects the asset's takes on every shot not using it now; a shot's
+ * selection is never cleared, and clearing the mark leaves the rejects.
+ * `scenes` lists the shots whose takes changed.
  */
 export function markPoolAssets(project, keys, mark) {
   const assetMarks = { ...(project.assetMarks || {}) };
@@ -62,7 +65,19 @@ export function markPoolAssets(project, keys, mark) {
     if (mark) assetMarks[key] = mark;
     else delete assetMarks[key];
   }
-  return { project: { ...project, assetMarks } };
+  if (mark !== 'bad') return { project: { ...project, assetMarks }, scenes: [] };
+  const bad = new Set(keys);
+  const changed = [];
+  const scenes = (project.scenes || []).map((scene) => {
+    if (!Array.isArray(scene.takes)) return scene;
+    const reject = (take) => take?.status !== 'rejected' && bad.has(`${KIND_OF_SLOT[take?.kind]}:${take?.assetId}`)
+      && scene[TAKE_SLOT[take.kind]] !== take.assetId;
+    if (!scene.takes.some(reject)) return scene;
+    const next = { ...scene, takes: scene.takes.map((take) => (reject(take) ? { ...take, status: 'rejected' } : take)) };
+    changed.push(next);
+    return next;
+  });
+  return { project: { ...project, assetMarks, scenes }, scenes: changed };
 }
 
 /**
