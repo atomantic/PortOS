@@ -97,6 +97,8 @@ vi.mock('./cos.js', () => ({
 
 import { generateManagedAppImprovementTaskForType } from './cosTaskGenerator.js';
 import { getAgents } from './cos.js';
+import { getTaskInterval } from './taskSchedule.js';
+import { applyPerpetualDrainCap } from './cosTaskPreStepBlocks.js';
 
 const APP = { id: 'app-1', name: 'Example App', repoPath: '/tmp/example-repo' };
 const STATE = { config: { confidenceAutoApproval: { enabled: false }, idleReviewPriority: 'MEDIUM' } };
@@ -117,9 +119,12 @@ const generate = () =>
 describe('generateManagedAppImprovementTaskForType composes the extracted pre-step layer', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    parkPerpetual.mockReset().mockResolvedValue();
+    recordPerpetualDispatch.mockReset().mockResolvedValue(1);
     getAgents.mockResolvedValue([]);
     getPerpetualDrainState.mockResolvedValue({ signature: null, dispatchCount: 0 });
     reconcileMock.mockResolvedValue(scan());
+    getTaskInterval.mockResolvedValue({ type: 'on-demand', perpetual: true, drainDispatchCap: 5, taskMetadata: { branchesPerAgent: 3 } });
   });
 
   it('folds the reconcile pre-step block into the prompt via {inFlightBranches}', async () => {
@@ -160,5 +165,87 @@ describe('generateManagedAppImprovementTaskForType composes the extracted pre-st
 
     expect(await generate()).toBeNull();
     expect(reconcileMock).not.toHaveBeenCalled();
+    expect(parkPerpetual).toHaveBeenCalledWith('branch-reconcile', APP.id, { reason: 'owner-state-unavailable' });
+    expect(recordPerpetualDispatch).not.toHaveBeenCalled();
   });
+  it('reaches later branches across a cap and manual retry, then parks the exhausted sweep', async () => {
+    const branches = ['__proto__', 'b', 'c', 'd'].map(name => ({ branch: name === '__proto__' ? name : `fix/${name}`, state: 'IN_REVIEW', tip: 'head-1', openPr: { number: 1 } }));
+    let persisted = { signature: null, dispatchCount: 0 };
+    getPerpetualDrainState.mockImplementation(async () => JSON.parse(JSON.stringify(persisted)));
+    recordPerpetualDispatch.mockImplementation(async (_type, _app, signature, { branchAttempts }) => {
+      persisted = { signature, dispatchCount: persisted.dispatchCount + 1, branchAttempts };
+    });
+    parkPerpetual.mockImplementation(async (_type, _app, { branchAttempts }) => {
+      persisted = { ...persisted, signature: null, dispatchCount: 0 };
+      if (branchAttempts === null) delete persisted.branchAttempts;
+    });
+    reconcileMock.mockResolvedValue(scan({ inFlight: branches,
+      wip: [{ branch: 'fix/draft', openPr: { isDraft: true } }],
+      detachedWorktrees: [{ path: '/scratch/checkout', reason: 'worktree-locked' }]
+    }));
+
+    const first = await generate();
+    expect(first.description).toContain('__proto__');
+    expect(first.description).toContain('fix/c');
+    expect(first.description).not.toContain('fix/d');
+    // The same persisted attempt map survives the real cap gate. Manual reset
+    // also retains it (taskSchedule's persistence regression covers that write).
+    expect(await applyPerpetualDrainCap(APP, 'branch-reconcile', { perpetual: true, drainDispatchCap: 1 }, {
+      getPerpetualDrainState, parkPerpetual
+    })).toEqual({ skip: true });
+    const second = await generate();
+    expect(second.description).toContain('fix/d');
+    expect(second.description).not.toContain('__proto__');
+    expect(await generate()).toBeNull();
+    expect(parkPerpetual).toHaveBeenLastCalledWith('branch-reconcile', APP.id, expect.objectContaining({
+      reason: 'no-progress', actionableCount: 4, branchAttempts: null,
+      counts: { unchangedBranches: 4, heldBranches: 1, heldDetached: 1 },
+      skipCauses: { 'unchanged-after-attempt': 4, 'draft-review-required': 1, 'worktree-locked': 1 }
+    }));
+    expect(recordPerpetualDispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries a changed revision without retrying an unchanged blocked prefix', async () => {
+    getPerpetualDrainState.mockResolvedValue({
+      signature: 'fix/a:IN_REVIEW:1:old-head', dispatchCount: 1,
+      branchAttempts: { 'fix/a': 'fix/a:IN_REVIEW:1:old-head', 'fix/b': 'fix/b:IN_REVIEW:2:same-head', removed: 'stale' }
+    });
+    reconcileMock.mockResolvedValue(scan({ inFlight: [
+      { branch: 'fix/a', state: 'IN_REVIEW', openPr: { number: 1 }, tip: 'new-head' },
+      { branch: 'fix/b', state: 'IN_REVIEW', openPr: { number: 2 }, tip: 'same-head' }
+    ] }));
+    const task = await generate();
+    expect(task.description).toContain('fix/a');
+    expect(task.description).not.toContain('fix/b');
+    expect(recordPerpetualDispatch).toHaveBeenLastCalledWith('branch-reconcile', APP.id, expect.stringContaining('new-head'), {
+      branchAttempts: { 'fix/a': 'fix/a:IN_REVIEW:1:new-head', 'fix/b': 'fix/b:IN_REVIEW:2:same-head' }
+    });
+  });
+
+  it('parks typed draft, owner, detached and cleanup blockers without treating them as an empty repo', async () => {
+    reconcileMock.mockResolvedValue(scan({ inFlight: [],
+      wip: [
+        { branch: 'fix/draft', openPr: { isDraft: true } },
+        { branch: 'fix/handoff', completionPolicyReason: 'human-handoff' },
+        { branch: 'fix/policy', completionPolicyReason: 'policy-unavailable' }
+      ],
+      skipped: [
+        { branch: 'fix/owned', reason: 'claim-owner-active' },
+        { branch: 'fix/delete', reason: 'delete-failed: private diagnostic' },
+        { branch: 'fix/backup', reason: 'backup-failed: /private/diagnostic', retryAt: '2030-01-02T00:00:00Z' },
+        { path: '/scratch/checkout', detached: true, reason: 'worktree-locked' }
+      ],
+      detachedWorktrees: [{ path: '/scratch/checkout', reason: 'worktree-locked' }],
+      superseded: [{ branch: 'fix/backup', holdReason: 'backup-failed: /private/diagnostic', holdRetryAt: '2030-01-01T00:00:00Z' }]
+    }));
+    expect(await generate()).toBeNull();
+    expect(parkPerpetual).toHaveBeenCalledWith('branch-reconcile', APP.id, expect.objectContaining({
+      reason: 'branches-blocked', counts: { heldBranches: 6, heldDetached: 1 },
+      notLaterThan: '2030-01-01T00:00:00.000Z',
+      skipCauses: { 'draft-review-required': 1, 'claim-owner-active': 1, 'branch-delete-failed': 1, 'worktree-locked': 1, 'backup-failed': 1, 'human-handoff': 1, 'policy-unavailable': 1 }
+    }));
+    expect(JSON.stringify(parkPerpetual.mock.calls)).not.toContain('/private/diagnostic');
+    expect(recordPerpetualDispatch).not.toHaveBeenCalled();
+  });
+
 });

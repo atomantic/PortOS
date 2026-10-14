@@ -238,6 +238,7 @@ describe('taskSchedule', () => {
     isInstanceFeatureEnabled.mockResolvedValue(true)
     // Default: no saved schedule → use defaults
     readJSONFile.mockResolvedValue(null)
+    writeFile.mockResolvedValue(undefined)
   })
 
   // Cases that freeze the clock restore it here, so a failed assertion inside a
@@ -3069,6 +3070,38 @@ describe('taskSchedule', () => {
         expect(Date.parse(record.parkedUntil)).toBeLessThanOrEqual(Date.now() + 3600000)
         expect(Date.parse(record.parkedUntil)).toBeGreaterThan(Date.now())
       })
+
+      it('derives retry eligibility from the app cadence and enabled switches, not a stale park', async () => {
+        const future = new Date(Date.now() + 3_600_000).toISOString();
+        const task = { type: 'on-demand', perpetual: false, autoStart: false, enabled: true };
+        const execution = { perApp: { 'app-1': { parkedUntil: future } } };
+        mockSchedule({ tasks: { 'branch-reconcile': task }, executions: { 'task:branch-reconcile': execution } });
+        expect(await shouldRunTask('branch-reconcile', 'app-1')).toMatchObject({ shouldRun: false, reason: 'on-demand-only' });
+        getAppTaskTypeInterval.mockResolvedValueOnce('0 3 * * *');
+        parseCronToNextRun.mockReturnValueOnce(new Date(future));
+        expect(await shouldRunTask('branch-reconcile', 'app-1')).toMatchObject({ shouldRun: false, reason: 'cron-cooldown', nextRunAt: future });
+        isTaskTypeEnabledForApp.mockResolvedValue(false);
+        expect(await shouldRunTask('branch-reconcile', 'app-1')).toEqual({ shouldRun: false, reason: 'disabled-for-app' });
+        isTaskTypeEnabledForApp.mockResolvedValue(true);
+        mockSchedule({ tasks: { 'branch-reconcile': { ...task, enabled: false } }, executions: { 'task:branch-reconcile': execution } });
+        expect(await shouldRunTask('branch-reconcile', 'app-1')).toEqual({ shouldRun: false, reason: 'disabled' });
+      });
+
+      it('persists branch attempts through cap parks and manual resets, clearing only on sweep exhaustion', async () => {
+        let saved = { version: 2, tasks: { 'branch-reconcile': { enabled: true, type: 'on-demand', perpetual: true } }, executions: {}, templates: [] };
+        readJSONFile.mockImplementation(async () => JSON.parse(JSON.stringify(saved)));
+        writeFile.mockImplementation(async (_path, contents) => { saved = JSON.parse(contents); });
+        const branchAttempts = { 'fix/first': 'fix/first:IN_REVIEW:1:head' };
+        await recordPerpetualDispatch('branch-reconcile', 'app-1', 'batch', { branchAttempts });
+        await parkPerpetual('branch-reconcile', 'app-1', { reason: 'drain-cap', signature: null });
+        await resetPerpetualForManualRun('branch-reconcile', 'app-1');
+        expect(await getPerpetualDrainState('branch-reconcile', 'app-1')).toEqual({ signature: null, dispatchCount: 0, branchAttempts });
+        const counts = { heldBranches: 2, heldDetached: 1 };
+        const skipCauses = { 'draft-review-required': 1, 'claim-owner-active': 1, 'worktree-locked': 1 };
+        await parkPerpetual('branch-reconcile', 'app-1', { reason: 'branches-blocked', counts, skipCauses, branchAttempts: null });
+        expect((await getPerpetualDrainState('branch-reconcile', 'app-1')).branchAttempts).toBeUndefined();
+        expect(await getPerpetualParkInfo('branch-reconcile', 'app-1')).toMatchObject({ parkReason: 'branches-blocked', parkCounts: counts, parkSkipCauses: skipCauses });
+      });
 
       it('parkPerpetual omits parkCounts when no breakdown is provided', async () => {
         mockSchedule({ tasks: { 'branch-reconcile': { type: 'on-demand', perpetual: true, enabled: true, recheckIntervalMs: 3600000 } } })

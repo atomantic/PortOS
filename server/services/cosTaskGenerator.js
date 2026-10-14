@@ -2072,6 +2072,14 @@ export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, t
     });
   }
 
+  // A park is a drain brake, not a promise of another automatic run. Read the
+  // actual eligibility, including per-app cadence/enablement and manual-only
+  // drains, rather than interpreting the stored park deadline as a schedule.
+  const readiness = parkInfo
+    ? await taskScheduleMod.shouldRunTask(request.taskType, appId).catch(() => null)
+    : null;
+  const nextAutoRecheckAt = readiness?.nextRunAt || (readiness?.shouldRun ? new Date().toISOString() : null);
+
   cosEvents.emit('schedule:on-demand-empty', {
     requestId: request.id,
     taskType: request.taskType,
@@ -2082,6 +2090,7 @@ export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, t
     forge,
     parkReason: parkInfo?.parkReason || null,
     parkedUntil: parkInfo?.parkedUntil || null,
+    nextAutoRecheckAt,
     actionableCount: parkInfo?.parkActionableCount ?? null,
     counts: parkInfo?.parkCounts || null,
     skipCauses: parkInfo?.parkSkipCauses || null

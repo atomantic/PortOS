@@ -105,6 +105,24 @@ describe('useOnDemandTaskToast — parked outcome', () => {
   beforeEach(() => { handlers.clear(); toastSpy.mockClear(); });
   afterEach(cleanup);
 
+  it.each([undefined, null])('never promises an automatic retry from a park deadline alone (%s)', nextAutoRecheckAt => {
+    renderHook(() => useOnDemandTaskToast());
+    fire({ taskType: 'branch-reconcile', outcome: 'parked', parkReason: 'no-progress', counts: { unchangedBranches: 4 }, parkedUntil: '2999-01-01T00:00:00Z', nextAutoRecheckAt });
+    expect(toastSpy.mock.calls[0][0]).not.toMatch(/auto-recheck|already up to date/);
+    expect(toastSpy.mock.calls[0][0]).toMatch(/did not advance.*4 branch\(es\) still blocked/);
+  });
+
+  it('shows typed branch holds and an automatic retry only when the server confirms eligibility', () => {
+    renderHook(() => useOnDemandTaskToast());
+    fire({ taskType: 'branch-reconcile', outcome: 'parked', parkReason: 'branches-blocked',
+      counts: { heldBranches: 2, heldDetached: 1, unchangedBranches: 4 }, skipCauses: { 'draft-review-required': 1, 'claim-owner-active': 1, 'worktree-locked': 1 },
+      nextAutoRecheckAt: '2999-01-01T00:00:00Z' });
+    const message = toastSpy.mock.calls[0][0];
+    expect(message).toMatch(/2 branch\(es\) held, 1 detached worktree\(s\) held, 4 branch\(es\) still blocked/);
+    expect(message).toMatch(/draft-review-required/);
+    expect(message).toMatch(/Next auto-recheck/);
+  });
+
   it('renders a bare "no open issues" when the repo is genuinely empty', () => {
     renderHook(() => useOnDemandTaskToast());
     fire({
