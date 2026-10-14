@@ -131,6 +131,7 @@ describe('isolated document preview ownership', () => {
 describe('composition document staging', () => {
   it.each([
     { timing: { speedFps: 24, offsetFrames: 12 }, inSec: 0.25, outSec: 2, filter: 'setpts=(PTS-STARTPTS)/2,fps=24' },
+    { timing: { speedFps: 24, offsetFrames: -6 }, inSec: 0, outSec: 2.25, filter: 'setpts=(PTS-STARTPTS)/2,tpad=start_mode=clone:start_duration=0.25,fps=24' },
     { timing: { offsetFrames: -6 }, inSec: 0, outSec: 4.25, filter: 'setpts=(PTS-STARTPTS)/1,tpad=start_mode=clone:start_duration=0.25,fps=24' },
   ])('stages shot timing $timing on the document output timebase', async ({ timing, inSec, outSec, filter }) => {
     const { project, plan } = await fixture();

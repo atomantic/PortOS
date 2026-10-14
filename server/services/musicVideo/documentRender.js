@@ -149,6 +149,8 @@ export async function resolveSceneMedia(project, { history = [], probe = async (
       const originalOut = edit ? Math.min(edit.outSec, duration ?? edit.outSec) : duration;
       const start = originalIn + (retimed ? clipOffsetSec(scene) : 0);
       const sourceIn = Math.min(duration ?? Infinity, Math.max(0, start));
+      // Offset holds are song/output seconds, independent of playback rate:
+      // clipTimeAt uses sourceIn + max(0, local + min(0, start)) * rate.
       const leadSec = Math.max(0, -start);
       const retime = rate !== 1 || leadSec > 0;
       out.set(scene.sceneId, {

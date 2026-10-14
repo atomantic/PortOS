@@ -520,6 +520,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
   // Uniquely catches correct timing metadata paired with an unretimed staged file.
   [
     { timing: { speedFps: 24, offsetFrames: 12 }, samples: [[0, 1], [5, 1], [6, 2]] },
+    { timing: { speedFps: 24, offsetFrames: -6 }, samples: [[0, 0], [11, 0], [12, 1], [17, 1], [18, 2]] },
     { timing: { offsetFrames: -6 }, samples: [[0, 0], [17, 0], [18, 1], [29, 1], [30, 2]] },
   ].forEach(({ timing, samples }) => it(`renders shot speed and offset ${JSON.stringify(timing)} into the document pixels`, async () => {
     await mkdir(PATHS.videos, { recursive: true });
