@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 
 import { mkdir, rm, writeFile, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 const mockCosState = vi.hoisted(() => ({
   // Use $TMPDIR (falls back to /tmp) rather than a hardcoded /private/tmp — the
@@ -72,6 +73,17 @@ vi.mock('./cosRunnerClient.js', () => ({
   requestSecurityScanViaRunner: vi.fn(),
 }));
 
+// `deleteAgent` / `completeAgent` route through `withBackupAssetPublication`,
+// whose admission lease lives under `PATHS.data` (lib/backupSharedAdmission.js).
+// Redirect PATHS so that lease is minted in an OS temp dir. Without it, a
+// checkout nested under the install's `data/` (a CoS claim worktree) resolves
+// `PATHS.data` to its own `data/`, and the real-data write guard refuses the
+// admission write. The temp root is lazy because this file imports its SUT
+// statically and `vi.mock` is hoisted above any `const` here.
+vi.mock('../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
+  dataRoot: () => lazyTempDataRoot('portos-cos-lifecycle-'),
+}));
+
 import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, deleteAgent, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
 import { saveState, loadState, readAgentsStateForSafetyCheck } from './cosState.js';
 import { recordDomainUsage } from './domainUsage.js';
@@ -80,6 +92,8 @@ import { loadAgentIndex } from './cosAgentIndex.js';
 import { getActiveAgentsFromRunner, requestSecurityScanViaRunner } from './cosRunnerClient.js';
 import { persistAgentSecurityScan } from './agentSecurityScan.js';
 import { activeAgents, runnerAgents, spawningTasks } from './agentState.js';
+
+afterAll(cleanupTempDataRoots);
 
 describe('cosAgentLifecycle', () => {
   beforeEach(async () => {
