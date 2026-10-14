@@ -1,6 +1,18 @@
-import { expect, it, vi } from 'vitest';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from './mockPathsDataRoot.js';
+import { expect, it, vi, afterAll } from 'vitest';
 import { maintenance } from './maintenanceAdmission.js';
 import { acquireBackupSnapshotCut, withBackupAssetPublication } from './backupSnapshotBoundary.js';
+
+// The admission lease is minted from PATHS.data (backupSharedAdmission.js). Redirect
+// PATHS so it lands in an OS temp dir: a checkout nested under the install's data/
+// (a CoS claim worktree) would otherwise resolve PATHS.data to its own data/, and the
+// real-data write guard refuses the lease write. Lazy because these suites import
+// their SUT statically and vi.mock is hoisted above any const here.
+vi.mock('./paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
+  dataRoot: () => lazyTempDataRoot('portos-backup-boundary-'),
+}));
+
+afterAll(cleanupTempDataRoots);
 
 it('keeps waiting publication owned, retires only refused admission, and retains a started failed write', async () => {
   vi.useFakeTimers();
