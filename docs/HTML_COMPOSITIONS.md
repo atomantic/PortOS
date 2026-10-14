@@ -420,6 +420,11 @@ snapshot freezes (`server/services/musicVideo/documentRender.js`):
   width, height } | null }], textCues, composition: { mode, style, posterSec,
   overlay } }`. Load it with `<script src="portos-mv.js">`; the sandbox
   refuses `fetch`.
+  A shot's `speedFps`/`offsetFrames` are baked into the staged clip, so a render
+  seeks `media.inSec + (t - startSec)`. The live preview bridges the original
+  bytes instead: its `media` keeps source-time `inSec`/`outSec` and adds
+  `timing: { rate, leadSec, startSec }` (only for a retimed shot), and the page
+  seeks `startSec + max(0, (t - scene.startSec) - leadSec) * rate`.
 - `song.json` — the same song block the code-rendered mode reads.
 - `media/scene-<sceneId>.<ext>` — each scene's selected take (its clip when
   it has one, else its still), named by `scenes[].media.src`.

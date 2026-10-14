@@ -130,16 +130,18 @@ describe('isolated document preview ownership', () => {
 
 describe('composition document staging', () => {
   it.each([
-    { timing: { speedFps: 24, offsetFrames: 12 }, inSec: 0.25, outSec: 2, filter: 'setpts=(PTS-STARTPTS)/2,fps=24' },
-    { timing: { speedFps: 24, offsetFrames: -6 }, inSec: 0, outSec: 2.25, filter: 'setpts=(PTS-STARTPTS)/2,tpad=start_mode=clone:start_duration=0.25,fps=24' },
-    { timing: { offsetFrames: -6 }, inSec: 0, outSec: 4.25, filter: 'setpts=(PTS-STARTPTS)/1,tpad=start_mode=clone:start_duration=0.25,fps=24' },
-  ])('stages shot timing $timing on the document output timebase', async ({ timing, inSec, outSec, filter }) => {
+    { timing: { speedFps: 24, offsetFrames: 12 }, live: { rate: 2, leadSec: 0, startSec: 0.5 }, inSec: 0.25, outSec: 2, filter: 'setpts=(PTS-STARTPTS)/2,fps=24' },
+    { timing: { speedFps: 24, offsetFrames: -6 }, live: { rate: 2, leadSec: 0.25, startSec: 0 }, inSec: 0, outSec: 2.25, filter: 'setpts=(PTS-STARTPTS)/2,tpad=start_mode=clone:start_duration=0.25,fps=24' },
+    { timing: { offsetFrames: -6 }, live: { rate: 1, leadSec: 0.25, startSec: 0 }, inSec: 0, outSec: 4.25, filter: 'setpts=(PTS-STARTPTS)/1,tpad=start_mode=clone:start_duration=0.25,fps=24' },
+  ])('stages shot timing $timing on the document output timebase', async ({ timing, live, inSec, outSec, filter }) => {
     const { project, plan } = await fixture();
     Object.assign(project.scenes[0], timing);
     // The live preview bridges original bytes, so it must retain source time.
     const raw = await resolveSceneMedia(project, { history: JSON.parse(await readFile(join(PATHS.data, 'video-history.json'), 'utf8')) });
     expect(raw.get('a')).toMatchObject({ ext: 'mp4', inSec: 0, outSec: 4, fps: 24 });
     expect(raw.get('a').rate).toBeUndefined();
+    // The live preview applies speed/offset at seek time (engine.js) from this source-time timing.
+    expect(raw.get('a').timing).toEqual(live);
     const controller = new AbortController();
     await expect(encodeDocumentComposition({ project, plan, jobId: 'job-timing', signal: controller.signal })).rejects.toThrow('stop after staging');
     expect(browser.seen.data.scenes[0].media).toMatchObject({ inSec, outSec, fps: 24 });
@@ -159,6 +161,23 @@ describe('composition document staging', () => {
     await expect(encode(project, plan, 'job-performance-timing')).rejects.toThrow('stop after staging');
     expect(browser.seen.data.scenes[3].media).toMatchObject({ inSec: 2, outSec: 7 });
     expect(browser.seen.data.scenes[0].media).toMatchObject({ inSec: 0, outSec: 4 });
+  });
+
+  it('keeps a performance in-point in the live preview timing and leaves untimed takes alone', async () => {
+    const { project } = await fixture();
+    Object.assign(project.scenes[3], { speedFps: -12, offsetFrames: 12 });
+    const raw = await resolveSceneMedia(project, { history: JSON.parse(await readFile(join(PATHS.data, 'video-history.json'), 'utf8')) });
+    expect(raw.get(project.scenes[3].sceneId)).toMatchObject({ inSec: 0.5, timing: { rate: 0.5, leadSec: 0, startSec: 1 } });
+    expect(raw.get('a').timing).toBeUndefined();
+  });
+
+  it('gives the live preview timing for an offset-only shot', async () => {
+    const { project } = await fixture();
+    Object.assign(project.scenes[0], { offsetFrames: 12 });
+    Object.assign(project.scenes[3], { offsetFrames: -6 });
+    const raw = await resolveSceneMedia(project, { history: JSON.parse(await readFile(join(PATHS.data, 'video-history.json'), 'utf8')) });
+    expect(raw.get('a').timing).toEqual({ rate: 1, leadSec: 0, startSec: 0.5 });
+    expect(raw.get(project.scenes[3].sceneId).timing).toEqual({ rate: 1, leadSec: 0, startSec: 0.25 });
   });
 
   it('fails before opening the page and cleans scratch when shot retiming fails', async () => {

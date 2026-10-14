@@ -553,6 +553,50 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     }
   }, 120000));
 
+  // Uniquely catches the live preview bridging raw bytes without the shot's speed/offset (same samples as the render above).
+  [
+    { timing: { speedFps: 24, offsetFrames: 12 }, samples: [[0, 1], [5, 1], [6, 2]] },
+    { timing: { speedFps: 24, offsetFrames: -6 }, samples: [[0, 0], [11, 0], [12, 1], [17, 1], [18, 2]] },
+    { timing: { offsetFrames: -6 }, samples: [[0, 0], [17, 0], [18, 1], [29, 1], [30, 2]] },
+  ].forEach(({ timing, samples }) => it(`plays shot speed and offset ${JSON.stringify(timing)} in the live preview`, async () => {
+    await mkdir(PATHS.videos, { recursive: true });
+    const clip = join(PATHS.videos, 'live-timed-rgb.webm');
+    execFileSync(ffmpeg, ['-v', 'error', '-y',
+      '-f', 'lavfi', '-i', 'color=c=red:s=64x36:r=24:d=0.5',
+      '-f', 'lavfi', '-i', 'color=c=lime:s=64x36:r=24:d=0.5',
+      '-f', 'lavfi', '-i', 'color=c=blue:s=64x36:r=24:d=0.5',
+      '-filter_complex', '[0:v][1:v][2:v]concat=n=3:v=1:a=0', '-c:v', 'libvpx', clip]);
+    const created = await projects.createProject({ name: 'Synthetic live shot timing' });
+    await projects.mutateProjectRecord(created.id, current => ({ project: { ...current,
+      audioAnalysis: { durationSec: 1.5, sections: [] },
+      scenes: [{ sceneId: 'timed', startSec: 0, endSec: 1.5, videoHistoryId: 'vh-live', ...timing }],
+    } }));
+    await writeFile(join(PATHS.data, 'video-history.json'), JSON.stringify([{ id: 'vh-live', filename: 'live-timed-rgb.webm', numFrames: 36, fps: 24, width: 64, height: 36 }]));
+    await importDocumentTemplate(created.id);
+    const preview = await buildDocumentPreview(await projects.getProject(created.id));
+    const page = await browser.newPage();
+    await page.setContent(preview.html);
+    const bytes = (await readFile(clip)).toString('base64');
+    await page.evaluate(async (base64) => {
+      const blob = new Blob([Uint8Array.from(atob(base64), c => c.charCodeAt(0))], { type: 'video/webm' });
+      addEventListener('message', ({ data }) => { if (data?.type === 'portos-mv:request') postMessage({ type: 'portos-mv:asset', key: data.key, blob }, '*'); });
+      postMessage({ type: 'portos-mv:manifest', keys: ['media/scene-timed.webm'] }, '*');
+      await window.PORTOS_MV_ASSETS;
+    }, bytes);
+    for (const [frame, channel] of samples) {
+      const rgb = await page.evaluate(async (frame) => {
+        await window.portosComposition.seek(frame / 24);
+        const stage = document.getElementById('stage');
+        const probe = document.createElement('canvas'); probe.width = stage.width; probe.height = stage.height;
+        const ctx = probe.getContext('2d'); ctx.drawImage(stage, 0, 0);
+        return [...ctx.getImageData(stage.width >> 1, stage.height >> 1, 1, 1).data.slice(0, 3)];
+      }, frame);
+      expect(rgb[channel], `frame ${frame}`).toBeGreaterThan(180);
+      rgb.forEach((value, i) => { if (i !== channel) expect(value, `frame ${frame}`).toBeLessThan(60); });
+    }
+    await page.close();
+  }, 120000));
+
   it('draws the selected take at SONG time in an excerpt, identically on every render, with the master muxed', async () => {
     const { cdpRequest } = await import('../browserService.js');
     const managedCalls = cdpRequest.mock.calls.length;

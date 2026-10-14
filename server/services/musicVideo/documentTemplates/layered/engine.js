@@ -222,7 +222,11 @@
     if (next?.media?.src) (next.media.kind === 'video' ? loadVideo(next.media.src) : loadImage(next.media.src)).catch(() => {});
     if (media.kind === 'video') {
       const v = await loadVideo(media.src);
-      return seekVideo(v, media, (media.inSec || 0) + (t - scene.startSec));
+      const local = t - scene.startSec;
+      // Raw-asset previews carry the shot's speed/offset instead of a retimed file.
+      const timing = media.timing;
+      if (!timing) return seekVideo(v, media, (media.inSec || 0) + local);
+      return seekVideo(v, { ...media, inSec: timing.startSec }, timing.startSec + Math.max(0, local - timing.leadSec) * timing.rate);
     }
     return loadImage(media.src);
   }
