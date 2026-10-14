@@ -144,15 +144,31 @@ export async function resolveSceneMedia(project, { history = [], probe = async (
       const duration = measured.numFrames && measured.fps ? measured.numFrames / measured.fps : null;
       const edit = selectedPerformanceInstruction(scene)?.edit ?? null;
       const ext = (/\.([a-z0-9]{2,5})$/i.exec(entry.filename)?.[1] || 'mp4').toLowerCase();
-      const rate = retimed ? clipSpeedRate(scene) : 1;
+      const rate = clipSpeedRate(scene);
       const originalIn = edit ? Math.min(edit.inSec, duration ?? edit.inSec) : 0;
       const originalOut = edit ? Math.min(edit.outSec, duration ?? edit.outSec) : duration;
-      const start = originalIn + (retimed ? clipOffsetSec(scene) : 0);
+      const start = originalIn + clipOffsetSec(scene);
       const sourceIn = Math.min(duration ?? Infinity, Math.max(0, start));
       // Offset holds are song/output seconds, independent of playback rate:
       // clipTimeAt uses sourceIn + max(0, local + min(0, start)) * rate.
       const leadSec = Math.max(0, -start);
       const retime = rate !== 1 || leadSec > 0;
+      // A raw-asset preview plays the original bytes, so it keeps source-time
+      // in/out and carries the same timing for the page's seek to apply.
+      if (!retimed) {
+        out.set(scene.sceneId, {
+          kind: 'video',
+          path: videoPath,
+          ext,
+          inSec: round3(originalIn),
+          outSec: originalOut == null ? null : round3(originalOut),
+          ...(retime ? { timing: { rate, leadSec: round3(leadSec), startSec: round3(sourceIn) } } : {}),
+          fps: finite(measured.fps),
+          width: finite(measured.width),
+          height: finite(measured.height),
+        });
+        continue;
+      }
       out.set(scene.sceneId, {
         kind: 'video',
         path: videoPath,
@@ -222,6 +238,8 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
         media: m ? {
           kind: m.kind, src: mediaSrc(scene.sceneId, m),
           inSec: m.inSec, outSec: m.outSec, fps: m.fps, width: m.width, height: m.height,
+          // Raw-asset previews only: seek source time = startSec + max(0, local - leadSec) * rate.
+          ...(m.timing ? { timing: m.timing } : {}),
         } : null,
       };
     });
