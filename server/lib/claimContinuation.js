@@ -400,7 +400,8 @@ export function claimContinuationAdmission({ metadata, agentId, sourceWorkspace,
  * @returns {'claim-owner-active'|'claim-owner-ambiguous'|'claim-ownership-unreadable'|null}
  */
 export function claimCheckoutOwnerReason({ branchName, holderPath = null, sourceWorkspace, agents, ignoreIds = [] }) {
-  if (!Array.isArray(agents) || !branchName) return 'claim-ownership-unreadable';
+  if (!Array.isArray(agents) || !branchName
+    || agents.some(agent => !agent || !['running', 'paused', 'completed'].includes(agent.status))) return 'claim-ownership-unreadable';
   const occupancy = claimHolderOccupancy({
     agents, holderPath, branchName, sourceWorkspace, ignoreIds: new Set(ignoreIds.filter(Boolean)),
   });

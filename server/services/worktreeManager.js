@@ -9,7 +9,7 @@
  * and the branch cleaned up.
  */
 
-import { claimBranchAdmission } from '../lib/claimContinuation.js';
+import { claimBranchAdmission, claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
 import { existsSync, realpathSync } from 'fs';
 import { lstat, readlink, readdir, rm, stat, symlink, unlink } from 'fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'path';
@@ -332,8 +332,8 @@ function removalOutcome(worktreePath, { directory, registration }, failure = nul
 
 /**
  * Remove a worktree directory robustly: try `git worktree remove --force`, and
- * if git refuses (locked, already-gone, broken admin files), fall back to a
- * plain recursive `rm` + `git worktree prune` to clear git's stale bookkeeping.
+ * if git refuses, preserve surviving contents and only prune an absent tree.
+ * Git's lock-aware remove is the only operation allowed to delete a checkout.
  * Never throws — cleanup is best-effort and must never throw into a
  * completion/reap path — but it DOES report what it achieved: after every
  * attempt it re-reads the exact directory and its Git registration, and
@@ -352,34 +352,60 @@ function removalOutcome(worktreePath, { directory, registration }, failure = nul
  *   cleanup (background paths that must not spam on the common case).
  * @param {'remove'|'all'} [opts.log='remove'] - how much to log when `label` is
  *   set: `'remove'` logs only the `worktree remove` failure (the operator-
- *   facing signal); `'all'` also logs the rm + prune sub-failures. Ignored when
+ *   facing signal); `'all'` also logs a prune failure. Ignored when
  *   `label` is absent (nothing logs). The two flags the four callers needed —
  *   "label + log everything" and "label + log remove only" and "silent" — are
  *   the three states here; there was never a "log without a label" caller.
- * @param {string} [opts.subject] - identifier embedded in the rm/prune
- *   sub-failure messages (only used when `log:'all'`). Defaults to
+ * @param {string} [opts.subject] - identifier embedded in prune
+ *   failure messages (only used when `log:'all'`). Defaults to
  *   `worktreePath`; the agent-cleanup callers pass their agent id so the
  *   message wording stays byte-identical to the pre-extraction logs an operator
  *   may grep for (e.g. `… for worktree <agentId>`).
+ * @param {(holder: object|null) => Promise<string|null>} [opts.verifyRemoval] -
+ *   caller's fresh ownership/content gate, run before Git removal and rechecked
+ *   after a refusal to report the current hold.
+ *   Callers that share claim ownership hold its lock through this operation.
  * @returns {Promise<{removed: boolean, directory: string, registration: string, warning: string|null}>}
  *   `warning` is set exactly when `removed` is false.
  */
-export async function forceRemoveWorktreeDir(repo, worktreePath, { label, log = 'remove', subject = worktreePath } = {}) {
+export async function forceRemoveWorktreeDir(repo, worktreePath, { label, log = 'remove', subject = worktreePath, verifyRemoval } = {}) {
   const logAll = label && log === 'all';
   let lastFailure = null;
-  await execGit(['worktree', 'remove', worktreePath, '--force'], repo).catch(async (err) => {
+  let heldReason = null;
+  const check = async () => {
+    const entries = await listWorktrees(repo).catch(() => null);
+    if (!entries) return 'worktree-ownership-unreadable';
+    const holder = entries.find(wt => pathsEqual(wt.path, worktreePath)) || null;
+    if (holder?.locked) return 'worktree-locked';
+    if (!verifyRemoval) return null;
+    const reason = await verifyRemoval(holder).catch(() => 'worktree-ownership-unreadable');
+    if (reason) return reason;
+    // Ownership/content checks await I/O. Refresh their registration afterward;
+    // Git's own removal still honors locks acquired after this final read.
+    const fresh = await listWorktrees(repo).catch(() => null);
+    if (!fresh) return 'worktree-ownership-unreadable';
+    const current = fresh.find(wt => pathsEqual(wt.path, worktreePath)) || null;
+    if (current?.locked) return 'worktree-locked';
+    if (current?.branch !== holder?.branch || current?.head !== holder?.head) return 'worktree-holder-changed';
+    return null;
+  };
+  heldReason = await check();
+  if (!heldReason) await execGit(['worktree', 'remove', worktreePath, '--force'], repo).catch(async (err) => {
     lastFailure = errorExcerpt(err);
     if (label) console.log(`⚠️ ${label}: ${err.message}`);
-    await rm(worktreePath, { recursive: true, force: true }).catch((rmErr) => {
-      lastFailure = errorExcerpt(rmErr);
-      if (logAll) console.log(`⚠️ Manual rm failed for worktree ${subject}: ${rmErr.message}`);
-    });
+    heldReason = await check();
+    if (heldReason) return;
+    // A refusal is not authority to erase a surviving checkout. A raw rm could
+    // bypass a lock acquired after our last read, even with a caller guard.
+    const directory = await lstat(worktreePath).then(() => 'present', err => err.code === 'ENOENT' ? 'absent' : 'unknown');
+    if (directory !== 'absent') { heldReason = 'worktree-removal-refused'; return; }
     await execGit(['worktree', 'prune'], repo).catch((pruneErr) => {
       lastFailure = errorExcerpt(pruneErr);
       if (logAll) console.log(`⚠️ Worktree prune failed for ${subject}: ${pruneErr.message}`);
     });
   });
-  const outcome = removalOutcome(worktreePath, await probeWorktreeRemoval(repo, worktreePath), lastFailure);
+  const outcome = removalOutcome(worktreePath, await probeWorktreeRemoval(repo, worktreePath), heldReason || lastFailure);
+  if (heldReason) outcome.reason = heldReason;
   if (!outcome.removed && label) console.warn(`⚠️ ${outcome.warning}`);
   return outcome;
 }
@@ -463,6 +489,21 @@ export function classifyWorktreeDirt(porcelain, { ignoredPaths = [] } = {}) {
     realChangePaths: lines.filter((line) => !isLockfile(line)).map(toPath),
     hasRealChanges: !lockfileOnly
   };
+}
+
+/** A proven-absent directory is empty; an existing tree must identify itself.
+ * Git can otherwise walk out of a broken linked checkout and report its parent
+ * clean. null means unknown, including unreadable directories or status errors.
+ */
+export async function readWorktreeStatus(worktreePath) {
+  const present = await lstat(worktreePath).then(() => true,
+    err => err.code === 'ENOENT' || err.code === 'ENOTDIR' ? false : null);
+  if (present === false) return '';
+  if (present === null) return null;
+  const top = await execGit(['rev-parse', '--show-toplevel'], worktreePath).then(r => r.stdout.trim()).catch(() => null);
+  if (!top || !pathsEqual(top, worktreePath)) return null;
+  const status = await execGit(['status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none'], worktreePath, { ignoreExitCode: true }).catch(() => null);
+  return status?.exitCode === 0 ? status.stdout : null;
 }
 
 /**
@@ -1126,27 +1167,17 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
   // Verify the worktree still points to the correct repo before trusting git status.
   // If the .git file is missing (e.g., worktree was partially cleaned up), git walks up
   // the directory tree and may find a parent repo (e.g., PortOS) instead of the app repo.
-  // In that case, git status would report the parent repo's dirty files, causing us to
-  // incorrectly preserve the worktree.
+  // In that case, even a successful git status describes the wrong checkout and
+  // cannot prove this directory has no unique work.
   const detectedToplevel = await execGit(['rev-parse', '--show-toplevel'], worktreePath)
     .then(r => r.stdout.trim())
     .catch(() => null);
   // Compare realpath-resolved forms so symlinks (e.g. macOS /var → /private/var)
   // or normalization differences don't false-positive as a broken worktree.
   if (detectedToplevel && !pathsEqual(detectedToplevel, worktreePath)) {
-    console.log(`🌳 Worktree ${agentId} resolves to ${detectedToplevel} instead of ${worktreePath} — broken worktree, removing`);
-    const rmFailure = await rm(worktreePath, { recursive: true, force: true }).then(() => null, rmErr => {
-      console.log(`⚠️ Failed to remove broken worktree ${agentId}: ${rmErr.message}`);
-      return rmErr;
-    });
-    if (rmFailure) {
-      warnings.push(`Worktree cleanup incomplete for ${worktreePath} (broken checkout still present): ${errorExcerpt(rmFailure)} — retryable`);
-      return { merged: false, removed: false, cleanupIncomplete: true, uncommittedSaved: false, warnings };
-    }
-    await cleanupWorktreeBranch(sourceWorkspace, branchName, {
-      preserveBranchWithCommits: options.preserveBranchWithCommits || options.merge, warnings,
-    });
-    return { merged: false, removed: true, uncommittedSaved: false, warnings };
+    warnings.push('Worktree preserved — broken checkout identity prevents verifying its contents');
+    console.warn(`⚠️ Worktree ${agentId} has a broken checkout identity; preserving its directory and branch`);
+    return { merged: false, removed: false, cleanupIncomplete: true, uncommittedSaved: false, warnings };
   }
 
   // Safety check: abort removal when uncommitted changes are detected.
@@ -1587,6 +1618,7 @@ export async function cleanupOrphanedWorktrees(sourceWorkspace, activeAgentIds) 
  */
 export async function reapMergedWorktrees(sourceWorkspace, {
   activeAgentIds = new Set(),
+  claimOwners,
   excludeBranches = null,
   includeClaudeTrees = true,
   includeUnmanagedTrees = false,
@@ -1594,6 +1626,12 @@ export async function reapMergedWorktrees(sourceWorkspace, {
   dryRun = false
 } = {}) {
   const { getDefaultBranch, hasBranchMergeEvidence } = await import('./git.js');
+  const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnership.js');
+  const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
+  // Every entry point (scheduled, reconcile, operator cleanup) needs a trusted
+  // registry. loadState/getAgents may default a corrupt file to empty state.
+  const readOwners = claimOwners === undefined ? readClaimOwnershipAgents
+    : async () => claimOwners?.readAgents ? claimOwners.readAgents().catch(() => null) : claimOwners?.agents;
 
   const defaultBranch = knownDefaultBranch || await getDefaultBranch(sourceWorkspace).catch(() => null) || 'main';
   const target = await resolveMergeTarget(sourceWorkspace, defaultBranch);
@@ -1645,14 +1683,9 @@ export async function reapMergedWorktrees(sourceWorkspace, {
     // uncommitted fresh-from-main worktree may be an active agent that has not
     // made its first commit yet.
     //
-    // A registration git already calls prunable has no working tree left to be
-    // dirty, so it reads as clean rather than status-failed — otherwise `git
-    // status` fails in the missing directory and the branch stays pinned behind a
-    // worktree that no longer exists. `existsSync` covers the same state on a git
-    // too old to report `prunable` in `worktree list --porcelain`.
-    const status = wt.prunable || !existsSync(wt.path)
-      ? ''
-      : await execGit(['status', '--porcelain'], wt.path).then(r => r.stdout).catch(() => null);
+    // Only a proven-absent directory is empty. A prunable registration may
+    // instead be an existing checkout with a broken .git pointer and unique work.
+    const status = await readWorktreeStatus(wt.path);
     if (status === null) { hold('status-failed'); continue; }
     if (!classifyWorktreeDirt(status).clean) { hold('uncommitted'); continue; }
 
@@ -1660,26 +1693,43 @@ export async function reapMergedWorktrees(sourceWorkspace, {
     const hasMergeEvidence = await hasBranchMergeEvidence(sourceWorkspace, branchName, target).catch(() => false);
     if (!hasMergeEvidence) { hold('unmerged'); continue; }
 
-    if (dryRun) { reaped.push({ path: wt.path, branch: branchName, locked: !!wt.locked, branchDeleted: false }); continue; }
-
-    // Remove the worktree, then force-delete the branch (-D because squash-merged
-    // branches aren't recognized by -d, and we've proven the work is in default).
-    const removal = await forceRemoveWorktreeDir(sourceWorkspace, wt.path, {
-      label: `worktree remove failed for ${wt.path}, manual cleanup`,
+    // The early reconcile pass must see the SAME registered owners and branch
+    // reservations as later retirement. Keep binding excluded until removal and
+    // branch deletion settle, and re-read after a Git refusal too.
+    await withClaimOwnershipLock(async () => {
+      const verifyRemoval = async (holder) => {
+        if (!holder || holder.branch !== wt.branch) return 'worktree-holder-changed';
+        const agents = await readOwners();
+        const ownerReason = claimCheckoutOwnerReason({ branchName, holderPath: wt.path, sourceWorkspace, agents });
+        if (ownerReason) return ownerReason;
+        const policyHold = await readBranchCompletionHold({ repoPath: sourceWorkspace, branch: branchName, retirement: true });
+        if (policyHold) return policyHold;
+        const reason = worktreeOwnershipReason({ path: wt.path, locked: holder.locked, activeAgentIds, roots: managedRoots, requireKnownLiveness: true });
+        if (reason) return reason;
+        const freshStatus = await readWorktreeStatus(wt.path);
+        if (freshStatus === null) return 'worktree-status-unavailable';
+        if (!classifyWorktreeDirt(freshStatus).clean) return 'worktree-dirty';
+        return await hasBranchMergeEvidence(sourceWorkspace, branchName, target).catch(() => false) ? null : 'unmerged';
+      };
+      if (dryRun) {
+        const reason = await verifyRemoval(wt);
+        if (reason) hold(reason);
+        else reaped.push({ path: wt.path, branch: branchName, locked: !!wt.locked, branchDeleted: false });
+        return;
+      }
+      const removal = await forceRemoveWorktreeDir(sourceWorkspace, wt.path, {
+        label: `worktree remove failed for ${wt.path}`, verifyRemoval,
+      });
+      if (!removal.removed) {
+        skipped.push({ path: wt.path, branch: branchName, reason: removal.reason || 'remove-failed', warning: removal.warning });
+        return;
+      }
+      const branchDeleted = await execGit(['branch', '-D', branchName], sourceWorkspace).then(() => true).catch(err => {
+        console.log(`⚠️ branch delete failed for ${branchName}: ${err.message}`);
+        return false;
+      });
+      reaped.push({ path: wt.path, branch: branchName, locked: !!wt.locked, branchDeleted });
     });
-    // A checkout that survived is not a reap: it is held (not counted) with the
-    // retryable warning, and the branch is left alone — it is still checked out.
-    if (!removal.removed) {
-      skipped.push({ path: wt.path, branch: branchName, reason: 'remove-failed', warning: removal.warning });
-      continue;
-    }
-    // Reported per entry: the tree is gone, but a caller that
-    // presents this as "branch deleted" would otherwise be lying on a failure.
-    const branchDeleted = await execGit(['branch', '-D', branchName], sourceWorkspace).then(() => true).catch(err => {
-      console.log(`⚠️ branch delete failed for ${branchName}: ${err.message}`);
-      return false;
-    });
-    reaped.push({ path: wt.path, branch: branchName, locked: !!wt.locked, branchDeleted });
   }
 
   if (reaped.length > 0) {

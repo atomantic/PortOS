@@ -25,12 +25,20 @@ vi.mock('./git.js', () => ({
 vi.mock('../lib/execGit.js', () => ({
   execGit: vi.fn(async () => ({ stdout: '', exitCode: 0 }))
 }));
+vi.mock('./cosClaimOwnership.js', async (importOriginal) => ({
+  ...await importOriginal(), readClaimOwnershipAgents: async () => [],
+}));
 vi.mock('./worktreeManager.js', async () => {
   const { AGENT_SCRATCH_PATHS, matchesScratchRoot } = await import('../lib/agentScratchPaths.js');
   return {
     listWorktrees: vi.fn(async () => []),
     forceRemoveWorktreeDir: vi.fn(async () => ({ removed: true, warning: null })),
     reapMergedWorktrees: vi.fn(async () => ({ reaped: [], skipped: [] })),
+    readWorktreeStatus: async (path) => {
+      const { execGit } = await import('../lib/execGit.js');
+      const result = await execGit(['status', '--porcelain'], path, { ignoreExitCode: true }).catch(() => null);
+      return result?.exitCode === 0 ? result.stdout : null;
+    },
     // Real pure classifier semantics: empty porcelain = clean, and every non-empty
     // line is a real change path (the suite never feeds it lockfile churn) EXCEPT
     // PortOS's own runtime scratch, which the real classifier subtracts for every
@@ -402,14 +410,14 @@ describe('cleanupMerged', () => {
     expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
   });
 
-  it('never tears down a locked / human-claim / active-agent worktree', async () => {
+  it('keeps legacy snapshot-only callers behind locked / human-claim / active-agent gates', async () => {
     git.hasBranchMergeEvidence.mockResolvedValue(true);
     const activeAgentIds = new Set(['agent-abc12345']);
     const res = await cleanupMerged('/repo', 'main', [
       { branch: 'locked-b', worktreePath: '/repo/data/cos/worktrees/locked', worktreeLocked: true },
       { branch: 'claim-b', worktreePath: '/repo/data/cos/worktrees/claim-foo' },
       { branch: 'active-b', worktreePath: '/repo/data/cos/worktrees/agent-abc12345' }
-    ], { activeAgentIds });
+    ], { activeAgentIds, claimOwners: { agents: [] } });
     expect(res.cleaned).toEqual([]);
     expect(res.skipped).toEqual([
       { branch: 'locked-b', reason: 'worktree-locked' },
@@ -483,13 +491,13 @@ describe('cleanupMerged', () => {
     expect(git.deleteBranch).toHaveBeenCalledWith('/repo', 'claim/issue-', { local: true });
   });
 
-  it('still protects a RECENT claim worktree even when merged + clean, and says when the hold lifts', async () => {
+  it('still protects a RECENT claim worktree for snapshot-only callers even when merged + clean, and says when the hold lifts', async () => {
     git.hasBranchMergeEvidence.mockResolvedValue(true);
     execGit.mockResolvedValue({ stdout: '', exitCode: 0 }); // clean
     const before = Date.now();
     const res = await cleanupMerged('/repo', 'main', [
       { branch: 'claim/issue-9999', worktreePath: '/repo/data/cos/worktrees/claim-issue-9999', worktreeAgeMs: 60 * 1000 } // 1 min old
-    ]);
+    ], { claimOwners: { agents: [] } });
     expect(res.cleaned).toEqual([]);
     expect(res.skipped).toHaveLength(1);
     expect(res.skipped[0]).toMatchObject({ branch: 'claim/issue-9999', reason: 'worktree-human-claim' });
@@ -510,12 +518,12 @@ describe('cleanupMerged', () => {
     git.hasBranchMergeEvidence.mockResolvedValue(true);
 
     execGit.mockResolvedValue({ stdout: '', exitCode: 0 }); // clean
-    const reaped = await cleanupMerged('/repo', 'main', [{ branch: 'claim/issue-0', ...shipped() }]);
+    const reaped = await cleanupMerged('/repo', 'main', [{ branch: 'claim/issue-0', ...shipped() }], { claimOwners: { agents: [] } });
     expect(reaped.cleaned).toEqual(['claim/issue-0']);
 
     // The dirty gate is independent — a shorter window never overrides it.
     execGit.mockResolvedValue({ stdout: ' M server/index.js', exitCode: 0 }); // dirty
-    const dirty = await cleanupMerged('/repo', 'main', [{ branch: 'claim/issue-1', ...shipped() }]);
+    const dirty = await cleanupMerged('/repo', 'main', [{ branch: 'claim/issue-1', ...shipped() }], { claimOwners: { agents: [] } });
     expect(dirty.cleaned).toEqual([]);
     expect(dirty.skipped).toEqual([{ branch: 'claim/issue-1', reason: 'worktree-dirty' }]);
 
@@ -524,7 +532,7 @@ describe('cleanupMerged', () => {
     // remote could not be read. The week-long window still applies.
     const unshipped = await cleanupMerged('/repo', 'main', [
       { branch: 'claim/issue-2', ...shipped({ upstreamGone: false }) }
-    ]);
+    ], { claimOwners: { agents: [] } });
     expect(unshipped.cleaned).toEqual([]);
     expect(unshipped.skipped[0]).toMatchObject({ branch: 'claim/issue-2', reason: 'worktree-human-claim' });
 
@@ -533,7 +541,7 @@ describe('cleanupMerged', () => {
     // caller is told when the short window lapses.
     const busy = await cleanupMerged('/repo', 'main', [
       { branch: 'claim/issue-3', ...shipped({ worktreeAgeMs: 60 * 1000 }) }
-    ]);
+    ], { claimOwners: { agents: [] } });
     expect(busy.cleaned).toEqual([]);
     expect(busy.skipped[0]).toMatchObject({ branch: 'claim/issue-3', reason: 'worktree-human-claim' });
     expect(Date.parse(busy.skipped[0].retryAt)).toBeLessThanOrEqual(Date.now() + SHIPPED_CLAIM_IDLE_MS);
@@ -1086,7 +1094,8 @@ describe('unreachable forge (#3358)', () => {
     const res = await reconcile('/repo');
     expect(res.cleaned).toEqual(['feature/done']);
     expect(wt.reapMergedWorktrees).toHaveBeenCalledWith('/repo', {
-      activeAgentIds: new Set(), includeClaudeTrees: true
+      activeAgentIds: new Set(), includeClaudeTrees: true,
+      claimOwners: { agents: [], readAgents: expect.any(Function) },
     });
     expect(wt.reapMergedWorktrees.mock.invocationCallOrder[0])
       .toBeLessThan(ensureForgeReachableMock.mock.invocationCallOrder[0]);
@@ -1175,7 +1184,9 @@ describe('reconcile', () => {
     worktreeMtimeMs = Date.now() - 4 * 60 * 60 * 1000;
     git.hasBranchMergeEvidence.mockResolvedValue(true);
 
-    const res = await reconcile('/repo');
+    // A snapshot-only caller cannot replace the human-claim age protection
+    // with a fresh registry proof under the binding lock.
+    const res = await reconcile('/repo', { claimOwners: { agents: [] } });
     expect(res.cleaned).toEqual([]);
     expect(res.skipped[0]).toMatchObject({ branch: 'claim/issue-4348', reason: 'worktree-human-claim' });
     expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();

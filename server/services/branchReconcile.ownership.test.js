@@ -1,8 +1,3 @@
-vi.mock('./branchCompletionPolicy.js', async () => ({
-  ...await vi.importActual('./branchCompletionPolicy.js'),
-  readBranchCompletionPolicies: vi.fn(async () => []),
-  readBranchCompletionHold: vi.fn(async () => null),
-}));
 /**
  * Worktree ownership through branch-reconcile's real cleanup boundary (#10270).
  *
@@ -14,12 +9,43 @@ vi.mock('./branchCompletionPolicy.js', async () => ({
  * operator's explicit merged-branch cleanup keeps its wider reach.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, mkdir, rm, utimes, writeFile } from 'fs/promises';
+import { mkdtemp, mkdir, rm, utimes, writeFile, appendFile, unlink } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { execGit } from '../lib/execGit.js';
 import { materializeGitRepo, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.js';
+
+const injected = vi.hoisted(() => ({ statusPath: null, statusThrows: false, beforeRemove: null, owners: [], policies: [] }));
+vi.mock('../lib/execGit.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, execGit: async (args, cwd, options) => {
+    // Git reports forward slashes even when path.join uses Windows separators.
+    if (args[0] === 'status' && injected.statusPath && cwd?.replaceAll('\\', '/') === injected.statusPath.replaceAll('\\', '/')) {
+      if (injected.statusThrows || !options?.ignoreExitCode) throw new Error('synthetic unreadable index');
+      return { stdout: '', stderr: 'synthetic unreadable index', exitCode: 128 };
+    }
+    if (args[0] === 'worktree' && args[1] === 'remove' && injected.beforeRemove) {
+      const before = injected.beforeRemove;
+      injected.beforeRemove = null;
+      await before();
+      throw new Error('synthetic Git removal failure');
+    }
+    return actual.execGit(args, cwd, options);
+  } };
+});
+vi.mock('./cosState.js', () => ({
+  readAgentsStateForSafetyCheck: async () => ({ trusted: injected.owners !== null,
+    agents: injected.owners && Object.fromEntries(injected.owners.map(agent => [agent.id, agent])) }),
+}));
+
+// Keep archive I/O at the boundary; use the real completion-policy evaluator.
+vi.mock('./branchCompletionPolicy.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, readBranchCompletionPolicies: async () => injected.policies, readBranchCompletionHold: input => actual.readBranchCompletionHold(input, {
+    readPolicies: async () => injected.policies,
+  }) };
+});
 
 // Keep the run hermetic: the verdict ledger otherwise reads this install's
 // real CoS data directory.
@@ -28,7 +54,7 @@ vi.mock('./supersededLedger.js', async (importOriginal) => ({
   readVerdictLedger: async () => [],
 }));
 
-const { reconcile } = await import('./branchReconcile.js');
+const { reconcile, cleanupMerged, reapSupersededBranches } = await import('./branchReconcile.js');
 const { deleteMergedBranches } = await import('./git.js');
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -39,6 +65,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
   let external;
 
   beforeEach(async () => {
+    Object.assign(injected, { statusPath: null, statusThrows: false, beforeRemove: null, owners: [], policies: [] });
     scratch = realpathSync(await mkdtemp(join(tmpdir(), 'portos-reconcile-own-')));
     const safeRepo = join(scratch, 'repo');
     await mkdir(safeRepo);
@@ -137,5 +164,141 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     expect(operator.deleted.map((d) => d.name), JSON.stringify(operator)).toContain('loose-br');
     expect(existsSync(loose)).toBe(false);
     expect(await branches()).not.toContain('loose-br');
+  });
+
+  it.each([false, true])('preserves authored files when status is unreadable (throws=%s)', async (throws) => {
+    const path = await addTree(join(repo, '.claude', 'worktrees', 'claim-unreadable'), 'claim/issue-31', { ageMs: 30 * DAY });
+    await writeFile(join(path, 'unfinished.txt'), 'keep this work\n');
+    injected.statusPath = throws ? path : path.replaceAll('/', '\\');
+    injected.statusThrows = throws;
+    const result = await reconcile(repo, { activeAgentIds: new Set() });
+    expect(result.cleaned).not.toContain('claim/issue-31');
+    expect(result.skipped).toContainEqual(expect.objectContaining({ branch: 'claim/issue-31', reason: 'worktree-status-unavailable' }));
+    expect(existsSync(join(path, 'unfinished.txt'))).toBe(true);
+    expect(await branches()).toContain('claim/issue-31');
+  });
+
+  it('does not let a superseded verdict authorize retirement of an unreadable checkout', async () => {
+    const branch = 'fix/superseded-unreadable';
+    const path = await addTree(join(repo, '.claude', 'worktrees', 'superseded'), branch);
+    await writeFile(join(path, 'unfinished.txt'), 'preserve before backup\n');
+    const tip = (await execGit(['rev-parse', branch], repo)).stdout.trim();
+    injected.statusPath = path;
+    const result = await reapSupersededBranches(repo, 'main', [{
+      branch, tip, worktreePath: path, dirtyPaths: ['unfinished.txt'],
+      verdict: { branch, tip, verdict: 'SUPERSEDED', dirtyPaths: ['unfinished.txt'] },
+    }], { cosDir: join(scratch, 'cos') });
+
+    expect(result.reaped).toEqual([]);
+    expect(result.skipped).toContainEqual({ branch, reason: 'worktree-status-unavailable' });
+    expect(existsSync(join(path, 'unfinished.txt'))).toBe(true);
+    expect(await branches()).toContain(branch);
+  });
+
+  it('checks current owners when direct cleanup receives only a previously merged ref', async () => {
+    const branch = 'fix/newly-reserved';
+    await execGit(['branch', branch, 'main'], repo);
+    injected.owners = [{ id: 'coordinator', status: 'running', metadata: {
+      sourceWorkspace: repo, claimBranches: [branch],
+    } }];
+
+    const result = await cleanupMerged(repo, 'main', [{ branch, upstreamGone: true }]);
+
+    expect(result.cleaned).toEqual([]);
+    expect(result.skipped).toEqual([{ branch, reason: 'claim-owner-active' }]);
+    expect(await branches()).toContain(branch);
+  });
+
+  it('refreshes a completion handoff before direct retirement and after a Git refusal', async () => {
+    const ref = 'fix/policy-held-ref';
+    const checkedOut = 'fix/policy-held-tree';
+    await execGit(['branch', ref, 'main'], repo);
+    const path = await addTree(join(repo, '.claude', 'worktrees', 'policy-held'), checkedOut);
+    const hold = branch => ({ id: `completed-${branch.replaceAll('/', '-')}`, status: 'completed', metadata: {
+      sourceWorkspace: repo, worktreeBranch: branch, prCompletionPolicy: 'leave-open',
+    } });
+    injected.policies = [hold(ref)];
+    const direct = await cleanupMerged(repo, 'main', [{ branch: ref, upstreamGone: true }]);
+    expect(direct.cleaned).toEqual([]);
+    expect(direct.skipped).toEqual([{ branch: ref, reason: 'pr-completion-human-handoff' }]);
+
+    injected.beforeRemove = async () => { injected.policies.push(hold(checkedOut)); };
+    const result = await reconcile(repo);
+    expect(result.cleaned).not.toContain(checkedOut);
+    expect(result.wip).toContainEqual(expect.objectContaining({ branch: checkedOut, completionPolicyReason: 'pr-completion-human-handoff' }));
+    expect(existsSync(path)).toBe(true);
+    expect(await branches()).toEqual(expect.arrayContaining([ref, checkedOut]));
+  });
+
+  it('protects registered branch owners and coordinator reservations during the early reap', async () => {
+    const root = join(repo, '.claude', 'worktrees');
+    const owned = await addTree(join(root, 'owned'), 'claim/issue-32');
+    const reserved = await addTree(join(root, 'reserved'), 'next/issue-33');
+    injected.owners = [
+      { id: 'agent-owner', status: 'paused', sourceWorkspace: repo, workspacePath: repo, metadata: { claimBranch: 'claim/issue-32' } },
+      { id: 'agent-coordinator', status: 'running', sourceWorkspace: repo, workspacePath: repo, metadata: { claimBranches: ['next/issue-33'] } },
+    ];
+    const result = await reconcile(repo, { activeAgentIds: new Set(), claimOwners: { agents: injected.owners, readAgents: async () => injected.owners } });
+    expect(result.cleaned).toEqual([]);
+    for (const path of [owned, reserved]) expect(existsSync(path)).toBe(true);
+    expect(result.skipped.map(row => row.reason)).toEqual(['claim-owner-active', 'claim-owner-active']);
+  });
+
+  it.each(['owner', 'lock', 'status failure'])('preserves a tree when a new %s appears before the early reaper fallback', async (change) => {
+    const path = await addTree(join(repo, '.claude', 'worktrees', 'fallback'), 'fix/fallback');
+    const owners = { agents: [], readAgents: async () => injected.owners };
+    injected.beforeRemove = async () => {
+      if (change === 'lock') await execGit(['worktree', 'lock', path], repo);
+      else if (change === 'status failure') injected.statusPath = path;
+      else injected.owners = [{ id: 'agent-new-owner', status: 'running', workspacePath: path }];
+    };
+    const result = await reconcile(repo, { activeAgentIds: new Set(), claimOwners: owners });
+    expect(result.cleaned).toEqual([]);
+    expect(existsSync(path)).toBe(true);
+    expect(await branches()).toContain('fix/fallback');
+    const registration = (await execGit(['worktree', 'list', '--porcelain'], repo)).stdout;
+    expect(registration.split(/\r?\n/)).toContain(`worktree ${path.replaceAll('\\', '/')}`);
+    if (change === 'lock') expect(registration).toContain('locked');
+    expect(result.skipped).toContainEqual(expect.objectContaining({ branch: 'fix/fallback', reason: change === 'lock' ? 'worktree-locked' : change === 'status failure' ? 'worktree-status-unavailable' : 'claim-owner-active' }));
+  });
+
+  it('fails closed on an unreadable registry or unknown owner status at the operator cleanup boundary', async () => {
+    const path = await addTree(join(external, 'unknown-owner'), 'fix/unknown-owner');
+    for (const owners of [null, [{ id: 'agent-unknown', status: 'unknown', workspacePath: path }]]) {
+      injected.owners = owners;
+      const result = await deleteMergedBranches(repo, { activeAgentIds: new Set() });
+      expect(result.deleted).toEqual([]);
+      expect(existsSync(path)).toBe(true);
+      expect(await branches()).toContain('fix/unknown-owner');
+    }
+  });
+
+  it('preserves an unreadable detached tree and still retires a clean detached peer', async () => {
+    const root = join(repo, '.claude', 'worktrees');
+    const unreadable = join(root, 'unreadable-detached');
+    const clean = join(root, 'clean-detached');
+    await execGit(['worktree', 'add', '--detach', unreadable, 'main'], repo);
+    await execGit(['worktree', 'add', '--detach', clean, 'main'], repo);
+    await writeFile(join(unreadable, 'unfinished.txt'), 'preserve\n');
+    injected.statusPath = unreadable;
+    const result = await reconcile(repo, { activeAgentIds: new Set(), claimOwners: { agents: [], readAgents: async () => [] } });
+    expect(result.detachedWorktrees).toContainEqual(expect.objectContaining({ path: unreadable.replaceAll('\\', '/'), reason: 'worktree-status-unavailable' }));
+    expect(existsSync(join(unreadable, 'unfinished.txt'))).toBe(true);
+    expect(existsSync(clean)).toBe(false);
+    expect(result.cleaned).toContain(clean.replaceAll('\\', '/'));
+  });
+
+  it('preserves a prunable checkout whose missing pointer makes Git report the parent clean', async () => {
+    await appendFile(join(repo, '.git', 'info', 'exclude'), '\n.claude/\n');
+    const path = await addTree(join(repo, '.claude', 'worktrees', 'broken'), 'fix/broken');
+    await writeFile(join(path, 'unique.txt'), 'uncommitted work\n');
+    await unlink(join(path, '.git'));
+    expect((await execGit(['status', '--porcelain'], path)).stdout).toBe('');
+    expect((await execGit(['worktree', 'list', '--porcelain'], repo)).stdout).toContain('prunable');
+    const result = await reconcile(repo, { activeAgentIds: new Set() });
+    expect(result.cleaned).toEqual([]);
+    expect(result.skipped).toContainEqual(expect.objectContaining({ branch: 'fix/broken', reason: 'worktree-status-unavailable' }));
+    expect(existsSync(join(path, 'unique.txt'))).toBe(true);
+    expect(await branches()).toContain('fix/broken');
   });
 });

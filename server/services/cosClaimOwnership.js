@@ -32,6 +32,23 @@ export function withClaimOwnershipLock(work) {
   return run;
 }
 
+/** Destructive callers must not consume loadState's empty recovery default. */
+export async function readClaimOwnershipAgents() {
+  const { readAgentsStateForSafetyCheck } = await import('./cosState.js');
+  const snapshot = await readAgentsStateForSafetyCheck().catch(() => null);
+  if (snapshot?.trusted !== true || !snapshot.agents || typeof snapshot.agents !== 'object' || Array.isArray(snapshot.agents)) return null;
+  const entries = Object.entries(snapshot.agents);
+  if (entries.some(([id, agent]) => {
+    if (!agent || agent.id !== id || !['running', 'paused', 'completed'].includes(agent.status)) return true;
+    if (agent.metadata != null && (typeof agent.metadata !== 'object' || Array.isArray(agent.metadata))) return true;
+    return ['claimBranches', 'claimReleasedBranches'].some(key => {
+      const bindings = agent.metadata?.[key] ?? agent[key];
+      return bindings != null && (!Array.isArray(bindings) || bindings.some(branch => typeof branch !== 'string'));
+    });
+  })) return null;
+  return entries.map(([, agent]) => agent);
+}
+
 /**
  * @param {{ agentId: string, action: 'bind'|'release', branch: string }} input
  * @returns {Promise<{ bound: true, branch: string }|{ released: true, branch: string }|{ bound?: false, released?: false, reason: string }>}
@@ -74,11 +91,7 @@ export async function checkReconcileOwnership(input, deps = {}) {
   const { appId, branch, prUrl, worktreePath, agentId } = input;
   const getAppById = deps.getAppById ?? (await import('./apps.js')).getAppById;
   const listWorktrees = deps.listWorktrees ?? (await import('./worktreeManager.js')).listWorktrees;
-  const getAgents = deps.getAgents ?? (async () => {
-    const { readAgentsStateForSafetyCheck } = await import('./cosState.js');
-    const snapshot = await readAgentsStateForSafetyCheck();
-    return snapshot.trusted && snapshot.agents ? Object.values(snapshot.agents) : null;
-  });
+  const getAgents = deps.getAgents ?? readClaimOwnershipAgents;
   const readCompletionHold = deps.readCompletionHold ?? (await import('./branchCompletionPolicy.js')).readBranchCompletionHold;
   const getActiveAgentIds = deps.getActiveAgentIds ?? (await import('./agentState.js')).getActiveAgentIds;
   const { buildActiveOwnerIds, resolveLiveOwnerReason } = await import('./branchReconcile.js');

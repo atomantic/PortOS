@@ -10,7 +10,7 @@
  * Repos are copied from the shared `gitTestRepo.js` template. The whole file
  * is excluded from `npm run test:fast` (`VITEST_FAST=1`).
  */
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import { mkdtemp, rm, writeFile, mkdir, chmod } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
@@ -24,6 +24,8 @@ import {
 } from '../lib/gitTestRepo.js';
 import { hasBranchMergeEvidence } from './git.js';
 import { reapMergedWorktrees } from './worktreeManager.js';
+vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionHold: async () => null }));
+vi.mock('./cosState.js', () => ({ readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: {} }) }));
 
 /**
  * Why `wantedPath` was skipped, matched separator-insensitively — `skipped[].path`
@@ -281,8 +283,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('reapMergedWorktrees', () => {
       }
 
       expect(result.reaped.map(r => r.branch)).not.toContain('stuck-br');
-      expect(skipReason(result, path)).toBe('remove-failed');
-      expect(result.skipped.find(entry => entry.reason === 'remove-failed').warning).toMatch(/cleanup incomplete/);
+      // Git removed its registration before failing to remove the directory.
+      // The fallback cannot prove the surviving directory is still our holder.
+      expect(skipReason(result, path)).toBe('worktree-holder-changed');
+      expect(result.skipped.find(entry => entry.path === path).warning).toMatch(/cleanup incomplete/);
       expect(existsSync(path)).toBe(true);
       const branches = (await execGit(['branch', '--format=%(refname:short)'], dir)).stdout.trim().split('\n');
       expect(branches).toContain('stuck-br');
