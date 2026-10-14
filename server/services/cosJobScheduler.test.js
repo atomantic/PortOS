@@ -78,14 +78,16 @@ vi.mock('./cosTaskGenerator.js', () => ({ queueEligibleImprovementTasks: vi.fn()
 
 const generateTaskFromJob = vi.fn(async (job) => ({ id: `task-${job.id}`, description: job.name }));
 const executeScriptJob = vi.fn().mockResolvedValue(undefined);
+const executeShellJob = vi.fn().mockResolvedValue(undefined);
+const recordJobGateSkip = vi.fn().mockResolvedValue(undefined);
 const checkJobGate = vi.fn().mockResolvedValue({ shouldRun: true, reason: 'ok' });
 vi.mock('./autonomousJobs.js', () => ({
   generateTaskFromJob: (...a) => generateTaskFromJob(...a),
-  recordJobGateSkip: vi.fn().mockResolvedValue(undefined),
+  recordJobGateSkip: (...a) => recordJobGateSkip(...a),
   isScriptJob: (job) => job?.type === 'script',
   executeScriptJob: (...a) => executeScriptJob(...a),
   isShellJob: (job) => job?.type === 'shell',
-  executeShellJob: vi.fn().mockResolvedValue(undefined),
+  executeShellJob: (...a) => executeShellJob(...a),
   // Dynamically imported inside executeScheduledJob — return a job built from the
   // requested id so two distinct ids model two distinct same-tick jobs.
   getJob: vi.fn(async (jobId) => ({
@@ -122,6 +124,8 @@ beforeEach(() => {
   globalThis.__nextJobType = 'agent';
   generateTaskFromJob.mockClear();
   executeScriptJob.mockClear();
+  executeShellJob.mockClear();
+  recordJobGateSkip.mockClear();
   checkJobGate.mockReset();
   checkJobGate.mockResolvedValue({ shouldRun: true, reason: 'ok' });
   // maxActionsPerDay:1, nothing recorded yet — the exact same-tick boundary.
@@ -138,8 +142,11 @@ afterEach(() => {
   // module-level set and timer don't leak across tests.
   clearSpawningJob('job-a');
   clearSpawningJob('job-b');
+  clearSpawningJob('job-fail');
   clearSpawningJob('script-a');
   clearSpawningJob('script-b');
+  clearSpawningJob('script-fail');
+  clearSpawningJob('shell-fail');
   delete globalThis.__nextJobType;
 });
 
@@ -225,6 +232,31 @@ describe('executeScheduledJob — same-tick daily-action budget race (#984)', ()
   it('a single job still fires when the budget has room for exactly one', async () => {
     await executeScheduledJob('job-a');
     expect(generateTaskFromJob).toHaveBeenCalledTimes(1);
+    expect(getScheduledActionReservations()).toBe(0);
+  });
+});
+
+describe('executeScheduledJob — execution failure advances schedule to avoid rapid loop', () => {
+  it('calls recordJobGateSkip when generateTaskFromJob throws', async () => {
+    generateTaskFromJob.mockRejectedValueOnce(new Error('Prompt template broken'));
+    await executeScheduledJob('job-fail');
+    expect(recordJobGateSkip).toHaveBeenCalledWith('job-fail');
+    expect(getScheduledActionReservations()).toBe(0);
+  });
+
+  it('calls recordJobGateSkip when executeScriptJob fails', async () => {
+    globalThis.__nextJobType = 'script';
+    executeScriptJob.mockRejectedValueOnce(new Error('Syntax error in job script'));
+    await executeScheduledJob('script-fail');
+    expect(recordJobGateSkip).toHaveBeenCalledWith('script-fail');
+    expect(getScheduledActionReservations()).toBe(0);
+  });
+
+  it('calls recordJobGateSkip when executeShellJob fails', async () => {
+    globalThis.__nextJobType = 'shell';
+    executeShellJob.mockRejectedValueOnce(new Error('Command failed: exit 1'));
+    await executeScheduledJob('shell-fail');
+    expect(recordJobGateSkip).toHaveBeenCalledWith('shell-fail');
     expect(getScheduledActionReservations()).toBe(0);
   });
 });
