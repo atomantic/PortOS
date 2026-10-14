@@ -182,6 +182,8 @@ describe('StoryboardAnimatic clips', () => {
 
   // Uniquely catches a slow link stuck re-seeking: each seek restarts the download, so a clip chased every time update never plays.
   it('lets a playing clip fetch after a seek before moving it again', async () => {
+    // Just after page load: the clip's first seek must not wait on a seek that never happened.
+    const now = vi.spyOn(performance, 'now').mockReturnValue(100);
     render(<StoryboardAnimatic project={{ id: 'p', scenes: clipScenes }} audioUrl="/song.mp3" />);
     const clip = await screen.findByLabelText('Clip for Opening');
     await waitFor(() => expect(clip.getAttribute('src')).toBe('/data/videos/clip-a.mov'));
@@ -200,6 +202,7 @@ describe('StoryboardAnimatic clips', () => {
     Object.defineProperty(clip, 'readyState', { value: 4, configurable: true });
     fireEvent.seeked(clip);
     expect(clip.currentTime).toBeCloseTo(4, 6);
+    now.mockRestore();
   });
 
   it('steps a paused clip to each frame while it is still fetching', async () => {

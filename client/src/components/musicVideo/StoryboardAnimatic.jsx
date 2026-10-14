@@ -237,7 +237,8 @@ function ShotClip({ scene, audioRef, time, current, preload = 'auto' }) {
   const videoRef = useRef(null);
   const [ready, setReady] = useState(false);
   const [reload, setReload] = useState(0);
-  const recovery = useRef({ errors: 0, timer: 0, lastSeekAt: 0, lastReloadAt: 0 });
+  // -Infinity: no seek or restart yet, so the first one is never held back.
+  const recovery = useRef({ errors: 0, timer: 0, lastSeekAt: -Infinity, lastReloadAt: -Infinity });
   const file = useVideoFileSrc(scene.videoHistoryId);
   const src = file.src || (file.resolving ? null : `/data/videos/${scene.videoHistoryId}.mp4`);
   const sync = useCallback(() => {
