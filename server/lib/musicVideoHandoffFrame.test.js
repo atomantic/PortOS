@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { previousShot, sceneClipOutFrameSec } from './musicVideoHandoffFrame.js';
+import { previousShot, sceneClipOutFrameSec, shotHandoffSource } from './musicVideoHandoffFrame.js';
 
 // Where a continuing shot's start frame comes from: the last frame the cut
 // shows of the previous shot's clip, never the clip's own last frame.
@@ -34,5 +34,20 @@ describe('previousShot', () => {
   it('is the shot before it in the cut, by start time', () => {
     expect(previousShot(project, 'b')?.sceneId).toBe('a');
     expect(previousShot(project, 'a')).toBeNull();
+  });
+});
+
+// Uniquely catches a still shot handing over a stale clip that is not on screen (the clip a still shot kept from before).
+describe('shotHandoffSource', () => {
+  const composed = { composition: { mode: 'composed' } };
+  const still = { sceneId: 's1', visualLayer: 'still', referenceImageId: 'still.png', endImageId: 'end.png', videoHistoryId: 'stale-clip' };
+  it('hands over what the cut ends on', () => {
+    expect(shotHandoffSource(composed, { ...still, imageEffect: 'end-glitch' })).toEqual({ imageId: 'end.png' });
+    expect(shotHandoffSource(composed, { ...still, imageEffect: 'flash-develop' })).toEqual({ imageId: 'still.png' });
+    expect(shotHandoffSource(composed, { ...still, imageEffect: 'end-glitch', endImageId: null })).toEqual({ imageId: 'still.png' });
+    expect(shotHandoffSource(composed, { sceneId: 's2', videoHistoryId: 'clip' })).toEqual({ clip: true });
+    expect(shotHandoffSource(composed, { sceneId: 's3', visualLayer: 'card' })).toBeNull();
+    // A plain concat render plays footage only, so a still-tagged shot there plays its clip.
+    expect(shotHandoffSource({}, still)).toEqual({ clip: true });
   });
 });

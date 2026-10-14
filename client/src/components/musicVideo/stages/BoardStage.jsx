@@ -6,7 +6,7 @@ import SceneCard from '../SceneCard.jsx';
 import ScenePoster from '../ScenePoster.jsx';
 import { ShotLockContext, SHOT_LOCK_LABELS, overallShotLock } from '../ShotLock.jsx';
 import { shotNumbers } from '../ShotStepper.jsx';
-import { previousShot } from '../../../../../server/lib/musicVideoHandoffFrame.js';
+import { previousShot, shotHandoffSource } from '../../../../../server/lib/musicVideoHandoffFrame.js';
 import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
 import { musicVideoAspect } from '../../../lib/musicVideoAspect.js';
 import { FOOTAGE_OPTIONAL_MODES } from '../../../lib/musicVideoStages.js';
@@ -233,7 +233,7 @@ export default function BoardStage({ board }) {
               onSwapFrames={takes.swapFrames}
               onContinueFromPrevious={takes.continueFromPrevious}
               // The server's own neighbor rule: the shot before this one by start time.
-              previousHasClip={Boolean(previousShot(project, scene.sceneId)?.videoHistoryId)}
+              previousHasClip={Boolean(shotHandoffSource(project, previousShot(project, scene.sceneId)))}
               onImportTake={(target) => board.setPickerTarget({ type: 'take', sceneId: target.sceneId })}
               onImportClipTake={(target) => board.setPickerTarget({ type: 'clip', sceneId: target.sceneId })}
               onPlacePoolItem={takes.placePoolItem}

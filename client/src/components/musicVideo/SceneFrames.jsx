@@ -154,7 +154,7 @@ export default function SceneFrames({
             {start && onContinueFromPrevious && (
               <button type="button" onClick={() => onContinueFromPrevious(scene, { keepStillAsEnd: keepStillAsEnd && Boolean(scene.referenceImageId) })}
                 disabled={takeBusy || !previousHasClip} className={SECONDARY_BUTTON}
-                title={previousHasClip ? 'Start this shot from the last frame the previous shot shows in the cut' : 'The previous shot needs a clip first'}>
+                title={previousHasClip ? 'Start this shot from the last frame the previous shot shows in the cut' : 'The previous shot needs a clip or still first'}>
                 <SkipForward size={14} /> From previous shot
               </button>
             )}
