@@ -200,6 +200,10 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
 
   // Sending a draft performs an external mail side effect as the operator (#11273).
   'POST /api/messages/drafts/:id/send',
+  // Provider launch opens Teams/Outlook tabs in the host CDP browser, and the
+  // Gmail enable helper navigates it to Google Cloud Console (#11433).
+  'POST /api/messages/launch/:accountId',
+  'POST /api/messages/gmail/enable-api',
 
   // Capture activation and existing live feeds require operator authority (#11272).
   // HEAD inherits the GET policy because Express invokes the same handler.
