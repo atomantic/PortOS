@@ -23,7 +23,6 @@ import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
 import { forkRemoteName, normalizeForkHead } from '../lib/forkHead.js';
 import { isHumanClaimWorktree, worktreeAgentId, worktreeOwnershipReason } from '../lib/worktreeOwnership.js';
 import { ensureInstanceId } from './instanceIdentity.js';
-import { withClaimOwnershipLock, readClaimOwnershipAgents } from './cosClaimOwnership.js';
 
 export { isHumanClaimWorktree } from '../lib/worktreeOwnership.js';
 
@@ -1627,6 +1626,7 @@ export async function reapMergedWorktrees(sourceWorkspace, {
   dryRun = false
 } = {}) {
   const { getDefaultBranch, hasBranchMergeEvidence } = await import('./git.js');
+  const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnership.js');
   const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
   // Every entry point (scheduled, reconcile, operator cleanup) needs a trusted
   // registry. loadState/getAgents may default a corrupt file to empty state.
