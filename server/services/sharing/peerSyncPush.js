@@ -106,10 +106,29 @@ export function __resetPushFailureLogForTests() {
   loggedPushFailures.clear();
 }
 
+// A store read that fails is NOT "record does not exist": only a not-found
+// error (ServerError 404 / a `*NOT_FOUND` code, as the record loaders throw)
+// maps to null. Anything else (DB down, a sanitizer throwing) rethrows so the
+// push rejects before any network call or lastPushedHash write, and the caller
+// logs it (#11455).
+function isNotFoundError(err) {
+  const code = err?.code;
+  return err?.status === 404 || (typeof code === 'string' && (code === 'NOT_FOUND' || code.endsWith('_NOT_FOUND')));
+}
+
+async function loadOrNotFound(fn) {
+  try {
+    return await fn();
+  } catch (err) {
+    if (isNotFoundError(err)) return null;
+    throw err;
+  }
+}
+
 async function isSubscriptionRecordTombstone(sub) {
   const desc = RECORD_KINDS[sub.recordKind];
   if (!desc) return false;
-  const record = await desc.load(sub.recordId).catch(() => null);
+  const record = await loadOrNotFound(() => desc.load(sub.recordId));
   return record?.deleted === true;
 }
 
@@ -582,7 +601,7 @@ async function clearSchemaVersionBlock(subId) {
  * the two genuinely-special kinds don't inflate the dispatcher's complexity.
  */
 async function buildUniversePushPayload(sub, sourceInstanceId, portosMeta) {
-  const record = await RECORD_KINDS.universe.load(sub.recordId).catch(() => null);
+  const record = await loadOrNotFound(() => RECORD_KINDS.universe.load(sub.recordId));
   if (!record) return null;
   const sanitized = sanitizeRecordForWire('universe', record);
   if (!sanitized) return null;
@@ -596,7 +615,7 @@ async function buildUniversePushPayload(sub, sourceInstanceId, portosMeta) {
   // it would re-create an empty bucket on the receiver.
   const linkedCollection = record.deleted === true
     ? null
-    : await findCollectionByUniverseId(sub.recordId).catch(() => null);
+    : await loadOrNotFound(() => findCollectionByUniverseId(sub.recordId));
   // Tombstone push: deleted records carry no on-disk assets the receiver
   // should pull. Sending an empty manifest avoids triggering
   // pullMissingAssetsFromPeer for a record we're telling the peer to
@@ -641,14 +660,14 @@ async function buildUniversePushPayload(sub, sourceInstanceId, portosMeta) {
  * but nothing else. Extracted out of `buildPushPayload`'s own body (#6843).
  */
 async function buildSeriesPushPayload(sub, sourceInstanceId, portosMeta) {
-  const record = await RECORD_KINDS.series.load(sub.recordId).catch(() => null);
+  const record = await loadOrNotFound(() => RECORD_KINDS.series.load(sub.recordId));
   if (!record) return null;
   const sanitized = sanitizeRecordForWire('series', record);
   if (!sanitized) return null;
   // Bundle child issues — the series + its issues form one unit of edit
   // for downstream consumers (panels, comic pages), so the receiver
   // applies them atomically per merge cycle.
-  const childIssues = await listIssuesForSeries(sub.recordId, { includeDeleted: true }).catch(() => []);
+  const childIssues = await listIssuesForSeries(sub.recordId, { includeDeleted: true });
   const sanitizedIssues = childIssues
     .map((i) => sanitizeRecordForWire('issue', i))
     .filter(Boolean);
@@ -676,7 +695,7 @@ async function buildSeriesPushPayload(sub, sourceInstanceId, portosMeta) {
   // and the receiver's collection would diverge.
   const linkedCollection = record.deleted === true
     ? null
-    : await findCollectionBySeriesId(sub.recordId).catch(() => null);
+    : await loadOrNotFound(() => findCollectionBySeriesId(sub.recordId));
   // Tombstone push at the series level: same reasoning as universe above.
   // When the series itself is deleted, send an empty asset manifest so
   // the receiver doesn't pull bytes for a record it's about to tombstone.
@@ -693,8 +712,8 @@ async function buildSeriesPushPayload(sub, sourceInstanceId, portosMeta) {
   const manuscriptReview = record.deleted === true
     ? null
     : await import('../pipeline/manuscriptReview.js')
-      .then(({ getReview }) => getReview(sub.recordId))
-      .catch(() => null);
+      
+      .then(({ getReview }) => loadOrNotFound(() => getReview(sub.recordId)));
   // Bundle the reverse-outline sibling doc (the scene-by-scene segmentation)
   // on the same terms as the review above: a regenerate-only change doesn't
   // move the series record, so without bundling it the per-record push would
@@ -704,8 +723,8 @@ async function buildSeriesPushPayload(sub, sourceInstanceId, portosMeta) {
   const reverseOutline = record.deleted === true
     ? null
     : await import('../pipeline/reverseOutline.js')
-      .then(({ getStoredOutline }) => getStoredOutline(sub.recordId))
-      .catch(() => null);
+      
+      .then(({ getStoredOutline }) => loadOrNotFound(() => getStoredOutline(sub.recordId)));
   // Same wire projection as the universe branch — see the note there.
   const bundledCollection = sanitizeRecordForWire('mediaCollection', linkedCollection);
   return {
@@ -736,7 +755,7 @@ export async function buildPushPayload(sub, sourceInstanceId) {
   if (!desc) return null;
   if (sub.recordKind === 'universe') return buildUniversePushPayload(sub, sourceInstanceId, portosMeta);
   if (sub.recordKind === 'series') return buildSeriesPushPayload(sub, sourceInstanceId, portosMeta);
-  const record = await desc.load(sub.recordId).catch(() => null);
+  const record = await loadOrNotFound(() => desc.load(sub.recordId));
   if (!record) return null;
   const sanitized = sanitizeRecordForWire(sub.recordKind, record);
   if (!sanitized) return null;
@@ -757,7 +776,7 @@ export async function buildPushPayload(sub, sourceInstanceId) {
     // it (same as before), so no schema-version bump (mirrors `linkedCollection`).
     let linkedTrack = null;
     if (record.deleted !== true && isStr(record.trackId)) {
-      const track = await getTrack(record.trackId, { includeDeleted: true }).catch(() => null);
+      const track = await loadOrNotFound(() => getTrack(record.trackId, { includeDeleted: true }));
       // Ship the linked track whether LIVE or a TOMBSTONE. A track delete fans
       // out to its linked music-video projects (collectSubscriptionsForUpdate),
       // and a musicVideoProjects-only peer needs the tombstone to converge

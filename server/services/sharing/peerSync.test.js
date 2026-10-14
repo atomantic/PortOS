@@ -256,6 +256,7 @@ import {
   pullRecordFromPeer,
   syncNowForPeer,
   collectSubscriptionsForUpdate,
+  triggerPushForRecord,
   buildMediaLibraryManifest,
   libraryKindsExcludedByPatterns,
   syncMediaLibraryFromPeer,
@@ -266,6 +267,7 @@ import {
 } from './peerSync.js';
 
 import { buildPushPayload, __resetPushFailureLogForTests } from './peerSyncPush.js';
+import { DEBOUNCE_MS } from './peerSyncShared.js';
 import { ENVELOPE_EXTENSIONS, ENVELOPE_PENDING_KEYS } from './peerSyncShared.js';
 import { getPeers } from '../instances.js';
 import { getInstanceId } from '../instanceIdentity.js';
@@ -1987,6 +1989,86 @@ describe('peerSync', () => {
       });
       expect(result.pushed).toBe(false);
       expect(result.reason).toBe('record-not-found');
+    });
+
+    // #11455 — a store read FAILURE must not read as "record does not exist"
+    // or ship a truncated payload that then advances lastPushedHash.
+    describe('push read failures (#11455)', () => {
+      const notFound = () => Object.assign(new Error('gone'), { code: 'PIPELINE_SERIES_NOT_FOUND' });
+      const dbDown = () => Object.assign(new Error('connection refused'), { code: 'ECONNREFUSED' });
+
+      it('maps a not-found loader error to record-not-found with no network call', async () => {
+        vi.mocked(getUniverse).mockRejectedValue(Object.assign(new Error('nope'), { code: 'NOT_FOUND' }));
+        const result = await pushRecordToPeer({
+          id: 's', peerId: 'peer-a', recordKind: 'universe', recordId: 'gone',
+        });
+        expect(result).toMatchObject({ pushed: false, reason: 'record-not-found' });
+        expect(peerFetch).not.toHaveBeenCalled();
+      });
+
+      it('rejects, posts nothing and keeps lastPushedHash when the loader fails for another reason', async () => {
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+        vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
+        await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
+        let sub;
+        await vi.waitFor(async () => {
+          sub = await findPeerSubscription('peer-a', 'universe', 'u1');
+          expect(sub?.lastPushedHash).toBeTruthy();
+        });
+        const priorHash = sub.lastPushedHash;
+        vi.mocked(peerFetch).mockClear();
+        vi.mocked(getUniverse).mockRejectedValue(dbDown());
+        await expect(pushRecordToPeer(sub)).rejects.toThrow('connection refused');
+        expect(peerFetch).not.toHaveBeenCalled();
+        expect((await findPeerSubscription('peer-a', 'universe', 'u1')).lastPushedHash).toBe(priorHash);
+      });
+
+      it('series push: a failing listIssuesForSeries rejects instead of pushing issues: []', async () => {
+        vi.mocked(getSeries).mockResolvedValue({ id: 'ser-1', name: 'Series' });
+        vi.mocked(listIssuesForSeries).mockRejectedValue(dbDown());
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'series', recordId: 'ser-1',
+        }, { adoptedFromReverse: true });
+        await expect(pushRecordToPeer(sub)).rejects.toThrow('connection refused');
+        expect(peerFetch).not.toHaveBeenCalled();
+        expect((await findPeerSubscription('peer-a', 'series', 'ser-1')).lastPushedHash).toBeFalsy();
+      });
+
+      it('series push: a failing review read rejects, but a not-found review is simply omitted', async () => {
+        vi.mocked(getSeries).mockResolvedValue({ id: 'ser-1', name: 'Series' });
+        vi.mocked(getReview).mockRejectedValue(dbDown());
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'series', recordId: 'ser-1',
+        }, { adoptedFromReverse: true });
+        await expect(pushRecordToPeer(sub)).rejects.toThrow('connection refused');
+        expect(peerFetch).not.toHaveBeenCalled();
+        vi.mocked(getReview).mockRejectedValue(notFound());
+        vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
+        const ok = await pushRecordToPeer(sub);
+        expect(ok.pushed).toBe(true);
+      });
+
+      it('debounced push logs the failure with the subscription id', async () => {
+        vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+        }, { adoptedFromReverse: true });
+        vi.mocked(getUniverse).mockRejectedValue(dbDown());
+        const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        vi.useFakeTimers({ toFake: ['setTimeout'] });
+        try {
+          await triggerPushForRecord('universe', 'u1');
+          await vi.advanceTimersByTimeAsync(DEBOUNCE_MS + 1);
+        } finally {
+          vi.useRealTimers();
+        }
+        await vi.waitFor(() => {
+          expect(errSpy.mock.calls.some(([msg]) => String(msg).includes(`scheduled push failed for ${sub.id}`)
+            && String(msg).includes('connection refused'))).toBe(true);
+        });
+        errSpy.mockRestore();
+        expect(peerFetch).not.toHaveBeenCalled();
+      });
     });
 
     it('short-circuits when the record hashes match the last push (no-op edits dont round-trip)', async () => {
