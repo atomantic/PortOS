@@ -153,7 +153,9 @@
  *     `stt.endpoint` receives microphone audio and returns the transcript
  *     the agent acts on. `PUT /api/voice/config` is gated only when one of those values would
  *     change (`HOST_CONTROL_VOICE_CONFIG_PATHS`); a whole-config resend and
- *     every other voice setting stay open.
+ *     every other voice setting stay open on that dedicated endpoint.
+ *     Generic settings replaces the entire voice root, so even an empty
+ *     replacement can reset protected policy and requires operator authority.
  *
  * Patterns are `METHOD /path`, with Express-style `:param` (one segment) and
  * `*name` (the rest of the path). Matching is case-insensitive and ignores one
@@ -880,7 +882,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
  * harness enablement and wrapper CLIs, the Code Animation worker tools, the
  * code-review chain, the untrusted content screen in front of agent work,
  * scheduled self-update, scheduled series autopilots, and backup destination/
- * recovery policy. The store is polymorphic, so its other slices stay open.
+ * recovery policy, and whole-root voice policy replacement. The store is
+ * polymorphic, so its other slices stay open.
  */
 export const HOST_CONTROL_SETTINGS_SLICES = Object.freeze([
   'autoUpdate',
@@ -893,6 +896,7 @@ export const HOST_CONTROL_SETTINGS_SLICES = Object.freeze([
   'harnesses',
   'seriesAutopilot',
   'untrustedContent',
+  'voice',
 ]);
 
 /**
