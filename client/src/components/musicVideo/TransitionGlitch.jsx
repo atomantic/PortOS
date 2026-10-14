@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
-  blockBox, mergeGlitchFrames, sceneImageEffectGlitchFrames, sceneShotGlitchFrames, sceneTransitionSections, transitionFrameAt, transitionGlitchFrames,
+  blockBox, glowStrips, mergeGlitchFrames, sceneImageEffectGlitchFrames, sceneShotGlitchFrames, sceneTransitionSections, transitionFrameAt, transitionGlitchFrames,
 } from '../../lib/musicVideoTransitions.js';
 
 // The canvas paints at most this wide; a glitch lasts a few frames, so detail past it is never seen.
@@ -203,6 +203,12 @@ function paintGlitch(canvas, figure, params, frame) {
     const box = blockBox(b.x, b.y, b.w, b.h, width, height);
     out.globalAlpha = b.alpha;
     out.fillStyle = `#${b.color}`;
+    out.fillRect(box.x, box.y, box.w, box.h);
+  }
+  for (const strip of glowStrips(params.glows)) {
+    const box = blockBox(strip.x, strip.y, strip.w, strip.h, width, height);
+    out.globalAlpha = strip.alpha;
+    out.fillStyle = `#${strip.color}`;
     out.fillRect(box.x, box.y, box.w, box.h);
   }
   out.globalAlpha = 1;

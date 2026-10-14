@@ -503,13 +503,13 @@ describe('VHS glitch transitions', () => {
       return <SceneCard scene={scene} index={0} onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
     }
     render(<Harness />);
-    const out = screen.getByLabelText('Glitch out');
+    const out = screen.getByLabelText('Effect out');
     fireEvent.change(out, { target: { value: 'vhs-glitch' } });
     expect(onSave).toHaveBeenLastCalledWith('s1', { transitionOut: 'vhs-glitch' });
     expect(out.value).toBe('vhs-glitch');
     fireEvent.change(out, { target: { value: '' } });
     expect(onSave).toHaveBeenLastCalledWith('s1', { transitionOut: null });
-    expect(screen.getByLabelText('Glitch in').value).toBe('');
+    expect(screen.getByLabelText('Effect in').value).toBe('');
   });
 });
 
@@ -523,15 +523,15 @@ describe('In-shot glitches', () => {
       return <SceneCard scene={scene} index={0} onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
     }
     render(<Harness />);
-    fireEvent.click(screen.getByRole('button', { name: /Add glitch/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Add effect/ }));
     expect(onSave).toHaveBeenLastCalledWith('s1', { glitches: [{ atSec: 2, style: 'color-block' }] });
     const slider = screen.getByLabelText(/^at /);
     fireEvent.change(slider, { target: { value: '2.5' } });
     fireEvent.pointerUp(slider);
     expect(onSave).toHaveBeenLastCalledWith('s1', { glitches: [{ atSec: 2.5, style: 'color-block' }] });
-    fireEvent.change(screen.getByLabelText('Glitch 1 length'), { target: { value: '0.5' } });
+    fireEvent.change(screen.getByLabelText('Effect 1 length'), { target: { value: '0.5' } });
     expect(onSave).toHaveBeenLastCalledWith('s1', { glitches: [{ atSec: 2.5, style: 'color-block', lengthSec: 0.5 }] });
-    fireEvent.click(screen.getByRole('button', { name: 'Remove glitch 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove effect 1' }));
     expect(onSave).toHaveBeenLastCalledWith('s1', { glitches: null });
   });
 });
