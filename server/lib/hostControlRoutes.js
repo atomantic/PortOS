@@ -179,6 +179,15 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/stacker-news/actions/:id/review',
   'POST /api/stacker-news/actions/:id/execute',
 
+  // X (Twitter) draft review authorizes a later browser compose handoff, and
+  // opening approved drafts, opening account destinations or syncing accounts
+  // executes CDP browser automation on the host. Reads, account CRUD and draft
+  // creation remain data-only operations.
+  'POST /api/x/drafts/:id/review',
+  'POST /api/x/drafts/:id/open',
+  'POST /api/x/accounts/:id/open',
+  'POST /api/x/accounts/:id/sync',
+
   // Sending a draft performs an external mail side effect as the operator (#11273).
   'POST /api/messages/drafts/:id/send',
 

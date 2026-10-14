@@ -170,6 +170,25 @@ describe('outbound mail host-control policy (#11273)', () => {
   });
 });
 
+describe('X (Twitter) review and browser automation policy', () => {
+  it('gates draft review, compose handoff, destination open and sync while keeping draft/account CRUD open', () => {
+    expect(isHostControlRoute('POST', '/api/x/drafts/00000000-0000-4000-8000-000000000001/review')).toBe(true);
+    expect(isHostControlRoute('POST', '/api/x/drafts/00000000-0000-4000-8000-000000000001/open')).toBe(true);
+    expect(isHostControlRoute('POST', '/api/x/accounts/00000000-0000-4000-8000-000000000001/open')).toBe(true);
+    expect(isHostControlRoute('POST', '/api/x/accounts/00000000-0000-4000-8000-000000000001/sync')).toBe(true);
+
+    expect(isHostControlRoute('GET', '/api/x/capabilities')).toBe(false);
+    expect(isHostControlRoute('GET', '/api/x/accounts')).toBe(false);
+    expect(isHostControlRoute('POST', '/api/x/accounts')).toBe(false);
+    expect(isHostControlRoute('GET', '/api/x/accounts/00000000-0000-4000-8000-000000000001')).toBe(false);
+    expect(isHostControlRoute('PATCH', '/api/x/accounts/00000000-0000-4000-8000-000000000001')).toBe(false);
+    expect(isHostControlRoute('DELETE', '/api/x/accounts/00000000-0000-4000-8000-000000000001')).toBe(false);
+    expect(isHostControlRoute('POST', '/api/x/drafts')).toBe(false);
+    expect(isHostControlRoute('GET', '/api/x/accounts/00000000-0000-4000-8000-000000000001/posts')).toBe(false);
+    expect(isHostControlRoute('GET', '/api/x/accounts/00000000-0000-4000-8000-000000000001/drafts')).toBe(false);
+  });
+});
+
 // Every mutation in these audited routers must be gated or explicitly reviewed
 // as a data/inference operation. A new route fails closed at review time instead
 // of silently falling through the inventory's one-way "listed routes exist" check.
