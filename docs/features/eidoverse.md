@@ -1271,6 +1271,16 @@ steady, approval-gated and challenged work stays attention, in-progress work
 stays active, and terminal entries are excluded. No task names, raw block
 reasons or arbitrary category strings enter the observation.
 
+Federation Terminal counts errored peer records with structured failed-probe
+reasons: `peer_connection_refused`, `peer_transport_failure`, `peer_probe_timeout`,
+`peer_auth_required`, `peer_dns_failure`, `peer_host_unreachable`, and
+`peer_health_http_failure`. Use these to select a bounded connection or credential
+diagnostic, without retrying peers or changing admission. `peer_failure_unknown`
+means the errored peer has no recognized failed-probe evidence (including legacy
+records); neither `status:error` nor unavailable travel proves a configuration,
+guest-admission or sync failure. Successful/healthy peers ignore old failure
+metadata. Probe messages, HTTP response bodies and network identities stay private.
+
 Other sources and older reason-less inputs use `source_attention` or `source_error`: these
 say only that a coarse source status requires attention, without inventing a
 cause. Error sources remain identifiable even though district status is attention.
