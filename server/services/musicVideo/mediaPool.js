@@ -91,15 +91,31 @@ function forgetPoolAssets(project, keys) {
 const usedKeys = (project) => new Set((project?.scenes || []).flatMap((scene) => Object.entries(TAKE_SLOT)
   .map(([slot, field]) => (scene[field] ? `${KIND_OF_SLOT[slot]}:${scene[field]}` : null)).filter(Boolean)));
 
+/** Each `<kind>:<id>` a shot uses now, mapped to the shots using it (still, clip or end frame slot), in board order. */
+const shotsUsing = (project) => {
+  const using = new Map();
+  for (const scene of project?.scenes || []) {
+    for (const [slot, field] of Object.entries(TAKE_SLOT)) {
+      if (!scene[field]) continue;
+      const key = `${KIND_OF_SLOT[slot]}:${scene[field]}`;
+      const ids = using.get(key) || [];
+      if (!ids.includes(scene.sceneId)) using.set(key, [...ids, scene.sceneId]);
+    }
+  }
+  return using;
+};
+
 /**
- * The pool the picker shows: every asset in the collection or on the board that
- * no shot uses now (not selected in any shot's still, clip or end frame slot).
- * Each item names the shot whose takes hold it (null on the floor), the take's
- * prompt and status, a clip's still, and the clips rendered from a still.
- * `history` maps a video id to its history entry. Newest first.
+ * The pool the picker shows: every asset in the collection or on the board,
+ * including ones a shot uses now, since a frame placed on one shot can be right
+ * for another too. `inUseBy` lists the shots using it (still, clip or end frame
+ * slot). Each item names the shot whose takes hold it (else the first shot using
+ * it, else null on the floor), the take's prompt and status, a clip's still, and
+ * the clips rendered from a still. `history` maps a video id to its history entry.
+ * Newest first.
  */
 function buildMediaPool(project, collectionItems = [], history = new Map()) {
-  const used = usedKeys(project);
+  const using = shotsUsing(project);
   const byKey = new Map();
   const add = (kind, ref, fields) => {
     const key = `${kind}:${ref}`;
@@ -125,7 +141,10 @@ function buildMediaPool(project, collectionItems = [], history = new Map()) {
   }
   const marks = project?.assetMarks || {};
   return items
-    .filter((item) => !used.has(`${item.kind}:${item.assetId}`))
+    .map((item) => {
+      const inUseBy = using.get(`${item.kind}:${item.assetId}`) || [];
+      return { ...item, sceneId: item.sceneId || inUseBy[0] || null, inUseBy };
+    })
     // Bad is only ever the director's own mark: a take rejected from one shot may be right for another.
     .map((item) => ({ ...item, mark: marks[`${item.kind}:${item.assetId}`] || null }))
     .map((item) => (item.kind === 'image' ? { ...item, clipIds: clipsByStill.get(item.assetId) || [] } : item))
@@ -174,7 +193,7 @@ async function stampClipProvenance(clips) {
 }
 
 /**
- * The unused stills and clips for a project's picker, backfilling its
+ * Every still and clip for a project's picker, backfilling its
  * collection first. An asset no longer in the media library (deleted from the
  * gallery or history) is left out rather than shown as a broken tile.
  */

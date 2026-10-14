@@ -1550,7 +1550,7 @@ router.post('/:id/scenes/:sceneId/continue-from-previous', asyncHandler(async (r
   res.json(await continueFromPreviousShot(req.params.id, req.params.sceneId, { keepStillAsEnd }));
 }));
 
-// Every still and clip generated for this video that no shot uses now (the shot card's "Swap from unused").
+// Every still and clip generated for this video, each naming the shots using it now (the shot card's Swap picker).
 router.get('/:id/media-pool', asyncHandler(async (req, res) => {
   const project = await getProject(req.params.id);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });

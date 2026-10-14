@@ -9,13 +9,14 @@ import { formatCount } from '../../utils/formatters.js';
 
 const PAGE = 60;
 const SLOT_NOUN = { image: 'still', video: 'clip', endImage: 'end frame' };
-// An end frame is picked from the same unused stills as a start frame.
+// An end frame is picked from the same stills as a start frame.
 const POOL_KIND = { image: 'image', video: 'video', endImage: 'image' };
+const SLOT_FIELD = { image: 'referenceImageId', video: 'videoHistoryId', endImage: 'endImageId' };
 
 /** Which tab a pool item belongs on for this shot: its own takes, another shot's, or the floor. */
 export const poolGroup = (item, sceneId) => (!item.sceneId ? 'floor' : item.sceneId === sceneId ? 'shot' : 'others');
 
-// The director's sort of unused assets: ★ ingredients (good, not placed), unsorted, ✕ bad (to clean up).
+// The director's sort of the video's assets: ★ ingredients (good, not placed), unsorted, ✕ bad (to clean up).
 const MARK_FILTERS = [
   { id: 'all', label: 'All' }, { id: 'ingredient', label: '★ Ingredients' }, { id: 'unsorted', label: 'Unsorted' }, { id: 'bad', label: '✕ Bad' },
 ];
@@ -25,8 +26,8 @@ const OTHER_FRAME = { image: { field: 'endImageId', takeKind: 'endImage', prompt
   endImage: { field: 'referenceImageId', takeKind: 'image', prompt: 'framePrompt', label: 'Start frame' } };
 
 /**
- * The shot's frame in the other slot as a pool item, or null. The pool lists only
- * unused stills, and that frame is in use, so it is added here, listed first on This shot.
+ * The shot's frame in the other slot as a pool item, or null: labeled and listed
+ * first on This shot, in place of its plain pool entry.
  */
 function otherFrameItem(scene, kind) {
   const other = OTHER_FRAME[kind];
@@ -36,6 +37,11 @@ function otherFrameItem(scene, kind) {
   return { kind: 'image', assetId, sceneId: scene.sceneId, prompt: take?.prompt || scene[other.prompt] || null, clipIds: [], ownFrame: other.label };
 }
 const poolKey = (item) => `${item.kind}:${item.assetId}`;
+/** "Used on #3, #12" for an item other shots (or this one) use now, else null. */
+const usedLabel = (item, shotNumbers) => {
+  const numbers = (item.inUseBy || []).map((id) => shotNumbers.get(id)).filter(Boolean);
+  return item.inUseBy?.length ? `Used on ${numbers.length ? numbers.map((n) => `#${n}`).join(', ') : 'a shot'}` : null;
+};
 const CHIP = 'min-h-[44px] rounded border px-2 text-xs sm:min-h-[28px]';
 const ACTION = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-3 text-xs disabled:opacity-50 sm:min-h-[32px]';
 
@@ -48,9 +54,9 @@ export function filterPool(items, { kind, query, shotNumbers }) {
 }
 
 /**
- * "Swap from unused": every still (or clip) generated for this video that no
- * shot uses now, as a searchable contact sheet in three tabs: this shot's
- * other takes, other shots' unused takes, and the floor (takes a cut shot, a
+ * "Swap": every still (or clip) generated for this video, as a searchable
+ * contact sheet in three tabs: this shot's other takes, other shots' takes
+ * (one another shot uses is marked "In use"), and the floor (takes a cut shot, a
  * re-plan or a merge left behind). Tap one to see it full size, then use it,
  * or use it with its partner: a still's rendered clip, or a clip's still.
  * `kind: 'endImage'` picks a still for the shot's end frame, on its own.
@@ -86,12 +92,15 @@ export default function SceneTakePicker({ open, onClose, projectId, scene, kind,
         const groups = new Set(items.filter((item) => item.kind === POOL_KIND[kind]).map((item) => poolGroup(item, scene.sceneId)));
         setGroup(hasOwnFrame ? 'shot' : ['shot', 'others', 'floor'].find((g) => groups.has(g)) || 'shot');
       })
-      .catch((err) => { if (active) setError(err?.message || 'Could not load the unused takes'); });
+      .catch((err) => { if (active) setError(err?.message || 'Could not load the takes'); });
     return () => { active = false; };
   }, [open, projectId, scene.sceneId, kind, hasOwnFrame]);
 
   const own = pool ? otherFrameItem(scene, kind) : null;
-  const ofKind = pool ? filterPool([...(own ? [own] : []), ...pool.filter((item) => !own || poolKey(item) !== poolKey(own))],
+  // What already fills this slot isn't offered back; a frame other shots use is, marked with where it's used.
+  const current = scene[SLOT_FIELD[kind]];
+  const offered = pool ? pool.filter((item) => (!own || poolKey(item) !== poolKey(own)) && !(item.kind === POOL_KIND[kind] && item.assetId === current)) : [];
+  const ofKind = pool ? filterPool([...(own ? [own] : []), ...offered],
     { kind: POOL_KIND[kind], query, shotNumbers }) : [];
   const counts = { shot: 0, others: 0, floor: 0 };
   for (const item of ofKind) counts[poolGroup(item, scene.sceneId)] += 1;
@@ -123,7 +132,8 @@ export default function SceneTakePicker({ open, onClose, projectId, scene, kind,
     setPicked((prev) => (prev && gone.has(poolKey(prev)) ? null : prev));
     setConfirmDelete(null);
   });
-  const badHere = markFilter === 'bad' ? items : [];
+  // A shot using it keeps it: the server refuses to delete it, so it's never offered.
+  const badHere = markFilter === 'bad' ? items.filter((item) => !item.inUseBy?.length) : [];
   // The next page loads when the bottom of the grid scrolls into view.
   const showMore = useCallback(() => setShown((n) => n + PAGE), []);
 
@@ -159,6 +169,7 @@ export default function SceneTakePicker({ open, onClose, projectId, scene, kind,
           {kind === 'video'
             ? <video key={picked.assetId} src={takeClipUrl(picked)} poster={takeThumbUrl(picked)} controls autoPlay muted loop playsInline className="w-full aspect-video rounded bg-black object-contain" />
             : <img src={takeThumbUrl(picked)} alt="" className="w-full aspect-video rounded bg-black object-contain" />}
+          {!picked.ownFrame && usedLabel(picked, shotNumbers) && <p className="text-[11px] text-port-text-muted">{usedLabel(picked, shotNumbers)}</p>}
           {picked.prompt && <p className="line-clamp-2 text-[11px] text-port-text-muted">{picked.prompt}</p>}
           <div className="flex flex-wrap gap-2">
             <button type="button" disabled={busy} onClick={() => place(null)}
@@ -179,9 +190,11 @@ export default function SceneTakePicker({ open, onClose, projectId, scene, kind,
               title="Failed or unusable: clean it up later" className={`${ACTION} ${picked.mark === 'bad' ? 'border-port-error text-port-error' : ''}`}>
               <Ban size={14} aria-hidden="true" />Bad
             </button>
+            {!picked.inUseBy?.length && (
             <button type="button" disabled={working} onClick={() => setConfirmDelete('picked')} className={ACTION}>
               <Trash2 size={14} aria-hidden="true" />Delete
             </button>
+            )}
             </>)}
           </div>
           {confirmDelete === 'picked' && (
@@ -200,16 +213,16 @@ export default function SceneTakePicker({ open, onClose, projectId, scene, kind,
       {error && <p role="alert" className="text-xs text-port-error">{error}</p>}
       {!pool && !error && <p className="flex items-center gap-2 text-xs text-port-text-muted"><Activity size={14} className="animate-spin" />Gathering every {itemNoun} made for this video…</p>}
       {pool && items.length === 0 && (
-        <p className="text-xs text-port-text-muted">{query ? `No unused ${itemNoun}s match.` : `No unused ${itemNoun}s here.`}</p>
+        <p className="text-xs text-port-text-muted">{query ? `No ${itemNoun}s match.` : `No ${itemNoun}s here.`}</p>
       )}
-      <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8" aria-label={`Unused ${itemNoun}s`}>
+      <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8" aria-label={`${itemNoun[0].toUpperCase()}${itemNoun.slice(1)}s`}>
         {items.slice(0, shown).map((item) => {
           const number = item.sceneId ? shotNumbers.get(item.sceneId) : null;
           const selected = picked?.assetId === item.assetId;
           return (
             <li key={item.assetId}>
               <button type="button" onClick={() => setPicked(item)} aria-pressed={selected}
-                aria-label={`${item.ownFrame ? `This shot's ${item.ownFrame.toLowerCase()}` : `${itemNoun}${number ? ` from shot ${number}` : ''}`}${item.prompt ? `: ${item.prompt.slice(0, 80)}` : ''}`}
+                aria-label={`${item.ownFrame ? `This shot's ${item.ownFrame.toLowerCase()}` : `${itemNoun}${number ? ` from shot ${number}` : ''}${usedLabel(item, shotNumbers) ? `, ${usedLabel(item, shotNumbers).toLowerCase()}` : ''}`}${item.prompt ? `: ${item.prompt.slice(0, 80)}` : ''}`}
                 className={`relative block w-full overflow-hidden rounded border ${selected ? 'border-port-accent ring-2 ring-port-accent' : 'border-port-border'} ${item.mark === 'bad' ? 'opacity-50' : ''}`}>
                 <img src={takeThumbUrl(item)} alt="" loading="lazy" className="block aspect-video w-full bg-black object-cover" />
                 {(item.ownFrame || number) && <span className="port-media-overlay-strong absolute left-1 top-1 rounded px-1 text-[10px] leading-tight">{item.ownFrame || `#${number}`}</span>}
@@ -217,6 +230,9 @@ export default function SceneTakePicker({ open, onClose, projectId, scene, kind,
                   <span className={`port-media-overlay-strong absolute right-1 top-1 rounded px-0.5 ${item.mark === 'bad' ? 'text-port-error' : 'text-port-warning'}`}>
                     {item.mark === 'bad' ? <Ban size={11} aria-label="bad" /> : <Star size={11} aria-label="ingredient" />}
                   </span>
+                )}
+                {!item.ownFrame && item.inUseBy?.length > 0 && (
+                  <span className="port-media-overlay-strong absolute bottom-1 left-1 rounded px-1 text-[10px] leading-tight">In use</span>
                 )}
                 {(kind === 'video' || item.clipIds?.length > 0) && (
                   <span className="port-media-overlay-strong absolute bottom-1 right-1 inline-flex items-center gap-0.5 rounded px-1 text-[10px] leading-tight">
