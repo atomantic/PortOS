@@ -46,6 +46,10 @@ router.get('/status', asyncHandler(async (req, res) => {
   }
 }));
 
+// Telegram bot configuration, testing and bridge lifecycle execute host
+// processes, register bots, or authorize remote command execution and
+// notification forwarding. All mutating routes require operator authority via
+// the central host-control gate.
 // PUT /api/telegram/method
 router.put('/method', asyncHandler(async (req, res) => {
   const { method } = validateRequest(telegramMethodSchema, req.body);

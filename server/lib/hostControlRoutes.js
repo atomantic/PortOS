@@ -188,6 +188,16 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/x/accounts/:id/open',
   'POST /api/x/accounts/:id/sync',
 
+  // Telegram bot configuration, testing and bridge lifecycle execute host
+  // processes, register bots, or authorize remote command execution and
+  // notification forwarding (#11431). Reads remain open.
+  'PUT /api/telegram/config',
+  'DELETE /api/telegram/config',
+  'PUT /api/telegram/method',
+  'POST /api/telegram/test',
+  'PUT /api/telegram/forward-types',
+  'POST /api/telegram/bridge/reload',
+
   // Sending a draft performs an external mail side effect as the operator (#11273).
   'POST /api/messages/drafts/:id/send',
 
@@ -960,6 +970,7 @@ export const HOST_CONTROL_SETTINGS_SLICES = Object.freeze([
   'credentialBootstraps',
   'harnesses',
   'seriesAutopilot',
+  'telegram',
   'untrustedContent',
   'voice',
 ]);
