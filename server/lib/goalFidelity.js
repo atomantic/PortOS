@@ -25,6 +25,7 @@ import { taskContextBlock } from './cosTaskPrompt.js';
 import { parse, parseExpression } from '@babel/parser';
 
 import { isTruthyMeta } from './metadataFlags.js';
+import { blankLiterals } from './sourceScan.js';
 /**
  * The three answers the review may return, ordered least → most disruptive.
  *
@@ -463,6 +464,134 @@ export function backfillAccountingFindings(objective, diff) {
     }
   }
   return [...findings];
+}
+
+/**
+ * Hunk-local statement syntax for production audits. No missing braces or
+ * enclosing conditions are supplied by a wrapper. Complete statements can be
+ * parsed inside a partial hunk, but their enclosing context remains unknown.
+ * Facts describe syntax, never whether an objective was delivered.
+ */
+export function productionAuditEvidence(diff) {
+  return productionAfterChangeHunks(diff).map(({ file, hunk, source }) => {
+    const statements = [];
+    const starts = [...blankLiterals(source).matchAll(/^[ \t]*(?:(?:const|let|var|if|for|while|try|switch)\b|[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*\s*(?:\(|\+\+|--|[+*/-]?=))/gm)];
+    let consumed = 0;
+    let attempts = 0;
+    for (const start of starts) {
+      if (start.index < consumed) continue;
+      const remainder = source.slice(start.index);
+      for (const end of remainder.matchAll(/;[ \t]*(?:\/\/[^\n]*)?$|^[ \t]*}/gm)) {
+        if (++attempts > 64) break;
+        const text = remainder.slice(0, end.index + end[0].length);
+        let ast;
+        try { ast = parse(text, { sourceType: 'module', allowAwaitOutsideFunction: true }); }
+        catch { continue; }
+        // Do not accidentally accept multiple adjacent statements as one root.
+        if (ast.program.body.length !== 1) break;
+        if (ast.program.body[0].type === 'IfStatement'
+            && /^\s*else\b/.test(blankLiterals(remainder.slice(text.length)))) continue;
+        const facts = [];
+        const code = node => text.slice(node.start, node.end);
+        const walk = (node, conditions = [], callbacks = []) => {
+          if (!node || typeof node !== 'object') return;
+          const record = (kind, extra = {}) => facts.push({ kind, source: code(node), conditions, callbacks, ...extra });
+          if (node.type === 'IfStatement') {
+            walk(node.test, conditions, callbacks);
+            walk(node.consequent, [...conditions, code(node.test)], callbacks);
+            if (node.alternate) walk(node.alternate, [...conditions, `!(${code(node.test)})`], callbacks);
+            return;
+          }
+          if (node.type === 'VariableDeclarator' && node.init) {
+            const call = node.init.type === 'AwaitExpression' ? node.init.argument : null;
+            const handler = call?.type === 'CallExpression' && call.callee.type === 'MemberExpression'
+              && !call.callee.computed && call.callee.property.name === 'catch' ? call.arguments[0] : null;
+            const body = handler?.body?.type === 'BlockStatement' ? handler.body.body : [];
+            const returns = body.filter(statement => statement.type === 'ReturnStatement');
+            const value = returns.length === 1 && body.at(-1) === returns[0]
+              && body.slice(0, -1).every(statement => statement.type === 'ExpressionStatement')
+              && returns[0].argument?.type === 'BooleanLiteral'
+              ? returns[0].argument.value : null;
+            record('binding', { name: code(node.id), value: code(node.init),
+              ...(value !== null && node.id.type === 'Identifier'
+                && ast.program.body[0].type === 'VariableDeclaration'
+                && ast.program.body[0].declarations.length === 1
+                && ast.program.body[0].declarations[0] === node
+                ? { handledRejectionValue: value } : {}),
+            });
+          }
+          if (node.type === 'UpdateExpression' || node.type === 'AssignmentExpression') record('write');
+          if (node.type === 'ReturnStatement') record('return', { value: node.argument ? code(node.argument) : null });
+          if (node.type === 'CallExpression') {
+            record('call', { callee: code(node.callee), arguments: node.arguments.map(code) });
+            walk(node.callee, conditions, callbacks);
+            for (const [index, argument] of node.arguments.entries()) {
+              const callback = /FunctionExpression$/.test(argument.type);
+              walk(argument, conditions, callback ? [...callbacks, `${code(node.callee)} argument ${index}`] : callbacks);
+            }
+            return;
+          }
+          if (node.type === 'ConditionalExpression') {
+            record('conditional', { test: code(node.test), whenTruthy: code(node.consequent), whenFalsy: code(node.alternate) });
+            walk(node.test, conditions, callbacks);
+            walk(node.consequent, [...conditions, code(node.test)], callbacks);
+            walk(node.alternate, [...conditions, `!(${code(node.test)})`], callbacks);
+            return;
+          }
+          if (node.type === 'LogicalExpression') {
+            walk(node.left, conditions, callbacks);
+            walk(node.right, [...conditions, `${node.operator} right operand after ${code(node.left)}`], callbacks);
+            return;
+          }
+          // A loop, switch or exception boundary cannot be evaluated from a
+          // single caught boolean. Retain its facts but mark that path unknown.
+          if (/^(?:For|While|DoWhile|Switch|Try|Catch|With)/.test(node.type)) conditions = [...conditions, `unavailable ${node.type} path`];
+          if (/FunctionExpression$/.test(node.type)) callbacks = [...callbacks, 'function body'];
+          for (const value of Object.values(node)) {
+            if (Array.isArray(value)) value.forEach(child => { if (child?.type) walk(child, conditions, callbacks); });
+            else if (value?.type) walk(value, conditions, callbacks);
+          }
+        };
+        walk(ast.program.body[0]);
+        statements.push({
+          hunkLine: source.slice(0, start.index).split('\n').length,
+          range: [start.index, start.index + text.length],
+          statementType: ast.program.body[0].type,
+          syntax: 'complete statement; enclosing context outside this statement unavailable',
+          source: text, facts,
+        });
+        consumed = start.index + text.length;
+        break;
+      }
+      if (attempts > 64 || (consumed <= start.index && /^\s*(?:if|for|while|try|switch)\b/.test(remainder))) break;
+    }
+    // Evaluate only the adjacent complete statement with a literal boolean
+    // returned by an awaited catch. This is a syntax scenario, not a claim
+    // about unseen surrounding branches or whether the callback can throw.
+    const handledRejectionScenarios = statements.flatMap((statement, index) => {
+      const binding = statement.facts.find(fact => fact.kind === 'binding' && typeof fact.handledRejectionValue === 'boolean');
+      const next = statements[index + 1];
+      if (!binding || !next || !['IfStatement', 'ExpressionStatement'].includes(next.statementType)) return [];
+      const between = source.slice(
+        statement.range[1], next.range[0],
+      );
+      if (blankLiterals(between).trim()) return [];
+      return next.facts.filter(fact => fact.kind === 'write' && fact.callbacks.length === 0)
+        .flatMap(write => {
+          const values = write.conditions.map(condition => condition === binding.name
+            ? binding.handledRejectionValue : condition === `!(${binding.name})` ? !binding.handledRejectionValue : null);
+          if (values.includes(null)) return [];
+          return [{
+            assumption: 'awaited rejection handler reaches its final boolean return; enclosing context unavailable',
+            binding: binding.name, handledRejectionValue: binding.handledRejectionValue,
+            nextStatement: next.source, write: write.source,
+            conditionValues: values, writeReached: values.every(Boolean),
+            trace: `On a handled rejection, ${binding.name} = ${binding.handledRejectionValue}. Next complete statement: ${next.source.trim()}. Its write ${write.source} is ${values.every(Boolean) ? 'REACHED because no predicate in this statement prevents it.' : 'SKIPPED because its condition is false.'}`,
+          }];
+        });
+    });
+    return { file, hunk, handledRejectionScenarios, statements, source };
+  });
 }
 
 // Parse only complete JSX expression containers within ONE hunk. A fragment

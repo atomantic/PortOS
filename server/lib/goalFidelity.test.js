@@ -9,6 +9,7 @@ import {
   mergeOutcomeReview,
   normalizeGoalFidelityVerdict,
   productionAfterChangeHunks,
+  productionAuditEvidence,
   resolveGoalFidelityConfig,
   taskObjective,
 } from './goalFidelity.js';
@@ -218,5 +219,65 @@ describe('productionAfterChangeHunks', () => {
     expect(rows).toHaveLength(2);
     expect(rows[0].source).toContain('<MarkdownOutput');
     expect(rows.every(row => row.renderPredicates.length === 0)).toBe(true);
+  });
+});
+
+
+describe('productionAuditEvidence', () => {
+  it('traces actual increment guards and log-level expressions with hunk provenance, excluding tests and deleted lines', () => {
+    const makeDiff = statement => [
+      'diff --git a/lifecycle.js b/lifecycle.js', '+++ b/lifecycle.js',
+      '@@ -10,2 +10,2 @@', '-backfilled++;', `+${statement}`,
+      "+emitLog(failed ? 'warn' : 'info', 'summary', { failed });",
+      'diff --git a/lifecycle.test.js b/lifecycle.test.js', '+++ b/lifecycle.test.js',
+      '@@ -1 +1 @@', '+expect(backfilled).toBe(1);',
+    ].join('\n');
+    const [row] = productionAuditEvidence(makeDiff('if (recorded) backfilled++;'));
+    expect(row.file).toBe('lifecycle.js');
+    expect(row.hunk).toBe('@@ -10,2 +10,2 @@');
+    expect(row.statements.flatMap(statement => statement.facts)).toContainEqual({
+      kind: 'write', source: 'backfilled++', conditions: ['recorded'], callbacks: [],
+    });
+    expect(row.statements.flatMap(statement => statement.facts)).toContainEqual(expect.objectContaining({
+      kind: 'conditional', test: 'failed', whenTruthy: "'warn'", whenFalsy: "'info'",
+    }));
+    const mutated = productionAuditEvidence(makeDiff('backfilled++;'));
+    expect(mutated[0].statements.flatMap(statement => statement.facts)).toContainEqual({
+      kind: 'write', source: 'backfilled++', conditions: [], callbacks: [],
+    });
+    expect(JSON.stringify(mutated)).not.toContain('expect(');
+  });
+
+  it('never repairs incomplete syntax or roots a nested write across an unavailable enclosing guard', () => {
+    const rows = productionAuditEvidence([
+      'diff --git a/lifecycle.js b/lifecycle.js', '+++ b/lifecycle.js',
+      '@@ -1,2 +1,2 @@', '+if (recorded) {', '+  backfilled++;',
+      '@@ -20 +20 @@', '+}',
+    ].join('\n'));
+    expect(rows).toHaveLength(2);
+    expect(rows.every(row => row.statements.length === 0)).toBe(true);
+    expect(rows[0].source).toContain('if (recorded)');
+  });
+});
+
+
+describe('handled-rejection syntax scenarios', () => {
+  it('keeps an else write and ignores code-shaped comment/string content and unsupported control paths', () => {
+    const diff = source => [
+      'diff --git a/lifecycle.js b/lifecycle.js', '+++ b/lifecycle.js',
+      '@@ -1 +1 @@', ...source.split('\n').map(line => `+${line}`),
+    ].join('\n');
+    const binding = 'const recorded = await recordTaskCompletion().catch(err => { return false; });';
+    const [row] = productionAuditEvidence(diff(`${binding}
+if (recorded) backfilled++;
+else backfilled++;`));
+    expect(row.handledRejectionScenarios.map(scenario => scenario.writeReached)).toEqual([false, true]);
+    for (const statement of [
+      'while (pending) backfilled++;',
+      'if (recorded) { while (pending) backfilled++; }',
+      'const next = () => { backfilled++; };',
+    ]) expect(productionAuditEvidence(diff(`${binding}\n${statement}`))[0].handledRejectionScenarios).toEqual([]);
+    const [commented] = productionAuditEvidence(diff(`/*\nif (recorded) backfilled++;\n*/\nconst label = "if (recorded) backfilled++;";`));
+    expect(commented.statements.flatMap(statement => statement.facts).filter(fact => fact.kind === 'write')).toEqual([]);
   });
 });
