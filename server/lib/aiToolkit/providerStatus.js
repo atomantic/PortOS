@@ -198,8 +198,26 @@ export function createProviderStatusService(config = {}) {
     // PATH probe) and this directory stays self-contained. It MUST be
     // synchronous and MUST default to "yes": an unknown answer has to route
     // exactly as it did before, never take a working provider out of the chain.
-    prerequisitesMet = null
+    prerequisitesMet = null,
+    // Host-supplied `() => [{ providerId, model?, effort? }]` — the user's ONE
+    // ordered fallback list. When it is non-empty it replaces the per-provider
+    // `fallbackProvider` and the system priority list: whichever entry the run
+    // started on, the next entry (wrapping past the end to the first) is tried.
+    // Sync by contract (a cache read); a throwing or non-array answer reads as
+    // "no chain" so the legacy tiers still route.
+    getFallbackChain = null
   } = config;
+
+  function readFallbackChain() {
+    if (typeof getFallbackChain !== 'function') return [];
+    try {
+      const chain = getFallbackChain();
+      return Array.isArray(chain) ? chain.filter(e => e && typeof e.providerId === 'string' && e.providerId) : [];
+    } catch (err) {
+      console.error(`❌ Fallback chain read failed: ${err.message}`);
+      return [];
+    }
+  }
 
   const STATUS_PATH = join(dataDir, statusFile);
   const events = new EventEmitter();
@@ -564,6 +582,26 @@ export function createProviderStatusService(config = {}) {
         const taskFallback = providers[taskFallbackId];
         const accepted = acceptCandidate(taskFallback, 'task', taskFallbackModelId);
         if (accepted) return accepted;
+      }
+
+      const chain = readFallbackChain();
+      if (chain.length > 0) {
+        // Rotate the list so it starts just after the entry the run began on.
+        // Match on provider AND model when the caller names the model, so two
+        // entries of one provider (different models, different limits) are
+        // distinct steps; an unlisted primary starts at the top.
+        const primaryModel = requestCapabilities?.primaryModel ?? null;
+        let at = primaryModel
+          ? chain.findIndex(e => e.providerId === primaryProviderId && e.model === primaryModel)
+          : -1;
+        if (at < 0) at = chain.findIndex(e => e.providerId === primaryProviderId);
+        const ordered = at < 0 ? chain : [...chain.slice(at + 1), ...chain.slice(0, at)];
+        for (const entry of ordered) {
+          const accepted = acceptCandidate(providers[entry.providerId], 'chain', entry.model || null);
+          if (accepted) return { ...accepted, effort: entry.effort || null };
+        }
+        if (capabilityRejections.length > 0) throw noEligibleFallbackError(capabilityRejections);
+        return null;
       }
 
       const primaryProvider = providers[primaryProviderId];

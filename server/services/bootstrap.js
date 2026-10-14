@@ -180,6 +180,8 @@ import { outcomesStore as liOutcomesStore } from './layeredIntelligenceOutcomes.
 import * as gameStore from './games/store.js';
 import * as fableLoomStore from './fableLoom/store.js';
 import { prerequisitesMetForRouting } from './providerPrerequisites.js';
+import { peekFallbackChain } from '../lib/providerFallbackChainCache.js';
+import { initFallbackChain } from './providerFallbackChain.js';
 import { localCachedModelIds } from './localCachedModels.js';
 import { stopCodexAppServer } from './codexAppServer.js';
 import { logFailureWithStack as logBootstrapFailure } from '../lib/failureLogging.js';
@@ -323,6 +325,9 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
       // of dying at spawn time. Sync by contract: it reads the runtime probe's
       // cache and never blocks.
       prerequisitesMet: prerequisitesMetForRouting,
+      // The user's single ordered fallback list (Models > Fallbacks); a cache
+      // read, so it is sync as the toolkit requires.
+      getFallbackChain: peekFallbackChain,
       // MTPLX and Slotstream each serve one checkpoint per process and report
       // only that one, so a refresh could never surface a newly downloaded
       // checkpoint — and for Slotstream it pruned the record's other shipped ids.
@@ -351,7 +356,11 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
     // Warm the providers file at startup so the codex-sentinel migration runs
     // before any inbound request can hit the providers cache. A pure READ of
     // on-disk provider config — it dispatches nothing to a provider.
-    warmProviders: (aiToolkit) => aiToolkit.services.providers.getAllProviders(),
+    warmProviders: async (aiToolkit) => {
+      // Prime the sync fallback-list cache from settings.json (disk only).
+      await initFallbackChain().catch((err) => logBootstrapFailure('⚠️ Failed to load provider fallback list', err));
+      return aiToolkit.services.providers.getAllProviders();
+    },
 
     // Ensure the provider paired with the active local-LLM backend (LLM_BACKEND in
     // .env, chosen at setup time) is enabled, so a fresh install can use Ollama /

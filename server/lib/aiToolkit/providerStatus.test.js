@@ -996,3 +996,49 @@ describe('Provider Status Service', () => {
     });
   });
 });
+
+describe('getFallbackProvider — global ordered fallback list', () => {
+  const providers = Object.fromEntries(['a', 'b', 'c'].map((id) => [id, { id, enabled: true, models: ['m1', 'm2'], fallbackProvider: 'c' }]));
+  let dir;
+  let chain;
+  let svc;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'portos-fallback-chain-'));
+    chain = [{ providerId: 'a' }, { providerId: 'b', model: 'm1', effort: 'max' }, { providerId: 'c' }];
+    svc = createProviderStatusService({ dataDir: dir, statusFile: 's.json', getFallbackChain: () => chain });
+    await svc.init();
+  });
+  afterEach(() => rm(dir, { recursive: true, force: true }));
+
+  it('continues after the failed entry and carries the step model and effort', () => {
+    expect(svc.getFallbackProvider('a', providers)).toMatchObject({ source: 'chain', model: 'm1', effort: 'max', provider: { id: 'b' } });
+  });
+
+  it('wraps past the last entry to the first instead of using per-provider links', () => {
+    expect(svc.getFallbackProvider('c', providers).provider.id).toBe('a');
+  });
+
+  it('starts at the top for a provider that is not listed', () => {
+    expect(svc.getFallbackProvider('z', providers).provider.id).toBe('a');
+  });
+
+  it('skips unavailable entries and returns null when none can run', async () => {
+    await svc.markUnavailable('b', { reason: 'usage-limit', waitTimeMs: 60000 });
+    expect(svc.getFallbackProvider('a', providers).provider.id).toBe('c');
+    await svc.markUnavailable('c', { reason: 'usage-limit', waitTimeMs: 60000 });
+    await svc.markUnavailable('a', { reason: 'usage-limit', waitTimeMs: 60000 });
+    expect(svc.getFallbackProvider('a', providers)).toBeNull();
+  });
+
+  it('lets one preset repeat with different models, matched by the primary model', () => {
+    chain = [{ providerId: 'a', model: 'm1' }, { providerId: 'a', model: 'm2' }, { providerId: 'b' }];
+    expect(svc.getFallbackProvider('a', providers, null, null, { primaryModel: 'm1' })).toMatchObject({ provider: { id: 'a' }, model: 'm2' });
+    expect(svc.getFallbackProvider('a', providers, null, null, { primaryModel: 'm2' }).provider.id).toBe('b');
+  });
+
+  it('falls back to the legacy tiers when the list is empty', () => {
+    chain = [];
+    expect(svc.getFallbackProvider('a', providers)).toMatchObject({ source: 'provider', provider: { id: 'c' } });
+  });
+});

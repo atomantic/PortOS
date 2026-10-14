@@ -31,6 +31,7 @@ import { isVisionCapableCodexTuiProvider } from '../lib/codex.js';
 import { createRun, executeApiRun, executeCliRun, extractBakedModel, hasModelFlag, stopRun, patchRunMetadata, finalizeRunRecord } from './runner.js';
 import { getActiveProvider, getProviderById, getAllProviders } from './providers.js';
 import { isCompositeProviderId } from '../lib/providerRef.js';
+import { peekFallbackChain } from '../lib/providerFallbackChainCache.js';
 // `./tuiPromptRunner.js` (which drags node-pty in through `./shell.js`) and
 // `./providerExecutionReadiness.js` are imported lazily on the branches that
 // actually execute a run — see their call sites below. promptRunner.js is reached
@@ -1099,6 +1100,9 @@ async function runPromptThroughProviderAdmitted(rawArgs) {
           ...args,
           provider: fallback,
           model: picked.model ?? undefined,
+          // A step in the global fallback list may pin its own effort; the
+          // primary's effort belongs to the primary's model, so it is not inherited.
+          ...(picked.effort ? { effort: picked.effort } : {}),
           runId: undefined, // fresh runId so the failed primary's record stays intact
         });
       } catch (fallbackError) {
@@ -1212,6 +1216,10 @@ async function pickFallbackProvider(failed, requestCapabilities) {
   if (isCompositeProviderId(failed.id)) {
     await (await import('./compositeProviders.js')).withCompositeCandidates(providersMap, [failed.id]);
   }
+  const chainComposites = peekFallbackChain().map((e) => e.providerId).filter(isCompositeProviderId);
+  if (chainComposites.length) {
+    await (await import('./compositeProviders.js')).withCompositeCandidates(providersMap, chainComposites);
+  }
 
   const picked = providerStatus.getFallbackProvider(failed.id, providersMap, null, null, requestCapabilities);
   if (!picked?.provider) return null;
@@ -1220,7 +1228,7 @@ async function pickFallbackProvider(failed, requestCapabilities) {
   // without its sibling's apiKey and fail auth (NVIDIA NIM 401s "Header of type
   // `authorization` was missing") despite a stored key. Attach it from the same
   // map (synchronous — no re-read to go stale).
-  return { provider: attachGatewaySiblingKey(picked.provider, providersMap), model: picked.model ?? null };
+  return { provider: attachGatewaySiblingKey(picked.provider, providersMap), model: picked.model ?? null, effort: picked.effort ?? null };
 }
 
 /**

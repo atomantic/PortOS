@@ -251,3 +251,11 @@ export const getFleetLlmHostUsage = (options) => request('/providers/fleet-host/
 export const stopFleetLlmHost = (options) => request('/providers/fleet-host/stop', { method: 'POST', ...options });
 export const getFleetPeerHosts = (options) => request('/providers/fleet-peer-hosts', options);
 export const revealFleetPeerHostKey = (peerId, options) => request(`/providers/fleet-peer-hosts/${encodeURIComponent(peerId)}/key`, { method: 'POST', ...options });
+
+// The single ordered provider fallback list (Models > Fallbacks).
+export const getProviderFallbacks = (options) => request('/provider-fallbacks', options);
+export const saveProviderFallbacks = (entries, options) => request('/provider-fallbacks', {
+  method: 'PUT',
+  body: JSON.stringify({ entries }),
+  ...options
+});
