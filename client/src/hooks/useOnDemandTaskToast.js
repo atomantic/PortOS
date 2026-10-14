@@ -21,6 +21,7 @@ const PARK_REASON_LABELS = {
   'merged-branches-held-back': 'every remaining branch is already merged and waiting on a protected worktree',
   'no-zombie-issues': 'no stale issues to reconcile',
   'no-actionable-plan-items': 'no unblocked PLAN items',
+  'claim-markers-held': 'local cleanup completed; issue reservation ownership remains unverified',
   'branches-blocked': 'remaining branches or worktrees need attention',
   'owner-state-unavailable': 'ownership state could not be read; reconciliation is paused to protect active work',
   'no-progress': 'remaining items were attempted but did not advance',
@@ -130,10 +131,11 @@ export function useOnDemandTaskToast() {
       // branch-reconcile's breakdown instead names merged branches whose worktree
       // a protection guard still holds — the park is a wait, not an empty repo, so
       // the count has to show or the toast reads as "nothing exists".
-      if (c && (c.heldBranches > 0 || c.heldDetached > 0)) {
+      if (c && (c.heldBranches > 0 || c.heldDetached > 0 || c.heldClaims > 0)) {
         const parts = [];
         if (c.heldBranches) parts.push(`${c.heldBranches} branch(es) held`);
         if (c.heldDetached) parts.push(`${c.heldDetached} detached worktree(s) held`);
+        if (c.heldClaims) parts.push(`${c.heldClaims} issue reservation(s) unverified`);
         if (c.unchangedBranches) parts.push(`${c.unchangedBranches} branch(es) still blocked`);
         const causes = formatSkipCauses(data?.skipCauses);
         countSuffix = ` (${parts.join(', ')}${causes ? ` — ${causes}` : ''})`;

@@ -91,14 +91,14 @@ vi.mock('./agentState.js', async (importActual) => ({
   getActiveAgentIds: vi.fn(() => []),
 }));
 
-vi.mock('./cos.js', () => ({
-  getAgents: vi.fn(async () => []),
+vi.mock('./cosState.js', () => ({
+  readAgentsStateForSafetyCheck: vi.fn(async () => ({ trusted: true, agents: {} })),
 }));
 
 import { generateManagedAppImprovementTaskForType } from './cosTaskGenerator.js';
-import { getAgents } from './cos.js';
 import { getTaskInterval } from './taskSchedule.js';
 import { applyPerpetualDrainCap } from './cosTaskPreStepBlocks.js';
+import { readAgentsStateForSafetyCheck } from './cosState.js';
 
 const APP = { id: 'app-1', name: 'Example App', repoPath: '/tmp/example-repo' };
 const STATE = { config: { confidenceAutoApproval: { enabled: false }, idleReviewPriority: 'MEDIUM' } };
@@ -121,7 +121,7 @@ describe('generateManagedAppImprovementTaskForType composes the extracted pre-st
     vi.clearAllMocks();
     parkPerpetual.mockReset().mockResolvedValue();
     recordPerpetualDispatch.mockReset().mockResolvedValue(1);
-    getAgents.mockResolvedValue([]);
+    readAgentsStateForSafetyCheck.mockResolvedValue({ trusted: true, agents: {} });
     getPerpetualDrainState.mockResolvedValue({ signature: null, dispatchCount: 0 });
     reconcileMock.mockResolvedValue(scan());
     getTaskInterval.mockResolvedValue({ type: 'on-demand', perpetual: true, drainDispatchCap: 5, taskMetadata: { branchesPerAgent: 3 } });
@@ -148,9 +148,9 @@ describe('generateManagedAppImprovementTaskForType composes the extracted pre-st
   });
 
   it('protects a live claim worktree by passing its recorded path token to reconcile', async () => {
-    getAgents.mockResolvedValue([
-      { id: 'agent-live', status: 'running', workspacePath: '/repo/data/cos/worktrees/claim-issue-99' }
-    ]);
+    readAgentsStateForSafetyCheck.mockResolvedValue({ trusted: true, agents: {
+      'agent-live': { id: 'agent-live', status: 'running', workspacePath: '/repo/data/cos/worktrees/claim-issue-99' },
+    } });
     reconcileMock.mockResolvedValue(scan({ inFlight: [] }));
 
     await generate();
@@ -161,7 +161,7 @@ describe('generateManagedAppImprovementTaskForType composes the extracted pre-st
   });
 
   it('does not reconcile when the live-agent state cannot be read', async () => {
-    getAgents.mockRejectedValue(new Error('state unavailable'));
+    readAgentsStateForSafetyCheck.mockRejectedValue(new Error('state unavailable'));
 
     expect(await generate()).toBeNull();
     expect(reconcileMock).not.toHaveBeenCalled();
@@ -222,6 +222,21 @@ describe('generateManagedAppImprovementTaskForType composes the extracted pre-st
     });
   });
 
+  it('reports protected issue markers separately after local cleanup succeeded', async () => {
+    reconcileMock.mockResolvedValue(scan({ inFlight: [], cleaned: ['claim/issue-42', 'next/issue-42'],
+      claimMarkersHeld: [
+        { branch: 'claim/issue-42', issue: 42, reason: 'claim-reservation-owner-unverified' },
+        { branch: 'next/issue-42', issue: 42, reason: 'claim-reservation-owner-unverified' },
+      ]
+    }));
+    expect(await generate()).toBeNull();
+    expect(parkPerpetual).toHaveBeenCalledWith('branch-reconcile', APP.id, expect.objectContaining({
+      reason: 'claim-markers-held', counts: { heldBranches: 0, heldDetached: 0, heldClaims: 1 },
+      skipCauses: { 'claim-reservation-owner-unverified': 1 }
+    }));
+    expect(recordPerpetualDispatch).not.toHaveBeenCalled();
+  });
+
   it('parks typed draft, owner, detached and cleanup blockers without treating them as an empty repo', async () => {
     reconcileMock.mockResolvedValue(scan({ inFlight: [],
       wip: [
@@ -246,6 +261,18 @@ describe('generateManagedAppImprovementTaskForType composes the extracted pre-st
     }));
     expect(JSON.stringify(parkPerpetual.mock.calls)).not.toContain('/private/diagnostic');
     expect(recordPerpetualDispatch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { trusted: false, agents: {} },
+    { trusted: true, agents: { owner: { id: 'owner', status: 'unknown' } } },
+    { trusted: true, agents: { owner: { id: 'different-owner', status: 'running' } } },
+    { trusted: true, agents: { owner: { id: 'owner', status: 'running', metadata: { claimBranches: 'claim/issue-99' } } } },
+  ])('does not dispatch cleanup from untrusted or malformed persisted ownership: %j', async (snapshot) => {
+    readAgentsStateForSafetyCheck.mockResolvedValue(snapshot);
+
+    expect(await generate()).toBeNull();
+    expect(reconcileMock).not.toHaveBeenCalled();
   });
 
 });

@@ -93,10 +93,6 @@ function completionDecision({ repoPath, branch, prUrl, tip, agents }) {
   return { release, obligation, reason: handoff ? held : 'pr-completion-review-required' };
 }
 
-export function branchCompletionHold(input) {
-  return completionDecision(input).reason;
-}
-
 export async function readBranchCompletionHold(input, deps = {}) {
   const readPolicies = deps.readPolicies || readBranchCompletionPolicies;
   const agents = input.agents ?? await readPolicies().catch(() => null);

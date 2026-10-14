@@ -39,7 +39,7 @@ vi.mock('./worktreeManager.js', () => ({ listWorktrees: async () => [], classify
 
 import { spawnReviewLoopFollowUp } from './agentWorktreeCleanup.js';
 import { buildAgentRegistration } from '../lib/agentRegistrationRecord.js';
-import { branchCompletionHold, readBranchCompletionHold, readBranchCompletionPolicies, recordBranchCompletionPolicy } from './branchCompletionPolicy.js';
+import { readBranchCompletionHold, readBranchCompletionPolicies, recordBranchCompletionPolicy } from './branchCompletionPolicy.js';
 import { gatherBranchState, classifyBranches, filterActionable, formatInFlightForPrompt } from './branchReconcile.js';
 import { checkReconcileOwnership } from './cosClaimOwnership.js';
 
@@ -51,7 +51,7 @@ function register(id, completion, startedAt = '2026-01-01T00:00:00Z', extra = {}
   runtime.agents[id] = { id, status: 'completed', startedAt, completedAt: startedAt, result: { success: true }, metadata };
   return assigned;
 }
-const snapshotHold = agents => branchCompletionHold({ repoPath, branch, prUrl, tip: runtime.tip, agents });
+const snapshotHold = agents => readBranchCompletionHold({ repoPath, branch, prUrl, tip: runtime.tip, agents });
 const recheck = () => checkReconcileOwnership({ appId: 'example', branch }, {
   getAppById: async () => ({ repoPath }), listWorktrees: async () => [], getAgents: async () => [], getActiveAgentIds: () => [],
 });
@@ -169,11 +169,11 @@ describe('completion policy across lifecycle and reconciliation boundaries', () 
     const grant = register('agent-merge', 'merge-on-green', '2026-01-01T00:00:00Z', { reviewLoopFollowUp: true, reviewLoopPRBranch: branch, reviewLoopPRUrl: prUrl });
     runtime.agents['agent-merge'].completedAt = '2026-01-03T00:00:00Z';
     await recordBranchCompletionPolicy({ agentId: 'agent-merge', task: grant, repoPath, branch, prUrl });
-    expect(snapshotHold(Object.values(runtime.agents))).toBe('pr-completion-human-handoff');
+    expect(await snapshotHold(Object.values(runtime.agents))).toBe('pr-completion-human-handoff');
     runtime.agents['agent-merge'].startedAt = '2026-01-03T00:00:00Z';
     runtime.remoteTip = 'b'.repeat(40);
     await recordBranchCompletionPolicy({ agentId: 'agent-merge', task: grant, repoPath, branch, prUrl });
-    expect(snapshotHold(Object.values(runtime.agents))).toBe('pr-completion-human-handoff');
+    expect(await snapshotHold(Object.values(runtime.agents))).toBe('pr-completion-human-handoff');
     await recordBranchCompletionPolicy({ agentId: 'agent-human', task: grant, repoPath, branch, prUrl });
     expect(runtime.agents['agent-human'].metadata.branchCompletionPolicy.completion).toBe('leave-open');
   });
@@ -184,9 +184,9 @@ describe('completion policy across lifecycle and reconciliation boundaries', () 
     const grant = register('agent-merge', 'merge-on-green', '2026-01-02T00:00:00Z', { reviewLoopFollowUp: true, reviewLoopPRBranch: branch, reviewLoopPRUrl: prUrl });
     await recordBranchCompletionPolicy({ agentId: 'agent-merge', task: grant, repoPath, branch, prUrl });
     register('agent-review', 'review-then-merge', '2026-01-03T00:00:00Z');
-    expect(snapshotHold(Object.values(runtime.agents))).not.toBeNull();
-    expect(branchCompletionHold({ repoPath, branch, prUrl: `${prUrl}0`, tip: runtime.tip, agents: [runtime.agents['agent-human']] })).toBeNull();
-    expect(branchCompletionHold({ repoPath: '/other', branch, prUrl, agents: Object.values(runtime.agents) })).toBeNull();
+    expect(await snapshotHold(Object.values(runtime.agents))).not.toBeNull();
+    expect(await readBranchCompletionHold({ repoPath, branch, prUrl: `${prUrl}0`, tip: runtime.tip, agents: [runtime.agents['agent-human']] })).toBeNull();
+    expect(await readBranchCompletionHold({ repoPath: '/other', branch, prUrl, agents: Object.values(runtime.agents) })).toBeNull();
   });
 
   it.each(['missing-index', 'corrupt-index', 'missing-record', 'untrusted-state'])('holds when policy storage is %s', async failure => {
