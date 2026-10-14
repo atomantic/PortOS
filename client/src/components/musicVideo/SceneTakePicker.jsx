@@ -109,13 +109,12 @@ export default function SceneTakePicker({ open, onClose, projectId, scene, kind,
     .then((placed) => { if (placed !== false) onClose?.(); });
 
   const run = (work) => { setWorking(true); setError(null); return work().catch((err) => setError(err?.message || 'That did not work')).finally(() => setWorking(false)); };
-  // Tapping the active mark clears it; a rejected take then reads as bad again, as the server sees it.
+  // Tapping the active mark clears it.
   const toggleMark = (mark) => run(async () => {
     const next = picked.mark === mark ? null : mark;
     await markMusicVideoPoolAssets(projectId, [{ kind: picked.kind, assetId: picked.assetId }], next, { silent: true });
-    const display = next || (picked.takeStatus === 'rejected' ? 'bad' : null);
-    setPool((prev) => prev.map((item) => (poolKey(item) === poolKey(picked) ? { ...item, mark: display } : item)));
-    setPicked((prev) => ({ ...prev, mark: display }));
+    setPool((prev) => prev.map((item) => (poolKey(item) === poolKey(picked) ? { ...item, mark: next } : item)));
+    setPicked((prev) => ({ ...prev, mark: next }));
   });
   const remove = (targets) => run(async () => {
     await deleteMusicVideoPoolAssets(projectId, targets.map(({ kind: k, assetId }) => ({ kind: k, assetId })), { silent: true });

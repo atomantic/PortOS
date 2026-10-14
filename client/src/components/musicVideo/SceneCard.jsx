@@ -115,7 +115,7 @@ export default function SceneCard({
   settingsSaving, videoBlockedReason, videoBlockedReasonFor = null, canContinueShot,
   onMove, onDelete, onEditLocal, onSave,
   project = null, onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
-  onOpenPreview, onSelectTake, onReviewTake, onRejectUnusedTakes = null, onSwapFrames = null, onImportTake, onImportClipTake, onPlacePoolItem, onTrimClip, projectId = null, aspect = '16:9', videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false,
+  onOpenPreview, onSelectTake, onReviewTake, onRejectUnusedTakes = null, onSwapFrames = null, onMarkTake = null, onImportTake, onImportClipTake, onPlacePoolItem, onTrimClip, projectId = null, aspect = '16:9', videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false,
   lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, onMoveStart = null, nextEndSec = null, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
   expanded, onToggleExpand, footageOptional = false, failedScenes = null, songReview = null,
 }) {
@@ -492,7 +492,7 @@ export default function SceneCard({
           onOpenPreview={onOpenPreview} takeBusy={takeBusy} onSelectTake={onSelectTake} onReviewTake={onReviewTake}
           onSwap={onPlacePoolItem ? setSwapKind : null} onSwapFrames={onSwapFrames ? () => onSwapFrames(scene) : null} onImportTake={onImportTake}
           onContinueFromPrevious={layer === 'footage' && index > 0 ? onContinueFromPrevious : null} previousHasClip={previousHasClip}
-          clipLocked={shotLock?.clip === 'locked'} />
+          clipLocked={shotLock?.clip === 'locked'} assetMarks={project?.assetMarks} onMarkTake={onMarkTake} />
         {/* Clip: the motion prompt, where this shot renders and what it costs, then its clip (Phase 1). */}
         <section aria-label="Render" className="min-w-0 space-y-2">
           <h4 className="text-xs font-medium">Clip</h4>
@@ -631,7 +631,7 @@ export default function SceneCard({
           <SceneTakeStrip scene={scene} kind="video" busy={takeBusy} grid
             onSelect={(take) => onSelectTake?.(scene, take)}
             onReview={(take, review) => onReviewTake?.(scene, take, review)}
-            onOpenPreview={onOpenPreview} />
+            onOpenPreview={onOpenPreview} marks={project?.assetMarks} onMark={onMarkTake} />
           </>
           )}
           {/* The render's settings sit with the render: what it covers and costs, then timing, shot mode and layer. */}

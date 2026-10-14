@@ -660,7 +660,7 @@ describe('finalizing a shot\'s takes', () => {
     expect(screen.getAllByText('In use').length).toBeGreaterThanOrEqual(2);
     fireEvent.click(screen.getByRole('button', { name: 'Reject unused (2)' }));
     expect(onRejectUnusedTakes).not.toHaveBeenCalled();
-    expect(screen.getByText('Reject 2 unused takes? The files stay.')).toBeTruthy();
+    expect(screen.getByText('Reject 2 unused takes from this shot? Other shots can still use them.')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Reject 2' }));
     expect(onRejectUnusedTakes).toHaveBeenCalledWith(scene);
     expect(screen.queryByRole('button', { name: 'Reject 2' })).toBeNull();

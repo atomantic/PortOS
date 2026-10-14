@@ -374,6 +374,18 @@ describe('renders made for a video with no shot', () => {
 });
 
 describe('the shot asset manager', () => {
+  // Uniquely catches a take rejected from one shot reading as bad in Swap, where another shot may want it.
+  it('lists a take rejected from its shot as not bad until the director marks it', async () => {
+    for (const name of ['first.png', 'second.png']) seedImage(name);
+    await addTake(sceneA.sceneId, { kind: 'image', assetId: 'first.png', source: 'generated' });
+    const second = await addTake(sceneA.sceneId, { kind: 'image', assetId: 'second.png', source: 'generated' });
+    await request(app).patch(`${base()}/scenes/${sceneA.sceneId}/takes/${second.body.take.takeId}`).send({ status: 'rejected' });
+    const listed = async () => (await request(app).get(`${base()}/media-pool`)).body.items.find((item) => item.assetId === 'second.png');
+    expect(await listed()).toMatchObject({ takeStatus: 'rejected', mark: null });
+    await request(app).patch(`${base()}/media-pool/marks`).send({ items: [{ kind: 'image', assetId: 'second.png' }], mark: 'bad' });
+    expect((await listed()).mark).toBe('bad');
+  });
+
   // Uniquely catches a deleted still or clip leaving a take, mark or collection row pointing at a file that is gone, and a shot's own still being deletable.
   it('marks unused assets, refuses a shot\'s own, and forgets deleted ones everywhere', async () => {
     for (const name of ['keep.png', 'bad.png', 'used.png', 'b-used.png']) seedImage(name);

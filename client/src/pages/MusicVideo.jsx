@@ -419,7 +419,7 @@ export default function MusicVideo() {
     videoSettings,
     applyScenePatch: patchScene,
   });
-  const takes = useMusicVideoTakes({ project: selected, applyScenePatch: patchScene });
+  const takes = useMusicVideoTakes({ project: selected, applyScenePatch: patchScene, patchProject });
   // Selective section revision (#8987): regenerate only a draft's flagged
   // sections, resumable from the server's checkpoint.
   const revisions = useMusicVideoRevisions({ project: selected, replaceProject, sceneMedia, attachRender: excerpts.attachRender });

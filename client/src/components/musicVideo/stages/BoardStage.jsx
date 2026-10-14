@@ -231,6 +231,7 @@ export default function BoardStage({ board }) {
               onReviewTake={takes.reviewTake}
               onRejectUnusedTakes={takes.rejectUnusedTakes}
               onSwapFrames={takes.swapFrames}
+              onMarkTake={takes.markTake}
               onContinueFromPrevious={takes.continueFromPrevious}
               // The server's own neighbor rule: the shot before this one by start time.
               previousHasClip={Boolean(shotHandoffSource(project, previousShot(project, scene.sceneId)))}

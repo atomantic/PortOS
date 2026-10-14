@@ -10,7 +10,8 @@ export const unusedTakeCount = (scene) => (Array.isArray(scene?.takes) ? scene.t
 
 /**
  * Finalize a shot's takes: one tap, then a confirm, rejects every take that is
- * not in use. The files stay and Use or Restore brings any back.
+ * not in use from this shot. That is not a bad mark: the files stay, other
+ * shots can still swap them in, and Use or Restore brings any back.
  */
 export default function SceneRejectUnused({ scene, busy = false, onReject }) {
   const [confirming, setConfirming] = useState(false);
@@ -21,7 +22,7 @@ export default function SceneRejectUnused({ scene, busy = false, onReject }) {
     <div className="flex flex-wrap items-center gap-2 text-xs">
       {confirming ? (
         <>
-          <span className="text-port-text-muted">Reject {takes}? The files stay.</span>
+          <span className="text-port-text-muted">Reject {takes} from this shot? Other shots can still use them.</span>
           <button type="button" disabled={busy} onClick={() => { setConfirming(false); onReject(scene); }}
             className={`${BTN} bg-port-error/20 text-port-error`}>
             <X size={12} aria-hidden="true" /> Reject {count}
@@ -30,7 +31,7 @@ export default function SceneRejectUnused({ scene, busy = false, onReject }) {
         </>
       ) : (
         <button type="button" disabled={busy} onClick={() => setConfirming(true)}
-          className={`${BTN} border border-port-border`} title="Keep only the frames and clip in use">
+          className={`${BTN} border border-port-border`} title="Keep only the frames and clip in use on this shot; the rest stay available to other shots">
           <X size={12} aria-hidden="true" /> Reject unused ({count})
         </button>
       )}

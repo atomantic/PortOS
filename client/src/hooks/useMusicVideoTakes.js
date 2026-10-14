@@ -8,6 +8,7 @@ import {
   reviewMusicVideoSceneTake,
   rejectUnusedMusicVideoSceneTakes,
   swapMusicVideoSceneFrames,
+  markMusicVideoPoolAssets,
   getMusicVideoHandoff,
   getMusicVideoHandoffBundle,
   importMusicVideoHandoff,
@@ -47,7 +48,7 @@ const handoffBundleFilename = (name) => `${handoffSlug(name)}-handoff.zip`;
  * routes (image → data/images, video → video history), then asks the server to
  * associate them with scenes by the file tags the exported manifest assigned.
  */
-export default function useMusicVideoTakes({ project, applyScenePatch }) {
+export default function useMusicVideoTakes({ project, applyScenePatch, patchProject = null }) {
   const [busy, setBusy] = useState(false);
   const chainRef = useRef(Promise.resolve());
 
@@ -112,6 +113,13 @@ export default function useMusicVideoTakes({ project, applyScenePatch }) {
   const reviewTake = (scene, take, review) => runTakeOp(
     (projectId) => reviewMusicVideoSceneTake(projectId, scene.sceneId, take.takeId, review, { silent: true }),
     'Failed to update take',
+  );
+
+  // Mark a take's file bad (or clear it): a project-wide mark, separate from rejecting it from this shot.
+  const markTake = (take, mark) => runTakeOp(
+    (projectId) => markMusicVideoPoolAssets(projectId, [{ kind: take.kind === 'video' ? 'video' : 'image', assetId: take.assetId }], mark, { silent: true })
+      .then(({ assetMarks }) => { patchProject?.(projectId, { assetMarks }); return null; }),
+    'Failed to mark the take',
   );
 
   // Start and end frames trade places, each bringing its prompt along.
@@ -202,5 +210,5 @@ export default function useMusicVideoTakes({ project, applyScenePatch }) {
     if (failures.length) toast.error(failures.slice(0, 3).join(' · '));
   };
 
-  return { busy, selectTake, placePoolItem, trimClipTake, reviewTake, rejectUnusedTakes, swapFrames, continueFromPrevious, importTake, importClipTake, exportHandoff, exportHandoffBundle, importHandoffFiles };
+  return { busy, selectTake, placePoolItem, trimClipTake, reviewTake, rejectUnusedTakes, swapFrames, markTake, continueFromPrevious, importTake, importClipTake, exportHandoff, exportHandoffBundle, importHandoffFiles };
 }
