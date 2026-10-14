@@ -32,7 +32,7 @@ vi.mock('./domainUsage.js', () => ({
 // archive's cross-filesystem fallback AND a failure partway through its copy.
 // Scoped to paths inside a `YYYY-MM-DD` bucket so the flat-dir writes that
 // precede the move still succeed. Off for every other test in this file.
-const fsFailures = vi.hoisted(() => ({ dateBucketWritesFail: false }));
+const fsFailures = vi.hoisted(() => ({ dateBucketWritesFail: false, rmFailsFor: null }));
 
 vi.mock('fs/promises', async (importOriginal) => {
   const actual = await importOriginal();
@@ -46,6 +46,14 @@ vi.mock('fs/promises', async (importOriginal) => {
     rename: async (from, to, ...rest) => {
       if (failsFor(to)) throw Object.assign(new Error('EXDEV: cross-device link'), { code: 'EXDEV' });
       return actual.rename(from, to, ...rest);
+    },
+    // Opt-in: rm of any path containing `fsFailures.rmFailsFor` rejects (EBUSY),
+    // so deleteAgent's directory cleanup failure can be observed.
+    rm: async (target, ...rest) => {
+      if (fsFailures.rmFailsFor && String(target).includes(fsFailures.rmFailsFor)) {
+        throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+      }
+      return actual.rm(target, ...rest);
     },
     // The archive fallback copies with `cp`; the destination dir is created
     // before the failure so the rollback has a half-copied target to remove.
@@ -64,7 +72,7 @@ vi.mock('./cosRunnerClient.js', () => ({
   requestSecurityScanViaRunner: vi.fn(),
 }));
 
-import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
+import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, deleteAgent, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
 import { saveState, loadState, readAgentsStateForSafetyCheck } from './cosState.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { cosEvents } from './cosEvents.js';
@@ -840,5 +848,34 @@ describe('cleanupZombieAgents — runner listing is not proof of life', () => {
     expect(result.cleaned).toEqual(['agent-stale']);
     expect(mockCosState.state.agents['agent-stale'].status).toBe('completed');
     expect(mockCosState.state.agents['agent-stale'].result.error).toMatch(/terminated unexpectedly/);
+  });
+});
+
+describe('deleteAgent directory cleanup (#11446)', () => {
+  beforeEach(async () => {
+    await rm(mockCosState.agentsDir, { recursive: true, force: true });
+    await mkdir(mockCosState.agentsDir, { recursive: true });
+    mockCosState.state = { agents: {} };
+  });
+
+  afterEach(async () => {
+    fsFailures.rmFailsFor = null;
+    await rm(mockCosState.agentsDir, { recursive: true, force: true });
+  });
+
+  it('logs the agentId and error when removing the agent directory fails, and still drops the record', async () => {
+    const agentId = 'agent-rm-busy';
+    await mkdir(join(mockCosState.agentsDir, agentId), { recursive: true });
+    mockCosState.state.agents[agentId] = { id: agentId };
+    fsFailures.rmFailsFor = agentId;
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const result = await deleteAgent(agentId);
+      expect(result).toEqual({ success: true, agentId });
+      expect(mockCosState.state.agents[agentId]).toBeUndefined();
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/^❌ .*agent-rm-busy.*EBUSY/));
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });
