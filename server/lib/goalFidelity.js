@@ -601,7 +601,7 @@ export function productionAuditEvidence(diff) {
           if (values.includes(null)) return [];
           return [{
             assumption: 'awaited rejection handler reaches its final boolean return; enclosing context unavailable',
-            binding: binding.name, handledRejectionValue: binding.handledRejectionValue,
+            binding: binding.name, bindingStatement: statement.source, handledRejectionValue: binding.handledRejectionValue,
             nextStatement: next.source, write: write.source,
             conditionValues: values, writeReached: values.every(Boolean),
             trace: `On a handled rejection, ${binding.name} = ${binding.handledRejectionValue}. Next complete statement: ${next.source.trim()}. Its write ${write.source} is ${values.every(Boolean) ? 'REACHED because no predicate in this statement prevents it.' : 'SKIPPED because its condition is false.'}`,
