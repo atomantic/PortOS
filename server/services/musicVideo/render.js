@@ -29,11 +29,13 @@ import { spawn } from '../../lib/childProcess.js';
 import { existsSync } from 'fs';
 import { unlink } from 'fs/promises';
 import { join } from 'path';
+import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { findFfmpeg, safeUnder, generateThumbnail, probeVideoDuration, probeVideoGeometry } from '../../lib/ffmpeg.js';
+import { filterGraphViaFile } from '../../lib/ffmpegFilterGraph.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { cancelMusicVideoRenderJob, isMusicVideoRenderCanceled } from './renderCancellation.js';
 import { attachFfmpegRenderGuard } from '../../lib/ffmpegRenderGuard.js';
@@ -991,6 +993,9 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
     const composition = cues.length > 0 ? project.composition : null;
 
     await assertCurrentRenderApproval(projectId, project, options);
+    // A long filter graph goes to ffmpeg in this file, removed once ffmpeg exits.
+    const graphPath = join(tmpdir(), `portos-music-video-${jobId}.filtergraph`);
+    const plainEncode = composition ? null : await filterGraphViaFile(ffmpeg, args, graphPath);
     const job = { id: jobId, projectId, status: 'running', clients: [], process: null, totalDuration };
     jobs.set(jobId, job);
     projectRenders.set(projectId, jobId);
@@ -1049,10 +1054,11 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
     const outroSec = statsOutroSeconds(project.statsOutro);
     // A composed render first captures its overlay (progress 0–50%), then
     // encodes (50–100%); a plain render encodes across the whole bar.
-    const startEncode = (encodeArgs, progressBase = 0) => {
+    const startEncode = (encode, progressBase = 0) => {
       const encodeTop = finishing ? progressBase + (1 - progressBase) / 2 : 1;
       const encodeProgress = (fraction) => progressBase + (encodeTop - progressBase) * fraction;
-      const proc = spawn(ffmpeg, encodeArgs, safeChildProcessOptions({ stdio: ['ignore', 'ignore', 'pipe'] }));
+      const dropGraphFile = () => (encode.file ? unlink(encode.file).catch(() => {}) : null);
+      const proc = spawn(ffmpeg, encode.args, safeChildProcessOptions({ stdio: ['ignore', 'ignore', 'pipe'] }));
       job.process = proc;
 
       let stderrBuf = '';
@@ -1092,6 +1098,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
         },
         onSpawnError: async (err) => {
           // Pre-spawn failure: the child never started, so 'close' won't follow.
+          await dropGraphFile();
           job.process = null;
           job.status = 'error';
           const reason = `Failed to spawn ffmpeg: ${err.message}`;
@@ -1110,6 +1117,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
         },
         onClose: async (code, signal) => {
           job.process = null;
+          await dropGraphFile();
           if (code !== 0) {
             const canceled = isMusicVideoRenderCanceled(job, signal);
             await settleFailure(canceled, canceled ? 'Render cancelled' : signal ? `Killed by signal ${signal}` : `ffmpeg exit ${code}`);
@@ -1205,7 +1213,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
     };
 
     if (!composition) {
-      startEncode(args);
+      startEncode(plainEncode);
       return { jobId };
     }
 
@@ -1224,7 +1232,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
       // Capture is over: from here a cancel kills the encode (job.process).
       job.overlayAbort = null;
       const layered = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, overlays, frameGrid: true, soundBed, grade: project.composition?.grade, beats: project.audioAnalysis?.beats });
-      startEncode(layered.args, 0.5);
+      startEncode(await filterGraphViaFile(ffmpeg, layered.args, graphPath), 0.5);
     }).catch(async (err) => {
       const canceled = signal.aborted;
       await settleFailure(canceled, canceled ? 'Render cancelled' : `Typography overlay failed: ${err.message}`);

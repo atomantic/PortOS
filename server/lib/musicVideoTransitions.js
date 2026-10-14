@@ -18,7 +18,8 @@
 
 import { IMAGE_EFFECT_GLITCH_STYLE, imageEffectChangeFrame, sceneImageEffect } from './musicVideoImageEffects.js';
 
-export const MUSIC_VIDEO_TRANSITIONS = Object.freeze(['vhs-glitch', 'channel-change', 'vhs-tracking', 'vhs-dropout', 'camera-flash', 'color-block', 'vhs-rewind']);
+export const MUSIC_VIDEO_TRANSITIONS = Object.freeze(['vhs-glitch', 'channel-change', 'vhs-tracking', 'vhs-dropout', 'camera-flash', 'color-block', 'vhs-rewind',
+  'film-burn', 'light-leak', 'gate-jump', 'shutter', 'film-scratches', 'color-split']);
 
 export const MUSIC_VIDEO_TRANSITION_LABELS = Object.freeze({
   'vhs-glitch': 'VHS glitch',
@@ -28,6 +29,12 @@ export const MUSIC_VIDEO_TRANSITION_LABELS = Object.freeze({
   'camera-flash': 'Camera flash',
   'color-block': 'Color blocks',
   'vhs-rewind': 'Rewind / fast-forward',
+  'film-burn': 'Film burn',
+  'light-leak': 'Light leak',
+  'gate-jump': 'Gate jump',
+  'shutter': 'Shutter',
+  'film-scratches': 'Film scratches',
+  'color-split': 'Color split',
 });
 
 // A shot also carries glitches at any moment inside it (`scene.glitches`):
@@ -50,6 +57,8 @@ export const MUSIC_VIDEO_GLITCH_LENGTHS = Object.freeze([0.125, 0.25, 0.5, 1, 2]
 //           shift of width, blur the horizontal smear (a fraction of width)
 //   swaps   macroblocks traded places: { x1, y1, x2, y2, w, h } fractions of the frame
 //   blocks  solid colour macroblocks: { x, y, w, h } fractions, color 'rrggbb', alpha
+//   glows   light washing in from an edge: { side: left|right|top|bottom, size }
+//           (fraction of the frame), color 'rrggbb', alpha at the edge fading to none
 export const MUSIC_VIDEO_TRANSITION_STYLES = Object.freeze({
   'vhs-glitch': {
     lead: 1,
@@ -141,6 +150,74 @@ export const MUSIC_VIDEO_TRANSITION_STYLES = Object.freeze({
       { smears: [{ y: 0.49, h: 0.08, shift: 0.05, blur: 0.008 }], bars: [{ y: 0.485, h: 0.006, alpha: 0.6 }],
         chroma: 0.006, sat: 0.9, noise: 0.3, lines: 0.3 },
       { smears: [{ y: 0.52, h: 0.04, shift: -0.02, blur: 0.005 }], chroma: 0.003, noise: 0.15, lines: 0.2 },
+    ],
+  },
+  // Film burning in the gate: a hot orange glow floods in from one side, whites
+  // the frame out on the cut and burns away off the other.
+  'film-burn': {
+    lead: 4,
+    frames: [
+      { glows: [{ side: 'right', size: 0.2, color: 'ff8a2a', alpha: 0.35 }], bright: 1.05 },
+      { glows: [{ side: 'right', size: 0.35, color: 'ff7a1a', alpha: 0.55 }], bright: 1.1, sat: 1.1 },
+      { glows: [{ side: 'right', size: 0.55, color: 'ff9a3a', alpha: 0.75 }, { side: 'left', size: 0.15, color: 'ffd27a', alpha: 0.3 }], bright: 1.2, sat: 1.1 },
+      { glows: [{ side: 'right', size: 0.8, color: 'ffb050', alpha: 0.9 }], bright: 1.35 },
+      { glows: [{ side: 'right', size: 1, color: 'ffc070', alpha: 0.9 }], bar: { y: 0, h: 1, alpha: 0.6 }, bright: 1.4 },
+      { glows: [{ side: 'left', size: 0.8, color: 'ffb050', alpha: 0.85 }], bright: 1.3 },
+      { glows: [{ side: 'left', size: 0.55, color: 'ff8a2a', alpha: 0.6 }], bright: 1.15 },
+      { glows: [{ side: 'left', size: 0.3, color: 'ff6a1a', alpha: 0.4 }], bright: 1.05 },
+      { glows: [{ side: 'left', size: 0.12, color: 'ff5a10', alpha: 0.2 }] },
+    ],
+  },
+  // Stray light on the film: a soft amber and rose wash from the top corner swells and fades.
+  'light-leak': {
+    lead: 5,
+    frames: [0.12, 0.22, 0.32, 0.42, 0.5, 0.5, 0.44, 0.36, 0.26, 0.16, 0.08].map((alpha) => ({
+      glows: [{ side: 'left', size: 0.6, color: 'ff4f8a', alpha }, { side: 'top', size: 0.5, color: 'ffb347', alpha: alpha * 0.9 }],
+      bright: 1 + alpha * 0.3, sat: 1.05,
+    })),
+  },
+  // The film slipping in a projector gate: the picture jumps up a frame line,
+  // its black frame bar showing, and drops back into place.
+  'gate-jump': {
+    lead: 2,
+    frames: [
+      { roll: 0.06, bright: 0.95 },
+      { roll: 0.45, blocks: [{ x: 0, y: 0.43, w: 1, h: 0.05, color: '000000', alpha: 1 }], bright: 0.9, noise: 0.1 },
+      { roll: -0.25, blocks: [{ x: 0, y: 0.73, w: 1, h: 0.05, color: '000000', alpha: 1 }], bright: 0.95 },
+      { roll: 0.05 },
+      { bright: 1.05, chroma: 0.002 },
+    ],
+  },
+  // A camera shutter blinking over the cut: black closes in from top and bottom and opens again.
+  shutter: {
+    lead: 3,
+    frames: [0.18, 0.38, 0.5, 0.5, 0.32, 0.12].map((v) => ({
+      blocks: [{ x: 0, y: 0, w: 1, h: v, color: '000000', alpha: 1 }, { x: 0, y: 1 - v, w: 1, h: v, color: '000000', alpha: 1 }],
+    })),
+  },
+  // Worn print: thin scratches run down the frame, dust specks flash and the exposure flickers.
+  'film-scratches': {
+    lead: 2,
+    frames: [
+      { blocks: [{ x: 0.23, y: 0, w: 0.003, h: 1, color: 'ffffff', alpha: 0.55 }, { x: 0.61, y: 0.3, w: 0.008, h: 0.012, color: '000000', alpha: 0.8 }], bright: 1.08, sat: 0.9 },
+      { blocks: [{ x: 0.24, y: 0, w: 0.003, h: 1, color: 'ffffff', alpha: 0.45 }, { x: 0.71, y: 0, w: 0.002, h: 1, color: '000000', alpha: 0.5 },
+        { x: 0.38, y: 0.66, w: 0.01, h: 0.014, color: 'ffffff', alpha: 0.8 }], bright: 0.93, sat: 0.9 },
+      { blocks: [{ x: 0.72, y: 0, w: 0.002, h: 1, color: '000000', alpha: 0.45 }, { x: 0.15, y: 0.2, w: 0.006, h: 0.01, color: '000000', alpha: 0.8 },
+        { x: 0.82, y: 0.78, w: 0.008, h: 0.012, color: '000000', alpha: 0.75 }], bright: 1.06, sat: 0.9 },
+      { blocks: [{ x: 0.46, y: 0, w: 0.003, h: 1, color: 'ffffff', alpha: 0.5 }, { x: 0.55, y: 0.45, w: 0.012, h: 0.016, color: 'ffffff', alpha: 0.75 }], bright: 0.95, sat: 0.9 },
+      { blocks: [{ x: 0.47, y: 0, w: 0.002, h: 1, color: 'ffffff', alpha: 0.35 }, { x: 0.3, y: 0.86, w: 0.007, h: 0.01, color: '000000', alpha: 0.7 }], bright: 1.04, sat: 0.95 },
+      { blocks: [{ x: 0.66, y: 0.12, w: 0.006, h: 0.01, color: '000000', alpha: 0.7 }], bright: 0.98 },
+    ],
+  },
+  // A tube camera losing convergence: red and blue pull apart and snap back.
+  'color-split': {
+    lead: 2,
+    frames: [
+      { chroma: 0.03, shift: 0.004, bright: 1.03 },
+      { chroma: 0.055, shift: -0.008, bright: 1.06, sat: 1.15 },
+      { chroma: 0.04, shift: 0.006, bright: 1.04, sat: 1.1 },
+      { chroma: 0.02, bright: 1.02 },
+      { chroma: 0.008 },
     ],
   },
 });
@@ -265,6 +342,32 @@ export function blockBox(x, y, w, h, width, height) {
   return { x: px, y: py, w: Math.max(0, Math.min(width - px, even(w * width))), h: Math.max(0, Math.min(height - py, even(h * height))) };
 }
 
+/**
+ * A style frame's glows, `{ side, size, color, alpha }`: light at `alpha` on its
+ * `side` edge that fades evenly to nothing `size` (a fraction of the frame) in.
+ * Both players paint each as one smooth ramp, so a glow looks the same in each.
+ */
+export function edgeGlows(glows) {
+  return (Array.isArray(glows) ? glows : [])
+    .map((g) => ({ side: g.side, size: Math.min(1, Math.max(0, g.size || 0)), color: g.color, alpha: Math.min(1, Math.max(0, g.alpha || 0)) }))
+    .filter((g) => g.size > 0 && g.alpha > 0);
+}
+
+// One `geq` per glow: each pixel moves toward the glow's color by the ramp's strength there.
+// The color goes in as limited-range BT.601 YUV, as drawbox paints it.
+function glowFilter({ side, size, color, alpha }) {
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(color.slice(i, i + 2), 16) / 255);
+  const yuv = [
+    16 + 65.481 * r + 128.553 * g + 24.966 * b,
+    128 - 37.797 * r - 74.203 * g + 112 * b,
+    128 + 112 * r - 93.786 * g - 18.214 * b,
+  ].map((v) => Math.round(v));
+  const from = side === 'left' ? 'X/W' : side === 'right' ? '(W-1-X)/W' : side === 'top' ? 'Y/H' : '(H-1-Y)/H';
+  const strength = `${num(alpha)}*max(0,1-${from}/${num(size)})`;
+  const [lum, cb, cr] = yuv.map((v) => `'p(X,Y)+(${v}-p(X,Y))*${strength}'`);
+  return `geq=lum=${lum}:cb=${cb}:cr=${cr}`;
+}
+
 /** Inclusive frame runs as a timeline expression: `between(n,4,6)+between(n,90,90)`. */
 function framesExpr(frames) {
   const sorted = [...new Set(frames)].sort((a, b) => a - b);
@@ -335,6 +438,7 @@ export function musicVideoTransitionFilter(glitches, { width, height }) {
       const box = blockBox(b.x, b.y, b.w, b.h, width, height);
       if (box.w >= 2 && box.h >= 2) add(`drawbox=x=${box.x}:y=${box.y}:w=${box.w}:h=${box.h}:color=0x${b.color}@${num(b.alpha)}:t=fill`);
     }
+    for (const glow of edgeGlows(p.glows)) add(glowFilter(glow));
     for (const bar of [...(p.bar ? [p.bar] : []), ...(p.bars || [])]) {
       add(`drawbox=x=0:y=${rows(bar.y)}:w=iw:h=${Math.max(2, rows(bar.h))}:color=white@${num(bar.alpha)}:t=fill`);
     }
