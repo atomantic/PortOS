@@ -167,24 +167,26 @@ const CLIP_PAUSED_DRIFT_SEC = 0.01;
  * them: the offset moves the in-point by whole frames, a negative one past the
  * clip's start holds its first frame that long, and the speed runs the clip faster
  * or slower, looping round the whole file as the render's looped input does.
+ * `early` follows the song's clock before the shot starts too (a beat toggle
+ * into it), reading the footage before its in-point back to the clip's start.
  */
-export function clipTimeAt(scene, t, clipSec = null) {
+export function clipTimeAt(scene, t, clipSec = null, { early = false } = {}) {
   const inSec = selectedPerformanceInstruction(scene)?.edit?.inSec ?? 0;
-  const local = Math.max(0, t - (scene.startSec || 0));
+  const local = early ? t - (scene.startSec || 0) : Math.max(0, t - (scene.startSec || 0));
   const rate = clipSpeedRate(scene);
   const start = inSec + clipOffsetSec(scene);
+  // A negative offset holds the first frame before the clip runs; otherwise it runs from `start`.
+  const at = start >= 0 ? Math.max(0, start + local * rate) : Math.max(0, local + start) * rate;
   if (clipReversed(scene)) {
     // Backwards from the file's end, as the render reads it once: past its start it holds the first frame shown last.
     if (!(clipSec > 0)) return 0;
-    const at = Math.max(0, start) + Math.max(0, local + Math.min(0, start)) * rate;
     return Math.min(clipSec - 0.05, Math.max(0, clipSec - at));
   }
   if (rate !== 1 || start !== inSec) {
-    const sourceIn = Math.max(0, start);
-    const at = sourceIn + Math.max(0, local + Math.min(0, start)) * rate;
     if (!(clipSec > 0) || at < clipSec) return at;
     return scene.loop !== false && !(inSec > 0) ? at % clipSec : Math.max(0, clipSec - 0.05);
   }
+  if (local < 0) return at;
   if (!(clipSec > inSec)) return inSec + local;
   const span = clipSec - inSec;
   if (local < span) return inSec + local;
@@ -206,10 +208,8 @@ const ANIMATIC_LOOK_KEY = 'portos-mv-animatic-look';
  * come waits paused on its first frame. The clip stays transparent until it has
  * a frame to show, so the shot's still underneath covers the load and the seek.
  */
-function ShotClip({ scene, audioRef, time, current, leadSec = 0 }) {
+function ShotClip({ scene, audioRef, time, current }) {
   const videoRef = useRef(null);
-  // A beat toggle into this shot started its clip early: it carries on from there.
-  const timing = useMemo(() => (leadSec > 0 ? { ...scene, startSec: (scene.startSec || 0) - leadSec } : scene), [scene, leadSec]);
   const [ready, setReady] = useState(false);
   const file = useVideoFileSrc(scene.videoHistoryId);
   const src = file.src || (file.resolving ? null : `/data/videos/${scene.videoHistoryId}.mp4`);
@@ -218,17 +218,17 @@ function ShotClip({ scene, audioRef, time, current, leadSec = 0 }) {
     const audio = audioRef.current;
     if (!video || !audio || video.readyState < 1) return;
     const duration = Number.isFinite(video.duration) ? video.duration : null;
-    const target = clipTimeAt(timing, current ? audio.currentTime || 0 : scene.startSec || 0, duration);
+    const target = clipTimeAt(scene, current ? audio.currentTime || 0 : scene.startSec || 0, duration);
     // A browser cannot play a clip backwards, so a reversed clip stays paused and is stepped to each frame.
     const reversed = clipReversed(scene);
     const tolerance = current && (audio.paused || reversed) ? CLIP_PAUSED_DRIFT_SEC : CLIP_DRIFT_SEC;
     if (Math.abs((video.currentTime || 0) - target) > tolerance && !(reversed && video.seeking)) video.currentTime = target;
     // The shot's hand-set speed; a negative offset's lead holds the first frame.
     video.playbackRate = clipSpeedRate(scene);
-    const leading = (timing.startSec || 0) - clipOffsetSec(scene) - (selectedPerformanceInstruction(scene)?.edit?.inSec ?? 0) > (audio.currentTime || 0);
+    const leading = (scene.startSec || 0) - clipOffsetSec(scene) - (selectedPerformanceInstruction(scene)?.edit?.inSec ?? 0) > (audio.currentTime || 0);
     if (!current || audio.paused || leading || reversed) video.pause?.();
     else if (video.paused) video.play?.()?.catch?.(() => {});
-  }, [scene, timing, audioRef, current]);
+  }, [scene, audioRef, current]);
   // Shown once a frame is decoded where the clip should be; kept from then on, since a
   // drift re-seek holds the last frame rather than going blank.
   const markReady = useCallback(() => {
@@ -276,8 +276,8 @@ function ShotClip({ scene, audioRef, time, current, leadSec = 0 }) {
 
 /**
  * The incoming shot of a beat toggle (lib/musicVideoCutEffects.js) over the
- * outgoing one: its clip plays from where the toggle starts it and shows only
- * on the toggle's frames, as the final render overlays it. Playback flips it on
+ * outgoing one: its clip runs on the song's clock, reading the footage before
+ * its in-point, and shows only on the toggle's frames, as the final render overlays it. Playback flips it on
  * animation frames, since the song's timeupdate is far too coarse for a beat.
  * A shot without a clip shows its still.
  */
@@ -285,7 +285,6 @@ function ToggleClip({ scene, toggle, audioRef, time }) {
   const mediaRef = useRef(null);
   const file = useVideoFileSrc(scene.videoHistoryId || null);
   const src = scene.videoHistoryId ? file.src || (file.resolving ? null : `/data/videos/${scene.videoHistoryId}.mp4`) : null;
-  const timing = useMemo(() => ({ ...scene, startSec: toggle.windowStartSec }), [scene, toggle.windowStartSec]);
   const apply = useCallback((t) => {
     const el = mediaRef.current;
     const audio = audioRef.current;
@@ -293,13 +292,13 @@ function ToggleClip({ scene, toggle, audioRef, time }) {
     el.style.opacity = toggle.incoming.some(([a, b]) => t >= a && t < b) ? '1' : '0';
     if (el.tagName !== 'VIDEO' || el.readyState < 1) return;
     const duration = Number.isFinite(el.duration) ? el.duration : null;
-    const target = clipTimeAt(timing, Math.max(t, toggle.windowStartSec), duration);
+    const target = clipTimeAt(scene, Math.min(Math.max(t, toggle.windowStartSec), toggle.cutSec), duration, { early: true });
     const tolerance = audio?.paused ? CLIP_PAUSED_DRIFT_SEC : CLIP_DRIFT_SEC;
     if (Math.abs((el.currentTime || 0) - target) > tolerance) el.currentTime = target;
     const running = !!audio && !audio.paused && t >= toggle.windowStartSec && t < toggle.cutSec;
     if (!running) el.pause?.();
     else if (el.paused) el.play?.()?.catch?.(() => {});
-  }, [toggle, timing, audioRef]);
+  }, [toggle, scene, audioRef]);
   useEffect(() => { apply(time); }, [time, apply]);
   useEffect(() => {
     const audio = audioRef.current;
@@ -431,9 +430,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   };
   // Beat toggles across cuts, on the frames the final render flips (lib/musicVideoCutEffects.js).
   const beats = project.audioAnalysis?.beats;
-  const toggles = useMemo(() => sceneBeatToggles(scenes, { fps: ANIMATIC_FPS, beats, endSec: songEndSec || null,
-    isPerformance: (scene) => !!selectedPerformanceInstruction(scene)?.edit }), [scenes, beats, songEndSec]);
-  const leadOf = (scene) => toggles.find((t) => t.toSceneId === scene.sceneId)?.leadSec || 0;
+  const toggles = useMemo(() => sceneBeatToggles(scenes, { fps: ANIMATIC_FPS, beats, endSec: songEndSec || null }), [scenes, beats, songEndSec]);
   // A toggle mounts its incoming clip a little ahead, so it has loaded when the flips start.
   const nearToggles = toggles.filter((t) => time >= t.windowStartSec - 3 && time < t.cutSec);
   const shot = shotAt(scenes, time);
@@ -474,7 +471,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
           </div>
         ) : null}
         {clipShots.map((scene) => (
-          <ShotClip key={`${scene.sceneId}:${scene.videoHistoryId}`} scene={scene} audioRef={audioRef} time={time} current={scene === shot} leadSec={leadOf(scene)} />
+          <ShotClip key={`${scene.sceneId}:${scene.videoHistoryId}`} scene={scene} audioRef={audioRef} time={time} current={scene === shot} />
         ))}
         {nearToggles.map((toggle) => {
           const incoming = scenes.find((scene) => scene.sceneId === toggle.toSceneId);

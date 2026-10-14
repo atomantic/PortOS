@@ -321,9 +321,8 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
       ...footageFrameFit(scene),
       // VHS glitches on its cuts (musicVideoTransitions.js) ride over the edit without moving it.
       ...sceneTransitions(scene),
-      // So does a beat toggle on its cut out (musicVideoCutEffects.js); a lip-synced shot restarts at its cut.
+      // So does a beat toggle on its cut out (musicVideoCutEffects.js).
       ...cutEffectOf(scene),
-      ...(edit ? { performance: true } : {}),
     });
   }
   if (missing.length > 0) {
@@ -582,25 +581,26 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
     return clipInput;
   };
   // A beat toggle (musicVideoCutEffects.js) flips the picture to the next shot's clip
-  // on the beats before a cut. That clip plays from where the toggle starts it, read
-  // from an input of its own, and its own section picks up where it left off.
+  // on the beats before a cut. That clip runs on the song's clock, read from an input
+  // of its own, so its own section starts exactly where it would without the toggle.
   const sectionFrame = (sec) => Math.round(sec * fps);
   const toggles = beatToggleCuts(plan.map(({ c, startSec, endSec }) => ({
     sceneId: c.sceneId, startFrame: sectionFrame(startSec), endFrame: sectionFrame(endSec),
-    partner: !!c.intercutOf, cutEffect: c.cutEffect, performance: !!c.performance,
+    partner: !!c.intercutOf, cutEffect: c.cutEffect,
   })), { fps, beats });
   const prerolls = toggles.map((t) => {
-    const incoming = plan[t.index + 1];
-    const clip = { ...incoming.c, outSec: incoming.c.inSec + t.windowFrames / fps };
-    // A clip that doesn't loop only runs on as far as its spare footage allows, so
-    // the shot never runs out early and freezes on its last frame.
-    const spare = incoming.c.loop === false
-      ? Math.max(0, (incoming.c.sourceSec ?? incoming.c.duration) - (incoming.c.outSec - incoming.c.inSec))
-      : Infinity;
-    const lead = Math.min(t.leadFrames / fps, spare);
-    if (lead > 0 && !incoming.c.layer) {
-      incoming.c = { ...incoming.c, inSec: incoming.c.inSec + lead, outSec: incoming.c.outSec + lead, sourceSec: (incoming.c.sourceSec ?? incoming.c.duration) - lead };
-    }
+    const { c } = plan[t.index + 1];
+    // The footage just before the incoming shot's in-point, on the output timebase
+    // its speed and offset already set; any part before the clip starts holds its first frame.
+    const windowSec = t.windowFrames / fps;
+    const shortSec = Math.max(0, windowSec - c.inSec);
+    const clip = c.layer ? { ...c, outSec: c.inSec + windowSec } : {
+      ...c,
+      inSec: Math.max(0, c.inSec - windowSec),
+      outSec: c.inSec + shortSec,
+      sourceSec: (c.sourceSec ?? c.duration) + windowSec,
+      ...(shortSec > 0 ? { leadSec: round3((c.leadSec || 0) + shortSec) } : {}),
+    };
     return { ...t, clip };
   });
   for (const { c } of plan) inputOf.push(addInput(c));
