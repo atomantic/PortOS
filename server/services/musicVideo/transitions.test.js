@@ -48,7 +48,8 @@ describe('transitionGlitchFrames', () => {
 // split or intercut shot painting it once.
 describe('shotGlitchFrames', () => {
   const FPS24 = 24;
-  const piece = (scene, extra = {}) => ({ sceneId: scene.sceneId, ...sceneTransitions(scene), ...extra });
+  const piece = (scene, extra = {}) => ({ sceneId: scene.sceneId, startFrame: Math.round(scene.startSec * FPS24),
+    endFrame: Math.round(scene.endSec * FPS24), ...sceneTransitions(scene), ...extra });
   const framesOf = (pieces) => shotGlitchFrames(pieces, FPS24).map((g) => `${g.frame}:${g.index}`);
 
   it('starts the glitch at its time in the shot and stretches the style over a set length', () => {
@@ -58,15 +59,18 @@ describe('shotGlitchFrames', () => {
     expect(framesOf([piece(long)])).toEqual(['288:0', '289:0', '290:1', '291:2', '292:2', '293:3']);
   });
 
-  it('keeps a glitch timed past the shot\'s end inside the shot', () => {
-    const shot = { sceneId: 'a', startSec: 0, endSec: 1, glitches: [{ atSec: 5, style: 'vhs-dropout' }] };
-    expect(framesOf([piece(shot)])[0]).toBe('24:0');
+  it('never paints past the shot, whether timed or stretched past its end', () => {
+    const late = { sceneId: 'a', startSec: 0, endSec: 1, glitches: [{ atSec: 5, style: 'vhs-dropout' }] };
+    expect(framesOf([piece(late)])).toEqual(['23:0']);
+    const long = { sceneId: 'a', startSec: 0, endSec: 1, glitches: [{ atSec: 0.9, style: 'color-block', lengthSec: 0.5 }] };
+    expect(framesOf([piece(long), piece({ sceneId: 'b', startSec: 1, endSec: 2 })])).toEqual(['21:0', '22:0', '23:0']);
   });
 
-  it('paints a split shot\'s glitch once and none for an intercut partner', () => {
-    const shot = { sceneId: 'a', startSec: 0, endSec: 4, glitches: [{ atSec: 1, style: 'vhs-dropout' }] };
+  it('paints a split shot\'s glitch once, only on its own pieces, and none for an intercut partner', () => {
+    const shot = { sceneId: 'a', startSec: 0, endSec: 4, glitches: [{ atSec: 1, style: 'vhs-dropout' }, { atSec: 1.5, style: 'vhs-dropout' }] };
     const other = { sceneId: 'b', startSec: 4, endSec: 8, glitches: [{ atSec: 1, style: 'vhs-dropout' }] };
-    expect(framesOf([piece(shot), piece(other, { partner: true }), piece(shot)])).toEqual(['24:0', '25:1']);
+    const pieces = [{ ...piece(shot), endFrame: 36 }, { ...piece(other, { partner: true }), startFrame: 36, endFrame: 48 }, { ...piece(shot), startFrame: 48, endFrame: 96 }];
+    expect(framesOf(pieces)).toEqual(['24:0', '25:1']);
   });
 });
 

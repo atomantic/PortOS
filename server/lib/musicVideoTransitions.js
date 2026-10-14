@@ -335,24 +335,31 @@ export function sceneImageEffectGlitchFrames(scenes, fps, { layered = false, end
  * The glitched frames of the shots' in-shot glitches, in the cut transitions'
  * shape (`[{ frame, style, index }]`). `pieces` are timeline sections carrying
  * `sceneId`, `partner?` and `shotGlitches` (song seconds, from
- * `sceneTransitions`); a shot cut into several pieces counts once, and an
- * intercut partner borrowing its footage adds none. A `lengthSec` stretches
+ * `sceneTransitions`) and `startFrame`/`endFrame`; a glitch paints only on
+ * its own shot's pieces, so it never spills into the next shot or over an
+ * intercut partner, and a partner borrowing the shot's footage adds none. A `lengthSec` stretches
  * the style's frames over that many frames, holding each a little longer.
  */
 export function shotGlitchFrames(pieces, fps) {
-  const seen = new Set();
-  const out = [];
+  // Each shot's own pieces: a glitch paints only while the shot is on screen.
+  const shots = new Map();
   for (const piece of Array.isArray(pieces) ? pieces : []) {
-    if (!piece || piece.partner || seen.has(piece.sceneId) || !Array.isArray(piece.shotGlitches)) continue;
-    seen.add(piece.sceneId);
-    for (const g of piece.shotGlitches) {
+    if (!piece || piece.partner || !Array.isArray(piece.shotGlitches)) continue;
+    if (!shots.has(piece.sceneId)) shots.set(piece.sceneId, { glitches: piece.shotGlitches, ranges: [] });
+    shots.get(piece.sceneId).ranges.push([piece.startFrame, piece.endFrame]);
+  }
+  const out = [];
+  for (const { glitches, ranges } of shots.values()) {
+    const onScreen = (frame) => ranges.some(([a, b]) => frame >= a && frame < b);
+    for (const g of glitches) {
       const style = MUSIC_VIDEO_TRANSITION_STYLES[g.style];
       if (!style) continue;
       const count = style.frames.length;
       const length = g.lengthSec ? Math.max(1, Math.round(g.lengthSec * fps)) : count;
-      const start = Math.round(g.atSec * fps);
+      // The frame showing at that moment, as the player counts it.
+      const start = Math.floor(g.atSec * fps + 1e-6);
       for (let i = 0; i < length; i++) {
-        if (start + i >= 0) out.push({ frame: start + i, style: g.style, index: Math.floor((i * count) / length) });
+        if (onScreen(start + i)) out.push({ frame: start + i, style: g.style, index: Math.floor((i * count) / length) });
       }
     }
   }
