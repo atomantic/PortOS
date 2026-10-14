@@ -134,6 +134,7 @@ import { reconcileBeeperIngestion } from '../services/beeperArming.js';
 import { reconcileItermBridge } from '../services/itermBridge.js';
 import { restartBeeperScheduler, isBeeperSchedulerRegistered } from '../services/beeperScheduler.js';
 import { updateSettingsWith } from '../services/settings.js';
+import { updateAiAssignment } from '../services/aiAssignments.js';
 import { hasConfiguredInstances as hasConfiguredDatadogInstances } from '../services/datadog.js';
 import { hasConfiguredInstances as hasConfiguredJiraInstances } from '../services/jira.js';
 import { assertEidoverseInstalled, installEidoverse, setEidoverseWorldsOrigin } from '../services/eidoverse.js';
@@ -1692,5 +1693,57 @@ describe('generic voice settings operator authority', () => {
     const res = await request(guardedSettingsApp('remote')).put('/api/settings').send({ theme: 'dark' });
     expect(res.status).toBe(200);
     expect(store.voice).toEqual(original);
+  });
+});
+
+
+// A remote policy write must not become a trusted shell command on a later
+// Autofixer repair, or turn a staged patch into an automatic live promotion.
+describe('autofixer settings operator authority', () => {
+  const original = { providerId: 'example-cli', model: 'example-model', verifyCommand: 'npm test', autoPromote: false };
+  beforeEach(() => { store = { autofixer: { ...original } }; vi.clearAllMocks(); });
+
+  it('refuses command, promotion, provider and clearing writes before persistence', async () => {
+    for (const autofixer of [
+      { verifyCommand: 'echo example-verification' },
+      { autoPromote: true },
+      { providerId: 'another-cli' },
+      { verifyCommand: '' },
+      {},
+      null,
+    ]) {
+      const response = await request(guardedSettingsApp('remote')).put('/api/settings').send({ autofixer });
+      expect([response.status, response.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+      expect(store.autofixer).toEqual(original);
+    }
+    expect(updateSettingsWith).not.toHaveBeenCalled();
+  });
+
+  it.each(['local', 'session'])('preserves %s repair policy updates and explicit clears', async authority => {
+    const app = guardedSettingsApp(authority);
+    const response = await request(app).put('/api/settings').send({ autofixer: { verifyCommand: 'echo example-verification', autoPromote: true } });
+    expect(response.status).toBe(200);
+    expect(store.autofixer).toEqual({ ...original, verifyCommand: 'echo example-verification', autoPromote: true });
+    expect((await request(app).put('/api/settings').send({ autofixer: { verifyCommand: '', autoPromote: false } })).status).toBe(200);
+    expect(store.autofixer).toEqual({ ...original, verifyCommand: '' });
+  });
+
+  it('gates the assignment facade that can replace the same repair policy', async () => {
+    const body = { providerId: 'example-cli', model: 'another-model' };
+    for (const id of ['settings.autofixer', 'settings%2Eautofixer']) {
+      const denied = await request(guardedSettingsApp('remote')).put(`/api/settings/ai-assignments/${id}`).send(body);
+      expect([denied.status, denied.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    }
+    expect(updateAiAssignment).not.toHaveBeenCalled();
+    for (const authority of ['local', 'session']) {
+      expect((await request(guardedSettingsApp(authority)).put('/api/settings/ai-assignments/settings.autofixer').send(body)).status).toBe(200);
+    }
+    expect(updateAiAssignment).toHaveBeenCalledTimes(2);
+    expect(updateAiAssignment).toHaveBeenLastCalledWith('settings.autofixer', body);
+  });
+
+  it('keeps unrelated remote settings saves open without changing deferred repair policy', async () => {
+    expect((await request(guardedSettingsApp('remote')).put('/api/settings').send({ theme: 'dark' })).status).toBe(200);
+    expect(store.autofixer).toEqual(original);
   });
 });
