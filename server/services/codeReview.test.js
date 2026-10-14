@@ -110,6 +110,18 @@ const backfillCases = [
   ['unrelated production', observabilityCases[2][2], 'rethink', null],
 ]
 
+const guardedBackfillSummaryDiff = backfillCase.diff.replace(/^\+  emitLog\(failed.*$/m, line => {
+  const call = line.slice(1).trim()
+  return [
+    '+  if (failed) {',
+    `+    ${call.replace("failed ? 'warn' : 'info'", "'warn'")}`,
+    '+  } else {',
+    `+    ${call.replace("failed ? 'warn' : 'info'", "'info'")}`,
+    '+  }',
+    "+  emitLog('info', 'Finished scanning history', {}, 'TaskLearning');",
+  ].join('\n')
+}).replace('@@ -105,11 +106,19 @@', '@@ -105,11 +106,24 @@')
+
 const processManifestCase = JSON.parse(readFileSync(new URL('../test/fixtures/goal-fidelity-process-manifest.json', import.meta.url), 'utf8'))
 const manifestDiffParts = processManifestCase.diff.split(/(?=^diff --git )/m).filter(Boolean)
 const manifestCases = [
@@ -1533,6 +1545,29 @@ describe('codeReview helpers', () => {
       expect(global.fetch).toHaveBeenCalledTimes(4)
     })
 
+    it('preserves summary guards and distinguishes other informational logging in focused severity evidence', async () => {
+      let severityReviewed = false
+      global.fetch = vi.fn(async (_url, init) => {
+        const { messages } = JSON.parse(init.body)
+        if (messages[1].content.includes('SUMMARY LEVEL ARGUMENTS')) {
+          severityReviewed = true
+          expect(messages[1].content).toContain('Complete statement:   if (failed) {')
+          expect(messages[1].content).toContain('Parsed conditions: ["failed"]')
+          expect(messages[1].content).toContain('Parsed conditions: ["!(failed)"]')
+          expect(messages[1].content).toContain('Finished scanning history')
+          expect(messages[1].content).toContain('Logging call:')
+          expect(messages[1].content).not.toContain('Summary call:')
+          expect(messages[0].content).toContain('other informational progress calls are not failure summaries')
+        }
+        return completion(shipVerdict)
+      })
+      expect(await runLocalGoalFidelityReview({
+        backend: 'ollama', model: 'example-model',
+        objective: backfillCase.objective, diff: guardedBackfillSummaryDiff,
+      })).toMatchObject({ verdict: 'ship', missing: [] })
+      expect(severityReviewed).toBe(true)
+    })
+
     it('does not impose accounting exclusion or a warning summary on a backfill logging-only objective', async () => {
       global.fetch = vi.fn().mockResolvedValue(completion(shipVerdict))
       expect(await runLocalGoalFidelityReview({
@@ -1594,6 +1629,7 @@ describe('codeReview helpers', () => {
     // Opt-in actual judgements, never an ordinary CI provider call.
     it.runIf(Boolean(process.env.GOAL_FIDELITY_EVAL_MODEL)).each([
       ...backfillCases,
+      ['guarded warning summary with unrelated info', guardedBackfillSummaryDiff, 'ship', null],
       ['original broad audit scope', backfillObservabilityCase.diff, 'ship', null, backfillObservabilityCase.objective],
       ['explicit catch repair scope', backfillObservabilityCase.diff, 'ship', null, backfillRequirement],
     ])('judges backfill accounting and warning outcomes with a real local model: %s', async (name, diff, expected, missingOutcome, objective = backfillCase.objective) => {

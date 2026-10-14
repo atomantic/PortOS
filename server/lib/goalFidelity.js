@@ -427,7 +427,7 @@ export function backfillAccountingFindings(objective, diff) {
   const requireWarning = /\bwarning summary\b/i.test(objective);
   if (!requireCount && !requireWarning) return [];
   const findings = new Set();
-  for (const { hunk, source } of productionAfterChangeHunks(diff)) {
+  for (const { hunk, source, statements: syntax } of productionAuditEvidence(diff)) {
     if (!/\bbackfillFromHistory\b/.test(hunk)) continue;
     // Parse two complete adjacent statements, never infer a guard across a gap.
     // A surrounding block applies to BOTH the awaited write and its increment.
@@ -449,9 +449,13 @@ export function backfillAccountingFindings(objective, diff) {
     }
     if (!requireWarning || !handler.some(row => row.expression?.type === 'UpdateExpression'
       && row.expression.operator === '++' && row.expression.argument?.name === 'failed')) continue;
-    for (const [line] of source.matchAll(/^[ \t]*emitLog\([^\n]*\);[ \t]*$/gm)) {
+    // A literal info call under an else guard is not an unconditional failure
+    // summary. Use complete-statement predicates, not isolated log lines.
+    for (const fact of syntax.flatMap(statement => statement.facts)
+      .filter(row => row.kind === 'call' && row.callee === 'emitLog'
+        && row.conditions.length === 0 && row.callbacks.length === 0)) {
       let summary;
-      try { summary = parseExpression(line.trim().slice(0, -1)); }
+      try { summary = parseExpression(fact.source); }
       catch { continue; }
       const message = summary.arguments?.[1];
       if (summary.arguments?.[0]?.type === 'StringLiteral' && summary.arguments[0].value === 'info'
