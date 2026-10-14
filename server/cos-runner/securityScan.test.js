@@ -15,7 +15,7 @@ const outerAgents = [];
 beforeEach(async () => { root = await mkdtemp(join(tmpdir(), 'scanner-runtime-test-')); await mkdir(join(root, 'repo')); });
 afterEach(async () => { for (const agent of outerAgents.splice(0)) clearTimeout(agent.killTimer); vi.useRealTimers(); await rm(root, { recursive: true, force: true }); });
 
-function setup({ finish, ...overrides } = {}) {
+function setup({ finish, prepareError, ...overrides } = {}) {
   let child;
   let onSpawn;
   const spawned = new Promise(resolve => { onSpawn = resolve; });
@@ -24,8 +24,20 @@ function setup({ finish, ...overrides } = {}) {
   const evidence = [];
   const spawnProcess = vi.fn((command, args, options) => {
     const outputDirectoryMode = statSync(args[1]).mode & 0o777;
-    child = Object.assign(new EventEmitter(), { pid: 99999999, stdout: new PassThrough(), stderr: new PassThrough() });
-    child.send = ({ command: scannerCommand, args: scannerArgs }, done) => {
+    child = Object.assign(new EventEmitter(), { pid: 99999999 + spawnProcess.mock.calls.length, stdout: new PassThrough(), stderr: new PassThrough() });
+    child.send = ({ command: scannerCommand, args: scannerArgs, prepare, cwd }, done) => {
+      if (prepare) {
+        done();
+        if (prepareError && spawnProcess.mock.calls.length === 1) {
+          setImmediate(() => child.emit('message', { snapshotError: { preflight: { field: 'paths', index: 0, code: 'not-in-commit' } } }));
+          return;
+        }
+        setImmediate(() => child.emit('message', { snapshot: { repository: join(root, 'snapshot'),
+          paths: [join(root, 'snapshot')], knowledgeBase: [],
+          baseline: { kind: 'git-commit', commit: 'a'.repeat(40), tree: 'b'.repeat(40), uncommitted: 'excluded', submodules: 'excluded', symlinks: 'link-text' } } }));
+        return;
+      }
+      options.scannerCwd = cwd;
       onSpawn({ child, command: scannerCommand, args: scannerArgs, options, outputDirectoryMode });
       done();
       if (finish) setImmediate(() => finish(child, scannerArgs));
@@ -48,6 +60,23 @@ function setup({ finish, ...overrides } = {}) {
 const input = { prompt: 'Report-only source audit of the selected boundary.', paths: ['.'], knowledgeBase: [] };
 
 describe.skipIf(process.platform === 'win32')('runner-owned scanner lifecycle', () => {
+  it('keeps delayed exit cleanup bound to the rejected preparation after corrected input starts', async () => {
+    const cleanupGroup = vi.fn(async () => true);
+    const h = setup({ prepareError: true, cleanupGroup });
+    await h.manager.register('agent-example', grant);
+    expect((await h.manager.start('agent-example', input)).evidence.status).toBe('invalid-input');
+    const oldChild = h.spawnProcess.mock.results[0].value;
+    const corrected = h.manager.start('agent-example', input);
+    const { child } = await h.spawned;
+    cleanupGroup.mockClear();
+    oldChild.emit('exit', 1, null);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(cleanupGroup).not.toHaveBeenCalled();
+    expect(cleanupGroup).not.toHaveBeenCalledWith(expect.objectContaining({ pid: child.pid }));
+    child.emit('close', 0, null);
+    expect((await corrected).evidence.status).toBe('completed');
+  });
+
   it('makes the results directory owner-only before spawning with a normal umask', async () => {
     const previousUmask = process.umask(0o022);
     try {
@@ -77,7 +106,7 @@ describe.skipIf(process.platform === 'win32')('runner-owned scanner lifecycle', 
     const completed = await run;
     expect(completed.evidence).toMatchObject({ status: 'completed', preflight: rejected.evidence.preflight });
     expect(rejected.evidence.status).toBe('invalid-input');
-    expect(h.evidence.map(e => e.status)).toEqual(['not-run', 'invalid-input', 'running', 'completed']);
+    expect(h.evidence.map(e => e.status)).toEqual(['not-run', 'invalid-input', 'running', 'running', 'completed']);
     expect(h.spawnProcess).toHaveBeenCalledOnce();
     expect(await h.manager.start('agent-example', input)).toEqual(completed);
   });
@@ -236,7 +265,7 @@ describe.skipIf(process.platform === 'win32')('runner-owned scanner lifecycle', 
     expect(result.evidence).toMatchObject({ source: 'runner', status: 'completed', model: 'example-model', effort: 'medium',
       maxCostUsd: launchGrant.maxCostUsd, timeLimitSeconds: launchGrant.timeLimitSeconds, estimatedCostUsd: 0.25, exitCode: 0, artifacts: { findings: true, coverage: true } });
     expect(JSON.parse(await readFile(join(root, 'agents/agent-example/security-scan.json'), 'utf8'))).toEqual(result.evidence);
-    expect(h.evidence.map(e => e.status)).toEqual(['not-run', 'running', 'completed']);
+    expect(h.evidence.map(e => e.status)).toEqual(['not-run', 'running', 'running', 'completed']);
   });
 
   it.each([

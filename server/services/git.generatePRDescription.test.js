@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../lib/execGit.js', () => ({ execGit: vi.fn(), execGitSafe: vi.fn() }));
 import { execGit } from '../lib/execGit.js';
 import { generatePRDescription } from './git.js';
+import { initialSecurityScanEvidence } from '../lib/securityScanEvidence.js';
+import { SENTINEL_COMPLETION_MARKER } from '../lib/agentOutputMarkers.js';
 
 const report = [
   '## Summary',
@@ -43,6 +45,38 @@ beforeEach(() => {
 const generate = output => generatePRDescription('/synthetic/repo', 'main', 'feature', output);
 
 describe('generatePRDescription', () => {
+  const scan = { ...initialSecurityScanEvidence({ model: 'example-model', effort: 'medium', auth: 'chatgpt', maxCostUsd: 'unlimited', timeLimitSeconds: 'unlimited' }),
+    status: 'failed', exitCode: 2, sequence: 3, estimatedCostUsd: 0, artifacts: { findings: true, coverage: null }, cleanup: 'confirmed',
+    baseline: { kind: 'git-commit', commit: 'a'.repeat(40), tree: 'b'.repeat(40), uncommitted: 'excluded', submodules: 'excluded', symlinks: 'link-text' } };
+
+  it('preserves bounded runner evidence before a truncated final report and separates delivery from coverage', async () => {
+    const output = SENTINEL_COMPLETION_MARKER + '\n' + `## Summary\n${'Synthetic completed audit.\n'.repeat(200)}`.slice(0, 4096) + '\n…[truncated]';
+    const body = await generatePRDescription('/synthetic/repo', 'main', 'feature', output, scan);
+    expect(body.indexOf('Security scanner (runner observed)')).toBeLessThan(body.indexOf('## Summary'));
+    expect(body).toContain('Status: **failed**');
+    expect(body).toContain('Audit delivery and assessment success are separate');
+    expect(body).toContain('estimated USD: 0; estimate cap: none; time limit (seconds): none');
+    expect(body).toContain('Exit: 2; process cleanup: confirmed; findings artifact: saved; coverage artifact: unknown');
+    expect(body).toContain(`Baseline commit: \`${'a'.repeat(40)}\``);
+    expect(body).toContain('does not certify subsequent repairs');
+    expect(body.length).toBeLessThan(6000);
+  });
+
+  it.each([{ ...scan, source: 'agent-report' }, { ...scan, prompt: 'private injected field' }])('does not publish untrusted or malformed metadata as runner evidence', async evidence => {
+    const body = await generatePRDescription('/synthetic/repo', 'main', 'feature', report, evidence);
+    expect(body).toContain('Runner evidence unavailable');
+    expect(body).not.toContain('Status: **failed**');
+    expect(body).not.toContain('private injected field');
+  });
+
+  it('preserves unknown legacy scope and a connection interruption independently of the last runner observation', async () => {
+    const { baseline: _baseline, ...legacy } = scan;
+    const body = await generatePRDescription('/synthetic/repo', 'main', 'feature', '', { ...legacy, status: 'running', exitCode: null }, { status: 'interrupted', cleanup: 'unconfirmed' });
+    expect(body).toContain('Status: **running**');
+    expect(body).toContain('Runner connection lost: interrupted; process cleanup unconfirmed');
+    expect(body).toContain('Scanned revision: unknown');
+  });
+
   it('keeps the report after raw diff output and token accounting, including Markdown', async () => {
     expect(await generate(`${diff}\ntokens used\n1,234\n\n${report}`)).toBe(body);
     expect(execGit).not.toHaveBeenCalled();

@@ -188,6 +188,8 @@ async function worktreeCleanupContext(agentId, options) {
     discardWorktree: isTruthyMeta(normalized.originalTask?.metadata?.discardWorktree),
     worktreePath: metadata.workspacePath || join(PATHS.worktrees, agentId),
     publicationValidation: publicationHolds.get(agentId) || metadata.publicationValidation,
+    securityScan: metadata.securityScan,
+    securityScanControl: metadata.securityScanControl,
     warnings: [],
   };
 }
@@ -334,7 +336,7 @@ async function openWorktreePullRequest(context) {
   }
   const prTitle = await git.suggestPRTitle(worktreePath, targetBranch, worktreeBranch, description);
 
-  const prBody = await git.generatePRDescription(worktreePath, targetBranch, worktreeBranch, agentOutput);
+  const prBody = await git.generatePRDescription(worktreePath, targetBranch, worktreeBranch, agentOutput, context.securityScan, context.securityScanControl);
 
   const prResult = await git.createPR(worktreePath, {
     title: prTitle,

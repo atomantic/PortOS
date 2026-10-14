@@ -58,6 +58,15 @@ it('shows runner observations during execution without requiring an agent comple
   expect(screen.queryByText('Completed successfully')).not.toBeInTheDocument();
 });
 
+it('shows the committed scanner baseline separately from later audit success', () => {
+  render(<AgentResultLine agent={{ result: { success: true }, metadata: { securityScan: {
+    source: 'runner', status: 'completed', baseline: { commit: 'a'.repeat(40), tree: 'b'.repeat(40) },
+  } } }} />);
+  expect(screen.getByText(/Committed baseline:/)).toHaveTextContent('a'.repeat(40));
+  expect(screen.getByText(/Committed baseline:/)).toHaveTextContent('Uncommitted files and submodules excluded');
+  expect(screen.getByText(/Committed baseline:/)).toHaveTextContent('Subsequent repairs are not certified');
+});
+
 it('distinguishes explicit unlimited grants from unknown, zero and saved bounded limits', () => {
   const scanner = { source: 'runner', status: 'running', auth: 'chatgpt', maxCostUsd: 'unlimited', timeLimitSeconds: 'unlimited' };
   const view = render(<SecurityScanEvidence scanner={scanner} />);

@@ -751,7 +751,11 @@ describe.each(['runner', 'spawner'])('%s completion side effects', (path) => {
   });
 
   it('hands a successful JIRA branch to its PR and ticket, skips generic cleanup, and releases the hold', async () => {
+    const securityScan = { source: 'runner', sequence: 4, status: 'failed', exitCode: 2 };
+    const securityScanControl = { status: 'interrupted', cleanup: 'unconfirmed' };
+    getAgent.mockResolvedValue({ status: 'completed', metadata: { workspacePath: workspace, securityScan, securityScanControl }, result: { success: true } });
     await complete({ jiraTicketId: 'EXAMPLE-1', jiraBranch: 'feature/EXAMPLE-1', jiraInstanceId: 'example' });
+    expect(git.generatePRDescription).toHaveBeenCalledWith(workspace, 'develop', 'feature/EXAMPLE-1', 'Implemented the example', securityScan, securityScanControl);
     expect(git.push).toHaveBeenCalledWith(workspace, 'feature/EXAMPLE-1');
     expect(git.createPR).toHaveBeenCalledWith(workspace, {
       title: 'EXAMPLE-1: Fix example',
