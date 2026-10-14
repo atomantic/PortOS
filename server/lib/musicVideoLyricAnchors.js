@@ -8,7 +8,7 @@
 const finite = (value) => typeof value === 'number' && Number.isFinite(value);
 
 /** `{ startSec, endSec }` of the singing in a cue, or null when it is untimed. */
-export function sungCueSpan(cue) {
+function sungCueSpan(cue) {
   const words = Array.isArray(cue?.words) ? cue.words.filter((w) => finite(w?.startSec) && finite(w?.endSec)) : [];
   if (words.length) return { startSec: Math.min(...words.map((w) => w.startSec)), endSec: Math.max(...words.map((w) => w.endSec)) };
   return finite(cue?.startSec) && finite(cue?.endSec) ? { startSec: cue.startSec, endSec: cue.endSec } : null;
