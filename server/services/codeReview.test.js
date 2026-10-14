@@ -84,6 +84,18 @@ const observabilityCases = [
   ['actual rejection still on stdout', `${observabilityCase.objective}\nThe selected finding is rejected HTTP push failures logged to stdout; move them to stderr.`, observabilityCase.diff.replace('+  else console.error(', '+  else console.log('), 'fix-first'],
   ['explicit removal of every console.log still required', `${observabilityCase.objective}\nAlso remove every console.log use from peerSyncPush.js, including successful recovery diagnostics.`, observabilityCase.diff, 'fix-first'],
 ]
+// Public production + test diff from merged PR #11400. The overturned review
+// read the deleted silent catch as surviving despite the added failure handler.
+const backfillObservabilityCase = JSON.parse(readFileSync(new URL('../test/fixtures/goal-fidelity-backfill-observability.json', import.meta.url), 'utf8'))
+const backfillRequirement = 'Audit task-learning observability and implement ONE finding: repair the `catch` in backfillFromHistory silently swallowing recordTaskCompletion failures and counting them as successes. Log each failure with agent/task IDs, exclude failed records from the success total, and emit a warning summary with the failure count.'
+const backfillObservabilityCases = [
+  ['removed silent catch replaced by contextual failure reporting', backfillObservabilityCase.objective, backfillObservabilityCase.diff, 'ship'],
+  ['complete repair with explicit accounting and warning requirements', backfillRequirement, backfillObservabilityCase.diff, 'ship'],
+  ['regression test without production repair', backfillRequirement, backfillObservabilityCase.diff.split(/(?=^diff --git )/m).find(part => part.startsWith('diff --git a/server/services/taskLearning/lifecycle.test.js')), 'rethink'],
+  ['failure details discarded despite positive regression assertions', backfillRequirement, backfillObservabilityCase.diff.replace(/^\+          console\.error\(.*$/m, '+          void err;'), 'fix-first'],
+  ['failed records still counted despite positive regression assertions', backfillRequirement, backfillObservabilityCase.diff.replace('+      if (recorded) backfilled++;', '+      backfilled++;'), 'fix-first'],
+  ['failure summary still reports info despite positive regression assertions', backfillRequirement, backfillObservabilityCase.diff.replace("+  emitLog(failed ? 'warn' : 'info',", "+  emitLog('info',"), 'fix-first'],
+]
 const processManifestCase = JSON.parse(readFileSync(new URL('../test/fixtures/goal-fidelity-process-manifest.json', import.meta.url), 'utf8'))
 const manifestDiffParts = processManifestCase.diff.split(/(?=^diff --git )/m).filter(Boolean)
 const manifestCases = [
@@ -1444,6 +1456,72 @@ describe('codeReview helpers', () => {
       expect(await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective, diff: observabilityTestsOnly }))
         .toMatchObject({ ok: true, verdict: 'rethink' })
     })
+
+    it('sends the surviving backfill catch with its after-change handler and result checks', async () => {
+      global.fetch = vi.fn(async (_url, init) => {
+        const { messages } = JSON.parse(init.body)
+        if (messages[1].content.includes('AFTER-CHANGE PRODUCTION HUNKS only')) {
+          const source = messages[1].content.match(/DIFF[^\n]*\n(`+)diff\n([\s\S]*)\n\1$/)[2]
+          expect(source).toContain('+++ b/server/services/taskLearning/lifecycle.js')
+          expect(source).toContain('@@ -105,11 +106,19 @@')
+          expect(source.match(/^@@ /gm)).toHaveLength(2)
+          expect(source).toContain('let failed = 0;')
+          expect(source).toContain('failed++;')
+          expect(source).toContain('console.error(`❌ 📚 TaskLearning: Backfill failed to record agent ${agent.id} (task ${agent.taskId}): ${err.message}`)')
+          expect(source).toContain('return false;')
+          expect(source).toContain('if (recorded) backfilled++;')
+          expect(source).toContain("emitLog(failed ? 'warn' : 'info'")
+          expect(source).toContain('{ backfilled, failed }')
+          expect(messages[1].content).not.toContain('.catch(() => {})')
+          expect(messages[1].content).not.toContain('lifecycle.test.js')
+          expect(messages[1].content).not.toContain('toHaveBeenCalledWith')
+          expect(messages[1].content).toContain('separate hunks are not contiguous source')
+          expect(messages[0].content).toContain('Search categories are candidate-discovery guidance')
+          expect(messages[0].content).toContain('Check the summary logger\'s level argument')
+          expect(messages[0].content).toContain('Positive assertions and comments cannot supply either missing condition')
+        } else {
+          expect(messages[1].content).toContain(backfillObservabilityCase.diff.trim())
+        }
+        return completion(shipVerdict)
+      })
+      // Transport/context regression only; actual judgements use the opt-in
+      // local model below, including test-only and broken-production controls.
+      expect(await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', ...backfillObservabilityCase }))
+        .toMatchObject({ ok: true, verdict: 'ship', missing: [], unrequested: [] })
+      expect(global.fetch).toHaveBeenCalledTimes(2)
+    })
+
+    it.each([
+      backfillObservabilityCases[1],
+      backfillObservabilityCases[4],
+      backfillObservabilityCases[5],
+    ])('never lets model approval waive explicit backfill accounting: %s', async (_name, objective, diff, expected) => {
+      global.fetch = vi.fn().mockResolvedValue(completion(shipVerdict))
+      const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective, diff })
+      expect(result).toMatchObject({ ok: true, verdict: expected })
+      if (expected === 'ship') expect(result.missing).toEqual([])
+      else expect(result.missing.join(' ')).toMatch(/backfillFromHistory.*(?:count|summary)/)
+      expect(global.fetch).toHaveBeenCalledTimes(2)
+    })
+
+    // Actual judgement pin: explicitly opt-in so ordinary CI makes zero provider calls.
+    it.runIf(Boolean(process.env.GOAL_FIDELITY_EVAL_MODEL)).each(backfillObservabilityCases)('judges the backfill catch replacement with a real local model: %s', async (_name, objective, diff, expected) => {
+      global.fetch = nativeFetch
+      const result = await runLocalGoalFidelityReview({
+        backend: 'ollama', model: process.env.GOAL_FIDELITY_EVAL_MODEL,
+        objective: taskObjective({ description: objective }), diff, timeoutMs: 180_000,
+      })
+      console.log(`🔍 Backfill evaluation ${_name}: ${JSON.stringify(result)}`)
+      expect(result.ok, result.error).toBe(true)
+      if (expected === 'ship') expect(result, JSON.stringify(result)).toMatchObject({ verdict: 'ship', missing: [], unrequested: [] })
+      else {
+        expect(['fix-first', 'rethink'], JSON.stringify(result)).toContain(result.verdict)
+        expect(expected === 'rethink' ? result.missing.length + result.unrequested.length : result.missing.length, JSON.stringify(result)).toBeGreaterThan(0)
+      }
+      if (expected === 'rethink') expect(result.verdict).toBe('rethink')
+      if (_name.startsWith('failed records still counted')) expect(result.missing.join(' ')).toMatch(/count|success/i)
+      if (_name.startsWith('failure summary still reports info')) expect(result.missing.join(' ')).toMatch(/warn|summary|level/i)
+    }, 190_000)
 
     // Actual judgement pin: explicitly opt-in so ordinary CI makes zero provider calls.
     it.runIf(Boolean(process.env.GOAL_FIDELITY_EVAL_MODEL)).each(observabilityCases)('judges the one-finding observability audit with a real local model: %s', async (_name, objective, diff, expected) => {

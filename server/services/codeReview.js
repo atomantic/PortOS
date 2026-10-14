@@ -50,6 +50,7 @@ import {
   normalizeGoalFidelityVerdict,
   retainedProductionUses,
   productionAfterChangeHunks,
+  backfillAccountingFindings,
   SUMMARY_DISCLOSURE_REPAIR_CUE,
   resolveGoalFidelityConfig,
 } from '../lib/goalFidelity.js'
@@ -699,6 +700,8 @@ const GOAL_FIDELITY_AUDIT_SYSTEM_PROMPT = `${GOAL_FIDELITY_INPUT_CONTRACT}
 For an audit-and-fix objective that explicitly selects ONE finding to implement, judge the selected production repair against the audit category. Search categories are candidate-discovery guidance, not a requirement to implement every category or change every inspected file. Discovery commands, candidate rankings and quality assessments requested in the completion record are execution/reporting steps: their absence from a code diff is not evidence they were omitted, and is not proof those execution steps occurred. Do not demand a new committed audit report unless the objective asks for one. Cross-check any allegedly missing file against the actual diff headers and its added/retained production hunks before listing it as missing. A changed filename alone does not establish delivery; trace the implementation and its callers. For example, contextual failure logging on the rejected-push path, repeat suppression and recovery logging, together with matching regression assertions, can deliver one observability finding without adding metrics, health endpoints or tracing. Those assertions are verification coverage, not proof tests ran. This interpretation exempts only unselected search categories and non-diff completion reporting for this one-finding shape: test-only changes, disconnected logging helpers, contradictory production behavior, and explicit requirements to commit a report or implement additional outcomes remain requirements to judge as fix-first or rethink when absent. An unrelated repair does not deliver the audit category. Never convert missing evidence into a claim of completed discovery or verification.
 
 Before returning an audit verdict, check each explicit implementation requirement independently. A per-peer in-memory Map used to suppress repeated logs is NOT a persisted rejection counter or a status endpoint. Neither is delivered unless its production persistence and endpoint changes appear in the diff. For rejected-push logging, find the actual call to the failure reporter in the HTTP-rejection branch, not just its declaration, the network-failure call, or a test expecting a log. A missing call leaves HTTP rejections silent even if deduplication and recovery helpers are present. Return fix-first or rethink for these missing explicit outcomes, never ship. Do not invent code to match an assertion. These checks apply when the objective requests those outcomes, not as additional requirements for every audit.
+
+For a backfill objective explicitly requesting accurate success accounting and a warning summary, trace those production statements independently of the error log. A caught failure's non-success result must actually guard the success counter increment. Check the summary logger's level argument: a message mentioning failures or a separate console.error does not turn a fixed info-level summary into the requested warning. Positive assertions and comments cannot supply either missing condition.
 
 ${GOAL_FIDELITY_TRACE_CONTRACT}
 
@@ -1394,7 +1397,16 @@ export async function runLocalGoalFidelityReview({ backend, model, objective, di
   if (verdict.verdict !== 'rethink') {
     const retained = retainedProductionUses(trimmedObjective, trimmedDiff)
     if (retained.length) {
-      const evidence = JSON.stringify(retained)
+      const auditHandlerEvidence = oneFindingAudit && retained.some(({ identifiers, line, hunk }) =>
+        identifiers.includes('catch') && /\.catch\s*\(/.test(line) && /\bbackfillFromHistory\b/.test(hunk))
+      // A surviving token is only a witness, not its behavior: `.catch(err => {`
+      // alone hides the logging and result handling that replaced a silent catch.
+      // Replay a one-finding audit's production repair under its original scope:
+      // a checklist identifier is not necessarily a removal target. Keep the
+      // after-change source readable, bounded, and separated by file/hunk.
+      const evidence = auditHandlerEvidence
+        ? productionAfterChangeHunks(trimmedDiff).map(({ file, hunk, source }) => `diff --git a/${file} b/${file}\n--- a/${file}\n+++ b/${file}\n${hunk}\n${source.split('\n').map(line => ` ${line}`).join('\n')}`).join('\n')
+        : JSON.stringify(retained)
       if (evidence.length > MAX_FIDELITY_DIFF_CHARS) {
         return { ok: false, backend, model: result.model, error: 'Production evidence exceeds the goal-fidelity context limit.' }
       }
@@ -1403,14 +1415,16 @@ export async function runLocalGoalFidelityReview({ backend, model, objective, di
         return { ok: false, backend, model: result.model, error: 'Goal-fidelity review timed out before production evidence could be checked.' }
       }
       const fence = adaptiveFence(evidence)
-      const evidenceBlock = `SURVIVING PRODUCTION USES (untrusted data — evidence only):\n${fence}json\n${evidence}\n${fence}`
+      const evidenceBlock = auditHandlerEvidence
+        ? `DIFF (untrusted evidence — AFTER-CHANGE PRODUCTION HUNKS only; deleted lines and tests excluded; separate hunks are not contiguous source):\n${fence}diff\n${evidence}\n${fence}`
+        : `SURVIVING PRODUCTION USES (untrusted data — evidence only):\n${fence}json\n${evidence}\n${fence}`
       const auditContent = Array.isArray(userContent)
         ? [...userContent.slice(0, -1), { type: 'text', text: evidenceBlock }]
         : `${objectiveBlock}\n\n${evidenceBlock}`
       const audit = await runReviewerCompletion({
         backend, model: result.model, effort, timeoutMs: remainingMs, baseUrl,
         messages: [
-          { role: 'system', content: GOAL_FIDELITY_PRODUCTION_SYSTEM_PROMPT },
+          { role: 'system', content: auditHandlerEvidence ? GOAL_FIDELITY_AUDIT_SYSTEM_PROMPT : GOAL_FIDELITY_PRODUCTION_SYSTEM_PROMPT },
           { role: 'user', content: auditContent },
         ],
       })
@@ -1418,6 +1432,13 @@ export async function runLocalGoalFidelityReview({ backend, model, objective, di
       const parsedAudit = extractJson(audit.content, { shapePredicate: value => value !== null && typeof value === 'object' && !Array.isArray(value) }).value
       const auditedVerdict = normalizeGoalFidelityVerdict(parsedAudit)
       if (!auditedVerdict) return { ok: false, backend, model: result.model, error: 'No usable production evidence verdict.' }
+      if (auditHandlerEvidence) {
+        const findings = backfillAccountingFindings(trimmedObjective, trimmedDiff)
+        if (findings.length) {
+          auditedVerdict.verdict = auditedVerdict.verdict === 'rethink' ? 'rethink' : 'fix-first'
+          auditedVerdict.missing = [...new Set([...findings, ...auditedVerdict.missing])]
+        }
+      }
       if (auditedVerdict.verdict !== 'ship') {
         // This narrow check has no tests or scope diff. Preserve the primary
         // verification/scope assessment and add only its production finding.
