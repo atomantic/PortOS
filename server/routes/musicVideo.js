@@ -12,7 +12,7 @@ import { existsSync } from 'fs';
 import { unlink } from 'fs/promises';
 import { pipeline } from 'stream/promises';
 import { Router } from 'express';
-import { musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoShotLockSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoContinueShotSchema, musicVideoPoolUseSchema, musicVideoPoolMarkSchema, musicVideoPoolDeleteSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoLyricAnchorSyncSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
+import { musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoShotLockSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoContinueShotSchema, musicVideoPoolUseSchema, musicVideoPoolMarkSchema, musicVideoPoolSearchQuerySchema, musicVideoPoolDeleteSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoLyricAnchorSyncSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
 import { productionReadiness } from '../services/musicVideo/productionReview.js';
 import { finishedOutsideBlocker } from '../lib/musicVideoFinishedOutside.js';
 import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, lockProductionShots, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, syncLyricAnchors, reviseProductionFromFeedback, revertProductionInput } from '../services/musicVideo/productionReviewService.js';
@@ -1556,6 +1556,15 @@ router.get('/:id/media-pool', asyncHandler(async (req, res) => {
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   const { getMusicVideoMediaPool } = await import('../services/musicVideo/mediaPool.js');
   res.json(await getMusicVideoMediaPool(project));
+}));
+
+// Swap's search: the pool items whose prompts (the shot's text and the prompt each file was made from) hold the words.
+router.get('/:id/media-pool/search', asyncHandler(async (req, res) => {
+  const { q } = validateRequest(musicVideoPoolSearchQuerySchema, req.query);
+  const project = await getProject(req.params.id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const { searchMusicVideoMediaPool } = await import('../services/musicVideo/mediaPool.js');
+  res.json({ items: await searchMusicVideoMediaPool(project, q) });
 }));
 
 // The cutting room floor outro's tally: what was made, kept and turned down for this video.

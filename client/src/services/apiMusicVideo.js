@@ -178,6 +178,9 @@ export const selectMusicVideoSceneTake = (id, sceneId, takeId, options = {}) =>
   request(`${takesPath(id, sceneId)}/${encodeURIComponent(takeId)}/select`, { method: 'POST', ...options });
 // The project's unused stills and clips (the shot card's "Swap from unused") → { collectionId, items }.
 export const getMusicVideoMediaPool = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/media-pool`, options);
+/** Swap's prompt search: `{ items: [{ kind, assetId }] }`, the pool items whose prompts hold every word. */
+export const searchMusicVideoMediaPool = (id, q, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/media-pool/search?q=${encodeURIComponent(q)}`, options);
 /** The cutting room floor outro's tally for a video: `{ stats }`. */
 export const getMusicVideoOutroStats = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/stats-outro`, options);
 // Asset manager: mark unused pool items ★ 'ingredient' / ✕ 'bad' (null clears) → { assetMarks }.
