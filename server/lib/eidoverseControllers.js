@@ -163,6 +163,14 @@ export const eidoverseControllerConfigUpdateSchema = z.object({
 
 export const eidoverseControllerArmSchema = z.object({ id: controllerInstallIdSchema, armed: z.boolean() }).strict();
 
+// Explicit shipped gameplay, never an interpreter for foundation bodies.
+const riddleActionBase = { id: controllerInstallIdSchema, expectedRevision: z.number().int().nonnegative() };
+export const eidoverseRiddleActionSchema = z.discriminatedUnion('action', [
+  z.object({ ...riddleActionBase, action: z.literal('offer'), clue: z.string().trim().min(1).max(200), answer: z.string().trim().min(1).max(120) }).strict(),
+  z.object({ ...riddleActionBase, action: z.literal('guess'), guess: z.string().trim().min(1).max(120) }).strict(),
+  z.object({ ...riddleActionBase, action: z.literal('reveal') }).strict(),
+]);
+
 /** Who installed this, at the coarsest grain that is still useful — the same
  * three actors a foundation records, and deliberately no display name. */
 const installedBySchema = z.enum(['mind', 'cos', 'user']);

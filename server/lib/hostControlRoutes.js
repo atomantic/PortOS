@@ -821,6 +821,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Eidoverse: clone and install a caller-named repo, or repoint it.
   'POST /api/settings/features/eidoverse/install',
   'PUT /api/settings/features/eidoverse/source',
+  // Explicit local gameplay can speak in this machine's private world. Scoped
+  // peer reachability does not grant it; operator/agent sessions retain access.
+  'POST /api/eidoverse/world/controllers/:id/riddle',
 
   // GitHub actions (#9013): mutating routes run `gh` with the user's GitHub
   // account and change external state. Syncing repos is read-only.

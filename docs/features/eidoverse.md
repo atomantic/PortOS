@@ -1439,6 +1439,50 @@ entities every Nth tick, so lamps an author placed stay lit across host restarts
 while the author is away — re-lighting an already-lit lamp is a no-op, which is
 what makes running it on a schedule safe.
 
+**Explicit riddle rounds.** `riddle-ledger` implements a fixed offer → guess →
+reveal interaction. It evaluates no foundation body: schema/affordance
+foundations remain declarative, with their body, attribution, admission and
+promotion contracts intact. Install a separate controller explicitly with an
+unused id, `controllerId: "riddle-ledger"`, `config: {}`, `armed: true`, and
+`deliverEffects: true` to speak into the private world (false for local-only
+play). Nothing installs at boot or resets another controller. Supervised ticks
+are silent, including after restart.
+
+Read `GET /api/eidoverse/world/controllers/<id>` or
+`eidoverse.inspect-controller`, then send `POST
+/api/eidoverse/world/controllers/<id>/riddle` or the `eidoverse.riddle` tool:
+
+```json
+{"action":"offer","expectedRevision":0,"clue":"Which shape has three sides?","answer":"triangle"}
+{"action":"guess","expectedRevision":1,"guess":"TRIANGLE"}
+{"action":"reveal","expectedRevision":2}
+```
+
+The tool also takes `id`. Both mind grants (`manageEidoverse` and
+`installEidoverseControllers`) are required. HTTP gameplay uses the operator
+gate, including authenticated local-agent sessions; scoped peer credentials do
+not grant gameplay. Each request must use the inspected `state.revision`, which
+advances once per accepted action. A stale revision, a second guess, a repeated
+reveal, an offer before revealing the current round, or a disarmed/wrong-kind
+install refuses without changing state or sending chat. Revealing without a
+guess is allowed; its `correct` is null. Otherwise matching ignores case after
+input trimming, and correctness is withheld until reveal.
+
+`outcome: "applied"` means the local transition persisted, even if world
+delivery failed. Inspect `state.delivery` (also returned as `delivery`):
+`disabled` means local-only, `pending` means completion is unknown,
+`acknowledged` means the existing world `say` protocol acknowledged one message,
+and `refused` carries the failure reason and acknowledged count. The answer is
+only spoken on reveal; private operator inspection includes it throughout.
+World acknowledgement does not prove visible browser rendering. Progress lands
+before delivery; neither a restart nor a repeated request retries the message.
+A crash can leave `pending` evidence, which must not be called successful.
+If a management operation replaces/retires the install during delivery,
+`outcome: "superseded"` reports the receipt without attaching it to the
+replacement. Round state lives entirely in the existing machine-local controller
+store, never in a promoted foundation or federation envelope. This surface is
+API/tool gameplay; it adds no world-client command or guest interaction UI.
+
 **The mind needs its own grant to install.** `eidoverse.install-controller` and
 `eidoverse.retire-controller` are gated on `manageEidoverse` **and** the separate
 default-off `installEidoverseControllers` grant, and are mind-scope only:

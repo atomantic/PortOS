@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   recordFoundation: vi.fn(),
   ensureInstanceId: vi.fn(),
   delegateSandbox: vi.fn(),
+  interactRiddle: vi.fn(),
 }));
 
 vi.mock('./persistentMindManagedApps.js', () => ({ readPersistentMindManagedApps: async () => [{ id: 'example', granted: true, forge: 'github' }] }));
@@ -80,6 +81,10 @@ vi.mock('./eidoverseWorld.js', () => ({
   augmentEidoverseWorld: (...args) => mocks.worldAugment(...args),
   sayInEidoverseWorld: (...args) => mocks.worldSay(...args),
 }));
+vi.mock('./eidoverseControllerRuntime.js', async () => ({
+  summarizeControllerInstall: (await import('../lib/eidoverseControllers.js')).summarizeControllerInstall,
+  interactEidoverseRiddleLedger: (...args) => mocks.interactRiddle(...args),
+}));
 vi.mock('./eidoverseFoundationLedger.js', () => ({
   adoptEidoverseFoundation: (...args) => mocks.adoptFoundation(...args),
   getEidoverseFoundationByRef: (...args) => mocks.getFoundationByRef(...args),
@@ -129,6 +134,19 @@ beforeEach(() => {
 });
 
 describe('cosToolRegistry', () => {
+  it('gates explicit riddle actions on both controller grants and returns the runtime delivery verdict', async () => {
+    const call = { requestId: 'example-riddle', name: 'eidoverse.riddle', arguments: {
+      id: 'example-game', action: 'reveal', expectedRevision: 2,
+    } };
+    await expect(executeCosToolCall({ call, authority: { scope: 'mind', capabilities: { manageEidoverse: true } } }))
+      .rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
+    expect(mocks.interactRiddle).not.toHaveBeenCalled();
+    mocks.interactRiddle.mockResolvedValue({ outcome: 'applied', install: { id: 'example-game', state: { revision: 3, revealed: true } },
+      delivery: { status: 'refused', delivered: 0, reason: 'Synthetic refusal' }, reasons: [] });
+    const result = await executeCosToolCall({ call, authority: { scope: 'mind', capabilities: { manageEidoverse: true, installEidoverseControllers: true } } });
+    expect(result.result).toMatchObject({ outcome: 'applied', install: { state: { revision: 3, revealed: true } }, delivery: { status: 'refused' } });
+    expect(mocks.interactRiddle).toHaveBeenCalledWith(call.arguments, expect.any(Object));
+  });
   it('delivers bounded stopped-task reasons under the observation grant without enabling reports', async () => {
     const tasks = Array.from({ length: 2 }, (_, index) => ({ id: `invented-task-${index}`,
       status: 'blocked', metadata: { blockedCategory: 'user-terminated' } }));
@@ -418,6 +436,7 @@ describe('cosToolRegistry', () => {
       'eidoverse.install-controller',
       'eidoverse.arm-controller',
       'eidoverse.retire-controller',
+      'eidoverse.riddle',
       'eidoverse.status',
       'eidoverse.inspect-scene',
       'eidoverse.project',
