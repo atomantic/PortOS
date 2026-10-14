@@ -500,7 +500,7 @@ export default function SceneCard({
         <div className="grid gap-3 @3xl:grid-cols-2">
         {/* Frames: the still this shot starts from and, optionally, the one it ends on (#11173),
             each with its prompt and Render under it, then the tapped frame's takes. */}
-        <SceneFrames scene={scene} index={index} endFrames={endFrames} generatingFrame={!!generatingFrame} generatingEndFrame={!!generatingEndFrame}
+        <SceneFrames project={project} scene={scene} index={index} endFrames={endFrames} generatingFrame={!!generatingFrame} generatingEndFrame={!!generatingEndFrame}
           onGenerateFrame={onGenerateFrame} onGenerateEndFrame={onGenerateEndFrame} onEditLocal={onEditLocal} onSave={onSave}
           onOpenPreview={onOpenPreview} takeBusy={takeBusy} onSelectTake={onSelectTake} onReviewTake={onReviewTake}
           onSwap={onPlacePoolItem ? setSwapKind : null} onSwapFrames={onSwapFrames ? () => onSwapFrames(scene) : null} onImportTake={onImportTake}

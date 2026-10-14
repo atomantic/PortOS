@@ -179,11 +179,12 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    * ahead of the kickoff is still attributed to it).
    *
    * `refine` (with `referenceImageId`) edits that frame by a short instruction
-   * instead: the frame is the only reference and the prompt is the instruction.
+   * instead: the prompt is the instruction, and the frame leads the shot's references.
    */
   const generateFrame = (scene, { revisionId, onJob, referenceImageId = null, refine = null } = {}) => {
     const refining = Boolean(refine?.trim() && referenceImageId);
-    const conditioning = refining ? [] : conditioningReferences(project, scene);
+    // The shot's references (the card's References row) ride along on every frame render, a refine included.
+    const conditioning = conditioningReferences(project, scene);
     const problem = refining ? null : shotActionContractProblem(scene.direction?.actionContract, scene);
     if (problem) { toast.error(problem); return Promise.resolve({ ok: false }); }
     // The director's text (or a refine's instruction); the server composes the still's
@@ -229,7 +230,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       })
       .catch((err) => {
         if (conditioning.length && REFERENCE_CAPABILITY_CODES.has(err?.code)) {
-          toast.error(`The current image backend can't condition on ${conditioning.length} reference image${conditioning.length === 1 ? '' : 's'}: ${err.message}. Switch the image backend, or untick "Condition frames" on the visual-spec references.`);
+          toast.error(`The current image backend can't condition on ${conditioning.length} reference image${conditioning.length === 1 ? '' : 's'}: ${err.message}. Switch the image backend, or take references off the shot's References row.`);
         } else {
           toast.error(err?.message || 'Frame generation failed');
         }
@@ -251,12 +252,15 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     const endPrompt = scene.endFramePrompt?.trim();
     if (!endPrompt && !refining) { toast.error('Describe the end frame first'); return Promise.resolve({ ok: false }); }
     const projectId = project.id;
+    // The frame it renders from leads, then the shot's references (the card's References row).
+    const references = [...(referenceImageId ? [referenceImageId] : []),
+      ...conditioningReferences(project, scene).map((ref) => ref.imageId).filter((id) => id !== referenceImageId)];
     endFrameLane.startScene(scene.sceneId);
     return generateImage({
       // From a frame the server keeps its shot and changes what the prompt asks; with no frame it renders like a start frame.
       prompt: refining ? refine.trim() : endPrompt,
       ...musicVideoFrameGenSize(project),
-      ...(referenceImageId ? { referenceImageFiles: [referenceImageId] } : {}),
+      ...(references.length ? { referenceImageFiles: references } : {}),
       musicVideo: {
         projectId, sceneId: scene.sceneId, slot: 'end', compose: true,
         ...(refining ? { refine: true } : referenceImageId ? { fromFrame: true } : {}),

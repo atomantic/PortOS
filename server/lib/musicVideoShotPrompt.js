@@ -93,9 +93,11 @@ export function musicVideoShotModelInput(project, scene, {
 }
 
 /** A refine edit's wrapper around the director's instruction ("[instruction]" marks where it goes). */
-const refineWrapper = (instruction) => `Edit the reference image: ${instruction}. Keep everything else exactly as it is: composition, framing, subject, lighting, color and film look.`;
+const refineWrapper = (instruction, first = false) => `Edit the ${first ? 'first ' : ''}reference image: ${instruction}. Keep everything else exactly as it is: composition, framing, subject, lighting, color and film look.`;
 const REWORK_FRAME = 'Start from the first reference image and rework it to match this prompt.';
 const KEEP_REFERENCE = 'Keep the reference image\'s composition, subject and framing; change only what this prompt describes.';
+// Sent when a refine or an end frame from a frame carries the shot's character or set references after that frame.
+export const MUSIC_VIDEO_OTHER_REFERENCES_NOTE = 'The other reference images show the characters and places in this shot: keep their faces, hair and wardrobe as shown there.';
 
 /** The director's text for a shot's start or end frame. */
 export const authoredFramePromptText = (scene, slot = 'start') => (slot === 'end'
@@ -113,17 +115,20 @@ export const authoredFramePromptText = (scene, slot = 'start') => (slot === 'end
  */
 export function musicVideoFrameModelInput(project, scene, {
   slot = 'start', authored = authoredFramePromptText(scene, slot), fromFrame = false, refine = false,
-  repairs = [], fixes = '',
+  repairs = [], fixes = '', otherReferences = 0,
 } = {}) {
+  const others = otherReferences > 0 ? addition('other-references', 'Character references', MUSIC_VIDEO_OTHER_REFERENCES_NOTE) : null;
   const text = typeof authored === 'string' ? authored.trim() : '';
   // A refine or an end frame from the start frame says only what changes, so it needs text;
   // a planned shot with no seeded text still gets its look, frame clause and actions.
   if (!text && (refine || slot === 'end')) return { prompt: '', promptAdditions: [] };
   if (refine) {
-    return { prompt: refineWrapper(text), promptAdditions: [addition('edit-instructions', 'Edit instructions', refineWrapper('[instruction]'))] };
+    return { prompt: [refineWrapper(text, !!others), others?.text].filter(Boolean).join(' '),
+      promptAdditions: [addition('edit-instructions', 'Edit instructions', refineWrapper('[instruction]', !!others)), others].filter(Boolean) };
   }
   if (slot === 'end' && fromFrame) {
-    return { prompt: `${text}. ${KEEP_REFERENCE}`, promptAdditions: [addition('keep-reference', 'Keep the start frame', KEEP_REFERENCE)] };
+    return { prompt: [`${text}. ${KEEP_REFERENCE}`, others?.text].filter(Boolean).join(' '),
+      promptAdditions: [addition('keep-reference', 'Keep the start frame', KEEP_REFERENCE), others].filter(Boolean) };
   }
   const look = [
     addition('project-style', 'Project style', project?.concept?.style),
