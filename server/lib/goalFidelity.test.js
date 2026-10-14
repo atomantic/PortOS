@@ -236,14 +236,14 @@ describe('productionAuditEvidence', () => {
     expect(row.file).toBe('lifecycle.js');
     expect(row.hunk).toBe('@@ -10,2 +10,2 @@');
     expect(row.statements.flatMap(statement => statement.facts)).toContainEqual({
-      kind: 'write', source: 'backfilled++', conditions: ['recorded'], callbacks: [],
+      kind: 'write', source: 'backfilled++', target: 'backfilled', conditions: ['recorded'], callbacks: [],
     });
     expect(row.statements.flatMap(statement => statement.facts)).toContainEqual(expect.objectContaining({
       kind: 'conditional', test: 'failed', whenTruthy: "'warn'", whenFalsy: "'info'",
     }));
     const mutated = productionAuditEvidence(makeDiff('backfilled++;'));
     expect(mutated[0].statements.flatMap(statement => statement.facts)).toContainEqual({
-      kind: 'write', source: 'backfilled++', conditions: [], callbacks: [],
+      kind: 'write', source: 'backfilled++', target: 'backfilled', conditions: [], callbacks: [],
     });
     expect(JSON.stringify(mutated)).not.toContain('expect(');
   });
@@ -276,7 +276,10 @@ else backfilled++;`));
       'while (pending) backfilled++;',
       'if (recorded) { while (pending) backfilled++; }',
       'const next = () => { backfilled++; };',
+      'if (recorded) {} else { recorded = true; if (recorded) backfilled++; }',
     ]) expect(productionAuditEvidence(diff(`${binding}\n${statement}`))[0].handledRejectionScenarios).toEqual([]);
+    expect(productionAuditEvidence(diff(`let recorded = await recordTaskCompletion().catch(() => false);
+if (recorded) {} else { recorded = true; if (recorded) backfilled++; }`))[0].handledRejectionScenarios).toEqual([]);
     const [commented] = productionAuditEvidence(diff(`/*\nif (recorded) backfilled++;\n*/\nconst label = "if (recorded) backfilled++;";`));
     expect(commented.statements.flatMap(statement => statement.facts).filter(fact => fact.kind === 'write')).toEqual([]);
   });

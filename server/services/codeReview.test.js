@@ -1432,6 +1432,11 @@ describe('codeReview helpers', () => {
       global.fetch = vi.fn(async (_url, init) => {
         const { messages, tools } = JSON.parse(init.body)
         expect(tools).toBeUndefined()
+        if (messages[0].content.startsWith('Check each explicitly requested production outcome independently')) {
+          expect(messages[1].content).toContain('AFTER-CHANGE PRODUCTION HUNKS')
+          expect(messages[1].content).toContain('[]')
+          return completion(shipVerdict)
+        }
         if (messages[0].content.startsWith('Check potential contradictions')) {
           expect(messages[0].content).toContain('a successful recovery message on stdout is compatible')
           expect(messages[1].content).toContain('SURVIVING PRODUCTION USES')

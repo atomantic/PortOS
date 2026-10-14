@@ -515,12 +515,13 @@ export function productionAuditEvidence(diff) {
             record('binding', { name: code(node.id), value: code(node.init),
               ...(value !== null && node.id.type === 'Identifier'
                 && ast.program.body[0].type === 'VariableDeclaration'
+                && ast.program.body[0].kind === 'const'
                 && ast.program.body[0].declarations.length === 1
                 && ast.program.body[0].declarations[0] === node
                 ? { handledRejectionValue: value } : {}),
             });
           }
-          if (node.type === 'UpdateExpression' || node.type === 'AssignmentExpression') record('write');
+          if (node.type === 'UpdateExpression' || node.type === 'AssignmentExpression') record('write', { target: code(node.type === 'UpdateExpression' ? node.argument : node.left) });
           if (node.type === 'ReturnStatement') record('return', { value: node.argument ? code(node.argument) : null });
           if (node.type === 'CallExpression') {
             record('call', { callee: code(node.callee), arguments: node.arguments.map(code) });
@@ -566,7 +567,7 @@ export function productionAuditEvidence(diff) {
       if (attempts > 64 || (consumed <= start.index && /^\s*(?:if|for|while|try|switch)\b/.test(remainder))) break;
     }
     // Evaluate only the adjacent complete statement with a literal boolean
-    // returned by an awaited catch. This is a syntax scenario, not a claim
+    // returned by an awaited catch into an immutable binding. This is a syntax scenario, not a claim
     // about unseen surrounding branches or whether the callback can throw.
     const handledRejectionScenarios = statements.flatMap((statement, index) => {
       const binding = statement.facts.find(fact => fact.kind === 'binding' && typeof fact.handledRejectionValue === 'boolean');
@@ -576,6 +577,8 @@ export function productionAuditEvidence(diff) {
         statement.range[1], next.range[0],
       );
       if (blankLiterals(between).trim()) return [];
+      if (next.facts.some(fact => fact.kind === 'write'
+          && (fact.target.match(/[A-Za-z_$][\w$]*/g) || []).includes(binding.name))) return [];
       return next.facts.filter(fact => fact.kind === 'write' && fact.callbacks.length === 0)
         .flatMap(write => {
           const values = write.conditions.map(condition => condition === binding.name

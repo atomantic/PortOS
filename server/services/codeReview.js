@@ -1492,7 +1492,9 @@ export async function runLocalGoalFidelityReview({ backend, model, objective, di
       }
     }
   }
-  if ((summaryDisclosureObjective || backfillAudit) && verdict.verdict !== 'rethink') {
+  const auditProductionCheck = backfillAudit
+    || (oneFindingAudit && productionAfterChangeHunks(trimmedDiff).length === 0)
+  if ((summaryDisclosureObjective || auditProductionCheck) && verdict.verdict !== 'rethink') {
     const rows = oneFindingAudit ? productionAuditEvidence(trimmedDiff) : productionAfterChangeHunks(trimmedDiff)
     const checks = [{
       label: 'AFTER-CHANGE PRODUCTION HUNKS',
