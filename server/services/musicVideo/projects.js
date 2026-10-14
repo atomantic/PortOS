@@ -452,6 +452,17 @@ export async function rejectUnusedSceneTakes(id, sceneId) {
   return { scene, rejected };
 }
 
+/** Swap a shot's start and end frames (and their prompts). A locked video refuses it. Returns the scene. */
+export async function swapProjectSceneFrames(id, sceneId) {
+  const [{ swapSceneFrames }, { assertClipUnlocked, keepDirectorStillLock }] = await Promise.all([import('./takes.js'), import('./productionReview.js')]);
+  const { scene } = await mutateProjectRecord(id, (current) => {
+    assertClipUnlocked(current, sceneId);
+    const outcome = swapSceneFrames(current, sceneId);
+    return { ...outcome, project: keepDirectorStillLock(current, outcome.project, sceneId) };
+  });
+  return scene;
+}
+
 /** Reject/restore a take and/or set its note. Returns the updated scene. */
 export async function reviewSceneTake(id, sceneId, takeId, review) {
   const [{ reviewSceneTake: reviewTake }, { assertClipUnlocked }] = await Promise.all([import('./takes.js'), import('./productionReview.js')]);
