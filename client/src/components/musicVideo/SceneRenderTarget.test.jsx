@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
-import SceneRenderTarget, { lastRenderTarget, rememberRenderTarget, renderTargetOverrides } from './SceneRenderTarget.jsx';
+import SceneRenderTarget, { lastRenderTarget, rememberRenderTarget, renderTargetOptions, renderTargetOverrides } from './SceneRenderTarget.jsx';
 import { FAL_IMAGE_VIDEO_MODELS, falVideoResolutions } from '../../lib/falVideoModels.js';
 
 const models = [
@@ -41,5 +41,23 @@ describe('a remembered Render on pick', () => {
     expect(lastRenderTarget({ performance: false, saved: {} })).toEqual({ pick: `fal:${sized.id}`, options: { falResolution: size } });
     rememberRenderTarget(`fal:${sized.id}`, { falResolution: '9999p' });
     expect(lastRenderTarget({ performance: false, saved: {} }).options).toEqual({});
+  });
+});
+
+// Uniquely catches a music-driven shot losing its per-shot choice of the models that hear the song.
+describe('a music-driven shot on fal', () => {
+  it('offers each music-driven model with its rate, and the pick becomes that take\'s music model', () => {
+    const scene = { sceneId: 's1', shotMode: 'performance', performanceStyle: 'music', startSec: 0, endSec: 2 };
+    const fal = renderTargetOptions({ performance: true, saved: { backend: 'fal' }, scene }).filter((option) => option.value.startsWith('fal'));
+    expect(fal[0].label).toBe('fal.ai · MiniMax H3 Max (reference)');
+    expect(fal.map((option) => option.value)).toEqual(expect.arrayContaining([
+      'fal:minimax/h3-max/reference-to-video', 'fal:bytedance/seedance-2.5/reference-to-video',
+    ]));
+    expect(fal.find((option) => option.value === 'fal:minimax/h3-max/reference-to-video').label).toMatch(/\+ song audio · \$0\.08\/s at 768P/);
+    // A lip-synced shot keeps its one lip-sync choice.
+    expect(renderTargetOptions({ performance: true, saved: {}, scene: { ...scene, performanceStyle: null } })
+      .filter((option) => option.value.startsWith('fal'))).toHaveLength(1);
+    expect(renderTargetOverrides('fal:bytedance/seedance-2.5/reference-to-video', { falMusicResolution: '768P' }, {}, { performance: true, scene }))
+      .toEqual({ backend: 'fal', falMusicModelId: 'bytedance/seedance-2.5/reference-to-video', falMusicResolution: null });
   });
 });

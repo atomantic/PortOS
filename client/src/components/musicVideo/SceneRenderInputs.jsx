@@ -1,4 +1,4 @@
-import { getFalVideoModel } from '../../lib/falVideoModels.js';
+import { falHearsAudioReference, getFalVideoModel } from '../../lib/falVideoModels.js';
 import { falSceneTake } from '../../lib/musicVideoShotTiming.js';
 import { shotActionContractProblem } from '../../../../server/lib/musicVideoActionContract.js';
 import { authoredShotPrompt, musicVideoShotModelInput } from '../../../../server/lib/musicVideoShotPrompt.js';
@@ -55,6 +55,7 @@ export function shotCardRenderRequest({
   const authored = authoredShotPrompt(scene);
   const { prompt, promptAdditions } = musicVideoShotModelInput(contractProblem ? null : project, scene, {
     authored, asTyped: true, hears, backend: settings.backend, audioReactive,
+    audioReferenceModelId: performance && falHearsAudioReference(falModel) ? falModel.id : null,
   });
 
   let endFrame = null;

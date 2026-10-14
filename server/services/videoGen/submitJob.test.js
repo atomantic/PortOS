@@ -235,6 +235,8 @@ describe('submitVideoGenJob', () => {
       }, {});
       expect(mocks.preparePerformanceShot).toHaveBeenCalledWith({
         musicVideo, backend: 'fal', sourceImagePath: '/example/images/frame.png', mode: 'image', resolution: '1080p',
+        // A music-driven shot's picked model; a lip-sync scene ignores it.
+        musicModelId: 'minimax/h3-max/image-to-video',
       });
       const { params } = mocks.enqueueJob.mock.calls[0][0];
       expect(params).toMatchObject({
@@ -282,6 +284,19 @@ describe('submitVideoGenJob', () => {
       expect(hearing.prompt).toContain('Lyric 0.500s–1.500s: hold on');
       expect(hearing.prompt).toContain('land the move exactly on the downbeat');
       expect(hearing.promptAdditions.map((item) => item.id)).toContain('project-style');
+
+      // A music-driven take on a reference model is told which reference is the song.
+      mocks.prepareVideoGenParams.mockResolvedValue(falPrepared());
+      mocks.preparePerformanceShot.mockResolvedValue({
+        audioFilePath: '/example/uploads/mv-performance-2.wav', modelId: 'minimax/h3-max/reference-to-video', resolution: '768P',
+        shotInstruction: { version: 2, shotMode: 'performance', performanceStyle: 'music', songInterval: { startSec: 0, endSec: 4 }, edit: { inSec: 0 } },
+      });
+      await submitVideoGenJob({ prompt: 'she turns away', backend: 'fal', mode: 'image', musicVideo: { ...musicVideo, compose: true } }, {});
+      const music = mocks.enqueueJob.mock.calls[2][0].params;
+      expect(music).toMatchObject({ modelId: 'minimax/h3-max/reference-to-video', audioFilePath: '/example/uploads/mv-performance-2.wav' });
+      expect(music.promptAdditions).toContainEqual({ id: 'audio-reference', label: 'Song audio reference',
+        text: 'Audio 1 is the song playing under this shot: time the movement to its beat.' });
+      expect(music.prompt.endsWith('. Audio 1 is the song playing under this shot: time the movement to its beat.')).toBe(true);
     });
 
     it('leaves a clip outside a music video at its own aspect', async () => {
