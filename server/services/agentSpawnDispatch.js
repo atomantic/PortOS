@@ -222,6 +222,8 @@ export async function dispatchAgentRun(context, { spawnViaRunner } = {}) {
       localPromptBudget,
       leanMode,
       prOpenedBy,
+      // Same decision that put merge admission in the prompt (#11435).
+      mergesOwnPr: promptTrace.mergesOwnPr === true,
       claimFlowTask,
       selectedModel,
       effort: taskEffort,

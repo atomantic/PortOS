@@ -468,6 +468,61 @@ describe('draft review delivery', () => {
   });
 });
 
+describe('generic own-PR delivery merges inside repository admission (#11435)', () => {
+  const worktree = { worktreePath: '/worktree', branchName: 'cos/task-1/agent-1', baseBranch: 'main' };
+  const ADMISSION = '## Repository merge admission';
+
+  it.each([
+    ['slashdo TUI', { isTui: true, providerId: 'claude-code-tui', providerCommand: 'claude' }, true],
+    ['slashdo CLI', { isTui: false, providerId: 'claude-code', providerCommand: 'claude' }, true],
+    ['inline harness', { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' }, false],
+  ])('a %s run that merges its own PR gets admission and reports the binding decision', (_label, provider, slashdo) => {
+    const promptTrace = {};
+    const prompt = buildLightContextPrompt(makeTask({ metadata: { openPR: true } }), '/repo', worktree,
+      { ...provider, agentId: 'agent-1', promptTrace });
+    expect(promptTrace.mergesOwnPr).toBe(true);
+    expect(prompt).toContain(ADMISSION);
+    expect(prompt).toContain('/api/cos/merge-admission');
+    expect(prompt).toContain('agent-1');
+    expect(prompt).toContain('--match-head-commit <sha>');
+    expect(prompt).toMatch(/gh pr merge "[^"]+" --merge --delete-branch/);
+    // Read before the workflow whose TUI form ends on the sentinel write.
+    expect(prompt.indexOf(ADMISSION)).toBeLessThan(prompt.search(/^## Completion/m));
+    // A saved slashdo merge default must not land the PR outside the lease.
+    if (slashdo) expect(prompt).toContain('/do:pr --review-with none --no-merge');
+  });
+
+  it.each([
+    ['a leave-open policy', { openPR: true, prCompletion: 'leave-open' }, worktree],
+    ['a JIRA human handoff', { openPR: true, jiraTicketId: 'EX-1' }, worktree],
+    ['a PortOS-merged branch', { openPR: false }, worktree],
+    ['a run without a worktree', { openPR: true }, null],
+  ])('%s neither acquires admission nor binds generic delivery', (_label, metadata, worktreeInfo) => {
+    const promptTrace = {};
+    const prompt = buildLightContextPrompt(makeTask({ metadata }), '/repo', worktreeInfo,
+      { isTui: true, providerId: 'claude-code-tui', providerCommand: 'claude', agentId: 'agent-1', promptTrace });
+    expect(promptTrace.mergesOwnPr).toBe(false);
+    expect(prompt).not.toContain(ADMISSION);
+  });
+
+  it('keeps the claim flow on its own claim admission rather than the generic binding', () => {
+    const promptTrace = {};
+    const prompt = buildLightContextPrompt(makeTask({ metadata: { analysisType: 'claim-issue', claimFlow: true, useWorktree: false, openPR: false } }),
+      '/repo', null, { isTui: true, providerId: 'claude-code-tui', providerCommand: 'claude', agentId: 'agent-1', promptTrace });
+    expect(promptTrace.mergesOwnPr).toBe(false);
+    expect(prompt.split(ADMISSION)).toHaveLength(2);
+    expect(prompt).toContain('## Claim ownership binding');
+  });
+
+  it('leaves an API run, whose PR PortOS opens and a follow-up merges, unbound', async () => {
+    const promptTrace = {};
+    const prompt = await buildAgentPrompt(makeTask({ metadata: { openPR: true } }), {}, '/repo', worktree,
+      { providerType: 'api', agentId: 'agent-1', promptTrace });
+    expect(promptTrace.mergesOwnPr).not.toBe(true);
+    expect(prompt).not.toContain(ADMISSION);
+  });
+});
+
 describe('claim-flow completion handoff', () => {
   it.each([true, false])('honors leave-open on the %s light/full claim path', async (light) => {
     const task = makeTask({ metadata: { analysisType: 'claim-issue', claimFlow: true, useWorktree: false, openPR: false, prCompletion: 'leave-open' } });
@@ -988,7 +1043,7 @@ describe('buildLightContextPrompt', () => {
         { isTui: true });
       expect(prompt).toMatch(/## Completion Workflow/);
       expect(prompt).toMatch(/`\/simplify`/);
-      expect(prompt).toMatch(/`\/do:pr --review-with none`/);
+      expect(prompt).toMatch(/`\/do:pr --review-with none --no-merge`/);
       expect(prompt).toMatch(/external review is disabled/i);
       expect(prompt).not.toMatch(/Copilot review loop/i);
       expect(prompt).toMatch(/\.agent-done/);
@@ -1668,7 +1723,8 @@ describe('buildLightContextPrompt', () => {
       // #9837 adds remote-state-first recovery and managed-cleanup ownership.
       // Keep bounded headroom for that safety prose while the explicit recipe
       // omission above and this ceiling still reject inlining the 40KB recipe.
-      expect(prompt.replace(MANDATORY_DISPATCH_HINT_GUIDANCE, '').length).toBeLessThan(29_000);
+      // #11435 adds the repository merge admission contract to own-PR runs.
+      expect(prompt.replace(MANDATORY_DISPATCH_HINT_GUIDANCE, '').length).toBeLessThan(30_000);
     });
 
     it('quotes a hostile branch ref inert in the PR-create command line', () => {
@@ -1740,7 +1796,7 @@ describe('buildLightContextPrompt', () => {
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
         { isTui: true, providerId: 'claude-code-tui', providerCommand: 'claude' });
-      expect(prompt).toMatch(/`\/do:pr --review-with none`/);
+      expect(prompt).toMatch(/`\/do:pr --review-with none --no-merge`/);
       expect(prompt).toMatch(/external review is disabled/i);
       expect(prompt).not.toMatch(/gh pr create/);
     });
@@ -1883,7 +1939,7 @@ describe('buildLightContextPrompt', () => {
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
         { isTui: false, providerId: 'claude-code' });
-      expect(prompt).toMatch(/`\/do:pr --review-with none`/);
+      expect(prompt).toMatch(/`\/do:pr --review-with none --no-merge`/);
       expect(prompt).toMatch(/external review disabled/i);
       expect(prompt).not.toMatch(/Copilot review loop/i);
       // No review loop means nothing else merges the PR — the agent gates on CI.
@@ -2514,7 +2570,7 @@ describe('buildLightContextPrompt', () => {
         '/r',
         { branchName: 'feat', worktreePath: '/tmp/wt' },
         { isTui: true });
-      expect(prompt).toMatch(/`\/do:pr --review-with antigravity`/);
+      expect(prompt).toMatch(/`\/do:pr --review-with antigravity --no-merge`/);
     });
 
     it('allows merging on `partial` in the completion merge step when a stop-mode is set', () => {
@@ -3372,7 +3428,7 @@ describe('buildAgentPrompt — reviewer resolution honors Code Review Defaults (
   it('threads a configured default reviewer list into --review-with when the task pins none', async () => {
     vi.mocked(getCodeReviewDefaults).mockResolvedValueOnce({ reviewers: ['claude', 'codex'] });
     const prompt = await buildAgentPrompt(reviewLoopTask(), {}, '/r', { branchName: 'b', worktreePath: '/tmp/wt' }, claudeCliOpts);
-    expect(prompt).toMatch(/`\/do:pr --review-with claude,codex`/);
+    expect(prompt).toMatch(/`\/do:pr --review-with claude,codex --no-merge`/);
     // The stalling copilot default must not leak in.
     expect(prompt).not.toMatch(/--review-with copilot/);
   });
@@ -3390,7 +3446,7 @@ describe('buildAgentPrompt — reviewer resolution honors Code Review Defaults (
     vi.mocked(getCodeReviewDefaults).mockResolvedValueOnce({ reviewers: ['claude', 'codex'] });
     const task = makeTask({ metadata: { openPR: true, reviewLoop: true, simplify: false, reviewers: ['grok'] } });
     const prompt = await buildAgentPrompt(task, {}, '/r', { branchName: 'b', worktreePath: '/tmp/wt' }, claudeCliOpts);
-    expect(prompt).toMatch(/`\/do:pr --review-with grok`/);
+    expect(prompt).toMatch(/`\/do:pr --review-with grok --no-merge`/);
     expect(prompt).not.toMatch(/--review-with claude/);
   });
 

@@ -601,9 +601,9 @@ export function buildMergeAdmissionSection(agentId) {
     'Admission serializes only the merge instant. The parent orchestrator (never a fan-out child) completes publication, validation, configured reviews and required CI on its own head WITHOUT admission — other runs and every PR in a swarm do this concurrently. Never hold admission while syncing, running pregate, pushing or waiting for CI/reviews. Do not chase the default branch: rebase only for an actual conflict, an enforced up-to-date branch policy, or evidenced integration risk (inspect semantic overlap as well as textual conflicts). This overrides mandatory base-sync instructions in delegated slashdo workflows.',
     'Once required CI is green on the exact head you pushed (record that SHA as the CI-verified head) and configured reviews are satisfied, acquire admission. Require a parsed JSON response with admitted:true and a nonempty token; retain that token privately for check/release:',
     '```bash', command('acquire'), '```',
-    'If admitted:false, report the reason and wait retryAfterMs (5 seconds), with a progress update at least every minute. Retry for at most 10 minutes, then record a leave-open outcome and finish with the PR and claim intact. An HTTP/auth/transport error, unreadable JSON, or missing admission is a refusal, never permission to proceed. Do not modify another owner’s branch, checkout or lease.',
+    'If admitted:false, report the reason and wait retryAfterMs (5 seconds), with a progress update at least every minute. Retry for at most 10 minutes, then record a leave-open outcome and finish with the PR (and any claim) intact. A refusal is never a reason to merge without admission. An HTTP/auth/transport error, unreadable JSON, or missing admission is a refusal, never permission to proceed. Do not modify another owner’s branch, checkout or lease.',
     'Inside the lease, re-read the PR (head SHA, merge state, required check rollup; on GitHub `gh pr view --json headRefOid,mergeStateStatus,statusCheckRollup`):',
-    '- If the head still equals the CI-verified head, every required check is green on it, and the forge reports the PR mergeable (`CLEAN`, or `UNSTABLE`/`HAS_HOOKS` with every required check green): check admission (replace TOKEN with the returned token; require admitted:true), then merge pinned to the CI-verified head — add `--match-head-commit <sha>` (GitLab: `--sha <sha>`) to every merge-method attempt the claim prompt lists. A base that moved while the PR stays `CLEAN` does NOT require a resync or fresh CI: the forge’s own merge check is authoritative, and post-merge default-branch CI catches semantic conflicts between two individually green PRs.',
+    '- If the head still equals the CI-verified head, every required check is green on it, and the forge reports the PR mergeable (`CLEAN`, or `UNSTABLE`/`HAS_HOOKS` with every required check green): check admission (replace TOKEN with the returned token; require admitted:true), then merge pinned to the CI-verified head — add `--match-head-commit <sha>` (GitLab: `--sha <sha>`) to every merge-method attempt your workflow lists; this pin is the one addition to a merge command that says to use exactly its flags. A base that moved while the PR stays `CLEAN` does NOT require a resync or fresh CI: the forge’s own merge check is authoritative, and post-merge default-branch CI catches semantic conflicts between two individually green PRs.',
     '```bash', command('check', { token: 'TOKEN' }), '```',
     '- Otherwise (head changed, a required check is not green, or the PR is `DIRTY`/conflicting, `BEHIND` where branch rules require an up-to-date head, `BLOCKED`, or still `UNKNOWN` after a few re-reads): release with outcome resync. Then, OUTSIDE the lease, sync onto the latest default branch, rerun pregate and the affected required reviews, push, wait for required CI on the new head, and acquire again. After three resync rounds without a merge, record leave-open instead.',
     'Verify the remote state is exactly MERGED, then release with outcome merged before worktree cleanup. On a recorded failure or leave-open handoff, release with outcome leave-open. Require released:true; report a failed release without deleting or overwriting ownership state:',
@@ -728,7 +728,7 @@ export function worktreeCommitGuidance({ isTui, mode = null, canTypeSlashCommand
  * `prCompletion` selects the review gate or CI-only merge gate. Leave-open
  * callers do not invoke this helper.
  */
-function buildPostPRMergeSteps(startStep, { prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, reviewPolicy, forgeCli = 'gh' }) {
+function buildPostPRMergeSteps(startStep, { prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, reviewPolicy, forgeCli = 'gh', mergeAdmission = false }) {
   const { reviewers, optionalReviewers, reviewStopMode } = reviewPolicy;
   const usernames = normalizeReviewUsernames(reviewPolicy.forgeReviewerUsernames);
   const mergeGateForge = forgeCli === 'glab' ? 'gitlab' : 'github';
@@ -736,7 +736,8 @@ function buildPostPRMergeSteps(startStep, { prCompletion = PR_COMPLETIONS.REVIEW
   // the manual-TUI workflow and the merge follow-up agent also use. The PR URL
   // isn't known when this prompt is written, hence the placeholder.
   if (prCompletion === PR_COMPLETIONS.MERGE_ON_GREEN) {
-    const gate = buildCiMergeGateSteps(startStep, { prRef: '"<PR_URL>"', forge: 'unknown' });
+    // Under merge admission `/do:pr` runs with --no-merge, so no saved default merges it.
+    const gate = buildCiMergeGateSteps(startStep, { prRef: '"<PR_URL>"', forge: 'unknown', ...(mergeAdmission ? { alreadyMergedHint: '' } : {}) });
     return {
       lines: [
         '   **No review loop is configured for this task, so nothing and nobody else will merge this PR** — `/do:pr` opens it and exits. Capture the PR URL it printed, then:',
@@ -866,7 +867,7 @@ function localReviewCompletionInstruction(localReviewRequired = true) {
  * this IS a Claude session, so `/simplify` and `/do:pr` are both safe to emit
  * without a second provider check.
  */
-export function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, simplifyEnabled, sentinelPath, mode = COMPLETION_MODES.TUI, rendersInlinePrLifecycle = false, portosMergesBranch = false, branchName = null, baseBranch = null, leavePrOpen = false, reviewPolicy, forgeCli = 'gh', noChangeSuccess = false, localReviewSection = '', localReviewRequired = true, postPrReview = null }) {
+export function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, simplifyEnabled, sentinelPath, mode = COMPLETION_MODES.TUI, rendersInlinePrLifecycle = false, portosMergesBranch = false, branchName = null, baseBranch = null, leavePrOpen = false, reviewPolicy, forgeCli = 'gh', noChangeSuccess = false, localReviewSection = '', localReviewRequired = true, postPrReview = null, mergeAdmission = false }) {
   const policyLeavesOpen = prCompletion === PR_COMPLETIONS.LEAVE_OPEN;
   const runsReviewLoop = prCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE;
   if (mode === COMPLETION_MODES.TUI_SLASHDO_FREE) {
@@ -883,8 +884,9 @@ export function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLE
   const { reviewers } = reviewPolicy;
   // A saved slashdo `merge: true` default would otherwise merge a PR that must
   // stay open — dropping our own merge steps isn't enough, `/do:pr` has to be
-  // told not to merge (see lib/prDisposition.js).
-  const mergeArg = (willOpenPR && (leavePrOpen || policyLeavesOpen)) ? ' --no-merge' : '';
+  // told not to merge (see lib/prDisposition.js). Under merge admission the
+  // gate below merges inside the lease, so `/do:pr` must not merge first.
+  const mergeArg = (willOpenPR && (leavePrOpen || policyLeavesOpen || mergeAdmission)) ? ' --no-merge' : '';
   const reviewerArg = (reviewArgs ? ` ${reviewArgs}` : '') + mergeArg;
   const copilotOnly = reviewers.length === 1 && reviewers[0] === DEFAULT_REVIEWER && reviewUsernames.length === 0;
   const reviewerListLabel = [...reviewers, ...reviewUsernames.map(u => `@${u}`)].join(', ');
@@ -913,7 +915,7 @@ export function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLE
   // alone when it doesn't (nothing else merges a no-review-loop PR). The one
   // exception is a PR a human lands (JIRA-tracked; see lib/prDisposition.js).
   const merge = (willOpenPR && !leavePrOpen && !policyLeavesOpen)
-    ? buildPostPRMergeSteps(3, { prCompletion, reviewPolicy, forgeCli })
+    ? buildPostPRMergeSteps(3, { prCompletion, reviewPolicy, forgeCli, mergeAdmission })
     : { lines: (leavePrOpen || policyLeavesOpen) && willOpenPR ? [LEAVE_PR_OPEN_STEP(3, leavePrOpen)] : [], nextStep: (leavePrOpen || policyLeavesOpen) && willOpenPR ? 4 : 3 };
   const sentinelStep = merge.nextStep;
 
@@ -1256,7 +1258,7 @@ export function buildInlineReviewLoopSection({
  * (`lib/agentCompletionMode.js`) rather than re-testing `worktreeInfo` /
  * `willOpenPR` — the caller already resolved those into `mode`.
  */
-export function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, mode = null, canTypeSlashCommands = false, rendersInlinePrLifecycle = false, simplifyEnabled = false, leavePrOpen = false, reviewPolicy, forgeCli = 'gh', noChangeSuccess = false, localReviewSection = '', localReviewRequired = true, postPrReview = null }) {
+export function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, mode = null, canTypeSlashCommands = false, rendersInlinePrLifecycle = false, simplifyEnabled = false, leavePrOpen = false, reviewPolicy, forgeCli = 'gh', noChangeSuccess = false, localReviewSection = '', localReviewRequired = true, postPrReview = null, mergeAdmission = false }) {
   const policyLeavesOpen = prCompletion === PR_COMPLETIONS.LEAVE_OPEN;
   const runsReviewLoop = postPrReview ?? (prCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE);
   if (canTypeSlashCommands && mode === COMPLETION_MODES.WORKTREE_NO_PUSH) {
@@ -1268,8 +1270,9 @@ export function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompleti
     const { reviewUsernames, reviewArgs, effortNote } = resolveReviewInvocation({ willOpenPR, runsReviewLoop, reviewPolicy });
     const { reviewers } = reviewPolicy;
     // `--no-merge` overrides a saved slashdo `merge: true` default, which would
-    // otherwise merge a PR this task must leave open (see lib/prDisposition.js).
-    const reviewerArg = (reviewArgs ? ` ${reviewArgs}` : '') + ((leavePrOpen || policyLeavesOpen) ? ' --no-merge' : '');
+    // otherwise merge a PR this task must leave open (see lib/prDisposition.js)
+    // or merge outside the admission lease the merge steps below acquire.
+    const reviewerArg = (reviewArgs ? ` ${reviewArgs}` : '') + ((leavePrOpen || policyLeavesOpen || mergeAdmission) ? ' --no-merge' : '');
     const completionNote = runsReviewLoop
       ? ((reviewers.length === 1 && reviewers[0] === DEFAULT_REVIEWER && reviewUsernames.length === 0)
           ? 'and drives the Copilot review loop until clean.'
@@ -1288,7 +1291,7 @@ export function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompleti
     if (leavePrOpen || policyLeavesOpen) {
       lines.push(LEAVE_PR_OPEN_STEP(step, leavePrOpen));
     } else {
-      const merge = buildPostPRMergeSteps(step, { prCompletion, reviewPolicy, forgeCli });
+      const merge = buildPostPRMergeSteps(step, { prCompletion, reviewPolicy, forgeCli, mergeAdmission });
       lines.push(...merge.lines);
     }
     return lines.join('\n');
