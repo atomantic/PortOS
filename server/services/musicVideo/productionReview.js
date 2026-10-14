@@ -10,6 +10,7 @@ import { cameraVarietyReport } from './shotCamera.js';
 import { overlayTextReport } from './overlayText.js';
 import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
 import { lyricCueSpan } from './timedText.js';
+import { cuesSungWithin } from '../../lib/musicVideoLyricAnchors.js';
 import { isLayeredComposition, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 const artifact = (project, id) => (project.devArtifacts || []).find(a => a.id === id && !a.deleted);
 const artifactBasis = a => a ? { id: a.id, version: a.version, file: a.file } : null;
@@ -549,7 +550,7 @@ function boardShotFromScene(project, scene) {
   const world = (project.castAndSets?.status !== 'skipped' && project.castAndSets?.direction?.world) || {};
   return {
     sceneId: scene.sceneId,
-    lyricCueIds: (project.lyricCues || []).filter(c => c.startSec < scene.endSec && c.endSec > scene.startSec).map(c => c.id),
+    lyricCueIds: cuesSungWithin(project.lyricCues, scene.startSec, scene.endSec).map(c => c.id),
     action: scene.visualIntent || scene.prompt || '', staging: scene.framePrompt || '',
     camera: shotCameraLabel(scene.camera) || scene.direction?.camera || world.camera || '', transition: sceneTransition(scene.direction) || world.transitions || 'Cut',
   };
@@ -559,6 +560,32 @@ function boardShotFromScene(project, scene) {
 export function boardStoryboard(project, storyboard = project.productionReview?.draft?.storyboard || []) {
   return [...storyboard, ...(project.scenes || []).filter(scene => !storyboard.some(shot => shot.sceneId === scene.sceneId))
     .map(scene => boardShotFromScene(project, scene))];
+}
+
+/**
+ * Re-anchor the storyboard rows of `sceneIds` (every shot when null) to the
+ * lyric lines sung over their scenes now, keeping each row's span in step with
+ * its scene. A shot with no draft row already reads its anchors from its scene.
+ * Returns the project unchanged when nothing moved.
+ */
+export function anchorShotsToSungLyrics(project, sceneIds = null) {
+  const draft = project.productionReview?.draft;
+  if (!Array.isArray(draft?.storyboard) || draft.storyboardSource === 'document') return project;
+  const scenes = new Map((project.scenes || []).map(scene => [scene.sceneId, scene]));
+  const cues = (project.lyricCues || []).filter(c => text(c.text));
+  let moved = false;
+  const storyboard = draft.storyboard.map(shot => {
+    const scene = shot?.sceneId && scenes.get(shot.sceneId);
+    if (!scene || (sceneIds && !sceneIds.includes(shot.sceneId))) return shot;
+    const lyricCueIds = cuesSungWithin(cues, scene.startSec, scene.endSec).map(c => c.id);
+    const span = 'startSec' in shot || 'endSec' in shot ? { startSec: scene.startSec, endSec: scene.endSec } : {};
+    const same = lyricCueIds.length === (shot.lyricCueIds || []).length && lyricCueIds.every((id, i) => shot.lyricCueIds[i] === id)
+      && Object.entries(span).every(([key, value]) => shot[key] === value);
+    if (same) return shot;
+    moved = true;
+    return { ...shot, ...span, lyricCueIds };
+  });
+  return moved ? { ...project, productionReview: { ...project.productionReview, draft: { ...draft, storyboard } } } : project;
 }
 
 export function productionReadiness(project) {
@@ -576,6 +603,8 @@ export function productionReadiness(project) {
   if (!['text/html', 'image/png', 'image/jpeg'].includes(artifact(project, draft.guideArtifactId)?.mimeType)) artProblems.push('Attach a visual cast/environment sheet from Development artifacts.');
   if (artifact(project, draft.guideArtifactId)?.mimeType?.startsWith('image/') && !musicVideoAllowsMedia(project, 'image')) artProblems.push('Code only requires a code-authored visual guide; select a compatible Development artifact.');
   const artApproved = !artProblems.length && review.approvals?.art?.basis === basis.art;
+  // Shots whose lyric anchors differ from the lines sung over them, with both, so the checklist can show and fix them.
+  const lyricAnchors = [];
   const boardProblems = unresolved('storyboard').map(f => `Resolve storyboard feedback for ${f.target}: ${f.text}`);
   if (!artApproved) boardProblems.push('Review and approve the current art direction first.');
   const duration = project.audioAnalysis?.durationSec;
@@ -618,9 +647,14 @@ export function productionReadiness(project) {
       || !shot || ['action', 'staging', 'camera', 'transition'].some(key => !text(shot[key]))) {
       boardProblems.push(`Complete timing, action, staging, camera and transition for ${scene.label || 'each shot'}.`);
     }
-    const overlapping = cues.filter(c => c.startSec < scene.endSec && c.endSec > scene.startSec);
-    if (overlapping.some(c => !shot?.lyricCueIds?.includes(c.id))
-      || shot?.lyricCueIds?.some(id => !cues.some(c => c.id === id))) boardProblems.push(`Review lyric anchors for ${scene.label || 'each shot'}.`);
+    // A shot anchors every line sung over it, counted from the line's first sung word (lib/musicVideoLyricAnchors.js).
+    const sung = cuesSungWithin(cues, scene.startSec, scene.endSec);
+    if (sung.some(c => !shot?.lyricCueIds?.includes(c.id))
+      || shot?.lyricCueIds?.some(id => !cues.some(c => c.id === id))) {
+      boardProblems.push(`Review lyric anchors for ${scene.label || 'each shot'}.`);
+      if (!documentShots) lyricAnchors.push({ sceneId: scene.sceneId, sung: sung.map(c => c.text),
+        anchored: (shot?.lyricCueIds || []).map(id => cues.find(c => c.id === id)?.text).filter(Boolean) });
+    }
   }
   // Once any shot has been locked, the board is approved exactly when every shot is.
   const locks = shotLocks(project);
@@ -643,7 +677,7 @@ export function productionReadiness(project) {
     // The overlay text check is advice on the storyboard, like camera variety; it never blocks approval.
     storyboard: { approved: storyboardApproved, problems: [...new Set(boardProblems)], camera,
       // Board shots as reviewed, derived rows included, so the editor and approval card show what the gate checked.
-      shots: documentShots ? null : boardStoryboard(project), text: overlayTextReport(project, overlayTextBasis), stale: storyboardApproved ? null : staleApproval(project, 'storyboard', basis.storyboard, inputs),
+      shots: documentShots ? null : boardStoryboard(project), lyricAnchors, text: overlayTextReport(project, overlayTextBasis), stale: storyboardApproved ? null : staleApproval(project, 'storyboard', basis.storyboard, inputs),
       shotLocks: locks, unlocked: byShot ? unlocked : [], clipLocks: clips,
       // Video shots whose clip is not locked yet: the board is finished when every shot is fully locked.
       clipsUnlocked: clips ? Object.keys(clips).filter(id => clips[id] && clips[id] !== 'locked') : [] },

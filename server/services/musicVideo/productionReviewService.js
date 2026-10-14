@@ -3,7 +3,8 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { musicVideoEvents } from './events.js';
 import { shotCameraLabel } from '../../lib/cameraMovements.js';
-import { productionReadiness, boardStoryboard, seedArtDraft, productionReviewBasis, productionAlignmentBasis, documentStoryboardBasis, approveProductionStage, assertProductionApproval, assertShotApproval, assertClipUnlocked, setShotLocks, recordProductionFeedback, resolveProductionFeedback, revertApprovedInput } from './productionReview.js';
+import { productionReadiness, boardStoryboard, seedArtDraft, productionReviewBasis, productionAlignmentBasis, documentStoryboardBasis, approveProductionStage, assertProductionApproval, assertShotApproval, assertClipUnlocked, setShotLocks, recordProductionFeedback, resolveProductionFeedback, revertApprovedInput, anchorShotsToSungLyrics } from './productionReview.js';
+import { cuesSungWithin } from '../../lib/musicVideoLyricAnchors.js';
 
 const reviewProcessId = randomUUID();
 
@@ -304,6 +305,25 @@ export async function addProductionFeedback(id, input) {
   const { project } = await mutateProjectRecord(id, current => ({ project: recordProductionFeedback(current, input) }));
   return changed(project);
 }
+/**
+ * Anchor shots to the lyric lines sung over them: the shots named, else every
+ * shot the storyboard check flags. Each also shows those lines as its lyric.
+ */
+export async function syncLyricAnchors(id, { sceneIds = null } = {}) {
+  const { project } = await mutateProjectRecord(id, current => {
+    const ids = sceneIds || productionReadiness(current).storyboard.lyricAnchors.map(entry => entry.sceneId);
+    if (!ids.length) return { project: current };
+    const anchored = anchorShotsToSungLyrics(current, ids);
+    const scenes = (anchored.scenes || []).map(scene => {
+      if (!ids.includes(scene.sceneId)) return scene;
+      const sung = cuesSungWithin(anchored.lyricCues, scene.startSec, scene.endSec).map(cue => cue.text?.trim()).filter(Boolean);
+      return { ...scene, lyricText: sung.length ? sung.join(' / ').slice(0, 2000) : null };
+    });
+    return { project: { ...anchored, scenes, updatedAt: new Date().toISOString() } };
+  });
+  return changed(project);
+}
+
 export async function closeProductionFeedback(id, input) {
   const { project } = await mutateProjectRecord(id, current => ({ project: resolveProductionFeedback(current, input) }));
   return changed(project);

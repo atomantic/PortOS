@@ -1708,6 +1708,10 @@ export const musicVideoProductionReviseSchema = musicVideoCastAndSetsStartSchema
 export const musicVideoProductionRevertSchema = z.object({
   stage: z.enum(['art', 'storyboard', 'proof', 'castAndSets']), field: z.string().trim().min(1).max(100),
 }).strict();
+// Anchor these storyboard shots (every flagged shot when absent) to the lyric lines sung over them.
+export const musicVideoLyricAnchorSyncSchema = z.object({
+  sceneIds: z.array(z.string().min(1).max(64)).min(1).max(2000).optional(),
+}).strict();
 export const musicVideoProductionFeedbackResolutionSchema = z.object({
   feedbackId: z.string().min(1).max(128), resolution: z.string().trim().max(8000).default(''), password: z.string().max(1024).optional(),
 }).strict();

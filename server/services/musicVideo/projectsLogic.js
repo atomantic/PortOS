@@ -41,7 +41,8 @@ import { normalizeFilmLook } from '../../lib/filmLook.js';
 import { normalizeTitleCard } from '../../lib/musicVideoTitleCard.js';
 import { normalizeStatsOutro } from '../../lib/musicVideoStatsOutro.js';
 import { remapTreatmentForClone, scenesFingerprint } from './treatment.js';
-import { carryStoryboardApproval } from './productionReview.js';
+import { anchorShotsToSungLyrics, carryStoryboardApproval } from './productionReview.js';
+import { cuesSungWithin } from '../../lib/musicVideoLyricAnchors.js';
 import { normalizeMusicVideoAutomation } from '../../lib/musicVideoAutomation.js';
 
 export { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
@@ -651,10 +652,17 @@ export function applySceneUpdate(project, sceneId, patch) {
   if (updated.startSec != null && updated.endSec != null && updated.endSec < updated.startSec) {
     throw new ServerError('endSec must be >= startSec', { status: 400, code: 'VALIDATION_ERROR' });
   }
+  // A retimed shot shows, and anchors, the lyric lines now sung over it.
+  const retimed = (('startSec' in data && data.startSec !== scenes[idx].startSec) || ('endSec' in data && data.endSec !== scenes[idx].endSec))
+    && (project.lyricCues || []).some((cue) => typeof cue?.startSec === 'number');
+  if (retimed && !('lyricText' in data)) {
+    const sung = cuesSungWithin(project.lyricCues, updated.startSec, updated.endSec).map((cue) => cue.text?.trim()).filter(Boolean);
+    updated.lyricText = sung.length ? sung.join(' / ').slice(0, 2000) : null;
+  }
   assertMusicVideoMediaSelections({ ...project, scenes: [updated], visualSpec: null });
   const nextScenes = scenes.slice();
   nextScenes[idx] = updated;
-  const next = touch(project, { scenes: nextScenes });
+  const next = retimed ? anchorShotsToSungLyrics(touch(project, { scenes: nextScenes }), [sceneId]) : touch(project, { scenes: nextScenes });
   // Retiming or rewording a shot, or picking another take, keeps the storyboard approval it was judged on.
   const shotEdit = Object.keys(data).every((key) => SCENE_SHOT_EDIT_FIELDS.includes(key));
   return { project: shotEdit ? carryStoryboardApproval(project, next, 'Edited a shot') : next, updated };
