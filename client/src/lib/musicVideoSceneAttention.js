@@ -8,6 +8,7 @@
  */
 import { shotActionContractProblem } from '../../../server/lib/musicVideoActionContract.js';
 import { currentPlateEvidence } from '../../../server/lib/musicVideoPlateEvidence.js';
+import { isEndFrameImageEffect } from './musicVideoImageEffects.js';
 import { isSelfDrawnLayer, sceneVisualLayer, sceneHasAuthoredSpan } from './musicVideoLayers.js';
 import { performanceBlockedReason, performanceCapability, planPerformanceWindow, isPerformanceScene } from './musicVideoShotTiming.js';
 import { sceneHasPendingDecision, sceneTakeList } from './musicVideoTakes.js';
@@ -37,6 +38,17 @@ const SONG_REVIEW_CODES = Object.freeze({ changed: 'song-changed', new: 'song-ne
 export const SCENE_MISSING_CODES = Object.freeze(['missing-frame', 'missing-clip', 'no-span']);
 
 export const SCENE_FILTERS = Object.freeze(['all', 'attention', 'missing']);
+
+/**
+ * The take slots a shot's picture uses: footage all of them, a still its frame
+ * (and its end frame for an image effect that plays into it), a card or code
+ * shot none. Takes left in a slot the shot does not use are not waiting on review.
+ */
+function takeKindsInUse(scene, layer) {
+  if (layer === 'footage') return undefined;
+  if (layer !== 'still') return [];
+  return isEndFrameImageEffect(scene.imageEffect) ? ['image', 'endImage'] : ['image'];
+}
 
 /** The `?scenes=` value as a filter id; anything unknown is `all`. */
 export const parseSceneFilter = (value) => (SCENE_FILTERS.includes(value) ? value : 'all');
@@ -76,7 +88,7 @@ export function sceneAttention(scene, ctx = {}) {
   const contract = scene.direction?.actionContract;
   if (contract && shotActionContractProblem(contract, scene)) codes.push('contract-problem');
   if (layer === 'footage' && isPerformanceScene(scene) && performanceBlocked(scene, { lipSyncBackend, songDurationSec, videoSettings })) codes.push('perf-blocked');
-  if (!locked && sceneHasPendingDecision(scene)) codes.push('candidates-pending');
+  if (!locked && sceneHasPendingDecision(scene, { kinds: takeKindsInUse(scene, layer) })) codes.push('candidates-pending');
   if (contract && scene.referenceImageId) {
     const selected = sceneTakeList(scene, 'image').find((take) => take.assetId === scene.referenceImageId);
     if (currentPlateEvidence(scene, selected)?.verdict !== 'pass') codes.push('plate-unverified');
