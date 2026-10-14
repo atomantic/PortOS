@@ -191,7 +191,7 @@ export function clipLocks(project, locks = shotLocks(project)) {
   }));
 }
 
-const clipLocked = (project, sceneId) => project.productionReview?.clipApprovals?.[sceneId]
+export const clipLocked = (project, sceneId) => project.productionReview?.clipApprovals?.[sceneId]
   && clipLocks(project)?.[sceneId] === 'locked';
 
 /** What a locked clip freezes: the inputs it was rendered from, and the selected clip itself. */

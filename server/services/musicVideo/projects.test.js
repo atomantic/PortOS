@@ -484,3 +484,24 @@ describe('moving the cut before a shot', () => {
     expect((await projects.getProject(p.id)).scenes.map((scene) => [scene.startSec, scene.endSec])).toEqual([[0, 1.25], [1.25, 4]]);
   });
 });
+
+describe('anchoring shots to the sung lyrics', () => {
+  // Uniquely catches the anchor fix rewriting the lyric of a shot whose video is locked.
+  it('re-anchors the named shots and refreshes their lyric, leaving a locked video\'s lyric alone', async () => {
+    const [{ setShotLocks }, { syncLyricAnchors }] = await Promise.all([import('./productionReview.js'), import('./productionReviewService.js')]);
+    const p = await projects.createProject({ name: 'Anchor lyrics' });
+    const { scenes: [a, b] } = await projects.addProjectScenes(p.id, [
+      { startSec: 0, endSec: 2, prompt: 'First', lyricText: 'old line' },
+      { startSec: 2, endSec: 4, prompt: 'Second', lyricText: 'old line' },
+    ]);
+    await projects.mutateProjectRecord(p.id, (current) => ({ project: { ...current,
+      lyricCues: [{ id: 'c1', text: 'sung over both', startSec: 0, endSec: 4 }],
+      productionReview: { draft: { storyboard: [a, b].map((s) => ({ sceneId: s.sceneId, lyricCueIds: [] })) } } } }));
+    await projects.updateScene(p.id, b.sceneId, { videoHistoryId: 'clip-b' });
+    await projects.mutateProjectRecord(p.id, (current) => ({ project: setShotLocks(setShotLocks(current, { sceneIds: [b.sceneId], locked: true, stage: 'still' }),
+      { sceneIds: [b.sceneId], locked: true, stage: 'video' }) }));
+    const { project } = await syncLyricAnchors(p.id, { sceneIds: [a.sceneId, b.sceneId] });
+    expect(project.productionReview.draft.storyboard.map((row) => row.lyricCueIds)).toEqual([['c1'], ['c1']]);
+    expect(project.scenes.map((scene) => scene.lyricText)).toEqual(['sung over both', 'old line']);
+  });
+});
