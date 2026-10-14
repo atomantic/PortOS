@@ -2644,9 +2644,14 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   // Tracker-filing types (reference-watch, or an audit type with fileIssues):
   // the {trackerInstructions} block for the app's resolved work tracker.
   const fileIssues = isFileIssuesMode(taskType, metadata);
-  if (isAuditTaskType(taskType)) metadata.noChangeSuccess = !fileIssues;
-  const trackerFiling = await resolveTrackerFilingBlock(app, taskType, { fileIssues });
-  if (trackerFiling.workTracker) {
+  if (isAuditTaskType(taskType)) {
+    metadata.noChangeSuccess = !fileIssues;
+  }
+  const trackerFiling = await resolveTrackerFilingBlock(app, taskType, { fileIssues: fileIssues || isAuditTaskType(taskType) });
+  // Git-backed issue trackers have a readback verifier; preserve Jira/PLAN.md
+  // delivery without promising an unsupported machine-checkable gate.
+  if (isAuditTaskType(taskType) && !fileIssues && ['github', 'gitlab'].includes(trackerFiling.workTracker)) metadata.auditDispositionVersion = 1;
+  if (trackerFiling.workTracker && (fileIssues || !isAuditTaskType(taskType))) {
     // Traceability + deliverable posture, derived from the SAME resolved tracker
     // that selected the {trackerInstructions} block above so the flag can't drift
     // from the instructions the agent actually got: the PLAN.md path commits

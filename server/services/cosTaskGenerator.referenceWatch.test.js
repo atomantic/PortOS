@@ -322,14 +322,25 @@ describe('audit fileIssues toggle', () => {
     expect(task.description).not.toContain('{trackerInstructions}');
   });
 
-  it('does not file and asks the agent to implement when fileIssues is off', async () => {
+  it('implements fixes and supplies a tracker for deferred findings when fileIssues is off', async () => {
     const { getTaskInterval } = await import('./taskSchedule.js');
     getTaskInterval.mockResolvedValue({ type: 'weekly', taskMetadata: { fileIssues: false } });
     const task = await generate(makeApp(), 'security');
     expect(task.metadata.fileIssues).toBe(false);
     expect(task.metadata.noCodeOutput).toBeUndefined();
-    expect(task.description).toContain('Mode: implement the highest-value fix');
-    expect(task.description).not.toContain('ID beginning with `security-`');
+    expect(task.description).toContain('Mode: audit and fix, track every deferred finding');
+    expect(task.description).toContain('ID beginning with `security-`');
+    expect(task.metadata.auditDispositionVersion).toBeUndefined();
+  });
+
+  it.each(['github', 'gitlab', 'jira', 'plan'])('only stamps a verifiable disposition contract for the %s tracker', async workTracker => {
+    const { getTaskInterval } = await import('./taskSchedule.js');
+    getTaskInterval.mockResolvedValue({ type: 'weekly', taskMetadata: { fileIssues: false } });
+    const task = await generate(makeApp({ workTracker }), 'security');
+    expect(task.metadata.auditDispositionVersion).toBe(['github', 'gitlab'].includes(workTracker) ? 1 : undefined);
+    expect(task.metadata.noCodeOutput).toBeUndefined();
+    expect(task.metadata.worktreeChangesExpected).toBeUndefined();
+    expect(task.description).toContain('Every actionable finding must end');
   });
 
   it('forces module-hygiene remediation into a worktree after an unsafe toggle transition', async () => {
@@ -343,6 +354,6 @@ describe('audit fileIssues toggle', () => {
     expect(task.metadata.useWorktree).toBe(true);
     expect(task.metadata.openPR).toBe(false);
     expect(task.metadata.noCodeOutput).toBeUndefined();
-    expect(task.description).toContain('Mode: implement the highest-value fix');
+    expect(task.description).toContain('Mode: audit and fix, track every deferred finding');
   });
 });

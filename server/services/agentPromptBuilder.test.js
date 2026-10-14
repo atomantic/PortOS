@@ -4623,3 +4623,11 @@ it('preserves the extended marker in split prompts, refuses unknown versions and
   expect(() => sanitizeTaskMetadata({ auditDepth: 'deep', auditWorkflow: 'future-v9' })).toThrow('Unsupported');
   expect(() => sanitizeTaskMetadata({ auditDepth: 'deep', auditWorkflow: 'extended-v1', deepAuditId: 'old' })).toThrow('cannot reuse');
 });
+
+it.each(['api', 'cli', 'tui'])('requires a per-agent disposition checkpoint and final register on %s audits', async providerType => {
+  const task = makeTask({ description: 'Stop after one fix', metadata: { auditDispositionVersion: '1', analysisType: 'security', app: 'example' } });
+  const prompt = await buildAgentPrompt(task, {}, '/r', null, { providerType, agentId: 'audit-example' });
+  expect(prompt).toContain('.agent-audit-findings-audit-example.json');
+  expect(prompt).toContain('AUDIT_FINDINGS_JSON');
+  expect(prompt.indexOf('## Required finding disposition register')).toBeLessThan(prompt.indexOf('Stop after one fix'));
+});

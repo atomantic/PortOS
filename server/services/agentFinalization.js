@@ -1046,8 +1046,10 @@ export function dispatchTaskOutputHookOnce({
     // retryable on recovery rather than being mistaken for a successful report.
     const savedAssessment = [agent?.metadata?.auditAssessment, agent?.result?.auditAssessment]
       .find(assessment => assessment?.status === 'recorded');
-    if (!isLegacyDeepAudit(task.metadata) && isAuditTaskType(resolveTaskHookType(task)) && savedAssessment?.status === 'recorded') {
-      return { ran: false, auditAssessment: savedAssessment };
+    if (!isLegacyDeepAudit(task.metadata) && isAuditTaskType(resolveTaskHookType(task)) && savedAssessment?.status === 'recorded'
+      && (Number(task.metadata?.auditDispositionVersion) !== 1 || agent?.metadata?.auditFindings?.status === 'complete')) {
+      return { ran: false, auditAssessment: savedAssessment,
+        ...(Number(task.metadata?.auditDispositionVersion) === 1 ? { auditDisposition: { status: 'complete' } } : {}) };
     }
     if (agent?.metadata?.outputHookDispatchedAt) {
       return { ran: false, alreadyDispatched: true, ...(agent.metadata?.deepAudit ? { deepAudit: agent.metadata.deepAudit } : {}) };
@@ -1163,19 +1165,21 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
   const isPrivateSecurity = isPrivateSecurityTask(task) || isPrivateSecurityTask(agent);
   const interruption = agent.metadata?.executionInterruption;
   const refused = ['content-refusal', 'content-filtered'].includes(interruption?.category);
-  const effectiveSuccess = isPrivateSecurity || refused ? false : success;
+  let effectiveSuccess = isPrivateSecurity || refused ? false : success;
   const errorAnalysis = refused ? {
     category: interruption.category, origin: interruption.source || 'provider',
     message: 'Provider safety refusal; automatic continuation, retries and provider fallback are disabled.',
     permanent: true, actionable: false, requiresFallback: false,
   } : { message: errorMessage, category };
 
-  await dispatchRecoveredTaskOutputHook({
+  const recoveredHook = await dispatchRecoveredTaskOutputHook({
     agentId: agent.id,
     task,
     success: effectiveSuccess,
     workspacePath: agent.metadata?.workspacePath || null,
   });
+
+  if (Number(task?.metadata?.auditDispositionVersion) === 1 && recoveredHook?.auditDisposition?.status !== 'complete') effectiveSuccess = false;
 
   // Recovery retires the run without reaching finalizeAgent's completion
   // cleanup, so the sentinel has no other owner — and the hook above was the
@@ -1197,6 +1201,7 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
       exitCode,
       duration,
       errorAnalysis,
+      ...(Number(task?.metadata?.auditDispositionVersion) === 1 ? [effectiveSuccess ? null : false] : []),
     );
   }
 
@@ -1207,6 +1212,8 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
     orphaned: true,
     error: errorMessage,
     ...agentResultExtra,
+    ...(Number(task?.metadata?.auditDispositionVersion) === 1 ? { success: effectiveSuccess,
+      auditDisposition: recoveredHook?.auditDisposition || { status: 'unverified' } } : {}),
     ...(refused ? { success: false, error: errorAnalysis.message, errorAnalysis, executionInterruption: interruption } : {}),
   });
 
@@ -1609,6 +1616,16 @@ export async function finalizeAgent({
     };
   }
 
+  // A persisted assessment or delivered PR cannot hide an untracked finding.
+  // Keep assessment, execution and disposition as separate evidence.
+  if (Number(task.metadata?.auditDispositionVersion) === 1
+    && hookResult?.auditDisposition?.status !== 'complete') {
+    hookResult = { ...hookResult, ran: true, outcome: {
+      accepted: false, permanent: true, reason: 'audit-disposition-incomplete',
+      message: 'Audit findings are not fully disposed: ' + (hookResult?.auditDisposition?.reason || 'register could not be verified and saved'),
+    } };
+  }
+
   // Output hooks may return a trusted metadata patch that advances a staged
   // workflow. Apply it before task persistence and cleanup so the next stage
   // sees the narrowed input set. An explicit `accepted: false` is a real
@@ -1700,6 +1717,7 @@ export async function finalizeAgent({
     ...(hookResult?.deepAudit ? { deepAudit: hookResult.deepAudit } : {}),
     ...(isAuditTaskType(resolveTaskHookType(task)) ? {
       auditAssessment: hookResult?.auditAssessment || { status: 'unverified' },
+      ...(Number(task.metadata?.auditDispositionVersion) === 1 ? { auditDisposition: hookResult?.auditDisposition || { status: 'unverified' } } : {}),
     } : {}),
     exitCode,
     duration,
@@ -2018,6 +2036,10 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, a
         emitLog('warn', `⚠️ Scanner diagnostics were not saved for ${agentId}: ${err.message}`, { agentId });
       });
     }
+    const auditDisposition = Number(task.metadata?.auditDispositionVersion) === 1
+      ? await (await import('./auditFindings.js')).settleAuditFindings({
+        task, agentId, workspacePath: hookPayloadDir({ task, workspacePath, recovery }),
+      }).catch(() => ({ status: 'incomplete', reason: 'Finding register persistence or verification failed' })) : null;
     const { recordAuditQuality } = await import('./appQuality.js');
     const auditAssessment = await recordAuditQuality({ task, taskType, agentId, success, assessedAt,
       ...(isLegacyDeepAudit(task.metadata) ? { deepDiscoveryComplete: deepAudit?.discoveryComplete === true } : {}),
@@ -2033,7 +2055,7 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, a
       await publishAppSnapshotFileAfterAudit(task?.metadata?.app);
     }
     // Assessment telemetry never waives commit/PR success criteria for fix mode.
-    return { ran: false, auditAssessment, ...(deepAudit ? { deepAudit } : {}) };
+    return { ran: false, auditAssessment, ...(auditDisposition ? { auditDisposition } : {}), ...(deepAudit ? { deepAudit } : {}) };
   }
   const { getTaskOutputHook } = await import('./taskTypeHooks.js');
   const hook = await getTaskOutputHook(taskType);

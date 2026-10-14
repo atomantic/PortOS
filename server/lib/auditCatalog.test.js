@@ -219,9 +219,11 @@ describe('mode contracts + wrapper', () => {
     expect(modeContractFor(true)).toBe(FILE_ISSUES_MODE_CONTRACT);
   });
 
-  it('do-work contract tells the agent to implement one fix', () => {
-    expect(DO_WORK_MODE_CONTRACT).toContain('implement');
-    expect(DO_WORK_MODE_CONTRACT).not.toContain('{trackerInstructions}');
+  it('do-work contract requires fixes or tracked dispositions', () => {
+    expect(DO_WORK_MODE_CONTRACT).toContain('Implement worthwhile verified fixes');
+    expect(DO_WORK_MODE_CONTRACT).toContain('{trackerInstructions}');
+    expect(DO_WORK_MODE_CONTRACT).toContain('Every actionable finding');
+    expect(DO_WORK_MODE_CONTRACT).not.toContain('Do not create tracker issues');
     expect(modeContractFor(false)).toBe(DO_WORK_MODE_CONTRACT);
   });
 

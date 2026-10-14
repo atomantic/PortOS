@@ -724,6 +724,20 @@ also exposes a numeric-only projection through `GET /api/apps/quality-federation
 with outbound sharing allowed. The ordinary app list and capability/status
 payloads still carry no assessment data. See [quality federation](decisions/2026-09-10-portos-quality-federation.md).
 
+New GitHub/GitLab audit-and-fix runs additionally retain a versioned `metadata.auditFindings` register
+in their existing machine-local agent archive. Stable root-cause keys deduplicate
+checkpoint/final/resumed rows; candidates retain confidence and verification gaps.
+Per-agent `.agent-audit-findings-*.json` workspace checkpoints are copied into that
+record during completion, including interrupted delivery. The archive survives
+worktree removal and normal age retention; explicit archive deletion still removes
+it. Register contents are not added to quality federation. Completion records a
+separate disposition outcome and remains incomplete when the final register,
+persistence, commit evidence or tracker readback is missing. Assessment scores do
+not certify finding disposition. No background provider run or issue filing is
+triggered by reading/recovering the register. Jira/PLAN.md apps retain their configured
+tracker instructions; this version does not claim machine-verified disposition for
+those trackers. Historical runs without the version marker are not retroactively failed.
+
 ### Retrying incomplete legacy creative imports
 
 The Series, Pipeline Issues, Story Builder, Universe and Writers Room file-to-DB

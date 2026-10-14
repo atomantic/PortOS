@@ -146,6 +146,39 @@ describe('recovery output-hook dispatch (#3182)', () => {
     expect(updateAgent).toHaveBeenCalledWith('agent-audit', { metadata: { auditAssessment: { status: 'recorded' } } });
   });
 
+  it('fails audit delivery with retained actionable rows even when its quality assessment succeeded', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const workspacePath = await mkdtemp(join(tmpdir(), 'audit-disposition-final-'));
+    const task = { ...TASK, metadata: { ...TASK.metadata, analysisType: 'security', auditDispositionVersion: '1' } };
+    const report = { version: 1, findings: [{ key: 'example-boundary', title: 'Example authority gap', path: 'server/routes/example.js',
+      severity: 8, confidence: 'high', evidence: 'Synthetic mounted request crossed the boundary.', classification: 'actionable',
+      disposition: { kind: 'unresolved', reason: 'Issue creation failed: tracker unavailable.' } }] };
+    try {
+      tryReadFile.mockImplementation(async path => (await import('node:fs/promises')).readFile(path, 'utf8').catch(() => null));
+      await writeFile(join(workspacePath, '.agent-done-agent-disposition-final'), JSON.stringify({
+        summary: `Delivered a coherent fix.\nAUDIT_FINDINGS_JSON: ${JSON.stringify(report)}`,
+      }));
+      await finalizeAgent({ agentId: 'agent-disposition-final', task, success: true, exitCode: 0, duration: 1000,
+        workspacePath, outputBuffer: 'Completed assessment and one fix' });
+      expect(persistedAgent.metadata.auditFindings.report).toEqual(report);
+      expect(completeAgent).toHaveBeenCalledWith('agent-disposition-final', expect.objectContaining({
+        success: false, auditAssessment: { status: 'recorded' },
+        auditDisposition: expect.objectContaining({ status: 'incomplete', unresolved: 1 }),
+        completionReason: 'audit-disposition-incomplete',
+      }));
+      expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'blocked' }), 'internal');
+      expect(addTask).not.toHaveBeenCalled();
+      // A saved score cannot waive a missing final register on recovery replay.
+      await rm(join(workspacePath, '.agent-done-agent-disposition-final'));
+      await expect(dispatchRecoveredTaskOutputHook({ agentId: 'agent-disposition-final', task, success: true, workspacePath }))
+        .resolves.toMatchObject({ auditDisposition: { status: 'incomplete', unresolved: 1 } });
+    } finally {
+      await rm(workspacePath, { recursive: true, force: true });
+      tryReadFile.mockReset();
+    }
+  });
+
   it('saves the assessment when scanner diagnostic persistence fails', async () => {
     const scanner = { version: 1, status: 'time-limit', model: null, effort: null, auth: 'unknown',
       maxCostUsd: null, estimatedCostUsd: null, timeLimitSeconds: 600, exitCode: null,

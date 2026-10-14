@@ -87,6 +87,26 @@ describe('cosAgentLifecycle', () => {
     await rm(mockCosState.agentsDir, { recursive: true, force: true });
   });
 
+  it('archives interrupted audit findings before removing their workspace and reloads them after live retention', async () => {
+    const { settleAuditFindings } = await import('./auditFindings.js');
+    const workspace = join(mockCosState.agentsDir, 'audit-workspace');
+    await mkdir(workspace);
+    mockCosState.state.stats = { agentsSpawned: 0, agentsCompleted: 0, agentsFailed: 0 };
+    await registerAgent('agent-disposition', 'task-example', { taskAnalysisType: 'security', auditDispositionVersion: 1 });
+    const report = { version: 1, findings: [{ key: 'example-authority', title: 'Example boundary', path: 'server/routes/example.js',
+      severity: 8, confidence: 'high', classification: 'actionable', evidence: 'Synthetic mounted route bypass.',
+      disposition: { kind: 'unresolved', reason: 'Tracker unavailable.' } }] };
+    await writeFile(join(workspace, '.agent-audit-findings-agent-disposition.json'), JSON.stringify(report));
+    const disposition = await settleAuditFindings({ agentId: 'agent-disposition', workspacePath: workspace,
+      task: { metadata: { auditDispositionVersion: '1', analysisType: 'security' } } });
+    await completeAgent('agent-disposition', { success: false, auditDisposition: disposition });
+    await rm(workspace, { recursive: true });
+    delete mockCosState.state.agents['agent-disposition'];
+    const archived = await getAgent('agent-disposition');
+    expect(archived.metadata.auditFindings.report).toEqual(report);
+    expect(archived.result.auditDisposition.status).toBe('incomplete');
+  });
+
   it('keeps trusted terminal scanner receipts across stale reconnects, agent claims and missing completion', async () => {
     mockCosState.state.stats = { agentsSpawned: 0, agentsCompleted: 0, agentsFailed: 0 };
     await registerAgent('agent-scanner', 'task-example', { taskAnalysisType: 'security', useRunner: true });
