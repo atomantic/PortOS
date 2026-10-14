@@ -685,6 +685,9 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
     '-filter_complex', filters.join(';'),
     '-map', videoMap,
     '-map', audioMap,
+    // Pin the output rate to the project's: left to its default, ffmpeg 7.0
+    // can fall back to 25 fps and re-time the graph's frames (#11476).
+    '-r', String(fps),
     '-c:v', 'libx264',
     '-preset', 'veryfast',
     '-crf', '18',

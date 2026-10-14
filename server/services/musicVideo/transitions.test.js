@@ -3,13 +3,14 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { findFfmpeg } from '../../lib/ffmpeg.js';
+import { findFfmpeg, findFfprobe } from '../../lib/ffmpeg.js';
 import { FILTER_GRAPH_ARG_LIMIT, filterGraphViaFile } from '../../lib/ffmpegFilterGraph.js';
 import { MUSIC_VIDEO_TRANSITION_STYLES, sceneTransitions, shotGlitchFrames, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
 import { buildMusicVideoFfmpegArgs } from './render.js';
 import { applySceneUpdate } from './projectsLogic.js';
 
 const ffmpeg = await findFfmpeg();
+const ffprobe = await findFfprobe();
 const dir = mkdtempSync(join(tmpdir(), 'portos-mv-transitions-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 const run = (args) => execFileSync(ffmpeg, ['-v', 'error', ...args], { maxBuffer: 64 * 1024 * 1024 });
@@ -107,6 +108,38 @@ describe.skipIf(!ffmpeg)('a VHS glitch on a cut in the final render', () => {
     const spreads = frameSpreads(output);
     expect(spreads).toHaveLength(2 * FPS);
     expect(spreads.map((s, f) => (s > 4 ? f : null)).filter((f) => f != null)).toEqual(expected);
+  });
+});
+
+// Uniquely catches the encode's output rate drifting from the project's fps
+// (ffmpeg 7.0 picked 25 fps and re-timed the graph's frames, #11476).
+describe('the render pins the output frame rate', () => {
+  const clipsAt = (fps, videoPath = 'c.mp4') => [0, 1].map((i) => ({ sceneId: `s${i}`, videoPath, width: W, height: H, fps, duration: 1, sourceSec: 1, loop: false, inSec: 0, outSec: 1, frameFit: 'fill' }));
+
+  it('passes the plan fps as an explicit output rate', () => {
+    const { args, fps } = buildMusicVideoFfmpegArgs(clipsAt(FPS), 's.wav', 'o.mp4', { audioDurationSec: 2, frameGrid: true });
+    expect(fps).toBe(FPS);
+    expect(args[args.indexOf('-r') + 1]).toBe(String(FPS));
+    expect(args.indexOf('-r')).toBeGreaterThan(args.indexOf('-filter_complex'));
+    expect(args.indexOf('-r')).toBeLessThan(args.indexOf('-c:v'));
+  });
+
+  it.skipIf(!ffmpeg || !ffprobe)('encodes a stream whose r_frame_rate is the plan fps with one frame per graph frame', () => {
+    const song = join(dir, 'fps-song.wav');
+    const clips = ['0x2050a0', '0xa05020'].map((color, i) => {
+      const videoPath = join(dir, `fps-clip${i}.mp4`);
+      run(['-f', 'lavfi', '-i', `color=${color}:s=${W}x${H}:r=${FPS}:d=1`, '-pix_fmt', 'yuv420p', '-y', videoPath]);
+      return { ...clipsAt(FPS, videoPath)[i] };
+    });
+    run(['-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-y', song]);
+    const output = join(dir, 'fps.mp4');
+    const plan = buildMusicVideoFfmpegArgs(clips, song, output, { audioDurationSec: 2, frameGrid: true });
+    run(plan.args.filter((arg, i) => !(arg === '-progress' || plan.args[i - 1] === '-progress')));
+    const probe = execFileSync(ffprobe, ['-v', 'error', '-select_streams', 'v:0', '-count_frames',
+      '-show_entries', 'stream=r_frame_rate,nb_read_frames', '-of', 'json', output]).toString();
+    const stream = JSON.parse(probe).streams[0];
+    expect(stream.r_frame_rate).toBe(`${FPS}/1`);
+    expect(Number(stream.nb_read_frames)).toBe(2 * FPS);
   });
 });
 
