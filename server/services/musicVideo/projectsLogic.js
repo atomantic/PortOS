@@ -523,6 +523,7 @@ function buildScene(input, { order }) {
     ...(input.transitionIn ? { transitionIn: input.transitionIn } : {}),
     ...(input.transitionOut ? { transitionOut: input.transitionOut } : {}),
     ...(input.glitches?.length ? { glitches: input.glitches } : {}),
+    ...(input.cutEffect ? { cutEffect: input.cutEffect } : {}),
     ...(input.imageEffect ? { imageEffect: input.imageEffect } : {}),
     ...(input.imageEffectSec ? { imageEffectSec: input.imageEffectSec } : {}),
     cardColor: input.cardColor ?? null,
@@ -609,6 +610,7 @@ export function replaceScenes(project, sceneInputs) {
       ...(prior.transitionIn ? { transitionIn: prior.transitionIn } : {}),
       ...(prior.transitionOut ? { transitionOut: prior.transitionOut } : {}),
       ...(prior.glitches?.length ? { glitches: prior.glitches } : {}),
+      ...(prior.cutEffect ? { cutEffect: prior.cutEffect } : {}),
       // A still playing an image effect stays one: the effect is the shot's picture.
       ...(prior.imageEffect && prior.visualLayer === 'still' ? { visualLayer: 'still', imageEffect: prior.imageEffect,
         ...(prior.imageEffectSec ? { imageEffectSec: prior.imageEffectSec } : {}) } : {}),
@@ -623,7 +625,7 @@ export function replaceScenes(project, sceneInputs) {
 // takes, and whether it plays as a clip or its still with an image effect) without
 // adding a shot or lyric the storyboard approval did not cover.
 const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'label', 'prompt', 'framePrompt', 'visualIntent',
-  'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'transitionIn', 'transitionOut', 'glitches',
+  'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'transitionIn', 'transitionOut', 'glitches', 'cutEffect',
   'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec'];
 
 /**

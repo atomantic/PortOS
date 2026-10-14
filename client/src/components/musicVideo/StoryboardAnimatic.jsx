@@ -18,6 +18,7 @@ import TransitionGlitch from './TransitionGlitch.jsx';
 import ImageEffectStill from './ImageEffectStill.jsx';
 import { isLayeredComposition } from '../../lib/musicVideoLayers.js';
 import { sceneImageEffect } from '../../lib/musicVideoImageEffects.js';
+import { sceneBeatToggles } from '../../lib/musicVideoCutEffects.js';
 
 const timedShots = (scenes) => scenes.filter((scene) => Number.isFinite(scene?.startSec)).sort((a, b) => a.startSec - b.startSec);
 
@@ -187,8 +188,10 @@ const ANIMATIC_LOOK_KEY = 'portos-mv-animatic-look';
  * come waits paused on its first frame. The clip stays transparent until it has
  * a frame to show, so the shot's still underneath covers the load and the seek.
  */
-function ShotClip({ scene, audioRef, time, current }) {
+function ShotClip({ scene, audioRef, time, current, leadSec = 0 }) {
   const videoRef = useRef(null);
+  // A beat toggle into this shot started its clip early: it carries on from there.
+  const timing = useMemo(() => (leadSec > 0 ? { ...scene, startSec: (scene.startSec || 0) - leadSec } : scene), [scene, leadSec]);
   const [ready, setReady] = useState(false);
   const file = useVideoFileSrc(scene.videoHistoryId);
   const src = file.src || (file.resolving ? null : `/data/videos/${scene.videoHistoryId}.mp4`);
@@ -197,12 +200,12 @@ function ShotClip({ scene, audioRef, time, current }) {
     const audio = audioRef.current;
     if (!video || !audio || video.readyState < 1) return;
     const duration = Number.isFinite(video.duration) ? video.duration : null;
-    const target = clipTimeAt(scene, current ? audio.currentTime || 0 : scene.startSec || 0, duration);
+    const target = clipTimeAt(timing, current ? audio.currentTime || 0 : scene.startSec || 0, duration);
     const tolerance = current && audio.paused ? CLIP_PAUSED_DRIFT_SEC : CLIP_DRIFT_SEC;
     if (Math.abs((video.currentTime || 0) - target) > tolerance) video.currentTime = target;
     if (!current || audio.paused) video.pause?.();
     else if (video.paused) video.play?.()?.catch?.(() => {});
-  }, [scene, audioRef, current]);
+  }, [scene, timing, audioRef, current]);
   // Shown once a frame is decoded where the clip should be; kept from then on, since a
   // drift re-seek holds the last frame rather than going blank.
   const markReady = useCallback(() => {
@@ -237,6 +240,62 @@ function ShotClip({ scene, audioRef, time, current }) {
       className={`pointer-events-none absolute inset-0 h-full w-full ${fit === 'fill' ? 'object-cover' : 'object-contain'} ${fit === 'black' ? 'bg-black' : ''} ${current && ready ? 'opacity-100' : 'opacity-0'}`}
     />
   );
+}
+
+/**
+ * The incoming shot of a beat toggle (lib/musicVideoCutEffects.js) over the
+ * outgoing one: its clip plays from where the toggle starts it and shows only
+ * on the toggle's frames, as the final render overlays it. Playback flips it on
+ * animation frames, since the song's timeupdate is far too coarse for a beat.
+ * A shot without a clip shows its still.
+ */
+function ToggleClip({ scene, toggle, audioRef, time }) {
+  const mediaRef = useRef(null);
+  const file = useVideoFileSrc(scene.videoHistoryId || null);
+  const src = scene.videoHistoryId ? file.src || (file.resolving ? null : `/data/videos/${scene.videoHistoryId}.mp4`) : null;
+  const timing = useMemo(() => ({ ...scene, startSec: toggle.windowStartSec }), [scene, toggle.windowStartSec]);
+  const apply = useCallback((t) => {
+    const el = mediaRef.current;
+    const audio = audioRef.current;
+    if (!el) return;
+    el.style.opacity = toggle.incoming.some(([a, b]) => t >= a && t < b) ? '1' : '0';
+    if (el.tagName !== 'VIDEO' || el.readyState < 1) return;
+    const duration = Number.isFinite(el.duration) ? el.duration : null;
+    const target = clipTimeAt(timing, Math.max(t, toggle.windowStartSec), duration);
+    const tolerance = audio?.paused ? CLIP_PAUSED_DRIFT_SEC : CLIP_DRIFT_SEC;
+    if (Math.abs((el.currentTime || 0) - target) > tolerance) el.currentTime = target;
+    const running = !!audio && !audio.paused && t >= toggle.windowStartSec && t < toggle.cutSec;
+    if (!running) el.pause?.();
+    else if (el.paused) el.play?.()?.catch?.(() => {});
+  }, [toggle, timing, audioRef]);
+  useEffect(() => { apply(time); }, [time, apply]);
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return undefined;
+    let handle = 0;
+    const tick = () => {
+      apply(audio.currentTime || 0);
+      handle = requestAnimationFrame(tick);
+    };
+    const start = () => { cancelAnimationFrame(handle); handle = requestAnimationFrame(tick); };
+    const stop = () => { cancelAnimationFrame(handle); apply(audio.currentTime || 0); };
+    audio.addEventListener('play', start);
+    audio.addEventListener('pause', stop);
+    if (!audio.paused) start();
+    return () => {
+      cancelAnimationFrame(handle);
+      audio.removeEventListener('play', start);
+      audio.removeEventListener('pause', stop);
+    };
+  }, [audioRef, apply]);
+  const fit = sceneFrameFit(scene);
+  const className = `pointer-events-none absolute inset-0 h-full w-full ${src && fit !== 'fill' ? 'object-contain' : 'object-cover'} ${fit === 'black' ? 'bg-black' : ''}`;
+  if (src) {
+    return <video ref={mediaRef} src={src} muted playsInline preload="auto" onLoadedMetadata={() => apply(audioRef.current?.currentTime || 0)}
+      data-testid="beat-toggle-clip" style={{ opacity: 0 }} className={className} />;
+  }
+  if (!scene.referenceImageId) return null;
+  return <img ref={mediaRef} src={`/data/images/${scene.referenceImageId}`} alt="" data-testid="beat-toggle-clip" style={{ opacity: 0 }} className={className} />;
 }
 
 /**
@@ -338,6 +397,13 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
     const media = figure?.querySelector('video[data-ready="true"]:not([aria-hidden="true"])') || figure?.querySelector('img');
     return captureMediaFrame(media);
   };
+  // Beat toggles across cuts, on the frames the final render flips (lib/musicVideoCutEffects.js).
+  const beats = project.audioAnalysis?.beats;
+  const toggles = useMemo(() => sceneBeatToggles(scenes, { fps: ANIMATIC_FPS, beats, endSec: songEndSec || null,
+    isPerformance: (scene) => !!selectedPerformanceInstruction(scene)?.edit }), [scenes, beats, songEndSec]);
+  const leadOf = (scene) => toggles.find((t) => t.toSceneId === scene.sceneId)?.leadSec || 0;
+  // A toggle mounts its incoming clip a little ahead, so it has loaded when the flips start.
+  const nearToggles = toggles.filter((t) => time >= t.windowStartSec - 3 && time < t.cutSec);
   const shot = shotAt(scenes, time);
   const timed = timedShots(scenes);
   const index = shot ? timed.indexOf(shot) : -1;
@@ -376,8 +442,12 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
           </div>
         ) : null}
         {clipShots.map((scene) => (
-          <ShotClip key={`${scene.sceneId}:${scene.videoHistoryId}`} scene={scene} audioRef={audioRef} time={time} current={scene === shot} />
+          <ShotClip key={`${scene.sceneId}:${scene.videoHistoryId}`} scene={scene} audioRef={audioRef} time={time} current={scene === shot} leadSec={leadOf(scene)} />
         ))}
+        {nearToggles.map((toggle) => {
+          const incoming = scenes.find((scene) => scene.sceneId === toggle.toSceneId);
+          return incoming ? <ToggleClip key={`toggle:${toggle.toSceneId}:${incoming.videoHistoryId || ''}`} scene={incoming} toggle={toggle} audioRef={audioRef} time={time} /> : null;
+        })}
         {/* The shots' VHS glitches on their cuts, on the frames the final render repaints. */}
         <TransitionGlitch scenes={scenes} figureRef={figureRef} audioRef={audioRef} time={time} layered={layered}
           endSec={Number(project.audioAnalysis?.durationSec) || null} fps={ANIMATIC_FPS} />
