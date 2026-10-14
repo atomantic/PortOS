@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { X, Search, Film, Activity, Star, Ban, Trash2 } from 'lucide-react';
 import Modal from '../ui/Modal.jsx';
 import TabPills from '../ui/TabPills.jsx';
+import InfiniteScrollFooter from '../ui/InfiniteScrollFooter.jsx';
 import { deleteMusicVideoPoolAssets, getMusicVideoMediaPool, markMusicVideoPoolAssets } from '../../services/apiMusicVideo.js';
 import { takeThumbUrl, takeClipUrl } from '../../lib/musicVideoTakes.js';
 import { formatCount } from '../../utils/formatters.js';
@@ -105,10 +106,13 @@ export default function SceneTakePicker({ open, onClose, projectId, scene, kind,
     setConfirmDelete(null);
   });
   const badHere = markFilter === 'bad' ? items : [];
+  // The next page loads when the bottom of the grid scrolls into view.
+  const showMore = useCallback(() => setShown((n) => n + PAGE), []);
 
   return (
-    <Modal open={open} onClose={onClose} size="2xl" align="top" usePortal ariaLabel={`Swap ${noun} for ${shotName}`}
-      panelClassName="bg-port-card border border-port-border rounded-lg p-3 space-y-2">
+    // Full height at every width, and nearly the full width on a desktop, so more of the contact sheet is in view.
+    <Modal open={open} onClose={onClose} size="none" usePortal ariaLabel={`Swap ${noun} for ${shotName}`}
+      panelClassName="w-full max-w-4xl lg:max-w-[min(100%,1600px)] min-h-dvh-cap bg-port-card border border-port-border rounded-lg p-3 space-y-2">
       <div className="flex items-center gap-2">
         <h3 className="min-w-0 flex-1 truncate text-sm font-medium">Swap {noun} · {shotName}</h3>
         <button type="button" onClick={onClose} aria-label="Close" className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded sm:min-h-0 sm:min-w-0 sm:p-1">
@@ -178,7 +182,7 @@ export default function SceneTakePicker({ open, onClose, projectId, scene, kind,
       {pool && items.length === 0 && (
         <p className="text-xs text-port-text-muted">{query ? `No unused ${itemNoun}s match.` : `No unused ${itemNoun}s here.`}</p>
       )}
-      <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6" aria-label={`Unused ${itemNoun}s`}>
+      <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8" aria-label={`Unused ${itemNoun}s`}>
         {items.slice(0, shown).map((item) => {
           const number = item.sceneId ? shotNumbers.get(item.sceneId) : null;
           const selected = picked?.assetId === item.assetId;
@@ -205,10 +209,8 @@ export default function SceneTakePicker({ open, onClose, projectId, scene, kind,
         })}
       </ul>
       {items.length > shown && (
-        <button type="button" onClick={() => setShown((n) => n + PAGE)}
-          className="w-full min-h-[44px] rounded border border-port-border text-xs sm:min-h-[32px]">
-          Show more ({formatCount(items.length - shown)} left)
-        </button>
+        <InfiniteScrollFooter hasMore loading={false} error={null} onLoadMore={showMore}
+          label={`Show more (${formatCount(items.length - shown)} left)`} />
       )}
     </Modal>
   );
