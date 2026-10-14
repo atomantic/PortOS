@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 const pool = [
   { kind: 'image', assetId: 'mine.png', sceneId: 's8', prompt: 'Film strip held to the lamp', clipIds: [] },
@@ -57,5 +57,39 @@ describe('Swap from unused', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Yes, delete' }));
     await waitFor(() => expect(api.deleteMusicVideoPoolAssets).toHaveBeenCalledWith('mv-1', [{ kind: 'image', assetId: 'blurry.png' }], { silent: true }));
     expect(await screen.findByRole('button', { name: '✕ Bad 0' })).toBeTruthy();
+  });
+
+  // Uniquely catches the grid stopping at its first page instead of loading more as its bottom scrolls into view.
+  it('loads the next page of stills when the bottom of the grid comes into view', async () => {
+    const many = Array.from({ length: 70 }, (_, i) => ({ kind: 'image', assetId: `f${i}.png`, sceneId: null, prompt: `Frame ${i}`, clipIds: [] }));
+    api.getMusicVideoMediaPool.mockImplementationOnce(async () => ({ items: many }));
+    const observers = [];
+    vi.stubGlobal('IntersectionObserver', function IntersectionObserver(callback) {
+      const self = { observe: () => observers.push(self), disconnect: () => {}, fire: () => callback([{ isIntersecting: true }]) };
+      return self;
+    });
+    render(<SceneTakePicker open projectId="mv-1" scene={{ sceneId: 's8' }} kind="image" onPlace={vi.fn()} shotNumbers={new Map()} />);
+    await waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(60));
+    act(() => observers.at(-1).fire());
+    await waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(70));
+    expect(screen.queryByRole('button', { name: /Show more/ })).toBeNull();
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("the shot's own other frame", () => {
+  // Uniquely catches the picker hiding the shot's end frame (in use, so not in the unused pool) when swapping its start.
+  it('lists the end frame first on This shot when swapping the start, and places it', async () => {
+    const onPlace = vi.fn(async () => {});
+    const scene = { sceneId: 's8', referenceImageId: 'start.png', endImageId: 'end.png', endFramePrompt: 'Door shut',
+      takes: [{ takeId: 't1', kind: 'endImage', assetId: 'end.png', prompt: 'Door shut', status: 'candidate' }] };
+    render(<SceneTakePicker open projectId="mv-1" scene={scene} kind="image" onClose={vi.fn()} onPlace={onPlace} shotNumbers={new Map([['s8', 8]])} />);
+    await waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(2));
+    const first = screen.getAllByRole('listitem')[0];
+    expect(first.textContent).toContain('End frame');
+    fireEvent.click(screen.getByRole('button', { name: "This shot's end frame: Door shut" }));
+    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Use still' }));
+    expect(onPlace).toHaveBeenCalledWith({ kind: 'image', assetId: 'end.png' });
   });
 });

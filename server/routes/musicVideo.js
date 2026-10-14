@@ -121,6 +121,7 @@ import {
   markMediaPoolAssets,
   reviewSceneTake,
   rejectUnusedSceneTakes,
+  swapProjectSceneFrames,
   refreshSongStyleFromSuno,
 } from '../services/musicVideo/projects.js';
 import { buildHandoffManifest, buildHandoffBundle, matchSceneByFileTag } from '../services/musicVideo/handoff.js';
@@ -1597,6 +1598,11 @@ router.post('/:id/scenes/:sceneId/takes/:takeId/select', asyncHandler(async (req
 // No body: marks the shot's unselected takes rejected, keeping their files.
 router.post('/:id/scenes/:sceneId/takes/reject-unused', asyncHandler(async (req, res) => {
   res.json(await rejectUnusedSceneTakes(req.params.id, req.params.sceneId));
+}));
+
+// No body: the shot's start frame becomes its end frame and the end frame its start, prompts included.
+router.post('/:id/scenes/:sceneId/swap-frames', asyncHandler(async (req, res) => {
+  res.json(await swapProjectSceneFrames(req.params.id, req.params.sceneId));
 }));
 
 router.patch('/:id/scenes/:sceneId/takes/:takeId', asyncHandler(async (req, res) => {

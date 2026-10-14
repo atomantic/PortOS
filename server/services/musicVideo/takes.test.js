@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appendSceneTakes, rejectUnusedTakes } from './takes.js';
+import { appendSceneTakes, rejectUnusedTakes, swapSceneFrames } from './takes.js';
 import { captureMusicVideoEvidence, captureTakeDependencies } from '../../lib/musicVideoDependencies.js';
 
 const project = () => ({ id: 'mv-1', scenes: [{ sceneId: 's1' }] });
@@ -88,5 +88,21 @@ describe('reject unused takes', () => {
     expect([next.referenceImageId, next.endImageId, next.videoHistoryId]).toEqual(['a.png', null, 'v2']);
     expect(project.scenes[0].takes).toEqual(next.takes);
     expect(rejectUnusedTakes(project, 's1').rejected).toBe(0);
+  });
+});
+
+describe('swap start and end frames', () => {
+  // Uniquely catches the swap losing a prompt, duplicating a take it could reuse, or leaving a frame's take rejected while selected.
+  it('trades the selected frames and their prompts, reusing and restoring takes', () => {
+    const take = (takeId, kind, assetId, extra = {}) => ({ takeId, kind, assetId, status: 'candidate', note: null, ...extra });
+    const scene = { sceneId: 's1', referenceImageId: 'a.png', endImageId: 'e.png', framePrompt: 'Door opens', endFramePrompt: 'Door shut',
+      takes: [take('t1', 'image', 'a.png', { prompt: 'Door opens' }), take('t2', 'image', 'e.png', { status: 'rejected' }),
+        take('t3', 'endImage', 'e.png', { prompt: 'Door shut' })] };
+    const { scene: next } = swapSceneFrames({ scenes: [scene] }, 's1');
+    expect([next.referenceImageId, next.endImageId, next.framePrompt, next.endFramePrompt]).toEqual(['e.png', 'a.png', 'Door shut', 'Door opens']);
+    expect(next.takes.find((t) => t.takeId === 't2').status).toBe('candidate');
+    const added = next.takes.filter((t) => !['t1', 't2', 't3'].includes(t.takeId));
+    expect(added.map((t) => [t.kind, t.assetId, t.prompt])).toEqual([['endImage', 'a.png', 'Door opens']]);
+    expect(() => swapSceneFrames({ scenes: [{ ...scene, endImageId: null }] }, 's1')).toThrow(/both a start and an end frame/);
   });
 });

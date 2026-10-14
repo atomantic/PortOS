@@ -51,6 +51,18 @@ describe.skipIf(!ffmpeg)('continueFromPreviousShot', () => {
     expect(mocks.selected).toEqual(['t0', 't1']);
   });
 
+  // Uniquely catches a still shot handing over the stale clip it kept, which the cut never shows.
+  it('starts from a still shot\'s end frame, never its stale clip', async () => {
+    mocks.appended.length = 0; mocks.selected.length = 0;
+    mocks.project = { id: 'mv-1', composition: { mode: 'composed' }, scenes: [
+      { sceneId: 'a', startSec: 0, endSec: 1, visualLayer: 'still', imageEffect: 'end-glitch', referenceImageId: 'still.png', endImageId: 'end.png', videoHistoryId: 'clip-a' },
+      { sceneId: 'b', startSec: 1, endSec: 3 },
+    ] };
+    const { frame } = await continueFromPreviousShot('mv-1', 'b');
+    expect(frame).toEqual({ imageId: 'end.png', atSec: null, fromSceneId: 'a' });
+    expect(mocks.appended.map((t) => [t.kind, t.assetId])).toEqual([['image', 'end.png']]);
+  });
+
   it('refuses the first shot and a previous shot without a clip', async () => {
     mocks.project = { id: 'mv-1', scenes: [{ sceneId: 'a', startSec: 0, endSec: 1 }, { sceneId: 'b', startSec: 1, endSec: 2 }] };
     await expect(continueFromPreviousShot('mv-1', 'a')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_NO_PREVIOUS_SHOT' });

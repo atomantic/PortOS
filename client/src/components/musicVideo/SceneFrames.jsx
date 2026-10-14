@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from 'react';
-import { Activity, ArrowRight, Image as ImageIcon, ImagePlus, PencilLine, Shuffle, SkipForward, Wand2, X } from 'lucide-react';
+import { Activity, ArrowLeftRight, ArrowRight, Image as ImageIcon, ImagePlus, PencilLine, Shuffle, SkipForward, Wand2, X } from 'lucide-react';
 import SceneTakeStrip from './SceneTakeStrip.jsx';
 
 const PRIMARY_BUTTON = 'flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap';
@@ -58,11 +58,12 @@ const REFERENCE_LABELS = { '': 'Prompt only', start: 'Start frame', end: 'End fr
  * short instruction (`{ referenceImageId, refine }`), and Swap puts one of the
  * video's unused stills on it. Each frame's own takes sit under it as a grid,
  * so both frames' actions and takes show at once; tapping a frame opens it full size.
+ * With both frames set, `onSwapFrames` trades them (prompts included) in one tap.
  */
 export default function SceneFrames({
   scene, index, endFrames, generatingFrame = false, generatingEndFrame = false, onGenerateFrame, onGenerateEndFrame,
   onEditLocal, onSave, onOpenPreview, takeBusy = false, onSelectTake, onReviewTake, onSwap = null, onImportTake = null,
-  onContinueFromPrevious = null, previousHasClip = false, clipLocked = false,
+  onContinueFromPrevious = null, previousHasClip = false, clipLocked = false, onSwapFrames = null,
 }) {
   const [keepStillAsEnd, setKeepStillAsEnd] = useState(false);
   // Which frame each render starts from: the start frame renders from its prompt, the end frame from the start frame.
@@ -153,7 +154,7 @@ export default function SceneFrames({
             {start && onContinueFromPrevious && (
               <button type="button" onClick={() => onContinueFromPrevious(scene, { keepStillAsEnd: keepStillAsEnd && Boolean(scene.referenceImageId) })}
                 disabled={takeBusy || !previousHasClip} className={SECONDARY_BUTTON}
-                title={previousHasClip ? 'Start this shot from the last frame the previous shot shows in the cut' : 'The previous shot needs a clip first'}>
+                title={previousHasClip ? 'Start this shot from the last frame the previous shot shows in the cut' : 'The previous shot needs a clip or still first'}>
                 <SkipForward size={14} /> From previous shot
               </button>
             )}
@@ -190,6 +191,12 @@ export default function SceneFrames({
           {column('end')}
         </div>
       ) : column('start')}
+      {endFrames && onSwapFrames && frames.start && frames.end && (
+        <button type="button" onClick={onSwapFrames} disabled={takeBusy || clipLocked} className={SECONDARY_BUTTON}
+          title={clipLocked ? lockedTitle : 'The start frame becomes the end frame and the end frame the start, each with its prompt'}>
+          <ArrowLeftRight size={14} /> Swap start and end
+        </button>
+      )}
     </section>
   );
 }

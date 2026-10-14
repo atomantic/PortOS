@@ -7,6 +7,7 @@ import {
   continueMusicVideoSceneFromPrevious,
   reviewMusicVideoSceneTake,
   rejectUnusedMusicVideoSceneTakes,
+  swapMusicVideoSceneFrames,
   getMusicVideoHandoff,
   getMusicVideoHandoffBundle,
   importMusicVideoHandoff,
@@ -113,6 +114,15 @@ export default function useMusicVideoTakes({ project, applyScenePatch }) {
     'Failed to update take',
   );
 
+  // Start and end frames trade places, each bringing its prompt along.
+  const swapFrames = (scene) => runTakeOp(
+    (projectId) => swapMusicVideoSceneFrames(projectId, scene.sceneId, { silent: true }).then((placed) => {
+      applyScenePatch?.(projectId, placed.sceneId, { framePrompt: placed.framePrompt ?? null, endFramePrompt: placed.endFramePrompt ?? null });
+      return placed;
+    }),
+    'Failed to swap the frames',
+  );
+
   // Finalize a shot: every take other than its selected frame, end frame and clip is rejected (files kept).
   const rejectUnusedTakes = (scene) => runTakeOp(
     (projectId) => rejectUnusedMusicVideoSceneTakes(projectId, scene.sceneId, { silent: true }).then((res) => res.scene),
@@ -192,5 +202,5 @@ export default function useMusicVideoTakes({ project, applyScenePatch }) {
     if (failures.length) toast.error(failures.slice(0, 3).join(' · '));
   };
 
-  return { busy, selectTake, placePoolItem, trimClipTake, reviewTake, rejectUnusedTakes, continueFromPrevious, importTake, importClipTake, exportHandoff, exportHandoffBundle, importHandoffFiles };
+  return { busy, selectTake, placePoolItem, trimClipTake, reviewTake, rejectUnusedTakes, swapFrames, continueFromPrevious, importTake, importClipTake, exportHandoff, exportHandoffBundle, importHandoffFiles };
 }
