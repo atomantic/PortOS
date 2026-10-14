@@ -2625,7 +2625,7 @@ describe('describeIdleReconcilePark', () => {
 
   it('reports a quiet repo when nothing is held', () => {
     expect(describeIdleReconcilePark([], [])).toEqual({
-      reason: 'no-in-flight-branches', heldBackMerged: [], counts: null, notLaterThan: null
+      reason: 'no-in-flight-branches', heldBackMerged: [], counts: null, skipCauses: null, notLaterThan: null
     });
     expect(describeIdleReconcilePark()).toMatchObject({ reason: 'no-in-flight-branches' });
   });
@@ -2639,7 +2639,7 @@ describe('describeIdleReconcilePark', () => {
       { branch: 'claim/issue-4442', reason: 'worktree-human-claim', retryAt: '2026-01-13T00:00:00.000Z' }
     ], []);
     expect(out.reason).toBe('merged-branches-held-back');
-    expect(out.counts).toEqual({ heldBackMerged: 2 });
+    expect(out.counts).toEqual({ heldBackMerged: 2, heldBranches: 2, heldDetached: 0 });
     expect(out.notLaterThan).toBe('2026-01-13T00:00:00.000Z');
     expect(out.heldBackMerged).toHaveLength(2);
   });
@@ -2648,18 +2648,18 @@ describe('describeIdleReconcilePark', () => {
     const out = describeIdleReconcilePark([CLAIM_HOLD], [{ branch: 'cos/x', liveOwnerReason: 'worktree-active-agent' }]);
     expect(out.reason).toBe('branches-held-by-live-owners');
     // The held-back set still travels, so the log/UI can name both.
-    expect(out.counts).toEqual({ heldBackMerged: 1 });
+    expect(out.counts).toEqual({ heldBackMerged: 1, heldBranches: 2, heldDetached: 0 });
   });
 
-  it('ignores skips that are not holds', () => {
-    // 'cleanup-disabled' (a toggle) and 'not-merged-on-recheck' (never eligible)
-    // are not pending work — counting them would invent a queue that does not exist.
+  it('reports disabled cleanup and deletion failure as blockers', () => {
+    // A branch no longer merged is reclassified next pass. Disabled cleanup
+    // and a failed deletion still leave concrete work that must remain visible.
     const out = describeIdleReconcilePark([
       { branch: 'a', reason: 'cleanup-disabled' },
       { branch: 'b', reason: 'not-merged-on-recheck' },
       { branch: 'c', reason: 'delete-failed: boom' }
     ], []);
-    expect(out).toEqual({ reason: 'no-in-flight-branches', heldBackMerged: [], counts: null, notLaterThan: null });
+    expect(out).toEqual({ reason: 'branches-blocked', heldBackMerged: [], counts: { heldBranches: 2, heldDetached: 0 }, skipCauses: { 'cleanup-disabled': 1, 'branch-delete-failed': 1 }, notLaterThan: null });
   });
 
   it('ignores an unreadable retryAt rather than parking on NaN', () => {

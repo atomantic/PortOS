@@ -21,8 +21,10 @@ const PARK_REASON_LABELS = {
   'merged-branches-held-back': 'every remaining branch is already merged and waiting on a protected worktree',
   'no-zombie-issues': 'no stale issues to reconcile',
   'no-actionable-plan-items': 'no unblocked PLAN items',
-  'no-progress': 'already up to date',
-  'drain-cap': 'paused after several back-to-back runs — the rest waits for the next scheduled check',
+  'branches-blocked': 'remaining branches or worktrees need attention',
+  'owner-state-unavailable': 'ownership state could not be read; reconciliation is paused to protect active work',
+  'no-progress': 'remaining items were attempted but did not advance',
+  'drain-cap': 'paused after reaching this run’s dispatch limit',
   'no-detector': 'no work detector for this task'
 };
 
@@ -128,7 +130,16 @@ export function useOnDemandTaskToast() {
       // branch-reconcile's breakdown instead names merged branches whose worktree
       // a protection guard still holds — the park is a wait, not an empty repo, so
       // the count has to show or the toast reads as "nothing exists".
-      if (c && typeof c.heldBackMerged === 'number' && c.heldBackMerged > 0) {
+      if (c && (c.heldBranches > 0 || c.heldDetached > 0)) {
+        const parts = [];
+        if (c.heldBranches) parts.push(`${c.heldBranches} branch(es) held`);
+        if (c.heldDetached) parts.push(`${c.heldDetached} detached worktree(s) held`);
+        if (c.unchangedBranches) parts.push(`${c.unchangedBranches} branch(es) still blocked`);
+        const causes = formatSkipCauses(data?.skipCauses);
+        countSuffix = ` (${parts.join(', ')}${causes ? ` — ${causes}` : ''})`;
+      } else if (c?.unchangedBranches > 0) {
+        countSuffix = ` (${c.unchangedBranches} branch(es) still blocked)`;
+      } else if (c && typeof c.heldBackMerged === 'number' && c.heldBackMerged > 0) {
         countSuffix = ` (${c.heldBackMerged} merged branch(es) held back)`;
       } else if (c && typeof c.open === 'number' && c.open > 0) {
         const parts = [];
@@ -145,8 +156,8 @@ export function useOnDemandTaskToast() {
         countSuffix = ` (0 of ${c.open} open${detail})`;
       }
 
-      const recheckSuffix = data?.parkedUntil
-        ? ` Next auto-recheck ${timeUntil(data.parkedUntil, 'soon')}.`
+      const recheckSuffix = data?.nextAutoRecheckAt
+        ? ` Next auto-recheck ${timeUntil(data.nextAutoRecheckAt, 'soon')}.`
         : '';
 
       // Re-checked live on this trigger — say so, since the confusing case is a
