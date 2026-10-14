@@ -599,12 +599,53 @@ describe('backup restore operator authority (#8772)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     isAuthEnabled.mockResolvedValue(false);
-    verifyRequestSession.mockImplementation(async (req) => req.headers.authorization === 'Bearer example-operator');
+    verifyRequestSession.mockImplementation(async (req) => ['Bearer example-operator', 'Bearer example-agent'].includes(req.headers.authorization));
     verifyPassword.mockResolvedValue(false);
     loadData.mockResolvedValue({ peers: [peer] });
     getSettings.mockResolvedValue({ backup: { destPath: '/example-backups' } });
     backup.restoreSnapshot.mockResolvedValue({ success: true });
     backup.restorePostgres.mockResolvedValue({ success: true });
+  });
+
+  // Regression: the raw archive, its creation/deletion and deferred recovery
+  // must not be reachable merely because a network peer can reach PortOS.
+  describe.each([
+    ['get', '/snapshots/snap-1/download', 'openSnapshotStream'],
+    ['head', '/snapshots/snap-1/download', 'openSnapshotStream'],
+    ['post', '/run', 'runBackup'],
+    ['delete', '/snapshots/snap-1', 'deleteSnapshot'],
+    ['post', '/restore-db/recover', 'resumeDatabaseRestore'],
+  ])('%s %s operator authority', (method, path, service) => {
+    const sink = () => service === 'resumeDatabaseRestore' ? resumeDatabaseRestore : backup[service];
+    const body = method === 'post' ? { id: '00000000-0000-4000-8000-000000000001' } : undefined;
+
+    it('refuses remote and scoped-peer callers before backup effects', async () => {
+      for (const enabled of [false, true]) {
+        isAuthEnabled.mockResolvedValue(enabled);
+        const pending = request(buildGuardedApp('192.0.2.10'))[method]('/api/backup' + path)
+          .set(PEER_AUTH_HEADER, derivePeerAuthToken(peer.syncSecret, peer.instanceId))
+          .set(PEER_INSTANCE_HEADER, peer.instanceId);
+        const res = await (body ? pending.send(body) : pending);
+        expect(res.status).toBe(403);
+        expect(sink()).not.toHaveBeenCalled();
+      }
+    });
+
+    it('preserves local, human-session and delegated-agent operations', async () => {
+      for (const token of [null, 'example-operator', 'example-agent']) {
+        isAuthEnabled.mockResolvedValue(token !== null);
+        if (service === 'openSnapshotStream') {
+          const stream = new PassThrough();
+          stream.end('synthetic snapshot');
+          sink().mockResolvedValueOnce(stream);
+        } else sink().mockResolvedValueOnce({ success: true });
+        const pending = request(buildGuardedApp(token ? '192.0.2.10' : '127.0.0.1'))[method]('/api/backup' + path);
+        if (token) pending.set('Authorization', `Bearer ${token}`);
+        const res = await (body ? pending.send(body) : pending);
+        expect(res.status).toBe(200);
+        expect(sink()).toHaveBeenCalledTimes(token === null ? 1 : token === 'example-operator' ? 2 : 3);
+      }
+    });
   });
 
   describe.each([

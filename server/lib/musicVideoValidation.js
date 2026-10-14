@@ -54,6 +54,7 @@ import { NARRATIVE_EVENT_KINDS } from './musicVideoNarrativeEvents.js';
 import { MUSIC_VIDEO_MEDIA } from './musicVideoMediumPlan.js';
 import { CLIP_OFFSET_FRAMES_RANGE, CLIP_SPEED_FPS_RANGE, MUSIC_VIDEO_FRAME_FITS, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_STILL_MOVES, MUSIC_VIDEO_TEXT_ZONES, MUSIC_VIDEO_VISUAL_LAYERS } from './musicVideoLayers.js';
 import { MUSIC_VIDEO_SHOT_GLITCH_LIMIT, MUSIC_VIDEO_TRANSITIONS } from './musicVideoTransitions.js';
+import { BEAT_TOGGLE_OVERLAP, BEAT_TOGGLE_RATES, MUSIC_VIDEO_CUT_EFFECTS } from './musicVideoCutEffects.js';
 import { IMAGE_EFFECT_SEC_RANGE, MUSIC_VIDEO_IMAGE_EFFECTS } from './musicVideoImageEffects.js';
 import { CAMERA_FRAMINGS, CAMERA_MOVEMENT_VALUES, CAMERA_SPEEDS } from './cameraMovements.js';
 import { MUSIC_VIDEO_PERFORMANCE_STYLES, MUSIC_VIDEO_SHOT_MODES, SOURCE_AUDIO_LIPSYNC } from './musicVideoShotTiming.js';
@@ -618,6 +619,13 @@ const sceneLayerFields = {
     style: z.enum(MUSIC_VIDEO_TRANSITIONS),
     lengthSec: z.number().positive().max(4).nullable().optional(),
   })).max(MUSIC_VIDEO_SHOT_GLITCH_LIMIT).nullable().optional(),
+  // An effect across the cut out of this shot (musicVideoCutEffects.js), kept with its settings while switched off; null clears it.
+  cutEffect: z.object({
+    style: z.enum(MUSIC_VIDEO_CUT_EFFECTS),
+    enabled: z.boolean().optional(),
+    overlapSec: z.number().min(BEAT_TOGGLE_OVERLAP.min).max(BEAT_TOGGLE_OVERLAP.max).optional(),
+    rate: z.enum(BEAT_TOGGLE_RATES).optional(),
+  }).nullable().optional(),
   // A code-drawn effect a still shot plays instead of a clip (musicVideoImageEffects.js) and how long
   // it takes to finish; null clears it.
   imageEffect: z.enum(MUSIC_VIDEO_IMAGE_EFFECTS).nullable().optional(),

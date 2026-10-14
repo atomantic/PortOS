@@ -84,6 +84,7 @@ import {
   isContextBudgetFitnessError,
 } from '../lib/persistentMindContextBudget.js';
 import { isProviderAvailable, markProviderUsageLimit } from './providerStatus.js';
+import { scrubSecretTokens } from '../lib/secretText.js';
 
 export const PERSISTENT_MIND_WAKE_EVENT_ID = 'cos-persistent-mind-wake';
 export const PERSISTENT_MIND_WATCHDOG_EVENT_ID = 'cos-persistent-mind-watchdog';
@@ -499,6 +500,9 @@ async function interruptActiveTurn(reason, status, { retry = false, expectedTurn
  */
 async function parkActiveTurn(turnId, reason, status = 'waiting', { retryAt = null, consumedAttempt = false, retireWake = false } = {}) {
   const paused = status === 'paused';
+  if (status === 'degraded') {
+    console.warn(`⚠️ Persistent mind turn degraded: ${scrubSecretTokens(String(reason)).slice(0, 300)}`);
+  }
   const result = await mutateMindState((mind) => {
     if (mind.activeTurn?.id !== turnId) return { mind, value: false };
     // Transport/slot waits may retry; a revoked route or uncertain inference

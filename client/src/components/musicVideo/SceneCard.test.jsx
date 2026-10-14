@@ -627,3 +627,23 @@ describe('clip speed and offset by hand', () => {
     expect(screen.getByLabelText('Speed').value).toBe('2');
   });
 });
+
+// Uniquely catches the beat toggle control saving the wrong shape or losing its settings when switched off.
+describe('Beat toggle into the next shot', () => {
+  it('switches on with defaults, changes its settings and keeps them when switched off', () => {
+    const onSave = vi.fn();
+    function Harness() {
+      const [scene, setScene] = useState({ sceneId: 's1', startSec: 0, endSec: 4, takes: [] });
+      return <SceneCard scene={scene} index={0} onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
+    }
+    render(<Harness />);
+    const toggle = screen.getByLabelText('Beat toggle into next shot');
+    fireEvent.click(toggle);
+    expect(onSave).toHaveBeenLastCalledWith('s1', { cutEffect: { style: 'beat-toggle', enabled: true, overlapSec: 1, rate: 'beat' } });
+    fireEvent.change(screen.getByLabelText('Beat toggle speed'), { target: { value: 'half' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { cutEffect: { style: 'beat-toggle', enabled: true, overlapSec: 1, rate: 'half' } });
+    fireEvent.click(toggle);
+    expect(onSave).toHaveBeenLastCalledWith('s1', { cutEffect: { style: 'beat-toggle', enabled: false, overlapSec: 1, rate: 'half' } });
+    expect(screen.getByLabelText('Beat toggle speed').value).toBe('half');
+  });
+});

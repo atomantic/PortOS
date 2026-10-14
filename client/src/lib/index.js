@@ -277,5 +277,6 @@ export * from './trackProvenance.js';
 export * from './musicVideoGrade.js';
 export * from './filmLook.js';
 export * from './musicVideoNarrativeEvents.js';
+export * from './musicVideoCutEffects.js';
 export * from './musicVideoTransitions.js';
 export * from './musicVideoImageEffects.js';

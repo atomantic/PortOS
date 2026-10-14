@@ -9,11 +9,11 @@ import { Router } from 'express'
 import { z } from 'zod'
 import { existsSync } from 'fs'
 import { readFile } from 'fs/promises'
-import { join, resolve } from 'path'
 import { asyncHandler, ServerError } from '../lib/errorHandler.js'
 import { atomicWrite } from '../lib/fileUtils.js'
 import { documentUpdateSchema, validateRequest } from '../lib/validation.js'
 import * as gsdService from '../services/gsdService.js'
+import { resolveGsdPath } from '../services/gsdPaths.js'
 import { addTask } from '../services/cos.js'
 import { getActiveApps } from '../services/apps.js'
 import * as git from '../services/git.js'
@@ -47,8 +47,8 @@ async function loadAppPlanning(req) {
   const apps = await getActiveApps()
   const app = apps.find(a => a.id === req.params.appId)
   if (!app?.repoPath) return null
-  const planningPath = join(app.repoPath, '.planning')
-  if (!existsSync(planningPath)) return null
+  const planningPath = await resolveGsdPath(app.repoPath, '', 'dir')
+  if (!planningPath || !existsSync(planningPath)) return null
   return { app, planningPath }
 }
 
@@ -162,11 +162,7 @@ router.get('/projects/:appId/documents/:docName', asyncHandler(async (req, res) 
     throw new ServerError('GSD project not found', { status: 404, code: 'GSD_PROJECT_NOT_FOUND' })
   }
 
-  const filePath = join(ctx.planningPath, docName)
-  const resolved = resolve(filePath)
-  if (!resolved.startsWith(resolve(ctx.planningPath))) {
-    throw new ServerError('Invalid document path', { status: 400, code: 'PATH_TRAVERSAL' })
-  }
+  const resolved = await resolveGsdPath(ctx.app.repoPath, docName)
 
   if (!existsSync(resolved)) {
     throw new ServerError('Document not found', { status: 404, code: 'NOT_FOUND' })
@@ -188,11 +184,7 @@ router.put('/projects/:appId/documents/:docName', asyncHandler(async (req, res) 
     throw new ServerError('GSD project not found', { status: 404, code: 'GSD_PROJECT_NOT_FOUND' })
   }
 
-  const filePath = join(ctx.planningPath, docName)
-  const resolved = resolve(filePath)
-  if (!resolved.startsWith(resolve(ctx.planningPath))) {
-    throw new ServerError('Invalid document path', { status: 400, code: 'PATH_TRAVERSAL' })
-  }
+  const resolved = await resolveGsdPath(ctx.app.repoPath, docName)
 
   const { content, commitMessage } = validateRequest(documentUpdateSchema, req.body)
   const created = !existsSync(resolved)

@@ -36,6 +36,7 @@ import ScenePoster from './ScenePoster.jsx';
 import SceneRenderTarget, { lastRenderTarget, renderTargetOverrides } from './SceneRenderTarget.jsx';
 import SceneRenderInputs, { shotCardRenderRequest, shotCardRequestProblem } from './SceneRenderInputs.jsx';
 import SceneFrameFit, { sceneFrameFit } from './SceneFrameFit.jsx';
+import SceneCutEffect from './SceneCutEffect.jsx';
 import SceneGlitches from './SceneGlitches.jsx';
 import SceneTransitions from './SceneTransitions.jsx';
 import SceneImageEffect from './SceneImageEffect.jsx';
@@ -257,6 +258,8 @@ export default function SceneCard({
           span={sceneHasAuthoredSpan(scene) ? { startSec: scene.startSec, endSec: scene.endSec } : null} />
         {/* A VHS glitch riding on the cut into or out of this shot; never moves the cut. */}
         <SceneTransitions fieldId={fieldId} scene={scene} onChange={applyPatch} />
+        {/* Both clips flipping on the beats over the end of this shot, switched on or off. */}
+        <SceneCutEffect fieldId={fieldId} scene={scene} onChange={applyPatch} />
         {/* Glitches at moments inside the shot, set and moved on a slider; they add no time. */}
         <SceneGlitches fieldId={fieldId} scene={scene} onChange={applyPatch} />
         {/* Everything set once and rarely revisited: timing, shot mode, layer, and a non-footage shot's camera. */}

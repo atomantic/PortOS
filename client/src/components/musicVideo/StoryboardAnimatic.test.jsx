@@ -121,6 +121,36 @@ describe('StoryboardAnimatic clips', () => {
     expect(container.querySelector('img').getAttribute('src')).toBe('/data/images/frame-b.png');
   });
 
+  // Uniquely catches the animatic's beat toggle showing the incoming shot on the wrong frames,
+  // starting its clip in the wrong place, or the incoming shot jumping back to its start at the cut.
+  it('flips to the next shot on the beats before a beat toggle cut and carries its clip on through the cut', async () => {
+    const scenes = [
+      { sceneId: 'a', label: 'One', startSec: 0, endSec: 4, videoHistoryId: 'clip-a', cutEffect: { style: 'beat-toggle', enabled: true, overlapSec: 1, rate: 'beat' } },
+      { sceneId: 'b', label: 'Two', startSec: 4, endSec: 8, videoHistoryId: 'clip-b' },
+    ];
+    const project = { id: 'p', scenes, audioAnalysis: { beats: [3, 3.5, 4, 4.5] } };
+    render(<StoryboardAnimatic project={project} audioUrl="/song.mp3" />);
+    const audio = screen.getByLabelText('Song for the storyboard animatic');
+    const at = (t) => { Object.defineProperty(audio, 'currentTime', { value: t, configurable: true }); fireEvent.timeUpdate(audio); };
+    at(2.9);
+    const toggle = await screen.findByTestId('beat-toggle-clip');
+    await waitFor(() => expect(toggle.getAttribute('src')).toBe('/data/videos/clip-b.mov'));
+    Object.defineProperty(toggle, 'readyState', { value: 4, configurable: true });
+    expect(toggle.style.opacity).toBe('0');
+    at(3.2);
+    expect(toggle.style.opacity).toBe('1');
+    // The incoming clip started on the first beat.
+    expect(toggle.currentTime).toBeCloseTo(0.2, 2);
+    at(3.7);
+    expect(toggle.style.opacity).toBe('0');
+    // Past the cut the incoming shot's own clip runs on from where the toggle took it.
+    const clipB = screen.getByLabelText('Clip for Two');
+    Object.defineProperty(clipB, 'readyState', { value: 4, configurable: true });
+    Object.defineProperty(audio, 'paused', { value: true, configurable: true });
+    at(4.25);
+    expect(clipB.currentTime).toBeCloseTo(1.25, 2);
+  });
+
   it('loads the next shots\' clips ahead and cuts to the same loaded clip', async () => {
     const scenes = [
       { sceneId: 'a', label: 'One', startSec: 0, endSec: 1, referenceImageId: 'frame-a.png' },
