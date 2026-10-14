@@ -519,6 +519,7 @@ function setupCosEventForwarding() {
   cosEvents.on('agent:updated', (data) => broadcastToCos('cos:agent:updated', toAgentListItem(data)));
   cosEvents.on('agent:completed', (data) => broadcastToCos('cos:agent:completed', toAgentListItem(data)));
   cosEvents.on('agent:output', (data) => broadcastToCos('cos:agent:output', data));
+  cosEvents.on('agent:feedback', (data) => broadcastToCos('cos:agent:feedback', data));
   cosEvents.on('agent:btw', (data) => broadcastToCos('cos:agent:btw', data));
   cosEvents.on('persistent-mind:status', (data) => broadcastToCos('cos:mind:status', data));
 
