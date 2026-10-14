@@ -228,6 +228,11 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // control of the host desktop; a peer's Basic credential must not mint one (#10923).
   'POST /api/remote-desktop/sessions',
 
+  // Force-kills whatever host PID the caller names, not only a detected agent
+  // CLI — the same host-process control as the gated PM2 process action in
+  // routes/commands.js. CoS agent stop/kill by agent id stays open.
+  'DELETE /api/agents/:pid',
+
   // Universe Builder authoring (#10669) can dispatch tool-capable text/vision
   // providers or image agents, including API-first CLI/TUI fallback. Authorize
   // the whole operation before image resolution, stores, runs or queue writes.
