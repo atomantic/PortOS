@@ -219,6 +219,33 @@ describe('startAutonomousVideo', () => {
     expect(runOf().output).toMatchObject({ renderJobId: 'render-1' });
   });
 
+  // Uniquely catches a failed child stop being swallowed while the delegated production keeps spending.
+  it.each([
+    ['stopAutonomousVideo', 'stopProduction', 'stopped', 'stop production'],
+    ['cancelAutonomousVideo', 'cancelProduction', 'canceled', 'cancel production'],
+  ])('%s reports a child failure but ignores an already-closed child (409/404)', async (action, dep, status, kind) => {
+    await service.startAutonomousVideo({ prompt: 'p' });
+    await vi.waitFor(() => expect(runOf()?.output.productionRunId).toBe('mvpr-1'));
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      doubles[dep].mockRejectedValueOnce(Object.assign(new Error("already closed"), { status: 409 }));
+      const closed = await service[action]('mv-auto');
+      expect(closed.childStopFailures).toEqual([]);
+      expect(errorLog).not.toHaveBeenCalled();
+      expect(runOf().status).toBe(status);
+
+      store.get('mv-auto').autonomousRun.status = 'running';
+      doubles[dep].mockRejectedValueOnce(new Error('store write failed'));
+      const failed = await service[action]('mv-auto');
+      expect(failed.childStopFailures).toEqual([{ kind, id: 'mvpr-1', error: 'store write failed' }]);
+      expect(errorLog).toHaveBeenCalledWith(expect.stringContaining(`could not ${kind} mvpr-1: store write failed`));
+      expect(errorLog.mock.calls[0][0]).toContain('project mv-auto');
+      expect(runOf().status).toBe(status);
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
   it('finishes — and starts the final render — when the delegated production run completes', async () => {
     await service.startAutonomousVideo({ prompt: 'p' });
     await vi.waitFor(() => expect(runOf()?.output.productionRunId).toBe('mvpr-1'));

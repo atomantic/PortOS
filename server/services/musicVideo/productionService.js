@@ -718,6 +718,12 @@ export async function resumeProduction(projectId, runId, { limits, acceptBasis =
   return response(fresh, findProductionRun(fresh, runId));
 }
 
+// 404/409 = the review is gone or already closed; anything else leaves it running, so say so.
+function logReviewStopFailure(verb, projectId, reviewId, err) {
+  if (err?.status === 404 || err?.status === 409) return;
+  console.error(`❌ Music video production could not ${verb} auto-review ${reviewId} (project ${projectId}): ${err?.message || err}`);
+}
+
 /** Stop: nothing new is dispatched and queued owned jobs are cancelled; running ones land. */
 export async function stopProduction(projectId, runId) {
   const out = await mutateProjectRecord(projectId, (current) => stopProductionOnProject(current, runId));
@@ -725,7 +731,7 @@ export async function stopProduction(projectId, runId) {
   const owned = new Set([out.run.reviewRunId, ...(out.run.pilot?.scenes || []).map((p) => p.reviewRunId)]);
   for (const review of (out.project.autoReviews || []).filter((r) => owned.has(r.id) && r.status === 'running')) {
     const { stopAutoReview } = await deps.autoReview();
-    await stopAutoReview(projectId, review.id).catch(() => {});
+    await stopAutoReview(projectId, review.id).catch((err) => logReviewStopFailure('stop', projectId, review.id, err));
   }
   const fresh = await requireProject(projectId);
   const run = findProductionRun(fresh, runId);
@@ -741,7 +747,7 @@ export async function cancelProduction(projectId, runId) {
   const owned = new Set([out.run.reviewRunId, ...(out.run.pilot?.scenes || []).map((p) => p.reviewRunId)]);
   for (const review of (out.project.autoReviews || []).filter((r) => owned.has(r.id) && ['running', 'stopped', 'limit-reached'].includes(r.status))) {
     const { cancelAutoReview } = await deps.autoReview();
-    await cancelAutoReview(projectId, review.id).catch(() => {});
+    await cancelAutoReview(projectId, review.id).catch((err) => logReviewStopFailure('cancel', projectId, review.id, err));
   }
   const fresh = await requireProject(projectId);
   const run = findProductionRun(fresh, runId);
