@@ -672,3 +672,24 @@ describe('finalizing a shot\'s takes', () => {
     expect(screen.queryByRole('button', { name: /Reject unused/ })).toBeNull();
   });
 });
+
+describe('reverse a shot\'s clip', () => {
+  // Uniquely catches Reverse saving the wrong shape, staying on a lip-sync shot, or leaving Loop clip on.
+  it('saves Reverse as a shot setting, turns off looping, and is not offered on a lip-sync shot', () => {
+    const onSave = vi.fn();
+    function Harness({ initial }) {
+      const [scene, setScene] = useState(initial);
+      return <SceneCard scene={scene} index={0} expanded onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
+    }
+    const { unmount } = render(<Harness initial={{ sceneId: 's1', videoHistoryId: 'clip-1', startSec: 0, endSec: 4, takes: [] }} />);
+    fireEvent.click(screen.getByLabelText(/^Reverse/));
+    expect(onSave).toHaveBeenLastCalledWith('s1', { reverse: true });
+    expect(screen.getByText('Reversed in the player')).toBeTruthy();
+    expect(screen.getByLabelText('Loop clip').disabled).toBe(true);
+    fireEvent.click(screen.getByLabelText(/^Reverse/));
+    expect(onSave).toHaveBeenLastCalledWith('s1', { reverse: null });
+    unmount();
+    render(<Harness initial={{ sceneId: 's2', videoHistoryId: 'clip-1', shotMode: 'performance', startSec: 0, endSec: 4, takes: [] }} />);
+    expect(screen.queryByLabelText(/^Reverse/)).toBeNull();
+  });
+});

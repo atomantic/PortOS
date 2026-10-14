@@ -610,6 +610,8 @@ const sceneLayerFields = {
   // A footage clip played faster or slower by whole frames a second, and slid against the song by whole frames; null clears it.
   speedFps: z.number().int().min(CLIP_SPEED_FPS_RANGE.min).max(CLIP_SPEED_FPS_RANGE.max).nullable().optional(),
   offsetFrames: z.number().int().min(CLIP_OFFSET_FRAMES_RANGE.min).max(CLIP_OFFSET_FRAMES_RANGE.max).nullable().optional(),
+  // The clip plays backwards (a footage shot; never a lip-sync performance).
+  reverse: z.boolean().nullable().optional(),
   // A VHS glitch over the cut into / out of this shot (musicVideoTransitions.js); null clears it.
   transitionIn: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),
   transitionOut: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),

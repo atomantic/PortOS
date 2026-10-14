@@ -9,7 +9,7 @@
 import { shotActionContractProblem } from '../../../server/lib/musicVideoActionContract.js';
 import { currentPlateEvidence } from '../../../server/lib/musicVideoPlateEvidence.js';
 import { isEndFrameImageEffect } from './musicVideoImageEffects.js';
-import { isSelfDrawnLayer, sceneVisualLayer, sceneHasAuthoredSpan } from './musicVideoLayers.js';
+import { clipReversed, isSelfDrawnLayer, sceneVisualLayer, sceneHasAuthoredSpan } from './musicVideoLayers.js';
 import { performanceBlockedReason, performanceCapability, planPerformanceWindow, isPerformanceScene } from './musicVideoShotTiming.js';
 import { sceneHasPendingDecision, sceneTakeList } from './musicVideoTakes.js';
 
@@ -82,7 +82,7 @@ export function sceneAttention(scene, ctx = {}) {
   if (!isSelfDrawnLayer(layer) && !scene.referenceImageId && !codeRendered) codes.push('missing-frame');
   if (layer === 'footage' && !footageOptional && !scene.videoHistoryId) codes.push('missing-clip');
   if (layer !== 'footage' && !sceneHasAuthoredSpan(scene)) codes.push('no-span');
-  if (layer === 'footage' && scene.loop === false && scene.beatAligned && clipSec != null
+  if (layer === 'footage' && (scene.loop === false || clipReversed(scene)) && scene.beatAligned && clipSec != null
     && typeof scene.startSec === 'number' && typeof scene.endSec === 'number'
     && scene.endSec - scene.startSec - clipSec > COVERAGE_TOLERANCE_SEC) codes.push('under-covered');
   const contract = scene.direction?.actionContract;

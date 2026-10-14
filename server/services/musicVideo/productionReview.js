@@ -196,7 +196,7 @@ const clipLocked = (project, sceneId) => project.productionReview?.clipApprovals
 
 /** What a locked clip freezes: the inputs it was rendered from, and the selected clip itself. */
 const CLIP_LOCKED_FIELDS = ['prompt', 'framePrompt', 'visualIntent', 'camera', 'direction', 'startSec', 'endSec', 'lyricText',
-  'referenceImageId', 'endImageId', 'shotMode', 'performanceSpeaker', 'performanceStyle', 'visualLayer', 'loop', 'videoHistoryId', 'codeClip', 'speedFps', 'offsetFrames'];
+  'referenceImageId', 'endImageId', 'shotMode', 'performanceSpeaker', 'performanceStyle', 'visualLayer', 'loop', 'videoHistoryId', 'codeClip', 'speedFps', 'offsetFrames', 'reverse'];
 
 /**
  * Refuse a change to a shot whose video is locked: `patch` is a scene patch

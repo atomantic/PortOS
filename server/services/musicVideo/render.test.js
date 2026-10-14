@@ -331,6 +331,20 @@ describe('resolveSceneClips', () => {
     expect(fc([{ ...faster, rate: undefined }])).not.toContain('PTS-STARTPTS)/');
   });
 
+  // Uniquely catches a reversed shot looping its input forever (reverse would never end) or playing forwards.
+  it('plays a reversed clip backwards from the same file, read once, before its speed', async () => {
+    loadHistory.mockResolvedValue([{ id: 'h1', filename: 'a.mp4', width: 768, height: 512, fps: 24, numFrames: 96 }]);
+    const [reversed, sung] = await resolveSceneClips({ scenes: [
+      { sceneId: 's1', order: 0, videoHistoryId: 'h1', reverse: true, speedFps: 24 },
+      { sceneId: 's2', order: 1, videoHistoryId: 'h1', reverse: true, shotMode: 'performance' },
+    ] });
+    expect(reversed).toMatchObject({ reverse: true, loop: false, rate: 2 });
+    expect(sung.reverse).toBeUndefined();
+    const { args } = buildMusicVideoFfmpegArgs([reversed], '/music/track.wav', '/out.mp4', { audioDurationSec: 30 });
+    expect(args).not.toContain('-stream_loop');
+    expect(args[args.indexOf('-filter_complex') + 1]).toContain('reverse,setpts=PTS-STARTPTS,setpts=(PTS-STARTPTS)/2,fps=24');
+  });
+
   it('cuts a code shot as a black ground in a composed render (#10297)', async () => {
     loadHistory.mockResolvedValue([]);
     const clips = await resolveSceneClips({ scenes: [{ sceneId: 's1', order: 0, visualLayer: 'code', startSec: 2, endSec: 5 }] }, { layered: true });

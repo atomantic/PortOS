@@ -242,6 +242,17 @@ describe('StoryboardAnimatic clips', () => {
     expect(clipTimeAt(early, 10.2, 6)).toBe(0);
     expect(clipTimeAt(early, 11.25, 6)).toBeCloseTo(1);
   });
+
+  // Uniquely catches a reversed shot previewing forwards, or looping where the render holds.
+  it('plays a reversed clip from its end, with its speed and offset, and holds once it runs out', () => {
+    const back = { startSec: 10, reverse: true };
+    expect(clipTimeAt(back, 10, 6)).toBeCloseTo(5.95);
+    expect(clipTimeAt(back, 12, 6)).toBeCloseTo(4);
+    expect(clipTimeAt(back, 20, 6)).toBe(0);
+    expect(clipTimeAt({ ...back, speedFps: 24, offsetFrames: 12 }, 11, 6)).toBeCloseTo(3.5);
+    // A lip-sync performance never reverses.
+    expect(clipTimeAt({ ...back, shotMode: 'performance' }, 12, 6)).toBe(2);
+  });
 });
 
 describe('StoryboardAnimatic film look', () => {

@@ -97,3 +97,5 @@ const whole = (value, { min, max }) => (Number.isInteger(value) ? Math.min(max, 
 export const clipSpeedRate = (scene) => (CLIP_TIMING_FPS + whole(scene?.speedFps, CLIP_SPEED_FPS_RANGE)) / CLIP_TIMING_FPS;
 /** How far a shot's clip slides against the song, in seconds: positive skips in, negative holds the first frame. */
 export const clipOffsetSec = (scene) => whole(scene?.offsetFrames, CLIP_OFFSET_FRAMES_RANGE) / CLIP_TIMING_FPS;
+// A footage shot's clip set to play backwards. A lip-sync performance never reverses: its mouth follows the song.
+export const clipReversed = (scene) => scene?.reverse === true && scene?.shotMode !== 'performance';

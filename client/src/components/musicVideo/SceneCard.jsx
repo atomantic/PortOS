@@ -17,7 +17,7 @@ import { isPerformanceScene, planPerformanceRepair } from '../../lib/musicVideoS
 import SceneTakeStrip from './SceneTakeStrip.jsx';
 import { sceneEndFramePlanFor } from './SceneEndFrame.jsx';
 import SceneFrames from './SceneFrames.jsx';
-import { MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_TEXT_ZONES, MUSIC_VIDEO_VISUAL_LAYERS, clipOffsetSec, clipSpeedRate, sceneHasAuthoredSpan } from '../../lib/musicVideoLayers.js';
+import { MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_TEXT_ZONES, MUSIC_VIDEO_VISUAL_LAYERS, clipOffsetSec, clipReversed, clipSpeedRate, sceneHasAuthoredSpan } from '../../lib/musicVideoLayers.js';
 
 // #8985: what a composed render shows for this scene's span.
 const LAYER_LABELS = { footage: 'Footage', still: 'Still image', card: 'Title card', code: 'Code-drawn' };
@@ -150,7 +150,8 @@ export default function SceneCard({
   const clipSec = clipMeta && clipMeta.id === scene.videoHistoryId ? clipMeta.sec : null;
   const clipSize = clipMeta && clipMeta.id === scene.videoHistoryId && clipMeta.width > 0 ? { width: clipMeta.width, height: clipMeta.height } : null;
   // Pre-#8964 scenes have no `loop` key and keep the legacy loop-to-fill render.
-  const loops = scene.loop !== false;
+  // A reversed clip is read once, backwards, so it holds rather than loops.
+  const loops = scene.loop !== false && !clipReversed(scene);
   const spanSec = scene.beatAligned && typeof scene.startSec === 'number' && typeof scene.endSec === 'number'
     ? scene.endSec - scene.startSec
     : null;
@@ -288,7 +289,7 @@ export default function SceneCard({
             Beat-aligned
           </label>
           <label className="flex items-center gap-1 min-h-[44px] sm:min-h-0" title="Repeat the generated clip to fill a span longer than the clip. Off: the shot must be covered by its clip (trim, continue, or replace it).">
-            <input type="checkbox" checked={loops} disabled={performance} onChange={(e) => applyPatch({ loop: e.target.checked })} />
+            <input type="checkbox" checked={loops} disabled={performance || clipReversed(scene)} onChange={(e) => applyPatch({ loop: e.target.checked })} />
             Loop clip
           </label>
         </div>
@@ -463,8 +464,10 @@ export default function SceneCard({
             </span>
             <button type="button" onClick={() => applyPatch({ endSec: Math.round((scene.startSec + playedSec) * 1000) / 1000 })}
               className="rounded bg-port-bg border border-port-border px-2 py-1 min-h-[44px] sm:min-h-0 text-port-text">Trim to clip</button>
-            <button type="button" onClick={() => applyPatch({ loop: true })}
-              className="rounded bg-port-bg border border-port-border px-2 py-1 min-h-[44px] sm:min-h-0 text-port-text">Loop clip</button>
+            {!clipReversed(scene) && (
+              <button type="button" onClick={() => applyPatch({ loop: true })}
+                className="rounded bg-port-bg border border-port-border px-2 py-1 min-h-[44px] sm:min-h-0 text-port-text">Loop clip</button>
+            )}
           </div>
         )}
         {layer !== 'footage' && layered && !sceneHasAuthoredSpan(scene) && (
@@ -525,6 +528,10 @@ export default function SceneCard({
                   if (Number.isFinite(sec) && sec > 0) setClipMeta({ id: scene.videoHistoryId, sec, width, height });
                 }}
               />
+              {/* This thumbnail plays the file as is; the player and the render play it backwards. */}
+              {clipReversed(scene) && (
+                <span className="port-media-overlay pointer-events-none absolute left-1 top-1 rounded px-1.5 py-0.5 text-[10px]">Reversed in the player</span>
+              )}
               {/* Corner expand — do not put the open handler on <video> itself;
                   that would fight native play/pause controls. Pause first so the
                   lightbox's unmuted autoplay doesn't double-play the audio. */}

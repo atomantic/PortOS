@@ -20,4 +20,5 @@ export {
   CLIP_OFFSET_FRAMES_RANGE,
   clipSpeedRate,
   clipOffsetSec,
+  clipReversed,
 } from '../../../server/lib/musicVideoLayers.js';

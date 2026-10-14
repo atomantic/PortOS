@@ -16,7 +16,7 @@ import FrameStepper, { captureMediaFrame } from './FrameStepper.jsx';
 import { sceneFrameFit } from './SceneFrameFit.jsx';
 import TransitionGlitch from './TransitionGlitch.jsx';
 import ImageEffectStill from './ImageEffectStill.jsx';
-import { clipOffsetSec, clipSpeedRate, isLayeredComposition } from '../../lib/musicVideoLayers.js';
+import { clipOffsetSec, clipReversed, clipSpeedRate, isLayeredComposition } from '../../lib/musicVideoLayers.js';
 import { sceneImageEffect } from '../../lib/musicVideoImageEffects.js';
 import { sceneBeatToggles } from '../../lib/musicVideoCutEffects.js';
 
@@ -173,6 +173,12 @@ export function clipTimeAt(scene, t, clipSec = null) {
   const local = Math.max(0, t - (scene.startSec || 0));
   const rate = clipSpeedRate(scene);
   const start = inSec + clipOffsetSec(scene);
+  if (clipReversed(scene)) {
+    // Backwards from the file's end, as the render reads it once: past its start it holds the first frame shown last.
+    if (!(clipSec > 0)) return 0;
+    const at = Math.max(0, start) + Math.max(0, local + Math.min(0, start)) * rate;
+    return Math.min(clipSec - 0.05, Math.max(0, clipSec - at));
+  }
   if (rate !== 1 || start !== inSec) {
     const sourceIn = Math.max(0, start);
     const at = sourceIn + Math.max(0, local + Math.min(0, start)) * rate;
@@ -213,12 +219,14 @@ function ShotClip({ scene, audioRef, time, current, leadSec = 0 }) {
     if (!video || !audio || video.readyState < 1) return;
     const duration = Number.isFinite(video.duration) ? video.duration : null;
     const target = clipTimeAt(timing, current ? audio.currentTime || 0 : scene.startSec || 0, duration);
-    const tolerance = current && audio.paused ? CLIP_PAUSED_DRIFT_SEC : CLIP_DRIFT_SEC;
-    if (Math.abs((video.currentTime || 0) - target) > tolerance) video.currentTime = target;
+    // A browser cannot play a clip backwards, so a reversed clip stays paused and is stepped to each frame.
+    const reversed = clipReversed(scene);
+    const tolerance = current && (audio.paused || reversed) ? CLIP_PAUSED_DRIFT_SEC : CLIP_DRIFT_SEC;
+    if (Math.abs((video.currentTime || 0) - target) > tolerance && !(reversed && video.seeking)) video.currentTime = target;
     // The shot's hand-set speed; a negative offset's lead holds the first frame.
     video.playbackRate = clipSpeedRate(scene);
-    const leading = (scene.startSec || 0) - clipOffsetSec(scene) - (selectedPerformanceInstruction(scene)?.edit?.inSec ?? 0) > (audio.currentTime || 0);
-    if (!current || audio.paused || leading) video.pause?.();
+    const leading = (timing.startSec || 0) - clipOffsetSec(scene) - (selectedPerformanceInstruction(scene)?.edit?.inSec ?? 0) > (audio.currentTime || 0);
+    if (!current || audio.paused || leading || reversed) video.pause?.();
     else if (video.paused) video.play?.()?.catch?.(() => {});
   }, [scene, timing, audioRef, current]);
   // Shown once a frame is decoded where the clip should be; kept from then on, since a
@@ -228,6 +236,15 @@ function ShotClip({ scene, audioRef, time, current, leadSec = 0 }) {
     if (video && video.readyState >= 2 && !video.seeking) setReady(true);
   }, []);
   useEffect(() => { sync(); }, [time, sync]);
+  // The song's time updates are too coarse to step a reversed clip, so it follows every animation frame.
+  const reversed = clipReversed(scene);
+  useEffect(() => {
+    if (!current || !reversed) return undefined;
+    let handle = 0;
+    const tick = () => { sync(); handle = requestAnimationFrame(tick); };
+    handle = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(handle);
+  }, [current, reversed, sync]);
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return undefined;
