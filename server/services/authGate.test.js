@@ -787,6 +787,7 @@ describe('mounted host-control trailing slashes (#8950)', () => {
   const runBody = { providerId: 'example-cli', prompt: 'Example prompt' };
   const protectedBodies = [
     { harnesses: {} },
+    { autofixer: { verifyCommand: 'npm test', autoPromote: true } },
     { imageGen: { codex: { codexPath: '/example/codex' } } },
     // A PATCH-shaped extra field must not change how a legacy PUT is gated.
     { slicePath: 'pipeline', partial: {}, imageGen: { local: { pythonPath: '/example/python3' } } },
@@ -862,13 +863,19 @@ describe('mounted host-control trailing slashes (#8950)', () => {
     expect(local.persist).toHaveBeenCalledTimes(2);
   });
 
-  it.each(['local', 'session', 'basic'])('preserves %s authority through mounted root handlers', async (authority) => {
+  it.each(['local', 'session', 'agent', 'basic'])('preserves %s authority through mounted root handlers', async (authority) => {
     let header = ['X-Example', 'local'];
     if (authority !== 'local') {
       const { token } = await (await import('./auth.js')).setPassword({ newPassword: 'example-password' });
-      header = authority === 'session'
-        ? ['Cookie', `portos_auth=${token}`]
-        : ['Authorization', `Basic ${Buffer.from(':example-password').toString('base64')}`];
+      if (authority === 'agent') {
+        const { resolveAgentApiEnv } = await import('./agentApiAuth.js');
+        const { PORTOS_API_TOKEN } = await resolveAgentApiEnv();
+        header = ['Authorization', `Bearer ${PORTOS_API_TOKEN}`];
+      } else {
+        header = authority === 'session'
+          ? ['Cookie', `portos_auth=${token}`]
+          : ['Authorization', `Basic ${Buffer.from(':example-password').toString('base64')}`];
+      }
     }
     const { app, runner, persist } = await buildApp(authority === 'session' ? '192.0.2.10' : '127.0.0.1');
     const allowed = authority !== 'basic';
@@ -883,7 +890,7 @@ describe('mounted host-control trailing slashes (#8950)', () => {
       if (!allowed) expect(run.body.code).toBe('HOST_CONTROL_FORBIDDEN');
     }
     expect(runner.executeCliRun).toHaveBeenCalledTimes(allowed ? 3 : 0);
-    expect(persist).toHaveBeenCalledTimes(allowed ? 9 : 0);
+    expect(persist).toHaveBeenCalledTimes(allowed ? protectedBodies.length * 3 : 0);
   });
 });
 

@@ -899,7 +899,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
 
 /**
  * `PUT /api/settings` slices that set what runs or the guardrails around it:
- * harness enablement and wrapper CLIs, the Code Animation worker tools, the
+ * Autofixer repair policy, harness enablement and wrapper CLIs, the Code Animation worker tools, the
  * code-review chain, the untrusted content screen in front of agent work,
  * scheduled self-update, scheduled series autopilots, and backup destination/
  * recovery policy, and whole-root voice policy replacement. The store is
@@ -907,6 +907,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
  */
 export const HOST_CONTROL_SETTINGS_SLICES = Object.freeze([
   'autoUpdate',
+  // Deferred repair policy: verifyCommand runs a shell and autoPromote can
+  // apply the repair to the live checkout. Provider pins also select its agent.
+  'autofixer',
   // Destination, schedule, exclusions and retention control private copies
   // and recovery durability, including writes consumed later by the scheduler.
   'backup',
