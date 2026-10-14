@@ -277,6 +277,8 @@ else backfilled++;`));
       'if (recorded) { while (pending) backfilled++; }',
       'const next = () => { backfilled++; };',
       'if (recorded) {} else { recorded = true; if (recorded) backfilled++; }',
+      'if (!recorded) { throw new Error("stop"); backfilled++; }',
+      'if (!recorded) { reportFailure(); backfilled++; }',
     ]) expect(productionAuditEvidence(diff(`${binding}\n${statement}`))[0].handledRejectionScenarios).toEqual([]);
     expect(productionAuditEvidence(diff(`let recorded = await recordTaskCompletion().catch(() => false);
 if (recorded) {} else { recorded = true; if (recorded) backfilled++; }`))[0].handledRejectionScenarios).toEqual([]);

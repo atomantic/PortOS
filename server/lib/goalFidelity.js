@@ -473,6 +473,17 @@ export function backfillAccountingFindings(objective, diff) {
  * Facts describe syntax, never whether an objective was delivered.
  */
 export function productionAuditEvidence(diff) {
+  // Deliberately evaluate only direct identifier increments with simple guards.
+  // Calls, assignments, exits and other statements need their original source,
+  // not a partial interpreter claiming reachability.
+  const supportsWriteScenario = node => node?.type === 'ExpressionStatement'
+    ? node.expression.type === 'UpdateExpression' && node.expression.argument.type === 'Identifier'
+    : node?.type === 'BlockStatement' ? node.body.every(supportsWriteScenario)
+      : node?.type === 'IfStatement'
+        && (node.test.type === 'Identifier' || (node.test.type === 'UnaryExpression'
+          && node.test.operator === '!' && node.test.argument.type === 'Identifier'))
+        && supportsWriteScenario(node.consequent)
+        && (!node.alternate || supportsWriteScenario(node.alternate));
   return productionAfterChangeHunks(diff).map(({ file, hunk, source }) => {
     const statements = [];
     const starts = [...blankLiterals(source).matchAll(/^[ \t]*(?:(?:const|let|var|if|for|while|try|switch)\b|[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*\s*(?:\(|\+\+|--|[+*/-]?=))/gm)];
@@ -557,7 +568,7 @@ export function productionAuditEvidence(diff) {
         statements.push({
           hunkLine: source.slice(0, start.index).split('\n').length,
           range: [start.index, start.index + text.length],
-          statementType: ast.program.body[0].type,
+          supportsWriteScenario: Boolean(supportsWriteScenario(ast.program.body[0])),
           syntax: 'complete statement; enclosing context outside this statement unavailable',
           source: text, facts,
         });
@@ -572,7 +583,7 @@ export function productionAuditEvidence(diff) {
     const handledRejectionScenarios = statements.flatMap((statement, index) => {
       const binding = statement.facts.find(fact => fact.kind === 'binding' && typeof fact.handledRejectionValue === 'boolean');
       const next = statements[index + 1];
-      if (!binding || !next || !['IfStatement', 'ExpressionStatement'].includes(next.statementType)) return [];
+      if (!binding || !next?.supportsWriteScenario) return [];
       const between = source.slice(
         statement.range[1], next.range[0],
       );
