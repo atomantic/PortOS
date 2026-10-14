@@ -240,6 +240,24 @@ export function selectSceneTake(project, sceneId, takeId) {
  * Reject/restore a take and/or set its review note. Rejecting the SELECTED take
  * clears the slot so the scene reads as "needs a take" again.
  */
+/**
+ * Finalize a shot's takes: every take that is not the selected frame, end
+ * frame or clip becomes rejected. Files and notes stay, the selection does not
+ * change, and Use or Restore brings any of them back.
+ */
+export function rejectUnusedTakes(project, sceneId) {
+  const scenes = project.scenes || [];
+  const idx = scenes.findIndex((s) => s.sceneId === sceneId);
+  if (idx < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
+  const scene = scenes[idx];
+  const unused = (take) => take?.takeId && TAKE_SLOT[take.kind] && take.status !== 'rejected' && scene[TAKE_SLOT[take.kind]] !== take.assetId;
+  const takes = Array.isArray(scene.takes) ? scene.takes : [];
+  const rejected = takes.filter(unused).length;
+  if (!rejected) return { project, scene, rejected };
+  const next = { ...scene, takes: takes.map((take) => (unused(take) ? { ...take, status: 'rejected' } : take)) };
+  return { project: replaceScene(project, idx, next), scene: next, rejected };
+}
+
 export function reviewSceneTake(project, sceneId, takeId, { status, note }) {
   const { idx, scene, takes, take } = locateTake(project, sceneId, takeId);
   const updated = {

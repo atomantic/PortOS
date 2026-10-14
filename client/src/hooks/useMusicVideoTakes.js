@@ -6,6 +6,7 @@ import {
   placeMusicVideoPoolItem,
   continueMusicVideoSceneFromPrevious,
   reviewMusicVideoSceneTake,
+  rejectUnusedMusicVideoSceneTakes,
   getMusicVideoHandoff,
   getMusicVideoHandoffBundle,
   importMusicVideoHandoff,
@@ -112,6 +113,12 @@ export default function useMusicVideoTakes({ project, applyScenePatch }) {
     'Failed to update take',
   );
 
+  // Finalize a shot: every take other than its selected frame, end frame and clip is rejected (files kept).
+  const rejectUnusedTakes = (scene) => runTakeOp(
+    (projectId) => rejectUnusedMusicVideoSceneTakes(projectId, scene.sceneId, { silent: true }).then((res) => res.scene),
+    'Failed to reject the unused takes',
+  );
+
   // A frame picked from (or uploaded into) the gallery for one scene.
   const importTake = (scene, item) => runTakeOp(
     (projectId) => addMusicVideoSceneTake(projectId, scene.sceneId, {
@@ -185,5 +192,5 @@ export default function useMusicVideoTakes({ project, applyScenePatch }) {
     if (failures.length) toast.error(failures.slice(0, 3).join(' · '));
   };
 
-  return { busy, selectTake, placePoolItem, trimClipTake, reviewTake, continueFromPrevious, importTake, importClipTake, exportHandoff, exportHandoffBundle, importHandoffFiles };
+  return { busy, selectTake, placePoolItem, trimClipTake, reviewTake, rejectUnusedTakes, continueFromPrevious, importTake, importClipTake, exportHandoff, exportHandoffBundle, importHandoffFiles };
 }

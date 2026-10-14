@@ -197,6 +197,8 @@ export const continueMusicVideoSceneFromPrevious = (id, sceneId, body = {}, opti
   request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/continue-from-previous`, {
     method: 'POST', body: JSON.stringify(body), ...options,
   });
+export const rejectUnusedMusicVideoSceneTakes = (id, sceneId, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/takes/reject-unused`, { method: 'POST', ...options });
 export const reviewMusicVideoSceneTake = (id, sceneId, takeId, review, options = {}) =>
   request(`${takesPath(id, sceneId)}/${encodeURIComponent(takeId)}`, {
     method: 'PATCH', body: JSON.stringify(review), ...options,

@@ -445,6 +445,13 @@ export async function placeMediaPoolItem(id, sceneId, { kind, assetId, withAsset
   return scene;
 }
 
+/** Reject every take of a shot that is not its selected frame, end frame or clip. Returns `{ scene, rejected }`. */
+export async function rejectUnusedSceneTakes(id, sceneId) {
+  const { rejectUnusedTakes } = await import('./takes.js');
+  const { scene, rejected } = await mutateProjectRecord(id, (current) => rejectUnusedTakes(current, sceneId));
+  return { scene, rejected };
+}
+
 /** Reject/restore a take and/or set its note. Returns the updated scene. */
 export async function reviewSceneTake(id, sceneId, takeId, review) {
   const [{ reviewSceneTake: reviewTake }, { assertClipUnlocked }] = await Promise.all([import('./takes.js'), import('./productionReview.js')]);

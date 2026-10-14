@@ -3,6 +3,7 @@ import ShotActionInspector from './ShotActionInspector.jsx';
 import SceneCameraControls from './SceneCameraControls.jsx';
 import SceneStartFrame from './SceneStartFrame.jsx';
 import SceneClipTiming from './SceneClipTiming.jsx';
+import SceneRejectUnused from './SceneRejectUnused.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { useEffect, useRef, useState } from 'react';
 import { Trash2, Activity, ArrowUp, ArrowDown, ChevronRight, Video, Maximize2, AlertTriangle, Clapperboard, Shuffle } from 'lucide-react';
@@ -114,7 +115,7 @@ export default function SceneCard({
   settingsSaving, videoBlockedReason, videoBlockedReasonFor = null, canContinueShot,
   onMove, onDelete, onEditLocal, onSave,
   project = null, onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
-  onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, onPlacePoolItem, onTrimClip, projectId = null, aspect = '16:9', videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false,
+  onOpenPreview, onSelectTake, onReviewTake, onRejectUnusedTakes = null, onImportTake, onImportClipTake, onPlacePoolItem, onTrimClip, projectId = null, aspect = '16:9', videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false,
   lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, onMoveStart = null, nextEndSec = null, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
   expanded, onToggleExpand, footageOptional = false, failedScenes = null, songReview = null,
 }) {
@@ -477,6 +478,9 @@ export default function SceneCard({
             {!documentComposition && ' A composed render shows it as a black frame under the typography; render from a composition document to draw it.'}
           </p>
         ) : (
+        <>
+        {/* Finalize the shot: only the frames and clip in use stay candidates. */}
+        <SceneRejectUnused scene={scene} busy={takeBusy} onReject={onRejectUnusedTakes} />
         <div className="grid gap-3 @3xl:grid-cols-2">
         {/* Frames: the still this shot starts from and, optionally, the one it ends on (#11173),
             each with its prompt and Render under it, then the tapped frame's takes. */}
@@ -627,6 +631,7 @@ export default function SceneCard({
           {shotSettings}
         </section>
         </div>
+        </>
         )}
         {codeShot && shotSettings}
         {(scene.visualIntent || scene.direction || scene.direction?.actionContract) && (

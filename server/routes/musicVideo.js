@@ -120,6 +120,7 @@ import {
   placeMediaPoolItem,
   markMediaPoolAssets,
   reviewSceneTake,
+  rejectUnusedSceneTakes,
   refreshSongStyleFromSuno,
 } from '../services/musicVideo/projects.js';
 import { buildHandoffManifest, buildHandoffBundle, matchSceneByFileTag } from '../services/musicVideo/handoff.js';
@@ -1591,6 +1592,11 @@ router.post('/:id/scenes/:sceneId/takes/use', asyncHandler(async (req, res) => {
 
 router.post('/:id/scenes/:sceneId/takes/:takeId/select', asyncHandler(async (req, res) => {
   res.json(await selectSceneTake(req.params.id, req.params.sceneId, req.params.takeId));
+}));
+
+// No body: marks the shot's unselected takes rejected, keeping their files.
+router.post('/:id/scenes/:sceneId/takes/reject-unused', asyncHandler(async (req, res) => {
+  res.json(await rejectUnusedSceneTakes(req.params.id, req.params.sceneId));
 }));
 
 router.patch('/:id/scenes/:sceneId/takes/:takeId', asyncHandler(async (req, res) => {
