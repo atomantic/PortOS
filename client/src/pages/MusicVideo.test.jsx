@@ -2525,18 +2525,40 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     }), { silent: true }));
   });
 
-  // Uniquely catches Refine sending the shot prompt or the mood references instead of editing just this frame by the instruction.
-  it('refines the start frame by a short instruction, with that frame as the only reference', async () => {
+  // Uniquely catches Refine sending the shot prompt instead of the instruction, the frame not leading, or the shot's picked references not riding along.
+  it('refines the start frame by a short instruction, sending the references picked on the shot after that frame', async () => {
     await openProject({ ...SPEC_PROJECT, scenes: [{ ...SPEC_PROJECT.scenes[0], referenceImageId: 'start.png' }] }, 'produce');
+    // The automatic set shows as chips; swap the flagged Lead for the Pier set.
+    const refs = within(screen.getByRole('group', { name: 'References sent with the frames' }));
+    expect(refs.getByText('Auto: from the prompt')).toBeTruthy();
+    fireEvent.click(refs.getByRole('button', { name: "Don't send Lead" }));
+    expect(updateMusicVideoScene).toHaveBeenLastCalledWith('mv-spec', 's1', { frameReferenceIds: [] }, expect.anything());
+    fireEvent.click(refs.getByRole('button', { name: 'Add' }));
+    fireEvent.click(refs.getByRole('button', { name: /Pier/ }));
+    expect(updateMusicVideoScene).toHaveBeenLastCalledWith('mv-spec', 's1', { frameReferenceIds: ['r2'] }, expect.anything());
     fireEvent.click(screen.getByRole('button', { name: 'Refine' }));
     fireEvent.change(screen.getByLabelText('What to change in the start frame'), { target: { value: 'remove the hand' } });
     fireEvent.click(screen.getByRole('button', { name: 'Render refined start frame' }));
     await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
       prompt: 'remove the hand',
-      referenceImageFiles: ['start.png'],
+      referenceImageFiles: ['start.png', 'set.png'],
       musicVideo: { projectId: 'mv-spec', sceneId: 's1', compose: true, refine: true },
     }), { silent: true }));
     expect(screen.queryByLabelText('What to change in the start frame')).toBeNull();
+  });
+
+  // Uniquely catches a refine sending the frame plus 4 references, over the backends' 4-image cap.
+  it('refines a shot with four references by sending the frame plus the first three', async () => {
+    const references = ['a', 'b', 'c', 'd'].map((key) => ({ id: `r-${key}`, imageId: `${key}.png`, role: 'character', label: key, note: '', condition: true }));
+    await openProject({ ...SPEC_PROJECT, visualSpec: { ...SPEC_PROJECT.visualSpec, references },
+      scenes: [{ ...SPEC_PROJECT.scenes[0], referenceImageId: 'start.png' }] }, 'produce');
+    expect(screen.getByText('Refines and end frames send the frame plus the first 3.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Refine' }));
+    fireEvent.change(screen.getByLabelText('What to change in the start frame'), { target: { value: 'remove the hand' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Render refined start frame' }));
+    await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
+      referenceImageFiles: ['start.png', 'a.png', 'b.png', 'c.png'],
+    }), { silent: true }));
   });
 
   // Uniquely catches a trimmed clip landing only in Video Gen history, never as this shot's take, or not becoming the shot's clip.

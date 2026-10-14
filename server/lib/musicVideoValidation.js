@@ -602,6 +602,8 @@ export const musicVideoSceneCameraSchema = z.object({
 // Per-scene visual layer (#8985) — footage, a moved still, or a title card;
 // see musicVideoLayers.js. Only a composed render honors a non-footage layer.
 const sceneLayerFields = {
+  // The references (visual spec ids) sent with this shot's frame renders; absent or null = the automatic set.
+  frameReferenceIds: z.array(z.string().min(1).max(128)).max(MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES).nullable().optional(),
   camera: musicVideoSceneCameraSchema.nullable().optional(),
   visualLayer: z.enum(MUSIC_VIDEO_VISUAL_LAYERS).optional(),
   stillMove: z.enum(MUSIC_VIDEO_STILL_MOVES).optional(),

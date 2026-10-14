@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { Activity, ArrowLeftRight, ArrowRight, Image as ImageIcon, ImagePlus, PencilLine, Shuffle, SkipForward, Wand2, X } from 'lucide-react';
 import SceneTakeStrip from './SceneTakeStrip.jsx';
+import SceneFrameReferences from './SceneFrameReferences.jsx';
 
 const PRIMARY_BUTTON = 'flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap';
 const SECONDARY_BUTTON = 'flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap';
@@ -59,9 +60,10 @@ const REFERENCE_LABELS = { '': 'Prompt only', start: 'Start frame', end: 'End fr
  * video's unused stills on it. Each frame's own takes sit under it as a grid,
  * so both frames' actions and takes show at once; tapping a frame opens it full size.
  * With both frames set, `onSwapFrames` trades them (prompts included) in one tap.
+ * The References row above them picks the character and set references every frame render sends.
  */
 export default function SceneFrames({
-  scene, index, endFrames, generatingFrame = false, generatingEndFrame = false, onGenerateFrame, onGenerateEndFrame,
+  project = null, scene, index, endFrames, generatingFrame = false, generatingEndFrame = false, onGenerateFrame, onGenerateEndFrame,
   onEditLocal, onSave, onOpenPreview, takeBusy = false, onSelectTake, onReviewTake, onSwap = null, onImportTake = null,
   onContinueFromPrevious = null, previousHasClip = false, clipLocked = false, onSwapFrames = null, assetMarks = null, onMarkTake = null,
 }) {
@@ -184,6 +186,7 @@ export default function SceneFrames({
   return (
     <section aria-label="Still" className="@container min-w-0 space-y-2">
       <h4 className="text-xs font-medium">{endFrames ? 'Frames' : 'Still'}</h4>
+      <SceneFrameReferences project={project} scene={scene} onEditLocal={onEditLocal} onSave={onSave} />
       {endFrames ? (
         <div role="group" aria-label="Start and end frames" className="grid gap-3 @sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
           {column('start')}

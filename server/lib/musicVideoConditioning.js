@@ -37,8 +37,18 @@ function featuredAuthoredCharacters(references, scene) {
     && !isOutsideMusicVideoReference(ref) && namesIn(text, String(ref.label || '').split(/\s[—-]\s|[:(]/)[0]));
 }
 
+/** The references a director can send with a shot's frames: every one with an image except outside inspiration. */
+export const musicVideoReferenceChoices = (project) => (project?.visualSpec?.references || [])
+  .filter((ref) => ref?.id && ref.imageId && !isOutsideMusicVideoReference(ref));
+
 export function musicVideoConditioningReferences(project, scene) {
   const references = project?.visualSpec?.references || [];
+  // The director's own pick for this shot (the shot card's References row) wins over the automatic set.
+  if (Array.isArray(scene?.frameReferenceIds)) {
+    const choices = musicVideoReferenceChoices(project);
+    return scene.frameReferenceIds.map((id) => choices.find((ref) => ref.id === id)).filter(Boolean)
+      .slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
+  }
   const stage = project?.castAndSets;
   if (stage?.status === 'approved' && Number.isInteger(scene?.sectionIndex)) {
     const setId = stage.direction?.songMap?.find((entry) => entry.section === scene.sectionIndex)?.setId;

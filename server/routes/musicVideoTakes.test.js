@@ -435,3 +435,26 @@ describe('the shot asset manager', () => {
     expect((await getCollection(musicVideoCollectionId(project.id))).items.map((item) => item.ref).sort()).toEqual(['b-clip', 'b-used.png', 'keep.png', 'shared.png', 'used.png']);
   });
 });
+
+describe('a shot\'s frame references', () => {
+  // Uniquely catches the shot card's References pick failing to save, or a frame render ignoring it.
+  it('saves the director\'s pick on the shot, and frame renders send it instead of the automatic set', async () => {
+    const { musicVideoConditioningReferences } = await import('../lib/musicVideoConditioning.js');
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, visualSpec: { ...(current.visualSpec || {}), references: [
+      { id: 'lead', imageId: 'lead.png', role: 'character', label: 'Lead', condition: true },
+      { id: 'tattooist', imageId: 'tattooist.png', role: 'character', label: 'Tattoo artist', condition: false },
+      { id: 'mvr-board-1', imageId: 'board.png', role: 'style', label: 'Board pin', condition: false },
+    ] } } }));
+    const sceneOf = async () => (await reload()).scenes.find((scene) => scene.sceneId === sceneA.sceneId);
+    expect(musicVideoConditioningReferences(await reload(), await sceneOf()).map((ref) => ref.id)).toEqual(['lead']);
+
+    const saved = await request(app).patch(`${base()}/scenes/${sceneA.sceneId}`).send({ frameReferenceIds: ['tattooist', 'mvr-board-1'] });
+    expect(saved.status).toBe(200);
+    // Outside inspiration is never sent as an image, even when named.
+    expect(musicVideoConditioningReferences(await reload(), await sceneOf()).map((ref) => ref.id)).toEqual(['tattooist']);
+    expect((await request(app).patch(`${base()}/scenes/${sceneA.sceneId}`).send({ frameReferenceIds: ['a', 'b', 'c', 'd', 'e'] })).status).toBe(400);
+    // Back to auto.
+    await request(app).patch(`${base()}/scenes/${sceneA.sceneId}`).send({ frameReferenceIds: null });
+    expect(musicVideoConditioningReferences(await reload(), await sceneOf()).map((ref) => ref.id)).toEqual(['lead']);
+  });
+});

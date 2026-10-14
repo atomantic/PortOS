@@ -633,7 +633,7 @@ export function replaceScenes(project, sceneInputs) {
 // adding a shot or lyric the storyboard approval did not cover.
 const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'label', 'prompt', 'framePrompt', 'visualIntent',
   'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'reverse', 'transitionIn', 'transitionOut', 'glitches', 'cutEffect',
-  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec'];
+  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'frameReferenceIds'];
 
 /**
  * Apply a patch to a single scene. Returns `{ project, updated }`. Throws if the

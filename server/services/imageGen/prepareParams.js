@@ -239,6 +239,8 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
       const composed = musicVideoFrameModelInput(musicVideoProject, scene, {
         slot: data.musicVideo.slot === 'end' ? 'end' : 'start', authored: data.prompt || '',
         fromFrame: data.musicVideo.fromFrame === true, refine: data.musicVideo.refine === true,
+        // The picked frame comes first; any reference after it is the shot's character or set reference.
+        otherReferences: Math.max(0, namedReferenceFiles.length + referenceUploads.length - 1),
       });
       data.prompt = composed.prompt;
       if (composed.promptAdditions.length) data.promptAdditions = [...(data.promptAdditions || []), ...composed.promptAdditions];
