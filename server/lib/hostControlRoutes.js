@@ -552,6 +552,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Upscale (LTX subprocess / ffmpeg) and stitch (ffmpeg) run on the host (#11076).
   'POST /api/video-gen/upscale/:id',
   'POST /api/video-gen/stitch',
+  // Start trim probes/transcodes a new gallery clip with ffprobe/ffmpeg (#11418).
+  'POST /api/video-gen/history/:id/trim-start',
   'POST /api/sprites/:id/reference/generate',
   // Fork creates a record and immediately queues reference generation too.
   'POST /api/sprites/:id/fork',

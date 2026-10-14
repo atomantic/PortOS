@@ -5,6 +5,7 @@ import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
+import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 
 vi.mock('../lib/paths.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-media-authority-') }));
@@ -20,6 +21,7 @@ const effects = vi.hoisted(() => ({
   image: vi.fn(async () => ({ filename: 'example.png' })),
   avatar: vi.fn(async () => ({ path: '/data/images/example.png' })),
   video: vi.fn(async () => ({ jobId: 'example-job' })),
+  trim: vi.fn(async () => ({ id: 'example-trim', trimmedFrom: '22222222-2222-4222-8222-222222222222', trimStartSec: 1.25 })),
   reference: vi.fn(async () => ({})), fork: vi.fn(async () => ({})),
   walk: vi.fn(async () => ({})), track: vi.fn(async () => ({})),
   binding: vi.fn(async () => ({})), publish: vi.fn(async () => ({})),
@@ -27,9 +29,18 @@ const effects = vi.hoisted(() => ({
 }));
 vi.mock('../services/auth.js', () => ({
   isAuthEnabled: vi.fn(async () => auth.enabled),
-  verifyRequestSession: vi.fn(async req => req.headers.authorization === 'Bearer example-session'),
+  verifyRequestSession: vi.fn(async req => req.headers.authorization === 'Bearer example-session'
+    || req.headers.authorization === 'Bearer example-agent-session'
+    || req.headers.cookie === 'portos_auth=example-session'),
   verifyPassword: vi.fn(async () => true),
 }));
+vi.mock('../services/instanceIdentity.js', () => ({
+  loadData: vi.fn(async () => ({ peers: [{
+    id: 'example-peer', instanceId: 'example-instance', enabled: true,
+    syncSecret: 'example-pair-secret-for-tests-only-123456',
+  }] })),
+}));
+vi.mock('../services/videoGen/trimStart.js', () => ({ trimHistoryItemStart: effects.trim }));
 vi.mock('../services/settings.js', () => ({
   settingsEvents: new EventEmitter(), getSettings: vi.fn(async () => ({})),
 }));
@@ -59,7 +70,7 @@ vi.mock('../services/userActions.js', () => ({ recordUserAction: vi.fn() }));
 vi.mock('../services/character.js', () => ({ setAvatar: vi.fn() }));
 vi.mock('../services/videoGen/submitJob.js', () => ({ submitVideoGenJob: effects.video }));
 vi.mock('../services/videoGen/local.js', () => ({
-  BYOV_RUNTIME_INFO: {}, getHistoryItem: vi.fn(), checkConnection: vi.fn(async () => ({})),
+  BYOV_RUNTIME_INFO: {}, getHistoryItem: vi.fn(async id => ({ id, filename: 'example.mp4' })), checkConnection: vi.fn(async () => ({})),
 }));
 vi.mock('../services/videoGen/batch.js', () => ({ MAX_VIDEO_BATCH_SIZE: 8 }));
 vi.mock('../services/sprites/records.js', () => ({
@@ -228,5 +239,71 @@ describe('media generation and source publication authority (#9667)', () => {
     expect((await request(appFor()).get('/api/sprites')).status).toBe(200);
     expect((await call(appFor(), ['post', '/api/image-gen/cancel', {}])).status).toBe(200);
     expectNoEffects();
+  });
+});
+
+// Uniquely catches start-trim bypassing the shared gate before the ffmpeg
+// consumer, while preserving its intentional local/agent and read workflows.
+describe('video history trim authority (#11418)', () => {
+  const path = '/api/video-gen/history/22222222-2222-4222-8222-222222222222/trim-start';
+  const body = { startSec: 1.25 };
+  const peerHeaders = {
+    [PEER_INSTANCE_HEADER]: 'example-instance',
+    [PEER_AUTH_HEADER]: derivePeerAuthToken('example-pair-secret-for-tests-only-123456', 'example-instance'),
+  };
+
+  it('refuses remote and forwarded callers before validation or the trim consumer', async () => {
+    for (const [address, headers] of [
+      ['192.0.2.10', {}],
+      ['127.0.0.1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }],
+      ['192.0.2.10', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '127.0.0.1' }],
+      ['192.0.2.10', peerHeaders],
+    ]) {
+      for (const target of [path, path.toUpperCase() + '/']) {
+        const response = await call(appFor(address), ['post', target, body], headers);
+        expect([response.status, response.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+      }
+    }
+    const invalid = await call(appFor(), ['post', path, { startSec: -1 }]);
+    expect([invalid.status, invalid.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    expect(effects.trim).not.toHaveBeenCalled();
+  });
+
+  it('rejects anonymous, legacy Basic and scoped peer credentials with auth enabled', async () => {
+    auth.enabled = true;
+    for (const [headers, status, code] of [
+      [{}, 401, 'AUTH_REQUIRED'],
+      [{ Authorization: 'Basic ' + Buffer.from(':example-password').toString('base64') }, 403, 'HOST_CONTROL_FORBIDDEN'],
+      [peerHeaders, 403, 'PEER_SCOPE_FORBIDDEN'],
+    ]) {
+      const response = await call(appFor(), ['post', path, body], headers);
+      expect([response.status, response.body.code]).toEqual([status, code]);
+    }
+    expect(effects.trim).not.toHaveBeenCalled();
+  });
+
+  it('preserves local, operator and delegated-agent trims with validated arguments', async () => {
+    for (const [enabled, address, headers] of [
+      [false, '127.0.0.1', {}],
+      [true, '192.0.2.10', { Cookie: 'portos_auth=example-session' }],
+      [true, '127.0.0.1', { Authorization: 'Bearer example-agent-session' }],
+    ]) {
+      auth.enabled = enabled;
+      const response = await call(appFor(address), ['post', path, body], headers);
+      expect(response.status, JSON.stringify(response.body)).toBe(200);
+      expect(response.body).toEqual({ ok: true, video: { id: 'example-trim', trimmedFrom: '22222222-2222-4222-8222-222222222222', trimStartSec: 1.25 } });
+      expect(effects.trim).toHaveBeenLastCalledWith('22222222-2222-4222-8222-222222222222', body);
+    }
+    expect(effects.trim).toHaveBeenCalledTimes(3);
+    const invalid = await call(appFor('127.0.0.1'), ['post', path, { startSec: -1 }], { Authorization: 'Bearer example-agent-session' });
+    expect(invalid.status).toBe(400);
+    expect(effects.trim).toHaveBeenCalledTimes(3);
+  });
+
+  it('keeps history reads available to remote password-free callers', async () => {
+    const response = await request(appFor()).get('/api/video-gen/history/22222222-2222-4222-8222-222222222222');
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ id: '22222222-2222-4222-8222-222222222222', filename: 'example.mp4' });
+    expect(effects.trim).not.toHaveBeenCalled();
   });
 });
