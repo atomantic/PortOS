@@ -126,8 +126,8 @@ function buildMediaPool(project, collectionItems = [], history = new Map()) {
   const marks = project?.assetMarks || {};
   return items
     .filter((item) => !used.has(`${item.kind}:${item.assetId}`))
-    // A rejected take counts as bad until the director marks it otherwise.
-    .map((item) => ({ ...item, mark: marks[`${item.kind}:${item.assetId}`] || (item.takeStatus === 'rejected' ? 'bad' : null) }))
+    // Bad is only ever the director's own mark: a take rejected from one shot may be right for another.
+    .map((item) => ({ ...item, mark: marks[`${item.kind}:${item.assetId}`] || null }))
     .map((item) => (item.kind === 'image' ? { ...item, clipIds: clipsByStill.get(item.assetId) || [] } : item))
     .sort((a, b) => String(b.addedAt || '').localeCompare(String(a.addedAt || '')));
 }

@@ -63,7 +63,7 @@ const REFERENCE_LABELS = { '': 'Prompt only', start: 'Start frame', end: 'End fr
 export default function SceneFrames({
   scene, index, endFrames, generatingFrame = false, generatingEndFrame = false, onGenerateFrame, onGenerateEndFrame,
   onEditLocal, onSave, onOpenPreview, takeBusy = false, onSelectTake, onReviewTake, onSwap = null, onImportTake = null,
-  onContinueFromPrevious = null, previousHasClip = false, clipLocked = false, onSwapFrames = null,
+  onContinueFromPrevious = null, previousHasClip = false, clipLocked = false, onSwapFrames = null, assetMarks = null, onMarkTake = null,
 }) {
   const [keepStillAsEnd, setKeepStillAsEnd] = useState(false);
   // Which frame each render starts from: the start frame renders from its prompt, the end frame from the start frame.
@@ -176,7 +176,7 @@ export default function SceneFrames({
         <SceneTakeStrip scene={scene} kind={start ? 'image' : 'endImage'} busy={takeBusy} grid
           onSelect={(take) => onSelectTake?.(scene, take)}
           onReview={(take, review) => onReviewTake?.(scene, take, review)}
-          onOpenPreview={onOpenPreview} />
+          onOpenPreview={onOpenPreview} marks={assetMarks} onMark={onMarkTake} />
       </div>
     );
   };
