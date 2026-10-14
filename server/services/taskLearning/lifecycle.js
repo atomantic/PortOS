@@ -92,6 +92,7 @@ export async function backfillFromHistory() {
   const agents = await getAgents();
 
   let backfilled = 0;
+  let failed = 0;
   for (const agent of agents) {
     // Same rule as the live listener above, and the reason it is repeated rather
     // than assumed: the backfill re-reads the ARCHIVE, where every relaunch the
@@ -105,11 +106,19 @@ export async function backfillFromHistory() {
         metadata: agent.metadata
       };
 
-      await recordTaskCompletion(withoutStaleCoordinatorVerdict(agent, task), task).catch(() => {});
-      backfilled++;
+      // Count only records that actually landed, and name the failing agent/task
+      // so a partial backfill is diagnosable instead of reporting a full count.
+      const recorded = await recordTaskCompletion(withoutStaleCoordinatorVerdict(agent, task), task)
+        .then(() => true)
+        .catch(err => {
+          failed++;
+          console.error(`❌ 📚 TaskLearning: Backfill failed to record agent ${agent.id} (task ${agent.taskId}): ${err.message}`);
+          return false;
+        });
+      if (recorded) backfilled++;
     }
   }
 
-  emitLog('info', `Backfilled ${backfilled} completed tasks into learning system`, { backfilled }, '📚 TaskLearning');
+  emitLog(failed ? 'warn' : 'info', `Backfilled ${backfilled} completed tasks into learning system${failed ? ` (${failed} failed)` : ''}`, { backfilled, failed }, '📚 TaskLearning');
   return backfilled;
 }
