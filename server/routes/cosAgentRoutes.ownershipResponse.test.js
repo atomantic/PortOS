@@ -10,10 +10,17 @@ vi.mock('../services/cos.js', () => ({}));
 vi.mock('../services/agentOrchestrator.js', () => ({}));
 vi.mock('../services/apps.js', () => ({ getAppById: async () => ({ repoPath: '/synthetic/repo' }) }));
 vi.mock('../services/cosState.js', () => ({
+  readAgentsStateForSafetyCheck: async () => ({ trusted: !fixture.unreadable, agents: fixture.unreadable ? null : fixture.state.agents }),
   withStateLock: (work) => work(),
   loadState: async () => structuredClone(fixture.state),
   saveState: async (state) => { fixture.state = structuredClone(state); },
 }));
+vi.mock('../services/branchCompletionPolicy.js', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, readBranchCompletionHold: input => actual.readBranchCompletionHold(input, {
+    readPolicies: async () => Object.values(fixture.state.agents),
+  }) };
+});
 vi.mock('../services/cosEvents.js', () => ({ cosEvents: { emit: vi.fn() } }));
 vi.mock('../services/cosAgentLifecycle.js', () => ({
   getAgents: async () => fixture.unreadable ? null : Object.values(fixture.state.agents),
@@ -98,11 +105,17 @@ describe('generated ownership recheck raw HTTP response (#11348)', () => {
       .toEqual({ bound: false, reason: 'owner-active' });
   });
 
-  it.each(['claim-owner-active', 'ownership-unreadable', 'owner-unknown'])('preserves the %s refusal as complete JSON without reserving', async (reason) => {
+  it.each(['claim-owner-active', 'ownership-unreadable', 'owner-unknown', 'pr-completion-human-handoff', 'pr-completion-review-required'])('preserves the %s refusal as complete JSON without reserving', async (reason) => {
     if (reason === 'claim-owner-active') {
       fixture.state.agents.owner = { id: 'owner', status: 'running', metadata: { claimBranches: [branch] } };
     }
     if (reason === 'ownership-unreadable') fixture.unreadable = true;
+    if (reason.startsWith('pr-completion-')) {
+      fixture.state.agents.handoff = { id: 'handoff', status: 'completed', metadata: {
+        sourceWorkspace: '/synthetic/repo', worktreeBranch: branch,
+        prCompletionPolicy: reason === 'pr-completion-human-handoff' ? 'leave-open' : 'review-then-merge',
+      } };
+    }
     const before = structuredClone(fixture.state);
     const capture = await captureRecheck({ agentId: reason === 'owner-unknown' ? 'unknown' : coordinator });
     expect(capture.status).toBe(200);

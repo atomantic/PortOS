@@ -1,3 +1,4 @@
+vi.mock('./branchCompletionPolicy.js', () => ({ recordBranchCompletionPolicy: vi.fn() }));
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { cosEvents } from './cosEvents.js';
 vi.mock('./publicationValidation.js', () => ({ validatePublication: vi.fn() }));

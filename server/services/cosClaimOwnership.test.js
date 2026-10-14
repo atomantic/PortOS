@@ -59,6 +59,7 @@ describe('checkReconcileOwnership', () => {
       listWorktrees: async () => [holder],
       getAgents: async () => agents,
       getActiveAgentIds: () => [],
+      readCompletionHold: async () => null,
       ...overrides,
     },
   );
@@ -93,6 +94,7 @@ describe('checkReconcileOwnership reservation', () => {
       listWorktrees: async () => [holder],
       getAgents: async () => Object.values(store.state.agents),
       getActiveAgentIds: () => [],
+      readCompletionHold: async () => null,
     },
   );
   const bind = () => updateClaimOwnership({ agentId: 'agent-picker', action: 'bind', branch: 'claim/issue-101' });
@@ -153,7 +155,7 @@ describe('checkReconcileOwnership reservation', () => {
     const feature = { path: '/repos/app-x/other', branch: 'refs/heads/feature/x' };
     expect(await checkReconcileOwnership(
       { appId: 'app-x', branch: 'feature/x', worktreePath: feature.path, agentId: 'agent-recon' },
-      { getAppById: async (id) => ({ id, repoPath: SOURCE }), listWorktrees: async () => [feature], getAgents: async () => [], getActiveAgentIds: () => [] },
+      { getAppById: async (id) => ({ id, repoPath: SOURCE }), listWorktrees: async () => [feature], getAgents: async () => [], getActiveAgentIds: () => [], readCompletionHold: async () => null },
     )).toEqual({ admitted: true });
     expect(store.state).toEqual(before);
   });
