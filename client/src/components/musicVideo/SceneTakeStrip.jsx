@@ -81,11 +81,14 @@ export default function SceneTakeStrip({
                   </span>
                 )}
               </button>
-              <div className="text-[10px] text-port-text-muted truncate" title={take.originalName || take.prompt || takeProvenance(take)}>
-                {verdict && <span className={`mr-1 rounded px-1 ${VERDICT_TONE[verdict.tone]}`} title="Plate preflight verdict">{verdict.label}</span>}
-                {isSelected ? <span className="font-semibold text-port-accent">In use · </span> : null}
-                {rejected ? 'not for this shot · ' : ''}{takeProvenance(take)}
-              </div>
+              {/* Only what the director acts on: how a take was made stays in the hover title. */}
+              {(verdict || isSelected || rejected) && (
+                <div className="text-[10px] text-port-text-muted truncate" title={take.originalName || take.prompt || takeProvenance(take)}>
+                  {verdict && <span className={`mr-1 rounded px-1 ${VERDICT_TONE[verdict.tone]}`} title="Plate preflight verdict">{verdict.label}</span>}
+                  {isSelected ? <span className="font-semibold text-port-accent">In use</span> : null}
+                  {rejected ? 'Not for this shot' : ''}
+                </div>
+              )}
               {take.note && noteFor !== take.takeId && (
                 <p className="text-[10px] text-port-warning break-words">{take.note}</p>
               )}

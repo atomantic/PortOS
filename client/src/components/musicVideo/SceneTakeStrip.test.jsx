@@ -10,7 +10,8 @@ describe('rejecting a take versus marking it bad', () => {
   it('shows a rejected take as not for this shot, and marks or clears bad on its own', () => {
     const onMark = vi.fn();
     const { rerender } = render(<SceneTakeStrip scene={scene} kind="image" marks={{}} onMark={onMark} />);
-    expect(screen.getByText(/not for this shot ·/)).toBeTruthy();
+    expect(screen.getByText('Not for this shot')).toBeTruthy();
+    expect(screen.queryByText(/generated/)).toBeNull();
     expect(screen.queryByText('Bad', { selector: 'span' })).toBeNull();
     fireEvent.click(screen.getAllByRole('button', { name: 'Bad' })[1]);
     expect(onMark).toHaveBeenCalledWith(scene.takes[1], 'bad');

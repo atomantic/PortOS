@@ -2573,11 +2573,12 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     await openProject({ ...PROJECT_NO_CLIP, id: 'mv-takes', name: 'Takes Project', scenes: [scene] }, 'produce');
 
     const strip = screen.getByRole('list', { name: /Frame takes/ });
-    expect(within(strip).getByText(/imported · midjourney/)).toBeTruthy();
+    // How a take was made is not labeled under it.
+    expect(within(strip).queryByText(/imported|generated/)).toBeNull();
     fireEvent.click(within(strip).getByRole('button', { name: /Use/ }));
     await waitFor(() => expect(selectMusicVideoSceneTake).toHaveBeenCalledWith('mv-takes', 's1', 't-b', { silent: true }));
     // The server's answer moves the selection; the other take now offers "Use".
-    await waitFor(() => expect(within(strip).getAllByText(/In use ·/)).toHaveLength(1));
+    await waitFor(() => expect(within(strip).getAllByText('In use', { selector: 'div > span' })).toHaveLength(1));
     const items = within(strip).getAllByRole('listitem');
     expect(within(items[1]).queryByRole('button', { name: /Use/ })).toBeNull();
 
