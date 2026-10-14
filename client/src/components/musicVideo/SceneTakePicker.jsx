@@ -20,6 +20,21 @@ const MARK_FILTERS = [
   { id: 'all', label: 'All' }, { id: 'ingredient', label: '★ Ingredients' }, { id: 'unsorted', label: 'Unsorted' }, { id: 'bad', label: '✕ Bad' },
 ];
 const markOf = (item) => item.mark || 'unsorted';
+// The shot's own frame in the other slot: its end frame when swapping the start, its start when swapping the end.
+const OTHER_FRAME = { image: { field: 'endImageId', takeKind: 'endImage', prompt: 'endFramePrompt', label: 'End frame' },
+  endImage: { field: 'referenceImageId', takeKind: 'image', prompt: 'framePrompt', label: 'Start frame' } };
+
+/**
+ * The shot's frame in the other slot as a pool item, or null. The pool lists only
+ * unused stills, and that frame is in use, so it is added here, listed first on This shot.
+ */
+function otherFrameItem(scene, kind) {
+  const other = OTHER_FRAME[kind];
+  const assetId = other && scene?.[other.field];
+  if (!assetId) return null;
+  const take = scene.takes?.find((t) => t.kind === other.takeKind && t.assetId === assetId);
+  return { kind: 'image', assetId, sceneId: scene.sceneId, prompt: take?.prompt || scene[other.prompt] || null, clipIds: [], ownFrame: other.label };
+}
 const poolKey = (item) => `${item.kind}:${item.assetId}`;
 const CHIP = 'min-h-[44px] rounded border px-2 text-xs sm:min-h-[28px]';
 const ACTION = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-3 text-xs disabled:opacity-50 sm:min-h-[32px]';
@@ -56,6 +71,8 @@ export default function SceneTakePicker({ open, onClose, projectId, scene, kind,
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [working, setWorking] = useState(false);
 
+  // The shot's frame in the other slot always sits on This shot, so the picker opens there when it has one.
+  const hasOwnFrame = !!otherFrameItem(scene, kind);
   useEffect(() => {
     if (!open) return undefined;
     let active = true;
@@ -67,13 +84,15 @@ export default function SceneTakePicker({ open, onClose, projectId, scene, kind,
         setPool(items);
         // Open on the first tab that has anything in it.
         const groups = new Set(items.filter((item) => item.kind === POOL_KIND[kind]).map((item) => poolGroup(item, scene.sceneId)));
-        setGroup(['shot', 'others', 'floor'].find((g) => groups.has(g)) || 'shot');
+        setGroup(hasOwnFrame ? 'shot' : ['shot', 'others', 'floor'].find((g) => groups.has(g)) || 'shot');
       })
       .catch((err) => { if (active) setError(err?.message || 'Could not load the unused takes'); });
     return () => { active = false; };
-  }, [open, projectId, scene.sceneId, kind]);
+  }, [open, projectId, scene.sceneId, kind, hasOwnFrame]);
 
-  const ofKind = pool ? filterPool(pool, { kind: POOL_KIND[kind], query, shotNumbers }) : [];
+  const own = pool ? otherFrameItem(scene, kind) : null;
+  const ofKind = pool ? filterPool([...(own ? [own] : []), ...pool.filter((item) => !own || poolKey(item) !== poolKey(own))],
+    { kind: POOL_KIND[kind], query, shotNumbers }) : [];
   const counts = { shot: 0, others: 0, floor: 0 };
   for (const item of ofKind) counts[poolGroup(item, scene.sceneId)] += 1;
   const activeGroup = group;
@@ -152,6 +171,7 @@ export default function SceneTakePicker({ open, onClose, projectId, scene, kind,
                 Use {noun} + its {kind === 'image' ? 'clip' : 'still'}
               </button>
             )}
+            {!picked.ownFrame && (<>
             <button type="button" disabled={working} onClick={() => toggleMark('ingredient')} aria-pressed={picked.mark === 'ingredient'}
               title="Good, not placed yet: keep it as an ingredient" className={`${ACTION} ${picked.mark === 'ingredient' ? 'border-port-warning text-port-warning' : ''}`}>
               <Star size={14} aria-hidden="true" />Ingredient
@@ -163,6 +183,7 @@ export default function SceneTakePicker({ open, onClose, projectId, scene, kind,
             <button type="button" disabled={working} onClick={() => setConfirmDelete('picked')} className={ACTION}>
               <Trash2 size={14} aria-hidden="true" />Delete
             </button>
+            </>)}
           </div>
           {confirmDelete === 'picked' && (
             <DeleteConfirm count={1} noun={itemNoun} working={working} onConfirm={() => remove([picked])} onCancel={() => setConfirmDelete(null)} />
@@ -189,10 +210,10 @@ export default function SceneTakePicker({ open, onClose, projectId, scene, kind,
           return (
             <li key={item.assetId}>
               <button type="button" onClick={() => setPicked(item)} aria-pressed={selected}
-                aria-label={`${itemNoun}${number ? ` from shot ${number}` : ''}${item.prompt ? `: ${item.prompt.slice(0, 80)}` : ''}`}
+                aria-label={`${item.ownFrame ? `This shot's ${item.ownFrame.toLowerCase()}` : `${itemNoun}${number ? ` from shot ${number}` : ''}`}${item.prompt ? `: ${item.prompt.slice(0, 80)}` : ''}`}
                 className={`relative block w-full overflow-hidden rounded border ${selected ? 'border-port-accent ring-2 ring-port-accent' : 'border-port-border'} ${item.mark === 'bad' ? 'opacity-50' : ''}`}>
                 <img src={takeThumbUrl(item)} alt="" loading="lazy" className="block aspect-video w-full bg-black object-cover" />
-                {number && <span className="port-media-overlay-strong absolute left-1 top-1 rounded px-1 text-[10px] leading-tight">#{number}</span>}
+                {(item.ownFrame || number) && <span className="port-media-overlay-strong absolute left-1 top-1 rounded px-1 text-[10px] leading-tight">{item.ownFrame || `#${number}`}</span>}
                 {item.mark && (
                   <span className={`port-media-overlay-strong absolute right-1 top-1 rounded px-0.5 ${item.mark === 'bad' ? 'text-port-error' : 'text-port-warning'}`}>
                     {item.mark === 'bad' ? <Ban size={11} aria-label="bad" /> : <Star size={11} aria-label="ingredient" />}

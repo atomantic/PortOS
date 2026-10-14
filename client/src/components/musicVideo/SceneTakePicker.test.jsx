@@ -76,3 +76,20 @@ describe('Swap from unused', () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe("the shot's own other frame", () => {
+  // Uniquely catches the picker hiding the shot's end frame (in use, so not in the unused pool) when swapping its start.
+  it('lists the end frame first on This shot when swapping the start, and places it', async () => {
+    const onPlace = vi.fn(async () => {});
+    const scene = { sceneId: 's8', referenceImageId: 'start.png', endImageId: 'end.png', endFramePrompt: 'Door shut',
+      takes: [{ takeId: 't1', kind: 'endImage', assetId: 'end.png', prompt: 'Door shut', status: 'candidate' }] };
+    render(<SceneTakePicker open projectId="mv-1" scene={scene} kind="image" onClose={vi.fn()} onPlace={onPlace} shotNumbers={new Map([['s8', 8]])} />);
+    await waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(2));
+    const first = screen.getAllByRole('listitem')[0];
+    expect(first.textContent).toContain('End frame');
+    fireEvent.click(screen.getByRole('button', { name: "This shot's end frame: Door shut" }));
+    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Use still' }));
+    expect(onPlace).toHaveBeenCalledWith({ kind: 'image', assetId: 'end.png' });
+  });
+});
