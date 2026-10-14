@@ -51,6 +51,7 @@ export async function renderUniverseJobs(universeId, body, mapServiceError) {
     extraNegative: body.negativePrompt,
     stylePresetPrompt: stylePreset?.prompt,
     stylePresetNegative: stylePreset?.negativePrompt,
+    stylePresetLabel: stylePreset?.label,
   });
   if (!compiled.length) {
     throw new ServerError('No prompts to render — add canon entries, variations, or composite sheets first', {
@@ -165,6 +166,7 @@ export async function renderUniverseJobs(universeId, body, mapServiceError) {
       ...baseParams,
       prompt: item.prompt,
       negativePrompt: item.negativePrompt || undefined,
+      ...(item.promptAdditions?.length ? { promptAdditions: item.promptAdditions } : {}),
       // Tag every job so the completion hook can route the result back
       // into the run's collection without us having to thread additional
       // arguments through the queue. `entryRef` (when present — variations

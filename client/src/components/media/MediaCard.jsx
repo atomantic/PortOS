@@ -205,6 +205,7 @@ function MediaCard({
           {[
             item.stitchedFrom && { label: 'stitched', cls: 'bg-port-success/80 text-white' },
             item.upscaledFrom && { label: '2×', cls: 'bg-port-accent/80 text-white' },
+            item.trimmedFrom && { label: 'trimmed', cls: 'bg-port-border text-white', title: 'Starts at a later frame of another clip' },
             item.extractedFromVideoId && { label: 'frame', cls: 'bg-port-warning/80 text-black', title: 'Extracted from video' },
           ].filter(Boolean).map((b) => (
             <span key={b.label} title={b.title} className={`pointer-events-auto text-[9px] px-1 py-0.5 rounded ${b.cls}`}>{b.label}</span>

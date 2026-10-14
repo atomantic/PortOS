@@ -112,6 +112,76 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     } finally { await _cleanupTestBrowser({ browser, proc, cleanup: () => {} }); }
   });
 
+  // Uniquely catches dropped effect data, missing staged modules and preview/export curve drift.
+  it('develops a still from white in the encoded document render and live preview', async () => {
+    await mkdir(PATHS.images, { recursive: true });
+    const image = await sharp({ create: { width: 64, height: 36, channels: 3, background: '#ee6721' } }).png().toBuffer();
+    await writeFile(join(PATHS.images, 'effect-still.png'), image);
+    const created = await projects.createProject({ name: 'Synthetic image effect' });
+    await projects.mutateProjectRecord(created.id, current => ({ project: { ...current,
+      audioAnalysis: { durationSec: 2, sections: [] },
+      scenes: [{ sceneId: 'develop', startSec: 0.25, endSec: 2, visualLayer: 'still', stillMove: 'hold',
+        referenceImageId: 'effect-still.png', imageEffect: 'flash-develop', imageEffectSec: 0.5 }],
+    } }));
+    await importDocumentTemplate(created.id);
+    const project = await projects.getProject(created.id);
+    await mkdir(PATHS.music, { recursive: true });
+    await mkdir(PATHS.videos, { recursive: true });
+    const master = join(PATHS.music, 'still-effect.wav');
+    const output = join(PATHS.videos, 'still-effect.mp4');
+    execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=2', master]);
+    await encodeDocumentComposition({ project, plan: await prepareDocumentRender(project), jobId: 'still-effect',
+      audioPath: master, outputPath: output, windowStart: 0.25, windowEnd: 1.25 + 1 / 24 });
+    const renderedFrames = execFileSync(ffmpeg, ['-v', 'error', '-i', output, '-vf', 'scale=64:36', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
+    const page = await browser.newPage();
+    try {
+      const loadPreview = async current => {
+        const preview = await buildDocumentPreview(current);
+        await page.setContent(preview.html);
+        await page.evaluate(({ key, encoded }) => {
+          addEventListener('message', ({ data }) => {
+            if (data?.type !== 'portos-mv:request') return;
+            const blob = new Blob([Uint8Array.from(atob(encoded), c => c.charCodeAt(0))], { type: 'image/png' });
+            window.postMessage({ type: 'portos-mv:asset', key, blob }, '*');
+          });
+          window.postMessage({ type: 'portos-mv:manifest', keys: [key] }, '*');
+        }, { key: preview.assets[0].key, encoded: image.toString('base64') });
+        await page.waitForFunction(() => globalThis.portosComposition);
+      };
+      await loadPreview(project);
+      const pixels = [];
+      for (const t of [0.25, 0.5, 0.75, 1.25]) {
+        const sample = `(async () => {
+          await portosComposition.seek(${t});
+          const canvas = document.getElementById('stage');
+          return [...canvas.getContext('2d').getImageData(canvas.width / 2, canvas.height / 2, 1, 1).data].slice(0, 3);
+        })()`;
+        const live = await page.evaluate(sample);
+        const offset = (Math.round((t - 0.25) * 24) * 64 * 36 + 18 * 64 + 32) * 3;
+        const rendered = [...renderedFrames.subarray(offset, offset + 3)];
+        expect(rendered).toHaveLength(3);
+        // H.264/YUV conversion and downscaling can change a pixel slightly.
+        rendered.forEach((channel, index) => expect(Math.abs(channel - live[index])).toBeLessThan(16));
+        pixels.push(live);
+      }
+      expect(pixels[0]).toEqual([255, 255, 255]);
+      expect(pixels[1][0] - pixels[1][2]).toBeLessThan(pixels[2][0] - pixels[2][2]);
+      expect(pixels[2][0]).toBeGreaterThan(pixels[2][1] + 80);
+      expect(pixels[2][1]).toBeGreaterThan(pixels[2][2] + 40);
+      // A developed still is exactly the no-effect picture at the same song time.
+      await loadPreview({ ...project, scenes: project.scenes.map(scene => ({ ...scene, imageEffect: null })) });
+      const held = await page.evaluate(async () => {
+        await globalThis.portosComposition.seek(1.25);
+        const canvas = document.getElementById('stage');
+        return [...canvas.getContext('2d').getImageData(canvas.width / 2, canvas.height / 2, 1, 1).data].slice(0, 3);
+      });
+      expect(held).toEqual(pixels[3]);
+    } finally {
+      await page.close();
+      await rm(output, { force: true });
+    }
+  }, 60000);
+
   it('keeps network refusal inside the owned capture browser and leaves the browsing session alive', async () => {
     const { openComposition } = await import('../htmlComposition/browser.js');
     const directory = 'compositions/synthetic-owned-refusal';
@@ -446,6 +516,86 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
       expect(difference, `event frame ${frame + 13}`).toBeLessThan(5); // lossy encoder tolerance
     }
   }, 120000);
+
+  // Uniquely catches correct timing metadata paired with an unretimed staged file.
+  [
+    { timing: { speedFps: 24, offsetFrames: 12 }, samples: [[0, 1], [5, 1], [6, 2]] },
+    { timing: { speedFps: 24, offsetFrames: -6 }, samples: [[0, 0], [11, 0], [12, 1], [17, 1], [18, 2]] },
+    { timing: { offsetFrames: -6 }, samples: [[0, 0], [17, 0], [18, 1], [29, 1], [30, 2]] },
+  ].forEach(({ timing, samples }) => it(`renders shot speed and offset ${JSON.stringify(timing)} into the document pixels`, async () => {
+    await mkdir(PATHS.videos, { recursive: true });
+    await mkdir(PATHS.music, { recursive: true });
+    const clip = join(PATHS.videos, 'timed-rgb.webm');
+    execFileSync(ffmpeg, ['-v', 'error', '-y',
+      '-f', 'lavfi', '-i', 'color=c=red:s=64x36:r=24:d=0.5',
+      '-f', 'lavfi', '-i', 'color=c=lime:s=64x36:r=24:d=0.5',
+      '-f', 'lavfi', '-i', 'color=c=blue:s=64x36:r=24:d=0.5',
+      '-filter_complex', '[0:v][1:v][2:v]concat=n=3:v=1:a=0', '-c:v', 'libvpx', clip]);
+    const master = join(PATHS.music, 'timed-master.wav');
+    execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=1.5', master]);
+    const created = await projects.createProject({ name: 'Synthetic shot timing' });
+    await projects.mutateProjectRecord(created.id, current => ({ project: { ...current,
+      audioAnalysis: { durationSec: 1.5, sections: [] },
+      scenes: [{ sceneId: 'timed', startSec: 0, endSec: 1.5, videoHistoryId: 'vh-timed', ...timing }],
+    } }));
+    await writeFile(join(PATHS.data, 'video-history.json'), JSON.stringify([{ id: 'vh-timed', filename: 'timed-rgb.webm', numFrames: 36, fps: 24, width: 64, height: 36 }]));
+    await importDocumentTemplate(created.id);
+    const project = await projects.getProject(created.id);
+    const outputPath = join(PATHS.videos, 'timed-output.mp4');
+    await encodeDocumentComposition({ project, plan: await prepareDocumentRender(project), jobId: 'timed-pixels', audioPath: master, outputPath });
+    const pixels = execFileSync(ffmpeg, ['-v', 'error', '-i', outputPath, '-vf', 'scale=64:36', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
+    for (const [frame, channel] of samples) {
+      const at = (frame * 64 * 36 + 18 * 64 + 32) * 3;
+      const rgb = [...pixels.subarray(at, at + 3)];
+      expect(rgb).toHaveLength(3);
+      expect(rgb[channel], `frame ${frame}`).toBeGreaterThan(180);
+      rgb.forEach((value, i) => { if (i !== channel) expect(value, `frame ${frame}`).toBeLessThan(60); });
+    }
+  }, 120000));
+
+  // Uniquely catches the live preview bridging raw bytes without the shot's speed/offset (same samples as the render above).
+  [
+    { timing: { speedFps: 24, offsetFrames: 12 }, samples: [[0, 1], [5, 1], [6, 2]] },
+    { timing: { speedFps: 24, offsetFrames: -6 }, samples: [[0, 0], [11, 0], [12, 1], [17, 1], [18, 2]] },
+    { timing: { offsetFrames: -6 }, samples: [[0, 0], [17, 0], [18, 1], [29, 1], [30, 2]] },
+  ].forEach(({ timing, samples }) => it(`plays shot speed and offset ${JSON.stringify(timing)} in the live preview`, async () => {
+    await mkdir(PATHS.videos, { recursive: true });
+    const clip = join(PATHS.videos, 'live-timed-rgb.webm');
+    execFileSync(ffmpeg, ['-v', 'error', '-y',
+      '-f', 'lavfi', '-i', 'color=c=red:s=64x36:r=24:d=0.5',
+      '-f', 'lavfi', '-i', 'color=c=lime:s=64x36:r=24:d=0.5',
+      '-f', 'lavfi', '-i', 'color=c=blue:s=64x36:r=24:d=0.5',
+      '-filter_complex', '[0:v][1:v][2:v]concat=n=3:v=1:a=0', '-c:v', 'libvpx', clip]);
+    const created = await projects.createProject({ name: 'Synthetic live shot timing' });
+    await projects.mutateProjectRecord(created.id, current => ({ project: { ...current,
+      audioAnalysis: { durationSec: 1.5, sections: [] },
+      scenes: [{ sceneId: 'timed', startSec: 0, endSec: 1.5, videoHistoryId: 'vh-live', ...timing }],
+    } }));
+    await writeFile(join(PATHS.data, 'video-history.json'), JSON.stringify([{ id: 'vh-live', filename: 'live-timed-rgb.webm', numFrames: 36, fps: 24, width: 64, height: 36 }]));
+    await importDocumentTemplate(created.id);
+    const preview = await buildDocumentPreview(await projects.getProject(created.id));
+    const page = await browser.newPage();
+    await page.setContent(preview.html);
+    const bytes = (await readFile(clip)).toString('base64');
+    await page.evaluate(async (base64) => {
+      const blob = new Blob([Uint8Array.from(atob(base64), c => c.charCodeAt(0))], { type: 'video/webm' });
+      addEventListener('message', ({ data }) => { if (data?.type === 'portos-mv:request') postMessage({ type: 'portos-mv:asset', key: data.key, blob }, '*'); });
+      postMessage({ type: 'portos-mv:manifest', keys: ['media/scene-timed.webm'] }, '*');
+      await window.PORTOS_MV_ASSETS;
+    }, bytes);
+    for (const [frame, channel] of samples) {
+      const rgb = await page.evaluate(async (frame) => {
+        await window.portosComposition.seek(frame / 24);
+        const stage = document.getElementById('stage');
+        const probe = document.createElement('canvas'); probe.width = stage.width; probe.height = stage.height;
+        const ctx = probe.getContext('2d'); ctx.drawImage(stage, 0, 0);
+        return [...ctx.getImageData(stage.width >> 1, stage.height >> 1, 1, 1).data.slice(0, 3)];
+      }, frame);
+      expect(rgb[channel], `frame ${frame}`).toBeGreaterThan(180);
+      rgb.forEach((value, i) => { if (i !== channel) expect(value, `frame ${frame}`).toBeLessThan(60); });
+    }
+    await page.close();
+  }, 120000));
 
   it('draws the selected take at SONG time in an excerpt, identically on every render, with the master muxed', async () => {
     const { cdpRequest } = await import('../browserService.js');

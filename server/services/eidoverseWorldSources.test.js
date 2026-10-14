@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { statfs } from 'node:fs/promises';
 import { PATHS } from '../lib/paths.js';
-import { readFileSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
@@ -75,6 +75,7 @@ vi.mock('./jira.js', () => ({
 const { collectEidoverseWorldSources } = await import('./eidoverseWorldSources.js');
 
 beforeEach(() => {
+  rmSync(join(dataRoot(), 'eidoverse', 'observation.json'), { force: true });
   Object.assign(sources, {
     apps: [{ id: 'app-example', overallStatus: 'online', managed: true }],
     appConfig: [],
@@ -235,6 +236,48 @@ describe('Eidoverse world source aggregation', () => {
 
 
 describe('semantic observation authority and marker workflow', () => {
+  it('exposes only evidenced peer failures through observation, with unknown and recovery semantics', async () => {
+    const { executeCosToolCall } = await import('./cosToolRegistry.js');
+    const authority = { scope: 'mind', capabilities: { manageEidoverse: true, toolExposureAllSchemas: true } };
+    const observe = (requestId) => executeCosToolCall({
+      call: { requestId, name: 'eidoverse.observe', arguments: {} }, authority,
+    });
+    const classes = ['local_refused', 'tunnel_dial', 'probe_timeout', 'auth_required', 'dns', 'host_unreachable', 'probe_http'];
+    sources.peers = classes.map((code, i) => ({
+      id: `invented-peer-${i}`, status: 'offline', address: 'private-host.example.com',
+      password: 'invented-peer-secret', lastProbe: { ok: false, class: code, message: 'invented-private-exception' },
+    }));
+    sources.peers.push(
+      { id: 'legacy-peer', status: 'error' },
+      { id: 'unknown-peer', status: 'error', lastProbe: { ok: false, class: 'invented-private-exception' } },
+      { id: 'inconsistent-peer', status: 'error', lastProbe: { ok: true, class: 'dns' } },
+      { id: 'recovered-peer', status: 'online', lastProbe: { ok: false, class: 'dns' } },
+    );
+    const first = await observe('peer-reasons-first');
+    const terminal = first.result.places.find((place) => place.sources.includes('peers'));
+    expect(terminal.attentionSignals).toEqual([{
+      source: 'peers', severity: 'error', signalCount: 10, reasons: [
+        { code: 'peer_auth_required', affectedCount: 1 },
+        { code: 'peer_connection_refused', affectedCount: 1 },
+        { code: 'peer_dns_failure', affectedCount: 1 },
+        { code: 'peer_failure_unknown', affectedCount: 3 },
+        { code: 'peer_health_http_failure', affectedCount: 1 },
+        { code: 'peer_host_unreachable', affectedCount: 1 },
+        { code: 'peer_probe_timeout', affectedCount: 1 },
+        { code: 'peer_transport_failure', affectedCount: 1 },
+      ],
+    }]);
+    for (const secret of ['private-host.example.com', 'invented-peer-secret', 'invented-private-exception', 'legacy-peer']) {
+      expect(JSON.stringify(first.result)).not.toContain(secret);
+    }
+    expect((await collectEidoverseWorldSources()).peers.every((peer) => !('attentionReasons' in peer))).toBe(true);
+    sources.peers = sources.peers.map((peer) => ({ ...peer, status: 'online' }));
+    expect((await observe('peer-reasons-recovered')).result.places.find((place) => place.sources.includes('peers')).attentionSignals).toEqual([]);
+    sources.peers = null;
+    expect((await observe('peer-reasons-unreadable')).result.places.find((place) => place.sources.includes('peers')))
+      .toMatchObject({ attentionSignals: [], unreadableSources: ['peers'] });
+  });
+
   it('delivers fresh bounded collector reasons only to a granted mind and preserves the observation delta', async () => {
     const { executeCosToolCall } = await import('./cosToolRegistry.js');
     const { observeEidoverseWorld } = await import('./eidoverseObservationLedger.js');

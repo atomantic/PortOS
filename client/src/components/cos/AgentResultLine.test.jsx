@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import { expect, it } from 'vitest';
-import AgentResultLine from './AgentResultLine';
+import AgentResultLine, { SecurityScanEvidence } from './AgentResultLine';
 
 it('separates clean execution, assessment persistence and delivery validation', () => {
   const agent = { result: { success: true, validationPassed: false, auditAssessment: { status: 'persistence-failed' } } };
@@ -31,4 +31,72 @@ it('does not present blocked publication as completed delivery', () => {
   expect(screen.getByText('Execution completed')).toBeInTheDocument();
   expect(screen.getByText('Publication blocked; worktree preserved')).toBeInTheDocument();
   expect(screen.queryByText('Completed successfully')).not.toBeInTheDocument();
+});
+
+
+it('retains refusal and scanner interruption evidence alongside successful delivery and assessment', () => {
+  render(<AgentResultLine agent={{ result: { success: true, auditAssessment: { status: 'recorded' } }, metadata: {
+    executionInterruption: { category: 'content-refusal' },
+    securityScan: { status: 'time-limit', model: 'example-model', effort: 'low', auth: 'chatgpt',
+      estimatedCostUsd: null, maxCostUsd: 0, timeLimitSeconds: 600, exitCode: null,
+      artifacts: { findings: true, coverage: null } },
+  } }} />);
+  expect(screen.getByText('Execution completed')).toBeInTheDocument();
+  expect(screen.getByText('Assessment saved')).toBeInTheDocument();
+  expect(screen.getByText(/provider safety refusal; automatic retry stopped/)).toBeInTheDocument();
+  expect(screen.getByText('Security scanner (agent reported): time-limit')).toBeInTheDocument();
+  expect(screen.getByText(/Estimated baseline: unknown · Estimate cap: \$0.00 \(API-equivalent USD\)/)).toBeInTheDocument();
+  expect(screen.getByText('Short-context estimates do not measure billed charges or ChatGPT subscription quota.')).toBeInTheDocument();
+  expect(screen.getByText(/Exit: unknown/)).toBeInTheDocument();
+  expect(screen.getByText(/findings: saved; coverage: unknown/)).toBeInTheDocument();
+});
+
+it('shows runner observations during execution without requiring an agent completion summary', () => {
+  render(<SecurityScanEvidence scanner={{ source: 'runner', status: 'interrupted', cleanup: 'unconfirmed', model: 'example-model', effort: 'medium', auth: 'chatgpt' }} />);
+  expect(screen.getByText('Security scanner (runner observed): interrupted')).toBeInTheDocument();
+  expect(screen.getByText('Process cleanup: unconfirmed')).toBeInTheDocument();
+  expect(screen.queryByText('Completed successfully')).not.toBeInTheDocument();
+});
+
+it('shows the committed scanner baseline separately from later audit success', () => {
+  render(<AgentResultLine agent={{ result: { success: true }, metadata: { securityScan: {
+    source: 'runner', status: 'completed', baseline: { commit: 'a'.repeat(40), tree: 'b'.repeat(40) },
+  } } }} />);
+  expect(screen.getByText(/Committed baseline:/)).toHaveTextContent('a'.repeat(40));
+  expect(screen.getByText(/Committed baseline:/)).toHaveTextContent('Uncommitted files and submodules excluded');
+  expect(screen.getByText(/Committed baseline:/)).toHaveTextContent('Subsequent repairs are not certified');
+});
+
+it('distinguishes explicit unlimited grants from unknown, zero and saved bounded limits', () => {
+  const scanner = { source: 'runner', status: 'running', auth: 'chatgpt', maxCostUsd: 'unlimited', timeLimitSeconds: 'unlimited' };
+  const view = render(<SecurityScanEvidence scanner={scanner} />);
+  expect(screen.getByText(/Time limit: none \(no elapsed-time deadline\)/)).toBeInTheDocument();
+  expect(screen.getByText(/Estimate cap: none \(no estimate cap\)/)).toBeInTheDocument();
+  view.rerender(<SecurityScanEvidence scanner={{ ...scanner, maxCostUsd: null, timeLimitSeconds: null }} />);
+  expect(screen.getByText(/Estimate cap: unknown/)).toBeInTheDocument();
+  expect(screen.getByText(/Time limit: unknown/)).toBeInTheDocument();
+  view.rerender(<SecurityScanEvidence scanner={{ ...scanner, maxCostUsd: 0, timeLimitSeconds: 0 }} />);
+  expect(screen.getByText(/Estimate cap: \$0.00/)).toBeInTheDocument();
+  expect(screen.getByText(/Time limit: 0s/)).toBeInTheDocument();
+  view.rerender(<SecurityScanEvidence scanner={{ ...scanner, maxCostUsd: 25, timeLimitSeconds: 1200 }} />);
+  expect(screen.getByText(/Estimate cap: \$25.00/)).toBeInTheDocument();
+  expect(screen.getByText(/Time limit: 1,200s/)).toBeInTheDocument();
+});
+
+it('distinguishes connection loss from the last trusted runner observation', () => {
+  render(<SecurityScanEvidence scanner={{ source: 'runner', status: 'running', auth: 'chatgpt' }} control={{ status: 'interrupted', cleanup: 'unconfirmed' }} />);
+  expect(screen.getByText(/interrupted \(runner connection lost\)/)).toBeInTheDocument();
+  expect(screen.getByText('Process cleanup: unconfirmed')).toBeInTheDocument();
+});
+
+it('keeps input rejection history visible after a corrected scanner execution completes', () => {
+  const scanner = { source: 'runner', status: 'invalid-input', auth: 'chatgpt',
+    preflight: { rejectedRequests: 1, lastError: { field: 'paths', index: 2, code: 'path-not-found' } } };
+  const view = render(<SecurityScanEvidence scanner={scanner} />);
+  expect(screen.getByText('Input rejected before scanner launch')).toBeInTheDocument();
+  expect(screen.getByText('Input rejections: 1 · Last: paths item 3 — path-not-found')).toBeInTheDocument();
+  view.rerender(<SecurityScanEvidence scanner={{ ...scanner, status: 'completed' }} />);
+  expect(screen.getByText('Security scanner (runner observed): completed')).toBeInTheDocument();
+  expect(screen.queryByText('Input rejected before scanner launch')).not.toBeInTheDocument();
+  expect(screen.getByText('Input rejections: 1 · Last: paths item 3 — path-not-found')).toBeInTheDocument();
 });

@@ -55,8 +55,10 @@ import {
 // re-declaring it just so this file's route schemas can be built.
 import { UPSCALE_METHODS, DEFAULT_UPSCALE_METHOD } from '../services/videoGen/upscalePlan.js';
 import { enqueueLtxUpscale } from '../services/videoGen/upscaleJob.js';
+import { trimHistoryItemStart } from '../services/videoGen/trimStart.js';
 import { cleanupMultipartTemp } from '../services/videoGen/prepareParams.js';
 import { submitVideoGenJob } from '../services/videoGen/submitJob.js';
+import { PREVIEW_UPLOAD_FIELDS, previewVideoPrompt } from '../services/videoGen/promptPreview.js';
 import { resolveReactorApiKey, mintReactorToken } from '../services/videoGen/reactor.js';
 import { isVideoModeUsable, VIDEO_GEN_MODE } from '../services/videoGen/modes.js';
 import { MAX_VIDEO_BATCH_SIZE } from '../services/videoGen/batch.js';
@@ -91,6 +93,7 @@ import {
 } from '../services/videoGen/runtimeInstaller.js';
 import { detectSystemCapabilities, withHardwareCompatibility } from '../lib/systemCapabilities.js';
 import { isDisplaySleepEnabled } from '../services/videoGen/displayPower.js';
+import { promptAdditionsSchema } from '../lib/modelInput.js';
 
 const router = Router();
 
@@ -278,6 +281,7 @@ export const LOCAL_ONLY_VIDEO_PARAMS = Object.freeze({
 });
 
 const generateBodySchema = z.object({
+  promptAdditions: promptAdditionsSchema,
   // Render backend: the local runtimes (default), the Grok Build CLI's
   // image-first image_to_video flow (#2859 phase 2), fal.ai's queue REST API
   // (#6213), or reactor.inc's fast-h3 API (#6214). Grok, fal, and reactor all
@@ -480,8 +484,25 @@ const generateBodySchema = z.object({
       // revisionGenerationJobs/revisionSectionStates uses it for an exact
       // match instead of the pre-#9011 scene+time heuristic.
       revisionId: z.string().min(1).max(200).optional(),
+      // The shot card's Render: `prompt` is exactly what the director sees and
+      // sends, so the shot-intent lines and the silent-model rewrite are skipped.
+      promptAsTyped: z.boolean().optional(),
+      // `prompt` is the director's own text and the server composes the rest as
+      // labeled additions (lib/musicVideoShotPrompt.js, #11317); `audioReactive`
+      // names an audio-reactive LoRA take, which gets its guard clause.
+      compose: z.boolean().optional(),
+      audioReactive: z.boolean().optional(),
+      // The shot card's Song audio toggle: hand a cutaway its song slice (true) or
+      // render it silent (false), whatever the project's generation mode says.
+      songAudio: z.boolean().optional(),
+      // The shot card's Whole sung line: a performance take's song slice covers
+      // the full lyric line the shot sits in; its edit points still frame the shot.
+      wholeLine: z.boolean().optional(),
     }).optional(),
   ),
+  // File the clip into this music video's media collection even when no shot
+  // keeps it (musicVideoCollectionHook). Collection only; the render is unchanged.
+  musicVideoProjectId: z.string().min(1).max(200).optional(),
   // FableLoom scene-video render. The media-job completion hook files the
   // finished history id onto the tagged loom node, even if the editor has
   // unmounted. Video requests are multipart, so parse the JSON tag before
@@ -511,6 +532,12 @@ const generateBodySchema = z.object({
   // docs/decisions/2026-08-20-federated-visual-prompts.md
   mediaProviderPeerId: z.string().guid().optional(),
   mediaProviderEngine: z.string().trim().min(1).max(80).optional(),
+});
+
+// The Video Gen form's preview (#11317): the generate body as the form would
+// post it, with each upload it holds named instead of attached.
+const promptPreviewBodySchema = generateBodySchema.safeExtend({
+  previewUploads: z.preprocess((v) => (typeof v === 'string' ? [v] : v), z.array(z.enum(PREVIEW_UPLOAD_FIELDS)).max(PREVIEW_UPLOAD_FIELDS.length)).optional(),
 });
 
 // Probes required-package imports on each call so a half-installed Python
@@ -928,6 +955,11 @@ router.get('/text-encoder/download', asyncHandler(async (req, res) => {
   await startHfDownloadStream({ req, res, repo, force: req.query.force === '1' });
 }));
 
+// What Generate would send to the model, built by the render's own code (#11317).
+router.post('/prompt-preview', uploadFields([]), asyncHandler(async (req, res) => {
+  res.json(await previewVideoPrompt(validateRequest(promptPreviewBodySchema, req.body ?? {})));
+}));
+
 router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
   // The route owns cleanup before validation succeeds; the submit service owns
   // every failure after it receives parsed data.
@@ -1250,6 +1282,16 @@ router.post('/upscale/:id', asyncHandler(async (req, res) => {
   }
   const entry = await upscaleHistoryItem(parsed.data, body.data);
   res.json({ ok: true, video: entry });
+}));
+
+// Keep a clip from a later frame on (a start trim). Like an upscale, it writes
+// a NEW gallery row and leaves the source clip untouched.
+const trimStartBodySchema = z.object({ startSec: z.number().finite().positive().max(3600) });
+router.post('/history/:id/trim-start', asyncHandler(async (req, res) => {
+  const parsed = historyIdSchema.safeParse(req.params.id);
+  if (!parsed.success) failValidation(parsed);
+  const body = validateRequest(trimStartBodySchema, req.body ?? {});
+  res.json({ ok: true, video: await trimHistoryItemStart(parsed.data, body) });
 }));
 
 const stitchBodySchema = z.object({

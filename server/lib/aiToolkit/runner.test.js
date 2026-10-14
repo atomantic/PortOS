@@ -1956,6 +1956,30 @@ describe('AI Toolkit runner — declared extension points', () => {
 
     await rm(dataDir, { recursive: true, force: true });
   });
+
+  it('treats a run id that climbs out of the runs directory as an unknown run', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-trav-'));
+    await mkdir(join(dataDir, 'runs', 'real'), { recursive: true });
+    await writeFile(join(dataDir, 'runs', 'real', 'output.txt'), 'out');
+    await mkdir(join(dataDir, 'brain'), { recursive: true });
+    await writeFile(join(dataDir, 'brain', 'output.txt'), 'secret');
+    const runner = createRunnerService({ dataDir });
+
+    // Express decodes %2F in :id, so these are the literal strings a route hands over.
+    for (const id of ['../brain', '..', 'real/../../brain', '..\\brain']) {
+      expect(await runner.deleteRun(id)).toBe(false);
+      expect(await runner.getRunOutput(id)).toBeNull();
+      expect(await runner.getRunPrompt(id)).toBeNull();
+      expect(await runner.getRun(id)).toBeNull();
+    }
+    expect(await readFile(join(dataDir, 'brain', 'output.txt'), 'utf-8')).toBe('secret');
+
+    // A genuine run id still resolves and deletes.
+    expect(await runner.getRunOutput('real')).toBe('out');
+    expect(await runner.deleteRun('real')).toBe(true);
+
+    await rm(dataDir, { recursive: true, force: true });
+  });
 });
 
 describe('AI Toolkit runner — built-in executeCliRun spawn (#1865)', () => {
@@ -1974,6 +1998,32 @@ describe('AI Toolkit runner — built-in executeCliRun spawn (#1865)', () => {
     child.killed = false;
     return child;
   }
+
+  it('classifies a capacity rejection without scanning the echoed input', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-cli-capacity-'));
+    try {
+      const runner = createRunnerService({ dataDir });
+      const child = makeChild();
+      spawn.mockReturnValue(child);
+      let resolveComplete;
+      const completed = new Promise(resolve => { resolveComplete = resolve; });
+      const prompt = 'Example schema describes authentication, billing, and credit.';
+      await runner.executeCliRun({
+        runId: 'capacity', provider: { id: 'codex', command: 'codex', args: [] },
+        prompt, onComplete: resolveComplete,
+      });
+      const transcript = `OpenAI Codex v1\r\nuser\r\n${prompt}\r\nERROR: Selected model is at capacity. Please try a different model.\r\n`;
+      child.stderr.emit('data', Buffer.from(transcript));
+      child.emit('close', 1);
+      expect(await completed).toMatchObject({
+        success: false, errorCategory: 'rate-limit',
+        error: 'Selected model is at capacity. Please try a different model.',
+      });
+      expect(await readFile(join(dataDir, 'runs', 'capacity', 'output.txt'), 'utf8')).toBe(transcript);
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
 
   it('never enables shell:true — resolveWindowsExecutable (not a shell) is the Windows fix', async () => {
     // The shared leaf's input matrix lives in bufferedSpawn.test.js; this

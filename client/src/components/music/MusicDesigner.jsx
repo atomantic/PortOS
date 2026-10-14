@@ -38,6 +38,7 @@ import WaveformPanel from './WaveformPanel';
 import { FIELD_CLASS, GHOST_BTN, LABEL_CLASS, PRIMARY_BTN } from './designerStyles';
 import ProviderModelSelector from '../ProviderModelSelector';
 import TabPills from '../ui/TabPills';
+import SentPromptPanel from '../media/SentPromptPanel';
 import toast from '../ui/Toast';
 import useMounted from '../../hooks/useMounted';
 import useProviderModels from '../../hooks/useProviderModels';
@@ -100,6 +101,10 @@ export default function MusicDesigner() {
   const [description, setDescription] = useState('');
   const [lyricsGuidance, setLyricsGuidance] = useState('');
   const [lyrics, setLyrics] = useState('');
+  // What the last Describe / Write lyrics run sent the AI: the user's words
+  // inside the designer's instructions and policy clause, as chips (#11317).
+  const [describeSent, setDescribeSent] = useState(null);
+  const [lyricsSent, setLyricsSent] = useState(null);
   const [title, setTitle] = useState('');
   const [trackId, setTrackId] = useState('');
   const [draftLoading, setDraftLoading] = useState(true);
@@ -213,7 +218,7 @@ export default function MusicDesigner() {
     const music = musicSettingsRef.current;
     const next = { ...music, designer: { ...(music.designer || {}), ...patch } };
     musicSettingsRef.current = next;
-    updateSettings({ music: next }, { silent: true }).catch(() => {});
+    updateSettings({ music: next }, { silent: true }).catch((err) => toast.error(err?.message || 'Could not save Music Designer preferences'));
   };
 
   const saveDraft = (patch) => {
@@ -247,33 +252,34 @@ export default function MusicDesigner() {
 
   const runDescribe = async ({ advance }) => {
     if (!concept.trim()) { toast.error('Describe the vibe (or name a reference) first'); return; }
-    saveDraft({ concept: concept.trim() });
+    saveDraft({ concept });
     setDescribing(true);
     const res = await describeMusic({
-      concept: concept.trim(),
-      guidance: conceptGuidance.trim() || undefined,
-      template: describeTemplate.trim() || undefined,
+      concept,
+      guidance: conceptGuidance || undefined,
+      template: describeTemplate.trim() ? describeTemplate : undefined,
       providerId: selectedProviderId || undefined,
       model: selectedModel || undefined,
       effort: effort || undefined,
     }, { silent: true }).catch((err) => { toast.error(err?.message || 'Could not describe the music'); return null; });
     if (mountedRef.current) setDescribing(false);
     if (!res?.description) return;
-    saveDraft({ concept: concept.trim(), prompt: res.description });
+    saveDraft({ concept, prompt: res.description });
     if (!mountedRef.current) return;
     setDescription(res.description);
+    setDescribeSent(typeof res.sentPrompt === 'string' ? { sentPrompt: res.sentPrompt, additions: res.promptAdditions || [] } : null);
     persistDesignerPrefs({ providerId: selectedProviderId || '', model: selectedModel || '', effort: effort || '' });
     if (advance) goTo('description');
   };
 
   const runLyrics = async () => {
     if (!description.trim()) { toast.error('Write the musical description first'); return; }
-    saveDraft({ prompt: description.trim() });
+    saveDraft({ prompt: description });
     setWriting(true);
     const res = await generateLyrics({
-      description: description.trim(),
-      guidance: lyricsGuidance.trim() || undefined,
-      template: lyricsTemplate.trim() || undefined,
+      description,
+      guidance: lyricsGuidance || undefined,
+      template: lyricsTemplate.trim() ? lyricsTemplate : undefined,
       providerId: selectedProviderId || undefined,
       model: selectedModel || undefined,
       effort: effort || undefined,
@@ -283,6 +289,7 @@ export default function MusicDesigner() {
     saveDraft({ lyrics: res.lyrics });
     if (!mountedRef.current) return;
     setLyrics(res.lyrics);
+    setLyricsSent(typeof res.sentPrompt === 'string' ? { sentPrompt: res.sentPrompt, additions: res.promptAdditions || [] } : null);
     persistDesignerPrefs({ providerId: selectedProviderId || '', model: selectedModel || '', effort: effort || '' });
   };
 
@@ -337,10 +344,9 @@ export default function MusicDesigner() {
               id="music-designer-concept"
               value={concept}
               onChange={(event) => setConcept(event.target.value)}
-              onBlur={() => saveDraft({ concept: concept.trim() })}
+              onBlur={() => saveDraft({ concept })}
               disabled={draftLoading}
               rows={3}
-              maxLength={8000}
               placeholder="A cross between a rain-soaked downtempo instrumental and a late-night synth ballad…"
               className={FIELD_CLASS}
             />
@@ -353,7 +359,6 @@ export default function MusicDesigner() {
               value={conceptGuidance}
               onChange={(event) => setConceptGuidance(event.target.value)}
               disabled={draftLoading}
-              maxLength={4000}
               placeholder="90–96 BPM, 6/8 meter, D minor, instrumental only with a cello lead…"
               className={FIELD_CLASS}
             />
@@ -395,9 +400,8 @@ export default function MusicDesigner() {
                     id="music-designer-describe-template"
                     value={describeTemplate}
                     onChange={(event) => setDescribeTemplate(event.target.value)}
-                    onBlur={() => persistDesignerPrefs({ describeTemplate: describeTemplate.trim() })}
+                    onBlur={() => persistDesignerPrefs({ describeTemplate })}
                     rows={4}
-                    maxLength={8000}
                     placeholder={DESCRIBE_PLACEHOLDER}
                     className={FIELD_CLASS}
                   />
@@ -418,9 +422,8 @@ export default function MusicDesigner() {
                     id="music-designer-lyrics-template"
                     value={lyricsTemplate}
                     onChange={(event) => setLyricsTemplate(event.target.value)}
-                    onBlur={() => persistDesignerPrefs({ lyricsTemplate: lyricsTemplate.trim() })}
+                    onBlur={() => persistDesignerPrefs({ lyricsTemplate })}
                     rows={4}
-                    maxLength={8000}
                     placeholder={LYRICS_PLACEHOLDER}
                     className={FIELD_CLASS}
                   />
@@ -456,14 +459,19 @@ export default function MusicDesigner() {
               id="music-designer-description"
               value={description}
               onChange={(event) => setDescription(event.target.value)}
-              onBlur={() => saveDraft({ prompt: description.trim() })}
+              onBlur={() => saveDraft({ prompt: description })}
               disabled={draftLoading}
               rows={8}
-              maxLength={8000}
               placeholder={'Global Metadata\nBasic Attributes: 92 BPM, 6/8 meter, warm instrumental soul…\n\nVocal Details\nInstrumental only; the Rhodes carries the lead melody…\n\nArrangement\nIntro: sparse keys enter first…'}
               className={FIELD_CLASS}
             />
           </label>
+          {describeSent && (
+            <div className="text-xs">
+              <span className="block mb-1 text-gray-500">Last sent to the AI</span>
+              <SentPromptPanel sentPrompt={describeSent.sentPrompt} additions={describeSent.additions} />
+            </div>
+          )}
           <div className="rounded border border-port-border bg-port-bg/60 p-3 text-xs text-gray-400">
             <p className="mb-2 font-medium text-gray-300">MiniMax structured caption</p>
             <ul className="list-disc space-y-1 pl-4">
@@ -507,7 +515,6 @@ export default function MusicDesigner() {
               value={lyricsGuidance}
               onChange={(event) => setLyricsGuidance(event.target.value)}
               disabled={draftLoading}
-              maxLength={4000}
               placeholder="Make the chorus about leaving a city at dawn…"
               className={FIELD_CLASS}
             />
@@ -538,15 +545,20 @@ export default function MusicDesigner() {
               id="music-designer-lyrics"
               value={lyrics}
               onChange={(event) => setLyrics(event.target.value)}
-              onBlur={() => saveDraft({ lyrics: lyrics.trim() })}
+              onBlur={() => saveDraft({ lyrics })}
               disabled={draftLoading}
               rows={10}
-              maxLength={20000}
               placeholder={'[verse]\n…\n[chorus]\n…'}
               className={`${FIELD_CLASS} font-mono`}
             />
           </label>
-          <button type="button" onClick={() => { saveDraft({ prompt: description.trim(), lyrics: lyrics.trim() }); goTo('render'); }} disabled={busy || !draftReady} className={PRIMARY_BTN}>
+          {lyricsSent && (
+            <div className="text-xs">
+              <span className="block mb-1 text-gray-500">Last sent to the AI</span>
+              <SentPromptPanel sentPrompt={lyricsSent.sentPrompt} additions={lyricsSent.additions} />
+            </div>
+          )}
+          <button type="button" onClick={() => { saveDraft({ prompt: description, lyrics }); goTo('render'); }} disabled={busy || !draftReady} className={PRIMARY_BTN}>
             {lyrics.trim() ? 'Next: render' : 'Continue without lyrics'}
           </button>
           {!lyrics.trim() && (
@@ -587,10 +599,9 @@ export default function MusicDesigner() {
               id="music-designer-render-prompt"
               value={description}
               onChange={(event) => setDescription(event.target.value)}
-              onBlur={() => saveDraft({ prompt: description.trim() })}
+              onBlur={() => saveDraft({ prompt: description })}
               disabled={draftLoading}
               rows={6}
-              maxLength={8000}
               placeholder={'Describe the sound, arrangement, vocals, instruments, mood, and production direction…'}
               aria-describedby="music-designer-render-prompt-hint"
               className={FIELD_CLASS}

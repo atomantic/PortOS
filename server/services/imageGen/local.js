@@ -49,6 +49,7 @@ import { weaveLoraTriggers } from '../../lib/loraTriggers.js';
 import { provenanceForRender } from '../../lib/assetProvenance.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { readTriggerWordsByFilename, readLoraLicensesByFilename } from '../loras.js';
+import { carriedPromptAdditions, promptAddition, sentPromptRecord } from '../../lib/modelInput.js';
 
 // Read the registry lazily — callers below hit getImageModels() at request
 // time. A prior `IMAGE_MODELS = Object.fromEntries(getImageModels()...)`
@@ -343,6 +344,8 @@ export function buildSidecarMeta({
   // License map keyed by LoRA basename, read from sidecars by generateImage
   // so this stays pure. Missing entries stamp license: null (unknown).
   loraLicenses = null,
+  // The labeled additions the composer put around the user's text (lib/modelInput.js).
+  promptAdditions = [],
   initImagePath = null,
   initImageStrength = null,
   referenceImagePaths = [],
@@ -466,6 +469,10 @@ export function buildSidecarMeta({
     meta.renderPrompt = renderPrompt;
     meta.addedTriggerWords = addedTriggerWords;
   }
+  Object.assign(meta, sentPromptRecord({
+    sentPrompt: renderPrompt, sentNegativePrompt: negativePrompt, carried: carriedPromptAdditions({ promptAdditions }),
+    added: [promptAddition('lora-triggers', 'LoRA trigger words', addedTriggerWords.join(', '))],
+  }));
   // Stamp the licenses known at THIS render. A later re-read of the LoRA
   // sidecar or model card must not rewrite what was true when the pixels
   // were made (#5638). Unknown stays null.
@@ -562,7 +569,22 @@ export function parseImageExecutionMarker(line) {
   };
 }
 
-export async function generateImage({ pythonPath, prompt = '', negativePrompt = '', modelId = LOCAL_IMAGEGEN_DEFAULT_MODEL, width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, referenceImagePaths = [], referenceImageStrengths = [], visualConditioning = null, jobId: providedJobId = null, cleanC2PA = false, denoise = false, regenOf = null, upscaleTo = null, outputTarget = null }) {
+/**
+ * What the local runner would receive for this prompt — the LoRA trigger weave
+ * included — as the compose preview's record (#11317). Same buildSidecarMeta
+ * the render calls.
+ */
+export async function localSentPrompt({ model, modelId, prompt = '', negativePrompt = '', loraFilenames = [], loraPaths = [], promptAdditions = [] }) {
+  const loraTriggerWords = await readTriggerWordsByFilename([...loraFilenames, ...loraPaths]);
+  const { meta } = buildSidecarMeta({
+    jobId: 'preview', model: model || { id: modelId }, prompt, negativePrompt, modelId,
+    loraFilenames, loraPaths, loraTriggerWords, promptAdditions,
+    resolveInputPath: resolveImageInputPath, loraExists: existsSync,
+  });
+  return sentPromptRecord({ sentPrompt: meta.sentPrompt, sentNegativePrompt: meta.sentNegativePrompt, carried: meta.promptAdditions || [] });
+}
+
+export async function generateImage({ pythonPath, prompt = '', negativePrompt = '', modelId = LOCAL_IMAGEGEN_DEFAULT_MODEL, width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, referenceImagePaths = [], referenceImageStrengths = [], visualConditioning = null, jobId: providedJobId = null, cleanC2PA = false, denoise = false, regenOf = null, upscaleTo = null, outputTarget = null, promptAdditions = [] }) {
   // The ingestion instant `renderTimingFields` measures from — the queue calls
   // generateImage the moment it picks this job up. See lib/renderTiming.js.
   const renderStartedAtMs = Date.now();
@@ -676,6 +698,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     regenOf,
     loraTriggerWords,
     loraLicenses,
+    promptAdditions,
     resolveInputPath: resolveImageInputPath,
     loraExists: existsSync,
   });
@@ -689,29 +712,32 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   // per inference step here; we watch and stream the latest as `currentImage`.
   const stepwiseDir = await mkdtemp(join(tmpdir(), 'portos-stepwise-'));
 
-  // `renderPrompt` — the user's prompt plus any LoRA activation tokens it was
-  // missing (#4665). Identical to `prompt` when nothing was woven.
-  const { bin, args } = buildArgs({ pythonPath, model, prompt: renderPrompt, negativePrompt, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, seed: actualSeed, quantize, outputPath, loraPaths: validLoras, loraScales, stepwiseDir, initImagePath: validInitImagePath, initImageStrength: validInitImageStrength, referenceImagePaths: validReferenceImagePaths, referenceImageStrengths: validReferenceImageStrengths });
-  const heavyClaim = await claimHeavyLocalJob({ kind: 'local image generation', id: jobId });
-  if (!heavyClaim.ok) {
-    jobs.delete(jobId);
-    await rmGuarded(stepwiseDir, { recursive: true, force: true });
-    throw new ServerError(heavyClaim.message, { status: 409, code: 'HEAVY_LOCAL_JOB_BUSY', context: { holder: heavyClaim.holder } });
-  }
-  const releaseHeavyClaim = () => maintenance.continueSettlement(() => heavyClaim.release())
-    .catch((err) => {
-      maintenance.markCurrentUnsettled();
-      console.error(`❌ Image generation claim release [${jobId.slice(0, 8)}]: ${err.message}`);
-    });
+  let heavyClaim = null;
+  const releaseHeavyClaim = () => {
+    if (!heavyClaim?.release) return Promise.resolve();
+    return maintenance.continueSettlement(() => heavyClaim.release())
+      .catch((err) => {
+        maintenance.markCurrentUnsettled();
+        console.error(`❌ Image generation claim release [${jobId.slice(0, 8)}]: ${err.message}`);
+      });
+  };
   const removeStepwise = () => maintenance.continueSettlement(
     () => rmGuarded(stepwiseDir, { recursive: true, force: true }),
   ).catch((err) => {
     maintenance.markCurrentUnsettled();
     console.error(`❌ Image generation scratch cleanup [${jobId.slice(0, 8)}]: ${err.message}`);
   });
+  let bin, args;
   let proc;
   let claimHandedOff = false;
   try {
+    // `renderPrompt` — the user's prompt plus any LoRA activation tokens it was
+    // missing (#4665). Identical to `prompt` when nothing was woven.
+    ({ bin, args } = buildArgs({ pythonPath, model, prompt: renderPrompt, negativePrompt, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, seed: actualSeed, quantize, outputPath, loraPaths: validLoras, loraScales, stepwiseDir, initImagePath: validInitImagePath, initImageStrength: validInitImageStrength, referenceImagePaths: validReferenceImagePaths, referenceImageStrengths: validReferenceImageStrengths }));
+    heavyClaim = await claimHeavyLocalJob({ kind: 'local image generation', id: jobId });
+    if (!heavyClaim.ok) {
+      throw new ServerError(heavyClaim.message, { status: 409, code: 'HEAVY_LOCAL_JOB_BUSY', context: { holder: heavyClaim.holder } });
+    }
     const { prepareLocalMemory, gpuBlockersMessage } = await import('../localMemory.js');
     const memoryReport = await prepareLocalMemory();
     // Something the unload above cannot evict already owns the GPU (today: the

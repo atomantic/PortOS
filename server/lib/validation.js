@@ -2847,3 +2847,15 @@ export const voicePiperFetchBodySchema = z.object({ voice: nonEmptyString });
 export const writersRoomSceneImageBodySchema = z.object({
   sceneId: nullishString, filename: nullishString, jobId: nullishString, prompt: nullishString,
 });
+
+// One step of the global provider fallback list. `providerId` is a preset or
+// composite reference; `model` / `effort` are optional pins for that step, so
+// one preset may appear several times with different models or effort.
+export const providerFallbackEntrySchema = z.object({
+  providerId: providerRefSchema,
+  model: z.preprocess((v) => (v === '' ? undefined : v), z.string().trim().min(1).max(200).optional()),
+  effort: z.preprocess((v) => (v === '' ? undefined : v), z.string().trim().min(1).max(40).optional()),
+});
+export const providerFallbackChainBodySchema = z.object({
+  entries: z.array(providerFallbackEntrySchema).max(50),
+});

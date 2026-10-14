@@ -55,6 +55,17 @@ describe('renderBoardItem', () => {
     expect(emit).toHaveBeenCalledWith({ boardId: 'mb-1', itemId: 'n1', status: 'queued' });
   });
 
+  // Uniquely catches the board look reaching the model unlisted, or a long note cut (#11317).
+  it('sends a long note whole and lists the blocks PortOS adds', async () => {
+    const long = 'x'.repeat(9000);
+    store.claimBoardItemRender.mockImplementationOnce(async () => ({ ...note, text: long, render: { status: 'queued', jobId: null } }));
+    enqueue.mockResolvedValueOnce({ jobId: 'job-2' });
+    await renderBoardItem('mb-1', 'n1');
+    const { params } = enqueue.mock.calls[0][0];
+    expect(params.prompt).toBe(`Mood board reference image: ${long}\n\nVisual style: neon chiaroscuro`);
+    expect(params.promptAdditions.map((item) => item.label)).toEqual(['Mood board reference', 'Board style', 'Board avoid (negative prompt)']);
+  });
+
   it('marks the note failed instead of leaving it rendering when the backend refuses', async () => {
     imageParams.mockRejectedValueOnce(new Error('The external image backend cannot render board notes'));
     await expect(renderBoardItem('mb-1', 'n1')).rejects.toThrow('cannot render board notes');

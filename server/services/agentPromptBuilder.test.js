@@ -693,11 +693,21 @@ describe('buildLightContextPrompt', () => {
 
       expect(prompt.userPrompt).toContain('Custom security mission');
       expect(prompt.systemPrompt).toContain('## Codex Security Audit Runtime');
-      expect(prompt.systemPrompt).toContain('--auth chatgpt --headless --json');
+      expect(prompt.systemPrompt).toContain('/security-scan');
+      expect(prompt.systemPrompt).toContain('subscription ChatGPT authentication');
+      expect(prompt.systemPrompt).toContain('saved grants retain their original limits');
+      expect(prompt.systemPrompt).toContain('Wait for the single request to finish');
+      expect(prompt.systemPrompt).toContain('--max-time 0');
+      expect(prompt.systemPrompt).toContain('no PortOS estimate cap or elapsed-time deadline');
+      expect(prompt.systemPrompt).not.toContain('npx --yes');
       expect(prompt.systemPrompt).toContain('deliver supported findings even when another probe is blocked');
       expect(prompt.systemPrompt).toContain('## Completion (No Code Output)');
       expect(prompt.systemPrompt).toContain('## Required audit assessment handoff');
       expect(prompt.systemPrompt).toContain('QUALITY_AUDIT_JSON');
+      expect(prompt.systemPrompt).toContain('SCANNER_STATUS_JSON');
+      expect(prompt.systemPrompt).toContain('refusal is terminal for this request');
+      expect(prompt.systemPrompt).toContain('Only an explicit runner status of invalid-input permits correction');
+      expect(prompt.systemPrompt).toContain('Do not resubmit after any other result or transport error');
     });
 
     it.each([
@@ -1130,6 +1140,7 @@ describe('buildLightContextPrompt', () => {
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' });
       expect(prompt).toMatch(/## Review-Loop Follow-up/);
+      expect(prompt).not.toContain('## Repository merge admission');
       // The review still runs — only the merge is withheld.
       expect(prompt).toMatch(/codex/);
       expect(prompt).toMatch(/leave the PR open/i);
@@ -1953,8 +1964,11 @@ describe('buildLightContextPrompt', () => {
         }}),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
-        { defaultReviewers: ['copilot'] });
+        { defaultReviewers: ['copilot'], agentId: 'registered-coordinator' });
       expect(prompt).toMatch(/## Review-Loop Follow-up/);
+      expect(prompt).toContain('## Repository merge admission');
+      expect(prompt).toContain('--match-head-commit <sha>');
+      expect(prompt).toContain('/api/cos/merge-admission');
       expect(prompt).toMatch(/task-src-1/);
       expect(prompt).toMatch(/gh pr merge "https:\/\/github\.com\/o\/r\/pull\/9" --merge --delete-branch/);
       // --auto must NOT appear inside any `gh pr merge` invocation — it defers
@@ -4608,4 +4622,12 @@ it('preserves the extended marker in split prompts, refuses unknown versions and
   await expect(buildAgentPrompt(makeTask({ metadata: { auditDepth: 'deep', deepAuditId: 'old' } }), {}, '/r')).rejects.toThrow('read-only');
   expect(() => sanitizeTaskMetadata({ auditDepth: 'deep', auditWorkflow: 'future-v9' })).toThrow('Unsupported');
   expect(() => sanitizeTaskMetadata({ auditDepth: 'deep', auditWorkflow: 'extended-v1', deepAuditId: 'old' })).toThrow('cannot reuse');
+});
+
+it.each(['api', 'cli', 'tui'])('requires a per-agent disposition checkpoint and final register on %s audits', async providerType => {
+  const task = makeTask({ description: 'Stop after one fix', metadata: { auditDispositionVersion: '1', analysisType: 'security', app: 'example' } });
+  const prompt = await buildAgentPrompt(task, {}, '/r', null, { providerType, agentId: 'audit-example' });
+  expect(prompt).toContain('.agent-audit-findings-audit-example.json');
+  expect(prompt).toContain('AUDIT_FINDINGS_JSON');
+  expect(prompt.indexOf('## Required finding disposition register')).toBeLessThan(prompt.indexOf('Stop after one fix'));
 });

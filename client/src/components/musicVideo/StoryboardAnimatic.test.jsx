@@ -27,6 +27,21 @@ describe('StoryboardAnimatic', () => {
     expect(container.querySelector('img').getAttribute('src')).toBe('/data/images/frame-b.png');
     expect(screen.getByText('Shot 2 / 2')).toBeTruthy();
   });
+
+  // Uniquely catches the animatic showing a clip where the composed render plays a still's image effect.
+  it('plays a still shot\'s camera flash develop over its still, not its clip, from the shot\'s start', () => {
+    const effectShot = { sceneId: 'fx', label: 'Burger', startSec: 0, endSec: 6, referenceImageId: 'burger.png', videoHistoryId: 'clip-1',
+      visualLayer: 'still', imageEffect: 'flash-develop', imageEffectSec: 2 };
+    render(<StoryboardAnimatic project={{ id: 'p', composition: { mode: 'composed' }, scenes: [effectShot] }} audioUrl="/song.mp3" />);
+    const effect = screen.getByTestId('animatic-image-effect');
+    expect(screen.queryByLabelText('Clip for Burger')).toBeNull();
+    const img = effect.querySelector('img');
+    expect(img.style.filter).toBe('contrast(0.55) saturate(0)');
+    const audio = screen.getByLabelText('Song for the storyboard animatic');
+    Object.defineProperty(audio, 'currentTime', { value: 3, configurable: true });
+    fireEvent.timeUpdate(audio);
+    expect(img.style.filter).toBe('contrast(1) saturate(1)');
+  });
 });
 
 vi.mock('../../services/apiMusicVideo.js', () => ({
@@ -106,6 +121,37 @@ describe('StoryboardAnimatic clips', () => {
     expect(container.querySelector('img').getAttribute('src')).toBe('/data/images/frame-b.png');
   });
 
+  // Uniquely catches the animatic's beat toggle showing the incoming shot on the wrong frames,
+  // or its clip leaving the song's clock (ignoring the shot's offset or speed) before or after the cut.
+  it('flips to the next shot on the beats before a beat toggle cut, its clip on the song\'s clock', async () => {
+    const scenes = [
+      { sceneId: 'a', label: 'One', startSec: 0, endSec: 4, videoHistoryId: 'clip-a', cutEffect: { style: 'beat-toggle', enabled: true, overlapSec: 1, rate: 'beat' } },
+      // 1.5 s in, half again as fast.
+      { sceneId: 'b', label: 'Two', startSec: 4, endSec: 8, videoHistoryId: 'clip-b', offsetFrames: 36, speedFps: 12 },
+    ];
+    const project = { id: 'p', scenes, audioAnalysis: { beats: [3, 3.5, 4, 4.5] } };
+    render(<StoryboardAnimatic project={project} audioUrl="/song.mp3" />);
+    const audio = screen.getByLabelText('Song for the storyboard animatic');
+    const at = (t) => { Object.defineProperty(audio, 'currentTime', { value: t, configurable: true }); fireEvent.timeUpdate(audio); };
+    at(2.9);
+    const toggle = await screen.findByTestId('beat-toggle-clip');
+    await waitFor(() => expect(toggle.getAttribute('src')).toBe('/data/videos/clip-b.mov'));
+    Object.defineProperty(toggle, 'readyState', { value: 4, configurable: true });
+    expect(toggle.style.opacity).toBe('0');
+    at(3.2);
+    expect(toggle.style.opacity).toBe('1');
+    // 0.8 s before the shot starts: 1.2 s of clip before its 1.5 s in-point.
+    expect(toggle.currentTime).toBeCloseTo(0.3, 2);
+    at(3.7);
+    expect(toggle.style.opacity).toBe('0');
+    // Past the cut the incoming shot's own clip starts where it would without the toggle.
+    const clipB = screen.getByLabelText('Clip for Two');
+    Object.defineProperty(clipB, 'readyState', { value: 4, configurable: true });
+    Object.defineProperty(audio, 'paused', { value: true, configurable: true });
+    at(4.25);
+    expect(clipB.currentTime).toBeCloseTo(1.875, 2);
+  });
+
   it('loads the next shots\' clips ahead and cuts to the same loaded clip', async () => {
     const scenes = [
       { sceneId: 'a', label: 'One', startSec: 0, endSec: 1, referenceImageId: 'frame-a.png' },
@@ -141,6 +187,18 @@ describe('StoryboardAnimatic clips', () => {
     expect(audio.currentTime).toBe(0);
   });
 
+  it('pauses the song and opens the shot playing from Edit shot', () => {
+    const stills = clipScenes.map(({ videoHistoryId, ...scene }) => scene);
+    const onEditShot = vi.fn();
+    render(<StoryboardAnimatic project={{ id: 'p', scenes: stills }} audioUrl="/song.mp3" onEditShot={onEditShot} />);
+    const audio = screen.getByLabelText('Song for the storyboard animatic');
+    audio.pause = vi.fn();
+    fireEvent.click(screen.getByRole('button', { name: 'Next shot' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit shot' }));
+    expect(audio.pause).toHaveBeenCalled();
+    expect(onEditShot).toHaveBeenCalledWith(stills[1].sceneId);
+  });
+
   it('saves the shot\'s still, then its clip once that shows', async () => {
     render(<StoryboardAnimatic project={{ id: 'p', name: 'Example Song', scenes: clipScenes }} audioUrl="/song.mp3" />);
     const clip = await screen.findByLabelText('Clip for Opening');
@@ -171,6 +229,30 @@ describe('StoryboardAnimatic clips', () => {
     expect(clipTimeAt(performance, 13, 9)).toBe(5);
     expect(clipTimeAt({ startSec: 10 }, 16, 4)).toBe(2);
     expect(clipTimeAt({ startSec: 10, loop: false }, 16, 4)).toBeCloseTo(3.95);
+  });
+
+  // Uniquely catches the preview playing a shot's hand-set speed or offset differently from the render.
+  it('plays a hand-set speed and frame offset from the same clip, as the render does', () => {
+    // 48 fps on the 24 fps grid: twice as fast, starting 12 frames (0.5s) in.
+    const fast = { startSec: 10, speedFps: 24, offsetFrames: 12 };
+    expect(clipTimeAt(fast, 11, 6)).toBeCloseTo(2.5);
+    expect(clipTimeAt(fast, 13, 6)).toBeCloseTo(0.5);
+    expect(clipTimeAt({ ...fast, loop: false }, 13, 6)).toBeCloseTo(5.95);
+    // Six frames early: the first frame holds a quarter second, then the clip runs.
+    const early = { startSec: 10, offsetFrames: -6 };
+    expect(clipTimeAt(early, 10.2, 6)).toBe(0);
+    expect(clipTimeAt(early, 11.25, 6)).toBeCloseTo(1);
+  });
+
+  // Uniquely catches a reversed shot previewing forwards, or looping where the render holds.
+  it('plays a reversed clip from its end, with its speed and offset, and holds once it runs out', () => {
+    const back = { startSec: 10, reverse: true };
+    expect(clipTimeAt(back, 10, 6)).toBeCloseTo(5.95);
+    expect(clipTimeAt(back, 12, 6)).toBeCloseTo(4);
+    expect(clipTimeAt(back, 20, 6)).toBe(0);
+    expect(clipTimeAt({ ...back, speedFps: 24, offsetFrames: 12 }, 11, 6)).toBeCloseTo(3.5);
+    // A lip-sync performance never reverses.
+    expect(clipTimeAt({ ...back, shotMode: 'performance' }, 12, 6)).toBe(2);
   });
 });
 

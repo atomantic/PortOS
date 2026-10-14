@@ -9,9 +9,12 @@
  *  - a performance take starts at its edit in-point and stops at its edit out-point;
  *  - a looping shot wraps around the clip;
  *  - a non-looping shot longer than its clip holds the clip's last frame.
+ *  - a shot's clip speed and frame offset move where it ends, and a reversed clip
+ *    ends on an earlier frame (its first frame when the shot outlasts it).
  * The returned time is the last displayed frame, one frame before the out-point.
  */
-import { sceneHasAuthoredSpan } from './musicVideoLayers.js';
+import { isEndFrameImageEffect } from './musicVideoImageEffects.js';
+import { clipOffsetSec, clipReversed, clipSpeedRate, isLayeredComposition, sceneHasAuthoredSpan, sceneVisualLayer } from './musicVideoLayers.js';
 import { selectedPerformanceInstruction } from './musicVideoShotTiming.js';
 
 const round3 = (n) => Math.round(n * 1000) / 1000;
@@ -27,15 +30,43 @@ export function sceneClipOutFrameSec(scene, clipDurationSec, fps = 24) {
   const frameSec = 1 / (Number(fps) > 0 ? Number(fps) : 24);
   const span = scene.endSec - scene.startSec;
   const edit = selectedPerformanceInstruction(scene)?.edit ?? null;
+  // Mirrors render.js: a hand-set speed reads the clip faster or slower, and an offset starts it
+  // later (or, negative, holds its first frame that long first).
+  const rate = clipSpeedRate(scene);
+  const offset = clipOffsetSec(scene);
+  // A reversed clip is read once from its end, so the cut ends on an earlier frame of it.
+  if (!edit && clipReversed(scene)) {
+    const read = Math.max(0, offset) + Math.max(0, span + Math.min(0, offset)) * rate;
+    return round3(Math.min(duration - frameSec, Math.max(0, duration - read + frameSec * rate)));
+  }
   const inSec = edit ? Math.min(Math.max(0, edit.inSec), duration) : 0;
   const stopSec = edit ? Math.min(edit.outSec, duration) : duration;
-  // Mirrors render.js: only a pre-#8964 scene (no `loop` key) or `loop: true`
-  // repeats, and a performance take never does.
+  // Only a pre-#8964 scene (no `loop` key) or `loop: true` repeats, and a performance take never does.
   const loops = !edit && scene.loop !== false;
   const playable = stopSec - inSec;
   if (!(playable > 0)) return round3(inSec);
-  const played = loops && span > playable ? span % playable || playable : Math.min(span, playable);
-  return round3(Math.max(inSec, inSec + played - frameSec));
+  const start = Math.max(0, offset);
+  const played = start + Math.max(0, span + Math.min(0, offset)) * rate;
+  const within = loops && played > playable ? played % playable || playable : Math.min(played, playable);
+  return round3(Math.max(inSec, inSec + within - frameSec * rate));
+}
+
+/**
+ * What the cut shows at the end of `shot`, for the shot after it to start from:
+ * `{ imageId }` for a still shot (its end frame when an effect plays to it, else
+ * its still), `{ clip: true }` for footage with a clip to read the out-frame
+ * from, or null when there is nothing to hand over (a drawn card or code shot,
+ * or a missing picture). A still shot's clip, left from before it became a
+ * still, is never on screen, so it is never read.
+ */
+export function shotHandoffSource(project, shot) {
+  if (!shot) return null;
+  const layer = sceneVisualLayer(shot, { layered: isLayeredComposition(project) });
+  if (layer === 'still') {
+    const imageId = isEndFrameImageEffect(shot.imageEffect) && shot.endImageId ? shot.endImageId : shot.referenceImageId;
+    return imageId ? { imageId } : null;
+  }
+  return layer === 'footage' && shot.videoHistoryId ? { clip: true } : null;
 }
 
 /**

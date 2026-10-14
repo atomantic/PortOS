@@ -310,7 +310,14 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // server-rendered SuperCollider take). A <=v9 peer's sanitizer would strip it
   // and LWW the unreproducible take back. Absent on every older render; nothing
   // to migrate.
-  tracks: 10,
+  // tracks v11 = exact local audio captions and labeled prompt additions on
+  // takes. Older sanitizers would erase the record of what the model received.
+  // Optional on older takes; no stored records need rewriting.
+  // tracks v12 = exact local audio lyric sheets and labeled lyric additions
+  // on takes. A <=v11 peer would strip sentLyrics/lyricAdditions, including
+  // on newly received takes where the sender-behind merge cannot restore them.
+  // Optional on older takes; no stored records need rewriting.
+  tracks: 12,
   // v1 = creative ingredients catalog (Postgres tables: catalog_scraps,
   // catalog_ingredients, catalog_ingredient_sources, catalog_ingredient_refs).
   // v2 = `catalog_ingredients.search_tsv` expanded to also index the

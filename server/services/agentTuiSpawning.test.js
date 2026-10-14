@@ -733,6 +733,7 @@ describe('spawnTuiAgent runtime', () => {
       prOpenedBy: overrides.prOpenedBy ?? stampPrOpenedBy(overrides, task, provider),
       leanMode: overrides.leanMode ?? false,
       useDurableRunner: overrides.useDurableRunner ?? false,
+      securityScanGrant: overrides.securityScanGrant ?? null,
       safetyProfile: overrides.safetyProfile ?? null,
       ...helpers,
     });
@@ -1212,7 +1213,7 @@ describe('spawnTuiAgent runtime', () => {
       tuiConfig: { ...defaultTuiConfig, command: 'opencode', spawnCommand: 'opencode', commandLine: 'opencode' },
     });
     await flushMicrotasks();
-    await capturedOnData(Buffer.from('OpenCode booting...\n'));
+    await capturedOnData(Buffer.from('\x1b[?2004l\x1b[?2004hAsk anything…\n'));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
@@ -1490,6 +1491,42 @@ describe('spawnTuiAgent runtime', () => {
     await vi.advanceTimersByTimeAsync(400);
     await flushMicrotasks();
     expect(pasteCount()).toBe(1);
+  });
+
+  it('waits through OpenCode terminal negotiation and skips its update modal before submitting once', async () => {
+    const spawnPromise = runSpawn({
+      provider: { ...defaultProvider, id: 'opencode-tui', name: 'OpenCode TUI' },
+      tuiConfig: { ...defaultTuiConfig, command: '/opt/bin/opencode', spawnCommand: 'opencode', commandLine: 'opencode' },
+    });
+    await flushMicrotasks();
+    // A quiet terminal-capability query used to trigger the idle paste, then
+    // exhaust every retry before the composer and update offer even appeared.
+    await capturedOnData(Buffer.from('\x1bP+q4d73\x1b\\'));
+    await vi.advanceTimersByTimeAsync(15000);
+    expect(pasteCount()).toBe(0);
+    expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
+
+    await capturedOnData(Buffer.from('\x1b[?2004l\x1b[?2004hAsk anything…\n'));
+    await vi.advanceTimersByTimeAsync(600);
+    expect(pasteCount()).toBe(0);
+    await capturedOnData(Buffer.from('Update\x1b[8;29H Available esc\nA new release v9.9.9 is avail'));
+    await capturedOnData(Buffer.from('able. Would you like to update now?\nSkip Confirm\n'));
+    await vi.advanceTimersByTimeAsync(400);
+    expect(vi.mocked(shellService.writeToSession).mock.calls.map(([, data]) => data)).toEqual(['\x1b']);
+    expect(pasteCount()).toBe(0);
+    // Even beyond the old blind-paste deadline, require fresh output after Esc.
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(pasteCount()).toBe(0);
+    await capturedOnData(Buffer.from('Ask anything…\n'));
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(pasteCount()).toBe(1);
+    await capturedOnData(Buffer.from('[Pasted ~42 lines]'));
+    await vi.advanceTimersByTimeAsync(8000);
+    expect(vi.mocked(shellService.writeToSession).mock.calls.map(([, data]) => data)).toContain('\r');
+    expect(pasteCount()).toBe(1);
+    expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
+    await capturedOnExit({ exitCode: 0, killed: false });
+    await spawnPromise;
   });
 
   it('codex hook-review offer: continues without trusting hooks before pasting the prompt', async () => {
@@ -2063,6 +2100,35 @@ describe('spawnTuiAgent runtime', () => {
   // The spawner acts on every gate from one 5s poll (PROVIDER_SIGNAL_POLL_MS,
   // module-private), so each nudge lands within a tick of its threshold.
   const SIGNAL_POLL_MS = 5000;
+
+  it.each([
+    { maxCostUsd: 'unlimited', timeLimitSeconds: 'unlimited', nudges: false },
+    { maxCostUsd: 2, timeLimitSeconds: 180, nudges: true },
+  ])('honors a trusted $timeLimitSeconds scanner grant through a quiet outer audit', async ({ nudges, ...limits }) => {
+    runSpawn({ securityScanGrant: { model: 'example-model', effort: 'medium', auth: 'chatgpt', ...limits } });
+    await flushMicrotasks();
+    await capturedOnData(Buffer.from('Codex booting...\n' + CODEX_COMPOSER));
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(pasteCount()).toBe(1);
+    await capturedOnData(Buffer.from('do the thing\n'));
+    await vi.advanceTimersByTimeAsync(4000);
+    // Both scanner work and the later source/fix/test phase can be silent.
+    await capturedOnData(Buffer.from('Reviewing source and validating fixes.\n'));
+    vi.mocked(shellService.pasteToSession).mockClear();
+    vi.mocked(shellService.writeToSession).mockClear();
+    await vi.advanceTimersByTimeAsync(nudges ? STALL_NUDGE_IDLE_MS + SIGNAL_POLL_MS : 2 * 60 * 60 * 1000);
+    if (nudges) {
+      expect(shellService.pasteToSession).toHaveBeenCalledWith(SESSION_ID, STALL_NUDGE_TEXT, expect.anything());
+    } else {
+      expect(shellService.pasteToSession).not.toHaveBeenCalled();
+      expect(shellService.writeToSession).not.toHaveBeenCalled();
+      expect(cosAgentLifecycle.updateAgent).not.toHaveBeenCalledWith('agent-1', { metadata: { phase: 'stalled' } });
+    }
+    expect(shellService.killSession).not.toHaveBeenCalled();
+    expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
+    await capturedOnExit({ exitCode: 1, killed: false });
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledOnce();
+  });
 
   // ── Stalled session: the turn just ended, with the task unfinished ─────────
   // agent-bb3061af (2026-09-17): the run finished its /simplify pass, printed

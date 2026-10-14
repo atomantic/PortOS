@@ -52,6 +52,7 @@ vi.mock('../components/ui/Toast', () => ({
 // test is the page's own wiring (open, persist via onResult, stored-analysis
 // children), not the analyzer internals, which have their own suite.
 let analysisDelay = null;
+vi.mock('../components/moodBoard/MoodBoardGeneratePanel', () => ({ default: () => <div data-testid="generate-more-panel" /> }));
 vi.mock('../components/moodBoard/MoodBoardStylePanel', () => ({
   default: () => <div data-testid="board-style-panel" />,
 }));

@@ -43,7 +43,8 @@ vi.mock('../../ui/Toast', () => ({
 vi.mock('../VoiceCapture', () => ({ default: () => null }));
 vi.mock('../RepoIntakeOptions', () => ({ default: () => null }));
 
-import { captureBrainThought, getBrainInbox } from '../../../services/api';
+import { captureBrainThought, getBrainInbox, resolveBrainReview } from '../../../services/api';
+import socket from '../../../services/socket';
 import InboxTab from './InboxTab';
 
 function LocationProbe() {
@@ -86,6 +87,60 @@ describe('Brain inbox capture', () => {
 
     await act(async () => { resolveHistory({ entries: historyIncludesCapture ? [accepted] : [], counts: { filed: historyIncludesCapture ? 1 : 0 } }); });
     await waitFor(() => expect(screen.queryByText('Loading inbox history')).toBeNull());
+    expect(screen.getAllByText(accepted.capturedText)).toHaveLength(1);
+  });
+
+  it.each([false, true])('shows the classified record when its capture acknowledgement arrives last: %s', async (acknowledgementLast) => {
+    const accepted = {
+      id: 'example-classified', capturedText: 'A thought to classify',
+      status: 'classifying', capturedAt: '2026-01-01T00:00:00.000Z',
+    };
+    let acknowledge;
+    captureBrainThought.mockReturnValue(new Promise(resolve => { acknowledge = resolve; }));
+    render(<MemoryRouter><InboxTab /></MemoryRouter>);
+    await waitFor(() => expect(screen.queryByText('Loading inbox history')).toBeNull());
+
+    fireEvent.change(screen.getByLabelText('New inbox thought'), { target: { value: accepted.capturedText } });
+    fireEvent.click(screen.getByLabelText('Capture thought'));
+    expect(screen.getByText('AI is classifying this thought...')).toBeInTheDocument();
+    if (!acknowledgementLast) {
+      await act(async () => { acknowledge({ inboxLog: accepted }); });
+    }
+
+    getBrainInbox.mockResolvedValue({
+      entries: [{ ...accepted, status: 'filed', filed: { destination: 'ideas', destinationId: 'example-idea' } }],
+      counts: { filed: 1 },
+    });
+    const classified = socket.on.mock.calls.find(([event]) => event === 'brain:classified')[1];
+    act(() => classified({ status: 'filed', destination: 'ideas', title: 'Example idea' }));
+    await screen.findByTitle('View in Memory');
+    if (acknowledgementLast) {
+      await act(async () => { acknowledge({ inboxLog: accepted }); });
+    }
+
+    await waitFor(() => expect(screen.queryByText('AI is classifying this thought...')).toBeNull());
+    expect(screen.getAllByText(accepted.capturedText)).toHaveLength(1);
+    expect(screen.getByTitle('View in Memory')).toBeInTheDocument();
+  });
+
+  it('shows the filed result after manually routing a capture that needed review', async () => {
+    const accepted = {
+      id: 'example-review', capturedText: 'A thought to review',
+      status: 'needs_review', capturedAt: '2026-01-01T00:00:00.000Z',
+    };
+    captureBrainThought.mockResolvedValue({ inboxLog: accepted });
+    render(<MemoryRouter><InboxTab /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText('New inbox thought'), { target: { value: accepted.capturedText } });
+    fireEvent.click(screen.getByLabelText('Capture thought'));
+    const route = await screen.findByTitle('Route to Ideas');
+
+    const filed = { ...accepted, status: 'filed', filed: { destination: 'ideas', destinationId: 'example-idea' } };
+    getBrainInbox.mockResolvedValue({ entries: [filed], counts: { filed: 1 } });
+    resolveBrainReview.mockResolvedValue({ inboxLog: filed });
+    fireEvent.click(route);
+
+    await screen.findByTitle('View in Memory');
+    expect(screen.queryByTitle('Route to Ideas')).toBeNull();
     expect(screen.getAllByText(accepted.capturedText)).toHaveLength(1);
   });
 

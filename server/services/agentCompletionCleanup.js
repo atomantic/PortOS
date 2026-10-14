@@ -414,7 +414,7 @@ async function completeJiraHandOff({ agentId, task, agentState, effectiveSuccess
     });
 
     const prUrl = jiraCreatePR === false ? null : await createJiraPullRequest({
-      agentId, task, workspace, jiraTicketId, jiraTicketRef, jiraBranch, outputBuffer,
+      agentId, task, workspace, jiraTicketId, jiraTicketRef, jiraBranch, outputBuffer, scannerMetadata: agentState?.metadata,
     });
 
     if (jiraInstanceId) {
@@ -447,11 +447,11 @@ async function resolveJiraTicketRef({ jiraTicketId, jiraTicketUrl, jiraInstanceI
   return ticketUrl ? `[${jiraTicketId}](${ticketUrl})` : jiraTicketId;
 }
 
-async function createJiraPullRequest({ agentId, task, workspace, jiraTicketId, jiraTicketRef, jiraBranch, outputBuffer }) {
+async function createJiraPullRequest({ agentId, task, workspace, jiraTicketId, jiraTicketRef, jiraBranch, outputBuffer, scannerMetadata }) {
   const { baseBranch, devBranch } = await git.getRepoBranches(workspace).catch(() => ({ baseBranch: null, devBranch: null }));
   const targetBranch = devBranch || baseBranch || 'main';
 
-  const jiraPrBody = await git.generatePRDescription(workspace, targetBranch, jiraBranch, outputBuffer);
+  const jiraPrBody = await git.generatePRDescription(workspace, targetBranch, jiraBranch, outputBuffer, scannerMetadata?.securityScan, scannerMetadata?.securityScanControl);
   const jiraPrBodyWithRef = `Resolves ${jiraTicketRef}\n\n${jiraPrBody}`;
 
   const baseTitle = await git.suggestPRTitle(workspace, targetBranch, jiraBranch, task.description);

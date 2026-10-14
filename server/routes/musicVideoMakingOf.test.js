@@ -154,7 +154,35 @@ describe('local making-of compilation', () => {
     } finally { fetchSpy.mockRestore(); }
   });
 
-  it('retains native cast/set raster plates and all 26 static storyboard graphics as portable images in source order', async () => {
+  it('retains native cast/set raster plates and all 26 static storyboard graphics as portable images in source order', async ({ onTestFinished }) => {
+    // Keep the real Sharp/route contract and its deadline. Bounded, fixture-only
+    // diagnostics survive a timeout so the next Windows failure identifies the
+    // active phase and whether native encoding or the surrounding work stalled.
+    const started = performance.now();
+    let phase = 'fixture';
+    let phaseStarted = started;
+    let encoded = 0, encodingMs = 0, longestEncodingMs = 0;
+    const activeEncodings = new Set();
+    const originalToBuffer = sharp.prototype.toBuffer;
+    const encodingSpy = vi.spyOn(sharp.prototype, 'toBuffer').mockImplementation(function (...args) {
+      const operation = { started: performance.now() };
+      activeEncodings.add(operation);
+      return originalToBuffer.apply(this, args).finally(() => {
+        const elapsed = performance.now() - operation.started;
+        activeEncodings.delete(operation);
+        encoded += 1; encodingMs += elapsed;
+        longestEncodingMs = Math.max(longestEncodingMs, elapsed);
+      });
+    });
+    const report = status => console.log(`⏱️ Making-of graphics ${status}: phase=${phase} phaseMs=${Math.round(performance.now() - phaseStarted)} totalMs=${Math.round(performance.now() - started)} encodes=${encoded} encodingMs=${Math.round(encodingMs)} longestEncodingMs=${Math.round(longestEncodingMs)} activeEncodes=${activeEncodings.size} oldestEncodeMs=${Math.round(activeEncodings.size ? performance.now() - Math.min(...[...activeEncodings].map(operation => operation.started)) : 0)}`);
+    const heartbeat = setInterval(() => report('pending'), 5000);
+    onTestFinished(() => { clearInterval(heartbeat); encodingSpy.mockRestore(); report('finished'); });
+    const measured = async (name, run) => {
+      phase = name; phaseStarted = performance.now();
+      const result = await run();
+      report('completed');
+      return result;
+    };
     const png = await sharp({ create: { width: 16, height: 9, channels: 3, background: '#227766' } }).png().toBuffer();
     const cast = artifact('visual-cast-example');
     const storyboard = artifact('visual-board-example'); storyboard.kind = 'storyboard';
@@ -165,13 +193,13 @@ describe('local making-of compilation', () => {
     const boardHTML = `<html><style>body{background:#111}</style><h1>Full storyboard</h1>${Array.from({ length: 26 }, (_, index) => `<figure><h2>Shot ${index + 1}</h2><svg viewBox="0 0 160 90" role="img" aria-label="Shot ${index + 1}"><rect x="0" y="0" width="160" height="90" fill="#17232f"/><circle cx="80" cy="45" r="${index + 2}" fill="#ffbb66"/><text x="8" y="15" font-size="12" fill="#ffffff">S${index + 1}</text></svg><figcaption>Hold at the harbor — ${index + 1}</figcaption></figure>`).join('')}</html>`;
     await file(cast.versions[0].file, castHTML);
     await file(storyboard.versions[0].file, boardHTML);
-    const selection = await select(['artifact:visual-cast-example:v1', 'artifact:visual-board-example:v1']);
+    const selection = await measured('catalog', () => select(['artifact:visual-cast-example:v1', 'artifact:visual-board-example:v1']));
     // Raster bytes are not inferred to be owned merely because their container was generated.
-    const undeclared = await preview(selection);
+    const undeclared = await measured('preview-unowned', () => preview(selection));
     expect(undeclared.manifest.inventory.filter(item => item.id.startsWith('artifact:visual-cast-example:v1:visual:')).every(item => item.reason === 'embedded-raster-ownership-unverified')).toBe(true);
     selection.projects[0].assets[0] = { ...selection.projects[0].assets[0], rights: 'owned', attribution: 'Original project art', ownershipConfirmed: true };
-    const inventory = await preview(selection);
-    const out = await compileMakingOf({ ...selection, previewDigest: inventory.previewDigest }, { download: true });
+    const inventory = await measured('preview-owned', () => preview(selection));
+    const out = await measured('download', () => compileMakingOf({ ...selection, previewDigest: inventory.previewDigest }, { download: true }));
     const files = members(out.zip);
     const boardVisuals = out.manifest.inventory.filter(item => item.id.startsWith('artifact:visual-board-example:v1:visual:'));
     expect(boardVisuals).toHaveLength(26);
@@ -185,12 +213,15 @@ describe('local making-of compilation', () => {
     expect(boardMD.match(/!\[[^\]]*\]\(v1-visuals\/[^)]+\.png\)/g)).toHaveLength(26);
     expect(files.get('projects/mv-example/storyboard.md').toString()).toContain('artifacts/visual-board-example/v1.md');
     expect(out.zip.toString()).not.toMatch(/<svg|<script|data:image|https?:\/\//);
+    phase = 'metadata-and-hashes'; phaseStarted = performance.now();
     for (const visual of [...boardVisuals, ...castVisuals]) {
       const metadata = await sharp(files.get(visual.path)).metadata();
       expect(metadata.format).toBe('png'); expect(metadata.exif).toBeUndefined();
       expect(createHash('sha256').update(files.get(visual.path)).digest('hex')).toBe(visual.sha256);
     }
-    expect((await compileMakingOf({ ...selection, previewDigest: inventory.previewDigest }, { download: true })).zip.equals(out.zip)).toBe(true);
+    report('completed');
+    const repeated = await measured('repeat-download', () => compileMakingOf({ ...selection, previewDigest: inventory.previewDigest }, { download: true }));
+    expect(repeated.zip.equals(out.zip)).toBe(true);
   });
 
   it('preserves actual procedural cast definitions without executing a browser or exporting active SVG', async () => {

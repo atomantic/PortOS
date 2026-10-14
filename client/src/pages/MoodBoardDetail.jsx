@@ -10,8 +10,8 @@
  */
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
-import { useParams, useNavigate, Link } from 'react-router';
-import { ArrowLeft, ChevronDown, ImageIcon, FileText, Trash2, Plus, Save, Link2, Unlink, RefreshCw, Images, Film, Play, ScanEye, Copy, AtSign, Download, Sparkles, Clapperboard, Paintbrush, Wand2 } from 'lucide-react';
+import { useParams, useNavigate, useSearchParams, Link } from 'react-router';
+import { ArrowLeft, ChevronDown, ImageIcon, FileText, Trash2, Plus, Save, Link2, Unlink, RefreshCw, Images, Film, Play, ScanEye, Copy, AtSign, Download, Sparkles, Clapperboard, Paintbrush, Wand2, GalleryHorizontal } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import TabPills from '../components/ui/TabPills';
@@ -20,8 +20,10 @@ import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
 import GalleryVideoPicker from '../components/videoGen/GalleryVideoPicker';
 import { PromptFromMediaModal } from '../components/media/PromptFromMedia';
 import MediaLightbox from '../components/media/MediaLightbox';
+import MoodBoardGeneratePanel from '../components/moodBoard/MoodBoardGeneratePanel';
 import MoodBoardStylePanel from '../components/moodBoard/MoodBoardStylePanel';
 import MoodBoardCollagePanel from '../components/moodBoard/MoodBoardCollagePanel';
+import VideoFramePicker from '../components/moodBoard/VideoFramePicker';
 import usePreviewRoute from '../hooks/usePreviewRoute';
 import { copyToClipboard } from '../lib/clipboard';
 import {
@@ -37,6 +39,7 @@ import {
   importMoodBoardXPost,
   localizeMoodBoardMedia,
   extractMoodBoardItemFrames,
+  extractMoodBoardItemFramesAt,
   renderMoodBoardItem,
 } from '../services/api';
 import socket from '../services/socket';
@@ -87,6 +90,14 @@ function MoodBoardEditor({ id }) {
 
   // Per-video frame extraction: requested frame count + the item in flight.
   const [frameCount, setFrameCount] = useState(4);
+  // The frame picker's video is in the URL (?frames=<itemId>), so it is reload-safe and linkable.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const pickingFramesItemId = searchParams.get('frames');
+  const setPickingFramesItemId = useCallback((itemId) => setSearchParams((prev) => {
+    const next = new URLSearchParams(prev);
+    if (itemId) next.set('frames', itemId); else next.delete('frames');
+    return next;
+  }, { replace: !itemId }), [setSearchParams]);
   const [extractingItemId, setExtractingItemId] = useState(null);
 
   // Text note → image render (#10531): the note whose request is in flight.
@@ -154,17 +165,24 @@ function MoodBoardEditor({ id }) {
     // A refetch still in flight when this effect is disposed must not write
     // its board's items into whatever board the page shows next.
     let active = true;
+    let sequence = 0;
     const onRender = async (evt) => {
       if (evt?.boardId !== id) return;
+      const current = ++sequence;
       const fresh = await getMoodBoard(id, { silent: true }).catch(() => null);
-      if (!active || !mountedRef.current || !fresh) return;
+      if (!active || current !== sequence || !mountedRef.current || !fresh) return;
       setBoard((prev) => (prev ? { ...prev, items: fresh.items, updatedAt: fresh.updatedAt } : fresh));
-      if (evt.status === 'failed' && evt.error && renderRequestRef.current !== evt.itemId) toast.error(`Render failed: ${evt.error}`);
+      if (evt.itemId && evt.status === 'failed' && evt.error && renderRequestRef.current !== evt.itemId) toast.error(`Render failed: ${evt.error}`);
     };
     socket.on('mood-board:item-render', onRender);
+    socket.on('mood-board:generate', onRender);
+    const onReconnect = () => onRender({ boardId: id });
+    socket.on('connect', onReconnect);
     return () => {
       active = false;
       socket.off('mood-board:item-render', onRender);
+      socket.off('mood-board:generate', onRender);
+      socket.off('connect', onReconnect);
     };
   }, [id, mountedRef]);
 
@@ -176,6 +194,9 @@ function MoodBoardEditor({ id }) {
   // when its `initialSource` identity changes, so a fresh object every render
   // would wipe an in-flight run on unrelated re-renders. (Lives above the
   // loading/not-found early returns — hooks must run unconditionally.)
+  const pickingFramesItem = pickingFramesItemId
+    ? ((Array.isArray(board?.items) ? board.items : []).find((it) => it.id === pickingFramesItemId && moodBoardItemVideoSrc(it)) || null)
+    : null;
   const analyzeItem = analyzeItemId
     ? ((Array.isArray(board?.items) ? board.items : []).find((it) => it.id === analyzeItemId) || null)
     : null;
@@ -342,6 +363,19 @@ function MoodBoardEditor({ id }) {
     setExtractingItemId(null);
     if (!res?.board) return;
     setBoard(res.board);
+    toast.success(res.added ? `Added ${res.added} frame${res.added === 1 ? '' : 's'} to the board` : 'Those frames are already on the board');
+  };
+
+  const handleAddPickedFrames = async (itemId, times) => {
+    if (!mountedRef.current || !times.length) return;
+    setExtractingItemId(itemId);
+    const res = await extractMoodBoardItemFramesAt(id, itemId, times, { silent: true })
+      .catch((err) => { toast.error(err?.message || 'Could not add those frames'); return null; });
+    if (!mountedRef.current) return;
+    setExtractingItemId(null);
+    if (!res?.board) return;
+    setBoard(res.board);
+    setPickingFramesItemId(null);
     toast.success(res.added ? `Added ${res.added} frame${res.added === 1 ? '' : 's'} to the board` : 'Those frames are already on the board');
   };
 
@@ -553,6 +587,7 @@ function MoodBoardEditor({ id }) {
       {/* Style + collage share a row on wide boards so pinned items stay above the fold */}
       <div className="grid grid-cols-1 @4xl/board:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-4 items-start">
         <MoodBoardStylePanel board={board} onBoardChange={setBoard} />
+        <MoodBoardGeneratePanel key={id} board={board} disabled={Boolean(metaDirty || savingMeta)} />
         <MoodBoardCollagePanel board={board} onBoardChange={setBoard} />
       </div>
 
@@ -993,6 +1028,15 @@ function MoodBoardEditor({ id }) {
                             >
                               <Clapperboard className={`w-3.5 h-3.5 ${extractingItemId === item.id ? 'animate-pulse' : ''}`} aria-hidden="true" />
                             </button>
+                            <button
+                              type="button"
+                              onClick={() => setPickingFramesItemId(item.id)}
+                              title="Pick frames on a timeline and add them to the board"
+                              aria-label="Pick frames"
+                              className="min-h-[44px] min-w-[44px] shrink-0 inline-flex items-center justify-center p-1 text-gray-500 hover:text-white transition-colors"
+                            >
+                              <GalleryHorizontal className="w-3.5 h-3.5" aria-hidden="true" />
+                            </button>
                           </span>
                         ) : null}
                         {item.type === 'text' ? (
@@ -1138,6 +1182,15 @@ function MoodBoardEditor({ id }) {
             </div>
           ) : null}
         </PromptFromMediaModal>
+      ) : null}
+      {pickingFramesItem ? (
+        <VideoFramePicker
+          src={moodBoardItemVideoSrc(pickingFramesItem)}
+          poster={moodBoardItemSrc(pickingFramesItem)}
+          busy={extractingItemId === pickingFramesItem.id}
+          onAdd={(times) => handleAddPickedFrames(pickingFramesItem.id, times)}
+          onClose={() => setPickingFramesItemId(null)}
+        />
       ) : null}
     </div>
   );

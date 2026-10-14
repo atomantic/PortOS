@@ -163,6 +163,17 @@ describe('<MusicDesigner>', () => {
       expect(window.localStorage.getItem('portos.musicDesigner.activeDraft')).toBe('track-draft');
     });
 
+    it('saves the lyric editor exactly as authored before proceeding to render', async () => {
+      const lyrics = '  [verse]\nKeep these spaces \n';
+      api.getTrack.mockResolvedValue({ id: 'track-saved', title: 'Named Track', concept: '', prompt: 'folk', lyrics: '' });
+      renderAt('/music/generate/lyrics?trackId=track-saved');
+      const editor = await findEnabledByLabelText('Lyrics');
+      fireEvent.change(editor, { target: { value: lyrics } });
+      fireEvent.blur(editor);
+      await waitFor(() => expect(api.updateTrack).toHaveBeenCalledWith('track-saved', { lyrics }, { silent: true }));
+      expect(editor).toHaveValue(lyrics);
+    });
+
     it('keeps the render prompt visible and editable for a saved draft', async () => {
       api.getTrack.mockResolvedValue({
         id: 'track-saved', title: 'Named Track', concept: 'A dusk-time pulse',
@@ -230,6 +241,56 @@ describe('<MusicDesigner>', () => {
     });
   });
 
+  // Uniquely catches whitespace loss in blur saves, either LLM submission,
+  // template preferences, or the final description handoff to the renderer.
+  it('preserves authored text across editor saves, AI requests and render handoff', async () => {
+    const concept = '  Paper moons\n  ';
+    const description = ' \nSoft fictional piano\n  ';
+    const template = ' \nMy custom instruction\n  ';
+    const lyrics = '  [verse]\nPaper moons\n  ';
+    api.describeMusic.mockResolvedValue({ description, llm: {} });
+    api.generateLyrics.mockResolvedValue({ lyrics, llm: {} });
+    renderAt('/music/generate/concept');
+    const conceptBox = await findEnabledByLabelText(/what do you want to hear/i);
+    fireEvent.change(conceptBox, { target: { value: concept } });
+    fireEvent.blur(conceptBox);
+    fireEvent.change(screen.getByLabelText(/extra guidance/i), { target: { value: '  Soft pulse  ' } });
+    fireEvent.click(screen.getByRole('button', { name: /advanced — meta-prompts/i }));
+    const templateBox = screen.getByLabelText(/description instruction/i);
+    fireEvent.change(templateBox, { target: { value: template } });
+    fireEvent.blur(templateBox);
+    fireEvent.click(screen.getByRole('button', { name: /describe it/i }));
+    await findEnabledByLabelText(/music description/i);
+    expect(api.describeMusic).toHaveBeenCalledWith(expect.objectContaining({ concept, guidance: '  Soft pulse  ', template }), { silent: true });
+    expect(api.updateSettings).toHaveBeenCalledWith(expect.objectContaining({ music: expect.objectContaining({ designer: expect.objectContaining({ describeTemplate: template }) }) }), { silent: true });
+    await waitFor(() => expect(api.updateTrack).toHaveBeenCalledWith('track-draft', { concept }, { silent: true }));
+    const edited = description + 'Keep my ending.  ';
+    fireEvent.change(screen.getByLabelText(/music description/i), { target: { value: edited } });
+    fireEvent.blur(screen.getByLabelText(/music description/i));
+    fireEvent.click(screen.getByRole('button', { name: /next: lyrics/i }));
+    fireEvent.change(screen.getByLabelText(/lyric guidance/i), { target: { value: '  Keep the hook  ' } });
+    fireEvent.click(screen.getByRole('button', { name: /generate lyrics/i }));
+    await waitFor(() => expect(screen.getByLabelText('Lyrics')).toHaveValue(lyrics));
+    expect(api.generateLyrics).toHaveBeenCalledWith(expect.objectContaining({ description: edited, guidance: '  Keep the hook  ' }), { silent: true });
+    fireEvent.click(screen.getByRole('button', { name: /next: render/i }));
+    expect(await screen.findByTestId('gen-panel')).toHaveAttribute('data-prompt', edited);
+    expect(screen.getByTestId('gen-panel')).toHaveAttribute('data-lyrics', lyrics);
+    await waitFor(() => expect(api.updateTrack).toHaveBeenCalledWith('track-draft', { prompt: edited, lyrics }, { silent: true }));
+  });
+
+  it('keeps oversized authored text editable when its submission is refused', async () => {
+    api.describeMusic.mockRejectedValue(new Error('concept has 8001 characters; limit is 8000'));
+    renderAt('/music/generate/concept');
+    const input = await findEnabledByLabelText(/what do you want to hear/i);
+    expect(input).not.toHaveAttribute('maxlength');
+    const concept = 'x'.repeat(8001);
+    fireEvent.change(input, { target: { value: concept } });
+    fireEvent.click(screen.getByRole('button', { name: /describe it/i }));
+    await waitFor(() => expect(api.describeMusic).toHaveBeenCalledWith(expect.objectContaining({ concept }), { silent: true }));
+    expect(input).toHaveValue(concept);
+    expect(screen.getByTestId('location')).toHaveTextContent('/music/generate/concept');
+  });
+
   describe('the describe step', () => {
     it('fires no LLM call on mount — both provider calls need an explicit press', async () => {
       renderAt('/music/generate/concept');
@@ -267,6 +328,21 @@ describe('<MusicDesigner>', () => {
         'track-draft', expect.objectContaining({ concept: 'a rainy downtempo loop', prompt: 'Lush pads over a broken beat.' }),
         { silent: true },
       ));
+    });
+
+    // Uniquely catches the designer's instructions and policy clause staying
+    // hidden after Describe (#11317).
+    it('lists what Describe sent the AI under the description', async () => {
+      api.describeMusic.mockResolvedValue({
+        description: 'Lush pads.', llm: {},
+        sentPrompt: 'policy\n\nbrief\n\nMUSICAL REFERENCE / VIBE:\nx',
+        promptAdditions: [{ id: 'creative-latitude', label: 'Creative latitude (operator policy)', text: 'policy' }],
+      });
+      renderAt('/music/generate/concept');
+      fireEvent.change(await findEnabledByLabelText(/what do you want to hear/i), { target: { value: 'x' } });
+      fireEvent.click(screen.getByRole('button', { name: /describe it/i }));
+      expect(await screen.findByRole('button', { name: '+ Creative latitude (operator policy)' })).toBeInTheDocument();
+      expect(screen.getByText('Last sent to the AI')).toBeInTheDocument();
     });
 
     it('persists the provider pin after a successful describe', async () => {

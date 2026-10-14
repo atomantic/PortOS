@@ -1703,7 +1703,8 @@ describe('cos.js source — priority + capacity invariants', () => {
     expect(
       fnBody,
       'queue path must call prepareManagedAppImprovementTask so applyPlanIdMetadata runs + the full prompt is used'
-    ).toMatch(/prepareManagedAppImprovementTask\s*\(/);
+    ).toMatch(/prepareTask\s*\(/);
+    expect(GEN_SRC).toContain('prepareTask = prepareManagedAppImprovementTask');
 
     // Match the call shape, not the specific variable name — `task` could
     // legitimately be renamed (e.g. `queuedTask`) in a behavior-preserving
@@ -1714,7 +1715,8 @@ describe('cos.js source — priority + capacity invariants', () => {
     expect(
       fnBody,
       'queue path must persist via addTask with raw:true so the enriched task object survives serialization'
-    ).toMatch(/addTask\s*\(\s*\w+\s*,\s*['"]internal['"]\s*,\s*\{\s*raw:\s*true\b/);
+    ).toMatch(/persistTask\s*\(\s*\w+\s*,\s*['"]internal['"]\s*,\s*\{\s*raw:\s*true\b/);
+    expect(GEN_SRC).toContain('persistTask = addTask');
 
     // The old buggy path called `getTaskDescription` to build a one-line
     // description and then passed app/context/approvalRequired fields to

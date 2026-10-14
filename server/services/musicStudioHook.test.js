@@ -84,6 +84,29 @@ describe('music studio completion hook', () => {
     expect(queue.updateJobResult).toHaveBeenCalledWith('job-instrumental', { trackId: 'track-1' });
   });
 
+  it('persists exact caption and lyric provenance on the take beyond the authored caps', async () => {
+    const authored = 'x'.repeat(8000);
+    const addition = { id: 'instrumental-only', label: 'Instrumental only', text: 'No vocals.' };
+    const sentPrompt = `${authored}\n\n${addition.text}\n`;
+    const sentLyrics = `${'x'.repeat(20000)}\n[outro]`;
+    const lyricAdditions = [{ id: 'closing-section', label: 'Closing section', text: '[outro]' }];
+    trackStore.getTrack.mockResolvedValue({ id: 'track-1', renders: [] });
+    trackStore.buildRenderAppend.mockImplementation((_current, input) => ({ renders: [makeRender(input)] }));
+    queue.events.emit('completed', {
+      id: 'job-provenance', kind: 'audio', queuedAt: new Date().toISOString(),
+      params: { prompt: sentPrompt, musicStudio: {
+        trackId: 'track-1', authoredPrompt: authored, sentPrompt, promptAdditions: [addition], instrumentalOnly: true,
+        sentLyrics, lyricAdditions,
+      } },
+      result: { filename: 'provenance.wav', engine: 'musicgen' },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(trackStore.updateTrack.mock.calls[0][1].renders[0]).toMatchObject({
+      sentPrompt, promptAdditions: [addition],
+      sentLyrics, lyricAdditions,
+    });
+  });
+
   it('keeps authored lyrics when an instrumental render creates a standalone track', async () => {
     queue.events.emit('completed', {
       id: 'job-standalone-instrumental', kind: 'audio', queuedAt: new Date().toISOString(),

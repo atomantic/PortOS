@@ -76,7 +76,9 @@ const project = (sceneOver) => ({
   id: 'mv-1',
   uploadedAudioFilename: 'song.wav',
   lyricCues: [
-    { id: 'c1', text: 'hold on', startSec: 19, endSec: 20.5, words: [{ text: 'hold', startSec: 19, endSec: 20 }, { text: 'on', startSec: 20, endSec: 20.5 }] },
+    // Aligned words carry their text as `w` (lyricAlignCore); the take records it as `text`.
+    { id: 'c1', text: 'hold on', startSec: 19, endSec: 20.5,
+      words: [{ w: 'hold', startSec: 19, endSec: 20, conf: 'matched' }, { text: 'on', startSec: 20, endSec: 20.5 }] },
     { id: 'c2', text: 'later line', startSec: 40, endSec: 42 },
     { id: 'c3', text: 'untimed', startSec: null, endSec: null },
   ],
@@ -302,7 +304,7 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     await writeFile(join(PATHS.music, 'vocals.wav'), songWav({ markerAmp: 12000 }));
     // A vocal stem is attached, but the drums it leaves out are what drive this shot.
     getProject.mockResolvedValue({ ...project({ performanceStyle: 'music', prompt: 'drummer hits on the beat' }), vocalStemFilename: 'vocals.wav',
-      videoSettings: { backend: 'fal', falLipSyncTranscription: true } });
+      videoSettings: { backend: 'fal', falLipSyncTranscription: true, falMusicModelId: 'fal-ai/bytedance/omnihuman/v1.5' } });
     const prepared = await preparePerformanceShot({
       musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1' }, backend: 'fal', sourceImagePath: join(PATHS.images, 'frame.png'), mode: 'image',
     });
@@ -323,7 +325,18 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     execFileSync(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'color=blue:s=64x64:r=24:d=1.5', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-y', deliveredPath]);
     const delivered = await readFile(deliveredPath);
     const posts = [];
+    // OmniHuman downloads its inputs, so the frame and audio go up to fal's
+    // CDN first and the request carries their URLs (#11381).
+    const uploads = new Map();
     vi.stubGlobal('fetch', vi.fn(async (url, opts) => {
+      if (url.startsWith('https://rest.fal.ai/storage/upload/initiate')) {
+        const { file_name: name } = JSON.parse(opts.body);
+        return jsonResponse({ upload_url: `https://upload.example.com/${name}`, file_url: `https://cdn.example.com/${name}` });
+      }
+      if (url.startsWith('https://upload.example.com/')) {
+        uploads.set(url.replace('https://upload.example.com/', 'https://cdn.example.com/'), Buffer.from(opts.body));
+        return { ok: opts.method === 'PUT', status: 200 };
+      }
       if (opts?.method === 'POST') {
         posts.push({ url, body: JSON.parse(opts.body) });
         return jsonResponse({ request_id: 'r2', status_url: 'https://queue.fal.run/s2', response_url: 'https://queue.fal.run/r2' });
@@ -344,8 +357,9 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     expect(posts[0].body).toMatchObject({
       prompt: 'drummer hits on the beat', resolution: '1080p',
     });
-    expect(posts[0].body.image_url).toMatch(/^data:image\//);
-    expect(posts[0].body.audio_url).toMatch(/^data:audio\/wav;base64,/);
+    expect(posts[0].body.image_url).toMatch(/^https:\/\/cdn\.example\.com\/.+-start\.[a-z]+$/);
+    expect(posts[0].body.audio_url).toMatch(/^https:\/\/cdn\.example\.com\/.+-audio\.wav$/);
+    expect(uploads.get(posts[0].body.audio_url)).toEqual(await readFile(prepared.audioFilePath));
     const { loadHistory } = await import('../videoGen/history.js');
     // 1.5s at $0.16/s.
     expect((await loadHistory()).find((h) => h.id === job.jobId)).toMatchObject({
@@ -353,6 +367,76 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     });
 
   }, 60_000);
+
+  it.each([
+    // The default: H3 Max reference opens on the start frame and hears the song as "Audio 1".
+    { musicModelId: null, url: 'minimax/h3-max/reference-to-video', window: { startSec: 18.25, endSec: 23.25, durationSec: 5 },
+      body: { duration: 5, resolution: '768P' }, frame: 'image_url', audio: 'reference_audio_urls', costUsd: 0.4 },
+    // Picked on the shot card: Seedance has no start-frame field, so the frame is @Image1.
+    { musicModelId: 'bytedance/seedance-2.5/reference-to-video', url: 'bytedance/seedance-2.5/reference-to-video',
+      window: { startSec: 18.75, endSec: 22.75, durationSec: 4 }, body: { duration: '4', resolution: '720p', generate_audio: false },
+      frame: 'image_urls', audio: 'audio_urls', costUsd: 1.892 },
+  ])('a music-driven shot on $url sends the start frame, prompt and song slice as an audio reference', async ({ musicModelId, url, window, body, frame, audio, costUsd }) => {
+    getProject.mockResolvedValue({ ...project({ performanceStyle: 'music', prompt: 'drummer hits on the beat' }), videoSettings: { backend: 'fal' } });
+    const prepared = await preparePerformanceShot({
+      musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1' }, backend: 'fal', sourceImagePath: join(PATHS.images, 'frame.png'), mode: 'image', musicModelId,
+    });
+    // A 1.5s shot pads to exactly the model's shortest billed clip, centered on the shot.
+    expect(prepared.shotInstruction.audioWindow).toEqual(window);
+    expect(prepared.shotInstruction.edit).toEqual({ inSec: 20 - window.startSec, outSec: 21.5 - window.startSec, targetSec: 1.5 });
+    expect(prepared.modelId).toBe(url);
+
+    await mkdir(PATHS.images, { recursive: true });
+    await writeFile(join(PATHS.images, 'frame.png'), Buffer.from('89504e470d0a1a0a', 'hex'));
+    const deliveredPath = join(PATHS.data, 'delivered-reference.mp4');
+    execFileSync(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', `color=blue:s=64x64:r=24:d=${window.durationSec}`, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-y', deliveredPath]);
+    const delivered = await readFile(deliveredPath);
+    const posts = [];
+    const uploads = new Map();
+    vi.stubGlobal('fetch', vi.fn(async (target, opts) => {
+      if (target.startsWith('https://rest.fal.ai/storage/upload/initiate')) {
+        const { file_name: name } = JSON.parse(opts.body);
+        return jsonResponse({ upload_url: `https://upload.example.com/${name}`, file_url: `https://cdn.example.com/${name}` });
+      }
+      if (target.startsWith('https://upload.example.com/')) {
+        uploads.set(target.replace('https://upload.example.com/', 'https://cdn.example.com/'), Buffer.from(opts.body));
+        return { ok: opts.method === 'PUT', status: 200 };
+      }
+      if (opts?.method === 'POST') {
+        posts.push({ url: target, body: JSON.parse(opts.body) });
+        return jsonResponse({ request_id: 'r3', status_url: 'https://queue.fal.run/s3', response_url: 'https://queue.fal.run/r3' });
+      }
+      if (target === 'https://queue.fal.run/s3') return jsonResponse({ status: 'COMPLETED' });
+      if (target === 'https://queue.fal.run/r3') return jsonResponse({ video: { url: 'https://cdn.example.com/ref.mp4' } });
+      if (target === 'https://cdn.example.com/ref.mp4') return { ok: true, status: 200, arrayBuffer: async () => Uint8Array.from(delivered).buffer };
+      throw new Error(`unexpected fetch: ${target}`);
+    }));
+    const job = await fal.generateVideo({
+      apiKey: 'test-key', modelId: prepared.modelId, resolution: prepared.resolution, prompt: 'drummer hits on the beat', width: 1920, height: 1080,
+      sourceImagePath: join(PATHS.images, 'frame.png'), audioFilePath: prepared.audioFilePath, shotInstruction: prepared.shotInstruction,
+    });
+    expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'completed' });
+    expect(posts).toHaveLength(1);
+    expect(posts[0].url).toBe(`https://queue.fal.run/${url}`);
+    expect(posts[0].body).toMatchObject({ prompt: 'drummer hits on the beat', ...body });
+    expect(posts[0].body).not.toHaveProperty('audio_url');
+    const start = frame === 'image_urls' ? posts[0].body.image_urls[0] : posts[0].body.image_url;
+    expect(start).toMatch(/^https:\/\/cdn\.example\.com\/.+-start\.[a-z]+$/);
+    expect(posts[0].body[audio]).toHaveLength(1);
+    expect(uploads.get(posts[0].body[audio][0])).toEqual(await readFile(prepared.audioFilePath));
+    const { loadHistory } = await import('../videoGen/history.js');
+    expect((await loadHistory()).find((h) => h.id === job.jobId)).toMatchObject({ modelId: `fal:${url}`, estimatedCostUsd: costUsd, audioDriven: true });
+  }, 60_000);
+
+  // Review on #11413: a stale card's cutaway model id must not replace the project's music pin.
+  it('keeps the project\'s music pin when the request names a model that is not a music lane', async () => {
+    getProject.mockResolvedValue({ ...project({ performanceStyle: 'music' }), videoSettings: { backend: 'fal', falMusicModelId: 'fal-ai/bytedance/omnihuman/v1.5' } });
+    const prepared = await preparePerformanceShot({
+      musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1' }, backend: 'fal', sourceImagePath: '/x/frame.png', mode: 'image',
+      musicModelId: 'minimax/h3-max/image-to-video',
+    });
+    expect(prepared.modelId).toBe('fal-ai/bytedance/omnihuman/v1.5');
+  });
 
   it('uses the full span of a long shot in one take, at the project\'s lip-sync resolution pin', async () => {
     // 26s: past the old 14.8s cap (fal accepts up to 15 minutes; PortOS keeps
@@ -367,6 +451,19 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     // pin; one it does not (a cutaway model's '720p') falls back to the pin.
     expect((await preparePerformanceShot({ ...args, resolution: '2k' })).resolution).toBe('2K');
     expect((await preparePerformanceShot({ ...args, resolution: '720p' })).resolution).toBe('768P');
+  });
+
+  // Catches a Whole sung line render slicing only the shot, or a continuation widening its accepted interval.
+  it('slices the whole sung line when the card asks for it, keeping the edit on the shot', async () => {
+    getProject.mockResolvedValue({ ...project(), lyricCues: [{ id: 'c1', text: 'the whole line', startSec: 16, endSec: 24 }] });
+    const args = { musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1', wholeLine: true }, backend: 'fal', sourceImagePath: '/x/frame.png', mode: 'image' };
+    const { shotInstruction: si } = await preparePerformanceShot(args);
+    expect(si.audioWindow).toEqual({ startSec: 16, endSec: 24, durationSec: 8, wholeLine: { startSec: 16, endSec: 24 } });
+    expect(si.edit).toMatchObject({ inSec: 4, outSec: 5.5, targetSec: 1.5 });
+    expect(si.songInterval).toEqual({ startSec: 20, endSec: 21.5 });
+    const plain = await preparePerformanceShot({ ...args, musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1' } });
+    expect(plain.shotInstruction.audioWindow.wholeLine).toBeUndefined();
+    expect(plain.shotInstruction.audioWindow.durationSec).toBeCloseTo(5.05, 6);
   });
 
   it('asks for transcript guidance by default and skips it when the project turns it off', async () => {

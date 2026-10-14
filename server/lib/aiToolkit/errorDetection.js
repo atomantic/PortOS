@@ -17,11 +17,8 @@ export const ERROR_CATEGORIES = {
   // An explicitly shortened caller spending cap, not provider health.
   RUNTIME_BUDGET_EXHAUSTED: 'runtime-budget-exhausted',
   QUOTA_EXCEEDED: 'quota-exceeded',
-  // A frontier model declined the prompt on content/safety grounds. NOT a
-  // provider fault — the provider is healthy and other prompts still work, so
-  // this must not bench the provider or spawn an investigation task. We do try
-  // a fallback (a local model often doesn't refuse) and tell the UI what
-  // happened. See server/index.js#onRunFailed + autoFixer.handleAIProviderError.
+  // A model safety refusal is terminal for this request. Never retry it or
+  // switch providers; it says nothing about provider health.
   CONTENT_REFUSAL: 'content-refusal',
   // A LOCAL inference runtime ran out of accelerator memory mid-request (Metal
   // on Apple silicon, CUDA elsewhere). Distinct from QUOTA_EXCEEDED (money) and
@@ -61,6 +58,39 @@ export const isRuntimeBudgetError = (err) => (
   || err?.errorAnalysis?.category === ERROR_CATEGORIES.RUNTIME_BUDGET_EXHAUSTED
 );
 
+// Provider error vocabulary, shared by streaming chrome and terminal analysis.
+const CONTENT_REFUSAL_PATTERN = /limited access to this content for safety|may be used to benefit or to harm|content[_ ]policy[_ ]violation|stop_reason["']?\s*:\s*["']?refusal|"type"\s*:\s*"refusal"|"codex(?:_error_info|ErrorInfo)"\s*:\s*"(?:cyber_policy|cyberPolicy|misalignment_policy_violation|misalignmentPolicyViolation)"|This\s*content\s*(?:was\s*flagged\s*for\s*possible\s*cybersecurity\s*risk|can[’']t\s*be\s*shown)/i;
+
+export const isContentRefusalError = (err) => (
+  err?.errorAnalysis?.category === ERROR_CATEGORIES.CONTENT_REFUSAL
+  || err?.context?.category === ERROR_CATEGORIES.CONTENT_REFUSAL
+  || CONTENT_REFUSAL_PATTERN.test(err?.message || '')
+);
+
+/** A bounded Codex chrome detector; ordinary mentions/quoted JSON are not chrome. */
+export function createContentRefusalDetector() {
+  let buffer = '';
+  let truncated = false;
+  return (chunk) => {
+    const next = `${buffer}${String(chunk || '')}`;
+    if (next.length > 4096) truncated = true;
+    buffer = next.slice(-4096);
+    // Keep cursor moves to column 1 as row boundaries before removing styles.
+    // Flattening the PTY first loses the distinction between chrome and quoted
+    // text. Buffer raw bytes so a split escape sequence remains parseable.
+    const screen = buffer.replace(/\x1b\[\d+;1H/g, '\n').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
+    const bounded = truncated ? `x${screen}` : screen;
+    if (!/^[ \t]*ⓘ\s*This\s*content\s*can[’']t\s*be\s*shown/im.test(bounded)) return null;
+    return {
+      hasError: true, category: ERROR_CATEGORIES.CONTENT_REFUSAL,
+      message: 'Codex stopped this request on cybersecurity/content policy grounds.',
+      requiresFallback: false, actionable: false, permanent: true,
+      origin: 'provider',
+      suggestedFix: 'Review the refusal. Automatic continuation, retries and provider fallback are disabled.',
+    };
+  };
+}
+
 // A LOCAL inference runtime that ran out of accelerator memory mid-request.
 //
 // Observed shape (MTPLX/MLX behind an OpenAI-compatible server, rendered inside
@@ -99,11 +129,11 @@ const ERROR_PATTERNS = [
     // Anthropic surfaces a `refusal` stop reason. Matched FIRST so a refusal is
     // never misclassified as an auth/unknown failure that would bench the
     // provider and queue a CoS investigation task.
-    pattern: /limited access to this content for safety|may be used to benefit or to harm|content[_ ]policy[_ ]violation|stop_reason["']?\s*:\s*["']?refusal|"type"\s*:\s*"refusal"/i,
+    pattern: CONTENT_REFUSAL_PATTERN,
     category: ERROR_CATEGORIES.CONTENT_REFUSAL,
-    requiresFallback: true,
+    requiresFallback: false,
     actionable: false,
-    suggestedFix: 'Model declined the prompt on content/safety grounds — retrying with a fallback model.'
+    suggestedFix: 'Stopped after a content/safety refusal. Review the refusal; no automatic retry or provider fallback.'
   },
   {
     // A local inference server (MTPLX/MLX, vLLM, llama.cpp, Ollama) whose device
@@ -117,6 +147,15 @@ const ERROR_PATTERNS = [
     requiresFallback: true,
     actionable: false,
     suggestedFix: 'The local inference runtime ran out of GPU memory. Retry once the device drains, shrink the context/KV cache, or run a smaller model.'
+  },
+  {
+    // Codex's transient model-capacity rejection is not a credential or
+    // billing problem. Let the existing rate-limit recovery choose a fallback.
+    pattern: /^(?:ERROR:\s*)?Selected model is at capacity\. Please try a different model\.[ \t]*$/im,
+    category: ERROR_CATEGORIES.RATE_LIMIT,
+    requiresFallback: true,
+    actionable: false,
+    suggestedFix: 'Selected model is temporarily at capacity. Retry later or use a different model.'
   },
   {
     pattern: /billing|payment|credit|insufficient funds/i,
@@ -698,6 +737,48 @@ export function createTruncatedResponseDetector({ maxBuffer = 512 } = {}) {
   };
 }
 
+// A provider that rejected the turn because the selected model is overloaded
+// (Codex: `Selected model is at capacity. Please try a different model.`). The
+// turn is dead but the session still holds the conversation, and a human typing
+// `continue` a little later resumes it. Unattended, nothing types it: the run
+// sits at the composer holding its lane (agent-9322c230). Same remedy as the
+// truncation banner, but the cause is load on the provider, so the consumer's
+// gate waits much longer between nudges (createModelCapacityNudgeGate).
+//
+// `\s+` joins survive a TUI hard-wrap. Not an IMMEDIATE_FALLBACK_SIGNALS entry
+// for the same reason as the truncation banner: the remedy is a continuation,
+// not a restart or an instant provider swap.
+const MODEL_AT_CAPACITY_PATTERN = /selected\s+model\s+is\s+at\s+capacity/i;
+
+export function detectModelAtCapacity(text) {
+  if (!text) return null;
+  if (!MODEL_AT_CAPACITY_PATTERN.test(String(text))) return null;
+  return {
+    hasError: true,
+    category: ERROR_CATEGORIES.RATE_LIMIT,
+    // FIXED sentence, not the banner wording: it becomes the run error and a
+    // task description can quote it back through this detector.
+    message: 'Provider reported the selected model is overloaded',
+    waitTime: null,
+    requiresFallback: true,
+    actionable: false,
+    graceMs: 0,
+    suggestedFix: 'The selected model is temporarily at capacity. A delayed continue nudge resumes the session; if it stays overloaded, route the task to a fallback provider.',
+    origin: 'provider',
+  };
+}
+
+export function createModelAtCapacityDetector({ maxBuffer = 512 } = {}) {
+  let buffer = '';
+  const cap = Number.isFinite(maxBuffer) && maxBuffer > 0 ? maxBuffer : 512;
+
+  return (chunk) => {
+    if (!chunk) return null;
+    buffer = `${buffer}${String(chunk)}`.slice(-cap);
+    return detectModelAtCapacity(buffer);
+  };
+}
+
 // Claude Code's in-TUI retry banner, painted while it re-sends a failed request:
 // `API error · Retrying in 0s · attempt 1/10` (the prefix varies — `Request timed
 // out`, `Overloaded` — so only the retry suffix is matched). The whitespace is
@@ -782,7 +863,7 @@ export function extractWaitTime(text) {
   return null;
 }
 
-export function analyzeError(errorText, exitCode = null) {
+export function analyzeError(errorText, exitCode = null, { prompt } = {}) {
   if (!errorText && exitCode === 0) {
     return {
       hasError: false,
@@ -795,7 +876,16 @@ export function analyzeError(errorText, exitCode = null) {
     };
   }
 
-  const text = String(errorText || '');
+  let text = String(errorText || '');
+  if (typeof prompt === 'string' && prompt.trim()) {
+    // Codex prints `user` followed by the complete input on its diagnostic
+    // stream. Match the KNOWN submitted body, not guessed transcript markers:
+    // tool schemas and quoted errors in that body are not provider failures.
+    // Keep the original transcript on disk and normalize only this scan.
+    text = text.replace(/\r\n/g, '\n');
+    const echo = `\nuser\n${prompt.replace(/\r\n/g, '\n').replace(/\n+$/, '')}\n`;
+    text = text.replace(echo, '\n');
+  }
 
   for (const errorPattern of ERROR_PATTERNS) {
     if (errorPattern.pattern.test(text)) {

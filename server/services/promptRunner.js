@@ -31,6 +31,7 @@ import { isVisionCapableCodexTuiProvider } from '../lib/codex.js';
 import { createRun, executeApiRun, executeCliRun, extractBakedModel, hasModelFlag, stopRun, patchRunMetadata, finalizeRunRecord } from './runner.js';
 import { getActiveProvider, getProviderById, getAllProviders } from './providers.js';
 import { isCompositeProviderId } from '../lib/providerRef.js';
+import { peekFallbackChain } from '../lib/providerFallbackChainCache.js';
 // `./tuiPromptRunner.js` (which drags node-pty in through `./shell.js`) and
 // `./providerExecutionReadiness.js` are imported lazily on the branches that
 // actually execute a run — see their call sites below. promptRunner.js is reached
@@ -38,7 +39,7 @@ import { isCompositeProviderId } from '../lib/providerRef.js';
 // both subtrees in every one of them.
 import { ServerError } from '../lib/errorHandler.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
-import { analyzeError, ERROR_CATEGORIES, isRunCanceledError, isRuntimeBudgetError } from '../lib/aiToolkit/errorDetection.js';
+import { analyzeError, ERROR_CATEGORIES, isRunCanceledError, isRuntimeBudgetError, isContentRefusalError } from '../lib/aiToolkit/errorDetection.js';
 import { isSchemaTypeCategory, resolveProviderBench } from '../lib/providerCooldown.js';
 import { isGenerationModel, isVisionCapableCliProvider } from '../lib/localModelHeuristics.js';
 import { contextWindowRejection, knownContextWindow } from '../lib/aiToolkit/providerStatus.js';
@@ -842,7 +843,7 @@ async function runPromptThroughProviderAdmitted(rawArgs) {
 
   // Stops and caller spending ceilings carry no provider-health verdict.
   // Neither enters correction/fallback, benching, or fault investigation.
-  if (isRunCanceledError(firstError) || isRuntimeBudgetError(firstError)) {
+  if (isRunCanceledError(firstError) || isRuntimeBudgetError(firstError) || isContentRefusalError(firstError)) {
     throw stripFallbackContext(firstError);
   }
 
@@ -926,8 +927,8 @@ async function runPromptThroughProviderAdmitted(rawArgs) {
     const primaryKey = { provider: failed.name || failed.id, model: failedModel };
 
     const investigation = createRecoveryInvestigationScope({ failed, failedModel, firstError });
-    const stopOnRuntimeBudget = async (error) => {
-      if (!isRuntimeBudgetError(error)) return;
+    const stopOnTerminalRequest = async (error) => {
+      if (!isRuntimeBudgetError(error) && !isContentRefusalError(error)) return;
       // Caller ceilings settle ownership without declaring a provider fault.
       await investigation.recoverAll();
       throw stripFallbackContext(error);
@@ -969,7 +970,7 @@ async function runPromptThroughProviderAdmitted(rawArgs) {
               runId: undefined, // fresh run so the failed primary's record stays intact
             });
           } catch (tier1Error) {
-            await stopOnRuntimeBudget(tier1Error);
+            await stopOnTerminalRequest(tier1Error);
             // The corrected retry failed. If it reached the execution layer, its
             // onRunFailed queued a task keyed on the EFFECTIVE provider/model
             // (createRun may have proactively swapped) — record and suppress that
@@ -1026,7 +1027,7 @@ async function runPromptThroughProviderAdmitted(rawArgs) {
               runId: undefined, // fresh run so the failed primary's record stays intact
             });
           } catch (tier2Error) {
-            await stopOnRuntimeBudget(tier2Error);
+            await stopOnTerminalRequest(tier2Error);
             // Same bookkeeping as Tier 1's failed corrected retry: a retry that
             // reached the execution layer queued its own task keyed on the
             // EFFECTIVE provider/model — record + suppress it so a slow Tier-3
@@ -1099,10 +1100,13 @@ async function runPromptThroughProviderAdmitted(rawArgs) {
           ...args,
           provider: fallback,
           model: picked.model ?? undefined,
+          // A step in the global fallback list may pin its own effort; the
+          // primary's effort belongs to the primary's model, so it is not inherited.
+          ...(picked.effort ? { effort: picked.effort } : {}),
           runId: undefined, // fresh runId so the failed primary's record stays intact
         });
       } catch (fallbackError) {
-        await stopOnRuntimeBudget(fallbackError);
+        await stopOnTerminalRequest(fallbackError);
         // ── Tier 4 — escalate ──: every deterministic tier failed. If the
         // fallback reached the execution layer, its OWN onRunFailed already
         // queued an investigation task (its key was never suppressed), so just
@@ -1212,6 +1216,10 @@ async function pickFallbackProvider(failed, requestCapabilities) {
   if (isCompositeProviderId(failed.id)) {
     await (await import('./compositeProviders.js')).withCompositeCandidates(providersMap, [failed.id]);
   }
+  const chainComposites = peekFallbackChain().map((e) => e.providerId).filter(isCompositeProviderId);
+  if (chainComposites.length) {
+    await (await import('./compositeProviders.js')).withCompositeCandidates(providersMap, chainComposites);
+  }
 
   const picked = providerStatus.getFallbackProvider(failed.id, providersMap, null, null, requestCapabilities);
   if (!picked?.provider) return null;
@@ -1220,7 +1228,7 @@ async function pickFallbackProvider(failed, requestCapabilities) {
   // without its sibling's apiKey and fail auth (NVIDIA NIM 401s "Header of type
   // `authorization` was missing") despite a stored key. Attach it from the same
   // map (synchronous — no re-read to go stale).
-  return { provider: attachGatewaySiblingKey(picked.provider, providersMap), model: picked.model ?? null };
+  return { provider: attachGatewaySiblingKey(picked.provider, providersMap), model: picked.model ?? null, effort: picked.effort ?? null };
 }
 
 /**

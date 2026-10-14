@@ -898,7 +898,14 @@ describe('imageGen local.buildSidecarMeta', () => {
       ...baseMetaInput,
       loraFilenames: ['aria.safetensors'],
       loraTriggerWords: { 'aria.safetensors': ['aria_tok', 'portrait'] },
+      promptAdditions: [{ id: 'style-1', label: 'Universe style', text: 'muted earth tones' }],
     });
+    // The record of what went out (#11317): exact text, carried additions, then the weave.
+    expect(meta.sentPrompt).toBe('a red cube, aria_tok');
+    expect(meta.promptAdditions).toEqual([
+      { id: 'style-1', label: 'Universe style', text: 'muted earth tones' },
+      { id: 'lora-triggers', label: 'LoRA trigger words', text: 'aria_tok' },
+    ]);
     // What the runner renders.
     expect(renderPrompt).toBe('a red cube, aria_tok');
     expect(addedTriggerWords).toEqual(['aria_tok']);
@@ -1039,6 +1046,48 @@ describe('imageGen local.generateImage runtime pre-flight', () => {
       message: expect.stringContaining('not installed or healthy'),
     });
     expect(mockIsFlux2VenvHealthy).toHaveBeenCalledWith('QwenImage21Pipeline');
+  });
+
+  it('cleans up stepwise directory and purges the job from memory when buildArgs rejects', async () => {
+    mockResolveFlux2Python.mockReturnValue(null);
+    mockIsFlux2VenvHealthy.mockResolvedValue(true);
+    const fileUtils = await import('../../lib/fileUtils.js');
+    const rmSpy = vi.spyOn(fileUtils, 'rmGuarded');
+    const { attachSseClient } = await import('./local.js');
+    const testJobId = 'test-build-args-throw-' + Date.now();
+    await expect(generateImage({ modelId: 'qwen-image-2.1', prompt: 'a fox', jobId: testJobId })).rejects.toMatchObject({
+      code: 'IMAGE_GEN_FLUX2_NOT_INSTALLED',
+      status: 400,
+    });
+    const response = { writeHead: vi.fn(), write: vi.fn(), end: vi.fn(), req: new EventEmitter() };
+    expect(attachSseClient(testJobId, response)).toBe(false);
+    expect(rmSpy).toHaveBeenCalledWith(expect.stringContaining('portos-stepwise-'), { recursive: true, force: true });
+    rmSpy.mockRestore();
+  });
+
+  it('cleans up stepwise directory and purges the job from memory when heavy claim is busy', async () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    mockIsFlux2VenvHealthy.mockResolvedValue(true);
+    const heavyJobClaim = await import('../../lib/heavyJobClaim.js');
+    const claimSpy = vi.spyOn(heavyJobClaim, 'claimHeavyLocalJob').mockResolvedValueOnce({
+      ok: false,
+      message: 'busy with another render',
+      holder: { id: 'other-job' },
+      release: async () => {},
+    });
+    const fileUtils = await import('../../lib/fileUtils.js');
+    const rmSpy = vi.spyOn(fileUtils, 'rmGuarded');
+    const { attachSseClient } = await import('./local.js');
+    const testJobId = 'test-heavy-busy-' + Date.now();
+    await expect(generateImage({ modelId: 'qwen-image-2.1', prompt: 'a fox', jobId: testJobId })).rejects.toMatchObject({
+      code: 'HEAVY_LOCAL_JOB_BUSY',
+      status: 409,
+    });
+    const response = { writeHead: vi.fn(), write: vi.fn(), end: vi.fn(), req: new EventEmitter() };
+    expect(attachSseClient(testJobId, response)).toBe(false);
+    expect(rmSpy).toHaveBeenCalledWith(expect.stringContaining('portos-stepwise-'), { recursive: true, force: true });
+    claimSpy.mockRestore();
+    rmSpy.mockRestore();
   });
 });
 

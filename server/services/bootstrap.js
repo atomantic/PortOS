@@ -152,6 +152,7 @@ import { initFableLoomSceneImageHook } from './fableLoomSceneImageHook.js';
 import { initFableLoomSceneVideoHook } from './fableLoomSceneVideoHook.js';
 import { initMusicVideoSceneImageHook } from './musicVideoSceneImageHook.js';
 import { initMusicVideoSceneVideoHook } from './musicVideoSceneVideoHook.js';
+import { initMusicVideoCollectionHook } from './musicVideoCollectionHook.js';
 import { initMusicVideoCastSetsImageHook } from './musicVideoCastSetsImageHook.js';
 import { initMusicVideoCoverArtImageHook } from './musicVideoCoverArtImageHook.js';
 import { initCreativeDirectorMusicBedHook } from './creativeDirectorMusicBedHook.js';
@@ -179,6 +180,8 @@ import { outcomesStore as liOutcomesStore } from './layeredIntelligenceOutcomes.
 import * as gameStore from './games/store.js';
 import * as fableLoomStore from './fableLoom/store.js';
 import { prerequisitesMetForRouting } from './providerPrerequisites.js';
+import { peekFallbackChain } from '../lib/providerFallbackChainCache.js';
+import { initFallbackChain } from './providerFallbackChain.js';
 import { localCachedModelIds } from './localCachedModels.js';
 import { stopCodexAppServer } from './codexAppServer.js';
 import { logFailureWithStack as logBootstrapFailure } from '../lib/failureLogging.js';
@@ -216,14 +219,14 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
       // provider fault. Emit a distinct code + warning severity so (a) the
       // autofixer skips it (it only spawns investigation tasks for
       // AI_PROVIDER_EXECUTION_FAILED) and (b) the client shows a calm "model
-      // declined, trying a fallback" notice instead of a red error toast. The
-      // fallback retry itself is driven by promptRunner.js.
+      // declined, stopped" notice instead of a red error toast. Automatic retry
+      // and provider fallback are disabled.
       const isBudget = metadata.errorAnalysis?.category === ERROR_CATEGORIES.RUNTIME_BUDGET_EXHAUSTED;
       const isRefusal = metadata.errorAnalysis?.category === ERROR_CATEGORIES.CONTENT_REFUSAL;
       errorEvents.emit('error', {
         code: isBudget ? 'AI_RUNTIME_BUDGET_EXHAUSTED' : (isRefusal ? 'AI_PROVIDER_CONTENT_REFUSED' : 'AI_PROVIDER_EXECUTION_FAILED'),
         message: isBudget ? errorMessage : isRefusal
-          ? `${metadata.providerName} declined this prompt on content/safety grounds — trying a fallback model if one is configured.`
+          ? `${metadata.providerName} declined this prompt on content/safety grounds — stopped without automatic retry or provider fallback.`
           : `AI provider ${metadata.providerName} execution failed: ${errorMessage}`,
         severity: isBudget || isRefusal ? 'warning' : 'error',
         canAutoFix: !isBudget && !isRefusal,
@@ -322,6 +325,9 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
       // of dying at spawn time. Sync by contract: it reads the runtime probe's
       // cache and never blocks.
       prerequisitesMet: prerequisitesMetForRouting,
+      // The user's single ordered fallback list (Models > Fallbacks); a cache
+      // read, so it is sync as the toolkit requires.
+      getFallbackChain: peekFallbackChain,
       // MTPLX and Slotstream each serve one checkpoint per process and report
       // only that one, so a refresh could never surface a newly downloaded
       // checkpoint — and for Slotstream it pruned the record's other shipped ids.
@@ -350,7 +356,11 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
     // Warm the providers file at startup so the codex-sentinel migration runs
     // before any inbound request can hit the providers cache. A pure READ of
     // on-disk provider config — it dispatches nothing to a provider.
-    warmProviders: (aiToolkit) => aiToolkit.services.providers.getAllProviders(),
+    warmProviders: async (aiToolkit) => {
+      // Prime the sync fallback-list cache from settings.json (disk only).
+      await initFallbackChain().catch((err) => logBootstrapFailure('⚠️ Failed to load provider fallback list', err));
+      return aiToolkit.services.providers.getAllProviders();
+    },
 
     // Ensure the provider paired with the active local-LLM backend (LLM_BACKEND in
     // .env, chosen at setup time) is enabled, so a fresh install can use Ollama /
@@ -697,6 +707,9 @@ const initMediaJobDependentHooks = () => {
   // Music Video scene-video hook — durably files a queued i2v scene clip onto
   // its project scene's `videoHistoryId` on completion (#1760 Phase 1).
   initMusicVideoSceneVideoHook();
+  // Music Video collection hook — files every render that names a music video
+  // (a shot's, Cast & Sets, or a tagged Image/Video Gen request) into its collection.
+  initMusicVideoCollectionHook();
   // Music Video Cast & Sets hook — files a queued check-in reference image
   // (character sheet, looks, set plates, in-set tests) onto its stage key.
   // It only listens: nothing is generated at boot.

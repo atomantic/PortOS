@@ -8,6 +8,7 @@ import {
   CODEX_TURN_NOTIFICATIONS,
   applyCodexTurnEvent,
   classifyCodexTransportError,
+  classifyCodexTurnError,
   createTurnAccumulator,
   finalizeCodexTurn,
   isCodexTextTransportEnabled,
@@ -416,4 +417,13 @@ describe('classifyCodexTransportError', () => {
     });
     expect(finalizeCodexTurn(acc).category).toBe('context-length');
   });
+});
+
+
+it.each([
+  { codex_error_info: 'cyber_policy' },
+  { codexErrorInfo: 'cyberPolicy' },
+  { codexErrorInfo: { cyberPolicy: {} } },
+])('classifies structured cybersecurity refusal %j', error => {
+  expect(classifyCodexTurnError(error).category).toBe(ERROR_CATEGORIES.CONTENT_REFUSAL);
 });

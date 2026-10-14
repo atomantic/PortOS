@@ -284,6 +284,17 @@ it('uses moodboard caption text on a backend without image-reference support', a
   expect(data.referenceImagePaths).toBeUndefined();
 });
 
+// Uniquely catches a board still sent with the director's text but without the
+// server's composed look, or with the look and no chips for it (#11317).
+it('composes a board still from the director\'s text and lists what it adds', async () => {
+  getSettings.mockResolvedValue({ imageGen: { mode: 'external' } });
+  getProject.mockResolvedValue({ concept: { style: 'grainy 16mm' }, styleReferences: [{ imageId: 'style.png', caption: 'fine silver grain' }],
+    scenes: [{ sceneId: 's1', framePrompt: 'harbor at dawn' }] });
+  const { data } = await run({ prompt: 'harbor at dawn', musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true, fromFrame: true } });
+  expect(data.prompt).toMatch(/^harbor at dawn, grainy 16mm\nStart from the first reference image.*\. Moodboard style only/s);
+  expect(data.promptAdditions.map((item) => item.id)).toEqual(['project-style', 'rework-frame', 'mood-board-style']);
+});
+
 // Pins cleaner precedence where requests are prepared, without loading a backend.
 describe('prepared image cleaner policy', () => {
   it('inherits saved per-mode flags and accepts explicit boolean overrides', async () => {

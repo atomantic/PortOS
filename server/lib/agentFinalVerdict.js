@@ -108,6 +108,12 @@ export function resolveAgentFinalVerdict({
   hookResult = null,
   failureIsTerminal = () => false,
 }) {
+  // Delivery checks cannot turn a provider refusal into an ordinary retryable
+  // PR/validation failure. The refusal remains the terminal execution cause.
+  if (['content-refusal', 'content-filtered'].includes(errorAnalysis?.category)) {
+    return Object.freeze({ source: 'reported', success: false, errorAnalysis,
+      error: errorAnalysis.message || error, completionReason: errorAnalysis.category });
+  }
   const driftDowngrade = Boolean(drift?.drifted) && reportedSuccess && !terminatedByUser;
   const prVerdict = prEvidence.completionVerdict;
   const delivered = driftDowngrade

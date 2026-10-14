@@ -35,6 +35,9 @@ vi.mock('../services/moodBoardCompositeStyle.js', () => ({
   composeBoardPrompt: vi.fn(),
 }));
 
+vi.mock('../services/moodBoard/generateMore.js', () => ({ startGenerateJob: vi.fn(), getGenerateJob: vi.fn() }));
+import { startGenerateJob, getGenerateJob } from '../services/moodBoard/generateMore.js';
+
 import * as svc from '../services/moodBoard/index.js';
 import { synthesizeBoardStyle } from '../services/moodBoardStyleSynthesis.js';
 import { composeBoardPrompt } from '../services/moodBoardCompositeStyle.js';
@@ -200,12 +203,15 @@ describe('mood-board routes', () => {
       expect(bad.status).toBe(400);
     });
 
-    it('requires a count for per-item frame extraction', async () => {
+    it('takes a count or picked times for per-item frame extraction', async () => {
       svc.extractItemFrames.mockResolvedValueOnce({ added: 4 });
       const ok = await request(makeApp()).post('/api/mood-boards/mb-1/items/i1/extract-frames').send({ count: 4 });
       expect(ok.status).toBe(200);
       expect(svc.extractItemFrames).toHaveBeenCalledWith('mb-1', 'i1', { count: 4 });
       expect((await request(makeApp()).post('/api/mood-boards/mb-1/items/i1/extract-frames').send({})).status).toBe(400);
+      expect((await request(makeApp()).post('/api/mood-boards/mb-1/items/i1/extract-frames').send({ times: [1.25, 3] })).status).toBe(200);
+      expect(svc.extractItemFrames).toHaveBeenLastCalledWith('mb-1', 'i1', { times: [1.25, 3] });
+      expect((await request(makeApp()).post('/api/mood-boards/mb-1/items/i1/extract-frames').send({ count: 2, times: [1] })).status).toBe(400);
     });
 
     it('queues a note render (202) on an optional backend pin', async () => {
@@ -215,5 +221,23 @@ describe('mood-board routes', () => {
       expect(svc.renderBoardItem).toHaveBeenCalledWith('mb-1', 'i1', {});
       expect((await request(makeApp()).post('/api/mood-boards/mb-1/items/i1/render').send({ target: 'deck' })).status).toBe(400);
     });
+  });
+});
+
+
+describe('mood-board generate routes', () => {
+  it('validates bounded batches and forwards independent prompt and image choices', async () => {
+    startGenerateJob.mockResolvedValue({ status: 'running' });
+    const body = { requestId: '12345678-1234-4123-8123-123456789abc', providerId: 'writer', model: 'writer-model', render: { mode: 'grok', width: 1024, height: 576 } };
+    const res = await request(makeApp()).post('/api/mood-boards/example/generate').send(body);
+    expect(res.status).toBe(202);
+    expect(startGenerateJob).toHaveBeenCalledWith('example', expect.objectContaining({ ...body, count: 1 }));
+    startGenerateJob.mockClear();
+    for (const invalid of [{ count: 5 }, { render: { width: 3840, height: 3840 } }, { render: { mode: 'external' } }, { requestId: '' }]) {
+      expect((await request(makeApp()).post('/api/mood-boards/example/generate').send({ ...body, ...invalid })).status).toBe(400);
+    }
+    expect(startGenerateJob).not.toHaveBeenCalled();
+    getGenerateJob.mockReturnValue({ status: 'queued', items: [] });
+    expect((await request(makeApp()).get('/api/mood-boards/example/generate')).body.status).toBe('queued');
   });
 });

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
-import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises';
+import { EventEmitter } from 'node:events';
+import { mkdtemp, mkdir, rm, writeFile, symlink, readFile, realpath } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { errorMiddleware } from '../lib/errorHandler.js';
@@ -8,6 +9,7 @@ import { request } from '../lib/testHelper.js';
 
 const mocks = vi.hoisted(() => ({
   activeApps: [],
+  authEnabled: false,
   addTask: vi.fn(),
   atomicWrite: vi.fn(),
   generateConcernTasks: vi.fn(),
@@ -16,6 +18,20 @@ const mocks = vi.hoisted(() => ({
   stageFiles: vi.fn(),
   commit: vi.fn(),
 }));
+
+// Credential verification is already covered by authGate.test.js; these fixtures
+// represent its verified human-cookie and delegated-agent bearer identities.
+vi.mock('../services/auth.js', () => ({
+  isAuthEnabled: async () => mocks.authEnabled,
+  verifyPassword: async () => false,
+  verifyRequestSession: async (req) => req.headers.cookie === 'portos_auth=synthetic-human'
+    || req.headers.authorization === 'Bearer synthetic-agent',
+}));
+vi.mock('../services/settings.js', () => ({
+  settingsEvents: new EventEmitter(), getSettings: async () => ({}),
+}));
+vi.mock('../services/instanceIdentity.js', () => ({ loadData: async () => ({ peers: [] }) }));
+vi.mock('../lib/securityAuditLog.js', () => ({ logSecurityEvent: vi.fn() }));
 
 vi.mock('../services/apps.js', () => ({
   getActiveApps: vi.fn(async () => mocks.activeApps),
@@ -44,10 +60,15 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
 }));
 
 import gsdRoutes from './gsd.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
 
-function makeApp() {
+function makeApp(address = '127.0.0.1') {
   const app = express();
-  app.use(express.json());
+  app.use((req, _res, next) => {
+    Object.defineProperty(req.socket, 'remoteAddress', { value: address });
+    next();
+  });
+  app.use(authGate, hostControlRouteGate, express.json());
   app.use('/api/cos/gsd', gsdRoutes);
   app.use(errorMiddleware);
   return app;
@@ -60,8 +81,10 @@ describe('GSD routes', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    mocks.getGsdProject.mockReset();
+    mocks.authEnabled = false;
     app = makeApp();
-    repoPath = await mkdtemp(join(tmpdir(), 'portos-gsd-route-'));
+    repoPath = await realpath(await mkdtemp(join(tmpdir(), 'portos-gsd-route-')));
     planningPath = join(repoPath, '.planning');
     await mkdir(planningPath);
     mocks.activeApps = [{ id: 'app-1', name: 'Example App', repoPath }];
@@ -83,6 +106,88 @@ describe('GSD routes', () => {
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ filename: 'PROJECT.md', content: '# Project\n' });
+  });
+
+  it.each(['leaf', 'directory'])('refuses a repository-controlled %s symlink before reading or writing outside', async (kind) => {
+    const outside = await mkdtemp(join(tmpdir(), 'portos-gsd-outside-'));
+    try {
+      const secret = join(outside, 'PROJECT.md');
+      await writeFile(secret, 'synthetic private content');
+      if (kind === 'directory') {
+        await rm(planningPath, { recursive: true });
+        await symlink(outside, planningPath, 'junction');
+      } else {
+        await symlink(secret, join(planningPath, 'PROJECT.md'));
+      }
+      const url = '/api/cos/gsd/projects/app-1/documents/PROJECT.md';
+      const read = await request(makeApp('192.0.2.10')).get(url);
+      const write = await request(app).put(url).send({ content: 'replacement' });
+      expect(read.status).toBe(400);
+      expect(read.body.code).toBe('PATH_TRAVERSAL');
+      expect(write.status).toBe(400);
+      expect(write.body.code).toBe('PATH_TRAVERSAL');
+      expect(mocks.atomicWrite).not.toHaveBeenCalled();
+      expect(mocks.stageFiles).not.toHaveBeenCalled();
+      expect(await readFile(secret, 'utf8')).toBe('synthetic private content');
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['PROJECT.md', 'config.json', 'phases/01/01-PLAN.md', 'phases'])('contains project-detail reads of %s through the real GSD service', async (relativePath) => {
+    const outside = await mkdtemp(join(tmpdir(), 'portos-gsd-detail-'));
+    try {
+      const target = join(outside, 'private.txt');
+      await writeFile(target, 'synthetic private content');
+      await mkdir(join(planningPath, 'phases', '01'), { recursive: true });
+      if (relativePath === 'phases') {
+        await rm(join(planningPath, 'phases'), { recursive: true });
+        await symlink(outside, join(planningPath, 'phases'), 'junction');
+      } else {
+        await symlink(target, join(planningPath, relativePath));
+      }
+      const service = await vi.importActual('../services/gsdService.js');
+      mocks.getGsdProject.mockImplementation(service.getGsdProject);
+      mocks.activeApps[0].id = repoPath.split(/[\\/]/).pop(); // Unique cache key for this synthetic project.
+      const response = await request(app).get(`/api/cos/gsd/projects/${encodeURIComponent(mocks.activeApps[0].id)}`);
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('PATH_TRAVERSAL');
+      expect(JSON.stringify(response.body)).not.toContain('synthetic private content');
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('reads a regular project and nested phase through a symlinked configured repository root', async () => {
+    const alias = join(repoPath, 'repo-alias');
+    await symlink(repoPath, alias, 'junction');
+    mocks.activeApps[0].repoPath = alias;
+    mocks.activeApps[0].id = repoPath.split(/[\\/]/).pop();
+    await writeFile(join(planningPath, 'PROJECT.md'), '# Synthetic Project');
+    await mkdir(join(planningPath, 'phases', '01'), { recursive: true });
+    await writeFile(join(planningPath, 'phases', '01', '01-PLAN.md'), '- [ ] Synthetic task');
+    const service = await vi.importActual('../services/gsdService.js');
+    mocks.getGsdProject.mockImplementation(service.getGsdProject);
+    const response = await request(app).get(`/api/cos/gsd/projects/${encodeURIComponent(mocks.activeApps[0].id)}`);
+    expect(response.status).toBe(200);
+    expect(response.body.projectDoc.raw).toBe('# Synthetic Project');
+    expect(response.body.phases[0].plans[0].tasks).toEqual([{ completed: false, text: 'Synthetic task' }]);
+  });
+
+  it('preserves verified human and agent writes while refusing anonymous remote writes', async () => {
+    const remote = makeApp('192.0.2.10');
+    const url = '/api/cos/gsd/projects/app-1/documents/STATE.md';
+    expect((await request(remote).put(url).send({ content: 'blocked' })).status).toBe(403);
+    expect(mocks.atomicWrite).not.toHaveBeenCalled();
+    mocks.authEnabled = true;
+    for (const [header, value] of [
+      ['Cookie', 'portos_auth=synthetic-human'],
+      ['Authorization', 'Bearer synthetic-agent'],
+    ]) {
+      const response = await request(remote).put(url).set(header, value).send({ content: '# Authorized' });
+      expect(response.status).toBe(200);
+    }
+    expect(mocks.atomicWrite).toHaveBeenCalledTimes(2);
   });
 
   it('rejects unallowlisted and traversal document names before side effects', async () => {

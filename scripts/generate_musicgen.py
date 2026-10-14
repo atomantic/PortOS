@@ -103,8 +103,8 @@ def main():
                         help="Path to the mlx-examples musicgen/ package dir")
     args = parser.parse_args()
 
-    text = (args.text or "").strip()
-    if not text:
+    text = args.text or ""
+    if not text.strip():
         print("ERROR: --text is required", file=sys.stderr, flush=True)
         return 2
 

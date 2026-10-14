@@ -79,7 +79,8 @@ describe.skipIf(!chrome)('overlay text check (headless Chrome)', () => {
     const started = await startOverlayTextCheck(created.id);
     expect(started.readiness.storyboard.text.status).toBe('running');
     const check = await started.done;
-    expect(check.status).toBe('complete');
+    // CI quiet mode suppresses service logs; retain the stored lifecycle error on failure.
+    expect(check.status, check.error ?? 'Overlay text check failed without a stored error').toBe('complete');
     expect(check.textSamples).toBeGreaterThan(0);
 
     const kinds = (text) => check.findings.filter((f) => f.texts.some((t) => t.includes(text))).map((f) => f.kind).sort();
@@ -119,7 +120,7 @@ describe.skipIf(!chrome)('overlay text check (headless Chrome)', () => {
     await importDocumentTemplate(created.id, 'layered');
     const started = await startOverlayTextCheck(created.id);
     const check = await started.done;
-    expect(check).toMatchObject({ status: 'complete', findings: [] });
+    expect(check, check.error ?? 'Overlay text check failed without a stored error').toMatchObject({ status: 'complete', findings: [] });
     expect(check.textSamples).toBeGreaterThan(4);
   }, 120000);
 });

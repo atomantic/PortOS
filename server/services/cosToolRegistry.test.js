@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   worldProject: vi.fn(),
   worldAugment: vi.fn(),
   worldSay: vi.fn(),
+  observeWorld: vi.fn(),
   listUserActions: vi.fn(),
   fileIssue: vi.fn(),
   listIssues: vi.fn(),
@@ -21,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   recordFoundation: vi.fn(),
   ensureInstanceId: vi.fn(),
   delegateSandbox: vi.fn(),
+  interactRiddle: vi.fn(),
 }));
 
 vi.mock('./persistentMindManagedApps.js', () => ({ readPersistentMindManagedApps: async () => [{ id: 'example', granted: true, forge: 'github' }] }));
@@ -70,11 +72,18 @@ vi.mock('./persistentMindContext.js', () => ({ choosePersistentMindName: (...arg
 vi.mock('./persistentMindMaintenance.js', () => ({
   cleanupPersistentMind: (...args) => mocks.cleanupMind(...args),
 }));
+vi.mock('./eidoverseObservationLedger.js', () => ({
+  observeEidoverseWorld: (...args) => mocks.observeWorld(...args),
+}));
 vi.mock('./eidoverseWorld.js', () => ({
   getEidoverseWorldStatus: (...args) => mocks.worldStatus(...args),
   projectEidoverseWorld: (...args) => mocks.worldProject(...args),
   augmentEidoverseWorld: (...args) => mocks.worldAugment(...args),
   sayInEidoverseWorld: (...args) => mocks.worldSay(...args),
+}));
+vi.mock('./eidoverseControllerRuntime.js', async () => ({
+  summarizeControllerInstall: (await import('../lib/eidoverseControllers.js')).summarizeControllerInstall,
+  interactEidoverseRiddleLedger: (...args) => mocks.interactRiddle(...args),
 }));
 vi.mock('./eidoverseFoundationLedger.js', () => ({
   adoptEidoverseFoundation: (...args) => mocks.adoptFoundation(...args),
@@ -99,6 +108,8 @@ vi.mock('./cosState.js', () => ({
   withStateLock: vi.fn(async (fn) => fn()),
 }));
 
+import { buildEidoverseWorldSignals } from '../lib/eidoverseWorldSignals.js';
+import { buildEidoverseObservation } from '../lib/eidoverseObservation.js';
 import { DEFAULT_TOOL_ACTIVATION_RETENTION_TURNS } from '../lib/persistentMindToolActivation.js';
 import {
   __testing,
@@ -123,6 +134,48 @@ beforeEach(() => {
 });
 
 describe('cosToolRegistry', () => {
+  it('gates explicit riddle actions on both controller grants and returns the runtime delivery verdict', async () => {
+    const call = { requestId: 'example-riddle', name: 'eidoverse.riddle', arguments: {
+      id: 'example-game', action: 'reveal', expectedRevision: 2,
+    } };
+    await expect(executeCosToolCall({ call, authority: { scope: 'mind', capabilities: { manageEidoverse: true } } }))
+      .rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
+    expect(mocks.interactRiddle).not.toHaveBeenCalled();
+    mocks.interactRiddle.mockResolvedValue({ outcome: 'applied', install: { id: 'example-game', state: { revision: 3, revealed: true } },
+      delivery: { status: 'refused', delivered: 0, reason: 'Synthetic refusal' }, reasons: [] });
+    const result = await executeCosToolCall({ call, authority: { scope: 'mind', capabilities: { manageEidoverse: true, installEidoverseControllers: true } } });
+    expect(result.result).toMatchObject({ outcome: 'applied', install: { state: { revision: 3, revealed: true } }, delivery: { status: 'refused' } });
+    expect(mocks.interactRiddle).toHaveBeenCalledWith(call.arguments, expect.any(Object));
+    const catalog = getCosToolCatalog({ scope: 'mind', capabilities: { manageEidoverse: true, installEidoverseControllers: true } });
+    for (const format of ['openai', 'anthropic']) {
+      const exported = formatCosToolCatalog(catalog, format).tools.find((tool) => (tool.function?.name || tool.name) === 'eidoverse_riddle');
+      const parameters = exported.function?.parameters || exported.input_schema;
+      expect(parameters).toMatchObject({ type: 'object', required: ['id', 'expectedRevision', 'action'], additionalProperties: false });
+      expect(parameters).not.toHaveProperty('oneOf');
+      expect(parameters.properties.action.enum).toEqual(['offer', 'guess', 'reveal']);
+    }
+  });
+  it('delivers bounded stopped-task reasons under the observation grant without enabling reports', async () => {
+    const tasks = Array.from({ length: 2 }, (_, index) => ({ id: `invented-task-${index}`,
+      status: 'blocked', metadata: { blockedCategory: 'user-terminated' } }));
+    mocks.observeWorld.mockImplementation(async () => buildEidoverseObservation({
+      source: buildEidoverseWorldSignals({ agents: [], taskState: { tasks } }, { includeAttentionReasons: true }),
+    }).report);
+    const call = { requestId: 'observe-stopped-tasks', name: 'eidoverse.observe', arguments: {} };
+    await expect(executeCosToolCall({ call, authority: { scope: 'mind', capabilities: {} } }))
+      .rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
+    expect(mocks.observeWorld).not.toHaveBeenCalled();
+    const authority = { scope: 'mind', capabilities: { manageEidoverse: true }, reportAccess: false };
+    const observed = await executeCosToolCall({ call, authority });
+    expect(observed.result.places.find((place) => place.id === 'agents').attentionSignals).toEqual([
+      { source: 'tasks', severity: 'error', signalCount: 2,
+        reasons: [{ code: 'task_user_terminated', affectedCount: 2 }] },
+    ]);
+    await expect(executeCosToolCall({ call: { requestId: 'report-still-disabled', name: 'reports.read',
+      arguments: {} }, authority })).rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
+    expect(tasks.every((task) => task.status === 'blocked')).toBe(true);
+  });
+
   it('requires the independent delegation grant, validates the packet, and replays one accepted proposal', async () => {
     const call = { requestId: 'sandbox-1', name: 'sandbox.delegate', arguments: {
       providerId: 'free-api', model: 'openrouter/free', kind: 'text', task: 'Write a greeting',
@@ -391,6 +444,7 @@ describe('cosToolRegistry', () => {
       'eidoverse.install-controller',
       'eidoverse.arm-controller',
       'eidoverse.retire-controller',
+      'eidoverse.riddle',
       'eidoverse.status',
       'eidoverse.inspect-scene',
       'eidoverse.project',

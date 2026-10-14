@@ -70,6 +70,7 @@ vi.mock('./domainUsage.js', () => ({
 vi.mock('./cosLocalEndpointSlots.js', () => ({
   acquireLocalEndpointProviderSlot: (...args) => mock.acquireSlot(...args),
   localEndpointOfProvider: (...args) => mock.localEndpointOfProvider(...args),
+  providerBaseUrl: (provider) => provider?.endpoint || null,
 }));
 
 vi.mock('./agentRunEventLog.js', () => ({
@@ -915,6 +916,50 @@ describe('persistent mind supervisor', () => {
     expect(mock.root.persistentMind.activeTurn).toBeNull();
     expect(mock.root.persistentMind.queuedMessages.map((item) => item.id)).toEqual(['message-1']);
     expect(mock.root.persistentMind.status).toBe('interrupted');
+  });
+
+  it.each([
+    ['alive', () => Promise.resolve(new Response(JSON.stringify({ models: [{ name: 'example-model' }] }))), false],
+    ['unloaded', () => Promise.resolve(new Response(JSON.stringify({ models: [] }))), true],
+    ['gone', () => Promise.reject(new Error('ECONNREFUSED')), true],
+  ])('watchdog with an Ollama call in flight and the runner %s', async (_label, psResponse, interrupts) => {
+    let callStarted = false;
+    const run = vi.fn(({ signal, callBoundary }) => callBoundary({ purpose: 'turn', round: 0 }, () => new Promise((resolve, reject) => {
+      callStarted = true;
+      signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+    })));
+    const probe = vi.fn(psResponse);
+    vi.stubGlobal('fetch', probe);
+    try {
+      await supervisor.registerPersistentMindTurnAdapter({
+        prepare: vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud', ollamaBacked: true, endpoint: 'http://127.0.0.1:11434/v1' } })),
+        run,
+      });
+      await supervisor.setPersistentMindEnabled(true);
+      await supervisor.startPersistentMind();
+      await supervisor.enqueuePersistentMindMessage({ id: 'message-1', text: 'Think for a long time.' });
+      const drain = supervisor.drainPersistentMind();
+      await vi.waitFor(() => expect(callStarted).toBe(true));
+      // Far past the stale window: a long thought, not a suspend.
+      mock.root.persistentMind.activeTurn.heartbeatAt = new Date(
+        Date.now() - 10 * PERSISTENT_MIND_LIMITS.WATCHDOG_STALE_MS
+      ).toISOString();
+      const result = await supervisor.checkPersistentMindWatchdog();
+      expect(probe).toHaveBeenCalledWith('http://127.0.0.1:11434/api/ps', expect.anything());
+      if (interrupts) {
+        expect(result).toEqual({ interrupted: true });
+        await drain;
+        expect(mock.root.persistentMind.activeTurn).toBeNull();
+      } else {
+        expect(result).toEqual({ interrupted: false, inFlight: true });
+        expect(mock.root.persistentMind.activeTurn).not.toBeNull();
+        await supervisor.interruptPersistentMindTurn?.();
+        await supervisor.stopPersistentMind?.();
+        await drain.catch(() => {});
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('watchdog restarts the stale window after a host suspend instead of killing the in-flight turn', async () => {
@@ -1821,6 +1866,77 @@ describe('usage-limit retry time', () => {
       // Stale: scheduled before a clock jump, so the time already passed.
       mock.events.set(PROBE_ID, { id: PROBE_ID, active: true, nextRunAt: Date.now() - 60_000 });
       expect(supervisor.persistentMindUsageLimitRetryAt()).toBeNull();
+    });
+  });
+
+  describe('degraded park logging', () => {
+    let warnSpy;
+
+    beforeEach(() => {
+      warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      warnSpy.mockRestore();
+    });
+
+    it('scrubs credentials and truncates a 21K reason in the degraded park log', async () => {
+      const secret = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz123456';
+      const longReason = `Preparation failed with token ${secret} ` + 'x'.repeat(21_000);
+      await supervisor.registerPersistentMindTurnAdapter({
+        prepare: vi.fn(async () => ({ ok: false, error: longReason })),
+        run: vi.fn(),
+      });
+      await supervisor.setPersistentMindEnabled(true);
+      await supervisor.startPersistentMind();
+      await supervisor.enqueuePersistentMindMessage({ id: 'msg-degraded', text: 'Degraded test' });
+      await supervisor.drainPersistentMind();
+
+      expect(mock.root.persistentMind.status).toBe('degraded');
+      const degradedCalls = warnSpy.mock.calls.filter(([msg]) =>
+        typeof msg === 'string' && msg.startsWith('⚠️ Persistent mind turn degraded:')
+      );
+      expect(degradedCalls).toHaveLength(1);
+      const [logged] = degradedCalls[0];
+      expect(logged).toContain('[REDACTED]');
+      expect(logged).not.toContain(secret);
+      expect(logged.length).toBe('⚠️ Persistent mind turn degraded: '.length + 300);
+    });
+
+    it('does not log when a turn is parked as waiting or paused', async () => {
+      // 1. Waiting park (local endpoint at capacity)
+      mock.localEndpointOfProvider.mockReturnValue('http://localhost:1234');
+      const run = vi.fn();
+      await supervisor.registerPersistentMindTurnAdapter({
+        prepare: vi.fn(async () => ({ ok: true, provider: mock.profile.provider })),
+        run,
+      });
+      mock.acquireSlot.mockResolvedValueOnce({ ok: false, reason: 'local endpoint localhost:1234 is at capacity (1/1)' });
+      await supervisor.setPersistentMindEnabled(true);
+      await supervisor.startPersistentMind();
+      await supervisor.enqueuePersistentMindMessage({ id: 'msg-waiting', text: 'Wait for capacity.' });
+      await supervisor.drainPersistentMind();
+
+      expect(mock.root.persistentMind.status).toBe('waiting');
+      expect(warnSpy.mock.calls.filter(([msg]) =>
+        typeof msg === 'string' && msg.startsWith('⚠️ Persistent mind turn degraded:')
+      )).toHaveLength(0);
+
+      // 2. Paused park (provider usage limit refusal)
+      mock.acquireSlot.mockResolvedValue({ ok: true, release: vi.fn() });
+      await supervisor.registerPersistentMindTurnAdapter({
+        prepare: vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud' } })),
+        run: vi.fn(async () => {
+          throw new Error("You've hit your usage limit Get Cursor Pro to keep going.");
+        }),
+      });
+      await supervisor.enqueuePersistentMindMessage({ id: 'msg-paused', text: 'Quota test' });
+      await supervisor.drainPersistentMind();
+
+      expect(mock.root.persistentMind.status).toBe('paused');
+      expect(warnSpy.mock.calls.filter(([msg]) =>
+        typeof msg === 'string' && msg.startsWith('⚠️ Persistent mind turn degraded:')
+      )).toHaveLength(0);
     });
   });
 });

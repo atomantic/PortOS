@@ -128,11 +128,13 @@ vi.mock('../services/itermBridge.js', () => ({
 }));
 
 import settingsRoutes from './settings.js';
+import { hostControlBodyGate } from '../services/authGate.js';
 import codeReviewRoutes from './codeReview.js';
 import { reconcileBeeperIngestion } from '../services/beeperArming.js';
 import { reconcileItermBridge } from '../services/itermBridge.js';
 import { restartBeeperScheduler, isBeeperSchedulerRegistered } from '../services/beeperScheduler.js';
 import { updateSettingsWith } from '../services/settings.js';
+import { updateAiAssignment } from '../services/aiAssignments.js';
 import { hasConfiguredInstances as hasConfiguredDatadogInstances } from '../services/datadog.js';
 import { hasConfiguredInstances as hasConfiguredJiraInstances } from '../services/jira.js';
 import { assertEidoverseInstalled, installEidoverse, setEidoverseWorldsOrigin } from '../services/eidoverse.js';
@@ -1618,5 +1620,130 @@ describe('Settings routes — atomic partial saves (#11045)', () => {
     const response = await request(buildApp()).put('/api/settings').send({ localLlm: { mtplx: { idleMinutes: 5 } } });
     expect(response.status).toBe(200);
     expect(persisted().localLlm).toEqual({ mtplx: { idleMinutes: 5 } });
+  });
+});
+
+const guardedSettingsApp = (authority) => {
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    Object.defineProperty(req.socket, 'remoteAddress', { value: authority === 'local' ? '127.0.0.1' : '192.0.2.10', configurable: true });
+    // authGate supplies this verified context for both human and agent sessions.
+    req.portosAuthContext = authority === 'session'
+      ? { enabled: true, authenticated: true, method: 'session' }
+      : { enabled: false, authenticated: false, method: null };
+    next();
+  });
+  app.use(hostControlBodyGate);
+  app.use('/api/settings', settingsRoutes);
+  return app;
+};
+
+// Regression: generic settings writes must not let a remote caller repoint,
+// disable or prune the backups that hold the install's private records.
+describe('backup settings operator authority', () => {
+  beforeEach(() => { store = { backup: { destPath: '/example-backups', enabled: true } }; vi.clearAllMocks(); });
+
+
+  it.each([{ destPath: '/example-other-backups' }, { enabled: false }, { retentionCount: 1 }, null])(
+    'refuses unauthorized backup policy changes before persistence: %j', async (backup) => {
+      const previous = structuredClone(store);
+      const res = await request(guardedSettingsApp('remote')).put('/api/settings').send({ backup });
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+      expect(updateSettingsWith).not.toHaveBeenCalled();
+      expect(store).toEqual(previous);
+    },
+  );
+
+  it.each(['local', 'session'])('preserves authorized backup configuration: %s', async (authority) => {
+    const res = await request(guardedSettingsApp(authority)).put('/api/settings').send({ backup: { destPath: '/example-other-backups' } });
+    expect(res.status).toBe(200);
+    expect(store.backup.destPath).toBe('/example-other-backups');
+  });
+});
+
+// A generic settings PUT replaces the whole voice root. Even an empty or null
+// value can reset protected instructions; it is not the dedicated deep-merge API.
+describe('generic voice settings operator authority', () => {
+  const original = { stt: { endpoint: 'https://example.com/trusted-stt' }, llm: { systemPrompt: 'Synthetic trusted instructions', tools: { enabled: false } }, tts: { rate: 1 } };
+  beforeEach(() => { store = { voice: structuredClone(original) }; vi.clearAllMocks(); });
+
+  it.each([
+    { stt: { endpoint: 'https://example.com/other-stt' } },
+    { llm: { systemPrompt: 'Synthetic replacement', tools: { enabled: true } } },
+    {},
+    null,
+  ])('refuses an unauthorized root replacement or reset before persistence: %j', async voice => {
+    const res = await request(guardedSettingsApp('remote')).put('/api/settings').send({ voice });
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+    expect(updateSettingsWith).not.toHaveBeenCalled();
+    expect(store.voice).toEqual(original);
+  });
+
+  it.each(['local', 'session'])('preserves authorized voice replacement: %s', async authority => {
+    const voice = { ...original, stt: { endpoint: 'https://example.com/other-stt' } };
+    const res = await request(guardedSettingsApp(authority)).put('/api/settings').send({ voice });
+    expect(res.status).toBe(200);
+    expect(store.voice).toEqual(voice);
+  });
+
+  it('keeps unrelated generic settings writes open without changing voice policy', async () => {
+    const res = await request(guardedSettingsApp('remote')).put('/api/settings').send({ theme: 'dark' });
+    expect(res.status).toBe(200);
+    expect(store.voice).toEqual(original);
+  });
+});
+
+
+// A remote policy write must not become a trusted shell command on a later
+// Autofixer repair, or turn a staged patch into an automatic live promotion.
+describe('autofixer settings operator authority', () => {
+  const original = { providerId: 'example-cli', model: 'example-model', verifyCommand: 'npm test', autoPromote: false };
+  beforeEach(() => { store = { autofixer: { ...original } }; vi.clearAllMocks(); });
+
+  it('refuses command, promotion, provider and clearing writes before persistence', async () => {
+    for (const autofixer of [
+      { verifyCommand: 'echo example-verification' },
+      { autoPromote: true },
+      { providerId: 'another-cli' },
+      { verifyCommand: '' },
+      {},
+      null,
+    ]) {
+      const response = await request(guardedSettingsApp('remote')).put('/api/settings').send({ autofixer });
+      expect([response.status, response.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+      expect(store.autofixer).toEqual(original);
+    }
+    expect(updateSettingsWith).not.toHaveBeenCalled();
+  });
+
+  it.each(['local', 'session'])('preserves %s repair policy updates and explicit clears', async authority => {
+    const app = guardedSettingsApp(authority);
+    const response = await request(app).put('/api/settings').send({ autofixer: { verifyCommand: 'echo example-verification', autoPromote: true } });
+    expect(response.status).toBe(200);
+    expect(store.autofixer).toEqual({ ...original, verifyCommand: 'echo example-verification', autoPromote: true });
+    expect((await request(app).put('/api/settings').send({ autofixer: { verifyCommand: '', autoPromote: false } })).status).toBe(200);
+    expect(store.autofixer).toEqual({ ...original, verifyCommand: '' });
+  });
+
+  it('gates the assignment facade that can replace the same repair policy', async () => {
+    const body = { providerId: 'example-cli', model: 'another-model' };
+    for (const id of ['settings.autofixer', 'settings%2Eautofixer']) {
+      const denied = await request(guardedSettingsApp('remote')).put(`/api/settings/ai-assignments/${id}`).send(body);
+      expect([denied.status, denied.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+    }
+    expect(updateAiAssignment).not.toHaveBeenCalled();
+    for (const authority of ['local', 'session']) {
+      expect((await request(guardedSettingsApp(authority)).put('/api/settings/ai-assignments/settings.autofixer').send(body)).status).toBe(200);
+    }
+    expect(updateAiAssignment).toHaveBeenCalledTimes(2);
+    expect(updateAiAssignment).toHaveBeenLastCalledWith('settings.autofixer', body);
+  });
+
+  it('keeps unrelated remote settings saves open without changing deferred repair policy', async () => {
+    expect((await request(guardedSettingsApp('remote')).put('/api/settings').send({ theme: 'dark' })).status).toBe(200);
+    expect(store.autofixer).toEqual(original);
   });
 });

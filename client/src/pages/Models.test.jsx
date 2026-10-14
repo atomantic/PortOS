@@ -28,6 +28,7 @@ vi.mock('../components/settings/LocalLlmTab', () => ({
 }));
 vi.mock('../components/settings/LocalLlmRuntimesView.jsx', () => ({ default: ({ view }) => <div data-testid="runtime-panel" data-runtime={view || ''}>runtimes panel</div> }));
 vi.mock('../components/settings/EmbeddingsTab', () => ({ default: () => <div>embeddings panel</div> }));
+vi.mock('../components/models/ProviderFallbacks', () => ({ default: () => <div>fallbacks panel</div> }));
 vi.mock('../components/models/Image3dRuntimes', () => ({ default: () => <div>3d runtimes panel</div> }));
 vi.mock('../components/models/ModelStatusTab', () => ({ default: () => <div>status panel</div> }));
 vi.mock('../components/models/SubscriptionsTab', () => ({ default: () => <div>subscriptions panel</div> }));
@@ -51,6 +52,7 @@ const PANEL_MARKER = {
   'code-reviewers': 'code reviewers panel',
   'decision-classifiers': 'classifiers panel',
   embeddings: 'embeddings panel',
+  fallbacks: 'fallbacks panel',
   llms: 'llms panel',
   abuse: 'llms panel',
   jev: 'llms panel',

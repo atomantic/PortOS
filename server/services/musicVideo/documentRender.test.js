@@ -24,7 +24,10 @@ vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await imp
 vi.mock('../../lib/ffmpeg.js', async (importOriginal) => ({
   ...(await importOriginal()),
   findFfmpeg: async () => 'ffmpeg',
-  runFfmpegProcess: async () => ({ ok: true }),
+  runFfmpegProcess: vi.fn(async ({ args }) => {
+    if (args.includes('-n')) await writeFile(args.at(-1), await readFile(args[args.indexOf('-i') + 1]));
+    return { ok: true };
+  }),
 }));
 // Capture the frozen job folder the page would open, then stop the render.
 vi.mock('../htmlComposition/browser.js', () => ({
@@ -52,11 +55,12 @@ vi.mock('../htmlComposition/browser.js', () => ({
   },
 }));
 
+const { runFfmpegProcess } = await import('../../lib/ffmpeg.js');
 const { PATHS } = await import('../../lib/paths.js');
-const { encodeDocumentComposition, documentRenderClock, openIsolatedDocumentPreview } = await import('./documentRender.js');
+const { encodeDocumentComposition, documentRenderClock, openIsolatedDocumentPreview, resolveSceneMedia } = await import('./documentRender.js');
 
 afterAll(() => cleanupTempDataRoots());
-beforeEach(() => { browser.seen = null; browser.contract = null; browser.visibility = null; browser.sampleTimes = []; browser.send = null; browser.closed = []; });
+beforeEach(() => { runFfmpegProcess.mockClear(); browser.seen = null; browser.contract = null; browser.visibility = null; browser.sampleTimes = []; browser.send = null; browser.closed = []; });
 
 const performanceTake = (assetId) => ({ takeId: 'mvt-p', kind: 'video', assetId, status: 'candidate', shotInstruction: { shotMode: 'performance', edit: { inSec: 0.5, outSec: 3.5 } } });
 
@@ -80,7 +84,7 @@ async function fixture({ shipped = {} } = {}) {
     composition: { mode: 'document', textCues: [{ id: 'c1', text: 'hero', startSec: 1, endSec: 2, emphasis: 'hero' }], overlay: { enabled: true, ticker: ['a'] } },
     scenes: [
       { sceneId: 'a', order: 0, startSec: 0, endSec: 4, videoHistoryId: 'vh-a', referenceImageId: 'still-b.png' },
-      { sceneId: 'b', order: 1, startSec: 4, endSec: 8, videoHistoryId: 'vh-gone', referenceImageId: 'still-b.png', visualLayer: 'still', stillMove: 'push' },
+      { sceneId: 'b', order: 1, startSec: 4, endSec: 8, videoHistoryId: 'vh-gone', referenceImageId: 'still-b.png', visualLayer: 'still', stillMove: 'push', imageEffect: 'flash-develop', imageEffectSec: 6 },
       { sceneId: 'c', order: 2, startSec: 8, endSec: 9, visualLayer: 'card', cardText: 'Title' },
       { sceneId: 'd', order: 3, startSec: 9, endSec: 12, shotMode: 'performance', videoHistoryId: 'vh-a', takes: [performanceTake('vh-a')] },
     ],
@@ -125,6 +129,66 @@ describe('isolated document preview ownership', () => {
 });
 
 describe('composition document staging', () => {
+  it.each([
+    { timing: { speedFps: 24, offsetFrames: 12 }, live: { rate: 2, leadSec: 0, startSec: 0.5 }, inSec: 0.25, outSec: 2, filter: 'setpts=(PTS-STARTPTS)/2,fps=24' },
+    { timing: { speedFps: 24, offsetFrames: -6 }, live: { rate: 2, leadSec: 0.25, startSec: 0 }, inSec: 0, outSec: 2.25, filter: 'setpts=(PTS-STARTPTS)/2,tpad=start_mode=clone:start_duration=0.25,fps=24' },
+    { timing: { offsetFrames: -6 }, live: { rate: 1, leadSec: 0.25, startSec: 0 }, inSec: 0, outSec: 4.25, filter: 'setpts=(PTS-STARTPTS)/1,tpad=start_mode=clone:start_duration=0.25,fps=24' },
+  ])('stages shot timing $timing on the document output timebase', async ({ timing, live, inSec, outSec, filter }) => {
+    const { project, plan } = await fixture();
+    Object.assign(project.scenes[0], timing);
+    // The live preview bridges original bytes, so it must retain source time.
+    const raw = await resolveSceneMedia(project, { history: JSON.parse(await readFile(join(PATHS.data, 'video-history.json'), 'utf8')) });
+    expect(raw.get('a')).toMatchObject({ ext: 'mp4', inSec: 0, outSec: 4, fps: 24 });
+    expect(raw.get('a').rate).toBeUndefined();
+    // The live preview applies speed/offset at seek time (engine.js) from this source-time timing.
+    expect(raw.get('a').timing).toEqual(live);
+    const controller = new AbortController();
+    await expect(encodeDocumentComposition({ project, plan, jobId: 'job-timing', signal: controller.signal })).rejects.toThrow('stop after staging');
+    expect(browser.seen.data.scenes[0].media).toMatchObject({ inSec, outSec, fps: 24 });
+    expect(runFfmpegProcess).toHaveBeenCalledTimes(1);
+    const call = runFfmpegProcess.mock.calls[0][0];
+    expect(call.signal).toBe(controller.signal);
+    expect(call.args[call.args.indexOf('-vf') + 1]).toBe(filter);
+    expect(call.args).toContain('-an');
+    expect(browser.seen.media['scene-a.mp4']).toBe('video-a');
+    expect(await readFile(join(PATHS.videos, 'clip-a.mp4'), 'utf8')).toBe('video-a');
+    expect(await scratchEntries()).toEqual([]);
+  });
+
+  it('combines a performance in-point with offset and speed, without changing untimed takes', async () => {
+    const { project, plan } = await fixture();
+    Object.assign(project.scenes[3], { speedFps: -12, offsetFrames: 12 });
+    await expect(encode(project, plan, 'job-performance-timing')).rejects.toThrow('stop after staging');
+    expect(browser.seen.data.scenes[3].media).toMatchObject({ inSec: 2, outSec: 7 });
+    expect(browser.seen.data.scenes[0].media).toMatchObject({ inSec: 0, outSec: 4 });
+  });
+
+  it('keeps a performance in-point in the live preview timing and leaves untimed takes alone', async () => {
+    const { project } = await fixture();
+    Object.assign(project.scenes[3], { speedFps: -12, offsetFrames: 12 });
+    const raw = await resolveSceneMedia(project, { history: JSON.parse(await readFile(join(PATHS.data, 'video-history.json'), 'utf8')) });
+    expect(raw.get(project.scenes[3].sceneId)).toMatchObject({ inSec: 0.5, timing: { rate: 0.5, leadSec: 0, startSec: 1 } });
+    expect(raw.get('a').timing).toBeUndefined();
+  });
+
+  it('gives the live preview timing for an offset-only shot', async () => {
+    const { project } = await fixture();
+    Object.assign(project.scenes[0], { offsetFrames: 12 });
+    Object.assign(project.scenes[3], { offsetFrames: -6 });
+    const raw = await resolveSceneMedia(project, { history: JSON.parse(await readFile(join(PATHS.data, 'video-history.json'), 'utf8')) });
+    expect(raw.get('a').timing).toEqual({ rate: 1, leadSec: 0, startSec: 0.5 });
+    expect(raw.get(project.scenes[3].sceneId).timing).toEqual({ rate: 1, leadSec: 0, startSec: 0.25 });
+  });
+
+  it('fails before opening the page and cleans scratch when shot retiming fails', async () => {
+    const { project, plan } = await fixture();
+    project.scenes[0].speedFps = 24;
+    runFfmpegProcess.mockResolvedValueOnce({ ok: false, reason: 'synthetic retiming failure' });
+    await expect(encode(project, plan, 'job-timing-failure')).rejects.toThrow('Shot timing failed: synthetic retiming failure');
+    expect(browser.seen).toBeNull();
+    expect(await scratchEntries()).toEqual([]);
+  });
+
   it('preserves the document shutter sampling contract through the shared encoder', async () => {
     const { project, plan } = await fixture();
     browser.contract = { durationSec: 30, fps: 24, width: 1920, height: 1080, motionBlur: 4, layout: false };
@@ -138,8 +202,9 @@ describe('composition document staging', () => {
     const byId = Object.fromEntries(data.scenes.map((s) => [s.sceneId, s]));
     expect(byId.a.media).toMatchObject({ kind: 'video', src: 'media/scene-a.mp4', inSec: 0, outSec: 4, fps: 24 });
     expect(byId.b.media).toMatchObject({ kind: 'image', src: 'media/scene-b.png' });
-    expect(byId.b).toMatchObject({ visualLayer: 'still', stillMove: 'push' });
-    expect(byId.c).toMatchObject({ media: null, visualLayer: 'card', cardText: 'Title' });
+    expect(byId.b).toMatchObject({ visualLayer: 'still', stillMove: 'push', imageEffect: { effect: 'flash-develop', developSec: 6 } });
+    expect(byId.a.imageEffect).toBeNull();
+    expect(byId.c).toMatchObject({ imageEffect: null, media: null, visualLayer: 'card', cardText: 'Title' });
     expect(byId.d.media).toMatchObject({ kind: 'video', src: 'media/scene-d.mp4', inSec: 0.5, outSec: 3.5 });
     expect(data.render).toEqual({ width: 1920, height: 1080, fps: 24, frames: 720, durationSec: 30 });
     expect(data.song).toMatchObject({ durationSec: 30, beats: [0, 0.5], downbeats: [0] });
@@ -147,6 +212,7 @@ describe('composition document staging', () => {
     expect(data.textCues.map((c) => c.emphasis)).toEqual(['hero']);
     expect(data.composition).toMatchObject({ mode: 'document', overlay: { enabled: true, ticker: ['a'] } });
     expect(media).toEqual({ 'scene-a.mp4': 'video-a', 'scene-b.png': 'image-b', 'scene-d.mp4': 'video-a' });
+    expect(runFfmpegProcess).not.toHaveBeenCalled();
     expect(song).toMatchObject({ beats: [0, 0.5], downbeats: [0] });
     // The source document is untouched and the job folder is gone.
     expect(existsSync(join(PATHS.data, plan.directory, 'portos-mv.js'))).toBe(false);

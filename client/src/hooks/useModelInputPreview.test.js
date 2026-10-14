@@ -1,0 +1,35 @@
+import { describe, expect, it, vi, afterEach } from 'vitest';
+import { act, renderHook } from '@testing-library/react';
+import { useModelInputPreview } from './useModelInputPreview';
+
+afterEach(() => vi.useRealTimers());
+
+describe('useModelInputPreview', () => {
+  // Typing fires one request after the pause, and an older answer arriving
+  // late must never replace the preview of what the form says now.
+  it('asks once per pause and keeps only the newest answer', async () => {
+    vi.useFakeTimers();
+    const resolvers = [];
+    const fetchPreview = vi.fn(() => new Promise((resolve) => resolvers.push(resolve)));
+    const { result, rerender } = renderHook(({ body }) => useModelInputPreview(fetchPreview, body), { initialProps: { body: { prompt: 'a' } } });
+
+    rerender({ body: { prompt: 'a fox' } });
+    await act(async () => { vi.advanceTimersByTime(500); });
+    expect(fetchPreview).toHaveBeenCalledTimes(1);
+    expect(fetchPreview).toHaveBeenLastCalledWith({ prompt: 'a fox' }, { silent: true });
+
+    rerender({ body: { prompt: 'a red fox' } });
+    await act(async () => { vi.advanceTimersByTime(500); });
+    await act(async () => { resolvers[1]({ sentPrompt: 'a red fox' }); });
+    await act(async () => { resolvers[0]({ sentPrompt: 'a fox' }); });
+    expect(result.current.preview).toEqual({ sentPrompt: 'a red fox' });
+  });
+
+  it('reports a refusal as the error to show', async () => {
+    vi.useFakeTimers();
+    const fetchPreview = vi.fn(async () => { throw new Error('Codex Imagegen is disabled'); });
+    const { result } = renderHook(() => useModelInputPreview(fetchPreview, { prompt: 'a fox' }));
+    await act(async () => { vi.advanceTimersByTime(500); });
+    expect(result.current).toEqual({ preview: null, error: 'Codex Imagegen is disabled' });
+  });
+});

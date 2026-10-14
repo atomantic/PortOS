@@ -11,7 +11,9 @@
  *
  * A route belongs here when it runs a process, git, npm, gh or a CoS agent on
  * the host, or when it sets what one will run (a repo path, a start command, a
- * task prompt, a shell job). Read-only GETs stay open. Mutating routes in the
+ * task prompt, a shell job), or accesses live camera/microphone streams.
+ * Ordinary read-only GETs stay open; raw backup archives require operator
+ * authority because they export private records and credentials. Mutating routes in the
  * same families that are deliberately left OUT:
  *   - apps: delete/archive/unarchive, scope-adherence — they
  *     change only PortOS's own records or read files; nothing runs.
@@ -89,6 +91,17 @@
  *     reduce execution or remove records.
  *   - notes (#9007): vault add/repoint gated (chooses the host directory
  *     note CRUD reads/writes); note CRUD itself stays open.
+ *   - Outbound endpoints and host data files: a setting that names a URL
+ *     PortOS later sends data to, or a host file it reads and writes, needs
+ *     operator authority to change. A remote caller choosing one could send
+ *     private audio, text or a stored token to their own server, which can
+ *     then redirect the request to PortOS's own loopback port, where it counts
+ *     as a local operator. They could also read or write any JSON file the
+ *     host user owns. Gated: the voice STT endpoint, the Image Gen external
+ *     SD API URL (including its legacy top-level key), the Beeper base URL and
+ *     its non-loopback opt-in, the MortalLoom store path (all change-gated,
+ *     below) and `PUT /api/lmstudio/config` (base URL plus timeout, in
+ *     memory, with no UI writer).
  *   - browser: navigate uses the configured browser with its URL/IP guards;
  *     downloads DELETE removes data. Harness models/refresh re-reads the
  *     configured harness catalog; neither selects or installs an executable.
@@ -136,10 +149,13 @@
  *     a tool. The mind maintainer watchdog queues remediation and is gated.
  *   - voice config (#10990): `llm.systemPrompt`, `llm.personality`,
  *     `llm.tools.enabled` and `llm.codeAgent` are the voice agent's
- *     instructions or the switch that arms its coding-agent tool.
- *     `PUT /api/voice/config` is gated only when one of those values would
+ *     instructions or the switch that arms its coding-agent tool, and
+ *     `stt.endpoint` receives microphone audio and returns the transcript
+ *     the agent acts on. `PUT /api/voice/config` is gated only when one of those values would
  *     change (`HOST_CONTROL_VOICE_CONFIG_PATHS`); a whole-config resend and
- *     every other voice setting stay open.
+ *     every other voice setting stay open on that dedicated endpoint.
+ *     Generic settings replaces the entire voice root, so even an empty
+ *     replacement can reset protected policy and requires operator authority.
  *
  * Patterns are `METHOD /path`, with Express-style `:param` (one segment) and
  * `*name` (the rest of the path). Matching is case-insensitive and ignores one
@@ -158,6 +174,39 @@ import { LLM_DRILL_TYPES } from './postDrillTypes.js';
 import { escapeRegExp } from './textUtils.js';
 
 export const HOST_CONTROL_ROUTES = Object.freeze([
+  // Stacker News review authorizes a later saved-key publication or browser
+  // handoff; both the decision and execution require operator authority.
+  'POST /api/stacker-news/actions/:id/review',
+  'POST /api/stacker-news/actions/:id/execute',
+
+  // X (Twitter) draft review authorizes a later browser compose handoff, and
+  // opening approved drafts, opening account destinations or syncing accounts
+  // executes CDP browser automation on the host. Reads, account CRUD and draft
+  // creation remain data-only operations.
+  'POST /api/x/drafts/:id/review',
+  'POST /api/x/drafts/:id/open',
+  'POST /api/x/accounts/:id/open',
+  'POST /api/x/accounts/:id/sync',
+
+  // Telegram bot configuration, testing and bridge lifecycle execute host
+  // processes, register bots, or authorize remote command execution and
+  // notification forwarding (#11431). Reads remain open.
+  'PUT /api/telegram/config',
+  'DELETE /api/telegram/config',
+  'PUT /api/telegram/method',
+  'POST /api/telegram/test',
+  'PUT /api/telegram/forward-types',
+  'POST /api/telegram/bridge/reload',
+
+  // Sending a draft performs an external mail side effect as the operator (#11273).
+  'POST /api/messages/drafts/:id/send',
+
+  // Capture activation and existing live feeds require operator authority (#11272).
+  // HEAD inherits the GET policy because Express invokes the same handler.
+  'POST /api/media/start',
+  'GET /api/media/video',
+  'GET /api/media/audio',
+
   // Rigging and retargeting spawn Blender/Python workers on the host for up to
   // 20 minutes each (#10922).
   'POST /api/rigging/models/:id',
@@ -305,6 +354,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/cos/agents/:id/resume',
   'POST /api/cos/agents/:id/relaunch',
   'POST /api/cos/agents/:id/btw',
+  'POST /api/cos/agents/:id/security-scan',
   'POST /api/cos/jobs',
   'PUT /api/cos/jobs/:id',
   // Toggle arms an existing job, shell jobs included, for its next run.
@@ -399,8 +449,14 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/notes/vaults',
   'PUT /api/notes/vaults/:id',
 
-  // Restores replace records and machine-local execution policy; previews
-  // require the same operator authority as execution (#8772).
+  // Backups contain private records and credentials, not a bounded read-only
+  // projection. Creating/exporting/deleting them and resuming a restore need
+  // the same operator authority as restore previews/execution (#8772).
+  // Status and snapshot inventory stay open; backup policy is body-gated below.
+  'POST /api/backup/run',
+  'GET /api/backup/snapshots/:snapshotId/download',
+  'DELETE /api/backup/snapshots/:snapshotId',
+  'POST /api/backup/restore-db/recover',
   'POST /api/backup/restore',
   'POST /api/backup/restore-db',
 
@@ -453,6 +509,23 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/midi-runtime/install',
   'POST /api/devtools/video-download/yt-dlp/update',
 
+  // Video and audio downloads shell out to yt-dlp and ffmpeg on the host.
+  'POST /api/devtools/video-download',
+  'POST /api/tracks/import/youtube',
+  'POST /api/rounds/reference-audio/import',
+
+  // Audio-to-MIDI transcription runs the local MuScriptor Python sidecar on the host.
+  'POST /api/music-video/:id/transcribe-midi',
+  'POST /api/rounds/reference-audio/transcribe-midi',
+
+  // Vocal stem separation provisions a demucs venv and runs neural separation on the host.
+  'POST /api/music-video/:id/vocal-stem/separate',
+  // Lyric alignment downloads models and spawns whisper or neural CTC on the host.
+  'POST /api/music-video/:id/lyrics/align',
+
+  // LoRA effect probe spawns Python on the host to analyze adapter tensors.
+  'POST /api/loras/:filename/effect',
+
   // Media authoring can launch a coding CLI/TUI agent, including via provider
   // fallback. Gate the whole operation even when the initial provider is API;
   // runtime-data cwd and later render containment do not sandbox authoring.
@@ -472,6 +545,10 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // directly, by fallback or after a checkpoint (#9869). Gate each operation
   // uniformly, including deterministic plan/compile options. Creative approval
   // and toolFree authoring flags do not grant network execution authority.
+  // Revision entry points reach the same authoring runners, including fallback.
+  // Song-revision /scenes gates only action=replan in the body registry; remove and
+  // dismiss remain record-only operations.
+  'POST /api/music-video/:id/production-review/revise',
   'POST /api/music-video/:id/plan',
   'POST /api/music-video/:id/treatment/compile',
   'POST /api/music-video/:id/publish-kit/copy',
@@ -499,6 +576,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Upscale (LTX subprocess / ffmpeg) and stitch (ffmpeg) run on the host (#11076).
   'POST /api/video-gen/upscale/:id',
   'POST /api/video-gen/stitch',
+  // Start trim probes/transcodes a new gallery clip with ffprobe/ffmpeg (#11418).
+  'POST /api/video-gen/history/:id/trim-start',
   'POST /api/sprites/:id/reference/generate',
   // Fork creates a record and immediately queues reference generation too.
   'POST /api/sprites/:id/fork',
@@ -585,6 +664,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/local-llm/upgrade-backend',
   'POST /api/local-llm/ollama-service',
   'POST /api/local-llm/lmstudio-service',
+  // Base URL every LM Studio completion, embedding and Persistent Mind call
+  // sends user text to; no UI writes it.
+  'PUT /api/lmstudio/config',
   'POST /api/local-llm/llama-server/install',
   'POST /api/local-llm/llama-server/upgrade',
   'POST /api/local-llm/llama-server/start',
@@ -674,10 +756,29 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/rounds/:id/evaluate',
   'POST /api/rounds/:id/derive-parts',
   'POST /api/agents/personalities/generate',
+
+  // Social-bot publication uses stored platform credentials (#11419). Guard
+  // direct writes and the stores that arm or steer later scheduled writes.
+  // Accounts/schedules are shared with Moltworld. Reads, private drafts and
+  // deletions stay open; dedicated toggles gate only re-enabling in-handler.
+  'POST /api/agents/tools/publish-post',
+  'POST /api/agents/tools/publish-comment',
+  'POST /api/agents/tools/engage',
+  'POST /api/agents/tools/check-posts',
+  'POST /api/agents/schedules',
+  'PUT /api/agents/schedules/:id',
+  'POST /api/agents/schedules/:id/run',
+  'PUT /api/agents/personalities/:id',
+  'POST /api/agents/accounts',
+  'POST /api/agents/accounts/:id/claim',
+  // Testing an account can promote it to active, admitting scheduled writes.
+  'POST /api/agents/accounts/:id/test',
+
   'POST /api/system-resources/triage',
   'POST /api/mood-boards/:id/synthesize-style',
   'POST /api/mood-boards/:id/compose-prompt',
   'POST /api/mood-boards/:id/analyze',
+  'POST /api/mood-boards/:id/generate',
   'POST /api/cos/tasks/enhance',
   // Music Video cover design/generation and promotion planning, and POST LLM
   // drills (#10989). Each hands free text and/or a caller-chosen provider to
@@ -766,6 +867,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Eidoverse: clone and install a caller-named repo, or repoint it.
   'POST /api/settings/features/eidoverse/install',
   'PUT /api/settings/features/eidoverse/source',
+  // Explicit local gameplay can speak in this machine's private world. Scoped
+  // peer reachability does not grant it; operator/agent sessions retain access.
+  'POST /api/eidoverse/world/controllers/:id/riddle',
 
   // GitHub actions (#9013): mutating routes run `gh` with the user's GitHub
   // account and change external state. Syncing repos is read-only.
@@ -774,6 +878,32 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/github/repos/:fullName/unarchive',
   'PUT /api/github/secrets/:name',
   'POST /api/github/secrets/:name/sync',
+
+  // Beeper outbox creation records approved send intent; send spends the
+  // operator's saved connection, and breaker reset re-arms that capability.
+  // First-contact confirmation and approved state do not establish caller
+  // authority. History, discard and delivery reconciliation never send.
+  'POST /api/beeper/outbox',
+  'POST /api/beeper/outbox/:id/send',
+  'POST /api/beeper/outbox/breaker/clear',
+
+  // Jira instance updates can retain a saved API token while changing its
+  // destination, so require operator authority before persisting the URL.
+  'POST /api/jira/instances',
+
+  // Jira writes act on the external tracker with the operator's saved account.
+  // Gate before dispatch, including create's epic-link retry and sprint move.
+  // Reads and local report generation retain their existing access policy.
+  'POST /api/jira/instances/:id/tickets',
+  'PUT /api/jira/instances/:instanceId/tickets/:ticketId',
+  'POST /api/jira/instances/:instanceId/tickets/:ticketId/labels',
+  'POST /api/jira/instances/:instanceId/tickets/:ticketId/comments',
+  'POST /api/jira/instances/:instanceId/tickets/:ticketId/transition',
+  'POST /api/jira/instances/:instanceId/sprints/:sprintId/issues',
+
+  // Datadog instance updates can retain both saved keys while changing their
+  // destination, so require operator authority before persisting the hostname.
+  'POST /api/datadog/instances',
 
   // Self-update (#8742): runs git + npm and restarts the process, or `gh repo
   // sync` against the fork. `check` and `ignore`/DELETE-`ignore` only read or
@@ -821,25 +951,36 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
 
 /**
  * `PUT /api/settings` slices that set what runs or the guardrails around it:
- * harness enablement and wrapper CLIs, the Code Animation worker tools, the
+ * Autofixer repair policy, harness enablement and wrapper CLIs, the Code Animation worker tools, the
  * code-review chain, the untrusted content screen in front of agent work,
- * scheduled self-update, and scheduled series autopilots. The store is polymorphic, so its other slices stay open.
+ * scheduled self-update, scheduled series autopilots, and backup destination/
+ * recovery policy, and whole-root voice policy replacement. The store is
+ * polymorphic, so its other slices stay open.
  */
 export const HOST_CONTROL_SETTINGS_SLICES = Object.freeze([
   'autoUpdate',
+  // Deferred repair policy: verifyCommand runs a shell and autoPromote can
+  // apply the repair to the live checkout. Provider pins also select its agent.
+  'autofixer',
+  // Destination, schedule, exclusions and retention control private copies
+  // and recovery durability, including writes consumed later by the scheduler.
+  'backup',
   'codeAnimationExecution',
   'codeReview',
   'credentialBootstraps',
   'harnesses',
   'seriesAutopilot',
+  'telegram',
   'untrustedContent',
+  'voice',
 ]);
 
 /**
  * Nested settings mutation keys, as dotted paths, that choose a binary
  * PortOS spawns (the image-gen CLIs and the Python interpreter every local
- * media lane runs) or turn the Layered Intelligence `cmd` sources into a
- * full shell (#8751). Their parent slices stay open, so each is gated per
+ * media lane runs), turn the Layered Intelligence `cmd` sources into a
+ * full shell (#8751), pick an outbound endpoint PortOS sends prompts or a
+ * stored token to, or pick the host file a store reads and rewrites. Their parent slices stay open, so each is gated per
  * CHANGED value rather than per presence: the Image Gen tab resends the whole
  * slice, stored paths included, on every save, and a remote caller changing
  * only an aspect ratio must still be able to save it. A body that omits or
@@ -848,16 +989,22 @@ export const HOST_CONTROL_SETTINGS_SLICES = Object.freeze([
  * cleared value as unset — so neither is gated.
  */
 export const HOST_CONTROL_SETTINGS_PATHS = Object.freeze([
+  'beeper.allowNonLoopbackBaseUrl',
+  'beeper.baseUrl',
   'imageGen.agy.agyPath',
   'imageGen.codex.codexPath',
+  'imageGen.external.sdapiUrl',
   'imageGen.grok.grokPath',
   'imageGen.local.pythonPath',
+  'imageGen.sdapiUrl',
   'layeredIntelligence.trustShellSources',
+  'mortalloom.path',
 ]);
 
 /**
- * `PUT /api/voice/config` fields that become the voice agent's instructions
- * or arm its coding-agent tool (#10990). The Voice settings tab resends the
+ * `PUT /api/voice/config` fields that become the voice agent's instructions,
+ * arm its coding-agent tool (#10990), or choose the endpoint that receives the
+ * operator's microphone audio and supplies the transcript the agent acts on. The Voice settings tab resends the
  * whole config on every save, so these are gated per CHANGED value: a remote
  * caller who only changes the TTS rate must still be able to save.
  * `llm.personality` and `llm.codeAgent` compare as whole objects.
@@ -867,6 +1014,7 @@ export const HOST_CONTROL_VOICE_CONFIG_PATHS = Object.freeze([
   'llm.personality',
   'llm.tools.enabled',
   'llm.codeAgent',
+  'stt.endpoint',
 ]);
 
 /**
@@ -905,6 +1053,9 @@ const bodyKeys = (body) => (body && typeof body === 'object' && !Array.isArray(b
 // `hostControlBodyGate` in services/authGate.js applies these after the body
 // parser, since `hostControlRouteGate` runs before it.
 const COMPILED_BODY_ROUTES = [
+  // Song revision replanning uses the tool-capable shot planner. The other
+  // actions (remove/dismiss) edit records without dispatching a provider.
+  ['POST /api/music-video/:id/song-revision/scenes', (body) => body?.action === 'replan' ? ['action'] : []],
   // Enabling this feature now launches its registered host executable.
   ['PUT /api/settings/features/eidoverse', (body) => bodyKeys(body)],
   ['POST /api/local-llm/capability-tests/run', (body) => body?.testId === 'sandbox-repair' ? ['testId'] : []],
@@ -992,7 +1143,7 @@ export const changedVoiceConfigHostControlPaths = (paths, body, current) => (
 /** The HOST_CONTROL_ROUTES entry that `method path` (an Express `req.method` / `req.path`) matches, or null. */
 export const hostControlRouteFor = (method, path) => {
   if (typeof method !== 'string' || typeof path !== 'string') return null;
-  const verb = method.toUpperCase();
+  const verb = method.toUpperCase() === 'HEAD' ? 'GET' : method.toUpperCase();
   return COMPILED_ROUTES.find((entry) => entry.method === verb && entry.pattern.test(path))?.route ?? null;
 };
 

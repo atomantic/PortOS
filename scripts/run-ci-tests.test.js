@@ -1,9 +1,9 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { delimiter, join } from 'path';
 import { stripVTControlCharacters } from 'node:util';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   structuredFailureDiagnostics,
@@ -15,11 +15,19 @@ import {
   repoRelativeFromCrashPath,
   requiresSourceFiles,
   shardArgs,
+  spawnNpm,
   toRunnerPath,
 } from './run-ci-tests.js';
 import { killProcessTree } from '../server/lib/bufferedSpawn.js';
 import { OWNER_FILE, STALE_ROOT_AGE_MS } from './lib/vitestStaleRunRoots.js';
 import { workflowJobs } from './lib/workflowJobs.js';
+
+// Synthetic crash/retry cases must not export a fabricated crash filename to
+// the Actions job's real GITHUB_ENV. Duration/summary tests retain real I/O.
+vi.mock('./lib/githubOutput.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  writeStepEnv: vi.fn(),
+}));
 
 // Keep nested Vitest's own scratch under its separately owned pvt-* root,
 // just like the workspace configs; reporter diagnostics stay outside it.
@@ -40,6 +48,32 @@ describe('shardArgs', () => {
     expect(shardArgs('2/3')).toEqual(['--shard=2/3']);
     expect(() => shardArgs('2')).toThrow(/<index>\/<count>/);
   });
+});
+
+it('forwards the related matrix slice and all selectors through the real launcher', () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'portos-related-shard-'));
+  try {
+    const npmScript = join(fixture, 'npm.js');
+    writeFileSync(npmScript, 'process.stdout.write(JSON.stringify(process.argv.slice(2)) + "\\n");');
+    writeFileSync(join(fixture, 'npm'), `#!${process.execPath}\n`
+      + 'process.stdout.write(JSON.stringify(process.argv.slice(2)) + "\\n");', { mode: 0o755 });
+    writeFileSync(join(fixture, 'npm.cmd'), `@"${process.execPath}" "${npmScript}" %*\r\n`);
+    const result = spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'server'], {
+      encoding: 'utf8', timeout: 30000,
+      env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`,
+        CI_TEST_MODE: 'related', CI_SHARD: '2/3',
+        CI_TEST_SOURCES: JSON.stringify(['server/lib/example.js']),
+        CI_TEST_FILES: JSON.stringify(['server/lib/example.test.js', 'scripts/example.test.js']),
+        GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    const args = JSON.parse(result.stdout.split('\n').find(line => line.startsWith('["run"')));
+    expect(args.slice(0, 9)).toEqual(['run', 'test:ci:related', '--prefix', 'server', '--',
+      './lib/example.js', './lib/example.test.js', '../scripts/example.test.js', '--shard=2/3']);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
 });
 
 describe('ci.yml shard wiring', () => {
@@ -276,6 +310,45 @@ describe('relatedInputs', () => {
       './services/auth.test.js',
       '../scripts/repo-scan-guards.test.js',
     ]);
+  });
+});
+
+describe('native crash diagnostics before retry/cancellation (#8152)', () => {
+  const output = 'Worker exited unexpectedly with exit code 3221226505 during started state while running test file '
+    + 'D:/a/PortOS/PortOS/server/services/sprites/walk.test.js\n'
+    + 'Test Files  798 passed | 2 skipped (801)\nTests  15077 passed | 61 skipped (15145)\nErrors  1 error';
+
+  it('captures each failed invocation before returning nonzero with the same one-retry ceiling', async () => {
+    const order = [];
+    const run = vi.fn(async () => {
+      order.push('run');
+      return { status: 1, output };
+    });
+    const diagnose = vi.fn(async () => { order.push('diagnose'); });
+    expect(await spawnNpm('server', 'test:ci', ['--shard=3/3'], 'fixture', { run, diagnose })).toBe(1);
+    expect(order).toEqual(['run', 'diagnose', 'run', 'diagnose']);
+    expect(run.mock.calls[1]).toEqual(['server', 'test:ci', ['./services/sprites/walk.test.js']]);
+  });
+
+  it('retains diagnostic evidence for recovered crashes without clearing unrelated assertion failures', async () => {
+    for (const [originalOutput, expected] of [[output, 0], [output.replace('798 passed', '797 passed | 1 failed'), 1]]) {
+      const run = vi.fn().mockResolvedValueOnce({ status: 1, output: originalOutput })
+        .mockResolvedValueOnce({ status: 0, output: 'passed' });
+      const diagnose = vi.fn();
+      expect(await spawnNpm('server', 'test:ci', [], 'fixture', { run, diagnose })).toBe(expected);
+      expect(diagnose).toHaveBeenCalledTimes(1);
+      expect(run).toHaveBeenCalledTimes(2);
+    }
+  });
+
+  it('leaves assertion failures and interrupted runs outside native diagnostics/retry', async () => {
+    for (const result of [{ status: 1, output: 'FAIL assertion' }, { status: 143, output, interrupted: 'SIGTERM' }]) {
+      const run = vi.fn().mockResolvedValue(result);
+      const diagnose = vi.fn();
+      expect(await spawnNpm('server', 'test:ci', [], 'fixture', { run, diagnose })).toBe(result.status);
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(diagnose).not.toHaveBeenCalled();
+    }
   });
 });
 

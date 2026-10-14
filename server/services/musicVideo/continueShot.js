@@ -10,14 +10,15 @@
  * (lib/musicVideoHandoffFrame.js) into the gallery and selects it as this
  * scene's start frame. With `keepStillAsEnd`, the scene's current start frame
  * becomes its style-break end frame (#11173), so a fal clip on an end-frame
- * model travels from the handoff to the planned still.
+ * model travels from the handoff to the planned still. A still shot before it
+ * hands over the picture it ends on (shotHandoffSource) instead of a clip.
  */
 import { join } from 'path';
 import { existsSync } from 'fs';
 import { ServerError } from '../../lib/errorHandler.js';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { findFfmpeg, probeVideoGeometry, runFfmpegProcess, safeUnder } from '../../lib/ffmpeg.js';
-import { previousShot, sceneClipOutFrameSec } from '../../lib/musicVideoHandoffFrame.js';
+import { previousShot, sceneClipOutFrameSec, shotHandoffSource } from '../../lib/musicVideoHandoffFrame.js';
 import { getHistoryItem } from '../videoGen/history.js';
 import { appendSceneTakes, getProject, selectSceneTake } from './projects.js';
 import { assertClipUnlocked } from './productionReview.js';
@@ -36,10 +37,14 @@ export async function continueFromPreviousShot(projectId, sceneId, { keepStillAs
   assertClipUnlocked(project, sceneId);
   const previous = previousShot(project, sceneId);
   if (!previous) throw refuse('This is the first shot, so there is no previous shot to continue from', 'MUSIC_VIDEO_NO_PREVIOUS_SHOT');
-  const entry = previous.videoHistoryId ? await getHistoryItem(previous.videoHistoryId) : null;
+  const source = shotHandoffSource(project, previous);
+  // A still shot hands over the picture the cut ends on, as it is: there is no clip on screen to read.
+  if (source?.imageId) return startFromFrame(projectId, scene, source.imageId, { keepStillAsEnd,
+    prompt: 'The picture the previous shot ends on', frame: { imageId: source.imageId, atSec: null, fromSceneId: previous.sceneId } });
+  const entry = source?.clip ? await getHistoryItem(previous.videoHistoryId) : null;
   const videoPath = entry?.filename ? safeUnder(PATHS.videos, entry.filename) : null;
   if (!videoPath || !existsSync(videoPath)) {
-    throw refuse('The previous shot has no selected clip to continue from', 'MUSIC_VIDEO_PREVIOUS_CLIP_MISSING');
+    throw refuse('The previous shot has no selected clip or still to continue from', 'MUSIC_VIDEO_PREVIOUS_CLIP_MISSING');
   }
   const geometry = await probeVideoGeometry(videoPath);
   const atSec = sceneClipOutFrameSec(previous, geometry?.durationSec, geometry?.fps);
@@ -62,12 +67,18 @@ export async function continueFromPreviousShot(projectId, sceneId, { keepStillAs
   }
   console.log(`🎞️ Handoff frame for ${sceneId}: ${previous.sceneId} clip at ${atSec}s of ${geometry.durationSec.toFixed(2)}s`);
 
+  return startFromFrame(projectId, scene, imageId, { keepStillAsEnd,
+    prompt: `Out-frame of the previous shot at ${atSec}s of its clip`, frame: { imageId, atSec, fromSceneId: previous.sceneId } });
+}
+
+// Select `imageId` as the scene's start frame; with `keepStillAsEnd`, its current start frame becomes its end frame.
+async function startFromFrame(projectId, scene, imageId, { keepStillAsEnd, prompt, frame }) {
   const plannedStill = keepStillAsEnd && scene.referenceImageId && scene.referenceImageId !== imageId ? scene.referenceImageId : null;
-  const { appended } = await appendSceneTakes(projectId, sceneId, [
-    { kind: 'image', assetId: imageId, source: 'generated', provider: 'portos', prompt: `Out-frame of the previous shot at ${atSec}s of its clip` },
+  const { appended } = await appendSceneTakes(projectId, scene.sceneId, [
+    { kind: 'image', assetId: imageId, source: 'generated', provider: 'portos', prompt },
     ...(plannedStill ? [{ kind: 'endImage', assetId: plannedStill, source: 'imported', provider: 'portos' }] : []),
   ]);
-  let updated = await selectSceneTake(projectId, sceneId, appended[0].takeId);
-  if (plannedStill) updated = await selectSceneTake(projectId, sceneId, appended[1].takeId);
-  return { scene: updated, frame: { imageId, atSec, fromSceneId: previous.sceneId } };
+  let updated = await selectSceneTake(projectId, scene.sceneId, appended[0].takeId);
+  if (plannedStill) updated = await selectSceneTake(projectId, scene.sceneId, appended[1].takeId);
+  return { scene: updated, frame };
 }

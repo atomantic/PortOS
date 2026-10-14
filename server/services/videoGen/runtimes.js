@@ -17,7 +17,7 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { createSingleFlight } from '../../lib/singleFlight.js';
-import { MINIMAX_H3_RUNTIMES, LTX2_FAMILY_RUNTIMES } from '../../lib/runners.js';
+import { LAST_FRAME_ANCHORED_RUNTIMES } from '../../lib/runners.js';
 
 // Path to the dgrauet/ltx-2-mlx venv populated by `INSTALL_LTX2=1
 // scripts/setup-image-video.sh`. Used when a model entry has
@@ -395,7 +395,7 @@ export const routesToWindowsHelper = (model) => (
 // resize in local.js (wasted ffmpeg work otherwise), and the client's
 // "last frame is advisory" note, which reads it off the model payload via
 // `lastFrameAnchored`.
-export const LAST_FRAME_ANCHORED_RUNTIMES = Object.freeze(new Set([...LTX2_FAMILY_RUNTIMES, ...MINIMAX_H3_RUNTIMES]));
+export { LAST_FRAME_ANCHORED_RUNTIMES };
 
 export const modelAnchorsLastFrame = (model) => LAST_FRAME_ANCHORED_RUNTIMES.has(model?.runtime);
 

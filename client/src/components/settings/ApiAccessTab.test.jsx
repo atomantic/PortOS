@@ -44,6 +44,68 @@ const renderTab = async () => {
 };
 
 describe('ApiAccessTab', () => {
+  it('keeps access controls unavailable after a failed read until retry restores the saved policies', async () => {
+    // A failed settings read is not a fresh install. Saving defaults here could
+    // remove a protected API's password requirement and erase other grants.
+    const saved = {
+      apiAccess: {
+        voice: { exposed: true, requireAuth: true },
+        sdapi: { exposed: true, requireAuth: false },
+      },
+      agentContext: {
+        enabled: true,
+        profile: 'summary',
+        scopes: ['brain', 'identity'],
+        actions: {
+          readPortos: true, writePortos: true, callToolRecipes: true,
+          manageEidoverse: false, visitEidoversePeers: true,
+        },
+      },
+    };
+    let resolveRetry;
+    getSettings.mockRejectedValueOnce(new Error('temporarily offline'));
+    render(<MemoryRouter><ApiAccessTab /></MemoryRouter>);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Failed to load API access settings');
+    const expectNoWritableControls = () => {
+      for (const control of [...screen.queryAllByRole('checkbox'), ...screen.queryAllByRole('combobox')]) {
+        expect(control).toBeDisabled();
+      }
+      expect(updateSettings).not.toHaveBeenCalled();
+    };
+    expectNoWritableControls();
+    getSettings.mockReturnValueOnce(new Promise((resolve) => { resolveRetry = resolve; }));
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(getSettings).toHaveBeenCalledTimes(2));
+    expectNoWritableControls();
+
+    await act(async () => { resolveRetry(saved); });
+    expect(await screen.findByText('Voice / TTS')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+    const exposure = screen.getAllByLabelText('Expose on the network');
+    const auth = screen.getAllByLabelText('Require auth (password)');
+    expect(exposure[0]).toBeChecked();
+    expect(exposure[1]).toBeChecked();
+    expect(auth[0]).toBeChecked();
+    expect(auth[1]).not.toBeChecked();
+    expect(screen.getByLabelText('Enable local MCP context')).toBeChecked();
+    expect(screen.getByLabelText('Disclosure profile')).toHaveValue('summary');
+    expect(screen.getByLabelText('Brain')).toBeChecked();
+    expect(screen.getByLabelText('Identity export')).toBeChecked();
+    expect(screen.getByLabelText('Navigation')).not.toBeChecked();
+    expect(screen.getByLabelText('Allow semantic PortOS updates')).toBeChecked();
+
+    fireEvent.click(exposure[1]);
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({
+      apiAccess: { ...saved.apiAccess, sdapi: { ...saved.apiAccess.sdapi, exposed: false } },
+    }, { silent: true }));
+    await waitFor(() => expect(screen.getByLabelText('Enable local MCP context')).toBeEnabled());
+    fireEvent.click(screen.getByLabelText('Allow semantic PortOS reads'));
+    await waitFor(() => expect(updateSettings).toHaveBeenLastCalledWith({
+      agentContext: { ...saved.agentContext, actions: { ...saved.agentContext.actions, readPortos: false } },
+    }, { silent: true }));
+  });
+
   it('renders a card per registry API with current state', async () => {
     getSettings.mockResolvedValue({ apiAccess: { voice: { exposed: true, requireAuth: false }, sdapi: { exposed: false, requireAuth: false } } });
     await renderTab();

@@ -62,13 +62,14 @@ describe('lyricType timing', () => {
     expect(type.wordStates(verse, 1.6)[0]).toMatchObject({ alpha: 1, dy: 0 });
   });
 
-  it('exits a sung line 0.3s after its last word and cuts a hook on the next beat', () => {
-    expect(verse.exitSec).toBeCloseTo(1.9 + 0.25 + 0.3, 6);
+  it('exits a sung line once its last word has held 0.8s and cuts a hook on the next beat', () => {
+    // "static" starts at 1.9: 0.3s past its end (2.45) would fade it before it is read.
+    expect(verse.exitSec).toBeCloseTo(1.9 + 0.8, 6);
     expect(verse.endSec - verse.exitSec).toBeCloseTo(8 / 24, 6);
     expect(type.linesAt(verse.endSec)).toEqual([]);
-    // Last hook word ends at 5.15 (cue end 5.2): the next beat is 5.5, no fade.
-    expect(hook.exitSec).toBe(5.5);
-    expect(hook.endSec).toBe(5.5);
+    // Last hook word starts at 5.0, so it holds to 5.8: the next beat is 6, no fade.
+    expect(hook.exitSec).toBe(6);
+    expect(hook.endSec).toBe(6);
     expect(hook.accent).toBe(3); // the longest word ("signal") is the outline-only accent
   });
 
@@ -77,10 +78,24 @@ describe('lyricType timing', () => {
     expect(quick.lines[0].exitSec).toBeCloseTo(2.8, 6);
   });
 
+  // Uniquely catches a short final word fading out before it can be read (sung and released fast).
+  it('holds a short final word on screen until it has been read', () => {
+    const type = createLyricType({ render: { fps: 24 } }, { lines: [
+      { text: 'then changed the scene', role: 'line', zone: 'lower-left', words: [
+        { text: 'then', startSec: 2, endSec: 2.2 }, { text: 'changed', startSec: 2.2, endSec: 2.5 },
+        { text: 'the', startSec: 2.5, endSec: 2.6 }, { text: 'scene', startSec: 2.6, endSec: 2.7 },
+      ] },
+    ] });
+    const [line] = type.lines;
+    expect(line.exitSec).toBeCloseTo(3.4, 6);
+    expect(type.linesAt(3.39)).toEqual([line]);
+    expect(type.wordStates(line, 3.39)[3]).toMatchObject({ shown: true, alpha: 1 });
+  });
+
   it.each([
     { role: 'line', nextRole: 'line', gap: 0.1, cut: true },
     { role: 'line', nextRole: 'data', gap: 1, cut: true },
-    { role: 'data', nextRole: 'line', gap: 1.2, cut: false },
+    { role: 'data', nextRole: 'line', gap: 1.6, cut: false },
   ])('never overlaps a $role cue with the next $nextRole cue in its zone (gap $gap)', ({ role, nextRole, gap, cut }) => {
     const onset = 2;
     const nextOnset = onset + gap;
@@ -91,10 +106,7 @@ describe('lyricType timing', () => {
     const [first, next] = type.lines;
     expect(first.endSec).toBeLessThanOrEqual(nextOnset);
     if (cut) expect(first.exitSec).toBe(nextOnset);
-    else {
-      expect(first.endSec).toBe(nextOnset);
-      expect(first.endSec - first.exitSec).toBeCloseTo(8 / 24, 6);
-    }
+    else expect(first.endSec - first.exitSec).toBeCloseTo(8 / 24, 6);
     for (let frame = onset * 24; frame <= (nextOnset + 1) * 24; frame++) {
       expect(type.linesAt(frame / 24).length).toBeLessThanOrEqual(1);
     }
@@ -107,7 +119,7 @@ describe('lyricType timing', () => {
       { text: 'Example next', role: 'line', zone: 'lower-left', words: words('Example next', 2.1, 0.02) },
     ] });
     expect(type.linesAt(2.3)).toEqual(type.lines);
-    expect(type.lines[0].exitSec).toBeCloseTo(2.8, 6);
+    expect(type.lines[0].exitSec).toBeCloseTo(2.02 + 0.8, 6);
     expect(type.lines[0].endSec - type.lines[0].exitSec).toBeCloseTo(8 / 24, 6);
   });
 
@@ -128,7 +140,7 @@ describe('lyricType timing', () => {
       { text: 'Example stamp next', role: 'stamp', words: words('Example stamp next', 5.1, 0.02) },
     ] });
     expect(type.lines[0]).toMatchObject({ exitSec: 2.1, endSec: 2.1 });
-    expect(type.lines[2].exitSec).toBeCloseTo(5.8, 6);
+    expect(type.lines[2].exitSec).toBeCloseTo(5.02 + 0.8, 6);
     expect(type.lines[2].endSec).toBe(type.lines[2].exitSec);
   });
 });

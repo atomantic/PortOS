@@ -45,6 +45,7 @@ function makeController({
   provider = { id: 'codex-tui', name: 'Codex' },
   tuiConfig = TUI_CONFIG,
   prompt = 'do the work',
+  securityScanGrant = null,
   sentinelRead = async () => sentinelSummary ?? '',
 } = {}) {
   // A DISTINCT closer per arm: the merge-gate case below has to tell the
@@ -59,6 +60,7 @@ function makeController({
   const seams = {
     closers,
     watch,
+    updateAgent: vi.fn().mockResolvedValue(undefined),
     releaseRunRecord: vi.fn(),
     runCompletionCleanup: vi.fn().mockResolvedValue({}),
     finalizeAgent: vi.fn().mockResolvedValue({ success: true }),
@@ -74,6 +76,7 @@ function makeController({
     runId: 'run-1',
     model: 'gpt-5-codex',
     provider,
+    securityScanGrant,
     prompt,
     tuiConfig,
     cwd: '/tmp/workspace',
@@ -99,7 +102,7 @@ function makeController({
       hasLiveChild: async () => true,
     },
     persistence: {
-      updateAgent: vi.fn().mockResolvedValue(undefined),
+      updateAgent: seams.updateAgent,
       appendRunEvent: vi.fn(),
       // THE CASE UNDER TEST: no active-run entry for this agent.
       readRunRecord: () => undefined,
@@ -282,6 +285,42 @@ describe('Codex terminal model-access rejection (#9319)', () => {
     subject.write.mockClear();
     return subject;
   };
+
+  it('stops all recovery when a trusted scanner refusal arrives before the outer TUI exits', async () => {
+    const { controller, ...seams } = await submitted({ securityScanGrant: { model: 'example-model', effort: 'medium', auth: 'chatgpt', maxCostUsd: 'unlimited', timeLimitSeconds: 'unlimited' } });
+    seams.write.mockClear();
+    seams.paste.mockClear();
+    await controller.refuseScanner();
+    await vi.advanceTimersByTimeAsync(STALL_NUDGE_IDLE_MS + 10000);
+    expect(seams.write).not.toHaveBeenCalled();
+    expect(seams.paste).not.toHaveBeenCalled();
+    expect(seams.finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({ success: false,
+      executionInterruption: { category: 'content-refusal', source: 'security-scanner' },
+      errorAnalysis: expect.objectContaining({ requiresFallback: false }) }));
+  });
+
+  it('latches a policy refusal while persistence is pending, outranking a concurrent success without nudges', async () => {
+    const { controller, updateAgent, paste, write, finalizeAgent, kill } = await submitted();
+    let rejectWrite;
+    updateAgent.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectWrite = reject; }));
+    const refusing = controller.handleData('\x1b[12;1Hⓘ This content can’t be shown');
+    // Let the serialized onData queue reach its metadata write.
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    await controller.finish({ success: true, reason: 'agent-signaled-done' });
+    await vi.advanceTimersByTimeAsync(STALL_NUDGE_IDLE_MS + 10000);
+    rejectWrite(new Error('synthetic persistence failure'));
+    await refusing;
+    expect(paste).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+    expect(finalizeAgent).toHaveBeenCalledTimes(1);
+    expect(finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({
+      success: false, completionReason: 'content-refusal',
+      errorAnalysis: expect.objectContaining({ category: 'content-refusal', requiresFallback: false }),
+      executionInterruption: expect.objectContaining({ category: 'content-refusal', source: 'provider' }),
+    }));
+    expect(kill).toHaveBeenCalledTimes(1);
+    expect(controller.isTerminal()).toBe(true);
+  });
 
   it('settles a chunked structured rejection, finalizes once, and tears down without continuing', async () => {
     const { controller, paste, write, finalizeAgent, resolveErrorAnalysis, kill, closers } = await submitted();

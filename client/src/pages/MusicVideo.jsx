@@ -25,6 +25,7 @@ import {
   deleteMusicVideoScene,
   splitMusicVideoScene,
   mergeMusicVideoNextScene,
+  moveMusicVideoSceneStart,
   reorderMusicVideoScenes,
   importMusicVideoLyrics,
   importMusicVideoTrackLyrics,
@@ -73,6 +74,7 @@ import ProjectSettingsDrawer, { SETTINGS_TAB_IDS } from '../components/musicVide
 import MusicVideoProjectCard from '../components/musicVideo/MusicVideoProjectCard.jsx';
 import PreviewDock from '../components/musicVideo/PreviewDock.jsx';
 import TitleCardPanel from '../components/musicVideo/TitleCardPanel.jsx';
+import StatsOutroPanel from '../components/musicVideo/StatsOutroPanel.jsx';
 import NeedsAttentionBanner from '../components/musicVideo/NeedsAttentionBanner.jsx';
 import SetupStage from '../components/musicVideo/stages/SetupStage.jsx';
 import StageChecklist from '../components/musicVideo/StageChecklist.jsx';
@@ -417,7 +419,7 @@ export default function MusicVideo() {
     videoSettings,
     applyScenePatch: patchScene,
   });
-  const takes = useMusicVideoTakes({ project: selected, applyScenePatch: patchScene });
+  const takes = useMusicVideoTakes({ project: selected, applyScenePatch: patchScene, patchProject });
   // Selective section revision (#8987): regenerate only a draft's flagged
   // sections, resumable from the server's checkpoint.
   const revisions = useMusicVideoRevisions({ project: selected, replaceProject, sceneMedia, attachRender: excerpts.attachRender });
@@ -779,8 +781,8 @@ export default function MusicVideo() {
   // commit, same as commitSceneTiming below. Sends only the changed sub-field;
   // the server merges it into the existing concept (applyProjectPatch), so a
   // stale local copy can't clobber a sibling sub-field. Consumed by
-  // buildScenePlanPrompt (AI Plan) and by buildFramePrompt/buildShotPrompt's
-  // style suffix, both already reading concept.
+  // buildScenePlanPrompt (AI Plan) and by the server's frame and clip composers
+  // (lib/musicVideoShotPrompt.js), both already reading concept.
   const commitConcept = (patch) => {
     replaceProject({ ...selected, concept: { ...selected.concept, ...patch } });
     updateMusicVideoProject(selected.id, { concept: patch }, { silent: true })
@@ -939,8 +941,9 @@ export default function MusicVideo() {
 
   // #8977: split a shot its backend cannot render in one take on lyric/phrase
   // boundaries. `backend` is the lane the card measured against.
-  const handleSplitScene = (sceneId, backend) => {
-    splitMusicVideoScene(selected.id, sceneId, backend, { silent: true })
+  // `atSec` cuts the shot in two at that song time instead (the card's "Split shot").
+  const handleSplitScene = (sceneId, backend, atSec = null) => {
+    splitMusicVideoScene(selected.id, sceneId, backend, { atSec, silent: true })
       .then(({ project, scenes }) => {
         replaceProject(project);
         toast.success(`Split into ${pluralize(scenes.length, 'shot')}`);
@@ -957,6 +960,11 @@ export default function MusicVideo() {
       })
       .catch((err) => toast.error(err?.message || 'Failed to merge scenes'));
   };
+
+  // Move the cut before a shot: it starts at `startSec` and the shot before it ends there.
+  const handleMoveSceneStart = (sceneId, startSec) => moveMusicVideoSceneStart(selected.id, sceneId, startSec, { silent: true })
+    .then(({ project }) => replaceProject(project))
+    .catch((err) => toast.error(err?.message || 'Failed to move the shot start'));
 
   const moveScene = (idx, dir) => {
     const scenes = selected.scenes || [];
@@ -1065,6 +1073,22 @@ export default function MusicVideo() {
     if (unfoldToAnchor(el)) requestAnimationFrame(land);
     else land();
   }, [activeStage, location.key, selectedId, !!selected]);
+  // Edit shot (from the preview player) opens that shot's card on Shots and
+  // scrolls it into view, also when the card was already open.
+  const [editShotRequest, setEditShotRequest] = useState(null);
+  const editShot = (sceneId) => {
+    if (!selected) return;
+    const search = searchParams.toString();
+    navigate(`/music-video/${encodeURIComponent(selected.id)}/produce/scene/${encodeURIComponent(sceneId)}${search ? `?${search}` : ''}`, { replace: activeStage === 'produce' });
+    setEditShotRequest({ sceneId });
+  };
+  // The card mounts once the navigation lands, so this waits for it.
+  useEffect(() => {
+    const card = editShotRequest && document.getElementById(`scene-${editShotRequest.sceneId}`);
+    if (!card) return;
+    card.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+    setEditShotRequest(null);
+  }, [editShotRequest, location.key]);
   const goToStage = (stage, anchor = null, params = null) => {
     // Preserve search params (e.g. ?play=, ?new=, ?sheet=) across tabs; `params` sets more (e.g. ?scenes=missing).
     const next = new URLSearchParams(searchParams);
@@ -1165,6 +1189,8 @@ export default function MusicVideo() {
     if (action.run === 'resolve-feedback') { productionReview.resolveFeedback(action.feedbackId, ''); return; }
     if (action.run === 'revise-feedback') { reviseFromFeedback(action.stage); return; }
     if (action.run === 'keep-approval') { keepApproval(action.stage); return; }
+    if (action.run === 'sync-lyric-anchors') { productionReview.syncLyricAnchors(); return; }
+    if (action.editShot) { editShot(action.editShot); return; }
     goToStage(action.stage || activeStage, action.anchor, action.params);
   };
   const runNextAction = () => {
@@ -1199,6 +1225,7 @@ export default function MusicVideo() {
       {dock}
       <TitleCardPanel project={selected} onEditLocal={editProjectLocal} onSave={saveProjectFields}
         onPreview={(startSec) => seekToScene({ startSec }, { play: true })} />
+      <StatsOutroPanel project={selected} onEditLocal={editProjectLocal} onSave={saveProjectFields} />
     </div>
   ));
   const board = selected ? {
@@ -1284,6 +1311,7 @@ export default function MusicVideo() {
     onDeleteScene: handleDeleteScene,
     onSplitScene: handleSplitScene,
     onMergeNextScene: handleMergeNextScene,
+    onMoveSceneStart: handleMoveSceneStart,
     onRepairPerformance: revisions.repairPerformance,
     repairBusy: revisions.busy,
     onRenderStyle: (mode) => {
@@ -1625,6 +1653,7 @@ export default function MusicVideo() {
                 onToggleCollapsed={() => setDockCollapsed(!(dockCollapsed ?? !playerFirst))}
                 expanded={dockExpanded}
                 onToggleExpanded={!playerFirst ? () => setDockExpanded((expanded) => !expanded) : undefined}
+                onEditShot={editShot}
               />,
             )}
           >

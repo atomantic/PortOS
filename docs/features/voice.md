@@ -309,6 +309,11 @@ MODEL_NAME=ggml-small.en.bin bash scripts/setup-voice.sh
 
 All options live in `data/settings.json` under `voice` (Settings UI patches this file).
 
+Replacing the entire `voice` root through `PUT /api/settings` requires operator
+authority, including empty or null replacements that reset voice policy. The
+dedicated `PUT /api/voice/config` endpoint continues to check changes to protected
+instructions, tools, and the STT endpoint while allowing ordinary voice preferences.
+
 | Option | Default | Notes |
 |--------|---------|-------|
 | `enabled` | `false` | Master toggle. Triggers reconcile on change. |

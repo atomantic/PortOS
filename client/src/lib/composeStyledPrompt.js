@@ -1,10 +1,10 @@
 // `composeStyledPrompt` (single preset or an array of presets) is a pure leaf
 // re-exported from server/lib/composeStyledPrompt.js so the browser and the
 // server compose style presets with identical logic (#8442).
-import { composeStyledPrompt } from '../../../server/lib/composeStyledPrompt.js';
+import { composeStyledPrompt, stylePromptAdditions } from '../../../server/lib/composeStyledPrompt.js';
 import { universeStylePreset } from './universeStylePreset';
 
-export { composeStyledPrompt };
+export { composeStyledPrompt, stylePromptAdditions };
 
 // Build the styled `{ prompt, negativePrompt }` for a single named canon subject
 // (character / place / object) layered on the universe's style preset. This is

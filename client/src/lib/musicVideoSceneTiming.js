@@ -13,7 +13,7 @@ const falEstimate = (take) => (take?.costUsd == null ? null
  */
 export function buildSceneTimingPresentation({
   scene, layer, lipSyncBackend, songDurationSec, falVideoSettings,
-  nextEndSec, isLast, documentComposition, hasMergeNext,
+  nextEndSec, isLast, documentComposition, hasMergeNext, lineCues = null,
 }) {
   const performance = isPerformanceScene(scene);
   const capability = performance ? performanceCapability(lipSyncBackend, { scene, videoSettings: falVideoSettings }) : null;
@@ -21,14 +21,14 @@ export function buildSceneTimingPresentation({
     ? scene.endSec - scene.startSec
     : null;
   const plan = capability
-    ? planPerformanceWindow({ startSec: scene.startSec, endSec: scene.endSec, songDurationSec: songDurationSec ?? Infinity, capability })
+    ? planPerformanceWindow({ startSec: scene.startSec, endSec: scene.endSec, songDurationSec: songDurationSec ?? Infinity, capability, lineCues })
     : null;
   const performanceBlocked = performance
     ? (capability ? (plan.ok ? null : plan.message) : performanceBlockedReason(lipSyncBackend))
     : null;
   const grokPlan = !performance && lipSyncBackend === 'grok' && timedSpan != null ? grokCoverage(timedSpan) : null;
   const falTake = lipSyncBackend === 'fal' && layer === 'footage'
-    ? falSceneTake({ scene, videoSettings: falVideoSettings || {}, songDurationSec })
+    ? falSceneTake({ scene, videoSettings: falVideoSettings || {}, songDurationSec, lineCues })
     : null;
   const falCost = falEstimate(falTake);
   const performanceCost = falTake?.performance ? (falCost || capability?.costLabel) : capability?.costLabel;

@@ -22,6 +22,14 @@ export const isSelfDrawnLayer = (layer) => layer === 'card' || layer === 'code';
 export const MUSIC_VIDEO_STILL_MOVES = ['hold', 'push', 'pan'];
 
 /**
+ * How a footage clip whose shape is not the video's fills the frame:
+ * `fill` zooms it to fill (the default, and every shot saved before the field
+ * existed), the others keep it whole and cover the side gaps with the shot's
+ * still, a VHS-style blur of the clip itself, or black bars.
+ */
+export const MUSIC_VIDEO_FRAME_FITS = ['fill', 'still', 'vhs', 'black'];
+
+/**
  * Kinetic lyric type per shot (#10583), read by the shared lyricType.js document
  * module: `textZone` is where the shot's words may sit so they never cover the
  * subject (`none` keeps the shot clear), and `lyricRole` overrides the role of the
@@ -75,3 +83,19 @@ export function sceneRenderReady(scene, { layered = false } = {}) {
   if (!sceneHasAuthoredSpan(scene)) return false;
   return isSelfDrawnLayer(layer) || Boolean(scene.referenceImageId);
 }
+
+// A footage shot's playback timing, set by hand on its card: `speedFps` plays
+// the clip that many frames a second faster (or slower) on the 24 fps grid, and
+// `offsetFrames` slides it against the song (positive starts that many frames
+// into the clip, negative holds its first frame that long). Both are applied
+// at playback and render, never by writing another copy of the clip.
+export const CLIP_TIMING_FPS = 24;
+export const CLIP_SPEED_FPS_RANGE = Object.freeze({ min: -18, max: 48 });
+export const CLIP_OFFSET_FRAMES_RANGE = Object.freeze({ min: -240, max: 240 });
+const whole = (value, { min, max }) => (Number.isInteger(value) ? Math.min(max, Math.max(min, value)) : 0);
+/** How fast a shot's clip plays: 1 is as rendered, 26/24 is two frames a second faster. */
+export const clipSpeedRate = (scene) => (CLIP_TIMING_FPS + whole(scene?.speedFps, CLIP_SPEED_FPS_RANGE)) / CLIP_TIMING_FPS;
+/** How far a shot's clip slides against the song, in seconds: positive skips in, negative holds the first frame. */
+export const clipOffsetSec = (scene) => whole(scene?.offsetFrames, CLIP_OFFSET_FRAMES_RANGE) / CLIP_TIMING_FPS;
+// A footage shot's clip set to play backwards. A lip-sync performance never reverses: its mouth follows the song.
+export const clipReversed = (scene) => scene?.reverse === true && scene?.shotMode !== 'performance';

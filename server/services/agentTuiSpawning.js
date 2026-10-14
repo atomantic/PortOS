@@ -118,6 +118,7 @@ export async function createAgentTuiSession({
   forgeTokenEnv = {},
   agentApiEnv = {},
   doneSentinelPath = null,
+  securityScanGrant = null,
   launchShape,
   safetyProfile = null,
   onData,
@@ -180,6 +181,7 @@ export async function createAgentTuiSession({
       envVars: env,
       providerAuth: cliProviderAuthDescriptor(provider),
       doneSentinelPath,
+      securityScanGrant,
       onData,
       onExit,
     });
@@ -272,6 +274,7 @@ export async function spawnTuiAgent({
   prOpenedBy,
   leanMode = false,
   useDurableRunner = false,
+  securityScanGrant = null,
   // The public-content execution profile this run enforces (null for an
   // ordinary agent task). Threaded through to the session so the PTY child
   // gets the same allowlisted environment its headless sibling would.
@@ -361,6 +364,7 @@ export async function spawnTuiAgent({
     runId,
     model,
     provider,
+    securityScanGrant,
     prompt,
     tuiConfig,
     cwd,
@@ -474,6 +478,7 @@ export async function spawnTuiAgent({
       forgeTokenEnv,
       agentApiEnv,
       doneSentinelPath,
+      securityScanGrant,
       launchShape,
       safetyProfile,
       onData: (...args) => maintenance.withResource('agent', agentId, () => controller.handleData(...args)),
@@ -617,6 +622,7 @@ export async function spawnTuiAgent({
     executionId,
     laneName,
     tuiSessionId: sessionId,
+    refuseScanner: controller.refuseScanner,
   });
 
   // Arm prompt delivery, the provider-signal gates and the sentinel watcher.

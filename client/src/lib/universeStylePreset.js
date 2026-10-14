@@ -5,3 +5,6 @@
 // tokens. A drift between the two used to leave a series override applied in
 // the preview but repeated/ignored in the actual render (#8442).
 export { universeStylePreset } from '../../../server/lib/universeVisualStyle.js';
+
+// The universe preset as the "Universe style" chip beside the prompt box (#11317).
+export const withUniverseLabel = (preset) => (preset ? { ...preset, additionLabel: 'Universe style' } : null);

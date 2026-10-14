@@ -124,4 +124,10 @@ describe('agentDrafts service', () => {
     expect(a[0].content).toBe('A');
     expect(b[0].content).toBe('B');
   });
+
+  it.each(['../../video-history', '..', 'a/b', 'a\\b', ''])('refuses agentId %j rather than reading or writing outside the drafts directory', async (agentId) => {
+    await expect(listDrafts(agentId)).rejects.toMatchObject({ status: 400 });
+    await expect(createDraft(agentId, { type: 'post', content: 'x' })).rejects.toMatchObject({ status: 400 });
+    expect(fileStore.size).toBe(0);
+  });
 });

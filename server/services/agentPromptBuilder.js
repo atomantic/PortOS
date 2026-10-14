@@ -41,6 +41,7 @@ import {
   buildActionOutputCompletionSection,
   buildAuditOutputCompletionSection,
   buildClaimFlowCompletionSection,
+  buildMergeAdmissionSection,
   buildClaimResumeOverride,
   claimResumeContext,
   buildReleaseFlowCompletionSection,
@@ -378,7 +379,11 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   }
   const workflow = auditWorkflow(task.metadata);
   if (workflow === 'legacy') throw new Error('Historical Deep certification runs are read-only; start a new Deep audit');
-  const deepAuditContract = workflow === 'extended-v1' ? EXTENDED_AUDIT_INSTRUCTIONS : null;
+  const deepAuditContract = [
+    workflow === 'extended-v1' ? EXTENDED_AUDIT_INSTRUCTIONS : '',
+    Number(task.metadata?.auditDispositionVersion) === 1
+      ? await (await import('./auditFindings.js')).buildAuditFindingsPrompt(task, options.agentId) : '',
+  ].filter(Boolean).join('\n\n');
   const withDeepAudit = prompt => !deepAuditContract ? prompt : typeof prompt === 'string'
     ? `${deepAuditContract}\n\n${prompt}`
     : { ...prompt, systemPrompt: `${deepAuditContract}\n\n${prompt.systemPrompt || ''}` };
@@ -750,6 +755,7 @@ After your task completes, the system will spawn a follow-up agent that runs the
     // top of buildAgentPrompt under the same reviewLoopFollowUp guard — reuse it
     // rather than re-reading the lib a second time.
     reviewLoopFollowUpSection = buildReviewLoopFollowUpSection(task.metadata || {}, { verbose: true, rprBody, localAgentLoopBody });
+    if (!isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)) reviewLoopFollowUpSection += '\n\n' + buildMergeAdmissionSection(agentId);
     if (isTui) {
       const sentinelPath = resolveSentinelPath(worktreeInfo, workspaceDir, agentId);
       const branchName = worktreeInfo?.branchName || task.metadata?.reviewLoopPRBranch || null;
@@ -1052,7 +1058,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
   contractSections.push(UNATTENDED_RUN_RULE);
   if (task.metadata?.prCompletion === PR_COMPLETIONS.DRAFT) contractSections.push(DRAFT_PR_RULE);
   if (isUiAuditTask(task)) contractSections.push(UI_AUDIT_RUNTIME_RULE);
-  const securityAuditRuntime = buildSecurityAuditRuntimeSection(task, { providerId, providerCommand });
+  const securityAuditRuntime = buildSecurityAuditRuntimeSection(task, { providerId, providerCommand, agentId });
   if (securityAuditRuntime) contractSections.push(securityAuditRuntime);
 
   // --- Issue filing labels and planner attribution --------------------------
@@ -1110,6 +1116,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
     [COMPLETION_MODES.READ_ONLY]: () => contractSections.push(buildReadOnlyCompletionSection({ isTui, sentinelPath: lightSentinelPath() })),
     [COMPLETION_MODES.REVIEW_LOOP_FOLLOW_UP]: () => {
       contractSections.push(buildReviewLoopFollowUpSection(task.metadata || {}, { verbose: false, localAgentLoopBody, forgeCli: resolvedForgeCli }));
+      if (!isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)) contractSections.push(buildMergeAdmissionSection(agentId));
       if (!isTui) return;
       const branchName = worktreeInfo?.branchName || task.metadata?.reviewLoopPRBranch || null;
       const sentinelTail = branchName ? `   ## Branch\n   ${branchName}` : '   ## Branch\n   <branch name>';

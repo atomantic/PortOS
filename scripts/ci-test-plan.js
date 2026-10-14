@@ -69,7 +69,7 @@ export const sourceReferencePattern = (sourcePath) => (
 
 // Parallel runners per test job on a full plan. Decided here rather than in
 // ci.yml because a job-level `if` cannot read the matrix context, so the
-// planner must emit `[1]` for a scoped plan itself. Sizing rationale:
+// planner emits the matrix for scoped plans too. Sizing rationale:
 // docs/GITHUB_ACTIONS.md "Full-suite sharding".
 export const FULL_SUITE_SHARDS = { server: 2, client: 3, windows: 3 };
 
@@ -471,7 +471,7 @@ const featureDirectory = (path) => {
   return null;
 };
 
-const structuralTestsFor = (changedFiles, trackedSet) => {
+export const structuralTestsFor = (changedFiles, trackedSet) => {
   const selected = [];
   const add = (path) => {
     if (trackedSet.has(path)) selected.push(path);
@@ -912,7 +912,12 @@ const finishPlan = (plan, options) => ({
   shards: {
     server: shardIndexes(plan.server.mode, FULL_SUITE_SHARDS.server),
     client: shardIndexes(plan.client.mode, FULL_SUITE_SHARDS.client),
-    windows: shardIndexes(plan.windowsMode, FULL_SUITE_SHARDS.windows),
+    // Related mode can reach most of the server graph through one shared
+    // source. The explicit selector count does not bound that work: one Windows
+    // runner exceeded the unchanged 15-minute step budget on a TUI handshake
+    // edit. Split execution across the existing matrix without widening or
+    // reducing related-test selection; exact-file plans stay on one runner.
+    windows: shardIndexes(plan.windowsMode === 'related' ? 'full' : plan.windowsMode, FULL_SUITE_SHARDS.windows),
   },
 });
 

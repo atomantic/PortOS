@@ -23,6 +23,9 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import useMounted from '../../hooks/useMounted';
+import { useModelInputPreview } from '../../hooks/useModelInputPreview';
+import ModelInputPreview from '../media/ModelInputPreview';
+import SentPromptPanel from '../media/SentPromptPanel';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
 import { useSocketResource } from '../../hooks/useSocketResource';
 import { Loader2, Wand2, Download, X } from 'lucide-react';
@@ -30,7 +33,7 @@ import toast from '../ui/Toast';
 import { analyzeMusicLyrics } from '../../lib/musicDuration.js';
 import { formatDurationSec } from '../../utils/formatters.js';
 import {
-  listMusicEngines, generateMusic, installAudioModel, removeAudioModel, getActiveProcessing, getMediaJob, getTrack, cancelMediaJob,
+  listMusicEngines, generateMusic, previewMusicPrompt, installAudioModel, removeAudioModel, getActiveProcessing, getMediaJob, getTrack, cancelMediaJob,
 } from '../../services/api';
 import { formatDownloadGb } from '../../utils/formatters';
 import { useFederatedMediaTarget } from '../../hooks/useFederatedMediaTarget.js';
@@ -275,6 +278,11 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
   // picked it. Where the peer CAN sing, it is an ordinary choice again.
   const forcedInstrumental = isRemote && !remoteLyricsAvailable;
   const effectiveInstrumentalOnly = forcedInstrumental || instrumentalOnly;
+  const captionPreview = useModelInputPreview(previewMusicPrompt, {
+    prompt, lyrics, engine: engine?.id, instrumentalOnly: effectiveInstrumentalOnly,
+    durationSec: Number.isFinite(durationSec) ? durationSec : undefined,
+    durationMode: autoDurationAvailable ? durationMode : 'manual',
+  }, { enabled: !isRemote && !!prompt?.trim() });
   const lyricsCondition = !isRemote || remoteLyricsAvailable;
   const conditioningLyrics = generationEngine?.lyrics && !effectiveInstrumentalOnly && lyricsCondition
     ? lyrics
@@ -413,7 +421,7 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
     }
     setGenerating(true);
     const body = {
-      prompt: prompt.trim(),
+      prompt,
       engine: generationEngine.id || generationEngine.engine,
       modelId: isRemote ? generationEngine.modelId : selectedModelId,
       instrumentalOnly: effectiveInstrumentalOnly,
@@ -634,7 +642,7 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
             <p className="mt-1 text-gray-500">No structured lyric sections detected. Add tags such as [intro], [verse], [chorus], and [outro] so MiniMax can pace the composition more reliably.</p>
           ) : null}
           {lyricDuration.sectionCount > 0 && !lyricDuration.hasOutro && lyricDuration.hasLyrics ? (
-            <p className="mt-1 text-gray-500">No [outro] section detected. PortOS appends a closing cue for you, but adding your own [outro] marker gives you control over exactly where the ending lands.</p>
+            <p className="mt-1 text-gray-500">No [outro] section detected. The closing cue is shown below; adding your own [outro] marker gives you control over exactly where the ending lands.</p>
           ) : null}
           {lyricDuration.isCapped ? (
             <p className="mt-1 text-port-warning">These lyrics estimate beyond MiniMax’s five-minute limit, so the final lines may still need to be shortened or split into another render.</p>
@@ -696,6 +704,18 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
               : 'No lyric text will condition this render, but vocals may still follow the prompt unless instrumental mode is enabled.'}
         </p>
       </div>
+
+      {!isRemote && <ModelInputPreview preview={captionPreview} prompt={prompt} />}
+      {!isRemote && typeof captionPreview.preview?.sentLyrics === 'string' && (
+        <section aria-label="Lyrics sent to the model" className="text-xs space-y-1">
+          <p className="text-gray-500">Lyrics sent to the model</p>
+          <SentPromptPanel
+            prompt={effectiveInstrumentalOnly ? '' : lyrics || ''}
+            sentPrompt={captionPreview.preview.sentLyrics}
+            additions={captionPreview.preview.lyricAdditions || []}
+          />
+        </section>
+      )}
 
       <div className="flex items-center gap-2">
         <button

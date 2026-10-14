@@ -85,19 +85,28 @@ export function watchForFile(
   let detected = false;
   let settleTimer = null;
   let pollTimer = null;
+  let watcher = null;
+  let onWatcherClosed = null;
 
   const notify = () => {
-    Promise.resolve(onDetected()).catch((err) => {
+    Promise.resolve().then(onDetected).catch((err) => {
       console.error(`❌ File watcher callback failed: ${err.message}`);
     });
+  };
+  const watcherClosed = () => {
+    watcher = null;
+    const callback = onWatcherClosed;
+    onWatcherClosed = null;
+    callback?.();
   };
   const close = (onClosed) => {
     if (closed) return;
     closed = true;
     if (settleTimer) clearTimeout(settleTimer);
     if (pollTimer) clearInterval(pollTimer);
-    if (onClosed) watcher.once('close', onClosed);
-    watcher.close();
+    onWatcherClosed = onClosed;
+    if (watcher) watcher.close();
+    else watcherClosed();
   };
   const detect = (settle = true) => {
     if (closed || detected || !existsSync(filePath) || !shouldDetect(filePath)) return;
@@ -112,9 +121,24 @@ export function watchForFile(
       close(notify);
     }, settleMs);
   };
-  const watcher = watchFileSystem(targetDir, (_eventType, changedName) => {
-    if (changedName == null || changedName.toString() === targetName) detect();
-  });
+  const watchFailed = (err) => {
+    // Native errors can close the handle without emitting `close`. Drop it so
+    // fallback detection never waits for an event that can no longer arrive.
+    const failedWatcher = watcher;
+    watcher = null;
+    failedWatcher?.close();
+    watcherClosed();
+    console.warn(`⚠️ File watcher unavailable (${err.code || 'UNKNOWN'}); using fallback polling`);
+  };
+  try {
+    watcher = watchFileSystem(targetDir, (_eventType, changedName) => {
+      if (changedName == null || changedName.toString() === targetName) detect();
+    });
+    watcher.once('close', watcherClosed);
+    watcher.on('error', watchFailed);
+  } catch (err) {
+    watchFailed(err);
+  }
   // fs.watch is low-latency but best-effort: native backends can miss a file
   // creation or atomic rename. Keep a deliberately relaxed fallback so a
   // missed event cannot strand an agent indefinitely.

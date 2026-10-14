@@ -38,7 +38,7 @@ const { sseState, ytSseStates, getYtSseState } = vi.hoisted(() => {
 
 // This page suite exercises existing controls with production approvals already granted.
 // ProductionReviewPanel and route integration suites exercise the real approval refusals.
-const feedbackCalls = vi.hoisted(() => ({ resolveFeedback: vi.fn(async () => null), revise: vi.fn(async () => ({ revision: { sceneIds: ['s-a'] } })) }));
+const feedbackCalls = vi.hoisted(() => ({ resolveFeedback: vi.fn(async () => null), syncLyricAnchors: vi.fn(async () => null), revise: vi.fn(async () => ({ revision: { sceneIds: ['s-a'] } })) }));
 vi.mock('../hooks/useMusicVideoProductionReview.js', () => ({ default: ({ project }) => ({
   ...feedbackCalls,
   readiness: project?.productionReadiness || { readyForProduction: true, basis: {}, art: { approved: true, problems: [] }, storyboard: { approved: true, problems: [] }, proof: { approved: true, problems: [] } },
@@ -74,6 +74,7 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   deleteMusicVideoScene: vi.fn(),
   reorderMusicVideoScenes: vi.fn(),
   splitMusicVideoScene: vi.fn(),
+  moveMusicVideoSceneStart: vi.fn(),
   importMusicVideoLyrics: vi.fn(),
   importMusicVideoTrackLyrics: vi.fn(),
   alignMusicVideoLyrics: vi.fn(),
@@ -216,6 +217,7 @@ vi.mock('../services/apiImageVideo.js', () => ({
   getVideoGenModelContext: vi.fn(async () => null),
   generateVideo: vi.fn(),
   uploadGalleryVideo: vi.fn(),
+  trimVideoStart: vi.fn(),
   listLorasFull: vi.fn(async () => [{
     filename: 'audio-reactive.safetensors',
     name: 'Audio Reactive',
@@ -278,7 +280,7 @@ import MusicVideo from './MusicVideo.jsx';
 import {
   listMusicVideoProjects, listMusicVideoProjectSummaries, createMusicVideoProject, cloneMusicVideoProject, renderMusicVideoProject, planMusicVideoProject, updateMusicVideoProject,
   deleteMusicVideoProject, transcribeMusicVideoMidi, cancelMusicVideoRender, analyzeMusicVideoProject, prepareMusicVideoSong,
-  importMusicVideoLyrics, importMusicVideoTrackLyrics, separateMusicVideoVocals, alignMusicVideoLyrics, updateMusicVideoScene, splitMusicVideoScene,
+  importMusicVideoLyrics, importMusicVideoTrackLyrics, separateMusicVideoVocals, alignMusicVideoLyrics, updateMusicVideoScene, splitMusicVideoScene, moveMusicVideoSceneStart,
   selectMusicVideoSceneTake, reviewMusicVideoSceneTake, importMusicVideoHandoff,
   addMusicVideoSceneTake, getMusicVideoHandoffBundle,
   renderMusicVideoExcerpt, deleteMusicVideoExcerpt, addMusicVideoExcerptNote,
@@ -289,7 +291,7 @@ import {
 } from '../services/apiMusicVideo.js';
 import { generateImage, uploadGalleryImage } from '../services/apiSystem.js';
 import { importTrackFromYoutube, importTrackFromSuno, trackImportEventsUrl, listTracks } from '../services/apiTracks.js';
-import { generateVideo, getVideoGenStatus, getVideoHistoryItem } from '../services/apiImageVideo.js';
+import { generateVideo, getVideoGenStatus, getVideoHistoryItem, trimVideoStart } from '../services/apiImageVideo.js';
 import { getUniverse } from '../services/apiUniverseBuilder.js';
 import { downloadBlob } from '../lib/downloadBlob.js';
 
@@ -994,7 +996,7 @@ describe('MusicVideo selective section revision (#8987)', () => {
     await waitFor(() => expect(resumeMusicVideoRevision).toHaveBeenCalledWith('mv-1', 'mvr-1', { silent: true }));
     expect(startMusicVideoRevision).toHaveBeenCalledWith('mv-1', 'mve-1', {}, { silent: true });
     await waitFor(() => expect(generateVideo).toHaveBeenCalledTimes(1));
-    expect(JSON.parse(generateVideo.mock.calls[0][0].musicVideo)).toEqual({ projectId: 'mv-1', sceneId: 's2', revisionId: 'mvr-1' });
+    expect(JSON.parse(generateVideo.mock.calls[0][0].musicVideo)).toEqual({ projectId: 'mv-1', sceneId: 's2', revisionId: 'mvr-1', compose: true });
     const panel = screen.getByLabelText('Section revision');
     expect(within(panel).getByText('Kept')).toBeInTheDocument();
   });
@@ -1130,8 +1132,9 @@ describe('MusicVideo project video renderer', () => {
       disableAudio: true,
       loraFilenames: ['audio-reactive-v2.safetensors'],
       loraScales: [1.2],
-      prompt: expect.stringMatching(/No singing, lip-sync, speaking, mouth movement/i),
     })));
+    // The server adds the audio-reactive guard as a labeled addition.
+    expect(JSON.parse(generateVideo.mock.calls.at(-1)[0].musicVideo)).toMatchObject({ compose: true, audioReactive: true });
   });
 
   it('lets the project pin an exact installed audio-reactive LoRA version', async () => {
@@ -1177,21 +1180,6 @@ describe('MusicVideo project video renderer', () => {
       { silent: true },
     ));
     expect(await screen.findByLabelText('fal.ai scene clip duration')).toBeTruthy();
-  });
-
-  it('carries applied action and reaction into a manually submitted clip prompt', async () => {
-    getVideoGenStatus.mockResolvedValueOnce({ connected: true, defaultModel: '', falEnabled: true, models: [] });
-    generateVideo.mockResolvedValue({ jobId: 'intent-job' });
-    const actionContract = { version: 1, purpose: 'The listener decides to stay',
-      actions: [{ startSec: 0, endSec: 1, subject: 'Singer', description: 'Offers a hand' }],
-      reactions: [{ startSec: 1, endSec: 2, subject: 'Listener', description: 'Turns back' }] };
-    await openProject({ ...PROJECT_NO_CLIP, videoSettings: { backend: 'fal', falDuration: 6 },
-      scenes: [{ ...PROJECT_NO_CLIP.scenes[0], startSec: 0, endSec: 4, direction: { actionContract } }] }, 'produce');
-    fireEvent.click(await findEnabledByRole('button', { name: /^Render$/ }));
-    await waitFor(() => expect(generateVideo).toHaveBeenCalled());
-    const prompt = generateVideo.mock.calls.at(-1)[0].prompt;
-    expect(prompt).toContain('Action 0.000s–1.000s: Singer');
-    expect(prompt).toContain('Reaction 1.000s–2.000s: Listener');
   });
 
   it('renders a scene image-to-video through a saved fal.ai pin (#8968)', async () => {
@@ -1245,6 +1233,27 @@ describe('MusicVideo project video renderer', () => {
       backend: 'fal', falModelId: 'fal-ai/minimax/hailuo-02/standard/image-to-video', mode: 'image', sourceImageFile: 'img1',
     })));
     expect(generateVideo.mock.calls.at(-1)[0]).not.toHaveProperty('modelId');
+    expect(updateMusicVideoProject.mock.calls.some(([, patch]) => patch?.videoSettings)).toBe(false);
+  });
+
+  // Uniquely catches "Local LTX" falling through to the install's default model, and a picked length being dropped.
+  it('renders a Local LTX pick on the model and length its card shows, LTX-2.5 before the install default', async () => {
+    getVideoGenStatus.mockResolvedValueOnce({ connected: true, defaultModel: 'ltx23_distilled_q4', falEnabled: true,
+      models: [{ id: 'ltx23_distilled_q4', name: 'LTX-2.3 Distilled Q4', runtime: 'mlx_video' }, { id: 'ltx25_mlx_q8', name: 'LTX-2.5 Q8', runtime: 'ltx25' }] });
+    generateVideo.mockResolvedValue({ jobId: 'local-pick-job' });
+    await openProject({ ...PROJECT_NO_CLIP, videoSettings: { backend: 'fal' }, scenes: [{ ...PROJECT_NO_CLIP.scenes[0], startSec: 0, endSec: 3 }] }, 'produce');
+    const render = within(await screen.findByRole('region', { name: 'Render' }));
+    fireEvent.change(render.getByLabelText('Render on'), { target: { value: 'local' } });
+    expect(render.getByLabelText('Model').value).toBe('ltx25_mlx_q8');
+    // A 3s shot: the shortest LTX length that covers it (73 frames at 24 fps).
+    const length = render.getByLabelText('Length');
+    expect(length.value).toBe('73');
+    expect(length.selectedOptions[0].textContent).toBe('3s · covers shot');
+    fireEvent.change(length, { target: { value: '121' } });
+    fireEvent.click(await findEnabledByRole('button', { name: /^Render$/ }));
+    await waitFor(() => expect(generateVideo).toHaveBeenCalledWith(expect.objectContaining({
+      backend: 'local', modelId: 'ltx25_mlx_q8', numFrames: 121, mode: 'image',
+    })));
     expect(updateMusicVideoProject.mock.calls.some(([, patch]) => patch?.videoSettings)).toBe(false);
   });
 
@@ -1366,6 +1375,44 @@ describe('MusicVideo project video renderer', () => {
       expect(screen.queryByRole('button', { name: /Split on lyric boundaries/ })).toBeNull();
     });
 
+    // Uniquely catches a shot with no way to be cut in two at a picked time (only merge, or the lyric-boundary split on a too-long shot).
+    it('splits a shot in two at the time picked on its slider', async () => {
+      const scene = { ...PROJECT_NO_CLIP.scenes[0], startSec: 10, endSec: 14 };
+      const pieces = [{ ...scene, endSec: 11.5, label: 'Shot · 1/2' }, { ...scene, sceneId: 's1b', order: 1, startSec: 11.5, label: 'Shot · 2/2' }];
+      splitMusicVideoScene.mockResolvedValue({ project: { ...PROJECT_NO_CLIP, scenes: pieces }, scenes: pieces });
+      await openProject({ ...PROJECT_NO_CLIP, scenes: [scene] }, 'produce');
+
+      fireEvent.click(await screen.findByRole('button', { name: /Split shot/ }));
+      const slider = screen.getByLabelText('Split at');
+      expect(slider.value).toBe('12');
+      fireEvent.change(slider, { target: { value: '11.5' } });
+      expect(screen.getByText(/1\.5s in/)).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: /Split here/ }));
+      await waitFor(() => expect(splitMusicVideoScene).toHaveBeenCalledWith('mv-2', 's1', null, expect.objectContaining({ atSec: 11.5 })));
+      expect((await screen.findAllByText(/Shot · 2\/2$/, { selector: ':not(option)' })).length).toBeGreaterThan(0);
+    });
+
+    it('moves a shot start by frame number, and the shot before ends there too', async () => {
+      const first = { ...PROJECT_NO_CLIP.scenes[0], startSec: 0, endSec: 10 };
+      const second = { ...first, sceneId: 's2', order: 1, startSec: 10, endSec: 14, label: 'Second' };
+      const moved = [{ ...first, endSec: 10.042 }, { ...second, startSec: 10.042 }];
+      moveMusicVideoSceneStart.mockResolvedValue({ project: { ...PROJECT_NO_CLIP, scenes: moved }, scene: moved[1], previous: moved[0] });
+      await openProject({ ...PROJECT_NO_CLIP, scenes: [first, second] }, 'produce');
+
+      await act(async () => fireEvent.click(await screen.findByRole('button', { name: /^Open Shot 2/ })));
+      const input = screen.getByLabelText('Start frame');
+      expect(input.value).toBe('240');
+      const row = input.closest('div');
+      expect(within(row).getByTestId('start-frame-time').textContent).toMatch(/^0:10\.00 · 24 fps · the shot before ends here/);
+      fireEvent.click(within(row).getByRole('button', { name: 'Start one frame later' }));
+      await waitFor(() => expect(moveMusicVideoSceneStart).toHaveBeenCalledWith('mv-2', 's2', 10.042, expect.objectContaining({ silent: true })));
+      await waitFor(() => expect(screen.getByLabelText('Start frame').value).toBe('241'));
+      // A typed frame moves it there.
+      fireEvent.change(screen.getByLabelText('Start frame'), { target: { value: '228' } });
+      fireEvent.blur(screen.getByLabelText('Start frame'));
+      await waitFor(() => expect(moveMusicVideoSceneStart).toHaveBeenLastCalledWith('mv-2', 's2', 9.5, expect.anything()));
+    });
+
     it('requests the Grok clip that covers a cutaway and adds approximate motion timing', async () => {
       generateVideo.mockResolvedValue({ jobId: 'grok-job' });
       await openProject({
@@ -1379,8 +1426,9 @@ describe('MusicVideo project video renderer', () => {
       fireEvent.click(await findEnabledByRole('button', { name: /^Render$/ }));
       await waitFor(() => expect(generateVideo).toHaveBeenCalledWith(expect.objectContaining({
         backend: 'grok', grokDuration: 10,
-        prompt: expect.stringContaining('around 2.0s: camera pushes in'),
       })));
+      // The server composes Grok's approximate phrase timing onto the director's text.
+      expect(JSON.parse(generateVideo.mock.calls.at(-1)[0].musicVideo)).toMatchObject({ compose: true });
     });
   });
 
@@ -2426,20 +2474,6 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     scenes: [{ sceneId: 's1', order: 0, prompt: 'waves', framePrompt: 'harbor at dawn', referenceImageId: null, videoHistoryId: null, takes: [] }],
   };
 
-  it('carries authored character identity and source styles into actual frame requests', async () => {
-    await openProject({ ...SPEC_PROJECT, concept: { ...SPEC_PROJECT.concept,
-      universeStyle: 'Ink silhouettes', moodBoardStyle: 'Watercolor', subjects: [
-        { id: 'lead', kind: 'character', role: 'protagonist', name: 'Example singer', description: 'Silver coat' },
-      ],
-    } }, 'produce');
-    fireEvent.click(screen.getByRole('button', { name: /^Generate frame$/ }));
-    await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
-      prompt: expect.stringContaining('character (protagonist): Example singer — Silver coat'),
-    }), { silent: true }));
-    expect(generateImage.mock.calls[0][0].prompt).toContain('Mood board look (palette, lighting and texture only; never its locations, objects or poses): Watercolor');
-    expect(generateImage.mock.calls[0][0].prompt).toContain('Universe style: Ink silhouettes');
-  });
-
   it('sends flagged references as conditioning inputs and names the capability gap when the backend refuses them', async () => {
     generateImage.mockRejectedValueOnce(Object.assign(
       new Error('Reference images are only supported for FLUX.2 and Qwen Image 2.1 models on the local backend'),
@@ -2448,12 +2482,13 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     await openProject(SPEC_PROJECT, 'produce');
     fireEvent.click(screen.getByRole('button', { name: /^Generate frame$/ }));
     await waitFor(() => expect(generateImage).toHaveBeenCalledWith({
-      prompt: 'harbor at dawn, grainy 16mm, color palette #112233; camera: locked-off wides',
+      // The director's text; the server composes the look onto it (lib/musicVideoShotPrompt.js).
+      prompt: 'harbor at dawn',
       // Frames are requested at the project's aspect (16:9 by default).
       width: 1536,
       height: 864,
       referenceImageFiles: ['mood.png'],
-      musicVideo: { projectId: 'mv-spec', sceneId: 's1' },
+      musicVideo: { projectId: 'mv-spec', sceneId: 's1', compose: true },
     }, { silent: true }));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith(
       expect.stringMatching(/can't condition on 1 reference image: Reference images are only supported/),
@@ -2474,8 +2509,51 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Generate frame$/ }));
     await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
       referenceImageFiles: ['character.png', 'roof.png'],
-      musicVideo: { projectId: 'mv-spec', sceneId: 's1' },
+      musicVideo: { projectId: 'mv-spec', sceneId: 's1', compose: true },
     }), { silent: true }));
+  });
+
+  // Uniquely catches a frame picked as the render's image reference not reaching the request, or not leading the references.
+  it('renders a new frame take from the shot\'s own start frame when it is picked as the reference', async () => {
+    await openProject({ ...SPEC_PROJECT, scenes: [{ ...SPEC_PROJECT.scenes[0], referenceImageId: 'start.png' }] }, 'produce');
+    fireEvent.change(screen.getByLabelText('From', { selector: '#mv-scene-s1-start-from' }), { target: { value: 'start' } });
+    fireEvent.click(screen.getByRole('button', { name: /^New frame take$/ }));
+    await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: 'harbor at dawn',
+      referenceImageFiles: ['start.png', 'mood.png'],
+      musicVideo: { projectId: 'mv-spec', sceneId: 's1', compose: true, fromFrame: true },
+    }), { silent: true }));
+  });
+
+  // Uniquely catches Refine sending the shot prompt or the mood references instead of editing just this frame by the instruction.
+  it('refines the start frame by a short instruction, with that frame as the only reference', async () => {
+    await openProject({ ...SPEC_PROJECT, scenes: [{ ...SPEC_PROJECT.scenes[0], referenceImageId: 'start.png' }] }, 'produce');
+    fireEvent.click(screen.getByRole('button', { name: 'Refine' }));
+    fireEvent.change(screen.getByLabelText('What to change in the start frame'), { target: { value: 'remove the hand' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Render refined start frame' }));
+    await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: 'remove the hand',
+      referenceImageFiles: ['start.png'],
+      musicVideo: { projectId: 'mv-spec', sceneId: 's1', compose: true, refine: true },
+    }), { silent: true }));
+    expect(screen.queryByLabelText('What to change in the start frame')).toBeNull();
+  });
+
+  // Uniquely catches a trimmed clip landing only in Video Gen history, never as this shot's take, or not becoming the shot's clip.
+  it('trims the shot clip to a later start frame and makes it the shot\'s selected clip take', async () => {
+    const scene = { sceneId: 's1', order: 0, prompt: 'waves', referenceImageId: 'img1', videoHistoryId: 'h1',
+      takes: [{ takeId: 't-v', kind: 'video', assetId: 'h1', source: 'generated', provider: 'portos', sourceImageId: 'img1', status: 'selected', note: null }] };
+    const trimmedTake = { takeId: 't-trim', kind: 'video', assetId: 'h1-trim', source: 'trimmed', provider: null, status: 'candidate', note: null };
+    trimVideoStart.mockResolvedValueOnce({ video: { id: 'h1-trim' } });
+    addMusicVideoSceneTake.mockResolvedValueOnce({ scene: { ...scene, takes: [...scene.takes, trimmedTake] }, take: trimmedTake });
+    selectMusicVideoSceneTake.mockResolvedValueOnce({ ...scene, videoHistoryId: 'h1-trim', takes: [{ ...scene.takes[0], status: 'candidate' }, { ...trimmedTake, status: 'selected' }] });
+    await openProject({ ...PROJECT_WITH_CLIP, id: 'mv-trim', scenes: [scene] }, 'produce');
+    const render = within(await screen.findByRole('region', { name: 'Render' }));
+    for (let i = 0; i < 12; i += 1) fireEvent.click(render.getByRole('button', { name: 'Next frame' }));
+    fireEvent.click(render.getByRole('button', { name: /Start clip here/ }));
+    await waitFor(() => expect(selectMusicVideoSceneTake).toHaveBeenCalledWith('mv-trim', 's1', 't-trim', { silent: true }));
+    expect(trimVideoStart).toHaveBeenCalledWith('h1', 0.5, { silent: true });
+    expect(addMusicVideoSceneTake).toHaveBeenCalledWith('mv-trim', 's1', { kind: 'video', assetId: 'h1-trim', source: 'trimmed', sourceImageId: 'img1', provider: 'portos' }, { silent: true });
   });
 
   it('keeps a new render as a candidate and lets the director explicitly pick and reject takes', async () => {
@@ -2495,11 +2573,12 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     await openProject({ ...PROJECT_NO_CLIP, id: 'mv-takes', name: 'Takes Project', scenes: [scene] }, 'produce');
 
     const strip = screen.getByRole('list', { name: /Frame takes/ });
-    expect(within(strip).getByText(/imported · midjourney/)).toBeTruthy();
+    // How a take was made is not labeled under it.
+    expect(within(strip).queryByText(/imported|generated/)).toBeNull();
     fireEvent.click(within(strip).getByRole('button', { name: /Use/ }));
     await waitFor(() => expect(selectMusicVideoSceneTake).toHaveBeenCalledWith('mv-takes', 's1', 't-b', { silent: true }));
     // The server's answer moves the selection; the other take now offers "Use".
-    await waitFor(() => expect(within(strip).getAllByText(/Selected/)).toHaveLength(1));
+    await waitFor(() => expect(within(strip).getAllByText('In use', { selector: 'div > span' })).toHaveLength(1));
     const items = within(strip).getAllByRole('listitem');
     expect(within(items[1]).queryByRole('button', { name: /Use/ })).toBeNull();
 
@@ -2694,6 +2773,25 @@ describe('MusicVideo stage tabs (#9243)', () => {
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByRole('tab', { name: /^Autopilot/ })).toHaveAttribute('aria-selected', 'true');
     await waitFor(() => expect(document.getElementById('mv-auto-edit')).toHaveFocus());
+  });
+
+  // Uniquely catches Edit shot losing its route (Shots, the shot's card) or its scroll to the card.
+  it('opens the shot playing in the preview on Shots and scrolls to its card', async () => {
+    listMusicVideoProjects.mockResolvedValue([{ ...PROJECT_WITH_CLIP, scenes: [{ ...PROJECT_WITH_CLIP.scenes[0], startSec: 0 }] }]);
+    const scrolled = [];
+    const scroll = vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(function record() { scrolled.push(this.id); });
+    renderAt('/music-video/mv-1/board');
+    await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
+    const dock = screen.getByRole('complementary', { name: 'Preview' });
+    fireEvent.click(within(dock).getByRole('button', { name: 'Edit shot' }));
+    await waitFor(() => expect(screen.getByTestId('loc')).toHaveTextContent('/music-video/mv-1/produce/scene/s1'));
+    expect(selectedTab()).toHaveAccessibleName(STAGE_TABS.produce);
+    await waitFor(() => expect(scrolled).toContain('scene-s1'));
+    // Already open, the card still comes back into view.
+    scrolled.length = 0;
+    fireEvent.click(within(dock).getByRole('button', { name: 'Edit shot' }));
+    await waitFor(() => expect(scrolled).toContain('scene-s1'));
+    scroll.mockRestore();
   });
 
   // Uniquely catches the opening title card form leaving the Look step or reappearing on Plan/Shots.
@@ -3296,6 +3394,24 @@ describe('stage checklist and project options', () => {
     // Lock all stills, on Shots, waits on the same request.
     await openStage('produce', false);
     expect(screen.getByRole('region', { name: 'Approve: Lyric-timed storyboard' })).toHaveTextContent('Resolve the change request on Chorus first.');
+  });
+
+  // Uniquely catches a lyric anchor problem the director cannot find or settle from the checklist.
+  it('names each shot whose lyric anchors differ from the singing, opens it, and anchors them all in one tap', async () => {
+    const project = { ...PROJECT_ANALYZED, scenes: [{ sceneId: 's-a', label: 'Drummer', startSec: 0, endSec: 4 }, { sceneId: 's-b', label: 'Singer', startSec: 4, endSec: 8 }],
+      productionReview: { draft: { storyboard: [] } },
+      productionReadiness: { readyForProduction: false, basis: {}, art: { approved: true, problems: [] },
+        storyboard: { approved: false, problems: ['Review lyric anchors for Singer.'],
+          lyricAnchors: [{ sceneId: 's-b', sung: ['If you think this is slop'], anchored: [] }] }, proof: { approved: false, problems: [] } } };
+    await openProject(project, 'board');
+    const checklist = screen.getByRole('region', { name: 'What this step needs' });
+    expect(checklist).not.toHaveTextContent('need lyric anchors reviewed');
+    const shots = within(checklist).getByRole('list', { name: 'Lyric anchors shots' });
+    expect(shots).toHaveTextContent('Shot 2Sung: “If you think this is slop” · anchored: nothing');
+    fireEvent.click(within(checklist).getByRole('button', { name: /Anchor to the sung lyrics/ }));
+    expect(feedbackCalls.syncLyricAnchors).toHaveBeenCalledWith();
+    fireEvent.click(within(shots).getByRole('button', { name: 'Shot 2' }));
+    await waitFor(() => expect(document.getElementById('scene-s-b')).toBeTruthy());
   });
 
   it('builds the cast & sets from the Look checklist when nothing is written yet', async () => {

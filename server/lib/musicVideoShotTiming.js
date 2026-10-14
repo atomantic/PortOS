@@ -16,8 +16,9 @@
  *     conditioning — REST documentation for a different Grok surface is not that
  *     proof. Local runtimes are absent for the same reason.
  *   - `SOURCE_AUDIO_MUSIC` — the music-driven performance lanes: fal.ai
- *     audio-to-video models (kind `a2v`) where the song slice drives the whole
- *     picture's motion rather than only a singer's mouth. A scene opts in with
+ *     audio-to-video models (kind `a2v`) and reference models that hear the
+ *     song slice as an audio reference (MiniMax H3 Max, Seedance 2.5), where
+ *     the song drives the whole picture's motion rather than only a singer's mouth. A scene opts in with
  *     `performanceStyle: 'music'`; it shares the window planning below.
  *   - `planPerformanceWindow` — the audio window a performance shot submits:
  *     inside the provider's limits (never relying on its silent truncation), a
@@ -42,10 +43,10 @@
 
 import { GROK_VIDEO_DURATIONS, nearestGrokDuration } from './grokVideoClip.js';
 import {
-  FAL_AUDIO_VIDEO_MODEL,
   FAL_AUDIO_VIDEO_MODELS,
   FAL_DEFAULT_IMAGE_VIDEO_MODEL,
   FAL_LIPSYNC_VIDEO_MODEL,
+  FAL_MUSIC_VIDEO_DEFAULT_MODEL,
   coerceFalVideoSeconds,
   describeFalVideoRate,
   estimateFalVideoCostUsd,
@@ -159,27 +160,27 @@ export const SOURCE_AUDIO_LIPSYNC = Object.freeze({
   local: localAudioLane('lipsync'),
 });
 
-/**
- * Default output resolution of a music-driven take (OmniHuman's own default).
- * LTX audio-to-video is deliberately not a fal lane: PortOS runs LTX-2.3 /
- * LTX-2.5 locally, where Make › Supplied song audio conditions a cutaway on
- * its own song slice (submitJob.js `_suppliedAudio`).
- */
-const MUSIC_VIDEO_MUSIC_DEFAULT_RESOLUTION = '1080p';
-
+// A music-driven take renders at its model's own default resolution.
+// LTX audio-to-video is deliberately not a fal lane: PortOS runs LTX-2.3 /
+// LTX-2.5 locally, where Make › Supplied song audio conditions a cutaway on
+// its own song slice (submitJob.js `_suppliedAudio`).
 const musicCapability = (model) => {
-  const resolutions = falVideoResolutions(model);
-  const defaultResolution = resolutions.includes(MUSIC_VIDEO_MUSIC_DEFAULT_RESOLUTION) ? MUSIC_VIDEO_MUSIC_DEFAULT_RESOLUTION : model.resolution.default;
+  const audio = model.audioInput || model.referenceAudio;
+  // A reference model bills and renders whole seconds from its shortest clip
+  // up: the song window starts at that length (less the planning margin, so a
+  // padded window lands exactly on it) and never outruns the longest clip.
+  const clip = model.duration.kind === 'range' ? model.duration : null;
+  const defaultResolution = model.resolution.default;
   return Object.freeze({
     provider: 'fal',
     style: 'music',
     label: `fal.ai ${model.label}`,
     modelId: model.id,
-    minAudioSec: model.audioInput.minSec,
+    minAudioSec: clip ? Math.max(audio.minSec, clip.min - PERFORMANCE_WINDOW_MARGIN_SEC) : audio.minSec,
     // The same one-phrase per-take ceiling as lip-sync (see above).
-    maxAudioSec: Math.min(model.audioInput.maxSec, 30),
+    maxAudioSec: Math.min(audio.maxSec, clip ? clip.max : Infinity, 30),
     transcription: false,
-    resolutions: Object.freeze(resolutions),
+    resolutions: Object.freeze(falVideoResolutions(model)),
     defaultResolution,
     costLabel: `${describeFalVideoRate(model.id, defaultResolution)} — billed to your fal.ai account`,
   });
@@ -188,7 +189,7 @@ const musicCapability = (model) => {
 /**
  * Verified music-driven lanes, keyed by backend then model id. The project's
  * `videoSettings.falMusicModelId` picks one; absent (or a model this install
- * does not curate) = `FAL_AUDIO_VIDEO_MODEL` (OmniHuman v1.5).
+ * does not curate) = `FAL_MUSIC_VIDEO_DEFAULT_MODEL` (MiniMax H3 Max reference).
  */
 const LOCAL_MUSIC_LANE = localAudioLane('music');
 
@@ -207,7 +208,7 @@ export function performanceCapability(backend, { scene = null, videoSettings = n
   if (backend === 'local') return LOCAL_MUSIC_LANE;
   const lanes = SOURCE_AUDIO_MUSIC[backend];
   const pinned = videoSettings?.falMusicModelId;
-  return (pinned && Object.prototype.hasOwnProperty.call(lanes, pinned) ? lanes[pinned] : null) || lanes[FAL_AUDIO_VIDEO_MODEL];
+  return (pinned && Object.prototype.hasOwnProperty.call(lanes, pinned) ? lanes[pinned] : null) || lanes[FAL_MUSIC_VIDEO_DEFAULT_MODEL];
 }
 
 /**
@@ -233,8 +234,14 @@ const round6 = (n) => Math.round(n * 1e6) / 1e6;
  * editInSec, editOutSec }` — the window is absolute song time; the edit in/out
  * points are relative to the generated clip (whose length follows the window).
  * Returns `{ ok: false, code, message }` when the shot cannot be planned.
+ *
+ * `lineCues` (the project's lyric cues) asks for the whole sung line: the
+ * window grows to cover every timed cue the shot overlaps, so the take holds
+ * the full line and can be played whole or cut down. The edit points still
+ * frame the shot. A line too long for one take keeps the shot's own window and
+ * says so (`lineTooLong`); `lineStartSec` / `lineEndSec` are the span covered.
  */
-export function planPerformanceWindow({ startSec, endSec, songDurationSec, capability }) {
+export function planPerformanceWindow({ startSec, endSec, songDurationSec, capability, lineCues = null }) {
   if (!capability) {
     return { ok: false, code: 'MUSIC_VIDEO_PERFORMANCE_UNSUPPORTED', message: performanceBlockedReason(null) };
   }
@@ -263,12 +270,26 @@ export function planPerformanceWindow({ startSec, endSec, songDurationSec, capab
   }
   let windowStartSec = startSec;
   let windowEndSec = endSec;
-  if (spanSec < minSec) {
-    // Pad a short shot to a supported contextual window, centered on the shot
-    // where the song allows, then shifted to stay inside it. The edit in-point
-    // records exactly where the shot starts inside the generated clip.
-    const pad = minSec - spanSec;
-    windowStartSec = Math.max(0, startSec - pad / 2);
+  let lineTooLong = false;
+  if (lineCues) {
+    const line = sungLineSpan(lineCues, startSec, endSec);
+    const lineStart = Math.max(0, line.startSec);
+    const lineEnd = Math.min(songDurationSec, line.endSec);
+    if (lineEnd - lineStart > maxSec) lineTooLong = true;
+    else {
+      windowStartSec = lineStart;
+      windowEndSec = lineEnd;
+    }
+  }
+  const lineStartSec = windowStartSec;
+  const lineEndSec = windowEndSec;
+  const coveredSec = windowEndSec - windowStartSec;
+  if (coveredSec < minSec) {
+    // Pad a short shot (or line) to a supported contextual window, centered on
+    // it where the song allows, then shifted to stay inside it. The edit
+    // in-point records exactly where the shot starts inside the generated clip.
+    const pad = minSec - coveredSec;
+    windowStartSec = Math.max(0, windowStartSec - pad / 2);
     windowEndSec = windowStartSec + minSec;
     if (windowEndSec > songDurationSec) {
       windowEndSec = songDurationSec;
@@ -283,7 +304,26 @@ export function planPerformanceWindow({ startSec, endSec, songDurationSec, capab
     windowSec: round6(windowEndSec - windowStartSec),
     editInSec: round6(startSec - windowStartSec),
     editOutSec: round6(endSec - windowStartSec),
+    ...(lineCues ? { lineStartSec: round6(lineStartSec), lineEndSec: round6(lineEndSec), lineTooLong } : {}),
   };
+}
+
+/**
+ * `[startSec, endSec]` widened to the whole of every timed lyric cue it
+ * overlaps (a cue that only touches an edge does not count). A shot over no
+ * timed cue keeps its own span.
+ */
+function sungLineSpan(cues, startSec, endSec) {
+  let lineStart = startSec;
+  let lineEnd = endSec;
+  for (const cue of Array.isArray(cues) ? cues : []) {
+    if (!timedNumber(cue?.startSec)) continue;
+    const cueEnd = timedNumber(cue.endSec) ? cue.endSec : cue.startSec;
+    if (cueEnd <= startSec + 1e-6 || cue.startSec >= endSec - 1e-6) continue;
+    lineStart = Math.min(lineStart, cue.startSec);
+    lineEnd = Math.max(lineEnd, cueEnd);
+  }
+  return { startSec: lineStart, endSec: lineEnd };
 }
 
 /**
@@ -302,7 +342,8 @@ export function clipRelativeCues(cues, windowStartSec, windowEndSec) {
       endSec: round6(Math.min(windowEndSec, end) - windowStartSec),
       ...(Array.isArray(cue.words) ? { words: cue.words
         .filter((word) => word && Number.isFinite(word.startSec) && Number.isFinite(word.endSec) && word.endSec > word.startSec && word.endSec > windowStartSec && word.startSec < windowEndSec)
-        .map((word) => ({ text: word.text, startSec: round6(Math.max(windowStartSec, word.startSec) - windowStartSec), endSec: round6(Math.min(windowEndSec, word.endSec) - windowStartSec) })) } : {}),
+        // Aligned lyric words keep their text as `w` (lyricAlignCore), transcribed ones as `text`.
+        .map((word) => ({ text: typeof word.text === 'string' ? word.text : typeof word.w === 'string' ? word.w : '', startSec: round6(Math.max(windowStartSec, word.startSec) - windowStartSec), endSec: round6(Math.min(windowEndSec, word.endSec) - windowStartSec) })) } : {}),
     });
   }
   return out;
@@ -481,11 +522,14 @@ export function planShotSplit({ startSec, endSec, maxSec, lyricCues, phrases, be
  * the footage default. An uncurated model keeps the legacy contract (only an
  * explicit pin is sent) and reports cost unknown.
  *
+ * `lineCues` prices a performance take that covers the whole sung line
+ * (planPerformanceWindow).
+ *
  * Returns `{ performance, modelId, seconds, resolution, costUsd }`; `seconds`
  * and `costUsd` are null when unknown (an untimed or unplannable performance,
  * an uncurated model).
  */
-export function falSceneTake({ scene, videoSettings = {}, songDurationSec = null } = {}) {
+export function falSceneTake({ scene, videoSettings = {}, songDurationSec = null, lineCues = null } = {}) {
   const settings = videoSettings || {};
   if (isPerformanceScene(scene)) {
     const capability = performanceCapability('fal', { scene, videoSettings: settings });
@@ -493,11 +537,12 @@ export function falSceneTake({ scene, videoSettings = {}, songDurationSec = null
     const pinned = capability.style === 'music' ? settings.falMusicResolution : settings.falLipSyncResolution;
     const resolution = resolveFalVideoResolution(model, pinned || capability.defaultResolution);
     const plan = planPerformanceWindow({
-      startSec: scene.startSec, endSec: scene.endSec, songDurationSec: songDurationSec ?? Infinity, capability,
+      startSec: scene.startSec, endSec: scene.endSec, songDurationSec: songDurationSec ?? Infinity, capability, lineCues,
     });
     const seconds = plan.ok ? plan.windowSec : null;
     return {
       performance: true,
+      music: capability.style === 'music',
       modelId: capability.modelId,
       seconds,
       resolution,
@@ -520,13 +565,14 @@ export function falSceneTake({ scene, videoSettings = {}, songDurationSec = null
 }
 
 /**
- * A `falSceneTake` as `/api/video-gen` fields. A performance take sends only
- * its lip-sync resolution — its length follows the song slice the server cuts;
- * a cutaway names its model, length and resolution. Unknown values stay absent
- * so the server resolves its own defaults (an uncurated model's legacy body).
+ * A `falSceneTake` as `/api/video-gen` fields. A performance take sends its
+ * resolution (and a music-driven take its model, which a shot card can pick) —
+ * its length follows the song slice the server cuts; a cutaway names its
+ * model, length and resolution. Unknown values stay absent so the server
+ * resolves its own defaults (an uncurated model's legacy body).
  */
 export const falTakeRequestFields = (take) => (take.performance
-  ? (take.resolution ? { falResolution: take.resolution } : {})
+  ? { ...(take.music ? { falModelId: take.modelId } : {}), ...(take.resolution ? { falResolution: take.resolution } : {}) }
   : {
     falModelId: take.modelId,
     ...(take.seconds != null ? { falDuration: take.seconds } : {}),

@@ -21,7 +21,7 @@
  *   --base <ref>  compare against <ref> instead of the remote default branch
  *   --full        actually run the complete suite when the plan demands it
  *                 (without this, a full plan runs the always-run guards only)
- *   --skip-lint   skip the client lint stage
+ *   --skip-lint   skip linting in both client and server workspaces
  *   --plan-only   print the plan and the stages, run nothing
  *
  * What it deliberately does NOT cover, because each needs a resource this
@@ -35,7 +35,7 @@ import { spawnSync } from 'child_process';
 import { execFileSync } from 'child_process';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { ALWAYS_RUN_TESTS } from './ci-test-plan.js';
+import { ALWAYS_RUN_TESTS, structuralTestsFor } from './ci-test-plan.js';
 import { assertNodeVersion } from './checkNodeVersion.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 
@@ -83,7 +83,7 @@ export function resolvePlanStages(plan, { skipLint = false, baseSha } = {}) {
 
   if (!skipLint && plan.lint.mode !== 'skip') {
     stages.push({
-      name: 'client lint',
+      name: 'client/server lint',
       script: 'run-ci-lint.js',
       args: [],
       env: { CI_LINT_MODE: plan.lint.mode, CI_LINT_FILES: JSON.stringify(plan.lint.files) },
@@ -118,19 +118,30 @@ export function resolvePlanStages(plan, { skipLint = false, baseSha } = {}) {
  * A full plan is CI's answer to "this diff could break anything", which is
  * correct there and unusable here — the complete suite is far longer than
  * anyone runs before a push, so the honest local default is the subset that
- * catches the tree-wide guards, plus a line saying what was dropped. `--full`
- * opts back in.
+ * catches always-run and diff-selected structural guards, plus a line saying
+ * what was dropped. `--full` opts back in.
  */
-export function downgradeFullPlan(plan, trackedFiles) {
+export function downgradeFullPlan(plan, trackedFiles, changedFiles = []) {
   const tracked = new Set(trackedFiles);
+  const structuralGuards = structuralTestsFor(changedFiles, tracked);
+  const serverStructuralGuards = structuralGuards.filter((path) => !path.startsWith('client/'));
+  const clientStructuralGuards = structuralGuards.filter((path) => path.startsWith('client/'));
   // Discover convention guards so new client scanners join the local gate
   // without a second hand-maintained list (including guards under hooks/).
   const clientGuards = trackedFiles.filter((path) => /^client\/src\/.*Conventions\.test\.js$/.test(path));
   return {
     ...plan,
     full: false,
-    server: { mode: 'files', files: ALWAYS_RUN_TESTS.filter((path) => tracked.has(path)), sources: [] },
-    client: { mode: clientGuards.length > 0 ? 'files' : 'skip', files: clientGuards, sources: [] },
+    server: {
+      mode: 'files',
+      files: [...new Set([...ALWAYS_RUN_TESTS.filter((path) => tracked.has(path)), ...serverStructuralGuards])],
+      sources: [],
+    },
+    client: {
+      mode: clientGuards.length > 0 || clientStructuralGuards.length > 0 ? 'files' : 'skip',
+      files: [...new Set([...clientGuards, ...clientStructuralGuards])],
+      sources: [],
+    },
     lint: { mode: 'full', files: [] },
   };
 }
@@ -264,8 +275,8 @@ function main() {
   console.log(`📋 ${raw.changed_files.length} changed file(s) — ${plan.reason}.`);
 
   if (plan.full && !options.full) {
-    plan = downgradeFullPlan(plan, git(['ls-files']).split('\n').filter(Boolean));
-    console.log('⚠️ CI will run the FULL suite for this diff — running the always-run guards only. Pass --full to run everything.');
+    plan = downgradeFullPlan(plan, git(['ls-files']).split('\n').filter(Boolean), changedFiles);
+    console.log('⚠️ CI will run the FULL suite for this diff — running always-run and diff-selected structural guards only. Pass --full to run everything.');
   }
 
   const stages = resolvePlanStages(plan, { skipLint: options.skipLint, baseSha });

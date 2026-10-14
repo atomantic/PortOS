@@ -248,6 +248,7 @@ export async function spawnViaRunner(agentId, task, opts) {
       workspacePath,
       model,
       providerAuth: cliProviderAuthDescriptor(provider),
+      securityScanGrant: opts.securityScanGrant,
       // A DELTA, not a full env — the cos-runner bases it on its own process.env
       // and does the PWD pin / CLAUDECODE strip. composeProviderEnv owns the layer
       // order: forgeTokenEnv before provider.envVars so an explicit provider

@@ -30,6 +30,7 @@ import { PATHS, ensureDir, resolveGalleryImage, unlinkGuarded, copyFileGuarded }
 import { prepareGenerateParams, resolveLocalImageModel, selectLocalImageModelFromSettings } from '../services/imageGen/prepareParams.js';
 import { applyImageClean, applyWatermarkRemoval, applyLightRegenVariant } from '../services/imageGen/variants.js';
 import { applyFilmLookBake } from '../services/imageGen/filmLookBake.js';
+import { previewImagePrompt } from '../services/imageGen/promptPreview.js';
 import { filmLookBakeSchema } from '../lib/filmLookValidation.js';
 import { join, basename } from 'node:path';
 import { STYLE_PRESETS } from '../lib/writersRoomStylePresets.js';
@@ -55,6 +56,7 @@ import {
 } from '../services/fableLoom/visualConditioning.js';
 import { loraCompatKey } from '../lib/runners.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
+import { promptAdditionsSchema } from '../lib/modelInput.js';
 
 const router = Router();
 
@@ -105,6 +107,7 @@ const galleryImageFilenameSchema = (label) => z.string().max(256)
 router.get('/style-presets', (_req, res) => res.json(STYLE_PRESETS));
 
 const generateSchema = z.object({
+  promptAdditions: promptAdditionsSchema,
   // Empty prompt allowed — i2i / edit / unconditional generation don't require
   // one. The multipart FormData builder drops empty-string fields, so an empty
   // prompt arrives as `undefined`; default it to '' rather than rejecting.
@@ -238,7 +241,18 @@ const generateSchema = z.object({
     // #11173: 'end' files the render as the scene's style-break end frame
     // (an `endImage` take) instead of its start frame.
     slot: z.enum(['end']).optional(),
+    // #11317: the prompt is the director's text; the server composes the still's
+    // prompt and lists each block it adds. `fromFrame` reworks the first reference
+    // image (a picked frame); `refine` makes the prompt an edit instruction for it.
+    compose: z.boolean().optional(),
+    fromFrame: z.boolean().optional(),
+    refine: z.boolean().optional(),
   }).optional(),
+  // File the render into this music video's media collection even when no shot
+  // keeps it (sheets, tests, alternates): musicVideoCollectionHook for the
+  // queued lanes, inline below for the synchronous one. Collection only; the
+  // render itself is unchanged.
+  musicVideoProjectId: z.string().min(1).max(200).optional(),
   // Durable catalog attach (#1359). When present, the mediaJobQueue completion
   // hook (catalogImageAttachHook) files the finished render onto this catalog
   // ingredient even if the page that started the render has since unmounted —
@@ -448,6 +462,18 @@ const queuedImageResponse = ({ jobId, position, status, mode, model, mediaProvid
   mediaProviderPeerId,
 });
 
+// What the render would send, before it is sent (#11317). Same preparation and
+// prompt builders as POST /generate; the form says which uploads it holds by
+// count rather than sending their bytes, and nothing is staged or queued.
+const promptPreviewSchema = generateSchema.safeExtend({
+  uploadedInitImage: z.boolean().optional(),
+  uploadedReferenceCount: z.number().int().min(0).max(MAX_REFERENCE_IMAGES).optional(),
+});
+
+router.post('/prompt-preview', asyncHandler(async (req, res) => {
+  res.json(await previewImagePrompt(validateRequest(promptPreviewSchema, req.body ?? {})));
+}));
+
 router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
   const data = validateRequest(generateSchema, coerceFormFields(req.body));
   const { data: params, mode, settings, uploadedTempPaths } = await prepareGenerateParams({
@@ -507,6 +533,8 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     if (compiled) {
       params.prompt = compiled.prompt;
       params.negativePrompt = compiled.negativePrompt;
+      // The compiler's canon blocks, listed beside what the scene's own request listed (#11317).
+      if (compiled.promptAdditions?.length) params.promptAdditions = [...(params.promptAdditions || []), ...compiled.promptAdditions];
       params.referenceImagePaths = compiled.referenceImagePaths;
       params.referenceImageStrengths = compiled.referenceImageStrengths;
       params.loraFilenames = compiled.loraFilenames;
@@ -698,6 +726,10 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     await assertRevisionOpen(params.musicVideo.projectId, params.musicVideo.revisionId, { sceneId: params.musicVideo.sceneId, kind: 'image' });
   }
   const result = await imageGen.generateImage(params);
+  if (params.musicVideoProjectId && result?.filename) {
+    const { fileIntoMusicVideoCollection } = await import('../services/musicVideoCollectionHook.js');
+    await fileIntoMusicVideoCollection(params.musicVideoProjectId, [{ kind: 'image', ref: result.filename }]);
+  }
   if (params.fableLoom && result?.filename) {
     await attachNodeImage(
       params.fableLoom.loomId,

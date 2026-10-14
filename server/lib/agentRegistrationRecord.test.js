@@ -128,3 +128,8 @@ it('accepts audit source provenance only from server capture, never task metadat
   const observed = { status: 'unavailable', version: 1 };
   expect(buildAgentRegistration({ ...args({ auditSourceEvidence: injected }), auditSourceEvidence: observed }).auditSourceEvidence).toEqual(observed);
 });
+
+it('preserves the persisted audit disposition contract on the registered run', () => {
+  expect(buildAgentRegistration(args({ auditDispositionVersion: '1' })).auditDispositionVersion).toBe(1);
+  expect(buildAgentRegistration(args({})).auditDispositionVersion).toBeUndefined();
+});

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { getApiRouteCatalog } from './apiRouteGraph.js';
 import {
-  HOST_CONTROL_ROUTES, changedVoiceConfigHostControlPaths, hostControlBodyKeys, hostControlSettingsPathsIn,
+  HOST_CONTROL_ROUTES, HOST_CONTROL_SETTINGS_SLICES, changedVoiceConfigHostControlPaths, hostControlBodyKeys, hostControlSettingsPathsIn,
   hostControlRouteFor, isHostControlRoute, voiceConfigHostControlPathsIn,
 } from './hostControlRoutes.js';
 import { LLM_DRILL_TYPES } from './postDrillTypes.js';
@@ -156,6 +156,36 @@ describe('HOST_CONTROL_ROUTES (#8716)', () => {
     expect(hostControlBodyKeys('put', '/API/Settings/', { harnesses: {}, location: {} })).toEqual(['harnesses']);
     expect(hostControlBodyKeys('PUT', '/api/COS/config', { avatarStyle: 'svg', mcpServers: [] })).toEqual(['mcpServers']);
     expect(hostControlBodyKeys('PUT', '/api/settings/credentials/example', { harnesses: {} })).toEqual([]);
+  });
+});
+
+describe('outbound mail host-control policy (#11273)', () => {
+  it('gates draft dispatch and keeps draft management routes open', () => {
+    const route = 'POST /api/messages/drafts/:id/send';
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => method + ' ' + path));
+    expect(mounted.has(route)).toBe(true);
+    expect(hostControlRouteFor('POST', '/api/messages/drafts/33333333-3333-3333-3333-333333333333/send')).toBe(route);
+    expect(isHostControlRoute('POST', '/api/messages/drafts')).toBe(false);
+    expect(isHostControlRoute('POST', '/api/messages/drafts/33333333-3333-3333-3333-333333333333/approve')).toBe(false);
+  });
+});
+
+describe('X (Twitter) review and browser automation policy', () => {
+  it('gates draft review, compose handoff, destination open and sync while keeping draft/account CRUD open', () => {
+    expect(isHostControlRoute('POST', '/api/x/drafts/00000000-0000-4000-8000-000000000001/review')).toBe(true);
+    expect(isHostControlRoute('POST', '/api/x/drafts/00000000-0000-4000-8000-000000000001/open')).toBe(true);
+    expect(isHostControlRoute('POST', '/api/x/accounts/00000000-0000-4000-8000-000000000001/open')).toBe(true);
+    expect(isHostControlRoute('POST', '/api/x/accounts/00000000-0000-4000-8000-000000000001/sync')).toBe(true);
+
+    expect(isHostControlRoute('GET', '/api/x/capabilities')).toBe(false);
+    expect(isHostControlRoute('GET', '/api/x/accounts')).toBe(false);
+    expect(isHostControlRoute('POST', '/api/x/accounts')).toBe(false);
+    expect(isHostControlRoute('GET', '/api/x/accounts/00000000-0000-4000-8000-000000000001')).toBe(false);
+    expect(isHostControlRoute('PATCH', '/api/x/accounts/00000000-0000-4000-8000-000000000001')).toBe(false);
+    expect(isHostControlRoute('DELETE', '/api/x/accounts/00000000-0000-4000-8000-000000000001')).toBe(false);
+    expect(isHostControlRoute('POST', '/api/x/drafts')).toBe(false);
+    expect(isHostControlRoute('GET', '/api/x/accounts/00000000-0000-4000-8000-000000000001/posts')).toBe(false);
+    expect(isHostControlRoute('GET', '/api/x/accounts/00000000-0000-4000-8000-000000000001/drafts')).toBe(false);
   });
 });
 
@@ -647,6 +677,7 @@ describe('Caller-prompted AI outside Pipeline policy (#10908)', () => {
     'POST /api/mood-boards/:id/synthesize-style',
     'POST /api/mood-boards/:id/compose-prompt',
     'POST /api/mood-boards/:id/analyze',
+    'POST /api/mood-boards/:id/generate',
     'POST /api/cos/tasks/enhance',
   ];
 
@@ -665,10 +696,10 @@ describe('Caller-prompted AI outside Pipeline policy (#10908)', () => {
       ['PATCH', '/api/games/:id'],
       ['POST', '/api/rounds'],
       ['PATCH', '/api/rounds/:id'],
-      ['PUT', '/api/agents/personalities/:id'],
       ['GET', '/api/system-resources/models/manifest'],
       ['PATCH', '/api/mood-boards/:id'],
       ['GET', '/api/mood-boards/:id/analyze'],
+      ['GET', '/api/mood-boards/:id/generate'],
     ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
   });
 });
@@ -945,5 +976,66 @@ describe('Importer, Brain and analytics AI policy (#11036)', () => {
       ['GET', '/api/insights/goal-scorecard'],
       ['PUT', '/api/insights/goal-scorecard/rules'],
     ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
+  });
+});
+
+describe('Media process execution policy', () => {
+  const protectedRoutes = [
+    'POST /api/devtools/video-download',
+    'POST /api/tracks/import/youtube',
+    'POST /api/rounds/reference-audio/import',
+    'POST /api/music-video/:id/transcribe-midi',
+    'POST /api/rounds/reference-audio/transcribe-midi',
+    'POST /api/music-video/:id/vocal-stem/separate',
+    'POST /api/music-video/:id/lyrics/align',
+    'POST /api/loras/:filename/effect',
+  ];
+
+  it('gates each route and maps every entry to a mounted route', () => {
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => method + ' ' + path));
+    for (const route of protectedRoutes) {
+      const [method, path] = route.split(' ');
+      expect(mounted.has(route), route).toBe(true);
+      expect(hostControlRouteFor(method, path), route).toBe(route);
+      expect(hostControlRouteFor(method, path.toUpperCase() + '/'), route).toBe(route);
+    }
+  });
+
+  it('keeps reads, progress SSE, and cancellations open', () => {
+    for (const [method, path] of [
+      ['GET', '/api/devtools/video-download/downloads'],
+      ['GET', '/api/devtools/video-download/yt-dlp'],
+      ['GET', '/api/devtools/video-download/:jobId/events'],
+      ['POST', '/api/devtools/video-download/:jobId/cancel'],
+      ['GET', '/api/tracks/import/:jobId/events'],
+      ['POST', '/api/tracks/import/:jobId/cancel'],
+      ['GET', '/api/rounds/reference-audio/import/:jobId/events'],
+      ['POST', '/api/rounds/reference-audio/import/:jobId/cancel'],
+      ['GET', '/api/rounds/reference-audio/transcribe-midi/:jobId/events'],
+      ['POST', '/api/rounds/reference-audio/transcribe-midi/:jobId/cancel'],
+      ['GET', '/api/music-video/:id/transcribe-midi/:jobId/events'],
+      ['POST', '/api/music-video/transcribe-midi/:jobId/cancel'],
+      ['GET', '/api/music-video/vocal-stem/separate/:jobId/events'],
+      ['POST', '/api/music-video/vocal-stem/separate/:jobId/cancel'],
+      ['GET', '/api/music-video/lyrics/align/:jobId/events'],
+      ['POST', '/api/music-video/lyrics/align/:jobId/cancel'],
+      ['GET', '/api/loras'],
+    ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
+  });
+});
+
+describe('Telegram bot and bridge authority policy (#11431)', () => {
+  it('gates every mutating Telegram route while keeping status open', () => {
+    const mutations = getApiRouteCatalog().routes.filter(({ method, path }) =>
+      /^(POST|PUT|PATCH|DELETE)$/.test(method) && /^\/api\/telegram(\/|$)/.test(path));
+    expect(mutations.length).toBe(6);
+    for (const { method, path } of mutations) {
+      expect(isHostControlRoute(method, path), `${method} ${path} should be gated`).toBe(true);
+    }
+    expect(isHostControlRoute('GET', '/api/telegram/status')).toBe(false);
+  });
+
+  it('includes telegram in HOST_CONTROL_SETTINGS_SLICES', () => {
+    expect(HOST_CONTROL_SETTINGS_SLICES).toContain('telegram');
   });
 });

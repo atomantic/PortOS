@@ -39,6 +39,8 @@ vi.mock('../lib/bufferedSpawn.js', () => ({
 }));
 import { killProcessTree } from '../lib/bufferedSpawn.js';
 import { createRunnerShutdown, registerRunnerShutdownSignals } from './shutdown.js';
+import { createSecurityScanManager } from './securityScan.js';
+import { securityScanRequestSchema } from '../lib/securityScanEvidence.js';
 import { createTuiExitHandler } from './tuiExit.js';
 import { armForceKill } from './forceKill.js';
 import * as requestSchemas from './requestSchemas.js';
@@ -111,6 +113,7 @@ function runner(assertDatabaseAdmission = vi.fn()) {
     withState, drainState,
     ...requestSchemas,
     createRunnerShutdown, registerRunnerShutdownSignals, createTuiExitHandler, createHttpDrain,
+    createSecurityScanManager, securityScanRequestSchema,
     armForceKillShared: armForceKill, killProcessTree, spawn, pty,
     createAgentSentinelAccess,
     buildCliChildEnv: () => ({}), prepareCliSpawn: (command, args) => ({ command, args }),

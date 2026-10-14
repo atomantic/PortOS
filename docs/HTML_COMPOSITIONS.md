@@ -366,7 +366,12 @@ Audiowide, Orbitron, Righteous, Pacifico, Playfair Display, files and licences
 in `server/services/musicVideo/titleCardFonts/`), picked from swatches drawn in
 each face. Text is drawn exactly as typed;
 the panel flags a sung line that starts while the card is up and offers to end the
-card before it.
+card before it. **Also at the end** (optional, off by default: `outro`) shows the
+same card again in its own window (`outroStartSec`–`outroEndSec`, song time);
+turning it on times that window from the song's length (`titleCardOutroWindow`:
+as long as the opening one, ending a second before the song does). The runtime's
+fade covers both windows, and a composed cut gets one capture cue per window
+(`titleCardWindows`).
 
 The card is not part of the composition document. `titleCardRuntimeSource()`
 is a page script installed beside it, in the live preview's head (live edits
@@ -415,6 +420,11 @@ snapshot freezes (`server/services/musicVideo/documentRender.js`):
   width, height } | null }], textCues, composition: { mode, style, posterSec,
   overlay } }`. Load it with `<script src="portos-mv.js">`; the sandbox
   refuses `fetch`.
+  A shot's `speedFps`/`offsetFrames` are baked into the staged clip, so a render
+  seeks `media.inSec + (t - startSec)`. The live preview bridges the original
+  bytes instead: its `media` keeps source-time `inSec`/`outSec` and adds
+  `timing: { rate, leadSec, startSec }` (only for a retimed shot), and the page
+  seeks `startSec + max(0, (t - scene.startSec) - leadSec) * rate`.
 - `song.json` — the same song block the code-rendered mode reads.
 - `media/scene-<sceneId>.<ext>` — each scene's selected take (its clip when
   it has one, else its still), named by `scenes[].media.src`.
@@ -482,7 +492,8 @@ its copies and the faces at the document root; a document's own copy is kept.
 Lines come from `PORTOS_MV.lyrics` with their aligned word times (or
 `options.lines`), and every timing is read from the song data. Each line gets
 one of four roles: `line` (default sung line: words rise and fade in on their
-onsets, the line drifts up and fades 0.3s after its last word), `hook` (wide
+onsets, the line drifts up and fades 0.3s after its last word ends, but never
+before that word has shown for 0.8s), `hook` (wide
 caps centred in the zone, each word slams in on its onset, one outline-only
 accent word with ink beneath its light outline, cut on the next beat),
 `stamp` (a three-frame stamp with a small tilt, optional strike-through) and `data` (mono HUD caption whose numbers roll;

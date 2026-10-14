@@ -57,10 +57,10 @@ import {
 import { getCudaCapability } from '../../lib/cudaCapability.js';
 import { inspectModelCache } from '../../lib/hfCache.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { stripMarkdownEmphasis } from '../../lib/markdownText.js';
 import { recommendMinimaxDurationSec } from '../../lib/musicDuration.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
+import { promptAddition } from '../../lib/modelInput.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -291,6 +291,8 @@ export const ENGINES = Object.freeze({
     // "runtime not found" 503.
     healthProbe: 'import torch; from transformers import AutoModel; from acestep.handler import AceStepHandler; from acestep.inference import GenerationConfig, GenerationParams, generate_music',
     lyrics: true,
+    // Keep the sidecar's required instrumental marker visible in the preview.
+    instrumentalLyrics: '[Instrumental]',
     customModels: false,
     fixedModelInstall: true,
   },
@@ -601,8 +603,43 @@ export function ensureClosingSection(lyrics) {
     .filter(Boolean)
     .at(-1);
   if (lastTag && MINIMAX_OUTRO_TAG.test(lastTag[1].trim())) return text;
-  const trimmed = text.replace(/\s+$/, '');
-  return trimmed ? `${trimmed}\n[outro]` : '[outro]';
+  return text ? `${text}\n[outro]` : '[outro]';
+}
+
+/** Resolve the same duration ceiling for preview, lyric composition and render. */
+function resolveMusicDuration({ engine: engineId = DEFAULT_ENGINE_ID, lyrics, durationSec, durationMode }) {
+  const engine = getEngine(engineId);
+  return durationMode === 'auto' && engine.autoDuration
+    ? recommendMinimaxDurationSec(lyrics, {
+      minDurationSec: engine.defaultDurationSec,
+      maxDurationSec: engine.maxDurationSec,
+    })
+    : durationSec ?? engine.defaultDurationSec;
+}
+
+/** Exact lyric-side input, shared by the studio preview, snapshot and sidecar. */
+export function composeMusicLyrics(input) {
+  const engine = getEngine(input.engine);
+  if (!engine.lyrics) return {};
+  const provided = typeof input.lyrics === 'string' ? input.lyrics : '';
+  const seconds = clampDuration(resolveMusicDuration(input), engine.id);
+  const fallback = typeof engine.instrumentalLyrics === 'function'
+    ? engine.instrumentalLyrics(seconds)
+    : (engine.instrumentalLyrics || '');
+  // A whitespace-only authored input remains intact; the required section
+  // sheet is appended as an inspectable addition instead of replacing it.
+  const fallbackAddition = !provided.trim() && fallback
+    ? promptAddition('instrumental-sections', 'Instrumental sections', fallback)
+    : null;
+  const sheet = fallbackAddition ? `${provided}${provided ? '\n' : ''}${fallbackAddition.text}` : provided;
+  const sentLyrics = engine.ensureOutro ? ensureClosingSection(sheet) : sheet;
+  const outroAddition = sentLyrics !== sheet
+    ? promptAddition('closing-section', 'Closing section', '[outro]')
+    : null;
+  return {
+    sentLyrics,
+    lyricAdditions: [fallbackAddition, outroAddition].filter(Boolean),
+  };
 }
 
 /**
@@ -623,29 +660,14 @@ export function buildSidecarArgs({ engineId = DEFAULT_ENGINE_ID, pythonPath, scr
     scriptPath ?? engine.scriptPath,
     '--model', repo,
     ...(engine.supportsModelRevision && revision ? ['--revision', revision] : []),
-    // Prompts are authored in a plain textarea that many users type markdown
-    // into out of habit. Every backend's text encoder tokenizes `**` and `_`
-    // as literal content, so the emphasis markers become conditioning noise —
-    // strip them and keep the words.
-    '--text', stripMarkdownEmphasis(prompt).trim(),
+    // Preserve the caption shown in the server's prompt preview.
+    '--text', prompt,
     '--duration', String(seconds),
     '--output', outputPath,
     '--runtime-dir', runtimeDir ?? engine.runtimeDir,
   ];
   if (engine.lyrics) {
-    // Preserve the caller's string when they supplied one; substitute only when
-    // it is absent or whitespace, and only for an engine that cannot accept
-    // empty lyrics (see instrumentalLyrics). The substitute may be a builder
-    // that sizes the sheet to the render length. `ensureOutro` engines may
-    // still append a closing section to either sheet below.
-    const provided = typeof lyrics === 'string' ? lyrics : '';
-    const fallback = typeof engine.instrumentalLyrics === 'function'
-      ? engine.instrumentalLyrics(seconds)
-      : (engine.instrumentalLyrics || '');
-    const sheet = provided.trim() ? provided : fallback;
-    // ensureOutro engines resolve on an end-token the draft may not cue —
-    // guarantee one on whatever sheet reaches the model, idempotently.
-    args.push('--lyrics', engine.ensureOutro ? ensureClosingSection(sheet) : sheet);
+    args.push('--lyrics', composeMusicLyrics({ engine: engine.id, lyrics, durationSec: seconds }).sentLyrics);
   }
   return { bin: pythonPath, args };
 }
@@ -684,8 +706,8 @@ export async function generateMusic(options = {}) {
 }
 
 async function generateMusicAdmitted({ prompt, lyrics, engine: engineId = DEFAULT_ENGINE_ID, durationSec, durationMode, modelId, repo, provenance, signal, onActivity }) {
-  const text = (prompt || '').trim();
-  if (!text) {
+  const text = prompt || '';
+  if (!text.trim()) {
     throw new ServerError('prompt is required', { status: 400, code: 'PIPELINE_MUSIC_EMPTY_PROMPT' });
   }
   const engine = getEngine(engineId);
@@ -698,12 +720,7 @@ async function generateMusicAdmitted({ prompt, lyrics, engine: engineId = DEFAUL
   const model = repo
     ? { id: modelId || repo, repo, name: modelId || repo }
     : shippedModel;
-  const resolvedDuration = durationMode === 'auto' && engine.autoDuration
-    ? recommendMinimaxDurationSec(lyrics, {
-      minDurationSec: engine.defaultDurationSec,
-      maxDurationSec: engine.maxDurationSec,
-    })
-    : durationSec ?? engine.defaultDurationSec;
+  const resolvedDuration = resolveMusicDuration({ engine: engine.id, lyrics, durationSec, durationMode });
   const pythonPath = engine.resolvePython();
   if (engine.cudaRequired) {
     const cuda = await getCudaCapability();

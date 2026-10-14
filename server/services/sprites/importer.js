@@ -23,8 +23,9 @@
  */
 
 import { join, basename, dirname } from 'path';
-import { readdir } from 'fs/promises';
+import { readdir, realpath } from 'fs/promises';
 import { PATHS, ensureDir, sha256File, atomicWrite, pathExists, readJSONFile, expandHome, copyFileGuarded, rmGuarded } from '../../lib/fileUtils.js';
+import { isWithinRoot } from '../../lib/workspaceRoots.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { upsertImportedRecord } from './records.js';
@@ -35,7 +36,6 @@ import {
   canonicalizeImportedRunPath,
   canonicalizeImportedRunPathValue,
   deepCanonicalizeImportedRunPaths,
-  resolveDriftTolerantRel,
   SOURCE_CLIP_NAME,
   toRecordRelativeAssetPath,
 } from './paths.js';
@@ -51,17 +51,57 @@ const PROP_FILE_EXTENSIONS = ['.png', '.md'];
 // as "nothing to import from this manifest."
 const readJson = (p) => readJSONFile(p, null, { logError: false });
 
+// The selected repository is the read boundary, including metadata and assets
+// reached through manifests. Check at use time and return the canonical path:
+// later copies must not follow the original (possibly redirected) symlink.
+// Missing optional artifacts retain their existing null/skip behavior.
+async function sourcePath(sourceRoot, candidate) {
+  const resolved = await realpath(candidate).catch((err) => {
+    if (err.code === 'ENOENT' || err.code === 'ENOTDIR') return null;
+    throw err;
+  });
+  // Both paths are realpath results. Do not fold case based on the OS: a
+  // case-sensitive volume may have a distinct sibling with the same spelling.
+  if (resolved && !isWithinRoot(resolved, sourceRoot)) {
+    throw new ServerError('Sprite import source path resolves outside the selected source root', {
+      status: 400, code: 'SOURCE_OUTSIDE_ROOT',
+    });
+  }
+  return resolved;
+}
+
+async function readSourceJson(sourceRoot, candidate) {
+  const checked = await sourcePath(sourceRoot, candidate);
+  return checked ? readJson(checked) : null;
+}
+
+async function copySourceFile(sourceRoot, candidate, dest) {
+  const checked = await sourcePath(sourceRoot, candidate);
+  if (!checked) return false;
+  await copyFileGuarded(checked, dest);
+  return true;
+}
+
+async function charSourcePath(sourceRoot, srcCharDir, rel) {
+  const direct = await sourcePath(sourceRoot, join(srcCharDir, rel));
+  if (direct) return direct;
+  const alt = altRunLayoutPath(rel);
+  return alt ? sourcePath(sourceRoot, join(srcCharDir, alt)) : null;
+}
+
 /**
  * Recursively copy `srcDir` into `destDir`, filtering by `shouldCopy(relPath,
  * isDir)`. Returns the list of copied file paths relative to destDir.
  */
-async function copyTree(srcDir, destDir, shouldCopy = () => true) {
+async function copyTree(sourceRoot, srcDir, destDir, shouldCopy = () => true) {
   const copied = [];
   const ensuredDirs = new Set();
   async function walk(current, rel) {
+    const checked = await sourcePath(sourceRoot, current);
+    if (!checked) return;
     let entries;
     try {
-      entries = await readdir(current, { withFileTypes: true });
+      entries = await readdir(checked, { withFileTypes: true });
     } catch {
       return;
     }
@@ -79,8 +119,7 @@ async function copyTree(srcDir, destDir, shouldCopy = () => true) {
           await ensureDir(parent);
           ensuredDirs.add(parent);
         }
-        await copyFileGuarded(srcPath, destPath);
-        copied.push(entryRel);
+        if (await copySourceFile(sourceRoot, srcPath, destPath)) copied.push(entryRel);
       }
     }
   }
@@ -221,25 +260,24 @@ function collectManifestRefs(node, characterId, refs, expectations) {
 // `grok/<run-id>/`. Read-then-fall-back rather than probe-then-read: readJson
 // already collapses a missing/corrupt file to null, so the twin costs a
 // syscall only when the declared path really isn't there.
-async function readCharJson(srcCharDir, rel) {
-  const direct = await readJson(join(srcCharDir, rel));
+async function readCharJson(sourceRoot, srcCharDir, rel) {
+  const direct = await readSourceJson(sourceRoot, join(srcCharDir, rel));
   if (direct) return direct;
   const alt = altRunLayoutPath(rel);
-  return alt ? readJson(join(srcCharDir, alt)) : null;
+  return alt ? readSourceJson(sourceRoot, join(srcCharDir, alt)) : null;
 }
 
 // Copy one character-dir file into PortOS's neutral imported-run layout. The
 // source lookup remains drift-tolerant, while every local write maps a legacy
 // `grok/` run prefix to `runs/` so a re-import cannot recreate the residue
 // migration 203 healed on earlier installs.
-async function copyCharFile(srcCharDir, destDir, rel) {
-  const srcRel = await resolveDriftTolerantRel(srcCharDir, rel);
-  if (!srcRel) return null;
+async function copyCharFile(sourceRoot, srcCharDir, destDir, rel) {
+  const src = await charSourcePath(sourceRoot, srcCharDir, rel);
+  if (!src) return null;
   const destRel = canonicalizeImportedRunPath(rel);
   const dest = join(destDir, destRel);
   await ensureDir(dirname(dest));
-  await copyFileGuarded(join(srcCharDir, srcRel), dest);
-  return destRel;
+  return await copySourceFile(sourceRoot, src, dest) ? destRel : null;
 }
 
 // Recursively collect JSON manifests in one imported tree. A missing optional
@@ -333,13 +371,13 @@ async function normalizeImportedRunLayout(destDir, characterId) {
  * strips at the version root, surrounded by unselected candidates that must
  * stay behind).
  */
-async function importApprovedDirection({ srcCharDir, destDir, characterId, direction, dir, result, hashExpectations, copiedThisRun }) {
+async function importApprovedDirection({ sourceRoot, srcCharDir, destDir, characterId, direction, dir, result, hashExpectations, copiedThisRun }) {
   const manifestRel = canonicalizeImportedRunPath(relToCharacterDir(dir.runManifest, characterId));
   if (!manifestRel) {
     result.errors.push(`walk set ${direction}: unsafe run path rejected: ${dir.runManifest || dir.runPath}`);
     return;
   }
-  const copiedManifestRel = await copyCharFile(srcCharDir, destDir, manifestRel);
+  const copiedManifestRel = await copyCharFile(sourceRoot, srcCharDir, destDir, manifestRel);
   if (!copiedManifestRel) {
     result.errors.push(`walk set ${direction}: run manifest missing: ${manifestRel}`);
     return;
@@ -354,13 +392,13 @@ async function importApprovedDirection({ srcCharDir, destDir, characterId, direc
   // expand their manifests.
   collectManifestRefs(await readJson(join(destDir, copiedManifestRel)), characterId, refs, hashExpectations);
   const runRel = canonicalizeImportedRunPath(relToCharacterDir(dir.runPath, characterId));
-  if (runRel && (await resolveDriftTolerantRel(srcCharDir, `${runRel}/generated/review-preview.json`))) {
+  if (runRel && (await charSourcePath(sourceRoot, srcCharDir, `${runRel}/generated/review-preview.json`))) {
     refs.add(`${runRel}/generated/review-preview.json`);
   }
   // One extra expansion level: packaged manifests / previews the run record
   // names in turn declare the strip files (and their hash pins).
   for (const rel of [...refs]) {
-    if (rel.endsWith('.json')) collectManifestRefs(await readCharJson(srcCharDir, rel), characterId, refs, hashExpectations);
+    if (rel.endsWith('.json')) collectManifestRefs(await readCharJson(sourceRoot, srcCharDir, rel), characterId, refs, hashExpectations);
   }
   // The source clip (#2984) — a fallback for a run whose manifests never name
   // it, since a direction with no clip can never be re-derived at a different
@@ -373,12 +411,12 @@ async function importApprovedDirection({ srcCharDir, destDir, characterId, direc
   // layout — that path is already in `refs` and denotes the same file.
   const clipRel = runRel && `${runRel}/generated/${SOURCE_CLIP_NAME}`;
   if (clipRel && RUN_DIR_MATCH.test(runRel) && !refs.has(clipRel) && !refs.has(altRunLayoutPath(clipRel))
-      && (await resolveDriftTolerantRel(srcCharDir, clipRel))) {
+      && (await charSourcePath(sourceRoot, srcCharDir, clipRel))) {
     refs.add(clipRel);
   }
   refs.delete(manifestRel);
   for (const rel of [...refs].sort()) {
-    if (await copyCharFile(srcCharDir, destDir, rel)) {
+    if (await copyCharFile(sourceRoot, srcCharDir, destDir, rel)) {
       result.files += 1;
       copiedThisRun.add(rel);
     } else {
@@ -406,7 +444,10 @@ async function importCharacter({ sourceRoot, characterId, spec, specPath, select
   await ensureDir(destDir);
 
   // Character spec — verbatim copy for provenance alongside the record.
-  await copyFileGuarded(specPath, join(destDir, 'character-spec.json'));
+  if (!await copySourceFile(sourceRoot, specPath, join(destDir, 'character-spec.json'))) {
+    result.errors.push('character spec missing from source');
+    return result;
+  }
   result.files += 1;
 
   const hashExpectations = [];
@@ -416,8 +457,9 @@ async function importCharacter({ sourceRoot, characterId, spec, specPath, select
   const copiedThisRun = new Set(['character-spec.json']);
 
   // reference/ — locked main + anchors; candidates/ (unapproved) stay behind.
-  if (await pathExists(join(srcCharDir, 'reference'))) {
+  if (await sourcePath(sourceRoot, join(srcCharDir, 'reference'))) {
     const copied = await copyTree(
+      sourceRoot,
       join(srcCharDir, 'reference'),
       join(destDir, 'reference'),
       (rel, isDir) => !(isDir && basename(rel) === 'candidates') && !rel.includes('candidates/'),
@@ -438,8 +480,8 @@ async function importCharacter({ sourceRoot, characterId, spec, specPath, select
   // but ASSETS import only for APPROVED directions of a FINALIZED set. Draft
   // selections / publication records / pending directions contribute nothing.
   const walkDir = join(srcCharDir, 'walk');
-  if (await pathExists(walkDir)) {
-    const copied = await copyTree(walkDir, join(destDir, 'walk'));
+  if (await sourcePath(sourceRoot, walkDir)) {
+    const copied = await copyTree(sourceRoot, walkDir, join(destDir, 'walk'));
     result.files += copied.length;
     for (const rel of copied) copiedThisRun.add(`walk/${rel}`);
     for (const rel of copied) {
@@ -455,7 +497,7 @@ async function importCharacter({ sourceRoot, characterId, spec, specPath, select
       collectManifestRefs(walkSetMeta, characterId, metaRefs, hashExpectations);
       for (const metaRel of [...metaRefs].sort()) {
         if (copiedThisRun.has(metaRel)) continue;
-        if (await copyCharFile(srcCharDir, destDir, metaRel)) {
+        if (await copyCharFile(sourceRoot, srcCharDir, destDir, metaRel)) {
           result.files += 1;
           copiedThisRun.add(metaRel);
         } else result.errors.push(`walk set: referenced file missing: ${metaRel}`);
@@ -465,7 +507,7 @@ async function importCharacter({ sourceRoot, characterId, spec, specPath, select
           result.errors.push(`walk set ${direction}: not approved (${dir?.status ?? 'missing'}) — skipped`);
           continue;
         }
-        await importApprovedDirection({ srcCharDir, destDir, characterId, direction, dir, result, hashExpectations, copiedThisRun });
+        await importApprovedDirection({ sourceRoot, srcCharDir, destDir, characterId, direction, dir, result, hashExpectations, copiedThisRun });
       }
     }
   }
@@ -473,8 +515,8 @@ async function importCharacter({ sourceRoot, characterId, spec, specPath, select
   // runtime/ — immutable published atlas archives. (No wholesale imagegen/
   // copy: approved redraw outputs arrive via the walk-set expansion above;
   // the rest of imagegen/ is unselected candidates and raw intermediates.)
-  if (await pathExists(join(srcCharDir, 'runtime'))) {
-    const copied = await copyTree(join(srcCharDir, 'runtime'), join(destDir, 'runtime'));
+  if (await sourcePath(sourceRoot, join(srcCharDir, 'runtime'))) {
+    const copied = await copyTree(sourceRoot, join(srcCharDir, 'runtime'), join(destDir, 'runtime'));
     result.files += copied.length;
     for (const rel of copied) copiedThisRun.add(`runtime/${rel}`);
   }
@@ -489,7 +531,7 @@ async function importCharacter({ sourceRoot, characterId, spec, specPath, select
     collectManifestRefs(selection.selected, characterId, selRefs, hashExpectations);
     for (const rel of [...selRefs].sort()) {
       if (copiedThisRun.has(rel)) continue;
-      if (await copyCharFile(srcCharDir, destDir, rel)) {
+      if (await copyCharFile(sourceRoot, srcCharDir, destDir, rel)) {
         result.files += 1;
         copiedThisRun.add(rel);
       } else result.errors.push(`published selection: referenced asset missing: ${rel}`);
@@ -516,7 +558,7 @@ async function importCharacter({ sourceRoot, characterId, spec, specPath, select
 async function importPropsFamily({ sourceRoot, familyId, srcFamilyDir }) {
   const result = { id: familyId, kind: 'props', files: 0, verified: 0, errors: [] };
   const destDir = join(spriteDir(familyId), 'atlas');
-  const copied = await copyTree(srcFamilyDir, destDir, (rel, isDir) => {
+  const copied = await copyTree(sourceRoot, srcFamilyDir, destDir, (rel, isDir) => {
     if (isDir) return true;
     const lower = rel.toLowerCase();
     return PROP_FILE_EXTENSIONS.some((ext) => lower.endsWith(ext));
@@ -548,12 +590,13 @@ async function importPropsFamily({ sourceRoot, familyId, srcFamilyDir }) {
 export async function importFromSource({ sourceRoot, characters, includeProps = true }) {
   // The UI placeholder suggests a ~/… path; resolve it before probing, or a
   // correct tilde path 400s with a misleading "not a sprite pipeline".
-  sourceRoot = expandHome(sourceRoot);
-  const specsDir = join(sourceRoot, 'art-pipeline', 'characters');
-  const propsDir = join(sourceRoot, 'game', 'assets', 'sprites');
-  const hasSpecs = await pathExists(specsDir);
-  const hasProps = await pathExists(propsDir);
-  if (!hasSpecs && !hasProps) {
+  sourceRoot = await realpath(expandHome(sourceRoot)).catch((err) => {
+    if (err.code === 'ENOENT' || err.code === 'ENOTDIR') return null;
+    throw err;
+  });
+  const specsDir = sourceRoot && await sourcePath(sourceRoot, join(sourceRoot, 'art-pipeline', 'characters'));
+  const propsDir = sourceRoot && await sourcePath(sourceRoot, join(sourceRoot, 'game', 'assets', 'sprites'));
+  if (!specsDir && !propsDir) {
     throw new ServerError(
       'Source root does not look like a sprite pipeline (expected art-pipeline/characters/ or game/assets/sprites/)',
       { status: 400, code: 'INVALID_SOURCE_ROOT' },
@@ -563,7 +606,7 @@ export async function importFromSource({ sourceRoot, characters, includeProps = 
   await ensureDir(PATHS.sprites);
   // Read the published-selection pointer up front so the matching character's
   // import can verify the hash-pinned runtime artifacts it declares.
-  const selection = await readJson(join(sourceRoot, 'art-pipeline', 'catalog', 'runtime-selection.json'));
+  const selection = await readSourceJson(sourceRoot, join(sourceRoot, 'art-pipeline', 'catalog', 'runtime-selection.json'));
   const results = [];
   // Ids imported THIS run (drives the runtime-selection provenance copy) vs
   // every character id the specs dir declares (drives the props-loop skip). A
@@ -573,12 +616,12 @@ export async function importFromSource({ sourceRoot, characters, includeProps = 
   const characterIds = new Set();
   const allSpecCharacterIds = new Set();
 
-  if (hasSpecs) {
+  if (specsDir) {
     const wanted = Array.isArray(characters) && characters.length ? new Set(characters) : null;
     for (const entry of (await readdir(specsDir)).sort()) {
       if (!entry.endsWith('.json')) continue;
       const specPath = join(specsDir, entry);
-      const spec = await readJson(specPath);
+      const spec = await readSourceJson(sourceRoot, specPath);
       // A real character spec carries characterId; sibling files in the specs
       // dir (JSON-schema definitions, templates) don't and are not subjects.
       if (!spec?.characterId) continue;
@@ -596,7 +639,7 @@ export async function importFromSource({ sourceRoot, characters, includeProps = 
     }
   }
 
-  if (hasProps && includeProps) {
+  if (propsDir && includeProps) {
     for (const entry of (await readdir(propsDir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
       if (!entry.isDirectory()) continue;
       // A character's published atlas dir duplicates what runtime/ archives —

@@ -12,7 +12,7 @@
  */
 
 import { ServerError } from '../lib/errorHandler.js';
-import { ENGINES, getEngine } from './pipeline/musicGen.js';
+import { ENGINES, getEngine, composeMusicLyrics } from './pipeline/musicGen.js';
 import { listEngineModels } from './audioModels.js';
 import {
   FEDERATED_MEDIA_WIRE_VERSION,
@@ -23,8 +23,20 @@ import { enqueueJob, listJobs } from './mediaJobQueue/index.js';
 import { resolveFederatedMediaProvider } from './federatedMediaConsumer.js';
 import { getPeers } from './instances.js';
 import * as tracks from './tracks/index.js';
+import { promptAddition, sentPromptRecord } from '../lib/modelInput.js';
 
 const INSTRUMENTAL_ONLY_GUIDANCE = 'Instrumental only. Do not include sung, spoken, chanted, choir, or background vocals. Carry the lead melody with the described instruments or textures.';
+
+/** The local audio caption, shared by preview and enqueue. Lyrics are separate. */
+export function composeMusicPrompt({ prompt, instrumentalOnly = false }) {
+  const addition = instrumentalOnly && !prompt.includes(INSTRUMENTAL_ONLY_GUIDANCE)
+    ? promptAddition('instrumental-only', 'Instrumental only', INSTRUMENTAL_ONLY_GUIDANCE)
+    : null;
+  return sentPromptRecord({
+    sentPrompt: addition ? `${prompt}\n\n${addition.text}` : prompt,
+    added: [addition],
+  });
+}
 
 /** Queue one audio render. Resolves to `{ jobId, position, status }`. */
 export async function queueMusicGeneration(input) {
@@ -161,10 +173,10 @@ export async function queueMusicGeneration(input) {
   // dropping lyrics is not enough when the authored caption itself mentions a
   // vocalist. Keep it idempotent so remixing an instrumental take does not append
   // the same directive repeatedly.
-  const usedPrompt = body.instrumentalOnly && !body.prompt.includes(INSTRUMENTAL_ONLY_GUIDANCE)
-    ? `${body.prompt}\n\n${INSTRUMENTAL_ONLY_GUIDANCE}`
-    : body.prompt;
+  const promptRecord = composeMusicPrompt(body);
+  const usedPrompt = promptRecord.sentPrompt;
   const usedLyrics = engine.lyrics && !body.instrumentalOnly ? (body.lyrics ?? '') : '';
+  const lyricRecord = !remoteMedia ? composeMusicLyrics({ ...body, engine: engine.id, lyrics: usedLyrics }) : {};
   if (remoteMedia) {
     // Lyrics ride the marker, not the top-level params, for the same reason the
     // profile does: `params.lyrics` stays blank so a build rolled back past
@@ -205,6 +217,7 @@ export async function queueMusicGeneration(input) {
         // Keep editable source text distinct from the augmented prompt and
         // empty lyric payload that actually condition an instrumental render.
         authoredPrompt: body.prompt,
+        ...(!remoteMedia ? { ...promptRecord, ...lyricRecord } : {}),
         authoredLyrics: engine.lyrics === true ? body.lyrics : undefined,
         lyricsEnabled: engine.lyrics === true,
         lyricsProvided: engine.lyrics === true && body.lyrics !== undefined,

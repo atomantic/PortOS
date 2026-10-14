@@ -46,6 +46,15 @@ beforeEach(reset);
 afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
 
 describe('tracks file backend — CRUD', () => {
+  it('preserves authored concept, description and lyrics across draft save/read', async () => {
+    const authored = { concept: '  Paper moons\n ', prompt: ' \nSoft piano\t ', lyrics: '  [verse]\nKeep the spaces\n  ' };
+    const created = await file.createTrack({ title: 'Fictional draft', ...authored });
+    expect(await file.getTrack(created.id)).toMatchObject(authored);
+    const edited = { concept: ' \nNew concept\t ', prompt: '  New arrangement\n ' };
+    await file.updateTrack(created.id, edited);
+    expect(await file.getTrack(created.id)).toMatchObject({ ...authored, ...edited });
+  });
+
   it('creates, reads, updates and soft-deletes a track', async () => {
     const created = await file.createTrack({ title: 'Intro', audioFilename: 'music-1.mp3' });
     expect(created.id).toMatch(/^track-/);

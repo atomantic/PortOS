@@ -82,9 +82,11 @@ import usePreviewRoute from '../hooks/usePreviewRoute';
 import useMediaPreviewActions from '../hooks/useMediaPreviewActions';
 import { useVideoGenForm } from '../hooks/useVideoGenForm.js';
 import { useFederatedMediaTarget } from '../hooks/useFederatedMediaTarget';
+import { useModelInputPreview } from '../hooks/useModelInputPreview';
+import ModelInputPreview from '../components/media/ModelInputPreview';
 import RemoteMediaTargetPicker from '../components/federatedMedia/RemoteMediaTargetPicker';
 import {
-  getVideoGenStatus, getVideoGenModelContext, generateVideo, cancelVideoGen,
+  getVideoGenStatus, getVideoGenModelContext, generateVideo, cancelVideoGen, previewVideoPrompt,
   listVideoHistory, deleteVideoHistoryItem, setVideoHidden,
   patchSettingsSlice,
   getActiveVideoJob,
@@ -104,6 +106,8 @@ import { REACTOR_MAX_PROMPT_LENGTH } from '../lib/reactorVideoClip.js';
 import { videoGenEnqueuePolicy } from '../lib/videoGenEnqueuePolicy.js';
 import { styledVideoPrompt } from '../lib/videoGenSubmission.js';
 import ReactorPanel from '../components/videoGen/ReactorPanel';
+import MusicVideoFilingSelect from '../components/media/MusicVideoFilingSelect';
+import { MUSIC_VIDEO_FILING_PARAM, musicVideoFilingFields, musicVideoOf } from '../lib/musicVideoFiling';
 import { formatCount, formatUsd, timeAgo } from '../utils/formatters';
 import ResolutionField from '../components/media/ResolutionField';
 import { VIDEO_EDGE_BOUNDS, videoEdgeBoundsForModel, IC_LORA_MODES } from '../lib/videoGenParams.js';
@@ -469,6 +473,11 @@ export default function VideoGen() {
   const handleUpscaleHistory = useCallback((item) => {
     setUpscaleItem(item?.raw || item);
   }, []);
+  // A start trim is a new clip: list it first and open it in place of the source.
+  const handleTrimmed = useCallback((video) => {
+    setHistory((h) => [video, ...h]);
+    setPreview(normalizeVideo(video));
+  }, [setPreview]);
   const handleUpscaled = useCallback((video) => {
     setHistory((h) => [video, ...h]);
   }, []);
@@ -479,8 +488,11 @@ export default function VideoGen() {
     const raw = item?.raw || item;
     if (!raw) return;
     applyRemix(raw);
+    // A clip made for a music video keeps its remix in that video's collection.
+    const projectId = musicVideoOf(raw);
+    if (projectId) setSearchParams((prev) => { const n = new URLSearchParams(prev); n.set(MUSIC_VIDEO_FILING_PARAM, projectId); return n; }, { replace: true });
     window.scrollTo({ top: 0, behavior: 'smooth' });
-  }, [applyRemix]);
+  }, [applyRemix, setSearchParams]);
 
   // Cross-page Remix (#6290). Media History (and every other MediaPreview
   // surface) hands this page a RECORD ID rather than a render-settings bundle,
@@ -867,6 +879,18 @@ export default function VideoGen() {
     });
   };
 
+  // The form's request plus the music video it is filed under, if one is picked.
+  const generatePayload = () => ({ ...buildGeneratePayload(), ...musicVideoFilingFields(searchParams) });
+
+  // The same request as Generate, each upload named instead of attached (#11317).
+  const previewBody = (() => {
+    const payload = generatePayload();
+    const previewUploads = Object.keys(payload).filter((key) => payload[key] instanceof Blob);
+    const fields = Object.fromEntries(Object.entries(payload).filter(([, value]) => !(value instanceof Blob)));
+    return previewUploads.length ? { ...fields, previewUploads } : fields;
+  })();
+  const modelInputPreview = useModelInputPreview(previewVideoPrompt, previewBody, { enabled: prompt.trim().length > 0 });
+
   const handleGenerate = async (e) => {
     e?.preventDefault?.();
     if (generating) {
@@ -878,7 +902,7 @@ export default function VideoGen() {
     // be pointing at a lapsed peer — re-derive at the moment of commit and say
     // so, rather than letting the peer reject a render already paid for.
     if (!verifyRemoteTarget()) return;
-    await runGeneration(buildGeneratePayload()).catch(() => {});
+    await runGeneration(generatePayload()).catch(() => {});
   };
 
   const verifyRemoteTarget = () => {
@@ -899,7 +923,7 @@ export default function VideoGen() {
     // including any multipart uploads, and the appropriate lane can start it
     // without waiting for this tab's active SSE render.
     if (!verifyRemoteTarget()) return;
-    await generateVideo(buildGeneratePayload())
+    await generateVideo(generatePayload())
       .then((data) => {
         const position = Number.isInteger(data?.position) ? ` (position ${data.position})` : '';
         toast.success(`Queued${position}`);
@@ -1258,6 +1282,9 @@ export default function VideoGen() {
                 Reactor will reject this — shorten the prompt. Style presets count toward the limit.
               </p>
             )}
+            <div className="mt-2">
+              <ModelInputPreview preview={modelInputPreview} prompt={prompt} />
+            </div>
             {!negativePromptSupported && !isFal && !isReactor && (
               <p className="mt-1 text-[11px] text-gray-500 leading-snug">
                 This model does not use a negative prompt.
@@ -1805,6 +1832,8 @@ export default function VideoGen() {
               default — see ImageGenTab's videoGenDisplaySleep) — a GPU-watchdog
               crash on this model is rare enough that most renders shouldn't pay for
               the mitigation, but the option needs to be one click away right here. */}
+          <MusicVideoFilingSelect id="video-gen-music-video" disabled={generating} />
+
           {canSleepDisplay && (
             <label htmlFor="video-gen-display-sleep" className="flex items-start gap-2 text-xs text-gray-400 cursor-pointer">
               <input
@@ -1872,6 +1901,7 @@ export default function VideoGen() {
         onPromptSaved={handlePromptSaved}
         onContinue={handleContinue}
         onRemix={(item) => item?.raw && handleRemixVideo(item.raw)}
+        onTrimmed={handleTrimmed}
       />
 
       <GalleryImagePicker

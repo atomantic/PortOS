@@ -35,6 +35,8 @@ describe('BoardStage scene filter', () => {
   it('writes the filter to the URL and removes it for All', () => {
     renderBoard(board(scenes));
     expect(screen.getByText('Shot 1 · Part 1')).toBeTruthy();
+    // Each card reads its run time beside where it sits in the song.
+    expect(screen.getAllByText('3.00s ·')[0].parentElement.textContent).toBe('3.00s · 0:00.00–0:03.00');
     fireEvent.click(screen.getByRole('button', { name: 'Needs attention (1)' }));
     expect(screen.getByTestId('search').textContent).toBe('?scenes=attention');
     expect(screen.queryByText('Shot 1 · Part 1')).toBeNull();
@@ -51,6 +53,17 @@ describe('BoardStage scene filter', () => {
     renderBoard(second);
     fireEvent.keyDown(window, { key: 'k' });
     expect(second.onToggleSceneExpand).toHaveBeenLastCalledWith('s1', true);
+  });
+
+  it('the open card steps to the neighboring shots in song order, past the filter', () => {
+    // Listed out of song order, and shot 2 has its clip so ?scenes=missing hides it.
+    const shuffled = [scene(3), scene(1), scene(2)];
+    const b = board(shuffled, { activeSceneId: 's1', seekToScene: vi.fn() });
+    renderBoard(b, '/?scenes=missing');
+    expect(screen.getByRole('button', { name: 'Previous shot' }).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Next shot' }));
+    expect(b.seekToScene).toHaveBeenLastCalledWith(expect.objectContaining({ sceneId: 's2' }));
+    expect(b.onToggleSceneExpand).toHaveBeenLastCalledWith('s2', true);
   });
 });
 

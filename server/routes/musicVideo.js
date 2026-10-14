@@ -12,10 +12,10 @@ import { existsSync } from 'fs';
 import { unlink } from 'fs/promises';
 import { pipeline } from 'stream/promises';
 import { Router } from 'express';
-import { musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoShotLockSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoContinueShotSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
+import { musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoShotLockSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoContinueShotSchema, musicVideoPoolUseSchema, musicVideoPoolMarkSchema, musicVideoPoolDeleteSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoLyricAnchorSyncSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
 import { productionReadiness } from '../services/musicVideo/productionReview.js';
 import { finishedOutsideBlocker } from '../lib/musicVideoFinishedOutside.js';
-import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, lockProductionShots, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, reviseProductionFromFeedback, revertProductionInput } from '../services/musicVideo/productionReviewService.js';
+import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, lockProductionShots, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, syncLyricAnchors, reviseProductionFromFeedback, revertProductionInput } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   validateRequest,
@@ -28,6 +28,7 @@ import {
   musicVideoSceneUpdateSchema,
   musicVideoSceneReorderSchema,
   musicVideoSceneSplitSchema,
+  musicVideoSceneStartSchema,
   musicVideoPlanRequestSchema,
   musicVideoManualAnalysisSchema,
   musicVideoTranscribeMidiRequestSchema,
@@ -111,11 +112,16 @@ import {
   reorderProjectScenes,
   splitProjectScene,
   mergeProjectNextScene,
+  moveProjectSceneStart,
   setProjectMidiTranscription,
   appendSceneTakes,
   appendTakesAcrossScenes,
   selectSceneTake,
+  placeMediaPoolItem,
+  markMediaPoolAssets,
   reviewSceneTake,
+  rejectUnusedSceneTakes,
+  swapProjectSceneFrames,
   refreshSongStyleFromSuno,
 } from '../services/musicVideo/projects.js';
 import { buildHandoffManifest, buildHandoffBundle, matchSceneByFileTag } from '../services/musicVideo/handoff.js';
@@ -725,6 +731,9 @@ router.post('/:id/production-review/feedback/resolve', asyncHandler(async (req, 
   const input = validateRequest(musicVideoProductionFeedbackResolutionSchema, req.body);
   const reviewer = await requireProductionReviewer(req);
   res.json(await closeProductionFeedback(req.params.id, { feedbackId: input.feedbackId, resolution: input.resolution, reviewer }));
+}));
+router.post('/:id/production-review/lyric-anchors', asyncHandler(async (req, res) => {
+  res.json(await syncLyricAnchors(req.params.id, validateRequest(musicVideoLyricAnchorSyncSchema, req.body ?? {})));
 }));
 // An explicit click: the only provider call is the stage's own revision.
 router.post('/:id/production-review/revise', asyncHandler(async (req, res) => {
@@ -1501,6 +1510,12 @@ router.post('/:id/scenes/:sceneId/merge-next', asyncHandler(async (req, res) => 
   res.json(await mergeProjectNextScene(req.params.id, req.params.sceneId, { backend }));
 }));
 
+// Move a shot's start; the shot before it ends at the same time, so the cut between them moves.
+router.post('/:id/scenes/:sceneId/start', asyncHandler(async (req, res) => {
+  const { startSec } = validateRequest(musicVideoSceneStartSchema, req.body ?? {});
+  res.json(await moveProjectSceneStart(req.params.id, req.params.sceneId, { startSec }));
+}));
+
 // --- Scene takes (#8965) ---
 // Every render or import for a scene slot is kept as an immutable take; the
 // slot field is the director's explicit selection among them. A take's asset
@@ -1535,8 +1550,59 @@ router.post('/:id/scenes/:sceneId/continue-from-previous', asyncHandler(async (r
   res.json(await continueFromPreviousShot(req.params.id, req.params.sceneId, { keepStillAsEnd }));
 }));
 
+// Every still and clip generated for this video, each naming the shots using it now (the shot card's Swap picker).
+router.get('/:id/media-pool', asyncHandler(async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const { getMusicVideoMediaPool } = await import('../services/musicVideo/mediaPool.js');
+  res.json(await getMusicVideoMediaPool(project));
+}));
+
+// The cutting room floor outro's tally: what was made, kept and turned down for this video.
+router.get('/:id/stats-outro', asyncHandler(async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const { getMusicVideoOutroStats } = await import('../services/musicVideo/statsOutro.js');
+  res.json({ stats: await getMusicVideoOutroStats(project) });
+}));
+
+// The asset manager: mark unused stills and clips ★ ingredient / ✕ bad, or delete them from the library.
+router.patch('/:id/media-pool/marks', asyncHandler(async (req, res) => {
+  const { items, mark } = validateRequest(musicVideoPoolMarkSchema, req.body);
+  res.json({ assetMarks: await markMediaPoolAssets(req.params.id, items.map((item) => `${item.kind}:${item.assetId}`), mark) });
+}));
+
+router.post('/:id/media-pool/delete', asyncHandler(async (req, res) => {
+  const { items } = validateRequest(musicVideoPoolDeleteSchema, req.body);
+  const project = await getProject(req.params.id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const { deleteMusicVideoPoolAssets } = await import('../services/musicVideo/mediaPool.js');
+  res.json(await deleteMusicVideoPoolAssets(project, items));
+}));
+
+router.post('/:id/scenes/:sceneId/takes/use', asyncHandler(async (req, res) => {
+  const { kind, assetId, withAssetId } = validateRequest(musicVideoPoolUseSchema, req.body);
+  const otherKind = kind === 'video' ? 'image' : 'video';
+  for (const [assetKind, id] of [[kind, assetId], [otherKind, withAssetId]]) {
+    if (id && !(await takeAssetExists(assetKind, id))) {
+      throw new ServerError(`${assetKind === 'video' ? 'Video' : 'Image'} not found in this install's media library`, { status: 400, code: 'TAKE_ASSET_NOT_FOUND' });
+    }
+  }
+  res.json({ scene: await placeMediaPoolItem(req.params.id, req.params.sceneId, { kind, assetId, withAssetId }) });
+}));
+
 router.post('/:id/scenes/:sceneId/takes/:takeId/select', asyncHandler(async (req, res) => {
   res.json(await selectSceneTake(req.params.id, req.params.sceneId, req.params.takeId));
+}));
+
+// No body: marks the shot's unselected takes rejected, keeping their files.
+router.post('/:id/scenes/:sceneId/takes/reject-unused', asyncHandler(async (req, res) => {
+  res.json(await rejectUnusedSceneTakes(req.params.id, req.params.sceneId));
+}));
+
+// No body: the shot's start frame becomes its end frame and the end frame its start, prompts included.
+router.post('/:id/scenes/:sceneId/swap-frames', asyncHandler(async (req, res) => {
+  res.json(await swapProjectSceneFrames(req.params.id, req.params.sceneId));
 }));
 
 router.patch('/:id/scenes/:sceneId/takes/:takeId', asyncHandler(async (req, res) => {

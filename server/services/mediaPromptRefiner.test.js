@@ -87,6 +87,14 @@ describe('mediaPromptRefiner', () => {
       providerId: 'openai',
       model: 'gpt-test',
     }));
+    // Uniquely catches the policy clause or the instructions reaching the LLM
+    // without being listed beside the user's words (#11317).
+    expect(result.sentPrompt.startsWith('## Creative latitude (operator policy)')).toBe(true);
+    expect(result.sentPrompt).toContain('more modern animated series');
+    expect(result.promptAdditions.map((item) => item.label)).toEqual(['Creative latitude (operator policy)', 'Refine instructions']);
+    expect(result.promptAdditions[1].text).toContain('[your feedback]');
+    expect(result.promptAdditions[1].text).not.toContain('more modern animated series');
+    expect(JSON.stringify(runner.executeApiRun.mock.calls[0][0])).toContain('Creative latitude (operator policy)');
   });
 
   it('runs refinement through CLI providers without requiring a model', async () => {

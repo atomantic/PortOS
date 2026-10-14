@@ -14,12 +14,12 @@
 import { ServerError } from '../../lib/errorHandler.js';
 import { QUEUEABLE_IMAGE_MODES } from '../../lib/generationModes.js';
 import { isNonBlankStr } from '../../lib/textUtils.js';
+import { promptAddition } from '../../lib/modelInput.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
 import * as store from './db.js';
 
 export const MOOD_BOARD_RENDER_TAG = 'moodBoardRender';
 const RENDER_SIZE = Object.freeze({ width: 1024, height: 1024 });
-const PROMPT_MAX = 8000;
 
 // Overridable for tests (queue, settings and socket are process singletons).
 const deps = {
@@ -33,20 +33,28 @@ const deps = {
 };
 export const __setDepsForTests = (overrides) => Object.assign(deps, overrides);
 
-/** The image prompt for a note: its words, then the board's composed look. */
+/**
+ * The image prompt for a note: its words, then the board's composed look, sent
+ * whole, with each block PortOS adds listed as a labeled addition (#11317).
+ */
 function buildItemRenderPrompt(board, item) {
   const text = String(item?.text || '').trim();
   const style = isNonBlankStr(board?.style?.prompt) ? board.style.prompt.trim() : '';
   const subject = `Mood board reference image: ${text}`;
-  return (style ? `${subject}\n\nVisual style: ${style}` : subject).slice(0, PROMPT_MAX);
+  return {
+    prompt: style ? `${subject}\n\nVisual style: ${style}` : subject,
+    promptAdditions: [
+      promptAddition('mood-board-note', 'Mood board reference', 'Mood board reference image: [note]'),
+      promptAddition('board-style', 'Board style', style && `Visual style: ${style}`),
+    ].filter(Boolean),
+  };
 }
 
 /** Job params for the chosen backend: a cloud provider bag, or the local model. */
 async function itemRenderParams(settings, { mode = null, model = null, target = null }, common) {
-  const [{ resolveRenderTargetConfig }, { resolveImageCleaners }, { resolveLocalImageModel }] = await Promise.all([
+  const [{ resolveRenderTargetConfig }, { resolveImageCleaners }] = await Promise.all([
     import('../imageGen/cloudProviderConfig.js'),
     import('../../lib/imageCleanDefaults.js'),
-    import('../imageGen/prepareParams.js'),
   ]);
   const resolved = resolveRenderTargetConfig(settings, target, { mode, model, usableInstallFallback: true });
   if ((mode && resolved.mode !== mode) || !QUEUEABLE_IMAGE_MODES.includes(resolved.mode)) {
@@ -57,8 +65,14 @@ async function itemRenderParams(settings, { mode = null, model = null, target = 
   if (resolved.cloud && !resolved.cloud.enabled) throw resolved.cloud.disabledError;
   const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, resolved.mode);
   if (resolved.cloud) return { ...resolved.cloud.jobParams, ...common, cleanC2PA, denoise };
+  const { resolveLocalImageModel } = await import('../imageGen/prepareParams.js');
   const { pythonPath, selectedModel } = resolveLocalImageModel(settings, { modelId: model || undefined });
   return { ...common, cleanC2PA, denoise, pythonPath, ...(selectedModel?.id ? { modelId: selectedModel.id } : {}) };
+}
+
+// Also used before prompt writing, so a disabled renderer never spends an LLM run.
+export async function prepareBoardRenderParams(route, common = {}) {
+  return deps.imageParams(await deps.getSettings(), route, common);
 }
 
 function announce(boardId, itemId, status, error = null) {
@@ -80,23 +94,27 @@ const isLiveStatus = (job) => job?.status === 'queued' || job?.status === 'runni
 export async function renderBoardItem(boardId, itemId, route = {}) {
   const board = await store.getBoard(boardId);
   if (!board) throw new ServerError('Mood board not found', { status: 404, code: 'NOT_FOUND' });
-  const priorJobId = board.items?.find((it) => it?.id === itemId)?.render?.jobId;
+  const previous = board.items?.find((it) => it?.id === itemId)?.render;
+  route = { ...previous?.options, ...route };
+  const priorJobId = previous?.jobId;
   const priorLive = priorJobId ? isLiveStatus(await deps.getJob(priorJobId)) : false;
   // A job id this request never saw (a concurrent render settled it after the
   // read above) counts as live, so the lock can't let a duplicate through.
   const claimed = await store.claimBoardItemRender(boardId, itemId, {
     isLive: (jobId) => jobId !== priorJobId || priorLive,
+    options: route,
   });
 
-  const prompt = buildItemRenderPrompt(board, claimed);
+  const { prompt, promptAdditions } = buildItemRenderPrompt(board, claimed);
   const negativePrompt = isNonBlankStr(board.style?.negativePrompt) ? board.style.negativePrompt.trim() : undefined;
   let jobId;
   try {
-    const settings = await deps.getSettings();
-    const params = await deps.imageParams(settings, route, {
+    const params = await prepareBoardRenderParams(route, {
       prompt,
+      promptAdditions: [...promptAdditions, promptAddition('board-negative', 'Board avoid (negative prompt)', negativePrompt)].filter(Boolean),
       ...(negativePrompt ? { negativePrompt } : {}),
-      ...RENDER_SIZE,
+      width: route.width ?? RENDER_SIZE.width,
+      height: route.height ?? RENDER_SIZE.height,
       [MOOD_BOARD_RENDER_TAG]: { boardId, itemId },
     });
     ({ jobId } = await deps.enqueue({ kind: 'image', params, owner: `mood-board-render:${boardId}` }));

@@ -837,7 +837,7 @@ describe('executeTuiRun', () => {
       vi.useFakeTimers({
         toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
       });
-      const provider = { id: 'opencode', type: 'tui', command: 'opencode', tuiPromptDelayMs: 50 };
+      const provider = { id: 'grok', type: 'tui', command: 'grok', tuiPromptDelayMs: 50 };
       const promise = executeTuiRun({
         runId: 'run-non-claude-trust-text', provider, prompt: 'return one structured response',
         workspacePath: TEST_WORKSPACE, timeout: 60000,
@@ -853,10 +853,38 @@ describe('executeTuiRun', () => {
       // from it — delivery still happens, via the blind PASTE_DEADLINE_MS
       // fallback that governs non-input-ready providers.
       expect(pty.write).not.toHaveBeenCalledWith(expect.stringContaining('\x1b[200~'));
-      pty.emitData('opencode ready\n');
+      pty.emitData('grok ready\n');
       await vi.advanceTimersByTimeAsync(2000);
       expect(pty.write).toHaveBeenCalledWith(expect.stringContaining('\x1b[200~'));
 
+      pty.emitExit({ exitCode: 0 });
+      await promise;
+    });
+
+    it('waits for the OpenCode composer and dismisses its update offer without confirming it', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+      const provider = { id: 'opencode', type: 'tui', command: 'opencode', tuiPromptDelayMs: 50 };
+      const promise = executeTuiRun({
+        runId: 'run-opencode-update', provider, prompt: 'return one structured response',
+        workspacePath: TEST_WORKSPACE, timeout: 60000,
+      });
+      await flushAsync();
+      const pty = ptyInstances[0];
+      pty.emitData('\x1bP+q4d73\x1b\\');
+      await vi.advanceTimersByTimeAsync(15000);
+      expect(pty.write).not.toHaveBeenCalled();
+      pty.emitData('\x1b[?2004hAsk anything…\nUpdate Available esc\n'
+        + 'A new release v9.9.9 is available. Would you like to update now?\nSkip Confirm\n');
+      await vi.advanceTimersByTimeAsync(400);
+      expect(pty.write.mock.calls.map(([data]) => data)).toEqual(['\x1b']);
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(pty.write).toHaveBeenCalledTimes(1);
+      pty.emitData('Ask anything…\n');
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(pty.write).toHaveBeenCalledWith(expect.stringContaining('\x1b[200~'));
+      pty.emitData('[Pasted ~42 lines]');
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(pty.write).toHaveBeenCalledWith('\r');
       pty.emitExit({ exitCode: 0 });
       await promise;
     });
@@ -1239,6 +1267,32 @@ describe('executeTuiRun', () => {
         error: expect.stringContaining('TUI command not found: no-such-tui'),
         extras: expect.objectContaining({ completionReason: 'command-not-found' }),
       }));
+    });
+
+    it('stops a Codex policy refusal even when a response file is already available', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+      const runId = 'run-refusal';
+      const provider = { id: 'codex', type: 'tui', command: 'codex', tuiPromptDelayMs: 50 };
+      const onComplete = vi.fn();
+      const promise = executeTuiRun({ runId, provider, prompt: 'a prompt long enough to submit',
+        workspacePath: TEST_WORKSPACE, onComplete, timeout: 60000 });
+      await flushAsync();
+      const pty = ptyInstances[0];
+      pty.emitData('› Ask Codex to do anything\n? for shortcuts');
+      await vi.advanceTimersByTimeAsync(6000);
+      responseFiles.set(resolve(runsTmpDirRef.current, runId, 'tui-response.txt'), 'partial response');
+      pty.emitData('Ordinary output');
+      pty.emitData('\x1b[12;1H');
+      pty.emitData('ⓘ This content can’t be shown');
+      await promise;
+      expect(pty.kill).toHaveBeenCalled();
+      expect(runnerMocks.finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({
+        success: false, extras: expect.objectContaining({ completionReason: 'content-refusal',
+          errorAnalysis: expect.objectContaining({ category: 'content-refusal' }),
+          executionInterruption: { category: 'content-refusal', source: 'provider' },
+        }),
+      }));
+      expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
     });
 
     it('early-fails with reason "fallback-signal" when Claude switches to extra usage', async () => {

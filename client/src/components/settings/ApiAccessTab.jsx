@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 import { Bot, Globe, Lock, Unlock, Copy, RefreshCw, ExternalLink } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
+import Banner from '../ui/Banner';
 import { getApiCatalog, getSettings, updateSettings, getOpenApiSpec } from '../../services/apiSystem';
 import { copyToClipboard } from '../../lib/clipboard';
 
@@ -51,6 +52,8 @@ const Toggle = ({ id, checked, onChange, label, hint, disabled }) => (
 
 export function ApiAccessTab() {
   const [loading, setLoading] = useState(true);
+  const [settingsError, setSettingsError] = useState(false);
+  const [settingsAttempt, setSettingsAttempt] = useState(0);
   const [savingId, setSavingId] = useState(null);
   const [access, setAccess] = useState({});
   const [agentContext, setAgentContext] = useState(DEFAULT_AGENT_CONTEXT);
@@ -77,6 +80,8 @@ export function ApiAccessTab() {
 
   useEffect(() => {
     let active = true;
+    setLoading(true);
+    setSettingsError(false);
     getSettings({ silent: true })
       .then((s) => {
         if (!active) return;
@@ -88,12 +93,12 @@ export function ApiAccessTab() {
           actions: { ...DEFAULT_AGENT_CONTEXT.actions, ...(s?.agentContext?.actions || {}) },
         });
       })
-      .catch(() => { if (active) toast.error('Failed to load API access settings'); })
+      .catch(() => { if (active) setSettingsError(true); })
       .finally(() => { if (active) setLoading(false); });
     loadApiCards();
     loadSpec();
     return () => { active = false; };
-  }, [loadApiCards, loadSpec]);
+  }, [loadApiCards, loadSpec, settingsAttempt]);
 
   const entryFor = (id) => ({ ...DEFAULT_ACCESS, ...(access[id] || {}) });
 
@@ -145,6 +150,21 @@ export function ApiAccessTab() {
   });
 
   if (loading) return <BrailleSpinner text="Loading API access settings" />;
+  // Both editors save complete settings slices. Defaults are safe only after
+  // a successful read confirms the slices are absent, never after a failed read.
+  if (settingsError) return (
+    <Banner tone="error" size="md" actions={
+      <button
+        type="button"
+        onClick={() => setSettingsAttempt((attempt) => attempt + 1)}
+        className="rounded border border-port-error/40 px-3 py-1.5 text-xs hover:bg-port-error/10"
+      >
+        Retry
+      </button>
+    }>
+      Failed to load API access settings
+    </Banner>
+  );
 
   return (
     <div className="space-y-6">

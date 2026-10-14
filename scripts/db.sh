@@ -36,20 +36,19 @@ read_db_config() {
 const { join } = require('node:path');
 const { parseEnvFile } = require(join(process.argv[2], 'scripts/lib/envFile.cjs'));
 const saved = parseEnvFile(join(process.argv[2], '.env'));
-const value = (key, fallback = '') => process.env[key] || saved[key] || fallback;
-const mode = value('PGMODE', 'docker');
+const { resolveDatabaseSettings, parsePort } = require(join(process.argv[2], 'scripts/lib/databaseSettings.cjs'));
+const resolved = resolveDatabaseSettings({ saved });
 const nativeSetup = process.argv[3] === 'setup-native';
-const selectedHost = value('PGHOST');
-const dockerPort = value('PGPORT_DOCKER', '5561');
-const selectedPort = nativeSetup
-  ? process.env.PORTOS_NATIVE_PGPORT || value('PGPORT')
-  : process.env.PGPORT || (mode === 'native' ? saved.PGPORT || '' : dockerPort);
+// Ordinary CLI commands retain an explicit exported endpoint override, even in
+// Docker mode (offline maintenance uses this to address a selected cluster).
+const selectedPort = nativeSetup ? resolved.selectedNativePort : parsePort(process.env.PGPORT);
 const settings = {
-  PGMODE: mode, PGUSER: value('PGUSER', 'portos'),
-  PGDATABASE: value('PGDATABASE', 'portos'), PGPASSWORD: value('PGPASSWORD', 'portos'),
-  PGHOST: selectedHost || 'localhost', SELECTED_PGHOST: selectedHost,
-  PGPORT: selectedPort || (mode === 'native' || nativeSetup ? '5432' : dockerPort),
-  SELECTED_PGPORT: selectedPort, PGPORT_DOCKER: dockerPort,
+  PGMODE: resolved.mode, PGUSER: resolved.user,
+  PGDATABASE: resolved.database, PGPASSWORD: resolved.password,
+  PGHOST: resolved.host, SELECTED_PGHOST: resolved.selectedHost,
+  PGPORT: String(selectedPort ?? (nativeSetup ? resolved.nativePort : resolved.port)),
+  SELECTED_PGPORT: selectedPort === undefined ? '' : String(selectedPort),
+  PGPORT_DOCKER: String(resolved.dockerPort),
 };
 process.stdout.write(Object.entries({ ...settings, complete: '1' })
   .flat().join('\0') + '\0');
@@ -471,13 +470,76 @@ fix_docker() {
 
   cd "$ROOT_DIR"
 
-  # Determine the actual data volume used by the portos-db container, if it exists
-  local data_volume=""
-  data_volume=$(docker inspect -f '{{ range .Mounts }}{{ if eq .Destination "/var/lib/postgresql/data" }}{{ .Name }}{{ end }}{{ end }}' portos-db 2>/dev/null || echo "")
-
-  # Stop and remove container
-  docker compose stop db 2>/dev/null || true
-  docker rm -f portos-db 2>/dev/null || true
+  local container_id data_volume configured_volume running
+  # Repair removes the container, so the next `compose up` must select the SAME
+  # volume. A renamed checkout/project or changed volume override can otherwise
+  # free the fixed container name and boot a new, empty database after repair.
+  # Resolve Compose's canonical model before any stop/removal. Its full output
+  # contains credentials: emit only a validated volume name, never parser errors.
+  if ! configured_volume=$(docker compose config --format json 2>/dev/null | node -e '
+    let input = "";
+    process.stdin.on("data", chunk => { input += chunk; });
+    process.stdin.on("end", () => {
+      try {
+        const config = JSON.parse(input);
+        const mounts = config.services?.db?.volumes;
+        if (!Array.isArray(mounts)) process.exit(1);
+        const matching = mounts.filter(v => v?.target === "/var/lib/postgresql/data");
+        if (matching.length !== 1 || matching[0].type !== "volume") process.exit(1);
+        const name = config.volumes?.[matching[0].source]?.name;
+        if (typeof name !== "string" || !/^[a-z0-9][a-z0-9_.-]*$/i.test(name)) process.exit(1);
+        process.stdout.write(name);
+      } catch { process.exit(1); }
+    });
+  '); then
+    err "Could not resolve the configured database volume; repair stopped"
+    return 1
+  fi
+  # A successful list distinguishes an absent container from an unavailable
+  # daemon. Never turn a failed inspection into permission to modify its volume.
+  if ! container_id=$(docker ps -aq --filter 'name=^/portos-db$'); then
+    err "Could not establish the database container state; repair stopped"
+    return 1
+  fi
+  if [ -n "$container_id" ]; then
+    # Retain the actual volume before removing the container, not a guessed
+    # Compose project name (which may have changed since it was provisioned).
+    if ! data_volume=$(docker inspect -f '{{ range .Mounts }}{{ if eq .Destination "/var/lib/postgresql/data" }}{{ .Name }}{{ end }}{{ end }}' "$container_id"); then
+      err "Could not resolve the database data volume; repair stopped"
+      return 1
+    fi
+    if [ "$data_volume" != "$configured_volume" ]; then
+      err "Database container volume differs from the configured Compose volume; repair stopped"
+      info "Restore the original Compose project/volume configuration before retrying. The container and data are unchanged."
+      return 1
+    fi
+    if ! docker compose stop db; then
+      err "Failed to stop Docker PostgreSQL; repair stopped"
+      return 1
+    fi
+    if ! running=$(docker inspect -f '{{.State.Running}}' "$container_id") || [ "$running" != false ]; then
+      err "Database container is still running or its state is unknown; repair stopped"
+      return 1
+    fi
+    # Do not force-remove a container that may have restarted since inspection.
+    if ! docker rm "$container_id"; then
+      err "Failed to remove the database container; repair stopped"
+      return 1
+    fi
+  else
+    # No container exists. Never try guessed names, which docker run would
+    # silently create; the configured volume must already exist below.
+    data_volume="$configured_volume"
+  fi
+  # Verify absence after removal too, including any concurrent restart.
+  if ! container_id=$(docker ps -aq --filter 'name=^/portos-db$') || [ -n "$container_id" ]; then
+    err "Database container absence could not be verified; repair stopped"
+    return 1
+  fi
+  if [ -z "$data_volume" ] || ! docker volume inspect "$data_volume" >/dev/null; then
+    err "Database data volume could not be verified; repair stopped"
+    return 1
+  fi
 
   # Remove stale postmaster.pid from the volume. Reuse the pinned, already-pulled
   # db image from docker-compose.yml (has rm/cat) so repair works offline.
@@ -488,14 +550,10 @@ fix_docker() {
     warn "Could not resolve the db image from docker-compose.yml — cannot remove stale lock files"
     return 1
   fi
-  if [ -n "$data_volume" ]; then
-    docker run --rm -v "${data_volume}:/data" "$PG_HELPER_IMAGE" rm -f /data/postmaster.pid 2>/dev/null || true
-  else
-    # Fallback: derive volume name from compose project name
-    local project_name
-    project_name=$(docker compose config --format json 2>/dev/null | grep -o '"name":"[^"]*"' | head -1 | cut -d'"' -f4 || echo "portos")
-    docker run --rm -v "${project_name}_portos-pgdata:/data" "$PG_HELPER_IMAGE" rm -f /data/postmaster.pid 2>/dev/null ||
-      docker run --rm -v "portos-pgdata:/data" "$PG_HELPER_IMAGE" rm -f /data/postmaster.pid 2>/dev/null || true
+  if ! docker run --rm --pull=never -v "${data_volume}:/data" "$PG_HELPER_IMAGE" \
+      sh -c 'rm -f /data/postmaster.pid && test ! -e /data/postmaster.pid'; then
+    err "Failed to remove or verify the stale database lock; repair stopped"
+    return 1
   fi
 
   log "Stale lock files cleaned"

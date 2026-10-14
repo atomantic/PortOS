@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { SkipBack, SkipForward } from 'lucide-react';
+import { Pencil, SkipBack, SkipForward } from 'lucide-react';
 import { shouldIgnoreGlobalKey } from '../../lib/a11yKeyboard.js';
 import { ShotLockButton } from './ShotLock.jsx';
 
@@ -55,8 +55,9 @@ const buttonCls = 'flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-
  * Back and Next buttons that jump the player to a shot's start, with the shot
  * number between them. `onSeek(songSec)` moves the player and leaves it playing
  * or paused as it was. `keys` also binds the left and right arrows on the page.
+ * With `onEditShot(sceneId)`, an Edit shot button opens the shot on screen.
  */
-export default function ShotStepper({ scenes, time, onSeek, range = null, disabled = false, keys = false, className = '' }) {
+export default function ShotStepper({ scenes, time, onSeek, onEditShot = null, range = null, disabled = false, keys = false, className = '' }) {
   const { back, next, index, count } = shotSteps(scenes, time, range);
   const onScreen = shotOnScreen(scenes, time);
   const latest = useRef({ back, next, onSeek, disabled });
@@ -86,6 +87,11 @@ export default function ShotStepper({ scenes, time, onSeek, range = null, disabl
       <button type="button" onClick={() => onSeek(next)} disabled={disabled || next == null} aria-label="Next shot" title="Next shot" className={buttonCls}>
         <SkipForward size={14} aria-hidden="true" />
       </button>
+      {onScreen && onEditShot && (
+        <button type="button" onClick={() => onEditShot(onScreen.sceneId)} title="Pause and open this shot's card" className={`${buttonCls} gap-1 px-2`}>
+          <Pencil size={14} aria-hidden="true" /> Edit shot
+        </button>
+      )}
       {onScreen && <ShotLockButton scene={onScreen} />}
     </div>
   );

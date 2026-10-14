@@ -6,6 +6,7 @@
 export {
   MUSIC_VIDEO_VISUAL_LAYERS,
   MUSIC_VIDEO_STILL_MOVES,
+  MUSIC_VIDEO_FRAME_FITS,
   MUSIC_VIDEO_TEXT_ZONES,
   MUSIC_VIDEO_LYRIC_ROLES,
   isSelfDrawnLayer,
@@ -14,4 +15,10 @@ export {
   sceneRenderReady,
   isLayeredComposition,
   LAYERED_COMPOSITION_MODES,
+  CLIP_TIMING_FPS,
+  CLIP_SPEED_FPS_RANGE,
+  CLIP_OFFSET_FRAMES_RANGE,
+  clipSpeedRate,
+  clipOffsetSec,
+  clipReversed,
 } from '../../../server/lib/musicVideoLayers.js';

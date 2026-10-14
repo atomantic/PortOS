@@ -9,35 +9,38 @@
  * continuity. These builders send authored intent plus the destination tag;
  * they never pre-flatten canon into an untyped browser reference list.
  *
- * The preset is applied here as well as server-side on purpose: an unlinked
- * loom (no universe reachable from the loom or its series) gets no compiled
- * request back, and the browser preset is the only style it would ever see.
- * The compiler drops style tokens the authored prompt already carries
- * (`stripStyleClause` matched against the same `universeStylePreset` clause,
- * both in server/lib/universeVisualStyle.js), so the linked path does not
- * emit the token list twice — do not fix the overlap by deleting either side.
+ * The browser sends the scene's own text, the loom's style notes and the
+ * camera direction, each listed as a labeled addition (#11317). A linked loom's
+ * universe and series style is the compiler's to add (server-side, from the
+ * same `universeStylePreset`), so it is not prefixed here; an unlinked loom has
+ * no universe style to add.
  */
 
-import { composeStyledPrompt } from '../../lib/composeStyledPrompt';
 import { FABLELOOM_CAMERA_MOVEMENTS } from '../../../../server/lib/fableLoomCameraMovements.js';
 import {
   asFableLoomRenderPreferences,
   asFableLoomRenderSettings,
 } from '../../../../server/lib/fableLoomProduction.js';
 
-const withLoomStyle = (prompt, styleNotes) => {
-  const notes = typeof styleNotes === 'string' ? styleNotes.trim() : '';
-  return notes ? `${prompt}\n\nStyle: ${notes}` : prompt;
+// The scene's text plus each addition after it, as `{ prompt, promptAdditions }`.
+const withAdditions = (authored, additions) => {
+  const listed = additions.filter((item) => item.text);
+  return {
+    prompt: [authored, ...listed.map((item) => item.text)].filter(Boolean).join('\n\n'),
+    ...(listed.length ? { promptAdditions: listed } : {}),
+  };
+};
+const loomStyle = (loom) => {
+  const notes = typeof loom?.styleNotes === 'string' ? loom.styleNotes.trim() : '';
+  return { id: 'loom-style', label: 'Loom style', text: notes ? `Style: ${notes}` : '' };
 };
 
-export function buildFableLoomImageRequest({ loom, episodeId, node, stylePreset = null }) {
-  const authoredPrompt = withLoomStyle((node?.imagePrompt || '').trim(), loom?.styleNotes);
-  const styled = composeStyledPrompt(authoredPrompt, '', stylePreset);
+export function buildFableLoomImageRequest({ loom, episodeId, node }) {
+  const composed = withAdditions((node?.imagePrompt || '').trim(), [loomStyle(loom)]);
   const render = asFableLoomRenderSettings(loom?.renderSettings);
   const preferences = asFableLoomRenderPreferences(loom?.renderSettings);
   return {
-    prompt: styled.prompt,
-    ...(styled.negativePrompt ? { negativePrompt: styled.negativePrompt } : {}),
+    ...composed,
     ...((preferences.imageMode || preferences.imageModel)
       ? { mode: preferences.imageMode || 'local' }
       : {}),
@@ -49,19 +52,18 @@ export function buildFableLoomImageRequest({ loom, episodeId, node, stylePreset 
   };
 }
 
-export function buildFableLoomVideoRequest({ loom, episodeId, node, stylePreset = null }) {
+export function buildFableLoomVideoRequest({ loom, episodeId, node }) {
   const authoredPrompt = (node?.videoPrompt || '').trim() || (node?.prose || '').trim();
   const movement = FABLELOOM_CAMERA_MOVEMENTS.find((move) => move.value === node?.cameraMovement);
   const direction = movement?.prompt || (node?.cameraMovement || '').trim();
-  const directedPrompt = direction
-    ? `${authoredPrompt}\n\nCamera direction: ${direction}`
-    : authoredPrompt;
-  const styled = composeStyledPrompt(withLoomStyle(directedPrompt, loom?.styleNotes), '', stylePreset);
+  const composed = withAdditions(authoredPrompt, [
+    { id: 'camera-direction', label: 'Camera direction', text: direction ? `Camera direction: ${direction}` : '' },
+    loomStyle(loom),
+  ]);
   const render = asFableLoomRenderSettings(loom?.renderSettings);
   const preferences = asFableLoomRenderPreferences(loom?.renderSettings);
   return {
-    prompt: styled.prompt,
-    ...(styled.negativePrompt ? { negativePrompt: styled.negativePrompt } : {}),
+    ...composed,
     backend: preferences.videoMode || 'local',
     ...(preferences.videoModel ? { modelId: preferences.videoModel } : {}),
     mode: node?.image ? 'image' : 'text',

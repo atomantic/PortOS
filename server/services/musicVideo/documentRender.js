@@ -1,4 +1,5 @@
 import { assertMusicVideoMediaSelections, musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
+import { isEndFrameImageEffect, sceneImageEffect } from '../../lib/musicVideoImageEffects.js';
 import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 import { filmLookRuntimeSource, isFilmLookNeutral } from '../../lib/filmLook.js';
 import { titleCardVisible } from '../../lib/musicVideoTitleCard.js';
@@ -37,7 +38,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { htmlCompositionContractSchemaFor } from '../../lib/validation.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
-import { documentSceneVisualLayer, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_TEXT_ZONES } from '../../lib/musicVideoLayers.js';
+import { clipSpeedRate, clipOffsetSec, documentSceneVisualLayer, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_TEXT_ZONES } from '../../lib/musicVideoLayers.js';
 import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
 import { documentDirectoryForRender } from './compositionDocument.js';
 import { musicVideoSongDocument } from './compositionRender.js';
@@ -57,6 +58,10 @@ const round3 = (n) => Math.round(n * 1000) / 1000;
 const finite = (n) => (typeof n === 'number' && Number.isFinite(n) ? n : null);
 const scriptJson = (value) => JSON.stringify(value).replace(/</g, '\\u003c');
 const safeSegment = (id) => String(id || 'scene').replace(/[^A-Za-z0-9_-]+/g, '-').slice(0, 80) || 'scene';
+const documentImageEffect = (scene) => {
+  const effect = sceneImageEffect(scene, { layered: true });
+  return effect && !isEndFrameImageEffect(effect.effect) ? effect : null;
+};
 
 /** The project's aspect ratio (brief), defaulting to 16:9 (lib/musicVideoAspect.js). */
 export const documentAspect = musicVideoAspect;
@@ -115,12 +120,14 @@ export function documentRenderClock(songDurationSec, fps = DOCUMENT_RENDER_FPS) 
 
 /**
  * Each scene's selected take as a file to stage: `Map<sceneId, { kind, path,
- * ext, inSec, outSec, fps, width, height }>`. Video is preferred over the still;
+ * ext, inSec, outSec, fps, width, height }>`. `retimed` requests output-time
+ * in/out points and staging instructions; raw-asset previews keep source time.
+ * Video is preferred over the still;
  * a scene whose selection is missing on disk gets no entry (media: null).
  * `history` is the video history list; `probe(path)` measures a clip the
  * history did not (hosted renders record no geometry).
  */
-export async function resolveSceneMedia(project, { history = [], probe = async () => null, strictLayers = false } = {}) {
+export async function resolveSceneMedia(project, { history = [], probe = async () => null, strictLayers = false, retimed = false } = {}) {
   assertMusicVideoMediaSelections(project);
   const byId = new Map((Array.isArray(history) ? history : []).map((entry) => [entry.id, entry]));
   const out = new Map();
@@ -137,13 +144,39 @@ export async function resolveSceneMedia(project, { history = [], probe = async (
       const duration = measured.numFrames && measured.fps ? measured.numFrames / measured.fps : null;
       const edit = selectedPerformanceInstruction(scene)?.edit ?? null;
       const ext = (/\.([a-z0-9]{2,5})$/i.exec(entry.filename)?.[1] || 'mp4').toLowerCase();
+      const rate = clipSpeedRate(scene);
+      const originalIn = edit ? Math.min(edit.inSec, duration ?? edit.inSec) : 0;
+      const originalOut = edit ? Math.min(edit.outSec, duration ?? edit.outSec) : duration;
+      const start = originalIn + clipOffsetSec(scene);
+      const sourceIn = Math.min(duration ?? Infinity, Math.max(0, start));
+      // Offset holds are song/output seconds, independent of playback rate:
+      // clipTimeAt uses sourceIn + max(0, local + min(0, start)) * rate.
+      const leadSec = Math.max(0, -start);
+      const retime = rate !== 1 || leadSec > 0;
+      // A raw-asset preview plays the original bytes, so it keeps source-time
+      // in/out and carries the same timing for the page's seek to apply.
+      if (!retimed) {
+        out.set(scene.sceneId, {
+          kind: 'video',
+          path: videoPath,
+          ext,
+          inSec: round3(originalIn),
+          outSec: originalOut == null ? null : round3(originalOut),
+          ...(retime || sourceIn !== originalIn ? { timing: { rate, leadSec: round3(leadSec), startSec: round3(sourceIn) } } : {}),
+          fps: finite(measured.fps),
+          width: finite(measured.width),
+          height: finite(measured.height),
+        });
+        continue;
+      }
       out.set(scene.sceneId, {
         kind: 'video',
         path: videoPath,
-        ext,
-        inSec: edit ? round3(Math.min(edit.inSec, duration ?? edit.inSec)) : 0,
-        outSec: edit ? round3(Math.min(edit.outSec, duration ?? edit.outSec)) : (duration ? round3(duration) : null),
-        fps: finite(measured.fps),
+        ext: retime ? 'mp4' : ext,
+        inSec: round3(sourceIn / rate),
+        outSec: originalOut == null ? null : round3(leadSec + Math.max(sourceIn, originalOut) / rate),
+        ...(retime ? { rate, leadSec } : {}),
+        fps: retime ? DOCUMENT_RENDER_FPS : finite(measured.fps),
         width: finite(measured.width),
         height: finite(measured.height),
       });
@@ -190,6 +223,8 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
         endSec: start != null && end != null && end > start ? end : null,
         shotMode: scene.shotMode === 'performance' ? 'performance' : 'cutaway',
         visualLayer: documentSceneVisualLayer(project, scene, { generated }),
+        // A document has no end-frame media yet, so a start-to-end effect plays its still.
+        imageEffect: documentImageEffect(scene),
         stillMove: typeof scene.stillMove === 'string' ? scene.stillMove : null,
         // #10589: the planned camera move the template's camera rig follows (only when planned).
         ...(typeof scene.camera?.move === 'string' ? { camera: structuredClone(scene.camera) } : {}),
@@ -203,6 +238,8 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
         media: m ? {
           kind: m.kind, src: mediaSrc(scene.sceneId, m),
           inSec: m.inSec, outSec: m.outSec, fps: m.fps, width: m.width, height: m.height,
+          // Raw-asset previews only: seek source time = startSec + max(0, local - leadSec) * rate.
+          ...(m.timing ? { timing: m.timing } : {}),
         } : null,
       };
     });
@@ -260,12 +297,34 @@ export async function prepareDocumentRender(project) {
 }
 
 /** Write portos-mv.js and copy the selected takes into a staged document folder. */
-async function stageDocumentData(compositionDir, data, media) {
+async function stageDocumentData(compositionDir, data, media, signal) {
   await mkdir(join(compositionDir, 'media'), { recursive: true });
   for (const scene of data.scenes) {
     const m = scene.media && media.get(scene.sceneId);
     if (!m) continue;
     const target = join(compositionDir, scene.media.src);
+    signal?.throwIfAborted();
+    if (m.kind === 'video' && m.rate != null) {
+      // Documents seek output seconds themselves. Retime the staged copy so
+      // existing/custom documents need no new playback contract.
+      if (existsSync(target)) throw new ServerError(`The composition document ships ${scene.media.src}, a name PortOS writes at render time`, { status: 422, code: 'COMPOSITION_DOCUMENT_INVALID' });
+      const { findFfmpeg, runFfmpegProcess, H264_ENCODE_ARGS } = await import('../../lib/ffmpeg.js');
+      const bin = await findFfmpeg();
+      if (!bin) throw new Error('ffmpeg not found on PATH');
+      const filters = [
+        `setpts=(PTS-STARTPTS)/${Number(m.rate.toFixed(6))}`,
+        ...(m.leadSec > 0 ? [`tpad=start_mode=clone:start_duration=${round3(m.leadSec)}`] : []),
+        `fps=${DOCUMENT_RENDER_FPS}`,
+      ];
+      const result = await runFfmpegProcess({ bin, signal, args: [
+        '-hide_banner', '-loglevel', 'error', '-i', m.path,
+        '-map', '0:v:0', '-vf', filters.join(','), ...H264_ENCODE_ARGS,
+        '-an', '-movflags', '+faststart', '-n', target,
+      ] });
+      signal?.throwIfAborted();
+      if (!result.ok) throw new Error(`Shot timing failed: ${result.reason}`);
+      continue;
+    }
     // Clone where the file system can (APFS), refuse to overwrite a file the
     // document shipped under PortOS's reserved name.
     await copyFile(m.path, target, fsConstants.COPYFILE_EXCL | fsConstants.COPYFILE_FICLONE).catch((error) => {
@@ -289,7 +348,7 @@ export async function openIsolatedDocumentPreview({ project, jobId, signal, onEv
   const { loadHistory } = await import('../videoGen/history.js');
   const generated = project.composition?.document?.source?.kind === 'generated';
   const history = (project.scenes || []).some((scene) => scene?.videoHistoryId) ? await loadHistory() : [];
-  const media = await resolveSceneMedia(project, { history, probe: probeVideoGeometry, strictLayers: generated });
+  const media = await resolveSceneMedia(project, { history, probe: probeVideoGeometry, retimed: true, strictLayers: generated });
   const data = buildDocumentData(project, {
     media, frame: plan.frame, clock: plan.clock, songDurationSec: plan.songDurationSec, generated,
   });
@@ -297,7 +356,7 @@ export async function openIsolatedDocumentPreview({ project, jobId, signal, onEv
   let page;
   try {
     staged = await stageMusicVideoComposition(plan.directory, jobId, musicVideoSongDocument(project), {
-      prepare: (dir) => stageDocumentData(dir, data, media),
+      prepare: (dir) => stageDocumentData(dir, data, media, signal),
     });
     signal?.throwIfAborted();
     page = await openComposition(staged.directory, {
@@ -390,7 +449,7 @@ export async function encodeDocumentComposition({
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
   const history = (project.scenes || []).some((s) => s?.videoHistoryId) ? await loadHistory() : [];
-  const media = await resolveSceneMedia(project, { history, probe: probeVideoGeometry, strictLayers: project.composition?.document?.source?.kind === 'generated' });
+  const media = await resolveSceneMedia(project, { history, probe: probeVideoGeometry, retimed: true, strictLayers: project.composition?.document?.source?.kind === 'generated' });
   const data = buildDocumentData(project, { media, frame: plan.frame, clock: plan.clock, songDurationSec: plan.songDurationSec,
     generated: project.composition?.document?.source?.kind === 'generated' });
   const silent = `${outputPath}.silent.mp4`;
@@ -398,7 +457,7 @@ export async function encodeDocumentComposition({
   let page;
   try {
     staged = await stageMusicVideoComposition(plan.directory, jobId, musicVideoSongDocument(project), {
-      prepare: (dir) => stageDocumentData(dir, data, media),
+      prepare: (dir) => stageDocumentData(dir, data, media, signal),
     });
     signal?.throwIfAborted();
     const openPage = (pageSignal) => openComposition(staged.directory, { signal: pageSignal, streamMedia: true, mediaMode: musicVideoMediaMode(project), ownedBrowser: true,
@@ -529,13 +588,13 @@ export async function probeDocumentText({ project, jobId, signal, sampleTimes, o
   const { default: sharp } = await import('sharp');
   const generated = project.composition?.document?.source?.kind === 'generated';
   const history = (project.scenes || []).some((s) => s?.videoHistoryId) ? await loadHistory() : [];
-  const media = await resolveSceneMedia(project, { history, probe: probeVideoGeometry, strictLayers: generated });
+  const media = await resolveSceneMedia(project, { history, probe: probeVideoGeometry, retimed: true, strictLayers: generated });
   const data = buildDocumentData(project, { media, frame: plan.frame, clock: plan.clock, songDurationSec: plan.songDurationSec, generated });
   let staged;
   let page;
   try {
     staged = await stageMusicVideoComposition(plan.directory, jobId, musicVideoSongDocument(project), {
-      prepare: (dir) => stageDocumentData(dir, data, media),
+      prepare: (dir) => stageDocumentData(dir, data, media, signal),
     });
     signal?.throwIfAborted();
     page = await openComposition(staged.directory, { signal, streamMedia: true, mediaMode: musicVideoMediaMode(project), ownedBrowser: true,

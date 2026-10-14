@@ -4,9 +4,11 @@ import UniverseStylePicker from '../media/UniverseStylePicker';
 import PromptEnhancer from '../media/PromptEnhancer';
 import PromptFromMedia from '../media/PromptFromMedia';
 import RemoteMediaTargetPicker from '../federatedMedia/RemoteMediaTargetPicker';
+import MusicVideoFilingSelect from '../media/MusicVideoFilingSelect';
 import { FormField } from '../ui/FormField';
 import Banner from '../ui/Banner';
 import AutoSizeTextarea from '../ui/AutoSizeTextarea';
+import ModelInputPreview from '../media/ModelInputPreview';
 import HfTokenBanner from './HfTokenBanner';
 import ImageGenControls from './ImageGenControls';
 import InitImagePicker from './InitImagePicker';
@@ -70,6 +72,7 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
           placeholder="Describe the image you want to generate..."
         />
       </FormField>
+      <ModelInputPreview preview={generation.modelInputPreview} prompt={fields.prompt} />
 
       <div
         className="sticky top-0 z-10 -mx-3 flex flex-wrap items-center gap-2 border-y border-port-border bg-port-card/95 px-3 py-2 backdrop-blur sm:-mx-4 sm:px-4 lg:static lg:mx-0 lg:border-0 lg:bg-transparent lg:p-0 lg:backdrop-blur-none"
@@ -130,6 +133,8 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
           </span>
         )}
       </div>
+
+      <MusicVideoFilingSelect id="image-gen-music-video" />
 
       {(loraTest.pending || loraTest.error) && (
         <Banner tone={loraTest.error ? 'error' : 'info'}>

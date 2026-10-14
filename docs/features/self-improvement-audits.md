@@ -42,6 +42,29 @@ and writes the usual quality assessment and completion sentinel. Scanner
 coverage and unresolved areas remain evidence to inspect, not a clean bill of
 health for the repository.
 
+The runner scans a private standalone snapshot of **committed HEAD**, with every
+selected source and knowledge-base path mapped into that snapshot. Ordinary
+remediation edits and later commits in the agent worktree cannot change the scan
+target. Evidence records the exact commit and tree. Uncommitted, untracked and
+ignored files are excluded; submodules are excluded without initialization, and
+symlinks are read as their recorded link text. A selected input absent from the
+commit or inside a submodule stops preparation before any provider launch.
+Findings must be checked against current source before remediation; a completed
+baseline scan does not certify later repairs.
+
+Snapshot preparation and scanning share the runner's supervised process group,
+durable reservation and Stop/recovery cleanup. A typed input rejection permits
+explicit correction only before provider launch and after confirmed preparation
+cleanup; other preparation failures remain terminal. New grants explicitly use ChatGPT auth and resolved model/
+effort, with no PortOS estimate cap or elapsed-time deadline; provider limits
+and terminal refusals still apply. Older saved grants retain their original limits.
+
+Server-generated PR descriptions place validated runner scanner evidence before
+the assistant summary. This section survives summary truncation and distinguishes
+scanner completion, artifacts, cleanup and revision coverage from delivery or
+quality-assessment success. Cost estimates are API-equivalent estimates, not
+proof of billing or subscription consumption.
+
 ## The lanes
 
 `Mode` is the shipped default. `Isolated` marks lanes whose remediation must run

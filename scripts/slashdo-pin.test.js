@@ -18,4 +18,12 @@ describe('slash-do install pin', () => {
     expect(src).toMatch(/scripts[\\/]SLASHDO_VERSION/);
     expect(src).toMatch(/npx --yes "slash-do@\$\{?SlashdoVersion\}?"|npx --yes "slash-do@\$\{?SLASHDO_VERSION\}?"/i);
   });
+
+  it('PowerShell scripts resolve scripts/SLASHDO_VERSION via $RootDir', () => {
+    for (const file of ['setup.ps1', 'update.ps1']) {
+      const src = read(file);
+      expect(src).toMatch(/Join-Path \$RootDir ["']scripts[\\/]SLASHDO_VERSION["']/);
+      expect(src).not.toMatch(/Join-Path \$PSScriptRoot ["']scripts[\\/]SLASHDO_VERSION["']/);
+    }
+  });
 });

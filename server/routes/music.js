@@ -33,12 +33,12 @@
 import { Router } from 'express';
 import { existsSync } from 'fs';
 import { z } from 'zod';
-import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { failValidation, asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { createLineReader } from '../lib/streamLines.js';
 import { SETUP_IMAGE_VIDEO_SCRIPT, spawnSetupScript, stopSetupScript } from '../lib/setupScriptRunner.js';
 import {
-  ENGINES, isEngineHealthy, isEnginePlatformSupported,
+  ENGINES, composeMusicLyrics, isEngineHealthy, isEnginePlatformSupported,
   enginePlatformLabel, resolveEngineVramReadiness, MUSIC_VRAM_READINESS,
   formatEngineVramReadinessMessage,
 } from '../services/pipeline/musicGen.js';
@@ -54,7 +54,9 @@ import { createInstallLogger } from '../lib/installLogger.js';
 import { inspectModelCache } from '../lib/hfCache.js';
 import { getCudaCapability } from '../lib/cudaCapability.js';
 import { federatedMediaAudioProfileSchema } from '../lib/federatedMediaWire.js';
-import { queueMusicGeneration } from '../services/musicGeneration.js';
+import { composeMusicPrompt, queueMusicGeneration } from '../services/musicGeneration.js';
+
+import { musicDescribeInputSchema, musicLyricsInputSchema, musicDesignerFields } from '../lib/musicDesignerValidation.js';
 
 const router = Router();
 
@@ -302,8 +304,7 @@ const blankToUndefined = (s) => {
 // template cap matches the description cap — an override is an instruction
 // block, not a document.
 const designerPickerShape = {
-  guidance: z.string().trim().max(4000).optional(),
-  template: z.string().trim().max(8000).optional(),
+  ...musicDesignerFields,
   providerId: z.string().max(128).optional().transform(blankToUndefined),
   model: z.string().max(256).optional().transform(blankToUndefined),
   effort: z.string().max(64).optional().transform(blankToUndefined),
@@ -311,22 +312,17 @@ const designerPickerShape = {
 
 // Caps mirror the Generate form's own limits: a concept/description feeds the
 // prompt field (≤8000), lyrics feed the lyrics field (≤20000).
-const describeSchema = z.object({
-  concept: z.string().trim().min(1, 'concept is required').max(8000),
-  ...designerPickerShape,
-});
-
-const lyricsSchema = z.object({
-  description: z.string().trim().min(1, 'description is required').max(8000),
-  ...designerPickerShape,
-});
+const describeSchema = musicDescribeInputSchema.extend(designerPickerShape);
+const lyricsSchema = musicLyricsInputSchema.extend(designerPickerShape);
 
 // POST /api/music/describe — expand a short reference/vibe into a rich musical
 // description the audio engine can condition on. One explicit user action per
 // call; nothing here runs unprompted.
 router.post('/describe', asyncHandler(async (req, res) => {
-  const body = validateRequest(describeSchema, req.body ?? {});
-  const { description, llm } = await describeMusic({
+  const parsed = describeSchema.safeParse(req.body ?? {});
+  if (!parsed.success) failValidation(parsed);
+  const body = parsed.data;
+  const { description, llm, sentPrompt, promptAdditions } = await describeMusic({
     concept: body.concept,
     guidance: body.guidance,
     template: body.template,
@@ -334,23 +330,27 @@ router.post('/describe', asyncHandler(async (req, res) => {
     model: body.model,
     effort: body.effort,
   });
-  res.json({ description, llm });
+  res.json({ description, llm, sentPrompt, promptAdditions });
 }));
 
 // POST /api/music/lyrics — write original lyrics from that description plus the
 // user's extra guidance, in the `[verse]`/`[chorus]` syntax the lyric-aware
 // engines expect.
 router.post('/lyrics', asyncHandler(async (req, res) => {
-  const body = validateRequest(lyricsSchema, req.body ?? {});
-  const { lyrics, llm } = await writeLyrics({
+  const parsed = lyricsSchema.safeParse(req.body ?? {});
+  if (!parsed.success) failValidation(parsed);
+  const body = parsed.data;
+  const { lyrics, llm, sentPrompt, promptAdditions } = await writeLyrics({
     description: body.description,
+    request: body.request,
+    targetSeconds: body.targetSeconds,
     guidance: body.guidance,
     template: body.template,
     providerId: body.providerId,
     model: body.model,
     effort: body.effort,
   });
-  res.json({ lyrics, llm });
+  res.json({ lyrics, llm, sentPrompt, promptAdditions });
 }));
 
 const waveformSchema = z.object({
@@ -391,11 +391,13 @@ router.post('/code', asyncHandler(async (req, res) => {
   res.json(await writeMusicCode(body));
 }));
 
+const captionField = z.string().max(8000).refine((value) => value.trim().length > 0, 'prompt is required');
+
 const generateSchema = z.object({
-  prompt: z.string().trim().min(1, 'prompt is required').max(8000),
+  prompt: captionField,
   // No default: distinguish ABSENT (don't touch the track's lyrics) from a
   // present '' (the user cleared them and generated without — persist the clear).
-  lyrics: z.string().trim().max(20000).optional(),
+  lyrics: z.string().max(20000).optional(),
   // A render-level override: ignore even supplied lyrics without clearing the
   // track's saved lyric field when the completed audio is attached.
   instrumentalOnly: z.boolean().optional().default(false),
@@ -443,6 +445,18 @@ const generateSchema = z.object({
   // build accepts them on the wire — neither of which this schema can see.
   // The check moved into the handler, below the capability resolve.
 });
+
+// Local caption preview: pure composition, no queue, peer probe or provider work.
+router.post('/prompt-preview', asyncHandler(async (req, res) => {
+  const body = validateRequest(generateSchema, req.body ?? {});
+  if (body.engine !== undefined && !ENGINES[body.engine]) {
+    throw new ServerError(`Unknown audio engine: ${body.engine}`, { status: 400, code: 'PIPELINE_MUSIC_UNKNOWN_ENGINE' });
+  }
+  res.json({
+    ...composeMusicPrompt(body),
+    ...composeMusicLyrics({ ...body, lyrics: body.instrumentalOnly ? '' : body.lyrics }),
+  });
+}));
 
 router.post('/generate', asyncHandler(async (req, res) => {
   const body = validateRequest(generateSchema, req.body ?? {});

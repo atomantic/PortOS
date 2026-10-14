@@ -188,6 +188,8 @@ async function worktreeCleanupContext(agentId, options) {
     discardWorktree: isTruthyMeta(normalized.originalTask?.metadata?.discardWorktree),
     worktreePath: metadata.workspacePath || join(PATHS.worktrees, agentId),
     publicationValidation: publicationHolds.get(agentId) || metadata.publicationValidation,
+    securityScan: metadata.securityScan,
+    securityScanControl: metadata.securityScanControl,
     warnings: [],
   };
 }
@@ -334,7 +336,7 @@ async function openWorktreePullRequest(context) {
   }
   const prTitle = await git.suggestPRTitle(worktreePath, targetBranch, worktreeBranch, description);
 
-  const prBody = await git.generatePRDescription(worktreePath, targetBranch, worktreeBranch, agentOutput);
+  const prBody = await git.generatePRDescription(worktreePath, targetBranch, worktreeBranch, agentOutput, context.securityScan, context.securityScanControl);
 
   const prResult = await git.createPR(worktreePath, {
     title: prTitle,
@@ -985,10 +987,13 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata }
   const result = await updateTask(task.id, {
     status: 'pending',
     metadata: { ...patch, ...clearedRetryHoldMetadata() }
-  }, taskType).catch(err => {
+  }, taskType, {
+    expectedStatus: 'in_progress', expectedMetadata: { retryPendingCleanup: persisted.metadata.retryPendingCleanup },
+  }).catch(err => {
     emitLog('warn', `Failed to release retry hold on task ${task.id}: ${err.message}`, { taskId: task.id, agentId });
     return { error: err.message };
   });
+  if (result?.statusChanged) return {};
   if (result?.error) {
     // The hold is still on disk, so the orphan sweep finishes the transition —
     // the task is delayed, never stranded.

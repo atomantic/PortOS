@@ -474,6 +474,12 @@ describe('stageChecklist', () => {
     expect(stageChecklist('setup', { id: 'p', autonomousRun: { status: 'awaiting-approval' } })[0].detail).toBe('The autonomous run is waiting for your approval.');
     expect(stageChecklist('board', castProject({ scenes: [scene()] }), NOT_APPROVED).map((i) => [i.id, i.done]))
       .toEqual([['shots', true], ['board-art', false]]);
+    // The Plan step's art row goes to the Look step, where the art approval is, and says what changed.
+    const artRow = (readiness) => stageChecklist('board', castProject({ scenes: [scene()] }), readiness).find((i) => i.id === 'board-art');
+    expect(artRow(NOT_APPROVED)).toMatchObject({ details: ['Review and approve the current art direction first.'],
+      action: { label: 'Review art direction', stage: 'cast-sets', anchor: 'mv-review-art' } });
+    expect(artRow({ ...NOT_APPROVED, art: { approved: false, problems: [], stale: { changedFields: ['visual spec'] } } }).details)
+      .toEqual(['Approved earlier — changed since: visual spec. Approve it again on the Look step.']);
     expect(stageChecklist('produce', castProject({ scenes: [scene()] }), NOT_APPROVED).find((i) => i.id === 'approve-storyboard'))
       .toMatchObject({ done: false, detail: 'Finish the plan first.', action: { stage: 'board' } });
     expect(stageChecklist('produce', castProject({ scenes: [scene(), scene({ sceneId: 's2', videoHistoryId: null })] }), APPROVED)[0])

@@ -97,13 +97,19 @@ function mockExecFile(responses) {
 }
 
 const NO_SUCH_VOLUME = { exitCode: 1, stdout: '', stderr: 'Error response from daemon: get x: no such volume' };
-// Docker destroy call order after the status probe: compose stop, compose rm,
-// volume rm x2, then verification (compose ps, volume inspect x2).
+const NO_SUCH_CONTAINER = { exitCode: 1, stdout: '', stderr: 'Error response from daemon: No such container: example' };
+const DOCKER_CONTAINER = 'abc123def456';
+const DOCKER_VOLUME = 'example_project_portos-pgdata';
+const DATA_MOUNT = { Type: 'volume', Destination: '/var/lib/postgresql/data', Name: DOCKER_VOLUME };
+// Resolve container + mounted volume, stop/remove the exact container, prove
+// its absence, then remove and verify only its data volume.
 const dockerDestroyResponses = (statusMode = 'native', overrides = {}) => {
   const calls = [
     { exitCode: 0, stdout: `Current mode: ${statusMode}` },
-    { exitCode: 0 }, { exitCode: 0 }, { exitCode: 0 }, { exitCode: 0 },
-    { exitCode: 0, stdout: '' }, NO_SUCH_VOLUME, NO_SUCH_VOLUME,
+    { exitCode: 0, stdout: DOCKER_CONTAINER },
+    { exitCode: 0, stdout: JSON.stringify([DATA_MOUNT]) },
+    { exitCode: 0 }, { exitCode: 0 }, NO_SUCH_CONTAINER,
+    { exitCode: 0 }, NO_SUCH_VOLUME,
   ];
   for (const [index, response] of Object.entries(overrides)) calls[index] = response;
   return calls;
@@ -687,16 +693,23 @@ describe('POST /api/database/destroy', () => {
   });
 
   describe('docker destroy path', () => {
-    it('invokes docker stop, rm, and volume rm commands when destroying non-active docker backend', async () => {
+    it('destroys only the selected container and its custom-project volume, preserving unrelated legacy names', async () => {
       vi.stubEnv('PGHOST', 'localhost');
       vi.stubEnv('PGPORT', '5432');
-      // Call order:
-      // 0: runDbScript(['status'])  → mode is "native" (so docker is the non-active backend)
-      // 1: docker compose stop db
-      // 2: docker compose rm -f db
-      // 3: docker volume rm -f portos_portos-pgdata  (first volume attempt)
-      // 4: docker volume rm -f portos-pgdata          (alternate volume attempt)
-      mockExecFile(dockerDestroyResponses());
+      const volumes = new Set([DOCKER_VOLUME, 'portos_portos-pgdata', 'portos-pgdata']);
+      let containerExists = true;
+      execFile.mockImplementation((cmd, args, _opts, callback) => {
+        let stdout = '';
+        let failure;
+        if (cmd === 'bash') stdout = 'Current mode: native';
+        else if (args[0] === 'compose') stdout = containerExists ? DOCKER_CONTAINER : '';
+        else if (args[0] === 'inspect' && args.includes('{{json .Mounts}}')) stdout = JSON.stringify([DATA_MOUNT]);
+        else if (args[0] === 'rm') containerExists = false;
+        else if (args[0] === 'inspect' && !containerExists) failure = 'No such container';
+        else if (args[0] === 'volume' && args[1] === 'rm') volumes.delete(args.at(-1));
+        else if (args[0] === 'volume' && args[1] === 'inspect' && !volumes.has(args.at(-1))) failure = 'no such volume';
+        callback(failure ? Object.assign(new Error(failure), { code: 1 }) : null, stdout, failure || '');
+      });
 
       const app = makeApp();
       const res = await request(app)
@@ -706,18 +719,14 @@ describe('POST /api/database/destroy', () => {
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
 
-      // Verify the first call was the status probe
-      const statusCall = execFile.mock.calls[0];
-      expect(statusCall[1]).toContain('status'); // db.sh status arg
-
-      // Verify one of the calls used 'docker' as the command with compose/volume args
-      const dockerCalls = execFile.mock.calls.filter(c => c[0] === 'docker');
-      expect(dockerCalls.length).toBeGreaterThanOrEqual(3);
-
-      const volumeRmCall = dockerCalls.find(
-        c => c[1].includes('volume') && c[1].includes('rm')
-      );
-      expect(volumeRmCall).toBeDefined();
+      expect(containerExists).toBe(false);
+      expect([...volumes]).toEqual(['portos_portos-pgdata', 'portos-pgdata']);
+      expect(execFile.mock.calls.filter(([cmd]) => cmd === 'docker').map(([, args]) => args)).toEqual([
+        ['compose', 'ps', '-a', '-q', 'db'],
+        ['inspect', '--type', 'container', '--format', '{{json .Mounts}}', DOCKER_CONTAINER],
+        ['stop', DOCKER_CONTAINER], ['rm', DOCKER_CONTAINER], ['inspect', '--type', 'container', '--format', '{{.Id}}', DOCKER_CONTAINER],
+        ['volume', 'rm', '-f', DOCKER_VOLUME], ['volume', 'inspect', DOCKER_VOLUME],
+      ]);
       expect(execFile.mock.calls.some(c => c[0] === 'psql')).toBe(false);
     });
   });
@@ -729,10 +738,11 @@ describe('POST /api/database/destroy', () => {
     });
 
     it.each([
-      ['compose stop', 1],
-      ['compose rm', 2],
-      ['primary volume rm', 3],
-      ['alternate volume rm', 4],
+      ['container listing', 1],
+      ['mount inspection', 2],
+      ['container stop', 3],
+      ['container removal', 4],
+      ['volume removal', 6],
     ])('reports a failed %s instead of success and stops issuing commands', async (_step, index) => {
       mockExecFile(dockerDestroyResponses('native', { [index]: { exitCode: 1, stderr: 'permission denied' } }));
 
@@ -740,13 +750,13 @@ describe('POST /api/database/destroy', () => {
 
       expect(res.status).toBe(500);
       expect(res.body).toMatchObject({ code: 'DATABASE_COMMAND_FAILED' });
-      expect(res.body.error).toMatch(/permission denied/);
+      expect(res.body.error).toMatch(index === 2 ? /inspection failed/ : /permission denied/);
       expect(res.body.timestamp).toBeDefined();
       expect(execFile).toHaveBeenCalledTimes(index + 1);
     });
 
     it('fails when a selected volume still exists after removal', async () => {
-      mockExecFile(dockerDestroyResponses('native', { 6: { exitCode: 0, stdout: '[]' } }));
+      mockExecFile(dockerDestroyResponses('native', { 7: { exitCode: 0, stdout: '[]' } }));
       const res = await request(makeApp()).post('/api/database/destroy').send({ backend: 'docker' });
       expect(res.status).toBe(500);
       expect(res.body.error).toMatch(/still exists/);
@@ -759,18 +769,80 @@ describe('POST /api/database/destroy', () => {
       expect(res.body.error).toMatch(/Cannot connect to the Docker daemon/);
     });
 
-    it('fails when the container is still listed after removal', async () => {
-      mockExecFile(dockerDestroyResponses('native', { 5: { exitCode: 0, stdout: 'abc123\n' } }));
+    it('does not delete its volume while the captured container still exists', async () => {
+      mockExecFile(dockerDestroyResponses('native', { 5: { exitCode: 0, stdout: '[{}]' } }));
       const res = await request(makeApp()).post('/api/database/destroy').send({ backend: 'docker' });
       expect(res.status).toBe(500);
       expect(res.body.error).toMatch(/container still exists/);
+      expect(execFile.mock.calls.some(([, args]) => args[0] === 'volume')).toBe(false);
     });
 
-    it('treats an already-absent target as an idempotent success', async () => {
-      mockExecFile(dockerDestroyResponses());
+    it('refuses volume deletion when container absence cannot be verified', async () => {
+      mockExecFile(dockerDestroyResponses('native', { 5: { exitCode: 1, stderr: 'Cannot connect to the Docker daemon' } }));
       const res = await request(makeApp()).post('/api/database/destroy').send({ backend: 'docker' });
-      expect(res.status).toBe(200);
-      expect(res.body.success).toBe(true);
+      expect(res.status).toBe(500);
+      expect(res.body.error).toMatch(/Cannot connect to the Docker daemon/);
+      expect(execFile.mock.calls.some(([, args]) => args[0] === 'volume')).toBe(false);
+    });
+
+    it.each(['', 'permission denied'])('uses the configured volume when no container exists (inspection failure: %s)', async (failure) => {
+      const config = { services: { db: { volumes: [{ type: 'volume', source: 'db-data', target: '/var/lib/postgresql/data' }] } }, volumes: { 'db-data': { name: DOCKER_VOLUME } } };
+      mockExecFile([
+        { exitCode: 0, stdout: 'Current mode: native' }, { exitCode: 0, stdout: '' },
+        { exitCode: failure ? 1 : 0, stdout: JSON.stringify(config), stderr: failure },
+        { exitCode: 0 }, NO_SUCH_VOLUME,
+      ]);
+      const res = await request(makeApp()).post('/api/database/destroy').send({ backend: 'docker' });
+      expect(res.status).toBe(failure ? 500 : 200);
+      const calls = execFile.mock.calls.filter(([cmd]) => cmd === 'docker').map(([, args]) => args);
+      expect(calls).toEqual([
+        ['compose', 'ps', '-a', '-q', 'db'], ['compose', 'config', '--format', 'json'],
+        ...(!failure ? [['volume', 'rm', '-f', DOCKER_VOLUME], ['volume', 'inspect', DOCKER_VOLUME]] : []),
+      ]);
+    });
+
+    it('does not expose resolved Compose credentials when configuration inspection fails', async () => {
+      const logs = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        mockExecFile([
+          { exitCode: 0, stdout: 'Current mode: native' }, { exitCode: 0, stdout: '' },
+          { exitCode: 1, stdout: '{"password":"fixture-compose-secret"}', stderr: 'Invalid fixture-compose-secret' },
+        ]);
+        const res = await request(makeApp()).post('/api/database/destroy').send({ backend: 'docker' });
+        expect(res.status).toBe(500);
+        expect(JSON.stringify(res.body)).not.toContain('fixture-compose-secret');
+        expect(JSON.stringify(logs.mock.calls)).not.toContain('fixture-compose-secret');
+        expect(execFile).toHaveBeenCalledTimes(3);
+      } finally {
+        logs.mockRestore();
+      }
+    });
+
+    it.each([
+      ['malformed configuration', '{'],
+      ['unresolved volume name', JSON.stringify({ services: { db: { volumes: [{ type: 'volume', source: 'db-data', target: '/var/lib/postgresql/data' }] } }, volumes: { 'db-data': {} } })],
+      ['bind-mounted configuration', JSON.stringify({ services: { db: { volumes: [{ type: 'bind', source: '/fixture/data', target: '/var/lib/postgresql/data' }] } } })],
+    ])('refuses %s with no container before deleting any volume', async (_reason, stdout) => {
+      mockExecFile([{ exitCode: 0, stdout: 'Current mode: native' }, { exitCode: 0, stdout: '' }, { exitCode: 0, stdout }]);
+      const res = await request(makeApp()).post('/api/database/destroy').send({ backend: 'docker' });
+      expect(res.status).toBe(500);
+      expect(res.body.error).toMatch(/No data was destroyed/);
+      expect(execFile).toHaveBeenCalledTimes(3);
+    });
+
+    it.each([
+      ['ambiguous containers', 1, `${DOCKER_CONTAINER}\n012345abcdef`],
+      ['malformed mounts', 2, '{'],
+      ['missing data mount', 2, '[]'],
+      ['ambiguous data mounts', 2, JSON.stringify([DATA_MOUNT, DATA_MOUNT])],
+      ['bind-mounted data', 2, JSON.stringify([{ ...DATA_MOUNT, Type: 'bind' }])],
+      ['missing volume name', 2, JSON.stringify([{ ...DATA_MOUNT, Name: '' }])],
+    ])('refuses %s before any mutation', async (_reason, index, stdout) => {
+      mockExecFile(dockerDestroyResponses('native', { [index]: { exitCode: 0, stdout } }));
+      const res = await request(makeApp()).post('/api/database/destroy').send({ backend: 'docker' });
+      expect(res.status).toBe(500);
+      expect(res.body.error).toMatch(/No data was destroyed/);
+      expect(execFile).toHaveBeenCalledTimes(index + 1);
     });
   });
 

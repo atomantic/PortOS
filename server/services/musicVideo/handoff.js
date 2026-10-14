@@ -3,6 +3,7 @@ import { shotCameraPrompt } from '../../lib/cameraMovements.js';
 import { musicVideoCreativeContext, musicVideoDirectorLook } from '../../lib/musicVideoCreativeContext.js';
 import { MOTION_CONTINUITY_CLAUSE } from '../../lib/musicVideoMotion.js';
 import { isOutsideMusicVideoReference } from '../../lib/musicVideoConditioning.js';
+import { musicVideoFrameModelInput, visualDirection } from '../../lib/musicVideoShotPrompt.js';
 /**
  * Music Video external-asset handoff (#8965) — provider-neutral export/import
  * for tools PortOS does not drive, such as Midjourney.
@@ -64,24 +65,8 @@ export function matchSceneByFileTag(scenes, originalName) {
   return matched.size === 1 ? [...matched][0] : null;
 }
 
-/**
- * The project-wide visual direction appended to generated prompts — palette
- * and camera rules from the visual spec. Kept in step with `visualDirection`
- * in client/src/hooks/useMusicVideoSceneMedia.js, which composes the same
- * suffix for PortOS's own renders.
- *
- * Typography is deliberately excluded from this suffix (#8992): it belongs
- * to the separately composited text layer (#8984), not the image/video
- * prompt handed to an external tool. `visualSpec.typography` still exports
- * on the manifest below for the typography lane and other external tools.
- */
-export function visualDirection(spec) {
-  if (!spec) return '';
-  return [
-    spec.palette?.length ? `color palette ${spec.palette.join(' ')}` : '',
-    spec.cameraRules?.trim() ? `camera: ${spec.cameraRules.trim()}` : '',
-  ].filter(Boolean).join('; ');
-}
+/** The project-wide palette and camera rules (shared with the board and the video submit). */
+export { visualDirection };
 
 // `clause` is the scene's applied treatment direction (#8980) — the composition
 // constraints for a frame or a motion prompt. Same order as the client's
@@ -100,8 +85,29 @@ function composePrompt(primary, fallback, project, clause, { motion = false } = 
   ].filter(Boolean).join(', ');
 }
 
+/**
+ * The authored frame prompt inside a still's rendered prompt: its first line,
+ * cut where the project-wide look (concept style, mood-board context, visual
+ * spec) was appended and before an end frame's keep-the-reference clause, so a
+ * still swapped onto another shot shows the prompt it was made from without
+ * the look being appended twice on the next render. Null for a refine edit
+ * (its text is an instruction, not a frame) or an empty prompt.
+ */
+export function authoredFramePrompt(project, prompt) {
+  const line = typeof prompt === 'string' ? prompt.split('\n')[0].trim() : '';
+  if (!line || line.startsWith('Edit the reference image:')) return null;
+  const look = [
+    project?.concept?.style?.trim(),
+    musicVideoCreativeContext(project?.concept, { look: musicVideoDirectorLook(project) }),
+    visualDirection(project?.visualSpec),
+  ].filter(Boolean);
+  const cuts = [...look.map((piece) => line.indexOf(`, ${piece}`)), line.indexOf('. Keep the reference image\'s composition')].filter((at) => at > 0);
+  const authored = (cuts.length ? line.slice(0, Math.min(...cuts)) : line).trim();
+  return authored || null;
+}
+
 /** A scene's composed reference-frame prompt (also the server-owned production run's, #9066). */
-export const sceneFramePrompt = (project, scene) => [composePrompt(scene.framePrompt, scene.prompt, project, scene.direction?.frameClause), shotActionPrompt(project, scene, { frame: true })].filter(Boolean).join('\n');
+export const sceneFramePrompt = (project, scene) => musicVideoFrameModelInput(project, scene).prompt;
 
 /**
  * A scene's composed shot (motion) prompt. A planned shot (#10589) carries its

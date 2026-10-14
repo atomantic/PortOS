@@ -57,6 +57,12 @@ describe('composeCardRenderPrompt', () => {
       orientation: '',
       subject: 'XVII · The Star: a kneeling figure',
     });
+    // The queued render lists the deck's blocks, never the card's own negative (#11317).
+    expect(out.promptAdditions).toEqual([
+      { id: 'deck-style', label: 'Deck style', text: 'copperplate engraving, aged paper' },
+      { id: 'deck-layout', label: 'Deck layout', text: 'Full tarot card, framed border' },
+      { id: 'deck-avoid', label: 'Deck avoid (negative prompt)', text: 'blurry' },
+    ]);
   });
 
   it('spells out the standard two-way rotation so a six cannot become a nine', () => {

@@ -26,7 +26,7 @@
  */
 
 /** Date the schemas and prices below were last verified against fal.ai. */
-export const FAL_VIDEO_PRICING_VERIFIED_AT = '2026-10-11';
+export const FAL_VIDEO_PRICING_VERIFIED_AT = '2026-10-13';
 
 /**
  * What an entry renders from: text, a start frame, reference assets, a frame +
@@ -40,6 +40,9 @@ export const FAL_DEFAULT_TEXT_VIDEO_MODEL = 'fal-ai/minimax/hailuo-02/standard/t
 export const FAL_DEFAULT_IMAGE_VIDEO_MODEL = 'fal-ai/minimax/hailuo-02/standard/image-to-video';
 export const FAL_LIPSYNC_VIDEO_MODEL = 'minimax/h3-max/lip-sync/image-to-video';
 export const FAL_AUDIO_VIDEO_MODEL = 'fal-ai/bytedance/omnihuman/v1.5';
+// The music-driven shot default: a start frame, a prompt and the song slice as
+// an audio reference (OmniHuman's takes were judged worse, 2026-10-13).
+export const FAL_MUSIC_VIDEO_DEFAULT_MODEL = 'minimax/h3-max/reference-to-video';
 
 const H3_RESOLUTIONS = Object.freeze(['480P', '768P', '1080P']);
 const SEEDANCE_RESOLUTIONS = Object.freeze(['480p', '720p', '1080p']);
@@ -71,6 +74,8 @@ const seedance = (id, kind, label, extra) => ({
 const h3 = (id, label, rates, extra = {}) => ({
   id, kind: 'i2v', label, family: 'minimax-h3',
   prompt: 'required',
+  // MiniMax's own prompt cap, the same as Hailuo-02's.
+  promptMaxChars: 2000,
   image: { param: 'image_url', required: false },
   endImage: { param: 'end_image_url' },
   duration: { kind: 'range', min: 5, max: 15, wire: 'integer', defaultSec: 5 },
@@ -90,6 +95,8 @@ export const FAL_VIDEO_MODELS = Object.freeze([
   {
     id: FAL_DEFAULT_IMAGE_VIDEO_MODEL, kind: 'i2v', label: 'MiniMax Hailuo-02 Standard (image)', family: 'hailuo-02',
     prompt: 'required',
+    // fal refuses a longer prompt with a 422 after the job is queued.
+    promptMaxChars: 2000,
     image: { param: 'image_url', required: true },
     endImage: { param: 'end_image_url' },
     duration: { kind: 'enum', values: [6, 10], wire: 'string', defaultSec: 6 },
@@ -101,6 +108,7 @@ export const FAL_VIDEO_MODELS = Object.freeze([
   {
     id: FAL_DEFAULT_TEXT_VIDEO_MODEL, kind: 't2v', label: 'MiniMax Hailuo-02 Standard (text)', family: 'hailuo-02',
     prompt: 'required',
+    promptMaxChars: 2000,
     duration: { kind: 'enum', values: [6, 10], wire: 'string', defaultSec: 6 },
     // Fixed 768P output; the text route takes neither resolution nor aspect ratio.
     resolution: null,
@@ -113,9 +121,16 @@ export const FAL_VIDEO_MODELS = Object.freeze([
   {
     id: 'minimax/h3-max/reference-to-video', kind: 'ref2v', label: 'MiniMax H3 Max (reference)', family: 'minimax-h3',
     prompt: 'required',
+    promptMaxChars: 2000,
+    // Reads its inputs from URLs: the frame and song slice are hosted on fal's CDN first.
+    hostedInputs: true,
+    // "The video opens exactly on this image": a true start frame, unlike the references.
+    image: { param: 'image_url', required: false },
+    endImage: { param: 'end_image_url' },
     // Referenced in the prompt as "Image 1", "Audio 1", … in list order.
     referenceImages: { param: 'reference_image_urls', max: 9 },
-    referenceAudio: { param: 'reference_audio_urls', max: 3, minSec: 2, maxSec: 15 },
+    // 2–15 s each and at most 15 s combined.
+    referenceAudio: { param: 'reference_audio_urls', max: 3, minSec: 2, maxSec: 15, promptName: 'Audio 1' },
     duration: { kind: 'range', min: 5, max: 15, wire: 'integer', defaultSec: 5 },
     resolution: { param: 'resolution', options: H3_RESOLUTIONS, default: '768P' },
     aspectRatio: { param: 'aspect_ratio', options: WIDE_ASPECTS, auto: 'adaptive' },
@@ -131,7 +146,10 @@ export const FAL_VIDEO_MODELS = Object.freeze([
     // No prompt field at all: the frame and the audio are the whole request.
     prompt: 'none',
     image: { param: 'image_url', required: true },
-    // fal accepts 5s to 15 minutes; the output length follows the audio.
+    // fal accepts 5s to 15 minutes; the output length follows the audio. The queue
+    // OpenAPI schema (checked 2026-10-13) says so; the h3-max-lip-sync marketing page
+    // claims a 15s clip and $0.255/s at 2K, which contradicts the schema and the model
+    // page. $0.32 stays: the higher figure is the safe side for the autopilot dollar cap.
     audioInput: { param: 'audio_url', minSec: 5, maxSec: 900 },
     duration: { kind: 'audio' },
     resolution: { param: 'resolution', options: [...H3_RESOLUTIONS, '2K'], default: '768P' },
@@ -156,6 +174,9 @@ export const FAL_VIDEO_MODELS = Object.freeze([
     // the audio, not just the mouth. Expects a person in the frame.
     id: FAL_AUDIO_VIDEO_MODEL, kind: 'a2v', label: 'OmniHuman v1.5 (audio-driven person)', family: 'omnihuman',
     prompt: 'optional',
+    // Downloads its inputs: a data URI fails with "Failed to download the file"
+    // (#11381), so the frame and audio are hosted on fal's CDN first.
+    hostedInputs: true,
     image: { param: 'image_url', required: true },
     // "Audio must be under 30s long for 1080p generation and under 60s long for 720p".
     audioInput: { param: 'audio_url', minSec: 1, maxSec: 30 },
@@ -166,16 +187,19 @@ export const FAL_VIDEO_MODELS = Object.freeze([
     pricing: { perSecond: 0.16 },
   },
   seedance('bytedance/seedance-2.5/reference-to-video', 'ref2v', 'Seedance 2.5 (reference)', {
-    // Referenced in the prompt as @Image1 / @Audio1. Audio references let a
-    // singer follow supplied audio, but each clip is capped at 30.2s.
-    referenceImages: { param: 'image_urls', max: 30 },
-    referenceAudio: { param: 'audio_urls', max: 10, minSec: 1.8, maxSec: 30.2 },
+    // Referenced in the prompt as @Image1 / @Audio1. There is no start-frame
+    // field: a PortOS start frame is the first reference image. Audio needs an
+    // image reference beside it, and each clip is capped at 30.2s.
+    hostedInputs: true,
+    referenceImages: { param: 'image_urls', max: 30, promptName: '@Image1' },
+    referenceAudio: { param: 'audio_urls', max: 10, minSec: 1.8, maxSec: 30.2, promptName: '@Audio1' },
     aspectRatio: { param: 'aspect_ratio', options: WIDE_ASPECTS, auto: 'auto' },
     seed: 'seed',
   }),
   {
     id: 'fal-ai/kling-video/v3/pro/image-to-video', kind: 'i2v', label: 'Kling v3 Pro (image)', family: 'kling-v3',
     prompt: 'required',
+    promptMaxChars: 2500,
     image: { param: 'start_image_url', required: true },
     endImage: { param: 'end_image_url' },
     duration: { kind: 'range', min: 3, max: 15, wire: 'string', defaultSec: 5 },
@@ -220,8 +244,15 @@ export const getFalVideoModel = (modelId) => (typeof modelId === 'string' ? BY_I
  */
 export const FAL_IMAGE_VIDEO_MODELS = Object.freeze(FAL_VIDEO_MODELS.filter((m) => m.kind === 'i2v'));
 
-/** Models that animate a frame to supplied audio across the whole picture (the music-driven performance lane). */
-export const FAL_AUDIO_VIDEO_MODELS = Object.freeze(FAL_VIDEO_MODELS.filter((m) => m.kind === 'a2v'));
+/**
+ * Models that move a whole frame to supplied audio (the music-driven
+ * performance lane): an audio-to-video model, or a reference model that hears
+ * the song slice as a reference its prompt names ("Audio 1" / @Audio1).
+ */
+export const FAL_AUDIO_VIDEO_MODELS = Object.freeze(FAL_VIDEO_MODELS.filter((m) => m.kind === 'a2v' || m.referenceAudio));
+
+/** Whether `model` hears supplied audio as a prompt-named reference rather than as its source audio. */
+export const falHearsAudioReference = (model) => Boolean(model?.referenceAudio && !model.audioInput);
 
 /** Resolution choices a model offers (empty when it has no resolution parameter). */
 export const falVideoResolutions = (model) => (model?.resolution?.options ? [...model.resolution.options] : []);
@@ -413,6 +444,11 @@ export function buildFalVideoRequest({
     // No native field: fold the negative prompt into the prompt as an "Avoid:"
     // clause — the same fallback grok.js uses for a provider without one.
     const folded = model.negativePrompt === 'fold' && avoid ? `${text}\nAvoid: ${avoid}` : text;
+    // fal refuses an over-cap prompt only after the job is queued, so it is refused
+    // here, before anything is paid for. It is never shortened (AGENTS.md, #11317).
+    if (model.promptMaxChars && folded.length > model.promptMaxChars) {
+      throw refuse(`The prompt is ${folded.length.toLocaleString('en-US')} characters${folded === text ? '' : ' with its "Avoid:" clause'}; ${model.label} takes ${model.promptMaxChars.toLocaleString('en-US')}. Shorten it to render.`);
+    }
     if (folded) body.prompt = folded;
     if (model.negativePrompt === 'native' && avoid) body.negative_prompt = avoid;
   }
@@ -420,13 +456,14 @@ export function buildFalVideoRequest({
   if (model.image) {
     if (imageUrl) body[model.image.param] = imageUrl;
     else if (model.image.required) throw refuse(`${model.label} renders from a start frame — supply a source image`);
-  } else if (model.referenceImages) {
-    // A PortOS start frame becomes the first reference ("Image 1" / @Image1).
-    const refs = [imageUrl, ...(Array.isArray(referenceImageUrls) ? referenceImageUrls : [])].filter(Boolean);
+  } else if (imageUrl && !model.referenceImages) {
+    throw refuse(`${model.label} is text-to-video — it cannot use a source image`);
+  }
+  if (model.referenceImages) {
+    // Without a start-frame field, a PortOS start frame becomes the first reference ("Image 1" / @Image1).
+    const refs = [model.image ? null : imageUrl, ...(Array.isArray(referenceImageUrls) ? referenceImageUrls : [])].filter(Boolean);
     if (refs.length > model.referenceImages.max) throw refuse(`${model.label} takes at most ${model.referenceImages.max} reference images`);
     if (refs.length) body[model.referenceImages.param] = refs;
-  } else if (imageUrl) {
-    throw refuse(`${model.label} is text-to-video — it cannot use a source image`);
   }
   if (endImageUrl) {
     if (!model.endImage) throw refuse(`${model.label} takes no end frame`);

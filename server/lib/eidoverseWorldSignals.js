@@ -30,7 +30,27 @@ export const EIDOVERSE_ATTENTION_REASON_CODES = Object.freeze([
   'backup_failure', 'review_alerts', 'cos_paused',
   'runtime_data_disk_pressure', 'runtime_data_disk_critical',
   'memory_pressure', 'memory_critical',
+  'task_user_terminated', 'task_blocked',
+  'peer_connection_refused', 'peer_transport_failure', 'peer_probe_timeout',
+  'peer_auth_required', 'peer_dns_failure', 'peer_host_unreachable',
+  'peer_health_http_failure', 'peer_failure_unknown',
 ]);
+
+// Read only structured evidence from the failed probe, never its free-text message.
+const PEER_PROBE_REASONS = new Map([
+  ['local_refused', 'peer_connection_refused'],
+  ['tunnel_dial', 'peer_transport_failure'],
+  ['probe_timeout', 'peer_probe_timeout'],
+  ['auth_required', 'peer_auth_required'],
+  ['dns', 'peer_dns_failure'],
+  ['host_unreachable', 'peer_host_unreachable'],
+  ['probe_http', 'peer_health_http_failure'],
+]);
+
+const peerAttentionReasons = (peer) => [{
+  code: (peer.lastProbe?.ok === false && PEER_PROBE_REASONS.get(peer.lastProbe.class)) || 'peer_failure_unknown',
+  affectedCount: 1,
+}];
 
 const coarseStatus = (value) => {
   const status = String(value || '').toLowerCase();
@@ -415,9 +435,16 @@ export function buildEidoverseWorldSignals({
   const projectedTasks = Array.isArray(taskState?.tasks)
     ? taskState.tasks
       .filter((task) => !['completed', 'done', 'archived'].includes(String(task?.status || '').toLowerCase()))
-      .map((task, index) => ({
-        id: opaqueId('task', task.id, `task-${index}`), label: 'Active task', status: taskSignalStatus(task),
-      }))
+      .map((task, index) => {
+        const status = taskSignalStatus(task);
+        return {
+          id: opaqueId('task', task.id, `task-${index}`), label: 'Active task', status,
+          ...(includeAttentionReasons && status === 'error' ? { attentionReasons: [{
+            code: task.metadata?.blockedCategory === 'user-terminated' ? 'task_user_terminated' : 'task_blocked',
+            affectedCount: 1,
+          }] } : {}),
+        };
+      })
     : null;
   const projectedFeatures = Array.isArray(featuresState?.features)
     ? featuresState.features.map((feature) => ({
@@ -432,6 +459,8 @@ export function buildEidoverseWorldSignals({
       enabled: peer.enabled !== false,
       fullSync: peer.fullSync === true,
       status: coarseStatus(peer.status),
+      ...(includeAttentionReasons && coarseStatus(peer.status) === 'error'
+        ? { attentionReasons: peerAttentionReasons(peer) } : {}),
     }))
     : null;
   const health = healthSnapshot({ apps, cosStatus, review, backupState, notifications, character, voiceConfig, memory, diskPercent }, includeAttentionReasons);

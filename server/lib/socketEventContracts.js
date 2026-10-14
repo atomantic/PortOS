@@ -44,6 +44,24 @@ const loomRunSnapshot = (production) => Object.freeze({
 });
 
 export const SOCKET_EVENT_CONTRACTS = Object.freeze({
+  'cos:agent:feedback': {
+    direction: 'server-to-client',
+    summary: 'Persisted agent feedback after the pending-feedback index has been updated; CoS subscribers only.',
+    payloadSchema: {
+      type: 'object', required: ['agentId', 'feedback'],
+      properties: {
+        agentId: { type: 'string' },
+        feedback: {
+          type: 'object', required: ['rating', 'comment', 'submittedAt'],
+          properties: {
+            rating: { type: 'string', enum: ['positive', 'negative', 'neutral'] },
+            comment: { type: ['string', 'null'] },
+            submittedAt: { type: 'string' },
+          },
+        },
+      },
+    },
+  },
   'peer-execution:changed': Object.freeze({ direction: 'server-to-client', summary: 'Invalidate authenticated peer execution setup and status; no credentials or operation data.', payloadSchema: { type: 'null' } }),
   'genome:clinvar-progress': {
     direction: 'server-to-client', summary: 'ClinVar download and indexing progress for an optional client request ID.',
@@ -381,6 +399,30 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
       },
       required: ['boardId', 'status'],
       additionalProperties: false,
+    },
+  },
+  'mood-board:generate': {
+    direction: 'server-to-client',
+    summary: 'Mood board prompt-writing and image enqueue progress; render progress uses media jobs.',
+    payloadSchema: {
+      type: 'object',
+      properties: {
+        boardId: { type: 'string' }, requestId: { type: 'string' },
+        status: { type: 'string', enum: ['running', 'queued', 'failed'] },
+        phase: { type: ['string', 'null'] }, total: { type: 'integer' },
+        error: { type: ['string', 'null'] }, revision: { type: 'integer' }, epoch: { type: 'string' },
+        items: { type: 'array', items: { type: 'object', properties: {
+          itemId: { type: ['string', 'null'] }, jobId: { type: ['string', 'null'] },
+        }, required: ['itemId', 'jobId'], additionalProperties: false } },
+        // The exact prompt-writing request and the blocks PortOS added (#11317).
+        sentInput: { type: 'object', properties: {
+          sentPrompt: { type: 'string' },
+          promptAdditions: { type: 'array', items: { type: 'object', properties: {
+            id: { type: 'string' }, label: { type: 'string' }, text: { type: 'string' },
+          }, required: ['id', 'label', 'text'], additionalProperties: false } },
+        }, required: ['sentPrompt', 'promptAdditions'], additionalProperties: false },
+      },
+      required: ['boardId', 'requestId', 'status', 'revision', 'epoch', 'items'], additionalProperties: false,
     },
   },
   'mood-board:item-render': {

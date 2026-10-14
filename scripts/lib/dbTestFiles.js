@@ -9,6 +9,7 @@ import { posix } from 'node:path';
  * listed explicitly below (the drift guard fails the build if you forget).
  */
 export const DB_TEST_INCLUDE = [
+  'services/stackerNews.db.test.js',
   'services/peerExecutionLedger.db.test.js',
   'services/voice/profiles.db.test.js',
   'services/voice/studio.db.test.js',

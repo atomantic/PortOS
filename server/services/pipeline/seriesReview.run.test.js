@@ -123,6 +123,18 @@ describe('runSeriesReview — pass concurrency (#4108)', () => {
     expect(order.indexOf('checks:end')).toBeLessThan(order.indexOf('getReview'));
   });
 
+  // Uniquely catches the note's routing instructions and policy clause staying
+  // hidden from the verdict the panel shows (#11317).
+  it('records what the note was sent to the AI as on the verdict', async () => {
+    const { runStageScopedInlineLLM } = await import('../stageRunner.js');
+    const result = await run({ feedback: 'the middle sags' });
+    const sent = runStageScopedInlineLLM.mock.calls.at(-1)[1];
+    expect(result.feedbackInput.sentPrompt).toBe(sent);
+    expect(sent).toContain('the middle sags');
+    expect(result.feedbackInput.promptAdditions.map((item) => item.label)).toEqual(['Creative latitude (operator policy)', 'Note routing instructions']);
+    expect((await run()).feedbackInput).toBeUndefined();
+  });
+
   it('still carries every dimension into the verdict payload', async () => {
     const result = await run();
     expect(result.foundation).toMatchObject({ weightedScore: 9 });

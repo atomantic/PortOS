@@ -8,6 +8,7 @@ import AutoSizeTextarea from '../ui/AutoSizeTextarea';
 import useProviderModels from '../../hooks/useProviderModels';
 import { generateImage, generateVideo, refineMediaPrompt } from '../../services/api';
 import { getRenderConfigForItem } from './normalize';
+import SentPromptPanel from './SentPromptPanel';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 
 // Refine→queue forces text-to-video; the source image/last-frame from the
@@ -37,6 +38,7 @@ export default function PromptRefineModal({ item, open, onClose }) {
   const [refinedPrompt, setRefinedPrompt] = useState('');
   const [refinedNegative, setRefinedNegative] = useState('');
   const [rationale, setRationale] = useState('');
+  const [sent, setSent] = useState(null);
   const [refining, setRefining] = useState(false);
   const [queueing, setQueueing] = useState(false);
 
@@ -45,6 +47,7 @@ export default function PromptRefineModal({ item, open, onClose }) {
     setRefinedPrompt('');
     setRefinedNegative('');
     setRationale('');
+    setSent(null);
   }, [open, item?.key]);
 
   const hasResult = refinedPrompt !== '' || rationale !== '';
@@ -80,6 +83,7 @@ export default function PromptRefineModal({ item, open, onClose }) {
       setRefinedPrompt(result.prompt || '');
       setRefinedNegative(result.negativePrompt || '');
       setRationale(result.rationale || '');
+      setSent(typeof result.sentPrompt === 'string' ? { sentPrompt: result.sentPrompt, additions: result.promptAdditions || [] } : null);
     } catch {
       // request() already toasted the server's error message.
     } finally {
@@ -184,6 +188,12 @@ export default function PromptRefineModal({ item, open, onClose }) {
                 <p className="text-sm text-gray-300 bg-port-bg border border-port-border rounded-lg p-3">
                   {rationale}
                 </p>
+              )}
+              {sent && (
+                <div className="text-xs">
+                  <span className="block mb-1 text-gray-500">Sent to the AI</span>
+                  <SentPromptPanel prompt={feedback.trim()} sentPrompt={sent.sentPrompt} additions={sent.additions} />
+                </div>
               )}
 
               <FormField label="New prompt" labelClassName="block text-[11px] uppercase tracking-wide text-gray-500 mb-1">

@@ -14,6 +14,12 @@ const enqueueJob = vi.fn(async () => ({ jobId: 'job-image' }));
 const submitVideoGenJob = vi.fn(async () => ({ jobId: 'job-video' }));
 vi.mock('../mediaJobQueue/index.js', () => ({ enqueueJob: (...a) => enqueueJob(...a) }));
 vi.mock('../videoGen/submitJob.js', () => ({ submitVideoGenJob: (...a) => submitVideoGenJob(...a) }));
+// Which local model a route renders on: an LTX-2.5 pin, else the install default.
+vi.mock('../videoGen/modelSelection.js', () => ({
+  resolveVideoModelSelection: async (modelId) => (modelId === 'ltx25_example'
+    ? { modelId, model: { id: modelId, runtime: 'ltx25' } }
+    : { modelId: 'fastmetal_example', model: { id: 'fastmetal_example', runtime: 'fastmetal' } }),
+}));
 vi.mock('./productionService.js', () => ({ assertProductionSubmission: vi.fn(async () => {}) }));
 const assertRevisionOpen = vi.fn(async () => {});
 vi.mock('./revisionService.js', () => ({ assertRevisionOpen: (...a) => assertRevisionOpen(...a) }));
@@ -151,7 +157,7 @@ describe('production scene dispatch (#9066)', () => {
     const clipTag = { ...tag, productionStepKey: 'clip:mvs-a:base:1' };
     await dispatchProductionStep({ stepKind: 'clip', project, scene, route: { kind: 'video', mode: 'grok', model: null }, tag: clipTag, settings });
     expect(submitVideoGenJob).toHaveBeenCalledWith(expect.objectContaining({
-      backend: 'grok', mode: 'image', sourceImageFile: 'frame-example.png', grokDuration: 6, musicVideo: clipTag,
+      backend: 'grok', mode: 'image', sourceImageFile: 'frame-example.png', grokDuration: 6, musicVideo: { ...clipTag, compose: true }, prompt: 'waves roll',
     }), {});
   });
 
@@ -196,5 +202,16 @@ describe('production scene dispatch (#9066)', () => {
     await dispatchProductionStep({ stepKind: 'clip', project: onModel('fal-ai/kling-video/v3/pro/image-to-video'), scene, route: fal, tag: clipTag, settings });
     for (const call of submitVideoGenJob.mock.calls.slice(1)) expect(call[0]).not.toHaveProperty('lastImageFile');
   });
-});
 
+  // Uniquely catches a local LTX clip that drops a shot's end frame (#11258),
+  // or one sent to a single-frame local model that would ignore it anyway.
+  it('ends a local clip on the end frame only on a model that anchors the last frame', async () => {
+    const clipTag = { ...tag, productionStepKey: 'clip:mvs-a:base:1' };
+    const styleBreak = { ...scene, endImageId: 'end-example.png' };
+    await dispatchProductionStep({ stepKind: 'clip', project, scene: styleBreak, route: { kind: 'video', mode: 'local', model: 'ltx25_example' }, tag: clipTag, settings });
+    expect(submitVideoGenJob.mock.calls[0][0]).toMatchObject({ backend: 'local', mode: 'fflf', sourceImageFile: 'frame-example.png', lastImageFile: 'end-example.png' });
+    await dispatchProductionStep({ stepKind: 'clip', project, scene: styleBreak, route: { kind: 'video', mode: 'local', model: null }, tag: clipTag, settings });
+    expect(submitVideoGenJob.mock.calls[1][0]).toMatchObject({ backend: 'local', mode: 'image' });
+    expect(submitVideoGenJob.mock.calls[1][0]).not.toHaveProperty('lastImageFile');
+  });
+});

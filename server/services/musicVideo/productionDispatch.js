@@ -29,8 +29,8 @@ import { withMusicVideoStyle } from './styleReferences.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { resolveGalleryImage } from '../../lib/pathSafety.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
-import { approximateMotionCues, falSceneTake, falTakeRequestFields, grokCoverage } from '../../lib/musicVideoShotTiming.js';
-import { sceneFramePrompt, sceneShotPrompt } from './handoff.js';
+import { falSceneTake, falTakeRequestFields, grokCoverage } from '../../lib/musicVideoShotTiming.js';
+import { authoredShotPrompt, musicVideoFrameModelInput } from '../../lib/musicVideoShotPrompt.js';
 import { sceneEndFrameRequestFields } from '../../lib/musicVideoEndFrame.js';
 import { conditioningReferences, falRouteVideoSettings } from './productionPool.js';
 import { musicVideoFrameGenSize } from '../../lib/musicVideoAspect.js';
@@ -48,13 +48,11 @@ async function guardRevision(tag, kind) {
 
 /** Enqueue a scene's reference frame on exactly `route`. Returns `{ jobId }`. */
 async function dispatchFrame({ project, scene, route, tag, settings }) {
-  const basePrompt = sceneFramePrompt(project, scene);
   const repairing = project.productionRuns?.find((run) => run.id === tag.productionRunId)?.steps?.find((step) => step.key === tag.productionStepKey)?.plateRepairBasis;
   const unmet = repairing ? (scene.takes || []).flatMap((take) => currentPlateEvidence(scene, take)?.checks.filter((check) => check.status === 'fail').map((check) => `${check.requirement}: ${check.note}`) || []) : [];
   // The autonomous run's stills review names what the last still got wrong (autonomousService.js).
   const fixes = typeof scene.stillFixes?.text === 'string' ? scene.stillFixes.text : '';
-  const prompt = basePrompt && [basePrompt, unmet.length ? `Repair these visible plate mismatches while preserving the shot intent:\n${[...new Set(unmet)].join('\n')}` : '',
-    fixes ? `Fix these visible problems from the previous still while preserving the shot intent:\n${fixes}` : ''].filter(Boolean).join('\n');
+  const { prompt, promptAdditions } = musicVideoFrameModelInput(project, scene, { repairs: unmet, fixes });
   if (!prompt) throw unprompted(scene, 'frame');
   const referenceImagePaths = conditioningReferences(project, scene)
     .map((ref) => resolveGalleryImage(ref.imageId, { mustExist: false })).filter(Boolean);
@@ -71,6 +69,7 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
   const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, route.mode);
   const common = {
     prompt,
+    ...(promptAdditions.length ? { promptAdditions } : {}),
     // The project's aspect, never the backend's per-prompt choice (a portrait
     // close-up pillarboxes in a 16:9 render).
     ...musicVideoFrameGenSize(project),
@@ -109,15 +108,13 @@ async function dispatchClip({ project, scene, route, tag }) {
   if (!scene.referenceImageId) {
     throw new ServerError(`"${scene.label || scene.sceneId}" has no reference frame yet`, { status: 409, code: 'PRODUCTION_FRAME_MISSING' });
   }
-  const base = sceneShotPrompt(project, scene);
-  if (!base) throw unprompted(scene, 'shot');
+  // The director's text; the submit service composes the rest as labeled additions (#11317).
+  const prompt = authoredShotPrompt(scene);
+  if (!prompt) throw unprompted(scene, 'shot');
   const spanSec = typeof scene.startSec === 'number' && typeof scene.endSec === 'number' && scene.endSec > scene.startSec
     ? scene.endSec - scene.startSec : null;
-  const isGrok = route.mode === 'grok';
   // The autonomous run's pilot repair names what the last clip got wrong (autonomousService.js).
   const fixes = typeof scene.clipFixes?.text === 'string' ? scene.clipFixes.text : '';
-  const prompt = [base, isGrok ? approximateMotionCues(project.phrases, scene.startSec, scene.endSec) : '',
-    fixes ? `Fix these problems from the previous take while preserving the shot intent: ${fixes}` : ''].filter(Boolean).join('. ');
   const byBackend = {
     // A supplied-audio route animates the frame from its shot's own song window.
     local: route.audio === 'supplied' ? { modelId: route.model, mode: 'a2v', _suppliedAudio: true } : { modelId: route.model, disableAudio: true },
@@ -125,6 +122,11 @@ async function dispatchClip({ project, scene, route, tag }) {
     fal: falClipParams(project, scene, route),
     reactor: { disableAudio: true },
   };
+  // A local model ends on the end frame only when its runtime anchors the last
+  // frame (#11258), so the plan needs the model this route actually renders on.
+  const localRuntime = route.mode === 'local' && scene.endImageId
+    ? (await (await import('../videoGen/modelSelection.js')).resolveVideoModelSelection(route.model || undefined)).model?.runtime ?? null
+    : null;
   const { submitVideoGenJob } = await import('../videoGen/submitJob.js');
   // The submit service runs the revision guard itself as its last step before
   // the queue write (submitJob.js), like every board-submitted clip.
@@ -134,9 +136,12 @@ async function dispatchClip({ project, scene, route, tag }) {
     mode: 'image',
     sourceImageFile: scene.referenceImageId,
     ...(byBackend[route.mode] || {}),
-    // A style-break end frame (#11173), when this fal model takes one.
-    ...sceneEndFrameRequestFields(scene, { backend: route.mode, falModelId: byBackend.fal?.falModelId }),
-    musicVideo: tag,
+    // A style-break end frame (#11173), when this fal or local model takes one.
+    ...sceneEndFrameRequestFields(scene, {
+      backend: route.mode, falModelId: byBackend.fal?.falModelId, mode: byBackend[route.mode]?.mode || 'image', localRuntime,
+    }),
+    musicVideo: { ...tag, compose: true },
+    ...(fixes ? { _clipFixes: fixes } : {}),
   }, {});
   return { jobId };
 }

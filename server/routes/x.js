@@ -60,6 +60,9 @@ router.delete('/accounts/:id', asyncHandler(async (req, res) => {
   res.status(204).send();
 }));
 
+// Sync and destination open execute CDP browser automation or handoffs on the host;
+// draft review authorizes a public post and compose open launches the CDP compose
+// view. All four require operator authority via the central host-control gate.
 router.post('/accounts/:id/sync', asyncHandler(async (req, res) => {
   requireId(req.params.id, 'account ID');
   const result = await x.syncAccount(req.params.id);

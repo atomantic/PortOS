@@ -1110,6 +1110,30 @@ describe('emitOnDemandEmpty', () => {
     expect(events[0]).toMatchObject({ taskType: 'pr-watcher', outcome: 'idle', reason: null });
   });
 
+  it.each([
+    ['manual', { shouldRun: false, reason: 'on-demand-only' }, null],
+    ['disabled app', { shouldRun: false, reason: 'disabled-for-app' }, null],
+    ['disabled task', { shouldRun: false, reason: 'disabled' }, null],
+    ['app cron', { shouldRun: false, reason: 'cron-cooldown', nextRunAt: '2999-01-02T00:00:00Z' }, '2999-01-02T00:00:00Z'],
+  ])('emits only the actual automatic retry for %s', async (_name, readiness, expected) => {
+    const events = [];
+    const handler = event => events.push(event);
+    cosEvents.on('schedule:on-demand-empty', handler);
+    const shouldRunTask = vi.fn(async () => readiness);
+    try {
+      await emitOnDemandEmpty({
+        taskScheduleMod: { ...stubMod, shouldRunTask,
+          getPerpetualParkInfo: async () => ({ parkedUntil: '2999-01-01T00:00:00Z', parkReason: 'branches-blocked', parkCounts: { heldDetached: 1 }, parkSkipCauses: { 'worktree-locked': 1 } }) },
+        request: { id: 'retry-test', taskType: 'branch-reconcile' },
+        targetApp: { id: 'app-1', name: 'Example App' },
+        taskConfig: { enabled: true, type: 'on-demand', perpetual: false }
+      });
+    } finally { cosEvents.off('schedule:on-demand-empty', handler); }
+    expect(shouldRunTask).toHaveBeenCalledWith('branch-reconcile', 'app-1');
+    expect(events[0]).toMatchObject({ outcome: 'parked', nextAutoRecheckAt: expected,
+      counts: { heldDetached: 1 }, skipCauses: { 'worktree-locked': 1 } });
+  });
+
   // Default: gh is healthy, so no test inherits a previous one's stubbed fault.
   beforeEach(() => {
     ghHealth.mockReset();
@@ -1623,7 +1647,7 @@ describe('ignoreTaskId reaches the in-flight-counting gates (#3179)', () => {
   it('queueEligibleImprovementTasks passes its ignoreTaskId down to the generator', () => {
     // It already forwards the same id to addTask and buildImprovementDedupSets;
     // the generator was the one path that dropped it.
-    expect(GEN_SRC).toMatch(/prepareManagedAppImprovementTask\(nextType, app, state, \{[\s\S]*ignoreTaskId[\s\S]*\}\)/);
+    expect(GEN_SRC).toMatch(/prepareTask\(nextType, app, state, \{[\s\S]*ignoreTaskId[\s\S]*\}\)/);
   });
 
   it('the perpetual gate hands ignoreTaskId to the work detector', () => {

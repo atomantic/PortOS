@@ -282,16 +282,15 @@ describe('buildSidecarArgs', () => {
     outputPath: '/data/music/music-gen-abc.wav',
   };
 
-  it('strips markdown emphasis out of the prompt for every engine', () => {
-    // The prompt box is a plain textarea; users type markdown into it out of
-    // habit and the text encoders tokenize `**`/`_` as literal content.
+  it('preserves the caption including Markdown and whitespace for every engine', () => {
+    // Regression: the sidecar must receive the caption shown by prompt preview.
     const textArg = (args) => args[args.indexOf('--text') + 1];
     for (const engineId of Object.keys(ENGINES)) {
       const { args } = buildSidecarArgs({
         ...base, engineId, repo: 'some/repo',
-        prompt: 'slow-burning, cinematic instrumental with a **dark** `analog` pulse',
+        prompt: '  slow-burning, cinematic instrumental with a **dark** `analog` pulse\n',
       });
-      expect(textArg(args), engineId).toBe('slow-burning, cinematic instrumental with a dark analog pulse');
+      expect(textArg(args), engineId).toBe('  slow-burning, cinematic instrumental with a **dark** `analog` pulse\n');
     }
   });
 
@@ -832,13 +831,13 @@ describe('instrumental lyrics fallback', () => {
   const base = { pythonPath: '/venv/bin/python3', prompt: 'cinematic electronic instrumental', durationSec: 60, outputPath: '/tmp/out.wav' };
   const lyricsArg = (args) => args[args.indexOf('--lyrics') + 1];
 
-  it('substitutes a documented structure-tag sheet when MiniMax Music 3 gets no lyrics', () => {
+  it('adds a documented structure-tag sheet while preserving whitespace-only MiniMax input', () => {
     // The checkpoint's tokenize step raises on an empty string, so an
     // instrumental prompt used to die with "`lyrics` must be a non-empty
     // string" after the model had already loaded.
     for (const lyrics of [undefined, '', '   ', '\n\t ']) {
       const { args } = buildSidecarArgs({ ...base, engineId: 'minimax-music3', repo: 'MiniMaxAI/MiniMax-Music3', lyrics });
-      expect(lyricsArg(args), `lyrics=${JSON.stringify(lyrics)}`).toBe(buildMinimaxInstrumentalLyrics(60));
+      expect(lyricsArg(args), `lyrics=${JSON.stringify(lyrics)}`).toBe(`${lyrics || ''}${lyrics ? '\n' : ''}${buildMinimaxInstrumentalLyrics(60)}`);
     }
   });
 
@@ -970,9 +969,9 @@ describe('ensureClosingSection', () => {
     expect(ensureClosingSection('outro')).toBe('outro\n[outro]');
   });
 
-  it('trims trailing whitespace before appending and emits a single cue', () => {
-    expect(ensureClosingSection('[verse]\nsing\n\n   ')).toBe('[verse]\nsing\n[outro]');
+  it('preserves authored whitespace before appending the closing cue', () => {
+    expect(ensureClosingSection('[verse]\nsing\n\n   ')).toBe('[verse]\nsing\n\n   \n[outro]');
     expect(ensureClosingSection('')).toBe('[outro]');
-    expect(ensureClosingSection('   \n  ')).toBe('[outro]');
+    expect(ensureClosingSection('   \n  ')).toBe('   \n  \n[outro]');
   });
 });

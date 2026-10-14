@@ -878,7 +878,7 @@ describe('stream error containment', () => {
     let reached; let finish;
     const reachedPromise = new Promise(resolve => { reached = resolve; });
     const finishPromise = new Promise(resolve => { finish = resolve; });
-    writeFileGuarded.mockImplementation((path, bytes) => fs.writeFile(path, bytes));
+    writeFileGuarded.mockImplementation((path, bytes, options) => fs.writeFile(path, bytes, options));
     const persistedLines = [];
     agentStateMocks.appendAgentOutputLines.mockImplementation(async (_id, batch) => {
       reached(); await finishPromise;
@@ -916,6 +916,123 @@ describe('stream error containment', () => {
       agentStateMocks.appendAgentOutputLines.mockResolvedValue(undefined);
       await fs.rm(dir, { recursive: true, force: true });
     }
+  });
+
+  describe('incremental transcript persistence', () => {
+    let fs;
+    let dir;
+    let writeFileGuarded;
+    let activeAgents;
+    beforeEach(async () => {
+      fs = await vi.importActual('node:fs/promises');
+      const { tmpdir } = await import('node:os');
+      ({ writeFileGuarded } = await import('../lib/fileUtils.js'));
+      ({ activeAgents } = await import('./agentState.js'));
+      dir = await fs.mkdtemp(join(tmpdir(), 'cli-transcript-'));
+      writeFileGuarded.mockReset();
+      writeFileGuarded.mockImplementation((path, bytes, options) => fs.writeFile(path, bytes, options));
+    });
+    afterEach(async () => {
+      writeFileGuarded.mockResolvedValue(undefined);
+      await fs.rm(dir, { recursive: true, force: true });
+    });
+    const finish = async () => {
+      fakeProcess.emit('close', 0);
+      await vi.waitFor(() => expect(runSpawnerCompletionCleanup).toHaveBeenCalled());
+    };
+    const emitTextAndFlush = async text => {
+      fakeProcess.stdout.emit('data', Buffer.from(text));
+      await activeAgents.get('agent-test').flushOutput();
+    };
+
+    it('writes a growing transcript once per byte plus the terminal rewrite, preserving mixed UTF-8 output', async () => {
+      // 240 flushes model one minute at the 250ms batch cadence without sleeps.
+      // Before the stderr suffix, full-prefix writes submitted 238,878,720
+      // bytes for 1,966,080 bytes of output; deltas plus final rewrite need 3,932,160.
+      await fs.writeFile(join(dir, 'output.txt'), 'stale previous transcript');
+      await spawnDirectly({ ...minimalArgs, agentDir: dir,
+        cliConfig: { command: 'claude', args: [], stdinMode: 'prompt', streamFormat: 'text' } });
+      const chunk = `é${'x'.repeat(8189)}\n`;
+      for (let i = 0; i < 240; i++) await emitTextAndFlush(chunk);
+      fakeProcess.stderr.emit('data', Buffer.from('尾\n'));
+      await activeAgents.get('agent-test').flushOutput();
+      const expected = `${chunk.repeat(240)}[stderr] 尾\n`;
+      expect(await fs.readFile(join(dir, 'output.txt'), 'utf8')).toBe(expected);
+      await finish();
+      expect(await fs.readFile(join(dir, 'output.txt'), 'utf8')).toBe(expected);
+      const submittedBytes = writeFileGuarded.mock.calls.reduce((sum, [, bytes]) => sum + Buffer.byteLength(bytes), 0);
+      expect(submittedBytes).toBe(Buffer.byteLength(expected) * 2);
+    });
+
+    it('rewrites after an uncertain partial append instead of duplicating or dropping its bytes', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      await spawnDirectly({ ...minimalArgs, agentDir: dir,
+        cliConfig: { command: 'claude', args: [], stdinMode: 'prompt', streamFormat: 'text' } });
+      await emitTextAndFlush('first\n');
+      writeFileGuarded.mockImplementationOnce(async (path, bytes, options) => {
+        await fs.writeFile(path, bytes.slice(0, 3), options);
+        throw Object.assign(new Error('synthetic partial write'), { code: 'EIO' });
+      });
+      await emitTextAndFlush('second\n');
+      await emitTextAndFlush('third\n');
+      expect(await fs.readFile(join(dir, 'output.txt'), 'utf8')).toBe('first\nsecond\nthird\n');
+      expect(agentStateMocks.updateAgent).toHaveBeenCalledWith('agent-test', {
+        metadata: { transcriptWriteFailed: { file: 'output.txt', code: 'EIO' } },
+      });
+      await finish();
+    });
+
+    it('waits for an already draining transcript before a second manual drain can finish', async () => {
+      await spawnDirectly({ ...minimalArgs, agentDir: dir,
+        cliConfig: { command: 'claude', args: [], stdinMode: 'prompt', streamFormat: 'text' } });
+      let reached;
+      let release;
+      const reachedPromise = new Promise(resolve => { reached = resolve; });
+      const blocked = new Promise(resolve => { release = resolve; });
+      writeFileGuarded.mockImplementationOnce(async (path, bytes, options) => {
+        reached();
+        await blocked;
+        await fs.writeFile(path, bytes, options);
+      });
+      const first = emitTextAndFlush('complete before termination\n');
+      await reachedPromise;
+      let drained = false;
+      const second = activeAgents.get('agent-test').flushOutput().then(() => { drained = true; });
+      try {
+        await new Promise(resolve => setImmediate(resolve));
+        expect(drained).toBe(false);
+      } finally { release(); }
+      await Promise.all([first, second]);
+      expect(await fs.readFile(join(dir, 'output.txt'), 'utf8')).toBe('complete before termination\n');
+      await finish();
+    });
+
+    it('replaces streamed progress with the authoritative result when close overlaps a write', async () => {
+      await spawnDirectly({ ...minimalArgs, agentDir: dir });
+      const delta = text => JSON.stringify({ type: 'stream_event', event: {
+        type: 'content_block_delta', delta: { type: 'text_delta', text },
+      } }) + '\n';
+      await emitTextAndFlush(delta('initial progress\n'));
+      let reached;
+      let release;
+      const reachedPromise = new Promise(resolve => { reached = resolve; });
+      const blocked = new Promise(resolve => { release = resolve; });
+      writeFileGuarded.mockImplementationOnce(async (path, bytes, options) => {
+        reached();
+        await blocked;
+        await fs.writeFile(path, bytes, options);
+      });
+      const flushing = emitTextAndFlush(delta('later progress\n'));
+      await reachedPromise;
+      fakeProcess.stdout.emit('data', Buffer.from(delta('last fragment') + JSON.stringify({
+        type: 'result', result: 'Final result that differs from the streamed progress.',
+      }) + '\n'));
+      const finishing = finish();
+      release();
+      await Promise.all([flushing, finishing]);
+      expect(await fs.readFile(join(dir, 'output.txt'), 'utf8'))
+        .toBe('Final result that differs from the streamed progress.');
+    });
   });
 
   it('detects a fallback signal and terminates immediately even while an earlier transcript write is blocked, keeping output ordered (#2384)', async () => {

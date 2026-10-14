@@ -41,7 +41,7 @@ export async function setHistoryItemHidden(id, hidden) {
   return result;
 }
 
-export async function deleteHistoryItem(id) {
+export async function deleteHistoryItem(id, { forgetInMusicVideos = true } = {}) {
   // One lease covers the history read, file removals, history rewrite, and
   // derived row removal; per-file admission would leave gaps between stores.
   return withBackupAssetPublication(async () => {
@@ -75,6 +75,9 @@ export async function deleteHistoryItem(id) {
     await import('../mediaAssetIndex/index.js')
       .then((m) => m.unindexVideo(id))
       .catch((err) => console.error(`❌ Media index video delete hook: ${err.message}`));
+    // Music videos forget it too (their unused takes, marks and collection rows);
+    // a batch delete from a video's asset manager forgets its whole batch at once.
+    if (forgetInMusicVideos) await import('../musicVideo/mediaPool.js').then((m) => m.forgetDeletedMusicVideoAssets([`video:${id}`]));
     console.log(`🗑️ Deleted video: ${item.filename}`);
     return { ok: true };
   });

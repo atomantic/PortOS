@@ -251,6 +251,8 @@ export const DEFAULT_EXCLUDES = [
   { path: '/code-animation-workspaces/', reason: 'In-flight sandboxed Code Animation worker workspaces — removed when each run ends', overridable: false },
   { path: '/code-animation-exports/', reason: 'Code Animation frame-exact export staging — the stored HTML plus render shim, staged once per export', overridable: true },
   { path: '/music-video-compositions/', reason: 'In-flight music-video typography overlay scratch — removed when its render ends and swept at boot', overridable: false },
+  { path: '/music-video-film-look/', reason: 'In-flight music-video film look pass (a staged link to the finished render) — removed when the pass ends', overridable: false },
+  { path: '/music-video-stats-outro/', reason: 'In-flight music-video outro page (fonts and floor stills) — removed when its render ends and swept at boot', overridable: false },
   { path: '/music-video-song-renders/', reason: 'In-flight music-video composition renders (a staged copy of the document plus scene media) — removed when the render ends and swept at boot', overridable: false },
   { path: '/launch-videos/*/*/proofs/', reason: 'Launch-video critique-loop contact sheets — re-rendered from the run composition', overridable: true },
   { path: '/cache/', reason: 'Remote-API metadata and licensed reading caches — regenerable on demand, and stale on restore anyway', overridable: false },
@@ -617,19 +619,28 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
 
   let changedFiles = [];
   let manifest;
+  let previousSnapshotId;
+
+  const removeMarker = (path, marker) => unlink(path).catch(cause => {
+    if (cause.code === 'ENOENT') return;
+    // Raw filesystem errors can contain the private backup destination.
+    const code = ['EACCES', 'EPERM', 'EIO', 'ENOSPC', 'EROFS', 'ENOTDIR', 'EMFILE', 'ENFILE', 'EBUSY'].includes(cause.code) ? cause.code : 'UNKNOWN';
+    console.error(`❌ Backup snapshot finalization failed: snapshot=${snapshotId} marker=${marker} code=${code}`);
+    throw new ServerError(`Backup snapshot finalization failed (${marker} marker, ${code})`, {
+      code: 'BACKUP_SNAPSHOT_FINALIZATION_FAILED',
+    });
+  });
 
   const clearInProgressMarkers = async () => {
-    if (snapshotDir) await unlink(markerPath(snapshotDir)).catch(() => {});
-    if (parentMarker) await unlink(parentMarker).catch(() => {});
+    if (snapshotDir) await removeMarker(markerPath(snapshotDir), 'snapshot');
+    if (parentMarker) await removeMarker(parentMarker, 'reservation');
   };
 
   const releaseActiveSnapshot = () => {
     activeSnapshotId = null;
   };
 
-  const complete = async (result) => {
-    if (snapshotDir) await unlink(failedMarkerPath(snapshotDir)).catch(() => {});
-    await clearInProgressMarkers();
+  const complete = (result) => {
     releaseActiveSnapshot();
     setBackupRunning(false, 'completion');
     return result;
@@ -642,10 +653,15 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
     const failureRecorded = snapshotDir
       ? await writeFile(failedMarkerPath(snapshotDir), '').then(() => true, () => false)
       : false;
-    if (failureRecorded) await clearInProgressMarkers();
+    // Cleanup errors are already logged by removeMarker. The durable failure
+    // marker blocks restore even if cleanup fails; always release the run lock.
+    if (failureRecorded) await clearInProgressMarkers().catch(() => {});
     releaseActiveSnapshot();
     setBackupRunning(false, 'failure');
-    const failureState = { lastRun: new Date().toISOString(), status: 'error', error: err.message, pgBackup: null };
+    const failureState = {
+      lastRun: new Date().toISOString(), status: 'error', error: err.message, pgBackup: null,
+      ...(previousSnapshotId !== undefined ? { lastSnapshotId: previousSnapshotId } : {}),
+    };
     await saveState(failureState, (cause) => {
       const code = ['EACCES', 'EPERM', 'EIO', 'ENOSPC', 'EROFS', 'ENOENT', 'EMFILE', 'ENFILE'].includes(cause.code) ? cause.code : 'UNKNOWN';
       failedStateProjection = { ...failureState, error: `Backup failed; status persistence failed (${code}). See server logs.` };
@@ -734,8 +750,15 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
       releaseSnapshotCut();
     }
 
+    // A backup is not complete while its durable guards still block restore.
+    // Keep the reservation guard until success is persisted: if both the
+    // status write and failure-marker write fail, it must survive a restart.
+    await removeMarker(failedMarkerPath(snapshotDir), 'failed');
+    await removeMarker(markerPath(snapshotDir), 'snapshot');
+
     const status = backupStatusForPg(pgResult);
     const lastRun = new Date().toISOString();
+    previousSnapshotId = (await getState()).lastSnapshotId;
     await saveState({
       lastRun,
       lastSnapshotId: snapshotId,
@@ -745,6 +768,8 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
       assetConsistency,
       error: pgResult.status === 'failed' ? `DB dump ${pgResult.reason}` : null
     });
+
+    await removeMarker(parentMarker, 'reservation');
 
     if (io) io.emit('backup:completed', { snapshotId, filesChanged: changedFiles.length, status, pgBackup: pgResult });
 
@@ -761,10 +786,10 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
       }
     }
 
-    const result = await complete({ snapshotId, filesChanged: changedFiles.length, status, lastRun, manifest, pgBackup: pgResult, assetConsistency });
+    const result = complete({ snapshotId, filesChanged: changedFiles.length, status, lastRun, manifest, pgBackup: pgResult, assetConsistency });
 
-    // Prune only after `complete()` has cleared this snapshot's own
-    // `.in-progress` marker and released `activeSnapshotId` — pruning any
+    // Prune only after the snapshot markers are cleared and `complete()` has
+    // released `activeSnapshotId` — pruning any
     // earlier would make the run's OWN fresh snapshot read as incomplete
     // (via `snapshotState`) and drop out of the retention count entirely,
     // silently keeping one snapshot MORE than configured. A run that throws

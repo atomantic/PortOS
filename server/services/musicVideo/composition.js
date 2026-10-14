@@ -19,7 +19,7 @@ import { normalizeMusicVideoGrade } from '../../lib/musicVideoGrade.js';
 
 import { randomUUID } from 'crypto';
 import { trimTo } from '../../lib/textUtils.js';
-import { normalizeTitleCard, titleCardVisible } from '../../lib/musicVideoTitleCard.js';
+import { normalizeTitleCard, titleCardWindows } from '../../lib/musicVideoTitleCard.js';
 import { titleCardRuntime } from './titleCardFonts.js';
 import { filmStyleIdSchema } from '../../lib/filmStyleGrammarValidation.js';
 import {
@@ -233,24 +233,25 @@ export function renderableCues(composition, durationSec) {
 }
 
 /**
- * The opening title card (lib/musicVideoTitleCard.js) as a capture window in a
- * composed render: a cue with no text of its own whose `titleCard` the overlay
- * page draws with the same runtime the live preview and document renders use.
- * Null when the card is off, empty or starts after the video ends.
+ * The opening title card (lib/musicVideoTitleCard.js) as capture windows in a
+ * composed render: one cue per window it shows in (the opening, and the end
+ * when that is on), with no text of its own; the overlay page draws the
+ * `titleCard` with the same runtime the live preview and document renders use.
+ * Empty when the card is off or empty; a window past the video's end is dropped.
  */
-function titleCardCue(project, durationSec) {
-  if (project?.composition?.mode !== 'composed') return null;
+function titleCardCues(project, durationSec) {
+  if (project?.composition?.mode !== 'composed') return [];
   const card = normalizeTitleCard(project.titleCard);
-  if (!titleCardVisible(card) || card.startSec >= durationSec) return null;
-  return { id: 'title-card', titleCard: card, startSec: card.startSec, endSec: Math.min(card.endSec, durationSec) };
+  return titleCardWindows(card)
+    .filter((w) => w.startSec < durationSec)
+    .map((w, i) => ({ id: i ? 'title-card-end' : 'title-card', titleCard: card, startSec: w.startSec, endSec: Math.min(w.endSec, durationSec) }));
 }
 
 /** Shared absolute-song-time cues and style for full renders and draft excerpts. */
 export function projectTypographyPlan(project, clips, sections, durationSec) {
   const graphicLanguage = project.treatment?.brief?.graphicLanguage;
-  const titleCard = titleCardCue(project, durationSec);
   return {
-    cues: [...renderableCues(project.composition, durationSec), ...sectionCardCues(clips, sections, durationSec, graphicLanguage), ...(titleCard ? [titleCard] : [])]
+    cues: [...renderableCues(project.composition, durationSec), ...sectionCardCues(clips, sections, durationSec, graphicLanguage), ...titleCardCues(project, durationSec)]
       .sort((a, b) => a.startSec - b.startSec),
     style: { ...project.composition?.style, graphicLanguage },
   };

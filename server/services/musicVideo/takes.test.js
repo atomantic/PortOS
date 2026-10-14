@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appendSceneTakes } from './takes.js';
+import { appendSceneTakes, rejectUnusedTakes, swapSceneFrames } from './takes.js';
 import { captureMusicVideoEvidence, captureTakeDependencies } from '../../lib/musicVideoDependencies.js';
 
 const project = () => ({ id: 'mv-1', scenes: [{ sceneId: 's1' }] });
@@ -70,5 +70,39 @@ describe('a clip made toward an end frame (#11173)', () => {
     const { scene } = appendSceneTakes(project, 's1', [input]);
     expect(scene.videoHistoryId).toBeUndefined();
     expect(scene.takes.at(-1).status).toBe('candidate');
+  });
+});
+
+describe('reject unused takes', () => {
+  // Uniquely catches finalizing a shot touching its selection or a take that is in use.
+  it('rejects every take not in use, keeping the selection, notes and the takes already rejected', () => {
+    const take = (takeId, kind, assetId, extra = {}) => ({ takeId, kind, assetId, status: 'candidate', note: null, ...extra });
+    const scene = { sceneId: 's1', referenceImageId: 'a.png', endImageId: null, videoHistoryId: 'v2',
+      takes: [take('t1', 'image', 'a.png'), take('t2', 'image', 'b.png', { note: 'too dark' }), take('t3', 'endImage', 'e.png'),
+        take('t4', 'video', 'v1', { status: 'rejected' }), take('t5', 'video', 'v2'), take('t6', 'video', 'v3')] };
+    const { project, scene: next, rejected } = rejectUnusedTakes({ scenes: [scene] }, 's1');
+    expect(rejected).toBe(3);
+    expect(next.takes.map((t) => [t.takeId, t.status])).toEqual([['t1', 'candidate'], ['t2', 'rejected'], ['t3', 'rejected'],
+      ['t4', 'rejected'], ['t5', 'candidate'], ['t6', 'rejected']]);
+    expect(next.takes[1].note).toBe('too dark');
+    expect([next.referenceImageId, next.endImageId, next.videoHistoryId]).toEqual(['a.png', null, 'v2']);
+    expect(project.scenes[0].takes).toEqual(next.takes);
+    expect(rejectUnusedTakes(project, 's1').rejected).toBe(0);
+  });
+});
+
+describe('swap start and end frames', () => {
+  // Uniquely catches the swap losing a prompt, duplicating a take it could reuse, or leaving a frame's take rejected while selected.
+  it('trades the selected frames and their prompts, reusing and restoring takes', () => {
+    const take = (takeId, kind, assetId, extra = {}) => ({ takeId, kind, assetId, status: 'candidate', note: null, ...extra });
+    const scene = { sceneId: 's1', referenceImageId: 'a.png', endImageId: 'e.png', framePrompt: 'Door opens', endFramePrompt: 'Door shut',
+      takes: [take('t1', 'image', 'a.png', { prompt: 'Door opens' }), take('t2', 'image', 'e.png', { status: 'rejected' }),
+        take('t3', 'endImage', 'e.png', { prompt: 'Door shut' })] };
+    const { scene: next } = swapSceneFrames({ scenes: [scene] }, 's1');
+    expect([next.referenceImageId, next.endImageId, next.framePrompt, next.endFramePrompt]).toEqual(['e.png', 'a.png', 'Door shut', 'Door opens']);
+    expect(next.takes.find((t) => t.takeId === 't2').status).toBe('candidate');
+    const added = next.takes.filter((t) => !['t1', 't2', 't3'].includes(t.takeId));
+    expect(added.map((t) => [t.kind, t.assetId, t.prompt])).toEqual([['endImage', 'a.png', 'Door opens']]);
+    expect(() => swapSceneFrames({ scenes: [{ ...scene, endImageId: null }] }, 's1')).toThrow(/both a start and an end frame/);
   });
 });

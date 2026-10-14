@@ -87,7 +87,7 @@ describe('describeMusic', () => {
 
     const result = await describeMusic({ concept: 'a rainy downtempo loop', providerId: 'fake-provider', model: 'fake-model' });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       description: 'Lush analog pads over a broken beat.',
       llm: { provider: 'fake-provider', model: 'ran-model' },
     });
@@ -98,6 +98,20 @@ describe('describeMusic', () => {
   it('passes effort through to the runner', async () => {
     await describeMusic({ concept: 'x', effort: 'high' });
     expect(lastRunArgs().effort).toBe('high');
+  });
+
+  // Uniquely catches the designer's instructions or the policy clause reaching
+  // the LLM unlisted, or a typed template being labeled as PortOS's (#11317).
+  it('returns the exact sent prompt with each block PortOS wrapped around the user\'s words', async () => {
+    const shipped = await describeMusic({ concept: 'a rainy downtempo loop' });
+    expect(shipped.sentPrompt).toBe(lastRunArgs().prompt);
+    expect(shipped.sentPrompt.startsWith('## Creative latitude (operator policy)')).toBe(true);
+    expect(shipped.promptAdditions.map((item) => item.label)).toEqual(['Creative latitude (operator policy)', 'Describe instructions', 'Caption format']);
+    const custom = await describeMusic({ concept: 'x', template: 'my own brief' });
+    expect(custom.promptAdditions.map((item) => item.label)).toEqual(['Creative latitude (operator policy)', 'Caption format']);
+    const lyrics = await writeLyrics({ description: 'slow piano' });
+    expect(lyrics.promptAdditions.map((item) => item.label)).toEqual(['Creative latitude (operator policy)', 'Lyrics instructions', 'Target length', 'Lyrics format']);
+    for (const item of lyrics.promptAdditions) expect(lyrics.sentPrompt).toContain(item.text);
   });
 
   it('unwraps a fully fenced response', async () => {
@@ -138,7 +152,7 @@ describe('writeLyrics', () => {
 
     const result = await writeLyrics({ description: 'warm rhodes soul', guidance: 'about leaving at dawn' });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       lyrics: '[verse]\nrain on the window',
       llm: { provider: 'fake-provider', model: 'ran-model' },
     });
@@ -168,6 +182,35 @@ describe('writeLyrics', () => {
   it('throws LLM_EMPTY on a blank response', async () => {
     ai.runPromptThroughProvider.mockResolvedValue({ text: '', model: null });
     await expect(writeLyrics({ description: 'x' })).rejects.toMatchObject({ code: 'LLM_EMPTY', status: 502 });
+  });
+});
+
+// Service callers include autonomous media work: they must obey the same
+// preservation and refusal contract without relying on an HTTP validator.
+describe('designer service input boundaries', () => {
+  it('refuses missing, blank, and oversized inputs before provider resolution', async () => {
+    await expect(describeMusic({ concept: '  ' })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+    await expect(writeLyrics({ description: 'x', request: 'x'.repeat(4001) })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+    await expect(reviewLyrics({ lyrics: 'x'.repeat(20001) })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+    expect(resolveProviderAndModel).not.toHaveBeenCalled();
+    expect(ai.runPromptThroughProvider).not.toHaveBeenCalled();
+  });
+
+  it('preserves review draft, description, guidance and request in the sent blocks', async () => {
+    const lyrics = '  [verse]\nPaper moons\n  ';
+    const description = '  Soft piano\n ';
+    const guidance = '  Keep the ending\n ';
+    const request = '  Sing of paper moons\n ';
+    await reviewLyrics({ lyrics, description, guidance, request });
+    expect(lastRunArgs().prompt).toContain(`:\n${request}\n\nMUSICAL DESCRIPTION:\n${description}\n\nADDITIONAL GUIDANCE FROM THE USER:\n${guidance}\n\nDRAFT LYRICS:\n${lyrics}`);
+  });
+
+  it('rejects an oversized revision or critique rather than cutting it', async () => {
+    ai.runPromptThroughProvider.mockResolvedValueOnce({ text: 'x'.repeat(20001) + '\n---\nA note.' });
+    await expect(reviewLyrics({ lyrics: '[verse]\nPaper moons' })).rejects.toMatchObject({ code: 'LLM_OUTPUT_TOO_LONG', context: { count: 20001, limit: 20000 } });
+    ai.runPromptThroughProvider.mockResolvedValueOnce({ text: '[verse]\nPaper moons\n---\n' + 'x'.repeat(4001) });
+    await expect(reviewLyrics({ lyrics: '[verse]\nPaper moons' })).rejects.toMatchObject({ code: 'LLM_OUTPUT_TOO_LONG', context: { count: 4001, limit: 4000 } });
+    expect(ai.runPromptThroughProvider).toHaveBeenCalledTimes(2);
   });
 });
 

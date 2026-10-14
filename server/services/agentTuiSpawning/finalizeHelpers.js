@@ -85,6 +85,7 @@ export async function captureWorktreeDiff(workspacePath, agentDir) {
  * @returns {Promise<object|null>} The error-analysis object, or null on success.
  */
 export async function resolveErrorAnalysis({ finalSuccess, rawFile, fallbackText, task, model, immediateFallbackAnalysis, completionReason, completionError }) {
+  if (immediateFallbackAnalysis?.category === 'content-refusal') return immediateFallbackAnalysis;
   if (finalSuccess) return null;
   // Short-circuit BEFORE the tail read: a mid-stream fallback signal already is
   // the verdict, so reading ~16KB of spool only to discard it is pure waste.

@@ -37,7 +37,20 @@ const api = vi.hoisted(() => ({
   getCosPendingAgentFeedback: vi.fn(),
 }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
-const socketStub = vi.hoisted(() => ({ connected: false, on: vi.fn(), off: vi.fn(), emit: vi.fn() }));
+const socketStub = vi.hoisted(() => {
+  const listeners = new Map();
+  return {
+    connected: false,
+    on: vi.fn((event, listener) => {
+      if (!listeners.has(event)) listeners.set(event, new Set());
+      listeners.get(event).add(listener);
+    }),
+    off: vi.fn((event, listener) => listeners.get(event)?.delete(listener)),
+    emit: vi.fn(),
+    receive: (event, payload) => listeners.get(event)?.forEach(listener => listener(payload)),
+    resetListeners: () => listeners.clear(),
+  };
+});
 const localLlm = vi.hoisted(() => ({
   getLocalLlmStatus: vi.fn(),
   getToolUseModels: vi.fn(),
@@ -97,6 +110,7 @@ const config = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  socketStub.resetListeners();
   api.getCosStatus.mockResolvedValue({ running: false, config, stats: {} });
   api.getCosTasks.mockResolvedValue({ user: null, cos: null });
   api.getCosAgents.mockResolvedValue([]);
@@ -1259,7 +1273,7 @@ describe('ChiefOfStaff route-scoped data', () => {
       await vi.advanceTimersByTimeAsync(450);
     });
     expect(api.getProviders).toHaveBeenCalledTimes(before[1] + 1);
-    await act(async () => { latestHandler('connect')(); });
+    await act(async () => { socketStub.receive('connect'); });
     expect(api.getCosAgents).toHaveBeenCalledTimes(before[0] + 1);
     expect(api.getCosTasks).not.toHaveBeenCalled();
   });

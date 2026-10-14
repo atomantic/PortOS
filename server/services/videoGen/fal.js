@@ -34,6 +34,7 @@ import {
   FAL_DEFAULT_IMAGE_VIDEO_MODEL,
   FAL_DEFAULT_TEXT_VIDEO_MODEL,
   buildFalVideoRequest,
+  falHearsAudioReference,
   getFalVideoModel,
 } from '../../lib/falVideoModels.js';
 import { probeVideoDuration, probeVideoGeometry } from '../../lib/ffmpeg.js';
@@ -46,9 +47,10 @@ import { getSettings } from '../settings.js';
 import { nearestAspectRatio } from '../imageGen/modes.js';
 import { frameDataUriAtAspect } from './falFrameAspect.js';
 import {
-  FAL_QUEUE_BASE, awaitFalCompletion, cancelFalRequest, createFalRequestEntry, fileToDataUri,
+  FAL_QUEUE_BASE, awaitFalCompletion, cancelFalRequest, createFalRequestEntry, fileToDataUri, hostFalDataUri,
   readCompletedFalResult, resolveFalApiKey, submitFalRequest,
 } from '../falQueue.js';
+import { carriedPromptAdditions, promptAddition, sentPromptRecord } from '../../lib/modelInput.js';
 
 // The queue transport (submit / poll / retrieve / cancel) is shared with the
 // fal.ai image backend in `services/falQueue.js`. Re-exported so existing
@@ -140,13 +142,52 @@ function buildRequestBody({ prompt, negativePrompt, duration, aspectRatio, image
   return body;
 }
 
+/**
+ * Dry-run the curated request body with placeholder media before anything is
+ * read or paid for: a missing required input or an over-cap prompt refuses here
+ * as a 400, and the plan carries the coerced length, resolution and estimate the
+ * history records. Returns the plan with the record of the text fal receives
+ * (#11317); the Video Gen form's preview calls it with the same inputs.
+ */
+export function falVideoSentPrompt({ hasImage = false, hasEndImage = false, hasAudio = false, promptAdditions = [], ...spec }) {
+  const modelId = spec.modelId || (hasImage ? FAL_DEFAULT_IMAGE_MODEL : FAL_DEFAULT_TEXT_MODEL);
+  const { prompt = '', negativePrompt } = spec;
+  // A reference model hears the audio as a prompt-named reference ("Audio 1").
+  const audioAsReference = hasAudio && falHearsAudioReference(getFalVideoModel(modelId));
+  let planned = null;
+  try {
+    planned = buildFalVideoRequest({
+      ...spec, modelId,
+      imageUrl: hasImage ? 'pending:image' : null,
+      endImageUrl: hasEndImage ? 'pending:end-image' : null,
+      audioUrl: hasAudio && !audioAsReference ? 'pending:audio' : null,
+      referenceAudioUrls: audioAsReference ? ['pending:audio'] : [],
+    });
+  } catch (err) {
+    if (err?.code !== 'FAL_MODEL_INPUT') throw err;
+    throw new ServerError(err.message, { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (hasEndImage && !planned) {
+    throw new ServerError('End frames require a fal.ai model with catalogued end-frame support', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  // The text fal receives: a negative prompt the model has no field for rides folded in as "Avoid:".
+  const record = sentPromptRecord({
+    sentPrompt: planned ? (planned.body.prompt ?? '') : buildRequestBody({ prompt, negativePrompt }).prompt,
+    sentNegativePrompt: planned?.body.negative_prompt ?? null,
+    carried: carriedPromptAdditions({ promptAdditions }),
+    added: [(!planned || planned.model.negativePrompt === 'fold') && planned?.model.prompt !== 'none'
+      ? promptAddition('avoid', 'Negative prompt, sent as "Avoid:"', negativePrompt) : null],
+  });
+  return { planned, record };
+}
+
 export async function generateVideo({
   apiKey: providedApiKey, settings, modelId: requestedModelId,
   prompt = '', negativePrompt, duration, aspectRatio, width, height,
   sourceImagePath = null, lastImagePath = null, jobId: providedJobId = null,
   audioFilePath = null, lipSync = null, shotInstruction = null,
   uploadedTempPath = null, uploadedTempPaths = [],
-  resolution = null, generateAudio = false, frameAspect = null,
+  resolution = null, generateAudio = false, frameAspect = null, promptAdditions = [],
 }) {
   await ensureDir(PATHS.videos);
   const renderStartedAtMs = Date.now();
@@ -190,29 +231,16 @@ export async function generateVideo({
   const audioSec = audioFilePath
     ? (shotInstruction?.audioWindow?.durationSec || await probeVideoDuration(audioFilePath).catch(() => null))
     : null;
+  // A reference model renders a set length, not one that follows its audio: the clip covers the song slice.
+  const audioAsReference = !!audioFilePath && falHearsAudioReference(catalogModel);
   const requestSpec = {
-    modelId, prompt, negativePrompt, seconds: duration, audioSec, aspectRatio, width, height, resolution,
+    modelId, prompt, negativePrompt, seconds: audioAsReference ? (duration ?? audioSec) : duration, audioSec, aspectRatio, width, height, resolution,
     generateAudio: generateAudio === true, enableTranscription: lipSync?.enableTranscription === true,
   };
-  // Dry-run the curated body with placeholder media before anything is read or
-  // paid for: a missing required input refuses here as a 400, and the result
-  // carries the coerced length, resolution and estimate the history records.
-  let planned = null;
-  try {
-    planned = buildFalVideoRequest({
-      ...requestSpec,
-      imageUrl: sourceImagePath ? 'pending:image' : null,
-      endImageUrl: lastImagePath ? 'pending:end-image' : null,
-      audioUrl: audioFilePath ? 'pending:audio' : null,
-    });
-  } catch (err) {
-    if (err?.code !== 'FAL_MODEL_INPUT') throw err;
-    throw new ServerError(err.message, { status: 400, code: 'VALIDATION_ERROR' });
-  }
-
-  if (lastImagePath && !planned) {
-    throw new ServerError('End frames require a fal.ai model with catalogued end-frame support', { status: 400, code: 'VALIDATION_ERROR' });
-  }
+  const { planned, record: sentRecord } = falVideoSentPrompt({
+    ...requestSpec, promptAdditions,
+    hasImage: !!sourceImagePath, hasEndImage: !!lastImagePath, hasAudio: !!audioFilePath,
+  });
 
   const meta = {
     id: jobId,
@@ -233,11 +261,12 @@ export async function generateVideo({
     // What PortOS expected this render to cost at fal's list price, or null for
     // an uncurated model — recorded so spend can be audited per clip.
     estimatedCostUsd: planned?.estimatedCostUsd ?? null,
+    ...sentRecord,
     filename,
     createdAt: new Date().toISOString(),
     mode: sourceImagePath ? 'image' : 'text',
     // A lip-sync take syncs a mouth; an audio-to-video take moves the whole frame to the audio.
-    ...(audioFilePath ? (catalogModel?.kind === 'a2v' ? { audioDriven: true } : { lipSync: true }) : {}),
+    ...(audioFilePath ? (catalogModel?.kind === 'a2v' || audioAsReference ? { audioDriven: true } : { lipSync: true }) : {}),
     ...(shotInstruction?.audioWindow ? { audioWindow: shotInstruction.audioWindow } : {}),
   };
   const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
@@ -304,11 +333,18 @@ async function runFalVideo(job, jobId, {
     const audioDataUri = audioFilePath
       ? `data:${audioMimeType(audioFilePath)};base64,${(await readFile(audioFilePath)).toString('base64')}`
       : null;
+    // Most routes read inputs inline; a model that downloads them gets fal-hosted URLs.
+    const hosted = getFalVideoModel(modelId)?.hostedInputs === true;
+    const host = (dataUri, name) => (hosted && dataUri ? hostFalDataUri({ apiKey, dataUri, fileName: `${jobId}-${name}` }) : dataUri);
+    const [imageUrl, endImageUrl, audioUrl] = await Promise.all([
+      host(imageDataUri, 'start'), host(endImageDataUri, 'end'), host(audioDataUri, 'audio'),
+    ]);
+    const audioInputs = falHearsAudioReference(getFalVideoModel(modelId)) ? { referenceAudioUrls: audioUrl ? [audioUrl] : [] } : { audioUrl };
     const body = requestSpec
-      ? buildFalVideoRequest({ ...requestSpec, imageUrl: imageDataUri, endImageUrl: endImageDataUri, audioUrl: audioDataUri }).body
+      ? buildFalVideoRequest({ ...requestSpec, imageUrl, endImageUrl, ...audioInputs }).body
       : audioFilePath
-        ? buildLipSyncRequestBody({ imageDataUri, audioDataUri, enableTranscription })
-        : buildRequestBody({ prompt, negativePrompt, duration, aspectRatio, imageDataUri });
+        ? buildLipSyncRequestBody({ imageDataUri: imageUrl, audioDataUri: audioUrl, enableTranscription })
+        : buildRequestBody({ prompt, negativePrompt, duration, aspectRatio, imageDataUri: imageUrl });
     // Cancelled while the inputs were being read: nothing was submitted, so
     // there is nothing to pay for or cancel remotely.
     if (entry.aborted) return finalizeCanceled(job, jobId);

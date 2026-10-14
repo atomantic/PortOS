@@ -235,6 +235,8 @@ describe('submitVideoGenJob', () => {
       }, {});
       expect(mocks.preparePerformanceShot).toHaveBeenCalledWith({
         musicVideo, backend: 'fal', sourceImagePath: '/example/images/frame.png', mode: 'image', resolution: '1080p',
+        // A music-driven shot's picked model; a lip-sync scene ignores it.
+        musicModelId: 'minimax/h3-max/image-to-video',
       });
       const { params } = mocks.enqueueJob.mock.calls[0][0];
       expect(params).toMatchObject({
@@ -251,6 +253,50 @@ describe('submitVideoGenJob', () => {
       mocks.getMusicVideoProject.mockResolvedValue({ id: 'mv-1', scenes: [{ sceneId: 'mvs-1' }], treatment: { brief: { aspectRatio: '9:16' } } });
       await submitVideoGenJob({ prompt: 'singer', backend: 'fal', falModelId: 'fal-ai/bytedance/omnihuman/v1.5', musicVideo, mode: 'image' }, {});
       expect(mocks.enqueueJob.mock.calls[0][0].params).toMatchObject({ aspectRatio: '9:16', frameAspect: '9:16' });
+    });
+
+    // Uniquely catches the server composing a shot clip differently from the shot card, or
+    // adding look words and song timing a take that hears nothing would act out (#11317).
+    it('composes a board clip from the director\'s text, adding each block as a labeled addition', async () => {
+      const scene = {
+        sceneId: 'mvs-1', startSec: 0, endSec: 4, camera: { move: 'fast-dolly-in', speed: 'fast', onBeat: true },
+        direction: { motionClause: 'slow drift', actionContract: { version: 1, purpose: 'She leaves',
+          actions: [{ startSec: 0, endSec: 1, subject: 'Singer', description: 'Offers a hand' }] } },
+      };
+      const project = { id: 'mv-1', scenes: [scene], concept: { style: 'grainy 16mm' },
+        lyricCues: [{ startSec: 0.5, endSec: 1.5, text: 'hold on', words: [] }] };
+      mocks.getMusicVideoProject.mockResolvedValue(project);
+      mocks.prepareVideoGenParams.mockResolvedValue(falPrepared());
+      await submitVideoGenJob({ prompt: 'she turns away', backend: 'fal', mode: 'image', musicVideo: { ...musicVideo, compose: true } }, {});
+      const silent = mocks.enqueueJob.mock.calls[0][0].params;
+      expect(silent.prompt.startsWith('she turns away, slow drift, ')).toBe(true);
+      expect(silent.prompt).toContain('Action 0.000s–1.000s: Singer');
+      expect(silent.prompt).not.toContain('grainy 16mm');
+      expect(silent.prompt).not.toContain('Lyric');
+      expect(silent.prompt).not.toContain('downbeat');
+      expect(silent.promptAdditions.map((item) => item.id)).toEqual(['shot-direction', 'lighting-continuity', 'camera-move', 'shot-actions']);
+
+      // A take that hears the song gets the project look and the lyric timing, each listed.
+      mocks.prepareVideoGenParams.mockResolvedValue({ ...falPrepared(), audioFilePath: '/example/uploads/song.wav' });
+      await submitVideoGenJob({ prompt: 'she turns away', backend: 'fal', mode: 'image', musicVideo: { ...musicVideo, compose: true } }, {});
+      const hearing = mocks.enqueueJob.mock.calls[1][0].params;
+      expect(hearing.prompt).toContain('grainy 16mm');
+      expect(hearing.prompt).toContain('Lyric 0.500s–1.500s: hold on');
+      expect(hearing.prompt).toContain('land the move exactly on the downbeat');
+      expect(hearing.promptAdditions.map((item) => item.id)).toContain('project-style');
+
+      // A music-driven take on a reference model is told which reference is the song.
+      mocks.prepareVideoGenParams.mockResolvedValue(falPrepared());
+      mocks.preparePerformanceShot.mockResolvedValue({
+        audioFilePath: '/example/uploads/mv-performance-2.wav', modelId: 'minimax/h3-max/reference-to-video', resolution: '768P',
+        shotInstruction: { version: 2, shotMode: 'performance', performanceStyle: 'music', songInterval: { startSec: 0, endSec: 4 }, edit: { inSec: 0 } },
+      });
+      await submitVideoGenJob({ prompt: 'she turns away', backend: 'fal', mode: 'image', musicVideo: { ...musicVideo, compose: true } }, {});
+      const music = mocks.enqueueJob.mock.calls[2][0].params;
+      expect(music).toMatchObject({ modelId: 'minimax/h3-max/reference-to-video', audioFilePath: '/example/uploads/mv-performance-2.wav' });
+      expect(music.promptAdditions).toContainEqual({ id: 'audio-reference', label: 'Song audio reference',
+        text: 'Audio 1 is the song playing under this shot: time the movement to its beat.' });
+      expect(music.prompt.endsWith('. Audio 1 is the song playing under this shot: time the movement to its beat.')).toBe(true);
     });
 
     it('leaves a clip outside a music video at its own aspect', async () => {
@@ -293,6 +339,15 @@ describe('submitVideoGenJob', () => {
           uploadedTempPaths: ['/example/uploads/frame.png', slice],
         });
         expect(params).not.toHaveProperty('lipSync');
+      });
+
+      // Uniquely catches MiniMax H3 Ref2VA (image + audio only) being refused
+      // for lip-sync, or sent a frame count off its 17n+5 grid.
+      it('renders the song window on MiniMax H3 Ref2VA at its covering frame count', async () => {
+        const ref2va = { id: 'ref2va-example', name: 'Ref2VA Example', runtime: 'minimax_h3_ref2va', supportedModes: ['a2v'], frameOptions: [107, 124, 141], fpsOptions: [24] };
+        mocks.prepareVideoGenParams.mockResolvedValue(localPrepared({ effectiveModel: ref2va, mode: 'image', sourceImagePath: '/example/images/frame.png' }));
+        await submitVideoGenJob({ prompt: 'singer', backend: 'local', modelId: ref2va.id, mode: 'image', fps: 24, musicVideo }, {});
+        expect(mocks.enqueueJob.mock.calls[0][0].params).toMatchObject({ mode: 'a2v', numFrames: 107, audioFilePath: slice, audioStartSec: 0, disableAudio: false });
       });
 
       it('renders a local cutaway silent unless the song conditions it', async () => {
@@ -415,6 +470,28 @@ describe('shot intent at the video submission boundary', () => {
     expect(params.prompt).toContain('Her head drops onto the pillow, camera holds');
     expect(params.prompt).toContain('Action 0.000s–1.000s: Singer — Offers a hand');
     expect(params.prompt).not.toMatch(/Sleep|Kodak|grain|Word \d|Musical onsets/);
+  });
+
+  // Adam: the shot card's Render sends what the card shows, nothing the director cannot see.
+  it('sends a shot card Render prompt exactly as typed', async () => {
+    mocks.getMusicVideoProject.mockResolvedValue({ ...project(), concept: { style: 'grainy 35mm Kodak look' } });
+    const prompt = 'She shakes her head on "Sleep", grainy 35mm Kodak look';
+    await submitVideoGenJob({ prompt, musicVideo: { projectId: 'p', sceneId: 's', promptAsTyped: true } }, {});
+    const { params } = mocks.enqueueJob.mock.calls[0][0];
+    expect(params.prompt).toBe(prompt);
+    expect(params.shotInstruction.actionContract).toEqual(contract);
+  });
+
+  it('still re-times a card-typed performance prompt to its padded song slice', async () => {
+    mocks.prepareVideoGenParams.mockResolvedValue({ backend: 'fal', cleanupStaged: vi.fn(), sourceImagePath: '/example/frame.png' });
+    mocks.preparePerformanceShot.mockResolvedValue({ audioFilePath: '/example/audio.wav', modelId: 'lip-sync', resolution: '1080P',
+      shotInstruction: { version: 1, shotMode: 'performance', songInterval: { startSec: 10, endSec: 14 }, edit: { inSec: 1.5, outSec: 5.5 } } });
+    await submitVideoGenJob({ prompt: 'Typed\nShot intent (clip-relative seconds):\nAction 0.000s–1.000s: Singer\nEnd shot intent.', backend: 'fal',
+      musicVideo: { projectId: 'p', sceneId: 's', promptAsTyped: true } }, {});
+    const { params } = mocks.enqueueJob.mock.calls[0][0];
+    expect(params.prompt.startsWith('Typed\n')).toBe(true);
+    expect(params.prompt).toContain('Action 1.500s–2.500s: Singer');
+    expect(params.prompt).not.toContain('Action 0.000s–1.000s');
   });
 
   it('shifts contract and words into a padded performance window exactly once', async () => {

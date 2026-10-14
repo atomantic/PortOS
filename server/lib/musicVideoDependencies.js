@@ -1,5 +1,6 @@
 /** Versioned Music Video provenance. Only pointers/checksums live on project rows. */
 import { canonicalSnapshotChecksum } from './snapshotChecksum.js';
+import { isEndFrameImageEffect } from './musicVideoImageEffects.js';
 
 export const MUSIC_VIDEO_DEPENDENCY_VERSION = 1;
 // `endPlate` (#11173): the style-break end frame a fal clip was generated to end on.
@@ -17,6 +18,18 @@ const layerRef = (scene) => ({ role: 'layer', sceneId: scene.sceneId, assetId: s
     .map((key) => [key, scene[key] ?? null]).concat([['actionContract', scene.direction?.actionContract || null]])
     // #10589: only a planned camera joins the revision, so pre-camera evidence stays current.
     .concat(scene.camera ? [['camera', scene.camera]] : [])
+    // A chosen frame fit changes the render; a shot left to fill keeps its evidence.
+    .concat(scene.frameFit && scene.frameFit !== 'fill' ? [['frameFit', scene.frameFit]] : [])
+    // A hand-set clip speed or offset changes the render; a shot left as rendered keeps its evidence.
+    .concat(['speedFps', 'offsetFrames', 'reverse'].filter((key) => scene[key]).map((key) => [key, scene[key]]))
+    // A glitch over its cuts changes the render; a shot without one keeps its evidence.
+    .concat(['transitionIn', 'transitionOut'].filter((key) => scene[key]).map((key) => [key, scene[key]]))
+    .concat(scene.glitches?.length ? [['glitches', scene.glitches]] : [])
+    .concat(scene.cutEffect && scene.cutEffect.enabled !== false ? [['cutEffect', scene.cutEffect]] : [])
+    // An image effect over a still changes the render; a still without one keeps its evidence.
+    .concat(scene.imageEffect ? [['imageEffect', scene.imageEffect], ['imageEffectSec', scene.imageEffectSec ?? null]] : [])
+    // An effect from the start frame to the end frame renders the end frame too.
+    .concat(scene.imageEffect && isEndFrameImageEffect(scene.imageEffect) ? [['endImageId', scene.endImageId ?? null]] : [])
     // Only a music-driven performance joins it, so lip-sync evidence stays current.
     .concat(scene.performanceStyle === 'music' ? [['performanceStyle', 'music']] : []))) });
 const snapshot = (references) => ({ version: MUSIC_VIDEO_DEPENDENCY_VERSION, references });

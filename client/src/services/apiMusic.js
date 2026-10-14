@@ -23,6 +23,11 @@ export const generateMusic = (body, requestOptions = {}) => request('/music/gene
   ...requestOptions,
 });
 
+// Preview the local audio caption without starting a render.
+export const previewMusicPrompt = (body, options = {}) => request('/music/prompt-preview', {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+
 // ---- Stepped music designer (#4305) ----
 // Both fire one LLM call each and are only ever invoked from an explicit button
 // press in the designer wizard. Callers own their loading/error UI, so pass

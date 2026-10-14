@@ -999,35 +999,47 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
 }
 
 /**
- * How an idle reconcile should PARK — the reason, the breakdown, and the instant
- * the park may end early.
- *
- * "Nothing actionable" has three very different meanings and they used to
- * collapse into one: branches belong to sessions still running, merged branches
- * are queued behind a protected worktree, or the repo really is quiet. Only the
- * last is "nothing to do". Reporting it for the middle case is what made a task
- * with four stale claim branches waiting on it read as though it had stopped
- * running — the persisted state said zero of everything.
- *
- * Pure.
- * @param {{reason?:string, retryAt?:string|null}[]} [skipped] - cleanupMerged's skips
- * @param {object[]} [heldLive] - WIP branches with a liveOwnerReason
- * @returns {{reason:string, heldBackMerged:object[], counts:{heldBackMerged:number}|null, notLaterThan:string|null}}
+ * Summarize every surviving hold when reconciliation has nothing dispatchable.
+ * Persist counts and typed causes, with the earliest known hold expiry as the
+ * next possible wake-up; raw cleanup diagnostics stay out of scheduler state.
  */
-export function describeIdleReconcilePark(skipped = [], heldLive = []) {
-  // Only worktree-* skips are a HOLD; 'not-merged-on-recheck' and 'cleanup-disabled'
-  // mean the branch was never eligible, so they must not read as pending work.
-  const heldBackMerged = skipped.filter((s) => !s.detached && s.reason?.startsWith('worktree-'));
-  const lifts = heldBackMerged.map((entry) => Date.parse(entry.retryAt)).filter(Number.isFinite);
-  const reason = heldLive.length
-    ? 'branches-held-by-live-owners'
-    : heldBackMerged.length ? 'merged-branches-held-back' : 'no-in-flight-branches';
+export function describeIdleReconcilePark(skipped = [], heldLive = [], { wip = [], detachedWorktrees = [], superseded = [], gated = [] } = {}) {
+  // One entry per surviving branch/checkout, even when it appears in both the
+  // skipped and detached/superseded projections. Never persist raw error text.
+  const holds = new Map();
+  const lifts = [];
+  const add = (entry, rawCause) => {
+    const cause = String(rawCause).split(':', 1)[0];
+    holds.set(entry.branch || entry.path, { ...entry, cause: /^[a-z]+(?:-[a-z]+)*$/.test(cause) ? cause : 'cleanup-failed' });
+    for (const deadline of [entry.retryAt, entry.holdRetryAt]) {
+      const timestamp = Date.parse(deadline);
+      if (Number.isFinite(timestamp)) lifts.push(timestamp);
+    }
+  };
+  for (const entry of skipped) {
+    if (entry.reason === 'not-merged-on-recheck') continue;
+    const cause = entry.reason?.startsWith('delete-failed') ? 'branch-delete-failed' : entry.reason || 'cleanup-failed';
+    add(entry, cause);
+  }
+  for (const entry of detachedWorktrees) add(entry, entry.reason || 'detached-worktree-held');
+  for (const entry of superseded) add(entry, entry.holdReason || 'superseded-branch-held');
+  for (const entry of wip) add(entry, entry.openPr?.isDraft ? 'draft-review-required' : entry.liveOwnerReason || entry.completionPolicyReason || 'unfinished-work');
+  for (const entry of heldLive) if (!holds.has(entry.branch || entry.path)) add(entry, entry.liveOwnerReason || 'live-owner');
+  for (const entry of gated) add(entry, entry.openPr?.isDraft ? 'draft-review-required' : 'action-disabled');
+  const entries = [...holds.values()];
+  const heldBackMerged = skipped.filter(s => !s.detached && s.reason?.startsWith('worktree-'));
+  const skipCauses = {};
+  for (const entry of entries) skipCauses[entry.cause] = (Object.hasOwn(skipCauses, entry.cause) ? skipCauses[entry.cause] : 0) + 1;
+  const counts = entries.length ? {
+    heldBranches: entries.filter(entry => !entry.detached && entry.branch).length,
+    heldDetached: entries.filter(entry => entry.detached || !entry.branch).length,
+    ...(heldBackMerged.length ? { heldBackMerged: heldBackMerged.length } : {})
+  } : null;
+  const reason = !entries.length ? 'no-in-flight-branches'
+    : heldLive.length ? 'branches-held-by-live-owners'
+      : heldBackMerged.length === entries.length ? 'merged-branches-held-back' : 'branches-blocked';
   return {
-    reason,
-    heldBackMerged,
-    counts: heldBackMerged.length ? { heldBackMerged: heldBackMerged.length } : null,
-    // The soonest hold to lapse is when this park may end early; entries with no
-    // (or an unreadable) deadline simply don't vote, leaving the normal cadence.
+    reason, heldBackMerged, counts, skipCauses: entries.length ? skipCauses : null,
     notLaterThan: lifts.length ? new Date(Math.min(...lifts)).toISOString() : null
   };
 }
@@ -1832,7 +1844,7 @@ export function desiredEndState(state, actions, { prNumber, worktreePath, collis
  */
 export function actionableSignature(actionable) {
   return actionable
-    .map((b) => `${b.branch}:${b.state}:${b.openPr?.number ?? 'none'}`)
+    .map((b) => `${b.branch}:${b.state}:${b.openPr?.number ?? 'none'}${b.tip ? `:${b.tip}` : ''}`)
     .sort()
     .join('|');
 }

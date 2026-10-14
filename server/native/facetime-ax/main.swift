@@ -74,23 +74,42 @@ let semanticAttributes: [CFString] = [
   kAXIdentifierAttribute as CFString,
 ]
 
-func attribute(_ element: AXUIElement, _ name: CFString) -> CFTypeRef? {
+enum SnapshotReadError: Error { case unavailable }
+
+func attribute(_ element: AXUIElement, _ name: CFString) throws -> CFTypeRef? {
   var value: CFTypeRef?
-  return AXUIElementCopyAttributeValue(element, name, &value) == .success ? value : nil
+  switch AXUIElementCopyAttributeValue(element, name, &value) {
+  case .success:
+    guard let value else { throw SnapshotReadError.unavailable }
+    return value
+  case .attributeUnsupported, .noValue:
+    return nil
+  default:
+    // A vanished element or failed IPC is not an absent attribute. Treating
+    // either as empty can falsely confirm that an active call disconnected.
+    throw SnapshotReadError.unavailable
+  }
 }
 
-func stringAttribute(_ element: AXUIElement, _ name: CFString) -> String? {
-  attribute(element, name) as? String
+func stringAttribute(_ element: AXUIElement, _ name: CFString) throws -> String? {
+  try attribute(element, name) as? String
 }
 
-func childElements(_ element: AXUIElement) -> [AXUIElement] {
-  attribute(element, kAXChildrenAttribute as CFString) as? [AXUIElement] ?? []
+func childElements(_ element: AXUIElement) throws -> [AXUIElement] {
+  guard let value = try attribute(element, kAXChildrenAttribute as CFString) else { return [] }
+  // Swift's conditional array cast does not check CoreFoundation element
+  // identities. Prove each CF type before accepting the typed collection.
+  guard CFGetTypeID(value) == CFArrayGetTypeID(),
+        let values = value as? [CFTypeRef],
+        values.allSatisfy({ CFGetTypeID($0) == AXUIElementGetTypeID() }),
+        let children = value as? [AXUIElement] else { throw SnapshotReadError.unavailable }
+  return children
 }
 
-func actionNames(_ element: AXUIElement) -> Set<String> {
+func actionNames(_ element: AXUIElement) throws -> Set<String> {
   var names: CFArray?
   guard AXUIElementCopyActionNames(element, &names) == .success,
-        let values = names as? [String] else { return [] }
+        let values = names as? [String] else { throw SnapshotReadError.unavailable }
   return Set(values)
 }
 
@@ -103,23 +122,27 @@ func snapshot(_ application: NSRunningApplication) -> Snapshot? {
   var cursor = 0
   let maximumNodes = 2_000
 
-  while cursor < pending.count && nodes.count < maximumNodes {
-    let (element, parent) = pending[cursor]
-    cursor += 1
-    let index = nodes.count
-    let values = semanticAttributes.compactMap { stringAttribute(element, $0) }
-      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-      .filter { !$0.isEmpty }
-    let role = stringAttribute(element, kAXRoleAttribute as CFString) ?? ""
-    let interactiveRoles = [kAXButtonRole as String, kAXMenuButtonRole as String, "AXLink"]
-    nodes.append(Node(
-      element: element,
-      parent: parent,
-      role: role,
-      text: values,
-      actions: interactiveRoles.contains(role) ? actionNames(element) : []
-    ))
-    pending.append(contentsOf: childElements(element).map { ($0, index) })
+  do {
+    while cursor < pending.count && nodes.count < maximumNodes {
+      let (element, parent) = pending[cursor]
+      cursor += 1
+      let index = nodes.count
+      let values = try semanticAttributes.compactMap { try stringAttribute(element, $0) }
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+      guard let role = try stringAttribute(element, kAXRoleAttribute as CFString), !role.isEmpty else { return nil }
+      let interactiveRoles = [kAXButtonRole as String, kAXMenuButtonRole as String, "AXLink"]
+      nodes.append(Node(
+        element: element,
+        parent: parent,
+        role: role,
+        text: values,
+        actions: interactiveRoles.contains(role) ? try actionNames(element) : []
+      ))
+      pending.append(contentsOf: try childElements(element).map { ($0, index) })
+    }
+  } catch {
+    return nil
   }
   return Snapshot(nodes: nodes, truncated: cursor < pending.count)
 }

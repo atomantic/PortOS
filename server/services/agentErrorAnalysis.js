@@ -1,3 +1,5 @@
+import { createContentRefusalDetector } from '../lib/aiToolkit/errorDetection.js';
+import { classifyCodexTurnError } from '../lib/codexTurn.js';
 import { PR_COMPLETIONS, resolvePrCompletion } from '../lib/prDisposition.js';
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 /**
@@ -771,10 +773,10 @@ export const ERROR_PATTERNS = [
     pattern: /content.?(?:filter|policy)|safety.?(?:filter|block)|harmful.?content/i,
     category: 'content-filtered',
     actionable: true,
-    escalation: 'Reword the task description to avoid the content that tripped the safety filter, then approve the retry.',
+    escalation: 'Review the safety refusal; automatic retry and provider fallback are disabled.',
     extract: () => ({
       message: 'Content filtered',
-      suggestedFix: 'Request was blocked by content safety filter. Rephrase the task description.'
+      suggestedFix: 'Request was stopped by a content safety refusal. No automatic continuation, retry or provider fallback.'
     })
   }
 ];
@@ -1123,6 +1125,28 @@ function structuralReasonAnalysis(def, completionReason, completionError) {
   };
 }
 
+function structuredPolicyRefusal(output, analysisOutput) {
+  const chromeRefusal = createContentRefusalDetector()(output);
+  if (chromeRefusal) return chromeRefusal;
+  // A quoted error string or source-code pattern is not a provider verdict.
+  // Only inspect the error slot of a complete terminal protocol envelope.
+  for (const line of analysisOutput.split('\n')) {
+    if (!line.trimStart().startsWith('{')) continue;
+    let event;
+    try { event = JSON.parse(line); } catch { continue; }
+    const error = event.type === 'event_msg' && event.payload?.type === 'task_complete'
+      ? event.payload.error
+      : event.type === 'turn.failed' ? event.error
+        : event.method === 'turn/completed' ? event.params?.turn?.error : null;
+    if (!error) continue;
+    const refusal = classifyCodexTurnError(error);
+    if (refusal.category === 'content-refusal') return { ...refusal, permanent: true,
+      actionable: false, requiresFallback: false, origin: 'provider',
+      suggestedFix: 'Review the refusal. Automatic continuation, retries and provider fallback are disabled.' };
+  }
+  return null;
+}
+
 /**
  * Analyze agent failure output and categorize the error.
  *
@@ -1138,6 +1162,8 @@ function structuralReasonAnalysis(def, completionReason, completionError) {
 export function analyzeAgentFailure(output, task, model, options = {}) {
   const completionReason = options?.completionReason || null;
   const analysisOutput = getFailureAnalysisWindow(output || '');
+  const refusal = structuredPolicyRefusal(output || '', analysisOutput);
+  if (refusal) return refusal;
   // An idle-out whose transcript ends on an unanswered prompt gets that named as
   // the cause; every other reason passes through untouched.
   const structuralDef = refineIdleReasonAnalysis(
@@ -1458,7 +1484,7 @@ export function resolveFailedTaskDecision(task, errorAnalysis, { agentId = null,
   // retry could read differently. Block on the FIRST occurrence, ahead of the
   // actionable branch, and file NO investigation task: an investigation agent
   // is another unbounded spawn against a cause the block already names.
-  if (errorAnalysis?.permanent) {
+  if (errorAnalysis?.permanent || ['content-refusal', 'content-filtered'].includes(errorAnalysis?.category)) {
     return {
       status: 'blocked',
       investigationAnalysis: null,

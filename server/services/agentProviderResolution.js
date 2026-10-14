@@ -1,6 +1,7 @@
 import { isForgeMaintenanceTask, hasCurrentForgeMaintenanceEvidence, LEGACY_FORGE_MAINTENANCE_REASON } from '../lib/forgeMaintenanceTasks.js';
 import { isProcessProvider } from '../lib/providerTypes.js';
 import { isCompositeProviderId } from '../lib/providerRef.js';
+import { peekFallbackChain } from '../lib/providerFallbackChainCache.js';
 import { isPrivateSecurityTask, PRIVATE_SECURITY_DELIVERY } from '../lib/privateSecurityPolicy.js';
 import { supportsPublicReviewProvider } from '../lib/providerVendors.js';
 /**
@@ -235,6 +236,10 @@ async function resolveOrdinaryProviderAndModel(task) {
     // The caller's mode policy travels WITH the fallback request, so an
     // ineligible candidate is skipped during selection rather than picked and
     // then rejected below — which used to burn the one retry the cascade had.
+    const chainComposites = peekFallbackChain().map((e) => e.providerId).filter(isCompositeProviderId);
+    if (chainComposites.length) {
+      await (await import('./compositeProviders.js')).withCompositeCandidates(providersMap, chainComposites);
+    }
     const fallbackResult = await getFallbackProvider(provider.id, providersMap, taskFallbackId, taskFallbackModel, {
       allowedModes: allowedModesFor(AGENT_CALLER_POLICY),
     });

@@ -39,8 +39,10 @@ import { normalizeComposition, invalidateCompositionTiming, withStoredCompositio
 import { normalizeSoundBed } from './soundBed.js';
 import { normalizeFilmLook } from '../../lib/filmLook.js';
 import { normalizeTitleCard } from '../../lib/musicVideoTitleCard.js';
+import { normalizeStatsOutro } from '../../lib/musicVideoStatsOutro.js';
 import { remapTreatmentForClone, scenesFingerprint } from './treatment.js';
-import { carryStoryboardApproval } from './productionReview.js';
+import { anchorShotsToSungLyrics, carryStoryboardApproval } from './productionReview.js';
+import { cuesSungWithin } from '../../lib/musicVideoLyricAnchors.js';
 import { normalizeMusicVideoAutomation } from '../../lib/musicVideoAutomation.js';
 
 export { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
@@ -172,6 +174,8 @@ export function buildProjectRecord(input, { id, now }) {
     filmLook: input.filmLook ? normalizeFilmLook(input.filmLook) : null,
     // The opening title card (song, artist, year over the opener); null = none.
     titleCard: normalizeTitleCard(input.titleCard),
+    // The cutting room floor outro after the song; null = off.
+    statsOutro: normalizeStatsOutro(input.statsOutro),
     // #8980 — optional pre-production treatment (brief, arc, shot direction,
     // proof checklist); null until the director starts one. See treatment.js.
     treatment: null,
@@ -379,6 +383,8 @@ export function applyProjectPatch(project, patch) {
     ...('filmLook' in patch ? { filmLook: normalizeFilmLook(patch.filmLook) } : {}),
     // The title card is replaced whole (one bounded record); null clears it.
     ...('titleCard' in patch ? { titleCard: normalizeTitleCard(patch.titleCard) } : {}),
+    // The outro after the song is replaced whole; null turns it off.
+    ...('statsOutro' in patch ? { statsOutro: normalizeStatsOutro(patch.statsOutro) } : {}),
   };
   // #8988: a bed is mixed UNDER the song — the song itself can't be its bed.
   const masterTrackId = 'trackId' in patch ? patch.trackId : project.trackId;
@@ -514,6 +520,16 @@ function buildScene(input, { order }) {
     cardText: input.cardText ?? null,
     ...(input.codeOverlay ? { codeOverlay: true } : {}),
     ...(input.codeClip ? { codeClip: true } : {}),
+    ...(input.frameFit ? { frameFit: input.frameFit } : {}),
+    ...(input.speedFps ? { speedFps: input.speedFps } : {}),
+    ...(input.offsetFrames ? { offsetFrames: input.offsetFrames } : {}),
+    ...(input.reverse ? { reverse: true } : {}),
+    ...(input.transitionIn ? { transitionIn: input.transitionIn } : {}),
+    ...(input.transitionOut ? { transitionOut: input.transitionOut } : {}),
+    ...(input.glitches?.length ? { glitches: input.glitches } : {}),
+    ...(input.cutEffect ? { cutEffect: input.cutEffect } : {}),
+    ...(input.imageEffect ? { imageEffect: input.imageEffect } : {}),
+    ...(input.imageEffectSec ? { imageEffectSec: input.imageEffectSec } : {}),
     cardColor: input.cardColor ?? null,
     // #8977: cutaway (any image-to-video lane) unless the director asks for a
     // lip-synced performance shot, which only a source-audio provider renders.
@@ -594,6 +610,17 @@ export function replaceScenes(project, sceneInputs) {
       videoHistoryId: prior.videoHistoryId ?? null,
       ...(prior.endImageId ? { endImageId: prior.endImageId } : {}),
       ...(prior.endFramePrompt ? { endFramePrompt: prior.endFramePrompt } : {}),
+      ...(prior.frameFit ? { frameFit: prior.frameFit } : {}),
+      ...(prior.speedFps ? { speedFps: prior.speedFps } : {}),
+      ...(prior.offsetFrames ? { offsetFrames: prior.offsetFrames } : {}),
+      ...(prior.reverse ? { reverse: true } : {}),
+      ...(prior.transitionIn ? { transitionIn: prior.transitionIn } : {}),
+      ...(prior.transitionOut ? { transitionOut: prior.transitionOut } : {}),
+      ...(prior.glitches?.length ? { glitches: prior.glitches } : {}),
+      ...(prior.cutEffect ? { cutEffect: prior.cutEffect } : {}),
+      // A still playing an image effect stays one: the effect is the shot's picture.
+      ...(prior.imageEffect && prior.visualLayer === 'still' ? { visualLayer: 'still', imageEffect: prior.imageEffect,
+        ...(prior.imageEffectSec ? { imageEffectSec: prior.imageEffectSec } : {}) } : {}),
       takes: prior.takes || [],
       ...(prior.direction ? { direction: prior.direction } : {}),
     };
@@ -601,10 +628,12 @@ export function replaceScenes(project, sceneInputs) {
   return { project: touch(project, { scenes }), scenes, replaced: existing.length };
 }
 
-// Scene fields a director edits within an approved shot (its span, wording and
-// selected takes) without adding a shot or lyric the storyboard approval did not cover.
+// Scene fields a director edits within an approved shot (its span, wording, selected
+// takes, and whether it plays as a clip or its still with an image effect) without
+// adding a shot or lyric the storyboard approval did not cover.
 const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'label', 'prompt', 'framePrompt', 'visualIntent',
-  'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip'];
+  'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'reverse', 'transitionIn', 'transitionOut', 'glitches', 'cutEffect',
+  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec'];
 
 /**
  * Apply a patch to a single scene. Returns `{ project, updated }`. Throws if the
@@ -625,10 +654,17 @@ export function applySceneUpdate(project, sceneId, patch) {
   if (updated.startSec != null && updated.endSec != null && updated.endSec < updated.startSec) {
     throw new ServerError('endSec must be >= startSec', { status: 400, code: 'VALIDATION_ERROR' });
   }
+  // A retimed shot shows, and anchors, the lyric lines now sung over it.
+  const retimed = (('startSec' in data && data.startSec !== scenes[idx].startSec) || ('endSec' in data && data.endSec !== scenes[idx].endSec))
+    && (project.lyricCues || []).some((cue) => typeof cue?.startSec === 'number');
+  if (retimed && !('lyricText' in data)) {
+    const sung = cuesSungWithin(project.lyricCues, updated.startSec, updated.endSec).map((cue) => cue.text?.trim()).filter(Boolean);
+    updated.lyricText = sung.length ? sung.join(' / ').slice(0, 2000) : null;
+  }
   assertMusicVideoMediaSelections({ ...project, scenes: [updated], visualSpec: null });
   const nextScenes = scenes.slice();
   nextScenes[idx] = updated;
-  const next = touch(project, { scenes: nextScenes });
+  const next = retimed ? anchorShotsToSungLyrics(touch(project, { scenes: nextScenes }), [sceneId]) : touch(project, { scenes: nextScenes });
   // Retiming or rewording a shot, or picking another take, keeps the storyboard approval it was judged on.
   const shotEdit = Object.keys(data).every((key) => SCENE_SHOT_EDIT_FIELDS.includes(key));
   return { project: shotEdit ? carryStoryboardApproval(project, next, 'Edited a shot') : next, updated };

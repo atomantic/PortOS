@@ -553,7 +553,7 @@ const PARK_FIELDS = ['parkedUntil', 'parkReason', 'parkActionableCount', 'parkCo
  * zeroing the counter there would reset the budget before every dispatch, so the
  * cap could never fire.
  */
-export async function parkPerpetual(taskType, appId = null, { reason = null, actionableCount = 0, counts = null, skipCauses = null, signature, dispatchCount = 0, notLaterThan = null } = {}) {
+export async function parkPerpetual(taskType, appId = null, { reason = null, actionableCount = 0, counts = null, skipCauses = null, signature, dispatchCount = 0, notLaterThan = null, branchAttempts } = {}) {
   const { record, parkedUntil } = await updateSchedule(async (schedule) => {
     const interval = schedule.tasks[taskType] || {};
     // Bound HERE, not at the assignment: `parkedUntil` is also what the log line and
@@ -563,6 +563,8 @@ export async function parkPerpetual(taskType, appId = null, { reason = null, act
     const record = ensureExecutionRecord(schedule, taskType, appId);
     record.parkedUntil = parkedUntil;
     record.parkReason = reason;
+    if (branchAttempts === null) delete record.branchReconcileAttempts;
+    else if (branchAttempts !== undefined) record.branchReconcileAttempts = branchAttempts;
     record.parkActionableCount = actionableCount;
     // The detector's candidate breakdown ({ open, inFlight, filtered }). Lets the
     // UI explain WHY a non-empty queue yields zero claimable work — "0 of N, M
@@ -718,7 +720,8 @@ export async function getPerpetualDrainState(taskType, appId = null) {
   const record = resolveExecutionRecord(schedule, taskType, appId);
   return {
     signature: record?.lastActionableSignature ?? null,
-    dispatchCount: record?.perpetualDispatchCount || 0
+    dispatchCount: record?.perpetualDispatchCount || 0,
+    ...(record?.branchReconcileAttempts && { branchAttempts: record.branchReconcileAttempts })
   };
 }
 
@@ -729,10 +732,11 @@ export async function getPerpetualDrainState(taskType, appId = null) {
  * a single read-modify-write, so the three facts can never land apart.
  * @returns {Promise<number>} the new consecutive-dispatch count
  */
-export async function recordPerpetualDispatch(taskType, appId = null, signature) {
+export async function recordPerpetualDispatch(taskType, appId = null, signature, { branchAttempts } = {}) {
   return updateSchedule(async (schedule) => {
     const record = ensureExecutionRecord(schedule, taskType, appId);
     for (const field of PARK_FIELDS) delete record[field];
+    if (branchAttempts !== undefined) record.branchReconcileAttempts = branchAttempts;
     // Mirrors parkPerpetual's signature handling, including the churn detector's
     // `signatureRepeatCount`. A dispatch only happens when the set CHANGED (an
     // unchanged one parks instead), so this is always the "new signature ⇒ first
@@ -760,6 +764,9 @@ export async function recordPerpetualDispatch(taskType, appId = null, signature)
  * "Run" honor the user's intent to re-check now: without clearing the signature,
  * branch-reconcile/issue-reconcile would re-park `no-progress` against an
  * unchanged-since-last-run set even though the user explicitly asked to re-drive.
+ *
+ * Branch-reconcile retains its attempted revisions: a manual retry must reach
+ * the remaining branches before starting another sweep of the blocked prefix.
  *
  * ONLY a human asking for a re-run may call this. An automated re-issue that
  * borrows the on-demand lane (the perpetual drain's own completion refill) must
@@ -1104,8 +1111,8 @@ export async function getDueTasks(appId = null, { continuingTaskType = null } = 
  * When `perpetualOnly` is true, return a due perpetual drain or null; never a
  * cron type that would mask it.
  */
-export async function getNextTaskType(appId = null, { perpetualOnly = false, continuingTaskType = null } = {}) {
-  const dueTasks = await getDueTasks(appId, { continuingTaskType });
+export async function getNextTaskType(appId = null, { perpetualOnly = false, continuingTaskType = null, dueTasks = null } = {}) {
+  dueTasks ??= await getDueTasks(appId, { continuingTaskType });
 
   const perpetualDue = dueTasks.filter(t => t.interval.perpetual === true);
   if (perpetualOnly) {

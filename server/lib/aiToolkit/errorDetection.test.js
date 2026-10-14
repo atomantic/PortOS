@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   analyzeError,
+  createContentRefusalDetector,
   analyzeHttpError,
   normalizeRateLimitHeaders,
   createClaudeSessionLimitBannerDetector,
@@ -30,13 +31,24 @@ const QUOTA_BANNER_LINE = '⚠ Individual quota reached. Please upgrade your sub
 
 describe('Error Detection', () => {
   describe('analyzeError', () => {
+    it('excludes only a complete known prompt echo, preserving real errors with the same words', () => {
+      const prompt = 'authentication\nuser\ncredit  \n';
+      const echoed = `OpenAI Codex v1\nuser\n${prompt}\nERROR: Unrecognized provider failure\n`;
+      expect(analyzeError(echoed, 1, { prompt }).category).toBe(ERROR_CATEGORIES.UNKNOWN);
+      // No framing or an incomplete body is not proof of an input echo.
+      expect(analyzeError('ERROR: authentication failed', 1, { prompt: 'authentication' })).toMatchObject({
+        category: ERROR_CATEGORIES.AUTH_ERROR, message: 'authentication failed',
+      });
+      expect(analyzeError('OpenAI Codex v1\nuser\nauthentication failed\n', 1, { prompt }).category).toBe(ERROR_CATEGORIES.AUTH_ERROR);
+    });
+
     it('detects a Codex/OpenAI content-safety refusal', () => {
       const result = analyzeError(
         "Invalid prompt: we've limited access to this content for safety reasons. This type of information may be used to benefit or to harm people."
       );
       expect(result.hasError).toBe(true);
       expect(result.category).toBe(ERROR_CATEGORIES.CONTENT_REFUSAL);
-      expect(result.requiresFallback).toBe(true);
+      expect(result.requiresFallback).toBe(false);
       expect(result.actionable).toBe(false);
     });
 
@@ -1073,5 +1085,33 @@ describe('Error Detection', () => {
       expect(isRunCanceledError(null)).toBe(false);
       expect(isRunCanceledError(undefined)).toBe(false);
     });
+  });
+});
+
+
+describe('terminal content refusals', () => {
+  it.each(['cyber_policy', 'cyberPolicy', 'misalignment_policy_violation'])('classifies structured %s without fallback', tag => {
+    expect(analyzeError(JSON.stringify({ type: 'task_complete', error: { codex_error_info: tag } })))
+      .toMatchObject({ category: 'content-refusal', requiresFallback: false });
+  });
+
+  it('detects split cursor-positioned chrome without treating quoted content as a live refusal', () => {
+    const detect = createContentRefusalDetector();
+    expect(detect('Quoted: "ⓘ This content can’t be shown"\n')).toBeNull();
+    expect(detect('{"error":{"codex_error_info":"cyber_policy"}}\n')).toBeNull();
+    expect(detect('tool output\x1b[12;')).toBeNull();
+    expect(detect('1H\x1b[1mⓘ Thiscontentcan’t')).toBeNull();
+    expect(detect('beshown\x1b[13;1HSome cybersecurity requests may still be limited.'))
+      .toMatchObject({ category: 'content-refusal', requiresFallback: false, permanent: true });
+  });
+});
+
+describe('detectModelAtCapacity', () => {
+  it('flags the Codex capacity rejection, even hard-wrapped, with a fixed non-echoing message', async () => {
+    const { detectModelAtCapacity } = await import('./errorDetection.js');
+    const hit = detectModelAtCapacity('■ Selected model is at capacity. Please try\na different model.');
+    expect(hit).toMatchObject({ category: 'rate-limit', requiresFallback: true, actionable: false });
+    expect(detectModelAtCapacity(hit.message)).toBeNull();
+    expect(detectModelAtCapacity('the parking lot is at capacity')).toBeNull();
   });
 });

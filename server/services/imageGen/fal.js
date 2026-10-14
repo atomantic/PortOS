@@ -55,6 +55,7 @@ import { IMAGE_GEN_MODE, describeFidelity, visualReferenceRole } from './modes.j
 import { resolveInputImages } from './inputImages.js';
 import { cloudPromptRequired } from './cloudProviderConfig.js';
 import { rejectDegenerateFrame } from './frameGuard.js';
+import { carriedPromptAdditions, promptAddition, sentPromptRecord } from '../../lib/modelInput.js';
 
 const MODE = IMAGE_GEN_MODE.FAL;
 
@@ -194,7 +195,31 @@ const firstImageUrl = (result) => {
   return typeof url === 'string' && url.trim() ? url : null;
 };
 
+/**
+ * The prompt text fal receives (the image-role prose plus the negative folded in
+ * as "Avoid:") and the record of what PortOS added (#11317). Shared by the
+ * render and the compose preview.
+ */
+export function falImageSentPrompt({ family, prompt = '', negativePrompt, inputImages, initImageStrength, promptAdditions = [] }) {
+  const fullPrompt = buildFalPrompt({
+    prompt,
+    hasInitImage: Boolean(inputImages.initPath),
+    initImageStrength,
+    referenceCount: inputImages.referencePaths.length,
+  });
+  return {
+    fullPrompt,
+    record: sentPromptRecord({
+      sentPrompt: buildFalImageRequest({ modelId: family.textEndpoint, prompt: fullPrompt, negativePrompt }).body.prompt,
+      carried: carriedPromptAdditions({ promptAdditions }),
+      added: [promptAddition('image-roles', 'How to read the attached images', fullPrompt.slice(prompt.trim().length)),
+        promptAddition('avoid', 'Negative prompt, sent as "Avoid:"', negativePrompt)],
+    }),
+  };
+}
+
 export async function generateImage({
+  promptAdditions = [],
   model, prompt = '', negativePrompt, width, height, seed,
   initImagePath, initImageStrength, referenceImagePaths = [],
   visualConditioning = null,
@@ -240,12 +265,7 @@ export async function generateImage({
   const jobId = providedJobId || randomUUID();
   const filename = `${jobId}.png`;
   const outputPath = join(PATHS.images, filename);
-  const fullPrompt = buildFalPrompt({
-    prompt,
-    hasInitImage: Boolean(inputImages.initPath),
-    initImageStrength,
-    referenceCount: inputImages.referencePaths.length,
-  });
+  const { fullPrompt, record: sentRecord } = falImageSentPrompt({ family, prompt, negativePrompt, inputImages, initImageStrength, promptAdditions });
 
   const meta = {
     id: jobId, prompt: prompt.trim(), negativePrompt: negativePrompt || '',
@@ -257,6 +277,7 @@ export async function generateImage({
     modelFamily: family.id,
     ...(inputImages.paths.length ? { inputImageCount: inputImages.paths.length } : {}),
     ...(visualConditioning ? { visualConditioning } : {}),
+    ...sentRecord,
     createdAt: new Date().toISOString(),
   };
   const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };

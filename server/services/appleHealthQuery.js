@@ -8,6 +8,7 @@
 import { readdir } from 'fs/promises';
 import { PATHS } from '../lib/fileUtils.js';
 import { readDayFile } from './appleHealthIngest.js';
+import { healthPointOrigin } from '../lib/appleHealthPoints.js';
 import { getDailyAlcohol } from './meatspaceAlcohol.js';
 import { getDailyNicotine } from './meatspaceNicotine.js';
 import { getBloodTests } from './meatspaceHealth.js';
@@ -77,12 +78,10 @@ export async function getAvailableDateRange() {
 export function pickDaySumPoints(points, getValue) {
   if (points.length === 0) return points;
 
-  const originOf = (p) => p.origin ?? (Object.prototype.hasOwnProperty.call(p, 'src') ? 'xml' : 'hae');
-
-  const haePoints = points.filter((p) => originOf(p) === 'hae');
+  const haePoints = points.filter((p) => healthPointOrigin(p) === 'hae');
   if (haePoints.length > 0) return haePoints;
 
-  const xmlPoints = points.filter((p) => originOf(p) === 'xml');
+  const xmlPoints = points.filter((p) => healthPointOrigin(p) === 'xml');
   if (xmlPoints.length === 0) return points;
 
   const bySrc = new Map();

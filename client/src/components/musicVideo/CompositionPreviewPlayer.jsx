@@ -36,9 +36,10 @@ const startsDeferred = (collapsed) => collapsed && window.matchMedia?.(DESKTOP_Q
  * the picture below `lg` until the dock is expanded or the viewport is desktop.
  * `lyrics` previews timed lyrics instead of the document. `draft` previews the
  * candidate document. `shotNav` adds Back and Next shot buttons (and the arrow
- * keys) and frame-by-frame stepping for the docked player.
+ * keys) and frame-by-frame stepping for the docked player; `onEditShot(sceneId)`
+ * there adds Edit shot, which pauses first.
  */
-export default function CompositionPreviewPlayer({ project, audioUrl, seekRequest = null, collapsed = false, draft = false, lyrics = false, shotNav = false, scrubId: givenScrubId = null }) {
+export default function CompositionPreviewPlayer({ project, audioUrl, seekRequest = null, collapsed = false, draft = false, lyrics = false, shotNav = false, onEditShot = null, scrubId: givenScrubId = null }) {
   const doc = lyrics ? { playthrough: true } : (draft ? project.composition?.documentDraft : project.composition?.document) || null;
   const scrubId = givenScrubId || (lyrics ? 'mv-lyrics-scrub' : draft ? 'mv-doc-draft-scrub' : 'mv-doc-scrub');
   const [wanted, setWanted] = useState(() => !startsDeferred(collapsed));
@@ -145,7 +146,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
           className="min-w-0 flex-1" />
         <span className="text-xs text-port-text-muted tabular-nums">{timeLabel}</span>
       </div>
-      {shotNav && <ShotStepper scenes={project.scenes} time={t} onSeek={seek} disabled={!preview.ready || failed} keys />}
+      {shotNav && <ShotStepper scenes={project.scenes} time={t} onSeek={seek} onEditShot={onEditShot ? (sceneId) => { audioRef.current?.pause?.(); setPlaying(false); onEditShot(sceneId); } : null} disabled={!preview.ready || failed} keys />}
       {shotNav && (
         <FrameStepper
           time={t}

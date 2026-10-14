@@ -449,6 +449,30 @@ describe('handleOrphanedTask — duplicate-investigation guard', () => {
     pausedAgents.clear();
   });
 
+  it.each(['content-refusal', 'content-filtered'])('keeps persisted %s terminal after a restart', category => {
+    const task = { id: 'task-refused', taskType: 'internal', status: 'in_progress', metadata: {} };
+    const executionInterruption = { category, source: 'provider', at: '2026-01-01T00:00:00Z' };
+    return handleOrphanedTask(task.id, 'agent-refused', vi.fn().mockResolvedValue(task), {
+      interrupted: true, agentMetadata: { executionInterruption },
+    }).then(() => {
+      expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'blocked',
+        metadata: expect.objectContaining({ blockedCategory: category, executionInterruption }),
+      }), 'internal');
+      expect(addTask).not.toHaveBeenCalled();
+      expect(resolveTaskResumePatch).not.toHaveBeenCalled();
+      expect(committedDuringRun).not.toHaveBeenCalled();
+      expect(forceSpawnTask).not.toHaveBeenCalled();
+    });
+  });
+
+  it('does not revive a refused task when a later sweep lacks the agent record', async () => {
+    const task = { id: 'task-refused', status: 'blocked', metadata: { blockedCategory: 'content-refusal' } };
+    await handleOrphanedTask(task.id, 'agent-refused', vi.fn().mockResolvedValue(task), { interrupted: true });
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+    expect(resolveTaskResumePatch).not.toHaveBeenCalled();
+  });
+
   it('blocks an interrupted private assessment without retrying or investigating its transcript', async () => {
     const task = { id: 'task-private', taskType: 'internal', status: 'in_progress',
       metadata: { analysisType: 'private-security-assessment', orphanRetryCount: 4 } };
@@ -1908,7 +1932,21 @@ describe('the orphan sweep finishes an interrupted retry transition (#3373)', ()
         retryPendingCleanup: undefined,
         retryPendingSince: undefined,
       },
-    }, 'user');
+    }, 'user', { expectedStatus: 'in_progress', expectedMetadata: { retryPendingCleanup: 'agent-dead' } });
+  });
+
+  it('recovers extended Deep with an owned hold release and reports rejected writes', async () => {
+    const task = heldTask();
+    task.metadata = { ...task.metadata, auditDepth: 'deep', auditWorkflow: 'extended-v1' };
+    getTaskById.mockResolvedValue(task);
+    updateTask.mockResolvedValueOnce({ error: 'Write rejected' });
+    const { emitLog } = await import('./cosEvents.js');
+    await handleOrphanedTask(task.id, 'unknown-reset', getTaskById);
+    expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'pending' }), 'user', {
+      expectedStatus: 'in_progress', expectedMetadata: { retryPendingCleanup: 'agent-dead' },
+    });
+    expect(emitLog).toHaveBeenCalledWith('error', expect.stringContaining('Write rejected'), expect.anything());
+    expect(emitLog).not.toHaveBeenCalledWith('info', expect.stringContaining('Completed interrupted retry'), expect.anything());
   });
 
   // The verdict was already reached and already budgeted a retry — this is not a
@@ -1932,7 +1970,7 @@ describe('the orphan sweep finishes an interrupted retry transition (#3373)', ()
     await handleOrphanedTask('task-1', 'agent-dead', getTaskById, { agentMetadata: null });
 
     expect(committedDuringRun).not.toHaveBeenCalled();
-    expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'pending' }), 'user');
+    expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'pending' }), 'user', { expectedStatus: 'in_progress', expectedMetadata: { retryPendingCleanup: 'agent-dead' } });
   });
 
   // The sweep is NOT owner-scoped by design — whoever armed the hold is gone by
@@ -1942,7 +1980,7 @@ describe('the orphan sweep finishes an interrupted retry transition (#3373)', ()
 
     await handleOrphanedTask('task-1', 'unknown-reset', getTaskById, { agentMetadata: null });
 
-    expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'pending' }), 'user');
+    expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'pending' }), 'user', { expectedStatus: 'in_progress', expectedMetadata: { retryPendingCleanup: 'agent-someone-else' } });
   });
 
   // A user-terminated (or budget-exhausted) task is blocked and never held, so the

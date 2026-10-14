@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import { composeStyledPrompt } from '../lib/composeStyledPrompt';
+import { composeStyledPrompt, stylePromptAdditions } from '../lib/composeStyledPrompt';
 import {
   FAL_IMAGE_MODEL_IDS,
   IMAGE_GEN_MODE,
@@ -18,6 +18,7 @@ import { useMediaJobSse, isMediaRunEnded } from './useMediaJobSse';
 import { useModelDownloadStatus } from './useModelDownloadStatus';
 import { useHfTokenStatus } from './useHfTokenStatus';
 import { useAgyModels } from './useAgyModels';
+import { useModelInputPreview } from './useModelInputPreview';
 import toast from '../components/ui/Toast';
 import {
   buildFormData,
@@ -29,8 +30,16 @@ import {
   getImageGenStatus,
   getRegenAvailability,
   listMediaJobs,
+  previewImagePrompt,
   regenerateGalleryImage,
 } from '../services/api';
+import { musicVideoFilingFields } from '../lib/musicVideoFiling';
+
+// The style presets folded into the prompt, recorded beside it on the render (#11317).
+const promptAdditionsField = (presets) => {
+  const additions = stylePromptAdditions(presets);
+  return additions.length ? { promptAdditions: additions } : {};
+};
 
 const IMAGE_QUEUE_EVENTS = ['media-jobs:changed'];
 
@@ -253,7 +262,7 @@ export function useImageGenPageRuntime() {
       ? previous : [...(previous || []), { id, status: ack.status || 'queued' }]);
   };
 
-  const submitGenerationPayload = async () => {
+  const buildGenerationPayload = () => {
     const composed = composeStyledPrompt(fields.prompt, fields.negativePrompt, derived.activeStylePresets);
     const width = clampImageEdge(fields.width);
     const height = clampImageEdge(fields.height);
@@ -291,19 +300,47 @@ export function useImageGenPageRuntime() {
       cleanC2PA: fields.cleanC2PA,
       denoise: fields.denoise,
     };
+    Object.assign(payload, musicVideoFilingFields(searchParams), promptAdditionsField(derived.activeStylePresets));
     const hasInitImage = derived.i2iCapable && images.initImage.source != null;
     const hasReferenceImages = derived.populatedRefs.length > 0;
-    if (hasInitImage || hasReferenceImages) {
-      const initFields = hasInitImage ? {
-        ...(images.initImage.source === 'upload'
-          ? { initImage: images.initImage.file }
-          : { initImageFile: images.initImage.name }),
-        initImageStrength: images.initImageStrength,
-      } : {};
-      const referenceFields = hasReferenceImages ? {
-        ...Object.fromEntries(derived.populatedRefs.map((slot, index) => [`referenceImage${index + 1}`, slot.file])),
-        referenceStrengths: derived.populatedRefs.map((slot) => slot.strength),
-      } : {};
+    const initFields = hasInitImage ? {
+      ...(images.initImage.source === 'upload'
+        ? { initImage: images.initImage.file }
+        : { initImageFile: images.initImage.name }),
+      initImageStrength: images.initImageStrength,
+    } : {};
+    const referenceFields = hasReferenceImages ? {
+      ...Object.fromEntries(derived.populatedRefs.map((slot, index) => [`referenceImage${index + 1}`, slot.file])),
+      referenceStrengths: derived.populatedRefs.map((slot) => slot.strength),
+    } : {};
+    return { payload, initFields, referenceFields, hasInputImages: hasInitImage || hasReferenceImages };
+  };
+
+  // The same request as Generate, with uploads named by count (#11317).
+  const previewBody = (() => {
+    if (!derived.isAsyncMode) {
+      const composed = composeStyledPrompt(fields.prompt, fields.negativePrompt, derived.activeStylePresets);
+      return {
+        prompt: composed.prompt, negativePrompt: composed.negativePrompt || undefined,
+        width: clampImageEdge(fields.width), height: clampImageEdge(fields.height), mode: IMAGE_GEN_MODE.EXTERNAL,
+        ...promptAdditionsField(derived.activeStylePresets),
+      };
+    }
+    const { payload, initFields, referenceFields } = buildGenerationPayload();
+    const { initImage, ...initRest } = initFields;
+    const { referenceStrengths, ...referenceUploads } = referenceFields;
+    const uploadedReferenceCount = Object.keys(referenceUploads).length;
+    return {
+      ...payload, ...initRest,
+      ...(initImage ? { uploadedInitImage: true } : {}),
+      ...(uploadedReferenceCount ? { uploadedReferenceCount, referenceStrengths } : {}),
+    };
+  })();
+  const modelInputPreview = useModelInputPreview(previewImagePrompt, previewBody, { enabled: !form.remix.pending });
+
+  const submitGenerationPayload = async () => {
+    const { payload, initFields, referenceFields, hasInputImages } = buildGenerationPayload();
+    if (hasInputImages) {
       const formData = buildFormData({ ...payload, ...initFields, ...referenceFields });
       const data = await generateImageMultipart(formData, { silent: true });
       rememberQueuedJob(data);
@@ -414,6 +451,7 @@ export function useImageGenPageRuntime() {
           denoise: fields.denoise,
         };
         if (fields.seed && Number(fields.seed) >= 0) payload.seed = Number(fields.seed);
+        Object.assign(payload, musicVideoFilingFields(searchParams), promptAdditionsField(derived.activeStylePresets));
         const data = await generateImage(payload, { silent: true });
         setResult({
           ...data,
@@ -521,6 +559,7 @@ export function useImageGenPageRuntime() {
       refreshFlux2Status,
       needsFlux2Token: derived.isFlux2Model && !!flux2Status && flux2Status.venvInstalled && !flux2Status.hfTokenPresent,
       handleRegenerate,
+      modelInputPreview,
     },
     gallery: {
       view: gallery.view,

@@ -50,7 +50,7 @@ async function requireBoard(boardId) {
  * Returns the written paths in timeline order. Throws a 422 when ffmpeg is
  * missing, the file is unreadable, or no frame could be decoded.
  */
-async function sampleVideoFrames(videoFile, count, outDir, prefix) {
+async function sampleVideoFrames(videoFile, count, outDir, prefix, picked = null) {
   const videoPath = safeUnder(PATHS.videos, videoFile);
   if (!videoPath) throw new ServerError('Invalid video reference', { status: 400, code: 'VALIDATION_ERROR' });
   const ffmpeg = await findFfmpeg();
@@ -58,40 +58,64 @@ async function sampleVideoFrames(videoFile, count, outDir, prefix) {
   const duration = await probeVideoDuration(videoPath);
   if (!duration) throw new ServerError('Could not read that video (missing or unreadable)', { status: 422, code: 'VIDEO_UNREADABLE' });
 
-  const times = frameSampleTimes(duration, count);
+  // Picked times are clamped just inside the end so the last frame still decodes.
+  const times = picked ? picked.map((t) => Math.min(Math.max(0, t), Math.max(0, duration - 0.05))) : frameSampleTimes(duration, count);
   const paths = [];
   for (let i = 0; i < times.length; i++) {
     const out = join(outDir, `${prefix}${i + 1}.jpg`);
+    // Input seek decodes forward from the prior keyframe to the exact time;
+    // the frame is written at source resolution at JPEG's top quality.
     const result = await runFfmpegProcess({
       bin: ffmpeg,
-      args: ['-ss', times[i].toFixed(3), '-i', videoPath, '-frames:v', '1', '-q:v', '3', '-y', out],
+      args: ['-ss', times[i].toFixed(3), '-i', videoPath, '-frames:v', '1', '-q:v', '1', '-qmin', '1', '-y', out],
       stderrTailBytes: 0,
     });
-    if (result.ok) paths.push(out);
+    if (result.ok) paths.push({ path: out, time: times[i] });
   }
   if (!paths.length) throw new ServerError('No frames could be extracted from that video', { status: 422, code: 'FRAME_EXTRACT_FAILED' });
   return paths;
 }
 
 /** Copy sampled frames into the gallery under stable, content-keyed names. */
-async function storeFramesInGallery(paths, videoFile, count) {
+async function storeFramesInGallery(frames, videoFile, count) {
   await ensureDir(PATHS.images);
   const key = createHash('sha1').update(`${videoFile}|${count}`).digest('hex').slice(0, 12);
   const names = [];
-  for (let i = 0; i < paths.length; i++) {
+  for (let i = 0; i < frames.length; i++) {
     const name = `board-frame-${key}-${i + 1}of${count}.jpg`;
-    await atomicWrite(join(PATHS.images, name), await readFile(paths[i]));
+    await atomicWrite(join(PATHS.images, name), await readFile(frames[i].path));
     names.push(name);
   }
   return names;
 }
 
+// Picked frames are keyed by their time (to the millisecond), so picking the
+// same moment twice dedupes and different picks never overwrite each other.
+async function storePickedFramesInGallery(frames, videoFile) {
+  await ensureDir(PATHS.images);
+  const key = createHash('sha1').update(videoFile).digest('hex').slice(0, 12);
+  const names = [];
+  for (const frame of frames) {
+    const name = `board-frame-${key}-at${Math.round(frame.time * 1000)}ms.jpg`;
+    await atomicWrite(join(PATHS.images, name), await readFile(frame.path));
+    names.push(name);
+  }
+  return names;
+}
+
+// Rounded to centiseconds before splitting, so 59.996 s reads 1:00.00, not 0:60.00.
+const clock = (sec) => {
+  const cs = Math.round(sec * 100);
+  return `${Math.floor(cs / 6000)}:${((cs % 6000) / 100).toFixed(2).padStart(5, '0')}`;
+};
+
 /**
- * Extract `count` frames from one video pin and append them to the board as
- * image items. Re-running with the same count is a no-op (source-deduped).
+ * Extract frames from one video pin and append them to the board as image
+ * items: `count` evenly spaced frames, or the exact `times` (seconds) picked in
+ * the frame picker. Re-running the same request is a no-op (source-deduped).
  * Returns `{ board, added, frames }`.
  */
-export async function extractItemFrames(boardId, itemId, { count }) {
+export async function extractItemFrames(boardId, itemId, { count, times }) {
   const board = await requireBoard(boardId);
   const item = (board.items || []).find((it) => it.id === itemId);
   if (!item) throw new ServerError('Item not found', { status: 404, code: 'NOT_FOUND' });
@@ -100,13 +124,15 @@ export async function extractItemFrames(boardId, itemId, { count }) {
 
   const tmp = await mkdtemp(join(tmpdir(), 'portos-board-frames-'));
   try {
-    const paths = await sampleVideoFrames(file, count, tmp, 'f');
-    const names = await storeFramesInGallery(paths, file, count);
+    const picked = Array.isArray(times) ? [...new Set(times.map((t) => Math.round(t * 1000) / 1000))].sort((a, b) => a - b) : null;
+    const frames = await sampleVideoFrames(file, picked ? picked.length : count, tmp, 'f', picked);
+    const names = picked ? await storePickedFramesInGallery(frames, file) : await storeFramesInGallery(frames, file, count);
+    const label = (i) => (picked ? `frame at ${clock(frames[i].time)}` : `frame ${i + 1}/${count}`);
     const imported = names.map((name, i) => ({
       type: 'image',
       imageUrl: `/data/images/${name}`,
-      source: `frame:${file}#${i + 1}of${count}`,
-      caption: item.caption ? `${item.caption} (frame ${i + 1}/${count})` : `Frame ${i + 1}/${count} of ${file}`,
+      source: picked ? `frame:${file}@${Math.round(frames[i].time * 1000)}ms` : `frame:${file}#${i + 1}of${count}`,
+      caption: item.caption ? `${item.caption} (${label(i)})` : `${label(i)[0].toUpperCase()}${label(i).slice(1)} of ${file}`,
     }));
     // The append first names the frame files, so it commits under the backup lease (#9982).
     const { board: next, added } = await withBackupAssetPublication(() => store.appendImportedItems(boardId, imported));
@@ -158,7 +184,7 @@ export async function composeBoardCollage(boardId, { framesPerVideo, addFramesTo
           return [];
         });
         if (!frames.length) { skipped += 1; continue; }
-        sources.push(...frames);
+        sources.push(...frames.map((f) => f.path));
         if (addFramesToBoard) {
           const names = await storeFramesInGallery(frames, file, framesPerVideo);
           names.forEach((name, i) => imported.push({

@@ -893,6 +893,36 @@ describe('Image Gen Routes', () => {
       expect(imageGen.generateImage).not.toHaveBeenCalled();
     });
 
+    // #11317: the compose preview runs the same preparation and Codex builder as
+    // /generate, so the form shows the wrapper and chips before anything queues.
+    it('prompt-preview shows the exact Codex message and its additions without queueing', async () => {
+      getSettings.mockResolvedValueOnce({
+        imageGen: { mode: 'codex', codex: { enabled: true, codexPath: '/usr/local/bin/codex', model: 'gpt-5.4' } },
+      });
+      const style = { id: 'style-1', label: 'Universe style', text: 'muted earth tones' };
+
+      const response = await request(app)
+        .post('/api/image-gen/prompt-preview')
+        .send({ prompt: 'muted earth tones. a tavern at dusk', width: 1024, height: 1024, promptAdditions: [style], uploadedInitImage: true });
+
+      expect(response.status).toBe(200);
+      expect(response.body.mode).toBe('codex');
+      expect(response.body.sentPrompt).toMatch(/^\$imagegen .*muted earth tones\. a tavern at dusk/s);
+      expect(response.body.promptAdditions[0]).toEqual(style);
+      expect(response.body.promptAdditions[1]).toMatchObject({ id: 'agent-instructions', label: 'Codex image tool instructions' });
+      expect(response.body.promptAdditions[1].text).toContain('[prompt]');
+      expect(response.body.promptAdditions[1].text).not.toContain('a tavern at dusk');
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      expect(mediaJobQueue.assertMediaQueueRoom).not.toHaveBeenCalled();
+    });
+
+    it('prompt-preview refuses a disabled provider the way Generate does', async () => {
+      getSettings.mockResolvedValueOnce({ imageGen: { mode: 'codex', codex: { enabled: false } } });
+      const response = await request(app).post('/api/image-gen/prompt-preview').send({ prompt: 'a tavern at dusk' });
+      expect(response.status).toBe(400);
+      expect(response.body.error).toMatch(/disabled/);
+    });
+
     // Per-request codex override: even when the saved default is external,
     // an explicit `mode: 'codex'` on the payload (e.g. the writers-room
     // storyboard chip strip) flips into queue mode so renders serialize.

@@ -1,8 +1,7 @@
-import { shotActionContractProblem, shotActionPrompt } from '../../../server/lib/musicVideoActionContract.js';
-import { shotCameraPrompt } from '../../../server/lib/cameraMovements.js';
+import { shotActionContractProblem } from '../../../server/lib/musicVideoActionContract.js';
 import { isOutsideMusicVideoReference, musicVideoConditioningReferences, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../server/lib/musicVideoConditioning.js';
-import { musicVideoCreativeContext, musicVideoDirectorLook } from '../../../server/lib/musicVideoCreativeContext.js';
 import { sceneEndFrameRequestFields } from '../../../server/lib/musicVideoEndFrame.js';
+import { authoredFramePromptText, authoredShotPrompt, musicVideoFrameModelInput, visualDirection } from '../../../server/lib/musicVideoShotPrompt.js';
 import { useEffect, useRef } from 'react';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';
@@ -14,14 +13,9 @@ import useSceneRenderLifecycle from './useSceneRenderLifecycle.js';
 import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { isLayeredComposition, isSelfDrawnLayer, sceneVisualLayer } from '../lib/musicVideoLayers.js';
 import { musicVideoFrameGenSize } from '../lib/musicVideoAspect.js';
-import { MOTION_CONTINUITY_CLAUSE } from '../lib/musicVideoMotion.js';
 import {
-  approximateMotionCues, falSceneTake, falTakeRequestFields, grokCoverage, isPerformanceScene, performanceBlockedReason,
+  falSceneTake, falTakeRequestFields, grokCoverage, isPerformanceScene, performanceBlockedReason,
 } from '../lib/musicVideoShotTiming.js';
-
-// Audio-reactive generation conditions motion on the song itself, so the prompt
-// has to rule out anything that reads as a performance of it.
-const AUDIO_REACTIVE_PERFORMANCE_GUARD = 'The music drives only environmental motion, lighting, particles, reflections, fabric, and subtle camera accents. No singing, lip-sync, speaking, mouth movement, dancing, instruments, performers, or musical performance.';
 
 // The image backends accept at most four reference images for most models
 // (server imageGen/prepareParams.js), mirrored by the server's
@@ -38,27 +32,8 @@ const REFERENCE_CAPABILITY_CODES = new Set([
   'TOO_MANY_INPUT_IMAGES',
 ]);
 
-/**
- * The project-wide visual direction appended to every generated prompt —
- * palette and camera rules from the visual spec (#8965). Kept in step with
- * `visualDirection` in server/services/musicVideo/handoff.js, which composes
- * the same suffix for the external-tool handoff manifest.
- *
- * Typography is deliberately excluded from this suffix (#8992): the visual
- * spec's font/caption guidance belongs to the separately composited text
- * layer (#8984), not to the image/video model's prompt — describing a font
- * style there works against the "no text, letters, captions" guard the
- * applied treatment adds and encourages text baked into the generated
- * pixels. `spec.typography` still reaches the composition/typography lane
- * directly and the external handoff manifest (`visualSpec.typography`).
- */
-export function visualDirection(spec) {
-  if (!spec) return '';
-  return [
-    spec.palette?.length ? `color palette ${spec.palette.join(' ')}` : '',
-    spec.cameraRules?.trim() ? `camera: ${spec.cameraRules.trim()}` : '',
-  ].filter(Boolean).join('; ');
-}
+/** The project-wide palette and camera rules, shared with the server's composers. */
+export { visualDirection };
 
 /** Shared scene-aware frame conditioning, with the legacy capped fallback. */
 export const conditioningReferences = musicVideoConditioningReferences;
@@ -178,26 +153,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   const genVideoScenes = videoLane.genScenes;
   const failedScenes = { frame: frameLane.failedScenes, video: videoLane.failedScenes };
 
-  const style = project?.concept?.style?.trim();
-  const direction = [musicVideoCreativeContext(project?.concept, { look: musicVideoDirectorLook(project) }), visualDirection(project?.visualSpec)].filter(Boolean).join('; ');
-  // The i2v prompt leaves the mood-board look out (handoff.js composePrompt): the frame already carries it.
-  const motionDirection = [musicVideoCreativeContext(project?.concept, { moodBoard: false }), visualDirection(project?.visualSpec)].filter(Boolean).join('; ');
   const conditioning = conditioningReferences(project);
-  // The image prompt for a scene's reference frame: its frame prompt (or the
-  // shot prompt as a fallback) suffixed with the project's global concept style
-  // and the visual spec's palette/camera direction (typography excluded, #8992).
-  // An applied treatment (#8980) adds the scene's composition constraints last:
-  // focal subject, framing, the region reserved for the composited typography,
-  // and no lettering in the generated pixels. Same order as the server's
-  // handoff manifest (handoff.js composePrompt).
-  const buildFramePrompt = (scene) =>
-    [[(scene.framePrompt?.trim() || scene.prompt?.trim() || ''), style, direction, scene.direction?.frameClause?.trim()].filter(Boolean).join(', '), shotActionPrompt(project, scene, { frame: true })].filter(Boolean).join('\n');
-  // The i2v prompt for a scene's clip: its shot prompt (or the frame prompt as a
-  // fallback) suffixed the same way. The reference frame already fixes the
-  // look; this prompt guides the motion. A planned camera move (#10589) follows
-  // as the four-part camera block, same as handoff.js sceneShotPrompt.
-  const buildShotPrompt = (scene) =>
-    [[(scene.prompt?.trim() || scene.framePrompt?.trim() || ''), style, motionDirection, scene.direction?.motionClause?.trim(), MOTION_CONTINUITY_CLAUSE].filter(Boolean).join(', '), shotCameraPrompt(scene.camera), shotActionPrompt(project, scene)].filter(Boolean).join('\n');
 
   /**
    * Render a still reference frame for one scene from its frame prompt. The
@@ -221,20 +177,32 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    * returns its `jobId`, and `onJob(jobId)` is told of it before the lane starts
    * tracking it (a batch registers the job there, so a terminal event that raced
    * ahead of the kickoff is still attributed to it).
+   *
+   * `refine` (with `referenceImageId`) edits that frame by a short instruction
+   * instead: the frame is the only reference and the prompt is the instruction.
    */
-  const generateFrame = (scene, { revisionId, onJob } = {}) => {
-    const conditioning = conditioningReferences(project, scene);
-    const problem = shotActionContractProblem(scene.direction?.actionContract, scene);
+  const generateFrame = (scene, { revisionId, onJob, referenceImageId = null, refine = null } = {}) => {
+    const refining = Boolean(refine?.trim() && referenceImageId);
+    const conditioning = refining ? [] : conditioningReferences(project, scene);
+    const problem = refining ? null : shotActionContractProblem(scene.direction?.actionContract, scene);
     if (problem) { toast.error(problem); return Promise.resolve({ ok: false }); }
-    const prompt = buildFramePrompt(scene);
-    if (!prompt) { toast.error('Add a frame prompt or shot prompt first'); return Promise.resolve({ ok: false }); }
+    // The director's text (or a refine's instruction); the server composes the still's
+    // prompt and lists each block it adds (lib/musicVideoShotPrompt.js, #11317).
+    const prompt = refining ? refine.trim() : authoredFramePromptText(scene);
+    // A planned shot with no text still renders from its look, frame clause and actions.
+    if (!refining && !musicVideoFrameModelInput(project, scene).prompt) { toast.error('Add a frame prompt or shot prompt first'); return Promise.resolve({ ok: false }); }
+    // A frame picked on the card (its start or end frame) leads the references, as the image this render reworks.
+    const references = [...(referenceImageId ? [referenceImageId] : []), ...conditioning.map((ref) => ref.imageId).filter((id) => id !== referenceImageId)];
     const projectId = project.id;
     frameLane.startScene(scene.sceneId);
     return generateImage({
       prompt,
       ...musicVideoFrameGenSize(project),
-      ...(conditioning.length ? { referenceImageFiles: conditioning.map((ref) => ref.imageId) } : {}),
-      musicVideo: { projectId, sceneId: scene.sceneId, ...(revisionId ? { revisionId } : {}) },
+      ...(references.length ? { referenceImageFiles: references } : {}),
+      musicVideo: {
+        projectId, sceneId: scene.sceneId, compose: true, ...(revisionId ? { revisionId } : {}),
+        ...(refining ? { refine: true } : referenceImageId ? { fromFrame: true } : {}),
+      },
     }, { silent: true })
       .then((res) => {
         const stillRunning = res?.status === 'queued' || res?.status === 'running';
@@ -278,17 +246,21 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    * `slot: 'end'` tag); a fal clip on a model that takes an end frame then ends
    * on it. Resolves `{ ok }` like generateFrame.
    */
-  const generateEndFrame = (scene) => {
-    if (!scene.referenceImageId) { toast.error('Generate a reference frame first'); return Promise.resolve({ ok: false }); }
+  const generateEndFrame = (scene, { referenceImageId = scene.referenceImageId, refine = null } = {}) => {
+    const refining = Boolean(refine?.trim() && referenceImageId);
     const endPrompt = scene.endFramePrompt?.trim();
-    if (!endPrompt) { toast.error('Describe the end frame first'); return Promise.resolve({ ok: false }); }
+    if (!endPrompt && !refining) { toast.error('Describe the end frame first'); return Promise.resolve({ ok: false }); }
     const projectId = project.id;
     endFrameLane.startScene(scene.sceneId);
     return generateImage({
-      prompt: `${endPrompt}. Keep the reference image's composition, subject, pose and framing; change only the visual style.`,
+      // From a frame the server keeps its shot and changes what the prompt asks; with no frame it renders like a start frame.
+      prompt: refining ? refine.trim() : endPrompt,
       ...musicVideoFrameGenSize(project),
-      referenceImageFiles: [scene.referenceImageId],
-      musicVideo: { projectId, sceneId: scene.sceneId, slot: 'end' },
+      ...(referenceImageId ? { referenceImageFiles: [referenceImageId] } : {}),
+      musicVideo: {
+        projectId, sceneId: scene.sceneId, slot: 'end', compose: true,
+        ...(refining ? { refine: true } : referenceImageId ? { fromFrame: true } : {}),
+      },
     }, { silent: true })
       .then((res) => {
         if (res?.status === 'queued' || res?.status === 'running') {
@@ -345,12 +317,15 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    * Returns a promise that always resolves to `{ ok }` — see generateFrame's
    * doc comment. `revisionId` (optional) is the revision hook's kickoff tag (#9011).
    */
-  const generateSceneVideo = (scene, { revisionId, onJob, target = null } = {}) => {
+  const generateSceneVideo = (scene, { revisionId, onJob, target = null, card = null } = {}) => {
     if (!scene.referenceImageId) { toast.error('Generate a reference frame first'); return Promise.resolve({ ok: false }); }
     const problem = shotActionContractProblem(scene.direction?.actionContract, scene);
     if (problem) { toast.error(problem); return Promise.resolve({ ok: false }); }
-    const basePrompt = buildShotPrompt(scene);
-    if (!basePrompt) { toast.error('Add a shot prompt first'); return Promise.resolve({ ok: false }); }
+    // `card` is the shot card's Render: the director's text and its input toggles
+    // ({ prompt, endFrame, songAudio, wholeLine }), composed as the card shows it (SceneRenderInputs).
+    // The server composes every addition from the director's text (musicVideoShotPrompt.js).
+    const prompt = card ? card.prompt : authoredShotPrompt(scene);
+    if (!prompt) { toast.error('Add a shot prompt first'); return Promise.resolve({ ok: false }); }
     // `target` renders this one shot elsewhere (a scene card's Render on pick) without changing the saved setting.
     const settings = target ? { ...videoSettings.settings, ...target } : videoSettings.settings;
     const { detectedAudioReactiveLora } = videoSettings;
@@ -366,14 +341,8 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       : null;
     if (performanceBlocked) { toast.error(performanceBlocked); return Promise.resolve({ ok: false }); }
     const spanSec = sceneSpanSec(scene);
-    // Grok's CLI lane takes no timed controls: phrase intents ride as prose
-    // whose timing is explicitly approximate. The environmental-motion guard
-    // stays exclusive to the audio-reactive lane.
-    const motionCues = settings.backend === 'grok' ? approximateMotionCues(project?.phrases, scene.startSec, scene.endSec) : '';
-    const prompt = audioReactiveSelected
-      ? `${basePrompt}. ${AUDIO_REACTIVE_PERFORMANCE_GUARD}`
-      : [basePrompt, motionCues].filter(Boolean).join('. ');
-    const mode = audioReactiveSelected || settings.generationMode === 'suppliedAudio' ? 'a2v' : 'image';
+    const songAudio = typeof card?.songAudio === 'boolean' ? card.songAudio : settings.generationMode === 'suppliedAudio';
+    const mode = audioReactiveSelected || songAudio ? 'a2v' : 'image';
     const falFields = settings.backend === 'fal'
       ? falTakeRequestFields(falSceneTake({ scene, videoSettings: settings, songDurationSec: project?.audioAnalysis?.durationSec ?? null }))
       : null;
@@ -384,7 +353,8 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       ...(settings.backend === 'grok'
         // Request the 6/10s clip that COVERS this shot; the saved pin is only
         // the fallback for a scene not yet timed on the song.
-        ? { grokDuration: spanSec != null ? grokCoverage(spanSec).requestSec : settings.grokDuration }
+        // A scene card's Length pick wins.
+        ? { grokDuration: target?.grokDuration || (spanSec != null ? grokCoverage(spanSec).requestSec : settings.grokDuration) }
         // fal.ai (#8968) — image-to-video only (see VideoRenderSettings). The
         // request is exactly the take the scene card prices (falSceneTake):
         // a cutaway names its model, the length covering the shot (or the
@@ -394,21 +364,31 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         : falFields
           ? falFields
           : settings.backend === 'local'
-            ? { modelId: settings.modelId || undefined, disableAudio: true }
+            // A scene card's pick names its model and length; else the saved model at the model's default length.
+            ? { modelId: settings.modelId || undefined, ...(target?.numFrames ? { numFrames: target.numFrames } : {}), disableAudio: true }
             // A named model is local-only machinery at the server boundary and
             // would force the resolver off a Grok install default. Keep the
             // shared pin saved, but omit it until this peer chooses Local.
             : { grokDuration: settings.grokDuration, disableAudio: true }),
       mode,
       sourceImageFile: scene.referenceImageId,
-      // A style-break end frame (#11173), when this fal model takes one.
-      ...sceneEndFrameRequestFields(scene, { backend: settings.backend, falModelId: falFields?.falModelId, mode }),
+      // A style-break end frame (#11173), when this fal or local model takes one
+      // (a local LTX clip then renders first+last frame, #11258).
+      ...(card && (card.endFrame === false || songAudio) ? {} : sceneEndFrameRequestFields(scene, {
+        backend: settings.backend, falModelId: falFields?.falModelId, mode, // A card's local pick names its own model; else the active one.
+        localRuntime: (target?.modelId ? (videoSettings.models || []).find((m) => m.id === target.modelId)?.runtime : videoSettings.activeModel?.runtime) ?? null,
+      })),
       ...(audioReactiveSelected ? {
         audioStartSec: scene.startSec || 0,
         loraFilenames: [detectedAudioReactiveLora.filename],
         loraScales: [settings.audioReactiveScale],
       } : {}),
-      musicVideo: JSON.stringify({ projectId: project.id, sceneId: scene.sceneId, ...(revisionId ? { revisionId } : {}) }),
+      musicVideo: JSON.stringify({
+        projectId: project.id, sceneId: scene.sceneId, ...(revisionId ? { revisionId } : {}),
+        compose: true, ...(audioReactiveSelected ? { audioReactive: true } : {}),
+        ...(card ? { promptAsTyped: true, ...(typeof card.songAudio === 'boolean' && !performance ? { songAudio: card.songAudio } : {}) } : {}),
+        ...(card?.wholeLine && performance ? { wholeLine: true } : {}),
+      }),
     })
       .then((res) => trackVideoJob(res, scene.sceneId, onJob))
       .catch((err) => handleVideoError(err, scene.sceneId, 'Scene video generation failed'));
@@ -431,14 +411,14 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     if (videoBlockedReason) { toast.error(videoBlockedReason); return; }
     videoLane.startScene(scene.sceneId);
     generateVideo({
-      prompt: buildShotPrompt(scene),
+      prompt: authoredShotPrompt(scene),
       backend: 'local',
       modelId: effectiveModelId || undefined,
       disableAudio: true,
       mode: 'extend',
       extendFromVideoId: scene.videoHistoryId,
       sourceImageFile: scene.referenceImageId,
-      musicVideo: JSON.stringify({ projectId: project.id, sceneId: scene.sceneId }),
+      musicVideo: JSON.stringify({ projectId: project.id, sceneId: scene.sceneId, compose: true }),
     })
       .then((res) => trackVideoJob(res, scene.sceneId))
       .catch((err) => handleVideoError(err, scene.sceneId, 'Shot continuation failed'));
@@ -451,7 +431,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   const frameScenes = scenes.filter((scene) => !isSelfDrawnLayer(sceneVisualLayer(scene, { layered })));
   const footageScenes = scenes.filter((scene) => sceneVisualLayer(scene, { layered }) === 'footage');
   const planMissingFrames = () => frameScenes.filter((scene) =>
-    !scene.referenceImageId && !genScenes[scene.sceneId] && buildFramePrompt(scene));
+    !scene.referenceImageId && !genScenes[scene.sceneId] && musicVideoFrameModelInput(project, scene).prompt);
 
   // The clips a Videos batch would submit: a footage scene with a frame, no clip
   // and nothing in flight. A scene still waiting for its frame never blocks the
@@ -459,7 +439,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   // dropped here and reported once (#8977).
   const planMissingVideos = () => {
     const candidates = footageScenes.filter((scene) =>
-      scene.referenceImageId && !scene.videoHistoryId && !genVideoScenes[scene.sceneId] && buildShotPrompt(scene));
+      scene.referenceImageId && !scene.videoHistoryId && !genVideoScenes[scene.sceneId] && authoredShotPrompt(scene));
     const { settings, audioReactiveSelected } = videoSettings;
     const lipSyncBlocked = performanceBlockedReason(audioReactiveSelected ? 'local' : settings.backend);
     const pending = lipSyncBlocked ? candidates.filter((scene) => !isPerformanceScene(scene)) : candidates;
@@ -508,8 +488,6 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     frameBatch,
     videoBatch,
     conditioning,
-    buildFramePrompt,
-    buildShotPrompt,
     generateFrame,
     generateEndFrame,
     generateSceneVideo,

@@ -311,6 +311,40 @@ describe('resolveSceneClips', () => {
     expect(clips[0].duration).toBe(2); // 48/24
   });
 
+  // Uniquely catches a hand-set speed or offset that never reaches the render, or reaches it by a copied clip.
+  it('plays a hand-set speed and offset from the same clip file, on the output timebase', async () => {
+    loadHistory.mockResolvedValue([{ id: 'h1', filename: 'a.mp4', width: 768, height: 512, fps: 24, numFrames: 96 }]);
+    const [faster, held] = await resolveSceneClips({ scenes: [
+      { sceneId: 's1', order: 0, videoHistoryId: 'h1', speedFps: 24, offsetFrames: 12 },
+      { sceneId: 's2', order: 1, videoHistoryId: 'h1', offsetFrames: -6 },
+    ] });
+    // Double speed, starting half a second in: the 4s clip's last 3.5s play in 1.75s.
+    expect(faster).toMatchObject({ rate: 2, inSec: 0.25, outSec: 2, sourceSec: 1.75 });
+    expect(faster.leadSec).toBeUndefined();
+    // Six frames late: the first frame holds a quarter second, then the whole clip plays.
+    expect(held).toMatchObject({ inSec: 0, outSec: 4.25, sourceSec: 4.25, leadSec: 0.25 });
+    expect(held.rate).toBeUndefined();
+    expect(faster.videoPath).toBe(held.videoPath);
+    const fc = (clips) => { const { args } = buildMusicVideoFfmpegArgs(clips, '/music/track.wav', '/out.mp4', { audioDurationSec: 30 }); return args[args.indexOf('-filter_complex') + 1]; };
+    expect(fc([faster])).toContain('setpts=(PTS-STARTPTS)/2,fps=24');
+    expect(fc([held])).toContain('tpad=start_mode=clone:start_duration=0.25,fps=24');
+    expect(fc([{ ...faster, rate: undefined }])).not.toContain('PTS-STARTPTS)/');
+  });
+
+  // Uniquely catches a reversed shot looping its input forever (reverse would never end) or playing forwards.
+  it('plays a reversed clip backwards from the same file, read once, before its speed', async () => {
+    loadHistory.mockResolvedValue([{ id: 'h1', filename: 'a.mp4', width: 768, height: 512, fps: 24, numFrames: 96 }]);
+    const [reversed, sung] = await resolveSceneClips({ scenes: [
+      { sceneId: 's1', order: 0, videoHistoryId: 'h1', reverse: true, speedFps: 24 },
+      { sceneId: 's2', order: 1, videoHistoryId: 'h1', reverse: true, shotMode: 'performance' },
+    ] });
+    expect(reversed).toMatchObject({ reverse: true, loop: false, rate: 2 });
+    expect(sung.reverse).toBeUndefined();
+    const { args } = buildMusicVideoFfmpegArgs([reversed], '/music/track.wav', '/out.mp4', { audioDurationSec: 30 });
+    expect(args).not.toContain('-stream_loop');
+    expect(args[args.indexOf('-filter_complex') + 1]).toContain('reverse,setpts=PTS-STARTPTS,setpts=(PTS-STARTPTS)/2,fps=24');
+  });
+
   it('cuts a code shot as a black ground in a composed render (#10297)', async () => {
     loadHistory.mockResolvedValue([]);
     const clips = await resolveSceneClips({ scenes: [{ sceneId: 's1', order: 0, visualLayer: 'code', startSec: 2, endSec: 5 }] }, { layered: true });

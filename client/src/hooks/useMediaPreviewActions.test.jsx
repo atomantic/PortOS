@@ -212,6 +212,18 @@ describe('useMediaPreviewActions.handleContinue', () => {
     expect(params.get('sourceImageFile')).toBe('last.png');
     expect(params.get('prompt')).toBeNull();
   });
+
+  // Uniquely catches a re-render of a music video's clip falling out of that video's collection.
+  it('hands on the music video a clip was made for, on Continue and Remix', async () => {
+    extractLastFrame.mockResolvedValue({ filename: 'last.png' });
+    const clip = { kind: 'video', id: 'vid-3', prompt: 'a neon alley', raw: { musicVideo: { projectId: 'mv-example', sceneId: null } } };
+    const { result } = renderHook(() => useMediaPreviewActions());
+    await result.current.handleContinue(clip);
+    expect(parseNav().params.get('musicVideo')).toBe('mv-example');
+    result.current.handleRemix(clip);
+    expect(parseNav().params.get('remix')).toBe('vid-3');
+    expect(parseNav().params.get('musicVideo')).toBe('mv-example');
+  });
 });
 
 // A compact gallery row (#8292) carries only a prompt preview; every handoff

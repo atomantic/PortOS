@@ -37,10 +37,10 @@ import { missingSentinelLogMessage, parseSentinelPayload } from '../../lib/agent
 import { LIFECYCLE_LINES, SENTINEL_COMPLETION_MARKER } from '../../lib/agentOutputMarkers.js';
 import { resolveMergeGateVerdict, buildMergeGateReprompt } from '../../lib/mergeGateContract.js';
 import { createStreamingAnsiStripper, stripAnsi } from '../../lib/ansiStrip.js';
-import { createClaudeSessionLimitBannerDetector, createImmediateFallbackSignalDetector, createLocalRuntimeOomDetector, createTruncatedResponseDetector } from '../../lib/aiToolkit/errorDetection.js';
+import { createContentRefusalDetector, createClaudeSessionLimitBannerDetector, createImmediateFallbackSignalDetector, createLocalRuntimeOomDetector, createTruncatedResponseDetector, createModelAtCapacityDetector } from '../../lib/aiToolkit/errorDetection.js';
 import { isAntigravityCommand } from '../../lib/antigravity.js';
 import { isCodexCommand } from '../../lib/codex.js';
-import { isClaudeCommand } from '../../lib/providerModels.js';
+import { isClaudeCommand, isOpencodeCommand } from '../../lib/providerModels.js';
 import { createCodexModelRejectionGate } from './codexModelRejection.js';
 import {
   READY_POLL_INTERVAL_MS,
@@ -56,6 +56,9 @@ import {
   OOM_NUDGE_MAX_ATTEMPTS,
   OOM_NUDGE_TEXT,
   createTruncationNudgeGate,
+  createModelCapacityNudgeGate,
+  CAPACITY_NUDGE_MAX_ATTEMPTS,
+  CAPACITY_NUDGE_TEXT,
   TRUNCATION_NUDGE_MAX_ATTEMPTS,
   TRUNCATION_NUDGE_TEXT,
   createStallNudgeGate,
@@ -72,6 +75,7 @@ import {
   createStartupDialogAnswers,
   answerStartupDialogs,
   AGY_INPUT_READY_PATTERN,
+  OPENCODE_INPUT_READY_PATTERN,
   PASTE_TO_ENTER_MIN_DELAY_MS,
   PASTE_TO_ENTER_FALLBACK_MS,
   PASTE_COMMIT_PATIENCE_MS,
@@ -474,6 +478,7 @@ export function createTuiSessionController({
   runId,
   model,
   provider,
+  securityScanGrant,
   prompt,
   tuiConfig,
   cwd,
@@ -534,7 +539,10 @@ export function createTuiSessionController({
   // and a fresh spawn (a real retry) starts a fresh closure with its own flag.
   let mergeGateReprompted = false;
   let immediateFallbackAnalysis = null;
+  let terminalRefusal = null;
+  let executionInterruption = null;
   const detectImmediateFallbackSignal = createImmediateFallbackSignalDetector();
+  const detectContentRefusal = createContentRefusalDetector();
   const detectClaudeSessionLimitBanner = createClaudeSessionLimitBannerDetector();
   let claudeLowPriorityPromptResubmitted = false;
   const mayUseClaudeLowPriority = provider?.type === 'tui'
@@ -556,6 +564,10 @@ export function createTuiSessionController({
   // createTruncationNudgeGate.
   const detectTruncatedResponse = createTruncatedResponseDetector();
   const truncationNudgeGate = createTruncationNudgeGate();
+  // A provider-side `model is at capacity` rejection (Codex). Dead turn, intact
+  // session — nudged with `continue`, but only after a much longer quiet spell.
+  const detectModelAtCapacity = createModelAtCapacityDetector();
+  const capacityNudgeGate = createModelCapacityNudgeGate();
   // agy quitting back to its launch shell (see createAgyResumeGate). Only a
   // login-shell launch has a shell to fall back to; runner/direct PTYs die with
   // agy and finish through handleExit instead.
@@ -640,6 +652,7 @@ export function createTuiSessionController({
   // not `spawnCommand` — a credential-bootstrap wrap makes the latter the
   // bootstrap CLI.
   const isCodexSession = isCodexCommand(tuiConfig.command);
+  const isOpencodeSession = isOpencodeCommand(tuiConfig.command);
   const codexModelRejectionGate = isCodexSession ? createCodexModelRejectionGate() : null;
   // Latches once codex's composer placeholder paints — the positive "the input
   // box exists" signal the idle heuristic lacks. See
@@ -651,9 +664,12 @@ export function createTuiSessionController({
   // paste into a startup banner, a trust menu, or a returned shell prompt.
   // agy enables bracketed paste on alt-screen entry, before its composer (and
   // before its trust gate) exists, so it needs the extra composer-footer gate.
+  // OpenCode also enables paste mode before the composer. Require its
+  // placeholder and a settled repaint so terminal queries cannot trigger paste.
   // Runner/direct shapes pty.spawn the TUI itself (no launch shell), so the
   // tracker must not wait for a shell paste-mode OFF that will never come.
   const inputReady = createInputReadyTracker({
+    ...(isOpencodeSession ? { readyTextPattern: OPENCODE_INPUT_READY_PATTERN } : {}),
     ...(isAntigravityCommand(tuiConfig.command) ? { readyTextPattern: AGY_INPUT_READY_PATTERN } : {}),
     launchShape,
   });
@@ -793,7 +809,7 @@ export function createTuiSessionController({
     if (sentinelRecoveryRetryTimer || isTerminal()) return;
     sentinelRecoveryRetryTimer = setTimeout(() => {
       sentinelRecoveryRetryTimer = null;
-      if (isTerminal()) return;
+      if (isTerminal() || terminalRefusal) return;
       doneSentinelWatcher?.();
       doneSentinelWatcher = armSentinelWatcher();
     }, SENTINEL_RECOVERY_RETRY_MS);
@@ -819,6 +835,7 @@ export function createTuiSessionController({
     const prProbe = await probeMergeGatePr();
     const verdict = resolveMergeGateVerdict({ prProbe, summary });
     if (verdict !== 'needs-reprompt') return false;
+    if (terminalRefusal) return false;
     if (!pasteController?.resubmit({ text: buildMergeGateReprompt(prProbe.prUrl || '<PR_URL>'), label: 'merge-gate contract nudge' })) {
       // Session is already gone — nothing to nudge; fall through to finalize.
       return false;
@@ -923,6 +940,7 @@ export function createTuiSessionController({
    * whole function settles.
    */
   const runFinishDecision = async ({ success }) => {
+    if (terminalRefusal) return { type: 'finalize' };
     // PortOS is going down. Whatever path got here — the PTY exiting under
     // TreeKill, a provider-signal failure, a paste that failed because the shell died —
     // the cause is the host restart, not the agent, so there is no outcome to
@@ -948,6 +966,8 @@ export function createTuiSessionController({
     // workflow writes the sentinel and stops; the 2s doneSentinelWatcher is
     // what normally calls finish(). Idempotent via `sentinelIngested`.
     const sentinelSummary = await ingestDoneSentinel();
+
+    if (terminalRefusal) return { type: 'finalize' };
 
     if (sentinelRecoveryPending) {
       sentinelRecoveryPending = false;
@@ -996,7 +1016,15 @@ export function createTuiSessionController({
     }
     sessionPhase = 'finishing';
 
-    const decision = await runFinishDecision({ success });
+    let decision = await runFinishDecision({ success });
+    // A refusal observed while a sentinel/probe was awaited outranks its result.
+    if (terminalRefusal) {
+      decision = { type: 'finalize' };
+      success = false;
+      exitCode = 1;
+      error = terminalRefusal.message;
+      reason = 'content-refusal';
+    }
 
     if (decision.type === 'abandon') {
       await abandonForHostShutdown();
@@ -1148,6 +1176,7 @@ export function createTuiSessionController({
         terminatedByUser,
         error: finalError || undefined,
         completionReason: reason,
+        ...(executionInterruption ? { executionInterruption } : {}),
         workspacePath: cwd,
         prExpected: prOwnership.prClaimExpected,
         // The run window the commit criterion is evaluated against (#3637).
@@ -1245,7 +1274,7 @@ export function createTuiSessionController({
   const resubmitAfterSignal = () => {
     // A banner that paints during startup (before the prompt was ever submitted)
     // has nothing to re-send — the ordinary paste path still owns first delivery.
-    if (isTerminal() || !promptSubmittedAt) return;
+    if (isTerminal() || terminalRefusal || !promptSubmittedAt) return;
     const attempt = selfClearingGate.takeResubmit(Date.now());
     if (!attempt) return;
     // Only claim the re-submission that actually went out — a false return means
@@ -1268,7 +1297,7 @@ export function createTuiSessionController({
       // reached a terminal phase, drop them — appending to the spool, growing
       // the post-paste accumulator, or mutating timing state is all pointless
       // after finish has settled.
-      if (isTerminal()) return;
+      if (isTerminal() || terminalRefusal) return;
       // node-pty surfaces output as already-decoded UTF-8 strings via
       // shellService's onData hook (StringDecoder handles multi-byte
       // boundaries internally), so `data` is a string here in normal use.
@@ -1302,6 +1331,20 @@ export function createTuiSessionController({
       if (isCodexSession && !codexComposerReady && !promptSentAt && commandInjected && stripped
         && CODEX_COMPOSER_READY_PATTERN.test(stripped)) codexComposerReady = true;
       const now = Date.now();
+      // A policy refusal ends this request before any recovery/nudge machinery.
+      const refusal = isCodexSession && promptSubmittedAt ? detectContentRefusal(text) : null;
+      if (refusal) {
+        terminalRefusal = refusal;
+        executionInterruption = { category: refusal.category, source: 'provider', at: new Date(now).toISOString() };
+        immediateFallbackAnalysis = refusal;
+        await persistence.updateAgent(agentId, { metadata: {
+          executionInterruption,
+        } }).catch(err => emitLog('warn', `Could not persist refusal for ${agentId}: ${err.message}`, { agentId }));
+        appendLine(LIFECYCLE_LINES.contentRefused());
+        await finish({ success: false, exitCode: 1, error: refusal.message, reason: 'content-refusal' });
+        return;
+      }
+
       if (promptSubmittedAt) codexModelRejectionGate?.observe(stripped);
       // Startup-idle detection (the promptTimer's non-inputReady branch below)
       // reads lastOutputAt/firstOutputAt to decide the TUI has gone quiet and is
@@ -1455,6 +1498,18 @@ export function createTuiSessionController({
           // The truncations outlasted every nudge: this provider is not going
           // to finish this response, so hand the task to a fallback provider.
           await failOverToFallback(truncationSignal);
+          return;
+        }
+      }
+
+      // Model at capacity: arm a delayed nudge; fail over once they run out.
+      const capacitySignal = promptSubmittedAt ? detectModelAtCapacity(stripped) : null;
+      if (capacitySignal) {
+        const armed = capacityNudgeGate.arm(capacitySignal, now);
+        if (armed === 'armed') {
+          appendLine(LIFECYCLE_LINES.capacityPending());
+        } else if (armed === 'exhausted') {
+          await failOverToFallback(capacitySignal);
           return;
         }
       }
@@ -1613,7 +1668,7 @@ export function createTuiSessionController({
       mcpBoot,
       isCodexSession,
       appendLine,
-      isFinalized: isTerminal,
+      isFinalized: () => isTerminal() || !!terminalRefusal,
       markPromptSent: () => { promptSentAt = Date.now(); },
       markPromptSubmitted: () => { if (promptSubmittedAt === null) promptSubmittedAt = Date.now(); },
       finishStartupFailure,
@@ -1642,7 +1697,7 @@ export function createTuiSessionController({
     // via TUI_TRUST_PROMPT_PATTERN. If agy ever fails to signal ready, the
     // requireInputReady path fails fast with a surfaced startup error instead of
     // silently failing at startup.
-    const requireInputReady = isClaudeCommand(tuiConfig.command) || isAntigravityCommand(tuiConfig.command);
+    const requireInputReady = isClaudeCommand(tuiConfig.command) || isAntigravityCommand(tuiConfig.command) || isOpencodeSession;
     // sendPrompt / finishStartupFailure are async and dispatched fire-and-forget
     // from the interval below. A setInterval callback can't await, and an
     // unhandled rejection there (e.g. a finalizeAgent throw inside finish())
@@ -1666,7 +1721,7 @@ export function createTuiSessionController({
 
       // Answer whatever startup dialog the TUI is showing — one per tick, in the
       // order answerStartupDialogs declares (external imports, hook review,
-      // folder trust). These run for EVERY provider, not only the positive
+      // folder trust, OpenCode updates). These run for EVERY provider, not only the positive
       // input-ready ones below, because codex takes the idle/deadline paste path
       // and a dialog is at its quietest right after it paints.
       //
@@ -1726,7 +1781,8 @@ export function createTuiSessionController({
           appendLine(LIFECYCLE_LINES.startupDialogAnswered({ message: answeredAtComposer.message, session: sessionLabel }));
           return;
         }
-        if (inputReady.ready && elapsed >= tuiConfig.promptDelayMs) {
+        if (inputReady.ready && elapsed >= tuiConfig.promptDelayMs
+          && (!isOpencodeSession || (firstOutputAt !== null && now - lastOutputAt >= READY_IDLE_THRESHOLD_MS))) {
           safeSendPrompt('input-ready');
           clearInterval(promptTimer);
           promptTimer = null;
@@ -1768,7 +1824,7 @@ export function createTuiSessionController({
     // Provider-handshake retry timer. It is deliberately not an idle watchdog:
     // a CoS TUI may remain silent for as long as the provider needs.
     providerSignalTimer = setInterval(() => {
-      if (isTerminal()) return;
+      if (isTerminal() || terminalRefusal) return;
       // One clock for every gate on this tick. They all measure the same silence,
       // so reading the wall four times only invites them to disagree about it.
       const now = Date.now();
@@ -1848,6 +1904,14 @@ export function createTuiSessionController({
         }
         return;
       }
+      // Nudge a session parked by a model-at-capacity rejection, after a long quiet.
+      const capacityNudge = capacityNudgeGate.takeNudge(now, lastOutputAt);
+      if (capacityNudge) {
+        if (pasteController?.resubmit({ text: CAPACITY_NUDGE_TEXT, label: 'model-capacity nudge' })) {
+          appendLine(LIFECYCLE_LINES.capacityNudged({ attempt: capacityNudge, max: CAPACITY_NUDGE_MAX_ATTEMPTS }));
+        }
+        return;
+      }
       // Last, and only once no gate above has a say: every one of them describes a
       // session stalled for a KNOWN reason, and their own silence tests would be
       // pre-empted by a nudge sent on plain quiet.
@@ -1857,7 +1921,10 @@ export function createTuiSessionController({
       // network call takes, non-terminal the whole time, and it may yet paste a
       // nudge of its own. And `promptSubmittedAt`, because before the prompt is
       // in the promptTimer owns delivery — silence there is startup, not a stall.
-      if (sessionPhase !== 'running' || !promptSubmittedAt) return;
+      // A no-deadline security audit may be quiet during the scan AND its later
+      // validation/fix work. Silence alone must not inject another turn or badge
+      // it as stalled. Explicit provider failures and terminal signals above stay active.
+      if (sessionPhase !== 'running' || !promptSubmittedAt || securityScanGrant?.timeLimitSeconds === 'unlimited') return;
       const stalled = stallNudgeGate.takeNudge(now, lastOutputAt);
       if (!stalled) return;
       // Read the sentinel here rather than on every tick: its watcher polls on its
@@ -1891,6 +1958,14 @@ export function createTuiSessionController({
   return {
     handleData,
     handleExit,
+    refuseScanner: () => {
+      terminalRefusal = { category: 'content-refusal', origin: 'provider', permanent: true, actionable: false, requiresFallback: false,
+        message: 'Security scanner safety refusal; automatic continuation, retries and provider fallback are disabled.' };
+      executionInterruption = { category: 'content-refusal', source: 'security-scanner' };
+      immediateFallbackAnalysis = terminalRefusal;
+      pasteController?.cancel();
+      return finish({ success: false, exitCode: 1, error: terminalRefusal.message, reason: 'content-refusal' });
+    },
     markCommandInjected: () => { commandInjected = true; },
     isTerminal,
     finish,

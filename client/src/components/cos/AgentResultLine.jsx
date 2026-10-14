@@ -1,4 +1,5 @@
 import { CheckCircle, AlertCircle, RotateCcw } from 'lucide-react';
+import { formatCount, formatUsd } from '../../utils/formatters';
 import { isAgentHandoff, agentHandoffReason } from '../../lib/agentOutcome';
 
 /**
@@ -24,7 +25,10 @@ export default function AgentResultLine({ agent, className = '' }) {
   const validationFailed = agent.result.validationPassed === false;
   const publication = agent.metadata?.publicationValidation;
   const publicationIncomplete = ['running', 'blocked'].includes(publication?.status);
-  const incomplete = assessmentUnverified || validationFailed || publicationIncomplete;
+  const interruption = agent.metadata?.executionInterruption || agent.result.executionInterruption;
+  const scanner = agent.metadata?.securityScan;
+  const scanIncomplete = scanner && scanner.status !== 'completed';
+  const incomplete = interruption || scanIncomplete || assessmentUnverified || validationFailed || publicationIncomplete;
   const tone = handoff ? 'text-port-accent' : agent.result.success ? incomplete ? 'text-port-warning' : 'text-port-success' : 'text-port-error';
 
   return (
@@ -38,9 +42,29 @@ export default function AgentResultLine({ agent, className = '' }) {
         <><AlertCircle size={14} aria-hidden="true" /> {agent.result.error || 'Failed'}</>
       )}
       </span>
+      {interruption && <div>Execution interrupted: {interruption.category === 'content-refusal' ? 'provider safety refusal; automatic retry stopped' : interruption.category}</div>}
+      <SecurityScanEvidence scanner={scanner} control={agent.metadata?.securityScanControl} />
       {!handoff && assessment && <div>{assessment.status === 'recorded' ? 'Assessment saved' : assessment.status === 'persistence-failed' ? 'Assessment could not be saved' : assessment.status === 'not-attempted' ? 'Assessment not attempted' : 'Assessment not verified as saved'}</div>}
       {!handoff && validationFailed && <div>Delivery validation failed</div>}
       {!handoff && publicationIncomplete && <div>{publication.status === 'running' ? 'Publication checks running' : 'Publication blocked; worktree preserved'}</div>}
     </div>
+  );
+}
+
+export function SecurityScanEvidence({ scanner, control }) {
+  if (!scanner) return null;
+  return (
+      <div className="mt-1 break-words">
+        <div>Security scanner ({scanner.source === 'runner' ? 'runner observed' : 'agent reported'}): {control?.status || scanner.status}{control && ' (runner connection lost)'}</div>
+        {scanner.status === 'invalid-input' && <div>Input rejected before scanner launch</div>}
+        {scanner.baseline && <div>Committed baseline: {scanner.baseline.commit} · Tree: {scanner.baseline.tree}. Uncommitted files and submodules excluded; symlinks read as link text. Subsequent repairs are not certified.</div>}
+        {scanner.preflight && <div>Input rejections: {formatCount(scanner.preflight.rejectedRequests)} · Last: {scanner.preflight.lastError.field} item {formatCount(scanner.preflight.lastError.index + 1)} — {scanner.preflight.lastError.code}</div>}
+        <div>Model: {scanner.model ?? 'unknown'} · Effort: {scanner.effort ?? 'unknown'} · Auth: {scanner.auth}</div>
+        <div>Estimated baseline: {scanner.estimatedCostUsd == null ? 'unknown' : formatUsd(scanner.estimatedCostUsd, { maximumFractionDigits: 4 })} · Estimate cap: {scanner.maxCostUsd == null ? 'unknown' : scanner.maxCostUsd === 'unlimited' ? 'none (no estimate cap)' : formatUsd(scanner.maxCostUsd, { maximumFractionDigits: 4 })} (API-equivalent USD)</div>
+        <div>Short-context estimates do not measure billed charges or ChatGPT subscription quota.</div>
+        <div>Time limit: {scanner.timeLimitSeconds == null ? 'unknown' : scanner.timeLimitSeconds === 'unlimited' ? 'none (no elapsed-time deadline)' : `${formatCount(scanner.timeLimitSeconds)}s`} · Exit: {scanner.exitCode ?? 'unknown'}</div>
+        <div>Artifacts — findings: {scanner.artifacts?.findings == null ? 'unknown' : scanner.artifacts.findings ? 'saved' : 'absent'}; coverage: {scanner.artifacts?.coverage == null ? 'unknown' : scanner.artifacts.coverage ? 'saved' : 'absent'}</div>
+        {(control?.cleanup || scanner.cleanup) && <div>Process cleanup: {control?.cleanup || scanner.cleanup}</div>}
+      </div>
   );
 }

@@ -2,6 +2,7 @@ import { PRIVATE_CREDENTIALS, putCredential } from '../services/privateKeyStore.
 import { Router } from 'express';
 import { z } from 'zod';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
+import { assertHostControl } from '../services/authGate.js';
 import { getAiAssignments, updateAiAssignment } from '../services/aiAssignments.js';
 import { saveSubscriptionCosts } from '../services/subscriptionCosts.js';
 import { savePlanTiers } from '../services/subscriptions.js';
@@ -373,6 +374,9 @@ router.put('/features/groups/:groupId', asyncHandler(async (req, res) => {
 
 // PUT /api/settings/ai-assignments/:id
 router.put('/ai-assignments/:id', asyncHandler(async (req, res) => {
+  // These facades replace execution policy or steer scheduled social posts.
+  // Check the decoded identifier so encoded route params cannot bypass the gate.
+  if (req.params.id === 'settings.autofixer' || req.params.id.startsWith('socialAgent.')) assertHostControl(req);
   const payload = validateRequest(aiAssignmentUpdateSchema, req.body || {});
   res.json(await updateAiAssignment(req.params.id, payload));
 }));

@@ -108,6 +108,19 @@ describe('retireDeadAgent (#8440)', () => {
     expect(completeAgent).toHaveBeenCalledWith('agent-dead', expect.objectContaining({ success: true }));
   });
 
+  it.each([true, false])('preserves a saved refusal when recovery reports success=%s', async success => {
+    const executionInterruption = { category: 'content-refusal', source: 'provider', at: '2026-01-01T00:00:00Z' };
+    const result = await retireDeadAgent({
+      agent: { ...AGENT, metadata: { runId: 'run-refused', executionInterruption } }, task: TASK,
+      success, exitCode: success ? 0 : 143, duration: 100, category: 'interrupted',
+    });
+    expect(result).toEqual({ success: false });
+    expect(completeAgentRun).toHaveBeenCalledWith('run-refused', '', success ? 0 : 143, 100,
+      expect.objectContaining({ category: 'content-refusal', origin: 'provider', permanent: true, requiresFallback: false }));
+    expect(completeAgent).toHaveBeenCalledWith('agent-dead', expect.objectContaining({ success: false,
+      executionInterruption, errorAnalysis: expect.objectContaining({ category: 'content-refusal' }) }));
+  });
+
   it('removes the completion sentinel before checking for a runId', async () => {
     await retireDeadAgent({ agent: AGENT, task: TASK, success: false, exitCode: 1, duration: 0 });
 

@@ -3,7 +3,7 @@ import MediaLightbox from './MediaLightbox';
 import { getMediaNavProps } from '../../lib/mediaNavigation';
 import { computeImageVariantGroup } from './variants';
 import useImageVariants from '../../hooks/useImageVariants';
-import { updateImagePrompt, updateVideoPrompt, updateVideoPoster } from '../../services/apiImageVideo';
+import { trimVideoStart, updateImagePrompt, updateVideoPrompt, updateVideoPoster } from '../../services/apiImageVideo';
 
 // Thin wrapper around MediaLightbox that owns the consistent wiring every
 // page repeated by hand: open/close, prev/next nav, and the annotation
@@ -23,6 +23,7 @@ export default function MediaPreview({
   updateAnnotation,
   onPromptSaved,
   onPosterSaved,
+  onTrimmed,
   ...handlers
 }) {
   const [promptOverride, setPromptOverride] = useState(null);
@@ -59,6 +60,13 @@ export default function MediaPreview({
     onPosterSaved?.(item, result);
     return result;
   }, [onPosterSaved]);
+  // The trim writes a new gallery clip; only a host that can list it (and open
+  // it) offers the control.
+  const trimStart = useCallback(async (item, startSec) => {
+    const { video } = await trimVideoStart(item.id, startSec, { silent: true });
+    onTrimmed(video, item);
+    return video;
+  }, [onTrimmed]);
   // Original-vs-cleaned toggle, computed over the UNION of the host's items
   // and the image's fetched lineage — neither source alone is complete. The
   // host list misses a copy it never held (see useImageVariants), while the
@@ -133,6 +141,7 @@ export default function MediaPreview({
       onAnnotationChange={preview && updateAnnotation ? (patch) => updateAnnotation(preview.key, patch) : undefined}
       onPromptChange={savePrompt}
       onPosterChange={savePoster}
+      onTrimStart={onTrimmed ? trimStart : undefined}
       variantGroup={variantGroup}
       onSelectVariant={onSelectVariant}
       onPromptAnalysis={handlePromptAnalysis}

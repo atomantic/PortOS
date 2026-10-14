@@ -1467,9 +1467,9 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
     return;
   }
 
-  // Never requeue tasks that were explicitly terminated by the user
-  if (task.status === 'blocked' && task.metadata?.blockedCategory === 'user-terminated') {
-    emitLog('info', `⏭️ Skipping orphaned task ${taskId} — user-terminated`, { taskId, agentId });
+  // User stops and policy refusals remain terminal across recovery sweeps.
+  if (task.status === 'blocked' && ['user-terminated', 'content-refusal', 'content-filtered'].includes(task.metadata?.blockedCategory)) {
+    emitLog('info', `⏭️ Skipping orphaned task ${taskId} — ${task.metadata.blockedCategory}`, { taskId, agentId });
     return;
   }
 
@@ -1503,6 +1503,20 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
   // Skip tasks already completed
   if (task.status === 'completed') {
     emitLog('debug', `⏭️ Skipping orphaned task ${taskId} — already completed`, { taskId, agentId });
+    return;
+  }
+
+  // A crash/restart after the refusal was saved must not authorize a retry or
+  // commit rescue. Do not let an older refused run block a newer invocation.
+  const interruption = agentMetadata?.executionInterruption;
+  if (['content-refusal', 'content-filtered'].includes(interruption?.category)) {
+    const startedAt = toEpochMs(agentStartedAt);
+    if (startedAt && toEpochMs(task.metadata?.[LAST_SPAWNED_AT_KEY]) > startedAt) return;
+    await updateTask(taskId, await stampLiExecutionVerdict({ status: 'blocked', metadata: {
+      ...task.metadata, ...clearedRetryHoldMetadata(), executionInterruption: interruption,
+      blockedAt: new Date().toISOString(), blockedCategory: interruption.category,
+      blockedReason: 'Provider safety refusal; automatic continuation, retries and provider fallback are disabled.',
+    } }, task, { success: false }), task.taskType || 'user');
     return;
   }
 
@@ -1545,13 +1559,20 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
       return {};
     });
     const targetBranch = resolveTaskTargetBranch(resumePatch);
-    emitLog('info', `🔓 Completing interrupted retry transition for task ${taskId}${targetBranch ? ` — resuming ${targetBranch}` : ''}`, {
-      taskId, agentId, branchName: targetBranch
-    });
-    await updateTask(taskId, {
+    const result = await updateTask(taskId, {
       status: 'pending',
       metadata: { ...resumePatch, ...clearedRetryHoldMetadata() }
-    }, task.taskType || 'user');
+    }, task.taskType || 'user', {
+      expectedStatus: 'in_progress', expectedMetadata: { [RETRY_HOLD_KEY]: task.metadata[RETRY_HOLD_KEY] },
+    });
+    if (result?.error) {
+      emitLog('error', `Interrupted retry transition for task ${taskId} failed: ${result.error}`, { taskId, agentId });
+      return;
+    }
+    if (result?.statusChanged) return;
+    emitLog('info', `🔓 Completed interrupted retry transition for task ${taskId}${targetBranch ? ` — resuming ${targetBranch}` : ''}`, {
+      taskId, agentId, branchName: targetBranch
+    });
     return;
   }
 

@@ -117,6 +117,33 @@ describe('addReferenceRepo', () => {
   });
 });
 
+describe('git argument injection guards', () => {
+  const OPTION_SHAPED = ['--upload-pack=touch /tmp/pwn', '-ouploadpack', '--config=core.fsmonitor=x'];
+
+  it.each(OPTION_SHAPED)('refuses option-shaped branch %j on add and update', async (branch) => {
+    seedApp('app-1', [{ id: 'r1', name: 'n', repoUrl: 'https://github.com/x/y.git', branch: 'main', status: 'ok' }]);
+    await expect(svc.addReferenceRepo('app-1', { name: 'n', repoUrl: 'https://github.com/x/y.git', branch })).rejects.toMatchObject({ status: 400 });
+    await expect(svc.updateReferenceRepo('app-1', 'r1', { branch })).rejects.toMatchObject({ status: 400 });
+    expect(mockApps.get('app-1').referenceRepos).toHaveLength(1);
+    expect(mockApps.get('app-1').referenceRepos[0].branch).toBe('main');
+  });
+
+  it('refuses an option-shaped repoUrl on add and update', async () => {
+    seedApp('app-1', [{ id: 'r1', name: 'n', repoUrl: 'https://github.com/x/y.git', branch: 'main', status: 'ok' }]);
+    await expect(svc.addReferenceRepo('app-1', { name: 'n', repoUrl: '--upload-pack=touch /tmp/pwn ://x' })).rejects.toMatchObject({ status: 400 });
+    await expect(svc.updateReferenceRepo('app-1', 'r1', { repoUrl: '--upload-pack=touch /tmp/pwn ://x' })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('never runs git for a stored record that already carries an option-shaped branch', async () => {
+    // apps.json is hand-editable and held such records before the write-time check existed.
+    seedApp('app-1', [{ id: 'r1', name: 'n', repoUrl: 'https://github.com/x/y.git', branch: '--upload-pack=touch /tmp/pwn', status: 'ok' }]);
+    existsMock.mockImplementation(() => true); // managed clone exists
+    execGitMock.mockClear();
+    await expect(svc.checkReferenceRepo('app-1', 'r1')).rejects.toMatchObject({ status: 400 });
+    expect(execGitMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('updateReferenceRepo', () => {
   it('updates allowed fields only and bumps lastCheckedAt when SHA is pinned manually', async () => {
     seedApp('app-1', [{ id: 'r1', name: 'old', repoUrl: 'u', branch: 'main', notes: '', lastReviewedSha: null, status: 'ok' }]);
@@ -205,7 +232,7 @@ describe('checkReferenceRepo', () => {
     expect(snapshot.commits[0].subject).toBe('first commit');
 
     // The first execGitMock call should have been `git clone <url> <id>`
-    expect(execGitMock.mock.calls[0][0]).toEqual(['clone', 'https://github.com/x/y.git', 'r1']);
+    expect(execGitMock.mock.calls[0][0]).toEqual(['clone', '--', 'https://github.com/x/y.git', 'r1']);
     // Persisted status must reflect the successful run.
     const persisted = mockApps.get('app-1').referenceRepos[0];
     expect(persisted.status).toBe('ok');

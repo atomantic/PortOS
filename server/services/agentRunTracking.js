@@ -126,9 +126,11 @@ export async function completeAgentRun(runId, output, exitCode, duration, errorA
   // the commit subject, because nothing ever emitted such a marker). The window
   // opens at the run's own startTime, so commits another agent pushed before
   // this run began don't launder it into a success.
+  const refused = ['content-refusal', 'content-filtered'].includes(errorAnalysis?.category);
+  if (refused) metadata.executionInterruption ||= { category: errorAnalysis.category, source: errorAnalysis.origin || 'provider', at: metadata.endTime };
   let success = exitCode === 0;
   const runStartedAt = Date.parse(metadata.startTime);
-  if (!success && metadata.taskId && metadata.workspacePath) {
+  if (!success && !refused && metadata.taskId && metadata.workspacePath) {
     if (await committedDuringRun(metadata.workspacePath, runStartedAt)) {
       console.log(`⚠️ Agent ${metadata.agentId} reported failure (exit ${exitCode}) but work completed - commit found for task ${metadata.taskId}`);
       success = true;
@@ -136,7 +138,7 @@ export async function completeAgentRun(runId, output, exitCode, duration, errorA
   }
   // An explicit false from the caller is authoritative and outranks both the
   // exit code and the commit rescue above; null (the default) means "no opinion".
-  if (successOverride === false) success = false;
+  if (successOverride === false || refused) success = false;
 
   metadata.success = success;
   metadata.outputSize = Buffer.byteLength(output || '');

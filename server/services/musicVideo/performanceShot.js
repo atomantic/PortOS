@@ -48,6 +48,7 @@ import {
   performanceCapability,
   planPerformanceWindow,
   selectedPerformanceInstruction,
+  SOURCE_AUDIO_MUSIC,
 } from '../../lib/musicVideoShotTiming.js';
 import { getProject } from './projects.js';
 import { assertVocalStemTimebase, resolveVocalStemPath } from './vocalStem.js';
@@ -263,10 +264,11 @@ export async function assertCurrentPerformanceTakes(project, masterPath) {
  * for a performance scene on a capable backend. `resolution` is the take's
  * output resolution: the request's own when the lip-sync route offers it, else
  * the project's `videoSettings.falLipSyncResolution`, else the capability
- * default (1080P). Throws a 4xx ServerError when the scene is a performance
+ * default (1080P). `musicModelId` is a music-driven model picked for this one
+ * take (ignored unless it is a curated music lane). Throws a 4xx ServerError when the scene is a performance
  * shot the backend or its timing cannot deliver.
  */
-export async function preparePerformanceShot({ musicVideo, backend, sourceImagePath, mode, resolution = null }) {
+export async function preparePerformanceShot({ musicVideo, backend, sourceImagePath, mode, resolution = null, musicModelId = null }) {
   if (!musicVideo?.projectId || !musicVideo?.sceneId) return null;
   const project = await getProject(musicVideo.projectId);
   const scene = project?.scenes?.find((s) => s.sceneId === musicVideo.sceneId);
@@ -283,7 +285,10 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
 
   // A music-driven scene renders on the project's audio-to-video model; a
   // lip-sync scene on the lip-sync route.
-  const capability = performanceCapability(backend, { scene, videoSettings: project.videoSettings });
+  // A shot card can pick another music-driven model for this take (one PortOS curates, else the project's).
+  const picked = backend === 'fal' && musicModelId && Object.hasOwn(SOURCE_AUDIO_MUSIC.fal, musicModelId);
+  const videoSettings = picked ? { ...project.videoSettings, falMusicModelId: musicModelId } : project.videoSettings;
+  const capability = performanceCapability(backend, { scene, videoSettings });
   if (!capability) throw refuse(performanceBlockedReason(backend), 'MUSIC_VIDEO_PERFORMANCE_UNSUPPORTED');
   const musicDriven = capability.style === 'music';
   // The lip-sync route is image + source audio; any other semantic mode would
@@ -300,7 +305,10 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
   if (scene.performanceRepair) await assertCurrentPerformanceTakes(project, masterPath);
   const songDurationSec = await probeVideoDuration(masterPath);
   if (songDurationSec == null) throw refuse('Could not read the song duration for this performance shot', 'MUSIC_VIDEO_AUDIO_UNREADABLE');
-  const plan = planPerformanceWindow({ startSec: scene.startSec, endSec: scene.endSec, songDurationSec, capability });
+  // The shot card's "Whole sung line" asks for a take covering the full line
+  // the shot sits in; a continuation only ever re-renders its own interval.
+  const lineCues = musicVideo.wholeLine === true && !scene.performanceRepair ? (project.lyricCues || []) : null;
+  const plan = planPerformanceWindow({ startSec: scene.startSec, endSec: scene.endSec, songDurationSec, capability, lineCues });
   if (!plan.ok) throw refuse(plan.message, plan.code);
   if (scene.performanceRepair && (plan.windowStartSec !== scene.startSec || plan.windowEndSec !== scene.endSec)) {
     throw refuse('Review needed: this provider cannot continue only the remaining audio interval', 'PERFORMANCE_REPAIR_REVIEW_NEEDED', 409);
@@ -374,7 +382,10 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
       },
     },
     songInterval: { startSec: scene.startSec, endSec: scene.endSec },
-    audioWindow: { startSec: plan.windowStartSec, endSec: plan.windowEndSec, durationSec: plan.windowSec },
+    audioWindow: {
+      startSec: plan.windowStartSec, endSec: plan.windowEndSec, durationSec: plan.windowSec,
+      ...(lineCues && !plan.lineTooLong ? { wholeLine: { startSec: plan.lineStartSec, endSec: plan.lineEndSec } } : {}),
+    },
     edit: { inSec: plan.editInSec, outSec: plan.editOutSec, targetSec: plan.spanSec },
     cues: clipRelativeCues(project.lyricCues, plan.windowStartSec, plan.windowEndSec),
     referenceImageId: typeof sourceImagePath === 'string' ? basename(sourceImagePath) : null,

@@ -71,3 +71,22 @@ describe('renderCharacterReferenceSheet local model selection', () => {
     expect(mocks.enqueueJob.mock.calls[0][0].params.modelId).toBe('dev');
   });
 });
+
+// Uniquely catches the sheet's universe style reaching the model unlisted, or a
+// typed override being labeled with blocks it never carried (#11317).
+describe('renderCharacterReferenceSheet prompt additions', () => {
+  it('lists the universe style and sheet negatives on a template render, and nothing on an override', async () => {
+    mocks.getUniverse.mockResolvedValue({
+      id: 'universe-1', name: 'Example Universe',
+      influences: { embrace: ['ink wash'] },
+      characters: [{ id: 'character-1', name: 'Example Character' }],
+    });
+    await renderCharacterReferenceSheet('universe-1', 'character-1');
+    const { params } = mocks.enqueueJob.mock.calls[0][0];
+    expect(params.promptAdditions.map((item) => item.id)).toEqual(['universe-style', 'sheet-negatives']);
+    expect(params.prompt).toContain(params.promptAdditions[0].text);
+
+    await renderCharacterReferenceSheet('universe-1', 'character-1', { overridePrompt: 'my own sheet', overrideNegativePrompt: 'blur' });
+    expect(mocks.enqueueJob.mock.calls[1][0].params.promptAdditions).toBeUndefined();
+  });
+});

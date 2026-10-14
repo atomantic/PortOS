@@ -592,7 +592,7 @@ function buildClaimOwnershipSection(agentId) {
  * Only the registered parent acquires, and only around the final verify-and-merge:
  * sync, pregate, push and CI run concurrently across runs (#10803).
  */
-function buildMergeAdmissionSection(agentId) {
+export function buildMergeAdmissionSection(agentId) {
   if (!agentId) return 'Merge admission requires a registered parent agent ID. If none was supplied, leave the reviewed PR open and report this missing ownership binding; do not merge.';
   const command = (action, extra = {}) => agentApiCurl({ apiBase: localApiBaseUrl(), path: '/api/cos/merge-admission',
     payload: JSON.stringify({ agentId, action, ...extra }) });

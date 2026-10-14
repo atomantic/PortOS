@@ -23,6 +23,7 @@ import { assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy
  */
 
 import { setSceneLastFailure } from './takes.js';
+import { droppedTakeAssets, fileMusicVideoMedia } from './mediaPool.js';
 import { presentMusicVideoDependencies, retainMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
 import { createRecordStoreBackendSelector } from '../../lib/pgFileFacade.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
@@ -253,10 +254,11 @@ export async function addProjectScenes(id, sceneInputs, { source = null } = {}) 
 
 /** Edit against the fresh record so a concurrent video lock cannot be bypassed. */
 export async function updateScene(id, sceneId, patch) {
-  const [{ applySceneUpdate }, { assertClipUnlocked }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
+  const [{ applySceneUpdate }, { assertClipUnlocked, keepDirectorStillLock }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
   const { updated } = await mutateProjectRecord(id, (current) => {
     assertClipUnlocked(current, sceneId, patch);
-    return applySceneUpdate(current, sceneId, patch);
+    const outcome = applySceneUpdate(current, sceneId, patch);
+    return { ...outcome, project: keepDirectorStillLock(current, outcome.project, sceneId) };
   });
   return updated;
 }
@@ -310,6 +312,40 @@ export async function mergeProjectNextScene(id, sceneId, options = {}) {
   });
 }
 
+/**
+ * Move the cut before a shot: the shot starts at `startSec` and the shot
+ * before it ends there, so the two stay joined. Either shot's locked video
+ * refuses the move. Returns `{ project, scene, previous }`.
+ */
+export async function moveProjectSceneStart(id, sceneId, { startSec }) {
+  const [{ applySceneUpdate }, { assertClipUnlocked, keepDirectorStillLock }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
+  return mutateProjectRecord(id, (current) => {
+    const scenes = current.scenes || [];
+    const index = scenes.findIndex((scene) => scene.sceneId === sceneId);
+    if (index < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
+    const scene = scenes[index];
+    const previous = index > 0 ? scenes[index - 1] : null;
+    if (typeof scene.endSec === 'number' && startSec >= scene.endSec) {
+      throw new ServerError('A shot has to start before it ends', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    if (previous && typeof previous.startSec === 'number' && startSec <= previous.startSec) {
+      throw new ServerError('The shot before this one would have no length left', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    assertClipUnlocked(current, sceneId, { startSec });
+    if (previous) assertClipUnlocked(current, previous.sceneId, { endSec: startSec });
+    let project = keepDirectorStillLock(current, applySceneUpdate(current, sceneId, { startSec }).project, sceneId);
+    if (previous) project = keepDirectorStillLock(current, applySceneUpdate(project, previous.sceneId, { endSec: startSec }).project, previous.sceneId);
+    return { project, scene: project.scenes[index], previous: previous ? project.scenes[index - 1] : null };
+  });
+}
+
+/** Mark unused assets ★ ingredient or ✕ bad (null clears); returns the project's marks. */
+export async function markMediaPoolAssets(id, keys, mark) {
+  const { markPoolAssets } = await import('./mediaPool.js');
+  const { project } = await mutateProjectRecord(id, (current) => markPoolAssets(current, keys, mark));
+  return project.assetMarks || {};
+}
+
 // ---- scene takes (#8965) ----
 // Append candidate takes to one scene: `{ scene, appended }`. A take fills its
 // slot only while the slot is empty — never replaces a selection (takes.js).
@@ -317,11 +353,19 @@ export async function appendSceneTakes(id, sceneId, inputs) {
   if (inputs.some(input => input.source === 'generated')) {
     const { appendSceneTakes: append } = await import('./takes.js');
     const outcome = await mutateProjectRecord(id, current => append(current, sceneId, inputs), { source: 'generation-completion' });
+    await fileAppendedTakes(outcome.project, outcome.appended.map(take => ({ sceneId, take })));
     return { scene: outcome.project.scenes.find(scene => scene.sceneId === sceneId), appended: outcome.appended };
   }
   const result = await (await selectBackend()).appendSceneTakes(id, sceneId, inputs);
   emitRecordUpdated('musicVideoProject', id);
+  await fileAppendedTakes(await getProject(id), result.appended.map(take => ({ sceneId, take })));
   return result;
+}
+
+// Every take that lands also lands in the project's own collection (mediaPool.js).
+function fileAppendedTakes(project, placed) {
+  return fileMusicVideoMedia(project, placed.filter(({ take }) => take?.assetId)
+    .map(({ sceneId, take }) => ({ kind: take.kind === 'video' ? 'video' : 'image', ref: take.assetId, sceneId, take })));
 }
 
 /**
@@ -337,15 +381,84 @@ export async function recordSceneFailure(id, sceneId, failure) {
 export async function appendTakesAcrossScenes(id, items) {
   const result = await (await selectBackend()).appendTakesAcrossScenes(id, items);
   emitRecordUpdated('musicVideoProject', id);
+  await fileAppendedTakes(result.project, result.appended.filter(Boolean));
   return result;
 }
 
 /** Explicitly select a take for its scene slot. Returns the updated scene. */
 export async function selectSceneTake(id, sceneId, takeId) {
-  const [{ selectSceneTake: select }, { assertClipUnlocked }] = await Promise.all([import('./takes.js'), import('./productionReview.js')]);
+  const [{ selectSceneTake: select }, { assertClipUnlocked, keepDirectorStillLock }] = await Promise.all([import('./takes.js'), import('./productionReview.js')]);
   const { scene } = await mutateProjectRecord(id, (current) => {
     assertClipUnlocked(current, sceneId);
-    return select(current, sceneId, takeId);
+    const outcome = select(current, sceneId, takeId);
+    return { ...outcome, project: keepDirectorStillLock(current, outcome.project, sceneId) };
+  });
+  return scene;
+}
+
+/**
+ * Put an unused still or clip from the project's pool on a shot (the shot
+ * card's "Swap from unused"): it becomes a take of the shot and its selection.
+ * `withAssetId` brings its partner too: a still's clip, or a clip's still.
+ * `kind: 'endImage'` puts a still on the shot's end frame instead.
+ * The take keeps the prompt and provider of the take it came from, and the
+ * shot's start or end frame prompt becomes the one that still was made from. A shot
+ * whose video is locked refuses, as it does any other new selection.
+ * Returns the updated scene.
+ */
+export async function placeMediaPoolItem(id, sceneId, { kind, assetId, withAssetId = null }) {
+  const [{ appendSceneTakes: append, selectSceneTake: select }, { assertClipUnlocked, keepDirectorStillLock }, { projectTakeAssets }, { authoredFramePrompt }] = await Promise.all([
+    import('./takes.js'), import('./productionReview.js'), import('./mediaPool.js'), import('./handoff.js'),
+  ]);
+  // A still off the floor has no take left to name its prompt; its image sidecar still does.
+  const placedStill = kind === 'video' ? withAssetId : assetId;
+  const sidecarPrompt = placedStill
+    ? await import('../imageGen/local.js').then(({ readImageSidecar }) => readImageSidecar(placedStill))
+      .then(({ metadata }) => (typeof metadata?.prompt === 'string' ? metadata.prompt : null)).catch(() => null)
+    : null;
+  const { scene } = await mutateProjectRecord(id, (current) => {
+    assertClipUnlocked(current, sceneId);
+    const origin = new Map(projectTakeAssets(current).filter(asset => asset.take).map(asset => [`${asset.kind}:${asset.ref}`, asset.take]));
+    const still = kind === 'video' ? withAssetId : assetId;
+    const clip = kind === 'video' ? assetId : withAssetId;
+    const input = (takeKind, ref) => {
+      const from = origin.get(`${takeKind === 'video' ? 'video' : 'image'}:${ref}`);
+      return { kind: takeKind, assetId: ref, source: 'reused', provider: from?.provider || null,
+        prompt: from?.prompt || (takeKind !== 'video' && ref === placedStill ? sidecarPrompt : null),
+        ...(takeKind === 'video' && still ? { sourceImageId: still } : {}) };
+    };
+    const inputs = kind === 'endImage'
+      ? [input('endImage', assetId)]
+      : [...(still ? [input('image', still)] : []), ...(clip ? [input('video', clip)] : [])];
+    let outcome = append(current, sceneId, inputs);
+    for (const take of outcome.appended) outcome = { ...select(outcome.project, sceneId, take.takeId), appended: outcome.appended };
+    // The placed still's frame prompt comes with it, so the start or end prompt matches the picture.
+    const stillTake = outcome.appended.find((take) => take.kind !== 'video');
+    const framePrompt = authoredFramePrompt(current, stillTake?.prompt);
+    if (framePrompt) {
+      const field = stillTake.kind === 'endImage' ? 'endFramePrompt' : 'framePrompt';
+      const scenes = outcome.project.scenes.map((scene) => (scene.sceneId === sceneId ? { ...scene, [field]: framePrompt } : scene));
+      outcome = { ...outcome, project: { ...outcome.project, scenes }, scene: scenes.find((scene) => scene.sceneId === sceneId) };
+    }
+    return { ...outcome, project: keepDirectorStillLock(current, outcome.project, sceneId) };
+  });
+  return scene;
+}
+
+/** Reject every take of a shot that is not its selected frame, end frame or clip. Returns `{ scene, rejected }`. */
+export async function rejectUnusedSceneTakes(id, sceneId) {
+  const { rejectUnusedTakes } = await import('./takes.js');
+  const { scene, rejected } = await mutateProjectRecord(id, (current) => rejectUnusedTakes(current, sceneId));
+  return { scene, rejected };
+}
+
+/** Swap a shot's start and end frames (and their prompts). A locked video refuses it. Returns the scene. */
+export async function swapProjectSceneFrames(id, sceneId) {
+  const [{ swapSceneFrames }, { assertClipUnlocked, keepDirectorStillLock }] = await Promise.all([import('./takes.js'), import('./productionReview.js')]);
+  const { scene } = await mutateProjectRecord(id, (current) => {
+    assertClipUnlocked(current, sceneId);
+    const outcome = swapSceneFrames(current, sceneId);
+    return { ...outcome, project: keepDirectorStillLock(current, outcome.project, sceneId) };
   });
   return scene;
 }
@@ -369,6 +482,7 @@ export async function reviewSceneTake(id, sceneId, takeId, review) {
  */
 export async function mutateProjectRecord(id, transform, { source = null } = {}) {
   const { preserveAutomatedShotLocks } = source ? await import('./productionReview.js') : {};
+  let dropped = null;
   const outcome = await (await selectBackend()).mutateProjectRecord(id, (current) => {
     const outcome = transform(current);
     if (source) {
@@ -382,9 +496,12 @@ export async function mutateProjectRecord(id, transform, { source = null } = {})
         if ('replaced' in outcome) outcome.replaced = 0;
       }
     }
+    dropped = { project: current, assets: droppedTakeAssets(current, outcome.project) };
     return { ...outcome, project: retainMusicVideoDependencies(current, outcome.project) };
   });
   emitRecordUpdated('musicVideoProject', id);
+  // A cut shot, a merge or a re-plan drops takes from the board: they stay findable in the project's collection.
+  if (dropped?.assets.length) await fileMusicVideoMedia(dropped.project, dropped.assets);
   return outcome;
 }
 

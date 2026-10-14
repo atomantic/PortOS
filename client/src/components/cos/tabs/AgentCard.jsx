@@ -32,7 +32,7 @@ import toast from '../../ui/Toast';
 import { copyToClipboard } from '../../../lib/clipboard';
 import { estimateCosDuration } from '../../../lib/cosDurationEstimate';
 import { isAgentFeedbackUpdateTarget, isSystemAgent as isSystemAgentRecord } from '../../../lib/cosAgentFeedback';
-import AgentResultLine from '../AgentResultLine';
+import AgentResultLine, { SecurityScanEvidence } from '../AgentResultLine';
 import AuditSourceEvidence from '../AuditSourceEvidence';
 import { DEFAULT_REVIEWER, normalizeReviewers } from '../constants';
 import { formatBytes, formatCount, formatDurationMs, formatDateTime, formatTimeOfDay, shortClaudeModelName } from '../../../utils/formatters';
@@ -737,7 +737,8 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
       <div className={completed ? "p-3 [overflow-wrap:anywhere]" : "p-4"}>
         {/* Top row: Agent ID, badges, and actions */}
         <div className="flex flex-wrap items-start justify-between gap-x-2 gap-y-1 mb-2">
-          <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1 basis-0 sm:basis-64">
+          {/* Wrap actions before they squeeze the identity into a narrow column. */}
+          <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1 basis-64">
             <Cpu size={16} aria-hidden="true" className={`shrink-0 ${inactive ? 'text-gray-500' : 'text-port-accent animate-pulse'}`} />
             <span className="font-mono text-sm text-gray-400 truncate min-w-0">{agent.id}</span>
             <button
@@ -753,12 +754,12 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
               <Copy size={13} aria-hidden="true" />
             </button>
             {remote && peerName && (
-              <span className="px-1.5 py-0.5 text-xs bg-port-accent/20 text-port-accent rounded shrink-0" title={`Remote agent on ${peerName}`}>
+              <span className="px-1.5 py-0.5 text-xs bg-port-accent/20 text-port-accent rounded min-w-0 max-w-full [overflow-wrap:anywhere]" title={`Remote agent on ${peerName}`}>
                 {peerName}
               </span>
             )}
             {agent.metadata?.taskApp && (agent.metadata.taskAppName || agent.metadata.workspaceName) && !/^[0-9a-f]{8}-[0-9a-f]{4}-/.test(agent.metadata.taskAppName || agent.metadata.workspaceName) && (
-              <span className="px-1.5 py-0.5 text-xs bg-cyan-500/20 text-cyan-400 rounded shrink-0" title={agent.metadata.workspacePath || agent.metadata.taskApp}>
+              <span className="px-1.5 py-0.5 text-xs bg-cyan-500/20 text-cyan-400 rounded min-w-0 max-w-full [overflow-wrap:anywhere]" title={agent.metadata.workspacePath || agent.metadata.taskApp}>
                 {agent.metadata.taskAppName || agent.metadata.workspaceName}
               </span>
             )}
@@ -820,7 +821,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
             )}
           </div>
           {/* Actions - right side */}
-          <div className="flex items-center gap-2 shrink-0 ml-0 sm:ml-auto">
+          <div className="flex flex-wrap items-center gap-2 min-w-0 max-w-full ml-0 sm:ml-auto">
             {(output.length > 0 || inactive || !remote) && (
               <button
                 onClick={() => setExpanded(!expanded)}
@@ -856,6 +857,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
               confirmingKill ? (
                 <ConfirmButtonPair
                   prompt="Kill?"
+                  className="flex-wrap max-w-full"
                   confirmText="Confirm"
                   cancelText="Cancel"
                   ariaLabel="Confirm kill agent"
@@ -892,6 +894,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
               isConfirming(agent.id) ? (
                 <ConfirmButtonPair
                   prompt="Remove?"
+                  className="flex-wrap max-w-full"
                   confirmText="Remove"
                   ariaLabel="Confirm remove agent"
                   onConfirm={() => confirmDelete(() => onDelete(agent.id))}
@@ -1123,6 +1126,8 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
         />
 
         <AuditSourceEvidence evidence={agent.metadata?.auditSourceEvidence} />
+
+        {!agent.result && <SecurityScanEvidence scanner={agent.metadata?.securityScan} control={agent.metadata?.securityScanControl} />}
 
         {agent.result && (
           <div className="flex items-center gap-4 flex-wrap">

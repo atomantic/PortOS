@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Clapperboard, Play } from 'lucide-react';
 import { getMusicVideoPublishPlatforms } from '../../services/apiMusicVideo.js';
 import {
-  TITLE_CARD_FONT_FACES, TITLE_CARD_LIMITS, TITLE_CARD_MTV_COLORS, normalizeTitleCard, titleCardPrefill,
+  TITLE_CARD_FONT_FACES, TITLE_CARD_LIMITS, TITLE_CARD_MTV_COLORS, normalizeTitleCard, titleCardOutroWindow, titleCardPrefill,
 } from '../../../../server/lib/musicVideoTitleCard.js';
 
 const POSITIONS = [['lower-left', 'Bottom left'], ['lower-right', 'Bottom right'], ['upper-left', 'Top left'], ['upper-right', 'Top right'], ['lower-center', 'Bottom centre'], ['center', 'Centre']];
@@ -56,6 +56,7 @@ function lyricDuringCard(project, card) {
  * Turning it on fills the song title, the artist named for DistroKid under
  * Where you post, this year and a window that ends before the first sung line.
  * Edits reach the preview at once (`onEditLocal`); leaving a field saves.
+ * Optionally it shows again at the end (`outro`), timed from the song's length.
  * Edited on the Look step, under the docked preview (a card of its own there).
  */
 export default function TitleCardPanel({ project, onEditLocal, onSave, onPreview }) {
@@ -92,6 +93,10 @@ export default function TitleCardPanel({ project, onEditLocal, onSave, onPreview
   const overlap = on ? lyricDuringCard(project, card) : null;
   const endBefore = overlap ? Math.round((overlap.startSec - 0.5) * 10) / 10 : null;
   const field = (key) => (raw?.[key] ?? card?.[key] ?? '');
+  const songSec = project.audioAnalysis?.durationSec;
+  // Turning the end showing on times it from the song's length the first time.
+  const setOutro = (outro) => commit(outro && card?.outroStartSec == null ? { outro, ...titleCardOutroWindow(card, songSec) } : { outro });
+  const canOutro = card?.outro || card?.outroStartSec != null || !!titleCardOutroWindow(card, songSec);
 
   return (
     <section aria-label="Opening title card" className="space-y-2 rounded-lg border border-port-border bg-port-card p-2">
@@ -146,6 +151,34 @@ export default function TitleCardPanel({ project, onEditLocal, onSave, onPreview
               <input id="mv-title-card-fade" type="number" min={0} max={TITLE_CARD_LIMITS.fadeMax} step={0.1} value={field('fadeSec')}
                 onChange={(e) => edit({ fadeSec: toNumber(e.target.value) })} onBlur={() => commit()} className={inputCls} />
             </div>
+          </div>
+          <div className="space-y-2">
+            <label htmlFor="mv-title-card-outro" className="inline-flex min-h-[44px] items-center gap-2 text-xs text-port-text-muted sm:min-h-0">
+              <input id="mv-title-card-outro" type="checkbox" checked={card.outro} disabled={!canOutro}
+                onChange={(e) => setOutro(e.target.checked)} className="h-4 w-4" />
+              Also at the end · Optional
+            </label>
+            {!canOutro && <p className="text-xs text-port-text-muted">Needs the song's length; analyze the song first.</p>}
+            {card.outro && (
+              <div className="grid grid-cols-3 items-end gap-2">
+                <div>
+                  <label htmlFor="mv-title-card-outro-start" className={labelCls}>End in (s)</label>
+                  <input id="mv-title-card-outro-start" type="number" min={0} max={TITLE_CARD_LIMITS.outroMax} step={0.1} value={field('outroStartSec')}
+                    onChange={(e) => edit({ outroStartSec: toNumber(e.target.value) ?? null })} onBlur={() => commit()} className={inputCls} />
+                </div>
+                <div>
+                  <label htmlFor="mv-title-card-outro-end" className={labelCls}>End out (s)</label>
+                  <input id="mv-title-card-outro-end" type="number" min={0} step={0.1} value={field('outroEndSec')}
+                    onChange={(e) => edit({ outroEndSec: toNumber(e.target.value) ?? null })} onBlur={() => commit()} className={inputCls} />
+                </div>
+                {onPreview && typeof card.outroStartSec === 'number' && (
+                  <button type="button" onClick={() => onPreview(Math.max(0, card.outroStartSec - 0.5))}
+                    className="inline-flex min-h-[44px] items-center gap-1 text-xs text-port-accent sm:min-h-0">
+                    <Play size={13} aria-hidden="true" /> Play from {clock(Math.max(0, card.outroStartSec - 0.5))}
+                  </button>
+                )}
+              </div>
+            )}
           </div>
           <div>
             <label htmlFor="mv-title-card-look" className={labelCls}>Look</label>

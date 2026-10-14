@@ -51,6 +51,9 @@ import {
 } from '../../lib/icLoraWeights.js';
 import { getSettings } from '../settings.js';
 import { getProject as getMusicVideoProject } from '../musicVideo/projects.js';
+import { musicVideoLocalClipSize } from '../../lib/musicVideoAspect.js';
+import { localModelRendersCutaway, localModelRendersPerformance } from '../../lib/musicVideoLocalModels.js';
+import { isPerformanceScene } from '../../lib/musicVideoShotTiming.js';
 import { getTrack } from '../tracks/index.js';
 import { VIDEO_GEN_MODE, resolveVideoMode } from './modes.js';
 import { getFalVideoModel } from '../../lib/falVideoModels.js';
@@ -226,26 +229,11 @@ export const withStagedRollback = async (cleanupStaged, fn) => {
 };
 
 /**
- * @param {object} opts
- * @param {object} opts.body    - validated + coerced body from Zod (mutated in place)
- * @param {object} opts.uploads - `req.files` from multer (may be empty)
- * @param {string[]} opts.localOnlyParamKeys - field names only the local runtimes
- *   consume; a request carrying any of them is not grok-deliverable. Passed in
- *   from the route (which owns their Zod schemas) so this module never has to
- *   import back into `routes/`.
- * @returns {Promise<object>} On the grok lane:
- *   `{ backend, grok, effectiveModel, sourceImagePath, uploadedTempPath,
- *   discardSourceImage, cleanupStaged }`.
- *   On the local lane, additionally `{ pythonPath, effectiveModelId, mode,
- *   lastImagePath, audioFilePath, icReferencePaths, resolvedKeyframes,
- *   extendFromVideoPath, uploadedTempPaths, loras, effectiveChunks,
- *   effectiveChunkPrompts }`.
- *   `cleanupStaged` is the caller's rollback hook for anything that can still
- *   throw after this resolves (today: `enqueueJob`) — pass it to
- *   `withStagedRollback`.
+ * The backend a video request renders on: an explicit `body.backend`, else the
+ * pin ladder (below). Shared by the submit path and the Video Gen form's
+ * prompt preview, which passes the uploads the form holds as present fields.
  */
-export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys }) {
-  const settings = await getSettings();
+export function resolveRequestedVideoBackend({ body, uploads, settings, localOnlyParamKeys }) {
   // #3231 Phase 4 — the video pin ladder. An explicit `body.backend` always
   // wins (the VideoGen page and the MV director board both send one); when
   // absent, consult the music-video target pin (for director-board renders)
@@ -270,10 +258,34 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
     && !body.keyframes?.length
     && !body.loraFilenames?.length
     && !(body.chunks != null && Number(body.chunks) > 1);
-  const backend = body.backend
+  return body.backend
     || (grokDeliverable
       ? resolveVideoMode(null, settings, { target: body.musicVideo ? RENDER_TARGET.MUSIC_VIDEO : null })
       : VIDEO_GEN_MODE.LOCAL);
+}
+
+/**
+ * @param {object} opts
+ * @param {object} opts.body    - validated + coerced body from Zod (mutated in place)
+ * @param {object} opts.uploads - `req.files` from multer (may be empty)
+ * @param {string[]} opts.localOnlyParamKeys - field names only the local runtimes
+ *   consume; a request carrying any of them is not grok-deliverable. Passed in
+ *   from the route (which owns their Zod schemas) so this module never has to
+ *   import back into `routes/`.
+ * @returns {Promise<object>} On the grok lane:
+ *   `{ backend, grok, effectiveModel, sourceImagePath, uploadedTempPath,
+ *   discardSourceImage, cleanupStaged }`.
+ *   On the local lane, additionally `{ pythonPath, effectiveModelId, mode,
+ *   lastImagePath, audioFilePath, icReferencePaths, resolvedKeyframes,
+ *   extendFromVideoPath, uploadedTempPaths, loras, effectiveChunks,
+ *   effectiveChunkPrompts }`.
+ *   `cleanupStaged` is the caller's rollback hook for anything that can still
+ *   throw after this resolves (today: `enqueueJob`) — pass it to
+ *   `withStagedRollback`.
+ */
+export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys }) {
+  const settings = await getSettings();
+  const backend = resolveRequestedVideoBackend({ body, uploads, settings, localOnlyParamKeys });
   // A loose reference (#4874) is a LOCAL-runtime capability. The model gate
   // further down asks whether the chosen model's runtime can honor it — but an
   // explicit `backend: 'grok'` never reaches that runtime at all: grok's
@@ -326,6 +338,40 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
       `Unknown modelId: ${body.modelId}`,
       { status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' },
     );
+  }
+  // A local Music Video shot: sized to the project's aspect, and checked
+  // against the model its kind of shot needs (musicVideoLocalModels.js).
+  let musicVideoContractMode = null;
+  if (backend === VIDEO_GEN_MODE.LOCAL && body.musicVideo?.projectId) {
+    // A clip's own audio never reaches the music video (the song does), so a
+    // model that always renders its audio track is not asked to mute it.
+    if (effectiveModel?.supportsDisableAudio === false) delete body.disableAudio;
+    const unsized = body.width == null && body.height == null;
+    const audioOnlyModel = !!effectiveModel && (!body.mode || body.mode === 'image') && !localModelRendersCutaway(effectiveModel);
+    const project = unsized || audioOnlyModel
+      ? await Promise.resolve().then(() => getMusicVideoProject(body.musicVideo.projectId))
+        .catch(async (error) => { await cleanupMultipartTemp(uploads); throw error; })
+      : null;
+    // Left unsized it would render the model's 768x512 (3:2) default,
+    // cropping its 16:9 still and leaving side gaps in a 16:9 video.
+    if (project && unsized) {
+      const endFrame = body.mode === 'fflf' || !!body.lastImageFile || !!uploads.lastImage;
+      Object.assign(body, musicVideoLocalClipSize(project, effectiveModel, { endFrame }));
+    }
+    const scene = project?.scenes?.find((entry) => entry.sceneId === body.musicVideo.sceneId);
+    if (scene && audioOnlyModel) {
+      // An audio-only model (MiniMax H3 Ref2VA) renders a performance shot as
+      // the a2v job the performance step builds from the still and the song
+      // slice after staging, so its contract is checked as that render.
+      if (isPerformanceScene(scene) && localModelRendersPerformance(effectiveModel)) musicVideoContractMode = 'a2v';
+      else {
+        await cleanupMultipartTemp(uploads);
+        throw new ServerError(
+          `${effectiveModel.name} renders lip-sync and music-driven shots only, from the still and the song. Pick an image-to-video model such as LTX-2.5 for this cutaway.`,
+          { status: 400, code: 'MUSIC_VIDEO_MODEL_NEEDS_PERFORMANCE_SHOT' },
+        );
+      }
+    }
   }
   validateVideoBatch({ ...body, backend }, effectiveModel);
   if (effectiveModel && !isHardwareCompatible(effectiveModel.hardwareCompatibility)) {
@@ -381,7 +427,7 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
   // rejection point at once, and stays correct as new awaits are added.
   return withStagedRollback(cleanupStaged, () => resolvePreparedParams({
     body, uploads, settings, backend, pythonPath,
-    effectiveModel, effectiveModelId, stagedDurablePaths, cleanupStaged,
+    effectiveModel, effectiveModelId, stagedDurablePaths, cleanupStaged, musicVideoContractMode,
   }));
 }
 
@@ -576,7 +622,7 @@ async function resolveAudioFrameCount({ body, audioFilePath, effectiveModel, eff
  */
 async function resolvePreparedParams({
   body, uploads, settings, backend, pythonPath,
-  effectiveModel, effectiveModelId, stagedDurablePaths, cleanupStaged,
+  effectiveModel, effectiveModelId, stagedDurablePaths, cleanupStaged, musicVideoContractMode = null,
 }) {
   // Stage a multipart upload into data/uploads so the queue worker can find
   // it after a server restart — the OS temp dir gets reaped on reboot, and a
@@ -766,7 +812,7 @@ async function resolvePreparedParams({
   // Pinned here rather than re-derived at the resolved pass below: once a
   // declared gallery pick fails to resolve, "was this an i2v request?" can only
   // be answered from what the caller declared.
-  const declaredMode = body.mode || (hasDeclaredFirstImage ? 'image' : 'text');
+  const declaredMode = musicVideoContractMode || body.mode || (hasDeclaredFirstImage ? 'image' : 'text');
   const modeContractError = videoModeContractError({
     model: effectiveModel,
     mode: declaredMode,

@@ -109,6 +109,8 @@ export const state = {
   getImageGenStatus: vi.fn(defaultStatus),
   /** `generateImage`; a spy so a suite can assert payloads or reject. */
   generateImage: vi.fn(async () => ({ jobId: 'job-1' })),
+  /** `previewImagePrompt` (#11317); a spy so a suite can assert the preview body and answer. */
+  previewImagePrompt: vi.fn(async () => ({ sentPrompt: '' })),
   /** `getActiveImageJob`'s payload. */
   activeJob: null,
   /** Settings `getSettings` resolves to; reset restores DEFAULT_SETTINGS. */
@@ -155,6 +157,7 @@ export function resetImageGenMockState() {
   state.peers = [];
   state.getImageGenStatus.mockReset().mockImplementation(defaultStatus);
   state.generateImage.mockReset().mockResolvedValue({ jobId: 'job-1' });
+  state.previewImagePrompt.mockReset().mockResolvedValue({ sentPrompt: '' });
   // The real media-run hook opens this for a started/resumed render; a silent
   // stream keeps the job open mid-render without leaking timers, and a test
   // drives its frames through `lastEventSource()`.
@@ -181,6 +184,7 @@ vi.mock('../services/api', () => ({
   getImageGenStatus: (...args) => state.getImageGenStatus(...args),
   generateImage: (...args) => state.generateImage(...args),
   generateImageMultipart: vi.fn(async () => ({})),
+  previewImagePrompt: (...args) => state.previewImagePrompt(...args),
   listImageModels: (...args) => state.listImageModels(...args),
   getGalleryImages: (...args) => state.getGalleryImages(...args),
   listLorasFull: (...args) => state.listLorasFull(...args),
@@ -215,6 +219,8 @@ vi.mock('../hooks/useModelDownloadStatus', () => ({
 vi.mock('../hooks/useHfTokenStatus', () => ({
   useHfTokenStatus: () => ({ present: state.hfTokenPresent, refresh: vi.fn() }),
 }));
+// The music-video picker lists projects over the network; its own suite covers it.
+vi.mock('../components/media/MusicVideoFilingSelect', () => ({ default: () => null }));
 vi.mock('../hooks/useAgyModels', () => ({ useAgyModels: () => ({ models: [], error: null }) }));
 vi.mock('../hooks/useMediaCompletionRefresh', () => ({ useMediaCompletionRefresh: vi.fn() }));
 vi.mock('../hooks/useMediaAnnotations', () => ({

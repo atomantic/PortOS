@@ -42,6 +42,16 @@ describe('sceneAttention', () => {
       takes: [{ takeId: 't1', kind: 'image', assetId: 'f.png', status: 'selected' }] };
     expect(sceneAttention(withIntent)).toContain('plate-unverified');
   });
+
+  // Uniquely catches a still or image-effect shot waiting on clip takes it no longer uses.
+  it('only reviews the takes a still shot uses', () => {
+    const still = { ...ready, videoHistoryId: null, visualLayer: 'still', imageEffect: 'flash-develop',
+      takes: [{ takeId: 'v2', kind: 'video', assetId: 'old', status: 'candidate' }, { takeId: 'e1', kind: 'endImage', assetId: 'e.png', status: 'candidate' }] };
+    expect(sceneAttention(still, { layered: true })).toEqual([]);
+    expect(sceneAttention({ ...still, imageEffect: 'end-fade' }, { layered: true })).toEqual(['candidates-pending']);
+    expect(sceneAttention({ ...still, takes: [...still.takes, { takeId: 'i2', kind: 'image', assetId: 'g.png', status: 'candidate' }] }, { layered: true }))
+      .toEqual(['candidates-pending']);
+  });
 });
 
 describe('scene filters', () => {

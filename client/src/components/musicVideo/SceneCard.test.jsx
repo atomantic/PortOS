@@ -1,11 +1,14 @@
 import { useState } from 'react';
-import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 vi.mock('../../hooks/useVideoFileSrc.js', () => ({ useVideoFileSrc: () => ({}) }));
+vi.mock('../../services/apiMusicVideo.js', async (importOriginal) => ({ ...(await importOriginal()), getMusicVideoMediaPool: vi.fn(async () => ({ items: [] })) }));
 import SceneCard from './SceneCard.jsx';
 import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
 
 const GROK_MAX = GROK_VIDEO_DURATIONS.at(-1);
+// A card opens on the last Render on pick, so each test starts from the project setting.
+beforeEach(() => localStorage.clear());
 
 describe('code shot (#10297)', () => {
   it('offers no frame or clip generation for a code shot in a layered composition', () => {
@@ -52,7 +55,7 @@ describe('performance speaker save boundary', () => {
 });
 
 describe('music-driven performance', () => {
-  it('switches a shot between cutaway, lip-sync and music-driven, and plans the music-driven take on the audio-to-video model', () => {
+  it('switches a shot between cutaway, lip-sync and music-driven, and plans the music-driven take on the default music-driven model', () => {
     const onSave = vi.fn();
     function Harness() {
       const [scene, setScene] = useState({ sceneId: 's1', shotMode: 'cutaway', startSec: 10, endSec: 13.5, referenceImageId: 'frame.png', takes: [] });
@@ -60,12 +63,14 @@ describe('music-driven performance', () => {
         onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
     }
     render(<Harness />);
+    // The header reads the shot's precise run time, then where it sits in the song.
+    expect(screen.getByText(/^3\.50s · 0:10\.00–0:13\.50/)).toBeTruthy();
     const shot = screen.getByLabelText('Shot');
     fireEvent.change(shot, { target: { value: 'music' } });
     expect(onSave).toHaveBeenLastCalledWith('s1', { shotMode: 'performance', performanceStyle: 'music' });
     expect(shot.value).toBe('music');
-    // The shot's own 3.5s, not lip-sync's 5s minimum window.
-    expect(screen.getByTestId('performance-plan').textContent).toMatch(/^Music-driven via fal\.ai OmniHuman v1\.5 \(audio-driven person\) \(fal-ai\/bytedance\/omnihuman\/v1\.5\) · song 0:10–0:13 · est\. \$0\.56 \(3\.5s at 1080p\)/);
+    // H3 Max reference by default: the song window pads to exactly its 5s shortest billed clip.
+    expect(screen.getByTestId('performance-plan').textContent).toMatch(/^Music-driven via fal\.ai MiniMax H3 Max \(reference\) \(minimax\/h3-max\/reference-to-video\) · song 0:09–0:14 · shot starts 0\.75s into the take · est\. \$0\.40 \(5s at 768P\)/);
     fireEvent.change(shot, { target: { value: 'performance' } });
     expect(onSave).toHaveBeenLastCalledWith('s1', { shotMode: 'performance', performanceStyle: null });
     expect(screen.getByTestId('performance-plan').textContent).toMatch(/^Lip-sync via/);
@@ -169,6 +174,19 @@ describe('planned camera move (#10589)', () => {
     expect(onSave).toHaveBeenLastCalledWith('s1', { camera: null });
   });
 
+  it('puts a footage shot\'s camera beside its motion prompt and shows the text it adds', () => {
+    render(<Harness initial={{ sceneId: 's1', visualLayer: 'footage', prompt: 'a hand turns the dial', startSec: 0, endSec: 5, takes: [] }} onSave={vi.fn()} />);
+    const camera = screen.getByLabelText('Camera');
+    expect(camera.closest('details').querySelector('summary').textContent).not.toMatch(/Shot settings/);
+    expect(screen.queryByTestId('camera-adds')).toBeNull();
+    fireEvent.change(camera, { target: { value: 'slow-dolly-in' } });
+    const adds = screen.getByTestId('camera-adds').textContent.replace(/^Adds to the prompt: /, '');
+    expect(adds.length).toBeGreaterThan(0);
+    // The same text is what Sent to the model lists as its Camera move addition.
+    fireEvent.click(within(screen.getByTestId('render-inputs')).getByRole('button', { name: '+ Camera move' }));
+    expect(screen.getByTestId('render-inputs').textContent).toContain(adds);
+  });
+
   it('asks why a static camera holds, and offers no camera on a title card', () => {
     const onSave = vi.fn();
     const { unmount } = render(<Harness initial={{ sceneId: 's1', startSec: 0, endSec: 5, takes: [], camera: { move: 'slow-dolly-in' } }} onSave={onSave} />);
@@ -210,11 +228,14 @@ describe('move buttons (#10785)', () => {
     const onMove = vi.fn();
     const props = { scene, index: 1, isLast: false, onMove, onEditLocal: () => {}, onSave: () => {} };
     const { rerender } = render(<SceneCard {...props} />);
-    expect(screen.getByRole('button', { name: /Move earlier/ }).disabled).toBe(false);
-    expect(screen.getByRole('button', { name: /Move later/ }).disabled).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Shot actions' }));
+    expect(screen.getByRole('menuitem', { name: /Move earlier/ }).disabled).toBe(false);
+    fireEvent.click(screen.getByRole('menuitem', { name: /Move later/ }));
+    expect(onMove).toHaveBeenCalledWith(1, 1);
     rerender(<SceneCard {...props} documentComposition />);
-    expect(screen.getByRole('button', { name: /Move earlier/ }).disabled).toBe(true);
-    expect(screen.getByRole('button', { name: /Move later/ }).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Shot actions' }));
+    expect(screen.getByRole('menuitem', { name: /Move earlier/ }).disabled).toBe(true);
+    expect(screen.getByRole('menuitem', { name: /Move later/ }).disabled).toBe(true);
     expect(screen.getByText(/comes from the composition document/)).toBeTruthy();
   });
 });
@@ -332,11 +353,343 @@ describe('Render follows the shot locks', () => {
     );
     const { rerender } = render(card('open', 'open'));
     expect(screen.getByRole('button', { name: 'Render again' })).toHaveProperty('title', 'Lock the still first');
+    // On a phone there is no tooltip: the reason and the lock it needs sit under Render.
+    const refusal = screen.getByTestId('render-refusal');
+    expect(refusal.textContent).toContain('Lock the still first');
+    expect(refusal.querySelector('button')).toBeTruthy();
     rerender(card('locked', 'locked'));
     expect(screen.getByRole('button', { name: 'Render again' }).disabled).toBe(true);
     expect(screen.getByRole('button', { name: 'Render again' }).title).toMatch(/^Video locked/);
     rerender(card('locked', 'open'));
+    // The corner lock shows only its icon on a phone; its label stays the button's name.
+    expect(screen.getByRole('button', { name: 'Lock video' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Render again' }));
-    expect(onGenerateVideo).toHaveBeenCalledWith(scene);
+    expect(onGenerateVideo).toHaveBeenCalledWith(scene, { card: expect.objectContaining({ prompt: scene.prompt }) });
+  });
+});
+
+describe('start and end frames', () => {
+  // Uniquely catches a frame's prompt, Render, Swap or takes hiding away from its picture, a frame reference not reaching the render, or the Render section not saying which renderer ends on the end frame.
+  it('shows each frame with its prompt, Render, Swap and takes, and renders from a picked frame', async () => {
+    const scene = { sceneId: 's1', prompt: 'She looks into the lens', referenceImageId: 'start.png', endImageId: 'end.png', endFramePrompt: 'Head thrown back', startSec: 0, endSec: 4,
+      takes: [{ takeId: 't1', kind: 'image', assetId: 'start.png', status: 'selected' }, { takeId: 't2', kind: 'endImage', assetId: 'end.png', status: 'selected' }] };
+    const onGenerateFrame = vi.fn();
+    const onGenerateEndFrame = vi.fn();
+    render(<SceneCard scene={scene} index={0} expanded onEditLocal={() => {}} onSave={() => {}} onGenerateFrame={onGenerateFrame} onGenerateEndFrame={onGenerateEndFrame}
+      onPlacePoolItem={() => {}} falVideoSettings={{ backend: 'local' }} />);
+    const pair = screen.getByRole('group', { name: 'Start and end frames' });
+    expect(within(pair).getByLabelText('Reference frame prompt')).toBeTruthy();
+    expect(within(pair).getByLabelText('End frame prompt').value).toBe('Head thrown back');
+    // Each frame swaps from the unused stills on its own, without tapping it first.
+    fireEvent.click(within(pair).getByRole('button', { name: 'Swap end frame from unused' }));
+    expect(await screen.findByRole('dialog', { name: /^Swap end frame for/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(within(pair).getByRole('button', { name: 'Swap start frame from unused' })).toBeTruthy();
+
+    // The end frame renders from the start frame unless another frame is picked; the start frame from its prompt.
+    fireEvent.click(within(pair).getByRole('button', { name: 'New end frame take' }));
+    expect(onGenerateEndFrame).toHaveBeenLastCalledWith(scene, { referenceImageId: 'start.png' });
+    fireEvent.change(screen.getByLabelText('From', { selector: '#mv-scene-s1-start-from' }), { target: { value: 'end' } });
+    fireEvent.click(within(pair).getByRole('button', { name: 'New frame take' }));
+    expect(onGenerateFrame).toHaveBeenLastCalledWith(scene, { referenceImageId: 'end.png' });
+
+    // Both frames' takes show at once, each under its own frame.
+    expect(within(pair).getByRole('list', { name: /^Frame takes/ })).toBeTruthy();
+    expect(within(pair).getByRole('list', { name: /^End frame takes/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Clear scene 1 end frame' })).toBeTruthy();
+
+    expect(screen.getByTestId('end-frame-plan').textContent).toMatch(/animates from the start frame only/);
+    const pick = screen.getByLabelText('Render on');
+    expect(within(pick).getByRole('option', { name: /Kling v3 Pro.*ends on end frame/ })).toBeTruthy();
+    fireEvent.change(pick, { target: { value: 'fal:fal-ai/kling-video/v3/pro/image-to-video' } });
+    expect(screen.getByTestId('end-frame-plan').textContent).toBe('The clip ends on the end frame.');
+  });
+});
+
+describe('Render on remembers the last pick', () => {
+  // Uniquely catches a new card falling back to the project setting (a paid fal render) after the director picked local.
+  it('opens the next card on the last pick made on this device, and falls back where the shot cannot use it', () => {
+    const scene = { sceneId: 's1', prompt: 'She turns away', referenceImageId: 'start.png', startSec: 0, endSec: 4,
+      takes: [{ takeId: 't1', kind: 'image', assetId: 'start.png', status: 'selected' }] };
+    const saved = { backend: 'fal' };
+    const first = render(<SceneCard scene={scene} index={0} expanded onEditLocal={() => {}} onSave={() => {}} falVideoSettings={saved} />);
+    expect(screen.getByLabelText('Render on').value).toBe('');
+    fireEvent.change(screen.getByLabelText('Render on'), { target: { value: 'local' } });
+    first.unmount();
+
+    const second = render(<SceneCard scene={{ ...scene, sceneId: 's2' }} index={1} expanded onEditLocal={() => {}} onSave={() => {}} falVideoSettings={saved} />);
+    expect(screen.getByLabelText('Render on').value).toBe('local');
+    fireEvent.change(screen.getByLabelText('Render on'), { target: { value: 'grok' } });
+    second.unmount();
+
+    // Grok renders cutaways only, so a lip-synced shot opens on the project setting.
+    render(<SceneCard scene={{ ...scene, sceneId: 's3', shotMode: 'performance' }} index={2} expanded onEditLocal={() => {}} onSave={() => {}} falVideoSettings={saved} />);
+    expect(screen.getByLabelText('Render on').value).toBe('');
+  });
+});
+
+describe('frame fit for an off-shape clip', () => {
+  // Uniquely catches the fit choice hiding on a 3:2 clip in a 16:9 video (or
+  // cluttering a matching one), and the pick not reaching the saved shot.
+  it('offers zoom to fill or keep ratio once the clip reads 3:2, and saves the pick', () => {
+    const scene = { sceneId: 's1', prompt: 'Memory footage', referenceImageId: 'still.png', videoHistoryId: 'clip-1', startSec: 0, endSec: 4, takes: [] };
+    const onSave = vi.fn();
+    const onEditLocal = vi.fn();
+    const { container } = render(<SceneCard scene={scene} index={0} expanded onEditLocal={onEditLocal} onSave={onSave} />);
+    const video = container.querySelector('video');
+    const load = (width, height) => {
+      Object.defineProperty(video, 'duration', { value: 4, configurable: true });
+      Object.defineProperty(video, 'videoWidth', { value: width, configurable: true });
+      Object.defineProperty(video, 'videoHeight', { value: height, configurable: true });
+      fireEvent.loadedMetadata(video);
+    };
+    load(1024, 576);
+    expect(screen.queryByLabelText('Not 16:9')).toBeNull();
+    load(768, 512);
+    const pick = screen.getByLabelText('Not 16:9');
+    expect(pick.value).toBe('fill');
+    fireEvent.change(pick, { target: { value: 'vhs' } });
+    expect(onSave).toHaveBeenCalledWith('s1', { frameFit: 'vhs' });
+    expect(onEditLocal).toHaveBeenCalledWith('s1', { frameFit: 'vhs' });
+  });
+});
+
+describe('Sent to the model', () => {
+  // Uniquely catches the card's Render sending anything other than what the card shows, or dropping the Song audio toggle.
+  it('shows the prompt Render sends and hands it, with the song audio pick, to the render', () => {
+    const scene = { sceneId: 's1', prompt: 'She shakes her head', referenceImageId: 'start.png', startSec: 0, endSec: 4,
+      takes: [{ takeId: 't1', kind: 'image', assetId: 'start.png', status: 'selected' }] };
+    const onGenerateVideo = vi.fn();
+    const models = [{ id: 'ltx25_example', name: 'LTX-2.5 Example', runtime: 'ltx25', supportedModes: ['image', 'a2v'] }];
+    render(<SceneCard scene={scene} index={0} expanded onEditLocal={() => {}} onSave={() => {}} onGenerateVideo={onGenerateVideo}
+      videoModels={models} falVideoSettings={{ backend: 'local', modelId: 'ltx25_example' }} />);
+    const inputs = screen.getByTestId('render-inputs');
+    expect(within(inputs).getByText('She shakes her head')).toBeTruthy();
+    fireEvent.click(within(inputs).getByLabelText('Song audio'));
+    fireEvent.click(screen.getByRole('button', { name: 'Render' }));
+    expect(onGenerateVideo).toHaveBeenCalledWith(scene, expect.objectContaining({ card: { prompt: 'She shakes her head', songAudio: true } }));
+  });
+});
+
+// Uniquely catches a Whole sung line take priced or sent for the shot alone, and the
+// render target naming the project's cutaway model for a lip-sync shot.
+describe('Whole sung line', () => {
+  it('re-plans and prices the take over the full line, sends it with Render, and names the lip-sync model', () => {
+    const scene = { sceneId: 's19', prompt: '', shotMode: 'performance', referenceImageId: 'start.png', startSec: 40.5, endSec: 42.8,
+      takes: [{ takeId: 't1', kind: 'image', assetId: 'start.png', status: 'selected' }] };
+    const project = { id: 'p1', lyricCues: [{ text: 'the whole line', startSec: 39.2, endSec: 45.6 }] };
+    const onGenerateVideo = vi.fn();
+    render(<SceneCard scene={scene} project={project} index={0} expanded onEditLocal={() => {}} onSave={() => {}} onGenerateVideo={onGenerateVideo}
+      lipSyncBackend="fal" songDurationSec={60} falVideoSettings={{ backend: 'fal' }} />);
+    expect(screen.getByLabelText('Render on').textContent).toContain('Project setting · fal.ai · MiniMax H3 Max lip-sync');
+    expect(screen.getByLabelText('Render on').textContent).not.toContain('Hailuo');
+    const plan = () => screen.getByTestId('performance-plan').textContent;
+    expect(plan()).toContain('est. $0.81 (5.05s at 1080P)');
+    fireEvent.click(within(screen.getByTestId('render-inputs')).getByLabelText('Whole sung line'));
+    expect(within(screen.getByTestId('render-inputs')).getByText('· Song 0:39.2–0:45.6')).toBeTruthy();
+    expect(plan()).toContain('shot starts 1.30s into the take');
+    expect(plan()).toContain('est. $1.02 (6.4s at 1080P)');
+    fireEvent.click(screen.getByRole('button', { name: 'Render' }));
+    expect(onGenerateVideo).toHaveBeenCalledWith(scene, expect.objectContaining({ card: expect.objectContaining({ wholeLine: true }) }));
+  });
+});
+
+// Uniquely catches the glitch picker saving the wrong field or failing to clear it.
+describe('VHS glitch transitions', () => {
+  it('sets a glitch on the cut out of a shot and clears it with Off', () => {
+    const onSave = vi.fn();
+    function Harness() {
+      const [scene, setScene] = useState({ sceneId: 's1', startSec: 0, endSec: 4, takes: [] });
+      return <SceneCard scene={scene} index={0} onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
+    }
+    render(<Harness />);
+    const out = screen.getByLabelText('Glitch out');
+    fireEvent.change(out, { target: { value: 'vhs-glitch' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { transitionOut: 'vhs-glitch' });
+    expect(out.value).toBe('vhs-glitch');
+    fireEvent.change(out, { target: { value: '' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { transitionOut: null });
+    expect(screen.getByLabelText('Glitch in').value).toBe('');
+  });
+});
+
+// Uniquely catches the in-shot glitch control saving the wrong shape, losing a
+// slider move, or leaving an empty list behind when the last glitch goes.
+describe('In-shot glitches', () => {
+  it('adds a color block glitch halfway through, moves it on release and removes it', () => {
+    const onSave = vi.fn();
+    function Harness() {
+      const [scene, setScene] = useState({ sceneId: 's1', startSec: 10, endSec: 14, takes: [] });
+      return <SceneCard scene={scene} index={0} onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
+    }
+    render(<Harness />);
+    fireEvent.click(screen.getByRole('button', { name: /Add glitch/ }));
+    expect(onSave).toHaveBeenLastCalledWith('s1', { glitches: [{ atSec: 2, style: 'color-block' }] });
+    const slider = screen.getByLabelText(/^at /);
+    fireEvent.change(slider, { target: { value: '2.5' } });
+    fireEvent.pointerUp(slider);
+    expect(onSave).toHaveBeenLastCalledWith('s1', { glitches: [{ atSec: 2.5, style: 'color-block' }] });
+    fireEvent.change(screen.getByLabelText('Glitch 1 length'), { target: { value: '0.5' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { glitches: [{ atSec: 2.5, style: 'color-block', lengthSec: 0.5 }] });
+    fireEvent.click(screen.getByRole('button', { name: 'Remove glitch 1' }));
+    expect(onSave).toHaveBeenLastCalledWith('s1', { glitches: null });
+  });
+});
+
+// Uniquely catches the picture picker saving the wrong layer or effect fields, or offering the effect where the render ignores it.
+describe('image effect picker', () => {
+  it('turns a shot into a still playing camera flash develop, sets its develop length, and back to a clip', () => {
+    const onSave = vi.fn();
+    function Harness({ layered = true }) {
+      const [scene, setScene] = useState({ sceneId: 's1', startSec: 0, endSec: 4, referenceImageId: 'burger.png', takes: [] });
+      return <SceneCard scene={scene} index={0} layered={layered} onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
+    }
+    const { unmount } = render(<Harness />);
+    const picture = screen.getByLabelText('Picture');
+    fireEvent.change(picture, { target: { value: 'flash-develop' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { visualLayer: 'still', imageEffect: 'flash-develop', imageEffectSec: 3 });
+    fireEvent.change(screen.getByLabelText('Develops in'), { target: { value: '6' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { imageEffectSec: 6 });
+    expect(screen.getByText('The shot ends at 4.0s, before the photo finishes developing.')).toBeTruthy();
+    fireEvent.change(picture, { target: { value: 'clip' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { visualLayer: 'footage', imageEffect: null });
+    unmount();
+    render(<Harness layered={false} />);
+    expect(screen.queryByLabelText('Picture')).toBeNull();
+  });
+});
+
+// Uniquely catches an effect shot still showing its old clip and video controls, or an end-frame effect saving the wrong fields.
+describe('a still picture in the clip column', () => {
+  it('previews the still playing its effect instead of the old clip, and an end-frame effect asks for its end frame', () => {
+    const onSave = vi.fn();
+    function Harness() {
+      const [scene, setScene] = useState({ sceneId: 's1', startSec: 0, endSec: 3, referenceImageId: 'start.png', videoHistoryId: 'clip-1', takes: [] });
+      return <SceneCard scene={scene} index={0} layered onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
+    }
+    const { container } = render(<Harness />);
+    expect(container.querySelector('section[aria-label="Render"] video')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Picture'), { target: { value: 'flash-develop' } });
+    expect(screen.getByTestId('scene-picture-preview')).toBeTruthy();
+    expect(container.querySelector('section[aria-label="Render"] video')).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Render/ })).toBeNull();
+    fireEvent.change(screen.getByLabelText('Picture'), { target: { value: 'end-glitch' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { visualLayer: 'still', imageEffect: 'end-glitch', imageEffectSec: null });
+    expect(screen.getByText(/Needs an end frame/)).toBeTruthy();
+    const change = screen.getByLabelText('Changes at');
+    expect([...change.options].map((o) => o.textContent)).toEqual(['Middle', '0.5s', '1s', '1.5s', '2s']);
+    fireEvent.change(change, { target: { value: '1' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { imageEffectSec: 1 });
+  });
+});
+
+describe('clip speed and offset by hand', () => {
+  function Harness({ initial, onSave }) {
+    const [scene, setScene] = useState(initial);
+    return <SceneCard scene={scene} index={0} expanded onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
+  }
+
+  // Uniquely catches the steppers saving something other than whole fps/frames, a zero not clearing,
+  // or the inline clip ignoring the speed it will render at.
+  it('steps speed in fps and offset in frames, saves them as shot settings, and plays the clip at that speed', () => {
+    const onSave = vi.fn();
+    const { container } = render(<Harness initial={{ sceneId: 's1', prompt: 'she dances', videoHistoryId: 'clip-1', startSec: 0, endSec: 4, takes: [] }} onSave={onSave} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Play the clip one fps faster' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Play the clip one fps faster' }));
+    expect(onSave).toHaveBeenLastCalledWith('s1', { speedFps: 2 });
+    expect(screen.getByText('26 fps (1.08×)')).toBeTruthy();
+    expect(container.querySelector('video').playbackRate).toBeCloseTo(26 / 24);
+    fireEvent.click(screen.getByRole('button', { name: 'Start the clip one frame later' }));
+    expect(onSave).toHaveBeenLastCalledWith('s1', { offsetFrames: -1 });
+    expect(screen.getByText('clip starts 1 frame later')).toBeTruthy();
+    const offset = screen.getByLabelText('Offset');
+    fireEvent.change(offset, { target: { value: '0' } });
+    fireEvent.blur(offset);
+    expect(onSave).toHaveBeenLastCalledWith('s1', { offsetFrames: null });
+    expect(screen.getByText('on the cut')).toBeTruthy();
+    // An emptied field is no change, not zero: the speed stays at +2.
+    const speed = screen.getByLabelText('Speed');
+    const saves = onSave.mock.calls.length;
+    fireEvent.change(speed, { target: { value: '' } });
+    fireEvent.blur(speed);
+    expect(onSave).toHaveBeenCalledTimes(saves);
+    expect(speed.value).toBe('2');
+  });
+
+  it('is off while the video is locked', async () => {
+    const { ShotLockContext } = await import('./ShotLock.jsx');
+    render(
+      <ShotLockContext.Provider value={{ locks: { s1: 'locked' }, clips: { s1: 'locked' }, toggle: () => {}, busy: false }}>
+        <SceneCard scene={{ sceneId: 's1', videoHistoryId: 'clip-1', startSec: 0, endSec: 4, speedFps: 2, takes: [] }} index={0} expanded onEditLocal={() => {}} onSave={() => {}} />
+      </ShotLockContext.Provider>,
+    );
+    expect(screen.getByRole('button', { name: 'Play the clip one fps faster' }).disabled).toBe(true);
+    expect(screen.getByLabelText('Speed').value).toBe('2');
+  });
+});
+
+// Uniquely catches the beat toggle control saving the wrong shape or losing its settings when switched off.
+describe('Beat toggle into the next shot', () => {
+  it('switches on with defaults, changes its settings and keeps them when switched off', () => {
+    const onSave = vi.fn();
+    function Harness() {
+      const [scene, setScene] = useState({ sceneId: 's1', startSec: 0, endSec: 4, takes: [] });
+      return <SceneCard scene={scene} index={0} onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
+    }
+    render(<Harness />);
+    const toggle = screen.getByLabelText('Beat toggle into next shot');
+    fireEvent.click(toggle);
+    expect(onSave).toHaveBeenLastCalledWith('s1', { cutEffect: { style: 'beat-toggle', enabled: true, overlapSec: 1, rate: 'beat' } });
+    fireEvent.change(screen.getByLabelText('Beat toggle speed'), { target: { value: 'half' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { cutEffect: { style: 'beat-toggle', enabled: true, overlapSec: 1, rate: 'half' } });
+    fireEvent.click(toggle);
+    expect(onSave).toHaveBeenLastCalledWith('s1', { cutEffect: { style: 'beat-toggle', enabled: false, overlapSec: 1, rate: 'half' } });
+    expect(screen.getByLabelText('Beat toggle speed').value).toBe('half');
+  });
+});
+
+describe('finalizing a shot\'s takes', () => {
+  const take = (takeId, kind, assetId, status = 'candidate') => ({ takeId, kind, assetId, status, source: 'generated', note: null });
+  const scene = { sceneId: 's1', referenceImageId: 'a.png', videoHistoryId: 'v1', startSec: 0, endSec: 4,
+    takes: [take('t1', 'image', 'a.png'), take('t2', 'image', 'b.png'), take('t3', 'video', 'v1'), take('t4', 'video', 'v2'), take('t5', 'video', 'v3', 'rejected')] };
+
+  // Uniquely catches the take in use reading like any other, and Reject unused firing without its confirm.
+  it('badges the take in use, and rejects the unused ones after one confirm', () => {
+    const onRejectUnusedTakes = vi.fn();
+    render(<SceneCard scene={scene} index={0} expanded onEditLocal={() => {}} onSave={() => {}} onRejectUnusedTakes={onRejectUnusedTakes} />);
+    expect(screen.getAllByText('In use').length).toBeGreaterThanOrEqual(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Reject unused (2)' }));
+    expect(onRejectUnusedTakes).not.toHaveBeenCalled();
+    expect(screen.getByText('Reject 2 unused takes from this shot? Other shots can still use them.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Reject 2' }));
+    expect(onRejectUnusedTakes).toHaveBeenCalledWith(scene);
+    expect(screen.queryByRole('button', { name: 'Reject 2' })).toBeNull();
+  });
+
+  it('offers nothing when every take is in use or rejected', () => {
+    render(<SceneCard scene={{ ...scene, takes: scene.takes.filter((t) => ['t1', 't3', 't5'].includes(t.takeId)) }} index={0} expanded
+      onEditLocal={() => {}} onSave={() => {}} onRejectUnusedTakes={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: /Reject unused/ })).toBeNull();
+  });
+});
+
+describe('reverse a shot\'s clip', () => {
+  // Uniquely catches Reverse saving the wrong shape, staying on a lip-sync shot, or leaving Loop clip on.
+  it('saves Reverse as a shot setting, turns off looping, and is not offered on a lip-sync shot', () => {
+    const onSave = vi.fn();
+    function Harness({ initial }) {
+      const [scene, setScene] = useState(initial);
+      return <SceneCard scene={scene} index={0} expanded onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
+    }
+    const { unmount } = render(<Harness initial={{ sceneId: 's1', videoHistoryId: 'clip-1', startSec: 0, endSec: 4, takes: [] }} />);
+    fireEvent.click(screen.getByLabelText(/^Reverse/));
+    expect(onSave).toHaveBeenLastCalledWith('s1', { reverse: true });
+    expect(screen.getByText('Reversed in the player')).toBeTruthy();
+    expect(screen.getByLabelText('Loop clip').disabled).toBe(true);
+    fireEvent.click(screen.getByLabelText(/^Reverse/));
+    expect(onSave).toHaveBeenLastCalledWith('s1', { reverse: null });
+    unmount();
+    render(<Harness initial={{ sceneId: 's2', videoHistoryId: 'clip-1', shotMode: 'performance', startSec: 0, endSec: 4, takes: [] }} />);
+    expect(screen.queryByLabelText(/^Reverse/)).toBeNull();
   });
 });

@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { isValidKey, parseKey } from './mediaItemKey.js';
+import { MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from './imageLimits.js';
+import { QUEUEABLE_IMAGE_MODES } from './generationModes.js';
 
 // =============================================================================
 // MOOD BOARD SCHEMAS (issue #911)
@@ -194,13 +196,35 @@ export const moodBoardCollageSchema = z.object({
   cellSize: z.number().int().min(128).max(1024).optional().default(512),
 }).strict();
 
+// Either `count` evenly spaced frames, or the exact `times` (seconds) picked
+// in the frame picker.
 export const moodBoardExtractFramesSchema = z.object({
-  count: z.number().int().min(1).max(24),
-}).strict();
+  count: z.number().int().min(1).max(24).optional(),
+  times: z.array(z.number().finite().min(0).max(86400)).min(1).max(24).optional(),
+}).strict().refine((v) => (v.count == null) !== (v.times == null), { message: 'Send either count or times' });
 
 // Render a text note into an image (#10531). Both optional: an omitted backend
 // renders on the install's default image backend.
 export const moodBoardItemRenderSchema = z.object({
   mode: z.string().trim().min(1).max(32).optional(),
   model: z.string().trim().min(1).max(256).optional(),
-}).strict();
+  width: z.number().int().min(64).max(MAX_IMAGE_EDGE).optional(),
+  height: z.number().int().min(64).max(MAX_IMAGE_EDGE).optional(),
+}).strict().refine((v) => (v.width ?? 1024) * (v.height ?? 1024) <= MAX_IMAGE_PIXELS, {
+  message: 'Image dimensions exceed the total pixel limit', path: ['width'],
+});
+
+// A small, explicitly requested batch. Renderer overrides remain independent
+// from the prompt-writing LLM; omitted renderer fields inherit saved settings.
+export const moodBoardGenerateSchema = z.object({
+  requestId: z.string().uuid(),
+  providerId: z.string().trim().min(1).max(256),
+  model: z.string().trim().min(1).max(256).optional(),
+  effort: z.string().trim().max(64).optional(),
+  direction: z.string().trim().max(2000).default(''),
+  count: z.number().int().min(1).max(4).default(1),
+  render: moodBoardItemRenderSchema.default({ width: 1024, height: 576 }),
+  retry: z.boolean().default(false),
+}).strict().refine((v) => !v.render.mode || QUEUEABLE_IMAGE_MODES.includes(v.render.mode), {
+  message: 'Choose a queueable image backend', path: ['render', 'mode'],
+});

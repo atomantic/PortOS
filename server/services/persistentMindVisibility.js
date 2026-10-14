@@ -68,20 +68,17 @@ const schedulerProjection = (root) => {
   };
 };
 
-const actionProjection = (root, reportAccess) => {
-  const capabilities = normalizePersistentMindCapabilities(root?.config?.persistentMindCapabilities);
-  return {
-    schemaVersion: PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION,
-    grants: capabilities,
-    tools: PERSISTENT_MIND_TOOL_CATALOG.map((tool) => ({
-      id: tool.id,
-      name: tool.name,
-      kind: tool.kind,
-      granted: tool.id === 'reports.audit' ? reportAccess.granted : capabilities[tool.capability] === true,
-      ...(tool.id === 'reports.audit' ? { access: reportAccess } : {}),
-    })),
-  };
-};
+const actionProjection = (capabilities, reportAccess) => ({
+  schemaVersion: PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION,
+  grants: capabilities,
+  tools: PERSISTENT_MIND_TOOL_CATALOG.map((tool) => ({
+    id: tool.id,
+    name: tool.name,
+    kind: tool.kind,
+    granted: tool.id === 'reports.audit' ? reportAccess.granted : capabilities[tool.capability] === true,
+    ...(tool.id === 'reports.audit' ? { access: reportAccess } : {}),
+  })),
+});
 
 const runtimeProjection = (result) => {
   if (!result) {
@@ -207,7 +204,15 @@ export async function readPersistentMindVisibility({
     safePromise(import('./persistentMindOrientation.js').then(({ readPersistentMindOrientation }) => readPersistentMindOrientation(root))),
     safePromise(import('./persistentMindProcessAudit.js').then(({ readProcessAuditAccess }) => readProcessAuditAccess({ root }))),
   ]);
-  const candidates = appsResult.ok ? appsResult.value : [];
+  // Diagnose only the apps this mind may target. Inspecting every active app
+  // in registry order let the prompt budget drop a granted app further down
+  // the list, while an ungranted app's checkout could mark the whole snapshot
+  // `blocked`. No stored allowlist is the legacy grant to every app.
+  const capabilities = normalizePersistentMindCapabilities(root?.config?.persistentMindCapabilities);
+  const { allowedAppIds } = capabilities;
+  const candidates = !appsResult.ok ? []
+    : Array.isArray(allowedAppIds) ? appsResult.value.filter((app) => allowedAppIds.includes(app?.id))
+      : appsResult.value;
   const workspaceResult = await safePromise(readPersistentMindWorkspacePreflights(candidates, {
     force,
     now: timestamp,
@@ -242,7 +247,7 @@ export async function readPersistentMindVisibility({
     runtime: projectedRuntime,
     harness: projectedRuntime.harness || harnessProjection(provider),
     provider: providerProjection(provider, runtime),
-    actions: actionProjection(root, reportAccessResult.value || { granted: false, reasonCode: 'report-access-unknown', reason: 'Report authorization could not be established.', apps: [] }),
+    actions: actionProjection(capabilities, reportAccessResult.value || { granted: false, reasonCode: 'report-access-unknown', reason: 'Report authorization could not be established.', apps: [] }),
     scheduler: schedulerProjection(root),
     orientation: orientationResult.value || { status: 'unknown' },
     workspaces,

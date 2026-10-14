@@ -128,6 +128,90 @@ completeAction(command: CommandLine.arguments[1], confirmedState: state, action:
     }
   }, 60_000);
 
+  it.runIf(process.platform === 'darwin')('keeps unreadable AX snapshots unknown instead of confirming a disconnect', () => {
+    const sourceDir = join(import.meta.dirname, '..', '..', 'native', 'facetime-ax');
+    const tempDir = mkdtempSync(join(process.env.PORTOS_TEST_TMPDIR || tmpdir(), 'portos-facetime-snapshot-'));
+    const runner = join(tempDir, 'main.swift');
+    const binary = join(tempDir, 'snapshot-test');
+    try {
+      // Run the native state/JSON boundary with synthetic AppKit/AX responses.
+      // No live app state is read and no controls are pressed.
+      const source = readFileSync(join(sourceDir, 'main.swift'), 'utf8');
+      const declarations = source.slice(0, source.indexOf('let arguments = CommandLine.arguments'));
+      writeFileSync(runner, `${declarations}
+
+// These local symbols shadow AppKit/AX entrypoints so no live AX reads occur.
+struct NSRunningApplication {
+  let processIdentifier: pid_t
+  let bundleIdentifier: String? = "com.apple.FaceTime"
+  let localizedName: String? = nil
+  let executableURL: URL? = nil
+  static func runningApplications(withBundleIdentifier bundle: String) -> [NSRunningApplication] {
+    bundle == "com.apple.FaceTime" ? [NSRunningApplication(processIdentifier: 100)] : []
+  }
+}
+struct NSWorkspace {
+  static let shared = NSWorkspace()
+  let runningApplications: [NSRunningApplication] = []
+}
+let scenario = CommandLine.arguments[1]
+func AXUIElementCopyAttributeNames(_ element: AXUIElement, _ names: UnsafeMutablePointer<CFArray?>) -> AXError {
+  names.pointee = [] as CFArray
+  return .success
+}
+func AXUIElementCopyActionNames(_ element: AXUIElement, _ names: UnsafeMutablePointer<CFArray?>) -> AXError {
+  if scenario == "actions-error" { return .cannotComplete }
+  names.pointee = [kAXPressAction] as CFArray
+  return .success
+}
+func AXUIElementCopyAttributeValue(_ element: AXUIElement, _ attr: CFString, _ output: UnsafeMutablePointer<CFTypeRef?>) -> AXError {
+  var pid: pid_t = 0
+  guard AXUIElementGetPid(element, &pid) == .success else { return .illegalArgument }
+  let name = attr as String
+  if name == kAXChildrenAttribute as String {
+    if pid == 100 { output.pointee = [AXUIElementCreateApplication(101)] as CFArray; return .success }
+    if pid == 101 {
+      if scenario == "children-error" { return .cannotComplete }
+      if scenario == "children-malformed" { output.pointee = ["wrong"] as CFArray; return .success }
+      if scenario == "children-not-array" { output.pointee = "wrong" as CFString; return .success }
+      output.pointee = [AXUIElementCreateApplication(102), AXUIElementCreateApplication(103)] as CFArray
+      return .success
+    }
+    return scenario == "leaf-no-value" ? .noValue : .attributeUnsupported
+  }
+  if name == kAXRoleAttribute as String {
+    if scenario == "role-error" && pid == 102 { return .cannotComplete }
+    if scenario == "role-missing" && pid == 102 { return .noValue }
+    let roles: [pid_t: String] = [100: kAXApplicationRole as String, 101: kAXGroupRole as String, 102: kAXStaticTextRole as String, 103: kAXButtonRole as String]
+    output.pointee = roles[pid]! as CFString
+    return .success
+  }
+  if name == kAXTitleAttribute as String && pid == 102 { output.pointee = "Example Caller" as CFString; return .success }
+  if name == kAXTitleAttribute as String && pid == 103 { output.pointee = "Hang up" as CFString; return .success }
+  return .noValue
+}
+let matcher = IdentityMatcher(handle: "+15551234567", identity: "Example Caller")
+let observed = probe(matcher: matcher)
+emit(Result(ok: true, command: "probe", state: observed, authorized: true, action: "probe", message: "synthetic", errorCode: nil))
+`);
+      const compiled = spawnSync('swiftc', ['-warnings-as-errors', join(sourceDir, 'identityMatcher.swift'), runner, '-o', binary], { encoding: 'utf8' });
+      expect(compiled.status, compiled.stderr).toBe(0);
+      for (const [scenario, state] of [
+        ['connected', 'connected'], ['leaf-no-value', 'connected'],
+        ['children-error', 'unknown'], ['children-malformed', 'unknown'],
+        ['children-not-array', 'unknown'], ['actions-error', 'unknown'],
+        ['role-error', 'unknown'], ['role-missing', 'unknown'],
+      ]) {
+        const result = spawnSync(binary, [scenario], { encoding: 'utf8' });
+        expect(result.status, `${scenario}: ${result.stderr}`).toBe(0);
+        expect(facetimeControlResultSchema.parse(JSON.parse(result.stdout)), scenario)
+          .toMatchObject({ ok: true, command: 'probe', state });
+      }
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it('accepts only the strict helper result contract', () => {
     const result = facetimeControlResultSchema.safeParse({
       ok: true, command: 'probe', state: 'idle', authorized: true,

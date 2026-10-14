@@ -1259,8 +1259,29 @@ crash. Nexus can report `runtime_data_disk_pressure` or
 `runtime_data_disk_critical` (capacity of the filesystem holding runtime data),
 `memory_pressure` or `memory_critical`, `backup_failure`, `review_alerts`, and
 `cos_paused`. These come from the same predicates that determine source status;
-health does not alarm on not-started apps, while App Arcade does. Other sources
-and older reason-less inputs use `source_attention` or `source_error`: these
+health does not alarm on not-started apps, while App Arcade does.
+
+Agent Foundry task errors mean **blocked internal CoS queue entries**, not
+necessarily failed executions. `task_user_terminated` means the entry records
+intentional user termination; `task_blocked` covers every other block category,
+including absent or unknown categories. Each task row represents one entry, so
+these reason counts aggregate entries. Recorded user intent does not authorize
+retrying, restarting or mutating stopped work. Ordinary pending work stays
+steady, approval-gated and challenged work stays attention, in-progress work
+stays active, and terminal entries are excluded. No task names, raw block
+reasons or arbitrary category strings enter the observation.
+
+Federation Terminal counts errored peer records with structured failed-probe
+reasons: `peer_connection_refused`, `peer_transport_failure`, `peer_probe_timeout`,
+`peer_auth_required`, `peer_dns_failure`, `peer_host_unreachable`, and
+`peer_health_http_failure`. Use these to select a bounded connection or credential
+diagnostic, without retrying peers or changing admission. `peer_failure_unknown`
+means the errored peer has no recognized failed-probe evidence (including legacy
+records); neither `status:error` nor unavailable travel proves a configuration,
+guest-admission or sync failure. Successful/healthy peers ignore old failure
+metadata. Probe messages, HTTP response bodies and network identities stay private.
+
+Other sources and older reason-less inputs use `source_attention` or `source_error`: these
 say only that a coarse source status requires attention, without inventing a
 cause. Error sources remain identifiable even though district status is attention.
 
@@ -1417,6 +1438,50 @@ as a note). `lantern-keeper` re-issues the `light` verb for a fixed set of world
 entities every Nth tick, so lamps an author placed stay lit across host restarts
 while the author is away — re-lighting an already-lit lamp is a no-op, which is
 what makes running it on a schedule safe.
+
+**Explicit riddle rounds.** `riddle-ledger` implements a fixed offer → guess →
+reveal interaction. It evaluates no foundation body: schema/affordance
+foundations remain declarative, with their body, attribution, admission and
+promotion contracts intact. Install a separate controller explicitly with an
+unused id, `controllerId: "riddle-ledger"`, `config: {}`, `armed: true`, and
+`deliverEffects: true` to speak into the private world (false for local-only
+play). Nothing installs at boot or resets another controller. Supervised ticks
+are silent, including after restart.
+
+Read `GET /api/eidoverse/world/controllers/<id>` or
+`eidoverse.inspect-controller`, then send `POST
+/api/eidoverse/world/controllers/<id>/riddle` or the `eidoverse.riddle` tool:
+
+```json
+{"action":"offer","expectedRevision":0,"clue":"Which shape has three sides?","answer":"triangle"}
+{"action":"guess","expectedRevision":1,"guess":"TRIANGLE"}
+{"action":"reveal","expectedRevision":2}
+```
+
+The tool also takes `id`. Both mind grants (`manageEidoverse` and
+`installEidoverseControllers`) are required. HTTP gameplay uses the operator
+gate, including authenticated local-agent sessions; scoped peer credentials do
+not grant gameplay. Each request must use the inspected `state.revision`, which
+advances once per accepted action. A stale revision, a second guess, a repeated
+reveal, an offer before revealing the current round, or a disarmed/wrong-kind
+install refuses without changing state or sending chat. Revealing without a
+guess is allowed; its `correct` is null. Otherwise matching ignores case after
+input trimming, and correctness is withheld until reveal.
+
+`outcome: "applied"` means the local transition persisted, even if world
+delivery failed. Inspect `state.delivery` (also returned as `delivery`):
+`disabled` means local-only, `pending` means completion is unknown,
+`acknowledged` means the existing world `say` protocol acknowledged one message,
+and `refused` carries the failure reason and acknowledged count. The answer is
+only spoken on reveal; private operator inspection includes it throughout.
+World acknowledgement does not prove visible browser rendering. Progress lands
+before delivery; neither a restart nor a repeated request retries the message.
+A crash can leave `pending` evidence, which must not be called successful.
+If a management operation replaces/retires the install during delivery,
+`outcome: "superseded"` reports the receipt without attaching it to the
+replacement. Round state lives entirely in the existing machine-local controller
+store, never in a promoted foundation or federation envelope. This surface is
+API/tool gameplay; it adds no world-client command or guest interaction UI.
 
 **The mind needs its own grant to install.** `eidoverse.install-controller` and
 `eidoverse.retire-controller` are gated on `manageEidoverse` **and** the separate

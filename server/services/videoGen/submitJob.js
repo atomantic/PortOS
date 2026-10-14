@@ -43,12 +43,12 @@ const musicVideoProjectAspect = async (projectId) => {
   return musicVideoAspect(await getProject(projectId));
 };
 /** A Music Video motion prompt for a take that hears no audio, with the project's look clauses removed. */
-async function silentMusicVideoMotionPrompt(prompt, project) {
+async function silentMusicVideoMotionPrompt(prompt, project, scene) {
   const [{ silentMotionPrompt }, { musicVideoCreativeContext }, { visualDirection }] = await Promise.all([
     import('../../lib/musicVideoMotion.js'), import('../../lib/musicVideoCreativeContext.js'), import('../musicVideo/handoff.js'),
   ]);
   return silentMotionPrompt(prompt, { styleParts: [project?.concept?.style, musicVideoCreativeContext(project?.concept, { moodBoard: false }),
-    visualDirection(project?.visualSpec)].filter(Boolean) });
+    visualDirection(project?.visualSpec)].filter(Boolean), keep: [scene?.direction?.motionClause] });
 }
 
 const submitValidatedVideoGenJob = async (body, uploads) => {
@@ -199,6 +199,7 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
     if (compiled) {
       body.prompt = compiled.prompt;
       body.negativePrompt = compiled.negativePrompt;
+      if (compiled.promptAdditions?.length) body.promptAdditions = [...(body.promptAdditions || []), ...compiled.promptAdditions];
       if (prepared.sourceImagePath && !compiled.sourceImagePath) {
         await prepared.discardSourceImage();
         prepared.uploadedTempPath = null;
@@ -234,23 +235,26 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
       sourceImagePath: prepared.sourceImagePath,
       mode: body.mode,
       resolution: body.falResolution,
+      musicModelId: backend === VIDEO_GEN_MODE.FAL ? body.falModelId || null : null,
     }).catch(async (error) => {
       await cleanupStaged();
       throw error;
     })
     : null;
-  // Local LTX lip-sync: the performance window is the a2v audio, on a frame
+  // Local lip-sync (LTX, or MiniMax H3 Ref2VA): the performance window is the a2v audio, on a frame
   // canvas that covers it (the helper pads the tail; the edit points trim it).
   let localPerformanceParams = null;
   if (performance && backend === 'local') {
-    const { sourceAudioVideoRequest, supportsSourceAudioWindow } = await import('../federatedMedia/sourceAudio.js');
+    const [{ sourceAudioVideoRequest }, { localModelRendersPerformance }] = await Promise.all([
+      import('../federatedMedia/sourceAudio.js'), import('../../lib/musicVideoLocalModels.js'),
+    ]);
     const fail = async (message, code) => {
       await unlink(performance.audioFilePath).catch(() => {});
       await cleanupStaged();
       throw new ServerError(message, { status: 400, code });
     };
-    if (!supportsSourceAudioWindow(prepared.effectiveModel)) {
-      await fail(`${prepared.effectiveModel?.name || 'This local model'} cannot lip-sync; choose an LTX-2.5 (or LTX-2.3 dgrauet) model for performance shots`, 'MUSIC_VIDEO_PERFORMANCE_UNSUPPORTED');
+    if (!localModelRendersPerformance(prepared.effectiveModel)) {
+      await fail(`${prepared.effectiveModel?.name || 'This local model'} cannot lip-sync; choose LTX-2.5, LTX-2.3 dgrauet or MiniMax H3 Ref2VA for performance shots`, 'MUSIC_VIDEO_PERFORMANCE_UNSUPPORTED');
     }
     const { audioWindow } = performance.shotInstruction;
     const { numFrames } = await Promise.resolve()
@@ -281,6 +285,7 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
   } : null;
 
   let repairReserved = false;
+  let composedAdditions = [];
   const enqueue = (params) => withStagedRollback(
     async () => {
       if (repairReserved) {
@@ -297,8 +302,8 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
           body.musicVideo.productionStepKey, { sceneId: body.musicVideo.sceneId, kind: 'video' });
       }
       if (body.musicVideo) {
-        const [{ getProject }, { assertShotActionContract, withShotActionPrompt }] = await Promise.all([
-          import('../musicVideo/projects.js'), import('../../lib/musicVideoActionContract.js'),
+        const [{ getProject }, { assertShotActionContract, withShotActionPrompt }, { musicVideoShotModelInput }] = await Promise.all([
+          import('../musicVideo/projects.js'), import('../../lib/musicVideoActionContract.js'), import('../../lib/musicVideoShotPrompt.js'),
         ]);
         const project = await getProject(body.musicVideo.projectId);
         // A brief that names tools and no video tool never dispatches generated footage;
@@ -311,8 +316,27 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
         // A take that hears nothing (no lip-sync or supplied song audio) gets plain physical
         // motion: the model would act out song cues and look words instead of reading them.
         const hearsAudio = !!(performance || prepared.audio || params.audioConditioning || params.audioFilePath);
-        params.prompt = withShotActionPrompt(params.prompt, project, scene, { offsetSec: performance?.shotInstruction?.edit?.inSec || 0 });
-        if (!hearsAudio) params.prompt = await silentMusicVideoMotionPrompt(params.prompt, project);
+        const offsetSec = performance?.shotInstruction?.edit?.inSec || 0;
+        if (body.musicVideo.compose) {
+          // The director's text plus each labeled block PortOS adds (#11317), from the same
+          // composer the shot card shows; a take that hears nothing gets no look or song timing.
+          const composed = musicVideoShotModelInput(project, scene, {
+            authored: params.prompt, asTyped: body.musicVideo.promptAsTyped === true, hears: hearsAudio, backend,
+            audioReactive: body.musicVideo.audioReactive === true, offsetSec, fixes: body._clipFixes || '',
+            // A music-driven take on a reference model hears the song slice as "Audio 1" / @Audio1.
+            audioReferenceModelId: backend === VIDEO_GEN_MODE.FAL ? performance?.modelId || null : null,
+          });
+          params.prompt = composed.prompt;
+          composedAdditions = composed.promptAdditions;
+        } else {
+          // A client from before the composer sends its prompt already composed.
+          // A shot card's prompt is sent as shown, its shot actions included; only a performance
+          // take re-times them to its padded song slice.
+          if (!body.musicVideo.promptAsTyped || performance) {
+            params.prompt = withShotActionPrompt(params.prompt, project, scene, { offsetSec });
+          }
+          if (!hearsAudio && !body.musicVideo.promptAsTyped) params.prompt = await silentMusicVideoMotionPrompt(params.prompt, project, scene);
+        }
         const interval = performance?.shotInstruction?.songInterval || prepared.audio?.songInterval;
         if (params.audioConditioning && Math.round(scene?.startSec * 48000) !== params.audioConditioning.startSample) {
           throw new ServerError('Scene timing changed while source audio was prepared', { status: 409, code: 'MUSIC_VIDEO_SHOT_TIMING_CHANGED' });
@@ -356,7 +380,8 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
           const { costUsd, modelId: costModelId } = falSceneTake({
             scene,
             videoSettings: {
-              falMusicModelId: project.videoSettings?.falMusicModelId ?? null,
+              falMusicModelId: (performance?.shotInstruction?.performanceStyle === 'music' ? performance.modelId : null)
+                ?? project.videoSettings?.falMusicModelId ?? null,
               falModelId: body.falModelId, falDuration: body.falDuration, falResolution: body.falResolution,
               falLipSyncResolution: body.falResolution, falMusicResolution: body.falResolution,
             },
@@ -381,6 +406,9 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
         params.remoteMedia.request = buildFederatedMediaRequest({ kind: 'video', params: { ...params.remoteMedia.request, prompt: params.prompt } });
       }
       if (params.remoteMedia && !params.musicVideo) delete params.prompt;
+      // The labeled additions the composers put around the user's text ride with the job to its record.
+      const additions = [...(body.promptAdditions || []), ...composedAdditions];
+      if (additions.length) params.promptAdditions = additions;
       return enqueueJob({ kind: 'video', params });
     },
   );
@@ -389,6 +417,7 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
     const { remoteMedia, audio } = prepared;
     const { jobId, position, status } = await enqueue({
       prompt: body.prompt, remoteMedia, ...(body.musicVideo ? { musicVideo: body.musicVideo } : {}),
+      ...(body.musicVideoProjectId ? { musicVideoProjectId: body.musicVideoProjectId } : {}),
       ...(body.musicVideo && prepared.sourceImagePath ? { sourceImagePath: prepared.sourceImagePath } : {}),
       ...(body.musicVideo ? { ...remoteMedia.request } : {}),
       ...(audio ? { audioConditioning: audio.audioConditioning, uploadedTempPaths: [audio.audioFilePath],
@@ -418,6 +447,7 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
       uploadedTempPath,
       ...(body.musicVideo ? { musicVideo: body.musicVideo } : {}),
       ...(body.fableLoom ? { fableLoom: body.fableLoom } : {}),
+      ...(body.musicVideoProjectId ? { musicVideoProjectId: body.musicVideoProjectId } : {}),
       ...(body.visualConditioning ? { visualConditioning: body.visualConditioning } : {}),
       ...hosted.buildParams(body, prepared),
       ...(projectAspect ? { aspectRatio: projectAspect, frameAspect: projectAspect } : {}),
@@ -499,6 +529,7 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
     icSkipStage2: isTruthyMeta(body.icSkipStage2),
     ...(body.musicVideo ? { musicVideo: body.musicVideo } : {}),
     ...(body.fableLoom ? { fableLoom: body.fableLoom } : {}),
+    ...(body.musicVideoProjectId ? { musicVideoProjectId: body.musicVideoProjectId } : {}),
     ...(body.visualConditioning ? { visualConditioning: body.visualConditioning } : {}),
     ...localPerformanceParams,
   });

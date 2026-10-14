@@ -1046,8 +1046,10 @@ export function dispatchTaskOutputHookOnce({
     // retryable on recovery rather than being mistaken for a successful report.
     const savedAssessment = [agent?.metadata?.auditAssessment, agent?.result?.auditAssessment]
       .find(assessment => assessment?.status === 'recorded');
-    if (!isLegacyDeepAudit(task.metadata) && isAuditTaskType(resolveTaskHookType(task)) && savedAssessment?.status === 'recorded') {
-      return { ran: false, auditAssessment: savedAssessment };
+    if (!isLegacyDeepAudit(task.metadata) && isAuditTaskType(resolveTaskHookType(task)) && savedAssessment?.status === 'recorded'
+      && (Number(task.metadata?.auditDispositionVersion) !== 1 || agent?.metadata?.auditFindings?.status === 'complete')) {
+      return { ran: false, auditAssessment: savedAssessment,
+        ...(Number(task.metadata?.auditDispositionVersion) === 1 ? { auditDisposition: { status: 'complete' } } : {}) };
     }
     if (agent?.metadata?.outputHookDispatchedAt) {
       return { ran: false, alreadyDispatched: true, ...(agent.metadata?.deepAudit ? { deepAudit: agent.metadata.deepAudit } : {}) };
@@ -1154,15 +1156,30 @@ export function dispatchRecoveredTaskOutputHook({ agentId, task, success, worksp
  *   private-security override), so callers that branch on it don't have to re-derive it
  */
 export async function retireDeadAgent({ agent, task, success, exitCode, duration, errorMessage, category, agentResultExtra = {} }) {
+  if (agent.metadata?.taskAnalysisType === 'security' && agent.metadata.useRunner) {
+    const { settleAgentSecurityScan } = await import('./agentSecurityScan.js');
+    const scanner = await settleAgentSecurityScan(agent.id);
+    if (scanner?.status === 'refused') agent = { ...agent, metadata: { ...agent.metadata,
+      executionInterruption: { category: 'content-refusal', source: 'security-scanner' } } };
+  }
   const isPrivateSecurity = isPrivateSecurityTask(task) || isPrivateSecurityTask(agent);
-  const effectiveSuccess = isPrivateSecurity ? false : success;
+  const interruption = agent.metadata?.executionInterruption;
+  const refused = ['content-refusal', 'content-filtered'].includes(interruption?.category);
+  let effectiveSuccess = isPrivateSecurity || refused ? false : success;
+  const errorAnalysis = refused ? {
+    category: interruption.category, origin: interruption.source || 'provider',
+    message: 'Provider safety refusal; automatic continuation, retries and provider fallback are disabled.',
+    permanent: true, actionable: false, requiresFallback: false,
+  } : { message: errorMessage, category };
 
-  await dispatchRecoveredTaskOutputHook({
+  const recoveredHook = await dispatchRecoveredTaskOutputHook({
     agentId: agent.id,
     task,
     success: effectiveSuccess,
     workspacePath: agent.metadata?.workspacePath || null,
   });
+
+  if (Number(task?.metadata?.auditDispositionVersion) === 1 && recoveredHook?.auditDisposition?.status !== 'complete') effectiveSuccess = false;
 
   // Recovery retires the run without reaching finalizeAgent's completion
   // cleanup, so the sentinel has no other owner — and the hook above was the
@@ -1183,7 +1200,8 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
       isPrivateSecurity ? 'Private security assessment interrupted; inspect its local assessment archive.' : output,
       exitCode,
       duration,
-      { message: errorMessage, category },
+      errorAnalysis,
+      ...(Number(task?.metadata?.auditDispositionVersion) === 1 ? [effectiveSuccess ? null : false] : []),
     );
   }
 
@@ -1194,6 +1212,9 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
     orphaned: true,
     error: errorMessage,
     ...agentResultExtra,
+    ...(Number(task?.metadata?.auditDispositionVersion) === 1 ? { success: effectiveSuccess,
+      auditDisposition: recoveredHook?.auditDisposition || { status: 'unverified' } } : {}),
+    ...(refused ? { success: false, error: errorAnalysis.message, errorAnalysis, executionInterruption: interruption } : {}),
   });
 
   return { success: effectiveSuccess };
@@ -1319,6 +1340,7 @@ export async function finalizeAgent({
   outputBuffer,
   finalSummary = null,
   errorAnalysis: reportedErrorAnalysis,
+  executionInterruption = null,
   terminatedByUser = false,
   error,
   completionReason,
@@ -1326,6 +1348,24 @@ export async function finalizeAgent({
   prExpected = false,
   startedAt = null,
 }) {
+  if (resolveTaskHookType(task) === 'security') {
+    const { settleAgentSecurityScan } = await import('./agentSecurityScan.js');
+    const scanner = await settleAgentSecurityScan(agentId);
+    if (scanner?.status === 'refused') {
+      reportedSuccess = false;
+      reportedErrorAnalysis = { category: 'content-refusal', origin: 'provider', permanent: true, actionable: false,
+        requiresFallback: false, message: 'Security scanner safety refusal; automatic continuation, retries and provider fallback are disabled.' };
+      executionInterruption = { category: 'content-refusal', source: 'security-scanner' };
+    }
+  }
+  if (['content-refusal', 'content-filtered'].includes(reportedErrorAnalysis?.category)) {
+    executionInterruption ||= { category: reportedErrorAnalysis.category, source: reportedErrorAnalysis.origin || 'provider' };
+    reportedSuccess = false;
+  }
+  if (executionInterruption) {
+    await updateAgent(agentId, { metadata: { executionInterruption } })
+      .catch(err => emitLog('warn', `Could not persist execution interruption for ${agentId}: ${err.message}`, { agentId }));
+  }
   // The run window the commit criterion is evaluated against (#3637). Callers
   // that don't track their own start timestamp still know how long the run took,
   // and `duration` is measured from the same instant, so derive it — a missing
@@ -1576,6 +1616,16 @@ export async function finalizeAgent({
     };
   }
 
+  // A persisted assessment or delivered PR cannot hide an untracked finding.
+  // Keep assessment, execution and disposition as separate evidence.
+  if (Number(task.metadata?.auditDispositionVersion) === 1
+    && hookResult?.auditDisposition?.status !== 'complete') {
+    hookResult = { ...hookResult, ran: true, outcome: {
+      accepted: false, permanent: true, reason: 'audit-disposition-incomplete',
+      message: 'Audit findings are not fully disposed: ' + (hookResult?.auditDisposition?.reason || 'register could not be verified and saved'),
+    } };
+  }
+
   // Output hooks may return a trusted metadata patch that advances a staged
   // workflow. Apply it before task persistence and cleanup so the next stage
   // sees the narrowed input set. An explicit `accepted: false` is a real
@@ -1667,11 +1717,13 @@ export async function finalizeAgent({
     ...(hookResult?.deepAudit ? { deepAudit: hookResult.deepAudit } : {}),
     ...(isAuditTaskType(resolveTaskHookType(task)) ? {
       auditAssessment: hookResult?.auditAssessment || { status: 'unverified' },
+      ...(Number(task.metadata?.auditDispositionVersion) === 1 ? { auditDisposition: hookResult?.auditDisposition || { status: 'unverified' } } : {}),
     } : {}),
     exitCode,
     duration,
     outputLength: outputBuffer?.length ?? 0,
     errorAnalysis: verdict.errorAnalysis,
+    ...(executionInterruption ? { executionInterruption } : {}),
     // Recorded whatever the verdict — a `ship` is the evidence that the gate ran
     // and cleared the run, which is what makes a run with no `goalFidelity` block
     // legible as "never judged" rather than "judged fine".
@@ -1970,6 +2022,24 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, a
       workspacePath: hookPayloadDir({ task, workspacePath, recovery }) }) : null;
   if (!taskType) return { ran: false, ...(deepAudit ? { deepAudit } : {}) };
   if (isAuditTaskType(taskType)) {
+    if (taskType === 'security') {
+      const { parseSecurityScanEvidence } = await import('../lib/securityScanEvidence.js');
+      const { doneSentinelPath, parseSentinelPayload } = await import('../lib/agentSentinel.js');
+      const cwd = hookPayloadDir({ task, workspacePath, recovery });
+      const path = doneSentinelPath(cwd, agentId);
+      const summary = path ? parseSentinelPayload(await tryReadFile(path)).summary : null;
+      const evidence = parseSecurityScanEvidence(summary);
+      // Record even on failed delivery; absence must not erase earlier evidence
+      // during completion replay. This stays in the machine-local agent record.
+      const existing = await getAgentRecord(agentId);
+      if (evidence && existing?.metadata?.securityScan?.source !== 'runner') await updateAgent(agentId, { metadata: { securityScan: evidence } }).catch(err => {
+        emitLog('warn', `⚠️ Scanner diagnostics were not saved for ${agentId}: ${err.message}`, { agentId });
+      });
+    }
+    const auditDisposition = Number(task.metadata?.auditDispositionVersion) === 1
+      ? await (await import('./auditFindings.js')).settleAuditFindings({
+        task, agentId, workspacePath: hookPayloadDir({ task, workspacePath, recovery }),
+      }).catch(() => ({ status: 'incomplete', reason: 'Finding register persistence or verification failed' })) : null;
     const { recordAuditQuality } = await import('./appQuality.js');
     const auditAssessment = await recordAuditQuality({ task, taskType, agentId, success, assessedAt,
       ...(isLegacyDeepAudit(task.metadata) ? { deepDiscoveryComplete: deepAudit?.discoveryComplete === true } : {}),
@@ -1985,7 +2055,7 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, a
       await publishAppSnapshotFileAfterAudit(task?.metadata?.app);
     }
     // Assessment telemetry never waives commit/PR success criteria for fix mode.
-    return { ran: false, auditAssessment, ...(deepAudit ? { deepAudit } : {}) };
+    return { ran: false, auditAssessment, ...(auditDisposition ? { auditDisposition } : {}), ...(deepAudit ? { deepAudit } : {}) };
   }
   const { getTaskOutputHook } = await import('./taskTypeHooks.js');
   const hook = await getTaskOutputHook(taskType);

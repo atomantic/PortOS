@@ -23,6 +23,7 @@ import {
 } from '../lib/gitForge.js';
 import { PROTECTED_BRANCHES, validateFilePaths, toLiteralPathspec, assertSafeRef } from '../lib/gitArgs.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { securityScanPRDisclosure } from '../lib/securityScanEvidence.js';
 
 // Re-export so callers that used to import from services/git.js keep working.
 export { execGit, execGitSafe };
@@ -527,21 +528,22 @@ export async function requestCopilotReview(dir, prUrl) {
  * @param {string} agentOutput - Raw agent output text
  * @returns {Promise<string>} Formatted PR body
  */
-export async function generatePRDescription(dir, baseBranch, headBranch, agentOutput) {
+export async function generatePRDescription(dir, baseBranch, headBranch, agentOutput, securityScan, securityScanControl) {
   const summary = extractAgentSummary(agentOutput);
+  const prefix = `Automated PR created by PortOS Chief of Staff.\n\n${securityScanPRDisclosure(securityScan, securityScanControl)}`;
 
   if (summary) {
-    return `Automated PR created by PortOS Chief of Staff.\n\n## Summary\n\n${summary}`;
+    return `${prefix}## Summary\n\n${summary}`;
   }
 
   // Fallback: build from commit messages when no usable agent output
   const comparison = await getBranchComparison(dir, baseBranch, headBranch).catch(() => null);
   if (comparison?.commits?.length) {
     const commitLines = comparison.commits.map(c => `- ${c.message}`).join('\n');
-    return `Automated PR created by PortOS Chief of Staff.\n\n## Changes\n\n${commitLines}`;
+    return `${prefix}## Changes\n\n${commitLines}`;
   }
 
-  return 'Automated PR created by PortOS Chief of Staff.';
+  return prefix.trimEnd();
 }
 
 /**

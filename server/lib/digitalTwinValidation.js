@@ -7,6 +7,7 @@ import {
   EMOJI_USAGE_VALUES
 } from './personaTraitBlend.js';
 import { partialWithoutDefaults } from './zodCompat.js';
+import { isSafeFilename } from './pathSafety.js';
 
 // Document category enum
 export const documentCategoryEnum = z.enum([
@@ -43,6 +44,13 @@ export const enrichmentCategoryEnum = z.enum([
   'error_intolerance',
   'personality_assessments'
 ]);
+
+// Imports and service callers may use existing peer document names (including
+// spaces and uppercase extensions), but every document stays a Markdown basename.
+export const documentFilenameSchema = z.string().min(1).refine(
+  name => isSafeFilename(name, ['.md']) && !name.startsWith('.'),
+  'Filename must be a safe markdown basename'
+);
 
 // Document metadata schema
 export const documentMetaSchema = z.object({
@@ -312,7 +320,7 @@ export const soulMetaSchema = digitalTwinMetaSchema; // Alias for backwards comp
 
 // Create document input
 export const createDocumentInputSchema = z.object({
-  filename: z.string().min(1).max(100).regex(/^[\w\-]+\.md$/, 'Filename must be a valid markdown filename'),
+  filename: documentFilenameSchema.max(100).regex(/^[\w\-]+\.md$/, 'Filename must be a valid markdown filename'),
   title: z.string().min(1).max(200),
   category: documentCategoryEnum,
   content: z.string().min(1).max(1000000),

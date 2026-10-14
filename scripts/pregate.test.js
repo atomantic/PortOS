@@ -69,7 +69,7 @@ describe('resolvePlanStages', () => {
       lint: { mode: 'files', files: ['client/src/App.jsx'] },
       client: { mode: 'files', files: ['client/src/App.test.jsx'], sources: [] },
     }), { baseSha: 'resolved-base' });
-    expect(stages.map((stage) => stage.name)).toEqual(['hidden-content scan', 'client lint', 'server tests', 'client tests']);
+    expect(stages.map((stage) => stage.name)).toEqual(['hidden-content scan', 'client/server lint', 'server tests', 'client tests']);
     expect(stages[0]).toEqual({
       name: 'hidden-content scan', script: 'scan-diff-hidden-content.js',
       args: ['--base', 'resolved-base', '--worktree'], env: {},
@@ -289,6 +289,14 @@ describe('downgradeFullPlan', () => {
     // ALWAYS_RUN_TESTS; passing that path to Vitest is an error, not a skip.
     const downgraded = downgradeFullPlan(planWith({ full: true }), []);
     expect(downgraded.server.files).toEqual([]);
+  });
+
+  it('keeps structural guards selected by a large diff when downgrading a full plan', () => {
+    const tracked = [...ALWAYS_RUN_TESTS, 'server/lib/index.test.js'];
+    const changedFiles = Array.from({ length: 31 }, (_, index) => `server/lib/module-${index}.js`);
+    const downgraded = downgradeFullPlan(planWith({ full: true }), tracked, changedFiles);
+
+    expect(downgraded.server.files).toContain('server/lib/index.test.js');
   });
 });
 

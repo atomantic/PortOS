@@ -242,3 +242,21 @@ describe('buildVideoGenSubmission — local IC-LoRA, chunks and misc', () => {
     expect(local({ steps: 8, guidanceScale: 3, seed: null })).toMatchObject({ steps: 8, guidanceScale: 3, seed: '' });
   });
 });
+
+describe('buildVideoGenSubmission — prompt additions (#11317)', () => {
+  const preset = { label: 'Film noir', prompt: 'cinematic noir', negativePrompt: '' };
+
+  it('lists the style preset, then the No music line the local lane appends', () => {
+    const payload = buildVideoGenSubmission(baseArgs({ currentModel: {}, stylePreset: preset, noMusic: true }));
+    expect(payload.prompt).toBe('cinematic noir. a fox running through a forest\n\nno music, no soundtrack');
+    expect(payload.promptAdditions).toEqual([
+      { id: 'style-1', label: 'Style preset: Film noir', text: 'cinematic noir' },
+      { id: 'no-music', label: 'No music', text: 'no music, no soundtrack' },
+    ]);
+  });
+
+  it('sends no No music chip on a hosted lane, which never appends it', () => {
+    const payload = buildVideoGenSubmission(baseArgs({ isFal: true, currentModel: {}, stylePreset: preset, noMusic: true }));
+    expect(payload.promptAdditions).toEqual([{ id: 'style-1', label: 'Style preset: Film noir', text: 'cinematic noir' }]);
+  });
+});

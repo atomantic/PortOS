@@ -100,3 +100,15 @@ describe('upscaleAdapterDownloadUrl', () => {
     expect(upscaleAdapterDownloadUrl(null)).toBeNull();
   });
 });
+
+describe('buildFormData', () => {
+  // The route's promptAdditions schema parses one JSON field (#11317); per-item
+  // String() would have sent "[object Object]".
+  it('sends a list of records as one JSON field and keeps scalar lists repeated', async () => {
+    const { buildFormData } = await import('./apiImageVideo.js');
+    const additions = [{ id: 'style-1', label: 'Universe style', text: 'muted earth tones' }];
+    const fd = buildFormData({ promptAdditions: additions, loraScales: [0.8, 1] });
+    expect(fd.getAll('promptAdditions')).toEqual([JSON.stringify(additions)]);
+    expect(fd.getAll('loraScales')).toEqual(['0.8', '1']);
+  });
+});

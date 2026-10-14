@@ -6,8 +6,9 @@ import SceneCard from '../SceneCard.jsx';
 import ScenePoster from '../ScenePoster.jsx';
 import { ShotLockContext, SHOT_LOCK_LABELS, overallShotLock } from '../ShotLock.jsx';
 import { shotNumbers } from '../ShotStepper.jsx';
-import { previousShot } from '../../../../../server/lib/musicVideoHandoffFrame.js';
+import { previousShot, shotHandoffSource } from '../../../../../server/lib/musicVideoHandoffFrame.js';
 import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
+import { musicVideoAspect } from '../../../lib/musicVideoAspect.js';
 import { FOOTAGE_OPTIONAL_MODES } from '../../../lib/musicVideoStages.js';
 import { parseSceneFilter, sceneAttention, sceneMatchesFilter, sceneMediaKind, SCENE_ATTENTION_LABELS, SCENE_MEDIA_LABELS } from '../../../lib/musicVideoSceneAttention.js';
 import { formatTimecode } from '../../../utils/formatters.js';
@@ -101,6 +102,15 @@ export default function BoardStage({ board }) {
       : inspectorRef.current?.querySelector('summary');
     if (target) { target.focus({ preventScroll: true }); focusAfterNavigation.current = null; }
   }, [activeSceneId]);
+  // The open card's Previous / Next shot buttons walk every shot in song order, filter or not.
+  const songOrder = [...scenes].sort((a, b) => (numbers.get(a.sceneId) ?? Infinity) - (numbers.get(b.sceneId) ?? Infinity));
+  const openShot = (scene) => scene && (() => {
+    focusAfterNavigation.current = { target: 'inspector' };
+    board.seekToScene?.(scene);
+    onToggleSceneExpand?.(scene.sceneId, true);
+  });
+  const activeAt = songOrder.findIndex((scene) => scene.sceneId === activeSceneId);
+  const stepShot = activeAt === -1 ? null : { prev: openShot(songOrder[activeAt - 1]), next: openShot(songOrder[activeAt + 1]) };
   // j / k step through the listed scenes (opening one, which also routes to it).
   useEffect(() => {
     const ids = visibleIds ? visibleIds.split('\n') : [];
@@ -172,7 +182,11 @@ export default function BoardStage({ board }) {
               <SceneMediaBadges scene={scene} layered={layered} />
             </span>
             <span className="mt-1 block truncate text-sm">{shotName(scene)}</span>
-            <span className="block text-xs text-port-text-muted">{formatTimecode(scene.startSec)}–{formatTimecode(scene.endSec)}</span>
+            {/* Run time first, then where it sits in the song. */}
+            <span className="block text-xs text-port-text-muted">
+              {Number.isFinite(scene.startSec) && Number.isFinite(scene.endSec) && <span className="font-medium text-port-text">{(scene.endSec - scene.startSec).toFixed(2)}s · </span>}
+              {formatTimecode(scene.startSec)}–{formatTimecode(scene.endSec)}
+            </span>
             {codesById.get(scene.sceneId).length > 0 && <span className="block text-xs text-port-warning">{SCENE_ATTENTION_LABELS[codesById.get(scene.sceneId)[0]]}</span>}
           </button>)}
         </div>
@@ -181,8 +195,10 @@ export default function BoardStage({ board }) {
             <SceneCard
               key={scene.sceneId}
               scene={scene}
+              project={project}
               expanded={activeSceneId === scene.sceneId}
               onToggleExpand={toggleInspector}
+              stepShot={stepShot}
               performanceReview={performanceReviews.get(`${scene.sceneId}:${scene.videoHistoryId}`)}
               index={idx}
               shotNumber={numbers.get(scene.sceneId)}
@@ -200,11 +216,14 @@ export default function BoardStage({ board }) {
               failedScenes={sceneMedia.failedScenes}
               songReview={attentionCtx.songReview}
               falVideoSettings={videoSettings.settings}
+              videoModels={videoSettings.models}
+              defaultVideoModel={videoSettings.defaultModel}
               canContinueShot={board.canContinueShot}
               onMove={board.moveScene}
               onDelete={board.onDeleteScene}
               onSplit={board.onSplitScene}
               onMergeNext={board.onMergeNextScene}
+              onMoveStart={board.onMoveSceneStart}
               nextEndSec={scenes[idx + 1]?.endSec ?? null}
               onRepairPerformance={['code', 'document'].includes(project.composition?.mode) ? null : board.onRepairPerformance}
               repairBusy={board.repairBusy || videoSettings.saving}
@@ -220,11 +239,19 @@ export default function BoardStage({ board }) {
               takeBusy={takes.busy}
               onSelectTake={takes.selectTake}
               onReviewTake={takes.reviewTake}
+              onRejectUnusedTakes={takes.rejectUnusedTakes}
+              onSwapFrames={takes.swapFrames}
+              onMarkTake={takes.markTake}
               onContinueFromPrevious={takes.continueFromPrevious}
               // The server's own neighbor rule: the shot before this one by start time.
-              previousHasClip={Boolean(previousShot(project, scene.sceneId)?.videoHistoryId)}
+              previousHasClip={Boolean(shotHandoffSource(project, previousShot(project, scene.sceneId)))}
               onImportTake={(target) => board.setPickerTarget({ type: 'take', sceneId: target.sceneId })}
               onImportClipTake={(target) => board.setPickerTarget({ type: 'clip', sceneId: target.sceneId })}
+              onPlacePoolItem={takes.placePoolItem}
+              onTrimClip={takes.trimClipTake}
+              projectId={project.id}
+              aspect={musicVideoAspect(project)}
+              shotNumbers={numbers}
               layered={layered}
               documentComposition={project.composition?.mode === 'document'}
             />

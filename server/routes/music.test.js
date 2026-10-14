@@ -18,7 +18,8 @@ const cuda = vi.hoisted(() => ({ status: 'available', maxVramGb: 40 }));
 vi.mock('../lib/cudaCapability.js', () => ({
   getCudaCapability: vi.fn(async () => ({ status: cuda.status, gpus: [], maxVramGb: cuda.maxVramGb, error: null })),
 }));
-vi.mock('../services/pipeline/musicGen.js', () => {
+vi.mock('../services/pipeline/musicGen.js', async () => {
+  const actual = await vi.importActual('../services/pipeline/musicGen.js');
   const ENGINES = {
     musicgen: { id: 'musicgen', name: 'MusicGen', models: [{ id: 'm', name: 'M' }], defaultModelId: 'm', minDurationSec: 1, maxDurationSec: 30, defaultDurationSec: 12, installEnv: 'INSTALL_MUSICGEN', venvDefault: '/v/mg', resolvePython: () => (gen.ready ? '/v/mg/bin/python3' : null), customModels: true },
     acestep: { id: 'acestep', name: 'ACE-Step', models: [{ id: 'a', name: 'A' }], defaultModelId: 'a', minDurationSec: 1, maxDurationSec: 240, defaultDurationSec: 60, installEnv: 'INSTALL_ACESTEP', venvDefault: '/v/ace', resolvePython: () => (gen.ready ? '/v/ace/bin/python3' : null), lyrics: true, customModels: false },
@@ -30,6 +31,7 @@ vi.mock('../services/pipeline/musicGen.js', () => {
     ], defaultModelId: 'minimax-music3-mlx-8bit', minDurationSec: 1, maxDurationSec: 300, defaultDurationSec: 60, installEnv: 'INSTALL_MINIMAX_MUSIC3_MLX', venvDefault: '/v/minimax-mlx', resolvePython: () => (gen.ready ? '/v/minimax-mlx/bin/python3' : null), lyrics: true, customModels: false, fixedModelInstall: true, autoDuration: true },
   };
   return {
+    composeMusicLyrics: actual.composeMusicLyrics,
     ENGINES,
     DEFAULT_ENGINE_ID: 'musicgen',
     getEngine: (id) => ENGINES[id] || ENGINES.musicgen,
@@ -223,6 +225,62 @@ describe('music routes', () => {
     designer.writeLyrics.mockReset().mockResolvedValue({ lyrics: '[verse]\nrain on the window', llm: { provider: 'fake-provider', model: 'fake-model' } });
   });
 
+  // Uniquely catches route/schema or composer rewrites of authored text, and
+  // ensures generated overflow is refused by the real workflow at its HTTP boundary.
+  it('preserves authored designer fields through routes and provider composition', async () => {
+    const real = await vi.importActual('../services/musicDesigner.js');
+    designer.describeMusic.mockImplementation(real.describeMusic);
+    designer.writeLyrics.mockImplementation(real.writeLyrics);
+    promptRunner.resolveProviderAndModel.mockResolvedValue({ provider: { id: 'p', type: 'api' }, selectedModel: 'm' });
+    promptRunner.runPromptThroughProvider.mockResolvedValue({ text: 'Valid generated text', model: 'm' });
+    const concept = '  A fictional twilight loop\n\t';
+    const guidance = '  Keep the pulse soft\t ';
+    const template = ' \nMy authored instruction.\n  ';
+    const described = await request(app).post('/api/music/describe').send({ concept, guidance, template });
+    expect(described.status).toBe(200);
+    expect(described.body.sentPrompt).toBe(promptRunner.runPromptThroughProvider.mock.calls.at(-1)[0].prompt);
+    expect(described.body.sentPrompt).toContain(`${template}\n\nMUSICAL REFERENCE / VIBE:\n${concept}\n\nADDITIONAL GUIDANCE FROM THE USER:\n${guidance}`);
+    const description = '  An airy fictional arrangement.\n ';
+    const requestText = '  Chorus about paper moons\n  ';
+    const written = await request(app).post('/api/music/lyrics').send({ description, guidance, template, request: requestText });
+    expect(written.status).toBe(200);
+    expect(written.body.sentPrompt).toContain(`:\n${requestText}\n\nMUSICAL DESCRIPTION:\n${description}\n\nADDITIONAL GUIDANCE FROM THE USER:\n${guidance}`);
+    expect(written.body.sentPrompt).toContain(template);
+    const reset = await request(app).post('/api/music/describe').send({ concept, template: ' \n\t' });
+    expect(reset.body.sentPrompt).toContain(real.DEFAULT_DESCRIBE_TEMPLATE);
+    expect(reset.body.promptAdditions.map((item) => item.label)).toContain('Describe instructions');
+  });
+
+  it.each([
+    ['/describe', { concept: 'x' }, 'description', 8000],
+    ['/lyrics', { description: 'x' }, 'lyrics', 20000],
+  ])('rejects oversized generated output from %s without another provider call', async (path, body, field, limit) => {
+    const real = await vi.importActual('../services/musicDesigner.js');
+    designer.describeMusic.mockImplementation(real.describeMusic);
+    designer.writeLyrics.mockImplementation(real.writeLyrics);
+    promptRunner.resolveProviderAndModel.mockResolvedValue({ provider: { id: 'p', type: 'api' }, selectedModel: 'm' });
+    promptRunner.runPromptThroughProvider.mockReset().mockResolvedValue({ text: 'x'.repeat(limit + 1), model: 'm' });
+    const response = await request(app).post(`/api/music${path}`).send(body);
+    expect(response.status).toBe(502);
+    expect(response.body.code).toBe('LLM_OUTPUT_TOO_LONG');
+    expect(response.body.error).toContain(`${limit + 1} characters; limit is ${limit}`);
+    expect(response.body).not.toHaveProperty(field);
+    expect(promptRunner.runPromptThroughProvider).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['/describe', { concept: 'x' + ' '.repeat(8000) }, 8001, 8000],
+    ['/lyrics', { description: 'x', guidance: ' '.repeat(4001) }, 4001, 4000],
+    ['/lyrics', { description: 'x', template: ' '.repeat(8001) }, 8001, 8000],
+    ['/lyrics', { description: 'x', request: ' '.repeat(4001) }, 4001, 4000],
+  ])('counts authored whitespace before rejecting %s', async (path, body, count, limit) => {
+    const response = await request(app).post(`/api/music${path}`).send(body);
+    expect(response.status).toBe(400);
+    expect(response.body.error).toContain(`${count} characters; limit is ${limit}`);
+    expect(designer.describeMusic).not.toHaveBeenCalled();
+    expect(designer.writeLyrics).not.toHaveBeenCalled();
+  });
+
   describe('POST /describe', () => {
     it('passes every designer field through to describeMusic and returns text + attribution', async () => {
       const r = await request(app).post('/api/music/describe').send({
@@ -286,6 +344,8 @@ describe('music routes', () => {
     it('passes every designer field through to writeLyrics and returns lyrics + attribution', async () => {
       const r = await request(app).post('/api/music/lyrics').send({
         description: 'warm rhodes soul',
+        request: undefined,
+        targetSeconds: undefined,
         guidance: 'about leaving at dawn',
         template: 'Two verses only.',
         providerId: 'fake-provider',
@@ -296,6 +356,8 @@ describe('music routes', () => {
       expect(r.body).toEqual({ lyrics: '[verse]\nrain on the window', llm: { provider: 'fake-provider', model: 'fake-model' } });
       expect(designer.writeLyrics).toHaveBeenCalledWith({
         description: 'warm rhodes soul',
+        request: undefined,
+        targetSeconds: undefined,
         guidance: 'about leaving at dawn',
         template: 'Two verses only.',
         providerId: 'fake-provider',
@@ -671,6 +733,69 @@ describe('music routes', () => {
     expect(r.status).toBe(200);
     expect(r.body.removed).toBe(true);
     expect(models.remove).toHaveBeenCalledWith({ engine: 'musicgen', id: 'facebook/musicgen-large' });
+  });
+
+  it('previews the instrumental caption without queueing and records exactly that caption on submit', async () => {
+    const prompt = '  **warm** `analog` folk\n';
+    const body = { prompt, instrumentalOnly: true };
+    const preview = await request(app).post('/api/music/prompt-preview').send(body);
+    expect(preview.status).toBe(200);
+    expect(mediaQueue.enqueue).not.toHaveBeenCalled();
+    expect(preview.body).toEqual({
+      sentPrompt: `${prompt}\n\nInstrumental only. Do not include sung, spoken, chanted, choir, or background vocals. Carry the lead melody with the described instruments or textures.`,
+      promptAdditions: [{
+        id: 'instrumental-only', label: 'Instrumental only',
+        text: 'Instrumental only. Do not include sung, spoken, chanted, choir, or background vocals. Carry the lead melody with the described instruments or textures.',
+      }],
+    });
+    const submitted = await request(app).post('/api/music/generate').send(body);
+    expect(submitted.status).toBe(202);
+    const params = mediaQueue.enqueue.mock.calls[0][0].params;
+    expect(params.prompt).toBe(preview.body.sentPrompt);
+    expect(params.musicStudio).toMatchObject({ authoredPrompt: prompt, ...preview.body });
+    const { buildSidecarArgs } = await vi.importActual('../services/pipeline/musicGen.js');
+    const { args } = buildSidecarArgs({ engineId: 'musicgen', prompt: params.prompt });
+    expect(args[args.indexOf('--text') + 1]).toBe(preview.body.sentPrompt);
+  });
+
+  it('previews exact lyric bytes and additions that the sidecar sends, without changing the authored sheet', async () => {
+    const actual = await vi.importActual('../services/pipeline/musicGen.js');
+    for (const body of [
+      { prompt: 'folk', engine: 'minimax-music3', lyrics: '  [verse]\nKeep these words\n \t', durationMode: 'auto' },
+      { prompt: 'folk', engine: 'minimax-music3-mlx', lyrics: '', durationSec: 180, instrumentalOnly: true },
+      { prompt: 'folk', engine: 'acestep15', lyrics: '  [verse]\nKeep the ending \n', durationSec: 60 },
+      { prompt: 'folk', engine: 'acestep15', lyrics: '  \n', durationSec: 60 },
+    ]) {
+      mediaQueue.enqueue.mockClear();
+      const preview = await request(app).post('/api/music/prompt-preview').send(body);
+      expect(preview.status).toBe(200);
+      expect(mediaQueue.enqueue).not.toHaveBeenCalled();
+      const submitted = await request(app).post('/api/music/generate').send(body);
+      expect(submitted.status).toBe(202);
+      const params = mediaQueue.enqueue.mock.calls[0][0].params;
+      expect(params.musicStudio.authoredLyrics).toBe(body.lyrics);
+      expect(params.musicStudio.sentLyrics).toBe(preview.body.sentLyrics);
+      expect(params.musicStudio.lyricAdditions).toEqual(preview.body.lyricAdditions);
+      const { args } = actual.buildSidecarArgs({
+        engineId: params.engine, prompt: params.prompt, lyrics: params.lyrics,
+        durationSec: body.durationSec ?? 60,
+      });
+      expect(args[args.indexOf('--lyrics') + 1]).toBe(preview.body.sentLyrics);
+      if (!body.instrumentalOnly) expect(preview.body.sentLyrics.startsWith(body.lyrics)).toBe(true);
+    }
+  });
+
+  it('refuses lyrics beyond the authored cap before preview or queueing', async () => {
+    const body = { prompt: 'folk', engine: 'minimax-music3', lyrics: ' '.repeat(20001) };
+    expect((await request(app).post('/api/music/prompt-preview').send(body)).status).toBe(400);
+    expect((await request(app).post('/api/music/generate').send(body)).status).toBe(400);
+    expect(mediaQueue.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('refuses over-limit caption previews instead of returning a shortened caption', async () => {
+    const preview = await request(app).post('/api/music/prompt-preview').send({ prompt: 'x'.repeat(8001) });
+    expect(preview.status).toBe(400);
+    expect(mediaQueue.enqueue).not.toHaveBeenCalled();
   });
 
   it('POST /generate queues a new track render', async () => {

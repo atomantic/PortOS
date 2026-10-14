@@ -104,27 +104,64 @@ describe('local LTX lip-sync lane', () => {
   });
 });
 
+// Whole sung line: the take hears the full line while the edit still frames
+// the shot. Catches a window that drops the line's start or end, counts a cue
+// that only touches the shot, or overruns the per-take limit.
+describe('whole sung line windows', () => {
+  const capability = performanceCapability('fal');
+  const cues = [
+    { text: 'before', startSec: 30, endSec: 39.2 },
+    { text: 'the line', startSec: 39.2, endSec: 45.6 },
+    { text: 'after', startSec: 45.6, endSec: 50 },
+  ];
+
+  it('covers every lyric line the shot overlaps and keeps the shot as the edit', () => {
+    expect(planPerformanceWindow({ startSec: 40.5, endSec: 42.8, songDurationSec: 60, capability, lineCues: cues })).toMatchObject({
+      ok: true, windowStartSec: 39.2, windowEndSec: 45.6, windowSec: 6.4, editInSec: 1.3, editOutSec: 3.6,
+      lineStartSec: 39.2, lineEndSec: 45.6, lineTooLong: false,
+    });
+  });
+
+  it('pads a line shorter than the provider minimum around the line, and keeps the shot window for an over-long line', () => {
+    const short = [{ text: 'hey', startSec: 10, endSec: 12 }];
+    expect(planPerformanceWindow({ startSec: 10.5, endSec: 11, songDurationSec: 60, capability, lineCues: short }))
+      .toMatchObject({ ok: true, windowStartSec: 8.475, windowEndSec: 13.525, lineStartSec: 10, lineEndSec: 12, editInSec: 2.025 });
+    const long = [{ text: 'a very long line', startSec: 0, endSec: 40 }];
+    expect(planPerformanceWindow({ startSec: 10, endSec: 16, songDurationSec: 60, capability, lineCues: long }))
+      .toMatchObject({ ok: true, windowStartSec: 10, windowEndSec: 16, editInSec: 0, lineTooLong: true });
+  });
+
+  it('prices the whole-line take', () => {
+    const scene = { shotMode: 'performance', startSec: 40.5, endSec: 42.8 };
+    expect(falSceneTake({ scene, songDurationSec: 60, lineCues: cues })).toMatchObject({ seconds: 6.4, costUsd: 1.024 });
+  });
+});
+
 // Each failure variant is a distinct admission regression: evidence, word
 // gap, provider minimum, or timebase mismatch must never resubmit a prefix.
 describe('music-driven performance takes', () => {
   // The drummer case: a 3.735s shot of the song whose motion the audio drives.
   const drummer = { shotMode: 'performance', performanceStyle: 'music', startSec: 212.718, endSec: 216.453 };
 
-  it('render on the audio-to-video model for the shot itself, without lip-sync\'s 5s padding', () => {
+  it('render on H3 Max reference by default, the song window padded to exactly its shortest billed clip', () => {
     const take = falSceneTake({ scene: drummer, videoSettings: {}, songDurationSec: 240 });
-    expect(take).toMatchObject({ performance: true, modelId: 'fal-ai/bytedance/omnihuman/v1.5', seconds: 3.735, resolution: '1080p', costUsd: 0.5976 });
-    expect(falTakeRequestFields(take)).toEqual({ falResolution: '1080p' });
-    // The same shot as lip-sync pads to the route's 5s minimum.
+    expect(take).toMatchObject({ performance: true, music: true, modelId: 'minimax/h3-max/reference-to-video', seconds: 5, resolution: '768P', costUsd: 0.4 });
+    // A music-driven take names its model, so a shot card can pick another.
+    expect(falTakeRequestFields(take)).toEqual({ falModelId: 'minimax/h3-max/reference-to-video', falResolution: '768P' });
+    // The same shot as lip-sync pads to the route's 5s minimum plus its margin.
     expect(falSceneTake({ scene: { ...drummer, performanceStyle: null }, songDurationSec: 240 }).seconds).toBeCloseTo(5.05, 6);
+    expect(shotSplitLimit(drummer, 'fal')).toBeCloseTo(15 - PERFORMANCE_WINDOW_MARGIN_SEC, 6);
   });
 
   it('follow the project pin (model and resolution) and fall back to the default for an uncurated pin', () => {
+    // An audio-to-video model hears the shot itself, with no padding.
     const pinned = falSceneTake({ scene: drummer, videoSettings: { falMusicModelId: 'fal-ai/bytedance/omnihuman/v1.5', falMusicResolution: '720p' }, songDurationSec: 240 });
-    expect(pinned).toMatchObject({ modelId: 'fal-ai/bytedance/omnihuman/v1.5', resolution: '720p', costUsd: 0.5976 });
+    expect(pinned).toMatchObject({ modelId: 'fal-ai/bytedance/omnihuman/v1.5', seconds: 3.735, resolution: '720p', costUsd: 0.5976 });
+    const seedance = falSceneTake({ scene: drummer, videoSettings: { falMusicModelId: 'bytedance/seedance-2.5/reference-to-video' }, songDurationSec: 240 });
+    expect(seedance).toMatchObject({ seconds: 4, resolution: '720p', costUsd: 1.892 });
     // A pin this install no longer curates (fal LTX-2.3, removed) falls back to the default.
     expect(falSceneTake({ scene: drummer, videoSettings: { falMusicModelId: 'fal-ai/ltx-2.3-22b/audio-to-video' }, songDurationSec: 240 }).modelId)
-      .toBe('fal-ai/bytedance/omnihuman/v1.5');
-    expect(shotSplitLimit(drummer, 'fal')).toBeCloseTo(30 - PERFORMANCE_WINDOW_MARGIN_SEC, 6);
+      .toBe('minimax/h3-max/reference-to-video');
   });
 });
 

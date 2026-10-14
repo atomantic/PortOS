@@ -787,6 +787,7 @@ describe('mounted host-control trailing slashes (#8950)', () => {
   const runBody = { providerId: 'example-cli', prompt: 'Example prompt' };
   const protectedBodies = [
     { harnesses: {} },
+    { autofixer: { verifyCommand: 'npm test', autoPromote: true } },
     { imageGen: { codex: { codexPath: '/example/codex' } } },
     // A PATCH-shaped extra field must not change how a legacy PUT is gated.
     { slicePath: 'pipeline', partial: {}, imageGen: { local: { pythonPath: '/example/python3' } } },
@@ -862,13 +863,19 @@ describe('mounted host-control trailing slashes (#8950)', () => {
     expect(local.persist).toHaveBeenCalledTimes(2);
   });
 
-  it.each(['local', 'session', 'basic'])('preserves %s authority through mounted root handlers', async (authority) => {
+  it.each(['local', 'session', 'agent', 'basic'])('preserves %s authority through mounted root handlers', async (authority) => {
     let header = ['X-Example', 'local'];
     if (authority !== 'local') {
       const { token } = await (await import('./auth.js')).setPassword({ newPassword: 'example-password' });
-      header = authority === 'session'
-        ? ['Cookie', `portos_auth=${token}`]
-        : ['Authorization', `Basic ${Buffer.from(':example-password').toString('base64')}`];
+      if (authority === 'agent') {
+        const { resolveAgentApiEnv } = await import('./agentApiAuth.js');
+        const { PORTOS_API_TOKEN } = await resolveAgentApiEnv();
+        header = ['Authorization', `Bearer ${PORTOS_API_TOKEN}`];
+      } else {
+        header = authority === 'session'
+          ? ['Cookie', `portos_auth=${token}`]
+          : ['Authorization', `Basic ${Buffer.from(':example-password').toString('base64')}`];
+      }
     }
     const { app, runner, persist } = await buildApp(authority === 'session' ? '192.0.2.10' : '127.0.0.1');
     const allowed = authority !== 'basic';
@@ -883,7 +890,171 @@ describe('mounted host-control trailing slashes (#8950)', () => {
       if (!allowed) expect(run.body.code).toBe('HOST_CONTROL_FORBIDDEN');
     }
     expect(runner.executeCliRun).toHaveBeenCalledTimes(allowed ? 3 : 0);
-    expect(persist).toHaveBeenCalledTimes(allowed ? 9 : 0);
+    expect(persist).toHaveBeenCalledTimes(allowed ? protectedBodies.length * 3 : 0);
+  });
+});
+
+// A remote caller who picks where PortOS sends audio, prompts or a stored
+// token can read them, answer with forged results, or 307 the request back to
+// PortOS's own loopback port, where it counts as a local operator. Picking a
+// store's host file path lets them rewrite any JSON file the host user owns.
+describe('outbound endpoint and host file settings authority', () => {
+  const buildApp = async (remoteAddress = '192.0.2.10') => {
+    const { authGate, hostControlRouteGate, hostControlBodyGate } = await import('./authGate.js');
+    const persist = vi.fn();
+    const ok = (req, res) => { persist(req.body); res.json({ saved: true }); };
+    const app = express();
+    app.use((req, res, next) => {
+      Object.defineProperty(req.socket, 'remoteAddress', { value: remoteAddress, configurable: true });
+      next();
+    });
+    app.use(authGate);
+    app.use(hostControlRouteGate);
+    app.use(express.json());
+    app.use(hostControlBodyGate);
+    app.put('/api/settings', ok);
+    app.patch('/api/settings/slice', ok);
+    app.put('/api/voice/config', ok);
+    app.put('/api/lmstudio/config', ok);
+    return { app, persist };
+  };
+  const attacker = 'http://attacker.example:7860';
+  const redirects = [
+    ['put', '/api/settings', { imageGen: { mode: 'external', external: { sdapiUrl: attacker } } }],
+    ['put', '/api/settings', { imageGen: { sdapiUrl: attacker } }],
+    ['patch', '/api/settings/slice', { slicePath: 'imageGen.external', partial: { sdapiUrl: attacker } }],
+    ['put', '/api/settings', { beeper: { baseUrl: attacker, allowNonLoopbackBaseUrl: true } }],
+    ['patch', '/api/settings/slice', { slicePath: 'beeper', partial: { baseUrl: attacker } }],
+    ['put', '/api/settings', { mortalloom: { enabled: true, path: '/example/target.json' } }],
+    ['put', '/api/voice/config', { stt: { endpoint: attacker } }],
+    ['put', '/api/lmstudio/config', { baseUrl: attacker }],
+  ];
+  const stored = {
+    imageGen: { mode: 'external', sdapiUrl: 'http://192.0.2.20:7860', external: { sdapiUrl: 'http://192.0.2.20:7860' } },
+    beeper: { enabled: true, baseUrl: 'http://localhost:23373', allowNonLoopbackBaseUrl: false },
+    mortalloom: { enabled: true, path: '/example/MortalLoom.json' },
+  };
+
+  it('refuses a remote password-free caller before any write', async () => {
+    mergeSettingsFile(stored);
+    const { app, persist } = await buildApp();
+    for (const [method, path, body] of redirects) {
+      const response = await request(app)[method](path).send(body);
+      expect(response.status, `${method} ${path}`).toBe(403);
+      expect(response.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+    }
+    expect(persist).not.toHaveBeenCalled();
+  });
+
+  it('keeps unchanged resends, clears and unrelated fields open to a remote caller', async () => {
+    mergeSettingsFile(stored);
+    const { app, persist } = await buildApp();
+    const open = [
+      ['put', '/api/settings', { imageGen: { ...stored.imageGen, external: { sdapiUrl: stored.imageGen.external.sdapiUrl, denoise: true } } }],
+      ['put', '/api/settings', { beeper: { ...stored.beeper, intervalMinutes: 30 } }],
+      ['put', '/api/settings', { mortalloom: { enabled: true, path: '' } }],
+      ['put', '/api/voice/config', { stt: { endpoint: 'http://127.0.0.1:5562', language: 'en' } }],
+    ];
+    for (const [method, path, body] of open) {
+      expect((await request(app)[method](path).send(body)).status, JSON.stringify(body)).toBe(200);
+    }
+    expect(persist).toHaveBeenCalledTimes(open.length);
+  });
+
+  it('preserves local and delegated agent operators', async () => {
+    mergeSettingsFile(stored);
+    const local = await buildApp('127.0.0.1');
+    for (const [method, path, body] of redirects) {
+      expect((await request(local.app)[method](path).send(body)).status, `${method} ${path}`).toBe(200);
+    }
+    await (await import('./auth.js')).setPassword({ newPassword: 'example-password' });
+    const { PORTOS_API_TOKEN: token } = await (await import('./agentApiAuth.js')).resolveAgentApiEnv();
+    expect(token).toBeTruthy();
+    const agent = await buildApp();
+    for (const [method, path, body] of redirects) {
+      expect((await request(agent.app)[method](path).set('Authorization', `Bearer ${token}`).send(body)).status, `${method} ${path}`).toBe(200);
+    }
+    expect(local.persist).toHaveBeenCalledTimes(redirects.length);
+    expect(agent.persist).toHaveBeenCalledTimes(redirects.length);
+  });
+});
+
+describe('outbound mail dispatch authority (#11273)', () => {
+  let mailDependencies;
+
+  const buildApp = async (remoteAddress = '192.0.2.10') => {
+    const { authGate, hostControlRouteGate } = await import('./authGate.js');
+    if (!mailDependencies) {
+      const approvedDraft = {
+        id: '33333333-3333-3333-3333-333333333333',
+        status: 'approved',
+        accountId: '11111111-1111-1111-1111-111111111111',
+        sendVia: 'api',
+        to: ['recipient@example.test'],
+        cc: [],
+        subject: 'Synthetic test message',
+        body: 'This message is never sent outside the test.',
+      };
+      vi.doMock('../services/messageDrafts.js', () => ({
+        getDraft: vi.fn(async (id) => ({ ...approvedDraft, id })),
+        claimDraftForSend: vi.fn(async (id) => ({ ...approvedDraft, id, sendAttemptId: `attempt-${id}` })),
+        finishDraftSend: vi.fn(),
+        releaseDraftSend: vi.fn(),
+      }));
+      vi.doMock('../services/messageAccounts.js', () => ({
+        getAccount: vi.fn().mockResolvedValue({ id: approvedDraft.accountId, type: 'gmail', canSend: true }),
+      }));
+      vi.doMock('../services/messageGmailSync.js', () => ({
+        sendGmail: vi.fn().mockResolvedValue({ success: true }),
+      }));
+      const { default: messagesRoutes } = await import('../routes/messages.js');
+      const drafts = await import('../services/messageDrafts.js');
+      const { sendGmail } = await import('../services/messageGmailSync.js');
+      mailDependencies = { messagesRoutes, drafts, sendGmail };
+    }
+    const app = express();
+    app.use((req, res, next) => {
+      Object.defineProperty(req.socket, 'remoteAddress', { value: remoteAddress, configurable: true });
+      next();
+    });
+    app.use(authGate);
+    app.use(hostControlRouteGate);
+    app.use(express.json());
+    app.use('/api/messages', mailDependencies.messagesRoutes);
+    return { app, drafts: mailDependencies.drafts, sendGmail: mailDependencies.sendGmail };
+  };
+
+  it('refuses remote password-free send before draft lookup or claim while preserving local and delegated operator access', async () => {
+    const remote = await buildApp();
+    const attackerCreatedDraft = '33333333-3333-3333-3333-333333333333';
+    const operatorApprovedDraft = '44444444-4444-4444-4444-444444444444';
+    for (const draftId of [attackerCreatedDraft, operatorApprovedDraft]) {
+      const denied = await request(remote.app).post(`/api/messages/drafts/${draftId}/send`);
+      expect(denied.status).toBe(403);
+      expect(denied.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+    }
+    expect(remote.drafts.getDraft).not.toHaveBeenCalled();
+    expect(remote.drafts.claimDraftForSend).not.toHaveBeenCalled();
+    expect(remote.sendGmail).not.toHaveBeenCalled();
+
+    const local = await buildApp('127.0.0.1');
+    expect((await request(local.app).post(`/api/messages/drafts/${attackerCreatedDraft}/send`)).status).toBe(200);
+    expect(local.drafts.claimDraftForSend).toHaveBeenCalledOnce();
+    expect(local.sendGmail).toHaveBeenCalledOnce();
+
+    const { token } = await (await import('./auth.js')).setPassword({ newPassword: 'example-password' });
+    const session = await buildApp();
+    expect((await request(session.app).post(`/api/messages/drafts/${operatorApprovedDraft}/send`)
+      .set('Cookie', `portos_auth=${token}`)).status).toBe(200);
+
+    const { PORTOS_API_TOKEN: agentToken } = await (await import('./agentApiAuth.js')).resolveAgentApiEnv();
+    expect(agentToken).toBeTruthy();
+    const agent = await buildApp();
+    expect((await request(agent.app).post(`/api/messages/drafts/${operatorApprovedDraft}/send`)
+      .set('Authorization', `Bearer ${agentToken}`)).status).toBe(200);
+    expect(session.sendGmail).toHaveBeenCalledTimes(3);
+    expect(agent.sendGmail).toHaveBeenCalledTimes(3);
+    expect(agent.drafts.claimDraftForSend).toHaveBeenCalledTimes(3);
   });
 });
 

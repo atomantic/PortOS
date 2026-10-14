@@ -2,13 +2,14 @@
  * Apple Health Ingest Service
  *
  * Handles JSON ingest from Health Auto Export app, deduplication by
- * metric+timestamp, and day-partitioned file storage at data/health/YYYY-MM-DD.json.
+ * metric+origin+source+timestamp, and day-partitioned file storage at data/health/YYYY-MM-DD.json.
  */
 
 import { invalidateMeatspace } from './meatspaceEvents.js';
 import { join } from 'path';
 import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
 import { createKeyedFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { healthPointKey } from '../lib/appleHealthPoints.js';
 
 // === Module State ===
 
@@ -146,44 +147,41 @@ export async function writeDayFile(dateStr, data, changedMetrics = Object.keys(d
 
 /**
  * Upsert data points into a metric array.
- * For each new point, if an existing point has the same date, replace it.
- * Otherwise append the new point.
+ * Replace only the same origin/source/timestamp. Different XML devices and
+ * HAE observations coexist so the query layer can choose the day's source.
  *
  * @param {Array} existing - Existing points for the metric
  * @param {Array} newPoints - New points to upsert
  * @returns {Object} { added: number of new points, updated: number of replaced points }
  */
 export function upsertPoints(existing, newPoints) {
-  if (!existing.length) {
-    return { added: newPoints.length, updated: 0, result: [...newPoints] };
-  }
-
-  // Build a map of existing points by date for O(1) lookup and update
-  const pointsByDate = new Map();
+  // Use the same identity on a first import, replay, and legacy day file.
+  const pointsByKey = new Map();
   for (const point of existing) {
-    pointsByDate.set(point.date, point);
+    pointsByKey.set(healthPointKey(point), point);
   }
 
   let added = 0;
   let updated = 0;
 
-  // Process new points: update if date exists, otherwise add
+  // Process new points: update the matching observation, otherwise add.
   for (const newPoint of newPoints) {
-    if (pointsByDate.has(newPoint.date)) {
+    const key = healthPointKey(newPoint);
+    if (pointsByKey.has(key)) {
       // Check if the point actually changed
-      const oldPoint = pointsByDate.get(newPoint.date);
+      const oldPoint = pointsByKey.get(key);
       if (JSON.stringify(oldPoint) !== JSON.stringify(newPoint)) {
-        pointsByDate.set(newPoint.date, newPoint);
+        pointsByKey.set(key, newPoint);
         updated++;
       }
       // If identical, count as a dupe (neither added nor updated)
     } else {
-      pointsByDate.set(newPoint.date, newPoint);
+      pointsByKey.set(key, newPoint);
       added++;
     }
   }
 
-  const result = Array.from(pointsByDate.values());
+  const result = Array.from(pointsByKey.values());
   return { added, updated, result };
 }
 
@@ -194,7 +192,7 @@ export function upsertPoints(existing, newPoints) {
  * @param {string} dateStr - YYYY-MM-DD string
  * @param {string} metricName - Health metric name
  * @param {Array} newPoints - Array of data point objects from the metric
- * @returns {Promise<Object>} { added, updated, totalPoints }
+ * @returns {Promise<Object>} { added, updated, totalPoints, changed }
  */
 export async function mergeIntoDay(dateStr, metricName, newPoints) {
   return queueHealthDayMutation(dateStr, async () => {
@@ -203,12 +201,15 @@ export async function mergeIntoDay(dateStr, metricName, newPoints) {
 
     const { added, updated, result } = upsertPoints(existing, newPoints);
 
-    if (added > 0 || updated > 0) {
+    // Repair duplicate identities left by older first-import behavior even
+    // when every incoming value already matches the canonical point.
+    const changed = added > 0 || updated > 0 || result.length !== existing.length;
+    if (changed) {
       dayData.metrics[metricName] = result;
       await writeDayFile(dateStr, dayData, [metricName]);
     }
 
-    return { added, updated, totalPoints: result.length };
+    return { added, updated, totalPoints: result.length, changed };
   });
 }
 
@@ -261,7 +262,7 @@ export async function ingestHealthData(payload) {
       recordsIngested += result.added;
       recordsUpdated += result.updated;
       recordsSkipped += (points.length - result.added - result.updated);
-      if (result.added > 0 || result.updated > 0) affectedDays.add(dateStr);
+      if (result.changed) affectedDays.add(dateStr);
     }
   }
 

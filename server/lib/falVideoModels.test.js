@@ -65,9 +65,12 @@ describe('buildFalVideoRequest — per-family wire bodies', () => {
     expect(body.image_urls).toEqual(['data:image/png;base64,AA==', 'https://example.com/b.png']);
     expect(body.audio_urls).toEqual(['https://example.com/a.wav']);
     expect(body).not.toHaveProperty('image_url');
-    expect(build('minimax/h3-max/reference-to-video', { width: 1080, height: 1350 }).body).toMatchObject({
-      reference_image_urls: ['data:image/png;base64,AA=='], aspect_ratio: '3:4', duration: 5,
+    // H3 Max reference opens exactly on its start frame; the song slice is "Audio 1".
+    const h3 = build('minimax/h3-max/reference-to-video', { width: 1080, height: 1350, referenceAudioUrls: ['https://example.com/a.wav'] }).body;
+    expect(h3).toMatchObject({
+      image_url: 'data:image/png;base64,AA==', reference_audio_urls: ['https://example.com/a.wav'], aspect_ratio: '3:4', duration: 5,
     });
+    expect(h3).not.toHaveProperty('reference_image_urls');
   });
 
   it('lip-sync: frame + audio + resolution only — no prompt field even when one is supplied', () => {
@@ -159,5 +162,21 @@ describe('per-clip quotes — what a shot actually bills', () => {
     expect(endFrame.every((q) => q.endFrame && getFalVideoModel(q.modelId).endImage)).toBe(true);
     expect(endFrame.map((q) => q.modelId)).toContain(KLING);
     expect(endFrame.map((q) => q.modelId)).not.toContain('fal-ai/veo3.1/fast/image-to-video');
+  });
+});
+
+// Regression: a 2,000+ character prompt reached Hailuo-02, which fal refused with a 422 only after the job was queued.
+describe('buildFalVideoRequest — prompt length caps', () => {
+  // AGENTS.md: a model's input is never cut out of sight; over the cap is refused before fal is paid.
+  it('refuses a prompt over the model limit, counting its Avoid clause', () => {
+    const prompt = 'x'.repeat(1995);
+    expect(() => build('fal-ai/minimax/hailuo-02/standard/image-to-video', { prompt, negativePrompt: 'blur' }))
+      .toThrow(/2,007 characters with its "Avoid:" clause; .* takes 2,000/);
+  });
+
+  it('leaves a prompt within the limit, and a model without a known limit, untouched', () => {
+    expect(build('fal-ai/minimax/hailuo-02/standard/image-to-video', { prompt: 'a', negativePrompt: 'blur' }).body.prompt).toBe('a\nAvoid: blur');
+    const long = 'x '.repeat(1500).trim();
+    expect(build('fal-ai/veo3.1/fast/image-to-video', { prompt: long }).body.prompt).toBe(long);
   });
 });

@@ -29,6 +29,7 @@
 
 import { randomUUID } from 'crypto';
 import { musicVideoStyleImages, musicVideoStylePrompt, musicVideoStyleReferenceCapacity } from '../../lib/musicVideoConditioning.js';
+import { musicVideoFrameModelInput } from '../../lib/musicVideoShotPrompt.js';
 import { join } from 'node:path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, ensureDir, resolveGalleryImage, copyFileGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
@@ -45,6 +46,7 @@ import { getUniverseRenderPin } from '../universeBuilder/crud.js';
 import { getImageModels, isFlux2, isEditOnly } from '../../lib/mediaModels.js';
 import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/systemCapabilities.js';
 import { usesDiffusersRunner } from '../../lib/runners.js';
+import { promptAddition } from '../../lib/modelInput.js';
 
 // The job tags that name the record owning a render, each mapped to the record
 // loader and the render target whose `renderDefaults` pin backs it. A generate
@@ -126,7 +128,11 @@ export function selectLocalImageModelFromSettings(settings, modelId, allModels =
  * @param {string[]} opts.referenceImageFields - field names for multi-ref slots
  * @returns {Promise<{ data, mode, settings, uploadedTempPaths }>}
  */
-export async function prepareGenerateParams({ data, files, referenceImageFields }) {
+// A compose-time preview (#11317) names uploads it never stages: each stands in
+// as this label, so the preview shows where the image goes without copying it.
+export const previewUploadLabel = (index) => `(uploaded image ${index + 1})`;
+
+export async function prepareGenerateParams({ data, files, referenceImageFields, preview = false }) {
   let initImagePath = null;
   const uploadedTempPaths = [];
   const initUpload = files?.initImage;
@@ -226,13 +232,27 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
   const localModel = mode === IMAGE_GEN_MODE.LOCAL ? selectLocalImageModelFromSettings(settings, data.modelId, getImageModels(), localModelCandidates) : null;
   if (data.musicVideo?.sceneId) {
     if (!musicVideoProjectLoaded) musicVideoProject = await getMusicVideoProject(data.musicVideo.projectId).catch(() => null);
+    if (data.musicVideo.compose) {
+      // The director's text plus each labeled block PortOS adds (#11317), from the
+      // composer the server's production run uses for the same still.
+      const scene = musicVideoProject?.scenes?.find((entry) => entry.sceneId === data.musicVideo.sceneId);
+      const composed = musicVideoFrameModelInput(musicVideoProject, scene, {
+        slot: data.musicVideo.slot === 'end' ? 'end' : 'start', authored: data.prompt || '',
+        fromFrame: data.musicVideo.fromFrame === true, refine: data.musicVideo.refine === true,
+      });
+      data.prompt = composed.prompt;
+      if (composed.promptAdditions.length) data.promptAdditions = [...(data.promptAdditions || []), ...composed.promptAdditions];
+    }
     const reservedSlots = referenceUploads.length + (initUpload || data.initImageFile ? 1 : 0);
     const capacity = Math.max(0, musicVideoStyleReferenceCapacity(mode, localModel) - reservedSlots);
     const styles = musicVideoStyleImages(musicVideoProject, namedReferenceFiles, capacity);
     // Named inputs precede uploads. Keep the latter's packed strength positions intact.
     if (!referenceUploads.length) namedReferenceFiles.push(...styles);
     const look = musicVideoStylePrompt(musicVideoProject, referenceUploads.length ? 0 : styles.length);
-    if (look) data.prompt = [data.prompt, look].filter(Boolean).join('. ');
+    if (look) {
+      data.prompt = [data.prompt, look].filter(Boolean).join('. ');
+      data.promptAdditions = [...(data.promptAdditions || []), promptAddition('mood-board-style', 'Mood board style', look)];
+    }
   }
   const referenceImageCount = namedReferenceFiles.length + referenceUploads.length;
   const inputImageCount = (initUpload || data.initImageFile ? 1 : 0) + referenceImageCount;
@@ -268,7 +288,7 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
   // A full media queue (#8326) is refused before anything is staged too — the
   // route's enqueue would refuse the same render, after these copies landed.
   // Lazy: only a queue-bound render needs the queue loaded.
-  if (data.mediaProviderPeerId || QUEUEABLE_IMAGE_MODES.includes(mode)) {
+  if (!preview && (data.mediaProviderPeerId || QUEUEABLE_IMAGE_MODES.includes(mode))) {
     await import('../mediaJobQueue/index.js')
       .then(({ assertMediaQueueRoom }) => assertMediaQueueRoom(1))
       .catch((err) => {
@@ -322,8 +342,11 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
     );
   }
 
-  if (initUpload || referenceUploads.length) await ensureDir(PATHS.imageRefs);
-  if (initUpload) {
+  let uploadIndex = 0;
+  if (!preview && (initUpload || referenceUploads.length)) await ensureDir(PATHS.imageRefs);
+  if (initUpload && preview) {
+    initImagePath = previewUploadLabel(uploadIndex++);
+  } else if (initUpload) {
     // Trust the validated mimetype from the fileFilter — picking the ext
     // off the original filename can mismatch the bytes (e.g. HEIC saved
     // as .jpg). MIME_TO_EXT only contains formats the fileFilter accepts.
@@ -369,6 +392,11 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
   // are filtered out above so the runner sees `referenceImagePaths: [p1, ...]`
   // and aligns strengths by index.
   for (const { upload, strength } of referenceUploads) {
+    if (preview) {
+      referenceImagePaths.push(previewUploadLabel(uploadIndex++));
+      referenceImageStrengths.push(typeof strength === 'number' ? strength : 1.0);
+      continue;
+    }
     const ext = MIME_TO_EXT[(upload.mimetype || '').toLowerCase()] || '.png';
     const refFilename = `ref-${randomUUID()}${ext}`;
     const refPath = join(PATHS.imageRefs, refFilename);

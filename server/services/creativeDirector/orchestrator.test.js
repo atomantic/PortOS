@@ -13,7 +13,8 @@ const mockSampleEvaluationFrames = vi.fn(async () => []);
 // frames deleted under us, and (b) the rendered .mp4 itself to differentiate
 // "video deleted while paused" (fail scene) from "transient ffmpeg failure"
 // (bail and retry). Tests override per-call with mockReturnValueOnce.
-const mockExistsSync = vi.fn(() => false);
+// Data-root resolution may call existsSync during static imports.
+const { mockExistsSync } = vi.hoisted(() => ({ mockExistsSync: vi.fn(() => false) }));
 
 vi.mock('./local.js', () => ({
   getProject: vi.fn(),

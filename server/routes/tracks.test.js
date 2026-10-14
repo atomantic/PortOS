@@ -240,9 +240,9 @@ describe('tracks routes', () => {
   });
 
   it('POST / creates a track', async () => {
-    const r = await request(app).post('/api/tracks').send({ title: 'Intro', engine: 'acestep' });
+    const r = await request(app).post('/api/tracks').send({ title: 'Intro', engine: 'acestep', lyrics: '  [verse]\nKeep the spaces \n' });
     expect(r.status).toBe(201);
-    expect(tracks.createTrack).toHaveBeenCalledWith(expect.objectContaining({ title: 'Intro', engine: 'acestep' }));
+    expect(tracks.createTrack).toHaveBeenCalledWith(expect.objectContaining({ title: 'Intro', engine: 'acestep', lyrics: '  [verse]\nKeep the spaces \n' }));
     expect(r.body.id).toBe('track-new');
   });
 
@@ -313,6 +313,14 @@ describe('tracks routes', () => {
     const r = await request(app).patch('/api/tracks/track-1').send({ prompt: 'warm folk' });
     expect(r.status).toBe(200);
     expect(tracks.updateTrack).toHaveBeenCalledWith('track-1', { prompt: 'warm folk' });
+  });
+
+  it('PATCH /:id preserves authored designer text before persistence', async () => {
+    tracks.getTrack.mockResolvedValue({ id: 'track-1', title: 'Fictional draft' });
+    const patch = { concept: '  Paper moons\n ', prompt: ' \nSoft piano\t ', lyrics: '  [verse]\nPaper moons\n  ' };
+    const response = await request(app).patch('/api/tracks/track-1').send(patch);
+    expect(response.status).toBe(200);
+    expect(tracks.updateTrack).toHaveBeenCalledWith('track-1', patch);
   });
 
   it('PATCH /:id accepts a saved music-designer concept', async () => {

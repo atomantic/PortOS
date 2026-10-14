@@ -163,6 +163,14 @@ export const generateImageMultipart = (formData, options = {}) => request('/imag
   ...options,
 });
 
+// What an Image Gen render would send to its model, before it is sent (#11317).
+// Same body as /generate, with uploads named by count instead of attached.
+export const previewImagePrompt = (body, options = {}) => request('/image-gen/prompt-preview', {
+  method: 'POST',
+  body: JSON.stringify(body),
+  ...options,
+});
+
 // Local Python-runtime setup probes (LocalSetupPanel). These use fetch() rather
 // than request() because the caller distinguishes intentional AbortError (a
 // superseded/unmounted probe) from a real failure — request()'s catch collapses
@@ -312,6 +320,12 @@ export const getUpscalePlan = (id, method, options = {}) => request(
 // `/ic-loras/:key/download` route (issue #3100) already resolves for every
 // registered IC-LoRA weight, remix mode or not.
 export const upscaleAdapterDownloadUrl = (key) => (key ? `${API_BASE}/video-gen/ic-loras/${encodeURIComponent(key)}/download` : null);
+// Keep a clip from `startSec` on as a NEW gallery entry; the source stays as is.
+export const trimVideoStart = (id, startSec, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}/trim-start`, {
+  method: 'POST',
+  body: JSON.stringify({ startSec }),
+  ...options,
+});
 export const stitchVideos = (videoIds, options = {}) => request('/video-gen/stitch', {
   method: 'POST',
   body: JSON.stringify({ videoIds }),
@@ -326,6 +340,8 @@ export function buildFormData(fields) {
   for (const [k, v] of Object.entries(fields)) {
     if (v == null || v === '') continue;
     if (v instanceof Blob) fd.append(k, v);
+    // A list of records (promptAdditions) travels as one JSON field the route parses.
+    else if (Array.isArray(v) && v.some((item) => item !== null && typeof item === 'object')) fd.append(k, JSON.stringify(v));
     else if (Array.isArray(v)) v.forEach((item) => fd.append(k, String(item)));
     else fd.append(k, String(v));
   }
@@ -347,6 +363,14 @@ export async function generateVideo(fields) {
   }
   return res.json();
 }
+
+// The Video Gen form's preview of what Generate would send (#11317): the same
+// multipart fields, each upload the form holds named in `previewUploads`.
+export const previewVideoPrompt = (fields, options = {}) => request('/video-gen/prompt-preview', {
+  method: 'POST',
+  body: buildFormData(fields),
+  ...options,
+});
 
 // Video timeline projects (non-linear editor)
 export const listTimelineProjects = () => request('/video-timeline/projects');

@@ -49,6 +49,8 @@ export const state = {
    */
   getVideoGenModelContext: vi.fn(),
   generateVideo: vi.fn(),
+  /** The form's prompt preview (#11317); resolves null (no panel) unless a test sets one. */
+  previewVideoPrompt: vi.fn(),
   activeJob: null,
   /** Cache-status entries keyed by download id, read by the default `getModelStatus`. */
   modelStatuses: {},
@@ -94,7 +96,7 @@ export const state = {
   runtimeStatus: { installed: true, ready: true, current: true },
 };
 
-const SPIES = ['getVideoGenStatus', 'getVideoGenModelContext', 'generateVideo', 'start', 'startWhenIdle', 'repair', 'cancel', 'refresh', 'listVideoHistory', 'listLorasFull'];
+const SPIES = ['getVideoGenStatus', 'getVideoGenModelContext', 'generateVideo', 'previewVideoPrompt', 'start', 'startWhenIdle', 'repair', 'cancel', 'refresh', 'listVideoHistory', 'listLorasFull'];
 
 /** Restore every documented default, including fresh spies. Call it first in `beforeEach`. */
 export function resetVideoGenMockState() {
@@ -121,6 +123,7 @@ export function resetVideoGenMockState() {
   state.runtimeStatus = { installed: true, ready: true, current: true };
   for (const key of SPIES) state[key].mockReset();
   state.listVideoHistory.mockResolvedValue([]);
+  state.previewVideoPrompt.mockResolvedValue(null);
   state.listLorasFull.mockImplementation(async () => state.availableLoras);
 }
 
@@ -185,6 +188,7 @@ vi.mock('../services/api', () => ({
   getVideoGenStatus: (...args) => state.getVideoGenStatus(...args),
   getVideoGenModelContext: (...args) => state.getVideoGenModelContext(...args),
   generateVideo: (...args) => state.generateVideo(...args),
+  previewVideoPrompt: (...args) => state.previewVideoPrompt(...args),
   cancelVideoGen: vi.fn(async () => ({})),
   listVideoHistory: (...args) => state.listVideoHistory(...args),
   deleteVideoHistoryItem: vi.fn(async () => ({})),
@@ -291,6 +295,8 @@ vi.mock('../components/videoGen/VideoGenGallery', () => ({
   default: (props) => { state.galleryProps = props; return null; },
 }));
 vi.mock('../components/media/MediaPreview', () => ({ default: () => null }));
+// The music-video picker lists projects over the network; its own suite covers it.
+vi.mock('../components/media/MusicVideoFilingSelect', () => ({ default: () => null }));
 vi.mock('../components/media/StylePresetPicker', () => ({ default: () => null }));
 vi.mock('../components/media/MediaJobsQueue', () => ({ default: () => null }));
 vi.mock('../components/imageGen/LoraPicker', () => ({

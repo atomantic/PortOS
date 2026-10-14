@@ -115,3 +115,6 @@ cache/
 
 
 tmp
+
+# Machine-local audit checkpoints (retained in the agent archive at completion)
+.agent-audit-findings-*.json

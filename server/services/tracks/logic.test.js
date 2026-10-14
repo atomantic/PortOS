@@ -72,6 +72,22 @@ describe('tracks logic', () => {
       expect(mergeTrackRecord(local, { ...local, title: 'Old', updatedAt: '2000-01-01T00:00:00.000Z' }).remoteWins).toBe(false);
     });
 
+    it('keeps exact caption provenance from a sender-behind track edit without restoring deleted takes', () => {
+      const addition = { id: 'instrumental-only', label: 'Instrumental only', text: 'No vocals.' };
+      const local = buildTrackRecord({ title: 'Local', lyrics: '  [verse]\nKeep the spaces \n', renders: [
+        { id: 'r-kept', audioFilename: 'kept.wav', sentPrompt: '  **folk**\nNo vocals.\n', promptAdditions: [addition], sentLyrics: '  [verse]\nKeep spaces \n[outro]', lyricAdditions: [{ id: 'closing-section', label: 'Closing section', text: '[outro]' }] },
+        { id: 'r-deleted', audioFilename: 'deleted.wav', sentPrompt: 'deleted' },
+      ] }, { id: 'track-1', now: '2026-06-01T00:00:00.000Z' });
+      const remote = { ...local, title: 'Remote edit', updatedAt: '2099-01-01T00:00:00.000Z', renders: [
+        { id: 'r-kept', audioFilename: 'kept.wav' },
+      ] };
+      const merged = mergeTrackRecord(local, remote).next;
+      expect(merged.lyrics).toBe('  [verse]\nKeep the spaces \n');
+      expect(merged.renders).toHaveLength(1);
+      expect(merged.renders[0]).toMatchObject({ sentPrompt: local.renders[0].sentPrompt, promptAdditions: [addition], sentLyrics: local.renders[0].sentLyrics, lyricAdditions: local.renders[0].lyricAdditions });
+      expect(sanitizeTrack(merged).renders[0]).toEqual(merged.renders[0]);
+    });
+
     it('preserves a local concept when an older peer omits the additive field', () => {
       const authored = buildTrackRecord({ title: 'Local', concept: 'A dusk-time pulse' }, { id: 'track-1', now: '2026-06-01T00:00:00.000Z' });
       const remote = { ...authored, title: 'Remote', updatedAt: '2099-01-01T00:00:00.000Z' };

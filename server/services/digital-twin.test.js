@@ -31,7 +31,8 @@ vi.mock('./promptService.js', () => ({
   buildPrompt: vi.fn()
 }));
 
-vi.mock('../lib/digitalTwinValidation.js', () => ({
+vi.mock('../lib/digitalTwinValidation.js', async importOriginal => ({
+  ...await importOriginal(),
   digitalTwinMetaSchema: {
     safeParse: vi.fn((data) => ({ success: true, data }))
   },

@@ -62,6 +62,11 @@ vi.mock('./brainStorage.js', () => ({
       .map(([id, rec]) => ({ id, ...rec }))),
   upsertWithId: vi.fn(async (_type, id, record) => {
     const existing = journalRecords.get(id);
+    const live = existing && !existing._deleted ? { id, ...existing } : null;
+    if (typeof record === 'function') {
+      record = await record(live);
+      if (record == null) return live;
+    }
     clock.n += 1;
     const stamp = `2026-04-17T12:00:${String(clock.n).padStart(2, '0')}.000Z`;
     const stored = {
@@ -84,7 +89,7 @@ vi.mock('./brainStorage.js', () => ({
 }));
 
 import * as journal from './brainJournal.js';
-import { brainEvents, getAll, getById } from './brainStorage.js';
+import { brainEvents, getAll } from './brainStorage.js';
 import { atomicWrite } from '../lib/fileUtils.js';
 import * as obsidian from './obsidian.js';
 
@@ -299,8 +304,7 @@ describe('brainJournal', () => {
     it('accepts a rewrite when the on-disk entry has no updatedAt to compare', async () => {
       // Legacy / hand-edited stores may lack a clock. Rejecting forever would
       // trap the day; accept the write when there is nothing to precondition on.
-      getById.mockResolvedValueOnce({
-        id: '2026-04-17',
+      journalRecords.set('2026-04-17', {
         date: '2026-04-17',
         content: 'legacy body',
         segments: [{ text: 'legacy body', at: '2026-04-17T10:00:00.000Z', source: 'edit' }],

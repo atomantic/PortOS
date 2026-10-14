@@ -8,6 +8,8 @@ import ResumeAgentModal from './ResumeAgentModal';
 import RelaunchAgentModal from './RelaunchAgentModal';
 import InfiniteScrollFooter from '../../ui/InfiniteScrollFooter';
 import { usePagedCollection } from '../../../hooks/usePagedCollection';
+import { useSocketResource } from '../../../hooks/useSocketResource';
+import socket from '../../../services/socket';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { agentResumeMessage } from '../../../lib/agentResumeOutcome';
 import { isAgentFeedbackEligible } from '../../../lib/cosAgentFeedback';
@@ -34,6 +36,7 @@ const RESUME_MESSAGES = {
 };
 
 const needsAgentFeedback = isAgentFeedbackEligible;
+const FEEDBACK_EVENTS = ['cos:agent:feedback', 'cos:agent:completed'];
 
 export default function AgentsTab({ agentsLoaded = true, agentsError = null, onRetryAgents, completedRevision = 0, agents, onRefresh, liveOutputs, providers, providersLoaded, apps }) {
   const { agentId } = useParams();
@@ -55,7 +58,15 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
   const [searchQuery, setSearchQuery] = useState('');
   const [feedbackUpdates, setFeedbackUpdates] = useState({});
 
-  const [pendingFeedbackCount, setPendingFeedbackCount] = useState(null);
+  // The durable reference index is the bounded source of truth for feedback
+  // actions. It brings older eligible runs into the filter without walking every
+  // historical date bucket; the response uses the same predicate as the server
+  // queue and supplies a count even when those cards are not otherwise loaded.
+  const pendingFeedback = useSocketResource(
+    ({ signal }) => api.getCosPendingAgentFeedback({ countOnly: true, silent: true, signal }),
+    { namespace: 'cos', events: FEEDBACK_EVENTS },
+  );
+  const pendingFeedbackCount = Number.isFinite(pendingFeedback.data?.count) ? pendingFeedback.data.count : null;
   const [confirmingClear, setConfirmingClear] = useState(false);
 
   // Filter selection is URL-backed so actionable insights can open the exact
@@ -79,21 +90,6 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
   // Fetch duration estimates for progress indicators
   useEffect(() => {
     api.getCosLearningDurations().then(setDurations).catch(() => {});
-  }, []);
-
-  // The durable reference index is the bounded source of truth for feedback
-  // actions. It brings older eligible runs into the filter without walking every
-  // historical date bucket; the response uses the same predicate as the server
-  // queue and supplies a count even when those cards are not otherwise loaded.
-  useEffect(() => {
-    let cancelled = false;
-    api.getCosPendingAgentFeedback({ countOnly: true, silent: true })
-      .then((result) => {
-        if (cancelled) return;
-        setPendingFeedbackCount(Number.isFinite(result?.count) ? result.count : null);
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
   }, []);
 
   const handleKill = async (agentId) => {
@@ -136,14 +132,21 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
   // fetches the rest itself if the reader expands it.
   const handleRelaunchClick = useCallback((agent) => setRelaunchingAgent(agent), []);
 
-  const handleFeedbackChange = useCallback((updatedAgent, previousAgent) => {
-    if (updatedAgent?.id && updatedAgent.feedback) {
-      setFeedbackUpdates(prev => ({ ...prev, [updatedAgent.id]: updatedAgent.feedback }));
-    }
-    if (needsAgentFeedback(previousAgent) && !needsAgentFeedback(updatedAgent)) {
-      setPendingFeedbackCount(count => count == null ? count : Math.max(0, count - 1));
-    }
+  const applyFeedback = useCallback((id, feedback) => {
+    if (!id || !feedback?.rating) return;
+    setFeedbackUpdates(prev => ({ ...prev, [id]: feedback }));
   }, []);
+
+  useEffect(() => {
+    const handleFeedback = ({ agentId, feedback }) => applyFeedback(agentId, feedback);
+    socket.on('cos:agent:feedback', handleFeedback);
+    return () => socket.off('cos:agent:feedback', handleFeedback);
+  }, [applyFeedback]);
+
+  const handleFeedbackChange = useCallback((updatedAgent) => {
+    applyFeedback(updatedAgent?.id, updatedAgent?.feedback);
+    pendingFeedback.refetch();
+  }, [applyFeedback, pendingFeedback.refetch]);
 
   // A PAUSED agent resumes IN PLACE (see `resumeAgent` in agentManagement.js):
   // the server requeues that agent's own task on the worktree its run left behind.
@@ -233,7 +236,9 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
     ? locallyVisibleNeedsFeedback
     : Math.max(pendingFeedbackCount, locallyVisibleNeedsFeedback);
 
-  const selectedAgent = agents.find(agent => agent.id === agentId) || (focusedAgent?.id === agentId ? focusedAgent : null);
+  const selectedRecord = agents.find(agent => agent.id === agentId) || (focusedAgent?.id === agentId ? focusedAgent : null);
+  const selectedAgent = selectedRecord && feedbackUpdates[agentId]
+    ? { ...selectedRecord, feedback: feedbackUpdates[agentId] } : selectedRecord;
 
   return (
     <div className="space-y-6">

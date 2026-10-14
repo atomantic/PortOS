@@ -5,6 +5,7 @@ import BrailleSpinner from '../../BrailleSpinner';
 import LoadFailureNotice from '../LoadFailureNotice';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
+import { localDateKey } from '../../../utils/formatters';
 import BodyCompChart from '../BodyCompChart';
 import BloodPressureCard from '../BloodPressureCard';
 
@@ -119,7 +120,7 @@ export default function BodyTab() {
           </div>
           {!showEyeForm && editingEyeId == null && (
             <button
-              onClick={() => { setShowEyeForm(true); setEyeForm({ ...EMPTY_EYE_FORM, date: new Date().toISOString().split('T')[0] }); }}
+              onClick={() => { setShowEyeForm(true); setEyeForm({ ...EMPTY_EYE_FORM, date: localDateKey() }); }}
               className="flex items-center gap-1 text-xs text-port-accent hover:text-port-accent/80 transition-colors"
             >
               <Plus size={14} /> Add Exam

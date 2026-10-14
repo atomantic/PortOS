@@ -69,6 +69,7 @@ vi.mock('../videoGen/local.js', () => ({
   mutateVideoHistory: vi.fn(async (fn) => fn([])),
 }));
 vi.mock('../tracks/index.js', () => ({ getTrack: vi.fn() }));
+vi.mock('./statsOutro.js', () => ({ appendStatsOutro: vi.fn(async () => 0), sweepStatsOutroScratch: vi.fn(async () => {}) }));
 vi.mock('./compositionRender.js', () => ({
   renderTypographyOverlays: h.renderTypographyOverlays,
   removeCompositionScratch: vi.fn(async () => {}),
@@ -513,7 +514,8 @@ describe('composed render lifecycle (#8984)', () => {
   it('lays the captured overlays over the cut and honors the chosen poster frame', async () => {
     primeComposed('composed-1', { mode: 'composed', textCues: [cue], posterSec: 1 });
     const { jobId } = await renderMusicVideo('composed-1');
-    expect(h.overlays.calls[0]).toMatchObject({ jobId, width: 768, height: 512, fps: 24, cues: [expect.objectContaining({ id: 'c1' })] });
+    // The 768x512 fixture clips sit in a 16:9 video, at their height.
+    expect(h.overlays.calls[0]).toMatchObject({ jobId, width: 910, height: 512, fps: 24, cues: [expect.objectContaining({ id: 'c1' })] });
     h.overlays.resolve([{ path: '/data/overlay-0.mov', startSec: 0.5, durationSec: 1 }]);
     await tick();
     const { args } = lastProc();
@@ -564,7 +566,7 @@ describe('layered sections (#8985)', () => {
     primeLayered('layers-1', 'composed');
     const { jobId } = await renderMusicVideo('layers-1');
     // The card's title is captured for exactly its section: [2s clip][2s still][1.01s card → 24 frames].
-    expect(h.overlays.calls[0]).toMatchObject({ jobId, width: 768, height: 512,
+    expect(h.overlays.calls[0]).toMatchObject({ jobId, width: 910, height: 512,
       cues: [{ id: 'card-s3', text: 'Verse two', startSec: 4, endSec: 5, placement: 'center', emphasis: 'hero' }] });
     h.overlays.resolve([{ path: '/data/overlay-0.mov', startSec: 4, durationSec: 1 }]);
     await tick();

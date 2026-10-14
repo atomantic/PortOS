@@ -33,6 +33,7 @@ import { sanitizeTaskMetadata, PIPELINE_STAGE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, 
 import { PATHS } from '../lib/fileUtils.js';
 import { renderOrPrependSection } from '../lib/promptSectionRenderer.js';
 import { currentTaskTypeName } from '../lib/scheduledTaskTypes.js';
+import { TASK_READINESS_REASON } from '../lib/taskReadinessReasons.js';
 import { isPlainObject } from '../lib/objects.js';
 import { hasQuotaBurnProvenance, isManualOnDemandRequest, onDemandRequestMetadata } from '../lib/quotaBurnOrigin.js';
 import { isAutoApprovableInvestigation } from '../lib/investigationTasks.js';
@@ -1231,7 +1232,10 @@ export async function queueDueInstallWideImprovementTasks({
  * Called during every evaluation to ensure system tasks are queued even when user tasks exist
  * Tasks are queued to COS-TASKS.md and will be picked up in Priority 2
  */
-export async function queueEligibleImprovementTasks(state, cosTaskData, { ignoreTaskId = null, wakeAfterRecord = true, perpetualContinuation = null } = {}) {
+export async function queueEligibleImprovementTasks(state, cosTaskData, {
+  ignoreTaskId = null, wakeAfterRecord = true, perpetualContinuation = null,
+  prepareTask = prepareManagedAppImprovementTask, persistTask = addTask
+} = {}) {
   const taskSchedule = await import('./taskSchedule.js');
   const { getDueTasks, getNextTaskType, recordExecution } = taskSchedule;
 
@@ -1274,10 +1278,17 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, { ignore
   // Queue eligible improvement tasks for all managed apps (including PortOS)
   const apps = await getActiveApps().catch(() => []);
   for (const app of apps) {
-    // One pending improvement per app at a time — sibling types must wait
-    // until the current task drains, otherwise they queue faster than they
-    // can run (per-project concurrency limit + cooldown after each completion).
-    if (appsWithPendingImprovement.has(app.id)) {
+    // Capture every due clock slot before applying the background-drain cap.
+    // Cron eligibility lasts one minute: a busy app or a sibling cron must not
+    // discard that occurrence. Persist it now; spawn admission still enforces
+    // concurrency, budgets and cooldowns when the task actually executes.
+    // Use the readiness reason rather than the global interval: an app may
+    // supply its own cron while the global task remains on-demand.
+    const continuingTaskType = perpetualContinuation?.appId === app.id ? perpetualContinuation.taskType : null;
+    const dueTasks = await getDueTasks(app.id, { continuingTaskType });
+    const cronTasks = dueTasks.filter(task => task.reason === TASK_READINESS_REASON.CRON_DUE);
+    const appBusy = appsWithPendingImprovement.has(app.id);
+    if (appBusy && cronTasks.length === 0) {
       if (appsWithBlockedImprovement.has(app.id)) {
         emitLog('info', `⛔ Skipping improvement queue for ${app.name}: failure-blocked improvement task ${appsWithBlockedImprovement.get(app.id)} occupies the app slot — resolve or delete it to resume`, { appId: app.id });
       } else {
@@ -1305,70 +1316,67 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, { ignore
     // bypass the back-to-back refill fired right after a perpetual run reads its
     // OWN app as "on cooldown" and skips the re-queue, and the drain stalls.
     //
-    // When the app IS on cooldown, constrain the pick to a due perpetual task
-    // (`perpetualOnly`). This is what makes a MIXED schedule converge: if the app
-    // also has a due cron/custom type (e.g. pr-watcher), the unconstrained
-    // `getNextTaskType` would return that higher-priority NON-exempt type first,
-    // we'd see a non-perpetual pick, and we'd skip the whole app for the cooldown
-    // window — stranding the perpetual drain behind it. Asking perpetual-only
-    // returns the due perpetual drain (or null → leave the cooled-down app
-    // alone). When NOT on cooldown, the normal full-priority pick runs.
+    // Once clock slots have been captured, cooldown only narrows the
+    // background pick to a perpetual drain, whose park is its own throttle.
     const onCooldown = isAppActivityOnCooldown(appActivity, state.config.appReviewCooldownMs);
 
-    const nextTypeResult = await getNextTaskType(app.id, {
-      perpetualOnly: onCooldown,
-      continuingTaskType: perpetualContinuation?.appId === app.id ? perpetualContinuation.taskType : null
-    }).catch(() => null);
-    if (!nextTypeResult) continue;
-    const nextType = nextTypeResult.taskType;
+    const nextTypeResult = cronTasks.length === 0
+      ? await getNextTaskType(app.id, {
+        perpetualOnly: onCooldown, continuingTaskType, dueTasks
+      }).catch(() => null)
+      : null;
+    const nextTypes = cronTasks.length > 0
+      ? cronTasks.map(task => task.taskType)
+      : nextTypeResult ? [nextTypeResult.taskType] : [];
 
-    const taskKey = `app:${app.id}:${nextType}`;
-    if (existingTaskTypes.has(taskKey)) {
-      if (blockedTaskTypes.has(taskKey)) {
-        emitLog('info', `⛔ Skipping ${nextType} for ${app.name}: blocked task ${blockedTaskTypes.get(taskKey)} of this type already exists — resolve or delete it to resume`, { appId: app.id });
-      } else {
-        emitLog('debug', `Improvement task ${nextType} for ${app.name} already queued`);
+    for (const nextType of nextTypes) {
+      const taskKey = `app:${app.id}:${nextType}`;
+      if (existingTaskTypes.has(taskKey)) {
+        if (blockedTaskTypes.has(taskKey)) {
+          emitLog('info', `⛔ Skipping ${nextType} for ${app.name}: blocked task ${blockedTaskTypes.get(taskKey)} of this type already exists — resolve or delete it to resume`, { appId: app.id });
+        } else {
+          emitLog('debug', `Improvement task ${nextType} for ${app.name} already queued`);
+        }
+        continue;
       }
-      continue;
+
+      // Route through the rich generator so `applyPlanIdMetadata` runs — it
+      // scans open `claim/<slug>` branches + PRs and excludes in-flight slugs
+      // from the pick. The old stub path skipped this and let two plan-task
+      // agents claim the same slug (2026-05-21 incident). The generator
+      // returns null on plan-gate / precondition skip; we silently continue.
+      // Regression-pinned in cos.test.js.
+      const prepared = await prepareTask(nextType, app, state, { ignoreTaskId });
+      if (!prepared.task) continue;
+      const { task, pendingPerpetualDispatch } = prepared;
+
+      // Queue-path invariants override the generator's direct-spawn defaults
+      // (which use MEDIUM priority + `app-improve-*` id).
+      task.priority = 'LOW';
+      task.priorityValue = PRIORITY_VALUES.LOW;
+      task.id = `sys-${app.id.slice(0, 8)}-${nextType}-${Date.now().toString(36)}`;
+
+      // Queue path: addTask's raw branch persists the task through COS-TASKS.md,
+      // which folds multi-line descriptions to first line + full body in
+      // metadata.prompt (#4153). On-demand path: emits unpersisted task on
+      // task:ready, renders full description via getTaskPrompt.
+      const newTask = await persistTask(task, 'internal', { raw: true, ignoreTaskId, suppressDequeue: true });
+      if (newTask?.duplicate) continue;
+      // Recorded from `pendingPerpetualDispatch` — the RECORD prepare returned —
+      // never from `task` or `newTask`: addTask hands back a different object
+      // whenever the description is multi-line, so recording must not depend on
+      // which one the caller is holding (#6871).
+      await recordDeferredPerpetualDispatch(pendingPerpetualDispatch, taskSchedule);
+      if (wakeAfterRecord) cosEvents.emit('cos:dequeue-requested');
+
+      await recordExecution(`task:${nextType}`, app.id);
+
+      emitLog('info', `Queued improvement task: ${nextType} for ${app.name}`, { taskId: newTask.id, appId: app.id });
+      existingTaskTypes.add(taskKey);
+      appsWithPendingImprovement.add(app.id);
+      queued++;
     }
-
-    // Route through the rich generator so `applyPlanIdMetadata` runs — it
-    // scans open `claim/<slug>` branches + PRs and excludes in-flight slugs
-    // from the pick. The old stub path skipped this and let two plan-task
-    // agents claim the same slug (2026-05-21 incident). The generator
-    // returns null on plan-gate / precondition skip; we silently continue.
-    // Regression-pinned in cos.test.js.
-    const prepared = await prepareManagedAppImprovementTask(nextType, app, state, { ignoreTaskId });
-    if (!prepared.task) continue;
-    const { task, pendingPerpetualDispatch } = prepared;
-
-    // Queue-path invariants override the generator's direct-spawn defaults
-    // (which use MEDIUM priority + `app-improve-*` id).
-    task.priority = 'LOW';
-    task.priorityValue = PRIORITY_VALUES.LOW;
-    task.id = `sys-${app.id.slice(0, 8)}-${nextType}-${Date.now().toString(36)}`;
-
-    // Queue path: addTask's raw branch persists the task through COS-TASKS.md,
-    // which folds multi-line descriptions to first line + full body in
-    // metadata.prompt (#4153). On-demand path: emits unpersisted task on
-    // task:ready, renders full description via getTaskPrompt.
-    const newTask = await addTask(task, 'internal', { raw: true, ignoreTaskId, suppressDequeue: true });
-    if (newTask?.duplicate) continue;
-    // Recorded from `pendingPerpetualDispatch` — the RECORD prepare returned —
-    // never from `task` or `newTask`: addTask hands back a different object
-    // whenever the description is multi-line, so recording must not depend on
-    // which one the caller is holding (#6871).
-    await recordDeferredPerpetualDispatch(pendingPerpetualDispatch, taskSchedule);
-    if (wakeAfterRecord) cosEvents.emit('cos:dequeue-requested');
-
-    await recordExecution(`task:${nextType}`, app.id);
-
-    emitLog('info', `Queued improvement task: ${nextType} for ${app.name}`, { taskId: newTask.id, appId: app.id });
-    existingTaskTypes.add(taskKey);
-    appsWithPendingImprovement.add(app.id);
-    queued++;
-
-    // Only queue one task per app per evaluation to avoid flooding
+    // Background drains still enqueue at most one task per app per evaluation.
   }
 
   if (queued > 0) {
@@ -2064,6 +2072,14 @@ export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, t
     });
   }
 
+  // A park is a drain brake, not a promise of another automatic run. Read the
+  // actual eligibility, including per-app cadence/enablement and manual-only
+  // drains, rather than interpreting the stored park deadline as a schedule.
+  const readiness = parkInfo
+    ? await taskScheduleMod.shouldRunTask(request.taskType, appId).catch(() => null)
+    : null;
+  const nextAutoRecheckAt = readiness?.nextRunAt || (readiness?.shouldRun ? new Date().toISOString() : null);
+
   cosEvents.emit('schedule:on-demand-empty', {
     requestId: request.id,
     taskType: request.taskType,
@@ -2074,6 +2090,7 @@ export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, t
     forge,
     parkReason: parkInfo?.parkReason || null,
     parkedUntil: parkInfo?.parkedUntil || null,
+    nextAutoRecheckAt,
     actionableCount: parkInfo?.parkActionableCount ?? null,
     counts: parkInfo?.parkCounts || null,
     skipCauses: parkInfo?.parkSkipCauses || null
@@ -2644,9 +2661,14 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   // Tracker-filing types (reference-watch, or an audit type with fileIssues):
   // the {trackerInstructions} block for the app's resolved work tracker.
   const fileIssues = isFileIssuesMode(taskType, metadata);
-  if (isAuditTaskType(taskType)) metadata.noChangeSuccess = !fileIssues;
-  const trackerFiling = await resolveTrackerFilingBlock(app, taskType, { fileIssues });
-  if (trackerFiling.workTracker) {
+  if (isAuditTaskType(taskType)) {
+    metadata.noChangeSuccess = !fileIssues;
+  }
+  const trackerFiling = await resolveTrackerFilingBlock(app, taskType, { fileIssues: fileIssues || isAuditTaskType(taskType) });
+  // Git-backed issue trackers have a readback verifier; preserve Jira/PLAN.md
+  // delivery without promising an unsupported machine-checkable gate.
+  if (isAuditTaskType(taskType) && !fileIssues && ['github', 'gitlab'].includes(trackerFiling.workTracker)) metadata.auditDispositionVersion = 1;
+  if (trackerFiling.workTracker && (fileIssues || !isAuditTaskType(taskType))) {
     // Traceability + deliverable posture, derived from the SAME resolved tracker
     // that selected the {trackerInstructions} block above so the flag can't drift
     // from the instructions the agent actually got: the PLAN.md path commits

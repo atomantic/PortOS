@@ -79,6 +79,7 @@ export function buildAgentRegistration({
     primaryCheckoutBaseline,
     // Trusted launch capture only; never project a task/model-supplied claim.
     auditSourceEvidence,
+    ...(Number(task.metadata?.auditDispositionVersion) === 1 ? { auditDispositionVersion: 1 } : {}),
     // The issue-tracker base URL of the repository this run worked in, already
     // shaped for its forge (`repoIssueUrlBase`) so the browser appends a number
     // and knows nothing about forges. It is what a bare `#7640` in the agent's
@@ -273,6 +274,13 @@ export function buildAgentRegistration({
     // agent, so `workspacePath` never names it; a later relaunch of that claim
     // reads these at launch to see that a live owner holds the checkout.
     ...claimOwnershipBinding(task),
+    // Snapshot the assigned follow-up target at registration. Admission also
+    // checks the persisted internal task and checkout; a prompt is never a grant.
+    reviewLoopMergeTarget: task.taskType === 'internal'
+      && isTruthyMeta(task.metadata?.reviewLoopFollowUp)
+      && !isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)
+      ? { url: task.metadata.reviewLoopPRUrl, branch: task.metadata.reviewLoopPRBranch }
+      : null,
     configSimplify: isTruthyMeta(task.metadata?.simplify),
     configReviewLoop: isTruthyMeta(task.metadata?.reviewLoop),
     configReviewers: normalizeReviewers(task.metadata),

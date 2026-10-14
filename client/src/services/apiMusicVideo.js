@@ -131,14 +131,20 @@ export const reorderMusicVideoScenes = (id, sceneIds, options = {}) =>
   });
 // Split a shot its backend cannot render in one take on lyric/phrase
 // boundaries (#8977) → { project, scenes }. `backend` omitted = project pin.
-export const splitMusicVideoScene = (id, sceneId, backend, options = {}) =>
+// `atSec` cuts it in two at that song time instead.
+export const splitMusicVideoScene = (id, sceneId, backend, { atSec = null, ...options } = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/split`, {
-    method: 'POST', body: JSON.stringify(backend ? { backend } : {}), ...options,
+    method: 'POST', body: JSON.stringify({ ...(backend ? { backend } : {}), ...(atSec != null ? { atSec } : {}) }), ...options,
   });
 // Join a scene with the next one, the inverse of split → { project, scene }.
 export const mergeMusicVideoNextScene = (id, sceneId, backend, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/merge-next`, {
     method: 'POST', body: JSON.stringify(backend ? { backend } : {}), ...options,
+  });
+// Move a shot's start; the shot before ends there too → { project, scene, previous }.
+export const moveMusicVideoSceneStart = (id, sceneId, startSec, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/start`, {
+    method: 'POST', body: JSON.stringify({ startSec }), ...options,
   });
 // Optional vocal stem (#8977): a full-length vocal bounce on the master's
 // timebase that performance shots are conditioned on. Both → the project.
@@ -170,11 +176,32 @@ export const addMusicVideoSceneTake = (id, sceneId, body, options = {}) => reque
 });
 export const selectMusicVideoSceneTake = (id, sceneId, takeId, options = {}) =>
   request(`${takesPath(id, sceneId)}/${encodeURIComponent(takeId)}/select`, { method: 'POST', ...options });
+// The project's unused stills and clips (the shot card's "Swap from unused") → { collectionId, items }.
+export const getMusicVideoMediaPool = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/media-pool`, options);
+/** The cutting room floor outro's tally for a video: `{ stats }`. */
+export const getMusicVideoOutroStats = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/stats-outro`, options);
+// Asset manager: mark unused pool items ★ 'ingredient' / ✕ 'bad' (null clears) → { assetMarks }.
+export const markMusicVideoPoolAssets = (id, items, mark, options = {}) => request(`/music-video/${encodeURIComponent(id)}/media-pool/marks`, {
+  method: 'PATCH', body: JSON.stringify({ items, mark }), ...options,
+});
+// Asset manager: delete unused pool items from the media library → { deleted }.
+export const deleteMusicVideoPoolAssets = (id, items, options = {}) => request(`/music-video/${encodeURIComponent(id)}/media-pool/delete`, {
+  method: 'POST', body: JSON.stringify({ items }), ...options,
+});
+// Put a pool still or clip on a shot as its selection; `withAssetId` brings its partner → { scene }.
+export const placeMusicVideoPoolItem = (id, sceneId, body, options = {}) => request(`${takesPath(id, sceneId)}/use`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
 // Start a shot from the previous shot's last on-screen frame → { scene, frame }.
 export const continueMusicVideoSceneFromPrevious = (id, sceneId, body = {}, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/continue-from-previous`, {
     method: 'POST', body: JSON.stringify(body), ...options,
   });
+// The shot's start frame becomes its end frame and the end frame its start, prompts included → the scene.
+export const swapMusicVideoSceneFrames = (id, sceneId, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/swap-frames`, { method: 'POST', ...options });
+export const rejectUnusedMusicVideoSceneTakes = (id, sceneId, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/takes/reject-unused`, { method: 'POST', ...options });
 export const reviewMusicVideoSceneTake = (id, sceneId, takeId, review, options = {}) =>
   request(`${takesPath(id, sceneId)}/${encodeURIComponent(takeId)}`, {
     method: 'PATCH', body: JSON.stringify(review), ...options,
@@ -565,6 +592,7 @@ export const addMusicVideoProductionFeedback = (id, body, options = {}) => reque
 // Write one changed input of a stale approval back to its approved value (#10241). `stage` is art | storyboard | proof | castAndSets.
 export const revertMusicVideoProductionInput = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/revert`, { method: 'POST', body: JSON.stringify(body), ...options });
 export const reviseMusicVideoProductionFromFeedback = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/revise`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const syncMusicVideoLyricAnchors = (id, body = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/lyric-anchors`, { method: 'POST', body: JSON.stringify(body), ...options });
 export const resolveMusicVideoProductionFeedback = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/feedback/resolve`, { method: 'POST', body: JSON.stringify(body), ...options });
 // Drafting is free; generation and candidate selection are separate explicit actions.
 export const saveMusicVideoSongRevision = (id, fields, options = {}) => request(`/music-video/${encodeURIComponent(id)}/song-revision`, { method: 'POST', body: JSON.stringify(fields), ...options });

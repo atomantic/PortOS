@@ -240,6 +240,52 @@ export function selectSceneTake(project, sceneId, takeId) {
  * Reject/restore a take and/or set its review note. Rejecting the SELECTED take
  * clears the slot so the scene reads as "needs a take" again.
  */
+/**
+ * Finalize a shot's takes: every take that is not the selected frame, end
+ * frame or clip becomes rejected. Files and notes stay, the selection does not
+ * change, and Use or Restore brings any of them back.
+ */
+export function rejectUnusedTakes(project, sceneId) {
+  const scenes = project.scenes || [];
+  const idx = scenes.findIndex((s) => s.sceneId === sceneId);
+  if (idx < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
+  const scene = scenes[idx];
+  const unused = (take) => take?.takeId && TAKE_SLOT[take.kind] && take.status !== 'rejected' && scene[TAKE_SLOT[take.kind]] !== take.assetId;
+  const takes = Array.isArray(scene.takes) ? scene.takes : [];
+  const rejected = takes.filter(unused).length;
+  if (!rejected) return { project, scene, rejected };
+  const next = { ...scene, takes: takes.map((take) => (unused(take) ? { ...take, status: 'rejected' } : take)) };
+  return { project: replaceScene(project, idx, next), scene: next, rejected };
+}
+
+/**
+ * Swap a shot's selected start and end frames, with their prompts. Each still
+ * becomes a take of the other frame (an existing one is reused), so both stay
+ * selected takes and neither frame's other takes change.
+ */
+export function swapSceneFrames(project, sceneId) {
+  const idx = findSceneIndex(project, sceneId);
+  const scene = project.scenes[idx];
+  const start = scene.referenceImageId;
+  const end = scene.endImageId;
+  if (!isNonBlankStr(start) || !isNonBlankStr(end)) {
+    throw new ServerError('This shot needs both a start and an end frame to swap them.', { status: 409, code: 'MUSIC_VIDEO_SWAP_FRAMES_MISSING' });
+  }
+  const now = new Date().toISOString();
+  const takes = ensureSceneTakes(scene, now);
+  const origin = (kind, assetId) => takes.find((t) => t.kind === kind && t.assetId === assetId);
+  const { scene: withTakes } = appendToScene(project, { ...scene, takes }, [
+    { kind: 'image', assetId: end, source: 'imported', provider: 'portos', prompt: origin('endImage', end)?.prompt ?? null },
+    { kind: 'endImage', assetId: start, source: 'imported', provider: 'portos', prompt: origin('image', start)?.prompt ?? null },
+  ], now);
+  // A take the director had rejected comes back as a candidate once it is selected, as selectSceneTake does.
+  const restore = (t) => ((t.kind === 'image' && t.assetId === end) || (t.kind === 'endImage' && t.assetId === start)) && t.status === 'rejected'
+    ? { ...t, status: 'candidate' } : t;
+  const next = { ...withTakes, takes: withTakes.takes.map(restore), referenceImageId: end, endImageId: start,
+    framePrompt: scene.endFramePrompt ?? null, endFramePrompt: scene.framePrompt ?? null };
+  return { project: replaceScene(project, idx, next), scene: next };
+}
+
 export function reviewSceneTake(project, sceneId, takeId, { status, note }) {
   const { idx, scene, takes, take } = locateTake(project, sceneId, takeId);
   const updated = {

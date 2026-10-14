@@ -141,6 +141,14 @@ export const extractMoodBoardItemFrames = (id, itemId, count, options) =>
     ...options,
   });
 
+// Extract the exact moments (seconds) picked in the frame picker.
+export const extractMoodBoardItemFramesAt = (id, itemId, times, options) =>
+  request(`/mood-boards/${encodeURIComponent(id)}/items/${encodeURIComponent(itemId)}/extract-frames`, {
+    method: 'POST',
+    body: JSON.stringify({ times }),
+    ...options,
+  });
+
 // Render a text note into an image (#10531) on the install's default image
 // backend. Resolves to `{ item, jobId }` once queued; the note becomes an image
 // item when the job completes (`mood-board:item-render` follows it).
@@ -150,3 +158,11 @@ export const renderMoodBoardItem = (id, itemId, options) =>
     body: JSON.stringify({}),
     ...options,
   });
+
+// Server-owned prompt writing + queue admission survives navigation.
+export const generateMoodBoardImages = (id, data, options) =>
+  request(`/mood-boards/${encodeURIComponent(id)}/generate`, {
+    method: 'POST', body: JSON.stringify(data), ...options,
+  });
+export const getMoodBoardGeneration = (id, options) =>
+  request(`/mood-boards/${encodeURIComponent(id)}/generate`, options);

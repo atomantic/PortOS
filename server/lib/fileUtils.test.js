@@ -1651,6 +1651,58 @@ describe('createCachedStore', () => {
     expect((await store.load()).items).toEqual(['a', 'b']);
   });
 
+  it('keeps a rejected disk write out of cached reads and the next queued mutation', async () => {
+    const file = join(dir, 'accounts.json');
+    const store = createCachedStore(file, {}, { ttl: 60_000 });
+    const original = { accounts: { example: { status: 'pending' } }, count: 0 };
+    await store.save(structuredClone(original));
+    const cached = await store.load();
+    const diskError = Object.assign(new Error('synthetic replacement failure'), { code: 'EIO' });
+    vi.mocked(fsPromises.rename).mockRejectedValueOnce(diskError);
+
+    const rejected = store.mutate((data) => { delete data.accounts.example; });
+    const rejection = expect(rejected).rejects.toBe(diskError);
+    const next = store.mutate((data) => {
+      expect(data.accounts.example).toEqual({ status: 'pending' });
+      data.count += 1;
+    });
+    await rejection;
+    await next;
+
+    expect(cached).toEqual(original);
+    const expected = { accounts: { example: { status: 'pending' } }, count: 1 };
+    expect(await store.load()).toEqual(expected);
+    expect(JSON.parse(await readFile(file, 'utf-8'))).toEqual(expected);
+  });
+
+  it('hides an in-flight edit and discards it if the mutation callback rejects', async () => {
+    const file = join(dir, 'accounts.json');
+    const store = createCachedStore(file, {}, { ttl: 60_000 });
+    const original = { accounts: { example: { status: 'pending' } }, count: 0 };
+    await store.save(structuredClone(original));
+    let signalStarted;
+    let rejectEdit;
+    const started = new Promise((resolve) => { signalStarted = resolve; });
+    const editing = new Promise((_resolve, reject) => { rejectEdit = reject; });
+    const failed = store.mutate(async (data) => {
+      data.accounts.example.status = 'uncommitted';
+      signalStarted();
+      await editing;
+    });
+    const callbackError = new Error('synthetic callback failure');
+    const rejection = expect(failed).rejects.toBe(callbackError);
+    await started;
+    const duringEdit = await store.load();
+    rejectEdit(callbackError);
+    await rejection;
+
+    expect(duringEdit).toEqual(original);
+    expect(await store.load()).toEqual(original);
+    expect(JSON.parse(await readFile(file, 'utf-8'))).toEqual(original);
+    await store.mutate((data) => { data.count += 1; });
+    expect(JSON.parse(await readFile(file, 'utf-8'))).toEqual({ ...original, count: 1 });
+  });
+
   it('invalidateCache forces a re-read from disk', async () => {
     const file = join(dir, 'x.json');
     const store = createCachedStore(file, { n: 0 });
