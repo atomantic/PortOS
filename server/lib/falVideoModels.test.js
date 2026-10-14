@@ -65,9 +65,12 @@ describe('buildFalVideoRequest — per-family wire bodies', () => {
     expect(body.image_urls).toEqual(['data:image/png;base64,AA==', 'https://example.com/b.png']);
     expect(body.audio_urls).toEqual(['https://example.com/a.wav']);
     expect(body).not.toHaveProperty('image_url');
-    expect(build('minimax/h3-max/reference-to-video', { width: 1080, height: 1350 }).body).toMatchObject({
-      reference_image_urls: ['data:image/png;base64,AA=='], aspect_ratio: '3:4', duration: 5,
+    // H3 Max reference opens exactly on its start frame; the song slice is "Audio 1".
+    const h3 = build('minimax/h3-max/reference-to-video', { width: 1080, height: 1350, referenceAudioUrls: ['https://example.com/a.wav'] }).body;
+    expect(h3).toMatchObject({
+      image_url: 'data:image/png;base64,AA==', reference_audio_urls: ['https://example.com/a.wav'], aspect_ratio: '3:4', duration: 5,
     });
+    expect(h3).not.toHaveProperty('reference_image_urls');
   });
 
   it('lip-sync: frame + audio + resolution only — no prompt field even when one is supplied', () => {

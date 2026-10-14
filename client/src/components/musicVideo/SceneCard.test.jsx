@@ -55,7 +55,7 @@ describe('performance speaker save boundary', () => {
 });
 
 describe('music-driven performance', () => {
-  it('switches a shot between cutaway, lip-sync and music-driven, and plans the music-driven take on the audio-to-video model', () => {
+  it('switches a shot between cutaway, lip-sync and music-driven, and plans the music-driven take on the default music-driven model', () => {
     const onSave = vi.fn();
     function Harness() {
       const [scene, setScene] = useState({ sceneId: 's1', shotMode: 'cutaway', startSec: 10, endSec: 13.5, referenceImageId: 'frame.png', takes: [] });
@@ -69,8 +69,8 @@ describe('music-driven performance', () => {
     fireEvent.change(shot, { target: { value: 'music' } });
     expect(onSave).toHaveBeenLastCalledWith('s1', { shotMode: 'performance', performanceStyle: 'music' });
     expect(shot.value).toBe('music');
-    // The shot's own 3.5s, not lip-sync's 5s minimum window.
-    expect(screen.getByTestId('performance-plan').textContent).toMatch(/^Music-driven via fal\.ai OmniHuman v1\.5 \(audio-driven person\) \(fal-ai\/bytedance\/omnihuman\/v1\.5\) · song 0:10–0:13 · est\. \$0\.56 \(3\.5s at 1080p\)/);
+    // H3 Max reference by default: the song window pads to exactly its 5s shortest billed clip.
+    expect(screen.getByTestId('performance-plan').textContent).toMatch(/^Music-driven via fal\.ai MiniMax H3 Max \(reference\) \(minimax\/h3-max\/reference-to-video\) · song 0:09–0:14 · shot starts 0\.75s into the take · est\. \$0\.40 \(5s at 768P\)/);
     fireEvent.change(shot, { target: { value: 'performance' } });
     expect(onSave).toHaveBeenLastCalledWith('s1', { shotMode: 'performance', performanceStyle: null });
     expect(screen.getByTestId('performance-plan').textContent).toMatch(/^Lip-sync via/);

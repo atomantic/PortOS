@@ -48,6 +48,26 @@ describe('shotCardRenderRequest', () => {
   });
 });
 
+// The 80s drummer shot: a music-driven take hears the song slice as a reference its prompt names.
+describe('music-driven shot on a reference model', () => {
+  const drummer = scene({ shotMode: 'performance', performanceStyle: 'music', prompt: 'The drummer hits the snare' });
+  it.each([
+    [{}, 'Audio 1 is the song playing under this shot: time the movement to its beat.'],
+    [{ falMusicModelId: 'bytedance/seedance-2.5/reference-to-video' },
+      '@Image1 is the opening frame. @Audio1 is the song playing under this shot: time the movement to its beat.'],
+  ])('lists the song audio reference as a chip, sent after the typed prompt (%o)', (pin, text) => {
+    const request = shotCardRenderRequest({ scene: drummer, performance: true, settings: { backend: 'fal', ...pin } });
+    expect(request.songAudio.state).toBe('required');
+    expect(request.promptAdditions).toContainEqual({ id: 'audio-reference', label: 'Song audio reference', text });
+    expect(request.prompt).toBe(`The drummer hits the snare. ${text}`);
+  });
+
+  it('adds nothing for an audio-to-video model that hears the song as its source audio', () => {
+    const request = shotCardRenderRequest({ scene: drummer, performance: true, settings: { backend: 'fal', falMusicModelId: 'fal-ai/bytedance/omnihuman/v1.5' } });
+    expect(request.promptAdditions.map((item) => item.id)).not.toContain('audio-reference');
+  });
+});
+
 describe('SceneRenderInputs', () => {
   it('shows the exact prompt and reports a toggle', () => {
     const onChange = vi.fn();

@@ -2,7 +2,7 @@ import {
   FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_IMAGE_VIDEO_MODELS, coerceFalVideoSeconds, describeFalVideoRate, falVideoResolutions, getFalVideoModel,
 } from '../../lib/falVideoModels.js';
 import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
-import { grokCoverage, performanceCapability } from '../../lib/musicVideoShotTiming.js';
+import { SOURCE_AUDIO_MUSIC, grokCoverage, performanceCapability } from '../../lib/musicVideoShotTiming.js';
 import { localMusicVideoModels } from '../../../../server/lib/musicVideoLocalModels.js';
 import { frameOptionsForModel } from '../../lib/videoGenParams.js';
 import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage.js';
@@ -10,9 +10,10 @@ import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage
 /**
  * Where one shot's clip renders, picked on its card: the project's saved
  * renderer, local LTX, Grok, or a fal.ai model. LTX is local only, so fal
- * offers only its curated start-frame models; a lip-synced or music-driven
- * shot renders on fal's source-audio route, so fal is one choice there, and
- * Grok (no audio) renders cutaways only.
+ * offers only its curated start-frame models; a lip-synced shot renders on
+ * fal's lip-sync route, so fal is one choice there, a music-driven shot offers
+ * each music-driven model (the song slice drives the picture), and Grok (no
+ * audio) renders cutaways only.
  * The pick is a value string: '' (saved), 'local', 'grok', 'fal' or 'fal:<modelId>'.
  *
  * A picked lane shows its own options, from the same definitions the Video Gen
@@ -50,7 +51,14 @@ export function renderTargetOptions({ performance, saved, endFrame = false, scen
     { value: 'local', label: performance ? 'Local LTX lip-sync (free)' : 'Local LTX (free)' },
     { value: 'grok', label: performance ? 'Grok (cutaways only)' : 'Grok', disabled: performance },
     ...(performance
-      ? [{ value: 'fal', label: `fal.ai · ${falPerformanceLabel(saved, scene)}` }]
+      ? [
+        { value: 'fal', label: `fal.ai · ${falPerformanceLabel(saved, scene)}` },
+        // A music-driven shot can try another model that hears the song, priced per second.
+        ...(scene?.performanceStyle === 'music' ? Object.values(SOURCE_AUDIO_MUSIC.fal).map((lane) => {
+          const rate = describeFalVideoRate(lane.modelId, lane.defaultResolution);
+          return { value: `fal:${lane.modelId}`, label: `fal.ai · ${getFalVideoModel(lane.modelId).label} + song audio${rate ? ` · ${rate}` : ''}` };
+        }) : []),
+      ]
       : FAL_IMAGE_VIDEO_MODELS.map((model) => {
         const rate = describeFalVideoRate(model.id);
         return { value: `fal:${model.id}`, label: `fal.ai · ${model.label}${rate ? ` · ${rate}` : ''}${endFrame && model.endImage ? ' · ends on end frame' : ''}` };
@@ -141,6 +149,10 @@ export function renderTargetOverrides(value, saved, options = {}, context = {}) 
   }
   const falModelId = value.slice(4) || null;
   if (!falModelId) return { backend: 'fal' };
+  // A music-driven shot's pick is its music model, at that model's own default size.
+  if (context.performance) {
+    return { backend: 'fal', falMusicModelId: falModelId, ...(falModelId === saved.falMusicModelId ? {} : { falMusicResolution: null }) };
+  }
   // Each model has its own resolutions, so the saved one only carries over to the saved model.
   const sameModel = falModelId === (saved.falModelId || FAL_DEFAULT_IMAGE_VIDEO_MODEL);
   // A picked model is the one this render uses, end frame or not.

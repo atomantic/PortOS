@@ -235,6 +235,7 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
       sourceImagePath: prepared.sourceImagePath,
       mode: body.mode,
       resolution: body.falResolution,
+      musicModelId: backend === VIDEO_GEN_MODE.FAL ? body.falModelId || null : null,
     }).catch(async (error) => {
       await cleanupStaged();
       throw error;
@@ -322,6 +323,8 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
           const composed = musicVideoShotModelInput(project, scene, {
             authored: params.prompt, asTyped: body.musicVideo.promptAsTyped === true, hears: hearsAudio, backend,
             audioReactive: body.musicVideo.audioReactive === true, offsetSec, fixes: body._clipFixes || '',
+            // A music-driven take on a reference model hears the song slice as "Audio 1" / @Audio1.
+            audioReferenceModelId: backend === VIDEO_GEN_MODE.FAL ? performance?.modelId || null : null,
           });
           params.prompt = composed.prompt;
           composedAdditions = composed.promptAdditions;
@@ -377,7 +380,8 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
           const { costUsd, modelId: costModelId } = falSceneTake({
             scene,
             videoSettings: {
-              falMusicModelId: project.videoSettings?.falMusicModelId ?? null,
+              falMusicModelId: (performance?.shotInstruction?.performanceStyle === 'music' ? performance.modelId : null)
+                ?? project.videoSettings?.falMusicModelId ?? null,
               falModelId: body.falModelId, falDuration: body.falDuration, falResolution: body.falResolution,
               falLipSyncResolution: body.falResolution, falMusicResolution: body.falResolution,
             },

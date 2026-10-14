@@ -34,6 +34,7 @@ import {
   FAL_DEFAULT_IMAGE_VIDEO_MODEL,
   FAL_DEFAULT_TEXT_VIDEO_MODEL,
   buildFalVideoRequest,
+  falHearsAudioReference,
   getFalVideoModel,
 } from '../../lib/falVideoModels.js';
 import { probeVideoDuration, probeVideoGeometry } from '../../lib/ffmpeg.js';
@@ -151,13 +152,16 @@ function buildRequestBody({ prompt, negativePrompt, duration, aspectRatio, image
 export function falVideoSentPrompt({ hasImage = false, hasEndImage = false, hasAudio = false, promptAdditions = [], ...spec }) {
   const modelId = spec.modelId || (hasImage ? FAL_DEFAULT_IMAGE_MODEL : FAL_DEFAULT_TEXT_MODEL);
   const { prompt = '', negativePrompt } = spec;
+  // A reference model hears the audio as a prompt-named reference ("Audio 1").
+  const audioAsReference = hasAudio && falHearsAudioReference(getFalVideoModel(modelId));
   let planned = null;
   try {
     planned = buildFalVideoRequest({
       ...spec, modelId,
       imageUrl: hasImage ? 'pending:image' : null,
       endImageUrl: hasEndImage ? 'pending:end-image' : null,
-      audioUrl: hasAudio ? 'pending:audio' : null,
+      audioUrl: hasAudio && !audioAsReference ? 'pending:audio' : null,
+      referenceAudioUrls: audioAsReference ? ['pending:audio'] : [],
     });
   } catch (err) {
     if (err?.code !== 'FAL_MODEL_INPUT') throw err;
@@ -227,8 +231,10 @@ export async function generateVideo({
   const audioSec = audioFilePath
     ? (shotInstruction?.audioWindow?.durationSec || await probeVideoDuration(audioFilePath).catch(() => null))
     : null;
+  // A reference model renders a set length, not one that follows its audio: the clip covers the song slice.
+  const audioAsReference = !!audioFilePath && falHearsAudioReference(catalogModel);
   const requestSpec = {
-    modelId, prompt, negativePrompt, seconds: duration, audioSec, aspectRatio, width, height, resolution,
+    modelId, prompt, negativePrompt, seconds: audioAsReference ? (duration ?? audioSec) : duration, audioSec, aspectRatio, width, height, resolution,
     generateAudio: generateAudio === true, enableTranscription: lipSync?.enableTranscription === true,
   };
   const { planned, record: sentRecord } = falVideoSentPrompt({
@@ -260,7 +266,7 @@ export async function generateVideo({
     createdAt: new Date().toISOString(),
     mode: sourceImagePath ? 'image' : 'text',
     // A lip-sync take syncs a mouth; an audio-to-video take moves the whole frame to the audio.
-    ...(audioFilePath ? (catalogModel?.kind === 'a2v' ? { audioDriven: true } : { lipSync: true }) : {}),
+    ...(audioFilePath ? (catalogModel?.kind === 'a2v' || audioAsReference ? { audioDriven: true } : { lipSync: true }) : {}),
     ...(shotInstruction?.audioWindow ? { audioWindow: shotInstruction.audioWindow } : {}),
   };
   const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
@@ -333,8 +339,9 @@ async function runFalVideo(job, jobId, {
     const [imageUrl, endImageUrl, audioUrl] = await Promise.all([
       host(imageDataUri, 'start'), host(endImageDataUri, 'end'), host(audioDataUri, 'audio'),
     ]);
+    const audioInputs = falHearsAudioReference(getFalVideoModel(modelId)) ? { referenceAudioUrls: audioUrl ? [audioUrl] : [] } : { audioUrl };
     const body = requestSpec
-      ? buildFalVideoRequest({ ...requestSpec, imageUrl, endImageUrl, audioUrl }).body
+      ? buildFalVideoRequest({ ...requestSpec, imageUrl, endImageUrl, ...audioInputs }).body
       : audioFilePath
         ? buildLipSyncRequestBody({ imageDataUri: imageUrl, audioDataUri: audioUrl, enableTranscription })
         : buildRequestBody({ prompt, negativePrompt, duration, aspectRatio, imageDataUri: imageUrl });

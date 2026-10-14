@@ -1,7 +1,7 @@
 import RenderPoolPicker from './RenderPoolPicker.jsx';
 import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
 import {
-  FAL_AUDIO_VIDEO_MODEL, FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_IMAGE_VIDEO_MODELS, describeFalVideoRate, falImageVideoQuotes, falVideoResolutions, getFalVideoModel,
+  FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_MUSIC_VIDEO_DEFAULT_MODEL, FAL_IMAGE_VIDEO_MODELS, describeFalVideoRate, falImageVideoQuotes, falVideoResolutions, getFalVideoModel,
 } from '../../lib/falVideoModels.js';
 import { projectFalSpend } from '../../lib/musicVideoStages.js';
 import { formatUsd } from '../../utils/formatters.js';
@@ -279,8 +279,8 @@ export default function VideoRenderSettings({ videoSettings, generating, project
                 className={`${falSelectCls} sm:max-w-[280px]`}
               >
                 {musicModels.map((lane) => (
-                  <option key={lane.modelId} value={lane.modelId === FAL_AUDIO_VIDEO_MODEL ? '' : lane.modelId}>
-                    {`Music-driven · ${getFalVideoModel(lane.modelId).label} · ${describeFalVideoRate(lane.modelId, lane.defaultResolution)}${lane.modelId === FAL_AUDIO_VIDEO_MODEL ? ' (default)' : ''}`}
+                  <option key={lane.modelId} value={lane.modelId === FAL_MUSIC_VIDEO_DEFAULT_MODEL ? '' : lane.modelId}>
+                    {`Music-driven · ${getFalVideoModel(lane.modelId).label} · ${describeFalVideoRate(lane.modelId, lane.defaultResolution)}${lane.modelId === FAL_MUSIC_VIDEO_DEFAULT_MODEL ? ' (default)' : ''}`}
                   </option>
                 ))}
               </select>

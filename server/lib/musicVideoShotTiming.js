@@ -16,8 +16,9 @@
  *     conditioning — REST documentation for a different Grok surface is not that
  *     proof. Local runtimes are absent for the same reason.
  *   - `SOURCE_AUDIO_MUSIC` — the music-driven performance lanes: fal.ai
- *     audio-to-video models (kind `a2v`) where the song slice drives the whole
- *     picture's motion rather than only a singer's mouth. A scene opts in with
+ *     audio-to-video models (kind `a2v`) and reference models that hear the
+ *     song slice as an audio reference (MiniMax H3 Max, Seedance 2.5), where
+ *     the song drives the whole picture's motion rather than only a singer's mouth. A scene opts in with
  *     `performanceStyle: 'music'`; it shares the window planning below.
  *   - `planPerformanceWindow` — the audio window a performance shot submits:
  *     inside the provider's limits (never relying on its silent truncation), a
@@ -42,10 +43,10 @@
 
 import { GROK_VIDEO_DURATIONS, nearestGrokDuration } from './grokVideoClip.js';
 import {
-  FAL_AUDIO_VIDEO_MODEL,
   FAL_AUDIO_VIDEO_MODELS,
   FAL_DEFAULT_IMAGE_VIDEO_MODEL,
   FAL_LIPSYNC_VIDEO_MODEL,
+  FAL_MUSIC_VIDEO_DEFAULT_MODEL,
   coerceFalVideoSeconds,
   describeFalVideoRate,
   estimateFalVideoCostUsd,
@@ -159,27 +160,27 @@ export const SOURCE_AUDIO_LIPSYNC = Object.freeze({
   local: localAudioLane('lipsync'),
 });
 
-/**
- * Default output resolution of a music-driven take (OmniHuman's own default).
- * LTX audio-to-video is deliberately not a fal lane: PortOS runs LTX-2.3 /
- * LTX-2.5 locally, where Make › Supplied song audio conditions a cutaway on
- * its own song slice (submitJob.js `_suppliedAudio`).
- */
-const MUSIC_VIDEO_MUSIC_DEFAULT_RESOLUTION = '1080p';
-
+// A music-driven take renders at its model's own default resolution.
+// LTX audio-to-video is deliberately not a fal lane: PortOS runs LTX-2.3 /
+// LTX-2.5 locally, where Make › Supplied song audio conditions a cutaway on
+// its own song slice (submitJob.js `_suppliedAudio`).
 const musicCapability = (model) => {
-  const resolutions = falVideoResolutions(model);
-  const defaultResolution = resolutions.includes(MUSIC_VIDEO_MUSIC_DEFAULT_RESOLUTION) ? MUSIC_VIDEO_MUSIC_DEFAULT_RESOLUTION : model.resolution.default;
+  const audio = model.audioInput || model.referenceAudio;
+  // A reference model bills and renders whole seconds from its shortest clip
+  // up: the song window starts at that length (less the planning margin, so a
+  // padded window lands exactly on it) and never outruns the longest clip.
+  const clip = model.duration.kind === 'range' ? model.duration : null;
+  const defaultResolution = model.resolution.default;
   return Object.freeze({
     provider: 'fal',
     style: 'music',
     label: `fal.ai ${model.label}`,
     modelId: model.id,
-    minAudioSec: model.audioInput.minSec,
+    minAudioSec: clip ? Math.max(audio.minSec, clip.min - PERFORMANCE_WINDOW_MARGIN_SEC) : audio.minSec,
     // The same one-phrase per-take ceiling as lip-sync (see above).
-    maxAudioSec: Math.min(model.audioInput.maxSec, 30),
+    maxAudioSec: Math.min(audio.maxSec, clip ? clip.max : Infinity, 30),
     transcription: false,
-    resolutions: Object.freeze(resolutions),
+    resolutions: Object.freeze(falVideoResolutions(model)),
     defaultResolution,
     costLabel: `${describeFalVideoRate(model.id, defaultResolution)} — billed to your fal.ai account`,
   });
@@ -188,7 +189,7 @@ const musicCapability = (model) => {
 /**
  * Verified music-driven lanes, keyed by backend then model id. The project's
  * `videoSettings.falMusicModelId` picks one; absent (or a model this install
- * does not curate) = `FAL_AUDIO_VIDEO_MODEL` (OmniHuman v1.5).
+ * does not curate) = `FAL_MUSIC_VIDEO_DEFAULT_MODEL` (MiniMax H3 Max reference).
  */
 const LOCAL_MUSIC_LANE = localAudioLane('music');
 
@@ -207,7 +208,7 @@ export function performanceCapability(backend, { scene = null, videoSettings = n
   if (backend === 'local') return LOCAL_MUSIC_LANE;
   const lanes = SOURCE_AUDIO_MUSIC[backend];
   const pinned = videoSettings?.falMusicModelId;
-  return (pinned && Object.prototype.hasOwnProperty.call(lanes, pinned) ? lanes[pinned] : null) || lanes[FAL_AUDIO_VIDEO_MODEL];
+  return (pinned && Object.prototype.hasOwnProperty.call(lanes, pinned) ? lanes[pinned] : null) || lanes[FAL_MUSIC_VIDEO_DEFAULT_MODEL];
 }
 
 /**
@@ -541,6 +542,7 @@ export function falSceneTake({ scene, videoSettings = {}, songDurationSec = null
     const seconds = plan.ok ? plan.windowSec : null;
     return {
       performance: true,
+      music: capability.style === 'music',
       modelId: capability.modelId,
       seconds,
       resolution,
@@ -563,13 +565,14 @@ export function falSceneTake({ scene, videoSettings = {}, songDurationSec = null
 }
 
 /**
- * A `falSceneTake` as `/api/video-gen` fields. A performance take sends only
- * its lip-sync resolution — its length follows the song slice the server cuts;
- * a cutaway names its model, length and resolution. Unknown values stay absent
- * so the server resolves its own defaults (an uncurated model's legacy body).
+ * A `falSceneTake` as `/api/video-gen` fields. A performance take sends its
+ * resolution (and a music-driven take its model, which a shot card can pick) —
+ * its length follows the song slice the server cuts; a cutaway names its
+ * model, length and resolution. Unknown values stay absent so the server
+ * resolves its own defaults (an uncurated model's legacy body).
  */
 export const falTakeRequestFields = (take) => (take.performance
-  ? (take.resolution ? { falResolution: take.resolution } : {})
+  ? { ...(take.music ? { falModelId: take.modelId } : {}), ...(take.resolution ? { falResolution: take.resolution } : {}) }
   : {
     falModelId: take.modelId,
     ...(take.seconds != null ? { falDuration: take.seconds } : {}),

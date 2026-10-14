@@ -143,21 +143,25 @@ describe('music-driven performance takes', () => {
   // The drummer case: a 3.735s shot of the song whose motion the audio drives.
   const drummer = { shotMode: 'performance', performanceStyle: 'music', startSec: 212.718, endSec: 216.453 };
 
-  it('render on the audio-to-video model for the shot itself, without lip-sync\'s 5s padding', () => {
+  it('render on H3 Max reference by default, the song window padded to exactly its shortest billed clip', () => {
     const take = falSceneTake({ scene: drummer, videoSettings: {}, songDurationSec: 240 });
-    expect(take).toMatchObject({ performance: true, modelId: 'fal-ai/bytedance/omnihuman/v1.5', seconds: 3.735, resolution: '1080p', costUsd: 0.5976 });
-    expect(falTakeRequestFields(take)).toEqual({ falResolution: '1080p' });
-    // The same shot as lip-sync pads to the route's 5s minimum.
+    expect(take).toMatchObject({ performance: true, music: true, modelId: 'minimax/h3-max/reference-to-video', seconds: 5, resolution: '768P', costUsd: 0.4 });
+    // A music-driven take names its model, so a shot card can pick another.
+    expect(falTakeRequestFields(take)).toEqual({ falModelId: 'minimax/h3-max/reference-to-video', falResolution: '768P' });
+    // The same shot as lip-sync pads to the route's 5s minimum plus its margin.
     expect(falSceneTake({ scene: { ...drummer, performanceStyle: null }, songDurationSec: 240 }).seconds).toBeCloseTo(5.05, 6);
+    expect(shotSplitLimit(drummer, 'fal')).toBeCloseTo(15 - PERFORMANCE_WINDOW_MARGIN_SEC, 6);
   });
 
   it('follow the project pin (model and resolution) and fall back to the default for an uncurated pin', () => {
+    // An audio-to-video model hears the shot itself, with no padding.
     const pinned = falSceneTake({ scene: drummer, videoSettings: { falMusicModelId: 'fal-ai/bytedance/omnihuman/v1.5', falMusicResolution: '720p' }, songDurationSec: 240 });
-    expect(pinned).toMatchObject({ modelId: 'fal-ai/bytedance/omnihuman/v1.5', resolution: '720p', costUsd: 0.5976 });
+    expect(pinned).toMatchObject({ modelId: 'fal-ai/bytedance/omnihuman/v1.5', seconds: 3.735, resolution: '720p', costUsd: 0.5976 });
+    const seedance = falSceneTake({ scene: drummer, videoSettings: { falMusicModelId: 'bytedance/seedance-2.5/reference-to-video' }, songDurationSec: 240 });
+    expect(seedance).toMatchObject({ seconds: 4, resolution: '720p', costUsd: 1.892 });
     // A pin this install no longer curates (fal LTX-2.3, removed) falls back to the default.
     expect(falSceneTake({ scene: drummer, videoSettings: { falMusicModelId: 'fal-ai/ltx-2.3-22b/audio-to-video' }, songDurationSec: 240 }).modelId)
-      .toBe('fal-ai/bytedance/omnihuman/v1.5');
-    expect(shotSplitLimit(drummer, 'fal')).toBeCloseTo(30 - PERFORMANCE_WINDOW_MARGIN_SEC, 6);
+      .toBe('minimax/h3-max/reference-to-video');
   });
 });
 

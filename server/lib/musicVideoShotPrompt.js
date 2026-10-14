@@ -15,6 +15,7 @@ import { musicVideoCreativeContext, musicVideoDirectorLook } from './musicVideoC
 import { shotCameraPrompt } from './cameraMovements.js';
 import { shotActionPrompt } from './musicVideoActionContract.js';
 import { approximateMotionCues } from './musicVideoShotTiming.js';
+import { falHearsAudioReference, getFalVideoModel } from './falVideoModels.js';
 
 /**
  * The project-wide visual direction: palette and camera rules from the visual
@@ -38,16 +39,30 @@ const addition = (id, label, text) => {
 };
 
 /**
+ * What a reference model is told about the song slice it hears (and, where its
+ * start frame is only a reference, that frame), in the names its prompt uses
+ * for them; '' for a model that hears no audio reference.
+ */
+function audioReferencePrompt(modelId) {
+  const model = getFalVideoModel(modelId);
+  if (!falHearsAudioReference(model)) return '';
+  const frame = model.image ? '' : `${model.referenceImages?.promptName || 'Image 1'} is the opening frame. `;
+  return `${frame}${model.referenceAudio.promptName || 'Audio 1'} is the song playing under this shot: time the movement to its beat.`;
+}
+
+/**
  * `{ prompt, promptAdditions }` for one clip. `authored` is the director's text
  * (the shot card's box, or the scene's saved prompt). `asTyped` is the shot
  * card's Render, which adds no project look or treatment direction. `hears` is
  * whether the take hears song audio (lip-sync, supplied song audio or an
  * audio-reactive LoRA); `offsetSec` re-times the shot actions to a performance
  * take's padded song slice; `fixes` is an autonomous run's repair note.
+ * `audioReferenceModelId` is the fal model of a music-driven take that hears
+ * the song slice as a reference, which its prompt then names.
  */
 export function musicVideoShotModelInput(project, scene, {
   authored = authoredShotPrompt(scene), asTyped = false, hears = false, backend = null,
-  audioReactive = false, offsetSec = 0, fixes = '',
+  audioReactive = false, offsetSec = 0, fixes = '', audioReferenceModelId = null,
 } = {}) {
   const text = typeof authored === 'string' ? authored.trim() : '';
   const look = !asTyped && hears ? [
@@ -66,6 +81,7 @@ export function musicVideoShotModelInput(project, scene, {
   const tail = audioReactive
     ? [addition('audio-reactive-guard', 'Audio-reactive guard', AUDIO_REACTIVE_PERFORMANCE_GUARD)]
     : [
+      addition('audio-reference', 'Song audio reference', audioReferenceModelId ? audioReferencePrompt(audioReferenceModelId) : ''),
       addition('phrase-timing', 'Phrase timing (approximate)', backend === 'grok' ? approximateMotionCues(project?.phrases, scene?.startSec, scene?.endSec) : ''),
       addition('repair-notes', 'Repair notes', fixes ? `Fix these problems from the previous take while preserving the shot intent: ${fixes}` : ''),
     ];
