@@ -52,7 +52,7 @@ import { EFFORT_LEVELS } from './providerModels.js';
 import { shotActionContractProblem } from './musicVideoActionContract.js';
 import { NARRATIVE_EVENT_KINDS } from './musicVideoNarrativeEvents.js';
 import { MUSIC_VIDEO_MEDIA } from './musicVideoMediumPlan.js';
-import { MUSIC_VIDEO_FRAME_FITS, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_STILL_MOVES, MUSIC_VIDEO_TEXT_ZONES, MUSIC_VIDEO_VISUAL_LAYERS } from './musicVideoLayers.js';
+import { CLIP_OFFSET_FRAMES_RANGE, CLIP_SPEED_FPS_RANGE, MUSIC_VIDEO_FRAME_FITS, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_STILL_MOVES, MUSIC_VIDEO_TEXT_ZONES, MUSIC_VIDEO_VISUAL_LAYERS } from './musicVideoLayers.js';
 import { MUSIC_VIDEO_SHOT_GLITCH_LIMIT, MUSIC_VIDEO_TRANSITIONS } from './musicVideoTransitions.js';
 import { BEAT_TOGGLE_OVERLAP, BEAT_TOGGLE_RATES, MUSIC_VIDEO_CUT_EFFECTS } from './musicVideoCutEffects.js';
 import { IMAGE_EFFECT_SEC_RANGE, MUSIC_VIDEO_IMAGE_EFFECTS } from './musicVideoImageEffects.js';
@@ -607,6 +607,9 @@ const sceneLayerFields = {
   stillMove: z.enum(MUSIC_VIDEO_STILL_MOVES).optional(),
   // How a clip of another shape fills the video's frame (musicVideoLayers.js).
   frameFit: z.enum(MUSIC_VIDEO_FRAME_FITS).optional(),
+  // A footage clip played faster or slower by whole frames a second, and slid against the song by whole frames; null clears it.
+  speedFps: z.number().int().min(CLIP_SPEED_FPS_RANGE.min).max(CLIP_SPEED_FPS_RANGE.max).nullable().optional(),
+  offsetFrames: z.number().int().min(CLIP_OFFSET_FRAMES_RANGE.min).max(CLIP_OFFSET_FRAMES_RANGE.max).nullable().optional(),
   // A VHS glitch over the cut into / out of this shot (musicVideoTransitions.js); null clears it.
   transitionIn: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),
   transitionOut: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),
@@ -1558,6 +1561,11 @@ export const musicVideoSceneSplitSchema = z.object({
   backend: z.enum(['local', 'grok', 'fal']).nullable().optional(),
   // Split the shot in two at this song time instead of by the backend's longest take.
   atSec: z.number().finite().nonnegative().optional(),
+}).strict();
+
+// Move where a shot starts; the shot before it ends there too, so the cut moves and nothing gaps or overlaps.
+export const musicVideoSceneStartSchema = z.object({
+  startSec: z.number().finite().nonnegative(),
 }).strict();
 
 // Autonomous shot planner (#1855): propose a scene per analyzed audio section.

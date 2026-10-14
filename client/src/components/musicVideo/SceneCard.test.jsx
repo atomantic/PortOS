@@ -583,6 +583,51 @@ describe('a still picture in the clip column', () => {
   });
 });
 
+describe('clip speed and offset by hand', () => {
+  function Harness({ initial, onSave }) {
+    const [scene, setScene] = useState(initial);
+    return <SceneCard scene={scene} index={0} expanded onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
+  }
+
+  // Uniquely catches the steppers saving something other than whole fps/frames, a zero not clearing,
+  // or the inline clip ignoring the speed it will render at.
+  it('steps speed in fps and offset in frames, saves them as shot settings, and plays the clip at that speed', () => {
+    const onSave = vi.fn();
+    const { container } = render(<Harness initial={{ sceneId: 's1', prompt: 'she dances', videoHistoryId: 'clip-1', startSec: 0, endSec: 4, takes: [] }} onSave={onSave} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Play the clip one fps faster' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Play the clip one fps faster' }));
+    expect(onSave).toHaveBeenLastCalledWith('s1', { speedFps: 2 });
+    expect(screen.getByText('26 fps (1.08×)')).toBeTruthy();
+    expect(container.querySelector('video').playbackRate).toBeCloseTo(26 / 24);
+    fireEvent.click(screen.getByRole('button', { name: 'Start the clip one frame later' }));
+    expect(onSave).toHaveBeenLastCalledWith('s1', { offsetFrames: -1 });
+    expect(screen.getByText('clip starts 1 frame later')).toBeTruthy();
+    const offset = screen.getByLabelText('Offset');
+    fireEvent.change(offset, { target: { value: '0' } });
+    fireEvent.blur(offset);
+    expect(onSave).toHaveBeenLastCalledWith('s1', { offsetFrames: null });
+    expect(screen.getByText('on the cut')).toBeTruthy();
+    // An emptied field is no change, not zero: the speed stays at +2.
+    const speed = screen.getByLabelText('Speed');
+    const saves = onSave.mock.calls.length;
+    fireEvent.change(speed, { target: { value: '' } });
+    fireEvent.blur(speed);
+    expect(onSave).toHaveBeenCalledTimes(saves);
+    expect(speed.value).toBe('2');
+  });
+
+  it('is off while the video is locked', async () => {
+    const { ShotLockContext } = await import('./ShotLock.jsx');
+    render(
+      <ShotLockContext.Provider value={{ locks: { s1: 'locked' }, clips: { s1: 'locked' }, toggle: () => {}, busy: false }}>
+        <SceneCard scene={{ sceneId: 's1', videoHistoryId: 'clip-1', startSec: 0, endSec: 4, speedFps: 2, takes: [] }} index={0} expanded onEditLocal={() => {}} onSave={() => {}} />
+      </ShotLockContext.Provider>,
+    );
+    expect(screen.getByRole('button', { name: 'Play the clip one fps faster' }).disabled).toBe(true);
+    expect(screen.getByLabelText('Speed').value).toBe('2');
+  });
+});
+
 // Uniquely catches the beat toggle control saving the wrong shape or losing its settings when switched off.
 describe('Beat toggle into the next shot', () => {
   it('switches on with defaults, changes its settings and keeps them when switched off', () => {

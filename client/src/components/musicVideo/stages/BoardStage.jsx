@@ -213,6 +213,7 @@ export default function BoardStage({ board }) {
               onDelete={board.onDeleteScene}
               onSplit={board.onSplitScene}
               onMergeNext={board.onMergeNextScene}
+              onMoveStart={board.onMoveSceneStart}
               nextEndSec={scenes[idx + 1]?.endSec ?? null}
               onRepairPerformance={['code', 'document'].includes(project.composition?.mode) ? null : board.onRepairPerformance}
               repairBusy={board.repairBusy || videoSettings.saving}

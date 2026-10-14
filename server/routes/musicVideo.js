@@ -28,6 +28,7 @@ import {
   musicVideoSceneUpdateSchema,
   musicVideoSceneReorderSchema,
   musicVideoSceneSplitSchema,
+  musicVideoSceneStartSchema,
   musicVideoPlanRequestSchema,
   musicVideoManualAnalysisSchema,
   musicVideoTranscribeMidiRequestSchema,
@@ -111,6 +112,7 @@ import {
   reorderProjectScenes,
   splitProjectScene,
   mergeProjectNextScene,
+  moveProjectSceneStart,
   setProjectMidiTranscription,
   appendSceneTakes,
   appendTakesAcrossScenes,
@@ -1501,6 +1503,12 @@ router.post('/:id/scenes/:sceneId/split', asyncHandler(async (req, res) => {
 router.post('/:id/scenes/:sceneId/merge-next', asyncHandler(async (req, res) => {
   const { backend } = validateRequest(musicVideoSceneSplitSchema, req.body ?? {});
   res.json(await mergeProjectNextScene(req.params.id, req.params.sceneId, { backend }));
+}));
+
+// Move a shot's start; the shot before it ends at the same time, so the cut between them moves.
+router.post('/:id/scenes/:sceneId/start', asyncHandler(async (req, res) => {
+  const { startSec } = validateRequest(musicVideoSceneStartSchema, req.body ?? {});
+  res.json(await moveProjectSceneStart(req.params.id, req.params.sceneId, { startSec }));
 }));
 
 // --- Scene takes (#8965) ---

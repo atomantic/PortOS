@@ -461,3 +461,26 @@ describe('video lock transactions', () => {
     expect((await projects.reviewSceneTake(p.id, scene.sceneId, appended[0].takeId, { status: 'rejected' })).videoHistoryId).toBeNull();
   });
 });
+
+describe('moving the cut before a shot', () => {
+  // Uniquely catches a start move that leaves a gap or overlap with the shot before, or retimes a locked video.
+  it('starts the shot at the new time and ends the shot before it there, unless either video is locked', async () => {
+    const { setShotLocks } = await import('./productionReview.js');
+    const p = await projects.createProject({ name: 'Move a cut' });
+    const { scenes: [a, b] } = await projects.addProjectScenes(p.id, [
+      { startSec: 0, endSec: 2, prompt: 'First' },
+      { startSec: 2, endSec: 4, prompt: 'Second' },
+    ]);
+    const later = await projects.moveProjectSceneStart(p.id, b.sceneId, { startSec: 2.5 });
+    expect([later.previous.endSec, later.scene.startSec, later.scene.endSec]).toEqual([2.5, 2.5, 4]);
+    const earlier = await projects.moveProjectSceneStart(p.id, b.sceneId, { startSec: 1.25 });
+    expect(earlier.project.scenes.map((scene) => [scene.startSec, scene.endSec])).toEqual([[0, 1.25], [1.25, 4]]);
+    await expect(projects.moveProjectSceneStart(p.id, b.sceneId, { startSec: 4 })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+    await expect(projects.moveProjectSceneStart(p.id, b.sceneId, { startSec: 0 })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+    await projects.updateScene(p.id, a.sceneId, { videoHistoryId: 'clip-a' });
+    await projects.mutateProjectRecord(p.id, (current) => ({ project: setShotLocks(setShotLocks(current, { sceneIds: [a.sceneId], locked: true, stage: 'still' }),
+      { sceneIds: [a.sceneId], locked: true, stage: 'video' }) }));
+    await expect(projects.moveProjectSceneStart(p.id, b.sceneId, { startSec: 1.5 })).rejects.toMatchObject({ code: 'MUSIC_VIDEO_SHOT_LOCKED' });
+    expect((await projects.getProject(p.id)).scenes.map((scene) => [scene.startSec, scene.endSec])).toEqual([[0, 1.25], [1.25, 4]]);
+  });
+});

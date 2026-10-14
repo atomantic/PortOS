@@ -63,7 +63,7 @@ function performanceBlocked(scene, { lipSyncBackend, songDurationSec, videoSetti
 /**
  * The attention codes for one scene, in display order (empty = nothing to do).
  * ctx: `layered`, `footageOptional` (a mode whose shots need no clip),
- * `lipSyncBackend`, `songDurationSec`, `clipSec` (the measured clip length —
+ * `lipSyncBackend`, `songDurationSec`, `clipSec` (the measured clip length as it plays, with any hand-set speed and offset —
  * only a mounted card knows it, so board-level counts omit `under-covered`),
  * and `failed: { frame: {sceneId: true}, video: {sceneId: true} }` for renders
  * that failed this session, and `songReview` (the project's revised-song

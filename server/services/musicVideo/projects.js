@@ -312,6 +312,33 @@ export async function mergeProjectNextScene(id, sceneId, options = {}) {
   });
 }
 
+/**
+ * Move the cut before a shot: the shot starts at `startSec` and the shot
+ * before it ends there, so the two stay joined. Either shot's locked video
+ * refuses the move. Returns `{ project, scene, previous }`.
+ */
+export async function moveProjectSceneStart(id, sceneId, { startSec }) {
+  const [{ applySceneUpdate }, { assertClipUnlocked, keepDirectorStillLock }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
+  return mutateProjectRecord(id, (current) => {
+    const scenes = current.scenes || [];
+    const index = scenes.findIndex((scene) => scene.sceneId === sceneId);
+    if (index < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
+    const scene = scenes[index];
+    const previous = index > 0 ? scenes[index - 1] : null;
+    if (typeof scene.endSec === 'number' && startSec >= scene.endSec) {
+      throw new ServerError('A shot has to start before it ends', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    if (previous && typeof previous.startSec === 'number' && startSec <= previous.startSec) {
+      throw new ServerError('The shot before this one would have no length left', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    assertClipUnlocked(current, sceneId, { startSec });
+    if (previous) assertClipUnlocked(current, previous.sceneId, { endSec: startSec });
+    let project = keepDirectorStillLock(current, applySceneUpdate(current, sceneId, { startSec }).project, sceneId);
+    if (previous) project = keepDirectorStillLock(current, applySceneUpdate(project, previous.sceneId, { endSec: startSec }).project, previous.sceneId);
+    return { project, scene: project.scenes[index], previous: previous ? project.scenes[index - 1] : null };
+  });
+}
+
 /** Mark unused assets ★ ingredient or ✕ bad (null clears); returns the project's marks. */
 export async function markMediaPoolAssets(id, keys, mark) {
   const { markPoolAssets } = await import('./mediaPool.js');

@@ -141,6 +141,11 @@ export const mergeMusicVideoNextScene = (id, sceneId, backend, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/merge-next`, {
     method: 'POST', body: JSON.stringify(backend ? { backend } : {}), ...options,
   });
+// Move a shot's start; the shot before ends there too → { project, scene, previous }.
+export const moveMusicVideoSceneStart = (id, sceneId, startSec, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/start`, {
+    method: 'POST', body: JSON.stringify({ startSec }), ...options,
+  });
 // Optional vocal stem (#8977): a full-length vocal bounce on the master's
 // timebase that performance shots are conditioned on. Both → the project.
 export const uploadMusicVideoVocalStem = (id, file, options = {}) => {

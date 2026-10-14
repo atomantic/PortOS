@@ -16,7 +16,7 @@ import FrameStepper, { captureMediaFrame } from './FrameStepper.jsx';
 import { sceneFrameFit } from './SceneFrameFit.jsx';
 import TransitionGlitch from './TransitionGlitch.jsx';
 import ImageEffectStill from './ImageEffectStill.jsx';
-import { isLayeredComposition } from '../../lib/musicVideoLayers.js';
+import { clipOffsetSec, clipSpeedRate, isLayeredComposition } from '../../lib/musicVideoLayers.js';
 import { sceneImageEffect } from '../../lib/musicVideoImageEffects.js';
 import { sceneBeatToggles } from '../../lib/musicVideoCutEffects.js';
 
@@ -163,10 +163,22 @@ const CLIP_PAUSED_DRIFT_SEC = 0.01;
  * Where song time `t` lands in a shot's clip: the take's edit-in point (a
  * performance take trimmed to the sung window) plus the time into the shot. Past
  * the clip's end it loops (`loop`, the render's default) or holds the last frame.
+ * A hand-set speed and offset (lib/musicVideoLayers.js) play as the render plays
+ * them: the offset moves the in-point by whole frames, a negative one past the
+ * clip's start holds its first frame that long, and the speed runs the clip faster
+ * or slower, looping round the whole file as the render's looped input does.
  */
 export function clipTimeAt(scene, t, clipSec = null) {
   const inSec = selectedPerformanceInstruction(scene)?.edit?.inSec ?? 0;
   const local = Math.max(0, t - (scene.startSec || 0));
+  const rate = clipSpeedRate(scene);
+  const start = inSec + clipOffsetSec(scene);
+  if (rate !== 1 || start !== inSec) {
+    const sourceIn = Math.max(0, start);
+    const at = sourceIn + Math.max(0, local + Math.min(0, start)) * rate;
+    if (!(clipSec > 0) || at < clipSec) return at;
+    return scene.loop !== false && !(inSec > 0) ? at % clipSec : Math.max(0, clipSec - 0.05);
+  }
   if (!(clipSec > inSec)) return inSec + local;
   const span = clipSec - inSec;
   if (local < span) return inSec + local;
@@ -203,7 +215,10 @@ function ShotClip({ scene, audioRef, time, current, leadSec = 0 }) {
     const target = clipTimeAt(timing, current ? audio.currentTime || 0 : scene.startSec || 0, duration);
     const tolerance = current && audio.paused ? CLIP_PAUSED_DRIFT_SEC : CLIP_DRIFT_SEC;
     if (Math.abs((video.currentTime || 0) - target) > tolerance) video.currentTime = target;
-    if (!current || audio.paused) video.pause?.();
+    // The shot's hand-set speed; a negative offset's lead holds the first frame.
+    video.playbackRate = clipSpeedRate(scene);
+    const leading = (scene.startSec || 0) - clipOffsetSec(scene) - (selectedPerformanceInstruction(scene)?.edit?.inSec ?? 0) > (audio.currentTime || 0);
+    if (!current || audio.paused || leading) video.pause?.();
     else if (video.paused) video.play?.()?.catch?.(() => {});
   }, [scene, timing, audioRef, current]);
   // Shown once a frame is decoded where the clip should be; kept from then on, since a

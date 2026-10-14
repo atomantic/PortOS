@@ -1,6 +1,8 @@
 import PlateComparison from './PlateComparison.jsx';
 import ShotActionInspector from './ShotActionInspector.jsx';
 import SceneCameraControls from './SceneCameraControls.jsx';
+import SceneStartFrame from './SceneStartFrame.jsx';
+import SceneClipTiming from './SceneClipTiming.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { useEffect, useRef, useState } from 'react';
 import { Trash2, Activity, ArrowUp, ArrowDown, ChevronRight, Video, Maximize2, AlertTriangle, Clapperboard, Shuffle } from 'lucide-react';
@@ -14,7 +16,7 @@ import { isPerformanceScene, planPerformanceRepair } from '../../lib/musicVideoS
 import SceneTakeStrip from './SceneTakeStrip.jsx';
 import { sceneEndFramePlanFor } from './SceneEndFrame.jsx';
 import SceneFrames from './SceneFrames.jsx';
-import { MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_TEXT_ZONES, MUSIC_VIDEO_VISUAL_LAYERS, sceneHasAuthoredSpan } from '../../lib/musicVideoLayers.js';
+import { MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_TEXT_ZONES, MUSIC_VIDEO_VISUAL_LAYERS, clipOffsetSec, clipSpeedRate, sceneHasAuthoredSpan } from '../../lib/musicVideoLayers.js';
 
 // #8985: what a composed render shows for this scene's span.
 const LAYER_LABELS = { footage: 'Footage', still: 'Still image', card: 'Title card', code: 'Code-drawn' };
@@ -113,7 +115,7 @@ export default function SceneCard({
   onMove, onDelete, onEditLocal, onSave,
   project = null, onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
   onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, onPlacePoolItem, onTrimClip, projectId = null, aspect = '16:9', videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false,
-  lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, nextEndSec = null, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
+  lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, onMoveStart = null, nextEndSec = null, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
   expanded, onToggleExpand, footageOptional = false, failedScenes = null, songReview = null,
 }) {
   const detailsRef = useRef(null);
@@ -151,8 +153,13 @@ export default function SceneCard({
   const spanSec = scene.beatAligned && typeof scene.startSec === 'number' && typeof scene.endSec === 'number'
     ? scene.endSec - scene.startSec
     : null;
-  const shortBySec = !loops && spanSec != null && clipSec != null ? spanSec - clipSec : 0;
+  // The clip's playing length with its hand-set speed and offset, as the render times it.
+  const clipRate = clipSpeedRate(scene);
+  const clipLead = clipOffsetSec(scene);
+  const playedSec = clipSec != null ? Math.max(0, -clipLead) + Math.max(0, clipSec - Math.max(0, clipLead)) / clipRate : null;
+  const shortBySec = !loops && spanSec != null && playedSec != null ? spanSec - playedSec : 0;
   const underCovered = shortBySec > COVERAGE_TOLERANCE_SEC;
+  useEffect(() => { if (clipPlayerRef.current) clipPlayerRef.current.playbackRate = clipRate; }, [clipRate]);
   const applyPatch = (patch) => { onEditLocal(scene.sceneId, patch); onSave(scene.sceneId, patch); };
   const layer = MUSIC_VIDEO_VISUAL_LAYERS.includes(scene.visualLayer) ? scene.visualLayer : 'footage';
   const fieldId = (name) => `mv-scene-${scene.sceneId}-${name}`;
@@ -187,7 +194,7 @@ export default function SceneCard({
   const lockBlocked = !shotLock ? null
     : shotLock.clip === 'locked' ? 'Video locked. Unlock the video to render it again.'
       : shotLock.still !== 'locked' ? 'Lock the still first' : null;
-  const attention = sceneAttention(scene, { layered, footageOptional, lipSyncBackend, songDurationSec, clipSec, failed: failedScenes || {}, songReview, videoSettings: falVideoSettings, locked });
+  const attention = sceneAttention(scene, { layered, footageOptional, lipSyncBackend, songDurationSec, clipSec: playedSec, failed: failedScenes || {}, songReview, videoSettings: falVideoSettings, locked });
   const songChange = songReview?.[scene.sceneId];
   const generatingLane = generatingFrame && generatingVideo ? 'Frame + clip' : generatingFrame ? 'Frame' : generatingVideo ? 'Clip' : null;
   // #10154: the server-persisted failure of the last render, shown until a
@@ -241,6 +248,11 @@ export default function SceneCard({
   );
   const shotSettings = (
     <>
+        {/* Move the cut before this shot a frame at a time; the shot before ends where this one starts. */}
+        {onMoveStart && sceneHasAuthoredSpan(scene) && (
+          <SceneStartFrame id={fieldId('start-frame')} scene={scene} joinsPrevious={(scene.order ?? index) > 0} onMove={onMoveStart}
+            disabled={shotLock?.clip === 'locked'} disabledReason={shotLock?.clip === 'locked' ? 'Video locked. Unlock the video to retime it.' : null} />
+        )}
         {/* What this shot's render covers and costs, and what blocks it, stays in view. */}
         <SceneTimingPlan timing={timing} sceneId={scene.sceneId} lipSyncBackend={renderLane} onSplit={onSplit} onMergeNext={onMergeNext}
           span={sceneHasAuthoredSpan(scene) ? { startSec: scene.startSec, endSec: scene.endSec } : null} />
@@ -445,10 +457,10 @@ export default function SceneCard({
           <div role="alert" className="flex flex-wrap items-center gap-2 rounded border border-port-warning/40 bg-port-warning/10 px-2 py-1.5 text-xs text-port-warning">
             <AlertTriangle size={13} className="shrink-0" />
             <span className="min-w-0 flex-1 basis-48">
-              Shot runs {spanSec.toFixed(1)}s but its clip is {clipSec.toFixed(1)}s — the render won&apos;t repeat it.
+              Shot runs {spanSec.toFixed(1)}s but its clip is {playedSec.toFixed(1)}s — the render won&apos;t repeat it.
               Trim the shot, continue or regenerate a longer clip, or loop it on purpose.
             </span>
-            <button type="button" onClick={() => applyPatch({ endSec: Math.round((scene.startSec + clipSec) * 1000) / 1000 })}
+            <button type="button" onClick={() => applyPatch({ endSec: Math.round((scene.startSec + playedSec) * 1000) / 1000 })}
               className="rounded bg-port-bg border border-port-border px-2 py-1 min-h-[44px] sm:min-h-0 text-port-text">Trim to clip</button>
             <button type="button" onClick={() => applyPatch({ loop: true })}
               className="rounded bg-port-bg border border-port-border px-2 py-1 min-h-[44px] sm:min-h-0 text-port-text">Loop clip</button>
@@ -503,6 +515,7 @@ export default function SceneCard({
                 preload="metadata"
                 controls
                 onLoadedMetadata={(e) => {
+                  e.currentTarget.playbackRate = clipRate;
                   const sec = e.currentTarget.duration;
                   const { videoWidth: width, videoHeight: height } = e.currentTarget;
                   if (Number.isFinite(sec) && sec > 0) setClipMeta({ id: scene.videoHistoryId, sec, width, height });
@@ -530,6 +543,11 @@ export default function SceneCard({
             <VideoStartTrimControl videoRef={clipPlayerRef} sourceKey={scene.videoHistoryId}
               disabled={takeBusy || !!generatingVideo || shotLock?.clip === 'locked'}
               onTrim={(startSec) => onTrimClip(scene, startSec)} />
+          )}
+          {/* Speed and offset by hand, from the same clip file, in the player and the final render. */}
+          {scene.videoHistoryId && layer === 'footage' && (
+            <SceneClipTiming fieldId={fieldId} scene={scene} onChange={applyPatch}
+              disabled={shotLock?.clip === 'locked'} disabledReason={shotLock?.clip === 'locked' ? 'Video locked. Unlock the video to retime it.' : null} />
           )}
           {/* A clip of another shape (a 3:2 local render) zooms to fill, or keeps its ratio with covered edges. */}
           {scene.videoHistoryId && (

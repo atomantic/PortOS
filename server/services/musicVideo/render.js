@@ -41,7 +41,7 @@ import { loadHistory, mutateVideoHistory } from '../videoGen/local.js';
 import { getTrack } from '../tracks/index.js';
 import { getProject, listProjects, updateProject, mutateProjectRecord } from './projects.js';
 import { applyProjectPatch } from './projectsLogic.js';
-import { MUSIC_VIDEO_FRAME_FITS, isSelfDrawnLayer, sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { MUSIC_VIDEO_FRAME_FITS, clipOffsetSec, clipSpeedRate, isSelfDrawnLayer, sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { musicVideoAspect, musicVideoRenderCanvas } from '../../lib/musicVideoAspect.js';
 import { projectTypographyPlan } from './composition.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
@@ -284,8 +284,22 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
     // clip so the caller gets the clean MISSING_CLIPS 4xx, matching the duration guard.
     if (!measured.width || measured.width <= 0 || !measured.height || measured.height <= 0) { missing.push(scene.videoHistoryId); continue; }
     const edit = performanceEdit(scene);
-    const inSec = edit ? Math.min(edit.inSec, duration) : 0;
-    const outSec = edit ? Math.min(edit.outSec, duration) : duration;
+    let inSec = edit ? Math.min(edit.inSec, duration) : 0;
+    let outSec = edit ? Math.min(edit.outSec, duration) : duration;
+    let sourceSec = duration - inSec;
+    // A hand-set speed and offset (clipSpeedRate / clipOffsetSec) put the clip on the
+    // output timebase: sectionChain plays it at `rate` and holds its first frame for
+    // `leadSec` before the trim, so the in/out points here are output seconds.
+    const rate = clipSpeedRate(scene);
+    const start = inSec + clipOffsetSec(scene);
+    const timing = rate !== 1 || start !== inSec;
+    const leadSec = timing ? round3(Math.max(0, -start)) : 0;
+    if (timing) {
+      const sourceIn = Math.min(duration, Math.max(0, start));
+      outSec = round3(leadSec + Math.max(sourceIn, outSec) / rate);
+      inSec = round3(sourceIn / rate);
+      sourceSec = round3(leadSec + (duration - sourceIn) / rate);
+    }
     clips.push({
       sceneId: scene.sceneId,
       videoPath,
@@ -296,8 +310,10 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
       // The playable source length (from the in-point on) survives the snap
       // below (which rewrites `duration` to the rendered span) so coverage can
       // be judged against it.
-      sourceSec: duration - inSec,
+      sourceSec,
       loop: edit ? false : sceneLoops(scene),
+      ...(rate !== 1 ? { rate } : {}),
+      ...(leadSec > 0 ? { leadSec } : {}),
       inSec,
       outSec,
       ...footageFrameFit(scene),
@@ -459,7 +475,10 @@ function sectionChain(c, input, { canonW, canonH, fps, frames, frameGrid }) {
   const holdSec = c.loop === false ? (c.outSec - c.inSec) - (c.sourceSec ?? c.duration) : 0;
   const padSec = c.loop === false && frameGrid ? Math.max(0, holdSec) + 2 / fps : holdSec;
   const hold = padSec > 0 ? `tpad=stop_mode=clone:stop_duration=${round3(padSec)},` : '';
-  const timed = `fps=${fps},${hold}${trim},setpts=PTS-STARTPTS`;
+  // A hand-set speed retimes the clip and a negative offset holds its first frame, both before the trim.
+  const speed = c.rate && c.rate !== 1 ? `setpts=(PTS-STARTPTS)/${Number(c.rate.toFixed(6))},` : '';
+  const lead = c.leadSec > 0 ? `tpad=start_mode=clone:start_duration=${round3(c.leadSec)},` : '';
+  const timed = `${speed}${lead}fps=${fps},${hold}${trim},setpts=PTS-STARTPTS`;
   const cover = `scale=${canonW}:${canonH}:force_original_aspect_ratio=increase,crop=${canonW}:${canonH},setsar=1`;
   const fit = `scale=${canonW}:${canonH}:force_original_aspect_ratio=decrease,setsar=1`;
   const centered = `overlay=(W-w)/2:(H-h)/2:shortest=1`;

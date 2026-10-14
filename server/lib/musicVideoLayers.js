@@ -83,3 +83,17 @@ export function sceneRenderReady(scene, { layered = false } = {}) {
   if (!sceneHasAuthoredSpan(scene)) return false;
   return isSelfDrawnLayer(layer) || Boolean(scene.referenceImageId);
 }
+
+// A footage shot's playback timing, set by hand on its card: `speedFps` plays
+// the clip that many frames a second faster (or slower) on the 24 fps grid, and
+// `offsetFrames` slides it against the song (positive starts that many frames
+// into the clip, negative holds its first frame that long). Both are applied
+// at playback and render, never by writing another copy of the clip.
+export const CLIP_TIMING_FPS = 24;
+export const CLIP_SPEED_FPS_RANGE = Object.freeze({ min: -18, max: 48 });
+export const CLIP_OFFSET_FRAMES_RANGE = Object.freeze({ min: -240, max: 240 });
+const whole = (value, { min, max }) => (Number.isInteger(value) ? Math.min(max, Math.max(min, value)) : 0);
+/** How fast a shot's clip plays: 1 is as rendered, 26/24 is two frames a second faster. */
+export const clipSpeedRate = (scene) => (CLIP_TIMING_FPS + whole(scene?.speedFps, CLIP_SPEED_FPS_RANGE)) / CLIP_TIMING_FPS;
+/** How far a shot's clip slides against the song, in seconds: positive skips in, negative holds the first frame. */
+export const clipOffsetSec = (scene) => whole(scene?.offsetFrames, CLIP_OFFSET_FRAMES_RANGE) / CLIP_TIMING_FPS;

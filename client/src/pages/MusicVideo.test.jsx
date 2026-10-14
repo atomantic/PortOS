@@ -74,6 +74,7 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   deleteMusicVideoScene: vi.fn(),
   reorderMusicVideoScenes: vi.fn(),
   splitMusicVideoScene: vi.fn(),
+  moveMusicVideoSceneStart: vi.fn(),
   importMusicVideoLyrics: vi.fn(),
   importMusicVideoTrackLyrics: vi.fn(),
   alignMusicVideoLyrics: vi.fn(),
@@ -279,7 +280,7 @@ import MusicVideo from './MusicVideo.jsx';
 import {
   listMusicVideoProjects, listMusicVideoProjectSummaries, createMusicVideoProject, cloneMusicVideoProject, renderMusicVideoProject, planMusicVideoProject, updateMusicVideoProject,
   deleteMusicVideoProject, transcribeMusicVideoMidi, cancelMusicVideoRender, analyzeMusicVideoProject, prepareMusicVideoSong,
-  importMusicVideoLyrics, importMusicVideoTrackLyrics, separateMusicVideoVocals, alignMusicVideoLyrics, updateMusicVideoScene, splitMusicVideoScene,
+  importMusicVideoLyrics, importMusicVideoTrackLyrics, separateMusicVideoVocals, alignMusicVideoLyrics, updateMusicVideoScene, splitMusicVideoScene, moveMusicVideoSceneStart,
   selectMusicVideoSceneTake, reviewMusicVideoSceneTake, importMusicVideoHandoff,
   addMusicVideoSceneTake, getMusicVideoHandoffBundle,
   renderMusicVideoExcerpt, deleteMusicVideoExcerpt, addMusicVideoExcerptNote,
@@ -1389,6 +1390,27 @@ describe('MusicVideo project video renderer', () => {
       fireEvent.click(screen.getByRole('button', { name: /Split here/ }));
       await waitFor(() => expect(splitMusicVideoScene).toHaveBeenCalledWith('mv-2', 's1', null, expect.objectContaining({ atSec: 11.5 })));
       expect((await screen.findAllByText(/Shot · 2\/2$/, { selector: ':not(option)' })).length).toBeGreaterThan(0);
+    });
+
+    it('moves a shot start by frame number, and the shot before ends there too', async () => {
+      const first = { ...PROJECT_NO_CLIP.scenes[0], startSec: 0, endSec: 10 };
+      const second = { ...first, sceneId: 's2', order: 1, startSec: 10, endSec: 14, label: 'Second' };
+      const moved = [{ ...first, endSec: 10.042 }, { ...second, startSec: 10.042 }];
+      moveMusicVideoSceneStart.mockResolvedValue({ project: { ...PROJECT_NO_CLIP, scenes: moved }, scene: moved[1], previous: moved[0] });
+      await openProject({ ...PROJECT_NO_CLIP, scenes: [first, second] }, 'produce');
+
+      await act(async () => fireEvent.click(await screen.findByRole('button', { name: /^Open Shot 2/ })));
+      const input = screen.getByLabelText('Start frame');
+      expect(input.value).toBe('240');
+      const row = input.closest('div');
+      expect(within(row).getByTestId('start-frame-time').textContent).toMatch(/^0:10\.00 · 24 fps · the shot before ends here/);
+      fireEvent.click(within(row).getByRole('button', { name: 'Start one frame later' }));
+      await waitFor(() => expect(moveMusicVideoSceneStart).toHaveBeenCalledWith('mv-2', 's2', 10.042, expect.objectContaining({ silent: true })));
+      await waitFor(() => expect(screen.getByLabelText('Start frame').value).toBe('241'));
+      // A typed frame moves it there.
+      fireEvent.change(screen.getByLabelText('Start frame'), { target: { value: '228' } });
+      fireEvent.blur(screen.getByLabelText('Start frame'));
+      await waitFor(() => expect(moveMusicVideoSceneStart).toHaveBeenLastCalledWith('mv-2', 's2', 9.5, expect.anything()));
     });
 
     it('requests the Grok clip that covers a cutaway and adds approximate motion timing', async () => {
