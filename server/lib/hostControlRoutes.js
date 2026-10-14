@@ -817,6 +817,16 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // destination, so require operator authority before persisting the URL.
   'POST /api/jira/instances',
 
+  // Jira writes act on the external tracker with the operator's saved account.
+  // Gate before dispatch, including create's epic-link retry and sprint move.
+  // Reads and local report generation retain their existing access policy.
+  'POST /api/jira/instances/:id/tickets',
+  'PUT /api/jira/instances/:instanceId/tickets/:ticketId',
+  'POST /api/jira/instances/:instanceId/tickets/:ticketId/labels',
+  'POST /api/jira/instances/:instanceId/tickets/:ticketId/comments',
+  'POST /api/jira/instances/:instanceId/tickets/:ticketId/transition',
+  'POST /api/jira/instances/:instanceId/sprints/:sprintId/issues',
+
   // Datadog instance updates can retain both saved keys while changing their
   // destination, so require operator authority before persisting the hostname.
   'POST /api/datadog/instances',
