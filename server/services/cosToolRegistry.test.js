@@ -146,6 +146,14 @@ describe('cosToolRegistry', () => {
     const result = await executeCosToolCall({ call, authority: { scope: 'mind', capabilities: { manageEidoverse: true, installEidoverseControllers: true } } });
     expect(result.result).toMatchObject({ outcome: 'applied', install: { state: { revision: 3, revealed: true } }, delivery: { status: 'refused' } });
     expect(mocks.interactRiddle).toHaveBeenCalledWith(call.arguments, expect.any(Object));
+    const catalog = getCosToolCatalog({ scope: 'mind', capabilities: { manageEidoverse: true, installEidoverseControllers: true } });
+    for (const format of ['openai', 'anthropic']) {
+      const exported = formatCosToolCatalog(catalog, format).tools.find((tool) => (tool.function?.name || tool.name) === 'eidoverse_riddle');
+      const parameters = exported.function?.parameters || exported.input_schema;
+      expect(parameters).toMatchObject({ type: 'object', required: ['id', 'expectedRevision', 'action'], additionalProperties: false });
+      expect(parameters).not.toHaveProperty('oneOf');
+      expect(parameters.properties.action.enum).toEqual(['offer', 'guess', 'reveal']);
+    }
   });
   it('delivers bounded stopped-task reasons under the observation grant without enabling reports', async () => {
     const tasks = Array.from({ length: 2 }, (_, index) => ({ id: `invented-task-${index}`,

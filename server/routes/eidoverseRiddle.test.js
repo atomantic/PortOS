@@ -86,6 +86,8 @@ describe('explicit Eidoverse riddle round', () => {
     expect((await act({ ...offer, answer: '' })).status).toBe(400);
     expect((await act({ ...offer, clue: 'x'.repeat(201) })).status).toBe(400);
     expect((await act({ ...offer, action: 'interpret' })).status).toBe(400);
+    expect((await act({ action: 'offer', expectedRevision: 0, clue: 'Synthetic clue' })).status).toBe(400);
+    expect((await act({ action: 'reveal', expectedRevision: 0, answer: 'triangle' })).status).toBe(400);
     await act(offer);
     expect((await act(offer)).body.outcome).toBe('refused');
     expect((await act({ ...offer, expectedRevision: 1 })).body.outcome).toBe('refused');
