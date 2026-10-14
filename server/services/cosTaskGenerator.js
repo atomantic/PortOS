@@ -1323,7 +1323,10 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, {
     const nextTypeResult = cronTasks.length === 0
       ? await getNextTaskType(app.id, {
         perpetualOnly: onCooldown, continuingTaskType, dueTasks
-      }).catch(() => null)
+      }).catch(err => {
+        emitLog('error', `Failed to select next improvement task type for ${app.name}: ${err.message}`, { appId: app.id });
+        return null;
+      })
       : null;
     const nextTypes = cronTasks.length > 0
       ? cronTasks.map(task => task.taskType)
