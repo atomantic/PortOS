@@ -576,6 +576,7 @@ export * from './providerServiceMerge.js';
 export * from './providerModelAliases.js';
 export * from './providerModePairing.js';
 export * from './providerPresets.js';
+export * from './providerFallbackChainCache.js';
 export * from './providerRef.js';
 export * from './providerRouteRecipes.js';
 export * from './serviceDefinitions.js';

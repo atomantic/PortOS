@@ -837,6 +837,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/standardize` | App PM2 standardizer |
 | `/api/stacker-news`, `/api/x` | Social integrations |
 | `/api/model-personality` | LLM personality tests |
+| `/api/provider-fallbacks` | GET/PUT the single ordered provider fallback list `{ entries: [{ providerId, model?, effort? }] }` (Models > Fallbacks); the step after the failed one runs next, wrapping to the first |
 | `/api/providers/comparison` | Selectable model inventory, sourced PortOS composite, and public evidence; POST `/import` merges researched observations (see [MODEL-COMPARISON.md](./MODEL-COMPARISON.md)) |
 | `/api/models/performance/task-benchmark` | Machine-local PortOS task benchmark history and configured-provider inventory; `POST /discover` and `POST /run` perform explicit user-requested actions |
 | `/api/browser` | Managed Chromium |

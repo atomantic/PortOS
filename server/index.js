@@ -1,4 +1,5 @@
 import maintenanceRoutes from './routes/maintenance.js';
+import providerFallbackRoutes from './routes/providerFallbacks.js';
 import './services/databaseBootFence.js';
 import express from 'express';
 import { Server } from 'socket.io';
@@ -324,6 +325,7 @@ app.use('/api/detect', detectRoutes);
 app.use('/api/scaffold', scaffoldRoutes);
 
 // AI Toolkit routes with PortOS extensions
+app.use('/api/provider-fallbacks', providerFallbackRoutes);
 app.use('/api/providers/comparison', createModelComparisonRoutes());
 app.use('/api/models/performance/task-benchmark', createModelPerformanceBenchmarkRoutes(aiToolkit.services.providers));
 app.use('/api/providers', createPortOSProviderRoutes(aiToolkit));

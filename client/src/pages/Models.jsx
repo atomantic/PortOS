@@ -61,6 +61,7 @@ const TAB_CONTENT = {
   'code-reviewers': CodeReviewersTab,
   'decision-classifiers': lazyWithReload(() => import('../components/models/DecisionClassifiers')),
   embeddings: EmbeddingsTab,
+  fallbacks: lazyWithReload(() => import('../components/models/ProviderFallbacks')),
   llms: LocalLlmTab,
   'llms-runtimes': LocalLlmRuntimesView,
   loras: Loras,

@@ -165,7 +165,7 @@ describe('nav contract — generated section child navigation', () => {
 
   it('keeps Models groups and destinations in the design order', () => {
     expect(getSectionNavGroups('Models').map(({ label, tabs }) => [label, tabs.map((tab) => tab.label)])).toEqual([
-      ['Connect', ['AI Services', 'Harnesses', 'Providers', 'Runtimes']],
+      ['Connect', ['AI Services', 'Fallbacks', 'Harnesses', 'Providers', 'Runtimes']],
       ['Evaluate', ['Comparison', 'Performance', 'Playground']],
       ['Library', ['3D', 'Embeddings', 'LoRAs', 'Media', 'Model Library', 'Training']],
       ['Operate', ['Quota Burn', 'Status', 'Subscriptions', 'Usage']],

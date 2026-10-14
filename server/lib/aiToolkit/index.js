@@ -65,6 +65,8 @@ export function createAIToolkit(config = {}) {
     // Host gate for "can this provider run at all?" — see providerStatus.js.
     // Unset standalone, so the toolkit routes on enabled + availability alone.
     prerequisitesMet = null,
+    // Host ordered fallback list — see providerStatus.js. Unset standalone.
+    getFallbackChain = null,
     // Host persistence hook fired after every providers.json write — see
     // createProviderService(). PortOS keeps its provider connection graph
     // reconciled through it; unset standalone.
@@ -93,6 +95,7 @@ export function createAIToolkit(config = {}) {
       statusFile,
       defaultFallbackPriority,
       prerequisitesMet,
+      getFallbackChain,
       onStatusChange: (eventData) => {
         io?.emit('provider:status:changed', eventData);
       }
