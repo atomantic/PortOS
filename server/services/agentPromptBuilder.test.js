@@ -18,6 +18,7 @@ import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vites
 import { join } from 'path';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
+import { execFileSync, spawnSync } from 'child_process';
 import { PATHS } from '../lib/fileUtils.js';
 
 // #3475 — The builder reads ~/.claude/CLAUDE.md off the real filesystem and splices
@@ -1193,6 +1194,45 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/## Branch\n\s+<branch name>/);
     });
 
+    describe('publication refspecs under a real shell (#11443)', () => {
+      // Pulls the emitted fetch refspec and force-with-lease argument out of the
+      // prompt, then expands them in a shell with no remote: only printf runs.
+      const buildPublishPrompt = () => buildLightContextPrompt(
+        makeTask({ metadata: { simplify: true, openPR: true, reviewLoop: true, reviewers: ['codex', 'copilot'] } }),
+        '/r',
+        { branchName: 'claim/issue-1', worktreePath: '/tmp/wt', baseBranch: 'main' },
+        {
+          isTui: true,
+          providerId: 'opencode-ollama-tui',
+          providerCommand: 'opencode',
+          localAgentLoopBody: 'RECIPE: codex --sandbox read-only review --base <base>',
+        });
+      const expandUnderShell = (shell, prompt) => {
+        const fetchLine = prompt.split('\n').find((l) => l.includes('git fetch "$PUBLISH_REMOTE"'));
+        const leaseLine = prompt.split('\n').find((l) => l.includes('--force-with-lease="refs/heads/'));
+        expect(fetchLine).toBeDefined();
+        expect(leaseLine).toBeDefined();
+        const refspec = fetchLine.match(/"(\+refs\/heads\/[^"]+)"/)[1];
+        const lease = leaseLine.match(/--force-with-lease="([^"]+)"/)[1];
+        const script = `BRANCH=cos/example; PUBLISH_REMOTE=origin; REMOTE_BRANCH_SHA=0123abc; printf '%s\\n' "${refspec}" "${lease}"`;
+        const args = shell === 'zsh' ? ['-f', '-c', script] : ['--noprofile', '--norc', '-c', script];
+        return execFileSync(shell, args, { encoding: 'utf8' }).split('\n');
+      };
+      const expected = [
+        '+refs/heads/cos/example:refs/remotes/origin/cos/example',
+        'refs/heads/cos/example:0123abc',
+      ];
+      const hasZsh = spawnSync('zsh', ['-f', '-c', 'exit 0']).status === 0;
+
+      it('expands the emitted refspecs to the branch names under bash', () => {
+        expect(expandUnderShell('bash', buildPublishPrompt())).toEqual([...expected, '']);
+      });
+
+      it.runIf(hasZsh)('expands the emitted refspecs identically under zsh (a bare $BRANCH: is a zsh modifier)', () => {
+        expect(expandUnderShell('zsh', buildPublishPrompt())).toEqual([...expected, '']);
+      });
+    });
+
     it('runs slashdo-free local reviewers before GitHub PR creation, then keeps PR-side review after it', () => {
       // OpenCode TUI doesn't load Claude Code slash commands, so /do:pr / /do:push
       // would be uninvokable — but it runs `git`/`gh` and the reviewer CLIs fine,
@@ -1224,11 +1264,11 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toContain('publish_reviewed_branch -u "$PUSH_REMOTE" "$BRANCH"');
       expect(prompt).toContain('git config --get "branch.${BRANCH}.pushRemote"');
       expect(prompt).toContain('git config --get remote.pushDefault');
-      expect(prompt).toContain('git fetch "$PUBLISH_REMOTE" "+refs/heads/$BRANCH:refs/remotes/$PUBLISH_REMOTE/$BRANCH"');
+      expect(prompt).toContain('git fetch "$PUBLISH_REMOTE" "+refs/heads/${BRANCH}:refs/remotes/${PUBLISH_REMOTE}/${BRANCH}"');
       expect(prompt).toContain('PUBLISH_REMOTE="$PUSH_REMOTE"');
       expect(prompt).toContain('git merge-base --is-ancestor "$REMOTE_BRANCH_SHA" HEAD');
       expect(prompt).toContain('publish_reviewed_branch -u "$PUBLISH_REMOTE" "HEAD:refs/heads/$BRANCH"');
-      expect(prompt).toContain('publish_reviewed_branch --force-with-lease="refs/heads/$BRANCH:$REMOTE_BRANCH_SHA" -u "$PUBLISH_REMOTE" "HEAD:refs/heads/$BRANCH"');
+      expect(prompt).toContain('publish_reviewed_branch --force-with-lease="refs/heads/${BRANCH}:${REMOTE_BRANCH_SHA}" -u "$PUBLISH_REMOTE" "HEAD:refs/heads/$BRANCH"');
       expect(prompt).toContain('PUBLISH_ERROR="publish failed; refusing PR/MR"');
       expect(prompt).toContain('publish_reviewed_branch() { git push "$@" || { echo "$PUBLISH_ERROR" >&2; exit 1; }; }');
       expect(prompt).toContain('PUSH_OWNER=$(gh repo view "$(git remote get-url --push "$PUSH_REMOTE"');
