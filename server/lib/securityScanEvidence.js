@@ -11,9 +11,10 @@ export const securityScanEvidenceSchema = z.object({
   model: z.string().regex(/^[a-zA-Z0-9_.:-]{1,100}$/).nullable(),
   effort: z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']).nullable(),
   auth: z.enum(['chatgpt', 'api-key', 'unknown']),
-  maxCostUsd: nullableCost,
+  maxCostUsd: z.union([nullableCost, z.literal('unlimited')]),
   estimatedCostUsd: nullableCost,
-  timeLimitSeconds: z.number().int().nonnegative().nullable(),
+  // Explicit unlimited values survive JSON; null still means unknown, zero is zero.
+  timeLimitSeconds: z.union([z.number().int().nonnegative().nullable(), z.literal('unlimited')]),
   exitCode: z.number().int().nullable(),
   artifacts: z.object({ findings: z.boolean().nullable(), coverage: z.boolean().nullable() }).strict(),
   cleanup: z.enum(['not-needed', 'confirmed', 'unconfirmed']).optional(),
@@ -27,12 +28,9 @@ export const securityScanEvidenceSchema = z.object({
   }).strict().optional(),
 }).strict().refine(value => value.status !== 'completed' || value.exitCode === 0);
 
-// New dispatches receive this server-owned policy. The cost cap bounds the
-// scanner's short-context API-equivalent estimate, not billing or subscription quota.
-const NEW_SCAN_LIMITS = Object.freeze({ maxCostUsd: 25, timeLimitSeconds: 1200 });
-// Allow the longest grant to expire and finish process-group cleanup before
-// the server-to-runner exchange gives up. This does not extend a saved grant.
-export const SECURITY_SCAN_REQUEST_TIMEOUT_MS = (NEW_SCAN_LIMITS.timeLimitSeconds + 10) * 1000;
+// New dispatches impose neither an estimate cap nor an elapsed-time deadline.
+// Provider quota, rate and safety limits remain in force.
+const NEW_SCAN_LIMITS = Object.freeze({ maxCostUsd: 'unlimited', timeLimitSeconds: 'unlimited' });
 const legacySecurityScanGrantSchema = z.object({
   model: z.string().regex(/^[a-zA-Z0-9_.:-]{1,100}$/).nullable(),
   effort: z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']).nullable(),
@@ -42,12 +40,13 @@ const legacySecurityScanGrantSchema = z.object({
 }).strict();
 
 // Saved grants retain their original pair of limits; accepting them must never
-// upgrade an existing attempt. Neither policy is accepted from a scan request.
+// upgrade an existing attempt. No policy is accepted from a scan request.
 export const securityScanGrantSchema = z.union([
   legacySecurityScanGrantSchema.extend({
     maxCostUsd: z.literal(NEW_SCAN_LIMITS.maxCostUsd),
     timeLimitSeconds: z.literal(NEW_SCAN_LIMITS.timeLimitSeconds),
   }),
+  legacySecurityScanGrantSchema.extend({ maxCostUsd: z.literal(25), timeLimitSeconds: z.literal(1200) }),
   legacySecurityScanGrantSchema,
 ]);
 

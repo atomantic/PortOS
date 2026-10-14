@@ -60,9 +60,9 @@ describe('cosRunnerClient', () => {
     vi.clearAllMocks();
   });
 
-  it('keeps one silent scanner request open through its grant and cleanup without shorter transport ceilings', async () => {
+  it('keeps one silent scanner request open without elapsed or transport inactivity ceilings', async () => {
     const { fetchWithTimeout: actualFetch } = await vi.importActual('../lib/fetchWithTimeout.js');
-    const evidence = { status: 'time-limit', timeLimitSeconds: 1200, cleanup: 'confirmed' };
+    const evidence = { status: 'interrupted', timeLimitSeconds: 'unlimited', cleanup: 'confirmed' };
     let finish;
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
     fetchWithTimeout.mockImplementationOnce(actualFetch);
@@ -72,8 +72,8 @@ describe('cosRunnerClient', () => {
       await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledOnce());
       const options = fetchSpy.mock.calls[0][1];
       expect(options.dispatcher).toBe(streamTransportDispatcher());
-      expect(fetchWithTimeout).toHaveBeenCalledWith(expect.stringContaining('/security-scan'), expect.any(Object), 1210000);
-      await vi.advanceTimersByTimeAsync(1205000);
+      expect(fetchWithTimeout).toHaveBeenCalledWith(expect.stringContaining('/security-scan'), expect.any(Object), 0);
+      await vi.advanceTimersByTimeAsync(48 * 60 * 60 * 1000);
       expect(options.signal.aborted).toBe(false);
       finish(mockResponse(true, { evidence }));
       expect(await pending).toEqual({ evidence });
@@ -82,6 +82,17 @@ describe('cosRunnerClient', () => {
       fetchSpy.mockRestore();
       vi.useRealTimers();
     }
+  });
+
+  it('surfaces a broken scanner connection once while status and Stop retain bounded waits', async () => {
+    fetchWithTimeout.mockRejectedValueOnce(new Error('synthetic connection loss'));
+    await expect(requestSecurityScanViaRunner('agent-example', { input: { prompt: 'Audit source.', paths: ['.'] } })).rejects.toThrow('synthetic connection loss');
+    expect(fetchWithTimeout).toHaveBeenCalledOnce();
+    fetchWithTimeout.mockResolvedValue(mockResponse(true, { evidence: { status: 'interrupted' } }));
+    await requestSecurityScanViaRunner('agent-example');
+    await requestSecurityScanViaRunner('agent-example', { stop: true });
+    expect(fetchWithTimeout).toHaveBeenNthCalledWith(2, expect.stringContaining('/security-scan'), { method: 'GET' }, 15000);
+    expect(fetchWithTimeout).toHaveBeenNthCalledWith(3, expect.stringContaining('/security-scan/stop'), { method: 'POST' }, 15000);
   });
 
   // ===========================================================================

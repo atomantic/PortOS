@@ -41,7 +41,7 @@ it('requires existing host authority before consuming a scanner grant', async ()
 });
 
 it.each([
-  ['model', 'another-model'], ['effort', 'high'], ['maxCostUsd', 100], ['timeLimitSeconds', 3600], ['auth', 'api-key'],
+  ['model', 'another-model'], ['effort', 'high'], ['maxCostUsd', 100], ['timeLimitSeconds', 3600], ['timeLimitSeconds', 'unlimited'], ['maxCostUsd', 'unlimited'], ['auth', 'api-key'],
 ])('rejects a %s override at the public request boundary', async (field, value) => {
   const result = await request(appFor('127.0.0.1')).post(endpoint).send({ ...input, [field]: value });
   expect(result.status).toBe(400);

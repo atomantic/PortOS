@@ -58,6 +58,22 @@ it('shows runner observations during execution without requiring an agent comple
   expect(screen.queryByText('Completed successfully')).not.toBeInTheDocument();
 });
 
+it('distinguishes explicit unlimited grants from unknown, zero and saved bounded limits', () => {
+  const scanner = { source: 'runner', status: 'running', auth: 'chatgpt', maxCostUsd: 'unlimited', timeLimitSeconds: 'unlimited' };
+  const view = render(<SecurityScanEvidence scanner={scanner} />);
+  expect(screen.getByText(/Time limit: none \(no elapsed-time deadline\)/)).toBeInTheDocument();
+  expect(screen.getByText(/Estimate cap: none \(no estimate cap\)/)).toBeInTheDocument();
+  view.rerender(<SecurityScanEvidence scanner={{ ...scanner, maxCostUsd: null, timeLimitSeconds: null }} />);
+  expect(screen.getByText(/Estimate cap: unknown/)).toBeInTheDocument();
+  expect(screen.getByText(/Time limit: unknown/)).toBeInTheDocument();
+  view.rerender(<SecurityScanEvidence scanner={{ ...scanner, maxCostUsd: 0, timeLimitSeconds: 0 }} />);
+  expect(screen.getByText(/Estimate cap: \$0.00/)).toBeInTheDocument();
+  expect(screen.getByText(/Time limit: 0s/)).toBeInTheDocument();
+  view.rerender(<SecurityScanEvidence scanner={{ ...scanner, maxCostUsd: 25, timeLimitSeconds: 1200 }} />);
+  expect(screen.getByText(/Estimate cap: \$25.00/)).toBeInTheDocument();
+  expect(screen.getByText(/Time limit: 1,200s/)).toBeInTheDocument();
+});
+
 it('distinguishes connection loss from the last trusted runner observation', () => {
   render(<SecurityScanEvidence scanner={{ source: 'runner', status: 'running', auth: 'chatgpt' }} control={{ status: 'interrupted', cleanup: 'unconfirmed' }} />);
   expect(screen.getByText(/interrupted \(runner connection lost\)/)).toBeInTheDocument();

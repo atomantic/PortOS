@@ -364,6 +364,7 @@ export async function spawnTuiAgent({
     runId,
     model,
     provider,
+    securityScanGrant,
     prompt,
     tuiConfig,
     cwd,

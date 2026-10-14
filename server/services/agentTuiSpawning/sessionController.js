@@ -477,6 +477,7 @@ export function createTuiSessionController({
   runId,
   model,
   provider,
+  securityScanGrant,
   prompt,
   tuiConfig,
   cwd,
@@ -1914,7 +1915,10 @@ export function createTuiSessionController({
       // network call takes, non-terminal the whole time, and it may yet paste a
       // nudge of its own. And `promptSubmittedAt`, because before the prompt is
       // in the promptTimer owns delivery — silence there is startup, not a stall.
-      if (sessionPhase !== 'running' || !promptSubmittedAt) return;
+      // A no-deadline security audit may be quiet during the scan AND its later
+      // validation/fix work. Silence alone must not inject another turn or badge
+      // it as stalled. Explicit provider failures and terminal signals above stay active.
+      if (sessionPhase !== 'running' || !promptSubmittedAt || securityScanGrant?.timeLimitSeconds === 'unlimited') return;
       const stalled = stallNudgeGate.takeNudge(now, lastOutputAt);
       if (!stalled) return;
       // Read the sentinel here rather than on every tick: its watcher polls on its

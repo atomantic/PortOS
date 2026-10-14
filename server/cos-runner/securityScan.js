@@ -157,7 +157,9 @@ export function createSecurityScanManager({ agentsDir, getAgent, emitEvidence, t
         await ensureDir(outputDir);
         await chmod(outputDir, 0o700);
         const args = [...cli.args, 'scan', agent.workspacePath, '--mode', 'standard', '--auth', 'chatgpt', '--headless', '--json',
-          '--model', entry.grant.model, '--effort', entry.grant.effort, '--max-cost', String(entry.grant.maxCostUsd),
+          '--model', entry.grant.model, '--effort', entry.grant.effort,
+          // codex-security documents omission as no cap; 0/null are not CLI limits.
+          ...(typeof entry.grant.maxCostUsd === 'number' ? ['--max-cost', String(entry.grant.maxCostUsd)] : []),
           '--output-dir', outputDir, '--scan-prompt-file', promptFile,
           ...paths.flatMap(path => ['--path', path]), ...knowledgeBase.flatMap(path => ['--knowledge-base', path])];
         const env = Object.fromEntries(Object.entries(environment).filter(([key]) => ENV_KEYS.has(key)));
@@ -172,6 +174,10 @@ export function createSecurityScanManager({ agentsDir, getAgent, emitEvidence, t
         if (entry.stopReason) { entry.evidence.status = entry.stopReason; return { evidence: entry.evidence, artifactDirectory: directory }; }
         const detectRefusal = createContentRefusalDetector();
         let logTail = '';
+        // --json reports cost even without --max-cost. Bound the whole stdout
+        // document; a truncated/oversized result is unknown, never a guessed cost.
+        let resultJson = '';
+        let resultJsonOversized = false;
         let logWrites = Promise.resolve();
         let logError;
         const logPath = join(directory, 'scan.log');
@@ -223,7 +229,13 @@ export function createSecurityScanManager({ agentsDir, getAgent, emitEvidence, t
             cancel();
           }
         };
-        child.stdout.on('data', consume);
+        child.stdout.on('data', chunk => {
+          if (!resultJsonOversized) {
+            resultJson += String(chunk);
+            if (resultJson.length > 1024 * 1024) { resultJson = ''; resultJsonOversized = true; }
+          }
+          consume(chunk);
+        });
         child.stderr.on('data', consume);
         const streamsEnded = Promise.all([child.stdout, child.stderr].map(stream =>
           new Promise(resolve => { stream.once('end', resolve); stream.once('close', resolve); })));
@@ -239,7 +251,9 @@ export function createSecurityScanManager({ agentsDir, getAgent, emitEvidence, t
             Promise.all([streamsEnded, exitCleanup]).then(() => resolveExit({ code, signal }));
           });
           child.once('close', (code, signalName) => resolveExit({ code, signal: signalName }));
-          deadline = setTimeout(() => { entry.stopReason ||= 'time-limit'; cancel(); }, entry.grant.timeLimitSeconds * 1000);
+          if (typeof entry.grant.timeLimitSeconds === 'number' && entry.grant.timeLimitSeconds > 0) {
+            deadline = setTimeout(() => { entry.stopReason ||= 'time-limit'; cancel(); }, entry.grant.timeLimitSeconds * 1000);
+          }
           if (entry.stopReason) cancel();
         });
         await atomicWrite(join(agentsDir, id, 'security-scan-process.json'), entry.owner);
@@ -256,6 +270,11 @@ export function createSecurityScanManager({ agentsDir, getAgent, emitEvidence, t
         entry.evidence.status = entry.stopReason || (exit.code === 0 && !exit.failed && entry.evidence.cleanup === 'confirmed' ? 'completed' : 'failed');
         const costs = [...logTail.matchAll(/short-context budget baseline:\s*\$([\d.]+)/g)];
         if (costs.length) entry.evidence.estimatedCostUsd = Number(costs.at(-1)[1]);
+        if (resultJson && !resultJsonOversized) {
+          let result; try { result = JSON.parse(resultJson); } catch { /* Partial output stays unknown. */ }
+          const baseline = (result?.data ?? result)?.cost?.estimatedUsd;
+          if (typeof baseline === 'number' && Number.isFinite(baseline) && baseline >= 0) entry.evidence.estimatedCostUsd = baseline;
+        }
         if (!entry.stopReason && /(?:exceeds?|exceeded).*?(?:max.cost|budget)|budget.*?(?:exceeded|limit reached)/i.test(logTail)) entry.evidence.status = 'budget-limit';
         const files = await readdir(outputDir).catch(() => null);
         entry.evidence.artifacts = { findings: files?.includes('findings.json') ?? null, coverage: files?.includes('coverage.json') ?? null };
