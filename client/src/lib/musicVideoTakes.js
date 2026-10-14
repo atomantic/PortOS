@@ -32,9 +32,12 @@ export const takeThumbUrl = (take) => (take.kind !== 'video'
 /** Playable clip URL for a video take (hover/focus preview). */
 export const takeClipUrl = (take) => `/data/videos/${encodeURIComponent(take.assetId)}.mp4`;
 
-/** Scenes whose slot still has an undecided candidate (a candidate that is not the selection). */
-export function sceneHasPendingDecision(scene) {
-  return Object.keys(TAKE_SLOT).some((kind) => {
+/**
+ * Scenes whose slot still has an undecided candidate (a candidate that is not
+ * the selection). `kinds` limits it to the slots the shot uses.
+ */
+export function sceneHasPendingDecision(scene, { kinds = Object.keys(TAKE_SLOT) } = {}) {
+  return kinds.some((kind) => {
     const selected = scene?.[TAKE_SLOT[kind]] || null;
     return sceneTakeList(scene, kind).some((t) => t.takeId && t.status === 'candidate' && t.assetId !== selected);
   });

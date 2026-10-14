@@ -1,14 +1,20 @@
+import { useContext } from 'react';
 import { Link } from 'react-router';
+import { ShotLockContext, overallShotLock } from './ShotLock.jsx';
 import { SCENE_ATTENTION_LABELS, sceneAttention } from '../../lib/musicVideoSceneAttention.js';
 
 /**
  * One compact cell per shot, from the same `sceneAttention` answer the Board's
  * scene rows use: green when nothing needs doing, amber otherwise, with the
- * reasons in the tooltip. Each cell opens that scene on the Storyboard.
+ * reasons in the tooltip. Each cell opens that scene on the Storyboard. A
+ * locked shot is settled, as on the Board: its other takes are not waiting.
  */
 export default function ShotStatusStrip({ projectId, scenes, ctx }) {
+  const lockValue = useContext(ShotLockContext);
   if (!scenes?.length) return null;
-  const cells = scenes.map((scene) => ({ scene, codes: sceneAttention(scene, ctx) }));
+  const locked = (scene) => !!lockValue?.locks?.[scene.sceneId]
+    && overallShotLock(lockValue.locks[scene.sceneId], lockValue.clips?.[scene.sceneId]) === 'locked';
+  const cells = scenes.map((scene) => ({ scene, codes: sceneAttention(scene, { ...ctx, locked: locked(scene) }) }));
   return (
     <ul aria-label="Shot status" className="flex flex-wrap gap-1">
       {cells.map(({ scene, codes }) => {
