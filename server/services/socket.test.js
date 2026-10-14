@@ -556,6 +556,21 @@ describe('socket.js — initSocket', () => {
     expect(socket.emitted.some(([ev]) => ev === 'cos:unsubscribed')).toBe(true);
   });
 
+  it('forwards submitted feedback only to CoS subscribers', () => {
+    const subscriber = makeSocket('feedback-subscriber');
+    const other = makeSocket('feedback-other');
+    createdSockets.push(subscriber, other);
+    io.connect(subscriber);
+    io.connect(other);
+    subscriber.handlers['cos:subscribe']();
+    const payload = { agentId: 'example-agent', feedback: { rating: 'positive', comment: null, submittedAt: '2026-07-13T12:00:00.000Z' } };
+    const listener = queueListeners.cos.find(([event]) => event === 'agent:feedback')?.[1];
+    listener(payload);
+    expect(subscriber.emitted).toContainEqual(['cos:agent:feedback', payload]);
+    expect(other.emitted.some(([event]) => event === 'cos:agent:feedback')).toBe(false);
+    expect(io.emitted.some(([event]) => event === 'cos:agent:feedback')).toBe(false);
+  });
+
   it('forwards task lifecycle changes with the task payload to CoS subscribers', () => {
     const socket = makeSocket('task-events');
     createdSockets.push(socket);

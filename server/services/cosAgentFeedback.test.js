@@ -436,6 +436,27 @@ describe('pending feedback served from the eligibility projection', () => {
     await expect(getPendingAgentFeedbackCount()).resolves.toBe(1);
   });
 
+  it('publishes feedback only after the pending count reflects the saved rating', async () => {
+    const agent = pendingAgent('agent-feedback-event', '2026-08-10T10:00:00.000Z');
+    await enrollThenEvict([agent]);
+    await seedProjection([[agent.id, { completedAt: agent.completedAt, completed: true, feedbackEligible: true }]]);
+    const dir = join(mockCosState.agentsDir, agent.completedAt.slice(0, 10), agent.id);
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'metadata.json'), JSON.stringify(agent));
+    await expect(getPendingAgentFeedbackCount()).resolves.toBe(1);
+    let countAtEvent;
+    const onFeedback = vi.fn(() => { countAtEvent = getPendingAgentFeedbackCount(); });
+    cosEvents.on('agent:feedback', onFeedback);
+    await submitAgentFeedback(agent.id, { rating: 'positive' }).finally(() => {
+      cosEvents.off('agent:feedback', onFeedback);
+    });
+    expect(onFeedback).toHaveBeenCalledExactlyOnceWith({
+      agentId: agent.id,
+      feedback: { rating: 'positive', comment: null, submittedAt: expect.any(String) },
+    });
+    await expect(countAtEvent).resolves.toBe(0);
+  });
+
   it('stops counting a run the projection records as already rated', async () => {
     const agent = pendingAgent('agent-projected-rated', '2026-08-11T10:00:00.000Z');
     await enrollThenEvict([agent]);

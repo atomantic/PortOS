@@ -4,6 +4,21 @@ import userEvent from '@testing-library/user-event';
 import { act } from 'react';
 import { MemoryRouter, Routes, Route } from 'react-router';
 
+const socket = vi.hoisted(() => {
+  const handlers = new Map();
+  return {
+    on: (event, handler) => {
+      if (!handlers.has(event)) handlers.set(event, new Set());
+      handlers.get(event).add(handler);
+    },
+    off: (event, handler) => handlers.get(event)?.delete(handler),
+    emit: vi.fn(),
+    receive: (event, payload) => handlers.get(event)?.forEach(handler => handler(payload)),
+    listenerCount: event => handlers.get(event)?.size || 0,
+  };
+});
+vi.mock('../../../services/socket', () => ({ default: socket }));
+
 vi.mock('../../../services/api', () => ({
   getCosLearningDurations: vi.fn(),
   getCosAgent: vi.fn(),
@@ -30,6 +45,7 @@ vi.mock('./AgentCard', () => ({
       {onRelaunch && (
         <button type="button" onClick={() => onRelaunch(agent)}>Relaunch {agent.id}</button>
       )}
+      {agent.feedback?.rating && <span>Feedback: {agent.feedback.rating}</span>}
       {!agent.feedback?.rating && (
         <button
           type="button"
@@ -274,6 +290,58 @@ describe('AgentsTab resume routing', () => {
 });
 
 describe('AgentsTab feedback review queue', () => {
+  it('applies notification feedback to live, archived and selected cards without reloading history', async () => {
+    const live = completedAgent('live', 'Recent task');
+    const archived = completedAgent('archived', 'Archived task');
+    api.getCosCompletedAgents.mockResolvedValue({ items: [archived], total: 1, nextCursor: null });
+    api.getCosAgent.mockResolvedValue(archived);
+    api.getCosPendingAgentFeedback.mockResolvedValue({ count: 2 });
+    const onRefresh = vi.fn();
+    const view = render(
+      <MemoryRouter initialEntries={['/cos/agents/archived']}>
+        <Routes><Route path="/cos/agents/:agentId" element={
+          <AgentsTab agents={[live]} onRefresh={onRefresh} liveOutputs={{}} providers={[]} apps={[]} />
+        } /></Routes>
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Rate Archived task' })).toHaveLength(2));
+    const pageReads = api.getCosCompletedAgents.mock.calls.length;
+    api.getCosPendingAgentFeedback.mockResolvedValue({ count: 1 });
+    await act(async () => socket.receive('cos:agent:feedback', {
+      agentId: 'archived', feedback: { rating: 'positive', comment: null, submittedAt: '2026-07-13T12:00:00.000Z' },
+    }));
+    expect(screen.getAllByText('Feedback: positive')).toHaveLength(2);
+    expect(screen.queryByRole('button', { name: 'Rate Archived task' })).not.toBeInTheDocument();
+    await screen.findByRole('button', { name: 'Needs feedback: 1' });
+
+    api.getCosPendingAgentFeedback.mockResolvedValue({ count: 0 });
+    await act(async () => socket.receive('cos:agent:feedback', {
+      agentId: 'live', feedback: { rating: 'negative', comment: null, submittedAt: '2026-07-13T12:01:00.000Z' },
+    }));
+    expect(screen.getByText('Feedback: negative')).toBeInTheDocument();
+    await screen.findByRole('button', { name: 'Needs feedback: 0' });
+    expect(api.getCosCompletedAgents).toHaveBeenCalledTimes(pageReads);
+    expect(onRefresh).not.toHaveBeenCalled();
+    view.unmount();
+    expect(socket.listenerCount('cos:agent:feedback')).toBe(0);
+  });
+
+  it('removes externally rated runs from the feedback filter and reconciles repeated ratings without double-counting', async () => {
+    const archived = completedAgent('archived', 'Archived task');
+    api.getCosCompletedAgents.mockResolvedValue({ items: [archived], total: 1, nextCursor: null });
+    api.getCosPendingAgentFeedback.mockResolvedValue({ count: 2 });
+    renderTab([], vi.fn(), '/cos/agents?feedback=needs-feedback');
+    await screen.findByText('Archived task');
+    await screen.findByRole('button', { name: 'Needs feedback: 2' });
+    api.getCosPendingAgentFeedback.mockResolvedValue({ count: 1 });
+    const event = { agentId: 'archived', feedback: { rating: 'positive' } };
+    await act(async () => socket.receive('cos:agent:feedback', event));
+    expect(screen.queryByText('Archived task')).not.toBeInTheDocument();
+    await screen.findByRole('button', { name: 'Needs feedback: 1' });
+    await act(async () => socket.receive('cos:agent:feedback', event));
+    await screen.findByRole('button', { name: 'Needs feedback: 1' });
+  });
+
   it('renders an older durable pending run and uses its server count', async () => {
     const archived = completedAgent('agent-archived', 'An older pending run');
     api.getCosPendingAgentFeedback.mockResolvedValue({ agents: [archived], count: 1 });

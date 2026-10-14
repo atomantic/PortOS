@@ -44,6 +44,24 @@ const loomRunSnapshot = (production) => Object.freeze({
 });
 
 export const SOCKET_EVENT_CONTRACTS = Object.freeze({
+  'cos:agent:feedback': {
+    direction: 'server-to-client',
+    summary: 'Persisted agent feedback after the pending-feedback index has been updated; CoS subscribers only.',
+    payloadSchema: {
+      type: 'object', required: ['agentId', 'feedback'],
+      properties: {
+        agentId: { type: 'string' },
+        feedback: {
+          type: 'object', required: ['rating', 'comment', 'submittedAt'],
+          properties: {
+            rating: { type: 'string', enum: ['positive', 'negative', 'neutral'] },
+            comment: { type: ['string', 'null'] },
+            submittedAt: { type: 'string' },
+          },
+        },
+      },
+    },
+  },
   'peer-execution:changed': Object.freeze({ direction: 'server-to-client', summary: 'Invalidate authenticated peer execution setup and status; no credentials or operation data.', payloadSchema: { type: 'null' } }),
   'genome:clinvar-progress': {
     direction: 'server-to-client', summary: 'ClinVar download and indexing progress for an optional client request ID.',

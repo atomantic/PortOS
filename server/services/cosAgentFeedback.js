@@ -318,7 +318,6 @@ export async function submitAgentFeedback(agentId, feedback) {
       }
 
       emitLog('info', `Feedback received for agent ${agentId}: ${feedback.rating}`, { agentId, rating: feedback.rating });
-      cosEvents.emit('agent:feedback', { agentId, feedback: feedbackData });
       return { success: true, agent: state.agents[agentId], feedbackData, clearPendingRef: archived.kind === 'found' };
     }
 
@@ -336,7 +335,6 @@ export async function submitAgentFeedback(agentId, feedback) {
     await atomicWrite(archived.metadataPath, updated);
 
     emitLog('info', `Feedback received for agent ${agentId}: ${feedback.rating}`, { agentId, rating: feedback.rating });
-    cosEvents.emit('agent:feedback', { agentId, feedback: feedbackData });
     return { success: true, agent: { ...updated, id: agentId }, feedbackData, clearPendingRef: true };
   });
 
@@ -345,6 +343,7 @@ export async function submitAgentFeedback(agentId, feedback) {
   // A rated archive is no longer an eligible target; clearing the projected bit
   // keeps the scalar badge correct without re-reading the record.
   await markCompletionFeedbackResolved(agentId);
+  cosEvents.emit('agent:feedback', { agentId, feedback: feedbackData });
   await recordUserAction({
     type: 'cos.agent.feedback',
     target: agentId,
