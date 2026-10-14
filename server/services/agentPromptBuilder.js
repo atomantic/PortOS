@@ -18,7 +18,7 @@ import { loadSlashdoFile, loadSlashdoLib, writeResolvedSlashdoBody } from '../li
 import { DEFAULT_REVIEWER, isToolFreeReviewer, isCliReviewer, hasRequiredReviewer, resolveReviewerConfig, resolveReviewPolicy } from '../lib/validation.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { doneSentinelName } from '../lib/agentSentinel.js';
-import { canTypeSlashCommands, SLASHDO_INLINE_BUDGET_CHARS } from '../lib/slashdoInvocation.js';
+import { canTypeSlashCommands, PR_OPENED_BY, SLASHDO_INLINE_BUDGET_CHARS } from '../lib/slashdoInvocation.js';
 import { getDigitalTwinForPrompt } from './digital-twin.js';
 import { TASK_PROMPT_KEY, taskContextBlock } from '../lib/cosTaskPrompt.js';
 import { injectReconcileAgentId } from '../lib/claimContinuation.js';
@@ -63,6 +63,7 @@ import {
   inlinePrLifecycleSection,
   isPrBranchWorktree,
   portosMergesBranchOnExit,
+  promptOpensOwnPr,
   worktreeCommitGuidance,
 } from './promptSections/completion.js';
 import { buildLocalReviewLoopSection, buildReviewLoopFollowUpSection, isMergeOnlyFollowUp, prepareLocalReviewLoopBody, prepareSandboxedReviewLoopBody } from './promptSections/reviewLifecycle.js';
@@ -91,6 +92,8 @@ export { buildReviewLoopFollowUpSection } from './promptSections/reviewLifecycle
 export { createJiraTicketForTask, generateJiraTitle, getAppDataForTask, getAppWorkspace } from './promptSections/appContext.js';
 
 const AGENTS_DIR = PATHS.cosAgents;
+// Completion modes whose generic section can hand the agent its own PR's merge.
+const AGENT_PR_DELIVERY_MODES = new Set([COMPLETION_MODES.TUI, COMPLETION_MODES.TUI_SLASHDO_FREE, COMPLETION_MODES.WORKTREE_NO_PUSH]);
 
 // These scheduled audits inspect a running web UI. Keep their runtime contract
 // in the builder rather than only in the default prompt bodies so customized
@@ -432,7 +435,7 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
 
   if (LIGHT_CONTEXT_PROVIDER_TYPES.has(providerType)) {
     const forgeCli = await resolveManualForgeCli(workspaceDir, worktreeInfo, task);
-    const lightOptions = { isTui, providerId, providerCommand, providerModel, leanMode, agentId, defaultReviewers, codeReviewDefaults, localAgentLoopBody: localAgentLoopBodyForInline, localAgentLoopBodyPath, forgeCli };
+    const lightOptions = { isTui, providerId, providerCommand, providerModel, leanMode, agentId, defaultReviewers, codeReviewDefaults, localAgentLoopBody: localAgentLoopBodyForInline, localAgentLoopBodyPath, forgeCli, promptTrace: options.promptTrace || null };
     return withDeepAudit(options.split === true
       ? buildLightContextPromptParts(task, workspaceDir, worktreeInfo, lightOptions)
       : buildLightContextPrompt(task, workspaceDir, worktreeInfo, lightOptions));
@@ -938,7 +941,7 @@ This run must leave its changes in a DRAFT pull request for human review. This o
 
 const BEGIN_WORKING_LINE = 'Begin working on the task now.';
 
-function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = true, providerId = null, providerCommand = null, providerModel = null, leanMode = false, agentId = null, defaultReviewers, codeReviewDefaults, localAgentLoopBody = null, localAgentLoopBodyPath = null, forgeCli = null } = {}) {
+function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = true, providerId = null, providerCommand = null, providerModel = null, leanMode = false, agentId = null, defaultReviewers, codeReviewDefaults, localAgentLoopBody = null, localAgentLoopBodyPath = null, forgeCli = null, promptTrace = null } = {}) {
   // Idempotent with the reconcile in buildAgentPrompt; also protects the
   // directly-exported buildLightContextPrompt/Parts entry points.
   task = reconcileSplitContext(task);
@@ -991,6 +994,15 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
     providerId, providerCommand, leanMode, worktreeInfo,
   });
   const rendersInlinePrLifecycle = inlineSection !== null;
+  // A generic worktree run whose section below tells it to open AND merge its
+  // own PR (`/do:pr` plus the CI merge gate, or the inline lifecycle). It
+  // merges inside repository merge admission (#11435), and the spawner stamps
+  // the matching ownership binding from this same decision via `promptTrace`.
+  const mergesOwnPr = AGENT_PR_DELIVERY_MODES.has(completionMode) && promptOpensOwnPr(task, {
+    providerType: isTui ? PROVIDER_TYPES.TUI : PROVIDER_TYPES.CLI,
+    providerId, providerCommand, leanMode, worktreeInfo,
+  }) !== PR_OPENED_BY.PORTOS;
+  if (promptTrace) promptTrace.mergesOwnPr = mergesOwnPr;
   // Slashdo already partitions reviewers. Plain-git completion prompts need the
   // same split spelled out: local CLIs/local LLMs inspect the committed branch
   // before it is public; Copilot and @login reviewers can only run after a PR.
@@ -1093,9 +1105,12 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
     baseBranch: worktreeInfo?.baseBranch || null,
     leavePrOpen: leavesPrForHuman(task),
     reviewPolicy,
-    forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: rendersInlinePrLifecycle ? runsPrSideReviewLoop : null
+    forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: rendersInlinePrLifecycle ? runsPrSideReviewLoop : null,
+    mergeAdmission: mergesOwnPr,
   }));
-  const pushCliCompletion = () => contractSections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion, mode: completionMode, canTypeSlashCommands: canTypeSlash, rendersInlinePrLifecycle, simplifyEnabled, noChangeSuccess, leavePrOpen: leavesPrForHuman(task), reviewPolicy, forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: rendersInlinePrLifecycle ? runsPrSideReviewLoop : null }));
+  const pushCliCompletion = () => contractSections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion, mode: completionMode, canTypeSlashCommands: canTypeSlash, rendersInlinePrLifecycle, simplifyEnabled, noChangeSuccess, leavePrOpen: leavesPrForHuman(task), reviewPolicy, forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: rendersInlinePrLifecycle ? runsPrSideReviewLoop : null, mergeAdmission: mergesOwnPr }));
+  // Ahead of the completion workflow, whose TUI form ends on the sentinel write.
+  if (mergesOwnPr) contractSections.push(buildMergeAdmissionSection(agentId));
 
   ({
     [COMPLETION_MODES.TOOL_FREE]: () => contractSections.push(buildToolFreeReasoningCompletionSection()),
