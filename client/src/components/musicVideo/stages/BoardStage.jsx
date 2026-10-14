@@ -102,6 +102,15 @@ export default function BoardStage({ board }) {
       : inspectorRef.current?.querySelector('summary');
     if (target) { target.focus({ preventScroll: true }); focusAfterNavigation.current = null; }
   }, [activeSceneId]);
+  // The open card's Previous / Next shot buttons walk every shot in song order, filter or not.
+  const songOrder = [...scenes].sort((a, b) => (numbers.get(a.sceneId) ?? Infinity) - (numbers.get(b.sceneId) ?? Infinity));
+  const openShot = (scene) => scene && (() => {
+    focusAfterNavigation.current = { target: 'inspector' };
+    board.seekToScene?.(scene);
+    onToggleSceneExpand?.(scene.sceneId, true);
+  });
+  const activeAt = songOrder.findIndex((scene) => scene.sceneId === activeSceneId);
+  const stepShot = activeAt === -1 ? null : { prev: openShot(songOrder[activeAt - 1]), next: openShot(songOrder[activeAt + 1]) };
   // j / k step through the listed scenes (opening one, which also routes to it).
   useEffect(() => {
     const ids = visibleIds ? visibleIds.split('\n') : [];
@@ -189,6 +198,7 @@ export default function BoardStage({ board }) {
               project={project}
               expanded={activeSceneId === scene.sceneId}
               onToggleExpand={toggleInspector}
+              stepShot={stepShot}
               performanceReview={performanceReviews.get(`${scene.sceneId}:${scene.videoHistoryId}`)}
               index={idx}
               shotNumber={numbers.get(scene.sceneId)}

@@ -6,7 +6,7 @@ import SceneClipTiming from './SceneClipTiming.jsx';
 import SceneRejectUnused from './SceneRejectUnused.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { useEffect, useRef, useState } from 'react';
-import { Trash2, Activity, ArrowUp, ArrowDown, ChevronRight, Video, Maximize2, AlertTriangle, Clapperboard, Shuffle } from 'lucide-react';
+import { Trash2, Activity, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, Video, Maximize2, AlertTriangle, Clapperboard, Shuffle } from 'lucide-react';
 import OverflowMenu from '../ui/OverflowMenu.jsx';
 import SceneTakePicker from './SceneTakePicker.jsx';
 import VideoStartTrimControl from '../media/VideoStartTrimControl.jsx';
@@ -117,7 +117,7 @@ export default function SceneCard({
   project = null, onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
   onOpenPreview, onSelectTake, onReviewTake, onRejectUnusedTakes = null, onSwapFrames = null, onMarkTake = null, onImportTake, onImportClipTake, onPlacePoolItem, onTrimClip, projectId = null, aspect = '16:9', videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false,
   lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, onMoveStart = null, nextEndSec = null, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
-  expanded, onToggleExpand, footageOptional = false, failedScenes = null, songReview = null,
+  expanded, onToggleExpand, stepShot = null, footageOptional = false, failedScenes = null, songReview = null,
 }) {
   const detailsRef = useRef(null);
 
@@ -396,7 +396,7 @@ export default function SceneCard({
     >
       <summary
         onClick={() => onSeek?.(scene)}
-        className="flex min-h-[44px] cursor-pointer select-none items-center gap-3 p-2 marker:content-none flex-wrap group-open:pr-40 sm:group-open:pr-52 [&::-webkit-details-marker]:hidden"
+        className="flex min-h-[44px] cursor-pointer select-none items-center gap-3 p-2 marker:content-none flex-wrap group-open:pr-52 sm:group-open:pr-72 [&::-webkit-details-marker]:hidden"
       >
         <ChevronRight size={14} aria-hidden="true" className="shrink-0 text-port-text-muted transition-transform group-open:rotate-90" />
         <ScenePoster scene={scene} iconSize={14} className="aspect-video w-16 shrink-0 rounded border border-port-border sm:w-20 max-sm:group-open:hidden" />
@@ -440,6 +440,18 @@ export default function SceneCard({
       {/* The open card's lock and "…" menu sit in its top-right corner. A move swaps this
           shot with its neighbor; the song timing and lyric stay with the slot. */}
       <div className="absolute right-2 top-2 z-10 flex items-center gap-1">
+        {stepShot && (
+          <>
+            <button type="button" onClick={stepShot.prev || undefined} disabled={!stepShot.prev} aria-label="Previous shot" title="Previous shot"
+              className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-port-border text-port-text hover:bg-port-border disabled:opacity-40 sm:min-h-[32px] sm:min-w-[32px]">
+              <ChevronLeft size={16} aria-hidden="true" />
+            </button>
+            <button type="button" onClick={stepShot.next || undefined} disabled={!stepShot.next} aria-label="Next shot" title="Next shot"
+              className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-port-border text-port-text hover:bg-port-border disabled:opacity-40 sm:min-h-[32px] sm:min-w-[32px]">
+              <ChevronRight size={16} aria-hidden="true" />
+            </button>
+          </>
+        )}
         <ShotLockButton scene={scene} compact />
         <OverflowMenu label="Shot actions" items={[
           { id: 'earlier', label: 'Move earlier', icon: ArrowUp, onSelect: () => onMove(index, -1), disabled: index === 0 || documentComposition },
