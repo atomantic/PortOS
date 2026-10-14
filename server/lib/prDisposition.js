@@ -114,6 +114,13 @@ export function leavesPrForHuman(task) {
   return PR_STAYS_OPEN_SET.has(metadata.analysisType) || !!metadata.jiraTicketId;
 }
 
+/** Explicit task authority only: defaults must never release a human handoff. */
+export function explicitPrCompletion(task) {
+  const metadata = task?.metadata || {};
+  if (leavesPrForHuman(task) || isTruthyMeta(metadata.reviewLoopLeaveOpen)) return PR_COMPLETIONS.LEAVE_OPEN;
+  return PR_COMPLETION_SET.has(metadata.prCompletion) ? resolvePrCompletion(metadata) : null;
+}
+
 // Shared by the PR-claim producer and cleanup classifier.
 export const PR_MISSING_CATEGORY = 'pr-missing';
 

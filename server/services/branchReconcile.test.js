@@ -1,3 +1,8 @@
+vi.mock('./branchCompletionPolicy.js', async () => ({
+  ...await vi.importActual('./branchCompletionPolicy.js'),
+  readBranchCompletionPolicies: vi.fn(async () => []),
+  readBranchCompletionHold: vi.fn(async () => null),
+}));
 /**
  * Unit tests for the Branch & PR Reconciler deterministic core.
  *
@@ -298,32 +303,26 @@ const mockOwnedClaim = () => execGh.mockImplementation(async (args) => {
   return '[]';
 });
 
-describe('retired claim markers in reconcile', () => {
-  it('releases early-reaped claims on the enterprise host with the pinned account', async () => {
+describe('unverified issue reservations in reconcile', () => {
+  it('retires the local checkout while leaving possible same-account peer markers untouched before its first commit', async () => {
     mockOwnedClaim();
     getOriginInfo.mockResolvedValue({ hasOrigin: true, host: 'github.example.com', fullName: 'example/app' });
     wt.reapMergedWorktrees.mockResolvedValue({ reaped: [{ branch: 'claim/issue-42', branchDeleted: true }], skipped: [] });
     git.getBranches.mockResolvedValue([]);
-    await reconcile('/repo', { forgeAccount: 'app-account' });
-    expect(execGh).toHaveBeenCalledWith([
-      'issue', 'edit', '42', '--repo', 'github.example.com/example/app',
-      '--remove-assignee', '@me', '--remove-label', 'in-progress'
-    ], undefined, { cwd: '/repo', env: PINNED_ENV });
-    expect(execGh).toHaveBeenCalledWith(['api', 'user', '--hostname', 'github.example.com', '--jq', '.login'], undefined, { cwd: '/repo', env: PINNED_ENV });
-    expect(resolveForgeExecOptionsMock).toHaveBeenCalledWith('/repo', { forgeAccount: 'app-account' });
-    expect(resolveForgeExecOptionsMock).toHaveBeenCalledOnce();
+    const result = await reconcile('/repo', { forgeAccount: 'app-account' });
+    expect(result.cleaned).toEqual(['claim/issue-42']);
+    expect(result.claimMarkersHeld).toEqual([{ branch: 'claim/issue-42', issue: 42, reason: 'claim-reservation-owner-unverified', markerState: 'unknown', ownerState: 'unknown' }]);
+    expect(execGh.mock.calls.some(([args]) => args[0] === 'issue' || args[0] === 'api')).toBe(false);
   });
 
-  it('keeps the reap successful and logs once when marker release fails during a forge outage', async () => {
+  it('reports unverified reservations separately even when the forge is unavailable', async () => {
     wt.reapMergedWorktrees.mockResolvedValue({ reaped: [{ branch: 'claim/issue-42', branchDeleted: true }], skipped: [] });
-    execGh.mockRejectedValueOnce(new Error('forge unavailable'));
     ensureForgeReachableMock.mockResolvedValueOnce({ ok: false, status: 'unavailable' });
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const result = await reconcile('/repo');
     expect(result.cleaned).toEqual(['claim/issue-42']);
     expect(result.forgeUnavailable).toBe(true);
-    expect(log.mock.calls.filter(([line]) => line.includes('could not release claim markers for #42'))).toHaveLength(1);
-    log.mockRestore();
+    expect(result.claimMarkersHeld[0].reason).toBe('claim-reservation-owner-unverified');
+    expect(execGh).not.toHaveBeenCalled();
   });
 
   it('does not release protected claims, unrelated branches, or non-GitHub issues', async () => {
@@ -433,15 +432,14 @@ describe('cleanupMerged', () => {
     expect(git.deleteBranch).toHaveBeenCalledWith('/repo', 'claim/issue-1933', { local: true });
   });
 
-  it('releases a retired issue claim with the repository credential after deletion', async () => {
+  it('leaves global issue markers untouched after successful local deletion without asserting they exist', async () => {
     mockOwnedClaim();
     git.hasBranchMergeEvidence.mockResolvedValue(true);
-    await cleanupMerged('/repo', 'main', [{ branch: 'claim/issue-42', worktreePath: '/repo/.claude/worktrees/retired' }]);
-    expect(execGh).toHaveBeenCalledWith([
-      'issue', 'edit', '42', '--repo', 'github.com/atomantic/PortOS',
-      '--remove-assignee', '@me', '--remove-label', 'in-progress'
-    ], undefined, { cwd: '/repo', env: PINNED_ENV });
-    expect(execGh.mock.invocationCallOrder[0]).toBeGreaterThan(git.deleteBranch.mock.invocationCallOrder[0]);
+    const result = await cleanupMerged('/repo', 'main', [{ branch: 'claim/issue-42', worktreePath: '/repo/.claude/worktrees/retired' }]);
+    expect(result.cleaned).toEqual(['claim/issue-42']);
+    expect(result.claimMarkersHeld).toEqual([{ branch: 'claim/issue-42', issue: 42, reason: 'claim-reservation-owner-unverified', markerState: 'unknown', ownerState: 'unknown' }]);
+    expect(git.deleteBranch).toHaveBeenCalled();
+    expect(execGh).not.toHaveBeenCalled();
   });
 
   it.each([

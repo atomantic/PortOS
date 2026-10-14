@@ -25,6 +25,7 @@ import { processAuditRecoveryOriginSchema } from './persistentMindProcessAudit.j
 import { normalizeReviewers } from './reviewerConfig.js';
 import { quotaBurnAgentMetadata } from './quotaBurnOrigin.js';
 import { claimOwnershipBinding } from './claimContinuation.js';
+import { explicitPrCompletion } from './prDisposition.js';
 
 /**
  * How this run is dispatched, as one closed vocabulary rather than the nested
@@ -94,6 +95,8 @@ export function buildAgentRegistration({
     // before this shipped carries null, which the card reads as plain text.
     repoIssueUrl,
     worktreeBranch: worktreeInfo?.branchName || null,
+    // Keep explicit handoffs after task archival; omitted policy is not a grant.
+    prCompletionPolicy: explicitPrCompletion(task),
     isWorktree: !!worktreeInfo,
     isPersistentWorktree: !!worktreeInfo?.isPersistentWorktree,
     isRecovery: isTruthyMeta(task.metadata?.isRecovery),

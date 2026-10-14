@@ -172,10 +172,10 @@ const PR_LIST_LIMIT = 200;
  *   an inactive dirty claim is actionable only when `abandonedClaimWorktree` is true.
  * @returns {'ABANDONED_WIP'|'MERGED'|'CONFLICTED'|'IN_REVIEW'|'NEEDS_PR'|'WIP'}
  */
-export function classifyBranch({ hasUpstream, ahead = null, hasOrigin = false, isMerged, worktreeDirty, abandonedAgentWorktree, abandonedClaimWorktree, liveOwnerReason = null, openPr, prStateUnavailable = false }) {
+export function classifyBranch({ hasUpstream, ahead = null, hasOrigin = false, isMerged, worktreeDirty, abandonedAgentWorktree, abandonedClaimWorktree, liveOwnerReason = null, completionPolicyReason = null, openPr, prStateUnavailable = false }) {
   // A draft is an explicit human-review handoff, even after its agent exits.
   // Protect it before dirty/merged classification can delegate or retire it.
-  if (openPr?.isDraft) return 'WIP';
+  if (openPr?.isDraft || completionPolicyReason) return 'WIP';
   // A dead agent's worktree that still holds uncommitted work is the ONE dirty
   // case that must be driven rather than skipped — and it must be caught BEFORE
   // the `isMerged` test, because an agent that exited without committing leaves
@@ -930,6 +930,9 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
     (b) => !b.isDefault && !b.current && !protectedSet.has(b.name)
   );
 
+  const { readBranchCompletionPolicies, readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
+  const completionPolicies = candidates.length ? await readBranchCompletionPolicies().catch(() => null) : [];
+
   const inputs = [];
   for (const b of candidates) {
     const upstreamName = upstreamBranchName(b.tracking);
@@ -950,9 +953,16 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
     const tipOut = await execGit(['rev-parse', b.name], repoPath, { ignoreExitCode: true }).catch(() => null);
     const tip = (tipOut?.stdout || '').trim() || null;
     const claimOwnerReason = resolveClaimOwnerReason({ branch: b.name, path: worktreePath, claimOwners, sourceWorkspace: repoPath });
+    const completionPolicyReason = await readBranchCompletionHold({ repoPath, branch: b.name, prUrl: prsByHead.get(b.name)?.url, tip, agents: completionPolicies, retirement: hasMergeEvidence });
     inputs.push({
       branch: b.name,
       tip,
+      completionPolicyReason,
+      ...(completionPolicyReason ? { completionPolicyWorkflow: completionPolicyReason === 'pr-completion-review-required'
+        ? 'Resume the configured review workflow; delivery success does not prove review passed.'
+        : completionPolicyReason === 'pr-completion-human-handoff'
+          ? 'Await the human handoff or an explicit later authorization for this exact PR.'
+          : 'Restore readable completion-policy records before reconciling this branch.' } : {}),
       hasUpstream: Boolean(b.tracking),
       hasOrigin,
       // Kept alongside the boolean because cleanup needs the NAME, not just the
@@ -1032,37 +1042,18 @@ export function describeIdleReconcilePark(skipped = [], heldLive = []) {
   };
 }
 
-/**
- * Release only exact issue claims whose local retirement already succeeded.
- * Keep forge/account resolution aligned with the reconcile cycle, including
- * enterprise hosts. A forge outage must never undo or block local cleanup.
- * The in-progress marker keeps the issue ineligible for a new claim until this
- * edit: deleting the local branch alone does not release it to the claim queue.
- * A fresh assignee read preserves claims now held by another account.
- */
-async function releaseRetiredClaim(repoPath, branch, { origin, forgeExec, forgeAccount = null } = {}) {
+// A local checkout can be retired without owning the global issue reservation.
+// Peer installs share a forge login, and a peer may reserve before its first
+// commit/push. Neither that login nor an absent remote branch proves release
+// authority. Leave issue markers untouched and report their unverified state.
+async function retainedClaimMarkers(repoPath, branch, { origin } = {}) {
   const issue = /^claim\/issue-([1-9]\d*)$/.exec(branch)?.[1];
-  if (!issue) return;
-  await (async () => {
-    const target = origin === undefined ? await getOriginInfo(repoPath) : origin;
-    const repoSpec = githubRepoSpec(target);
-    if (!repoSpec) return;
-    const { cwd, env } = forgeExec || await resolveForgeExecOptions(repoPath, { forgeAccount });
-    const login = (await execGh([
-      'api', 'user', '--hostname', githubApiHost(target.host), '--jq', '.login'
-    ], undefined, { cwd, env })).trim();
-    const current = safeJSONParse(await execGh([
-      'issue', 'view', issue, '--repo', repoSpec, '--json', 'assignees'
-    ], undefined, { cwd, env }), null);
-    if (!login || !Array.isArray(current?.assignees)) throw new Error('claim ownership unavailable');
-    if (current.assignees.length !== 1 || current.assignees[0]?.login !== login) return;
-    await execGh([
-      'issue', 'edit', issue, '--repo', repoSpec,
-      '--remove-assignee', '@me', '--remove-label', 'in-progress'
-    ], undefined, { cwd, env });
-  })().catch(() => {
-    console.log(`⚠️ branch-reconcile: could not release claim markers for #${issue} after local cleanup`);
-  });
+  if (!issue) return null;
+  const target = origin === undefined ? await getOriginInfo(repoPath).catch(() => null) : origin;
+  if (target && !githubRepoSpec(target)) return null;
+  const hold = { branch, issue: Number(issue), reason: 'claim-reservation-owner-unverified', markerState: 'unknown', ownerState: 'unknown' };
+  console.warn(`🔒 branch-reconcile: issue #${issue} markers untouched; reservation owner/state unverified`);
+  return hold;
 }
 
 /**
@@ -1112,6 +1103,7 @@ async function releaseRetiredClaim(repoPath, branch, { origin, forgeExec, forgeA
 export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAgentIds = new Set(), claimOwners, origin, forgeExec, forgeAccount = null } = {}) {
   const cleaned = [];
   const skipped = [];
+  const claimMarkersHeld = [];
   for (const b of merged) {
     // Re-verify at action time — state may have shifted since the gather.
     const hasMergeEvidence = await hasBranchMergeEvidence(repoPath, b.branch, defaultBranch);
@@ -1135,10 +1127,11 @@ export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAge
       skipped.push({ branch: b.branch, ...failure });
       continue;
     }
-    await releaseRetiredClaim(repoPath, b.branch, { origin, forgeExec, forgeAccount });
+    const markerHold = await retainedClaimMarkers(repoPath, b.branch, { origin });
+    if (markerHold) claimMarkersHeld.push(markerHold);
     cleaned.push(b.branch);
   }
-  return { cleaned, skipped };
+  return { cleaned, skipped, claimMarkersHeld };
 }
 
 /**
@@ -1503,10 +1496,12 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSup
     ? await resolveForgeExecOptions(repoPath, { forgeAccount })
     : null;
   // The early reaper may have deleted the branch before gather can see it.
-  // Release these claims even when the subsequent forge probe is unavailable.
+  // Report their global reservation separately, including during forge outages.
+  const claimMarkersHeld = [];
   for (const entry of worktreeCleanup.reaped || []) {
     if (!entry?.branchDeleted) continue;
-    await releaseRetiredClaim(repoPath, entry.branch, { origin, forgeExec, forgeAccount });
+    const markerHold = await retainedClaimMarkers(repoPath, entry.branch, { origin });
+    if (markerHold) claimMarkersHeld.push(markerHold);
   }
   if (forgeExec) {
     const forge = await ensureForgeReachable('branch-reconcile', {
@@ -1514,7 +1509,7 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSup
       ...(forgeExec?.customEnv ? { env: forgeExec.customEnv } : {}),
     });
     if (!forge.ok) {
-      return { defaultBranch: null, cleaned: cleanedWorktrees, inFlight: [], wip: [], skipped: [], forgeUnavailable: true, forgeStatus: forge.status };
+      return { defaultBranch: null, cleaned: cleanedWorktrees, inFlight: [], wip: [], skipped: [], claimMarkersHeld, forgeUnavailable: true, forgeStatus: forge.status };
     }
   }
 
@@ -1564,7 +1559,7 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSup
   // running sessions" rather than a bare "nothing actionable") filters `wip` on it.
   const wip = classified.filter((c) => c.state === 'WIP');
 
-  const { cleaned: cleanedBranches, skipped } = cleanup
+  const { cleaned: cleanedBranches, skipped, claimMarkersHeld: mergedMarkerHolds = [] } = cleanup
     ? await cleanupMerged(repoPath, defaultBranch, merged, { activeAgentIds, claimOwners, origin, forgeExec, forgeAccount })
     : { cleaned: [], skipped: merged.map((m) => ({ branch: m.branch, reason: 'cleanup-disabled' })) };
   // Detached worktrees have no branch, so nothing above can see them (#10825).
@@ -1588,6 +1583,7 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSup
   return {
     defaultBranch,
     cleaned,
+    claimMarkersHeld: [...claimMarkersHeld, ...mergedMarkerHolds],
     // Kept OUT of `cleaned`: readers of that key render it as "deleted merged
     // branch" (repoSync.js) and a superseded branch is precisely not merged.
     reapedSuperseded: supersededReap.reaped,
@@ -1740,7 +1736,8 @@ export const driveToMerge = (pr) => [
   'A conflict-free branch with passing current-head required checks and satisfied configured reviews may merge behind the default branch. Base movement alone does not require rebasing or restarting CI.',
   `Wait for CI in-session by re-polling \`gh pr checks ${pr} --required\` every 30s so the run stays observable while CI is pending. Budget 15 minutes for the run; past that, leave the PR open and report that CI was still pending.`,
   'If a required check FAILS, fix it on the branch, push, and re-poll (max 3 rounds); if it is still red after that, leave the PR open and report exactly which check failed.',
-  `Once every required check is green AND the PR is MERGEABLE, merge it — from the repo root, NOT from inside the branch's worktree (\`gh\` can't delete a branch that is checked out elsewhere): \`gh pr merge ${pr} --merge --delete-branch\`. Repos differ in which methods they allow, so on a "not allowed" error retry with \`--squash\`, then \`--rebase\`. Never \`--auto\`: a queued auto-merge outlives this run, so a check that goes red afterward has nobody left to fix it.`,
+  'Record the exact local branch head whose checks and configured reviews passed as <verified-head>; immediately before merging, repeat the ownership/policy Recheck and require the forge PR head to equal that same head. If either changed, stop and revalidate. Every merge attempt, including a method retry, must retain --match-head-commit <verified-head>.',
+  `Once every required check is green AND the PR is MERGEABLE, merge it — from the repo root, NOT from inside the branch's worktree (\`gh\` can't delete a branch that is checked out elsewhere): \`gh pr merge ${pr} --merge --delete-branch --match-head-commit <verified-head>\`. Repos differ in which methods they allow, so on a "not allowed" error retry with \`--squash\`, then \`--rebase\`. Never \`--auto\`: a queued auto-merge outlives this run, so a check that goes red afterward has nobody left to fix it.`,
   'After the merge, remove the branch\'s worktree first, then delete the local branch — the delete fails while a worktree still has it checked out.'
 ].join(' ');
 

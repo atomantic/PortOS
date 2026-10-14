@@ -612,7 +612,7 @@ async function observePrClaim({ task, workspacePath, success, prExpected, agentS
         message: `This run requires an open draft ${noun}; the forge did not confirm that disposition for ${branch}` });
     }
     const issueNumber = issueNumberFromRef(branch);
-    if (issueNumber === null) return prObservation(PR_OBSERVATION.VERIFIED_CLAIM, { branch });
+    if (issueNumber === null) return prObservation(PR_OBSERVATION.VERIFIED_CLAIM, { branch, url: found.url });
     if (typeof found.body !== 'string') {
       // An unreadable body cannot distinguish a missing trailer from a present
       // one, so it is a forge failure, never the agent's.
@@ -622,10 +622,10 @@ async function observePrClaim({ task, workspacePath, success, prExpected, agentS
         inconclusive: true,
       });
     }
-    if (hasIssueClosingTrailer(found.body, issueNumber)) return prObservation(PR_OBSERVATION.VERIFIED_CLAIM, { branch });
+    if (hasIssueClosingTrailer(found.body, issueNumber)) return prObservation(PR_OBSERVATION.VERIFIED_CLAIM, { branch, url: found.url });
     if (hasIssuePartialTrailer(found.body, issueNumber)) {
       return prObservation(PR_OBSERVATION.VERIFIED_CLAIM, {
-        branch,
+        branch, url: found.url,
         advisory: `${titleNoun} for branch ${branch} partially ships issue #${issueNumber}; reconcile the remaining scope after merge.`,
       });
     }
@@ -1411,6 +1411,11 @@ export async function finalizeAgent({
     task, workspacePath, success: reportedSuccess, agentId, agentSummary,
   });
   const prEvidence = resolvePrEvidence({ primaryObservation: primaryPrObservation, noChangeObservation });
+  if (primaryPrObservation.outcome === PR_OBSERVATION.VERIFIED_CLAIM && primaryPrObservation.url) {
+    const { recordBranchCompletionPolicy } = await import('./branchCompletionPolicy.js');
+    await recordBranchCompletionPolicy({ agentId, task, repoPath: workspacePath,
+      branch: primaryPrObservation.branch, prUrl: primaryPrObservation.url });
+  }
   const branchProvenEmpty = prEvidence.branchProvenEmpty;
 
   // Record the verdict in the lifecycle ledger (#4540) — but ONLY for an outcome
