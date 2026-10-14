@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { getApiRouteCatalog } from './apiRouteGraph.js';
 import {
-  HOST_CONTROL_ROUTES, changedVoiceConfigHostControlPaths, hostControlBodyKeys, hostControlSettingsPathsIn,
+  HOST_CONTROL_ROUTES, HOST_CONTROL_SETTINGS_SLICES, changedVoiceConfigHostControlPaths, hostControlBodyKeys, hostControlSettingsPathsIn,
   hostControlRouteFor, isHostControlRoute, voiceConfigHostControlPathsIn,
 } from './hostControlRoutes.js';
 import { LLM_DRILL_TYPES } from './postDrillTypes.js';
@@ -1021,5 +1021,21 @@ describe('Media process execution policy', () => {
       ['POST', '/api/music-video/lyrics/align/:jobId/cancel'],
       ['GET', '/api/loras'],
     ]) expect(isHostControlRoute(method, path), `${method} ${path}`).toBe(false);
+  });
+});
+
+describe('Telegram bot and bridge authority policy (#11431)', () => {
+  it('gates every mutating Telegram route while keeping status open', () => {
+    const mutations = getApiRouteCatalog().routes.filter(({ method, path }) =>
+      /^(POST|PUT|PATCH|DELETE)$/.test(method) && /^\/api\/telegram(\/|$)/.test(path));
+    expect(mutations.length).toBe(6);
+    for (const { method, path } of mutations) {
+      expect(isHostControlRoute(method, path), `${method} ${path} should be gated`).toBe(true);
+    }
+    expect(isHostControlRoute('GET', '/api/telegram/status')).toBe(false);
+  });
+
+  it('includes telegram in HOST_CONTROL_SETTINGS_SLICES', () => {
+    expect(HOST_CONTROL_SETTINGS_SLICES).toContain('telegram');
   });
 });
