@@ -158,6 +158,27 @@ function useLyricOverlay({ project, enabled, audioRef, time }) {
 // wider than a fraction of a frame re-seeks it.
 const CLIP_DRIFT_SEC = 0.25;
 const CLIP_PAUSED_DRIFT_SEC = 0.01;
+// A clip still fetching after a seek gets this long before it is moved again: each seek
+// restarts its download, so on a slow phone link re-seeking on every time update never lets
+// it catch up.
+const CLIP_RESEEK_WAIT_MS = 1500;
+// A clip that fails to load is tried again this many times, a little later each time.
+const CLIP_LOAD_RETRIES = 2;
+const CLIP_RETRY_MS = 1500;
+// A playing shot's clip whose download stalls is restarted at most this often.
+const CLIP_STALL_RELOAD_MS = 5000;
+
+/**
+ * Lets the browser drop a video's download and decoder. Removing the element
+ * alone does not: iOS Safari keeps both until the element is collected, and
+ * after a few dozen cuts it stops loading new clips at all.
+ */
+function releaseVideo(video) {
+  if (!video) return;
+  video.pause?.();
+  video.removeAttribute('src');
+  video.load?.();
+}
 
 /**
  * Where song time `t` lands in a shot's clip: the take's edit-in point (a
@@ -207,10 +228,16 @@ const ANIMATIC_LOOK_KEY = 'portos-mv-animatic-look';
  * seek or drift puts it back at the song's place in the shot. A shot still to
  * come waits paused on its first frame. The clip stays transparent until it has
  * a frame to show, so the shot's still underneath covers the load and the seek.
+ * `preload` is 'auto' for the shot on screen and the next one, else 'metadata',
+ * so a phone spends its bandwidth on the clip it needs first. A clip that fails
+ * to load is retried, a stalled one restarted, and a removed one releases its
+ * download and decoder.
  */
-function ShotClip({ scene, audioRef, time, current }) {
+function ShotClip({ scene, audioRef, time, current, preload = 'auto' }) {
   const videoRef = useRef(null);
   const [ready, setReady] = useState(false);
+  const [reload, setReload] = useState(0);
+  const recovery = useRef({ errors: 0, timer: 0, lastSeekAt: 0, lastReloadAt: 0 });
   const file = useVideoFileSrc(scene.videoHistoryId);
   const src = file.src || (file.resolving ? null : `/data/videos/${scene.videoHistoryId}.mp4`);
   const sync = useCallback(() => {
@@ -222,7 +249,12 @@ function ShotClip({ scene, audioRef, time, current }) {
     // A browser cannot play a clip backwards, so a reversed clip stays paused and is stepped to each frame.
     const reversed = clipReversed(scene);
     const tolerance = current && (audio.paused || reversed) ? CLIP_PAUSED_DRIFT_SEC : CLIP_DRIFT_SEC;
-    if (Math.abs((video.currentTime || 0) - target) > tolerance && !(reversed && video.seeking)) video.currentTime = target;
+    // A clip still seeking, or still fetching after its last seek, is left to land; its `seeked` re-checks it.
+    const settling = video.seeking || (video.readyState < 3 && performance.now() - recovery.current.lastSeekAt < CLIP_RESEEK_WAIT_MS);
+    if (Math.abs((video.currentTime || 0) - target) > tolerance && !settling) {
+      video.currentTime = target;
+      recovery.current.lastSeekAt = performance.now();
+    }
     // The shot's hand-set speed; a negative offset's lead holds the first frame.
     video.playbackRate = clipSpeedRate(scene);
     const leading = (scene.startSec || 0) - clipOffsetSec(scene) - (selectedPerformanceInstruction(scene)?.edit?.inSec ?? 0) > (audio.currentTime || 0);
@@ -236,6 +268,28 @@ function ShotClip({ scene, audioRef, time, current }) {
     if (video && video.readyState >= 2 && !video.seeking) setReady(true);
   }, []);
   useEffect(() => { sync(); }, [time, sync]);
+  // Each mounted element (a retry remounts it) lets go of its download when it leaves.
+  useEffect(() => {
+    const video = videoRef.current;
+    return () => releaseVideo(video);
+  }, [src, reload]);
+  useEffect(() => () => clearTimeout(recovery.current.timer), []);
+  const retryLoad = () => {
+    const state = recovery.current;
+    if (state.errors >= CLIP_LOAD_RETRIES) return;
+    state.errors += 1;
+    clearTimeout(state.timer);
+    state.timer = setTimeout(() => { file.retry(); setReload((n) => n + 1); }, CLIP_RETRY_MS * state.errors);
+  };
+  // A download that stalls while its shot plays is restarted; its metadata re-seeks it.
+  const restartStalled = () => {
+    const video = videoRef.current;
+    const state = recovery.current;
+    if (!video || !current || audioRef.current?.paused || video.readyState >= 3) return;
+    if (performance.now() - state.lastReloadAt < CLIP_STALL_RELOAD_MS) return;
+    state.lastReloadAt = performance.now();
+    video.load?.();
+  };
   // The song's time updates are too coarse to step a reversed clip, so it follows every animation frame.
   const reversed = clipReversed(scene);
   useEffect(() => {
@@ -257,15 +311,18 @@ function ShotClip({ scene, audioRef, time, current }) {
   const fit = sceneFrameFit(scene);
   return (
     <video
+      key={reload}
       ref={videoRef}
       src={src}
       muted
       playsInline
-      preload="auto"
+      preload={preload}
       onLoadedMetadata={sync}
       onLoadedData={markReady}
-      onSeeked={markReady}
+      onSeeked={() => { markReady(); sync(); }}
       onPlaying={markReady}
+      onError={retryLoad}
+      onStalled={restartStalled}
       aria-label={`Clip for ${scene.label || 'this shot'}`}
       aria-hidden={current ? undefined : true}
       data-ready={ready ? 'true' : 'false'}
@@ -300,6 +357,10 @@ function ToggleClip({ scene, toggle, audioRef, time }) {
     else if (el.paused) el.play?.()?.catch?.(() => {});
   }, [toggle, scene, audioRef]);
   useEffect(() => { apply(time); }, [time, apply]);
+  useEffect(() => {
+    const el = mediaRef.current;
+    return () => { if (el?.tagName === 'VIDEO') releaseVideo(el); };
+  }, [src]);
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return undefined;
@@ -471,7 +532,8 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
           </div>
         ) : null}
         {clipShots.map((scene) => (
-          <ShotClip key={`${scene.sceneId}:${scene.videoHistoryId}`} scene={scene} audioRef={audioRef} time={time} current={scene === shot} />
+          <ShotClip key={`${scene.sceneId}:${scene.videoHistoryId}`} scene={scene} audioRef={audioRef} time={time} current={scene === shot}
+            preload={timed.indexOf(scene) - Math.max(index, 0) <= 1 ? 'auto' : 'metadata'} />
         ))}
         {nearToggles.map((toggle) => {
           const incoming = scenes.find((scene) => scene.sceneId === toggle.toSceneId);

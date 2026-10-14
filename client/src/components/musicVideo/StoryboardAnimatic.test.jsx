@@ -118,6 +118,8 @@ describe('StoryboardAnimatic clips', () => {
     Object.defineProperty(audio, 'currentTime', { value: 12, configurable: true });
     fireEvent.timeUpdate(audio);
     expect(screen.queryByLabelText('Clip for Opening')).toBeNull();
+    // The cut lets go of the clip's download, so a phone does not run out of decoders.
+    expect(clip.getAttribute('src')).toBeNull();
     expect(container.querySelector('img').getAttribute('src')).toBe('/data/images/frame-b.png');
   });
 
@@ -164,6 +166,9 @@ describe('StoryboardAnimatic clips', () => {
     expect(screen.getByLabelText('Clip for Three')).toBeTruthy();
     expect(screen.queryByLabelText('Clip for Four')).toBeNull();
     expect(next.getAttribute('aria-hidden')).toBe('true');
+    // The next clip loads in full; the one after it only its metadata until it is next.
+    expect(next.getAttribute('preload')).toBe('auto');
+    expect(screen.getByLabelText('Clip for Three').getAttribute('preload')).toBe('metadata');
     Object.defineProperty(next, 'readyState', { value: 4, configurable: true });
     fireEvent.seeked(next);
     expect(next.className).toContain('opacity-0');
@@ -173,6 +178,38 @@ describe('StoryboardAnimatic clips', () => {
     expect(screen.getByLabelText('Clip for Two')).toBe(next);
     expect(next.className).toContain('opacity-100');
     expect(await screen.findByLabelText('Clip for Four')).toBeTruthy();
+  });
+
+  // Uniquely catches a slow link stuck re-seeking: each seek restarts the download, so a clip chased every time update never plays.
+  it('lets a playing clip fetch after a seek before moving it again', async () => {
+    render(<StoryboardAnimatic project={{ id: 'p', scenes: clipScenes }} audioUrl="/song.mp3" />);
+    const clip = await screen.findByLabelText('Clip for Opening');
+    await waitFor(() => expect(clip.getAttribute('src')).toBe('/data/videos/clip-a.mov'));
+    clip.play = vi.fn(() => Promise.resolve());
+    clip.pause = vi.fn();
+    const audio = screen.getByLabelText('Song for the storyboard animatic');
+    Object.defineProperty(audio, 'paused', { value: false, configurable: true });
+    Object.defineProperty(clip, 'readyState', { value: 1, configurable: true });
+    const at = (t) => { Object.defineProperty(audio, 'currentTime', { value: t, configurable: true }); fireEvent.timeUpdate(audio); };
+    at(3);
+    expect(clip.currentTime).toBeCloseTo(3, 6);
+    clip.currentTime = 3.1;
+    at(4);
+    expect(clip.currentTime).toBeCloseTo(3.1, 6);
+    // Once its seek lands with data to play, it is checked again and put back in step.
+    Object.defineProperty(clip, 'readyState', { value: 4, configurable: true });
+    fireEvent.seeked(clip);
+    expect(clip.currentTime).toBeCloseTo(4, 6);
+  });
+
+  it('tries a clip that fails to load again', async () => {
+    render(<StoryboardAnimatic project={{ id: 'p', scenes: clipScenes }} audioUrl="/song.mp3" />);
+    const clip = await screen.findByLabelText('Clip for Opening');
+    await waitFor(() => expect(clip.getAttribute('src')).toBe('/data/videos/clip-a.mov'));
+    fireEvent.error(clip);
+    await waitFor(() => expect(screen.getByLabelText('Clip for Opening')).not.toBe(clip), { timeout: 3000 });
+    await waitFor(() => expect(screen.getByLabelText('Clip for Opening').getAttribute('src')).toBe('/data/videos/clip-a.mov'));
+    expect(clip.getAttribute('src')).toBeNull();
   });
 
   it('steps the song to the next and previous shot starts', () => {
