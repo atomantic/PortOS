@@ -249,8 +249,12 @@ function ShotClip({ scene, audioRef, time, current, preload = 'auto' }) {
     // A browser cannot play a clip backwards, so a reversed clip stays paused and is stepped to each frame.
     const reversed = clipReversed(scene);
     const tolerance = current && (audio.paused || reversed) ? CLIP_PAUSED_DRIFT_SEC : CLIP_DRIFT_SEC;
-    // A clip still seeking, or still fetching after its last seek, is left to land; its `seeked` re-checks it.
-    const settling = video.seeking || (video.readyState < 3 && performance.now() - recovery.current.lastSeekAt < CLIP_RESEEK_WAIT_MS);
+    // A clip still seeking is left to land; its `seeked` re-checks it. A clip playing forward
+    // that is still fetching after its last seek gets a moment too. Paused or reversed, it must
+    // show the exact frame, so it moves at once.
+    const fetching = current && !audio.paused && !reversed && video.readyState < 3
+      && performance.now() - recovery.current.lastSeekAt < CLIP_RESEEK_WAIT_MS;
+    const settling = video.seeking || fetching;
     if (Math.abs((video.currentTime || 0) - target) > tolerance && !settling) {
       video.currentTime = target;
       recovery.current.lastSeekAt = performance.now();

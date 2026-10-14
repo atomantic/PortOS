@@ -202,6 +202,21 @@ describe('StoryboardAnimatic clips', () => {
     expect(clip.currentTime).toBeCloseTo(4, 6);
   });
 
+  it('steps a paused clip to each frame while it is still fetching', async () => {
+    render(<StoryboardAnimatic project={{ id: 'p', scenes: clipScenes }} audioUrl="/song.mp3" />);
+    const clip = await screen.findByLabelText('Clip for Opening');
+    await waitFor(() => expect(clip.getAttribute('src')).toBe('/data/videos/clip-a.mov'));
+    clip.pause = vi.fn();
+    const audio = screen.getByLabelText('Song for the storyboard animatic');
+    Object.defineProperty(audio, 'paused', { value: true, configurable: true });
+    Object.defineProperty(clip, 'readyState', { value: 2, configurable: true });
+    const at = (t) => { Object.defineProperty(audio, 'currentTime', { value: t, configurable: true }); fireEvent.timeUpdate(audio); };
+    at(3);
+    expect(clip.currentTime).toBeCloseTo(3, 6);
+    at(3.5);
+    expect(clip.currentTime).toBeCloseTo(3.5, 6);
+  });
+
   it('tries a clip that fails to load again', async () => {
     render(<StoryboardAnimatic project={{ id: 'p', scenes: clipScenes }} audioUrl="/song.mp3" />);
     const clip = await screen.findByLabelText('Clip for Opening');
