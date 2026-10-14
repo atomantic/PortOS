@@ -517,6 +517,41 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     }
   }, 120000);
 
+  // Uniquely catches correct timing metadata paired with an unretimed staged file.
+  [
+    { timing: { speedFps: 24, offsetFrames: 12 }, samples: [[0, 1], [5, 1], [6, 2]] },
+    { timing: { offsetFrames: -6 }, samples: [[0, 0], [17, 0], [18, 1], [29, 1], [30, 2]] },
+  ].forEach(({ timing, samples }) => it(`renders shot speed and offset ${JSON.stringify(timing)} into the document pixels`, async () => {
+    await mkdir(PATHS.videos, { recursive: true });
+    await mkdir(PATHS.music, { recursive: true });
+    const clip = join(PATHS.videos, 'timed-rgb.webm');
+    execFileSync(ffmpeg, ['-v', 'error', '-y',
+      '-f', 'lavfi', '-i', 'color=c=red:s=64x36:r=24:d=0.5',
+      '-f', 'lavfi', '-i', 'color=c=lime:s=64x36:r=24:d=0.5',
+      '-f', 'lavfi', '-i', 'color=c=blue:s=64x36:r=24:d=0.5',
+      '-filter_complex', '[0:v][1:v][2:v]concat=n=3:v=1:a=0', '-c:v', 'libvpx', clip]);
+    const master = join(PATHS.music, 'timed-master.wav');
+    execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=1.5', master]);
+    const created = await projects.createProject({ name: 'Synthetic shot timing' });
+    await projects.mutateProjectRecord(created.id, current => ({ project: { ...current,
+      audioAnalysis: { durationSec: 1.5, sections: [] },
+      scenes: [{ sceneId: 'timed', startSec: 0, endSec: 1.5, videoHistoryId: 'vh-timed', ...timing }],
+    } }));
+    await writeFile(join(PATHS.data, 'video-history.json'), JSON.stringify([{ id: 'vh-timed', filename: 'timed-rgb.webm', numFrames: 36, fps: 24, width: 64, height: 36 }]));
+    await importDocumentTemplate(created.id);
+    const project = await projects.getProject(created.id);
+    const outputPath = join(PATHS.videos, 'timed-output.mp4');
+    await encodeDocumentComposition({ project, plan: await prepareDocumentRender(project), jobId: 'timed-pixels', audioPath: master, outputPath });
+    const pixels = execFileSync(ffmpeg, ['-v', 'error', '-i', outputPath, '-vf', 'scale=64:36', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
+    for (const [frame, channel] of samples) {
+      const at = (frame * 64 * 36 + 18 * 64 + 32) * 3;
+      const rgb = [...pixels.subarray(at, at + 3)];
+      expect(rgb).toHaveLength(3);
+      expect(rgb[channel], `frame ${frame}`).toBeGreaterThan(180);
+      rgb.forEach((value, i) => { if (i !== channel) expect(value, `frame ${frame}`).toBeLessThan(60); });
+    }
+  }, 120000));
+
   it('draws the selected take at SONG time in an excerpt, identically on every render, with the master muxed', async () => {
     const { cdpRequest } = await import('../browserService.js');
     const managedCalls = cdpRequest.mock.calls.length;
