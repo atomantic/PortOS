@@ -483,6 +483,23 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/midi-runtime/install',
   'POST /api/devtools/video-download/yt-dlp/update',
 
+  // Video and audio downloads shell out to yt-dlp and ffmpeg on the host.
+  'POST /api/devtools/video-download',
+  'POST /api/tracks/import/youtube',
+  'POST /api/rounds/reference-audio/import',
+
+  // Audio-to-MIDI transcription runs the local MuScriptor Python sidecar on the host.
+  'POST /api/music-video/:id/transcribe-midi',
+  'POST /api/rounds/reference-audio/transcribe-midi',
+
+  // Vocal stem separation provisions a demucs venv and runs neural separation on the host.
+  'POST /api/music-video/:id/vocal-stem/separate',
+  // Lyric alignment downloads models and spawns whisper or neural CTC on the host.
+  'POST /api/music-video/:id/lyrics/align',
+
+  // LoRA effect probe spawns Python on the host to analyze adapter tensors.
+  'POST /api/loras/:filename/effect',
+
   // Media authoring can launch a coding CLI/TUI agent, including via provider
   // fallback. Gate the whole operation even when the initial provider is API;
   // runtime-data cwd and later render containment do not sandbox authoring.
