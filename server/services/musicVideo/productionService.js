@@ -623,7 +623,7 @@ function advanceInBackground(projectId, runId) {
     console.error(`❌ Music Video production ${short(runId)} step failed: ${err.message}`);
     await halt(projectId, runId, { status: 'stopped', reason: `A step failed: ${err.message}`, error: err.message })
       .then((out) => publish(projectId, out.project, out.run, { type: 'idle' }))
-      .catch(() => {});
+      .catch((haltErr) => console.error(`❌ Music Video production ${short(runId)} could not halt project ${projectId} after the step failure: ${haltErr.message}`));
   }));
 }
 
