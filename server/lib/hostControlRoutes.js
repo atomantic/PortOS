@@ -174,6 +174,11 @@ import { LLM_DRILL_TYPES } from './postDrillTypes.js';
 import { escapeRegExp } from './textUtils.js';
 
 export const HOST_CONTROL_ROUTES = Object.freeze([
+  // Stacker News review authorizes a later saved-key publication or browser
+  // handoff; both the decision and execution require operator authority.
+  'POST /api/stacker-news/actions/:id/review',
+  'POST /api/stacker-news/actions/:id/execute',
+
   // Sending a draft performs an external mail side effect as the operator (#11273).
   'POST /api/messages/drafts/:id/send',
 
