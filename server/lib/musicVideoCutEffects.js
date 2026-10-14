@@ -7,9 +7,10 @@
  * `beat-toggle`: over the last moments of the outgoing shot both clips play and
  * the picture flips between them on the song's beats, incoming first
  * (incoming, outgoing, incoming, …), then the incoming shot carries on. Its
- * clip keeps running from where the toggle started it, so the cut lands mid-
- * motion; a lip-synced (performance) shot instead starts from its in-point at
- * the cut, so its mouth stays on the words.
+ * clip runs on the song's clock: during the flips it shows the footage just
+ * before its in-point (as its speed and offset place it), so beat-timed motion
+ * and a lip-sync stay on the song, and the shot itself starts exactly where it
+ * would without the toggle.
  *
  * One definition serves both players: the final render overlays the incoming
  * clip on exactly the frames `beatToggleCuts` names, and the storyboard
@@ -76,15 +77,13 @@ export function beatToggleSwitches({ cutSec, overlapSec, rate = 'beat', beats = 
 
 /**
  * The beat toggles on a cut timeline. `pieces` are its sections in order,
- * `{ sceneId, startFrame, endFrame, partner?, cutEffect?, performance? }` on one
+ * `{ sceneId, startFrame, endFrame, partner?, cutEffect? }` on one
  * frame grid (`cutEffect` as `sceneCutEffect` returns it). A toggle plays on the
  * cut out of a shot's last piece into the next shot's first; an intercut
  * partner piece on either side carries none. Returns, per toggle:
- * `{ index, cutFrame, windowFrames, incoming: [[from, to)], leadFrames }` with
- * `index` the outgoing piece, `incoming` the frames (on the timeline) that show
- * the incoming clip, `windowFrames` how many frames before the cut the incoming
- * clip starts playing, and `leadFrames` how far its clip has run by the cut
- * (0 for a performance shot, which starts again at its in-point).
+ * `{ index, cutFrame, windowFrames, incoming: [[from, to)] }` with `index` the
+ * outgoing piece, `incoming` the frames (on the timeline) that show the incoming
+ * clip, and `windowFrames` how many frames before the cut its clip is read.
  */
 export function beatToggleCuts(pieces, { fps, beats = [] }) {
   const list = Array.isArray(pieces) ? pieces : [];
@@ -111,7 +110,7 @@ export function beatToggleCuts(pieces, { fps, beats = [] }) {
     const incoming = [];
     for (let k = 0; k < switches.length; k += 2) incoming.push([switches[k], k + 1 < switches.length ? switches[k + 1] : cutFrame]);
     const windowFrames = cutFrame - switches[0];
-    out.push({ index: i, cutFrame, windowFrames, incoming, leadFrames: to.performance ? 0 : windowFrames });
+    out.push({ index: i, cutFrame, windowFrames, incoming });
   }
   return out;
 }
@@ -119,17 +118,16 @@ export function beatToggleCuts(pieces, { fps, beats = [] }) {
 /**
  * The storyboard's beat toggles in song seconds (the animatic's counterpart of
  * the render's): `[{ fromSceneId, toSceneId, windowStartSec, cutSec, incoming:
- * [[fromSec, toSec)], leadSec }]`. `isPerformance(scene)` says whether a shot
- * plays a lip-synced edit.
+ * [[fromSec, toSec)] }]`.
  */
-export function sceneBeatToggles(scenes, { fps, beats = [], endSec = null, isPerformance = () => false }) {
+export function sceneBeatToggles(scenes, { fps, beats = [], endSec = null }) {
   const timed = (Array.isArray(scenes) ? scenes : []).filter((s) => Number.isFinite(s?.startSec)).sort((a, b) => a.startSec - b.startSec);
   const pieces = timed.map((scene, i) => {
     const next = timed[i + 1];
     const stop = next ? next.startSec : (Number.isFinite(endSec) ? endSec : scene.endSec);
     return {
       sceneId: scene.sceneId, startFrame: Math.round(scene.startSec * fps), endFrame: Math.round((stop ?? scene.startSec) * fps),
-      cutEffect: sceneCutEffect(scene), performance: !!isPerformance(scene),
+      cutEffect: sceneCutEffect(scene),
     };
   });
   return beatToggleCuts(pieces, { fps, beats }).map((t) => ({
@@ -138,6 +136,5 @@ export function sceneBeatToggles(scenes, { fps, beats = [], endSec = null, isPer
     windowStartSec: (t.cutFrame - t.windowFrames) / fps,
     cutSec: t.cutFrame / fps,
     incoming: t.incoming.map(([a, b]) => [a / fps, b / fps]),
-    leadSec: t.leadFrames / fps,
   }));
 }

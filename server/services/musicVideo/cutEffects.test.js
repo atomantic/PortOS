@@ -18,16 +18,15 @@ const H = 48;
 const toggle = (extra = {}) => sceneCutEffect({ cutEffect: { style: 'beat-toggle', overlapSec: 0.5, ...extra } });
 
 // Uniquely catches where a beat toggle flips: which beats (or half beats) in the
-// overlap, the even fallback with no beat grid, which cuts carry one, and a
-// lip-synced shot restarting at its cut rather than running on.
+// overlap, the even fallback with no beat grid, and which cuts carry one.
 describe('beatToggleCuts', () => {
   const piece = (sceneId, startFrame, endFrame, extra = {}) => ({ sceneId, startFrame, endFrame, ...extra });
 
   it('flips to the incoming shot on each beat in the overlap before the cut, incoming first', () => {
     const [cut] = beatToggleCuts([piece('a', 0, 24, { cutEffect: toggle() }), piece('b', 24, 48)], { fps: 24, beats: [0.25, 0.5, 0.75, 1] });
-    expect(cut).toEqual({ index: 0, cutFrame: 24, windowFrames: 12, incoming: [[12, 18]], leadFrames: 12 });
-    const [half] = beatToggleCuts([piece('a', 0, 24, { cutEffect: toggle({ rate: 'half' }) }), piece('b', 24, 48, { performance: true })], { fps: 24, beats: [0.25, 0.5, 0.75, 1] });
-    expect(half).toMatchObject({ incoming: [[12, 15], [18, 21]], leadFrames: 0 });
+    expect(cut).toEqual({ index: 0, cutFrame: 24, windowFrames: 12, incoming: [[12, 18]] });
+    const [half] = beatToggleCuts([piece('a', 0, 24, { cutEffect: toggle({ rate: 'half' }) }), piece('b', 24, 48)], { fps: 24, beats: [0.25, 0.5, 0.75, 1] });
+    expect(half).toMatchObject({ incoming: [[12, 15], [18, 21]] });
     const [even] = beatToggleCuts([piece('a', 0, 24, { cutEffect: toggle() }), piece('b', 24, 48)], { fps: 24 });
     expect(even.incoming).toEqual([[12, 15], [18, 21]]);
   });
@@ -47,44 +46,53 @@ function frameMeans(path) {
 }
 
 // Uniquely catches the toggle's filters failing in ffmpeg, flipping on the wrong
-// frames, adding time, or the incoming clip jumping back to its start at the cut.
+// frames, adding time, or the incoming clip leaving the song's clock: ignoring its
+// in-point (a performance edit or hand-set offset) or speed, or moving the shot itself.
 describe.skipIf(!ffmpeg)('a beat toggle across a cut in the final render', () => {
-  const render = (incomingExtra = {}) => {
-    const song = join(dir, 'song.wav');
+  const song = join(dir, 'song.wav');
+  const outgoing = join(dir, 'outgoing.mp4');
+  const incoming = join(dir, 'incoming.mp4');
+  const render = (incomingTiming) => {
     run(['-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-y', song]);
-    const outgoing = join(dir, 'outgoing.mp4');
-    const incoming = join(dir, 'incoming.mp4');
     run(['-f', 'lavfi', '-i', `color=white:s=${W}x${H}:r=${FPS}:d=1`, '-pix_fmt', 'yuv420p', '-y', outgoing]);
-    // Its brightness climbs 8 levels a frame, so a frame's luma names its place in the clip.
-    run(['-f', 'lavfi', '-i', `color=black:s=${W}x${H}:r=${FPS}:d=2,geq=lum='40+8*N':cb=128:cr=128`, '-pix_fmt', 'yuv420p', '-y', incoming]);
-    const clip = (videoPath, i, extra = {}) => ({ sceneId: `s${i}`, videoPath, width: W, height: H, fps: FPS, duration: i ? 2 : 1, sourceSec: i ? 2 : 1, loop: false, inSec: 0, outSec: 1, frameFit: 'fill', ...extra });
+    // Its brightness climbs 4 levels a frame, so a frame's luma names its place in the clip.
+    run(['-f', 'lavfi', '-i', `color=black:s=${W}x${H}:r=${FPS}:d=4,geq=lum='40+4*N':cb=128:cr=128`, '-pix_fmt', 'yuv420p', '-y', incoming]);
+    const clip = (videoPath, i, extra = {}) => ({ sceneId: `s${i}`, videoPath, width: W, height: H, fps: FPS, duration: 1, sourceSec: 1, loop: false, inSec: 0, outSec: 1, frameFit: 'fill', ...extra });
     const output = join(dir, 'toggle.mp4');
-    const plan = buildMusicVideoFfmpegArgs([clip(outgoing, 0, { cutEffect: toggle() }), clip(incoming, 1, incomingExtra)], song, output,
+    const plan = buildMusicVideoFfmpegArgs([clip(outgoing, 0, { cutEffect: toggle() }), clip(incoming, 1, incomingTiming)], song, output,
       { audioDurationSec: 2, frameGrid: true, beats: [0.5, 0.75, 1, 1.25] });
     run(plan.args.filter((arg, i) => !(arg === '-progress' || plan.args[i - 1] === '-progress')));
     expect(plan.totalDuration).toBe(2);
-    return frameMeans(output);
+    const means = frameMeans(output);
+    expect(means).toHaveLength(2 * FPS);
+    // Outgoing until the first beat (frame 6) and again on frames 9-11, between the flips.
+    expect([0, 5, 9, 11].every((f) => means[f] > 200)).toBe(true);
+    return means;
   };
   // The clip's Y levels read back as full-range gray.
-  const clipFrame = (n) => ((40 + 8 * n - 16) * 255) / 219;
+  const showsClipFrame = (means, f, n) => expect(Math.abs(means[f] - ((40 + 4 * n - 16) * 255) / 219)).toBeLessThan(2.5);
 
-  it('shows the incoming clip on its beats, keeps every frame and carries the clip on through the cut', () => {
-    const means = render();
-    expect(means).toHaveLength(2 * FPS);
-    const white = (f) => means[f] > 200;
-    // Outgoing until the first beat, the incoming clip from its start on frames 6-8, outgoing again on 9-11.
-    expect([0, 5, 9, 11].every(white)).toBe(true);
-    [6, 7, 8].forEach((f, k) => expect(Math.abs(means[f] - clipFrame(k))).toBeLessThan(4));
-    // At the cut the incoming clip is 6 frames in, as far as the toggle ran it.
-    expect(Math.abs(means[12] - clipFrame(6))).toBeLessThan(4);
+  it('reads the footage before an in-point, so the shot still starts at its in-point', () => {
+    // In 0.5 s: the half second before it plays under the flips.
+    const means = render({ inSec: 0.5, outSec: 1.5, sourceSec: 3.5, duration: 1 });
+    [6, 7, 8].forEach((f, k) => showsClipFrame(means, f, k));
+    showsClipFrame(means, 12, 6);
+    showsClipFrame(means, 23, 17);
   });
 
-  // Uniquely catches a non-looping clip with no spare footage running out before its shot ends.
-  it('starts a clip with no footage to spare from its in-point at the cut', () => {
-    const means = render({ duration: 1, sourceSec: 1 });
-    [6, 7, 8].forEach((f, k) => expect(Math.abs(means[f] - clipFrame(k))).toBeLessThan(4));
-    expect(Math.abs(means[12] - clipFrame(0))).toBeLessThan(4);
-    expect(Math.abs(means[23] - clipFrame(11))).toBeLessThan(4);
+  it('holds the first frame where the clip has no footage before its in-point', () => {
+    const means = render({ sourceSec: 4 });
+    [6, 7, 8].forEach((f) => showsClipFrame(means, f, 0));
+    showsClipFrame(means, 12, 0);
+    showsClipFrame(means, 23, 11);
+  });
+
+  it('plays the footage before the in-point at the shot\'s speed', () => {
+    // Twice as fast from 1 s into the clip: on the output timebase it starts at 0.5 s.
+    const means = render({ rate: 2, inSec: 0.5, outSec: 1.5, sourceSec: 1.5, duration: 1 });
+    [6, 7, 8].forEach((f, k) => showsClipFrame(means, f, 2 * k));
+    showsClipFrame(means, 12, 12);
+    showsClipFrame(means, 23, 34);
   });
 });
 

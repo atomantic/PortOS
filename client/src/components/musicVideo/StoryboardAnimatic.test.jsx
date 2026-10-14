@@ -122,11 +122,12 @@ describe('StoryboardAnimatic clips', () => {
   });
 
   // Uniquely catches the animatic's beat toggle showing the incoming shot on the wrong frames,
-  // starting its clip in the wrong place, or the incoming shot jumping back to its start at the cut.
-  it('flips to the next shot on the beats before a beat toggle cut and carries its clip on through the cut', async () => {
+  // or its clip leaving the song's clock (ignoring the shot's offset or speed) before or after the cut.
+  it('flips to the next shot on the beats before a beat toggle cut, its clip on the song\'s clock', async () => {
     const scenes = [
       { sceneId: 'a', label: 'One', startSec: 0, endSec: 4, videoHistoryId: 'clip-a', cutEffect: { style: 'beat-toggle', enabled: true, overlapSec: 1, rate: 'beat' } },
-      { sceneId: 'b', label: 'Two', startSec: 4, endSec: 8, videoHistoryId: 'clip-b' },
+      // 1.5 s in, half again as fast.
+      { sceneId: 'b', label: 'Two', startSec: 4, endSec: 8, videoHistoryId: 'clip-b', offsetFrames: 36, speedFps: 12 },
     ];
     const project = { id: 'p', scenes, audioAnalysis: { beats: [3, 3.5, 4, 4.5] } };
     render(<StoryboardAnimatic project={project} audioUrl="/song.mp3" />);
@@ -139,16 +140,16 @@ describe('StoryboardAnimatic clips', () => {
     expect(toggle.style.opacity).toBe('0');
     at(3.2);
     expect(toggle.style.opacity).toBe('1');
-    // The incoming clip started on the first beat.
-    expect(toggle.currentTime).toBeCloseTo(0.2, 2);
+    // 0.8 s before the shot starts: 1.2 s of clip before its 1.5 s in-point.
+    expect(toggle.currentTime).toBeCloseTo(0.3, 2);
     at(3.7);
     expect(toggle.style.opacity).toBe('0');
-    // Past the cut the incoming shot's own clip runs on from where the toggle took it.
+    // Past the cut the incoming shot's own clip starts where it would without the toggle.
     const clipB = screen.getByLabelText('Clip for Two');
     Object.defineProperty(clipB, 'readyState', { value: 4, configurable: true });
     Object.defineProperty(audio, 'paused', { value: true, configurable: true });
     at(4.25);
-    expect(clipB.currentTime).toBeCloseTo(1.25, 2);
+    expect(clipB.currentTime).toBeCloseTo(1.875, 2);
   });
 
   it('loads the next shots\' clips ahead and cuts to the same loaded clip', async () => {
