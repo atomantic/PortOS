@@ -1222,16 +1222,6 @@ export async function runLocalCodeReview({ backend, model, diff, effort = null, 
     diagnostics: reviewFailureDiagnostics({ reason, finishReason: result.finishReason, responseLengthChars: result.responseLengthChars }),
     error: `${backend} returned no usable code-review verdict: incomplete or contradictory review output.`,
   }
-  // Preserve the fail-only production floor from the contextual-catch
-  // calibration. Focused model checks above cannot waive proven contradictions.
-  if (backfillAudit && verdict.verdict !== 'rethink') {
-    const findings = backfillAccountingFindings(trimmedObjective, trimmedDiff)
-    if (findings.length) Object.assign(verdict, normalizeGoalFidelityVerdict({
-      ...verdict, verdict: 'fix-first',
-      missing: [...new Set([...findings, ...verdict.missing])],
-    }))
-  }
-
   return {
     ok: true,
     backend,
