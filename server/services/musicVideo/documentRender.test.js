@@ -171,6 +171,15 @@ describe('composition document staging', () => {
     expect(raw.get('a').timing).toBeUndefined();
   });
 
+  it('gives the live preview timing for an offset-only shot', async () => {
+    const { project } = await fixture();
+    Object.assign(project.scenes[0], { offsetFrames: 12 });
+    Object.assign(project.scenes[3], { offsetFrames: -6 });
+    const raw = await resolveSceneMedia(project, { history: JSON.parse(await readFile(join(PATHS.data, 'video-history.json'), 'utf8')) });
+    expect(raw.get('a').timing).toEqual({ rate: 1, leadSec: 0, startSec: 0.5 });
+    expect(raw.get(project.scenes[3].sceneId).timing).toEqual({ rate: 1, leadSec: 0, startSec: 0.25 });
+  });
+
   it('fails before opening the page and cleans scratch when shot retiming fails', async () => {
     const { project, plan } = await fixture();
     project.scenes[0].speedFps = 24;

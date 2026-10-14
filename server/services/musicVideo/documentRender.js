@@ -162,7 +162,7 @@ export async function resolveSceneMedia(project, { history = [], probe = async (
           ext,
           inSec: round3(originalIn),
           outSec: originalOut == null ? null : round3(originalOut),
-          ...(retime ? { timing: { rate, leadSec: round3(leadSec), startSec: round3(sourceIn) } } : {}),
+          ...(retime || sourceIn !== originalIn ? { timing: { rate, leadSec: round3(leadSec), startSec: round3(sourceIn) } } : {}),
           fps: finite(measured.fps),
           width: finite(measured.width),
           height: finite(measured.height),
