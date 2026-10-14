@@ -18,7 +18,8 @@
  *
  * Roles:
  *   line   default sung line: words rise and fade in on their onsets, the line
- *          drifts up and fades out 0.3s after its last word.
+ *          drifts up and fades out 0.3s after its last word ends, once that
+ *          word has shown for 0.8s.
  *   hook   chorus / title phrases: wide caps, centred in the zone, each word slams
  *          in on its onset, one outline-only accent word, cut on the next beat.
  *   stamp  short punches, negations, spoken lines: a three-frame stamp with a
@@ -50,7 +51,7 @@ const SECTION_LABEL_KINDS = [
 export const LYRIC_TIMING = Object.freeze({
   lineRiseSec: 0.2, lineRisePx: 16, lineExitDelaySec: 0.3, lineExitFrames: 8,
   hookSlamSec: 0.22, hookSlamFrom: 1.35, stampFrames: 3, stampFrom: 1.25, stampTiltDeg: 2,
-  strikeSec: 0.2, dataRollSec: 0.4, minOnScreenSec: 0.8, minPx: 56,
+  strikeSec: 0.2, dataRollSec: 0.4, minOnScreenSec: 0.8, lastWordHoldSec: 0.8, minPx: 56,
 });
 
 const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
@@ -149,8 +150,10 @@ function wordsForLine(line, songWords = []) {
 
 /**
  * When a line leaves the screen. A line never shows before its first onset and
- * stays at least LYRIC_TIMING.minOnScreenSec unless another cue takes its zone.
- * `line`/`data` fade 0.3s after the last word ends, finishing by the next cue in
+ * stays at least LYRIC_TIMING.minOnScreenSec, and its last word at least
+ * LYRIC_TIMING.lastWordHoldSec, so a short final word is read before the line
+ * leaves; only another cue taking its zone cuts it sooner.
+ * `line`/`data` fade 0.3s after the last word ends (or once it has held), finishing by the next cue in
  * their zone (or cutting at its onset when a full fade cannot fit). A `stamp`
  * cuts after its hold; a `hook` cuts on the next beat (or at the next cue if that comes first), with no fade.
  */
@@ -159,7 +162,7 @@ function lineWindow(words, role, { beats = [], nextOnset = null, fps = 24, endSe
   const onset = words[0].startSec;
   const last = words[words.length - 1];
   const lastEnd = Math.max(...words.map((w) => (finite(w.endSec) ? w.endSec : w.startSec)), finite(endSec) ? endSec : -Infinity);
-  const minExit = onset + T.minOnScreenSec;
+  const minExit = Math.max(onset + T.minOnScreenSec, last.startSec + T.lastWordHoldSec);
   if (role === 'hook') {
     const sorted = beats.filter(finite);
     const from = Math.max(lastEnd, last.startSec, minExit);

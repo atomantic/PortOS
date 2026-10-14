@@ -487,7 +487,8 @@ its copies and the faces at the document root; a document's own copy is kept.
 Lines come from `PORTOS_MV.lyrics` with their aligned word times (or
 `options.lines`), and every timing is read from the song data. Each line gets
 one of four roles: `line` (default sung line: words rise and fade in on their
-onsets, the line drifts up and fades 0.3s after its last word), `hook` (wide
+onsets, the line drifts up and fades 0.3s after its last word ends, but never
+before that word has shown for 0.8s), `hook` (wide
 caps centred in the zone, each word slams in on its onset, one outline-only
 accent word with ink beneath its light outline, cut on the next beat),
 `stamp` (a three-frame stamp with a small tilt, optional strike-through) and `data` (mono HUD caption whose numbers roll;
