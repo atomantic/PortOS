@@ -5,6 +5,14 @@ PortOS backs up two things together, into a single timestamped snapshot:
 1. **Filesystem data** — an rsync mirror of `./data/` (with SHA-256 manifest).
 2. **PostgreSQL** — a `pg_dump` logical dump (`portos-db.sql`) written alongside the snapshot.
 
+Backup configuration, manual runs, snapshot downloads/deletion, and restore/recovery
+require operator authority: a verified human or delegated agent session when auth is
+on, or a genuine local connection when auth is off. A reachable LAN/tailnet caller
+or scoped federation credential cannot export the raw archive or alter recovery
+policy. This includes HEAD requests for downloads. Status and snapshot inventory
+remain readable under the normal API policy. Scheduled backups continue under the
+operator-configured policy without additional confirmation.
+
 ### Consistency while assets are changing
 
 The backup service closes a shared cross-process publication boundary before copying

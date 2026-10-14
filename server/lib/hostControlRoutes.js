@@ -12,7 +12,8 @@
  * A route belongs here when it runs a process, git, npm, gh or a CoS agent on
  * the host, or when it sets what one will run (a repo path, a start command, a
  * task prompt, a shell job), or accesses live camera/microphone streams.
- * Ordinary read-only GETs stay open. Mutating routes in the
+ * Ordinary read-only GETs stay open; raw backup archives require operator
+ * authority because they export private records and credentials. Mutating routes in the
  * same families that are deliberately left OUT:
  *   - apps: delete/archive/unarchive, scope-adherence — they
  *     change only PortOS's own records or read files; nothing runs.
@@ -422,8 +423,14 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/notes/vaults',
   'PUT /api/notes/vaults/:id',
 
-  // Restores replace records and machine-local execution policy; previews
-  // require the same operator authority as execution (#8772).
+  // Backups contain private records and credentials, not a bounded read-only
+  // projection. Creating/exporting/deleting them and resuming a restore need
+  // the same operator authority as restore previews/execution (#8772).
+  // Status and snapshot inventory stay open; backup policy is body-gated below.
+  'POST /api/backup/run',
+  'GET /api/backup/snapshots/:snapshotId/download',
+  'DELETE /api/backup/snapshots/:snapshotId',
+  'POST /api/backup/restore-db/recover',
   'POST /api/backup/restore',
   'POST /api/backup/restore-db',
 
@@ -862,10 +869,14 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
  * `PUT /api/settings` slices that set what runs or the guardrails around it:
  * harness enablement and wrapper CLIs, the Code Animation worker tools, the
  * code-review chain, the untrusted content screen in front of agent work,
- * scheduled self-update, and scheduled series autopilots. The store is polymorphic, so its other slices stay open.
+ * scheduled self-update, scheduled series autopilots, and backup destination/
+ * recovery policy. The store is polymorphic, so its other slices stay open.
  */
 export const HOST_CONTROL_SETTINGS_SLICES = Object.freeze([
   'autoUpdate',
+  // Destination, schedule, exclusions and retention control private copies
+  // and recovery durability, including writes consumed later by the scheduler.
+  'backup',
   'codeAnimationExecution',
   'codeReview',
   'credentialBootstraps',
