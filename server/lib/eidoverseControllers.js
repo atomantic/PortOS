@@ -163,6 +163,24 @@ export const eidoverseControllerConfigUpdateSchema = z.object({
 
 export const eidoverseControllerArmSchema = z.object({ id: controllerInstallIdSchema, armed: z.boolean() }).strict();
 
+// Explicit shipped gameplay, never an interpreter for foundation bodies.
+// Provider tool parameters need an object root. Refinements keep the HTTP/tool
+// runtime action-specific without exporting a top-level oneOf to providers.
+export const eidoverseRiddleActionSchema = z.object({
+  id: controllerInstallIdSchema,
+  expectedRevision: z.number().int().nonnegative(),
+  action: z.enum(['offer', 'guess', 'reveal']),
+  clue: z.string().trim().min(1).max(200).optional(),
+  answer: z.string().trim().min(1).max(120).optional(),
+  guess: z.string().trim().min(1).max(120).optional(),
+}).strict().superRefine((input, ctx) => {
+  const fields = input.action === 'offer' ? ['clue', 'answer'] : input.action === 'guess' ? ['guess'] : [];
+  for (const field of ['clue', 'answer', 'guess']) {
+    if (fields.includes(field) && input[field] === undefined) ctx.addIssue({ code: 'custom', path: [field], message: `Required for ${input.action}` });
+    if (!fields.includes(field) && input[field] !== undefined) ctx.addIssue({ code: 'custom', path: [field], message: `Not accepted for ${input.action}` });
+  }
+});
+
 /** Who installed this, at the coarsest grain that is still useful — the same
  * three actors a foundation records, and deliberately no display name. */
 const installedBySchema = z.enum(['mind', 'cos', 'user']);

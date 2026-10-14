@@ -42,7 +42,7 @@ import {
   eidoverseChatReadSchema, eidoverseTravelVisitSchema, eidoverseVisitChatSchema, eidoverseVisitLeaveSchema,
 } from '../lib/validation.js';
 import { detailFoundation, eidoverseFoundationIdParamSchema, eidoverseFoundationInputSchema, eidoverseFoundationTargetSchema, summarizeFoundation } from '../lib/eidoverseFoundations.js';
-import { eidoverseControllerArmSchema, eidoverseControllerIdParamSchema, eidoverseControllerInstallSchema, summarizeControllerInstall } from '../lib/eidoverseControllers.js';
+import { eidoverseControllerArmSchema, eidoverseControllerIdParamSchema, eidoverseControllerInstallSchema, eidoverseRiddleActionSchema, summarizeControllerInstall } from '../lib/eidoverseControllers.js';
 import {
   buildDistrictTemplateAugmentOperations,
   buildDistrictTemplateFoundationDraft,
@@ -551,6 +551,7 @@ const eidoverseControllerTools = [
   ['install-controller', 'Attach a bounded controller to the private world so it keeps ticking between your wakes. `controllerId` names one of the ids eidoverse.controllers returns — a controller is never a path or code you supply. Every tick is synchronous and provider-free, and `deliverEffects` (default false) decides whether its effects reach the world at all. This is a REQUEST: the result is `outcome: "installed"` only when it landed, and any other outcome means nothing is running — read `reasons`. The first tick is one interval away, never immediate. Re-installing an existing id REBUILDS its state from the new config — inspect it first with eidoverse.inspect-controller if you want to keep what it has accumulated.', eidoverseControllerInstallSchema, ['manageEidoverse', 'installEidoverseControllers'], 'write'],
   ['arm-controller', 'Pause or resume one installed controller without losing the state it has accumulated. Use this to resume a controller the supervisor disarmed after repeated failures, once you have fixed what it was failing on — re-installing would work too but starts its state over.', eidoverseControllerArmSchema, ['manageEidoverse', 'installEidoverseControllers'], 'write'],
   ['retire-controller', 'Stop and remove one installed controller by its install id. Retiring deletes the install and its accumulated state; re-installing starts it fresh.', eidoverseControllerIdParamSchema, ['manageEidoverse', 'installEidoverseControllers'], 'write'],
+  ['riddle', 'Play one explicit riddle-ledger round on an already installed, armed controller. Inspect state.revision, then pass expectedRevision and action: offer (clue, answer), guess (guess), or reveal. One guess per round; reveal before the next offer. No AI calls or recurring announcements. outcome applied means local progress persisted; delivery reports disabled, pending/unknown, acknowledged, or refused separately. Refused delivery does not undo progress and is never retried automatically. The answer stays out of world chat until reveal, but operator inspection includes it. No arbitrary foundation is executed or modified.', eidoverseRiddleActionSchema, ['manageEidoverse', 'installEidoverseControllers'], 'write'],
 ].map(([operation, description, schema, requiredCapabilities, sideEffect]) => ({
   type: 'portos_tool', name: `eidoverse.${operation}`, version: COS_TOOL_SCHEMA_VERSION,
   providerName: providerToolName(`eidoverse.${operation}`), aliases: [providerToolName(`eidoverse.${operation}`)],
@@ -1202,6 +1203,10 @@ const executeAdapter = async (tool, args, context, authority) => {
       // State included here too, and on inspect-controller: the mind just
       // authored this config and the initial state is what tells it the
       // controller understood it. The list projection stays state-free.
+      return { ...result, install: result.install ? summarizeControllerInstall(result.install, { includeState: true }) : null };
+    }
+    if (tool.adapter.operation === 'riddle') {
+      const result = await runtime.interactEidoverseRiddleLedger(args, { signal: context.signal });
       return { ...result, install: result.install ? summarizeControllerInstall(result.install, { includeState: true }) : null };
     }
     const result = await runtime.retireEidoverseController(args.id);

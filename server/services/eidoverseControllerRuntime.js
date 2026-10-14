@@ -40,12 +40,14 @@
  */
 
 import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { PATHS, atomicWrite, readJSONFile } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import {
   EIDOVERSE_CONTROLLER_LIMITS,
   controllerTickDue,
   eidoverseControllerInstallSchema,
+  eidoverseRiddleActionSchema,
   nextControllerTickAt,
   runControllerStep,
   summarizeControllerEffect,
@@ -80,6 +82,9 @@ const LOG_PREFIX = '🌀 Eidoverse controllers';
 const storeFile = () => join(PATHS.data, 'eidoverse', 'controllers.json');
 
 const withStoreLock = createMutex();
+// Keep explicit round messages ordered without holding the shared store lock
+// across world I/O. Ordinary controller management remains available.
+const withRiddleActionLock = createMutex();
 
 /**
  * Serializes whole tick passes. A pass reads every install, steps the due
@@ -336,6 +341,72 @@ const afterGateMove = (reason) => async (result) => {
   await reconcileEidoverseControllerTicks({ reason });
   return result;
 };
+
+/** Apply one explicit action to a shipped riddle-ledger install. Local progress
+ * is persisted BEFORE delivery, so a restart never repeats a guess or a say.
+ * `delivery` is a separate verdict; pending after a crash is unknown, not an
+ * acknowledgement. Neither this path nor quiet ticks retry outbound work.
+ */
+export async function interactEidoverseRiddleLedger(input, {
+  now = new Date().toISOString(),
+  signal,
+  deliver = deliverControllerEffects,
+} = {}) {
+  const parsed = eidoverseRiddleActionSchema.safeParse(input);
+  if (!parsed.success) return refused(parsed.error.issues.map((issue) => `${issue.path.join('.') || 'input'}: ${issue.message}`));
+  const action = parsed.data;
+  return withRiddleActionLock(async () => {
+    signal?.throwIfAborted();
+    const applied = await withStoreLock(async () => {
+      const { schemaVersion, installs } = await readInstalls();
+      if (schemaVersion > STORE_SCHEMA_VERSION) return refused(['Controller store is from a newer build; upgrade before interacting.']);
+      const record = installs[action.id];
+      if (!record) return { outcome: 'unknown-install', install: null, reasons: ['Install a riddle-ledger controller explicitly first.'] };
+      if (record.controllerId !== 'riddle-ledger') return refused(['This action only supports the shipped riddle-ledger controller.']);
+      if (!record.armed) return refused(['This controller is disarmed; arm it explicitly before interacting.']);
+      const definition = await findControllerDefinitionById('riddle-ledger');
+      if (!definition) return refused(['This build does not ship the riddle-ledger controller.']);
+      const config = definition.configSchema.safeParse(record.config);
+      if (!config.success) return refused(['Stored riddle config is incompatible; no action was applied.']);
+      const proposed = definition.interact(record.state, action);
+      if (proposed.refused) return refused([proposed.refused]);
+      const operationId = randomUUID();
+      const delivery = { status: record.deliverEffects ? 'pending' : 'disabled', delivered: 0, reason: null };
+      const outcome = runControllerStep({
+        definition: { ...definition, step: () => ({ ...proposed, state: { ...proposed.state, operationId, delivery } }) },
+        state: record.state, config: config.data, tick: record.tick,
+      });
+      if (!outcome.ok) return refused([outcome.reason]);
+      const install = { ...record, state: outcome.state, updatedAt: now };
+      installs[action.id] = install;
+      await writeInstalls(installs, schemaVersion);
+      return { outcome: 'applied', install, reasons: [], effects: outcome.effects };
+    });
+    if (applied.outcome !== 'applied') return applied;
+    const { effects, ...result } = applied;
+    if (!result.install.deliverEffects) return { ...result, delivery: result.install.state.delivery };
+    const attempt = await deliver(effects, { signal }).catch((error) => ({ delivered: 0, error: String(error?.message ?? error) || 'World delivery failed.' }));
+    const acknowledged = attempt.delivered === 1 && !attempt.error;
+    const delivery = {
+      status: acknowledged ? 'acknowledged' : 'refused',
+      delivered: attempt.delivered,
+      reason: acknowledged ? null : String(attempt.error || 'No world acknowledgement was recorded.').slice(0, EIDOVERSE_CONTROLLER_LIMITS.reasonMax),
+    };
+    return withStoreLock(async () => {
+      const { schemaVersion, installs } = await readInstalls();
+      const current = installs[action.id];
+      // A management operation may replace/retire the install during delivery.
+      // A fresh server-generated id prevents stamping its receipt over a reset.
+      if (current?.state?.operationId !== result.install.state.operationId) {
+        return { outcome: 'superseded', install: null, delivery, reasons: ['The install changed during delivery; this receipt was not attached to the replacement.'] };
+      }
+      const install = { ...current, state: { ...current.state, delivery } };
+      installs[action.id] = install;
+      await writeInstalls(installs, schemaVersion);
+      return { ...result, install, delivery };
+    });
+  });
+}
 
 // ---------------------------------------------------------------------------
 // The tick pass

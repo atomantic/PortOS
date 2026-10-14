@@ -24,6 +24,7 @@ import {
   eidoverseControllerConfigUpdateSchema,
   eidoverseControllerIdParamSchema,
   eidoverseControllerInstallSchema,
+  eidoverseRiddleActionSchema,
 } from '../lib/eidoverseControllers.js';
 import {
   adoptEidoverseFoundation,
@@ -39,6 +40,7 @@ import { describeControllerDefinitions } from '../services/eidoverseControllerRe
 import {
   getEidoverseControllerInstall,
   installEidoverseController,
+  interactEidoverseRiddleLedger,
   listEidoverseControllers,
   retireEidoverseController,
   setEidoverseControllerArmed,
@@ -258,6 +260,14 @@ router.get('/controllers/:id', asyncHandler(async (req, res) => {
   const install = await getEidoverseControllerInstall(id);
   if (!install) throw new ServerError('Controller install not found', { status: 404 });
   res.json(summarizeControllerInstall(install, { includeState: true }));
+}));
+
+// An explicit local round, independent of arbitrary declarative foundations.
+router.post('/controllers/:id/riddle', asyncHandler(async (req, res) => {
+  const input = validateRequest(eidoverseRiddleActionSchema, { ...(req.body || {}), id: req.params.id });
+  const result = await interactEidoverseRiddleLedger(input);
+  if (result.outcome === 'unknown-install') throw new ServerError('Controller install not found', { status: 404 });
+  res.json({ ...result, install: result.install ? summarizeControllerInstall(result.install, { includeState: true }) : null });
 }));
 
 // PATCH /api/eidoverse/world/controllers/:id/config — change an installed
