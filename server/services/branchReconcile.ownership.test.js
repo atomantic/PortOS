@@ -257,7 +257,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     expect(existsSync(path)).toBe(true);
     expect(await branches()).toContain('fix/fallback');
     const registration = (await execGit(['worktree', 'list', '--porcelain'], repo)).stdout;
-    expect(registration).toContain(`worktree ${path}`);
+    expect(registration.split(/\r?\n/)).toContain(`worktree ${path.replaceAll('\\', '/')}`);
     if (change === 'lock') expect(registration).toContain('locked');
     expect(result.skipped).toContainEqual(expect.objectContaining({ branch: 'fix/fallback', reason: change === 'lock' ? 'worktree-locked' : change === 'status failure' ? 'worktree-status-unavailable' : 'claim-owner-active' }));
   });
@@ -282,10 +282,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     await writeFile(join(unreadable, 'unfinished.txt'), 'preserve\n');
     injected.statusPath = unreadable;
     const result = await reconcile(repo, { activeAgentIds: new Set(), claimOwners: { agents: [], readAgents: async () => [] } });
-    expect(result.detachedWorktrees).toContainEqual(expect.objectContaining({ path: unreadable, reason: 'worktree-status-unavailable' }));
+    expect(result.detachedWorktrees).toContainEqual(expect.objectContaining({ path: unreadable.replaceAll('\\', '/'), reason: 'worktree-status-unavailable' }));
     expect(existsSync(join(unreadable, 'unfinished.txt'))).toBe(true);
     expect(existsSync(clean)).toBe(false);
-    expect(result.cleaned).toContain(clean);
+    expect(result.cleaned).toContain(clean.replaceAll('\\', '/'));
   });
 
   it('preserves a prunable checkout whose missing pointer makes Git report the parent clean', async () => {
