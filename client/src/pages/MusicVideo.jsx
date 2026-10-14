@@ -25,6 +25,7 @@ import {
   deleteMusicVideoScene,
   splitMusicVideoScene,
   mergeMusicVideoNextScene,
+  moveMusicVideoSceneStart,
   reorderMusicVideoScenes,
   importMusicVideoLyrics,
   importMusicVideoTrackLyrics,
@@ -960,6 +961,11 @@ export default function MusicVideo() {
       .catch((err) => toast.error(err?.message || 'Failed to merge scenes'));
   };
 
+  // Move the cut before a shot: it starts at `startSec` and the shot before it ends there.
+  const handleMoveSceneStart = (sceneId, startSec) => moveMusicVideoSceneStart(selected.id, sceneId, startSec, { silent: true })
+    .then(({ project }) => replaceProject(project))
+    .catch((err) => toast.error(err?.message || 'Failed to move the shot start'));
+
   const moveScene = (idx, dir) => {
     const scenes = selected.scenes || [];
     const target = idx + dir;
@@ -1303,6 +1309,7 @@ export default function MusicVideo() {
     onDeleteScene: handleDeleteScene,
     onSplitScene: handleSplitScene,
     onMergeNextScene: handleMergeNextScene,
+    onMoveSceneStart: handleMoveSceneStart,
     onRepairPerformance: revisions.repairPerformance,
     repairBusy: revisions.busy,
     onRenderStyle: (mode) => {

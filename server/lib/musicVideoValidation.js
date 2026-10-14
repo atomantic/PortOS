@@ -1546,6 +1546,11 @@ export const musicVideoSceneSplitSchema = z.object({
   atSec: z.number().finite().nonnegative().optional(),
 }).strict();
 
+// Move where a shot starts; the shot before it ends there too, so the cut moves and nothing gaps or overlaps.
+export const musicVideoSceneStartSchema = z.object({
+  startSec: z.number().finite().nonnegative(),
+}).strict();
+
 // Autonomous shot planner (#1855): propose a scene per analyzed audio section.
 // `seedPrompts` (default true) additionally asks the active/given AI provider
 // for a first-pass framePrompt/prompt per scene — best-effort, never fails the
