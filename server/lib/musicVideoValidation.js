@@ -332,6 +332,11 @@ const musicVideoPoolAssetSchema = z.object({
   if (!parsed.success) ctx.addIssue({ code: 'custom', path: ['assetId'], message: parsed.error.issues[0].message });
 });
 
+/** A search over a video's media pool by the prompts its stills and clips were made from. */
+export const musicVideoPoolSearchQuerySchema = z.object({
+  q: z.string().trim().min(1).max(200),
+}).strict();
+
 /** ★ ingredient (good, not placed) or ✕ bad (to clean up); null clears the mark. */
 export const musicVideoPoolMarkSchema = z.object({
   items: z.array(musicVideoPoolAssetSchema).min(1).max(500),

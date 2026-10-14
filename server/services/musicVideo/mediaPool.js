@@ -231,6 +231,26 @@ export async function getMusicVideoMediaPool(project) {
 }
 
 /**
+ * The pool items (`{ kind, assetId }`) whose prompts hold every word of `query`, case-insensitively:
+ * the take's prompt, the prompt saved beside a still (its image sidecar) and a clip's history prompt.
+ * Swap searches here because a still on the floor has no take left to carry its prompt.
+ */
+export async function searchMusicVideoMediaPool(project, query) {
+  const words = String(query).toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  const [{ items }, { loadHistory }, { readImageSidecar }] = await Promise.all([
+    getMusicVideoMediaPool(project), import('../videoGen/history.js'), import('../imageGen/local.js'),
+  ]);
+  const history = new Map((await loadHistory()).filter((entry) => entry?.id).map((entry) => [entry.id, entry]));
+  const sidecarPrompt = (assetId) => readImageSidecar(assetId)
+    .then(({ metadata }) => (typeof metadata?.prompt === 'string' ? metadata.prompt : '')).catch(() => '');
+  const texts = await Promise.all(items.map(async (item) => [item.prompt || '',
+    item.kind === 'video' ? history.get(item.assetId)?.prompt || '' : await sidecarPrompt(item.assetId)].join('\n').toLowerCase()));
+  return items.filter((_, index) => words.every((word) => texts[index].includes(word)))
+    .map(({ kind, assetId }) => ({ kind, assetId }));
+}
+
+/**
  * After stills or clips (`<image|video>:<ref>` keys) are deleted from the
  * media library: forget them on every music video that held them (unused
  * takes, marks, collection rows), in one pass per project, so nothing points

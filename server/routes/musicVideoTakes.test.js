@@ -395,6 +395,25 @@ describe('renders made for a video with no shot', () => {
   });
 });
 
+describe('Swap\'s prompt search', () => {
+  // Uniquely catches a still on the floor (no take left to carry its prompt) or a clip missing from a search for words in its prompt.
+  it('matches every word against each file\'s own prompt, ignoring case', async () => {
+    for (const name of ['falcon.png', 'street.png']) seedImage(name);
+    writeFileSync(join(ROOT(), 'images', 'falcon.metadata.json'), JSON.stringify({ prompt: 'A Falcon tattoo on her forearm, grainy 16mm' }));
+    writeFileSync(join(ROOT(), 'images', 'street.metadata.json'), JSON.stringify({ prompt: 'A wet street at night' }));
+    seedVideoHistory([{ id: 'falcon-clip', filename: 'falcon-clip.mp4', prompt: 'The falcon tattoo flexes as she grips the wheel' }]);
+    await addTake(sceneB.sceneId, { kind: 'image', assetId: 'falcon.png', source: 'generated' });
+    await addTake(sceneB.sceneId, { kind: 'image', assetId: 'street.png', source: 'generated' });
+    await addTake(sceneB.sceneId, { kind: 'video', assetId: 'falcon-clip', source: 'generated' });
+    // Cut shot B: its files land on the floor, where only the files themselves still name a prompt.
+    await request(app).delete(`${base()}/scenes/${sceneB.sceneId}`);
+    const search = (q) => request(app).get(`${base()}/media-pool/search?q=${encodeURIComponent(q)}`);
+    expect((await search('FALCON tattoo')).body.items).toEqual(expect.arrayContaining([{ kind: 'image', assetId: 'falcon.png' }, { kind: 'video', assetId: 'falcon-clip' }]));
+    expect((await search('falcon street')).body.items).toEqual([]);
+    expect((await search('')).status).toBe(400);
+  });
+});
+
 describe('the shot asset manager', () => {
   // Uniquely catches a take rejected from one shot reading as bad in Swap, where another shot may want it.
   it('lists a take rejected from its shot as not bad until the director marks it', async () => {

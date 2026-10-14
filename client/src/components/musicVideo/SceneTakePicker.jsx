@@ -3,7 +3,7 @@ import { X, Search, Film, Activity, Star, Ban, Trash2 } from 'lucide-react';
 import Modal from '../ui/Modal.jsx';
 import TabPills from '../ui/TabPills.jsx';
 import InfiniteScrollFooter from '../ui/InfiniteScrollFooter.jsx';
-import { deleteMusicVideoPoolAssets, getMusicVideoMediaPool, markMusicVideoPoolAssets } from '../../services/apiMusicVideo.js';
+import { deleteMusicVideoPoolAssets, getMusicVideoMediaPool, markMusicVideoPoolAssets, searchMusicVideoMediaPool } from '../../services/apiMusicVideo.js';
 import { takeThumbUrl, takeClipUrl } from '../../lib/musicVideoTakes.js';
 import { formatCount } from '../../utils/formatters.js';
 
@@ -45,11 +45,15 @@ const usedLabel = (item, shotNumbers) => {
 const CHIP = 'min-h-[44px] rounded border px-2 text-xs sm:min-h-[28px]';
 const ACTION = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-3 text-xs disabled:opacity-50 sm:min-h-[32px]';
 
-/** Items of one kind matching a search over their prompt, or a shot number ("12" or "#12"). */
-export function filterPool(items, { kind, query, shotNumbers }) {
+/**
+ * Items of one kind matching a search over their prompt, or a shot number ("12" or "#12").
+ * `matches` holds the keys the server's prompt search found (the prompt each file was made from).
+ */
+export function filterPool(items, { kind, query, shotNumbers, matches = null }) {
   const needle = query.trim().toLowerCase().replace(/^#/, '');
   return items.filter((item) => item.kind === kind && (!needle
     || String(item.prompt || '').toLowerCase().includes(needle)
+    || matches?.has(poolKey(item))
     || (item.sceneId && String(shotNumbers.get(item.sceneId) ?? '') === needle)));
 }
 
@@ -76,6 +80,7 @@ export default function SceneTakePicker({ open, onClose, projectId, scene, kind,
   const [markFilter, setMarkFilter] = useState('all');
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [working, setWorking] = useState(false);
+  const [matches, setMatches] = useState(null);
 
   // The shot's frame in the other slot always sits on This shot, so the picker opens there when it has one.
   const hasOwnFrame = !!otherFrameItem(scene, kind);
@@ -96,12 +101,27 @@ export default function SceneTakePicker({ open, onClose, projectId, scene, kind,
     return () => { active = false; };
   }, [open, projectId, scene.sceneId, kind, hasOwnFrame]);
 
+  // Typing searches the prompts each still and clip was made from, after a short pause.
+  useEffect(() => {
+    const q = query.trim();
+    setMatches(null);
+    if (!open || !q) return undefined;
+    let active = true;
+    const timer = setTimeout(() => {
+      searchMusicVideoMediaPool(projectId, q, { silent: true })
+        .then((res) => { if (active) setMatches(new Set((res.items || []).map(poolKey))); })
+        // A failed search leaves the matches on the prompts already shown here.
+        .catch(() => { if (active) setMatches(new Set()); });
+    }, 300);
+    return () => { active = false; clearTimeout(timer); };
+  }, [open, projectId, query]);
+
   const own = pool ? otherFrameItem(scene, kind) : null;
   // What already fills this slot isn't offered back; a frame other shots use is, marked with where it's used.
   const current = scene[SLOT_FIELD[kind]];
   const offered = pool ? pool.filter((item) => (!own || poolKey(item) !== poolKey(own)) && !(item.kind === POOL_KIND[kind] && item.assetId === current)) : [];
   const ofKind = pool ? filterPool([...(own ? [own] : []), ...offered],
-    { kind: POOL_KIND[kind], query, shotNumbers }) : [];
+    { kind: POOL_KIND[kind], query, shotNumbers, matches }) : [];
   const counts = { shot: 0, others: 0, floor: 0 };
   for (const item of ofKind) counts[poolGroup(item, scene.sceneId)] += 1;
   const activeGroup = group;
@@ -215,7 +235,7 @@ export default function SceneTakePicker({ open, onClose, projectId, scene, kind,
       {error && <p role="alert" className="text-xs text-port-error">{error}</p>}
       {!pool && !error && <p className="flex items-center gap-2 text-xs text-port-text-muted"><Activity size={14} className="animate-spin" />Gathering every {itemNoun} made for this video…</p>}
       {pool && items.length === 0 && (
-        <p className="text-xs text-port-text-muted">{query ? `No ${itemNoun}s match.` : `No ${itemNoun}s here.`}</p>
+        <p className="text-xs text-port-text-muted">{query ? (matches ? `No ${itemNoun}s match.` : 'Searching prompts…') : `No ${itemNoun}s here.`}</p>
       )}
       <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8" aria-label={`${itemNoun[0].toUpperCase()}${itemNoun.slice(1)}s`}>
         {items.slice(0, shown).map((item) => {
