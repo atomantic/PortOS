@@ -350,6 +350,11 @@ export async function executeScheduledJob(jobId) {
         .catch(err => console.error(`❌ Failed to record CoS budget usage for script job ${job.id}: ${err.message}`));
       releaseReservation(); // recorded usage now owns the in-flight count for this action
       if (scriptOk) emitLog('info', `Script job executed: ${job.name}`, { jobId: job.id });
+      else {
+        await recordJobGateSkip(jobId).catch(err =>
+          console.error(`❌ Failed to record failure-skip for ${jobId}: ${err.message}`)
+        );
+      }
     } else if (isShellJob(job)) {
       const startedAt = Date.now();
       const shellOk = await executeShellJob(job).then(() => true, err => {
@@ -365,6 +370,11 @@ export async function executeScheduledJob(jobId) {
         .catch(err => console.error(`❌ Failed to record CoS budget usage for shell job ${job.id}: ${err.message}`));
       releaseReservation(); // recorded usage now owns the in-flight count for this action
       if (shellOk) emitLog('info', `Shell job executed: ${job.name}`, { jobId: job.id });
+      else {
+        await recordJobGateSkip(jobId).catch(err =>
+          console.error(`❌ Failed to record failure-skip for ${jobId}: ${err.message}`)
+        );
+      }
     } else {
       // Check if this job is already being spawned or has a running agent.
       // Don't re-register the timer here — the job:spawned handler will do it
@@ -427,6 +437,9 @@ export async function executeScheduledJob(jobId) {
       } catch (err) {
         clearSpawningJob(jobId);
         emitLog('error', `Failed to fire autonomous job: ${job.name} - ${err?.message || err}`, { jobId, category: job.category });
+        await recordJobGateSkip(jobId).catch(skipErr =>
+          console.error(`❌ Failed to record failure-skip for ${jobId}: ${skipErr.message}`)
+        );
       }
     }
 
