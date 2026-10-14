@@ -2643,3 +2643,10 @@ it('preserves custom Deep workflow through projection and non-raw persistence', 
   expect((await getTaskById(legacy.id)).metadata).toMatchObject({ deepAuditId: 'historic', existingBranch: 'cos/preserved' });
   await expect(addTask(generatedJobTaskFields({ metadata: { auditDepth: 'deep', deepAuditId: 'historic' } }), 'internal')).rejects.toThrow('read-only');
 });
+
+it('round-trips the server-owned audit disposition contract through persisted task metadata', async () => {
+  const created = await addTask({ id: 'sys-audit-disposition-example', description: 'Audit example boundaries',
+    metadata: { app: 'example', analysisType: 'security', fileIssues: false, auditDispositionVersion: 1 } }, 'internal', { raw: true });
+  const reloaded = await getTaskById(created.id);
+  expect(reloaded.metadata).toMatchObject({ analysisType: 'security', auditDispositionVersion: '1', fileIssues: 'false' });
+});

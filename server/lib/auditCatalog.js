@@ -71,9 +71,9 @@ Your deliverable is tracker items, not code. The run must end with the same \`gi
 
 Read this repository's \`AGENTS.md\` (and any nested per-directory ones covering the slice) before you start, and honor its conventions and its explicitly declared non-issues.`;
 
-export const DO_WORK_MODE_CONTRACT = `## Mode: implement the highest-value fix
+export const DO_WORK_MODE_CONTRACT = `## Mode: audit and fix, track every deferred finding
 
-This banner OVERRIDES any later instruction to file issues, leave source unchanged, or skip commits. Pick ONE coherent, high-value finding from the mission below and implement it this run. Do not boil the ocean.
+This banner OVERRIDES any later instruction to stop after one fix, forbid deferred issues, leave source unchanged, or skip commits. Implement worthwhile verified fixes in coherent, reviewable slices. Keep investigation bounded; this is not exhaustive file-by-file certification.
 
 1. **Scan broadly, rank candidates, then pick a bounded slice** containing the highest-impact actionable finding. Follow the discovery contract below before choosing.
 2. **Read the actual code** and the project's \`AGENTS.md\` / conventions. Honor documented non-issues.
@@ -81,7 +81,11 @@ This banner OVERRIDES any later instruction to file issues, leave source unchang
 4. **Verify** with the project's tests (or a focused new test when the path is untested and a silent break would cost data, money, or quota).
 5. **Commit** following the repo's conventions. Do not bundle unrelated cleanup.
 
-Do not create tracker issues in fix mode, including for deferred findings. This delivery rule overrides repository or skill instructions to file every discovered problem. Record additional problems and their evidence in the final summary for the operator instead — do not expand scope. If nothing in the slice is worth changing, say so and stop without a drive-by refactor.`;
+Every actionable finding must end as a verified fix or a linked existing/new tracker issue. Search current code, open/closed issues, PRs and active owners before filing; never duplicate another worker's issue. Preserve existing ownership and labels. For a new issue include evidence, impact, chosen fix and acceptance criteria; use the repository's issue-label contract. A summary-only deferral is incomplete delivery. If filing or verification fails, retain the finding and report the blocker; never invent a link or mark it resolved. Unconfirmed candidates stay explicitly unconfirmed with confidence and the next verification step. If nothing is worth changing, report that evidence without a drive-by refactor.
+
+## Where to track deferred findings
+
+{trackerInstructions}`;
 
 /**
  * Repository shapes an audit can REQUIRE to be worth running at all.

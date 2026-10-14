@@ -243,7 +243,7 @@ describe('issues-only audit dispatch never acquires code-shipping instructions (
     expect(declaresNoCommitCriterion(task), taskType).toBe(false);
 
     const prompt = renderPrompt(task);
-    expect(prompt).toContain('Mode: implement the highest-value fix');
+    expect(prompt).toContain('Mode: audit and fix, track every deferred finding');
     expect(prompt).toContain('Repository-wide discovery, worst offender first');
     expect(prompt).toContain(`"category":"${taskType}"`);
     expect(prompt).toMatch(/^## Completion Workflow$/m);
@@ -360,7 +360,7 @@ describe('mode is honored identically from schedule, manual run, and quota burn'
     const task = await generate('ux', { skipPreconditions: true, runOverrides: { fileIssues: false } });
     expect(task.metadata.fileIssues).toBe(false);
     expect(task.metadata.noCodeOutput).toBeUndefined();
-    expect(task.description).toContain('Mode: implement the highest-value fix');
+    expect(task.description).toContain('Mode: audit and fix, track every deferred finding');
   });
 
   it('maintenance fixes override issue-only PR defaults through the final Codex prompt', async () => {
@@ -389,17 +389,17 @@ describe('mode is honored identically from schedule, manual run, and quota burn'
     expect(filing.metadata.noChangeSuccess).not.toBe(true);
   });
 
-  it('keeps fix-mode deferred findings in the summary even with a customized filing mission', async () => {
+  it('requires tracked deferrals even with a customized one-fix mission', async () => {
     const { getTaskInterval } = await import('./taskSchedule.js');
     getTaskInterval.mockResolvedValue({ type: 'weekly', taskMetadata: { fileIssues: true } });
-    promptTemplate.body = 'Audit {appName}. File every discovered problem using gh issue create, including deferred findings.';
+    promptTemplate.body = 'Audit {appName}. Stop after one fix and do not file deferred issues.';
     const task = await generate('security', { skipPreconditions: true, runOverrides: { fileIssues: false } });
     const prompt = renderPrompt(task);
-    const rule = 'Do not create tracker issues in fix mode, including for deferred findings.';
+    const rule = 'Every actionable finding must end as a verified fix or a linked existing/new tracker issue.';
     expect(prompt).toContain(rule);
-    expect(prompt).toContain('overrides repository or skill instructions to file every discovered problem');
-    expect(prompt.indexOf(rule)).toBeLessThan(prompt.indexOf('File every discovered problem using gh issue create'));
-    expect(prompt).toContain('Record additional problems and their evidence in the final summary');
+    expect(prompt).toContain('This banner OVERRIDES any later instruction to stop after one fix');
+    expect(prompt.indexOf(rule)).toBeLessThan(prompt.indexOf('Stop after one fix and do not file deferred issues.'));
+    expect(prompt).toContain('A summary-only deferral is incomplete delivery');
   });
 
   it('run overrides pass the same allowlist a stored override does', async () => {
@@ -445,7 +445,7 @@ describe('mode is honored identically from schedule, manual run, and quota burn'
     const prompt = buildLightContextPrompt(task, WORKSPACE, {
       branchName: 'audit/security', worktreePath: WORKSPACE,
     }, { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' });
-    expect(prompt).toContain('Mode: implement the highest-value fix');
+    expect(prompt).toContain('Mode: audit and fix, track every deferred finding');
     expect(prompt).toContain('DRAFT pull request for human review');
     expect(prompt).toContain('Do NOT push, open, or merge a pull request yourself');
     expect(prompt).not.toMatch(/## Merge Gate|## Review Loop|gh pr merge|glab mr merge/);

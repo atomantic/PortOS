@@ -79,6 +79,7 @@ export function buildAgentRegistration({
     primaryCheckoutBaseline,
     // Trusted launch capture only; never project a task/model-supplied claim.
     auditSourceEvidence,
+    ...(Number(task.metadata?.auditDispositionVersion) === 1 ? { auditDispositionVersion: 1 } : {}),
     // The issue-tracker base URL of the repository this run worked in, already
     // shaped for its forge (`repoIssueUrlBase`) so the browser appends a number
     // and knows nothing about forges. It is what a bare `#7640` in the agent's
