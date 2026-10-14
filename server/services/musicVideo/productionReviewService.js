@@ -158,8 +158,14 @@ export async function revertProductionInput(id, input) {
 }
 
 /** Lock or unlock Board shots for an authenticated reviewer, under the project write lock. */
+// Locking a shot's video finalizes it: its other frame and clip takes are rejected, as Reject unused does.
 export async function lockProductionShots(id, input) {
-  const { project } = await mutateProjectRecord(id, current => ({ project: setShotLocks(current, input) }));
+  const { rejectUnusedTakes } = await import('./takes.js');
+  const { project } = await mutateProjectRecord(id, current => {
+    const locked = setShotLocks(current, input);
+    if (input.stage !== 'video' || !input.locked) return { project: locked };
+    return { project: input.sceneIds.reduce((next, sceneId) => rejectUnusedTakes(next, sceneId).project, locked) };
+  });
   return changed(project);
 }
 

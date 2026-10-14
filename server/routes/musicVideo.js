@@ -1569,7 +1569,7 @@ router.get('/:id/stats-outro', asyncHandler(async (req, res) => {
 // The asset manager: mark unused stills and clips ★ ingredient / ✕ bad, or delete them from the library.
 router.patch('/:id/media-pool/marks', asyncHandler(async (req, res) => {
   const { items, mark } = validateRequest(musicVideoPoolMarkSchema, req.body);
-  res.json({ assetMarks: await markMediaPoolAssets(req.params.id, items.map((item) => `${item.kind}:${item.assetId}`), mark) });
+  res.json(await markMediaPoolAssets(req.params.id, items.map((item) => `${item.kind}:${item.assetId}`), mark));
 }));
 
 router.post('/:id/media-pool/delete', asyncHandler(async (req, res) => {

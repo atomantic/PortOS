@@ -66,7 +66,7 @@ export function filterPool(items, { kind, query, shotNumbers }) {
  * not placed yet) or ✕ bad, filter by mark, and delete bad ones from the
  * media library (the server refuses anything a shot uses).
  */
-export default function SceneTakePicker({ open, onClose, projectId, scene, kind, shotNumbers = new Map(), onPlace, busy = false }) {
+export default function SceneTakePicker({ open, onClose, projectId, scene, kind, shotNumbers = new Map(), onPlace, onMarked = null, busy = false }) {
   const [pool, setPool] = useState(null);
   const [error, setError] = useState(null);
   const [group, setGroup] = useState('shot');
@@ -121,7 +121,9 @@ export default function SceneTakePicker({ open, onClose, projectId, scene, kind,
   // Tapping the active mark clears it.
   const toggleMark = (mark) => run(async () => {
     const next = picked.mark === mark ? null : mark;
-    await markMusicVideoPoolAssets(projectId, [{ kind: picked.kind, assetId: picked.assetId }], next, { silent: true });
+    const result = await markMusicVideoPoolAssets(projectId, [{ kind: picked.kind, assetId: picked.assetId }], next, { silent: true });
+    // Bad rejects its takes on the shots not using it; the board shows that at once.
+    onMarked?.(result);
     setPool((prev) => prev.map((item) => (poolKey(item) === poolKey(picked) ? { ...item, mark: next } : item)));
     setPicked((prev) => ({ ...prev, mark: next }));
   });

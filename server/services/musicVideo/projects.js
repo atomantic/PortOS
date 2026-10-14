@@ -339,11 +339,14 @@ export async function moveProjectSceneStart(id, sceneId, { startSec }) {
   });
 }
 
-/** Mark unused assets ★ ingredient or ✕ bad (null clears); returns the project's marks. */
+/**
+ * Mark assets ★ ingredient or ✕ bad (null clears). Returns the project's marks and
+ * the shots whose takes a bad mark rejected.
+ */
 export async function markMediaPoolAssets(id, keys, mark) {
   const { markPoolAssets } = await import('./mediaPool.js');
-  const { project } = await mutateProjectRecord(id, (current) => markPoolAssets(current, keys, mark));
-  return project.assetMarks || {};
+  const { project, scenes } = await mutateProjectRecord(id, (current) => markPoolAssets(current, keys, mark));
+  return { assetMarks: project.assetMarks || {}, scenes };
 }
 
 // ---- scene takes (#8965) ----
