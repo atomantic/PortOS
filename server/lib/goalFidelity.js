@@ -22,7 +22,7 @@
 
 import { LOCAL_LLM_REVIEWERS, normalizeReviewerEffort, normalizeReviewerModel } from './reviewerConfig.js';
 import { taskContextBlock } from './cosTaskPrompt.js';
-import { parseExpression } from '@babel/parser';
+import { parse, parseExpression } from '@babel/parser';
 
 import { isTruthyMeta } from './metadataFlags.js';
 /**
@@ -418,6 +418,51 @@ export function productionAfterChangeHunks(diff) {
   }
   flush();
   return rows;
+}
+
+/** Fail-only witnesses for the explicit backfill accounting contract. */
+export function backfillAccountingFindings(objective, diff) {
+  const requireCount = /\bexclude\b[^.\n]*\bfailed\b[^.\n]*\bsuccess\b/i.test(objective);
+  const requireWarning = /\bwarning summary\b/i.test(objective);
+  if (!requireCount && !requireWarning) return [];
+  const findings = new Set();
+  for (const { hunk, source } of productionAfterChangeHunks(diff)) {
+    if (!/\bbackfillFromHistory\b/.test(hunk)) continue;
+    // Parse two complete adjacent statements, never infer a guard across a gap.
+    // A surrounding block applies to BOTH the awaited write and its increment.
+    const fragment = source.match(/^[ \t]*const recorded = await recordTaskCompletion\([\s\S]*?\n[ \t]*(?:if \(recorded\) )?backfilled\+\+;/m)?.[0];
+    if (!fragment) continue;
+    let statements;
+    try { statements = parse(fragment, { sourceType: 'module' }).program.body; }
+    catch { continue; }
+    if (statements.length !== 2) continue;
+    const call = statements[0]?.declarations?.[0]?.init?.argument;
+    if (call?.type !== 'CallExpression' || call.callee?.property?.name !== 'catch') continue;
+    const handler = call.arguments[0]?.body?.body;
+    const returned = handler?.at(-1);
+    if (returned?.type !== 'ReturnStatement' || returned.argument?.type !== 'BooleanLiteral' || returned.argument.value !== false) continue;
+    const increment = statements[1]?.expression;
+    if (requireCount && increment?.type === 'UpdateExpression'
+        && increment.operator === '++' && increment.argument?.name === 'backfilled') {
+      findings.add('backfillFromHistory still counts failed records as successes');
+    }
+    if (!requireWarning || !handler.some(row => row.expression?.type === 'UpdateExpression'
+      && row.expression.operator === '++' && row.expression.argument?.name === 'failed')) continue;
+    for (const [line] of source.matchAll(/^[ \t]*emitLog\([^\n]*\);[ \t]*$/gm)) {
+      let summary;
+      try { summary = parseExpression(line.trim().slice(0, -1)); }
+      catch { continue; }
+      const message = summary.arguments?.[1];
+      if (summary.arguments?.[0]?.type === 'StringLiteral' && summary.arguments[0].value === 'info'
+          && message?.type === 'TemplateLiteral' && message.quasis[0].value.cooked?.startsWith('Backfilled ')
+          && message.expressions[0]?.name === 'backfilled'
+          && summary.arguments[2]?.type === 'ObjectExpression'
+          && summary.arguments[2].properties.some(row => row.key?.name === 'failed' && row.value?.name === 'failed')) {
+        findings.add('backfillFromHistory failure summary stays at info instead of warning');
+      }
+    }
+  }
+  return [...findings];
 }
 
 // Parse only complete JSX expression containers within ONE hunk. A fragment
