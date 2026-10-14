@@ -12,6 +12,7 @@ import * as automationScheduler from '../services/automationScheduler.js';
 import * as platformAccounts from '../services/platformAccounts.js';
 import * as agentPersonalities from '../services/agentPersonalities.js';
 import { logAction } from '../services/history.js';
+import { assertHostControl } from '../services/authGate.js';
 
 const toggleScheduleSchema = z.object({
   enabled: z.boolean(),
@@ -126,6 +127,7 @@ router.delete('/:id', asyncHandler(async (req, res) => {
 router.post('/:id/toggle', asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { enabled } = validateRequest(toggleScheduleSchema, req.body);
+  if (enabled) assertHostControl(req);
   console.log(`📅 POST /api/agents/schedules/${id}/toggle enabled=${enabled}`);
 
   const schedule = await automationScheduler.toggleSchedule(id, enabled);

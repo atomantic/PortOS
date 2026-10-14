@@ -677,7 +677,6 @@ describe('Caller-prompted AI outside Pipeline policy (#10908)', () => {
       ['PATCH', '/api/games/:id'],
       ['POST', '/api/rounds'],
       ['PATCH', '/api/rounds/:id'],
-      ['PUT', '/api/agents/personalities/:id'],
       ['GET', '/api/system-resources/models/manifest'],
       ['PATCH', '/api/mood-boards/:id'],
       ['GET', '/api/mood-boards/:id/analyze'],
