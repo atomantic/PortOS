@@ -374,9 +374,9 @@ router.put('/features/groups/:groupId', asyncHandler(async (req, res) => {
 
 // PUT /api/settings/ai-assignments/:id
 router.put('/ai-assignments/:id', asyncHandler(async (req, res) => {
-  // This facade replaces the Autofixer slice, including its verification policy.
+  // These facades replace execution policy or steer scheduled social posts.
   // Check the decoded identifier so encoded route params cannot bypass the gate.
-  if (req.params.id === 'settings.autofixer') assertHostControl(req);
+  if (req.params.id === 'settings.autofixer' || req.params.id.startsWith('socialAgent.')) assertHostControl(req);
   const payload = validateRequest(aiAssignmentUpdateSchema, req.body || {});
   res.json(await updateAiAssignment(req.params.id, payload));
 }));

@@ -730,6 +730,24 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/rounds/:id/evaluate',
   'POST /api/rounds/:id/derive-parts',
   'POST /api/agents/personalities/generate',
+
+  // Social-bot publication uses stored platform credentials (#11419). Guard
+  // direct writes and the stores that arm or steer later scheduled writes.
+  // Accounts/schedules are shared with Moltworld. Reads, private drafts and
+  // deletions stay open; dedicated toggles gate only re-enabling in-handler.
+  'POST /api/agents/tools/publish-post',
+  'POST /api/agents/tools/publish-comment',
+  'POST /api/agents/tools/engage',
+  'POST /api/agents/tools/check-posts',
+  'POST /api/agents/schedules',
+  'PUT /api/agents/schedules/:id',
+  'POST /api/agents/schedules/:id/run',
+  'PUT /api/agents/personalities/:id',
+  'POST /api/agents/accounts',
+  'POST /api/agents/accounts/:id/claim',
+  // Testing an account can promote it to active, admitting scheduled writes.
+  'POST /api/agents/accounts/:id/test',
+
   'POST /api/system-resources/triage',
   'POST /api/mood-boards/:id/synthesize-style',
   'POST /api/mood-boards/:id/compose-prompt',
