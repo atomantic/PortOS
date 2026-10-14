@@ -860,6 +860,14 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'PUT /api/github/secrets/:name',
   'POST /api/github/secrets/:name/sync',
 
+  // Beeper outbox creation records approved send intent; send spends the
+  // operator's saved connection, and breaker reset re-arms that capability.
+  // First-contact confirmation and approved state do not establish caller
+  // authority. History, discard and delivery reconciliation never send.
+  'POST /api/beeper/outbox',
+  'POST /api/beeper/outbox/:id/send',
+  'POST /api/beeper/outbox/breaker/clear',
+
   // Jira instance updates can retain a saved API token while changing its
   // destination, so require operator authority before persisting the URL.
   'POST /api/jira/instances',
