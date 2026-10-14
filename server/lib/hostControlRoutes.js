@@ -578,6 +578,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/video-gen/stitch',
   // Start trim probes/transcodes a new gallery clip with ffprobe/ffmpeg (#11418).
   'POST /api/video-gen/history/:id/trim-start',
+  // Timeline render spawns ffmpeg/ffprobe on the host for segments and audio (#11432).
+  'POST /api/video-timeline/projects/:id/render',
   'POST /api/sprites/:id/reference/generate',
   // Fork creates a record and immediately queues reference generation too.
   'POST /api/sprites/:id/fork',
