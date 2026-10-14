@@ -168,3 +168,17 @@ describe('agent:completed listener — a resumed record is a continuation, not a
     expect(observeAgentChurn).not.toHaveBeenCalled();
   });
 });
+
+describe('backfillFromHistory — failed records are reported, not counted', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('logs the failing agent and returns only the records that landed', async () => {
+    agentsStore.list = [completed('ok-task', 'ux', true), { ...completed('bad-task', 'ux', true), id: 'agent-bad' }];
+    recordTaskCompletion.mockImplementationOnce(async () => {}).mockImplementationOnce(async () => { throw new Error('disk full'); });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    expect(await backfillFromHistory()).toBe(1);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('agent-bad (task bad-task): disk full'));
+    errorSpy.mockRestore();
+  });
+});
