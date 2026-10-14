@@ -393,7 +393,7 @@ const countSuffix = (items, noun, describe) => {
  *   `label` prefixes the log lines (emoji + type); `unit` names the items ("branch(es)").
  * @returns {Promise<boolean>} true to dispatch; false when the drain was parked
  */
-export async function resolveReconcileDrainGate(taskSchedule, taskType, app, { signature, actionableCount, label, unit }) {
+export async function resolveReconcileDrainGate(taskSchedule, taskType, app, { signature, actionableCount, label, unit, branchAttempts }) {
   const { signature: lastSignature } = await taskSchedule.getPerpetualDrainState(taskType, app.id);
   if (signature === lastSignature) {
     // The park fields, the cleared signature, and the zeroed dispatch budget land
@@ -406,7 +406,7 @@ export async function resolveReconcileDrainGate(taskSchedule, taskType, app, { s
 
   // Progress within budget — resume the drain, record the signature, and spend one
   // dispatch, so the drain runs back-to-back without the post-completion cooldown.
-  await taskSchedule.recordPerpetualDispatch(taskType, app.id, signature);
+  await taskSchedule.recordPerpetualDispatch(taskType, app.id, signature, ...(branchAttempts ? [{ branchAttempts }] : []));
   return true;
 }
 
@@ -429,7 +429,10 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
     emitLog('warn', `branch-reconcile skipped for ${app.name}: active agent state unreadable (${err.message})`, { appId: app.id, analysisType: taskType });
     return null;
   });
-  if (!Array.isArray(liveAgents)) return { skip: true };
+  if (!Array.isArray(liveAgents)) {
+    await taskSchedule.parkPerpetual(taskType, app.id, { reason: 'owner-state-unavailable' });
+    return { skip: true };
+  }
   // Claim worktrees use a branch-shaped directory name, not the `agent-*` id
   // stored on the run, so the live records' workspace basenames join the
   // ownership set — and a run that cut its own claim tree keeps the source repo
@@ -498,15 +501,18 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   // A detached worktree has no branch to list anywhere else, so name it here too.
   const detachedSuffix = countSuffix(result.detachedWorktrees, 'detached worktree(s) held back', (d) => d.reason);
   const allActionable = filterActionable(result.inFlight, actions);
-  const actionable = limitBranchesForAgent(allActionable, metadata.branchesPerAgent);
+  const idlePark = describeIdleReconcilePark(result.skipped || [], heldLive, {
+    wip: result.wip, detachedWorktrees: result.detachedWorktrees, superseded: result.superseded,
+    gated: result.inFlight.filter(branch => !allActionable.includes(branch))
+  });
   if (allActionable.length === 0) {
     // Definitive idle: nothing in-flight to drive. Park on the recheck cadence,
     // clearing the progress signature so a fresh set later dispatches and zeroing the
     // dispatch budget — this drain converged, so the next one gets a full one.
     // "Held back" vs "quiet repo", plus the early-wake deadline — see describeIdleReconcilePark.
-    const { reason, heldBackMerged, counts, notLaterThan } = describeIdleReconcilePark(result.skipped || [], heldLive);
+    const { reason, heldBackMerged, counts, skipCauses, notLaterThan } = idlePark;
     await taskSchedule.parkPerpetual(taskType, app.id, {
-      reason, actionableCount: 0, signature: null, counts, notLaterThan
+      reason, actionableCount: 0, signature: null, branchAttempts: null, counts, skipCauses, notLaterThan
     });
     // Surface merged branches held back by a protection guard so a lingering
     // worktree isn't an invisible "cleaned 0".
@@ -519,13 +525,37 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
     emitLog('info', `🔀 branch-reconcile parked for ${app.name}: nothing actionable (cleaned ${result.cleaned.length}${heldSuffix}${gatedSuffix}${heldLiveSuffix}${supersededSuffix}${detachedSuffix})`, { appId: app.id });
     return { skip: true };
   }
+  // Retain attempted revisions across caps/manual retries. A blocked prefix must
+  // not monopolize every window; changed revisions are eligible again, and old
+  // entries disappear with their branches. The full-set park ends this sweep.
+  const drain = await taskSchedule.getPerpetualDrainState(taskType, app.id);
+  const branchAttempts = Object.create(null);
+  for (const branch of allActionable) {
+    const signature = actionableSignature([branch]);
+    if (drain.branchAttempts?.[branch.branch] === signature) branchAttempts[branch.branch] = signature;
+  }
+  const actionable = limitBranchesForAgent(
+    allActionable.filter(b => !Object.hasOwn(branchAttempts, b.branch)), metadata.branchesPerAgent
+  );
+  if (!actionable.length) {
+    await taskSchedule.parkPerpetual(taskType, app.id, {
+      reason: 'no-progress', actionableCount: allActionable.length, signature: null, branchAttempts: null,
+      counts: { ...idlePark.counts, unchangedBranches: allActionable.length },
+      skipCauses: { ...idlePark.skipCauses, 'unchanged-after-attempt': allActionable.length },
+      notLaterThan: idlePark.notLaterThan
+    });
+    emitLog('info', `🔀 branch-reconcile parked for ${app.name}: all ${allActionable.length} branch(es) were attempted without further progress`, { appId: app.id });
+    return { skip: true };
+  }
+  for (const branch of actionable) branchAttempts[branch.branch] = actionableSignature([branch]);
   // Convergence guards — no-progress, then the consecutive-dispatch cap. See
   // resolveReconcileDrainGate for why one brake isn't enough.
   const dispatch = await resolveReconcileDrainGate(taskSchedule, taskType, app, {
     signature: actionableSignature(actionable),
     actionableCount: actionable.length,
     label: '🔀 branch-reconcile',
-    unit: 'branch(es)'
+    unit: 'branch(es)',
+    branchAttempts
   });
   if (!dispatch) return { skip: true };
   metadata.perpetual = true;
