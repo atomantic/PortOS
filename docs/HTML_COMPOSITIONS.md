@@ -566,6 +566,86 @@ into the page. Exact document or job revisions retire the previous worker.
 Closing the session kills the browser process group and deletes the scratch
 directory under `music-video-song-renders/`.
 
+During cooperative playback, the viewer presents valid images in arrival order
+with at most two pending images and one presenting image. Actual visible-image
+decode and one animation-frame opportunity precede the next presentation task.
+Queued images cannot replace that current image early. A 100 ms receipt-to-
+acknowledgement deadline and queue bound stop the preview clearly when the
+consumer cannot keep up; intermediate images are never silently discarded.
+This adds bounded viewer latency without changing the source/audio clock.
+Pause, scrub, visual controls and session changes retire pending work; exact
+images keep their generation rules, and Save frame uses the actual known
+decoded current image. URLs retire after their DOM references. Native cadence,
+lag and drift still require measured evidence for the particular source.
+
+### Optional authored complete-frame playback
+
+A custom music-video document can explicitly supply a cooperative producer
+without PortOS rewriting its engine. Ship `preview-playback.json` beside
+`index.html`, containing exactly:
+
+```json
+{"version":1,"contract":"portos-complete-frame-v1"}
+```
+
+Before document readiness, install an own `previewPlayback` data property on
+`portosComposition`. Its own data properties declare `version: 1`, `fps: 30`,
+`presentation: 'atomic-canvas-v1'`, and `mediaTiming: 'staged-output-v1'`, and
+provide the methods below. PortOS snapshots and binds the methods with their
+original receiver once. Replacing the public API later cannot redirect calls.
+
+| Method | Input | Successful result |
+| --- | --- | --- |
+| `clock()` | None | Synchronous, finite, nonnegative, nondecreasing `performance.now()` milliseconds |
+| `prepare(input)` | `{epoch, sequence, t}` | `{epoch, sequence, status:'prepared', t}` with the requested values |
+| `play(input)` | `{epoch, sequence, t, workerTime}` | `{epoch, sequence, status:'playing'}` |
+| `sync(input)` | `{epoch, sequence, t, workerTime}` | `{epoch, sequence, status:'accepted', driftSec?}`; optional drift is finite |
+| `pause(input)` | `{epoch}` | `{epoch, status:'paused'}` after all owned work retires |
+| `dispose()` | None | Release author-owned resources; host closure also destroys the owned page |
+
+Replies have no extra fields. `play` may instead return `resync-required`,
+`superseded` or `stale`; `sync` may return `resync-required` or `stale`, retaining
+the same correlation fields. A current operation that reports stale/superseded
+requests synchronization. The host's bounded resynchronization policy still
+applies. Operation sequence and captured-frame sequence are separate values.
+
+The producer owns atomic visible commits: finish source/font/image preparation
+and every asynchronous drawing dependency before publishing the complete frame
+in one synchronous task. Retained callbacks must not mutate the visible document
+after publication or pause. Honor the request's epoch/sequence and cancel stale
+work before it can publish. Use the staged `PORTOS_MV` media timebase, applying
+rate/lead transformations once; keep original song time separate from quantized
+or held drawing time. Advance the film-look and title finishing hooks from song
+time, preserve lyric stacking and pointer behavior, and keep exact `seek(t)`
+consistent with paused/scrubbed frames and the final renderer.
+
+The synthetic reference in `server/test/authoredPreviewFixture.js` packages its
+own scheduler and complete-frame bridge, with asynchronous source preparation
+and a deliberately limited, checked source mapping.
+
+Declaration and handshake are an author's promise of this behavior. They do not
+prove arbitrary JavaScript purity, isolate same-realm canvas/DOM effects, certify
+untracked embedded media, or establish content throughput. The host enforces
+method shape, correlation, clock checks, queue ordering and deadlines: clock,
+play and sync have 1.5 seconds; prepare and pause have 3 seconds. It gates frames
+immediately before retirement. An invoked producer that fails, exceeds its
+deadline or returns an invalid reply loses the owned page; uncertain work never
+continues into exact rendering on that page. An explicit reopen is a new session.
+
+Missing declarations preserve the existing canonical recognition/exact path.
+Present malformed, unknown or incomplete contracts retain exact fallback without
+source rewriting. Eligibility still requires the verified Chromium 155+ capture
+baseline, native video-frame request/cancel callbacks, and trusted finite selected
+video cadence above 10 fps. This does not establish 30 fps for every source or
+document, 1080p/4K decoding, GPU presentation, or audible A/V synchronization.
+
+Existing generated version-1 documents, spatial engines and older/customized
+engines are not automatically opted in. Generated hosts currently ignore section
+Promise returns; changing that would change historical semantics. Future
+generation needs a new immutable candidate under an explicit authoring contract,
+then revision-bound review and acceptance. Custom authors implement the API and
+re-import; historical engine adoption remains an explicit version change.
+
 Two limits stay explicit. The lyric-overlay animatic still mounts the shipped
 lyric template in an iframe because the storyboard has to show through it; that
 template is not given private media. Final MP4 encodes still use the existing
