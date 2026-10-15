@@ -144,13 +144,16 @@ async function scenario(route) {
 
 try {
   fixture = await startCollectionFixture();
+  report.startup = fixture.startup;
   report.cardinalities = fixture.cardinalities;
   browser = await chromium.launch({ headless: true, ...(process.env.COLLECTION_AUDIT_BROWSER
     ? { executablePath: process.env.COLLECTION_AUDIT_BROWSER } : { channel: 'chrome' }) });
   await scenario('/media/history');
   await scenario('/messages/inbox');
-} catch {
-  report.failures.push({ endpoint: 'fixture', reason: 'audit-startup-or-shutdown', bytes: 0 });
+} catch (error) {
+  if (error.fixtureStartup) report.startup = error.fixtureStartup;
+  report.failures.push({ endpoint: fixture ? 'browser' : 'fixture',
+    reason: error.fixtureFailure || 'audit-startup-or-shutdown', bytes: 0 });
 } finally {
   await browser?.close().catch(() => report.failures.push({ endpoint: 'browser', reason: 'cleanup', bytes: 0 }));
   await fixture?.close().catch(() => report.failures.push({ endpoint: 'fixture', reason: 'cleanup', bytes: 0 }));

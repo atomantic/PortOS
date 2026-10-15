@@ -14,11 +14,30 @@ temporary directory. Initialization failures also clean up. As with any process,
 SIGKILL or machine power loss cannot run cleanup; use graceful shutdown.
 
 A future CDP runner can import startCollectionFixture() and use its returned
-{ url, cardinalities, close }. Always await close() in a finally block. It is
+{ url, cardinalities, startup, close }. Always await close() in a finally block. It is
 idempotent. /__fixture/ready returns the same readiness/cardinality information
 without database identifiers, credentials, paths, or record payloads. The optional
 clientDist argument selects an already-built client; it defaults to client/dist.
 No development proxy is started.
+
+Startup preserves the 30,000 ms overall worker readiness budget. A separate
+10,000 ms no-progress deadline detects a stalled worker sooner; only an advancing
+allowlisted phase or completed-record count resets it. Repeated heartbeats do not.
+The optional `startupLimits: { overallTimeoutMs, noProgressTimeoutMs }` argument
+accepts integer milliseconds from 100 through 120,000, with the no-progress limit
+at most the overall limit. These are explicit experiment limits, not automatic
+retries or pass thresholds. The worker budgets start after the parent source copy
+and schema setup; startup diagnostics include those parent phases as well.
+
+`startup` contains fixed phase names, elapsed/phase milliseconds, completed
+image/video/account/message counts, and cumulative milliseconds awaiting file
+writes and canonical media-index inserts. Eight records seed concurrently, with
+two sequential file writes and one canonical upsert per record. A failed batch
+drains its outstanding writes before cleanup. The time aggregates sum work across
+records and can exceed elapsed wall time with concurrent seeding. Each phase
+retains only its latest progress sample, bounding report size. Rejected startup
+errors carry the same sanitized `fixtureStartup` snapshot and a fixed
+`fixtureFailure` reason; exception text and worker stderr never enter reports.
 
 The fixed dataset contains 2,400 PNG images, 1,200 one-second MP4 videos and their
 PNG thumbnails, and 4,000 messages across two disabled synthetic accounts. Every
@@ -67,10 +86,13 @@ Tests, from server/:
 
 ~~~sh
 npm test -- ../scripts/perf/collectionFixture.test.js
+npm test -- ../scripts/perf/collectionFixtureStartup.test.js ../scripts/perf/collectionFixtureLifecycle.test.js ../scripts/perf/collectionFixtureSeed.test.js
 npm run test:db -- ../scripts/perf/collectionFixture.db.test.js
 ~~~
 
-The first covers pre-import isolation rejection. The second covers actual HTTP
+The non-DB tests cover pre-import isolation rejection, bounded concurrency,
+failed-batch drainage, independent total/inactivity deadlines, sanitized IPC and
+stalled-child cleanup with injected resources/time. The DB suite covers actual HTTP
 pagination, projections, unavailable actions, and success/failure cleanup against
 portos_test.
 
@@ -93,6 +115,8 @@ gate is evidence to fix, never a reason to raise the limit until the run passes.
 
 The report records:
 
+- Fixture startup phases, aggregate seed work and counts on success or failure;
+  startup failures retain specific fixed reasons instead of a generic audit error.
 - Time from navigation start until the first visible synthetic collection row,
   then a two-second observation tail for eager fetches; 60 media cards / 50 inbox
   rows maximum, checked against response counts before client rendering.
@@ -138,8 +162,8 @@ single-record hydration on open; the fixture serves the same bounded image
 lookup and video-history record readers the migrated UI calls. The media
 scenario now passes with a 32,212-byte first page, visible/hidden totals of
 3,240/360, no cold detail reads, and exactly one detail read when a row opens.
-Image variant lineage (`/api/image-gen/:filename/variants`) remains outside the
-fixture and is counted as unavailable. Inbox summary/detail and Contacts idle
+The fixture also serves image variant lineage (`/api/image-gen/:filename/variants`)
+for the lightbox's current lazy-detail read. Inbox summary/detail and Contacts idle
 gates passed, including a full idle minute with zero HTTP transfer and four
 bytes of socket heartbeat payload. This runner does not claim all #8232
 contracts are met.
