@@ -30,6 +30,7 @@ const FOCUSABLE_SELECTOR = [
   'textarea:not([disabled]):not([tabindex="-1"])',
   'input:not([disabled]):not([type="hidden"]):not([tabindex="-1"])',
   'select:not([disabled]):not([tabindex="-1"])',
+  'details > summary:first-of-type:not([tabindex="-1"])',
   '[tabindex]:not([tabindex="-1"])',
 ].join(',');
 
@@ -47,6 +48,12 @@ function isTabbable(el, container) {
   for (let node = el; node && node !== container; node = node.parentElement) {
     if (node.nodeType !== 1) return false;
     if (node.hasAttribute('hidden')) return false;
+    // Closed disclosures keep their descendants in the DOM and computed
+    // styles, but only their summary participates in native keyboard focus.
+    if (node.tagName === 'DETAILS' && !node.open) {
+      const summary = Array.from(node.children).find(child => child.tagName === 'SUMMARY');
+      if (!summary?.contains(el)) return false;
+    }
     const style = typeof getComputedStyle === 'function' ? getComputedStyle(node) : null;
     if (style && (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse')) {
       return false;
