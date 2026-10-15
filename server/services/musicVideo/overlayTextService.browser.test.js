@@ -94,7 +94,8 @@ describe.skipIf(!chrome)('overlay text check (headless Chrome)', () => {
     expect(kinds('tiny tag')).toContain('small');
     expect(kinds('DOM CAPTION')).toEqual(['contrast']);
     expect(kinds('BLOOM')).toEqual([]);
-    expect(kinds('ON A PLATE')).toEqual([]);
+    // On failure, name the measured ratio and the moment, so a backdrop sampled off the plate is visible.
+    expect(kinds('ON A PLATE'), JSON.stringify(check.findings.filter((f) => f.texts.includes('ON A PLATE')))).toEqual([]);
     // One finding per problem however many frames showed it, errors first.
     expect(new Set(check.findings.map((f) => f.id)).size).toBe(check.findings.length);
     expect(check.findings[0].severity).toBe('error');
