@@ -1,6 +1,7 @@
-import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtemp, writeFile, readdir } from 'fs/promises';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { chmod, mkdtemp, readFile, rm, writeFile, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { execGit } from './execGit.js';
@@ -33,10 +34,76 @@ describe('template exit hook', () => {
 
 const sandboxes = [];
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await Promise.all(sandboxes.splice(0).map((s) => destroyGitSandbox(s)));
 });
 
 describe('makeGitSandbox', () => {
+  it('keeps automatic maintenance inside the awaited Git lifetime before fixture removal', async () => {
+    const box = await makeGitSandbox({ origin: true, prefix: 'portos-git-fx-maintenance-' });
+    sandboxes.push(box.scratch);
+    const entered = join(box.scratch, 'maintenance-entered');
+    const release = join(box.scratch, 'maintenance-release');
+    const hookScript = join(box.scratch, 'hold-maintenance.cjs');
+    const trace = join(box.scratch, 'git-trace.jsonl');
+    // Git samples loose objects in bucket 17. Two objects there and gc.auto=1
+    // makes the real auto-maintenance path run, even in this tiny repository.
+    for (let n = 0, written = 0; written < 2; n++) {
+      const blob = `Example maintenance object ${n}\n`;
+      if (!createHash('sha1').update(`blob ${Buffer.byteLength(blob)}\0${blob}`).digest('hex').startsWith('17')) continue;
+      await writeFile(join(box.repo, 'maintenance-object.txt'), blob);
+      await execGit(['hash-object', '-w', 'maintenance-object.txt'], box.repo);
+      written++;
+    }
+    await execGit(['config', 'gc.auto', '1'], box.repo);
+    await writeFile(hookScript, `const fs = require('node:fs');
+const [entered, release] = process.argv.slice(2);
+fs.writeFileSync(entered, 'entered');
+const deadline = Date.now() + 5000;
+const timer = setInterval(() => {
+  if (fs.existsSync(release) || Date.now() >= deadline) {
+    clearInterval(timer);
+    process.exitCode = fs.existsSync(release) ? 0 : 1;
+  }
+}, 10);
+`);
+    const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
+    const hook = join(box.repo, '.git', 'hooks', 'pre-auto-gc');
+    await writeFile(hook, `#!/bin/sh\nexec ${quote(process.execPath.replaceAll('\\', '/'))} ${quote(hookScript)} ${quote(entered)} ${quote(release)}\n`);
+    await chmod(hook, 0o755);
+    vi.stubEnv('GIT_TRACE2_EVENT', trace);
+    const readEvents = async () => (await readFile(trace, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    // Each fork adds an exit record without another start, under the same
+    // Trace2 session identity. Drain even a deliberately broken baseline.
+    const drainTrace = () => vi.waitFor(async () => {
+      const events = await readEvents();
+      const started = events.filter(event => event.event === 'start').length;
+      const detached = events.filter(event => event.event === 'region_enter' && event.label === 'detach').length;
+      expect(events.filter(event => event.event === 'exit').length).toBe(started + detached);
+    }, { timeout: 3000 });
+    let settled = false;
+    const commit = execGit(['commit', '--allow-empty', '-m', 'Example maintained commit'], box.repo)
+      .finally(() => { settled = true; });
+    try {
+      await vi.waitFor(() => expect(existsSync(entered)).toBe(true), { timeout: 3000 });
+      // The held maintenance hook still owns the fixture. An awaited direct
+      // Git child alone is insufficient when maintenance forks and detaches.
+      const events = await readEvents();
+      expect(events.some(event => event.category === 'maintenance' && event.label === 'detach')).toBe(false);
+      expect(settled).toBe(false);
+    } finally {
+      await writeFile(release, 'release');
+      await commit;
+      await drainTrace();
+    }
+    // Receiving a push also runs maintenance in the copied bare origin.
+    await execGit(['push', 'origin', 'main'], box.repo);
+    await drainTrace();
+    expect((await readEvents()).some(event => event.event === 'region_enter' && event.label === 'detach')).toBe(false);
+    await rm(box.scratch, { recursive: true, force: true });
+    expect(existsSync(box.scratch)).toBe(false);
+  });
+
   it('yields a real repo on main with the template commit and no origin by default', async () => {
     const box = await makeGitSandbox({ prefix: 'portos-git-fx-' });
     sandboxes.push(box.scratch);
