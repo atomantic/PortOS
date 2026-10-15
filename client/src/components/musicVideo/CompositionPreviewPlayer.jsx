@@ -124,7 +124,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
     ? 'Preview unavailable'
     : preview.ready
       ? `${t.toFixed(2)}s / ${duration.toFixed(1)}s`
-      : !wanted ? 'Expand to load preview' : 'Loading preview…';
+      : !wanted ? 'Expand to load preview' : preview.status === 'idle' ? 'Preview paused' : 'Loading preview…';
   return (
     <div className="space-y-2" aria-label={lyrics ? 'Lyric timing playthrough' : 'Composition preview'}>
       {failed && <p className="text-xs text-port-error" role="alert">{preview.reason || 'Preview unavailable'}</p>}
@@ -137,6 +137,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
         )}
       </div>
       <div className="flex flex-wrap items-center gap-2">
+        {request && preview.status === 'idle' && <button type="button" className={buttonCls} onClick={preview.resume}>Resume preview</button>}
         <button type="button" className={buttonCls} onClick={togglePlay} disabled={!preview.ready || !audioUrl || (failed && !playing)}>
           {playing ? <Pause size={14} /> : <Play size={14} />} {playing ? 'Pause' : 'Play'}
         </button>

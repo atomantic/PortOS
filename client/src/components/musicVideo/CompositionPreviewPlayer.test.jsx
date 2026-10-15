@@ -59,9 +59,120 @@ beforeEach(() => {
   socket.emit.mockReset();
   socket.emit.mockImplementation(socket.reply);
   socket.__handlers.clear();
+  socket.connected = true;
 });
 
 describe('CompositionPreviewPlayer', () => {
+  it('resumes an expired preview only on request and restores its controls and playhead', async () => {
+    const look = { version: 1, preset: 'custom', grain: 0.4 };
+    const { rerender } = render(<CompositionPreviewPlayer project={{ ...project, filmLook: look }} audioUrl='/song.mp3' />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled());
+    fireEvent.change(screen.getByLabelText('Scrub the composition preview'), { target: { value: '2' } });
+    const oldOpen = opens()[0][1];
+    const oldSessionId = socket.emit.mock.calls.find(([event]) => event === 'generated-preview:seek')[1].sessionId;
+    act(() => {
+      for (const fn of socket.__handlers.get('generated-preview:closed') || []) fn({ sessionId: oldSessionId, reason: 'idle' });
+    });
+    expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled();
+    expect(opens()).toHaveLength(1);
+    const nextLook = { ...look, grain: 0.9 };
+    rerender(<CompositionPreviewPlayer project={{ ...project, filmLook: nextLook }} audioUrl='/song.mp3' />);
+    fireEvent.click(screen.getByRole('button', { name: 'Resume preview' }));
+    expect(opens()).toHaveLength(2);
+    const nextOpen = opens()[1][1];
+    expect(nextOpen.requestId).not.toBe(oldOpen.requestId);
+    expect(nextOpen.look).toEqual(nextLook);
+    expect(socket.emit).toHaveBeenLastCalledWith('generated-preview:seek', expect.objectContaining({ requestId: nextOpen.requestId, t: 2 }));
+    const nextSessionId = socket.emit.mock.calls.at(-1)[1].sessionId;
+    act(() => {
+      for (const fn of socket.__handlers.get('generated-preview:closed') || []) fn({ sessionId: oldSessionId, reason: 'idle' });
+    });
+    expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled();
+    act(() => {
+      for (const fn of socket.__handlers.get('generated-preview:closed') || []) fn({ sessionId: nextSessionId, reason: 'replaced' });
+    });
+    expect(opens()).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'Resume preview' })).toBeEnabled();
+    act(() => {
+      socket.connected = false;
+      for (const fn of socket.__handlers.get('disconnect') || []) fn();
+      socket.connected = true;
+      for (const fn of socket.__handlers.get('connect') || []) fn();
+    });
+    expect(opens()).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'Resume preview' })).toBeEnabled();
+  });
+
+  it('waits for a connection before opening and never reopens after unmount', async () => {
+    socket.connected = false;
+    const { unmount } = render(<CompositionPreviewPlayer project={project} audioUrl='/song.mp3' />);
+    expect(opens()).toHaveLength(0);
+    expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled();
+    act(() => {
+      socket.connected = true;
+      for (const fn of socket.__handlers.get('connect') || []) fn();
+      for (const fn of socket.__handlers.get('connect') || []) fn();
+    });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled());
+    expect(opens()).toHaveLength(1);
+    act(() => {
+      socket.connected = false;
+      for (const fn of socket.__handlers.get('disconnect') || []) fn();
+    });
+    const sent = socket.emit.mock.calls.length;
+    unmount();
+    act(() => {
+      socket.connected = true;
+      for (const fn of socket.__handlers.get('connect') || []) fn();
+    });
+    expect(socket.emit.mock.calls).toHaveLength(sent);
+  });
+
+  it('reopens a disconnected preview with current controls and ignores the obsolete session', async () => {
+    const look = { version: 1, preset: 'custom', grain: 0.4 };
+    const { rerender } = render(<CompositionPreviewPlayer project={{ ...project, filmLook: look }} audioUrl='/song.mp3' />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled());
+    fireEvent.change(screen.getByLabelText('Scrub the composition preview'), { target: { value: '2' } });
+    const oldOpen = opens()[0][1];
+    act(() => {
+      for (const fn of socket.__handlers.get('generated-preview:error') || []) fn({ requestId: oldOpen.requestId, message: 'Synthetic seek failure' });
+    });
+    expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled();
+    act(() => {
+      for (const fn of socket.__handlers.get('generated-preview:frame') || []) {
+        fn({ requestId: oldOpen.requestId, generation: 1, mime: 'image/jpeg', data: btoa('recovered frame') });
+      }
+    });
+    expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled();
+    act(() => {
+      socket.connected = false;
+      for (const fn of socket.__handlers.get('disconnect') || []) fn();
+    });
+    expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled();
+    expect(screen.getByLabelText('Scrub the composition preview')).toBeDisabled();
+    const sent = socket.emit.mock.calls.length;
+    const nextLook = { ...look, grain: 0.9 };
+    rerender(<CompositionPreviewPlayer project={{ ...project, filmLook: nextLook }} audioUrl='/song.mp3' />);
+    expect(socket.emit.mock.calls).toHaveLength(sent);
+    socket.emit.mockImplementation(() => {});
+    act(() => {
+      socket.connected = true;
+      for (const fn of socket.__handlers.get('connect') || []) fn();
+      for (const fn of socket.__handlers.get('connect') || []) fn();
+    });
+    expect(opens()).toHaveLength(2);
+    const nextOpen = opens()[1][1];
+    expect(nextOpen.requestId).not.toBe(oldOpen.requestId);
+    expect(nextOpen.look).toEqual(nextLook);
+    act(() => socket.reply('generated-preview:open', oldOpen));
+    expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled();
+    act(() => socket.reply('generated-preview:open', nextOpen));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled());
+    expect(socket.emit).toHaveBeenLastCalledWith('generated-preview:seek', expect.objectContaining({ requestId: nextOpen.requestId, t: 2 }));
+    fireEvent.change(screen.getByLabelText('Scrub the composition preview'), { target: { value: '3' } });
+    expect(socket.emit).toHaveBeenLastCalledWith('generated-preview:seek', expect.objectContaining({ requestId: nextOpen.requestId, t: 3 }));
+  });
+
   it('preserves a one-frame step while pausing playback with audio present', async () => {
     const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
     const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});

@@ -230,6 +230,7 @@ export default function CodeVideoPanel({ project, audioUrl, onProject, productio
         )}
       </div>
       <div className="flex flex-wrap items-center gap-2">
+        {doc && preview.status === 'idle' && <button type="button" className={buttonCls} onClick={preview.resume}>Resume preview</button>}
         <button type="button" className={buttonCls} onClick={togglePlay} disabled={!doc}>{playing ? 'Pause' : 'Play'}</button>
         <button type="button" className={buttonCls} aria-pressed={looping} onClick={() => setLooping((value) => !value)}>
           {looping ? 'Looping section' : 'Loop section'}
