@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { Activity, Ban, Film, Image as ImageIcon, Pencil, Search, Star, Trash2 } from 'lucide-react';
+import { Activity, Ban, Check, Film, FolderInput, Image as ImageIcon, Library, Pencil, Search, Star, Trash2 } from 'lucide-react';
 import TabPills from '../../ui/TabPills.jsx';
 import InfiniteScrollFooter from '../../ui/InfiniteScrollFooter.jsx';
 import { DeleteConfirm, filterPool, poolKey, usedLabel } from '../SceneTakePicker.jsx';
 import { shotNumbers as numberShots } from '../ShotStepper.jsx';
-import { deleteMusicVideoPoolAssets, getMusicVideoMediaPool, markMusicVideoPoolAssets, searchMusicVideoMediaPool } from '../../../services/apiMusicVideo.js';
+import { addMusicVideoLibraryMedia, deleteMusicVideoPoolAssets, getMusicVideoMediaPool, importMusicVideoPool, listMusicVideoProjectSummaries, markMusicVideoPoolAssets, searchMusicVideoLibrary, searchMusicVideoMediaPool } from '../../../services/apiMusicVideo.js';
 import { takeThumbUrl, takeClipUrl } from '../../../lib/musicVideoTakes.js';
 import { formatCount } from '../../../utils/formatters.js';
 
@@ -33,7 +33,8 @@ const ACTION = 'inline-flex min-h-[44px] items-center gap-1 rounded border borde
  * with the floor (takes a cut shot or a re-plan left behind) last. Search the
  * prompts or a shot number, sort them ★ ingredient or ✕ bad, delete bad ones
  * from the media library (the server refuses anything a shot uses), and jump
- * to the shot a file was made for. The open tab and file are in the URL
+ * to the shot a file was made for. "Add media from another video" files an
+ * earlier draft's stills and clips in too (they land on the floor). The open tab and file are in the URL
  * (`?kind=clips&asset=<id>`).
  */
 export default function AssetsStage({ board }) {
@@ -108,6 +109,23 @@ export default function AssetsStage({ board }) {
     if (picked && gone.has(poolKey(picked))) setParams({ asset: null });
     setConfirmDelete(null);
   });
+  // Add media from another video (an earlier draft): its stills and clips join this one's assets and stats outro.
+  const [importing, setImporting] = useState(null);
+  const [imported, setImported] = useState(null);
+  const [librarySearch, setLibrarySearch] = useState(false);
+  const openImport = () => {
+    setImporting({ projects: null, fromId: '' });
+    listMusicVideoProjectSummaries({ limit: 100 }, { silent: true })
+      .then((res) => setImporting((prev) => prev && { ...prev, projects: (res.items || []).filter((p) => p.id !== projectId) }))
+      .catch((err) => { setImporting(null); setError(err?.message || 'Could not list the other videos'); });
+  };
+  const runImport = () => run(async () => {
+    const from = importing.projects.find((p) => p.id === importing.fromId);
+    const result = await importMusicVideoPool(projectId, importing.fromId, { silent: true });
+    setPool(result.items || []);
+    setImporting(null);
+    setImported(`Added ${formatCount(result.added, { fallback: '0' })} stills and clips from ${from?.name || 'that video'}${result.added < result.total ? ` (${formatCount(result.total - result.added)} were already here)` : ''}.`);
+  });
   // A shot using it keeps it: the server refuses to delete it, so it's never offered.
   const badHere = filter === 'bad' ? items.filter((item) => !inUse(item)) : [];
   const showMore = useCallback(() => setShown((n) => n + PAGE), []);
@@ -174,6 +192,35 @@ export default function AssetsStage({ board }) {
             <Trash2 size={14} aria-hidden="true" />Delete {formatCount(badHere.length)} bad
           </button>
         ))}
+      {importing ? (
+        <div className="flex flex-wrap items-center gap-2 rounded border border-port-border p-2 text-xs">
+          <label htmlFor="mv-assets-import" className="shrink-0">Add media from</label>
+          <select id="mv-assets-import" value={importing.fromId} disabled={!importing.projects || working}
+            onChange={(e) => setImporting((prev) => ({ ...prev, fromId: e.target.value }))}
+            className="min-h-[44px] min-w-0 flex-1 basis-48 rounded border border-port-border bg-port-bg px-2 text-sm sm:min-h-[32px]">
+            <option value="">{importing.projects ? 'Pick a video' : 'Loading videos…'}</option>
+            {(importing.projects || []).map((p) => <option key={p.id} value={p.id}>{p.name || 'Untitled'}{p.version > 1 ? ` (v${p.version})` : ''}</option>)}
+          </select>
+          <button type="button" disabled={!importing.fromId || working} onClick={runImport}
+            className="inline-flex min-h-[44px] items-center gap-1 rounded bg-port-accent px-3 font-medium text-white disabled:opacity-50 sm:min-h-[32px]">
+            {working && <Activity size={14} className="animate-spin" />}Add
+          </button>
+          <button type="button" disabled={working} onClick={() => setImporting(null)} className={ACTION}>Cancel</button>
+        </div>
+      ) : librarySearch ? (
+        <LibraryAdd projectId={projectId} onCancel={() => setLibrarySearch(false)}
+          onAdded={(result) => { setPool(result.items || []); setLibrarySearch(false); setImported(`Added ${formatCount(result.added, { fallback: '0' })} from the media library.`); }} />
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={() => { setImported(null); openImport(); }} className={ACTION}>
+            <FolderInput size={14} aria-hidden="true" />Add media from another video
+          </button>
+          <button type="button" onClick={() => { setImported(null); setLibrarySearch(true); }} className={ACTION}>
+            <Library size={14} aria-hidden="true" />Add from the media library
+          </button>
+        </div>
+      )}
+      {imported && <p role="status" className="text-xs text-port-success">{imported}</p>}
       {error && <p role="alert" className="text-xs text-port-error">{error}</p>}
       {!pool && !error && <p className="flex items-center gap-2 text-xs text-port-text-muted"><Activity size={14} className="animate-spin" />Gathering every still and clip made for this video…</p>}
       {pool && items.length === 0 && (
@@ -205,6 +252,88 @@ export default function AssetsStage({ board }) {
       {items.length > shown && (
         <InfiniteScrollFooter hasMore loading={false} error={null} onLoadMore={showMore}
           label={`Show more (${formatCount(items.length - shown)} left)`} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * "Add from the media library": stills and clips made for the video but never
+ * filed under it (rendered before renders named their video). Search the
+ * prompts, tap to pick (or Pick all), then Add.
+ */
+function LibraryAdd({ projectId, onAdded, onCancel }) {
+  const [query, setQuery] = useState('');
+  const [found, setFound] = useState(null);
+  const [picked, setPicked] = useState(() => new Set());
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    const q = query.trim();
+    setFound(null); setPicked(new Set());
+    if (!q) return undefined;
+    let active = true;
+    const timer = setTimeout(() => {
+      searchMusicVideoLibrary(projectId, q, { silent: true })
+        .then((res) => { if (active) setFound(res); })
+        .catch((err) => { if (active) setError(err?.message || 'Search failed'); });
+    }, 300);
+    return () => { active = false; clearTimeout(timer); };
+  }, [projectId, query]);
+
+  const toggle = (key) => setPicked((prev) => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; });
+  const items = found?.items || [];
+  const add = () => {
+    setBusy(true); setError(null);
+    addMusicVideoLibraryMedia(projectId, items.filter((item) => picked.has(poolKey(item))).map(({ kind, assetId }) => ({ kind, assetId })), { silent: true })
+      .then(onAdded)
+      .catch((err) => setError(err?.message || 'Could not add them'))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <div className="space-y-2 rounded border border-port-border p-2">
+      <label htmlFor="mv-assets-library" className="flex items-center gap-2 rounded border border-port-border bg-port-bg px-2">
+        <Library size={14} aria-hidden="true" className="shrink-0 text-port-text-muted" />
+        <span className="sr-only">Search the media library by prompt</span>
+        <input id="mv-assets-library" type="search" value={query} onChange={(e) => setQuery(e.target.value)} autoFocus
+          placeholder="Search the media library by prompt" className="min-h-[44px] min-w-0 flex-1 bg-transparent text-sm outline-none sm:min-h-[32px]" />
+      </label>
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span className="min-w-0 flex-1 text-port-text-muted">
+          {!query.trim() ? 'Media not in this video yet.' : !found ? 'Searching…'
+            : `${formatCount(items.length, { fallback: '0' })}${found.more ? '+' : ''} not in this video yet`}
+        </span>
+        {items.length > 0 && (
+          <button type="button" disabled={busy} onClick={() => setPicked(picked.size === items.length ? new Set() : new Set(items.map(poolKey)))} className={ACTION}>
+            {picked.size === items.length ? 'Pick none' : 'Pick all'}
+          </button>
+        )}
+        <button type="button" disabled={!picked.size || busy} onClick={add}
+          className="inline-flex min-h-[44px] items-center gap-1 rounded bg-port-accent px-3 font-medium text-white disabled:opacity-50 sm:min-h-[32px]">
+          {busy && <Activity size={14} className="animate-spin" />}Add {formatCount(picked.size, { fallback: '0' })}
+        </button>
+        <button type="button" disabled={busy} onClick={onCancel} className={ACTION}>Cancel</button>
+      </div>
+      {error && <p role="alert" className="text-xs text-port-error">{error}</p>}
+      {items.length > 0 && (
+        <ul className="grid max-h-[60vh] grid-cols-3 gap-2 overflow-y-auto sm:grid-cols-4 lg:grid-cols-6" aria-label="Media library matches">
+          {items.map((item) => {
+            const key = poolKey(item);
+            const on = picked.has(key);
+            return (
+              <li key={key}>
+                <button type="button" onClick={() => toggle(key)} aria-pressed={on} aria-label={`${NOUN[item.kind]}: ${String(item.prompt || '').slice(0, 80)}`}
+                  className={`relative block w-full overflow-hidden rounded border ${on ? 'border-port-accent ring-2 ring-port-accent' : 'border-port-border'}`}>
+                  <img src={takeThumbUrl(item)} alt="" loading="lazy" className="block aspect-video w-full bg-black object-cover" />
+                  {item.kind === 'video' && <span className="port-media-overlay-strong absolute bottom-1 right-1 inline-flex items-center gap-0.5 rounded px-1 text-[10px] leading-tight"><Film size={10} aria-hidden="true" />clip</span>}
+                  {on && <span className="port-media-overlay-strong absolute right-1 top-1 rounded p-0.5 text-port-accent"><Check size={12} aria-hidden="true" /></span>}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
       )}
     </div>
   );

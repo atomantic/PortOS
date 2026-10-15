@@ -251,6 +251,74 @@ export async function getMusicVideoMediaPool(project) {
 }
 
 /**
+ * File every still and clip of another video's pool (an earlier draft of the
+ * same song) into `project`'s collection, so its Assets page and stats outro
+ * count them. References only: no file is copied, the other video is not
+ * changed, and its clips keep their own provenance stamp. Resolves
+ * `{ added, total }`: how many were new here, of the other video's pool.
+ */
+export async function importMusicVideoPool(project, fromProject) {
+  const [{ findOrCreateMusicVideoCollection, bulkUpdateCollectionItems }, { items }] = await Promise.all([
+    import('../mediaCollections.js'), getMusicVideoMediaPool(fromProject),
+  ]);
+  const collection = await findOrCreateMusicVideoCollection({ projectId: project.id, projectName: project.name });
+  const present = new Set([...collection.items.map((item) => `${item.kind}:${item.ref}`),
+    ...projectTakeAssets(project).map((asset) => `${asset.kind}:${asset.ref}`)]);
+  const add = items.filter((item) => !present.has(`${item.kind}:${item.assetId}`)
+    && !item.assetId.includes(':') && !item.assetId.includes('/'))
+    .map((item) => ({ kind: item.kind, ref: item.assetId }));
+  if (add.length) await bulkUpdateCollectionItems(collection.id, { add });
+  console.log(`🗂️ music-video media pool: filed ${add.length} of ${items.length} item(s) from ${fromProject.id} into ${project.id}`);
+  return { added: add.length, total: items.length };
+}
+
+const LIBRARY_MATCH_MAX = 300;
+
+/**
+ * Stills and clips in the whole media library whose prompts hold every word of
+ * `query` and that are not in `project`'s pool yet: media made for the video
+ * but never filed (rendered before renders named their video). Newest first,
+ * at most 300: `{ items: [{ kind, assetId, prompt, createdAt }], more }`.
+ */
+export async function searchMediaLibraryForPool(project, query) {
+  const words = String(query).toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return { items: [], more: false };
+  const [{ items: pool }, { listGallery }, { loadHistory }] = await Promise.all([
+    getMusicVideoMediaPool(project), import('../imageGen/local.js'), import('../videoGen/history.js'),
+  ]);
+  const inPool = new Set(pool.map((item) => `${item.kind}:${item.assetId}`));
+  const matches = (prompt) => typeof prompt === 'string' && words.every((word) => prompt.toLowerCase().includes(word));
+  const found = [
+    ...(await listGallery()).filter((image) => matches(image.prompt) && !inPool.has(`image:${image.filename}`))
+      .map((image) => ({ kind: 'image', assetId: image.filename, prompt: image.prompt, createdAt: image.createdAt || null })),
+    ...(await loadHistory()).filter((entry) => entry?.id && matches(entry.prompt) && !inPool.has(`video:${entry.id}`))
+      .map((entry) => ({ kind: 'video', assetId: entry.id, prompt: entry.prompt, createdAt: entry.createdAt || null })),
+  ].sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  return { items: found.slice(0, LIBRARY_MATCH_MAX), more: found.length > LIBRARY_MATCH_MAX };
+}
+
+/**
+ * File stills and clips from the media library into `project`'s collection
+ * (the Assets page's "Add from the library"). Only files the library holds;
+ * a clip keeps whatever provenance stamp it has. Resolves `{ added }`.
+ */
+export async function addLibraryMediaToPool(project, items) {
+  const [{ findOrCreateMusicVideoCollection, bulkUpdateCollectionItems }, { resolveGalleryImage }, { getHistoryItem }, { ServerError }] = await Promise.all([
+    import('../mediaCollections.js'), import('../../lib/pathSafety.js'), import('../videoGen/history.js'), import('../../lib/errorHandler.js'),
+  ]);
+  for (const { kind, assetId } of items) {
+    const exists = kind === 'image' ? resolveGalleryImage(assetId) : await getHistoryItem(assetId);
+    if (!exists) throw new ServerError(`${kind === 'image' ? 'Image' : 'Video'} not found in this install's media library`, { status: 400, code: 'TAKE_ASSET_NOT_FOUND' });
+  }
+  const collection = await findOrCreateMusicVideoCollection({ projectId: project.id, projectName: project.name });
+  const present = new Set(collection.items.map((item) => `${item.kind}:${item.ref}`));
+  const add = [...new Map(items.filter(({ kind, assetId }) => !present.has(`${kind}:${assetId}`))
+    .map(({ kind, assetId }) => [`${kind}:${assetId}`, { kind, ref: assetId }])).values()];
+  if (add.length) await bulkUpdateCollectionItems(collection.id, { add });
+  return { added: add.length };
+}
+
+/**
  * The pool items (`{ kind, assetId }`) whose prompts hold every word of `query`, case-insensitively:
  * the take's prompt, the prompt saved beside a still (its image sidecar) and a clip's history prompt.
  * Swap searches here because a still on the floor has no take left to carry its prompt.
