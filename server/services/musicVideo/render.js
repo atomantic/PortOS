@@ -132,17 +132,17 @@ const cutEffectOf = (scene, planned) => {
 // final frame (tpad) rather than repeating footage. Longer shortfalls block the
 // render until the director resolves them.
 const COVERAGE_TOLERANCE_SEC = 0.25;
-const COVERAGE_RESOLUTIONS = Object.freeze(['trim', 'continue', 'replace', 'loop']);
+const COVERAGE_RESOLUTIONS = Object.freeze(['hold', 'trim', 'continue', 'replace', 'loop']);
 
 /**
  * Pure: the snapped clips whose authored span needs more footage than their
- * non-looping source clip provides. Returns
+ * non-looping source clip provides (one set to hold its last frame is covered). Returns
  * `[{ sceneId, spanSec, clipSec, shortBySec }]` (empty when every shot is covered).
  */
 function findCoverageShortfalls(clips, { toleranceSec = COVERAGE_TOLERANCE_SEC } = {}) {
   const out = [];
   for (const clip of Array.isArray(clips) ? clips : []) {
-    if (clip.layer || clip.loop !== false) continue;
+    if (clip.layer || clip.loop !== false || clip.holdLastFrame) continue;
     const spanSec = clip.outSec - clip.inSec;
     const clipSec = clip.sourceSec ?? clip.duration;
     if (spanSec - clipSec > toleranceSec) {
@@ -317,6 +317,8 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
       // A reversed clip is read once, backwards, and holds its last frame rather than looping.
       loop: edit || clipReversed(scene) ? false : sceneLoops(scene),
       ...(clipReversed(scene) ? { reverse: true } : {}),
+      // The director chose to hold the last frame over a shot longer than its clip.
+      ...(scene.holdLastFrame === true ? { holdLastFrame: true } : {}),
       ...(rate !== 1 ? { rate } : {}),
       ...(leadSec > 0 ? { leadSec } : {}),
       inSec: playbackInSec,
@@ -781,11 +783,11 @@ export async function planMusicVideoRender(project, { draft = false } = {}) {
   const snapped = beatSnapClips(rawClips, beats, { scenes: project.scenes });
   // #8964: a new (non-looping) shot must never silently repeat footage to
   // fill its span. Refuse the render and name the shots that need a trim,
-  // a continuation, a replacement clip, or an explicit loop.
+  // a continuation, a replacement clip, an explicit loop, or a held last frame.
   const shortfalls = findCoverageShortfalls(snapped);
   if (shortfalls.length > 0) {
     throw new ServerError(
-      `${nameShots(project, shortfalls.map((entry) => ({ sceneId: entry.sceneId, note: `${entry.shortBySec}s short` })))}: longer than ${shortfalls.length === 1 ? 'its' : 'their'} clip. Trim, continue, replace, or loop ${shortfalls.length === 1 ? 'it' : 'them'} before rendering`,
+      `${nameShots(project, shortfalls.map((entry) => ({ sceneId: entry.sceneId, note: `${entry.shortBySec}s short` })))}: longer than ${shortfalls.length === 1 ? 'its' : 'their'} clip. Hold the last frame, trim, continue, replace, or loop ${shortfalls.length === 1 ? 'it' : 'them'} before rendering`,
       { status: 422, code: 'INSUFFICIENT_CLIP_COVERAGE', context: { shortfalls, resolutions: COVERAGE_RESOLUTIONS } },
     );
   }

@@ -524,6 +524,7 @@ function buildScene(input, { order }) {
     ...(input.speedFps ? { speedFps: input.speedFps } : {}),
     ...(input.offsetFrames ? { offsetFrames: input.offsetFrames } : {}),
     ...(input.reverse ? { reverse: true } : {}),
+    ...(input.holdLastFrame ? { holdLastFrame: true } : {}),
     ...(input.transitionIn ? { transitionIn: input.transitionIn } : {}),
     ...(input.transitionOut ? { transitionOut: input.transitionOut } : {}),
     ...(input.glitches?.length ? { glitches: input.glitches } : {}),
@@ -614,6 +615,7 @@ export function replaceScenes(project, sceneInputs) {
       ...(prior.speedFps ? { speedFps: prior.speedFps } : {}),
       ...(prior.offsetFrames ? { offsetFrames: prior.offsetFrames } : {}),
       ...(prior.reverse ? { reverse: true } : {}),
+      ...(prior.holdLastFrame ? { holdLastFrame: true } : {}),
       ...(prior.transitionIn ? { transitionIn: prior.transitionIn } : {}),
       ...(prior.transitionOut ? { transitionOut: prior.transitionOut } : {}),
       ...(prior.glitches?.length ? { glitches: prior.glitches } : {}),
@@ -633,7 +635,7 @@ export function replaceScenes(project, sceneInputs) {
 // takes, and whether it plays as a clip or its still with an image effect) without
 // adding a shot or lyric the storyboard approval did not cover.
 const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'label', 'prompt', 'framePrompt', 'visualIntent',
-  'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'reverse', 'transitionIn', 'transitionOut', 'glitches', 'cutEffect',
+  'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'reverse', 'holdLastFrame', 'transitionIn', 'transitionOut', 'glitches', 'cutEffect',
   'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'frameReferenceIds'];
 
 /**

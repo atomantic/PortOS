@@ -769,23 +769,23 @@ export default function MusicVideo() {
       .catch((err) => toast.error(err?.message || 'Failed to add scene'));
   };
 
-  // The lip-sync render refusal's one-tap fix: its unlocked shots become cutaways.
+  // A render refusal's one-tap fix: the same patch on each shot it names.
   // Sequential, like auto-arrange, so each PATCH merges against the last.
-  const switchToCutaway = (sceneIds) => {
+  const patchShots = (sceneIds, patch, doneMessage) => {
     if (!selected || !sceneIds.length) return Promise.resolve();
     const snapshot = selected;
     const ids = new Set(sceneIds);
-    replaceProject({ ...selected, scenes: selected.scenes.map((s) => (ids.has(s.sceneId) ? { ...s, shotMode: 'cutaway' } : s)) });
+    replaceProject({ ...selected, scenes: selected.scenes.map((s) => (ids.has(s.sceneId) ? { ...s, ...patch } : s)) });
     return (async () => {
-      for (const sceneId of sceneIds) await updateMusicVideoScene(selected.id, sceneId, { shotMode: 'cutaway' }, { silent: true });
+      for (const sceneId of sceneIds) await updateMusicVideoScene(selected.id, sceneId, patch, { silent: true });
     })()
       .then(() => {
         renderJob.clearFailure();
-        toast.success(`Switched ${sceneIds.length} shot${sceneIds.length === 1 ? '' : 's'} to Cutaway — render again`);
+        toast.success(`${doneMessage} — render again`);
       })
       .catch((err) => {
         replaceProject(snapshot);
-        toast.error(err?.message || 'Could not switch the shots to Cutaway');
+        toast.error(err?.message || 'Could not change the shots');
       });
   };
 
@@ -1279,7 +1279,7 @@ export default function MusicVideo() {
     videoSettings,
     sceneMedia,
     renderJob,
-    onSwitchToCutaway: switchToCutaway,
+    onPatchShots: patchShots,
     production,
     castSets,
     devArtifacts,

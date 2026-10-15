@@ -634,6 +634,8 @@ const sceneLayerFields = {
   offsetFrames: z.number().int().min(CLIP_OFFSET_FRAMES_RANGE.min).max(CLIP_OFFSET_FRAMES_RANGE.max).nullable().optional(),
   // The clip plays backwards (a footage shot; never a lip-sync performance).
   reverse: z.boolean().nullable().optional(),
+  // A clip shorter than its shot holds its last frame for the rest of the shot; null clears it.
+  holdLastFrame: z.boolean().nullable().optional(),
   // A VHS glitch over the cut into / out of this shot (musicVideoTransitions.js); null clears it.
   transitionIn: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),
   transitionOut: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),

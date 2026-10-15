@@ -21,15 +21,19 @@ it('shows an amber out-of-date notice only when the final render is stale (#1014
   expect(screen.queryByRole('status')).not.toBeInTheDocument();
 });
 
-// Uniquely catches the lip-sync refusal's fix switching a shot that Cutaway cannot fix.
-it('offers one tap that switches a lip-sync refusal\'s fixable shots to Cutaway', async () => {
+// Uniquely catches a refusal's one-tap fix patching a shot it cannot fix, or a fix offered where none exists.
+it('offers one tap that fixes the shots a render refusal names', async () => {
   const project = { id: 'mv-example', status: 'ready' };
-  const onSwitchToCutaway = vi.fn(async () => {});
-  const failure = { projectId: project.id, code: 'MUSIC_VIDEO_STALE_SOURCE_AUDIO_TAKES', message: 'Shots 3 (not lip-synced), 6 (re-timed): …',
+  const onPatchShots = vi.fn(async () => {});
+  const failure = { projectId: project.id, code: 'STALE_PERFORMANCE_TAKES', message: 'Shots 3 (not lip-synced), 6 (re-timed): …',
     context: { stale: [{ sceneId: 'a', cutaway: true }, { sceneId: 'b', cutaway: false }, { sceneId: 'c', cutaway: true }] } };
-  const { rerender } = render(<RenderFailure project={project} renderJob={{ failure }} onSwitchToCutaway={onSwitchToCutaway} />);
+  const { rerender } = render(<RenderFailure project={project} renderJob={{ failure }} onPatchShots={onPatchShots} />);
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Switch these 2 to Cutaway' })); });
-  expect(onSwitchToCutaway).toHaveBeenCalledWith(['a', 'c']);
-  rerender(<RenderFailure project={project} renderJob={{ failure: { ...failure, code: 'MISSING_CLIPS' } }} onSwitchToCutaway={onSwitchToCutaway} />);
+  expect(onPatchShots).toHaveBeenCalledWith(['a', 'c'], { shotMode: 'cutaway' }, 'Switched 2 shots to Cutaway');
+  rerender(<RenderFailure project={project} renderJob={{ failure: { projectId: project.id, code: 'INSUFFICIENT_CLIP_COVERAGE', message: 'Shot 19 (0.58s short): …',
+    context: { shortfalls: [{ sceneId: 'd', shortBySec: 0.58 }] } } }} onPatchShots={onPatchShots} />);
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Hold the last frame on it' })); });
+  expect(onPatchShots).toHaveBeenLastCalledWith(['d'], { holdLastFrame: true }, 'Holding the last frame on 1 shot');
+  rerender(<RenderFailure project={project} renderJob={{ failure: { ...failure, code: 'MISSING_CLIPS' } }} onPatchShots={onPatchShots} />);
   expect(screen.queryByRole('button')).not.toBeInTheDocument();
 });

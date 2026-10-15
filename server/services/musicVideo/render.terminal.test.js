@@ -444,9 +444,10 @@ describe('renderMusicVideo clip coverage (#8964)', () => {
     const expected = {
       status: 422,
       code: 'INSUFFICIENT_CLIP_COVERAGE',
+      message: 'Shot 1 (18s short): longer than its clip. Hold the last frame, trim, continue, replace, or loop it before rendering',
       context: {
         shortfalls: [{ sceneId: 's1', spanSec: 20, clipSec: 2, shortBySec: 18 }],
-        resolutions: ['trim', 'continue', 'replace', 'loop'],
+        resolutions: ['hold', 'trim', 'continue', 'replace', 'loop'],
       },
     };
     await expect(renderMusicVideo('short-1')).rejects.toMatchObject(expected);
@@ -462,6 +463,15 @@ describe('renderMusicVideo clip coverage (#8964)', () => {
     const { args } = lastProc();
     expect(args).not.toContain('-stream_loop');
     expect(filterGraph(args)).toContain('tpad=stop_mode=clone:stop_duration=0.2,trim=start=0:end=2.2');
+  });
+
+  // Uniquely catches the director's held last frame still blocking, or repeating footage.
+  it('holds the last frame over a shot the director set to hold, however long the gap', async () => {
+    primeScene('hold-1', { startSec: 0, endSec: 20, loop: false, holdLastFrame: true });
+    await renderMusicVideo('hold-1');
+    const { args } = lastProc();
+    expect(args).not.toContain('-stream_loop');
+    expect(filterGraph(args)).toContain('tpad=stop_mode=clone:stop_duration=18,trim=start=0:end=20');
   });
 
   it('repeats a shot the director explicitly set to loop', async () => {

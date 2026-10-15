@@ -121,6 +121,9 @@ it('blocks composition and exposes a repair when supplied audio used an older ta
   getProject.mockResolvedValue(supplied);
   getTrack.mockResolvedValue({ audioFilename: 'song.wav' });
   await expect(assertCurrentPerformanceTakes(supplied, await resolveMasterAudioPath(supplied))).resolves.toBeUndefined();
+  // A local lip-sync take hears the song the same way: it is lip-synced, not a cutaway import.
+  const lipSync = { ...supplied, scenes: [{ ...shot, shotMode: 'performance' }] };
+  await expect(assertCurrentPerformanceTakes(lipSync, await resolveMasterAudioPath(lipSync))).resolves.toBeUndefined();
   await writeFile(join(PATHS.music, 'another-take.wav'), songWav({ markerAmp: 10000 }));
   getTrack.mockResolvedValue({ audioFilename: 'another-take.wav' });
   await expect(assertCurrentPerformanceTakes(supplied, await resolveMasterAudioPath(supplied))).rejects.toMatchObject({ code: 'MUSIC_VIDEO_STALE_SOURCE_AUDIO_TAKES' });
