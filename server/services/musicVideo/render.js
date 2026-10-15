@@ -755,7 +755,9 @@ export function assertCurrentClipDependencies(project) {
   const order = [...(project.scenes || [])].filter((scene) => Number.isFinite(scene.startSec)).sort((a, b) => a.startSec - b.startSec);
   const numbers = stale.map((scene) => order.indexOf(scene) + 1).filter((n) => n > 0).sort((a, b) => a - b);
   const shots = numbers.length === stale.length ? `${numbers.length === 1 ? 'Shot' : 'Shots'} ${numbers.join(', ')}` : `${stale.length} shots`;
-  throw new ServerError(`${shots}: the clip was made from frames that have since changed. Lock the clip to keep it as it is, or render a new one`,
+  // A document storyboard has no clip locks, so a new render is its only fix.
+  const fix = locks ? 'Lock the clip to keep it as it is, or render a new one' : 'Render a new one';
+  throw new ServerError(`${shots}: the clip was made from frames that have since changed. ${fix}`,
     { status: 422, code: 'STALE_CLIP_DEPENDENCIES', context: { sceneIds: stale.map((scene) => scene.sceneId) } });
 }
 
