@@ -72,7 +72,7 @@ export default function RenderStatusPanel({
             controls
             playsInline
             preload="metadata"
-            className="w-full aspect-video max-h-[65vh] object-contain rounded bg-black border border-port-border"
+            className="mx-auto block w-full aspect-video max-w-[calc(65vh*16/9)] object-contain rounded bg-black border border-port-border"
             aria-label="Play final music video"
           />
           <button
