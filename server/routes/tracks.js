@@ -50,7 +50,7 @@ import { PATHS } from '../lib/fileUtils.js';
 import { probeVideoDuration } from '../lib/ffmpeg.js';
 import * as tracks from '../services/tracks/index.js';
 import { attachAudioAsRender } from '../services/trackAudioAttach.js';
-import { createTrackWithAlbum, updateTrackWithAlbum, removeTrackFromAlbum } from '../services/trackAlbumMembership.js';
+import { createTrackWithAlbum, updateTrackWithAlbum, deleteTrackWithAlbum } from '../services/trackAlbumMembership.js';
 import {
   listMusicLibrary, importUploadedTrack, statMusicTrack,
   isSupportedMusicUpload, assertSafeMusicFilename, MUSIC_UPLOAD_MAX_BYTES,
@@ -225,17 +225,12 @@ router.get('/:id', asyncHandler(async (req, res) => {
 
 router.patch('/:id', asyncHandler(async (req, res) => {
   const body = validateRequest(patchSchema, req.body ?? {});
-  const prev = await requireTrack(req.params.id);
-  const track = await updateTrackWithAlbum(prev, body);
+  const track = await updateTrackWithAlbum({ id: req.params.id }, body);
   res.json(track);
 }));
 
 router.delete('/:id', asyncHandler(async (req, res) => {
-  const prev = await tracks.getTrack(req.params.id).catch(() => null);
-  const result = await tracks.deleteTrack(req.params.id);
-  // Drop the deleted track from its album's ordered list so the album doesn't
-  // render a dangling (missing) entry.
-  if (prev?.albumId) await removeTrackFromAlbum(req.params.id, prev.albumId);
+  const result = await deleteTrackWithAlbum(req.params.id);
   res.json(result);
 }));
 

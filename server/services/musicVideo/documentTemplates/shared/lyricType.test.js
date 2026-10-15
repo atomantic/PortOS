@@ -259,6 +259,35 @@ describe('lyricType text zones', () => {
     }
   });
 
+  it('places corner lyrics in all four corners, right-aligned on the right side', () => {
+    const text = 'a short sung line';
+    for (const zone of ['upper-left', 'upper-right', 'lower-left', 'lower-right']) {
+      expect(TEXT_ZONES).toContain(zone);
+      const type = createLyricType({}, { lines: [{ text, role: 'line', zone, startSec: 0, words: words(text, 0) }] });
+      const placed = type.layout(type.lines[0], 1920, 1080, measure);
+      const right = Math.max(...placed.words.map((word) => word.x + word.w - measure(' ', `${Math.round(placed.px)}px`)));
+      const left = Math.min(...placed.words.map((word) => word.x));
+      if (zone.endsWith('right')) expect(right).toBeCloseTo(placed.rect.x + placed.rect.w, 6);
+      else expect(left).toBeCloseTo(placed.rect.x, 6);
+      for (const word of placed.words) {
+        if (zone.startsWith('upper')) expect(word.y).toBeLessThan(1080 / 2);
+        else expect(word.y - placed.px).toBeGreaterThan(1080 / 2);
+      }
+    }
+  });
+
+  it('sizes a shot\'s lyrics small or large without going under the phone floor', () => {
+    const text = 'a short sung line';
+    const sizeOf = (lyricSize) => {
+      const type = createLyricType({ scenes: [{ sceneId: 's', startSec: 0, endSec: 9, lyricSize }] }, { lines: [{ text, role: 'line', startSec: 0, words: words(text, 0) }] });
+      return type.layout(type.lines[0], 1920, 1080, measure).px;
+    };
+    const normal = sizeOf(null);
+    expect(sizeOf('large')).toBeCloseTo(normal * 1.25, 6);
+    expect(sizeOf('small')).toBe(56);
+    expect(normal).toBe(60);
+  });
+
   it('reframes zones for a portrait frame', () => {
     const rect = zoneRect('lower-left', 1080, 1920);
     expect(rect.x + rect.w).toBeCloseTo(1080 - rect.x, 6);

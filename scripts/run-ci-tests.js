@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from 'child_process';
-import { mkdtempSync, readFileSync, statSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, statSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { stripVTControlCharacters } from 'node:util';
 import { dirname, join } from 'path';
@@ -11,6 +11,7 @@ import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { sweepStaleRunRoots, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
 import { writeStepEnv, writeStepSummary } from './lib/githubOutput.js';
 import { reportWindowsCrashDiagnostics } from './ci-windows-crash-diagnostics.js';
+import { diagnosticTestFile, persistTestDiagnostic } from './ci-test-diagnostics.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -139,7 +140,7 @@ export function structuredFailureDiagnostics(reportPath, runReportPath) {
   const lines = [];
   if (runReportPath) {
     try {
-      if (statSync(runReportPath).size > 100_000) throw new Error('run report exceeds limit');
+      if (statSync(runReportPath).size > 160_000) throw new Error('run report exceeds limit');
       const run = JSON.parse(readFileSync(runReportPath, 'utf8'));
       if (!Array.isArray(run.errors) || !run.errors.every(error => typeof error === 'string')) {
         throw new Error('invalid run report schema');
@@ -191,20 +192,35 @@ export function structuredFailureDiagnostics(reportPath, runReportPath) {
  * @returns {Promise<{status: number, output: string, interrupted?: NodeJS.Signals, error?: Error}>}
  */
 export async function runNpm(scope, script, extraArgs) {
-  const hostRoot = tmpdir();
-  sweepStaleRunRoots(hostRoot, { prefix: 'portos-vitest-' });
+  // Opt-in, job-owned storage survives an abruptly terminated launcher. Keep
+  // separate roots for the initial attempt and the existing single retry.
+  const durableRoot = process.env.PORTOS_CI_DIAGNOSTICS_DIR;
+  let hostRoot = tmpdir();
+  if (durableRoot) {
+    try { mkdirSync(durableRoot, { recursive: true }); hostRoot = durableRoot; }
+    catch { console.error('Durable CI test diagnostics unavailable; using temporary reports.'); }
+  }
+  const durable = hostRoot === durableRoot;
+  if (!durable) sweepStaleRunRoots(hostRoot, { prefix: 'portos-vitest-' });
   const reportDir = mkdtempSync(join(hostRoot, 'portos-vitest-'));
   const reportPath = join(reportDir, 'failures.json');
   try {
     writeOwnerFile(reportDir);
     return await runNpmWithReport(scope, script, extraArgs, reportPath);
   } finally {
-    rmSync(reportDir, { recursive: true, force: true });
+    if (!durable) rmSync(reportDir, { recursive: true, force: true });
   }
 }
 
 function runNpmWithReport(scope, script, extraArgs, reportPath) {
   const runReportPath = join(dirname(reportPath), 'run.json');
+  const invocationPath = join(dirname(reportPath), 'invocation.json');
+  const invocation = {
+    startedAt: Date.now(), completed: false, scope, script,
+    selectors: extraArgs.filter(arg => !arg.startsWith('-')).slice(0, 100)
+      .map(arg => diagnosticTestFile(arg.startsWith('../') ? arg.slice(3) : `${scope}/${arg.replace(/^\.\//, '')}`)),
+  };
+  persistTestDiagnostic(invocationPath, invocation);
   const args = ['run', script, '--prefix', scope];
   args.push('--', ...extraArgs, '--reporter=json', `--outputFile.json=${reportPath}`,
     `--reporter=${join(repoRoot, 'scripts', 'vitestRunDiagnostics.js')}`);
@@ -216,8 +232,12 @@ function runNpmWithReport(scope, script, extraArgs, reportPath) {
     // npm is a launcher, not the entire test tree. Give this invocation its
     // own POSIX group; Windows killProcessTree uses taskkill /T instead.
     const processGroup = process.platform !== 'win32';
+    const childEnv = { ...process.env, PORTOS_CI_DIAGNOSTICS_PATH: runReportPath };
+    // Only the workflow launcher owns durable attempts. Nested launcher
+    // fixtures must not overwrite or add to the job's failure provenance.
+    delete childEnv.PORTOS_CI_DIAGNOSTICS_DIR;
     const child = spawn(command, spawnArgs, {
-      env: { ...process.env, PORTOS_CI_DIAGNOSTICS_PATH: runReportPath }, cwd: repoRoot, detached: processGroup,
+      env: childEnv, cwd: repoRoot, detached: processGroup,
     });
     let interrupted;
     let escalation;
@@ -253,6 +273,7 @@ function runNpmWithReport(scope, script, extraArgs, reportPath) {
       process.removeListener('SIGINT', onSigint);
       process.removeListener('SIGTERM', onSigterm);
       const status = interrupted ? (interrupted === 'SIGINT' ? 130 : 143) : code ?? 1;
+      persistTestDiagnostic(invocationPath, { ...invocation, completed: true, status, signal: signal ?? interrupted ?? null });
       if (status !== 0) {
         console.error(`Test launcher exited: code=${code}, signal=${signal ?? 'none'}${interrupted ? `, interrupted=${interrupted}` : ''}`);
         console.error(structuredFailureDiagnostics(reportPath, runReportPath));

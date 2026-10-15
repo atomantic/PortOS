@@ -26,7 +26,7 @@ import { buildDocumentData, documentRenderClock, documentSongDuration } from './
 const LINES_PER_SCENE = 4;
 const finite = (n) => typeof n === 'number' && Number.isFinite(n);
 // The fields the template reads from a shot; no take, frame or clip comes along.
-const SCENE_FIELDS = ['sceneId', 'order', 'label', 'sectionLabel', 'startSec', 'endSec', 'shotMode', 'textZone', 'lyricRole', 'lyricText', 'camera', 'stillMove'];
+const SCENE_FIELDS = ['sceneId', 'order', 'label', 'sectionLabel', 'startSec', 'endSec', 'shotMode', 'textZone', 'lyricRole', 'lyricSize', 'lyricText', 'camera', 'stillMove'];
 
 const timedShots = (scenes) => (Array.isArray(scenes) ? scenes : [])
   .filter((scene) => scene?.sceneId && finite(scene.startSec) && finite(scene.endSec) && scene.endSec > scene.startSec)

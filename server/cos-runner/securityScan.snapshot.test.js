@@ -2,7 +2,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, writeFile, readFile, rm, realpath, symlink, lstat, chmod } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { execFileSync } from '../lib/childProcess.js';
+import { execFileSync, spawn } from '../lib/childProcess.js';
 import { createSecurityScanManager } from './securityScan.js';
 import { cleanupSecurityScanGroup } from './securityScanRecovery.js';
 
@@ -12,6 +12,117 @@ const git = (...args) => execFileSync('git', args, { cwd: source, encoding: 'utf
   GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' } }).trim();
 const commit = () => { git('add', '.'); return git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Synthetic baseline'); };
 const grant = { model: 'example-model', effort: 'medium', auth: 'chatgpt', maxCostUsd: 'unlimited', timeLimitSeconds: 'unlimited' };
+
+// Keep the former vi.waitFor default budget. A missing marker must distinguish
+// pending preparation from an already-settled request or an exited supervisor.
+// No paths, PIDs, child output, exception messages or environment enter errors.
+// #11528's historical timing cause is still unknown. Set
+// PORTOS_PROFILE_SCANNER_PREPARATION=1 on the capped broader plan to retain the
+// same fixed state/phase timings on success as well as failure; a quiet pass is
+// not evidence that the missing-marker failure is resolved.
+function observeGitPreparation(markerName = 'git-worker') {
+  const started = performance.now();
+  const state = { settlement: 'pending', status: null, spawned: false, pidAssigned: false,
+    prepareSent: false, reply: null, exited: false, exitCode: null, signal: null, errorCode: null };
+  const phases = [];
+  const mark = phase => { if (phases.length < 16) phases.push({ phase, elapsedMs: Math.round(performance.now() - started) }); };
+  let child;
+  let originalSend;
+  let timer;
+  let pollTimer;
+  let settled = false;
+  let resolveReady;
+  let rejectReady;
+  const ready = new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
+  // Own rejection immediately, even when asynchronous fixture setup precedes wait.
+  ready.catch(() => {});
+  const dispose = () => {
+    settled = true;
+    clearTimeout(timer);
+    clearTimeout(pollTimer);
+    child?.removeListener('spawn', onSpawn);
+    child?.removeListener('error', onError);
+    child?.removeListener('exit', onExit);
+    child?.removeListener('message', onMessage);
+    if (child && originalSend) child.send = originalSend;
+  };
+  const finish = (reason, pid) => {
+    if (settled) return;
+    settled = true;
+    const diagnostics = { ...state, elapsedMs: Math.round(performance.now() - started), phases: [...phases] };
+    if (process.env.PORTOS_PROFILE_SCANNER_PREPARATION === '1') {
+      process.stdout.write(JSON.stringify({ kind: 'synthetic-git-preparation', outcome: reason || 'ready', ...diagnostics }) + '\n');
+    }
+    dispose();
+    if (reason) rejectReady(Object.assign(new Error('Synthetic Git preparation: ' + reason + ' ' + JSON.stringify(diagnostics)), { reason, diagnostics }));
+    else resolveReady(pid);
+  };
+  const onSpawn = () => { state.spawned = true; mark('supervisor-spawn'); };
+  const onError = error => {
+    state.errorCode = ['ENOENT', 'EACCES', 'EPERM'].includes(error.code) ? error.code : 'other';
+    finish('supervisor-error-before-marker');
+  };
+  const onExit = (code, signal) => {
+    state.exited = true;
+    state.exitCode = Number.isInteger(code) ? code : null;
+    state.signal = ['SIGTERM', 'SIGKILL', 'SIGABRT'].includes(signal) ? signal : signal ? 'other' : null;
+    finish('supervisor-exit-before-marker');
+  };
+  const onMessage = message => {
+    state.reply = message?.snapshotError ? 'snapshot-error' : message?.snapshot ? 'snapshot' : 'other';
+    mark('preparation-reply');
+  };
+  // Reuse the former waitFor polling cadence without a new filesystem-watcher
+  // dependency. Atomic publication makes a visible marker a complete PID.
+  const poll = () => {
+    if (settled) return;
+    readFile(join(root, markerName), 'utf8').then(text => {
+      if (settled) return;
+      const pid = Number(text);
+      if (!Number.isInteger(pid) || pid <= 1) return finish('invalid-marker');
+      mark('git-marker');
+      finish(null, pid);
+    }, error => {
+      if (settled) return;
+      if (error.code !== 'ENOENT') return finish('marker-read-failed');
+      pollTimer = setTimeout(poll, 50);
+    });
+  };
+  return {
+    spawnProcess(command, args, options) {
+      child = spawn(command, args, options);
+      state.pidAssigned = Number.isInteger(child.pid) && child.pid > 1;
+      mark('supervisor-created');
+      child.once('spawn', onSpawn);
+      child.once('error', onError);
+      child.once('exit', onExit);
+      child.on('message', onMessage);
+      originalSend = child.send;
+      child.send = function (message, ...rest) {
+        if (message?.prepare) { state.prepareSent = true; mark('preparation-sent'); }
+        return originalSend.call(this, message, ...rest);
+      };
+      return child;
+    },
+    wait(run) {
+      if (!settled) {
+        timer = setTimeout(() => finish('marker-deadline'), 1000);
+        poll();
+      }
+      run.then(result => {
+        state.settlement = 'fulfilled';
+        const status = result?.evidence?.status;
+        state.status = ['invalid-input', 'unavailable', 'interrupted', 'completed', 'failed'].includes(status) ? status : 'other';
+        finish('request-settled-before-marker');
+      }, () => {
+        state.settlement = 'rejected';
+        finish('request-rejected-before-marker');
+      });
+      return ready;
+    },
+    dispose,
+  };
+}
 
 beforeEach(async () => {
   root = await realpath(await mkdtemp(join(tmpdir(), 'scanner-snapshot-test-')));
@@ -119,16 +230,64 @@ describe.skipIf(process.platform === 'win32')('scanner committed snapshot bounda
   it('stops owned Git preparation and never launches the scanner after Stop', async () => {
     const bin = join(root, 'bin'); await mkdir(bin);
     const marker = join(root, 'git-worker');
-    await writeFile(join(bin, 'git'), `#!/bin/sh\necho $$ > '${marker}'\nexec sleep 300\n`);
+    await writeFile(join(bin, 'git'), `#!/bin/sh\nprintf '%s\\n' "$$" > '${marker}.pending'\nmv '${marker}.pending' '${marker}'\nexec sleep 300\n`);
     await chmod(join(bin, 'git'), 0o700);
-    const manager = await setup({ environment: { ...process.env, PATH: `${bin}:${process.env.PATH}` }, graceMs: 100 });
+    const preparation = observeGitPreparation();
+    const manager = await setup({ spawnProcess: preparation.spawnProcess,
+      environment: { ...process.env, PATH: `${bin}:${process.env.PATH}` }, graceMs: 100 });
     const run = manager.start('agent-fixture', { prompt: 'Synthetic audit', paths: ['.'] });
-    await vi.waitFor(async () => expect(Number(await readFile(marker, 'utf8'))).toBeGreaterThan(1));
-    const pid = Number(await readFile(marker, 'utf8'));
-    expect((await manager.stop('agent-fixture')).status).toBe('interrupted');
-    expect((await run).evidence.cleanup).toBe('confirmed');
-    expect(() => process.kill(pid, 0)).toThrow();
-    expect(await lstat(join(root, 'launched.json')).catch(() => null)).toBeNull();
+    try {
+      const pid = await preparation.wait(run);
+      expect(pid).toBeGreaterThan(1);
+      expect((await manager.stop('agent-fixture')).status).toBe('interrupted');
+      expect((await run).evidence.cleanup).toBe('confirmed');
+      expect(() => process.kill(pid, 0)).toThrow();
+      expect(await lstat(join(root, 'launched.json')).catch(() => null)).toBeNull();
+    } finally {
+      preparation.dispose();
+      await manager.stop('agent-fixture');
+      await run;
+    }
+  });
+
+  it('reports settlement before Git readiness rather than waiting for a marker that cannot arrive', async () => {
+    const preparation = observeGitPreparation();
+    const manager = await setup({ spawnProcess: preparation.spawnProcess });
+    try {
+      const run = manager.start('agent-fixture', { prompt: 'Synthetic audit', paths: ['missing.js'] });
+      await expect(preparation.wait(run)).rejects.toMatchObject({ reason: 'request-settled-before-marker', diagnostics: {
+        settlement: 'fulfilled', status: 'invalid-input', spawned: false, prepareSent: false,
+      } });
+      expect(await lstat(join(root, 'launched.json')).catch(() => null)).toBeNull();
+    } finally { preparation.dispose(); }
+  });
+
+  it('reports a supervisor that exits before Git readiness and still confirms owned cleanup', async () => {
+    const preparation = observeGitPreparation();
+    const manager = await setup({ spawnProcess: (_command, _args, options) =>
+      preparation.spawnProcess(process.execPath, ['-e', 'process.exit(17)'], options) });
+    const run = manager.start('agent-fixture', { prompt: 'Synthetic audit', paths: ['.'] });
+    try {
+      await expect(preparation.wait(run)).rejects.toMatchObject({ reason: 'supervisor-exit-before-marker', diagnostics: {
+        spawned: true, exited: true, exitCode: 17,
+      } });
+      expect((await run).evidence).toMatchObject({ status: 'unavailable', cleanup: 'confirmed' });
+      expect(await lstat(join(root, 'launched.json')).catch(() => null)).toBeNull();
+    } finally { preparation.dispose(); await manager.stop('agent-fixture'); await run; }
+  });
+
+  it('retains bounded pending-state diagnostics when preparation does not advance before the existing deadline', async () => {
+    vi.useFakeTimers();
+    const preparation = observeGitPreparation();
+    try {
+      const ready = preparation.wait(new Promise(() => {}));
+      const failed = expect(ready).rejects.toMatchObject({ reason: 'marker-deadline', diagnostics: {
+        settlement: 'pending', spawned: false, pidAssigned: false, prepareSent: false, reply: null,
+      } });
+      await vi.advanceTimersByTimeAsync(1000);
+      await failed;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { preparation.dispose(); vi.useRealTimers(); }
   });
 
   it('fails closed if committed baseline evidence cannot be persisted before launch', async () => {
