@@ -7,6 +7,7 @@ import BulkTargetPicker from './BulkTargetPicker';
 
 // Keep the actual lightbox and organization pickers together: mocking those
 // children hid the portal's interaction with the viewer's focus/Escape trap.
+vi.mock('../../hooks/useFilmLookPresets.js', () => ({ default: () => ({ presets: [], loaded: true, save: vi.fn(), remove: vi.fn() }) }));
 vi.mock('./PromptRefineModal', () => ({ default: () => null }));
 vi.mock('./PromptFromMedia', () => ({ PromptFromMediaModal: () => null }));
 const api = vi.hoisted(() => ({

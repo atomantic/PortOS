@@ -157,7 +157,7 @@ async function chooseFilmLookPath(page, { width, height, fps, frames, offsetSec 
     if (!info?.available) return { gpu: false, reason: 'WebGL2 is unavailable' };
     await page.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
     const frame = Math.floor(frames / 2);
-    const at = (n) => Math.round((offsetSec + n / fps) * 1e6) / 1e6;
+    const at = (n) => offsetSec + n / fps;
     // The seek pays for the GPU draw and the capture for the SVG filter: time both.
     const timed = async (n) => {
       const started = performance.now();

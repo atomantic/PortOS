@@ -6,7 +6,10 @@
  * pipeline, which the turbulence and kernel unit tests cannot see.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { existsSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { chromium } from 'playwright-core';
 import sharp from 'sharp';
 import { startOwnedBrowserFixture } from '../test/browserFixture.js';
@@ -72,5 +75,48 @@ describe.skipIf(!canRun)('film look on the GPU in Chrome', () => {
     }, { look, frame, width, height });
     const [svg, gpu] = await Promise.all([svgPage, gpuPage].map(async (p) => sharp(await p.screenshot()).removeAlpha().raw().toBuffer()));
     expect(psnr(svg, gpu)).toBeGreaterThanOrEqual(40);
+  }, 60000);
+
+  // A video is read the way the page's compositor reads it, scaled to fill the
+  // frame. WebGL's own video upload converted colour differently (about 30 dB
+  // off on the soft-analog look) and copied another size unscaled.
+  it('draws a video of another size as the page fills the frame', async ({ skip }) => {
+    let clip;
+    try {
+      const dir = mkdtempSync(join(tmpdir(), 'film-look-gpu-video-'));
+      const path = join(dir, 'clip.webm');
+      execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc2=s=480x264:r=24', '-t', '1', '-c:v', 'libvpx-vp9', '-pix_fmt', 'yuv420p', '-y', path]);
+      clip = readFileSync(path);
+      rmSync(dir, { recursive: true, force: true });
+    } catch { skip(); }
+    if (!available) skip();
+    const look = filmLookPreset('soft-analog');
+    const origin = 'http://film-look.test';
+    const body = (extra) => `<video id="v" src="${origin}/clip.webm" muted style="display:block;width:${width}px;height:${height}px;object-fit:fill"></video>${extra}`;
+    const open = async (extra) => {
+      const p = await fixture.browser.newPage({ viewport: { width, height } });
+      await p.route(`${origin}/**`, (route) => route.fulfill(route.request().url().endsWith('.webm')
+        ? { body: clip, contentType: 'video/webm' } : { body: page(body(extra)), contentType: 'text/html' }));
+      await p.goto(`${origin}/`);
+      await p.evaluate(() => new Promise((resolve) => {
+        const v = document.getElementById('v');
+        const go = () => { v.addEventListener('seeked', () => requestAnimationFrame(() => requestAnimationFrame(resolve)), { once: true }); v.currentTime = 0.5; };
+        if (v.readyState >= 2) go(); else v.addEventListener('loadeddata', go, { once: true });
+      }));
+      return p;
+    };
+    const svg = await open('<svg id="fx" width="0" height="0" style="position:absolute"></svg>');
+    const gpu = await open(`<canvas id="out" width="${width}" height="${height}"></canvas><script>${filmLookGpuRuntimeSource()}</script>`);
+    const { filter, css } = filmLookFilterMarkup(look, { frame, width, height });
+    await svg.evaluate(({ filter, css }) => {
+      document.getElementById('fx').innerHTML = `<defs>${filter}</defs>`;
+      document.documentElement.style.filter = css;
+    }, { filter, css });
+    await gpu.evaluate(({ look, frame, width, height }) => {
+      globalThis.__portosFilmLookGpu.create(document.getElementById('out')).render(document.getElementById('v'), look, { frame, width, height });
+    }, { look, frame, width, height });
+    const [a, b] = await Promise.all([svg, gpu].map(async (p) => sharp(await p.screenshot()).removeAlpha().raw().toBuffer()));
+    await Promise.all([svg.close(), gpu.close()]);
+    expect(psnr(a, b)).toBeGreaterThanOrEqual(40);
   }, 60000);
 });

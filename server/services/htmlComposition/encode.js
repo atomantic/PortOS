@@ -133,12 +133,15 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
   const captureOnce = async t => {
     page.check();
     // awaitPromise in evaluate is essential: each seek owns its paint.
-    const at = offsetSec ? Math.round((offsetSec + t) * 1e6) / 1e6 : t;
+    // Unrounded: pages pick their frame with floor(t × fps + 1e-6), and a time
+    // rounded to the microsecond lands up to 1.2e-5 frames early at 24 fps, so
+    // every third frame drew its predecessor.
+    const at = offsetSec + t;
     await seekComposition(page, at, Math.round(t * fps));
     page.check();
     const captureStarted = performance.now();
     const { data } = await page.send('Page.captureScreenshot', SCREENSHOT).catch(error => {
-      throw new Error(`Composition capture failed at frame ${Math.round(t * fps)} (song ${at}s) after ${Math.round(performance.now() - captureStarted)}ms: ${error.message}`);
+      throw new Error(`Composition capture failed at frame ${Math.round(t * fps)} (song ${+at.toFixed(6)}s) after ${Math.round(performance.now() - captureStarted)}ms: ${error.message}`);
     });
     page.check();
     return Buffer.from(data, 'base64');
@@ -296,7 +299,7 @@ export async function encodeCompositionSegments(page, contract, outputPath, { op
       const slot = replaceable(i === 0 ? page : null, controller.signal);
       try {
         slot.page ??= await openPage(controller.signal);
-        const at = Math.round((offsetSec + start / fps) * 1e6) / 1e6;
+        const at = offsetSec + start / fps;
         const result = await encode(slot.page, { ...contract, durationSec: frames / fps }, parts[i], {
           signal: controller.signal, offsetSec: at, continuous: start > 0, followed: i < segments.length - 1, videoFilter: videoFilterAt(at),
           reopenPage: slot.reopen, onRetry: onRetry && (detail => onRetry({ ...detail, segment: i })),

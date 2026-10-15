@@ -4,6 +4,7 @@ import Modal from '../ui/Modal';
 import toast from '../ui/Toast';
 import FilmLookControls from './FilmLookControls.jsx';
 import FilmLookPreview from './FilmLookPreview.jsx';
+import useFilmLookPresets from '../../hooks/useFilmLookPresets.js';
 import { applyImageFilmLook } from '../../services/apiImageVideo';
 import { filmLookPreset, isFilmLookNeutral, normalizeFilmLook } from '../../lib/filmLook.js';
 
@@ -21,6 +22,7 @@ export default function FilmLookEditor({ item, open, onClose, onComplete, projec
   const start = () => normalizeFilmLook(projectLook?.look) || normalizeFilmLook(item?.filmLook) || filmLookPreset('none');
   const [look, setLook] = useState(start);
   const [saving, setSaving] = useState(false);
+  const saved = useFilmLookPresets();
   const [savingProject, setSavingProject] = useState(false);
   // A different image (or a reopen) starts over from the project's look, never from the last session's sliders.
   useEffect(() => { if (open) setLook(start()); }, [open, item?.key]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -65,7 +67,7 @@ export default function FilmLookEditor({ item, open, onClose, onComplete, projec
         </div>
         <div className="flex min-h-0 w-full flex-col border-t border-port-border md:w-96 md:border-l md:border-t-0">
           <div className="min-h-0 flex-1 overflow-y-auto p-3">
-            <FilmLookControls look={look} onChange={setLook} />
+            <FilmLookControls look={look} onChange={setLook} saved={saved} />
           </div>
           <div className="flex flex-wrap gap-2 border-t border-port-border p-2">
             <button type="button" onClick={saveCopy} disabled={saving || neutral} title={neutral ? 'Move a control first' : 'Render this look into a new image; the original stays as it is'}

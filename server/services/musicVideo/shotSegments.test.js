@@ -116,6 +116,18 @@ describe.skipIf(!hasFfmpeg)('shot segments', () => {
     expect(average === 'inf' || Number(average) > 35).toBe(true);
   }, 60000);
 
+  it("files an intercut piece under the shot whose span it plays in, with that shot's look", async () => {
+    const saved = fixture.clips;
+    // C's span plays a piece of B's spare footage in its middle (an intercut partner).
+    fixture.clips = [saved[0], saved[1], { ...saved[2], outSec: 0.5, duration: 0.5 },
+      { ...saved[1], inSec: 1, outSec: 1.25, duration: 0.25, intercutOf: 'c' }, { ...saved[2], inSec: 0.75, outSec: 1, duration: 0.25 }];
+    const pinned = { preset: 'polaroid', grain: 0.2 };
+    const scenes = project().scenes.map((s) => (s.sceneId === 'c' ? { ...s, filmLook: pinned } : s));
+    const plan = await planShotSegments(project({ scenes })).finally(() => { fixture.clips = saved; });
+    expect(plan.segments.map((s) => s.sceneId)).toEqual(['a', 'b', 'c', 'c', 'c']);
+    expect(plan.segments[3].look).toMatchObject({ preset: 'polaroid' });
+  }, 60000);
+
   it('re-renders only the segments a shot tweak reaches, and keeps bases through a look change', async () => {
     const before = await planShotSegments(project());
     // B played faster: B changes, and so does A, which shows B's footage in its dissolve.

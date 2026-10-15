@@ -1747,3 +1747,23 @@ describe('autofixer settings operator authority', () => {
     expect(store.autofixer).toEqual(original);
   });
 });
+
+describe('Settings routes — saved film looks', () => {
+  beforeEach(() => { store = {}; vi.clearAllMocks(); });
+  it('stores named looks and refuses a malformed one without touching the saved list', async () => {
+    const presets = [{ id: 'dusk-ab12', label: 'Dusk', look: { preset: 'custom', warmth: 0.3, grain: 0.2 } }];
+    const saved = await request(buildApp()).put('/api/settings').send({ filmLookPresets: presets });
+    expect(saved.status).toBe(200);
+    expect(store.filmLookPresets).toEqual(presets);
+    for (const bad of [
+      [{ id: 'x', label: 'Out of range', look: { warmth: 5 } }],
+      [{ id: 'x', label: 'Typo', look: { warmht: 0.2 } }],
+      [{ id: 'Bad Id', label: 'Id', look: {} }],
+      [{ id: 'x', label: '', look: {} }],
+    ]) {
+      const result = await request(buildApp()).put('/api/settings').send({ filmLookPresets: bad });
+      expect(result.status).toBe(400);
+      expect(store.filmLookPresets).toEqual(presets);
+    }
+  });
+});

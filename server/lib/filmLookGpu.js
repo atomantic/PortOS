@@ -593,6 +593,20 @@ void main() {
     gl.uniform4f(uniforms.clip, x0 + 0.25, y0 + 0.25, x1 - 0.25, y1 - 0.25);
   };
 
+  // A video goes through a 2D canvas at the frame size first. WebGL's own
+  // video upload converts YUV to RGB differently from the page compositor the
+  // SVG filter reads (about 30 dB apart on a plain frame), and a sized
+  // texImage2D copies a video of another size unscaled instead of filling the
+  // frame the way the page's object-fit does.
+  let staging = null;
+  const stage = (source) => {
+    if (typeof HTMLVideoElement === 'undefined' || !(source instanceof HTMLVideoElement)) return source;
+    staging ||= document.createElement('canvas');
+    if (staging.width !== width || staging.height !== height) { staging.width = width; staging.height = height; }
+    staging.getContext('2d', { alpha: false }).drawImage(source, 0, 0, width, height);
+    return staging;
+  };
+
   let lastPlanKey = null;
   let lastPlan = null;
   const render = (source, look, { frame = 0, width: w, height: h, until = Infinity } = {}) => {
@@ -613,7 +627,7 @@ void main() {
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
     gl.bindTexture(gl.TEXTURE_2D, uploadTexture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, source);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, stage(source));
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
     const frameRegion = [0, 0, width, height];
     const results = new Map();

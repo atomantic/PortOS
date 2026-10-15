@@ -1,7 +1,7 @@
 import { useId, useState } from 'react';
-import { Copy, RotateCcw } from 'lucide-react';
+import { Copy, RotateCcw, Save, Trash2 } from 'lucide-react';
 import {
-  FILM_LOOK_CONTROLS, FILM_LOOK_GROUPS, FILM_LOOK_PRESETS, describeFilmLook, filmLookPreset, normalizeFilmLook,
+  FILM_LOOK_CONTROLS, FILM_LOOK_GROUPS, FILM_LOOK_PRESETS, describeFilmLook, filmLookPreset, isFilmLookNeutral, normalizeFilmLook, sameFilmLook, scaleFilmLook,
 } from '../../lib/filmLook.js';
 import { copyToClipboard } from '../../lib/clipboard';
 
@@ -32,6 +32,62 @@ function Slider({ control, value, onChange, onCommit, id }) {
   );
 }
 
+const chipCls = (on) => `min-h-[44px] rounded-full border px-3 py-1 sm:min-h-0 ${on ? 'border-port-accent bg-port-accent/20 text-port-accent' : 'border-port-border bg-port-bg text-port-text-muted hover:text-port-text'}`;
+
+// The install's saved looks: tap one to apply it, save the current look under a
+// name, or delete the saved look the controls currently match.
+function SavedLooks({ look, saved, matched, onApply }) {
+  const nameId = useId();
+  const [naming, setNaming] = useState(false);
+  const [name, setName] = useState('');
+  const [confirming, setConfirming] = useState(false);
+  const submit = (event) => {
+    event.preventDefault();
+    if (!name.trim()) return;
+    saved.save(name, look);
+    setNaming(false);
+    setName('');
+  };
+  if (!saved.loaded) return null;
+  return (
+    <div className="space-y-1.5">
+      {saved.presets.length > 0 && (
+        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Your saved looks">
+          {saved.presets.map((preset) => (
+            <button key={preset.id} type="button" onClick={() => { setConfirming(false); onApply(preset.look); }} aria-pressed={matched?.id === preset.id}
+              className={chipCls(matched?.id === preset.id)}>{preset.label}</button>
+          ))}
+        </div>
+      )}
+      {naming ? (
+        <form onSubmit={submit} className="flex flex-wrap items-center gap-2">
+          <label htmlFor={nameId} className="text-port-text-muted">Name</label>
+          <input id={nameId} value={name} onChange={(event) => setName(event.target.value)} maxLength={60} autoFocus
+            className="min-h-[44px] min-w-0 flex-1 rounded border border-port-border bg-port-bg px-2 sm:min-h-0 sm:py-1" />
+          <button type="submit" disabled={!name.trim()} className="min-h-[44px] rounded bg-port-accent px-3 text-port-bg disabled:opacity-50 sm:min-h-0 sm:py-1">Save</button>
+          <button type="button" onClick={() => setNaming(false)} className="min-h-[44px] px-2 sm:min-h-0">Cancel</button>
+        </form>
+      ) : matched ? (
+        confirming ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <span>Delete &ldquo;{matched.label}&rdquo;?</span>
+            <button type="button" onClick={() => { saved.remove(matched.id); setConfirming(false); }} className="min-h-[44px] px-2 text-port-error sm:min-h-0">Delete</button>
+            <button type="button" onClick={() => setConfirming(false)} className="min-h-[44px] px-2 sm:min-h-0">Keep</button>
+          </div>
+        ) : (
+          <button type="button" onClick={() => setConfirming(true)} className="inline-flex min-h-[44px] items-center gap-1 px-1 text-port-text-muted hover:text-port-text sm:min-h-0">
+            <Trash2 size={12} aria-hidden="true" /> Delete saved look
+          </button>
+        )
+      ) : !isFilmLookNeutral(look) && (
+        <button type="button" onClick={() => { setName(''); setNaming(true); }} className="inline-flex min-h-[44px] items-center gap-1 px-1 text-port-accent sm:min-h-0">
+          <Save size={12} aria-hidden="true" /> Save as preset
+        </button>
+      )}
+    </div>
+  );
+}
+
 /**
  * The film look's controls: preset chips, then every slider, color and toggle
  * grouped the way a colorist thinks (focus & glow, color, texture, frame).
@@ -42,19 +98,34 @@ function Slider({ control, value, onChange, onCommit, id }) {
  * `onChange(look)` fires on every slider move (for a live preview);
  * `onCommit(look)` fires when a control is released (to save). Both receive the
  * whole normalized look. Controlled: `look` is the current value (null = clean).
+ * `saved` (from `useFilmLookPresets`) adds the install's saved looks and the
+ * Save as preset action.
  */
-export default function FilmLookControls({ look: given, onChange, onCommit, compact = false }) {
+export default function FilmLookControls({ look: given, onChange, onCommit, compact = false, saved = null }) {
   const look = normalizeFilmLook(given) || filmLookPreset('none');
   const base = useId();
+  // Strength scales the look as it stood after the last preset pick or control
+  // edit (its anchor), so dragging it back to 100% restores that look exactly.
+  const [anchor, setAnchor] = useState(() => ({ look, amount: 1 }));
+  const anchored = sameFilmLook(scaleFilmLook(anchor.look, anchor.amount), look) ? anchor : { look, amount: 1 };
   const [openGroups, setOpenGroups] = useState(() => new Set(compact ? [] : FILM_LOOK_GROUPS.map((group) => group.id)));
   const set = (patch, { commit = true } = {}) => {
     const next = normalizeFilmLook({ ...look, ...patch, preset: 'custom' });
+    setAnchor({ look: next, amount: 1 });
     onChange?.(next);
     if (commit) onCommit?.(next);
   };
   const live = (patch) => set(patch, { commit: false });
   const commit = () => onCommit?.(look);
-  const applyPreset = (id) => { const next = filmLookPreset(id); onChange?.(next); onCommit?.(next); };
+  const applyLook = (next) => { setAnchor({ look: next, amount: 1 }); onChange?.(next); onCommit?.(next); };
+  const strengthId = `${base}-strength`;
+  const setStrength = (amount) => {
+    const next = amount === 1 ? anchored.look : { ...scaleFilmLook(anchored.look, amount), preset: 'custom' };
+    setAnchor({ look: anchored.look, amount });
+    onChange?.(next);
+  };
+  const applyPreset = (id) => applyLook(filmLookPreset(id));
+  const matched = saved?.presets.find((preset) => sameFilmLook(preset.look, look)) || null;
   const words = describeFilmLook(look);
   const toggleGroup = (id) => setOpenGroups((current) => {
     const next = new Set(current);
@@ -73,13 +144,26 @@ export default function FilmLookControls({ look: given, onChange, onCommit, comp
         <div className="flex flex-wrap gap-1.5" role="group" aria-label="Film look presets">
           {FILM_LOOK_PRESETS.filter((preset) => preset.id !== 'none').map((preset) => (
             <button key={preset.id} type="button" onClick={() => applyPreset(preset.id)} title={preset.summary} aria-pressed={look.preset === preset.id}
-              className={`min-h-[44px] rounded-full border px-3 py-1 sm:min-h-0 ${look.preset === preset.id ? 'border-port-accent bg-port-accent/20 text-port-accent' : 'border-port-border bg-port-bg text-port-text-muted hover:text-port-text'}`}>
+              className={chipCls(look.preset === preset.id)}>
               {preset.label}
             </button>
           ))}
         </div>
-        {look.preset !== 'none' && <p className="mt-1 text-port-text-muted">{FILM_LOOK_PRESETS.find((preset) => preset.id === look.preset)?.summary || 'A custom look. Save it to keep it on this project.'}</p>}
+        {look.preset !== 'none' && !matched && <p className="mt-1 text-port-text-muted">{FILM_LOOK_PRESETS.find((preset) => preset.id === look.preset)?.summary || 'A custom look.'}</p>}
       </div>
+      {!isFilmLookNeutral(anchored.look) && (
+        <div className="space-y-0.5">
+          <div className="flex items-baseline justify-between gap-2">
+            <label htmlFor={strengthId} className="text-port-text">Strength <span className="ml-1.5 text-port-text-muted">the whole look, lighter</span></label>
+            <span className="tabular-nums text-port-text-muted">{Math.round(anchored.amount * 100)}%</span>
+          </div>
+          <input id={strengthId} type="range" min={0} max={1} step={0.05} value={anchored.amount}
+            onChange={(event) => setStrength(Number(event.target.value))}
+            onPointerUp={commit} onKeyUp={commit} onBlur={commit}
+            className="block h-6 w-full accent-port-accent" />
+        </div>
+      )}
+      {saved && <SavedLooks look={look} saved={saved} matched={matched} onApply={(value) => applyLook(normalizeFilmLook({ ...value, preset: 'custom' }))} />}
 
       {FILM_LOOK_GROUPS.map((group) => {
         const controls = groupControls(group.id).filter((control) => shown(control, look));
