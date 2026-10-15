@@ -72,8 +72,11 @@ describe('shot segments', () => {
     // The whole film through the one-graph path, then compared frame by frame.
     const whole = join(ROOT(), 'whole.mp4');
     const { args } = buildMusicVideoFfmpegArgs(fixture.clips, fixture.audioPath, whole, { audioDurationSec: 3, frameGrid: true });
-    run(args.filter((a, i) => a !== '-progress' && args[i - 1] !== '-progress'));
-    const report = execFileSync('sh', ['-c', `ffmpeg -hide_banner -i '${out}' -i '${whole}' -lavfi psnr -f null - 2>&1 | grep -o 'average:[0-9.inf]*'`]).toString();
+    // Encoded at the segments' preset, and both compared as the same range, so
+    // the score measures the picture rather than encoder or tag differences.
+    run(args.filter((a, i) => a !== '-progress' && args[i - 1] !== '-progress').map((a, i, all) => (all[i - 1] === '-preset' ? 'medium' : a)));
+    const lavfi = '[0:v]setparams=range=tv[a];[1:v]setparams=range=tv[b];[a][b]psnr';
+    const report = execFileSync('sh', ['-c', `ffmpeg -hide_banner -i '${out}' -i '${whole}' -lavfi '${lavfi}' -f null - 2>&1 | grep -o 'average:[0-9.inf]*'`]).toString();
     const average = report.split(':')[1].trim();
     expect(average === 'inf' || Number(average) > 35).toBe(true);
   }, 60000);
