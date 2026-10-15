@@ -1,7 +1,7 @@
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
-import { assertProductionApproval, productionReviewBasis } from './productionReview.js';
+import { assertProductionApproval, clipLocks, productionReviewBasis } from './productionReview.js';
 import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 /**
  * Music Video — render pipeline (#1760, Phase 2).
@@ -742,10 +742,20 @@ export function excerptBoundaryTimes(sections, cues, startSec, endSec, { fps = 2
 // every scene's clip, and refuse a render whose shots don't cover their
 // authored span. Both callers build on the exact same resolved clip list, so
 // an excerpt frame matches what a full render would produce at that song time.
+//
+// A shot whose clip is locked renders as locked: the director approved that
+// clip as it is, so frames changed after it was made no longer block.
+// Any other stale clip blocks, naming its shots (numbered in song order) and the fix.
 export function assertCurrentClipDependencies(project) {
+  const locks = clipLocks(project);
   const stale = (project.scenes || []).filter((scene) => scene.videoHistoryId && scene.visualLayer !== 'still' && !isSelfDrawnLayer(scene.visualLayer))
+    .filter((scene) => locks?.[scene.sceneId] !== 'locked')
     .filter((scene) => musicVideoTakeChanges(project, scene, (scene.takes || []).find((take) => take.kind === 'video' && take.assetId === scene.videoHistoryId)).length);
-  if (stale.length) throw new ServerError('Selected clips were derived from changed plates — preview and repair their dependencies before rendering',
+  if (!stale.length) return;
+  const order = [...(project.scenes || [])].filter((scene) => Number.isFinite(scene.startSec)).sort((a, b) => a.startSec - b.startSec);
+  const numbers = stale.map((scene) => order.indexOf(scene) + 1).filter((n) => n > 0).sort((a, b) => a - b);
+  const shots = numbers.length === stale.length ? `${numbers.length === 1 ? 'Shot' : 'Shots'} ${numbers.join(', ')}` : `${stale.length} shots`;
+  throw new ServerError(`${shots}: the clip was made from frames that have since changed. Lock the clip to keep it as it is, or render a new one`,
     { status: 422, code: 'STALE_CLIP_DEPENDENCIES', context: { sceneIds: stale.map((scene) => scene.sceneId) } });
 }
 
