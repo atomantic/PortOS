@@ -45,7 +45,6 @@ const uploadGalleryImage = vi.hoisted(() => vi.fn(async () => ({ filename: 'uplo
 vi.mock('../../services/apiSystem.js', () => ({ uploadGalleryImage }));
 
 import CompositionPreviewPlayer from './CompositionPreviewPlayer.jsx';
-import { playbackSchema } from '../../../../server/services/generatedPreview/cooperativePlayback.js';
 
 const DOCUMENT = { directory: 'music-video/mv-1/composition/doc-a', entry: 'index.html' };
 const project = {
@@ -504,8 +503,34 @@ describe('native composition playback', () => {
     expect(playbackMessages('sync').length).toBeLessThanOrEqual(4);
     expect(socket.emit.mock.calls.filter(([event, payload]) => event === 'generated-preview:seek' && payload.playing)).toHaveLength(0);
     expect(screen.getByText('1.00s / 10.0s')).toBeInTheDocument();
-    for (const [event, payload] of socket.emit.mock.calls) {
-      if (event === 'generated-preview:playback') expect(playbackSchema.safeParse(payload).success, payload.action).toBe(true);
+    // Assert the client's exact wire projection here; authoritative schema
+    // admission is exercised through the server's public socket tests.
+    const identity = { requestId: opens()[0][1].requestId, sessionId: native.session().sessionId };
+    for (const id of Object.values(identity)) expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    const syncs = playbackMessages('sync');
+    const emitted = socket.emit.mock.calls.filter(([event]) => event === 'generated-preview:playback').map(([, payload]) => payload);
+    expect(emitted).toStrictEqual([
+      ...[100, 280, 300].map((clientTime, probeId) => ({ ...identity, action: 'clock', probeId, clientTime })),
+      { ...identity, action: 'prepare', epoch: 1, sequence: 1, generation: 0, t: 0 },
+      { ...identity, action: 'play', epoch: 1, sequence: 2, t: anchor.t, workerTime: anchor.workerTime },
+      ...syncs.map((payload, index) => ({ ...identity, action: 'sync', epoch: 1, sequence: index + 3, t: payload.t, workerTime: payload.workerTime })),
+    ]);
+    let previousTime = anchor.workerTime;
+    let previousPosition = anchor.t;
+    for (const payload of emitted) {
+      for (const field of ['clientTime', 't', 'workerTime']) {
+        if (field in payload) expect(Number.isFinite(payload[field]), `${payload.action}.${field}`).toBe(true);
+      }
+      if ('t' in payload) {
+        expect(payload.t).toBeGreaterThanOrEqual(0);
+        expect(payload.t).toBeLessThanOrEqual(10);
+      }
+      if (payload.action === 'sync') {
+        expect(payload.workerTime).toBeGreaterThan(previousTime);
+        expect(payload.t).toBeGreaterThan(previousPosition);
+        previousTime = payload.workerTime;
+        previousPosition = payload.t;
+      }
     }
 
     const frame = (extra) => receive('frame', { ...native.session(), playbackEpoch: anchor.epoch, sequence: 1, data: btoa('native'), ...extra });
