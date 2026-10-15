@@ -18,9 +18,10 @@
 
 import { ServerError } from '../../lib/errorHandler.js';
 import { isNonBlankStr } from '../../lib/textUtils.js';
+import { sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { buildDocumentPreview } from './documentPreview.js';
 import { readLyricOverlayDocumentFiles, readTemplateDocumentFiles } from './compositionDocument.js';
-import { documentSongDuration } from './documentRender.js';
+import { buildDocumentData, documentRenderClock, documentSongDuration } from './documentRender.js';
 
 const LINES_PER_SCENE = 4;
 const finite = (n) => typeof n === 'number' && Number.isFinite(n);
@@ -78,11 +79,31 @@ export async function buildLyricPlaythroughPreview(project, { overlay = false } 
   if (!cues.some((cue) => finite(cue?.startSec) && isNonBlankStr(cue?.text))) {
     throw new ServerError('Align the words before playing the lyrics through', { status: 409, code: 'NO_TIMED_LYRICS' });
   }
+  return buildDocumentPreview(playthroughProject(project, durationSec), { files: overlay ? await readLyricOverlayDocumentFiles() : await readTemplateDocumentFiles('layered') });
+}
+
+// Only the song, the words, the shots' timing and the opening title card: no composition, overlay text,
+// narrative events or film look of the project's own. The look would filter the whole page, and on the
+// transparent overlay that dims the frames under the words.
+function playthroughProject(project, durationSec) {
   const shots = timedShots(project.scenes);
-  const scenes = shots.length ? shots : lyricScenes(cues, project.lyricMarkers, durationSec);
-  // Only the song, the words and the opening title card: no composition, overlay text, narrative events or film look of the
-  // project's own. The look would filter the whole page, and on the transparent overlay that dims the
-  // storyboard frames under the words.
-  const playthrough = { ...project, scenes, composition: { mode: 'document', textCues: [] }, filmLook: null };
-  return buildDocumentPreview(playthrough, { files: overlay ? await readLyricOverlayDocumentFiles() : await readTemplateDocumentFiles('layered') });
+  const scenes = shots.length ? shots : lyricScenes(project.lyricCues || [], project.lyricMarkers, durationSec);
+  return { ...project, scenes, composition: { mode: 'document', textCues: [] }, filmLook: null };
+}
+
+/**
+ * The `window.PORTOS_MV` the lyric overlay page draws in a composed final render
+ * (compositionRender.js), at that render's frame: the same words, roles and text
+ * zones the storyboard animatic lays over its frames. A title card shot already
+ * draws its text (its own, else its sung line) on the typography page, so its
+ * lines are kept off it here.
+ */
+export function lyricOverlayDocumentData(project, { width, height, fps, durationSec }) {
+  const songDurationSec = documentSongDuration(project) || durationSec;
+  const cards = new Set((project.scenes || []).filter((scene) => sceneVisualLayer(scene, { layered: true }) === 'card').map((scene) => scene.sceneId));
+  const playthrough = playthroughProject(project, songDurationSec);
+  const scenes = playthrough.scenes.map((scene) => (cards.has(scene.sceneId) ? { ...scene, textZone: 'none' } : scene));
+  return buildDocumentData({ ...playthrough, scenes }, {
+    frame: { width, height }, clock: documentRenderClock(songDurationSec, fps), songDurationSec,
+  });
 }

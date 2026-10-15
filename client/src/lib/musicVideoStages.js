@@ -4,7 +4,7 @@
  * spend. Pure functions over the project record so the header, the progress
  * strip and the tests all read the same answer.
  */
-import { isLayeredComposition, isSelfDrawnLayer, sceneRenderReady, sceneVisualLayer } from './musicVideoLayers.js';
+import { composedDrawsLyrics, isLayeredComposition, isSelfDrawnLayer, sceneRenderReady, sceneVisualLayer } from './musicVideoLayers.js';
 import {
   AUTONOMOUS_CHECKPOINT_LABELS, AUTONOMOUS_LYRICS_STEP_LABELS, AUTONOMOUS_SONG_STEP_LABELS, AUTONOMOUS_STATUS_LABELS,
 } from './musicVideoAutonomous.js';
@@ -375,7 +375,7 @@ const codeComposed = (project) => {
 };
 
 const composeDone = (project, mode) => {
-  if (mode === 'composed') return (project.composition?.textCues || []).length > 0;
+  if (mode === 'composed') return (project.composition?.textCues || []).length > 0 || composedDrawsLyrics(project);
   if (mode === 'document') return !!project.composition?.document;
   if (mode === 'eidoverse') return !!project.composition?.eidoverseScene?.inlineScript;
   if (mode === 'code') return codeComposed(project);
@@ -1030,7 +1030,13 @@ export function stageChecklist(stageId, project, readiness = project?.production
         ? [{ ...proofApproval, label: proofApproval.done ? proofApproval.label : 'Animated proof (optional)', optional: true, detail: null }] : [];
       const composition = project.composition || {};
       let work = null;
-      if (mode === 'composed') work = { id: 'composition', label: 'Timed typography added', done: (composition.textCues || []).length > 0, action: { label: 'Add typography', anchor: 'mv-typo-font' } };
+      if (mode === 'composed') {
+        const cues = (composition.textCues || []).length > 0;
+        // Timed lyrics with no subtitle cues are drawn by the render itself, as the player shows them.
+        work = composedDrawsLyrics(project)
+          ? { id: 'composition', label: 'Lyrics drawn over the footage', done: true }
+          : { id: 'composition', label: 'Timed typography added', done: cues, action: { label: 'Add typography', anchor: 'mv-typo-font' } };
+      }
       else if (mode === 'document') work = { id: 'composition', label: 'Composition document attached', done: !!composition.document, action: { label: 'Attach a document', anchor: 'mv-doc-folder' } };
       else if (mode === 'eidoverse') {
         const saved = !!composition.eidoverseScene?.inlineScript;

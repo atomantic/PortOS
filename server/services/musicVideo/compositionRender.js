@@ -14,7 +14,7 @@
  * it once the final render finishes, and boot recovery sweeps any a crash left.
  */
 
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { copyFile, mkdir, rm, writeFile } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { spawn } from '../../lib/childProcess.js';
@@ -74,11 +74,6 @@ async function captureWindow(page, ffmpeg, { startSec, frames, fps, outputPath, 
   }
 }
 
-/**
- * Render the overlay clips for `cues` (already filtered by renderableCues) on a
- * `width`×`height`, `fps` frame. Resolves `[{ path, startSec, durationSec }]` in
- * time order. `onProgress(0..1)` reports captured frames; `signal` cancels.
- */
 export function musicVideoSongDocument(project) {
   const analysis = project?.audioAnalysis && typeof project.audioAnalysis === 'object' && !Array.isArray(project.audioAnalysis)
     ? project.audioAnalysis : {};
@@ -127,45 +122,78 @@ export async function renderSongComposition({ project, directory, jobId, audioPa
   });
 }
 
-export async function renderTypographyOverlays({ jobId, cues, style, width, height, fps, durationSec, signal, onProgress }) {
+/**
+ * Stage the storyboard animatic's lyric overlay page (documentTemplates/lyricOverlay,
+ * with the shared lyricType.js and its faces) in `dir`, drawing `project`'s lyrics
+ * at the render's frame, so a composed render's words match the animatic's.
+ */
+async function stageLyricOverlay(dir, project, { width, height, fps, durationSec }) {
+  const [{ readLyricOverlayDocumentFiles }, { lyricOverlayDocumentData }] = await Promise.all([
+    import('./compositionDocument.js'), import('./lyricPlaythrough.js'),
+  ]);
+  for (const [rel, file] of await readLyricOverlayDocumentFiles()) {
+    await mkdir(dirname(join(dir, rel)), { recursive: true });
+    await copyFile(file.abs, join(dir, rel));
+  }
+  const data = lyricOverlayDocumentData(project, { width, height, fps, durationSec });
+  await writeFile(join(dir, 'portos-mv.js'), `window.PORTOS_MV = ${JSON.stringify(data).replace(/</g, '\\u003c')};\n`);
+}
+
+/**
+ * Render the overlay clips on a `width`×`height`, `fps` frame: the timed text
+ * `cues` (already filtered by renderableCues) on the typography page, and, when
+ * `lyrics` is `{ project, windows }` (composedLyricWindows), the sung lyrics in
+ * the shared lyric type over those windows. Resolves `[{ path, startSec,
+ * durationSec }]`, typography clips first, each set in time order.
+ * `onProgress(0..1)` reports captured frames; `signal` cancels.
+ */
+export async function renderTypographyOverlays({ jobId, cues, style, width, height, fps, durationSec, lyrics = null, signal, onProgress }) {
   // Snap each window outward to the output frame grid so every overlay frame
   // lands exactly on a footage frame, and never past the video's last frame.
   const lastFrame = Math.round(durationSec * fps);
-  const windows = overlayWindows(cues)
+  const onGrid = (spans) => spans
     .map((w) => {
       const first = Math.floor(w.startSec * fps + 1e-6);
       return { startSec: first / fps, frames: Math.min(lastFrame, Math.ceil(w.endSec * fps - 1e-6)) - first };
     })
     .filter((w) => w.frames > 0);
-  if (windows.length === 0) return [];
+  const pages = [
+    { name: 'doc', windows: onGrid(overlayWindows(cues)), stage: async (dir) => {
+      await writeFile(join(dir, 'index.html'), buildTypographyDocument({ cues, style, width, height, durationSec, fps }));
+      if (cues.some((c) => c.card || c.titleCard)) await copyFile(LYRIC_FONT_SOURCE, join(dir, LYRIC_FONT_FILE));
+    } },
+    { name: 'lyrics', windows: lyrics ? onGrid(lyrics.windows) : [], stage: (dir) => stageLyricOverlay(dir, lyrics.project, { width, height, fps, durationSec }) },
+  ].filter((p) => p.windows.length > 0);
+  if (pages.length === 0) return [];
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw new Error('ffmpeg not found on PATH');
   const root = scratchPath(jobId);
-  await mkdir(join(root, 'doc'), { recursive: true });
-  await writeFile(join(root, 'doc', 'index.html'), buildTypographyDocument({ cues, style, width, height, durationSec, fps }));
-  if (cues.some((c) => c.card || c.titleCard)) await copyFile(LYRIC_FONT_SOURCE, join(root, 'doc', LYRIC_FONT_FILE));
-  signal?.throwIfAborted();
   // Lazy: the composition browser drags in browserService, which only a
   // composed render needs — not every suite that reaches render.js.
   const { openComposition } = await import('../htmlComposition/browser.js');
-  const page = await openComposition(`${COMPOSITION_SCRATCH_DIR}/${jobId}/doc`, { signal });
-  try {
-    await page.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
-    // A transparent default background is what gives the PNG captures alpha.
-    await page.send('Emulation.setDefaultBackgroundColorOverride', { color: { r: 0, g: 0, b: 0, a: 0 } });
-    await page.evaluate(`globalThis.portosComposition.layout({ width: ${width}, height: ${height} })`);
-    const total = windows.reduce((sum, w) => sum + w.frames, 0);
-    let done = 0;
-    const overlays = [];
-    for (const [index, w] of windows.entries()) {
-      const outputPath = join(root, `overlay-${index}.mov`);
-      await captureWindow(page, ffmpeg, { startSec: w.startSec, frames: w.frames, fps, outputPath, signal,
-        onFrame: () => { done += 1; onProgress?.(done / total); } });
-      overlays.push({ path: outputPath, startSec: w.startSec, durationSec: w.frames / fps });
+  const total = pages.reduce((sum, p) => sum + p.windows.reduce((n, w) => n + w.frames, 0), 0);
+  let done = 0;
+  const overlays = [];
+  for (const { name, windows, stage } of pages) {
+    await mkdir(join(root, name), { recursive: true });
+    await stage(join(root, name));
+    signal?.throwIfAborted();
+    const page = await openComposition(`${COMPOSITION_SCRATCH_DIR}/${jobId}/${name}`, { signal });
+    try {
+      await page.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+      // A transparent default background is what gives the PNG captures alpha.
+      await page.send('Emulation.setDefaultBackgroundColorOverride', { color: { r: 0, g: 0, b: 0, a: 0 } });
+      await page.evaluate(`globalThis.portosComposition.layout({ width: ${width}, height: ${height} })`);
+      for (const [index, w] of windows.entries()) {
+        const outputPath = join(root, `${name}-overlay-${index}.mov`);
+        await captureWindow(page, ffmpeg, { startSec: w.startSec, frames: w.frames, fps, outputPath, signal,
+          onFrame: () => { done += 1; onProgress?.(done / total); } });
+        overlays.push({ path: outputPath, startSec: w.startSec, durationSec: w.frames / fps });
+      }
+      await page.close({ verify: true });
+    } finally {
+      await page.close();
     }
-    await page.close({ verify: true });
-    return overlays;
-  } finally {
-    await page.close();
   }
+  return overlays;
 }

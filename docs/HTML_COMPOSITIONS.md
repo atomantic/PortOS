@@ -233,6 +233,17 @@ only audio. A cue's state at a time is a pure function of that time
 The scratch directory is removed when the render ends, swept at boot, and
 excluded from backups.
 
+With timed lyrics and no Subtitle text cues (Hero cues are titles over the
+words, not a stand-in for them), a composed render also draws the sung lyrics
+in the shared lyric type, exactly as the storyboard animatic shows them: it
+stages the animatic's lyric overlay page (`documentTemplates/lyricOverlay`)
+beside the typography page and captures it over each line's window
+(`composedLyricWindows`, the first onset to two seconds past the line's end).
+Each shot's Text zone and Lyric role apply; a title card shot already draws its
+text (else its sung line), so the overlay keeps its lines off it. A Subtitle cue hands the words
+back to the text cues, so "Copy timed lyrics" swaps the lyric type for plain
+subtitles.
+
 A composed render also honors each scene's visual layer (#8985): its
 generated footage (the default), its selected still frame with a deterministic
 hold, push-in or pan, or a title card — a solid colour whose text is drawn by
