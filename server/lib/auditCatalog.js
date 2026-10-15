@@ -413,7 +413,7 @@ export const AUDIT_DEFINITIONS = Object.freeze({
   'better-cognitive-load': {
     quotaBurnId: null,
     label: 'Cognitive load & readability',
-    description: 'Reader-cost audit — configurable: file issues (default) or implement one refactor',
+    description: 'Reader-cost and excessive code-comment audit — configurable: file issues (default) or implement one refactor',
     defaultFileIssues: true,
     doWorkRequiresWorktree: true,
     filing: filing({

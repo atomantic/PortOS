@@ -33,10 +33,8 @@ import fs from 'fs/promises';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
 
-// Import services directly
 const jiraService = await import(join(rootDir, 'server/services/jira.js'));
 
-// Parse CLI args
 function parseArgs() {
   const args = process.argv.slice(2);
   const parsed = {};

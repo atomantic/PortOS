@@ -93,7 +93,6 @@ const DecisionLogWidget = memo(function DecisionLogWidget() {
 
   const { last24Hours, impactfulDecisions, transparencyScore } = summary;
 
-  // Get icon and color for decision type
   const getDecisionStyle = (type) => {
     switch (type) {
       case 'task_skipped':

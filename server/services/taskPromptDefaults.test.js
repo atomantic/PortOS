@@ -228,7 +228,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
     ['better-dev-environment', ['Measure, do not only read', 'before and after', 'Prefer a guard to a patch', 'Not yours']],
   ])('%s states the discipline that makes it its own lane', (key, markers) => {
     const current = DEFAULT_TASK_PROMPTS[key];
-    const versions = { 'better-complexity': 2, 'better-runtime-safety': 3, 'better-test-quality': 2 };
+    const versions = { 'better-cognitive-load': 2, 'better-complexity': 2, 'better-runtime-safety': 3, 'better-test-quality': 2 };
     expect(PROMPT_VERSIONS[key]).toBe(versions[key] ?? 1);
     for (const marker of markers) expect(current, key).toContain(marker);
   });

@@ -18,7 +18,6 @@ router.get('/:id/agents', loadApp, asyncHandler(async (req, res) => {
   const app = req.loadedApp;
   const { limit } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 500 });
 
-  // Get running agents filtered by this app
   const runningAgents = await cos.getAgents().catch(() => []);
   const appRunning = runningAgents.filter(a =>
     a.metadata?.app === app.id || a.metadata?.taskApp === app.id
@@ -38,7 +37,6 @@ router.get('/:id/agents', loadApp, asyncHandler(async (req, res) => {
     historyAgents.push(...appAgents);
   }
 
-  // Combine running + history, deduplicate by id, limit
   const seenIds = new Set();
   const combined = [];
   for (const agent of [...appRunning, ...historyAgents]) {

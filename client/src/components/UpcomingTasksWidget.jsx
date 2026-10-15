@@ -56,7 +56,6 @@ const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
     return null;
   }
 
-  // Separate ready tasks from scheduled ones
   const currentTasks = upcoming.map(task => ({
     ...task,
     eligibleInFormatted: Number.isFinite(task.eligibleAt) ? timeUntil(task.eligibleAt) : task.eligibleInFormatted,
@@ -65,7 +64,6 @@ const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
   const readyTasks = currentTasks.filter(t => t.status === 'ready');
   const scheduledTasks = currentTasks.filter(t => t.status === 'scheduled');
 
-  // Get interval type label
   const getIntervalLabel = (intervalType) => {
     const labels = {
       'on-demand': 'On Demand',
@@ -74,7 +72,6 @@ const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
     return labels[intervalType] || intervalType;
   };
 
-  // Get icon for task based on type
   const getTaskIcon = (taskType) => {
     const icons = {
       'security': '🔒',

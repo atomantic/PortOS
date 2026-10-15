@@ -44,10 +44,7 @@ function getMacAppBundle(config, chromePath) {
 async function loadConfig() {
   const raw = await readFile(CONFIG_FILE, 'utf-8').catch(() => null);
   if (!raw) return {};
-  // Guard against a partially-written / corrupt config (now user-editable via
-  // the Browser settings UI). An unguarded JSON.parse here throws on boot —
-  // loadConfig is awaited from launchBrowser()→main() with no catch, so a bad
-  // file would crash the PM2 child into a restart-loop. Fall back to defaults.
+  // Corrupt user-editable config must not put the browser child in a restart loop.
   try {
     return JSON.parse(raw);
   } catch (err) {
@@ -58,25 +55,9 @@ async function loadConfig() {
 
 const checkCdp = () => probeCdpVersion(`http://${CDP_HOST}:${CDP_PORT}/json/version`);
 
-// Chrome's download directory is set through the profile's own `Preferences`
-// file, NOT through CDP's `Browser.setDownloadBehavior`.
-//
-// `Browser.setDownloadBehavior` looks like the obvious lever, but setting it
-// swaps Chrome's `ChromeDownloadManagerDelegate` for the automation-only
-// `DevToolsDownloadManagerDelegate`. That delegate routes the bytes to the
-// requested path — downloads land correctly and the download UI lists them —
-// but it leaves `OpenDownload()` / `ShowDownloadInShell()` as no-ops. The
-// result: every shell handoff from the download UI ("Show in Finder", "Open
-// file", clicking a row in chrome://downloads or the download bubble) silently
-// does nothing, with no error anywhere. Verified against Chrome 151 by
-// A/B-ing two otherwise identical browsers: without the CDP call the reveal
-// selects the file in Finder, with it nothing happens at the OS level.
-//
-// Writing `download.default_directory` into the profile keeps the native
-// delegate, so downloads land in the configured directory AND the UI stays
-// clickable. The pref is not one of Chrome's MAC-protected prefs, so writing
-// it directly is safe. It must be written while Chrome is NOT running —
-// Chrome rewrites Preferences from memory on exit.
+// CDP Browser.setDownloadBehavior replaces Chrome's native download delegate,
+// making Open/Show in Finder no-ops (verified on Chrome 151). Set the unprotected
+// profile prefs instead, before Chrome starts: it overwrites them on exit.
 async function applyDownloadDirPreference(profileDir, downloadDir) {
   const prefsPath = join(profileDir, 'Default', 'Preferences');
   const raw = await tryReadJson(prefsPath);

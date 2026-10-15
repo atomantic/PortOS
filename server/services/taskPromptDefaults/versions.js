@@ -64,7 +64,7 @@ export const PROMPT_VERSIONS = {
   // than copied command mechanics. Net-new types (no retired-hash history
   // needed). Mode injected at dispatch.
   'better-complexity': 2, // v2: compare repository-wide worst offenders; low churn is not an exclusion. v1: counted branching per function, ranked by churn/fan-in, with a named transformation and a behavior-preservation contract.
-  'better-cognitive-load': 1, // v1: reader cost (mixed abstraction, flag arguments, lying names, action at a distance) — explicitly NOT the size/nesting thresholds its siblings own.
+  'better-cognitive-load': 2, // v2: audit and clean excessive code comments while preserving contracts and rationale. v1: reader cost (mixed abstraction, flag arguments, lying names, action at a distance) — explicitly NOT the size/nesting thresholds its siblings own.
   'better-structural-drift': 1, // v1: derived artifacts as a second source of truth, position-keyed records, hand-synced registries, incidental-layout coupling — carved out of code-quality v3.
   'better-runtime-safety': 3, // v3: adds cross-module contract breaks in untyped code (missing members, missing named exports, dropped wrapper arguments) with a guard-test fix. Previous version: Framework-neutral UI lifecycle overlap. Previous version: v1: latent defects (floating promises, unowned rejections, unguarded access, sentinel confusion, races, leaks) requiring a concrete failure scenario.
   'better-dependency-freedom': 1, // v1: dependency NECESSITY (the do:depfree lens) — classify, prove usage, size the replacement. Distinct from dependency-updates, which bumps what stays.
