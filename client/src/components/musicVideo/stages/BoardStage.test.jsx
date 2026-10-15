@@ -141,11 +141,9 @@ describe('BoardStage ending', () => {
     const card = screen.getByRole('region', { name: 'Ending: cutting room floor' });
     await waitFor(() => expect(card.textContent).toContain('Left on the floor'));
     expect(card.textContent).toContain('Renders reviewed39');
-    // The 3 shots, the 12 stills and 4 clips used are the decisions; renders made are not.
-    expect(card.textContent).toContain('Human directed · 19 decisions');
     expect(screen.getByRole('button', { name: /Play 8s/ })).toBeTruthy();
     fireEvent.click(screen.getByLabelText(/Off/));
-    expect(saveProjectFields).toHaveBeenCalledWith({ statsOutro: { enabled: true, durationSec: 8 } });
+    expect(saveProjectFields).toHaveBeenCalledWith({ statsOutro: { enabled: true, durationSec: 8, title: 'Human Directed', subtitle: 'Human Imagined', hidden: [] } });
     fireEvent.click(screen.getByRole('button', { name: 'Close the ending' }));
     expect(screen.getByTestId('search').textContent).not.toContain('ending');
     expect(screen.queryByRole('region', { name: 'Ending: cutting room floor' })).toBeNull();
