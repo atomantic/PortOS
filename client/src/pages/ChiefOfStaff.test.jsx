@@ -189,7 +189,14 @@ const renderSettledConfigTab = async () => {
   // outside DOM-query deadlines so contended transforms cannot time out the
   // Force Evaluate tests before their action even exists.
   await act(async () => { await import('../components/cos/tabs/ConfigTab'); });
-  return renderSettledAt('config');
+  // #11548 — warming the module does not initialize React.lazy's thenable.
+  // Mount inside async act as well, so the resolved lazy retry commits before
+  // the caller starts its control query. The shell alone can still show the
+  // configuration Suspense fallback even after the module import has resolved.
+  let result;
+  await act(async () => { result = renderPageAt('config'); });
+  await waitForPageShell();
+  return result;
 };
 
 // #4144 — `/cos` is an `isFullWidth` route, so its `<main>` is a bare
@@ -288,6 +295,17 @@ describe('ChiefOfStaff mind tab layout', () => {
     const panel = document.getElementById('tabpanel-mind');
     expect(panel.className).toContain('xl:flex-1');
     expect(panel.className).toContain('min-h-0');
+  });
+});
+
+describe('ChiefOfStaff config mount readiness (#11548)', () => {
+  it('commits the lazy configuration controls before the settled mount returns', async () => {
+    await renderSettledConfigTab();
+
+    // Synchronous on purpose: another findBy here would hide an incomplete
+    // mount by spending the control query's budget on the Suspense retry.
+    expect(screen.getByRole('heading', { name: 'Chief of Staff settings' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Force Evaluate/i })).toBeEnabled();
   });
 });
 
