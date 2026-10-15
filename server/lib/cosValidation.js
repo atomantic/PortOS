@@ -195,6 +195,9 @@ const taskStatusInputSchema = z.preprocess(
   z.enum(TASK_STATUS_VALUES).optional()
 );
 
+export const cosTaskTypeSchema = z.enum(['user', 'internal']);
+export const cosTaskDeleteQuerySchema = z.object({ type: cosTaskTypeSchema.default('user') });
+
 // The metadata-bound fields below are carried onto the task by
 // `services/cosTaskIntake.js#buildTaskMetadata`; its test fails when a field is
 // added here without a mapping there (or an explicit non-metadata verdict).
@@ -216,7 +219,7 @@ export const createCosTaskSchema = z.object({
   thinking: z.boolean().optional(),
   app: z.string().optional(),
   targetInstanceId: targetInstanceIdInputSchema,
-  type: z.string().optional().default('user'),
+  type: cosTaskTypeSchema.default('user'),
   approvalRequired: z.boolean().optional(),
   screenshots: z.array(z.string()).optional(),
   attachments: z.array(cosTaskAttachmentSchema).optional(),
@@ -358,7 +361,7 @@ export const updateCosTaskSchema = z.object({
   app: z.string().optional(),
   targetInstanceId: targetInstanceIdUpdateSchema,
   blockedReason: z.string().optional(),
-  type: z.string().optional().default('user'),
+  type: cosTaskTypeSchema.default('user'),
 });
 
 // Worker's dispute of a reviewer rejection (#2441). `reason` is the required

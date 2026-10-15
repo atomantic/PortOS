@@ -230,7 +230,6 @@ const UNVALIDATED_QUERY_BASELINE = [
   'routes/cosLearningRoutes.js GET /digest/compare',
   'routes/cosLearningRoutes.js GET /learning/insights',
   'routes/cosScheduleRoutes.js GET /upcoming',
-  'routes/cosTaskRoutes.js DELETE /tasks/:id',
   'routes/cosTemplateRoutes.js GET /templates/popular',
   'routes/cosWorkflowRoutes.js GET /workflow',
   'routes/creativeCommissions.js GET /',
