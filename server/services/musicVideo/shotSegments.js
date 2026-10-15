@@ -137,11 +137,13 @@ export async function planShotSegments(project) {
       ...(overlayPages.some((p) => p.name === 'lyrics') ? { lyrics: windowedKeyData({ ...lyricData, render: nearEnd ? lyricData.render : null }, lo, hi) } : {}),
     };
     const baseKey = hash({ v: SHOT_SEGMENT_VERSION, args: await fingerprintArgs(built.args), overlays: overlayKey, width, height, fps });
-    const scene = scenes.get(built.sceneId);
+    // Each segment belongs to the shot whose span it plays in, so a shot's
+    // render, look and cached files cover exactly its own time on the song.
+    const scene = scenes.get(built.shotId);
     const look = shotFilmLook(project, scene);
     const lookKey = look ? segmentLookKey({ baseKey, startSec: built.startSec }, look, fps) : null;
     segments.push({
-      index, sceneId: built.sceneId, layer: built.layer, startSec: built.startSec, endSec: built.endSec,
+      index, sceneId: built.shotId, layer: built.layer, startSec: built.startSec, endSec: built.endSec,
       startFrame, frames: built.frames, window, segment, look, baseKey, lookKey, ownLook: hasOwnLook(scene),
       basePath: join(dir, `${baseKey}.mp4`),
       path: join(dir, lookKey ? `${baseKey}-${lookKey}.mp4` : `${baseKey}.mp4`),

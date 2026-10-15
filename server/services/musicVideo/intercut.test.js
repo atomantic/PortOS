@@ -66,6 +66,15 @@ describe('intercutClips (#9290)', () => {
     }
   });
 
+  it('leaves a locked shot whole: no partner pieces, no cards, and its footage nowhere else', () => {
+    const cues = [{ text: 'Rise 198', startSec: 10, endSec: 14, words: [{ w: 'Rise', startSec: 10.5 }, { w: '198', startSec: 12.5 }] }];
+    const out = intercutClips(clips, { scenes, sections, beats, bpm, lyricCues: cues, graphicCards: true, lockedSceneIds: ['perf', 'mid'] });
+    expect(out.filter((c) => c.sceneId === 'perf')).toEqual([clips[1]]);
+    expect(out.filter((c) => c.sceneId === 'mid')).toEqual([clips[3]]);
+    expect(out.some((c) => c.layer === 'card')).toBe(false);
+    expect(spanOf(out)).toBeCloseTo(spanOf(clips), 2);
+  });
+
   it('prefers a sung word onset near the target cut', () => {
     const one = [footage('perf', 0, 4, 4), footage('b-roll', 0, 4, 10)];
     const loudOnly = [{ startSec: 0, endSec: 8, energy: 1 }, { startSec: 8, endSec: 9, energy: 0 }];

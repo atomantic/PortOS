@@ -134,7 +134,7 @@ function graphicWords(cues) {
 }
 
 /** Replace one beat within a single source piece; keep footage read heads intact. */
-function insertGraphicCards(clips, ranked, period, lyricCues, accentColor) {
+function insertGraphicCards(clips, ranked, period, lyricCues, accentColor, locked) {
   const candidates = graphicWords(lyricCues);
   if (!candidates.length) return clips;
   const accent = /^#[0-9a-f]{6}$/i.test(accentColor || '') ? accentColor : '#ff5a1f';
@@ -158,6 +158,7 @@ function insertGraphicCards(clips, ranked, period, lyricCues, accentColor) {
       out.push(clip);
       continue;
     }
+    if (locked.has(clip.sceneId)) { out.push(clip); continue; }
     const eligible = candidates.filter(({ atSec }) => {
       const section = sectionAt(ranked, atSec);
       return section && tierBeats(section.rank) <= 3 && atSec >= section.startSec - EPS && atSec >= start - EPS
@@ -172,7 +173,7 @@ function insertGraphicCards(clips, ranked, period, lyricCues, accentColor) {
       if (atSec > from + EPS) out.push(sliceClip(clip, from - start, atSec - from));
       const duration = round3(period);
       out.push({ sceneId: `graphic-card-${count}`, layer: 'card', inSec: 0, outSec: duration, duration,
-        cardText: text, cardColor: count % 2 === 0 ? accent : '#000000' });
+        cardText: text, cardColor: count % 2 === 0 ? accent : '#000000', cardOf: clip.sceneId });
       count += 1;
       previousCardAt = atSec;
       from = atSec + period;
@@ -198,7 +199,8 @@ function sliceClip(clip, offset, length) {
  * Returns a new clip list; the input is returned as-is when there is no beat
  * grid to cut on.
  */
-export function intercutClips(clips, { scenes = [], sections = [], beats = [], bpm = null, words = [], lyricCues = [], graphicCards = false, accentColor = null } = {}) {
+export function intercutClips(clips, { scenes = [], sections = [], beats = [], bpm = null, words = [], lyricCues = [], graphicCards = false, accentColor = null, lockedSceneIds = [] } = {}) {
+  const locked = new Set(lockedSceneIds);
   const list = Array.isArray(clips) ? clips : [];
   const grid = (Array.isArray(beats) ? beats : []).filter(finite).sort((a, b) => a - b);
   const period = beatPeriod(bpm, grid);
@@ -224,7 +226,7 @@ export function intercutClips(clips, { scenes = [], sections = [], beats = [], b
   // Partner cutaways: footage that is not a sung performance, each with a
   // read head starting after the part the edit already shows.
   const partners = placed
-    .filter(({ clip }) => !clip.layer && clip.videoPath && modes.get(clip.sceneId) !== 'performance' && finite(clip.sourceSec) && clip.sourceSec > MIN_PIECE_SEC)
+    .filter(({ clip }) => !clip.layer && clip.videoPath && modes.get(clip.sceneId) !== 'performance' && !locked.has(clip.sceneId) && finite(clip.sourceSec) && clip.sourceSec > MIN_PIECE_SEC)
     .map((p) => ({ ...p, head: p.clip.outSec, start: p.clip.inSec, end: p.clip.inSec + p.clip.sourceSec }));
 
   function takePartner(host, len) {
@@ -245,7 +247,9 @@ export function intercutClips(clips, { scenes = [], sections = [], beats = [], b
   for (const host of placed) {
     const { clip, t0, t1, section } = host;
     const still = clip.layer === 'still';
-    if ((clip.layer && !still) || (!still && !clip.videoPath) || !section) { out.push(clip); continue; }
+    // A locked shot is approved as it plays, so the final render keeps it whole
+    // and never lends its footage to another shot.
+    if ((clip.layer && !still) || (!still && !clip.videoPath) || !section || locked.has(clip.sceneId)) { out.push(clip); continue; }
     const target = tierBeats(section.rank) * period;
     const cuts = cutTimes(t0, t1, target, halfGrid, onsets, period);
     if (!cuts.length) { out.push(clip); continue; }
@@ -261,5 +265,5 @@ export function intercutClips(clips, { scenes = [], sections = [], beats = [], b
       out.push({ ...clip, inSec, outSec: round3(inSec + len), duration: len, ...(clip.loop === false ? { sourceSec: round3(clip.inSec + (clip.sourceSec ?? clip.duration) - inSec) } : {}) });
     }
   }
-  return graphicCards ? insertGraphicCards(out, ranked, period, lyricCues, accentColor) : out;
+  return graphicCards ? insertGraphicCards(out, ranked, period, lyricCues, accentColor, locked) : out;
 }
