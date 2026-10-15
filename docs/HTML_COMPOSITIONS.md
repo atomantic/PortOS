@@ -444,11 +444,13 @@ snapshot freezes (`server/services/musicVideo/documentRender.js`):
   width, height } | null }], textCues, composition: { mode, style, posterSec,
   overlay } }`. Load it with `<script src="portos-mv.js">`; the sandbox
   refuses `fetch`.
-  A shot's `speedFps`/`offsetFrames` are baked into the staged clip, so a render
-  seeks `media.inSec + (t - startSec)`. The live preview bridges the original
-  bytes instead: its `media` keeps source-time `inSec`/`outSec` and adds
-  `timing: { rate, leadSec, startSec }` (only for a retimed shot), and the page
-  seeks `startSec + max(0, (t - scene.startSec) - leadSec) * rate`.
+  A shot's `speedFps`/`offsetFrames` are baked into the staged clip for renders
+  and the isolated viewer, so both seek `media.inSec + (t - startSec)` without
+  raw timing metadata. The raw preview-document API (`GET /preview`, built by
+  `documentPreview.js`) bridges the original bytes: its `media` keeps source-time
+  `inSec`/`outSec` and adds `timing: { rate, leadSec, startSec }` (only for a
+  retimed shot), and that page seeks
+  `startSec + max(0, (t - scene.startSec) - leadSec) * rate`.
 - `song.json` — the same song block the code-rendered mode reads.
 - `media/scene-<sceneId>.<ext>` — each scene's selected take (its clip when
   it has one, else its still), named by `scenes[].media.src`.
@@ -577,6 +579,25 @@ Pause, scrub, visual controls and session changes retire pending work; exact
 images keep their generation rules, and Save frame uses the actual known
 decoded current image. URLs retire after their DOM references. Native cadence,
 lag and drift still require measured evidence for the particular source.
+
+### Recognized starter compatibility
+
+Cooperative playback also recognizes the untouched layered starter graph whose
+engine SHA256 begins `9581bb2d190e`. Its exact historical entrypoint, camera rig,
+lyric module, stylesheet and fonts must match together. The preview adapts only
+the disposable staged copy; the project's document and final renderer retain
+their original bytes. Historical lyric timing, sizes and zones remain intact,
+as does that engine's absence of still-image effects. Staged video timing is
+already retimed, so playback does not apply shot rate or lead a second time.
+
+Mixed helpers, customized or generated entrypoints, and other historical engines
+retain exact playback. Inert files that the recognized entrypoint never executes
+are preserved. Any explicit authored declaration takes precedence, including an
+unsupported or malformed declaration. Recognition is limited to this exact
+graph; it neither upgrades old documents nor makes a general source-resolution,
+cold-transition or 30 fps content guarantee. See the
+[compatibility plan](plans/2026-10-15-historical-preview-playback-compatibility.md)
+for the graph and validation boundary.
 
 ### Optional authored complete-frame playback
 

@@ -4,17 +4,29 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
+import { createHash } from 'node:crypto';
+import { narrativeFrameState } from '../../lib/musicVideoNarrativeEvents.js';
 import { adaptStagedDocumentPreview } from './documentPreviewPlayback.js';
 import { installLayeredPreviewPlayback } from './previewPlaybackRuntime.js';
 
 const roots = [];
 const templates = fileURLToPath(new URL('./documentTemplates/', import.meta.url));
+const historicalFixtures = new URL('./fixtures/layered9581/', import.meta.url);
+const historicalFiles = { 'engine.js': 'engine.txt', 'index.html': 'index.html.txt', 'lyricType.js': 'lyricType.txt' };
+const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 afterAll(async () => { await Promise.all(roots.map(root => rm(root, { recursive: true, force: true }))); });
 async function staged() {
   const root = await mkdtemp(join(tmpdir(), 'preview-playback-contract-')); roots.push(root);
   await cp(join(templates, 'layered'), root, { recursive: true });
   await cp(join(templates, 'shared'), root, { recursive: true });
   await cp(new URL('../../lib/musicVideoImageEffects.js', import.meta.url), join(root, 'musicVideoImageEffects.js'));
+  return root;
+}
+async function historicalStaged() {
+  const root = await staged();
+  for (const [name, fixture] of Object.entries(historicalFiles)) {
+    await cp(new URL(fixture, historicalFixtures), join(root, name));
+  }
   return root;
 }
 
@@ -110,6 +122,130 @@ describe('recognized staged composition playback capability', () => {
     expect(backs[0].context.calls.filter(call => call[0] === 'reset')).toHaveLength(3);
     expect(events).toEqual([expect.objectContaining({ type: 'portos-mv:playback-error', epoch: 2 })]);
     await api.dispose();
+  });
+});
+
+describe('one historical starter graph', () => {
+  it('preserves original source, exact seek and inert files while adapting only the owned copy', async () => {
+    const root = await historicalStaged();
+    const original = await readFile(join(root, 'engine.js'));
+    const index = await readFile(join(root, 'index.html'));
+    const lyric = await readFile(join(root, 'lyricType.js'));
+    await writeFile(join(root, 'generated.js'), '/* Inert: the historical index never loads this file. */');
+    const inert = await readFile(join(root, 'generated.js'));
+    const effects = await readFile(join(root, 'musicVideoImageEffects.js'));
+    expect(sha256(original)).toBe('9581bb2d190e62ea2eb6a709bc989b1f913c501236554cd0301379877dc8a5fc');
+    const text = original.toString(), start = text.indexOf('    async seek(t,');
+    const exact = text.slice(start, text.indexOf('\n    },', start) + '\n    },'.length);
+    expect(sha256(exact)).toBe('c8ac135592ac2bf56736f227ef0cb6cc46d3cf68a37a2b1b775f265246cead34');
+    expect(await adaptStagedDocumentPreview(root)).toMatchObject({ adapted: true, originalEngineSha256: sha256(original) });
+    expect(await readFile(join(root, 'engine.js'), 'utf8')).toContain(exact);
+    for (const [name, bytes] of [['index.html', index], ['lyricType.js', lyric], ['generated.js', inert], ['musicVideoImageEffects.js', effects]]) {
+      expect(await readFile(join(root, name))).toEqual(bytes);
+    }
+    expect(await readFile(new URL('engine.txt', historicalFixtures))).toEqual(original);
+  });
+
+  it.each(['engine.js', 'index.html', 'cameraRig.js', 'lyricType.js', 'lyricType.css',
+    'fonts/big-shoulders-stencil-display-900.woff2', 'fonts/ibm-plex-mono-400.woff2',
+    'fonts/ibm-plex-mono-600.woff2', 'fonts/ibm-plex-sans-condensed-500.woff2',
+    'fonts/ibm-plex-sans-condensed-700.woff2', 'fonts/archivo-variable.woff2', 'fonts/ibm-plex-mono-500.woff2'])(
+    'declines a raw-byte change to active graph member %s before writing', async name => {
+      const root = await historicalStaged();
+      await writeFile(join(root, name), Buffer.concat([await readFile(join(root, name)), Buffer.from('\n')]));
+      const original = await readFile(join(root, 'engine.js'));
+      expect(await adaptStagedDocumentPreview(root)).toMatchObject({ adapted: false });
+      expect(await readFile(join(root, 'engine.js'))).toEqual(original);
+    },
+  );
+
+  it('declines mixed current lyrics, generated entrypoints, other old engines and missing assets', async () => {
+    const root = await historicalStaged(), original = await readFile(join(root, 'engine.js'));
+    await cp(join(templates, 'shared/lyricType.js'), join(root, 'lyricType.js'));
+    expect(await adaptStagedDocumentPreview(root)).toMatchObject({ adapted: false, reason: 'custom-helper' });
+    await cp(new URL('lyricType.txt', historicalFixtures), join(root, 'lyricType.js'));
+    const index = await readFile(join(root, 'index.html'), 'utf8');
+    await writeFile(join(root, 'index.html'), index.replace('<script src="engine.js">', '<script src="generated.js"></script><script src="engine.js">'));
+    expect(await adaptStagedDocumentPreview(root)).toMatchObject({ adapted: false, reason: 'custom-entrypoint' });
+    await writeFile(join(root, 'index.html'), index);
+    await rm(join(root, 'fonts/archivo-variable.woff2'));
+    expect(await adaptStagedDocumentPreview(root)).toMatchObject({ adapted: false, reason: 'missing-helper' });
+    expect(await readFile(join(root, 'engine.js'))).toEqual(original);
+    const other = await readFile(new URL('../../routes/fixtures/musicVideoLayeredEngine.txt', import.meta.url));
+    await writeFile(join(root, 'engine.js'), other);
+    expect(await adaptStagedDocumentPreview(root)).toMatchObject({ adapted: false, reason: 'unrecognized-engine' });
+    expect(await readFile(join(root, 'engine.js'))).toEqual(other);
+    await writeFile(join(root, 'engine.js'), original.toString().replace(/\n/g, '\r\n'));
+    expect(await adaptStagedDocumentPreview(root)).toMatchObject({ adapted: false, reason: 'unrecognized-engine' });
+  });
+
+  it('draws actual historical lyrics and ignores image effects in both exact and cooperative frames', async () => {
+    const root = await historicalStaged(), exactEngine = await readFile(join(root, 'engine.js'), 'utf8');
+    expect(await adaptStagedDocumentPreview(root)).toMatchObject({ adapted: true });
+    const camera = await readFile(join(root, 'cameraRig.js'), 'utf8');
+    const lyrics = await readFile(join(root, 'lyricType.js'), 'utf8');
+    const loaded = [];
+    function runtime(engine) {
+      const canvases = [];
+      const makeCanvas = () => {
+        const calls = [];
+        const target = { calls, globalAlpha: 1, filter: 'none' };
+        const context = new Proxy(target, { get(object, name) {
+          if (name in object) return object[name];
+          if (name === 'measureText') return text => ({ width: String(text).length * 10 });
+          if (name === 'createImageData' || name === 'getImageData') return (a, b, w, h) => ({ data: new Uint8ClampedArray((w || a) * (h || b) * 4) });
+          if (name === 'createLinearGradient' || name === 'createRadialGradient') return () => ({ addColorStop() {} });
+          if (name === 'createPattern') return () => ({});
+          return (...args) => calls.push({ name, args, font: object.font, filter: object.filter });
+        } });
+        const canvas = { width: 1920, height: 1080, context, getContext: () => context };
+        target.canvas = canvas; canvases.push(canvas); return canvas;
+      };
+      const front = makeCanvas(), finish = [], titles = [];
+      const data = { render: { width: 1920, height: 1080, fps: 24, durationSec: 5 }, composition: {},
+        song: { beats: [0, 1, 2, 3, 4], sections: [{ id: 'verse', label: 'Verse', startSec: 0, endSec: 5 }],
+          narrativeEvents: [{ kind: 'silence', startFrame: 48, endFrame: 72 }] },
+        lyrics: [{ text: 'Old words', role: 'hook', startSec: 0.1, endSec: 3.5,
+          words: [{ w: 'Old', startSec: 0.1, endSec: 0.5 }, { w: 'words', startSec: 0.5, endSec: 3.5 }] }],
+        scenes: [{ sceneId: 'still', startSec: 0, endSec: 5, visualLayer: 'still',
+          media: { kind: 'image', src: 'media/still.png' }, imageEffect: 'flash-develop', camera: { move: 'slow-dolly-in', speed: 1 } }] };
+      const sandbox = { setTimeout, clearTimeout, performance: { now: () => 0 }, requestAnimationFrame: () => 1, cancelAnimationFrame() {},
+        Image: function Image() { this.naturalWidth = 640; this.naturalHeight = 360;
+          Object.defineProperty(this, 'src', { set(value) { loaded.push(value); queueMicrotask(() => this.onload()); } }); },
+        document: { getElementById: () => front, createElement: () => makeCanvas(), fonts: { load: () => Promise.resolve() } },
+        PORTOS_MV: data, PORTOS_MV_EVENT_STATE: narrativeFrameState, postMessage() {},
+        __portosFilmLook: { frame: t => finish.push(t), playback() {} }, __portosTitleCard: { draw: t => titles.push(t) } };
+      sandbox.window = sandbox;
+      runInNewContext(camera, sandbox);
+      runInNewContext(`'use strict';\n${lyrics.replace(/^export /gm, '')}`, sandbox);
+      runInNewContext(engine, sandbox);
+      return { front, canvases, sandbox, finish, titles };
+    }
+    const control = runtime(exactEngine), adapted = runtime(await readFile(join(root, 'engine.js'), 'utf8'));
+    const api = adapted.sandbox.portosComposition.previewPlayback;
+    try {
+      const summarize = canvas => canvas.context.calls.filter(call => ['fillText', 'strokeText', 'drawImage'].includes(call.name))
+        .map(call => ({ ...call, args: call.args.map(arg => arg && typeof arg === 'object' ? 'drawable' : arg) }));
+      for (const [index, t] of [0.25, 1.25, 2.6].entries()) {
+        control.front.context.calls.length = 0;
+        for (const canvas of adapted.canvases) canvas.context.calls.length = 0;
+        await control.sandbox.portosComposition.seek(t);
+        await api.prepare({ epoch: index + 1, t });
+        const back = adapted.canvases.find(canvas => canvas.context.calls.some(call => call.name === 'reset'));
+        expect(summarize(back)).toEqual(summarize(control.front));
+        expect(back.context.calls.some(call => call.name === 'fillText' && /Old|words/i.test(call.args[0]))).toBe(true);
+        expect(back.context.calls.filter(call => call.name === 'drawImage').every(call => call.filter === 'none')).toBe(true);
+      }
+      const line = adapted.sandbox.PORTOS_LYRIC_TYPE.createLyricType(adapted.sandbox.PORTOS_MV).lines[0];
+      expect(line.zone).toBe('center');
+      expect(adapted.finish.at(-1)).toBe(62);
+      expect(adapted.titles.at(-1)).toBe(2.6);
+      expect(loaded).toEqual(['media/still.png', 'media/still.png']);
+      await api.pause({ epoch: 4 });
+      adapted.front.context.calls.length = 0;
+      await adapted.sandbox.portosComposition.seek(1.25);
+      expect(adapted.front.context.calls.some(call => call.name === 'fillText')).toBe(true);
+    } finally { await api.dispose(); }
   });
 });
 

@@ -124,6 +124,92 @@ async function canonicalPreview() {
   return value;
 }
 
+async function historicalPreview() {
+  const value = await canonicalPreview(), directory = join(PATHS.data, value.plan.directory);
+  for (const [name, fixture] of Object.entries({ 'engine.js': 'engine.txt', 'index.html': 'index.html.txt', 'lyricType.js': 'lyricType.txt' })) {
+    await cp(new URL(`./fixtures/layered9581/${fixture}`, import.meta.url), join(directory, name));
+  }
+  return value;
+}
+
+describe('historical starter admission through document open', () => {
+  it('adapts only preview scratch, retains staged output timing and leaves final source exact', async () => {
+    const { project, plan } = await historicalPreview();
+    project.scenes[0].speedFps = 24;
+    project.scenes[0].offsetFrames = -6;
+    const source = join(PATHS.data, plan.directory), original = await readFile(join(source, 'engine.js'));
+    const lyric = await readFile(join(source, 'lyricType.js'));
+    const preview = await openIsolatedDocumentPreview({ project, jobId: 'historical-preview' });
+    try {
+      expect(preview.playback).toMatchObject({ adapted: true, version: 1, fps: 30, mediaTiming: 'staged-output-v1',
+        originalEngineSha256: '9581bb2d190e62ea2eb6a709bc989b1f913c501236554cd0301379877dc8a5fc' });
+      const staged = join(PATHS.data, browser.seen.directory);
+      expect(await readFile(join(staged, 'engine.js'))).not.toEqual(original);
+      expect(await readFile(join(staged, 'lyricType.js'))).toEqual(lyric);
+      expect(browser.seen.data.scenes[0].media).toMatchObject({ inSec: 0, outSec: 2.25, fps: 24 });
+      expect(browser.seen.data.scenes[0].media.timing).toBeUndefined();
+      expect(browser.seen.data.scenes[1].imageEffect).toBeTruthy();
+      expect(runFfmpegProcess.mock.calls[0][0].args).toContain('setpts=(PTS-STARTPTS)/2,tpad=start_mode=clone:start_duration=0.25,fps=24');
+      expect(await readFile(join(source, 'engine.js'))).toEqual(original);
+    } finally { await preview.page.close(); await rm(preview.scratchRoot, { recursive: true, force: true }); }
+
+    browser.contract = { durationSec: 30, fps: 24, width: 1920, height: 1080, motionBlur: 1 };
+    let finalEngine;
+    const encoder = encodeComposition.getMockImplementation();
+    encodeComposition.mockImplementation(async () => {
+      finalEngine = await readFile(join(PATHS.data, browser.seen.directory, 'engine.js'));
+      throw new Error('stop at encoder');
+    });
+    try {
+      await expect(encodeDocumentComposition({ project, plan, jobId: 'historical-final',
+        audioPath: join(PATHS.data, 'none.wav'), outputPath: join(PATHS.videos, 'historical-final.mp4'),
+        windowStart: 0, windowEnd: 1 })).rejects.toThrow('stop at encoder');
+    }
+    finally { encodeComposition.mockImplementation(encoder); }
+    expect(finalEngine).toEqual(original);
+    expect(await readFile(join(source, 'lyricType.js'))).toEqual(lyric);
+  });
+
+  it('declines mixed lyrics through the public opener without writing the staged engine', async () => {
+    const { project, plan } = await historicalPreview();
+    const source = join(PATHS.data, plan.directory), original = await readFile(join(source, 'engine.js'));
+    await cp(new URL('./documentTemplates/shared/lyricType.js', import.meta.url), join(source, 'lyricType.js'));
+    const preview = await openIsolatedDocumentPreview({ project, jobId: 'historical-mixed' });
+    try {
+      expect(preview.playback).toBeUndefined();
+      expect(preview.playbackAdapter).toMatchObject({ adapted: false, reason: 'custom-helper' });
+      expect(browser.versionCalls).toEqual([]);
+      expect(await readFile(join(PATHS.data, browser.seen.directory, 'engine.js'))).toEqual(original);
+    } finally { await preview.page.close(); await rm(preview.scratchRoot, { recursive: true, force: true }); }
+  });
+
+  it.each([
+    { label: 'supported', declaration: '{"version":1,"contract":"portos-complete-frame-v1"}', supported: true },
+    { label: 'future', declaration: '{"version":2,"contract":"portos-complete-frame-v2"}', reason: 'unsupported-declaration' },
+    { label: 'malformed', declaration: '{', reason: 'invalid-declaration' },
+  ])('gives a $label authored declaration priority over historical adaptation', async ({ label, declaration, supported, reason }) => {
+    const { project, plan } = await historicalPreview();
+    const source = join(PATHS.data, plan.directory), original = await readFile(join(source, 'engine.js'));
+    await writeFile(join(source, 'preview-playback.json'), declaration);
+    browser.authoredContext = { portosComposition: { previewPlayback: {
+      version: 1, fps: 30, presentation: 'atomic-canvas-v1', mediaTiming: 'staged-output-v1',
+      clock() { return 1; }, prepare() {}, play() {}, sync() {}, pause() {}, dispose() {},
+    } } };
+    const preview = await openIsolatedDocumentPreview({ project, jobId: `historical-authored-${label}` });
+    try {
+      expect(preview.playbackAdapter).toMatchObject({ producer: 'authored-v1', adapted: false });
+      if (supported) expect(preview.playback).toMatchObject({ producer: 'authored-v1', adapted: false });
+      else {
+        expect(preview.playback).toBeUndefined();
+        expect(preview.playbackAdapter.reason).toBe(reason);
+      }
+      expect(browser.authoredInspections).toBe(supported ? 1 : 0);
+      expect(await readFile(join(PATHS.data, browser.seen.directory, 'engine.js'))).toEqual(original);
+      expect(await readFile(join(source, 'engine.js'))).toEqual(original);
+    } finally { await preview.page.close(); await rm(preview.scratchRoot, { recursive: true, force: true }); }
+  });
+});
+
 async function authoredPreview(declaration = { version: 1, contract: 'portos-complete-frame-v1' }) {
   const value = await fixture({ shipped: { 'preview-playback.json': JSON.stringify(declaration), 'authored.js': '/* Immutable authored implementation fixture. */' } });
   value.project.composition.document = { directory: value.plan.directory };

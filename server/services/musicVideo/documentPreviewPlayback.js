@@ -7,6 +7,21 @@ import { installLayeredPreviewPlayback } from './previewPlaybackRuntime.js';
 
 const ROOT = fileURLToPath(new URL('./documentTemplates/', import.meta.url));
 const ENGINE_SHA256 = 'ecf110208a0861eb35a39ca559997eca647b922b49c1ca5d5bddc35b2f37bd61';
+// This graph retains its older lyrics and intentionally has no image-effects module.
+const HISTORICAL_GRAPH = {
+  'engine.js': '9581bb2d190e62ea2eb6a709bc989b1f913c501236554cd0301379877dc8a5fc',
+  'index.html': 'a5a384bf17ad9858bfe5ce0c960fd5c194ebfbf581d8f4994694df48bec09936',
+  'cameraRig.js': '508b9bbad6490903f53c0928fb24a62812caf17800ded5c7248bf7b7740b95a2',
+  'lyricType.js': 'f2f2cc5094a6407226b5f5d62c6788ccc7220a8e13ad6b81415422d3efa3f961',
+  'lyricType.css': 'b48f2ac170e4c53cda88dc44d78a03e5862bc67e04b0244602e1a39098c0054c',
+  'fonts/big-shoulders-stencil-display-900.woff2': 'd071c3ae576a9d0e149af9f8dea74a5cee7a403b53d543b2f4d984cd65ebcb8b',
+  'fonts/ibm-plex-mono-400.woff2': '08949f728dc52d528e69b1667d15c89a5686a4ee9a296ff90983985f99c380f7',
+  'fonts/ibm-plex-mono-600.woff2': '0d1f0b8d0722224e32e9f28261bdc86c79115be73444ae5eceb73976a1bcdf83',
+  'fonts/ibm-plex-sans-condensed-500.woff2': 'e3b4fd97fd20bc70fda66d8d5f0745d8d6958068a024cb4724bbc1ffb6cbc183',
+  'fonts/ibm-plex-sans-condensed-700.woff2': '4768878c107d92c528a65bba206a87cdcf2c694514e75907fb91772cf8a388a5',
+  'fonts/archivo-variable.woff2': 'e3a28eade21a900c7155a247757f4b2834c07bb7ef07ad7efa55cebaac1e8f5e',
+  'fonts/ibm-plex-mono-500.woff2': '01d285447409c8a588692162439a038b8cbd7871309ee20267b0d2d91c6e8e22',
+};
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const read = (directory, name) => readFile(join(directory, name));
 
@@ -56,31 +71,39 @@ export async function adaptStagedDocumentPreview(directory, { scenes = [] } = {}
   try {
     [original, index, template] = await Promise.all([read(directory, 'engine.js'), read(directory, 'index.html'), read(join(ROOT, 'layered'), 'index.html')]);
   } catch { return declined('unrecognized-entrypoint'); }
-  if (digest(original) !== ENGINE_SHA256) return declined('unrecognized-engine');
+  const historical = digest(original) === HISTORICAL_GRAPH['engine.js'];
+  if (!historical && digest(original) !== ENGINE_SHA256) return declined('unrecognized-engine');
   const marker = '<script src="engine.js"></script>';
   const generatedIndex = template.toString().replace(marker, '<script src="generated.js"></script>\n' + marker);
-  if (!index.equals(template) && index.toString() !== generatedIndex) return declined('custom-entrypoint');
-  // General authored JavaScript is not a complete-frame publication contract.
-  // Generated/custom/older engines keep deterministic exact seek unchanged.
-  if (!index.equals(template)) return declined('generated-contract-not-admitted');
+  if (historical) {
+    if (digest(index) !== HISTORICAL_GRAPH['index.html']) return declined('custom-entrypoint');
+  } else {
+    if (!index.equals(template) && index.toString() !== generatedIndex) return declined('custom-entrypoint');
+    if (!index.equals(template)) return declined('generated-contract-not-admitted');
+  }
   // Only the host's already-staged metadata is authority for source cadence.
   // A source period >=100 ms cannot satisfy the live frame freshness bound.
   if (scenes.some(scene => scene.media?.kind === 'video'
     && (!Number.isFinite(scene.media.fps) || scene.media.fps <= 10))) return declined('unsupported-video-fps');
-  // The complete executable/style helper graph must match, not only engine.js.
-  const helpers = [
-    ['cameraRig.js', join(ROOT, 'layered')],
-    ['lyricType.js', join(ROOT, 'shared')], ['lyricType.css', join(ROOT, 'shared')],
-    ['musicVideoImageEffects.js', fileURLToPath(new URL('../../lib/', import.meta.url))],
-  ];
   try {
-    for (const [name, root] of helpers) if (!(await read(directory, name)).equals(await read(root, name))) return declined('custom-helper');
-    // Font bytes affect exact parity too; only canonical entrypoint/CSS names apply.
-    const css = `${template}\n${await read(join(ROOT, 'shared'), 'lyricType.css')}`;
-    for (const match of css.matchAll(/url\(['"]?([^)'"\s]+)['"]?\)/g)) {
-      const name = match[1];
-      const root = name.includes('archivo') || name.includes('ibm-plex-mono-500') ? join(ROOT, 'shared') : join(ROOT, 'layered');
-      if (!(await read(directory, name)).equals(await read(root, name))) return declined('custom-font');
+    if (historical) {
+      for (const [name, expected] of Object.entries(HISTORICAL_GRAPH)) {
+        const bytes = name === 'engine.js' ? original : name === 'index.html' ? index : await read(directory, name);
+        if (digest(bytes) !== expected) return declined(name.startsWith('fonts/') ? 'custom-font' : 'custom-helper');
+      }
+    } else {
+      const helpers = [
+        ['cameraRig.js', join(ROOT, 'layered')],
+        ['lyricType.js', join(ROOT, 'shared')], ['lyricType.css', join(ROOT, 'shared')],
+        ['musicVideoImageEffects.js', fileURLToPath(new URL('../../lib/', import.meta.url))],
+      ];
+      for (const [name, root] of helpers) if (!(await read(directory, name)).equals(await read(root, name))) return declined('custom-helper');
+      const css = `${template}\n${await read(join(ROOT, 'shared'), 'lyricType.css')}`;
+      for (const match of css.matchAll(/url\(['"]?([^)'"\s]+)['"]?\)/g)) {
+        const name = match[1];
+        const root = name.includes('archivo') || name.includes('ibm-plex-mono-500') ? join(ROOT, 'shared') : join(ROOT, 'layered');
+        if (!(await read(directory, name)).equals(await read(root, name))) return declined('custom-font');
+      }
     }
   } catch { return declined('missing-helper'); }
   let source = original.toString();
