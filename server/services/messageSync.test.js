@@ -628,6 +628,46 @@ describe('syncAccount', () => {
     ]);
   });
 
+  it('replays a full cached sync with linear identity reads and preserves local IDs and evaluations', async () => {
+    const count = 500;
+    const messages = Array.from({ length: count }, (_, i) => ({
+      id: `local-${i}`, externalId: `summary-${i}`, providerRowId: `row-${i}`,
+      browserMessageKind: 'member', date: '2026-01-01T12:00:00Z',
+      from: { email: 'sender@example.com' }, evaluation: { action: 'review' }, activityIdentity: `activity-${i}`,
+    }));
+    let dateReads = 0;
+    const incoming = messages.map(({ evaluation: _evaluation, ...message }) => ({
+      ...message, id: `incoming-${message.id}`, isRead: true,
+      get date() { dateReads++; return message.date; },
+    }));
+    getAccount.mockResolvedValue({ id: VALID_UUID, type: 'outlook', enabled: true });
+    readFile.mockResolvedValue(JSON.stringify({ messages }));
+    syncPlaywright.mockResolvedValue({ status: 'success', messages: incoming });
+
+    const result = await syncAccount(VALID_UUID, mockIo);
+
+    expect(result).toMatchObject({ newMessages: 0, total: count });
+    expect(atomicWrite.mock.calls[0][1].messages).toEqual(messages.map(message => ({ ...message, isRead: true })));
+    // Count actual identity input reads rather than a machine-dependent deadline.
+    // Re-scanning the incoming batch for every message takes >250,000 reads.
+    expect(dateReads).toBeLessThanOrEqual(count * 8);
+  });
+
+  it('reindexes a legacy row when a full body makes it a member during the same sync', async () => {
+    const identity = { externalId: 'summary', providerRowId: 'row', date: '2026-01-01T12:00:00Z', from: { email: 'sender@example.com' } };
+    getAccount.mockResolvedValue({ id: VALID_UUID, type: 'outlook', enabled: true });
+    readFile.mockResolvedValue(JSON.stringify({ messages: [{ ...identity, id: 'local', threadId: 'thread', bodyFull: false }] }));
+    syncPlaywright.mockResolvedValue({ status: 'success', messages: [
+      { ...identity, id: 'row-update', bodyFull: true, bodyText: 'First body' },
+      { ...identity, id: 'member-update', externalId: 'member-summary', browserMessageKind: 'member', bodyFull: true, bodyText: 'Member body' },
+    ] });
+
+    expect(await syncAccount(VALID_UUID, mockIo)).toMatchObject({ newMessages: 0, total: 1 });
+    expect(atomicWrite.mock.calls[0][1].messages).toEqual([expect.objectContaining({
+      id: 'local', externalId: 'member-summary', browserMessageKind: 'member', bodyText: 'Member body',
+    })]);
+  });
+
   it('retains a known row ID when a later unambiguous extraction omits it', async () => {
     getAccount.mockResolvedValue({ id: VALID_UUID, type: 'outlook', enabled: true });
     readFile.mockResolvedValue(JSON.stringify({ messages: [{ id: 'local', externalId: 'summary', providerRowId: 'stable-row' }] }));
