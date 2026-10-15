@@ -1,3 +1,4 @@
+import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -50,6 +51,14 @@ const DOCUMENT = { directory: 'music-video/mv-1/composition/doc-a', entry: 'inde
 const project = {
   id: 'mv-1', name: 'Example', updatedAt: '2026-01-01T00:00:00.000Z', composition: { mode: 'document', document: DOCUMENT },
   lyricCues: [{ id: 'l1', text: 'first line', startSec: 1, endSec: 3 }, { id: 'l2', text: 'second line', startSec: 3, endSec: 6 }],
+};
+
+// happy-dom does not load blob images. Drive the actual element's load/decode
+// boundary explicitly, rather than treating a src assignment as presentation.
+const loadImage = async (image, decoding = Promise.resolve()) => {
+  Object.defineProperty(image, 'naturalWidth', { configurable: true, value: 1920 });
+  image.decode = vi.fn(() => decoding);
+  await act(async () => fireEvent.load(image));
 };
 
 const opens = () => socket.emit.mock.calls.filter(([event]) => event === 'generated-preview:open');
@@ -406,12 +415,33 @@ describe('CompositionPreviewPlayer', () => {
     expect(document.querySelector('iframe')).toBeNull();
   });
 
+  it('keeps DOM-selected URLs live through StrictMode effect replay and releases them after unmount', async () => {
+    const create = vi.spyOn(URL, 'createObjectURL');
+    const release = URL.revokeObjectURL;
+    const revoke = vi.spyOn(URL, 'revokeObjectURL').mockImplementation((url) => {
+      for (const image of document.querySelectorAll('img')) {
+        expect(image.getAttribute('src')).not.toBe(url);
+        expect(image.currentSrc).not.toBe(url);
+      }
+      release(url);
+    });
+    const { container, unmount } = render(<StrictMode><CompositionPreviewPlayer project={project} audioUrl='/song.mp3' /></StrictMode>);
+    await loadImage(container.querySelector('img'));
+    const visible = container.querySelector('img').src;
+    expect(revoke).not.toHaveBeenCalledWith(visible);
+    unmount();
+    for (const { value: url } of create.mock.results) expect(revoke.mock.calls.filter(([value]) => value === url)).toHaveLength(1);
+    create.mockRestore();
+    revoke.mockRestore();
+  });
+
   it('saves the docked preview frame on screen to the gallery', async () => {
     const blob = new Blob(['jpeg'], { type: 'image/jpeg' });
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ blob: async () => blob });
     const { container } = render(<CompositionPreviewPlayer project={{ ...project, scenes: [{ sceneId: 'a', startSec: 0 }] }} audioUrl="/song.mp3" shotNav />);
     await waitFor(() => expect(container.querySelector('img')?.getAttribute('src')).toBeTruthy());
     const frameSrc = container.querySelector('img').getAttribute('src');
+    await loadImage(container.querySelector('img'));
     await act(async () => { screen.getByRole('button', { name: /Save frame/ }).click(); });
     expect(fetchSpy).toHaveBeenCalledWith(frameSrc);
     expect(uploadGalleryImage).toHaveBeenCalledWith(blob, { silent: true });
@@ -474,6 +504,254 @@ describe('native composition playback', () => {
     vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {});
     return { play, pause, raf };
   };
+  const presenter = async ({ shotNav = false } = {}) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const native = installNative();
+    const controls = media();
+    const create = vi.spyOn(URL, 'createObjectURL');
+    const revoke = vi.spyOn(URL, 'revokeObjectURL');
+    const view = render(<CompositionPreviewPlayer project={project} audioUrl='/song.mp3' shotNav={shotNav} />);
+    const image = view.container.querySelector('img');
+    await loadImage(image);
+    const baseline = image.src;
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Play' })));
+    expect(playbackMessages('play')).toHaveLength(1);
+    const anchor = playbackMessages('play')[0];
+    const callbacks = new Map();
+    let nextId = 1000;
+    controls.raf.mockImplementation((callback) => { callbacks.set(++nextId, callback); return nextId; });
+    window.cancelAnimationFrame.mockImplementation((id) => callbacks.delete(id));
+    const frame = (sequence, extra = {}) => {
+      act(() => receive('frame', { ...native.session(), playbackEpoch: anchor.epoch, sequence, data: btoa(`frame-${sequence}`), ...extra }));
+      return create.mock.results.at(-1).value;
+    };
+    const task = async () => { await act(async () => vi.advanceTimersByTime(0)); };
+    const batch = () => {
+      const snapshot = [...callbacks.values()];
+      callbacks.clear();
+      act(() => { for (const callback of snapshot) callback(performance.now()); });
+    };
+    const advance = async (ms) => { native.advance(ms); await act(async () => vi.advanceTimersByTime(ms)); };
+    return { ...view, ...controls, native, image, baseline, frame, task, batch, advance, create, revoke, callbacks };
+  };
+
+  it('presents a burst FIFO and keeps its source for observers on both sides of the acknowledgement RAF', async () => {
+    const p = await presenter();
+    const first = p.frame(1);
+    const second = p.frame(2);
+    const third = p.frame(3);
+    expect(p.image.src).toBe(p.baseline);
+    await p.task();
+    expect(p.image.src).toBe(first);
+    const observed = [];
+    requestAnimationFrame(() => observed.push(p.image.src));
+    await loadImage(p.image);
+    requestAnimationFrame(() => observed.push(p.image.src));
+    p.batch();
+    expect(observed).toEqual([first, first]);
+    expect(p.image.src).toBe(first);
+    expect(p.revoke).not.toHaveBeenCalledWith(first);
+    await p.task();
+    expect(p.image.src).toBe(second);
+    await loadImage(p.image);
+    expect(p.revoke).toHaveBeenCalledWith(first);
+    p.batch();
+    expect(p.image.src).toBe(second);
+    await p.task();
+    expect(p.image.src).toBe(third);
+    await loadImage(p.image);
+    p.batch();
+    fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
+    expect(p.image.src).toBe(third);
+  });
+
+  it('routes an arrival between acknowledgement and promotion through the owned task', async () => {
+    const p = await presenter();
+    const first = p.frame(1);
+    await p.task();
+    await loadImage(p.image);
+    requestAnimationFrame(() => {
+      p.frame(2);
+      expect(p.image.src).toBe(first);
+    });
+    p.batch();
+    expect(p.image.src).toBe(first);
+    await p.task();
+    expect(p.image.src).not.toBe(first);
+    fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
+    expect(p.image.src).toBe(first);
+  });
+
+  it('restores the decoded picture on pause, saves it, and rejects old decode/epoch work after a newer exact frame', async () => {
+    const p = await presenter({ shotNav: true });
+    const first = p.frame(1);
+    await p.task();
+    await loadImage(p.image);
+    p.batch();
+    const second = p.frame(2);
+    await p.task();
+    expect(p.image.src).toBe(second);
+    let finishDecode;
+    await loadImage(p.image, new Promise((resolve) => { finishDecode = resolve; }));
+    const blob = new Blob(['displayed']);
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ blob: async () => blob });
+    const uploadsBefore = uploadGalleryImage.mock.calls.length;
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: /Save frame/ })));
+    expect(fetch).not.toHaveBeenCalled();
+    expect(uploadGalleryImage).toHaveBeenCalledTimes(uploadsBefore);
+    fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
+    expect(p.image.src).toBe(first);
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: /Save frame/ })));
+    expect(fetch).toHaveBeenCalledWith(first);
+    expect(uploadGalleryImage).toHaveBeenCalledTimes(uploadsBefore + 1);
+    expect(uploadGalleryImage).toHaveBeenLastCalledWith(blob, { silent: true });
+    const exact = socket.emit.mock.calls.filter(([event]) => event === 'generated-preview:seek').at(-1)[1];
+    const urls = p.create.mock.calls.length;
+    p.frame(3);
+    expect(p.create).toHaveBeenCalledTimes(urls);
+    act(() => receive('frame', { ...p.native.session(), generation: exact.generation, data: btoa('exact') }));
+    const latest = p.image.src;
+    await loadImage(p.image);
+    await act(async () => finishDecode());
+    p.batch();
+    await p.task();
+    expect(p.image.src).toBe(latest);
+    expect(p.revoke).toHaveBeenCalledWith(second);
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: /Save frame/ })));
+    expect(fetch).toHaveBeenLastCalledWith(latest);
+  });
+
+  it('flushes old-look frames at visual control dispatch before the server responds', async () => {
+    const p = await presenter();
+    const first = p.frame(1);
+    await p.task();
+    await loadImage(p.image);
+    p.batch();
+    const candidate = p.frame(2);
+    await p.task();
+    let finishDecode;
+    await loadImage(p.image, new Promise((resolve) => { finishDecode = resolve; }));
+    const queued = p.frame(3);
+    p.rerender(<CompositionPreviewPlayer project={{ ...project, filmLook: { version: 1, preset: 'custom', grain: 0.4 } }} audioUrl='/song.mp3' />);
+    expect(socket.emit).toHaveBeenLastCalledWith('generated-preview:command', expect.objectContaining({ action: 'film-look' }));
+    expect(p.image.src).toBe(first);
+    const count = p.create.mock.calls.length;
+    p.frame(4);
+    expect(p.create).toHaveBeenCalledTimes(count);
+    await act(async () => finishDecode());
+    await p.task();
+    expect(p.image.src).toBe(first);
+    expect(p.revoke).toHaveBeenCalledWith(candidate);
+    expect(p.revoke).toHaveBeenCalledWith(queued);
+    // The same wire epoch still admits the server's control-resync signal.
+    const anchor = playbackMessages('play')[0];
+    await act(async () => receive('playback-state', { ...p.native.session(), ...anchor, action: 'sync', status: 'resync-required', reason: 'controls' }));
+    expect(playbackMessages('prepare')).toHaveLength(2);
+  });
+
+  it('fails visibly and pauses on queue overflow rather than discarding a source frame', async () => {
+    const p = await presenter();
+    p.frame(1);
+    p.frame(2);
+    p.frame(3);
+    p.frame(4);
+    expect(screen.getByRole('alert')).toHaveTextContent('presentation queue is full');
+    expect(p.image.src).toBe(p.baseline);
+    expect(p.pause).toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled();
+    expect(socket.emit).toHaveBeenCalledWith('generated-preview:close', expect.objectContaining({ sessionId: p.native.session().sessionId }));
+    await p.task();
+    expect(p.image.src).toBe(p.baseline);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('enforces the receipt-to-ack deadline even when decode finishes but RAF is held', async () => {
+    const p = await presenter();
+    const first = p.frame(1);
+    await p.task();
+    await loadImage(p.image);
+    await p.advance(99);
+    expect(screen.queryByRole('alert')).toBeNull();
+    await p.advance(1);
+    expect(screen.getByRole('alert')).toHaveTextContent('presentation fell behind');
+    expect(p.image.src).toBe(first);
+    expect(p.pause).toHaveBeenCalled();
+    expect(p.callbacks.size).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('rechecks the deadline at acknowledgement when an overdue timer has not fired', async () => {
+    const p = await presenter();
+    p.frame(1);
+    await p.task();
+    await loadImage(p.image);
+    p.native.advance(100);
+    p.batch();
+    expect(screen.getByRole('alert')).toHaveTextContent('presentation fell behind');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('rechecks queued frame age in the promotion task before replacing an acknowledged picture', async () => {
+    const p = await presenter();
+    const first = p.frame(1);
+    await p.task();
+    await loadImage(p.image);
+    p.batch();
+    p.frame(2);
+    p.native.advance(100);
+    await p.task();
+    expect(screen.getByRole('alert')).toHaveTextContent('presentation fell behind');
+    expect(p.image.src).toBe(first);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('disposes a held DOM decode and its queued successors on unmount without rearming work', async () => {
+    const p = await presenter();
+    p.frame(1);
+    await p.task();
+    let finishDecode;
+    await loadImage(p.image, new Promise((resolve) => { finishDecode = resolve; }));
+    p.frame(2);
+    const all = p.create.mock.results.map(({ value }) => value);
+    p.unmount();
+    await act(async () => finishDecode());
+    p.batch();
+    await p.task();
+    for (const url of all) expect(p.revoke.mock.calls.filter(([value]) => value === url)).toHaveLength(1);
+    expect(p.callbacks.size).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('preserves the visible picture across reopen and revokes each owned URL once on unmount', async () => {
+    const p = await presenter();
+    p.frame(1);
+    await p.task();
+    await loadImage(p.image);
+    p.batch();
+    const retained = p.image.src;
+    p.frame(2);
+    socket.emit.mockImplementation(() => {});
+    p.rerender(<CompositionPreviewPlayer project={{ ...project, composition: { ...project.composition, document: { ...DOCUMENT, updatedAt: '2026-01-02' } } }} audioUrl='/song.mp3' />);
+    expect(opens()).toHaveLength(2);
+    expect(p.image.src).toBe(retained);
+    expect(p.revoke).not.toHaveBeenCalledWith(retained);
+    const replacement = { ...p.native.session(), requestId: opens()[1][1].requestId, sessionId: '10000000-0000-4000-8000-000000000002' };
+    act(() => {
+      receive('opened', replacement);
+      receive('frame', { ...replacement, generation: 0, data: btoa('replacement baseline') });
+    });
+    expect(p.image.src).not.toBe(retained);
+    expect(p.revoke).not.toHaveBeenCalledWith(retained);
+    await loadImage(p.image);
+    expect(p.revoke).toHaveBeenCalledWith(retained);
+    const all = p.create.mock.results.map(({ value }) => value);
+    p.unmount();
+    expect(p.image.isConnected).toBe(false);
+    for (const url of all) expect(p.revoke.mock.calls.filter(([value]) => value === url)).toHaveLength(1);
+    expect(p.callbacks.size).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
   it('waits for native preparation, anchors actual audio time, and sends bounded clock updates without frame seeks', async () => {
@@ -536,6 +814,8 @@ describe('native composition playback', () => {
     const frame = (extra) => receive('frame', { ...native.session(), playbackEpoch: anchor.epoch, sequence: 1, data: btoa('native'), ...extra });
     act(() => frame({}));
     const image = container.querySelector('img');
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+    await loadImage(image);
     const accepted = image.src;
     act(() => frame({ data: btoa('duplicate') }));
     expect(image.src).toBe(accepted);

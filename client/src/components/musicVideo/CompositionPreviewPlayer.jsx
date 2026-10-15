@@ -287,7 +287,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
       <div title={title} className={`overflow-hidden rounded border border-port-border bg-black mx-auto ${collapsed ? 'max-xl:hidden' : ''}`}
         style={{ aspectRatio: aspect, maxHeight: '70vh', maxWidth: '100%' }}>
         {preview.frameUrl ? (
-          <img alt="" src={preview.frameUrl} className="h-full w-full object-contain" />
+          <img ref={preview.imageRef} onLoad={preview.onFrameLoad} alt="" src={preview.frameUrl} className="h-full w-full object-contain" />
         ) : (
           <p className="p-3 text-xs text-port-text-muted">{failed ? '' : wanted ? 'Building the preview…' : ''}</p>
         )}
@@ -311,7 +311,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
           maxSec={duration || null}
           onSeek={stopPlayback}
           disabled={!preview.ready || failed}
-          capture={() => (preview.frameUrl ? fetch(preview.frameUrl).then((res) => res.blob()) : Promise.resolve(null))}
+          capture={preview.captureFrame}
           label={[project.name, shotIndex ? `Shot ${shotIndex}` : null].filter(Boolean).join(' · ')}
           keys
         />

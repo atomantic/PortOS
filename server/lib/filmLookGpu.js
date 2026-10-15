@@ -422,7 +422,6 @@ void main() {
 
   let width = 0, height = 0;
   let pool = [];
-  let sourceTexture = null;
   let uploadTexture = null;
   let output = null;
   const tableCache = new Map();

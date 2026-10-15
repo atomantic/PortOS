@@ -2,16 +2,17 @@
  * Optional document playback. Exact seeks and native capture lifetimes share
  * one queue; only the page's cooperative producer advances playing frames.
  */
-import { generatedPreviewPlaybackSchema as playbackSchema } from '../../lib/generatedPreviewPlaybackSchema.js';
+import { AUTHORED_PREVIEW_HANDSHAKE_MS, AUTHORED_PREVIEW_PLAYBACK_TARGET, authoredPreviewPlaybackReplies, generatedPreviewPlaybackSchema as playbackSchema } from '../../lib/generatedPreviewPlaybackSchema.js';
 export { playbackSchema };
 
+const AUTHORED_METHOD_MS = { clock: AUTHORED_PREVIEW_HANDSHAKE_MS, prepare: 3000, play: 1500, sync: 1500, pause: 3000 };
 const DRAIN_MS = 1500;
 const START_FENCE_MS = 750;
-const nativeCall = (page, method, args = {}) => page.evaluate(
+const canonicalCall = (page, method, args = {}) => page.evaluate(
   `globalThis.portosComposition.previewPlayback.${method}(${JSON.stringify(args)})`,
 );
 
-export function createCooperativePlayback(session, { seekPage, capture, emitFrame, fail, closeSession }) {
+export function createCooperativePlayback(session, { seekPage, capture, emitFrame, fail, closeSession, authored = false }) {
   let tail = Promise.resolve();
   let intent = 0;
   let epoch = 0;
@@ -26,6 +27,8 @@ export function createCooperativePlayback(session, { seekPage, capture, emitFram
   let controlRevision = 0;
   let exactBarrier = 0;
   let resyncEpoch = null;
+  let lastClock = -1;
+  const pendingCalls = new Set();
 
   const enqueue = (operation) => {
     const result = tail.catch(() => {}).then(() => closed ? undefined : operation());
@@ -45,6 +48,54 @@ export function createCooperativePlayback(session, { seekPage, capture, emitFram
     console.error(`❌ Cooperative preview failed: ${error?.message || error}`);
     fail(session.socket, { requestId: session.requestId, sessionId: session.id, code: 'PREVIEW_PLAYBACK_FAILED', message: 'Live preview stopped. Retry the preview to continue.' });
     closeSession(session.id, 'playback-failed').catch(() => {});
+  };
+
+  const nativeCall = async (method, args = {}) => {
+    if (!authored) return canonicalCall(session.page, method, args);
+    if (closed || session.closed) throw new Error('Preview closed');
+    const startedAt = performance.now();
+    const timeoutMs = AUTHORED_METHOD_MS[method];
+    let timer;
+    let rejectClosed;
+    const canceled = new Promise((_, reject) => { rejectClosed = reject; });
+    pendingCalls.add(rejectClosed);
+    const invocation = `globalThis.${AUTHORED_PREVIEW_PLAYBACK_TARGET}.${method}(${JSON.stringify(args)})`;
+    // CDP awaits returned Promises, so enforce the synchronous clock contract
+    // inside the renderer before the transport can assimilate a thenable.
+    const source = method === 'clock'
+      ? `(() => { const value = ${invocation}; if (value && typeof value.then === 'function') throw new Error('Authored preview clock must be synchronous'); return value; })()`
+      : invocation;
+    try {
+      const value = await Promise.race([
+        Promise.resolve().then(() => {
+          if (closed || session.closed) throw new Error('Preview closed');
+          return session.page.evaluate(source);
+        }),
+        canceled,
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`Authored preview ${method} timed out`)), timeoutMs); }),
+      ]);
+      // Overdue timers can run after a CDP response microtask. Elapsed time is
+      // authoritative even when the response wins that event-loop race.
+      if (performance.now() - startedAt >= timeoutMs) throw new Error(`Authored preview ${method} timed out`);
+      const parsed = authoredPreviewPlaybackReplies[method].safeParse(value);
+      if (!parsed.success) throw new Error(`Authored preview ${method} returned an invalid response`);
+      const result = parsed.data;
+      if (method === 'clock') {
+        if (result < lastClock) throw new Error('Authored preview clock regressed');
+        lastClock = result;
+      } else if (result.epoch !== args.epoch || ('sequence' in args && result.sequence !== args.sequence) || (method === 'prepare' && result.t !== args.t)) {
+        throw new Error(`Authored preview ${method} response did not match its request`);
+      }
+      return result;
+    } catch (error) {
+      // A timed-out author Promise is still running. Close before any queued
+      // exact seek or control can reuse that uncertain page.
+      terminate(error);
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      pendingCalls.delete(rejectClosed);
+    }
   };
 
   async function stopStream() {
@@ -76,7 +127,7 @@ export function createCooperativePlayback(session, { seekPage, capture, emitFram
   async function quiesce() {
     gate();
     if (stream) stream.draining = true;
-    await nativeCall(session.page, 'pause', { epoch });
+    await nativeCall('pause', { epoch });
     await stopStream();
   }
 
@@ -168,7 +219,7 @@ export function createCooperativePlayback(session, { seekPage, capture, emitFram
   const handle = (input) => {
     if (input.requestId !== session.requestId) return Promise.resolve();
     if (input.action === 'clock') return enqueue(async () => {
-      const workerTime = await nativeCall(session.page, 'clock');
+      const workerTime = await nativeCall('clock');
       reply({ action: 'clock', probeId: input.probeId, clientTime: input.clientTime, workerTime });
     });
     if (input.action === 'pause') {
@@ -194,7 +245,7 @@ export function createCooperativePlayback(session, { seekPage, capture, emitFram
         if (current !== intent) return;
         await seekPage(session, input.t, false);
         if (current !== intent) return;
-        const prepared = await nativeCall(session.page, 'prepare', { epoch: input.epoch, t: input.t });
+        const prepared = await nativeCall('prepare', { epoch: input.epoch, ...(authored ? { sequence: input.sequence } : {}), t: input.t });
         if (current !== intent || revision !== controlRevision || prepared?.status === 'superseded') return;
         const data = await capture(session.page);
         if (current !== intent || revision !== controlRevision || closed) return;
@@ -214,9 +265,9 @@ export function createCooperativePlayback(session, { seekPage, capture, emitFram
       if (input.action === 'play') {
         if (mode !== 'prepared') return;
         mode = 'starting';
-        const result = await nativeCall(session.page, 'play', { epoch: input.epoch, t: input.t, workerTime: input.workerTime, sequence: input.sequence });
+        const result = await nativeCall('play', { epoch: input.epoch, t: input.t, workerTime: input.workerTime, sequence: input.sequence });
         if (current !== intent || revision !== controlRevision || mode !== 'starting' || closed) return;
-        if (result?.status === 'resync-required') {
+        if (result?.status === 'resync-required' || authored && ['stale', 'superseded'].includes(result.status)) {
           beginClockResync('play', input.sequence);
           return;
         }
@@ -228,10 +279,10 @@ export function createCooperativePlayback(session, { seekPage, capture, emitFram
         if (stream) stream.forward = true;
         reply({ action: 'play', epoch, sequence: input.sequence, status: 'playing' });
       } else if (mode === 'playing') {
-        const result = await nativeCall(session.page, 'sync', { epoch: input.epoch, t: input.t, workerTime: input.workerTime, sequence: input.sequence });
+        const result = await nativeCall('sync', { epoch: input.epoch, t: input.t, workerTime: input.workerTime, sequence: input.sequence });
         if (current !== intent || revision !== controlRevision || mode !== 'playing' || closed) return;
         time = input.t;
-        if (result?.status === 'resync-required') {
+        if (result?.status === 'resync-required' || authored && result.status === 'stale') {
           beginClockResync('sync', input.sequence);
           return;
         }
@@ -285,6 +336,8 @@ export function createCooperativePlayback(session, { seekPage, capture, emitFram
       closed = true;
       intent += 1;
       gate();
+      for (const reject of pendingCalls) reject(new Error('Preview closed'));
+      pendingCalls.clear();
       if (stream) {
         clearTimeout(stream.timer);
         stream.rejectHeld?.(new Error('Preview closed'));

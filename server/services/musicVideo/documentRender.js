@@ -356,13 +356,20 @@ export async function openIsolatedDocumentPreview({ project, jobId, signal, onEv
   let staged;
   let page;
   let playbackAdapter;
+  let authoredDeclaration;
   try {
     const { adaptStagedDocumentPreview } = await import('./documentPreviewPlayback.js');
+    const { readAuthoredPreviewDeclaration, bindAuthoredPreviewPlayback } = await import('./authoredPreviewPlayback.js');
     staged = await stageMusicVideoComposition(plan.directory, jobId, musicVideoSongDocument(project), {
       prepare: async (dir) => {
+        authoredDeclaration = await readAuthoredPreviewDeclaration(dir, { scenes: data.scenes });
         await stageDocumentData(dir, data, media, signal);
         signal?.throwIfAborted();
-        playbackAdapter = await adaptStagedDocumentPreview(dir, { scenes: data.scenes });
+        // A declared producer owns its implementation. Never rewrite it through
+        // the canonical recognizer, including an unknown future declaration.
+        playbackAdapter = authoredDeclaration.declared
+          ? { adapted: false, producer: 'authored-v1', ...authoredDeclaration }
+          : await adaptStagedDocumentPreview(dir, { scenes: data.scenes });
       },
     });
     signal?.throwIfAborted();
@@ -377,7 +384,7 @@ export async function openIsolatedDocumentPreview({ project, jobId, signal, onEv
     });
     signal?.throwIfAborted();
     let playbackAvailable = false;
-    if (playbackAdapter?.adapted) {
+    if (playbackAdapter?.adapted || authoredDeclaration.supported) {
       let captureProtocolSupported = false;
       try {
         const version = await page.send('Browser.getVersion', {}, null);
@@ -396,6 +403,12 @@ export async function openIsolatedDocumentPreview({ project, jobId, signal, onEv
       playbackAdapter = { ...playbackAdapter, runtimeSupported, captureProtocolSupported,
         ...(!captureProtocolSupported ? { reason: 'unsupported-capture-protocol' }
           : !runtimeSupported ? { reason: 'unsupported-frame-callbacks' } : {}) };
+      if (playbackAvailable && authoredDeclaration.supported) {
+        const bound = await bindAuthoredPreviewPlayback(page);
+        signal?.throwIfAborted();
+        playbackAvailable = bound.supported;
+        playbackAdapter = { ...playbackAdapter, ...bound };
+      }
     }
     return {
       page, scratchRoot: staged.scratchRoot, playbackAdapter,

@@ -62,10 +62,30 @@ describe('CI client lint runner', () => {
   // The server has no other static check: a removed declaration (the `d is not
   // defined` storyboard crash) only fails when a test happens to run that line.
   it('lints the server tree and only selects the job for server code or its config', () => {
-    expect(SERVER_LINT_ARGS).not.toContain('--error-on-warnings');
+    expect(SERVER_LINT_ARGS).toContain('--error-on-warnings');
     expect(touchesServer(['server/services/a.js', 'docs/x.md'])).toBe(true);
     expect(touchesServer(['server/biome.jsonc'])).toBe(true);
     expect(touchesServer(['server/node_modules/x/index.js', 'client/src/a.js', 'server/README.md'])).toBe(false);
+  });
+
+  it.skipIf(!existsSync(BIOME_BIN))('fails server lint for unused bindings and inherited warning diagnostics', () => {
+    const serverDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'server');
+    const dir = mkdtempSync(join(tmpdir(), 'biome-findings-'));
+    try {
+      cpSync(join(serverDir, 'biome.jsonc'), join(dir, 'biome.jsonc'));
+      writeFileSync(join(dir, 'app.js'), 'const unused = 1;\n');
+      const lint = () => spawnSync(process.execPath, [BIOME_BIN, ...SERVER_LINT_ARGS], { cwd: dir, encoding: 'utf8' });
+      const unused = lint();
+      expect(unused.status).not.toBe(0);
+      expect(unused.stderr).toContain('noUnusedVariables');
+      writeFileSync(join(dir, 'app.js'), 'export const used = 1;\n');
+      expect(lint().status).toBe(0);
+      writeFileSync(join(dir, 'biome.jsonc'), JSON.stringify({ linter: { rules: { preset: 'none', correctness: { noUnusedVariables: 'warn' } } } }));
+      writeFileSync(join(dir, 'app.js'), 'const unused = 1;\n');
+      expect(lint().status).not.toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   // Vitest's HTML reporter writes JS assets under server/coverage/; lint must
