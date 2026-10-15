@@ -877,7 +877,7 @@ function startLaneJob(job, { lane }) {
     archive.push(job);
     recomputeQueuePositions();
     archiveWrite = persist();
-    archiveWrite.catch((e) => console.log(`⚠️ mediaJobQueue persist on ${label} done failed: ${e.message}`));
+    archiveWrite.catch((e) => console.error(`❌ media-job [${job.id.slice(0, 8)}] mediaJobQueue persist on ${label} done failed: ${e.message}`));
     return archiveWrite;
   }
   let markRunning;
@@ -1035,7 +1035,7 @@ export function removeArchivedJob(jobId) {
     for (const c of sseEntry.clients) c.end();
     sseJobs.delete(jobId);
   }
-  persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on archive prune failed: ${e.message}`));
+  persist().catch((e) => console.error(`❌ media-job [${jobId.slice(0, 8)}] mediaJobQueue persist on archive prune failed: ${e.message}`));
   return true;
 }
 
@@ -1224,7 +1224,7 @@ async function runJobLifecycle(job, markDispatched, permit) {
     }
     if (!progressPersistDirty) return;
     progressPersistDirty = false;
-    await persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on progress failed: ${e.message}`));
+    await persist().catch((e) => console.error(`❌ media-job [${job.id.slice(0, 8)}] mediaJobQueue persist on progress failed: ${e.message}`));
   };
 
   const drainProgressPersist = async () => {
@@ -1381,7 +1381,7 @@ async function runJobLifecycle(job, markDispatched, permit) {
       const { remoteInputsDisposable, remoteRecoverySettlement, ...result } = payload;
       trackTerminalOperation(
         terminate('completed', (j) => { j.result = result; }, remoteInputsDisposable === true)
-          .catch((e) => console.log(`⚠️ media-job [${job.id.slice(0, 8)}] terminal handler failed: ${e.message}`)),
+          .catch((e) => console.error(`❌ media-job [${job.id.slice(0, 8)}] terminal handler failed: ${e.message}`)),
       );
     },
     failed: (payload) => {
@@ -1395,7 +1395,7 @@ async function runJobLifecycle(job, markDispatched, permit) {
             // is cleaned up still gets a meaningful terminal frame from the
             // archived state, rather than the generic "Canceled" fallback.
             j.error = 'Canceled while running';
-          }, payload.remoteInputsDisposable === true).catch((e) => console.log(`⚠️ media-job [${job.id.slice(0, 8)}] terminal handler failed: ${e.message}`)),
+          }, payload.remoteInputsDisposable === true).catch((e) => console.error(`❌ media-job [${job.id.slice(0, 8)}] terminal handler failed: ${e.message}`)),
         );
         return;
       }
@@ -1404,7 +1404,7 @@ async function runJobLifecycle(job, markDispatched, permit) {
           j.error = payload.error || 'unknown error';
           videoHolds.captureFailure(j, j.error, payload);
         }, payload.remoteInputsDisposable === true)
-          .catch((e) => console.log(`⚠️ media-job [${job.id.slice(0, 8)}] terminal handler failed: ${e.message}`)),
+          .catch((e) => console.error(`❌ media-job [${job.id.slice(0, 8)}] terminal handler failed: ${e.message}`)),
       );
     },
   };
