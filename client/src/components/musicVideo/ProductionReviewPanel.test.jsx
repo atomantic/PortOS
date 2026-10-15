@@ -348,13 +348,20 @@ describe('Approval problems with unsaved edits', () => {
     expect(screen.getByText('Second problem.')).toBeTruthy();
   });
 
-  it('points the storyboard card at the step checklist in one line instead of repeating its items', () => {
+  // Uniquely catches the lock card pointing at "items above" that live on another step.
+  it('names the open Plan items and their shots on the storyboard card, with a link to the Plan step', () => {
     const review = reviewFixture();
-    review.readiness.storyboard = { approved: false, problems: ['Cover the master with timed shots.', 'Second problem.'] };
-    render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="storyboard" />);
-    expect(screen.getByText('Finish the 2 open items above first.')).toBeTruthy();
-    expect(screen.queryByText(/Cover the master with timed shots\./)).toBeNull();
-    expect(screen.queryByText('Second problem.')).toBeNull();
+    const board = { ...project, composition: { mode: 'concat' }, scenes: [{ sceneId: 's-a', label: 'Verse', startSec: 0, endSec: 4 }, { sceneId: 's-b', label: 'Chorus', startSec: 3.5, endSec: 8 }] };
+    review.readiness.storyboard = { approved: false,
+      problems: ['Storyboard shots must cover the master without unintended gaps or overlaps.', 'Complete timing, action, staging, camera and transition for Chorus.'],
+      coverage: [{ sceneId: 's-b', issue: 'overlap', startSec: 3.5, endSec: 4 }], incompleteShots: [{ sceneId: 's-b', missing: ['camera'] }] };
+    const onNavigate = vi.fn();
+    render(<ProductionReviewPanel project={board} review={review} onOpenArtifact={vi.fn()} stage="storyboard" onNavigate={onNavigate} />);
+    expect(screen.getByText('Finish these 2 items on the Plan step first:')).toBeTruthy();
+    expect(screen.getByRole('list', { name: 'Open Plan items' }).textContent).toBe('Shot coverage (shot 2)Shot details (shot 2)');
+    expect(screen.queryByText(/without unintended gaps/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Open the Plan step' }));
+    expect(onNavigate).toHaveBeenCalledWith('board');
   });
 });
 
