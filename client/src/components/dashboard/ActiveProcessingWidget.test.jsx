@@ -106,6 +106,18 @@ describe('ActiveProcessingWidget', () => {
     expect(await screen.findByRole('link', { name: /Example App · update/ })).toHaveAttribute('href', '/apps');
   });
 
+  it('shows a render running outside the media queue, linked to its project', async () => {
+    mockGetSystemActivity.mockResolvedValue({
+      jobs: [],
+      extras: {},
+      agents: {},
+      renders: [{ kind: 'music-video-final', noun: 'music video render', to: '/music-video/mv-example', startedAt: new Date().toISOString() }],
+      activity: { idle: false, activeCount: 1, queuedCount: 0, blockers: [] },
+    });
+    renderWidget();
+    expect(await screen.findByRole('link', { name: /Music video render/ })).toHaveAttribute('href', '/music-video/mv-example');
+  });
+
   it('shows LLM model/source, elapsed time, a run deep link and Ollama residency', async () => {
     mockGetSystemActivity.mockResolvedValue({
       ...idle,

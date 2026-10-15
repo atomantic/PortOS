@@ -48,6 +48,7 @@ import {
 } from './segments.js';
 import { AUDIO_NORM, buildAudioBedMix, fmtSec } from './audioBedMix.js';
 import { historySourceDuration, resolveClipSpan, resolveStillFades, resolveAudioSpan } from '../../lib/videoTimelineSourceSpans.js';
+import { trackedRenderMap } from '../renderActivity.js';
 
 const PROJECTS_FILE = join(PATHS.data, 'video-projects.json');
 
@@ -61,7 +62,7 @@ const DEFAULT_CANVAS = { width: 1280, height: 720, fps: 24 };
 // can render in parallel; same project re-render returns 409 with the
 // existing jobId so the UI can attach SSE instead of getting a stale failure.
 const jobs = new Map();
-const projectRenders = new Map(); // projectId → jobId
+const projectRenders = trackedRenderMap('video-timeline', { noun: 'video timeline render', link: (projectId) => `/media/timeline/${encodeURIComponent(projectId)}` }); // projectId → jobId
 
 export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 

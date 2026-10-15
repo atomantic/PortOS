@@ -27,6 +27,7 @@ vi.mock('./render.js', async (importOriginal) => {
 
 const { planShotSegments, renderMissingSegments, stitchSegments } = await import('./shotSegments.js');
 const { buildMusicVideoFfmpegArgs } = await import('./render.js');
+const { musicVideoEvents } = await import('./events.js');
 
 afterAll(cleanupTempDataRoots);
 
@@ -66,7 +67,13 @@ describe.skipIf(!hasFfmpeg)('shot segments', () => {
   it('stitch to the picture the whole-film graph draws, with the song under it', async () => {
     const plan = await planShotSegments(project());
     expect(plan.segments.map((s) => [s.sceneId, s.frames])).toEqual([['a', 24], ['b', 24], ['c', 24]]);
+    // Each shot a final render finishes is announced, so an open shot card can play it mid-render.
+    const announced = [];
+    const onShot = (event) => announced.push(`${event.projectId}:${event.sceneId}:${event.state}`);
+    musicVideoEvents.on('shot-render', onShot);
     expect(await renderMissingSegments(plan, { concurrency: 2 })).toBe(0);
+    musicVideoEvents.off('shot-render', onShot);
+    expect(announced.sort()).toEqual(['a', 'b', 'c'].map((id) => `mv-segments-test:${id}:rendered`));
     const out = join(ROOT(), 'stitched.mp4');
     await stitchSegments(plan, out);
     expect(probe(out, 'stream=codec_type').sort()).toEqual(['audio', 'video']);

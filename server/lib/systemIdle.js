@@ -119,10 +119,16 @@ export function summarizeSystemActivity(snapshot) {
     add('app-operations', `${pluralize(appOperations.length, 'app operation')} running`, appOperations.length);
   }
 
-  // A music-video final render runs for an hour or more outside the media
-  // queue; a restart through it loses the render (#11580 follow-up).
-  const musicVideoRenders = Number(snapshot?.musicVideo?.renders) || 0;
-  if (musicVideoRenders > 0) add('music-video-render', `${pluralize(musicVideoRenders, 'music video render')} running`, musicVideoRenders);
+  // Renders outside the media queue (a music-video final render runs for an
+  // hour or more); a restart through one loses it (services/renderActivity.js).
+  const renders = Array.isArray(snapshot?.renders) ? snapshot.renders : [];
+  const renderKinds = new Map();
+  for (const render of renders) {
+    const kind = typeof render?.kind === 'string' ? render.kind : 'render';
+    const noun = typeof render?.noun === 'string' && render.noun ? render.noun : 'render';
+    renderKinds.set(kind, { noun, count: (renderKinds.get(kind)?.count || 0) + 1 });
+  }
+  for (const [kind, { noun, count }] of renderKinds) add(`render:${kind}`, `${pluralize(count, noun)} running`, count);
 
   if (snapshot?.update?.inProgress) add('update-in-progress', 'An update is already running', 1);
 
@@ -133,7 +139,7 @@ export function summarizeSystemActivity(snapshot) {
 
   const activeCount = jobs.filter((job) => job?.status === 'running').length
     + imageTo3d + activeAgents + activeLlmRuns + (mind?.thinking ? 1 : 0) + appOperations.length
-    + backupActive + musicVideoRenders;
+    + backupActive + renders.length;
   const queuedCount = jobs.filter((job) => job?.status === 'queued').length
     + queuedAgents + (Number(mind?.queued) || 0);
 

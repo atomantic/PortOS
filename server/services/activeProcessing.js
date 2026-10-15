@@ -8,7 +8,7 @@ import { getLoadedModels, getLastLoadedModelsError } from './ollamaManager.js';
 import { listActiveAppOperations } from './appOperations.js';
 import { readPersistentMindStateForSafetyCheck } from './cosState.js';
 import { isUpdateInProgress } from './updateChecker.js';
-import { countActiveMusicVideoRenders } from './musicVideo/renderActivity.js';
+import { listActiveRenders } from './renderActivity.js';
 import * as cos from './cos.js';
 
 // Lazy — NOT a static top-level import. `services/runner.js` and
@@ -173,7 +173,7 @@ export async function getSystemActivity({ includeOllama = false } = {}) {
     update: { inProgress: isUpdateInProgress() },
     // Final renders, draft excerpts and shot renders run their own ffmpeg and
     // browsers outside the media queue; an in-process count, no I/O.
-    musicVideo: { renders: countActiveMusicVideoRenders() },
+    renders: listActiveRenders(),
     // No trusted contract needed: an in-process flag with no I/O once loaded.
     backup: { inProgress: backupInProgress },
   };

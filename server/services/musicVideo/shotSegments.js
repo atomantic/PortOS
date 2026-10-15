@@ -41,7 +41,7 @@ import { nameShots } from './productionReview.js';
 import { getProject } from './projects.js';
 import { musicVideoEvents } from './events.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
-import { trackedRenderMap } from './renderActivity.js';
+import { trackedRenderMap } from '../renderActivity.js';
 
 export const SHOT_SEGMENT_DIR = 'music-video-segments';
 // Bump when a segment's encode changes in a way its key cannot see.
@@ -301,6 +301,8 @@ export async function renderMissingSegments(plan, { signal, onProgress, concurre
         await renderSegment(plan, segment, { signal, onProgress: (f) => { done.set(segment, f); report(); } });
         done.set(segment, 1);
         report();
+        // An open shot card flips to Rendered (and can play it) mid-render.
+        if (segment.sceneId) emitShotRender({ projectId: plan.project?.id, sceneId: segment.sceneId, state: 'rendered', progress: 1 });
       } catch (err) {
         if (signal?.aborted || err.code === 'CANCELED') throw err;
         failures.push(err);
@@ -412,7 +414,10 @@ function segmentStatus(plan) {
 }
 
 // One shot render per shot at a time: `${projectId}:${sceneId}` → { controller }.
-const shotJobs = trackedRenderMap('shot');
+const shotJobs = trackedRenderMap('music-video-shot', {
+  noun: 'music video shot render',
+  link: (key) => { const [projectId, sceneId] = key.split(':'); return `/music-video/${encodeURIComponent(projectId)}/scene/${encodeURIComponent(sceneId)}`; },
+});
 const shotJobKey = (projectId, sceneId) => `${projectId}:${sceneId}`;
 
 const emitShotRender = (payload) => musicVideoEvents.emit('shot-render', payload);

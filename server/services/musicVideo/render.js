@@ -64,12 +64,12 @@ import { cutEffectCuts, plannedTransitions, sceneCutEffect } from '../../lib/mus
 import { imageEffectGlitchFrames, mergeGlitchFrames, musicVideoTransitionFilter, sceneTransitions, shotGlitchFrames, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
 import { stillMoveForCamera } from '../../lib/cameraMovements.js';
 import { isEndFrameImageEffect, musicVideoImageEffectFilter, sceneImageEffect } from '../../lib/musicVideoImageEffects.js';
-import { trackedRenderMap } from './renderActivity.js';
+import { trackedRenderMap } from '../renderActivity.js';
 
 // Per-project render mutex (keyed by projectId so two projects can render in
 // parallel; same-project re-entry returns 409 with the live jobId for re-attach).
 const jobs = new Map();
-const projectRenders = trackedRenderMap('final');
+const projectRenders = trackedRenderMap('music-video-final', { noun: 'music video render', link: (key) => `/music-video/${encodeURIComponent(key)}` });
 // Reserved synchronously the instant a render is accepted, BEFORE the async
 // prep (ffmpeg/audio/clip resolution) — so a double-click or second client
 // can't pass the 409 check during that await window and spawn a duplicate.

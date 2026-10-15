@@ -107,13 +107,20 @@ describe('system idle verdict', () => {
 
   // Milder than the others (a wasted snapshot, not lost work), but a running
   // backup still gets killed mid-rsync by an unattended restart.
-  // A final render runs outside the media queue; restarting through it lost a
-  // multi-hour render to the unattended updater.
-  it('counts a running music-video render as activity', () => {
-    const verdict = summarizeSystemActivity(snapshot({ musicVideo: { renders: 1 } }));
+  // Renders outside the media queue; restarting through one lost a multi-hour
+  // music-video render to the unattended updater.
+  it('counts each kind of running render as activity', () => {
+    const verdict = summarizeSystemActivity(snapshot({ renders: [
+      { kind: 'music-video-final', noun: 'music video render' },
+      { kind: 'video-timeline', noun: 'video timeline render' },
+      { kind: 'video-timeline', noun: 'video timeline render' },
+    ] }));
     expect(verdict.idle).toBe(false);
-    expect(verdict.activeCount).toBe(1);
-    expect(verdict.blockers).toEqual([{ kind: 'music-video-render', label: '1 music video render running', count: 1 }]);
+    expect(verdict.activeCount).toBe(3);
+    expect(verdict.blockers).toEqual([
+      { kind: 'render:music-video-final', label: '1 music video render running', count: 1 },
+      { kind: 'render:video-timeline', label: '2 video timeline renders running', count: 2 },
+    ]);
   });
 
   it('counts a running backup snapshot as activity', () => {
