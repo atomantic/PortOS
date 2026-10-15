@@ -167,12 +167,6 @@ export async function syncPlaywright(account, cache, io, options = {}) {
     ...overrides
   });
 
-  // Helper: emit a batch of messages to the client in real-time
-  const emitMessages = (msgs) => {
-    if (!io || msgs.length === 0) return;
-    io.emit('messages:sync:message', { accountId: account.id, messages: msgs });
-  };
-
   for (let i = 0; i < extracted.length; i++) {
     const msg = extracted[i];
     const extId = browserSummaryId(msg.date || '', msg.from || '', msg.subject || '');
@@ -189,7 +183,6 @@ export async function syncPlaywright(account, cache, io, options = {}) {
         isUnread: msg.isUnread === null ? null : (msg.isUnread ?? false),
         isPinned: msg.isPinned, isFlagged: msg.isFlagged, isReplied: msg.isReplied }));
       messages.push(...batch);
-      emitMessages(batch);
       continue;
     }
 
@@ -214,16 +207,13 @@ export async function syncPlaywright(account, cache, io, options = {}) {
           browserSummaryExternalId: extId
         }));
         messages.push(...batch);
-        emitMessages(batch);
       } else {
         const m = buildMessage(msg, extId);
         messages.push(m);
-        emitMessages([m]);
       }
     } else {
       const m = buildMessage(msg, extId);
       messages.push(m);
-      emitMessages([m]);
     }
   }
 

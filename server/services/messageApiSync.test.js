@@ -66,12 +66,17 @@ describe('syncOutlookApi — malformed-body masquerade guard', () => {
   });
 
   it('certifies a full snapshot only after its last page', async () => {
+    const body = 'Synthetic body '.repeat(1000);
+    const io = { emit: vi.fn() };
     fetchWithTimeout.mockResolvedValueOnce(mockJsonResponse({
-      value: [{ Id: 'a' }], '@odata.nextLink': 'https://outlook.office.com/next',
+      value: [{ Id: 'a', Body: { Content: body } }], '@odata.nextLink': 'https://outlook.office.com/next',
     })).mockResolvedValueOnce(mockJsonResponse({ value: [{ Id: 'b' }] }));
-    const result = await syncOutlookApi(ACCOUNT, {}, null, { mode: 'full' });
+    const result = await syncOutlookApi(ACCOUNT, {}, io, { mode: 'full' });
     expect(result.messages).toHaveLength(2);
     expect(result.inboxComplete).toBe(true);
+    expect(result.messages[0].bodyText).toBe(body);
+    expect(io.emit.mock.calls.map(([event]) => event)).toEqual(['messages:sync:progress', 'messages:sync:progress']);
+    expect(JSON.stringify(io.emit.mock.calls)).not.toContain(body);
   });
 
   it('merges valid rows without certifying malformed membership', async () => {

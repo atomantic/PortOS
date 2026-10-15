@@ -130,11 +130,6 @@ export async function syncOutlookApi(account, cache, io, options = {}) {
     if (messages.length >= maxMessages) break;
   }
 
-  // Emit messages in real-time
-  if (io && messages.length > 0) {
-    io.emit('messages:sync:message', { accountId: account.id, messages });
-  }
-
   console.log(`📧 API sync complete: ${messages.length} messages fetched in ${page} page(s)`);
   return { messages, inboxComplete: mode === 'full' && !url && validMembership, status: 'success', syncMethod: 'api' };
 }
