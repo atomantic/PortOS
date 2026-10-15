@@ -42,6 +42,7 @@ export const EXCLUSIVE_CAPTURE_TESTS = [
   'lib/filmLookGpu.browser.test.js',
   'services/htmlComposition/index.test.js',
   'services/musicVideo/documentRender.browser.test.js',
+  'services/musicVideo/documentTemplates/shared/lyricType.browser.test.js',
   'services/musicVideo/documentTemplates/shared/toonWorld.browser.test.js',
   'routes/musicVideoProductionReview.browser.test.js',
   'routes/musicVideoRichAuthoring.browser.test.js',
