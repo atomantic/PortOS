@@ -338,7 +338,8 @@ export async function renderMissingSegments(plan, { signal, onProgress, concurre
         if (signal?.aborted || err.code === 'CANCELED') throw err;
         done.set(segment, 0);
         report();
-        if (attempts.get(segment) < SEGMENT_ATTEMPTS) {
+        // Once a shot has failed for good the render has failed: no more retries.
+        if (!failures.length && attempts.get(segment) < SEGMENT_ATTEMPTS) {
           console.warn(`⚠️ ${err.message}; trying it again after the other shots`);
           queue.push(segment);
           continue;

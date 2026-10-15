@@ -39,6 +39,7 @@ const MAX_TARGETED_TEST_FILES = 125;
 // the gate is left out.
 export const BROWSER_SUITES = [
   'server/lib/filmLook.browser.test.js',
+  'server/lib/filmLookGpu.browser.test.js',
   'server/lib/musicVideoTitleCard.browser.test.js',
   'server/routes/musicVideoProductionReview.browser.test.js',
   'server/routes/musicVideoRichAuthoring.browser.test.js',

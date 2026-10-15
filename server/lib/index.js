@@ -845,6 +845,7 @@ export * from './musicVideoActionContract.js';
 export * from './musicVideoGrade.js';
 export * from './filmLook.js';
 export * from './filmLookValidation.js';
+export * from './filmLookGpu.js';
 export * from './musicVideoStatsOutro.js';
 export * from './musicVideoTitleCard.js';
 export * from './musicVideoDependencies.js';
