@@ -6,7 +6,7 @@
  */
 import { describe, it, expect, vi, afterAll, beforeAll } from 'vitest';
 import { execFileSync } from 'child_process';
-import { existsSync, mkdirSync } from 'fs';
+import { existsSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
@@ -25,7 +25,12 @@ vi.mock('./render.js', async (importOriginal) => {
   };
 });
 
-const { planShotSegments, renderMissingSegments, stitchSegments } = await import('./shotSegments.js');
+// The look pass draws in a browser; here it keeps the base picture, which is
+// enough to follow which look file each segment lands in.
+vi.mock('./filmLookFinish.js', () => ({ applyFilmLookFinish: vi.fn(async () => true) }));
+vi.mock('./projects.js', () => ({ getProject: vi.fn(async (id) => (id === fixture.project?.id ? fixture.project : null)) }));
+
+const { planShotSegments, renderMissingSegments, stitchSegments, pruneSegments, listFilmLooks, deleteFilmLook, buildRenderPreview } = await import('./shotSegments.js');
 const { buildMusicVideoFfmpegArgs } = await import('./render.js');
 const { musicVideoEvents } = await import('./events.js');
 
@@ -116,5 +121,43 @@ describe.skipIf(!hasFfmpeg)('shot segments', () => {
     // A shot set to a clean look skips the look pass under a looked video.
     const clean = await planShotSegments(project({ scenes: scenes.map((s) => (s.sceneId === 'c' ? { ...s, filmLook: { preset: 'none' } } : s)), filmLook: look }));
     expect(clean.segments[2].path).toBe(clean.segments[2].basePath);
+  }, 60000);
+
+  it('keeps each film look to swap back to, plays what is rendered so far, and deletes a look', async () => {
+    const lookA = { preset: 'vhs', grain: 0.3 };
+    const lookB = { preset: 'super8', grain: 0.6 };
+    fixture.project = project({ filmLook: lookA });
+    const planA = await planShotSegments(fixture.project);
+    await renderMissingSegments(planA, { concurrency: 2 });
+
+    const whole = await buildRenderPreview(fixture.project.id);
+    expect(whole).toMatchObject({ shots: 3, totalShots: 3, complete: true });
+    expect(whole.durationSec).toBeCloseTo(3, 5);
+    const wholePath = join(planA.dir, whole.name);
+    expect(probe(wholePath, 'stream=codec_type').sort()).toEqual(['audio', 'video']);
+
+    fixture.project = project({ filmLook: lookB });
+    const planB = await planShotSegments(fixture.project);
+    await renderMissingSegments(planB, { concurrency: 2 });
+    await pruneSegments(planB);
+    // The other look's files survive the prune: switching back only stitches.
+    expect(planA.segments.every((s) => existsSync(s.path))).toBe(true);
+    const listed = await listFilmLooks(fixture.project.id);
+    expect(listed.total).toBe(3);
+    expect(listed.looks.map((l) => [l.look.preset, l.current, l.rendered])).toEqual([['super8', true, 3], ['vhs', false, 3]]);
+
+    const left = await deleteFilmLook(fixture.project.id, listed.looks[1].id);
+    expect(left.looks.map((l) => l.look.preset)).toEqual(['super8']);
+    expect(planA.segments.some((s) => existsSync(s.path))).toBe(false);
+    expect(planB.segments.every((s) => existsSync(s.path))).toBe(true);
+
+    // A missing shot in the middle: the player stops before it.
+    rmSync(planB.segments[1].path);
+    const partial = await buildRenderPreview(fixture.project.id);
+    expect(partial).toMatchObject({ shots: 1, totalShots: 3, complete: false });
+    expect(partial.durationSec).toBeCloseTo(1, 5);
+    // Only the newest preview is kept.
+    expect(existsSync(wholePath)).toBe(false);
+    expect(probe(join(planB.dir, partial.name), 'stream=nb_read_frames')).toContain('24');
   }, 60000);
 });
