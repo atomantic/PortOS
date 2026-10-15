@@ -172,53 +172,9 @@ export async function localVideoSentPrompt({ prompt = '', negativePrompt, loraFi
   };
 }
 
-export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId, width = null, height = null, numFrames = null, fps = 24, steps, guidanceScale, seed, batchSize = 1, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, audioStartSec = null, audioConditioning = null, mode = null, imageStrength = null, i2vReferenceMode = null, loras = null, icReferencePaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, textEncoderId = null, speedProfileId = null, draftDecode = null, streamingMode = null, visualConditioning = null, hidden = false, keepExtendSource = false, displaySleep = null, jobId: providedJobId = null, promptAdditions = [] }) {
-  const sourceAudioProvenance = audioConditioning == null ? null : federatedSourceAudioSchema.parse(audioConditioning);
-  uploadedTempPaths = Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [];
-  if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
-  // Single-flight is now enforced by the mediaJobQueue worker upstream — only
-  // one job is dequeued at a time, so we don't need a BUSY guard here. Direct
-  // callers (legacy / tests) bypass the queue and would clobber the shared active process
-  // on concurrent calls; that's an explicit "don't do that" contract.
-
-  const { modelId: selectedModelId, model } = await resolveVideoModelSelection(modelId, { resolveModel: resolveVideoModel });
-  modelId = selectedModelId;
-  if (!model) throw new ServerError(`Unknown video model: ${modelId}`, { status: 400, code: 'VALIDATION_ERROR' });
-  validateVideoBatch({ batchSize, seed }, model);
-  if (!isHardwareCompatible(model.hardwareCompatibility)) {
-    throw new ServerError(
-      hardwareUnavailableReason(`Video model "${modelId}"`, model.hardwareCompatibility),
-      { status: 400, code: 'MODEL_HARDWARE_UNAVAILABLE' },
-    );
-  }
-  // Validate the mode contract before cache lookups, image resize, or staging
-  // work. Internal producers and persisted/retried jobs bypass route
-  // preparation, so silently dropping one of these inputs here would render a
-  // materially different video than the caller requested. Ungated runtimes
-  // (ltx2 / mlx_video) fall through untouched.
-  //
-  // Promote before checking: the route sets both fields, but a direct caller
-  // that only staged `uploadedTempPath` would otherwise pass the mode guard and
-  // then render text-only with its image dropped.
-  if (VIDEO_MODE_GATED_RUNTIMES.has(model.runtime)) sourceImagePath ||= uploadedTempPath;
-  assertRenderModeContract({
-    model,
-    mode,
-    sourceImagePath,
-    lastImagePath,
-    keyframes,
-    extendFromVideoPath,
-    audioFilePath,
-    audioStartSec,
-    icReferencePaths,
-  });
-  // Registry defaults are user-editable. Validate them at this internal-call
-  // boundary so an empty or malformed value cannot turn into a 0/NaN runner
-  // argument when the caller deliberately leaves the resolution unset.
-  ({ width, height } = resolveVideoDimensions(model, width, height));
-  numFrames = numFrames ?? model.defaultFrames ?? DEFAULT_NUM_FRAMES;
-  const frameCountError = wan22FrameCountError(model, numFrames);
-  if (frameCountError) throw frameCountError;
+// Resolve required render assets before staging media or acquiring GPU work.
+// Runtime-specific pin/fallback policies and dependency ordering stay explicit.
+async function resolveVideoModelAssets({ model, modelId, textEncoderId }) {
   let wanModelPath = null;
   const wanRequiredWeights = [];
   if (model.runtime === 'wan22' || model.runtime === 'wan22_cuda') {
@@ -311,6 +267,104 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
       configOverrides: textEncoderOption.configOverrides,
     };
   }
+  return { wanModelPath, wanRequiredWeights, fastvideoModelPath, ltxModelPath, ref2vaModelPath, resolvedTextEncoder };
+}
+
+// Preview-fidelity video decode (#5423). Every gate lives in
+// lib/videoDraftDecoders.js and RETURNS its reason; the render always
+// proceeds, on the full decoder, because a decode substitution only ever
+// makes a render cheaper. Resolved here rather than in the arg builder for
+// the same reason the substituted conditioner is: a missing download has to
+// be discovered before any GPU work, and the decision has to be recorded on
+// the history row.
+//
+// Two gates need I/O and so cannot live in the pure module: whether the
+// installed runner checkout is the revision the asset was verified against
+// (an older one ignores the flags, which would let a full decode report
+// itself as a draft), and whether the pinned files are actually in the HF
+// cache. Both are only probed when a draft decode was requested AND the model
+// declares one, so a full-decode render costs nothing extra.
+async function resolveRequestedDraftDecoder({ model, draftDecode, jobId }) {
+  let draftDecoder = null;
+  if (!isFullDecode(draftDecode)) {
+    const declared = model.draftDecoder;
+    const runtimeRevision = (declared && await isByovRuntimeCurrent(model.runtime))
+      ? byovRuntimeExpectedRevision(model.runtime)
+      : null;
+    // Only probed once the cheaper gates have passed — a model with no
+    // declaration, or a checkout at the wrong revision, never touches the cache.
+    const decoderPaths = (declared && runtimeRevision === declared.runtimeRevision)
+      ? await findCachedRepoFiles(declared.repo, declared.files, { revision: declared.revision })
+      : null;
+    const gateArgs = {
+      model,
+      models: getVideoModels(),
+      decodeId: draftDecode,
+      runtimeRevision,
+      assetCached: Array.isArray(decoderPaths) && decoderPaths.length > 0,
+    };
+    const resolved = resolveVideoDraftDecoder(gateArgs);
+    if (resolved) {
+      draftDecoder = { ...resolved, paths: decoderPaths };
+      console.log(`🩻 Draft decode "${resolved.id}" [${jobId.slice(0, 8)}] via ${resolved.label}`);
+    } else {
+      const declined = draftDecodeDeclineReason(gateArgs);
+      console.log(`⚠️ Draft decode declined [${jobId.slice(0, 8)}] ${declined?.code || 'UNKNOWN'}: ${declined?.message || 'rendering on the full decoder'}`);
+    }
+  }
+  return draftDecoder;
+}
+
+export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId, width = null, height = null, numFrames = null, fps = 24, steps, guidanceScale, seed, batchSize = 1, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, audioStartSec = null, audioConditioning = null, mode = null, imageStrength = null, i2vReferenceMode = null, loras = null, icReferencePaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, textEncoderId = null, speedProfileId = null, draftDecode = null, streamingMode = null, visualConditioning = null, hidden = false, keepExtendSource = false, displaySleep = null, jobId: providedJobId = null, promptAdditions = [] }) {
+  const sourceAudioProvenance = audioConditioning == null ? null : federatedSourceAudioSchema.parse(audioConditioning);
+  uploadedTempPaths = Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [];
+  if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
+  // Single-flight is now enforced by the mediaJobQueue worker upstream — only
+  // one job is dequeued at a time, so we don't need a BUSY guard here. Direct
+  // callers (legacy / tests) bypass the queue and would clobber the shared active process
+  // on concurrent calls; that's an explicit "don't do that" contract.
+
+  const { modelId: selectedModelId, model } = await resolveVideoModelSelection(modelId, { resolveModel: resolveVideoModel });
+  modelId = selectedModelId;
+  if (!model) throw new ServerError(`Unknown video model: ${modelId}`, { status: 400, code: 'VALIDATION_ERROR' });
+  validateVideoBatch({ batchSize, seed }, model);
+  if (!isHardwareCompatible(model.hardwareCompatibility)) {
+    throw new ServerError(
+      hardwareUnavailableReason(`Video model "${modelId}"`, model.hardwareCompatibility),
+      { status: 400, code: 'MODEL_HARDWARE_UNAVAILABLE' },
+    );
+  }
+  // Validate the mode contract before cache lookups, image resize, or staging
+  // work. Internal producers and persisted/retried jobs bypass route
+  // preparation, so silently dropping one of these inputs here would render a
+  // materially different video than the caller requested. Ungated runtimes
+  // (ltx2 / mlx_video) fall through untouched.
+  //
+  // Promote before checking: the route sets both fields, but a direct caller
+  // that only staged `uploadedTempPath` would otherwise pass the mode guard and
+  // then render text-only with its image dropped.
+  if (VIDEO_MODE_GATED_RUNTIMES.has(model.runtime)) sourceImagePath ||= uploadedTempPath;
+  assertRenderModeContract({
+    model,
+    mode,
+    sourceImagePath,
+    lastImagePath,
+    keyframes,
+    extendFromVideoPath,
+    audioFilePath,
+    audioStartSec,
+    icReferencePaths,
+  });
+  // Registry defaults are user-editable. Validate them at this internal-call
+  // boundary so an empty or malformed value cannot turn into a 0/NaN runner
+  // argument when the caller deliberately leaves the resolution unset.
+  ({ width, height } = resolveVideoDimensions(model, width, height));
+  numFrames = numFrames ?? model.defaultFrames ?? DEFAULT_NUM_FRAMES;
+  const frameCountError = wan22FrameCountError(model, numFrames);
+  if (frameCountError) throw frameCountError;
+  const {
+    wanModelPath, wanRequiredWeights, fastvideoModelPath, ltxModelPath, ref2vaModelPath, resolvedTextEncoder,
+  } = await resolveVideoModelAssets({ model, modelId, textEncoderId });
 
   // Only require the legacy mlx_video pythonPath when the chosen runtime
   // actually uses it. BYOV runtimes resolve their own venv path inside
@@ -421,47 +475,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   if (speedProfileDeclined) {
     console.log(`⚠️ Speed profile declined [${jobId.slice(0, 8)}] ${speedProfileDeclined.code}: ${speedProfileDeclined.message}`);
   }
-  // Preview-fidelity video decode (#5423). Every gate lives in
-  // lib/videoDraftDecoders.js and RETURNS its reason; the render always
-  // proceeds, on the full decoder, because a decode substitution only ever
-  // makes a render cheaper. Resolved here rather than in the arg builder for
-  // the same reason the substituted conditioner is: a missing download has to
-  // be discovered before any GPU work, and the decision has to be recorded on
-  // the history row.
-  //
-  // Two gates need I/O and so cannot live in the pure module: whether the
-  // installed runner checkout is the revision the asset was verified against
-  // (an older one ignores the flags, which would let a full decode report
-  // itself as a draft), and whether the pinned files are actually in the HF
-  // cache. Both are only probed when a draft decode was requested AND the model
-  // declares one, so a full-decode render costs nothing extra.
-  let draftDecoder = null;
-  if (!isFullDecode(draftDecode)) {
-    const declared = model.draftDecoder;
-    const runtimeRevision = (declared && await isByovRuntimeCurrent(model.runtime))
-      ? byovRuntimeExpectedRevision(model.runtime)
-      : null;
-    // Only probed once the cheaper gates have passed — a model with no
-    // declaration, or a checkout at the wrong revision, never touches the cache.
-    const decoderPaths = (declared && runtimeRevision === declared.runtimeRevision)
-      ? await findCachedRepoFiles(declared.repo, declared.files, { revision: declared.revision })
-      : null;
-    const gateArgs = {
-      model,
-      models: getVideoModels(),
-      decodeId: draftDecode,
-      runtimeRevision,
-      assetCached: Array.isArray(decoderPaths) && decoderPaths.length > 0,
-    };
-    const resolved = resolveVideoDraftDecoder(gateArgs);
-    if (resolved) {
-      draftDecoder = { ...resolved, paths: decoderPaths };
-      console.log(`🩻 Draft decode "${resolved.id}" [${jobId.slice(0, 8)}] via ${resolved.label}`);
-    } else {
-      const declined = draftDecodeDeclineReason(gateArgs);
-      console.log(`⚠️ Draft decode declined [${jobId.slice(0, 8)}] ${declined?.code || 'UNKNOWN'}: ${declined?.message || 'rendering on the full decoder'}`);
-    }
-  }
+  const draftDecoder = await resolveRequestedDraftDecoder({ model, draftDecode, jobId });
 
   const sampler = resolveVideoSampler({ model, steps, guidanceScale, speedProfile });
   let actualSteps = sampler.steps;
