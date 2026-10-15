@@ -42,6 +42,21 @@ const PR_REVIEWER_REASON_LABELS = {
   'security-guard-not-ready': "the local model-abuse classifier (Settings → Models → LLMs → Abuse Guard) isn't ready — finish or repair its setup, then try again",
 };
 
+// Maintenance also records ordinary queue waits in `reason`. Only these exact
+// server messages are routine; unfamiliar reasons must remain actionable.
+function maintenanceNeedsAttention(run) {
+  if (run.status === 'stopped') return run.reason !== 'stopped by the user';
+  if (run.status !== 'running') return false;
+  const active = run.active;
+  if (active?.status === 'blocked') return true;
+  if (!run.reason) return false;
+  if (active?.taskId && ['pending', 'in_progress'].includes(active.status)
+    && run.reason === `waiting for ${active.status.replace('_', ' ')} task ${active.taskId}`) return false;
+  if (active?.requestId && (run.reason === `waiting for request preparation ${active.requestId}`
+    || run.reason === `waiting for the CoS daemon to accept request ${active.requestId} (${active.taskType})`)) return false;
+  return true;
+}
+
 /**
  * Global subscriber that toasts when a user-initiated on-demand task run
  * produced no work. The server emits `cos:schedule:on-demand-empty` ONLY for
@@ -60,14 +75,34 @@ export function useOnDemandTaskToast() {
       const { current, total } = maintenanceRunProgress(run);
       const label = `Maintenance · ${current}/${total} · ${run.status}`;
       const signature = JSON.stringify([run.status, run.completed, run.active, run.reason]);
-      if (maintenanceStates.get(run.id) === signature) return;
-      maintenanceStates.set(run.id, signature);
-      if (maintenanceStates.size > 100) maintenanceStates.delete(maintenanceStates.keys().next().value);
-      if (run.status !== 'running') toast.dismiss(`maintenance-${run.id}`);
+      const previous = maintenanceStates.get(run.id);
+      if (previous?.signature === signature) return;
+      const attention = maintenanceNeedsAttention(run);
+      const attentionKey = attention ? JSON.stringify([run.status, run.active?.status === 'blocked', run.reason]) : null;
+      const state = { status: run.status, signature, attentionKey, submissionShown: previous?.submissionShown || false, toastId: previous?.toastId };
+      maintenanceStates.set(run.id, state);
+      // Bound settled history without forgetting a still-running submission or
+      // a dismissed hold: later progress must not resurrect either notice.
+      const settled = [...maintenanceStates].filter(([, entry]) => entry.status !== 'running' && !entry.attentionKey);
+      if (settled.length > 100) {
+        const [id, entry] = settled.find(([id]) => id !== run.id);
+        if (entry.toastId) toast.dismiss(entry.toastId);
+        maintenanceStates.delete(id);
+      }
+      if (attention && previous?.attentionKey === attentionKey) return;
+      if (run.status === 'running' && !attention) {
+        if (previous?.attentionKey) toast.dismiss(previous.toastId);
+        // This is a submission receipt, not the live run view. Replacing it on
+        // progress would restart Toast's timer or resurrect a dismissed notice.
+        if (state.submissionShown) return;
+        state.submissionShown = true;
+      }
       const toastId = run.status === 'running' ? `maintenance-${run.id}` : `maintenance-${run.id}-${run.updatedAt}`;
+      if (previous?.toastId && previous.toastId !== toastId) toast.dismiss(previous.toastId);
+      state.toastId = toastId;
       const onDismiss = () => toast.dismiss(toastId);
       toast(() => createElement(MaintenanceRunStatus, { run, onDismiss }), {
-        id: toastId, label, duration: run.status === 'running' ? Infinity : 8000,
+        id: toastId, label, duration: attention ? Infinity : run.status === 'running' ? 5000 : 8000,
       });
     };
     socket.on('cos:maintenance:updated', handleMaintenance);
@@ -192,6 +227,9 @@ export function useOnDemandTaskToast() {
       socket.off('cos:maintenance:updated', handleMaintenance);
       socket.off('cos:schedule:on-demand-empty', handleEmpty);
       socket.off('cos:schedule:on-demand-handled', handleHandled);
+      for (const state of maintenanceStates.values()) {
+        if (state.toastId) toast.dismiss(state.toastId);
+      }
       // Don't unsubscribe from cos — other components share the room.
     };
   }, []);
