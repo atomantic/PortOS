@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { chromium } from 'playwright-core';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 import { findFfmpeg, findFfprobe } from '../../lib/ffmpeg.js';
-import { _cleanupTestBrowser, _selectTestChrome, _waitForTestChrome, _testChromeCaptureArgs } from '../htmlComposition/testBrowserCleanup.js';
+import { _cleanupTestBrowser, _createTestArtifactsRoot, _selectTestChrome, _waitForTestChrome, _testChromeCaptureArgs } from '../htmlComposition/testBrowserCleanup.js';
 
 let endpoint;
 vi.mock('../browserService.js', () => ({ cdpRequest: path => fetch(`${endpoint}${path}`) }));
@@ -69,6 +69,7 @@ const manifest = {
 
 let proc;
 let browser;
+let artifacts;
 let projectId;
 
 describe.skipIf(!dbReady || !chrome || !ffmpeg || !ffprobe)('Production stages with real Chrome and ffmpeg', () => {
@@ -78,10 +79,11 @@ describe.skipIf(!dbReady || !chrome || !ffmpeg || !ffprobe)('Production stages w
     try {
       const ws = await _waitForTestChrome(proc, 20000, { source: selected.source, executable: chrome, profile });
       endpoint = new URL(ws).origin.replace('ws:', 'http:');
-      browser = await chromium.connectOverCDP(endpoint);
+      artifacts = _createTestArtifactsRoot();
+      browser = await chromium.connectOverCDP(endpoint, { artifactsDir: artifacts.path });
     } catch (error) {
       // Retain the owned handle for afterAll if termination itself fails.
-      await _cleanupTestBrowser({ browser, proc, cleanup: cleanupTempDataRoots, startupError: error });
+      await _cleanupTestBrowser({ browser, proc, artifacts, cleanup: cleanupTempDataRoots, startupError: error });
     }
     // Enclose the existing startup (20s), version probe (up to 3s), disconnect
     // (5s) and owned-child termination (10s) budgets without cutting off evidence.
@@ -89,7 +91,7 @@ describe.skipIf(!dbReady || !chrome || !ffmpeg || !ffprobe)('Production stages w
 
   afterAll(async () => {
     if (projectId) await query('DELETE FROM code_animation_projects WHERE id = $1', [projectId]);
-    await _cleanupTestBrowser({ browser, proc, cleanup: cleanupTempDataRoots });
+    await _cleanupTestBrowser({ browser, proc, artifacts, cleanup: cleanupTempDataRoots });
     await close();
   }, 20000);
 

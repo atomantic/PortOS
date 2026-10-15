@@ -18,7 +18,7 @@ vi.mock('../services/auth.js', () => ({ isAuthEnabled: async () => true, verifyP
 let endpoint;
 vi.mock('../services/browserService.js', () => ({ loadConfig: async () => ({ chromePath: chrome }), cdpRequest: path => fetch(`${endpoint}${path}`) }));
 const { findFfmpeg } = await import('../lib/ffmpeg.js');
-const { _testChromeCaptureArgs, _waitForTestChrome, _cleanupTestBrowser } = await import('../services/htmlComposition/testBrowserCleanup.js');
+const { _testChromeCaptureArgs, _waitForTestChrome, _cleanupTestBrowser, _createTestArtifactsRoot } = await import('../services/htmlComposition/testBrowserCleanup.js');
 const chrome = [process.env.CHROME_PATH, chromium.executablePath(), '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome'].find(p => p && existsSync(p));
 const ffmpeg = await findFfmpeg();
 // Server-only CI intentionally does not install the client workspace. This
@@ -36,9 +36,9 @@ try {
 // Vitest does not run afterAll when the whole suite is skipped.
 const canRun = browserSuiteCanRun('musicVideo browser suite', { Chrome: chrome, ffmpeg, 'client workspace dependencies': clientBundler }, { onUnavailable: cleanupTempDataRoots });
 
-let browser, proc, server;
+let browser, artifacts, proc, server;
 afterAll(async () => {
-  await _cleanupTestBrowser({ browser, proc, cleanup: () => {} });
+  await _cleanupTestBrowser({ browser, proc, artifacts, cleanup: () => {} });
   if (server) await new Promise(resolve => server.close(resolve));
   cleanupTempDataRoots();
   // A just-killed Chrome helper can recreate the data root after removal; CI's Linux run left one (#10312).
@@ -95,7 +95,8 @@ describe.skipIf(!canRun)('production review in a real browser (Chrome, ffmpeg an
     server = await new Promise(resolve => { const listener = app.listen(0, '127.0.0.1', () => resolve(listener)); });
     proc = spawn(chrome, _testChromeCaptureArgs(join(PATHS.data, 'test-chrome')), { stdio: ['ignore', 'ignore', 'pipe'] });
     endpoint = new URL(await _waitForTestChrome(proc)).origin.replace('ws:', 'http:');
-    browser = await chromium.connectOverCDP(endpoint);
+    artifacts = _createTestArtifactsRoot();
+    browser = await chromium.connectOverCDP(endpoint, { artifactsDir: artifacts.path });
     const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
     const errors = []; page.on('pageerror', e => errors.push(e.message));
     await page.goto(`http://127.0.0.1:${server.address().port}`);

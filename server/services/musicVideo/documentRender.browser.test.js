@@ -68,7 +68,7 @@ vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await imp
 }));
 
 const { findFfmpeg } = await import('../../lib/ffmpeg.js');
-const { _cleanupTestBrowser, _waitForTestChrome, _testChromeCaptureArgs } = await import('../htmlComposition/testBrowserCleanup.js');
+const { _cleanupTestBrowser, _createTestArtifactsRoot, _waitForTestChrome, _testChromeCaptureArgs } = await import('../htmlComposition/testBrowserCleanup.js');
 
 afterAll(() => { lifecycle.diagnostics.dispose(); cleanupTempDataRoots(); });
 
@@ -83,6 +83,7 @@ const canRun = browserSuiteCanRun('documentRender browser suite', { Chrome: chro
 describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
   let proc;
   let browser;
+  let artifacts;
   let PATHS, encodeDocumentComposition, prepareDocumentRender, documentRenderClock, importDocumentTemplate;
   let generateMixedMediaDocument, regenerateMixedMediaSection, acceptMixedMediaDocument, buildDocumentPreview, PREVIEW_MEDIA_BUDGET_BYTES, projects;
   beforeAll(async () => {
@@ -103,7 +104,8 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     proc = spawn(chrome, _testChromeCaptureArgs(profile), { stdio: ['ignore', 'ignore', 'pipe'] });
     const ws = await _waitForTestChrome(proc);
     endpoint = new URL(ws).origin.replace('ws:', 'http:');
-    browser = await chromium.connectOverCDP(endpoint);
+    artifacts = _createTestArtifactsRoot();
+    browser = await chromium.connectOverCDP(endpoint, { artifactsDir: artifacts.path });
   }, 30000);
   afterAll(async () => {
     try {
@@ -112,7 +114,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
         expect(owned.closed, `owned capture child closed before fixture teardown; ${lifecycle.diagnostics.describe(owned)}`).toBe(true);
         expect(existsSync(owned.profile), `owned capture profile removed before fixture teardown; ${lifecycle.diagnostics.describe(owned)}`).toBe(false);
       }
-    } finally { await _cleanupTestBrowser({ browser, proc, cleanup: () => {} }); }
+    } finally { await _cleanupTestBrowser({ browser, proc, artifacts, cleanup: () => {} }); }
   });
 
   // Uniquely catches dropped effect data, missing staged modules and preview/export curve drift.

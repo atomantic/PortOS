@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { chromium } from 'playwright-core';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 import { findFfmpeg, findFfprobe } from '../../lib/ffmpeg.js';
-import { _cleanupTestBrowser, _waitForTestChrome } from '../htmlComposition/testBrowserCleanup.js';
+import { _cleanupTestBrowser, _createTestArtifactsRoot, _waitForTestChrome } from '../htmlComposition/testBrowserCleanup.js';
 
 const state = vi.hoisted(() => ({ html: '' }));
 let endpoint;
@@ -104,6 +104,7 @@ window.renderFrame = (t) => {
 
 let proc;
 let browser;
+let artifacts;
 const decodeRaw = (input, extra = []) => execFileSync(ffmpeg, ['-v', 'error', '-i', input, ...extra, '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { maxBuffer: 80 * 1024 * 1024 });
 const meanAbsDiff = (a, b) => {
   let sum = 0;
@@ -118,16 +119,17 @@ describe.skipIf(!chrome || !ffmpeg || !ffprobe)('Code Animation frame-exact expo
     try {
       const ws = await _waitForTestChrome(proc);
       endpoint = new URL(ws).origin.replace('ws:', 'http:');
-      browser = await chromium.connectOverCDP(endpoint);
+      artifacts = _createTestArtifactsRoot();
+      browser = await chromium.connectOverCDP(endpoint, { artifactsDir: artifacts.path });
     } catch (error) {
       // Retain the owned handle for afterAll if termination itself fails.
-      await _cleanupTestBrowser({ browser, proc, cleanup: cleanupTempDataRoots, startupError: error });
+      await _cleanupTestBrowser({ browser, proc, artifacts, cleanup: cleanupTempDataRoots, startupError: error });
     }
     // Enclose the existing startup (20s), disconnect (5s) and owned-child
     // termination (10s) budgets without cutting off evidence.
   }, 40000);
 
-  afterAll(() => _cleanupTestBrowser({ browser, proc, cleanup: cleanupTempDataRoots }), 20000);
+  afterAll(() => _cleanupTestBrowser({ browser, proc, artifacts, cleanup: cleanupTempDataRoots }), 20000);
 
   it('exports duration × fps unique frames from a slow renderFrame, matching direct screenshots, as BT.709 H.264 with the controls hidden', async () => {
     state.html = FIXTURE;
