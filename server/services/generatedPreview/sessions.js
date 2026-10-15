@@ -426,7 +426,8 @@ async function startMusicVideo(session, input) {
   session.page = opened.page;
   session.scratchRoot = opened.scratchRoot;
   if (opened.playback?.version === 1) {
-    session.playback = createCooperativePlayback(session, { seekPage, capture, emitFrame, fail, closeSession });
+    session.playback = createCooperativePlayback(session, { seekPage, capture, emitFrame, fail, closeSession,
+      authored: opened.playback.producer === 'authored-v1' });
   }
   // The first frame is captured after this seek. Apply the live controls first
   // so that frame is already graded and titled.
