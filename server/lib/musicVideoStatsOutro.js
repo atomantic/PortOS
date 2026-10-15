@@ -1,9 +1,9 @@
 /**
  * Music Video — the cutting room floor outro: an optional closing scene that
- * plays after the song ends and tallies the human choices behind the video
- * (stills and clips made against the ones in the cut, takes rejected,
- * transitions, image effects, camera moves, lip-sync shots), over a floor of
- * the stills that did not make it. One record on the project
+ * plays after the song ends under the title "Human Directed" and tallies the
+ * work behind the video (every render reviewed, the images and videos
+ * generated against the ones used, the cuts, moves and effects placed), over
+ * a floor of the stills that did not make it. One record on the project
  * (`project.statsOutro`, null = off) turns it on and sets how long it runs;
  * it adds that time after the song and never shortens it.
  *
@@ -19,8 +19,8 @@
 
 export const STATS_OUTRO_LIMITS = Object.freeze({ durationMin: 4, durationMax: 20 });
 export const STATS_OUTRO_DEFAULTS = Object.freeze({ enabled: false, durationSec: 8 });
-/** How many unused stills lie on the floor behind the tally. */
-export const STATS_OUTRO_FLOOR_MAX = 14;
+/** How many unused stills are piled into the floor collage behind the tally. */
+export const STATS_OUTRO_FLOOR_MAX = 48;
 /** The fonts the scene draws in (bundled OFL faces, registered by each page). */
 export const STATS_OUTRO_FONTS = Object.freeze({
   head: Object.freeze({ family: 'MV Archivo', file: 'archivo-variable.woff2' }),
@@ -119,9 +119,10 @@ export function musicVideoOutroStats(project, { collectionItems = [] } = {}) {
  * module scope, only to each other by name. */
 
 /**
- * The tally's lines, in order: `{ label, value, accent? }`. Stills and clips
- * always show; a choice the director never made (no transitions, say) is left
- * out rather than shown as a zero. The last line is what was left on the floor.
+ * The tally's lines, in order: `{ label, value, choice?, accent? }`. A
+ * `choice` line counts calls the director made. The images and videos lines
+ * always show; cuts, moves and effects are left out when there are none. The
+ * last line is what was left on the floor.
  */
 function statsOutroRows(stats) {
   const n = (v) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.round(v) : 0);
@@ -129,18 +130,22 @@ function statsOutroRows(stats) {
   const stills = s.stills || {};
   const clips = s.clips || {};
   const rows = [
-    { label: 'Stills made', value: n(stills.made) },
-    { label: 'Clips made', value: n(clips.made) },
-    { label: 'Takes rejected', value: n(s.rejected), optional: true },
-    { label: 'Transitions placed', value: n(s.transitions), optional: true },
-    { label: 'Image effects', value: n(s.imageEffects), optional: true },
-    { label: 'Camera moves', value: n(s.cameraMoves), optional: true },
-    { label: 'Lip-sync shots', value: n(s.lipSyncs), optional: true },
-    { label: 'Shots in the cut', value: n(s.shots) },
-  ].filter((row) => !row.optional || row.value > 0).map(({ label, value }) => ({ label, value }));
+    { label: 'Renders reviewed', value: n(stills.made) + n(clips.made) },
+    { label: 'Images generated', value: n(stills.made) },
+    { label: 'Images used', value: n(stills.kept), choice: true },
+    { label: 'Videos generated', value: n(clips.made) },
+    { label: 'Videos used', value: n(clips.kept), choice: true },
+    { label: 'Cuts, moves & effects', value: n(s.transitions) + n(s.imageEffects) + n(s.cameraMoves) + n(s.lipSyncs), choice: true, optional: true },
+  ].filter((row) => !row.optional || row.value > 0).map(({ optional: _optional, ...row }) => row);
   const floor = Math.max(0, n(stills.made) - n(stills.kept)) + Math.max(0, n(clips.made) - n(clips.kept));
   rows.push({ label: 'Left on the floor', value: floor, accent: true });
   return rows;
+}
+
+/** The decisions the heading counts: every shot dreamed up, plus each `choice` line. */
+function statsOutroDecisions(stats) {
+  const shots = stats && typeof stats.shots === 'number' && stats.shots > 0 ? Math.round(stats.shots) : 0;
+  return shots + statsOutroRows(stats).reduce((sum, row) => sum + (row.choice ? row.value : 0), 0);
 }
 
 /**
@@ -171,24 +176,43 @@ function drawStatsOutro(ctx, { width, height, t, durationSec, stats, images = []
   ctx.fillStyle = floorGrad;
   ctx.fillRect(0, 0, width, height);
 
-  // Prints and film offcuts dropped on the floor, landing one after another.
-  const prints = Math.max(8, (stats && Array.isArray(stats.floorImages) ? stats.floorImages.length : 0));
-  for (let i = 0; i < prints; i++) {
-    const land = ease((t - 0.1 - i * 0.07) / 0.5);
-    if (land <= 0) continue;
-    const size = unit * (0.2 + hash(i, 1) * 0.1);
+  // The floor is a collage: prints and film offcuts piled edge to edge over the whole frame,
+  // dropping in one after another. A grid of overlapping, tilted prints leaves no floor showing,
+  // and a second, sparser layer on top makes it read as a pile rather than a wall.
+  const floorCount = stats && Array.isArray(stats.floorImages) ? stats.floorImages.length : 0;
+  const cell = unit * 0.22;
+  const cols = Math.ceil(width / cell) + 1;
+  const rowsN = Math.ceil(height / (cell * 0.8)) + 1;
+  const spots = [];
+  for (let r = 0; r < rowsN; r++) {
+    for (let c = 0; c < cols; c++) spots.push({ x: (c - 0.5 + (r % 2) * 0.5) * cell, y: (r - 0.5) * cell * 0.8, scale: 1.3 });
+  }
+  const base = spots.length;
+  for (let k = 0; k < Math.ceil(base / 3); k++) spots.push({ x: hash(k, 7) * width, y: hash(k, 8) * height, scale: 1.1 });
+  // Shuffled so the pile lands all over the frame rather than row by row.
+  const order = spots.map((_, i) => i).sort((a, b) => hash(a, 9) - hash(b, 9));
+  const landOrder = [...order.filter((i) => i < base), ...order.filter((i) => i >= base)];
+  const dropGap = 1.6 / Math.max(1, landOrder.length);
+  landOrder.forEach((spotIndex, i) => {
+    const land = ease((t - 0.05 - i * dropGap) / 0.35);
+    if (land <= 0) return;
+    const spot = spots[spotIndex];
+    const size = cell * spot.scale * (0.92 + hash(spotIndex, 1) * 0.2);
     const w = size * 1.25;
     const h = size;
-    const x = (((i * 0.618034) + hash(i, 2) * 0.2) % 1) * (width + w) - w / 2;
-    const y = (((i * 0.381966) + hash(i, 3) * 0.3) % 1) * (height + h) - h / 2 + (1 - land) * -unit * 0.05;
-    const drift = t * unit * 0.004 * (0.5 + hash(i, 4));
-    const angle = (hash(i, 5) - 0.5) * 0.7;
+    const x = spot.x + (hash(spotIndex, 2) - 0.5) * cell * 0.35;
+    const y = spot.y + (hash(spotIndex, 3) - 0.5) * cell * 0.3 + (1 - land) * -unit * 0.04;
+    const drift = t * unit * 0.002 * (0.5 + hash(spotIndex, 4));
+    const angle = (hash(spotIndex, 5) - 0.5) * 0.6;
     ctx.save();
     ctx.translate(x + drift, y);
     ctx.rotate(angle);
-    ctx.scale(1 + (1 - land) * 0.12, 1 + (1 - land) * 0.12);
-    ctx.globalAlpha = land * 0.85;
-    const img = images[i] || null;
+    ctx.scale(1 + (1 - land) * 0.15, 1 + (1 - land) * 0.15);
+    ctx.globalAlpha = land;
+    // A soft shadow under each print gives the pile its depth.
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+    ctx.fillRect(-w / 2 - size * 0.02, -h / 2 + size * 0.04, w + size * 0.1, h + size * 0.14);
+    const img = floorCount ? images[spotIndex % floorCount] || null : null;
     const iw = img ? img.naturalWidth || img.width : 0;
     const ih = img ? img.naturalHeight || img.height : 0;
     if (iw > 0 && ih > 0) {
@@ -215,7 +239,7 @@ function drawStatsOutro(ctx, { width, height, t, durationSec, stats, images = []
       ctx.fillRect(-w / 2 + w * 0.06, -h / 2 + hole * 2, w * 0.88, h - hole * 4);
     }
     ctx.restore();
-  }
+  });
   // The prints sit in shadow, under the tally.
   ctx.fillStyle = 'rgba(8, 6, 5, 0.5)';
   ctx.fillRect(0, 0, width, height);
@@ -233,14 +257,18 @@ function drawStatsOutro(ctx, { width, height, t, durationSec, stats, images = []
   const lineH = 1.5;
   const headScale = 1.45;
   // Fit the block's height first, then its widest line.
-  // Plate: padding, heading, a gap, the rows, a foot, padding (in units of the row size).
-  const blockUnits = pad + headScale + 0.6 + rows.length * lineH + 0.5 + pad;
+  // Plate: padding, heading, the decision line, a gap, the rows, a foot, padding (in units of the row size).
+  const blockUnits = pad + headScale + 1.95 + rows.length * lineH + 0.5 + pad;
   let px = safeH / blockUnits;
   const rowFont = (size, weight = 500) => `${weight} ${Math.floor(size * 100) / 100}px ${body}`;
   const headFont = (size) => `800 ${Math.floor(size * 100) / 100}px ${head}`;
-  const headText = 'THE CUTTING ROOM FLOOR';
+  const headText = 'HUMAN DIRECTED';
+  const decisions = statsOutroDecisions(stats);
+  const shots = stats && typeof stats.shots === 'number' && stats.shots > 0 ? Math.round(stats.shots) : 0;
+  const subText = (v) => `${fmt(v)} DECISIONS${shots ? ` · ${fmt(shots)} SHOTS` : ''}`;
   const widest = (size) => Math.max(
     measure(headText, headFont(size * headScale)) + size * pad * 2,
+    measure(subText(Math.max(decisions, 10000)), rowFont(size, 600)) + size * pad * 2,
     ...rows.map((row) => measure(row.label.toUpperCase(), rowFont(size)) + measure(fmt(Math.max(row.value, 1000)), rowFont(size, 600)) + size * (2 + pad * 2)),
   );
   const wide = widest(px);
@@ -262,9 +290,14 @@ function drawStatsOutro(ctx, { width, height, t, durationSec, stats, images = []
   ctx.fillStyle = '#f3ead7';
   const headY = top + px * pad + px * headScale;
   ctx.fillText(headText, width / 2, headY);
+  // Under it, every call the director made, counting up with the rows.
+  ctx.font = rowFont(px, 600);
+  ctx.fillStyle = '#ff8a4c';
+  const subY = headY + px * 1.25;
+  ctx.fillText(subText(decisions * ease((t - 0.9) / Math.max(1, D * 0.5))), width / 2, subY);
   // A rule under the heading.
   ctx.fillStyle = 'rgba(243, 196, 107, 0.7)';
-  ctx.fillRect(left + px * pad, headY + px * 0.45, plateW - px * pad * 2, Math.max(1, px * 0.06));
+  ctx.fillRect(left + px * pad, subY + px * 0.55, plateW - px * pad * 2, Math.max(1, px * 0.06));
   // Rows arrive one by one in the first half of the scene, each counting up to its number.
   const firstRow = 0.9;
   const stagger = Math.min(0.4, Math.max(0.12, (D * 0.5 - firstRow) / Math.max(1, rows.length)));
@@ -273,7 +306,7 @@ function drawStatsOutro(ctx, { width, height, t, durationSec, stats, images = []
     const show = ease((t - start) / 0.35);
     if (show <= 0) return;
     const counted = row.value * ease((t - start) / 0.9);
-    const y = headY + px * 0.6 + px * lineH * (i + 1) + (1 - show) * px * 0.4;
+    const y = subY + px * 0.7 + px * lineH * (i + 1) + (1 - show) * px * 0.4;
     ctx.globalAlpha = plateIn * show;
     if (row.accent) {
       ctx.fillStyle = 'rgba(255, 122, 61, 0.14)';
@@ -304,7 +337,7 @@ function drawStatsOutro(ctx, { width, height, t, durationSec, stats, images = []
   ctx.restore();
 }
 
-export { statsOutroRows, drawStatsOutro };
+export { statsOutroRows, statsOutroDecisions, drawStatsOutro };
 
 /**
  * The render page's script: draws the outro full-frame on a canvas and
@@ -317,6 +350,7 @@ export function statsOutroPageSource({ stats, imageSrcs = [], width, height, fps
   const json = (value) => JSON.stringify(value).replace(/</g, '\\u003c');
   return `(() => {
   ${statsOutroRows.toString()}
+  ${statsOutroDecisions.toString()}
   ${drawStatsOutro.toString()}
   const STATS = ${json(stats)};
   const SRCS = ${json(imageSrcs)};

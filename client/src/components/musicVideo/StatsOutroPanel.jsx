@@ -41,7 +41,7 @@ export default function StatsOutroPanel({ project, onEditLocal, onSave }) {
             </select>
           </div>
           <p className="min-w-0 flex-1 basis-48 text-xs text-port-text-muted">
-            Stills and clips made against the ones in the cut, takes rejected, transitions, effects, camera moves and lip-syncs, over the unused stills. Ending plays it in the player.
+            A “Human directed” card: renders reviewed, images and videos generated against the ones used, and cuts, moves and effects, over the unused stills. Ending plays it in the player.
           </p>
         </div>
       )}

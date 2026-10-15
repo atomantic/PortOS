@@ -42,7 +42,7 @@ describe('cutting room floor ending', () => {
     act(() => { audio.dispatchEvent(new Event('ended')); });
     expect(screen.getByTestId('animatic-stats-outro')).toBeTruthy();
     await waitFor(() => expect(getMusicVideoOutroStats).toHaveBeenCalledWith('p', { silent: true }));
-    expect(canvas.texts).toContain('THE CUTTING ROOM FLOOR');
+    expect(canvas.texts).toContain('HUMAN DIRECTED');
     fireEvent.play(audio);
     expect(screen.queryByTestId('animatic-stats-outro')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /Ending/ }));

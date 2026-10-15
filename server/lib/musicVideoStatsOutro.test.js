@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { STATS_OUTRO_FLOOR_MAX, musicVideoOutroStats, normalizeStatsOutro, statsOutroRows, statsOutroSeconds } from './musicVideoStatsOutro.js';
+import { STATS_OUTRO_FLOOR_MAX, musicVideoOutroStats, statsOutroDecisions, normalizeStatsOutro, statsOutroRows, statsOutroSeconds } from './musicVideoStatsOutro.js';
 
 describe('cutting room floor outro', () => {
   it('is off unless turned on, and its length stays inside its limits', () => {
@@ -44,17 +44,25 @@ describe('cutting room floor outro', () => {
       floorImages: ['bad.png', 'floor.png'],
     });
     const rows = statsOutroRows(stats);
-    expect(rows.at(-1)).toEqual({ label: 'Left on the floor', value: 4, accent: true });
-    expect(rows.map((row) => row.label)).toEqual(['Stills made', 'Clips made', 'Takes rejected', 'Transitions placed', 'Image effects',
-      'Camera moves', 'Lip-sync shots', 'Shots in the cut', 'Left on the floor']);
+    expect(rows).toEqual([
+      { label: 'Renders reviewed', value: 8 },
+      { label: 'Images generated', value: 5 },
+      { label: 'Images used', value: 3, choice: true },
+      { label: 'Videos generated', value: 3 },
+      { label: 'Videos used', value: 1, choice: true },
+      { label: 'Cuts, moves & effects', value: 5, choice: true },
+      { label: 'Left on the floor', value: 4, accent: true },
+    ]);
+    // Every shot dreamed up is a decision, then each still and clip used and each cut, move and effect.
+    expect(statsOutroDecisions(stats)).toBe(2 + 3 + 1 + 5);
   });
 
   it('leaves out the choices never made and spreads the floor over the whole pile', () => {
-    const collectionItems = Array.from({ length: 40 }, (_, i) => ({ kind: 'image', ref: `still-${String(i).padStart(2, '0')}.png` }));
+    const collectionItems = Array.from({ length: 120 }, (_, i) => ({ kind: 'image', ref: `still-${String(i).padStart(3, '0')}.png` }));
     const stats = musicVideoOutroStats({ scenes: [{ sceneId: 's' }] }, { collectionItems });
     expect(stats.floorImages).toHaveLength(STATS_OUTRO_FLOOR_MAX);
-    expect(stats.floorImages[0]).toBe('still-00.png');
-    expect(stats.floorImages.at(-1) > 'still-35.png').toBe(true);
-    expect(statsOutroRows(stats).map((row) => row.label)).toEqual(['Stills made', 'Clips made', 'Shots in the cut', 'Left on the floor']);
+    expect(stats.floorImages[0]).toBe('still-000.png');
+    expect(stats.floorImages.at(-1) > 'still-110.png').toBe(true);
+    expect(statsOutroRows(stats).map((row) => row.label)).toEqual(['Renders reviewed', 'Images generated', 'Images used', 'Videos generated', 'Videos used', 'Left on the floor']);
   });
 });

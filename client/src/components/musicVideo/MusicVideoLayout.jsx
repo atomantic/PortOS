@@ -84,7 +84,7 @@ function StepRail({ stages, stage, onStageChange, needsYouStage, notes }) {
 // From `xl` the preview is a sticky right column under the header. Below it,
 // it sits in the page above the step, one folded row until opened, rather than
 // a bar pinned over the content.
-const DOCK_CLASSES = 'min-w-0 max-xl:order-first max-xl:col-span-full xl:sticky xl:top-[calc(var(--mv-header-h,9rem)-0.75rem)] xl:max-h-[calc(100vh-var(--mv-header-h,9rem)-2rem)] xl:overflow-y-auto';
+const DOCK_CLASSES = 'min-w-0 max-xl:order-first max-xl:col-span-full xl:sticky xl:top-[calc(var(--mv-header-h,9rem)-0.75rem)] xl:max-h-[calc(var(--mv-scroll-h,100dvh)-var(--mv-header-h,9rem)-2rem)] xl:overflow-y-auto';
 
 /**
  * The Music Video project frame. A sticky header says where the project stands
@@ -130,10 +130,17 @@ export default function MusicVideoLayout({
     const header = headerRef.current;
     const root = rootRef.current;
     if (!header || !root || typeof ResizeObserver === 'undefined') return undefined;
-    const apply = () => root.style.setProperty('--mv-header-h', `${Math.round(header.getBoundingClientRect().height)}px`);
+    // The dock's height fits the page's scroll area, which is shorter than the window whenever
+    // the app shows a bar above it; sized to the window, the dock's last panel sat out of reach.
+    const scroller = root.closest('main');
+    const apply = () => {
+      root.style.setProperty('--mv-header-h', `${Math.round(header.getBoundingClientRect().height)}px`);
+      if (scroller) root.style.setProperty('--mv-scroll-h', `${scroller.clientHeight}px`);
+    };
     apply();
     const observer = new ResizeObserver(apply);
     observer.observe(header);
+    if (scroller) observer.observe(scroller);
     return () => observer.disconnect();
   }, []);
 
