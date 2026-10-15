@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import BoardStage from './BoardStage.jsx';
 import { ShotLockContext } from '../ShotLock.jsx';
@@ -10,6 +10,8 @@ vi.mock('../BeatTimeline.jsx', () => ({ default: () => null }));
 vi.mock('../ContactSheetButton.jsx', () => ({ default: () => null }));
 vi.mock('../TreatmentPanel.jsx', () => ({ default: () => null, treatmentSummary: () => '' }));
 vi.mock('../ProjectActionGroups.jsx', () => ({ PlanActions: () => null }));
+vi.mock('../../../services/apiMusicVideo.js', async (load) => ({ ...await load(),
+  getMusicVideoOutroStats: vi.fn(async () => ({ stats: { stills: { made: 30, kept: 12 }, clips: { made: 9, kept: 4 }, rejected: 5, shots: 3, transitions: 0, imageEffects: 0, cameraMoves: 0, lipSyncs: 0, floorImages: [] } })) }));
 
 const scene = (n, extra = {}) => ({ sceneId: `s${n}`, order: n - 1, label: `Part ${n}`, referenceImageId: 'f.png', videoHistoryId: 'v', startSec: (n - 1) * 3, endSec: n * 3, takes: [], ...extra });
 const board = (scenes, over = {}) => ({
@@ -118,5 +120,33 @@ describe('BoardStage scene cards', () => {
     unmount();
     view({ s1: 'locked', s2: 'open', s3: 'open' });
     expect(screen.getByRole('button', { name: 'Open Shot 2 · Verse' }).textContent).not.toContain('Takes to review');
+  });
+});
+
+describe('BoardStage ending', () => {
+  // Uniquely catches the ending after the song being unreachable from the board, where the shots are managed.
+  it('lists the ending after the last shot and opens its preview and settings there', async () => {
+    const scenes = [scene(1), scene(2)];
+    const saveProjectFields = vi.fn(async () => {});
+    const b = board(scenes, { editProjectLocal: vi.fn(), saveProjectFields });
+    // happy-dom paints no canvas; the scene's drawing is covered by StatsOutro.test.jsx.
+    const canvas = vi.spyOn(window.HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+    renderBoard(b, '/?scenes=all');
+    const thumbs = screen.getByLabelText('Storyboard thumbnails').querySelectorAll(':scope > button');
+    const ending = thumbs[thumbs.length - 1];
+    expect(ending.getAttribute('aria-label')).toBe('Open the ending: cutting room floor');
+    expect(ending.textContent).toContain('Off');
+    fireEvent.click(ending);
+    expect(screen.getByTestId('search').textContent).toContain('ending=1');
+    const card = screen.getByRole('region', { name: 'Ending: cutting room floor' });
+    await waitFor(() => expect(card.textContent).toContain('Left on the floor'));
+    expect(card.textContent).toContain('Stills made30');
+    expect(screen.getByRole('button', { name: /Play 8s/ })).toBeTruthy();
+    fireEvent.click(screen.getByLabelText(/Off/));
+    expect(saveProjectFields).toHaveBeenCalledWith({ statsOutro: { enabled: true, durationSec: 8 } });
+    fireEvent.click(screen.getByRole('button', { name: 'Close the ending' }));
+    expect(screen.getByTestId('search').textContent).not.toContain('ending');
+    expect(screen.queryByRole('region', { name: 'Ending: cutting room floor' })).toBeNull();
+    canvas.mockRestore();
   });
 });

@@ -78,6 +78,7 @@ export { default as useMusicVideoModelSettings } from './useMusicVideoModelSetti
 export { default as useMusicVideoProduction } from './useMusicVideoProduction.js';
 export { default as useAutonomousMusicVideo } from './useAutonomousMusicVideo.js';
 export { default as useMusicVideoRenderJob } from './useMusicVideoRenderJob.js';
+export { default as useMusicVideoStatsOutro } from './useMusicVideoStatsOutro.js';
 export { default as useMusicVideoRevisions } from './useMusicVideoRevisions.js';
 export { default as useMusicVideoSceneMedia } from './useMusicVideoSceneMedia.js';
 export { default as useMusicVideoTakes } from './useMusicVideoTakes.js';

@@ -4,7 +4,8 @@ import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage.js';
 import { isFilmLookNeutral } from '../../lib/filmLook.js';
 import { Captions, Film, Scissors } from 'lucide-react';
 import { formatDurationSec } from '../../utils/formatters.js';
-import { getMusicVideoLyricOverlayPreview, getMusicVideoOutroStats } from '../../services/apiMusicVideo.js';
+import { getMusicVideoLyricOverlayPreview } from '../../services/apiMusicVideo.js';
+import useMusicVideoStatsOutro from '../../hooks/useMusicVideoStatsOutro.js';
 import { playthroughVersion } from './CompositionPreviewPlayer.jsx';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
@@ -427,53 +428,6 @@ function FadeBlack({ fade, audioRef, time }) {
 }
 
 /**
- * The cutting room floor outro after the song (lib/musicVideoStatsOutro.js):
- * when the song ends it plays for its own length on a clock of its own, and
- * Ending plays it straight away. Playing or seeking the song leaves it. The
- * tally is fetched each time it starts, so it counts the latest choices.
- * Returns `{ seconds, t, active, start, stop }` (`t` null while it is off screen).
- */
-function useStatsOutro({ project, audioRef }) {
-  const seconds = statsOutroSeconds(project.statsOutro);
-  const [t, setT] = useState(null);
-  const [stats, setStats] = useState(null);
-  const run = useRef({ handle: 0, startedAt: 0, generation: 0 });
-  const stop = useCallback(() => {
-    cancelAnimationFrame(run.current.handle);
-    run.current.generation += 1;
-    setT(null);
-  }, []);
-  const start = useCallback(() => {
-    if (!(seconds > 0)) return;
-    cancelAnimationFrame(run.current.handle);
-    const generation = ++run.current.generation;
-    run.current.startedAt = performance.now();
-    setT(0);
-    getMusicVideoOutroStats(project.id, { silent: true })
-      .then((next) => { if (run.current.generation === generation) setStats(next?.stats || null); })
-      .catch(() => {});
-    const tick = () => {
-      if (run.current.generation !== generation) return;
-      const elapsed = (performance.now() - run.current.startedAt) / 1000;
-      // It holds on its last (black) frame once it has run its length.
-      setT(Math.min(elapsed, seconds));
-      if (elapsed < seconds) run.current.handle = requestAnimationFrame(tick);
-    };
-    run.current.handle = requestAnimationFrame(tick);
-  }, [seconds, project.id]);
-  // A different video, or the outro turned off, leaves it.
-  useEffect(() => { stop(); setStats(null); }, [project.id, seconds, stop]);
-  useEffect(() => () => cancelAnimationFrame(run.current.handle), []);
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio || !(seconds > 0)) return undefined;
-    audio.addEventListener('ended', start);
-    return () => audio.removeEventListener('ended', start);
-  }, [audioRef, seconds, start]);
-  return { seconds, t, stats, active: t != null, start, stop };
-}
-
-/**
  * Something to watch before anything is rendered: the master song under the
  * storyboard, showing each shot's selected video clip (muted, in step with the
  * song) or else its selected frame (or, without either, its label, time and
@@ -497,7 +451,8 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   const scenes = project.scenes || [];
   const lyricsAvailable = hasTimedLyrics(project);
   const { overlay, failed } = useLyricOverlay({ project, enabled: lyricsAvailable && lyricsOn, audioRef, time });
-  const outro = useStatsOutro({ project, audioRef });
+  // The cutting room floor outro: it plays when the song ends, and Ending plays it straight away; playing or seeking the song leaves it.
+  const outro = useMusicVideoStatsOutro({ projectId: project.id, seconds: statsOutroSeconds(project.statsOutro), audioRef });
   const songEndSec = Number(project.audioAnalysis?.durationSec) || 0;
   useEffect(() => {
     if (!seekRequest || applied.current === seekRequest.n || !audioRef.current) return;
