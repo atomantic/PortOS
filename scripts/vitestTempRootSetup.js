@@ -3,7 +3,7 @@
  * redirects temp APIs before Vitest creates its module-transform cache.
  * The server's exclusive capture projects share this single global owner.
  */
-import { readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { lstatSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { OWNER_FILE, killTestBrowsersUnder } from './lib/vitestStaleRunRoots.js';
 
@@ -60,7 +60,10 @@ export function groupLeakPrefix(name) {
 export function isEffectivelyEmpty(path) {
   let stat;
   try {
-    stat = statSync(path);
+    // A leftover fixture can link outside the run root or back into itself.
+    // Inspect the link, never its target: following branching cycles can keep
+    // this synchronous scan busy indefinitely before cleanup gets a chance.
+    stat = lstatSync(path);
   } catch {
     return true;
   }
