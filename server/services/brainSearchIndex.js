@@ -18,9 +18,8 @@
  *
  * Only the fields a consumer actually reads (plus the ordering key) are
  * projected — the index holds no attachments, embeddings, or classification
- * payloads. A consumer that needs a *predicate* over a large body (the Daily
- * Log's `content`/`segments`) gets a derived boolean instead, so the body never
- * enters the cache.
+ * payloads. The Daily Log projects a body-presence predicate and a bounded
+ * summary, so full `content`/`segments` never enter the cache.
  *
  * FRESHNESS — three signal classes, all of them covered:
  *   1. `${type}:upserted` / `${type}:deleted` — the per-record events every
@@ -51,7 +50,7 @@ import { safeDate } from '../lib/fileUtils.js';
  *     node's label from `name || title` and drops archived records, while the
  *     edge-bearing graph views also need tags, status, and summary fields.
  * `journals` is graph-only (the Daily Log is not a unified-search source), and
- * projects no body — see `journalHasBody` below. `songs` (SongBook) is
+ * keeps only body presence and a 120-character summary. `songs` (SongBook) is
  * graph-only too, and its sheet body lives in `content.text` (up to 200k
  * chars of tab/ChordPro per song). The graph projection keeps only a string
  * `content` value, so the SongBook object never reaches the cache.
@@ -82,10 +81,8 @@ const PROJECTED_FIELDS = Object.freeze({
 });
 
 /**
- * Is this Daily Log entry non-empty? The graph only asks the question — it
- * never renders the answer's source — and a journal body is the largest record
- * in the brain, so the predicate is projected and `content`/`segments` are not.
- * Exported so `brainGraph`'s journal path applies the identical rule.
+ * Is this Daily Log entry non-empty? Segment-only entries belong in the graph
+ * even when their text summary is empty.
  */
 export const journalHasBody = (record) => !!(record?.content || record?.segments?.length);
 
@@ -100,7 +97,14 @@ const DERIVED_FIELDS = Object.freeze({
   admin: GRAPH_DERIVED_FIELDS,
   memories: GRAPH_DERIVED_FIELDS,
   songs: GRAPH_DERIVED_FIELDS,
-  journals: Object.freeze({ hasBody: journalHasBody }),
+  journals: Object.freeze({
+    hasBody: journalHasBody,
+    summary: record => {
+      const summary = stringContent(record)?.slice(0, 120) ?? '';
+      // A V8 substring can retain the entire journal body in this long-lived cache.
+      return summary.split('').join('');
+    },
+  }),
 });
 
 /**

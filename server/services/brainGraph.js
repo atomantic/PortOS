@@ -22,10 +22,9 @@
  * (issue #3507).
  */
 
-import * as brainStorage from './brainStorage.js';
 import * as memoryBackend from './memoryBackend.js';
 import { loadBridgeMap, bridgeKey } from './brainMemoryBridge.js';
-import { getBrainProjections, journalHasBody } from './brainSearchIndex.js';
+import { getBrainProjections } from './brainSearchIndex.js';
 import { getGoals } from './identity.js';
 
 const ENTITY_TYPES = ['people', 'projects', 'ideas', 'admin', 'memories', 'songs', 'threads'];
@@ -120,16 +119,16 @@ async function loadNodes() {
   }
 
   // Journals (Daily Log): non-empty dated entries as graph nodes
-  const journals = await brainStorage.getAll('journals').catch(() => []);
+  const journals = await getBrainProjections('journals', { ranked: false }).catch(() => []);
   for (const entry of journals) {
-    if (!journalHasBody(entry)) continue;
+    if (!entry.hasBody) continue;
     const date = journalDate(entry);
     if (!date) continue;
     nodes.push({
       id: date,
       brainType: 'journals',
       label: date,
-      summary: entry.content ? entry.content.slice(0, 120) : '',
+      summary: entry.summary,
       tags: [],
       importance: 0.4
     });
@@ -141,13 +140,9 @@ async function loadNodes() {
 /**
  * Lightweight index for the client-side search box — every node, no edges.
  *
- * Deliberately does NOT go through `loadNodes()`: that reads the full body of
- * every entity record and Daily Log entry only to throw the summaries and tags
- * away here. Instead it reads `brainSearchIndex`'s cached field projections, so
- * the endpoint costs an in-memory scan after the first call and never parses a
- * record body it doesn't render. Node set, labels, and order are identical to
- * the `loadNodes()` derivation — the label/skip rules are the shared helpers
- * above, and `ranked: false` keeps each store's natural order.
+ * Reads the same cached projections as `loadNodes()`, retaining only the
+ * search fields. Node set, labels, and order are identical — the label/skip
+ * rules are shared above, and `ranked: false` keeps each store's natural order.
  *
  * Goals still come from `getGoals()`: identity keeps them in ONE file, so
  * there is no per-record walk to avoid.

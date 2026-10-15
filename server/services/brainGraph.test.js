@@ -125,14 +125,33 @@ describe('getBrainGraphSearchIndex', () => {
   });
 
   it('reads each store once and serves repeat requests from the projections', async () => {
-    onlyType('people', [{ id: 'p1', name: 'A' }]);
+    let journals = [{ id: '2026-01-01', content: 'x'.repeat(5000) },
+      { id: '2026-01-02', content: '', segments: [{ text: 'Voice note' }] },
+      { id: '2026-01-03', content: '', segments: [] }];
+    brainStorage.getAll.mockImplementation(async type => type === 'journals' ? journals : []);
 
-    await getBrainGraphSearchIndex();
+    const [index, overview] = await Promise.all([getBrainGraphSearchIndex(), getBrainGraphOverview()]);
     // 7 entity types (incl. songs and threads) + journals, one scan each.
     expect(brainStorage.getAll).toHaveBeenCalledTimes(8);
+    expect(index.nodes.map(node => node.id)).toEqual(['2026-01-01', '2026-01-02']);
+    expect(overview.nodes.map(node => node.summary)).toEqual(['x'.repeat(120), '']);
 
-    await getBrainGraphSearchIndex();
+    const focused = await getBrainGraphNeighborhood({ focusId: '2026-01-01' });
+    expect(focused.nodes[0].summary).toBe('x'.repeat(120));
     expect(brainStorage.getAll).toHaveBeenCalledTimes(8);
+
+    journals = [{ id: '2026-01-01', content: 'Edited journal' }];
+    // Daily Log writes and peer applies use the silent-write invalidation.
+    brainStorage.brainEvents.emit('record:changed', { type: 'journals', id: '2026-01-01' });
+    const edited = await getBrainGraphOverview();
+    expect(edited.nodes.map(node => node.summary)).toEqual(['Edited journal']);
+    expect(brainStorage.getAll).toHaveBeenCalledTimes(9);
+
+    brainStorage.brainEvents.emit('journals:upserted', { record: { id: '2026-01-01', content: 'Updated again' } });
+    expect((await getBrainGraphNeighborhood({ focusId: '2026-01-01' })).nodes[0].summary).toBe('Updated again');
+    brainStorage.brainEvents.emit('journals:deleted', { id: '2026-01-01' });
+    expect((await getBrainGraphOverview()).nodes).toEqual([]);
+    expect(brainStorage.getAll).toHaveBeenCalledTimes(9);
   });
 
   it('keeps unrendered payloads and journal bodies out of the projections it reads', async () => {
@@ -166,10 +185,9 @@ describe('getBrainGraphSearchIndex', () => {
     const [song] = await getBrainProjections('songs', { ranked: false });
     expect(song.content).toBeUndefined();
 
-    // The Daily Log body is the biggest record in the brain — the graph only
-    // needs "is this day non-empty?", so the text must never reach the cache.
+    // Keep the graph tooltip, not the full Daily Log body or voice segments.
     expect(await getBrainProjections('journals', { ranked: false })).toEqual([
-      { id: '2026-01-01', date: undefined, hasBody: true }
+      { id: '2026-01-01', date: undefined, hasBody: true, summary: 'z'.repeat(120) }
     ]);
   });
 });
