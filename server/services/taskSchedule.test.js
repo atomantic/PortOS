@@ -2847,6 +2847,33 @@ describe('taskSchedule', () => {
     })
 
     describe('getScheduleStatus — appSchedules', () => {
+      it('rejects an unavailable registry and recovers with a valid empty registry', async () => {
+        mockSchedule({ tasks: { 'do-release': { type: 'on-demand', enabled: true, runAfter: [] } } })
+        getActiveApps.mockRejectedValueOnce(new Error('app registry unavailable'))
+
+        await expect(getScheduleStatus()).rejects.toThrow('app registry unavailable')
+
+        getActiveApps.mockResolvedValue([])
+        const task = (await getScheduleStatus()).tasks['do-release']
+        expect(task).toMatchObject({ totalAppCount: 0, enabledAppCount: 0, appOverrides: {}, appSchedules: [] })
+        expect(task.status).toMatchObject({ shouldRun: false, reason: 'on-demand-only' })
+      })
+
+      it('rejects unavailable app cadence instead of reporting a not-due row, then recovers', async () => {
+        await withRealCron()
+        getActiveApps.mockResolvedValue([{ id: 'app-1', name: 'Example App' }])
+        getAppTaskTypeOverrides.mockResolvedValue({ 'do-release': { enabled: true, interval: '15 9 * * *' } })
+        getAppTaskTypeInterval.mockRejectedValueOnce(new Error('app cadence unavailable'))
+        mockSchedule({ tasks: { 'do-release': { type: 'on-demand', enabled: true, runAfter: [] } } })
+
+        await expect(getScheduleStatus()).rejects.toThrow('app cadence unavailable')
+
+        getAppTaskTypeInterval.mockResolvedValue('15 9 * * *')
+        expect((await getScheduleStatus()).tasks['do-release'].appSchedules).toEqual([
+          expect.objectContaining({ appId: 'app-1', nextRunAt: '2026-01-01T17:15:00.000Z', reason: 'cron-cooldown' })
+        ])
+      })
+
       // vi.clearAllMocks() keeps a mockResolvedValue, so these cases restore the
       // apps.js factory defaults rather than leaking an app roster into the
       // suites that follow.

@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, cleanup, act, within } from '@testing-library/react';
+import { render, screen, cleanup, act, within, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 const api = {
@@ -67,6 +67,20 @@ beforeEach(() => vi.clearAllMocks());
 afterEach(cleanup);
 
 describe('WorkflowTab per-app schedules', () => {
+  it('keeps the last app schedule visible when refresh fails and clears the error after recovery', async () => {
+    await render_(APP_SCHEDULED);
+    api.getCosWorkflow.mockRejectedValueOnce(new Error('app registry unavailable'));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Refresh' })); });
+    expect(screen.getByText('app registry unavailable')).toBeVisible();
+    expect(screen.getByText('1 app · at 07:00')).toBeVisible();
+
+    api.getCosWorkflow.mockResolvedValueOnce(graph({ appSchedules: [], occurrences: [] }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Refresh' })); });
+    expect(screen.queryByText('app registry unavailable')).not.toBeInTheDocument();
+    expect(screen.getByText('Unpinned runner queue')).toBeVisible();
+    expect(api.getCosWorkflow).toHaveBeenLastCalledWith(168, { silent: true });
+  });
+
   it('gives an app-scheduled task a timeline track instead of the unpinned queue', async () => {
     await render_(APP_SCHEDULED);
 
