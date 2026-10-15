@@ -64,6 +64,61 @@ export const MANIFEST_RELATIVE_PATH = 'server/lib/promptStageCallSites.generated
 /** The command a failing drift test tells the author to run. */
 export const REGENERATE_COMMAND = 'node scripts/generate-prompt-stage-call-sites.js';
 
+/** Redacted, phase-level evidence, including when synchronous work overruns. */
+export function createStageScanDiagnostics({ budgetMs = Infinity, onProgress = () => {}, now = () => performance.now() } = {}) {
+  const started = now();
+  const initialCpu = process.cpuUsage();
+  const phaseMs = {};
+  let counts = { sources: 0, sourceBytes: 0, scannedSources: 0, nodes: 0 };
+  let lastReport = started;
+  let peakHeapBytes = 0;
+  let peakRssBytes = 0;
+  let phase = 'initialization';
+
+  const snapshot = () => {
+    const memory = process.memoryUsage();
+    peakHeapBytes = Math.max(peakHeapBytes, memory.heapUsed);
+    peakRssBytes = Math.max(peakRssBytes, memory.rss);
+    const cpu = process.cpuUsage(initialCpu);
+    return {
+      phase, ...counts, elapsedMs: Math.round(now() - started),
+      phaseMs: Object.fromEntries(Object.entries(phaseMs).map(([name, ms]) => [name, Math.round(ms)])),
+      cpuMs: Math.round((cpu.user + cpu.system) / 1000),
+      sampledPeakHeapMiB: Math.round(peakHeapBytes / 1024 / 1024),
+      sampledPeakRssMiB: Math.round(peakRssBytes / 1024 / 1024),
+    };
+  };
+  const report = () => {
+    lastReport = now();
+    const progress = snapshot();
+    onProgress(progress);
+    return progress;
+  };
+  return {
+    measure(name, operation) {
+      phase = name;
+      const start = now();
+      let result;
+      try {
+        result = operation();
+      } finally {
+        phaseMs[name] = (phaseMs[name] ?? 0) + now() - start;
+      }
+      if (now() - started > budgetMs) {
+        throw new Error(`Prompt-stage scan exceeded ${budgetMs}ms during ${name}: ${JSON.stringify(report())}`);
+      }
+      if (now() - lastReport >= 5000) report();
+      return result;
+    },
+    checkpoint(update) {
+      counts = { ...counts, ...update };
+      // Sample once per source, rather than retaining ASTs to measure them.
+      snapshot();
+    },
+    finish: report,
+  };
+}
+
 /**
  * Call shapes whose FIRST argument is a stage key. These are only used to
  * discover keys that the shipped `stage-config.json` doesn't list (a call site
@@ -119,49 +174,52 @@ export function readShippedStageKeys(repoRoot = REPO_ROOT) {
  * walk picks up `node_modules`, build output, and CoS-agent worktrees under
  * `data/`, which would make the manifest non-deterministic across installs.
  */
-export function collectServerSources(repoRoot = REPO_ROOT) {
-  const tracked = execFileSync('git', ['ls-files', '--', 'server'], {
+export function collectServerSources(repoRoot = REPO_ROOT, { diagnostics = createStageScanDiagnostics() } = {}) {
+  const tracked = diagnostics.measure('inventory', () => execFileSync('git', ['ls-files', '--', 'server'], {
     cwd: repoRoot,
     encoding: 'utf8',
     maxBuffer: 32 * 1024 * 1024,
   })
     .split('\n')
-    .filter((p) => p.endsWith('.js') && !p.endsWith('.test.js') && !EXCLUDED_SOURCES.has(p));
+    .filter((p) => p.endsWith('.js') && !p.endsWith('.test.js') && !EXCLUDED_SOURCES.has(p)));
 
-  return tracked.map((path) => ({ path, source: readFileSync(join(repoRoot, path), 'utf8') }));
+  diagnostics.checkpoint({ sources: tracked.length });
+  return diagnostics.measure('read', () => tracked.map((path) => ({ path, source: readFileSync(join(repoRoot, path), 'utf8') })));
 }
 
 /** Keys babel hangs off a node that are never child AST nodes worth walking. */
 const NON_AST_KEYS = new Set(['loc', 'leadingComments', 'trailingComments', 'innerComments', 'extra']);
 
-/** Every node in a parsed program, depth-first. Avoids a `@babel/traverse` dependency. */
-function* walkNodes(node) {
-  if (!node || typeof node !== 'object') return;
-  if (Array.isArray(node)) {
-    for (const child of node) yield* walkNodes(child);
-    return;
-  }
-  if (typeof node.type !== 'string') return;
-  yield node;
-  for (const key of Object.keys(node)) {
-    if (NON_AST_KEYS.has(key)) continue;
-    yield* walkNodes(node[key]);
+/** Visit each node once without materializing or retaining the corpus's ASTs. */
+function walkNodes(root, visit) {
+  const pending = [root];
+  while (pending.length) {
+    const node = pending.pop();
+    if (!node || typeof node !== 'object') continue;
+    if (Array.isArray(node)) {
+      for (const child of node) pending.push(child);
+      continue;
+    }
+    if (typeof node.type !== 'string') continue;
+    visit(node);
+    for (const key of Object.keys(node)) {
+      if (!NON_AST_KEYS.has(key) && typeof node[key] === 'object') pending.push(node[key]);
+    }
   }
 }
 
 /**
- * Parse one source into its node list.
+ * Parse one source; the caller drops the AST after extracting references.
  *
  * A source that will not parse throws, naming the file: contributing nothing
  * would silently drop every call site in it, which is the exact failure this
  * rewrite exists to end.
  */
-function parseNodes(path, source) {
+function parseSource(path, source) {
   // Outside any request lifecycle, and babel's message names a line/column but
   // not the file — which of 500 sources broke is the only useful half.
   try {
-    const ast = parse(source, { sourceType: 'module', plugins: ['jsx'] });
-    return [...walkNodes(ast.program)];
+    return parse(source, { sourceType: 'module', plugins: ['jsx'] }).program;
   } catch (err) {
     throw new Error(`${path}: ${err.message}`, { cause: err });
   }
@@ -183,40 +241,38 @@ function calleeName(callee) {
  * @returns {Record<string, string[]>} sorted keys, sorted paths, keys with zero
  *   references omitted
  */
-export function buildStageCallSites({ shippedStageKeys, sources }) {
-  const parsed = sources.map(({ path, source }) => ({ path, nodes: parseNodes(path, source) }));
-
+export function buildStageCallSites({ shippedStageKeys, sources, diagnostics = createStageScanDiagnostics() }) {
   // A call site may name a stage whose config entry was never shipped; those
   // keys still deserve protection if the user (or a migration) creates them.
   const keys = new Set(shippedStageKeys);
-  for (const { nodes } of parsed) {
-    for (const node of nodes) {
-      if (node.type !== 'CallExpression') continue;
-      if (!STAGE_CALL_NAMES.has(calleeName(node.callee))) continue;
-      const [first] = node.arguments;
-      if (first?.type === 'StringLiteral') keys.add(first.value);
-    }
-  }
-
-  const index = new Map();
-  const record = (key, path) => {
-    if (!index.has(key)) index.set(key, new Set());
-    index.get(key).add(path);
+  const literals = new Map();
+  const prefixes = new Map();
+  const record = (references, key, path) => {
+    if (!references.has(key)) references.set(key, new Set());
+    references.get(key).add(path);
   };
-
-  for (const { path, nodes } of parsed) {
-    for (const node of nodes) {
-      if (node.type === 'StringLiteral') {
-        if (keys.has(node.value)) record(node.value, path);
-        continue;
+  let nodes = 0;
+  let scannedSources = 0;
+  diagnostics.checkpoint({ sources: sources.length, sourceBytes: sources.reduce((n, { source }) => n + Buffer.byteLength(source), 0) });
+  for (const { path, source } of sources) {
+    const ast = diagnostics.measure('parse', () => parseSource(path, source));
+    diagnostics.measure('walk', () => walkNodes(ast, (node) => {
+      nodes += 1;
+      if (node.type === 'CallExpression' && STAGE_CALL_NAMES.has(calleeName(node.callee))) {
+        const [first] = node.arguments;
+        if (first?.type === 'StringLiteral') keys.add(first.value);
       }
-      if (node.type !== 'TemplateLiteral') continue;
+      if (node.type === 'StringLiteral') {
+        record(literals, node.value, path);
+        return;
+      }
+      if (node.type !== 'TemplateLiteral') return;
 
       // A template with no interpolation is just a string spelled differently.
       if (node.expressions.length === 0) {
         const only = node.quasis[0]?.value?.cooked;
-        if (only != null && keys.has(only)) record(only, path);
-        continue;
+        if (only != null) record(literals, only, path);
+        return;
       }
 
       // Rebuild the template's SHAPE — static chunks with a placeholder where
@@ -224,23 +280,35 @@ export function buildStageCallSites({ shippedStageKeys, sources }) {
       // immediately before a `${`, wherever in the template it appears.
       const shape = node.quasis.map((quasi) => quasi.value.raw).join('${}');
       for (const [, prefix] of shape.matchAll(TEMPLATE_PREFIX_RE)) {
-        for (const key of keys) {
-          if (key.length > prefix.length && key.startsWith(prefix)) record(key, path);
-        }
+        record(prefixes, prefix, path);
       }
-    }
+    }));
+    diagnostics.checkpoint({ nodes, scannedSources: ++scannedSources });
   }
 
-  return Object.fromEntries(
-    [...index.keys()].sort().map((key) => [key, [...index.get(key)].sort()]),
-  );
+  // Resolve only after discovering every key, including calls in later files.
+  // Keep strings/prefixes and paths between sources, never their AST nodes.
+  return diagnostics.measure('resolve', () => {
+    const index = new Map();
+    for (const key of keys) {
+      const paths = new Set(literals.get(key));
+      for (const [prefix, references] of prefixes) {
+        if (key.length > prefix.length && key.startsWith(prefix)) {
+          for (const path of references) paths.add(path);
+        }
+      }
+      if (paths.size) index.set(key, paths);
+    }
+    return Object.fromEntries([...index.keys()].sort().map((key) => [key, [...index.get(key)].sort()]));
+  });
 }
 
 /** Full generation pass against a checkout. */
-export function generateStageCallSites(repoRoot = REPO_ROOT) {
+export function generateStageCallSites(repoRoot = REPO_ROOT, { diagnostics = createStageScanDiagnostics() } = {}) {
   return buildStageCallSites({
-    shippedStageKeys: readShippedStageKeys(repoRoot),
-    sources: collectServerSources(repoRoot),
+    shippedStageKeys: diagnostics.measure('config', () => readShippedStageKeys(repoRoot)),
+    sources: collectServerSources(repoRoot, { diagnostics }),
+    diagnostics,
   });
 }
 
