@@ -116,6 +116,35 @@ beforeEach(() => {
   });
 });
 
+describe('CoS task collection selectors', () => {
+  it.each([
+    ['post', '/api/cos/tasks', { description: 'Example task', type: 'cos' }],
+    ['put', '/api/cos/tasks/sys-example', { description: 'Changed task', type: 'cos' }],
+    ['delete', '/api/cos/tasks/sys-example?type=cos', undefined],
+    ['delete', '/api/cos/tasks/sys-example?type=user&type=internal', undefined],
+  ])('rejects an invalid selector on %s %s before mutation', async (method, url, body) => {
+    const res = await request(buildApp())[method](url).send(body);
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(cos.addTask).not.toHaveBeenCalled();
+    expect(cos.updateTask).not.toHaveBeenCalled();
+    expect(cos.deleteTask).not.toHaveBeenCalled();
+    expect(cos.getTaskById).not.toHaveBeenCalled();
+    expect(await listUserActions()).toEqual([]);
+  });
+
+  it('deletes from the explicitly selected internal collection', async () => {
+    cos.getTaskById.mockResolvedValue({ id: 'sys-example', description: 'Example task' });
+    cos.deleteTask.mockResolvedValue({ success: true, taskId: 'sys-example' });
+
+    const res = await request(buildApp()).delete('/api/cos/tasks/sys-example?type=internal');
+
+    expect(res.status).toBe(200);
+    expect(cos.deleteTask).toHaveBeenCalledWith('sys-example', 'internal');
+  });
+});
+
 describe('POST /api/cos/tasks — targetInstanceId (#4520)', () => {
   it('passes a registry-known pin through to addTask', async () => {
     const res = await request(buildApp())

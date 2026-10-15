@@ -30,6 +30,7 @@ import {
   goalFidelityFalsePositiveSchema,
   validateRequest,
   cosTaskReorderBodySchema,
+  cosTaskDeleteQuerySchema,
   isPaginationRequested,
   parsePagination,
 } from '../lib/validation.js';
@@ -550,7 +551,7 @@ router.put('/tasks/:id', asyncHandler(async (req, res) => {
 // DELETE /api/cos/tasks/:id - Delete a task
 router.delete('/tasks/:id', asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { type = 'user' } = req.query;
+  const { type } = validateRequest(cosTaskDeleteQuerySchema, req.query);
 
   // Read the description BEFORE the delete: once the row is gone the ledger's
   // only handle on what was thrown away would be an opaque task id.
