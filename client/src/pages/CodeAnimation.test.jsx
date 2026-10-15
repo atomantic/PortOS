@@ -6,6 +6,7 @@ import { MemoryRouter, Route, Routes } from 'react-router';
 const socketHarness = vi.hoisted(() => ({ handlers: new Map(), emit: vi.fn() }));
 
 vi.mock('../services/socket', () => ({ default: {
+  connected: true,
   emit: (event, payload) => {
     socketHarness.emit(event, payload);
     if (event !== 'generated-preview:open') return;

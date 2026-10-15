@@ -5,20 +5,24 @@ import { MemoryRouter } from 'react-router';
 
 const socket = vi.hoisted(() => {
   const handlers = new Map();
-  const emit = vi.fn((event, payload) => {
+  const sessions = new Map();
+  const reply = (event, payload) => {
     if (event !== 'generated-preview:open') return;
+    const sessionId = `11111111-1111-4111-8111-${String(sessions.size + 1).padStart(12, '0')}`;
+    sessions.set(payload.requestId, sessionId);
     const opened = {
       requestId: payload.requestId,
-      sessionId: '11111111-1111-4111-8111-111111111111',
+      sessionId,
       durationSec: 5, fps: 30, width: 1920, height: 1080,
       audio: payload.withAudio ? 'ready' : 'none',
       revision: payload.revision,
     };
     for (const fn of handlers.get('generated-preview:opened') || []) fn(opened);
     for (const fn of handlers.get('generated-preview:frame') || []) fn({ ...opened, generation: 0, mime: 'image/jpeg', data: btoa('frame') });
-  });
+  };
   return {
-    emit,
+    emit: vi.fn(reply),
+    reply,
     on: vi.fn((event, cb) => {
       if (!handlers.has(event)) handlers.set(event, new Set());
       handlers.get(event).add(cb);
@@ -26,6 +30,7 @@ const socket = vi.hoisted(() => {
     off: vi.fn((event, cb) => { handlers.get(event)?.delete(cb); }),
     connected: true,
     __handlers: handlers,
+    __sessions: sessions,
   };
 });
 vi.mock('../../services/socket', () => ({ default: socket }));
@@ -77,11 +82,80 @@ describe('CodeAnimationPreview', () => {
   beforeEach(() => {
     globalThis.URL.createObjectURL = vi.fn(() => 'blob:recorded');
     globalThis.URL.revokeObjectURL = vi.fn();
-    socket.emit.mockClear();
+    socket.emit.mockReset();
+    socket.emit.mockImplementation(socket.reply);
     socket.__handlers.clear();
+    socket.__sessions.clear();
+    socket.connected = true;
   });
 
   afterEach(() => vi.unstubAllGlobals());
+
+  it('displays an early screencast frame without enabling recording before the session opens', async () => {
+    const user = userEvent.setup();
+    socket.emit.mockImplementation(() => {});
+    renderPreview();
+    const open = previewOpens()[0][1];
+    act(() => {
+      for (const fn of socket.__handlers.get('generated-preview:frame') || []) {
+        fn({ requestId: open.requestId, sessionId: '11111111-1111-4111-8111-000000000001', generation: 0, mime: 'image/jpeg', data: btoa('early frame') });
+      }
+    });
+    expect(screen.getByTitle('Code animation preview')).toBeInTheDocument();
+    const record = screen.getByRole('button', { name: /record \(real-time\)/i });
+    expect(record).toBeDisabled();
+    await user.click(record);
+    expect(socket.emit.mock.calls.filter(([event]) => event === 'generated-preview:command')).toHaveLength(0);
+    act(() => socket.reply('generated-preview:open', open));
+    expect(record).toBeEnabled();
+    await user.click(record);
+    expect(socket.emit).toHaveBeenLastCalledWith('generated-preview:command', expect.objectContaining({ requestId: open.requestId, sessionId: socket.__sessions.get(open.requestId), action: 'record' }));
+  });
+
+  it('stops an interrupted recording and reconnects without replaying its command', async () => {
+    const user = userEvent.setup();
+    renderPreview();
+    const record = await screen.findByRole('button', { name: /record \(real-time\)/i });
+    await waitFor(() => expect(record).toBeEnabled());
+    const oldOpen = previewOpens()[0][1];
+    await user.click(record);
+    expect(screen.getByRole('button', { name: /Recording 0s/ })).toBeDisabled();
+    act(() => {
+      socket.connected = false;
+      for (const fn of socket.__handlers.get('disconnect') || []) fn();
+    });
+    expect(record).toBeDisabled();
+    const sent = socket.emit.mock.calls.length;
+    await user.click(record);
+    expect(socket.emit.mock.calls).toHaveLength(sent);
+    act(() => {
+      socket.connected = true;
+      for (const fn of socket.__handlers.get('connect') || []) fn();
+    });
+    await waitFor(() => expect(record).toBeEnabled());
+    expect(previewOpens()).toHaveLength(2);
+    const nextOpen = previewOpens()[1][1];
+    expect(nextOpen.requestId).not.toBe(oldOpen.requestId);
+    expect(socket.emit.mock.calls.filter(([event]) => event === 'generated-preview:command')).toHaveLength(1);
+    act(() => {
+      for (const fn of socket.__handlers.get('generated-preview:recording') || []) {
+        fn({ requestId: oldOpen.requestId, sessionId: socket.__sessions.get(oldOpen.requestId), index: 0, count: 1, mime: 'video/webm', chunk: btoa('x') });
+      }
+    });
+    expect(screen.queryByLabelText('Recorded animation')).not.toBeInTheDocument();
+    await user.click(record);
+    expect(socket.emit).toHaveBeenLastCalledWith('generated-preview:command', expect.objectContaining({ requestId: nextOpen.requestId, action: 'record' }));
+    act(() => {
+      socket.connected = false;
+      for (const fn of socket.__handlers.get('disconnect') || []) fn();
+      socket.connected = true;
+      for (const fn of socket.__handlers.get('connect') || []) fn();
+    });
+    expect(record).toBeEnabled();
+    expect(previewOpens()).toHaveLength(3);
+    expect(new Set(socket.__sessions.values()).size).toBe(3);
+    expect(socket.emit.mock.calls.filter(([event]) => event === 'generated-preview:command')).toHaveLength(2);
+  });
 
   it.each([
     ['portrait', 1080, 1920, 608, 1080],
@@ -141,7 +215,7 @@ describe('CodeAnimationPreview', () => {
     const open = previewOpens().at(-1)[1];
     await act(async () => {
       for (const fn of socket.__handlers.get('generated-preview:event') || []) {
-        fn({ requestId: open.requestId, sessionId: '11111111-1111-4111-8111-111111111111', type: MESSAGES.ready, meta: { duration: 5 } });
+        fn({ requestId: open.requestId, sessionId: socket.__sessions.get(open.requestId), type: MESSAGES.ready, meta: { duration: 5 } });
       }
     });
     expect(screen.getByText('Animation ready')).toBeInTheDocument();
@@ -160,7 +234,7 @@ describe('CodeAnimationPreview', () => {
 
     await act(async () => {
       for (const fn of socket.__handlers.get('generated-preview:recording') || []) {
-        fn({ requestId: open.requestId, sessionId: '11111111-1111-4111-8111-111111111111', index: 0, count: 1, mime: 'video/webm', chunk: btoa('x') });
+        fn({ requestId: open.requestId, sessionId: socket.__sessions.get(open.requestId), index: 0, count: 1, mime: 'video/webm', chunk: btoa('x') });
       }
     });
     expect(screen.getByLabelText('Recorded animation')).toHaveAttribute('src', 'blob:recorded');
