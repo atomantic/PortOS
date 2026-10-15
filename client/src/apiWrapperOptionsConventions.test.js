@@ -42,11 +42,21 @@ import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { trackedSourceFiles } from './test/trackedFiles.js';
-import { blankCommentBodies, blankLiterals, matchBracket } from '../../server/lib/sourceScan.js';
+import { blankLiterals, matchBracket } from '../../server/lib/sourceScan.js';
 
 const CLIENT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SERVICE_FILE = /^src\/services\/api[^/]*\.js$/;
 const OPTIONS_NAMES = new Set(['options', 'opts']);
+
+// Opt-in stage evidence for workload-sensitive timeouts; normal runs stay quiet.
+const profile = process.env.PORTOS_PROFILE_API_WRAPPERS === '1' ? new Map() : null;
+const measure = (stage, run) => {
+  if (!profile) return run();
+  const start = performance.now();
+  const result = run();
+  profile.set(stage, (profile.get(stage) ?? 0) + performance.now() - start);
+  return result;
+};
 
 /** Split `text[start, end)` on top-level commas, using the blanked copy to find them. */
 function splitTopLevel(blanked, text, start, end) {
@@ -71,8 +81,7 @@ const WRAPPER_HEAD = /^[ \t]*export\s+(?:(?:async\s+)?function\s+(\w+)\s*\(|cons
 
 /** Exported function wrappers in one service file: `[{ name, params, text }]`. */
 export function wrapperExports(src) {
-  const code = blankCommentBodies(src);
-  const blanked = blankLiterals(src);
+  const { code, blanked } = measure('lex', () => blankLiterals(src, { includeCommentOnly: true }));
   const heads = [...blanked.matchAll(WRAPPER_HEAD)];
   const allExports = [...blanked.matchAll(/^[ \t]*export\s/gm)].map((m) => m.index);
   return heads.map((head) => {
@@ -122,8 +131,7 @@ const SILENT_KEY = /[{,]\s*silent\s*(?::|,|\})/;
  */
 export function silentCalls(src, names) {
   if (!src.includes('silent')) return [];
-  const code = blankCommentBodies(src);
-  const blanked = blankLiterals(src);
+  const { code, blanked } = measure('lex', () => blankLiterals(src, { includeCommentOnly: true }));
   const imported = new Set([...code.matchAll(/import\s*\{([^}]*)\}\s*from/g)]
     .flatMap((m) => m[1].split(',').map((part) => part.trim().split(/\s+as\s+/).pop())));
   const hits = [];
@@ -165,13 +173,17 @@ const read = (file) => ({ file, src: readFileSync(join(CLIENT_ROOT, file), 'utf8
 
 describe('silent options reach the API wrapper that reads them (#9951)', () => {
   it('has no { silent } passed to a position the wrapper drops', () => {
-    const tracked = trackedSourceFiles(CLIENT_ROOT);
+    profile?.clear();
+    const tracked = measure('discovery', () => trackedSourceFiles(CLIENT_ROOT));
     expect(tracked.length).toBeGreaterThan(100);
-    const wrappers = tracked.filter((file) => SERVICE_FILE.test(file)).flatMap((file) => wrapperExports(read(file).src));
+    const files = measure('read', () => tracked.map(read));
+    const wrappers = measure('wrappers', () => files.filter(({ file }) => SERVICE_FILE.test(file)).flatMap(({ src }) => wrapperExports(src)));
     // A broken parse would otherwise pass by judging nothing.
     expect(wrappers.length).toBeGreaterThan(500);
 
-    const violations = findDroppedSilent(tracked.map(read), wrappers);
+    const violations = measure('calls', () => findDroppedSilent(files, wrappers));
+    // Explicit profiling must survive CI's suppression of passing-test consoles.
+    if (profile) process.stdout.write(`⏱ API wrapper scan: files=${files.length}, wrappers=${wrappers.length}, ${[...profile].map(([stage, ms]) => `${stage}=${ms.toFixed(1)}ms`).join(', ')}\n`);
     expect(
       violations,
       'These calls pass `{ silent: … }` to an API wrapper whose parameter at that position does not '
@@ -217,6 +229,31 @@ describe('silent options reach the API wrapper that reads them (#9951)', () => {
     expect(silentCalls('other(id, { silent: true });', names)).toEqual([]);
     expect(silentCalls(`${imp}thing.named(id, { silent: true });`, names)).toEqual([]);
     expect(silentCalls(`${imp}// noOptions(id, { silent: true })`, names)).toEqual([]);
+  });
+
+  it('keeps dynamic endpoints, nested defaults, and calls inside template interpolation visible', () => {
+    const wrappers = wrapperExports(`
+      export const dynamic = (id, data = { label: \`item-\${id}\` }, extra) =>
+        request(\`/things/\${id ? 'nested)' : 'other'}\`, { body: JSON.stringify(data), ...extra });
+      export async function dropped(id = choose({ nested: [1, 2] })) {
+        return request(\`/things/\${id}\`);
+      }
+    `);
+    expect(wrappers.map(({ name, params }) => [name, params.length])).toEqual([
+      ['dynamic', 3], ['dropped', 1],
+    ]);
+    const files = [{ file: 'dynamic.jsx', src: `
+      import { dynamic } from './services/api';
+      dynamic(id, { value: 'literal }, separator' }, { silent: true });
+      dynamic(id, { silent: true });
+      const label = \`prefix \${api.dropped(choose({ nested: [1, 2] }), { silent: true })}\`;
+      // api.dropped(id, { silent: true });
+      const sample = 'api.dropped(id, { silent: true })';
+    ` }];
+    expect(findDroppedSilent(files, wrappers)).toEqual([
+      'dynamic.jsx:4 dynamic(…) passes { silent } as argument 2',
+      'dynamic.jsx:5 dropped(…) passes { silent } as argument 2',
+    ]);
   });
 
   it('flags a call whose position the wrapper drops and accepts a forwarding one', () => {
