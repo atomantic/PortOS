@@ -789,6 +789,25 @@ export default function MusicVideo() {
       });
   };
 
+  // A render refused for clips made from since-changed frames: render each shot's clip
+  // again from its current frames and the video settings, as Render on its card would.
+  // Like the card's Render, a shot whose still isn't locked yet is refused by name.
+  const renderClips = (sceneIds) => {
+    const timed = (selected?.scenes || []).filter((scene) => Number.isFinite(scene.startSec)).sort((a, b) => a.startSec - b.startSec);
+    const shotName = (scene) => `Shot ${timed.indexOf(scene) + 1}`;
+    const requested = (selected?.scenes || []).filter((scene) => sceneIds.includes(scene.sceneId));
+    const unlocked = shotLocks ? requested.filter((scene) => shotLocks[scene.sceneId] !== 'locked') : [];
+    if (unlocked.length) toast.error(`${unlocked.map(shotName).join(', ')}: lock the still first, then render the new clip`);
+    const scenes = requested.filter((scene) => !unlocked.includes(scene));
+    if (!scenes.length) return Promise.resolve();
+    return Promise.all(scenes.map((scene) => sceneMedia.generateSceneVideo(scene))).then((results) => {
+      const started = results.filter((result) => result?.ok).length;
+      if (!started) return;
+      renderJob.clearFailure();
+      toast.success(`Rendering ${started === 1 ? 'a new clip' : `${started} new clips`}. Render again once ${started === 1 ? 'it lands' : 'they land'}`);
+    });
+  };
+
   // Optimistic local edit; PATCH on blur (silent — this owns its error toast).
   const editSceneLocal = (sceneId, patch) => {
     replaceProject({ ...selected, scenes: selected.scenes.map((s) => (s.sceneId === sceneId ? { ...s, ...patch } : s)) });
@@ -1047,13 +1066,18 @@ export default function MusicVideo() {
         `Music Video: ${selected.name}`,
       ));
     }
-    // Every take (#8965), selected first, so the take strips and contact sheet
+    // Every take (#8965), start and end frames included, selected first, so the take strips and contact sheet
     // can open any candidate in the shared lightbox.
     for (const scene of selected.scenes || []) {
       const frames = sceneTakeList(scene, 'image')
         .sort((a, b) => (b.assetId === scene.referenceImageId) - (a.assetId === scene.referenceImageId));
       for (const take of frames) {
         items.push(normalizeImage({ filename: take.assetId, prompt: take.prompt || scene.framePrompt || scene.prompt || '' }));
+      }
+      const endFrames = sceneTakeList(scene, 'endImage')
+        .sort((a, b) => (b.assetId === scene.endImageId) - (a.assetId === scene.endImageId));
+      for (const take of endFrames) {
+        items.push(normalizeImage({ filename: take.assetId, prompt: take.prompt || scene.endFramePrompt || scene.prompt || '' }));
       }
       const clips = sceneTakeList(scene, 'video')
         .sort((a, b) => (b.assetId === scene.videoHistoryId) - (a.assetId === scene.videoHistoryId));
@@ -1280,6 +1304,7 @@ export default function MusicVideo() {
     sceneMedia,
     renderJob,
     onPatchShots: patchShots,
+    onRenderClips: renderClips,
     production,
     castSets,
     devArtifacts,

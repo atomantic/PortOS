@@ -2386,6 +2386,13 @@ describe('MusicVideo media lightbox (#3718)', () => {
       .toMatch(/\/data\/images\/img1/);
   });
 
+  it('opens the lightbox from an end-frame thumbnail click', async () => {
+    await openProject({ ...PROJECT_WITH_CLIP, scenes: [{ ...PROJECT_WITH_CLIP.scenes[0], endImageId: 'end1' }] }, 'produce');
+    fireEvent.click(await screen.findByRole('button', { name: 'View scene 1 end frame full size' }));
+    const dialog = await screen.findByRole('dialog', { name: /Media viewer/i });
+    expect(dialog.querySelector('img')?.getAttribute('src') || dialog.innerHTML).toMatch(/\/data\/images\/end1/);
+  });
+
   it('opens the lightbox from a scene-clip expand control without hijacking play/pause', async () => {
     await openProject(PROJECT_WITH_CLIP, 'produce');
     // Inline thumb keeps its own controls attribute for native play/pause.
