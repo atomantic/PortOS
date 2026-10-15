@@ -989,6 +989,27 @@ describe('mediaJobQueue', () => {
     await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'completed');
   });
 
+  it('reports a failed debounced progress write to stderr with the job id', async () => {
+    const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'progress persistence failure' } });
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+    await waitFor(() => mediaJobQueue.getJob(job.jobId)?.status === 'running');
+    const realWrite = atomicWriteSpy.getMockImplementation();
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    atomicWriteSpy.mockImplementation(async (path, data) => {
+      if (data?.jobs?.some((entry) => entry.id === job.jobId && entry.progress === 0.25)) throw new Error('synthetic progress disk failure');
+      return realWrite(path, data);
+    });
+    try {
+      videoGenEvents.emit('progress', { generationId: job.jobId, progress: 0.25, message: 'working' });
+      await waitFor(() => errorLog.mock.calls.some(([message]) => String(message).includes('persist on progress failed')));
+      expect(errorLog).toHaveBeenCalledWith(expect.stringContaining(`[${job.jobId.slice(0, 8)}] mediaJobQueue persist on progress failed: synthetic progress disk failure`));
+      expect(mediaJobQueue.getJob(job.jobId)).toMatchObject({ status: 'running', progress: 0.25 });
+    } finally {
+      atomicWriteSpy.mockImplementation(realWrite);
+      errorLog.mockRestore();
+    }
+  });
+
   it('refuses a canceled suffix repair at provider dispatch without paying again', async () => {
     const { assertPerformanceRepairDispatch } = await import('../musicVideo/revisionService.js');
     assertPerformanceRepairDispatch.mockRejectedValueOnce(new Error('This repair revision is canceled'));
@@ -3554,13 +3575,19 @@ describe('backup snapshot admission for media completion', () => {
   it('releases admission after a terminal write fails for good, leaving no half-published outcome', async () => {
     const failed = await startJob();
     const failures = failTerminalWrites(3);
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
     renderFinishes(failed);
-    await waitFor(() => failures.count === 3);
-    await settle();
-    // The abandoned publication holds nothing: a cut opens at once and sees no half-written outcome.
-    const release = await boundary.acquireBackupSnapshotCut({ timeoutMs: 50 });
-    expect(capture(failed)).toEqual({ files: [`${failed}.mp4`], queueStatus: 'running', rows: new Map() });
-    release();
+    try {
+      await waitFor(() => failures.count === 3);
+      await settle();
+      expect(errorLog).toHaveBeenCalledWith(expect.stringContaining(`media-job [${failed.slice(0, 8)}] terminal handler failed:`));
+      // The abandoned publication holds nothing: a cut opens at once and sees no half-written outcome.
+      const release = await boundary.acquireBackupSnapshotCut({ timeoutMs: 50 });
+      expect(capture(failed)).toEqual({ files: [`${failed}.mp4`], queueStatus: 'running', rows: new Map() });
+      release();
+    } finally {
+      errorLog.mockRestore();
+    }
   });
 
   it('recovers an abandoned completion only under admission, never from a write landing mid-cut', async () => {
