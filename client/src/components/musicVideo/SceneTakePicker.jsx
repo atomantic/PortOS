@@ -17,10 +17,10 @@ const SLOT_FIELD = { image: 'referenceImageId', video: 'videoHistoryId', endImag
 export const poolGroup = (item, sceneId) => (!item.sceneId ? 'floor' : item.sceneId === sceneId ? 'shot' : 'others');
 
 // The director's sort of the video's assets: ★ ingredients (good, not placed), unsorted, ✕ bad (to clean up).
-const MARK_FILTERS = [
+export const MARK_FILTERS = [
   { id: 'all', label: 'All' }, { id: 'ingredient', label: '★ Ingredients' }, { id: 'unsorted', label: 'Unsorted' }, { id: 'bad', label: '✕ Bad' },
 ];
-const markOf = (item) => item.mark || 'unsorted';
+export const markOf = (item) => item.mark || 'unsorted';
 // The shot's own frame in the other slot: its end frame when swapping the start, its start when swapping the end.
 const OTHER_FRAME = { image: { field: 'endImageId', takeKind: 'endImage', prompt: 'endFramePrompt', label: 'End frame' },
   endImage: { field: 'referenceImageId', takeKind: 'image', prompt: 'framePrompt', label: 'Start frame' } };
@@ -36,9 +36,9 @@ function otherFrameItem(scene, kind) {
   const take = scene.takes?.find((t) => t.kind === other.takeKind && t.assetId === assetId);
   return { kind: 'image', assetId, sceneId: scene.sceneId, prompt: take?.prompt || scene[other.prompt] || null, clipIds: [], ownFrame: other.label };
 }
-const poolKey = (item) => `${item.kind}:${item.assetId}`;
+export const poolKey = (item) => `${item.kind}:${item.assetId}`;
 /** "Used on #3, #12" for an item other shots (or this one) use now, else null. */
-const usedLabel = (item, shotNumbers) => {
+export const usedLabel = (item, shotNumbers) => {
   const numbers = (item.inUseBy || []).map((id) => shotNumbers.get(id)).filter(Boolean);
   return item.inUseBy?.length ? `Used on ${numbers.length ? numbers.map((n) => `#${n}`).join(', ') : 'a shot'}` : null;
 };
@@ -274,7 +274,8 @@ export default function SceneTakePicker({ open, onClose, projectId, scene, kind,
   );
 }
 
-function DeleteConfirm({ count, noun, working, onConfirm, onCancel }) {
+/** Inline "Delete … from the media library?" with Yes, delete and Keep. */
+export function DeleteConfirm({ count, noun, working, onConfirm, onCancel }) {
   return (
     <div className="flex flex-wrap items-center gap-2 rounded border border-port-error/50 p-2 text-xs">
       <span className="min-w-0 flex-1">Delete {count === 1 ? `this ${noun}` : `${formatCount(count)} ${noun}s`} from the media library? This can't be undone.</span>
