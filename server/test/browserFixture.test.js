@@ -3,12 +3,12 @@ import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { rm } from 'node:fs/promises';
+import { lstat, rm } from 'node:fs/promises';
 import { startOwnedBrowserFixture } from './browserFixture.js';
 
 vi.mock('node:fs/promises', async original => {
   const actual = await original();
-  return { ...actual, rm: vi.fn(actual.rm) };
+  return { ...actual, lstat: vi.fn(actual.lstat), rm: vi.fn(actual.rm) };
 });
 
 const stalls = () => new Promise(() => {});
@@ -36,8 +36,8 @@ const owned = () => {
     launchOptions: { executablePath: 'example-chrome', headless: true, args: ['--mute-audio'] } });
   return { child, server, browser, chromium, start, profile, canonicalProfile, clearProfile };
 };
-// Advance only the injected lifecycle deadlines; actual filesystem completion
-// uses the real event loop, never sleeps or timer-based polling.
+// Synthetic launch/connect readiness only; real filesystem completion uses the
+// operation handshake below rather than a number of event-loop turns.
 const flushUntil = async check => {
   for (let i = 0; i < 1000; i++) {
     if (check()) return;
@@ -52,10 +52,32 @@ const recordRoot = fixture => {
   writeFileSync(join(temp, 'playwright_chromiumdev_profile-example', 'owned'), 'fixture');
   return temp;
 };
+const rootRemoval = temp => {
+  const completed = deferred();
+  const remove = rm.getMockImplementation();
+  const stat = lstat.getMockImplementation();
+  let removed = false;
+  rm.mockImplementation(async (...args) => {
+    const result = await remove(...args);
+    if (args[0] === temp) removed = true;
+    return result;
+  });
+  lstat.mockImplementation((...args) => stat(...args).catch(error => {
+    if (removed && args[0] === temp && error.code === 'ENOENT') {
+      // The real removal and final absence check have completed. One turn
+      // drains their promise continuations, including deadline disposal; no
+      // filesystem work is being polled or presumed complete after N turns.
+      setImmediate(completed.resolve);
+    }
+    throw error;
+  }));
+  return completed.promise;
+};
 
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  lstat.mockReset();
   rm.mockReset();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -167,8 +189,10 @@ describe('owned server browser fixture lifecycle', () => {
     fixture.browser.close.mockImplementation(stalls);
     const started = await fixture.start();
     const temp = recordRoot(fixture);
+    const removed = rootRemoval(temp);
     const closing = started.close().catch(error => error);
-    await flushUntil(() => !existsSync(temp));
+    await removed;
+    expect(existsSync(temp)).toBe(false);
     expect(fixture.child.exitCode).toBe(0);
     await vi.advanceTimersByTimeAsync(100);
     expect(await closing).toBeInstanceOf(Error);
@@ -214,13 +238,14 @@ describe('owned server browser fixture lifecycle', () => {
     const starting = fixture.start().catch(error => error);
     await flushUntil(() => fixture.chromium.launchServer.mock.calls.length > 0);
     const temp = recordRoot(fixture);
+    const removed = rootRemoval(temp);
     await vi.advanceTimersByTimeAsync(200);
     expect((await starting).message).toBe('Owned browser startup failed; cleanup unconfirmed');
     expect(existsSync(temp)).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
     launch.resolve(fixture.server);
     await vi.advanceTimersByTimeAsync(30);
-    await flushUntil(() => vi.getTimerCount() === 0);
+    await removed;
     expect(existsSync(temp)).toBe(false);
     expect(fixture.chromium.connect).not.toHaveBeenCalled();
     expect(fixture.server.close).toHaveBeenCalledTimes(1);
@@ -280,10 +305,13 @@ describe('owned server browser fixture lifecycle', () => {
     const starting = fixture.start().catch(error => error);
     await flushUntil(() => fixture.chromium.launchServer.mock.calls.length > 0);
     const temp = recordRoot(fixture);
+    const removed = rootRemoval(temp);
     await vi.advanceTimersByTimeAsync(200);
     expect((await starting).message).toContain('cleanup unconfirmed');
     launch.reject(new Error('synthetic abandoned launch failure'));
-    await flushUntil(() => !existsSync(temp) && vi.getTimerCount() === 0);
+    await removed;
+    expect(existsSync(temp)).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
     expect(rm).toHaveBeenCalledTimes(1);
     expect(fixture.server.close).not.toHaveBeenCalled();
   });
