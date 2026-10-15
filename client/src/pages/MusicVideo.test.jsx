@@ -3461,13 +3461,13 @@ describe('stage checklist and project options', () => {
       productionReadiness: { readyForProduction: false, basis: {}, art: { approved: true, problems: [] },
         storyboard: { approved: false, problems: ['Storyboard shots must cover the master without unintended gaps or overlaps.', 'Complete timing, action, staging, camera and transition for Singer.'],
           coverage: [{ sceneId: 's-b', issue: 'gap', startSec: 4, endSec: 4.5 }],
-          incompleteShots: [{ sceneId: 's-b', missing: ['camera'] }] }, proof: { approved: false, problems: [] } } };
+          incompleteShots: [{ sceneId: 's-b', missing: ['staging'] }] }, proof: { approved: false, problems: [] } } };
     await openProject(project, 'board');
     const checklist = screen.getByRole('region', { name: 'What this step needs' });
     expect(within(checklist).getByRole('list', { name: 'Shot coverage shots' })).toHaveTextContent('Shot 2Gap of 0.50 s before this shot, 0:04.00–0:04.50');
     expect(checklist).not.toHaveTextContent('without unintended gaps');
     const details = within(checklist).getByRole('list', { name: 'Shot details shots' });
-    expect(details).toHaveTextContent('Shot 2Missing camera');
+    expect(details).toHaveTextContent('Shot 2Missing staging');
     expect(checklist).not.toHaveTextContent('1 shot missing timing');
     fireEvent.click(within(details).getByRole('button', { name: 'Shot 2' }));
     await waitFor(() => expect(document.getElementById('scene-s-b')).toBeTruthy());

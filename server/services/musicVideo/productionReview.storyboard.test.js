@@ -45,7 +45,7 @@ describe('storyboard readiness after verified lyric timing', () => {
   });
 
   it('keeps a director-edited draft shot over the derived row', () => {
-    const edited = { sceneId: 's1', lyricCueIds: ['c1'], action: 'She laughs', staging: 'Close-up', camera: '', transition: 'Cut' };
+    const edited = { sceneId: 's1', lyricCueIds: ['c1'], action: 'She laughs', staging: '', camera: 'Close-up', transition: 'Cut' };
     const { storyboard } = productionReadiness(project({ draftShots: [edited] }));
     expect(storyboard.shots[0]).toEqual(edited);
     expect(storyboard.problems).toContain('Complete timing, action, staging, camera and transition for Verse.');
@@ -306,6 +306,15 @@ describe('storyboard rows stay bound to the shots on the board', () => {
 });
 
 describe('naming the shots behind Shot coverage and Shot details', () => {
+  // Uniquely catches a cutaway with no camera note blocking the board it was locked on.
+  it('lets a Board shot leave its camera blank', () => {
+    const planned = project({ draftShots: [{ sceneId: 's1', lyricCueIds: ['c1'], action: 'She looks up', staging: 'Desk', camera: '', transition: 'Cut' }] });
+    const bare = { ...planned, castAndSets: { status: 'approved', direction: { world: {} } } };
+    const { storyboard } = productionReadiness(bare);
+    expect(storyboard.incompleteShots).toEqual([]);
+    expect(storyboard.problems.filter((p) => SHOT_PROBLEM.test(p))).toEqual([]);
+  });
+
   // Uniquely catches the coverage and details checks failing a board without saying which shot to fix.
   it('names the shot at each gap, overlap and song-end mismatch, and what each incomplete shot is missing', () => {
     const base = project();
