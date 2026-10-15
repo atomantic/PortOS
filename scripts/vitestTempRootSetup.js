@@ -3,8 +3,9 @@
  * redirects temp APIs before Vitest creates its module-transform cache.
  * The server's exclusive capture projects share this single global owner.
  */
-import { lstatSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { lstatSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { describeOwnedBrowserObservation, readOwnedBrowserObservations } from '../server/test/ownedBrowserDiagnostics.js';
 import { OWNER_FILE, killTestBrowsersUnder } from './lib/vitestStaleRunRoots.js';
 
 export function setup() {}
@@ -36,21 +37,9 @@ const TOOLCHAIN_CACHE_PREFIXES = new Set([
 ]);
 
 // Written by server/lib/mockPathsDataRoot.js (`<dir>\t<test file>` per root it
-// minted). Kept as a literal here: this setup file imports no server code.
+// minted), plus optional bounded composition snapshots. The decoder reaches
+// only Node builtins and the existing owner writer, never a service graph.
 const OWNERS_FILE = '.leak-owners';
-
-function readLeakOwners(root) {
-  const owners = new Map();
-  let text = '';
-  try {
-    text = readFileSync(join(root, OWNERS_FILE), 'utf8');
-  } catch { /* no PATHS-mocking suite ran */ }
-  for (const line of text.split('\n')) {
-    const [dir, file] = line.split('\t');
-    if (dir && file) owners.set(dir, file);
-  }
-  return owners;
-}
 
 export function groupLeakPrefix(name) {
   return name.replace(/[0-9a-zA-Z]{6,}$/, '') || name;
@@ -96,7 +85,7 @@ export function teardown() {
     .filter((name) => !TOOLCHAIN_CACHE_PREFIXES.has(groupLeakPrefix(name)))
     .filter((name) => !isEffectivelyEmpty(join(root, name)));
 
-  const owners = readLeakOwners(root);
+  const { owners, observations, state } = readOwnedBrowserObservations(root);
   const byPrefix = new Map();
   for (const name of entries) {
     const prefix = groupLeakPrefix(name);
@@ -109,6 +98,11 @@ export function teardown() {
     const by = files.size ? ` (created by ${[...files].join(', ')})` : '';
     console.warn(`⚠️ test temp leak: ${prefix} ×${count}${by}`);
   }
+  const composition = entries.filter(name => name.startsWith('portos-composition-browser-'));
+  for (const [index, name] of composition.slice(0, 8).entries()) {
+    console.warn(`⚠️ composition profile ${index + 1}: ${describeOwnedBrowserObservation(observations.get(name), state)}`);
+  }
+  if (composition.length > 8) console.warn(`⚠️ composition profile provenance capped: ${composition.length - 8} additional entries`);
   if (entries.length) process.exitCode = 1;
 
   try {

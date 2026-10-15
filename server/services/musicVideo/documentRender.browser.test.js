@@ -70,7 +70,7 @@ vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await imp
 const { findFfmpeg } = await import('../../lib/ffmpeg.js');
 const { _cleanupTestBrowser, _waitForTestChrome, _testChromeCaptureArgs } = await import('../htmlComposition/testBrowserCleanup.js');
 
-afterAll(() => cleanupTempDataRoots());
+afterAll(() => { lifecycle.diagnostics.dispose(); cleanupTempDataRoots(); });
 
 const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',

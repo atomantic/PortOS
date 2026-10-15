@@ -45,7 +45,7 @@
  * target the default re-rooting wouldn't produce — it merges last.
  */
 
-import { appendFileSync, mkdtempSync, readdirSync, rmSync } from 'fs';
+import { appendFileSync, mkdtempSync, readdirSync, rmSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, isAbsolute, join, relative, sep } from 'path';
 
@@ -64,16 +64,26 @@ export function createTempDataRoot(prefix = 'portos-test-') {
  * leaked `<prefix>XXXXXX` directory is reported with the test file that minted
  * it. A random-suffixed name alone cannot identify its creator (#10404).
  * Best-effort and basename-only: diagnostics must never fail a fixture or put a
- * checkout path in a log.
+ * checkout path in a log. Optional versioned observations are prevalidated by
+ * the owned-browser observer; retain legacy two-column attribution unchanged.
+ * The 8 MiB budget admits at most one small concurrent append per worker.
  */
 const TEMP_ROOT_OWNERS_FILE = '.leak-owners';
-function recordTempRootOwner(dir) {
+export function recordTempRootOwner(dir, { owner, observation } = {}) {
   try {
     const runRoot = process.env.PORTOS_TEST_TEMP_ROOT;
-    const owner = globalThis.__vitest_worker__?.filepath;
-    if (!runRoot || !owner) return;
-    appendFileSync(join(runRoot, TEMP_ROOT_OWNERS_FILE), `${basename(dir)}\t${basename(owner)}\n`);
-  } catch { /* diagnostics only */ }
+    const source = owner ?? globalThis.__vitest_worker__?.filepath;
+    if (!runRoot || !source) return 'unavailable';
+    const file = join(runRoot, TEMP_ROOT_OWNERS_FILE);
+    const row = `${basename(dir)}\t${observation ? source : basename(source)}${observation ? `\t${observation}` : ''}\n`;
+    if (observation) {
+      if (Buffer.byteLength(row) > 1024) return 'capped';
+      try { if (statSync(file).size >= 8 * 1024 * 1024) return 'capped'; }
+      catch (error) { if (error.code !== 'ENOENT') return 'unavailable'; }
+    }
+    appendFileSync(file, row);
+    return 'written';
+  } catch { return 'unavailable'; /* diagnostics only; never recreate a missing run root */ }
 }
 
 /**

@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter, getEventListeners } from 'node:events';
 import { PassThrough } from 'node:stream';
+import { basename } from 'node:path';
 import { access, mkdir, rm } from 'node:fs/promises';
-import { createOwnedBrowserDiagnostics } from '../../test/ownedBrowserDiagnostics.js';
+import { createOwnedBrowserDiagnostics, readOwnedBrowserObservations } from '../../test/ownedBrowserDiagnostics.js';
 
 const launch = vi.hoisted(() => ({ spawn: vi.fn() }));
 vi.mock('node:fs/promises', async original => {
@@ -45,6 +46,7 @@ beforeEach(() => {
 const originalGetuid = Object.getOwnPropertyDescriptor(process, 'getuid');
 const setUid = uid => Object.defineProperty(process, 'getuid', { value: () => uid, configurable: true, writable: true });
 afterEach(() => {
+  diagnostics.dispose();
   child.stderr.destroy();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -56,6 +58,10 @@ afterEach(() => {
 describe('owned composition capture browser lifecycle', () => {
   it('keeps close pending until removal settles and distinguishes later profile recreation in diagnostics', async () => {
     const owner = await launchCompositionBrowser();
+    // Production ownership plus one shared diagnostic binding, even with both
+    // the environment observer and this suite's existing local observer.
+    expect(child.listenerCount('exit')).toBe(2);
+    expect(child.listenerCount('close')).toBe(2);
     const remove = rm.getMockImplementation();
     let release;
     let started;
@@ -72,10 +78,14 @@ describe('owned composition capture browser lifecycle', () => {
       await removing;
       const owned = diagnostics.children[0];
       expect(settled).toBe(false);
+      const persisted = () => readOwnedBrowserObservations(process.env.PORTOS_TEST_TEMP_ROOT).observations.get(basename(profile));
+      expect(persisted()).toMatchObject({ owner: 'server/services/htmlComposition/ownedBrowser.test.js',
+        removal: 'pending', observer: 'active', exit: true, close: true });
       expect(diagnostics.describe(owned)).toContain('exit=true close=true removal=pending presentAfterRemoval=unknown presentNow=true');
       release();
       await closing;
       expect(diagnostics.describe(owned)).toContain('removal=resolved presentAfterRemoval=false presentNow=false');
+      expect(persisted()).toMatchObject({ removal: 'resolved', presentAfterRemoval: false });
       // A later writer is a negative control, not evidence about Chrome helpers.
       await mkdir(profile);
       const report = diagnostics.describe(owned);
@@ -98,6 +108,8 @@ describe('owned composition capture browser lifecycle', () => {
       await expect(owner.close()).rejects.toBe(error);
       const report = diagnostics.describe(diagnostics.children[0]);
       expect(report).toContain('removal=rejected:EACCES presentAfterRemoval=true presentNow=true');
+      expect(readOwnedBrowserObservations(process.env.PORTOS_TEST_TEMP_ROOT).observations.get(basename(profile)))
+        .toMatchObject({ removal: 'rejected:EACCES', presentAfterRemoval: true });
       expect(report).not.toContain(profile);
       expect(report).not.toContain(error.message);
       expect(log).toHaveBeenCalledWith('❌ Composition browser profile cleanup failed (other)');
