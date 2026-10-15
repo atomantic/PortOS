@@ -18,6 +18,7 @@
 
 import { ServerError } from '../../lib/errorHandler.js';
 import { isNonBlankStr } from '../../lib/textUtils.js';
+import { sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { buildDocumentPreview } from './documentPreview.js';
 import { readLyricOverlayDocumentFiles, readTemplateDocumentFiles } from './compositionDocument.js';
 import { buildDocumentData, documentRenderClock, documentSongDuration } from './documentRender.js';
@@ -93,11 +94,16 @@ function playthroughProject(project, durationSec) {
 /**
  * The `window.PORTOS_MV` the lyric overlay page draws in a composed final render
  * (compositionRender.js), at that render's frame: the same words, roles and text
- * zones the storyboard animatic lays over its frames.
+ * zones the storyboard animatic lays over its frames. A title card shot already
+ * draws its text (its own, else its sung line) on the typography page, so its
+ * lines are kept off it here.
  */
 export function lyricOverlayDocumentData(project, { width, height, fps, durationSec }) {
   const songDurationSec = documentSongDuration(project) || durationSec;
-  return buildDocumentData(playthroughProject(project, songDurationSec), {
+  const cards = new Set((project.scenes || []).filter((scene) => sceneVisualLayer(scene, { layered: true }) === 'card').map((scene) => scene.sceneId));
+  const playthrough = playthroughProject(project, songDurationSec);
+  const scenes = playthrough.scenes.map((scene) => (cards.has(scene.sceneId) ? { ...scene, textZone: 'none' } : scene));
+  return buildDocumentData({ ...playthrough, scenes }, {
     frame: { width, height }, clock: documentRenderClock(songDurationSec, fps), songDurationSec,
   });
 }

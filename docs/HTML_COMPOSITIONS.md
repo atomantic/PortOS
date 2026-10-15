@@ -239,7 +239,8 @@ in the shared lyric type, exactly as the storyboard animatic shows them: it
 stages the animatic's lyric overlay page (`documentTemplates/lyricOverlay`)
 beside the typography page and captures it over each line's window
 (`composedLyricWindows`, the first onset to two seconds past the line's end).
-Each shot's Text zone and Lyric role apply. A Subtitle cue hands the words
+Each shot's Text zone and Lyric role apply; a title card shot already draws its
+text (else its sung line), so the overlay keeps its lines off it. A Subtitle cue hands the words
 back to the text cues, so "Copy timed lyrics" swaps the lyric type for plain
 subtitles.
 
