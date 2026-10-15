@@ -9,6 +9,7 @@ export {
   MUSIC_VIDEO_FRAME_FITS,
   MUSIC_VIDEO_TEXT_ZONES,
   MUSIC_VIDEO_LYRIC_ROLES,
+  MUSIC_VIDEO_LYRIC_SIZES,
   composedDrawsLyrics,
   isSelfDrawnLayer,
   sceneVisualLayer,

@@ -13,7 +13,7 @@ export const playthroughVersion = (project) => JSON.stringify([
   project.audioAnalysis?.durationSec ?? null,
   (project.lyricCues || []).map((cue) => [cue.text, cue.startSec, cue.endSec, (cue.words || []).map((w) => [w.startSec, w.endSec])]),
   (project.lyricMarkers || []).map((m) => [m.type, m.label, m.line]),
-  (project.scenes || []).map((s) => [s.startSec, s.endSec, s.textZone, s.lyricRole]),
+  (project.scenes || []).map((s) => [s.startSec, s.endSec, s.textZone, s.lyricRole, s.lyricSize]),
 ]);
 
 /** The lyric line sung at song time `t`, from the project's timed cues. */

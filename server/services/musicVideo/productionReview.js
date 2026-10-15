@@ -43,8 +43,8 @@ export const documentStoryboardBasis = project => hash({
 export const overlayTextBasis = project => hash({
   document: project.composition?.document?.directory || null, aspect: musicVideoAspect(project), source: source(project),
   textCues: project.composition?.textCues ?? null, overlay: project.composition?.overlay ?? null, style: project.composition?.style ?? null,
-  scenes: (project.scenes || []).map(({ sceneId, startSec, endSec, textZone, lyricRole, lyricText, cardText, referenceImageId, videoHistoryId, performanceEdit, visualLayer }) =>
-    ({ sceneId, startSec, endSec, textZone, lyricRole, lyricText, cardText, referenceImageId, videoHistoryId, performanceEdit, visualLayer })),
+  scenes: (project.scenes || []).map(({ sceneId, startSec, endSec, textZone, lyricRole, lyricSize, lyricText, cardText, referenceImageId, videoHistoryId, performanceEdit, visualLayer }) =>
+    ({ sceneId, startSec, endSec, textZone, lyricRole, lyricSize, lyricText, cardText, referenceImageId, videoHistoryId, performanceEdit, visualLayer })),
 });
 
 // Share the evidence contract between new decisions and persisted approvals:
