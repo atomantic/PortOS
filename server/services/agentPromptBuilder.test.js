@@ -1407,7 +1407,7 @@ describe('buildLightContextPrompt', () => {
         { isTui: true, providerId: 'opencode-ollama-tui', providerCommand: 'opencode', localAgentLoopBody: 'RECIPE' });
 
       expect(prompt).toContain('All local reviewers are optional, so missing/inconclusive results');
-      expect(prompt).toContain('Set aggregate `LOCAL_OVERALL_STATUS=clean` for clean, configured capped, or optional inconclusive');
+      expect(prompt).toContain('Set aggregate `LOCAL_OVERALL_STATUS=clean` for clean, configured capped with all accepted findings resolved, or optional inconclusive with no unresolved accepted findings');
       expect(prompt).toContain('missing/malformed/no-verdict result from one of them is non-blocking');
       expect(prompt).toContain('`codex` still run and their findings must still be fixed');
       expect(prompt).not.toContain('a missing, timed-out, malformed, or inconclusive local review is UNSATISFIED');
@@ -3529,16 +3529,17 @@ describe('buildReviewLoopFollowUpSection — CLI reviewer procedure inlining', (
     expect(out).toMatch(/codex/);
   });
 
-  it('keeps review rounds focused on material findings and diminishing returns', () => {
+  it('keeps review scope focused while requiring every accepted finding to be resolved', () => {
     const out = buildReviewLoopFollowUpSection(
       { ...baseMeta, reviewLoopReviewers: ['claude'] },
       { verbose: false, localAgentLoopBody: null }
     );
     expect(out).toContain('directly affected contracts only');
-    expect(out).toContain('concrete wrong outcome');
-    expect(out).toContain('only substantive fixes do');
-    expect(out).toContain('skip repository-wide audits');
-    expect(out).toContain('This affects looping only, not clean/partial verdicts');
+    expect(out).toContain('verified defects and established-convention violations with concrete evidence');
+    expect(out).toContain('including nits and warnings');
+    expect(out).toContain('Resolve every accepted finding; severity only determines sequencing');
+    expect(out).toContain('Do not broaden into an unrelated repository-wide audit');
+    expect(out).toContain('A round cap never makes unresolved accepted findings clean');
   });
 });
 
