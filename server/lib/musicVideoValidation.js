@@ -348,6 +348,21 @@ export const musicVideoPoolDeleteSchema = z.object({
   items: z.array(musicVideoPoolAssetSchema).min(1).max(500),
 }).strict();
 
+/** File another music video's whole pool (an earlier draft) into this video's collection. */
+export const musicVideoPoolImportSchema = z.object({
+  fromProjectId: z.string().min(1).max(200),
+}).strict();
+
+/** Search the whole media library for stills and clips to add to a video's assets. */
+export const musicVideoLibrarySearchQuerySchema = z.object({
+  q: z.string().trim().min(1).max(200),
+}).strict();
+
+/** File stills and clips from the media library into a video's assets. */
+export const musicVideoPoolAddSchema = z.object({
+  items: z.array(musicVideoPoolAssetSchema).min(1).max(500),
+}).strict();
+
 // Put an unused still or clip from the project's pool on a shot; `withAssetId` is its partner (a still's clip, a clip's still).
 // `endImage` puts a still on the shot's end frame; only a start still pairs with a clip.
 export const musicVideoPoolUseSchema = z.object({

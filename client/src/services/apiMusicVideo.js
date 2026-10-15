@@ -191,6 +191,17 @@ export const markMusicVideoPoolAssets = (id, items, mark, options = {}) => reque
 export const deleteMusicVideoPoolAssets = (id, items, options = {}) => request(`/music-video/${encodeURIComponent(id)}/media-pool/delete`, {
   method: 'POST', body: JSON.stringify({ items }), ...options,
 });
+// Asset manager: file another video's whole pool (an earlier draft) into this one → { added, total, items }.
+export const importMusicVideoPool = (id, fromProjectId, options = {}) => request(`/music-video/${encodeURIComponent(id)}/media-pool/import`, {
+  method: 'POST', body: JSON.stringify({ fromProjectId }), ...options,
+});
+// Asset manager: library stills and clips whose prompts hold every word, not in this video yet → { items, more }.
+export const searchMusicVideoLibrary = (id, q, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/media-pool/library?q=${encodeURIComponent(q)}`, options);
+// Asset manager: file library stills and clips into this video → { added, items }.
+export const addMusicVideoLibraryMedia = (id, items, options = {}) => request(`/music-video/${encodeURIComponent(id)}/media-pool/add`, {
+  method: 'POST', body: JSON.stringify({ items }), ...options,
+});
 // Put a pool still or clip on a shot as its selection; `withAssetId` brings its partner → { scene }.
 export const placeMusicVideoPoolItem = (id, sceneId, body, options = {}) => request(`${takesPath(id, sceneId)}/use`, {
   method: 'POST', body: JSON.stringify(body), ...options,
