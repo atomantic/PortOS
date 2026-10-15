@@ -117,6 +117,9 @@ describe('composition-document render plan', () => {
   // Uniquely catches a draft blocked by a stale lip-sync take, or a final render drawing one.
   it('refuses a full render over a stale performance take (#9266), while a draft draws it as a cutaway', async () => {
     const id = await documentProject();
+    await mkdir(PATHS.images, { recursive: true });
+    await writeFile(join(PATHS.images, 'still.png'), 'synthetic still');
+    await writeFile(join(PATHS.data, 'video-history.json'), JSON.stringify([{ id: 'clip-1', filename: 'clip-1.mp4' }]));
     await importDocumentTemplate(id);
     await projects.mutateProjectRecord(id, (current) => ({ project: {
       ...current,

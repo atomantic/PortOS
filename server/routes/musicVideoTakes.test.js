@@ -9,11 +9,34 @@
 
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import express from 'express';
-import { mkdirSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, rmSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
+
+const race = vi.hoisted(() => ({ beforeDelete: null, beforeSave: null, onRequest: null }));
+vi.mock('../services/galleryImageDeletion.js', async (original) => {
+  const actual = await original();
+  return { ...actual, deleteGalleryImage: async (...args) => {
+    await race.beforeDelete?.(...args);
+    return actual.deleteGalleryImage(...args);
+  } };
+});
+vi.mock('../services/videoGen/historyOps.js', async (original) => {
+  const actual = await original();
+  return { ...actual, deleteHistoryItem: async (...args) => {
+    await race.beforeDelete?.(...args);
+    return actual.deleteHistoryItem(...args);
+  } };
+});
+vi.mock('../lib/fileUtils.js', async (original) => {
+  const actual = await original();
+  return { ...actual, atomicWrite: async (...args) => {
+    if (args[0].endsWith('music-video-projects.json')) await race.beforeSave?.(args[1]);
+    return actual.atomicWrite(...args);
+  } };
+});
 
 const ROOT = () => lazyTempDataRoot('mv-takes-route-test-');
 vi.mock('../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), { dataRoot: ROOT }));
@@ -24,6 +47,7 @@ const projects = await import('../services/musicVideo/projects.js');
 
 const app = express();
 app.use(express.json());
+app.use((req, res, next) => { race.onRequest?.(req); next(); });
 app.use('/api/music-video', musicVideoRoutes);
 app.use(errorMiddleware);
 
@@ -39,6 +63,7 @@ let project;
 let sceneA;
 let sceneB;
 beforeEach(async () => {
+  race.beforeDelete = race.beforeSave = race.onRequest = null;
   rmSync(join(ROOT(), 'music-video-projects.json'), { force: true });
   rmSync(join(ROOT(), 'images'), { recursive: true, force: true });
   seedVideoHistory([]);
@@ -107,7 +132,9 @@ describe('scene takes routes', () => {
 
   it('materializes a pre-takes selection as a legacy take instead of losing it', async () => {
     // A pre-#8965 scene: a selected frame with no takes list at all.
+    seedImage('legacy.png');
     await projects.updateScene(project.id, sceneB.sceneId, { referenceImageId: 'legacy.png' });
+    rmSync(join(ROOT(), 'images', 'legacy.png')); // legacy records may outlive their bytes
     const raw = await reload();
     // updateScene records the slot as a take; strip it to model an old record.
     const { mergeProjectsFromSync } = projects;
@@ -512,5 +539,141 @@ describe('a shot\'s frame references', () => {
     // Back to auto.
     await request(app).patch(`${base()}/scenes/${sceneA.sceneId}`).send({ frameReferenceIds: null });
     expect(musicVideoConditioningReferences(await reload(), await sceneOf()).map((ref) => ref.id)).toEqual(['lead']);
+  });
+});
+
+
+function barrier() {
+  let entered;
+  let release;
+  const reached = new Promise(resolve => { entered = resolve; });
+  const resumed = new Promise(resolve => { release = resolve; });
+  return { reached, release, wait: async () => { entered(); await resumed; } };
+}
+
+// Each combination catches a different deletion lane or all-project scan.
+describe('pool deletion and selection admission', () => {
+  async function seedRace(kind, anotherProject) {
+    const assetId = kind === 'image' ? 'race.png' : 'race-clip';
+    const keep = kind === 'image' ? 'keep.png' : 'keep-clip';
+    const field = kind === 'image' ? 'referenceImageId' : 'videoHistoryId';
+    if (kind === 'image') {
+      seedImage(assetId);
+      seedImage(keep);
+    } else {
+      mkdirSync(join(ROOT(), 'videos'), { recursive: true });
+      for (const id of [assetId, keep]) writeFileSync(join(ROOT(), 'videos', `${id}.mp4`), 'synthetic clip');
+      seedVideoHistory([assetId, keep].map(id => ({ id, filename: `${id}.mp4` })));
+    }
+    await addTake(sceneA.sceneId, { kind, assetId: keep });
+    const candidate = await addTake(sceneA.sceneId, { kind, assetId });
+    let owner = project;
+    let shot = sceneA;
+    let take = candidate.body.take;
+    if (anotherProject) {
+      owner = await projects.createProject({ name: 'Other synthetic project' });
+      shot = await projects.addProjectScene(owner.id, { prompt: 'Another shot' });
+      await projects.appendSceneTakes(owner.id, shot.sceneId, [{ kind, assetId: keep }]);
+      take = (await projects.appendSceneTakes(owner.id, shot.sceneId, [{ kind, assetId }])).appended[0];
+    }
+    const path = `/api/music-video/${owner.id}/scenes/${shot.sceneId}`;
+    const select = () => request(app).post(`${path}/takes/${take.takeId}/select`).then(value => value);
+    const remove = () => request(app).post(`${base()}/media-pool/delete`).send({ items: [{ kind, assetId }] }).then(value => value);
+    const bytes = () => existsSync(join(ROOT(), kind === 'image' ? 'images' : 'videos', kind === 'image' ? assetId : `${assetId}.mp4`));
+    const selected = async () => (await projects.getProject(owner.id)).scenes.find(scene => scene.sceneId === shot.sceneId)[field];
+    return { assetId, keep, field, owner, shot, path, select, remove, bytes, selected };
+  }
+
+  it.each([['image', false], ['video', false], ['image', true], ['video', true]])(
+    'keeps a %s selected before deletion (other project: %s)', async (kind, anotherProject) => {
+      const fixture = await seedRace(kind, anotherProject);
+      const gate = barrier();
+      race.beforeSave = async rows => {
+        if (rows.some(row => row.id === fixture.owner.id && row.scenes.some(scene => scene[fixture.field] === fixture.assetId))) {
+          race.beforeSave = null;
+          await gate.wait();
+        }
+      };
+      const selection = fixture.select();
+      await gate.reached;
+      const arrived = barrier();
+      race.onRequest = req => { if (req.path.endsWith('/media-pool/delete')) arrived.release(); };
+      const deletion = fixture.remove();
+      // Wait until HTTP deletion has arrived while selection owns the store tail.
+      await arrived.wait();
+      gate.release();
+      expect((await selection).status).toBe(200);
+      const refused = await deletion;
+      expect(refused.status).toBe(409);
+      expect(refused.body.code).toBe('POOL_ASSET_IN_USE');
+      expect(await fixture.selected()).toBe(fixture.assetId);
+      expect(fixture.bytes()).toBe(true);
+    },
+  );
+
+  it.each([['image', false], ['video', false], ['image', true], ['video', true]])(
+    'refuses selection after admitted %s deletion (other project: %s)', async (kind, anotherProject) => {
+      const fixture = await seedRace(kind, anotherProject);
+      const gate = barrier();
+      race.beforeDelete = gate.wait;
+      const deletion = fixture.remove();
+      await gate.reached;
+      const arrived = barrier();
+      race.onRequest = req => { if (req.path.endsWith('/select')) arrived.release(); };
+      const selection = fixture.select();
+      // An unrelated project edit must survive the file-wide cleanup too.
+      const edit = projects.updateProject(fixture.owner.id, { name: 'Concurrent title' });
+      await arrived.wait();
+      gate.release();
+      expect((await deletion).status).toBe(200);
+      expect((await selection).status).toBe(404); // cleanup removed the now-missing take
+      await edit;
+      expect(await fixture.selected()).toBe(fixture.keep);
+      expect(fixture.bytes()).toBe(false);
+      expect((await projects.getProject(fixture.owner.id)).name).toBe('Concurrent title');
+      // Direct slot writes and reused/generated/imported completions also see
+      // the missing local asset inside admission, even after route preflight.
+      const direct = await request(app).patch(fixture.path).send({ [fixture.field]: fixture.assetId });
+      expect(direct.status).toBe(400);
+      expect(direct.body.code).toBe('TAKE_ASSET_NOT_FOUND');
+      await expect(projects.placeMediaPoolItem(fixture.owner.id, fixture.shot.sceneId, { kind, assetId: fixture.assetId }))
+        .rejects.toMatchObject({ code: 'TAKE_ASSET_NOT_FOUND' });
+      await projects.updateScene(fixture.owner.id, fixture.shot.sceneId, { [fixture.field]: null });
+      for (const source of ['generated', 'imported']) {
+        await expect(projects.appendSceneTakes(fixture.owner.id, fixture.shot.sceneId, [{ kind, assetId: fixture.assetId, source }]))
+          .rejects.toMatchObject({ code: 'TAKE_ASSET_NOT_FOUND' });
+      }
+      await expect(projects.appendTakesAcrossScenes(fixture.owner.id, [{ sceneId: fixture.shot.sceneId, kind, assetId: fixture.assetId }]))
+        .rejects.toMatchObject({ code: 'TAKE_ASSET_NOT_FOUND' });
+      expect(await fixture.selected()).toBeNull();
+    },
+  );
+
+  it('cleans a completed batch prefix after failure and keeps the failed asset and evidence', async () => {
+    seedImage('keep.png');
+    seedImage('deleted.png');
+    seedImage('failed.png');
+    await addTake(sceneA.sceneId, { kind: 'image', assetId: 'keep.png' });
+    await addTake(sceneA.sceneId, { kind: 'image', assetId: 'deleted.png' });
+    await addTake(sceneA.sceneId, { kind: 'image', assetId: 'failed.png' });
+    const items = ['deleted.png', 'failed.png'].map(assetId => ({ kind: 'image', assetId }));
+    await request(app).patch(`${base()}/media-pool/marks`).send({ items, mark: 'bad' });
+    seedImage('outside.png');
+    for (const assetId of ['keep.png', 'outside.png']) {
+      const refused = await request(app).post(`${base()}/media-pool/delete`).send({ items: [items[0], { kind: 'image', assetId }] });
+      expect(refused.status).toBe(409);
+      expect(refused.body.code).toBe('POOL_ASSET_IN_USE');
+      expect(existsSync(join(ROOT(), 'images', 'deleted.png'))).toBe(true);
+    }
+    race.beforeDelete = async id => { if (id === 'failed.png') throw new Error('Synthetic deletion failure'); };
+    const result = await request(app).post(`${base()}/media-pool/delete`).send({ items });
+    expect(result.status).toBe(500);
+    expect(existsSync(join(ROOT(), 'images', 'deleted.png'))).toBe(false);
+    expect(existsSync(join(ROOT(), 'images', 'failed.png'))).toBe(true);
+    const stored = await reload();
+    expect(stored.scenes[0].takes.map(take => take.assetId)).toEqual(['keep.png', 'failed.png']);
+    expect(stored.assetMarks).toEqual({ 'image:failed.png': 'bad' });
+    await projects.updateProject(project.id, { name: 'Queue recovered' });
+    expect((await reload()).name).toBe('Queue recovered');
   });
 });

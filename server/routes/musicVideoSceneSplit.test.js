@@ -37,7 +37,7 @@ beforeEach(async () => {
   rmSync(join(ROOT(), 'music-video-projects.json'), { force: true });
   mkdirSync(join(ROOT(), 'images'), { recursive: true });
   writeFileSync(join(ROOT(), 'images', 'singer.png'), 'png-bytes');
-  writeFileSync(join(ROOT(), 'video-history.json'), JSON.stringify([]));
+  writeFileSync(join(ROOT(), 'video-history.json'), JSON.stringify(['clip-whole-verse', 'clip-bridge'].map(id => ({ id, filename: `${id}.mp4` }))));
   project = await projects.createProject({ name: 'Example Video' });
   await projects.updateProject(project.id, { lyricCues: LYRICS, videoSettings: { backend: 'fal' } });
 });
