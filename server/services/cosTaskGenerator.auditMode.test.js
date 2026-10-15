@@ -165,6 +165,9 @@ describe('issues-only audit dispatch never acquires code-shipping instructions (
     const task = await generate('better-cognitive-load');
     const prompt = renderPrompt(task);
     expect(prompt).toContain('Excessive code comments');
+    expect(prompt).toContain('Every accepted finding requires resolution regardless of severity');
+    expect(prompt).toContain('warnings and nits are not exemptions');
+    expect(prompt).toContain('Never hide findings, weaken tests, or disable useful checks');
     expect(prompt).toContain('safety rationale, external contracts, and justified workarounds');
     expect(prompt).toContain('Preserve licenses, tool directives, meaningful type/JSDoc metadata');
     expect(prompt).toContain('not a rewrite of user-facing documentation');
