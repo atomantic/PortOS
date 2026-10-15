@@ -854,6 +854,8 @@ jobs:
         # (#10415). Observed healthy runs take 2-10 minutes.
         timeout-minutes: 15
         env:
+          # Outside the launcher's disposable temp root; recoverable after exit.
+          PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
           CI_TEST_MODE: ${{ needs.impact.outputs.windows_mode }}
           CI_TEST_FILES: ${{ needs.impact.outputs.windows_files }}
           CI_TEST_SOURCES: ${{ needs.impact.outputs.windows_sources }}
@@ -864,6 +866,14 @@ jobs:
           # (STATUS_DLL_INIT_FAILED) under per-file process churn (#10114).
           PORTOS_CI_MAX_WORKERS: 2
         run: node scripts/run-ci-tests.js server
+
+      - name: Preserve Windows test failure diagnostics
+        if: failure()
+        continue-on-error: true
+        timeout-minutes: 1
+        env:
+          PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
+        run: node scripts/ci-test-diagnostics.js
 
       - name: Report the failure, then cancel sibling CI jobs
         if: failure() && github.event_name == 'pull_request'

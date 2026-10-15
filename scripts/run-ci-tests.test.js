@@ -406,7 +406,9 @@ describe('structured failure diagnostics', () => {
         FIXTURE_CONFIG);
       const runnerUrl = new URL('./run-ci-tests.js', import.meta.url).href;
       const args = ['--config', join(fixture, 'vitest.config.mjs'), '--root', fixture, './fixture.test.js'];
-      const env = { ...process.env, NODE_ENV: 'test', TMPDIR: host, TMP: host, TEMP: host, NODE_DISABLE_COMPILE_CACHE: '1' };
+      const durable = join(fixture, 'durable');
+      const env = { ...process.env, NODE_ENV: 'test', TMPDIR: host, TMP: host, TEMP: host, NODE_DISABLE_COMPILE_CACHE: '1',
+        PORTOS_CI_DIAGNOSTICS_DIR: durable };
       delete env.PORTOS_TEST_TEMP_ROOT;
       const result = spawnSync(process.execPath, ['--input-type=module', '-e',
         `import { runNpm } from ${JSON.stringify(runnerUrl)};
@@ -416,6 +418,14 @@ describe('structured failure diagnostics', () => {
       expect(result.error).toBeUndefined();
       expect(result.status).toBe(1);
       expect(readdirSync(host)).toEqual([]);
+      const attempts = readdirSync(durable);
+      expect(attempts).toHaveLength(1);
+      const invocation = JSON.parse(readFileSync(join(durable, attempts[0], 'invocation.json'), 'utf8'));
+      expect(invocation).toMatchObject({ completed: true, status: 1 });
+      const progress = JSON.parse(readFileSync(join(durable, attempts[0], 'run.json'), 'utf8'));
+      // Vitest reports bail=1 as an interrupted run, even with a failed suite.
+      expect(progress).toMatchObject({ reason: 'interrupted', completedCount: 1, activeModules: [],
+        completedModules: ['<outside-repository>/fixture.test.js'] });
       expect(result.stdout).toContain('Test Files');
       expect(result.stdout).toContain('Tests');
       expect(result.stderr).toContain('Failed Tests');
