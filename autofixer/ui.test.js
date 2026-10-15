@@ -4,11 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { hashPassword, hashToken } from '../lib/portosAuthCore.js';
 
-const harness = vi.hoisted(() => ({ routes: new Map(), gates: [], auth: null, execPm2: vi.fn() }));
+const harness = vi.hoisted(() => ({ routes: new Map(), gates: [], auth: null, execPm2: vi.fn(), loadApps: vi.fn() }));
 vi.mock('express', () => {
   const express = () => ({
     use: (handler) => harness.gates.push(handler),
-    get: () => {},
+    get: (path, ...handlers) => harness.routes.set(path, handlers),
     post: (path, ...handlers) => harness.routes.set(path, handlers),
   });
   express.json = () => (_req, _res, next) => next();
@@ -24,7 +24,7 @@ vi.mock('../lib/tailscale-https.js', () => ({
 vi.mock('./shared.js', () => ({
   PM2_BIN: 'example-pm2', DATA_DIR: 'unused', AUTOFIXER_DIR: 'unused', INDEX_FILE: 'unused',
   execPm2: harness.execPm2, listProcessesStrict: vi.fn(),
-  loadApps: async () => [{ pm2ProcessNames: ['example-process'] }],
+  loadApps: harness.loadApps,
 }));
 
 const PASSWORD = 'example-password';
@@ -35,6 +35,7 @@ beforeAll(async () => { passwordHash = await hashPassword(PASSWORD, SALT); }, 30
 beforeEach(async () => {
   dataDir = await mkdtemp(join(tmpdir(), 'autofixer-authority-'));
   harness.execPm2.mockReset().mockResolvedValue({ stdout: 'ok', stderr: '' });
+  harness.loadApps.mockReset().mockResolvedValue([{ pm2ProcessNames: ['example-process'] }]);
   harness.gates.length = 0;
   harness.routes.clear();
 });
@@ -65,7 +66,7 @@ const mutate = async (action, address = '192.0.2.10', headers = {}) => {
   const req = { path: `/api/${action}/example-process`, params: { process: 'example-process' },
     headers, socket: { remoteAddress: address } };
   const res = response();
-  for (const handler of [...harness.gates, ...harness.routes.get(`/api/${action}/:process`)]) {
+  for (const handler of [...harness.gates.filter(handler => handler.length !== 4), ...harness.routes.get(`/api/${action}/:process`)]) {
     let nexted = false;
     await handler(req, res, () => { nexted = true; });
     if (!nexted) break;
@@ -74,12 +75,26 @@ const mutate = async (action, address = '192.0.2.10', headers = {}) => {
 };
 
 describe('Autofixer process-control authority', () => {
+  it('returns sanitized unavailability for app reads and blocks controls before PM2', async () => {
+    await loadUi();
+    harness.loadApps.mockRejectedValue(Object.assign(new Error('App registry unavailable'), { code: 'APPS_UNAVAILABLE' }));
+    const errorBoundary = harness.gates.find(handler => handler.length === 4);
+    for (const path of ['/api/apps', '/api/restart/:process', '/api/stop/:process']) {
+      const handler = harness.routes.get(path).at(-1);
+      const res = response();
+      await handler({ params: { process: 'example-process' } }, res).catch(error => errorBoundary(error, {}, res, vi.fn()));
+      expect(res.statusCode).toBe(503);
+      expect(res.body).toEqual({ error: 'App registry unavailable', code: 'APPS_UNAVAILABLE' });
+    }
+    expect(harness.execPm2).not.toHaveBeenCalled();
+  });
+
   it('gates both staged patch actions before touching session files', async () => {
     await loadUi();
     for (const action of ['apply', 'discard']) {
       const req = { path: `/api/fixes/autofixer_example_123/${action}`, params: { session: 'autofixer_example_123' }, headers: {}, socket: { remoteAddress: '192.0.2.10' } };
       const res = response();
-      for (const handler of [...harness.gates, ...harness.routes.get(`/api/fixes/:session/${action}`)]) {
+      for (const handler of [...harness.gates.filter(handler => handler.length !== 4), ...harness.routes.get(`/api/fixes/:session/${action}`)]) {
         let nexted = false;
         await handler(req, res, () => { nexted = true; });
         if (!nexted) break;

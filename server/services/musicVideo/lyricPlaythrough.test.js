@@ -5,7 +5,7 @@ vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await imp
   dataRoot: () => lazyTempDataRoot('portos-mv-lyric-playthrough-'),
 }));
 
-const { buildLyricPlaythroughPreview } = await import('./lyricPlaythrough.js');
+const { buildLyricPlaythroughPreview, lyricOverlayDocumentData } = await import('./lyricPlaythrough.js');
 
 afterAll(() => cleanupTempDataRoots());
 
@@ -95,5 +95,19 @@ describe('lyric timing playthrough', () => {
     expect(preview.html).toContain('let look = null;');
     // The opening title card does ride along, so it can be checked against the lyrics and the animatic.
     expect(preview.html).toContain('"title":"Example Song"');
+  });
+});
+
+describe('lyric overlay for a composed render', () => {
+  it('keeps a title card shot\'s sung line off the overlay, since the card already draws it', () => {
+    const data = lyricOverlayDocumentData({
+      audioAnalysis: { durationSec: 10 }, lyricCues: [cue('found a shot', 1), cue('then changed the scene', 5)],
+      scenes: [
+        { sceneId: 's1', order: 0, startSec: 0, endSec: 4, visualLayer: 'card', lyricText: 'found a shot', textZone: 'upper' },
+        { sceneId: 's2', order: 1, startSec: 4, endSec: 10, textZone: 'upper-right' },
+      ],
+    }, { width: 320, height: 180, fps: 24, durationSec: 10 });
+    expect(data.scenes.map((scene) => [scene.sceneId, scene.textZone])).toEqual([['s1', 'none'], ['s2', 'upper-right']]);
+    expect(data.render).toMatchObject({ width: 320, height: 180, fps: 24 });
   });
 });

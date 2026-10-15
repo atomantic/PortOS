@@ -36,9 +36,9 @@ function otherFrameItem(scene, kind) {
   const take = scene.takes?.find((t) => t.kind === other.takeKind && t.assetId === assetId);
   return { kind: 'image', assetId, sceneId: scene.sceneId, prompt: take?.prompt || scene[other.prompt] || null, clipIds: [], ownFrame: other.label };
 }
-const poolKey = (item) => `${item.kind}:${item.assetId}`;
+export const poolKey = (item) => `${item.kind}:${item.assetId}`;
 /** "Used on #3, #12" for an item other shots (or this one) use now, else null. */
-const usedLabel = (item, shotNumbers) => {
+export const usedLabel = (item, shotNumbers) => {
   const numbers = (item.inUseBy || []).map((id) => shotNumbers.get(id)).filter(Boolean);
   return item.inUseBy?.length ? `Used on ${numbers.length ? numbers.map((n) => `#${n}`).join(', ') : 'a shot'}` : null;
 };
@@ -274,7 +274,8 @@ export default function SceneTakePicker({ open, onClose, projectId, scene, kind,
   );
 }
 
-function DeleteConfirm({ count, noun, working, onConfirm, onCancel }) {
+/** Inline "Delete … from the media library?" with Yes, delete and Keep. */
+export function DeleteConfirm({ count, noun, working, onConfirm, onCancel }) {
   return (
     <div className="flex flex-wrap items-center gap-2 rounded border border-port-error/50 p-2 text-xs">
       <span className="min-w-0 flex-1">Delete {count === 1 ? `this ${noun}` : `${formatCount(count)} ${noun}s`} from the media library? This can't be undone.</span>

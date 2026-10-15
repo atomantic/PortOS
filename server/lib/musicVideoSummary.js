@@ -7,7 +7,7 @@
  * / spend / preview rules mirror `client/src/lib/musicVideoStages.js` and
  * `musicVideoPreview.js`, which still derive them for a full record.
  */
-import { isLayeredComposition, sceneRenderReady } from './musicVideoLayers.js';
+import { composedDrawsLyrics, isLayeredComposition, sceneRenderReady } from './musicVideoLayers.js';
 import { latestMusicVideoReviewDraft } from './musicVideoReviewDraft.js';
 import { finishedOutsideCovers } from './musicVideoFinishedOutside.js';
 
@@ -54,7 +54,7 @@ function projectSpend(project, run) {
 
 function composeDone(project, mode) {
   const composition = project.composition || {};
-  if (mode === 'composed') return (composition.textCues || []).length > 0;
+  if (mode === 'composed') return (composition.textCues || []).length > 0 || composedDrawsLyrics(project);
   if (mode === 'document') return Boolean(composition.document);
   if (mode === 'eidoverse') return Boolean(composition.eidoverseScene?.inlineScript);
   if (mode === 'code') return Boolean(composition.codeVideo?.generatedAt || (composition.codeVideo?.sections || []).length > 0);

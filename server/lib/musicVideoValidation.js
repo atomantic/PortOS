@@ -2,7 +2,7 @@ import { MUSIC_VIDEO_MEDIA_MODES } from './musicVideoMediaPolicy.js';
 import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicVideoGrade.js';
 import { filmLookSchema } from './filmLookValidation.js';
 import { TITLE_CARD_FONTS, TITLE_CARD_LIMITS, TITLE_CARD_POSITIONS, TITLE_CARD_STYLES } from './musicVideoTitleCard.js';
-import { STATS_OUTRO_LIMITS } from './musicVideoStatsOutro.js';
+import { STATS_OUTRO_LIMITS, STATS_OUTRO_LINES } from './musicVideoStatsOutro.js';
 import { COVER_DESIGN_OPTIONS } from './musicVideoCoverOverlay.js';
 import { DISTROKID_REMEMBERED_OPTIONS } from './distrokidGenres.js';
 import { CROSS_LINK_EDIT_TARGETS } from './musicVideoCrossLinks.js';
@@ -345,6 +345,21 @@ export const musicVideoPoolMarkSchema = z.object({
 
 /** Delete unused stills and clips from the media library (the asset manager's "Delete bad"). */
 export const musicVideoPoolDeleteSchema = z.object({
+  items: z.array(musicVideoPoolAssetSchema).min(1).max(500),
+}).strict();
+
+/** File another music video's whole pool (an earlier draft) into this video's collection. */
+export const musicVideoPoolImportSchema = z.object({
+  fromProjectId: z.string().min(1).max(200),
+}).strict();
+
+/** Search the whole media library for stills and clips to add to a video's assets. */
+export const musicVideoLibrarySearchQuerySchema = z.object({
+  q: z.string().trim().min(1).max(200),
+}).strict();
+
+/** File stills and clips from the media library into a video's assets. */
+export const musicVideoPoolAddSchema = z.object({
   items: z.array(musicVideoPoolAssetSchema).min(1).max(500),
 }).strict();
 
@@ -1310,6 +1325,9 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
 export const musicVideoStatsOutroSchema = z.object({
   enabled: z.boolean().optional(),
   durationSec: z.number().min(STATS_OUTRO_LIMITS.durationMin).max(STATS_OUTRO_LIMITS.durationMax).optional(),
+  title: z.string().max(STATS_OUTRO_LIMITS.textMax).optional(),
+  subtitle: z.string().max(STATS_OUTRO_LIMITS.textMax).optional(),
+  hidden: z.array(z.enum(STATS_OUTRO_LINES.map((line) => line.key))).max(STATS_OUTRO_LINES.length).optional(),
 }).strict();
 
 // The opening title card (lib/musicVideoTitleCard.js): song title, artist, year

@@ -45,6 +45,7 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
   const [searchParams, setSearchParams] = useSearchParams();
   const [schedule, setSchedule] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   const label = searchParams.get('label') || '';
   const setLabel = next => {
@@ -84,8 +85,14 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
   }, [searchParams, setSearchParams]);
 
   const fetchSchedule = useCallback(async () => {
-    const data = await api.getCosSchedule().catch(() => null);
-    setSchedule(current => data || current);
+    const data = await api.getCosSchedule({ silent: true }).catch(err => {
+      setError(err?.message || 'Failed to load task schedule');
+      return null;
+    });
+    if (data) {
+      setSchedule(data);
+      setError(null);
+    }
     setLoading(false);
     return data;
   }, []);
@@ -157,6 +164,7 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
       <div className="text-center py-8 text-gray-500">
         <AlertCircle className="w-12 h-12 mx-auto mb-3 opacity-50" />
         <p>Failed to load task schedule</p>
+        <button type="button" onClick={fetchSchedule} className="mt-3 underline">Retry</button>
       </div>
     );
   }
@@ -186,6 +194,12 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
           Refresh
         </button>
       </div>
+
+      {error && (
+        <Banner tone="error" icon={AlertCircle} title="Schedule unavailable — showing the last loaded schedule">
+          {error}
+        </Banner>
+      )}
 
       {improvementDisabled && (
         <Banner size="md" icon={AlertCircle} title="Improvement is disabled">

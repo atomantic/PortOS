@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
 
 // loadApps() reads a fixed on-disk path, so the read is faked to keep the
-// fallback assertions independent of whether this install has a data/apps.json.
+// availability assertions independent of whether this install has a data/apps.json.
 const readFileMock = vi.hoisted(() => vi.fn());
 vi.mock('fs/promises', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -104,6 +104,16 @@ describeShared('autofixer/shared — loadApps', () => {
 
   it('returns [] when the apps file has no apps key', async () => {
     readFileMock.mockResolvedValue('{}');
+    await expect(shared.loadApps()).resolves.toEqual([]);
+  });
+
+  it.each(['EACCES', 'EIO'])('reports %s without exposing the underlying error', async (code) => {
+    readFileMock.mockRejectedValue(Object.assign(new Error('private example path or content'), { code }));
+    await expect(shared.loadApps()).rejects.toMatchObject({ message: 'App registry unavailable', code: 'APPS_UNAVAILABLE' });
+  });
+
+  it('preserves a successfully read empty app registry', async () => {
+    readFileMock.mockResolvedValue('{"apps":{}}');
     await expect(shared.loadApps()).resolves.toEqual([]);
   });
 

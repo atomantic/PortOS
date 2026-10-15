@@ -1187,6 +1187,10 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
   const firstLine = sourceTaskDesc.split(/[\r\n]/).find(l => l.trim()) || sourceTaskDesc;
   const followUpTitle = `[${kind.title}] ${firstLine.trim().substring(0, 80)} (${prUrl})`;
 
+  const reviewLoopForkTarget = forkHead && !leaveOpen
+    ? await (await import('./forkReviewMergeTarget.js')).captureForkReviewMergeTarget({ prUrl, prBranch, forkHead, sourceWorkspace })
+    : null;
+
   const followUpTaskId = `sys-rl-${Date.now().toString(36)}`;
   const followUpTask = {
     id: followUpTaskId,
@@ -1223,6 +1227,7 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
       // shared reader is `resolveTaskForkHead`, so this key is the generic
       // `forkHead` rather than a review-loop-specific one.
       forkHead: normalizeForkHead(forkHead),
+      reviewLoopForkTarget,
       reviewLoopPRNumber: parsedPr?.number ?? null,
       reviewLoopPRHost: parsedPr?.host ?? null,
       reviewLoopPROwner: parsedPr?.owner ?? null,

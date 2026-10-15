@@ -76,7 +76,7 @@ describe('WorkflowTab timeline defaults and layout', () => {
       );
     });
 
-    expect(api.getCosWorkflow).toHaveBeenCalledWith(168);
+    expect(api.getCosWorkflow).toHaveBeenCalledWith(168, { silent: true });
     const sevenDaysBtn = screen.getByRole('button', { name: '7 days' });
     expect(sevenDaysBtn.className).toContain('text-port-accent');
     const twentyFourHoursBtn = screen.getByRole('button', { name: '24 hours' });

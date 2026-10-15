@@ -259,6 +259,20 @@ describe('following the tab order', () => {
       .toEqual([['footage', true, false, 'Footage for every shot (1 of 1)'], ['approve-storyboard', true, false, 'Every still locked'], ['composition', true, false, 'Timed typography added']]);
   });
 
+  it('counts a composed render\'s own lyrics as its typography, so it asks for no text cues', () => {
+    const composition = { mode: 'composed', textCues: [] };
+    const lyricCues = [{ text: 'found a shot', startSec: 1, endSec: 2 }];
+    const project = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, scenes: [scene()], composition, lyricCues };
+    const readiness = readinessFor(project, { art: true, storyboard: true, approvedComposition: JSON.stringify(composition) });
+    expect(stageChecklist('produce', project, readiness).find((i) => i.id === 'composition'))
+      .toMatchObject({ done: true, label: 'Lyrics drawn over the footage' });
+    expect(deriveNextAction(project, { readiness })).not.toMatchObject({ id: 'goto-compose' });
+    // Without timed lyrics there is nothing to draw, so the task still asks for text.
+    const bare = { ...project, lyricCues: [] };
+    expect(stageChecklist('produce', bare, readinessFor(bare, { art: true, storyboard: true })).find((i) => i.id === 'composition'))
+      .toMatchObject({ done: false, label: 'Timed typography added' });
+  });
+
   it('keeps the header on the footage until it is in, unless a run is parked on its pilot proof', () => {
     const project = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, scenes: [scene({ videoHistoryId: null })] };
     const readiness = readinessFor(project, { art: true, storyboard: true });

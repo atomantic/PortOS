@@ -362,10 +362,6 @@ export async function syncGmail(account, cache, io, options = {}) {
     else inboxMessages.push(m);
   }
 
-  if (io && inboxMessages.length > 0) {
-    io.emit('messages:sync:message', { accountId: account.id, messages: inboxMessages });
-  }
-
   // Sent-coverage fail-closed also covers a dropped detail fetch (#2820): a
   // `users.messages.get` that failed above was skipped, but `sentTruncated` only
   // reflects LIST pagination — so a dropped message (possibly the user's reply)

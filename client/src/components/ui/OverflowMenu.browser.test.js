@@ -15,18 +15,21 @@ const { chromium } = require(require.resolve('playwright-core', { paths: [
   fileURLToPath(new URL('../../..', import.meta.url)),
   fileURLToPath(new URL('../../../../server', import.meta.url)),
 ] }));
+const auditCdp = process.env.PORTOS_AUDIT_CDP;
 const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
   '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',
 ].find(path => path && existsSync(path));
 
-describe.skipIf(!chrome)('overflow menu keyboard focus', () => {
+describe.skipIf(!chrome && !auditCdp)('overflow menu keyboard focus', () => {
   let browser;
   let fixture;
   let origin;
+  let auditPage;
   beforeAll(async () => {
     // Each startup phase is bounded and cleaned up inside the hook (#10543).
-    fixture = await startBrowserFixture({ name: 'overflow-chrome', createServer, chromium,
+    fixture = await startBrowserFixture({ name: 'overflow-chrome', createServer,
+      chromium: auditCdp ? { launch: () => chromium.connectOverCDP(auditCdp) } : chromium,
       launchOptions: { executablePath: chrome, args: ['--mute-audio'] }, viteConfig: temp => ({
       configFile: false,
       // Concurrent fixtures and linked worktrees must not replace each other's
@@ -48,6 +51,8 @@ describe.skipIf(!chrome)('overflow menu keyboard focus', () => {
             createRoot(document.getElementById('root')).render(
               React.createElement(React.Fragment, null,
                 React.createElement('button', { id: 'before' }, 'Before'),
+                React.createElement('div', { style: { display: 'none' } },
+                  React.createElement('button', null, 'Hidden desktop action')),
                 React.createElement(OverflowMenu, {
                   label: 'More actions',
                   items: [
@@ -56,6 +61,11 @@ describe.skipIf(!chrome)('overflow menu keyboard focus', () => {
                     { id: 'delete', label: 'Delete' },
                   ],
                 }),
+                React.createElement('button', { tabIndex: -1 }, 'Programmatic action'),
+                React.createElement('fieldset', { disabled: true },
+                  React.createElement('button', null, 'Disabled by fieldset')),
+                React.createElement('div', { inert: true },
+                  React.createElement('button', null, 'Inert action')),
                 React.createElement('button', { id: 'after' }, 'After'))
             );
           `;
@@ -71,11 +81,28 @@ describe.skipIf(!chrome)('overflow menu keyboard focus', () => {
       server: { host: '127.0.0.1', port: 0 },
     }) });
     ({ browser, origin } = fixture);
+    if (auditCdp) {
+      for (const candidate of browser.contexts().flatMap(context => context.pages())) {
+        if (await candidate.evaluate(() => window.name === 'portos-ui-quality-audit')) {
+          auditPage = candidate;
+          break;
+        }
+      }
+      if (!auditPage) throw new Error('Dedicated PortOS audit target is missing');
+      const session = await auditPage.context().newCDPSession(auditPage);
+      await session.send('Emulation.setFocusEmulationEnabled', { enabled: true });
+    }
   }, BROWSER_FIXTURE_STARTUP_MS);
-  afterAll(() => fixture?.close());
+  afterAll(async () => {
+    if (auditPage) await auditPage.evaluate(() => {
+      window.name = 'portos-ui-quality-audit';
+      document.title = 'PortOS UI Audit';
+    });
+    await fixture?.close();
+  });
 
   it.each(['ArrowDown', 'Enter'])('enters after %s, keeps focus on reflow, and exits relative to the trigger', async (key) => {
-    const page = await browser.newPage();
+    const page = auditPage || await browser.newPage();
     try {
       await page.goto(`${origin}overflow-test`);
       const trigger = page.getByRole('button', { name: 'More actions' });
@@ -114,7 +141,7 @@ describe.skipIf(!chrome)('overflow menu keyboard focus', () => {
       expect(await page.getByRole('menu').count()).toBe(0);
       await focused(page.locator('#before'));
     } finally {
-      await page.close();
+      if (!auditPage) await page.close();
     }
   }, 60000);
 });

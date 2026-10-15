@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -42,6 +42,10 @@ const projects = await import('./projects.js');
 
 function reset() {
   rmSync(join(TEST_DATA_ROOT, 'music-video-projects.json'), { force: true });
+  writeFileSync(join(TEST_DATA_ROOT, 'video-history.json'), JSON.stringify(
+    ['run-clip', 'new-clip', 'clip-1', 'clip-2', 'approved-clip', 'alternate-clip', 'keep-clip', 'candidate-clip', 'clip-a', 'clip-b']
+      .map(id => ({ id, filename: `${id}.mp4` })),
+  ));
   emitRecordUpdated.mockClear();
   emitRecordDeleted.mockClear();
   autoSubscribeRecordToAllPeers.mockClear();

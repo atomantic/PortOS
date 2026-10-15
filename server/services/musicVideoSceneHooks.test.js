@@ -7,16 +7,14 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), 'mv-scene-hooks-test-'));
 
-vi.mock('../lib/fileUtils.js', async (importOriginal) => {
-  const actual = await importOriginal();
-  return { ...actual, PATHS: { ...actual.PATHS, data: TEST_DATA_ROOT } };
-});
+vi.mock('../lib/paths.js', async (original) => makePathsProxy(await original(), { dataRoot: () => TEST_DATA_ROOT }));
 vi.mock('./settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
 
 const { mediaJobEvents } = await import('./mediaJobQueue/index.js');
@@ -64,6 +62,17 @@ describe('music-video scene completion hooks → takes', () => {
   beforeEach(async () => {
     project = null;
     rmSync(join(TEST_DATA_ROOT, 'music-video-projects.json'), { force: true });
+    // Real workers publish media/history before emitting completed. Keep the
+    // hook tests on that boundary, including direct selection of source plates.
+    mkdirSync(join(TEST_DATA_ROOT, 'images'), { recursive: true });
+    for (const name of ['newer', 'older', 'first', 'second', 'third', 'one', 'two', 'three',
+      'frame-a', 'frame-b', 'start', 'sketch', 'late', 'kept', 'frame']) {
+      writeFileSync(join(TEST_DATA_ROOT, 'images', `${name}.png`), 'synthetic image');
+    }
+    mkdirSync(join(TEST_DATA_ROOT, 'videos'), { recursive: true });
+    const clips = ['clip-1', 'clip-2', 'clip-old', 'late-clip', 'clip-ok'];
+    for (const id of clips) writeFileSync(join(TEST_DATA_ROOT, 'videos', `${id}.mp4`), 'synthetic clip');
+    writeFileSync(join(TEST_DATA_ROOT, 'video-history.json'), JSON.stringify(clips.map(id => ({ id, filename: `${id}.mp4` }))));
     imageHook.__testing.reset();
     videoHook.__testing.reset();
     imageHook.initMusicVideoSceneImageHook();

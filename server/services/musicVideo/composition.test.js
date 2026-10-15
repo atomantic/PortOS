@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildTypographyDocument, cueStateAt, normalizeComposition, overlayWindows, projectTypographyPlan, renderableCues, sectionCardCues } from './composition.js';
+import { buildTypographyDocument, composedLyricWindows, cueStateAt, normalizeComposition, overlayWindows, projectTypographyPlan, renderableCues, sectionCardCues } from './composition.js';
 
 const cue = (over = {}) => ({ id: 'c', text: 'Hello world', startSec: 10, endSec: 12, template: 'fade', placement: 'lower', emphasis: 'subtitle', ...over });
 
@@ -85,6 +85,31 @@ describe('overlayWindows (#8984)', () => {
       { startSec: 3.5, endSec: 4 },
       { startSec: 2, endSec: 2.5 },
     ])).toEqual([{ startSec: 1, endSec: 4 }, { startSec: 20, endSec: 22 }]);
+  });
+});
+
+describe('composedLyricWindows', () => {
+  const lyricCues = [
+    { text: 'found a shot', startSec: 1, endSec: 1.6, words: [{ w: 'found', startSec: 1, endSec: 1.2 }, { w: 'shot', startSec: 1.4, endSec: 1.9 }] },
+    { text: 'then changed the scene', startSec: 10, endSec: 11 },
+    { text: 'past the end', startSec: 30, endSec: 31 },
+  ];
+  const project = (composition) => ({ composition, lyricCues });
+
+  it('draws the timed lyrics of a composed render with no subtitle cues, holding past each line', () => {
+    expect(composedLyricWindows(project({ mode: 'composed', textCues: [] }), 20)).toEqual([
+      { startSec: 1, endSec: 3.9 }, { startSec: 10, endSec: 13 },
+    ]);
+    // A hero cue is a title over the lyrics, not a stand-in for them.
+    const hero = { id: 'h', text: 'TITLE', startSec: 0, endSec: 2, emphasis: 'hero' };
+    expect(composedLyricWindows(project({ mode: 'composed', textCues: [hero] }), 20)).toHaveLength(2);
+  });
+
+  it('leaves the lyrics to subtitle cues, and to every other render mode', () => {
+    const subtitle = { id: 's', text: 'my own line', startSec: 0, endSec: 2, emphasis: 'subtitle' };
+    expect(composedLyricWindows(project({ mode: 'composed', textCues: [subtitle] }), 20)).toEqual([]);
+    expect(composedLyricWindows(project({ mode: 'concat', textCues: [] }), 20)).toEqual([]);
+    expect(composedLyricWindows(project(undefined), 20)).toEqual([]);
   });
 });
 

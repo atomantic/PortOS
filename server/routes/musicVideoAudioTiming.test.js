@@ -28,6 +28,7 @@ const post = (id, action, body) => request(app).post(`/api/music-video/${id}/aud
 
 async function fixture({ legacy = false } = {}) {
   mkdirSync(join(ROOT(), 'music'), { recursive: true });
+  writeFileSync(join(ROOT(), 'video-history.json'), JSON.stringify(['clip-a', 'clip-b'].map(id => ({ id, filename: `${id}.mp4` }))));
   for (const name of ['old', 'insert', 'delete']) writeFileSync(join(ROOT(), 'music', `${name}.wav`), `${name}-synthetic-audio`);
   const project = await projects.createProject({ name: 'Example timing project', trackId: 'old' });
   await projects.mutateProjectRecord(project.id, (p) => ({ project: { ...p,

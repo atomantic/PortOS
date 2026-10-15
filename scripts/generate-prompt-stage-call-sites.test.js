@@ -8,6 +8,7 @@ import {
   REGENERATE_COMMAND,
   REPO_ROOT,
   buildStageCallSites,
+  createStageScanDiagnostics,
   generateStageCallSites,
   readShippedStageKeys,
   readStageCallSitesManifest,
@@ -162,6 +163,37 @@ describe('prompt stage call-site scanner', () => {
     expect(index['demo-unshipped']).toEqual(['server/services/a.js']);
   });
 
+  it('resolves earlier literals and template prefixes against keys discovered in a later file', () => {
+    const sources = [
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: Parse this interpolation as fixture source, not as the test's own template.
+      src('server/services/a.js', "const stages = ['demo-unshipped', `demo-template-one`]; const pick = (id) => `demo-future-${id}`;"),
+      src('server/services/z.js', "getStage('demo-unshipped'); buildPrompt('demo-template-one'); buildPrompt('demo-future-one');"),
+    ];
+    const build = (scanned) => buildStageCallSites({ shippedStageKeys: [], sources: scanned });
+
+    expect(build(sources)).toEqual({
+      'demo-future-one': ['server/services/a.js', 'server/services/z.js'],
+      'demo-template-one': ['server/services/a.js', 'server/services/z.js'],
+      'demo-unshipped': ['server/services/a.js', 'server/services/z.js'],
+    });
+    expect(build([...sources].reverse())).toEqual(build(sources));
+  });
+
+  it('names an over-budget synchronous phase with redacted timing, inventory, and resource evidence', () => {
+    let clock = 0;
+    const reports = [];
+    const diagnostics = createStageScanDiagnostics({ budgetMs: 60000, now: () => clock, onProgress: (report) => reports.push(report) });
+    diagnostics.checkpoint({ sources: 3, sourceBytes: 1234, scannedSources: 2, nodes: 42 });
+
+    expect(() => diagnostics.measure('parse', () => { clock = 60001; }))
+      .toThrow(/exceeded 60000ms during parse/);
+    expect(reports).toEqual([expect.objectContaining({
+      phase: 'parse', sources: 3, sourceBytes: 1234, scannedSources: 2, nodes: 42,
+      elapsedMs: 60001, phaseMs: { parse: 60001 },
+      cpuMs: expect.any(Number), sampledPeakHeapMiB: expect.any(Number), sampledPeakRssMiB: expect.any(Number),
+    })]);
+  });
+
   it('omits keys nothing references and dedupes repeated references', () => {
     const index = buildStageCallSites({
       shippedStageKeys,
@@ -208,18 +240,27 @@ describe('prompt stage call-site scanner', () => {
 // literal-key call site (or renaming a file that has one) without rerunning
 // the generator leaves stages unprotected, and this fails until it's rerun.
 describe('prompt stage call-site manifest', () => {
-  // Babel-parses every tracked non-test source under `server/` in one test —
-  // ~7s on a warm dev machine, and past the 10s default on a loaded CI runner.
-  // Raised so the scan's own cost cannot be misreported as manifest drift.
+  // Keep the 60s deadline. Synchronous work can delay Vitest's timer, so the
+  // diagnostic budget also checks each completed phase and identifies it.
+  // Report elapsed/CPU time, inventory, and sampled memory without source text.
   it('matches a fresh scan of the tracked server sources', { timeout: 60000 }, () => {
     const stale = `${MANIFEST_RELATIVE_PATH} is stale — run \`${REGENERATE_COMMAND}\` and commit the result.`;
-    const fresh = generateStageCallSites();
-
-    // Structural first, so a genuine drift reports as a readable key diff…
-    expect(fresh, stale).toEqual(readStageCallSitesManifest());
-    // …then byte-exact, so a hand-edit that reformats the file is caught too.
-    expect(readFileSync(join(REPO_ROOT, MANIFEST_RELATIVE_PATH), 'utf8'), stale)
-      .toBe(serializeManifest(fresh));
+    const diagnostics = createStageScanDiagnostics({
+      budgetMs: 60000,
+      onProgress: (report) => console.log(`📜 Prompt-stage scan: ${JSON.stringify(report)}`),
+    });
+    try {
+      const fresh = generateStageCallSites(REPO_ROOT, { diagnostics });
+      diagnostics.measure('comparison', () => {
+        // Structural first, so a genuine drift reports as a readable key diff…
+        expect(fresh, stale).toEqual(readStageCallSitesManifest());
+        // …then byte-exact, so a hand-edit that reformats the file is caught too.
+        expect(readFileSync(join(REPO_ROOT, MANIFEST_RELATIVE_PATH), 'utf8'), stale)
+          .toBe(serializeManifest(fresh));
+      });
+    } finally {
+      diagnostics.finish();
+    }
   });
 
   it('covers the shipped stages that features resolve by name', () => {

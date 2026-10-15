@@ -1132,7 +1132,11 @@ async function pruneOldSnapshots(destPath, retentionCount) {
   if (retentionCount === null || retentionCount === undefined) return { pruned: 0 };
 
   const sourceRoot = join(destPath, 'snapshots', MACHINE_HOST);
-  const entries = await readdir(sourceRoot, { withFileTypes: true }).catch(() => []);
+  // A completed snapshot was just written here; even ENOENT is a failed
+  // inventory, not proof that there is nothing to prune. Keep paths private.
+  const entries = await readdir(sourceRoot, { withFileTypes: true }).catch(cause => {
+    throw inventoryReadError(cause, 'read-retention-namespace');
+  });
   const candidateIds = entries
     .filter(entry => entry.isDirectory() && !entry.name.startsWith('.') && SNAPSHOT_ID_PATTERN.test(entry.name))
     .map(entry => entry.name);

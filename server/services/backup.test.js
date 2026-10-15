@@ -142,6 +142,7 @@ vi.mock('fs/promises', async (importOriginal) => {
   return {
     ...actual,
     stat: vi.fn(actual.stat),
+    readdir: vi.fn(actual.readdir),
     readFile: vi.fn(actual.readFile),
     access: vi.fn(actual.access),
     unlink: vi.fn(actual.unlink),
@@ -181,6 +182,7 @@ import { EXCLUDE_PATTERN_MAX_LENGTH, anchorUserExclude, anchorUserExcludes, isSa
 // mockResolvedValue would otherwise make every later test see a marker and 409.
 beforeEach(async () => {
   const actual = await vi.importActual('fs/promises');
+  fs.readdir.mockImplementation(actual.readdir);
   fs.access.mockImplementation(actual.access);
   fs.unlink.mockImplementation(actual.unlink);
   fs.writeFile.mockImplementation(actual.writeFile);
@@ -4780,6 +4782,34 @@ describe('runBackup lifecycle', () => {
       await expect(fsp.stat(incomplete)).resolves.toBeDefined();
       await expect(fsp.stat(failed)).resolves.toBeDefined();
       await expect(fsp.stat(otherMachine)).resolves.toBeDefined();
+    });
+
+    it('reports an unreadable retention inventory without failing the completed backup or deleting snapshots', async () => {
+      const fsp = await actualFs();
+      const old = await seedSnapshot(machineHost, '2020-01-01T00-00-00');
+      const namespace = joinPath(destRoot, 'snapshots', machineHost);
+      fs.readdir.mockImplementation((path, ...args) => path === namespace
+        ? Promise.reject(Object.assign(new Error('private destination detail'), { code: 'EACCES' }))
+        : fsp.readdir(path, ...args));
+      const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const rsync = fakeProc();
+        spawn.mockReturnValue(rsync);
+        const pending = runBackup(destRoot, null, { retentionCount: 1 });
+        await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+        rsync.emit('close', 0);
+
+        const result = await pending;
+        expect(result).toMatchObject({ status: 'ok', prunedSnapshots: 0 });
+        await expect(fsp.stat(old)).resolves.toBeDefined();
+        await expect(fsp.stat(joinPath(namespace, result.snapshotId))).resolves.toBeDefined();
+        expect(errorLog).toHaveBeenCalledWith(
+          '❌ Backup retention prune failed: Backup inventory unavailable: read-retention-namespace (EACCES)'
+        );
+        expect(JSON.stringify(errorLog.mock.calls)).not.toContain('private destination detail');
+      } finally {
+        errorLog.mockRestore();
+      }
     });
 
     it('preserves older snapshots and reports zero pruned when the database dump fails', async () => {
