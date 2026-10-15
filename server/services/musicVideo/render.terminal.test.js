@@ -554,7 +554,7 @@ describe('composed render lifecycle (#8984)', () => {
     await tick();
     const [plan, outputPath] = seg.stitch.mock.calls[0];
     expect(plan).toBe(seg.plans.at(-1));
-    expect(outputPath).toMatch(/^\/data\/videos\/music-video-composed/);
+    expect(outputPath.replaceAll('\\', '/')).toMatch(/^\/data\/videos\/music-video-composed/);
     expect(generateThumbnail).toHaveBeenCalledWith(outputPath, jobId, { atSec: 1 });
     expect(getRenderJobStatus(jobId).status).toBe('complete');
     expect(updateProject).toHaveBeenCalledWith('composed-1', expect.objectContaining({ status: 'complete', renderHistoryId: jobId }));
