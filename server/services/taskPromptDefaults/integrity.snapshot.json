@@ -30,7 +30,7 @@
     "error-handling": "137b371f38398042c0a2c7e2279c92ce",
     "feature-completeness": "00d8916cc6032e74817657375375115b",
     "feature-ideas": "804f62f1dadadbfa8a0bcd4aff16b2e8",
-    "infrastructure": "b4ad755eb115b82679c601a0df1ffd7b",
+    "infrastructure": "bd31db72a371136f6c32d119d76c0281",
     "issue-reconcile": "716c87476d77d7e4f98613dadc06f228",
     "jira-sprint-manager": "3e63c8a3bdf0d5a05a30faaa2dc07980",
     "jira-status-report": "9d374a9d8ccb92c5c8fd0aa9899e79a5",
@@ -94,7 +94,7 @@
     "error-handling": 3,
     "feature-completeness": 1,
     "feature-ideas": 11,
-    "infrastructure": 1,
+    "infrastructure": 2,
     "issue-reconcile": 8,
     "jira-sprint-manager": 1,
     "jira-status-report": 1,
@@ -340,6 +340,9 @@
       "73cdc70f8d14fc909668054bbcee1259",
       "0741418bd275b8953131155f8bc89460",
       "d3282f16da29efe2d53595b3b34778bc"
+    ],
+    "infrastructure": [
+      "b4ad755eb115b82679c601a0df1ffd7b"
     ],
     "issue-reconcile": [
       "6f33db6ad0b57c36909229694b78891a",

@@ -1906,6 +1906,46 @@ the project's documented deployment model decides which exposure is intended.
   reads it) that disagree about a port, a variable, or a resource, so the first
   deploy to the other one fails.
 
+## CI efficiency and placement
+
+This is part of the audit, alongside deployment safety. Trace workflow files
+through their planner, runners, scripts and required-check rules; YAML alone
+may hide what actually runs.
+
+- **Measure before changing.** Sample recent representative PR/MR, merge,
+  nightly and release runs, including a small change and a broad-risk change.
+  Record run links/commit SHAs, sample window and count, execution frequency,
+  per-job/step durations, queue time, summed runner time and the dependency
+  critical path. Separate measured data from estimates and explain missing
+  telemetry; estimate savings per run and at the observed cadence.
+- **Select work by risk.** Inspect event triggers, path filters, affected-test
+  selection and full-suite fallbacks. Check that small unrelated changes do
+  not select expensive work without a reason, and relevant changes cannot skip
+  required coverage. Evaluate PR/MR versus merge, nightly, release and opt-in
+  placement against the failures each check catches and when detection is
+  needed. Preserve required status reporting and fail closed on uncertain scope.
+- **Remove demonstrated duplicate work.** Trace overlapping workflows, matrix
+  jobs, installs, builds, test processes and setup. Inspect job dependencies for
+  unnecessary serialization or repeated prerequisites. Distinguish runner-time
+  savings from critical-path latency; more parallelism can increase total cost.
+- **Reuse safely.** Check cache hits/misses, keys and invalidation, restore cost,
+  artifact upload/download cost, retention and same-input build reuse. Preserve
+  platform/toolchain compatibility, provenance and untrusted-PR isolation.
+- **Bound obsolete work.** Inspect concurrency groups, superseded-run
+  cancellation, failure cancellation, retries and timeouts. Keep release work,
+  required gates and failure diagnostics reliable; do not trade waste for
+  missing results or restart loops.
+- **Prove test value.** Coordinate with Test Quality for redundant or vacuous
+  tests: identify the stronger surviving coverage or use a bounded mutation
+  probe, reverted before commit. A slow test is not a valueless test. Improve
+  fixtures, imports or setup before removing useful correctness/security checks.
+
+For a CI finding, give the measured baseline, exact selection/dependency change,
+expected savings, retained risk coverage and validation. Test representative
+changed-path/event cases and required-check behavior, then compare equivalent
+before/after runs where available. If access prevents measurement, report that
+limit; do not invent savings or weaken essential coverage to obtain green CI.
+
 ## Not yours
 
 Application-code vulnerabilities belong to the security work; package version
@@ -1917,7 +1957,8 @@ reliability work. Name the overlap if it is the cause, then leave it to its owne
 
 Every finding names the file and line, the environment it affects, and the
 concrete consequence: who can reach what, what a leaked credential grants, or
-which deploy breaks. Redact before you publish — describe a secret's location
+which deploy breaks, measured avoidable runner time or critical-path delay,
+or a coverage/required-check failure. Redact before you publish — describe a secret's location
 and shape, never its value, and never paste account ids, hostnames, or addresses.`,
 
   'data-integrity': `[Improvement: {appName}] Data integrity and pipeline audit
