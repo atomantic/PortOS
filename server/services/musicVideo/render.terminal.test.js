@@ -113,7 +113,7 @@ import { maintenance } from '../../lib/maintenanceAdmission.js';
 const tick = () => new Promise((r) => setTimeout(r, 0));
 const lastProc = () => h.procs[h.procs.length - 1];
 // A terminal project write: the status plus the cleared in-flight mark (#9010).
-const settled = (status, extra = {}) => ({ status, ...extra, renderingOn: null, renderPartialFilename: null, renderResume: null });
+const settled = (status, extra = {}) => ({ status, renderError: null, ...extra, renderingOn: null, renderPartialFilename: null, renderResume: null });
 
 const prime = (projectId) => {
   getProject.mockResolvedValue({
@@ -448,6 +448,28 @@ describe('recoverStuckMusicVideoRenders (#8430)', () => {
     await tick();
     expect(seg.plans.map((plan) => plan.project.id)).toEqual(['resume-1']);
     expect(updateProject).toHaveBeenCalledWith('resume-1', expect.objectContaining({ status: 'rendering', renderResume: { attempt: 1 } }));
+    logSpy.mockRestore();
+  });
+
+  it('leaves no error when the render was started again before the resume ran', async () => {
+    const { recoverStuckMusicVideoRenders, renderMusicVideo } = await import('./render.js');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    prime('again-1');
+    getProject.mockResolvedValue({
+      id: 'again-1', name: 'P', trackId: 't1', status: 'ready',
+      scenes: [{ sceneId: 's1', order: 0, videoHistoryId: 'h1' }],
+      composition: { version: 1, mode: 'composed', textCues: [], style: { color: '#ffffff', font: 'sans' }, posterSec: null },
+    });
+    seedStore([{ id: 'again-1', status: 'rendering', renderResume: { attempt: 0 } }]);
+
+    await recoverStuckMusicVideoRenders();
+    await renderMusicVideo('again-1', { resumable: true });
+    await vi.runOnlyPendingTimersAsync();
+    vi.useRealTimers();
+    await tick();
+    expect(seg.plans).toHaveLength(1);
+    expect(updateProject.mock.calls.some(([, patch]) => /could not restart/.test(patch?.renderError || ''))).toBe(false);
     logSpy.mockRestore();
   });
 });

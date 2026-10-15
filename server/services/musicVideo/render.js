@@ -98,7 +98,9 @@ export const isLocalRenderMark = (renderingOn, instanceId) => !renderingOn || re
 
 // Every terminal project write clears the in-flight mark's stamp and the
 // partial-output pointer alongside the status.
-const settledRender = (status, extra = {}) => ({ status, ...extra, renderingOn: null, renderPartialFilename: null, renderResume: null });
+// A settled render carries no error unless `extra` names one: a finished render
+// never keeps the message of an earlier attempt.
+const settledRender = (status, extra = {}) => ({ status, renderError: null, ...extra, renderingOn: null, renderPartialFilename: null, renderResume: null });
 
 // Tell listeners (the autonomous run waiting on its final render) that a render
 // job reached a terminal state. Emitted after the project record's terminal
@@ -1078,7 +1080,7 @@ async function renderFromShotSegments(projectId, project, handOff, options) {
         width: plan.width, height: plan.height, numFrames: Math.round(durationSec * plan.fps), fps: plan.fps,
         filename, thumbnail: poster, createdAt: new Date().toISOString(), musicVideoProjectId: projectId,
       });
-      await writeProject(settledRender('complete', { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project) }), 'complete');
+      await writeProject(settledRender('complete', { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project)}), 'complete');
       return poster;
     });
     finish('complete');
@@ -1502,6 +1504,11 @@ function scheduleRenderResumes(resumes) {
         const { jobId } = await renderMusicVideo(projectId, { resumable: true, resumeAttempt: attempt });
         console.log(`🎬 Music Video boot recovery: resumed the final render of ${projectId.slice(0, 8)} [${jobId.slice(0, 8)}] from its cached shots`);
       } catch (err) {
+        // Someone started it again in the meantime: that render resumes from the same cache.
+        if (err?.code === 'RENDER_IN_PROGRESS') {
+          console.log(`🎬 Music Video boot recovery: the final render of ${projectId.slice(0, 8)} was already started again`);
+          continue;
+        }
         console.error(`❌ Music Video boot recovery: could not resume the final render of ${projectId.slice(0, 8)}: ${err.message}`);
         await updateProject(projectId, { renderError: `Interrupted by a server restart and could not restart: ${err.message}`.slice(0, 2000) }).catch(() => {});
       }
