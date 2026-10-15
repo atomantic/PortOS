@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Activity, Film, Play, Square, X } from 'lucide-react';
+import { Activity, Film, Play, SlidersHorizontal, Square, X } from 'lucide-react';
+import FilmLookControls from '../media/FilmLookControls.jsx';
+import FilmLookPreview from '../media/FilmLookPreview.jsx';
 import { cancelMusicVideoShotRender, musicVideoShotRenderUrl, renderMusicVideoShot } from '../../services/apiMusicVideo.js';
 import useMusicVideoShotRenders from '../../hooks/useMusicVideoShotRenders.js';
 import useFilmLookPresets from '../../hooks/useFilmLookPresets.js';
@@ -21,9 +23,11 @@ export default function ShotFinalRender({ project, scene, onChange, fieldId }) {
   const live = liveByShot[sceneId] || null;
   const [playing, setPlaying] = useState(false);
   const [starting, setStarting] = useState(false);
-  const { presets: savedLooks } = useFilmLookPresets();
+  const saved = useFilmLookPresets();
+  const savedLooks = saved.presets;
+  const [tuning, setTuning] = useState(null); // the look being tuned, or null when closed
 
-  useEffect(() => { setPlaying(false); }, [sceneId]);
+  useEffect(() => { setPlaying(false); setTuning(null); }, [sceneId]);
 
   if (!status?.available) return null;
   const shot = status.shots.find((entry) => entry.sceneId === sceneId);
@@ -46,6 +50,7 @@ export default function ShotFinalRender({ project, scene, onChange, fieldId }) {
   };
   const pickLook = (value) => {
     setPlaying(false);
+    setTuning(null);
     if (value === 'video') onChange({ filmLook: null });
     else if (value === 'keep') onChange({ filmLook: videoLook || filmLookPreset('none') });
     else if (value.startsWith('saved:')) {
@@ -101,7 +106,24 @@ export default function ShotFinalRender({ project, scene, onChange, fieldId }) {
             </optgroup>
           )}
         </select>
+        <button type="button" className={BUTTON} aria-expanded={!!tuning}
+          onClick={() => setTuning((open) => (open ? null : ownLook || videoLook || filmLookPreset('none')))}>
+          <SlidersHorizontal size={12} aria-hidden="true" /> {tuning ? 'Done' : 'Tune'}
+        </button>
       </div>
+      {tuning && (
+        // This shot's own look, slider by slider, on its still: subtle fixes
+        // (a little haze on one clean shot) without a whole preset.
+        <div className="space-y-2" aria-label="Tune this shot's look" role="group">
+          {scene.referenceImageId && (
+            <FilmLookPreview src={`/data/images/${scene.referenceImageId}`} alt="This shot" look={tuning}
+              className="flex items-center justify-center overflow-hidden rounded bg-black [&_img]:max-h-[30dvh]" />
+          )}
+          <FilmLookControls look={tuning} compact saved={saved}
+            onChange={setTuning}
+            onCommit={(look) => { setTuning(look); onChange({ filmLook: look }); }} />
+        </div>
+      )}
     </section>
   );
 }

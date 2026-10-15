@@ -9,6 +9,7 @@ export {
   normalizeFilmLook,
   isFilmLookNeutral,
   sameFilmLook,
+  scaleFilmLook,
   describeFilmLook,
   filmLookControl,
   filmLookFilterMarkup,

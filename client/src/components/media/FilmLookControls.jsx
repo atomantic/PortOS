@@ -1,7 +1,7 @@
 import { useId, useState } from 'react';
 import { Copy, RotateCcw, Save, Trash2 } from 'lucide-react';
 import {
-  FILM_LOOK_CONTROLS, FILM_LOOK_GROUPS, FILM_LOOK_PRESETS, describeFilmLook, filmLookPreset, isFilmLookNeutral, normalizeFilmLook, sameFilmLook,
+  FILM_LOOK_CONTROLS, FILM_LOOK_GROUPS, FILM_LOOK_PRESETS, describeFilmLook, filmLookPreset, isFilmLookNeutral, normalizeFilmLook, sameFilmLook, scaleFilmLook,
 } from '../../lib/filmLook.js';
 import { copyToClipboard } from '../../lib/clipboard';
 
@@ -103,15 +103,26 @@ function SavedLooks({ look, saved, matched, onApply }) {
 export default function FilmLookControls({ look: given, onChange, onCommit, compact = false, saved = null }) {
   const look = normalizeFilmLook(given) || filmLookPreset('none');
   const base = useId();
+  // Strength scales the look as it stood after the last preset pick or control
+  // edit (its anchor), so dragging it back to 100% restores that look exactly.
+  const [anchor, setAnchor] = useState(() => ({ look, amount: 1 }));
+  const anchored = sameFilmLook(scaleFilmLook(anchor.look, anchor.amount), look) ? anchor : { look, amount: 1 };
   const [openGroups, setOpenGroups] = useState(() => new Set(compact ? [] : FILM_LOOK_GROUPS.map((group) => group.id)));
   const set = (patch, { commit = true } = {}) => {
     const next = normalizeFilmLook({ ...look, ...patch, preset: 'custom' });
+    setAnchor({ look: next, amount: 1 });
     onChange?.(next);
     if (commit) onCommit?.(next);
   };
   const live = (patch) => set(patch, { commit: false });
   const commit = () => onCommit?.(look);
-  const applyLook = (next) => { onChange?.(next); onCommit?.(next); };
+  const applyLook = (next) => { setAnchor({ look: next, amount: 1 }); onChange?.(next); onCommit?.(next); };
+  const strengthId = `${base}-strength`;
+  const setStrength = (amount) => {
+    const next = amount === 1 ? anchored.look : { ...scaleFilmLook(anchored.look, amount), preset: 'custom' };
+    setAnchor({ look: anchored.look, amount });
+    onChange?.(next);
+  };
   const applyPreset = (id) => applyLook(filmLookPreset(id));
   const matched = saved?.presets.find((preset) => sameFilmLook(preset.look, look)) || null;
   const words = describeFilmLook(look);
@@ -139,6 +150,18 @@ export default function FilmLookControls({ look: given, onChange, onCommit, comp
         </div>
         {look.preset !== 'none' && !matched && <p className="mt-1 text-port-text-muted">{FILM_LOOK_PRESETS.find((preset) => preset.id === look.preset)?.summary || 'A custom look.'}</p>}
       </div>
+      {!isFilmLookNeutral(anchored.look) && (
+        <div className="space-y-0.5">
+          <div className="flex items-baseline justify-between gap-2">
+            <label htmlFor={strengthId} className="text-port-text">Strength <span className="ml-1.5 text-port-text-muted">the whole look, lighter</span></label>
+            <span className="tabular-nums text-port-text-muted">{Math.round(anchored.amount * 100)}%</span>
+          </div>
+          <input id={strengthId} type="range" min={0} max={1} step={0.05} value={anchored.amount}
+            onChange={(event) => setStrength(Number(event.target.value))}
+            onPointerUp={commit} onKeyUp={commit} onBlur={commit}
+            className="block h-6 w-full accent-port-accent" />
+        </div>
+      )}
       {saved && <SavedLooks look={look} saved={saved} matched={matched} onApply={(value) => applyLook(normalizeFilmLook({ ...value, preset: 'custom' }))} />}
 
       {FILM_LOOK_GROUPS.map((group) => {
