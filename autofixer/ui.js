@@ -243,6 +243,14 @@ app.get('/logs', async (req, res) => {
   });
 });
 
+// Registry failures reach every consumer (apps, process controls and staged
+// fixes) through Express's error boundary, before any mutation can run.
+app.use((error, req, res, next) => {
+  if (error.code !== 'APPS_UNAVAILABLE') return next(error);
+  console.error(`❌ [Autofixer UI] App registry unavailable`);
+  res.status(503).json({ error: 'App registry unavailable', code: 'APPS_UNAVAILABLE' });
+});
+
 // Serve HTTPS with the same Tailscale cert the main PortOS server uses when one
 // is present, so the sidebar's `${window.location.protocol}//<host>:5560` link
 // (which inherits https:// on a cert-enabled install) hits a matching listener.

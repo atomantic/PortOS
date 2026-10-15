@@ -88,6 +88,7 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
   const [saving, setSaving] = useState(false);
   const [packageDownloading, setPackageDownloading] = useState(false);
   const recordTimerRef = useRef(null);
+  const recordingSessionRef = useRef(null);
   // Frame-exact export runs server-side on the media queue; its progress and
   // result stream from the composition job's SSE channel.
   const [exportJob, setExportJob] = useState(null);
@@ -170,6 +171,13 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
   useEffect(() => () => clearTimeout(recordTimerRef.current), []);
 
   useEffect(() => {
+    if (!recording || (preview.ready && preview.sessionId === recordingSessionRef.current)) return;
+    clearTimeout(recordTimerRef.current);
+    setRecording(false);
+    toast.error('The preview stopped before recording finished. Start a new recording to try again.');
+  }, [recording, preview.ready, preview.sessionId]);
+
+  useEffect(() => {
     const event = preview.lastEvent;
     if (!event || !messages) return;
     if (event.type === messages.ready) setMeta(event.meta && typeof event.meta === 'object' ? event.meta : {});
@@ -193,6 +201,7 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
 
   const handleRecord = () => {
     if (!preview.ready || recording || !messages?.record) return;
+    recordingSessionRef.current = preview.sessionId;
     setRecording(true);
     setRecordProgress(0);
     preview.command('record', { message: { type: messages.record } });
@@ -302,6 +311,7 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
+        {request && preview.status === 'idle' && <button type="button" className={BUTTON_SECONDARY} onClick={preview.resume}>Resume preview</button>}
         <button
           type="button"
           onClick={handleRecord}

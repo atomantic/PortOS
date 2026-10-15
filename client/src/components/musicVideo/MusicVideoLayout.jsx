@@ -1,16 +1,17 @@
 import { useEffect, useRef } from 'react';
 import {
-  ArrowRight, Bot, Check, Clapperboard, Film, History, LayoutGrid, Music, Pencil, Play, Send, Settings, Users,
+  ArrowRight, Bot, Check, Clapperboard, Film, History, Images, LayoutGrid, Music, Pencil, Play, Send, Settings, Users,
 } from 'lucide-react';
 import CancelRenderButton from './CancelRenderButton.jsx';
 import TabPills from '../ui/TabPills.jsx';
 import Pill from '../ui/Pill.jsx';
 import { formatUsd } from '../../utils/formatters.js';
+import { MUSIC_VIDEO_PAGES } from '../../lib/musicVideoStages.js';
 
 // One icon per step: the phone's bottom bar collapses to icons, and a repeated
 // glyph would be a repeated destination.
 const STAGE_ICONS = {
-  setup: Music, 'cast-sets': Users, board: LayoutGrid, produce: Clapperboard, review: Film, publish: Send,
+  setup: Music, 'cast-sets': Users, board: LayoutGrid, produce: Clapperboard, review: Film, publish: Send, assets: Images,
 };
 
 // The page's scroll body (the route is full-width, so the page owns its
@@ -77,6 +78,28 @@ function StepRail({ stages, stage, onStageChange, needsYouStage, notes }) {
           );
         })}
       </ol>
+      {/* Pages beside the steps (Assets): under a rule, with their icon in place of a number. */}
+      <ul className="mt-2 space-y-1 border-t border-port-border pt-2">
+        {MUSIC_VIDEO_PAGES.map((entry) => {
+          const Icon = STAGE_ICONS[entry.id];
+          const selected = entry.id === stage;
+          return (
+            <li key={entry.id}>
+              <button
+                type="button"
+                onClick={() => onStageChange(entry.id)}
+                aria-current={selected ? 'page' : undefined}
+                className={`flex w-full min-h-[44px] items-center gap-2 rounded-lg border px-2 py-2 text-left ${selected ? 'border-port-accent bg-port-accent/10' : 'border-transparent hover:bg-port-card'}`}
+              >
+                <span aria-hidden="true" className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-port-border text-port-text-muted">
+                  <Icon size={13} />
+                </span>
+                <span className="text-sm font-medium text-port-text">{entry.label}</span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
     </nav>
   );
 }
@@ -84,7 +107,7 @@ function StepRail({ stages, stage, onStageChange, needsYouStage, notes }) {
 // From `xl` the preview is a sticky right column under the header. Below it,
 // it sits in the page above the step, one folded row until opened, rather than
 // a bar pinned over the content.
-const DOCK_CLASSES = 'min-w-0 max-xl:order-first max-xl:col-span-full xl:sticky xl:top-[calc(var(--mv-header-h,9rem)-0.75rem)] xl:max-h-[calc(100vh-var(--mv-header-h,9rem)-2rem)] xl:overflow-y-auto';
+const DOCK_CLASSES = 'min-w-0 max-xl:order-first max-xl:col-span-full xl:sticky xl:top-[calc(var(--mv-header-h,9rem)-0.75rem)] xl:max-h-[calc(var(--mv-scroll-h,100dvh)-var(--mv-header-h,9rem)-2rem)] xl:overflow-y-auto';
 
 /**
  * The Music Video project frame. A sticky header says where the project stands
@@ -130,10 +153,17 @@ export default function MusicVideoLayout({
     const header = headerRef.current;
     const root = rootRef.current;
     if (!header || !root || typeof ResizeObserver === 'undefined') return undefined;
-    const apply = () => root.style.setProperty('--mv-header-h', `${Math.round(header.getBoundingClientRect().height)}px`);
+    // The dock's height fits the page's scroll area, which is shorter than the window whenever
+    // the app shows a bar above it; sized to the window, the dock's last panel sat out of reach.
+    const scroller = root.closest('main');
+    const apply = () => {
+      root.style.setProperty('--mv-header-h', `${Math.round(header.getBoundingClientRect().height)}px`);
+      if (scroller) root.style.setProperty('--mv-scroll-h', `${scroller.clientHeight}px`);
+    };
     apply();
     const observer = new ResizeObserver(apply);
     observer.observe(header);
+    if (scroller) observer.observe(scroller);
     return () => observer.disconnect();
   }, []);
 
@@ -146,7 +176,7 @@ export default function MusicVideoLayout({
   }, [stage]);
 
   const needsYouStage = status?.needsYouStage || null;
-  const tabs = progress.stages.map((entry) => {
+  const stepTabs = progress.stages.map((entry) => {
     const state = stepState(entry, { needsYouStage });
     return {
       id: entry.id,
@@ -161,8 +191,10 @@ export default function MusicVideoLayout({
       ),
     };
   });
+  // The phone bar ends with the pages (Assets), icon only like the steps.
+  const tabs = [...stepTabs, ...MUSIC_VIDEO_PAGES.map((entry) => ({ id: entry.id, label: entry.label, icon: STAGE_ICONS[entry.id] }))];
   const showSpend = spend.spentUsd > 0 || spend.capUsd > 0;
-  const stageEntry = progress.stages.find((entry) => entry.id === stage);
+  const stageEntry = [...progress.stages, ...MUSIC_VIDEO_PAGES].find((entry) => entry.id === stage);
   // Play runs something; an arrow goes somewhere (a step, or a Project settings tab).
   const ActionIcon = nextAction?.kind === 'run' ? Play : ArrowRight;
 

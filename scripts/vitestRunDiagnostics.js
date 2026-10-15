@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs';
+import { diagnosticTestFile, persistTestDiagnostic } from './ci-test-diagnostics.js';
 
 // The JSON reporter includes test failures, but drops run-level errors such as
 // unhandled rejections and worker crashes. Keep those independently of stdout.
@@ -11,23 +11,35 @@ function errorDiagnostic(error, depth = 0) {
 }
 
 export default function vitestRunDiagnostics() {
-  let diagnostics = { reason: 'not-finished', errorCount: 0, errors: [] };
+  let diagnostics = { reason: 'not-finished', errorCount: 0, errors: [], completedCount: 0 };
+  const activeModules = new Set();
+  const completedModules = [];
   const persist = () => {
     const path = process.env.PORTOS_CI_DIAGNOSTICS_PATH;
     if (!path) return;
-    try {
-      writeFileSync(path, JSON.stringify({ ...diagnostics, exitCode: process.exitCode ?? null }));
-    } catch {
-      // Diagnostic I/O must never turn a passing test run into a failure.
-      console.error('Unable to persist Vitest run diagnostics.');
-    }
+    persistTestDiagnostic(path, { ...diagnostics, activeModules: [...activeModules].slice(0, 100),
+      completedModules, exitCode: process.exitCode ?? null });
   };
   return {
     onInit(vitest) {
       vitest.onClose(persist);
+      persist();
+    },
+    onTestModuleQueued(module) {
+      // Queued includes import/collection, before any test body can run.
+      activeModules.add(diagnosticTestFile(module.moduleId));
+      persist();
+    },
+    onTestModuleEnd(module) {
+      const file = diagnosticTestFile(module.moduleId);
+      activeModules.delete(file);
+      completedModules.push(file);
+      if (completedModules.length > 100) completedModules.shift();
+      diagnostics.completedCount += 1;
+      persist();
     },
     onTestRunEnd(_modules, errors, reason) {
-      diagnostics = { reason, errorCount: errors.length, errors: errors.slice(0, 10).map(error => errorDiagnostic(error)) };
+      diagnostics = { ...diagnostics, reason, errorCount: errors.length, errors: errors.slice(0, 10).map(error => errorDiagnostic(error)) };
       persist();
     },
     onProcessTimeout() {

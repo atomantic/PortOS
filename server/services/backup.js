@@ -1132,7 +1132,11 @@ async function pruneOldSnapshots(destPath, retentionCount) {
   if (retentionCount === null || retentionCount === undefined) return { pruned: 0 };
 
   const sourceRoot = join(destPath, 'snapshots', MACHINE_HOST);
-  const entries = await readdir(sourceRoot, { withFileTypes: true }).catch(() => []);
+  // A completed snapshot was just written here; even ENOENT is a failed
+  // inventory, not proof that there is nothing to prune. Keep paths private.
+  const entries = await readdir(sourceRoot, { withFileTypes: true }).catch(cause => {
+    throw inventoryReadError(cause, 'read-retention-namespace');
+  });
   const candidateIds = entries
     .filter(entry => entry.isDirectory() && !entry.name.startsWith('.') && SNAPSHOT_ID_PATTERN.test(entry.name))
     .map(entry => entry.name);
@@ -1898,7 +1902,13 @@ async function restoreHeldDatabase({ snapshotDir, currentSource }, snapshotId, {
   if (pendingRecovery) return pendingRecovery;
   const sqlPath = join(snapshotDir, 'portos-db.sql');
 
-  const info = await stat(sqlPath).catch(() => null);
+  const info = await stat(sqlPath).catch(cause => {
+    if (cause?.code === 'ENOENT') return null;
+    const { filesystemCode } = inventoryReadError(cause, 'stat-database-dump').context;
+    console.error(`❌ restore: dump metadata unreadable for snapshot ${snapshotId} (${filesystemCode})`);
+    return false;
+  });
+  if (info === false) return DUMP_UNREADABLE;
   // An empty/0-byte dump is as good as absent — restoring it is a silent no-op.
   // Mirror dumpPostgres's empty-dump guard so a truncated snapshot can't read
   // as a successful "0 tables" restore.

@@ -177,9 +177,10 @@ router.delete('/accounts/:id', asyncHandler(async (req, res) => {
   if (!UUID_RE.test(req.params.id)) {
     throw new ServerError('Invalid account ID format', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  const deleted = await calendarAccounts.deleteAccount(req.params.id);
-  if (!deleted) throw new ServerError('Account not found', { status: 404, code: 'NOT_FOUND' });
-  await calendarSync.deleteCache(req.params.id).catch(() => {});
+  // Remove metadata first so queued/provider-delayed writes cannot recreate
+  // the cache. Retry cleanup even if an earlier attempt removed the account.
+  await calendarAccounts.deleteAccount(req.params.id);
+  await calendarSync.deleteCache(req.params.id);
   req.app.get('io')?.emit('calendar:changed', {});
   res.status(204).send();
 }));

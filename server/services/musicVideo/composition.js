@@ -20,6 +20,7 @@ import { normalizeMusicVideoGrade } from '../../lib/musicVideoGrade.js';
 import { randomUUID } from 'crypto';
 import { trimTo } from '../../lib/textUtils.js';
 import { normalizeTitleCard, titleCardWindows } from '../../lib/musicVideoTitleCard.js';
+import { composedDrawsLyrics } from '../../lib/musicVideoLayers.js';
 import { titleCardRuntime } from './titleCardFonts.js';
 import { filmStyleIdSchema } from '../../lib/filmStyleGrammarValidation.js';
 import {
@@ -245,6 +246,31 @@ function titleCardCues(project, durationSec) {
   return titleCardWindows(card)
     .filter((w) => w.startSec < durationSec)
     .map((w, i) => ({ id: i ? 'title-card-end' : 'title-card', titleCard: card, startSec: w.startSec, endSec: Math.min(w.endSec, durationSec) }));
+}
+
+// How long after a lyric line ends its window stays open, so the lyric type's
+// last-word hold, exit fade and hook beat cut are captured whole.
+export const LYRIC_WINDOW_TAIL_SEC = 2;
+
+/**
+ * The windows a composed render draws the sung lyrics in, with the same shared
+ * lyric type the storyboard animatic shows (documentTemplates/lyricOverlay),
+ * when `composedDrawsLyrics` (no subtitle text cues). Each timed line opens at
+ * its first onset and closes LYRIC_WINDOW_TAIL_SEC after it ends, clipped to
+ * the video. Empty for any other render mode.
+ */
+export function composedLyricWindows(project, durationSec) {
+  if (!composedDrawsLyrics(project)) return [];
+  const finiteNum = (n) => typeof n === 'number' && Number.isFinite(n);
+  const spans = [];
+  for (const cue of Array.isArray(project?.lyricCues) ? project.lyricCues : []) {
+    if (typeof cue?.text !== 'string' || !cue.text.trim() || !finiteNum(cue.startSec) || cue.startSec >= durationSec) continue;
+    const words = Array.isArray(cue.words) ? cue.words : [];
+    const lastSec = Math.max(cue.startSec, finiteNum(cue.endSec) ? cue.endSec : cue.startSec,
+      ...words.flatMap((w) => [w?.startSec, w?.endSec]).filter(finiteNum));
+    spans.push({ startSec: cue.startSec, endSec: Math.min(durationSec, lastSec + LYRIC_WINDOW_TAIL_SEC) });
+  }
+  return overlayWindows(spans);
 }
 
 /** Shared absolute-song-time cues and style for full renders and draft excerpts. */

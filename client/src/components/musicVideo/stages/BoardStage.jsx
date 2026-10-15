@@ -1,8 +1,9 @@
 import { useContext, useEffect, useLayoutEffect, useRef } from 'react';
-import { useSearchParams } from 'react-router';
+import { useNavigate, useSearchParams } from 'react-router';
 import { Plus, Image as ImageIcon, Film, Code2, Type, FlagTriangleRight, Lock, LockOpen } from 'lucide-react';
 import ContactSheetButton from '../ContactSheetButton.jsx';
 import SceneCard from '../SceneCard.jsx';
+import EndingCard, { EndingThumbnail } from '../EndingCard.jsx';
 import ScenePoster from '../ScenePoster.jsx';
 import { ShotLockContext, SHOT_LOCK_LABELS, overallShotLock } from '../ShotLock.jsx';
 import { shotNumbers } from '../ShotStepper.jsx';
@@ -64,6 +65,19 @@ export default function BoardStage({ board }) {
   const setFilter = (next) => setSearchParams((prev) => {
     const params = new URLSearchParams(prev);
     if (next === 'all') params.delete('scenes'); else params.set('scenes', next);
+    return params;
+  }, { replace: true });
+  // The ending after the song sits after the last shot; opening it is a search param on the board (a shot's route closes it).
+  const navigate = useNavigate();
+  const endingOpen = !activeSceneId && searchParams.get('ending') === '1';
+  const openEnding = () => {
+    const params = new URLSearchParams(searchParams);
+    params.set('ending', '1');
+    navigate({ pathname: `/music-video/${project.id}/produce`, search: `?${params}` }, { replace: true });
+  };
+  const closeEnding = () => setSearchParams((prev) => {
+    const params = new URLSearchParams(prev);
+    params.delete('ending');
     return params;
   }, { replace: true });
   const layered = isLayeredComposition(project);
@@ -189,8 +203,14 @@ export default function BoardStage({ board }) {
             </span>
             {codesById.get(scene.sceneId).length > 0 && <span className="block text-xs text-port-warning">{SCENE_ATTENTION_LABELS[codesById.get(scene.sceneId)[0]]}</span>}
           </button>)}
+          {scenes.length > 0 && filter === 'all' && (
+            <EndingThumbnail project={project} open={endingOpen} onOpen={endingOpen ? closeEnding : openEnding} />
+          )}
         </div>
         <div ref={inspectorRef} className="mt-3">
+          {endingOpen && (
+            <EndingCard project={project} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields} onClose={closeEnding} />
+          )}
           {scenes.map((scene, idx) => scene.sceneId !== activeSceneId ? null : (
             <SceneCard
               key={scene.sceneId}

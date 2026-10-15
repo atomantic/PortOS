@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
-import { ServerError } from '../lib/errorHandler.js';
+import { ServerError, errorEvents } from '../lib/errorHandler.js';
 
 vi.mock('../services/calendarAccounts.js', () => ({
   listAccounts: vi.fn(),
@@ -73,6 +73,8 @@ import * as googleAuth from '../services/googleAuth.js';
 import * as googleOAuthAutoConfig from '../services/googleOAuthAutoConfig.js';
 
 const ACCOUNT_ID = '11111111-1111-1111-1111-111111111111';
+const observeError = vi.fn();
+afterEach(() => errorEvents.off('error', observeError));
 
 describe('Calendar Routes — normalized error handling', () => {
   let app;
@@ -89,6 +91,36 @@ describe('Calendar Routes — normalized error handling', () => {
   });
 
   describe('thrown ServerErrors map to the standard JSON envelope', () => {
+    // Catches a false 204 when cleanup fails or a retry rejected merely because
+    // account metadata was already removed; cleanup must follow metadata removal.
+    it('reports account cleanup failure and accepts retries after account removal', async () => {
+      const io = { emit: vi.fn() };
+      app.set('io', io);
+      errorEvents.once('error', observeError);
+      let present = true;
+      calendarAccounts.deleteAccount.mockImplementation(async () => {
+        const removed = present;
+        present = false;
+        return removed;
+      });
+      calendarSync.deleteCache.mockImplementationOnce(async () => {
+        expect(present).toBe(false);
+        throw Object.assign(new Error('Synthetic cache deletion denied'), { code: 'EACCES' });
+      }).mockResolvedValue(undefined);
+      const failed = await request(app).delete(`/api/calendar/accounts/${ACCOUNT_ID}`);
+      expect(failed.status).toBe(500);
+      expect(failed.body.error).toBe('Filesystem operation failed');
+      expect(observeError).toHaveBeenCalledWith(expect.objectContaining({ status: 500 }), expect.any(Object));
+      expect(io.emit).not.toHaveBeenCalledWith('calendar:changed', {});
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const retried = await request(app).delete(`/api/calendar/accounts/${ACCOUNT_ID}`);
+        expect(retried.status).toBe(204);
+      }
+      expect(calendarSync.deleteCache).toHaveBeenCalledTimes(3);
+      expect(calendarSync.deleteCache).toHaveBeenLastCalledWith(ACCOUNT_ID);
+      expect(io.emit.mock.calls.filter(([event]) => event === 'calendar:changed')).toHaveLength(2);
+    });
+
     it('GET /review/:date passes bounded page params to the service and defaults to the legacy first page', async () => {
       dailyReview.getDailyReview.mockResolvedValue({ events: [], total: 0 });
       await request(app).get('/api/calendar/review/2026-01-02');

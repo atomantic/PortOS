@@ -742,6 +742,8 @@ describe('mediaJobQueue', () => {
   });
 
   it('worker drains a queued video job and marks it completed on the gen completed event', async () => {
+    const progressLog = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
     const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'hi' } });
     // Wait until the worker invokes generateVideo. The stub records the call.
     await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
@@ -763,6 +765,9 @@ describe('mediaJobQueue', () => {
     expect(finished.status).toBe('completed');
     expect(finished.completedAt).toBeTruthy();
     expect(finished.result?.path).toBe(`/data/videos/${job.jobId}.mp4`);
+    const summary = `media-job [${job.jobId.slice(0, 8)}] completed`;
+    expect(progressLog).toHaveBeenCalledWith(expect.stringContaining(summary));
+    expect(errorLog).not.toHaveBeenCalledWith(expect.stringContaining(summary));
   });
 
   it('progress/status events update the live job record for non-SSE readers', async () => {
@@ -1291,6 +1296,8 @@ describe('mediaJobQueue', () => {
   });
 
   it('failed gen events propagate to job status', async () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const progressLog = vi.spyOn(console, 'log').mockImplementation(() => {});
     const job = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'hi' } });
     await waitFor(() => stubs.generateImage.mock.calls.length === 1);
     imageGenEvents.emit('failed', { generationId: job.jobId, error: 'OOM' });
@@ -1299,6 +1306,9 @@ describe('mediaJobQueue', () => {
     const failed = mediaJobQueue.getJob(job.jobId);
     expect(failed.status).toBe('failed');
     expect(failed.error).toBe('OOM');
+    const summary = `media-job [${job.jobId.slice(0, 8)}] failed: OOM`;
+    expect(errorLog.mock.calls.filter(([message]) => String(message).includes(summary))).toHaveLength(1);
+    expect(progressLog).not.toHaveBeenCalledWith(expect.stringContaining(summary));
   });
 
   it('pre-gen sanitizer nulls uploadedTempPath that resolves outside PATHS.uploads', async () => {

@@ -1,11 +1,12 @@
 /**
  * Music Video — the cutting room floor outro: an optional closing scene that
- * plays after the song ends and tallies the human choices behind the video
- * (stills and clips made against the ones in the cut, takes rejected,
- * transitions, image effects, camera moves, lip-sync shots), over a floor of
- * the stills that did not make it. One record on the project
- * (`project.statsOutro`, null = off) turns it on and sets how long it runs;
- * it adds that time after the song and never shortens it.
+ * plays after the song ends under a heading ("Human Directed") and an orange
+ * subheading ("Human Imagined") and tallies the work behind the video (every
+ * render reviewed, the images and videos generated against the ones used, the
+ * cuts, moves and effects placed), over a floor of the stills that did not
+ * make it. One record on the project (`project.statsOutro`, null = off) turns
+ * it on, sets how long it runs, its two heading lines and which tally lines
+ * show; it adds its time after the song and never shortens it.
  *
  * Every count comes from what the project records (`musicVideoOutroStats`):
  * its shots' takes and selections, its media collection and its asset marks.
@@ -17,24 +18,42 @@
  * function of the scene's own time. Browser-safe, no imports.
  */
 
-export const STATS_OUTRO_LIMITS = Object.freeze({ durationMin: 4, durationMax: 20 });
-export const STATS_OUTRO_DEFAULTS = Object.freeze({ enabled: false, durationSec: 8 });
-/** How many unused stills lie on the floor behind the tally. */
-export const STATS_OUTRO_FLOOR_MAX = 14;
+export const STATS_OUTRO_LIMITS = Object.freeze({ durationMin: 4, durationMax: 20, textMax: 40 });
+/** The tally's lines a project can hide, in the order they show. */
+export const STATS_OUTRO_LINES = Object.freeze([
+  Object.freeze({ key: 'renders', label: 'Renders reviewed' }),
+  Object.freeze({ key: 'images', label: 'Images generated & used' }),
+  Object.freeze({ key: 'videos', label: 'Videos generated & used' }),
+  Object.freeze({ key: 'edits', label: 'Cuts, moves & effects' }),
+  Object.freeze({ key: 'floor', label: 'Left on the floor' }),
+]);
+export const STATS_OUTRO_DEFAULTS = Object.freeze({
+  enabled: false, durationSec: 8, title: 'Human Directed', subtitle: 'Human Imagined', hidden: Object.freeze([]),
+});
+/** How many unused stills are piled into the floor collage behind the tally. */
+export const STATS_OUTRO_FLOOR_MAX = 48;
 /** The fonts the scene draws in (bundled OFL faces, registered by each page). */
 export const STATS_OUTRO_FONTS = Object.freeze({
   head: Object.freeze({ family: 'MV Archivo', file: 'archivo-variable.woff2' }),
   body: Object.freeze({ family: 'MV Mono', file: 'ibm-plex-mono-500.woff2' }),
 });
 
-/** A stored outro from any input (null for none). */
+/**
+ * A stored outro from any input (null for none). A heading line left out takes
+ * its default; one stored empty stays empty (that line is not drawn).
+ */
 export function normalizeStatsOutro(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
-  const { durationMin, durationMax } = STATS_OUTRO_LIMITS;
+  const { durationMin, durationMax, textMax } = STATS_OUTRO_LIMITS;
   const raw = typeof input.durationSec === 'number' && Number.isFinite(input.durationSec) ? input.durationSec : STATS_OUTRO_DEFAULTS.durationSec;
+  const text = (value, fallback) => (typeof value === 'string' ? value.trim().slice(0, textMax) : fallback);
+  const hidden = new Set(Array.isArray(input.hidden) ? input.hidden : []);
   return {
     enabled: typeof input.enabled === 'boolean' ? input.enabled : STATS_OUTRO_DEFAULTS.enabled,
     durationSec: Math.round(Math.min(durationMax, Math.max(durationMin, raw)) * 10) / 10,
+    title: text(input.title, STATS_OUTRO_DEFAULTS.title),
+    subtitle: text(input.subtitle, STATS_OUTRO_DEFAULTS.subtitle),
+    hidden: STATS_OUTRO_LINES.map((line) => line.key).filter((key) => hidden.has(key)),
   };
 }
 
@@ -119,37 +138,39 @@ export function musicVideoOutroStats(project, { collectionItems = [] } = {}) {
  * module scope, only to each other by name. */
 
 /**
- * The tally's lines, in order: `{ label, value, accent? }`. Stills and clips
- * always show; a choice the director never made (no transitions, say) is left
- * out rather than shown as a zero. The last line is what was left on the floor.
+ * The tally's lines, in order: `{ key, label, value, accent? }`, `key` naming
+ * its STATS_OUTRO_LINES entry. The images and videos lines always show unless
+ * `hidden` names them; cuts, moves and effects are left out when there are
+ * none. The last line is what was left on the floor.
  */
-function statsOutroRows(stats) {
+function statsOutroRows(stats, hidden = []) {
   const n = (v) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.round(v) : 0);
   const s = stats || {};
   const stills = s.stills || {};
   const clips = s.clips || {};
   const rows = [
-    { label: 'Stills made', value: n(stills.made) },
-    { label: 'Clips made', value: n(clips.made) },
-    { label: 'Takes rejected', value: n(s.rejected), optional: true },
-    { label: 'Transitions placed', value: n(s.transitions), optional: true },
-    { label: 'Image effects', value: n(s.imageEffects), optional: true },
-    { label: 'Camera moves', value: n(s.cameraMoves), optional: true },
-    { label: 'Lip-sync shots', value: n(s.lipSyncs), optional: true },
-    { label: 'Shots in the cut', value: n(s.shots) },
-  ].filter((row) => !row.optional || row.value > 0).map(({ label, value }) => ({ label, value }));
+    { key: 'renders', label: 'Renders reviewed', value: n(stills.made) + n(clips.made) },
+    { key: 'images', label: 'Images generated', value: n(stills.made) },
+    { key: 'images', label: 'Images used', value: n(stills.kept) },
+    { key: 'videos', label: 'Videos generated', value: n(clips.made) },
+    { key: 'videos', label: 'Videos used', value: n(clips.kept) },
+    { key: 'edits', label: 'Cuts, moves & effects', value: n(s.transitions) + n(s.imageEffects) + n(s.cameraMoves) + n(s.lipSyncs), optional: true },
+  ].filter((row) => !row.optional || row.value > 0).map(({ optional: _optional, ...row }) => row);
   const floor = Math.max(0, n(stills.made) - n(stills.kept)) + Math.max(0, n(clips.made) - n(clips.kept));
-  rows.push({ label: 'Left on the floor', value: floor, accent: true });
-  return rows;
+  rows.push({ key: 'floor', label: 'Left on the floor', value: floor, accent: true });
+  const off = Array.isArray(hidden) ? hidden : [];
+  return rows.filter((row) => !off.includes(row.key));
 }
 
 /**
  * Paint the outro at scene time `t` (0 = the song's last frame) on a
  * width × height 2D context. `images[i]` is the loaded still for
- * `stats.floorImages[i]` (null while loading, or when none). Everything sits
- * inside the title-safe area and shrinks to fit, at any aspect.
+ * `stats.floorImages[i]` (null while loading, or when none). `outro` is the
+ * normalized record: its heading, subheading and hidden lines (an empty
+ * heading line is not drawn). Everything sits inside the title-safe area and
+ * shrinks to fit, at any aspect.
  */
-function drawStatsOutro(ctx, { width, height, t, durationSec, stats, images = [], fonts = {} }) {
+function drawStatsOutro(ctx, { width, height, t, durationSec, stats, outro = null, images = [], fonts = {} }) {
   const head = fonts.head || '"MV Archivo", "Arial Black", Impact, sans-serif';
   const body = fonts.body || '"MV Mono", Menlo, Consolas, "Courier New", monospace';
   const clamp = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
@@ -171,24 +192,43 @@ function drawStatsOutro(ctx, { width, height, t, durationSec, stats, images = []
   ctx.fillStyle = floorGrad;
   ctx.fillRect(0, 0, width, height);
 
-  // Prints and film offcuts dropped on the floor, landing one after another.
-  const prints = Math.max(8, (stats && Array.isArray(stats.floorImages) ? stats.floorImages.length : 0));
-  for (let i = 0; i < prints; i++) {
-    const land = ease((t - 0.1 - i * 0.07) / 0.5);
-    if (land <= 0) continue;
-    const size = unit * (0.2 + hash(i, 1) * 0.1);
+  // The floor is a collage: prints and film offcuts piled edge to edge over the whole frame,
+  // dropping in one after another. A grid of overlapping, tilted prints leaves no floor showing,
+  // and a second, sparser layer on top makes it read as a pile rather than a wall.
+  const floorCount = stats && Array.isArray(stats.floorImages) ? stats.floorImages.length : 0;
+  const cell = unit * 0.22;
+  const cols = Math.ceil(width / cell) + 1;
+  const rowsN = Math.ceil(height / (cell * 0.8)) + 1;
+  const spots = [];
+  for (let r = 0; r < rowsN; r++) {
+    for (let c = 0; c < cols; c++) spots.push({ x: (c - 0.5 + (r % 2) * 0.5) * cell, y: (r - 0.5) * cell * 0.8, scale: 1.3 });
+  }
+  const base = spots.length;
+  for (let k = 0; k < Math.ceil(base / 3); k++) spots.push({ x: hash(k, 7) * width, y: hash(k, 8) * height, scale: 1.1 });
+  // Shuffled so the pile lands all over the frame rather than row by row.
+  const order = spots.map((_, i) => i).sort((a, b) => hash(a, 9) - hash(b, 9));
+  const landOrder = [...order.filter((i) => i < base), ...order.filter((i) => i >= base)];
+  const dropGap = 1.6 / Math.max(1, landOrder.length);
+  landOrder.forEach((spotIndex, i) => {
+    const land = ease((t - 0.05 - i * dropGap) / 0.35);
+    if (land <= 0) return;
+    const spot = spots[spotIndex];
+    const size = cell * spot.scale * (0.92 + hash(spotIndex, 1) * 0.2);
     const w = size * 1.25;
     const h = size;
-    const x = (((i * 0.618034) + hash(i, 2) * 0.2) % 1) * (width + w) - w / 2;
-    const y = (((i * 0.381966) + hash(i, 3) * 0.3) % 1) * (height + h) - h / 2 + (1 - land) * -unit * 0.05;
-    const drift = t * unit * 0.004 * (0.5 + hash(i, 4));
-    const angle = (hash(i, 5) - 0.5) * 0.7;
+    const x = spot.x + (hash(spotIndex, 2) - 0.5) * cell * 0.35;
+    const y = spot.y + (hash(spotIndex, 3) - 0.5) * cell * 0.3 + (1 - land) * -unit * 0.04;
+    const drift = t * unit * 0.002 * (0.5 + hash(spotIndex, 4));
+    const angle = (hash(spotIndex, 5) - 0.5) * 0.6;
     ctx.save();
     ctx.translate(x + drift, y);
     ctx.rotate(angle);
-    ctx.scale(1 + (1 - land) * 0.12, 1 + (1 - land) * 0.12);
-    ctx.globalAlpha = land * 0.85;
-    const img = images[i] || null;
+    ctx.scale(1 + (1 - land) * 0.15, 1 + (1 - land) * 0.15);
+    ctx.globalAlpha = land;
+    // A soft shadow under each print gives the pile its depth.
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+    ctx.fillRect(-w / 2 - size * 0.02, -h / 2 + size * 0.04, w + size * 0.1, h + size * 0.14);
+    const img = floorCount ? images[spotIndex % floorCount] || null : null;
     const iw = img ? img.naturalWidth || img.width : 0;
     const ih = img ? img.naturalHeight || img.height : 0;
     if (iw > 0 && ih > 0) {
@@ -215,13 +255,13 @@ function drawStatsOutro(ctx, { width, height, t, durationSec, stats, images = []
       ctx.fillRect(-w / 2 + w * 0.06, -h / 2 + hole * 2, w * 0.88, h - hole * 4);
     }
     ctx.restore();
-  }
+  });
   // The prints sit in shadow, under the tally.
   ctx.fillStyle = 'rgba(8, 6, 5, 0.5)';
   ctx.fillRect(0, 0, width, height);
 
   // The tally: an edit log on a dark plate, inside the title-safe area.
-  const rows = statsOutroRows(stats);
+  const rows = statsOutroRows(stats, outro && outro.hidden);
   const insetX = width * 0.1;
   const insetY = height * 0.1;
   const safeW = width - insetX * 2;
@@ -232,15 +272,22 @@ function drawStatsOutro(ctx, { width, height, t, durationSec, stats, images = []
   const pad = 0.9; // plate padding, in row heights
   const lineH = 1.5;
   const headScale = 1.45;
+  const line = (value) => (typeof value === 'string' ? value.trim().toUpperCase() : '');
+  const headText = line(outro ? outro.title : 'Human Directed');
+  const subText = line(outro ? outro.subtitle : 'Human Imagined');
   // Fit the block's height first, then its widest line.
-  // Plate: padding, heading, a gap, the rows, a foot, padding (in units of the row size).
-  const blockUnits = pad + headScale + 0.6 + rows.length * lineH + 0.5 + pad;
+  // Plate: padding, heading, subheading, a gap under the rule, the rows, a foot, padding (in units of the row size).
+  const headUnits = headText ? headScale : 0;
+  const subUnits = subText ? (headText ? 1.25 : 1) : 0;
+  const ruled = headUnits + subUnits > 0;
+  const blockUnits = pad + headUnits + subUnits + (ruled ? 0.7 : -0.5) + rows.length * lineH + 0.5 + pad;
   let px = safeH / blockUnits;
   const rowFont = (size, weight = 500) => `${weight} ${Math.floor(size * 100) / 100}px ${body}`;
   const headFont = (size) => `800 ${Math.floor(size * 100) / 100}px ${head}`;
-  const headText = 'THE CUTTING ROOM FLOOR';
   const widest = (size) => Math.max(
-    measure(headText, headFont(size * headScale)) + size * pad * 2,
+    size * 8,
+    headText ? measure(headText, headFont(size * headScale)) + size * pad * 2 : 0,
+    subText ? measure(subText, rowFont(size, 600)) + size * pad * 2 : 0,
     ...rows.map((row) => measure(row.label.toUpperCase(), rowFont(size)) + measure(fmt(Math.max(row.value, 1000)), rowFont(size, 600)) + size * (2 + pad * 2)),
   );
   const wide = widest(px);
@@ -258,13 +305,25 @@ function drawStatsOutro(ctx, { width, height, t, durationSec, stats, images = []
   ctx.strokeRect(left + px * 0.25, top + px * 0.25, plateW - px * 0.5, plateH - px * 0.5);
   ctx.textBaseline = 'alphabetic';
   ctx.textAlign = 'center';
-  ctx.font = headFont(px * headScale);
-  ctx.fillStyle = '#f3ead7';
-  const headY = top + px * pad + px * headScale;
-  ctx.fillText(headText, width / 2, headY);
+  const headY = top + px * pad + px * headUnits;
+  if (headText) {
+    ctx.font = headFont(px * headScale);
+    ctx.fillStyle = '#f3ead7';
+    ctx.fillText(headText, width / 2, headY);
+  }
+  // Under it, the subheading in orange.
+  const subY = headY + px * subUnits;
+  if (subText) {
+    ctx.font = rowFont(px, 600);
+    ctx.fillStyle = '#ff8a4c';
+    ctx.fillText(subText, width / 2, subY);
+  }
   // A rule under the heading.
-  ctx.fillStyle = 'rgba(243, 196, 107, 0.7)';
-  ctx.fillRect(left + px * pad, headY + px * 0.45, plateW - px * pad * 2, Math.max(1, px * 0.06));
+  if (ruled) {
+    ctx.fillStyle = 'rgba(243, 196, 107, 0.7)';
+    ctx.fillRect(left + px * pad, subY + px * 0.55, plateW - px * pad * 2, Math.max(1, px * 0.06));
+  }
+  const rowBase = subY + px * (ruled ? 0.7 : -0.5);
   // Rows arrive one by one in the first half of the scene, each counting up to its number.
   const firstRow = 0.9;
   const stagger = Math.min(0.4, Math.max(0.12, (D * 0.5 - firstRow) / Math.max(1, rows.length)));
@@ -273,7 +332,7 @@ function drawStatsOutro(ctx, { width, height, t, durationSec, stats, images = []
     const show = ease((t - start) / 0.35);
     if (show <= 0) return;
     const counted = row.value * ease((t - start) / 0.9);
-    const y = headY + px * 0.6 + px * lineH * (i + 1) + (1 - show) * px * 0.4;
+    const y = rowBase + px * lineH * (i + 1) + (1 - show) * px * 0.4;
     ctx.globalAlpha = plateIn * show;
     if (row.accent) {
       ctx.fillStyle = 'rgba(255, 122, 61, 0.14)';
@@ -313,12 +372,13 @@ export { statsOutroRows, drawStatsOutro };
  * for `stats.floorImages[i]`; the faces are declared by the page's
  * @font-face rules. Every seek waits for the stills and faces to load.
  */
-export function statsOutroPageSource({ stats, imageSrcs = [], width, height, fps, durationSec }) {
+export function statsOutroPageSource({ stats, outro = null, imageSrcs = [], width, height, fps, durationSec }) {
   const json = (value) => JSON.stringify(value).replace(/</g, '\\u003c');
   return `(() => {
   ${statsOutroRows.toString()}
   ${drawStatsOutro.toString()}
   const STATS = ${json(stats)};
+  const OUTRO = ${json(outro)};
   const SRCS = ${json(imageSrcs)};
   const WIDTH = ${Number(width)}, HEIGHT = ${Number(height)}, FPS = ${Number(fps)}, DURATION = ${Number(durationSec)};
   const canvas = document.getElementById('outro');
@@ -340,7 +400,7 @@ export function statsOutroPageSource({ stats, imageSrcs = [], width, height, fps
     async seek(t) {
       await loaded;
       await faces;
-      drawStatsOutro(ctx, { width: WIDTH, height: HEIGHT, t, durationSec: DURATION, stats: STATS, images });
+      drawStatsOutro(ctx, { width: WIDTH, height: HEIGHT, t, durationSec: DURATION, stats: STATS, outro: OUTRO, images });
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     },
   };

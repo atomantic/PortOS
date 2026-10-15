@@ -46,15 +46,17 @@ async function persist(exec, album) {
   return album;
 }
 
-export async function listAlbums({ includeDeleted = false } = {}) {
+export async function listAlbums({ includeDeleted = false, client } = {}) {
+  const exec = client ? client.query.bind(client) : query;
   const { rows } = includeDeleted
-    ? await query(`SELECT data FROM albums ORDER BY title ASC`)
-    : await query(`SELECT data FROM albums WHERE deleted = FALSE ORDER BY title ASC`);
+    ? await exec(`SELECT data FROM albums ORDER BY title ASC`)
+    : await exec(`SELECT data FROM albums WHERE deleted = FALSE ORDER BY title ASC`);
   return rows.map(rowToAlbum);
 }
 
-export async function getAlbum(id, { includeDeleted = false } = {}) {
-  const { rows } = await query(`SELECT data FROM albums WHERE id = $1`, [id]);
+export async function getAlbum(id, { includeDeleted = false, client } = {}) {
+  const exec = client ? client.query.bind(client) : query;
+  const { rows } = await exec(`SELECT data FROM albums WHERE id = $1${client ? ' FOR UPDATE' : ''}`, [id]);
   const album = rowToAlbum(rows[0]);
   if (!album) return null;
   return includeDeleted || !album.deleted ? album : null;
@@ -68,16 +70,16 @@ export async function listAlbumIds({ includeDeleted = false } = {}) {
   return rows.map((r) => r.id);
 }
 
-export async function createAlbum(input) {
+export async function createAlbum(input, { client } = {}) {
   const album = buildAlbumRecord(input, { id: `album-${randomUUID()}`, now: new Date().toISOString() });
   if (!album) throw new ServerError('Invalid album payload', { status: 400, code: 'VALIDATION' });
-  await persist(query, album);
+  await persist(client ? client.query.bind(client) : query, album);
   console.log(`💿 Created album: ${album.id} (${album.title})`);
   return album;
 }
 
-export async function updateAlbum(id, patch) {
-  return withTransaction(async (client) => {
+export async function updateAlbum(id, patch, { client: transactionClient } = {}) {
+  const mutate = async (client) => {
     const sel = await client.query(`SELECT data FROM albums WHERE id = $1 FOR UPDATE`, [id]);
     const current = rowToAlbum(sel.rows[0]);
     if (!current || current.deleted) throw new ServerError('Album not found', { status: 404, code: 'NOT_FOUND' });
@@ -85,11 +87,12 @@ export async function updateAlbum(id, patch) {
     if (!next) throw new ServerError('Invalid album payload', { status: 400, code: 'VALIDATION' });
     await persist(client.query.bind(client), next);
     return next;
-  });
+  };
+  return transactionClient ? mutate(transactionClient) : withTransaction(mutate);
 }
 
-export async function deleteAlbum(id) {
-  return withTransaction(async (client) => {
+export async function deleteAlbum(id, { client: transactionClient } = {}) {
+  const mutate = async (client) => {
     const sel = await client.query(`SELECT data FROM albums WHERE id = $1 FOR UPDATE`, [id]);
     const current = rowToAlbum(sel.rows[0]);
     if (!current || current.deleted) throw new ServerError('Album not found', { status: 404, code: 'NOT_FOUND' });
@@ -97,7 +100,8 @@ export async function deleteAlbum(id) {
     const next = { ...current, deleted: true, deletedAt: now, updatedAt: now };
     await persist(client.query.bind(client), next);
     return { id };
-  });
+  };
+  return transactionClient ? mutate(transactionClient) : withTransaction(mutate);
 }
 
 /**

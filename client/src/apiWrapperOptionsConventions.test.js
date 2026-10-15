@@ -42,13 +42,23 @@ import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { trackedSourceFiles } from './test/trackedFiles.js';
-import { blankCommentBodies, blankLiterals, matchBracket } from '../../server/lib/sourceScan.js';
+import { blankLiterals, matchBracket } from '../../server/lib/sourceScan.js';
 
 const CLIENT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SERVICE_FILE = /^src\/services\/api[^/]*\.js$/;
 const OPTIONS_NAMES = new Set(['options', 'opts']);
 
-/** Split `text[start, end)` on top-level commas, using the blanked copy to find them. */
+// Opt-in stage evidence for workload-sensitive timeouts; normal runs stay quiet.
+const profile = process.env.PORTOS_PROFILE_API_WRAPPERS === '1' ? new Map() : null;
+const measure = (stage, run) => {
+  if (!profile) return run();
+  const start = performance.now();
+  const result = run();
+  profile.set(stage, (profile.get(stage) ?? 0) + performance.now() - start);
+  return result;
+};
+
+/** Argument/property spans in `text[start, end)`, split on commas in the blanked view. */
 function splitTopLevel(blanked, text, start, end) {
   const parts = [];
   let depth = 0;
@@ -58,12 +68,11 @@ function splitTopLevel(blanked, text, start, end) {
     if ('([{'.includes(c)) depth++;
     else if (')]}'.includes(c)) depth--;
     else if (c === ',' && depth === 0) {
-      parts.push(text.slice(from, i).trim());
+      parts.push({ start: from, end: i });
       from = i + 1;
     }
   }
-  const last = text.slice(from, end).trim();
-  if (last) parts.push(last);
+  if (text.slice(from, end).trim()) parts.push({ start: from, end });
   return parts;
 }
 
@@ -71,8 +80,7 @@ const WRAPPER_HEAD = /^[ \t]*export\s+(?:(?:async\s+)?function\s+(\w+)\s*\(|cons
 
 /** Exported function wrappers in one service file: `[{ name, params, text }]`. */
 export function wrapperExports(src) {
-  const code = blankCommentBodies(src);
-  const blanked = blankLiterals(src);
+  const { code, blanked } = measure('lex', () => blankLiterals(src, { includeCommentOnly: true }));
   const heads = [...blanked.matchAll(WRAPPER_HEAD)];
   const allExports = [...blanked.matchAll(/^[ \t]*export\s/gm)].map((m) => m.index);
   return heads.map((head) => {
@@ -82,7 +90,8 @@ export function wrapperExports(src) {
     const next = allExports.find((index) => index > head.index) ?? src.length;
     return {
       name: head[1] || head[2],
-      params: splitTopLevel(blanked, code, open + 1, close - 1),
+      params: splitTopLevel(blanked, code, open + 1, close - 1)
+        .map(({ start, end }) => code.slice(start, end).trim()),
       text: code.slice(close, next),
     };
   }).filter(Boolean);
@@ -112,7 +121,23 @@ export function forwardsOptionsAt(wrapper, index) {
   return new RegExp(`\\.\\.\\.${escaped}\\b|\\b${escaped}\\??\\.silent\\b|,\\s*${escaped}\\s*\\)`).test(wrapper.text);
 }
 
-const SILENT_KEY = /[{,]\s*silent\s*(?::|,|\})/;
+const SILENT_KEY = /^(?:silent\s*(?::|$)|(['"])silent\1\s*:)/;
+
+/** Read keys only at property starts; literal values cannot invent those boundaries. */
+function hasSilentKey(blanked, code, start, end) {
+  while (start < end && /\s/.test(code[start])) start++;
+  if (blanked[start] !== '{') return false;
+  const close = matchBracket(blanked, start);
+  if (close === -1 || close > end) return false;
+  // Preserve the guard's conservative detection of keys in nested objects too.
+  for (let open = start; open !== -1 && open < close; open = blanked.indexOf('{', open + 1)) {
+    const objectEnd = matchBracket(blanked, open);
+    if (objectEnd === -1 || objectEnd > close) continue;
+    if (splitTopLevel(blanked, code, open + 1, objectEnd - 1)
+      .some((part) => SILENT_KEY.test(code.slice(part.start, part.end).trim()))) return true;
+  }
+  return false;
+}
 
 /**
  * `{ line, name, index }` for every call of one of `names` that passes a literal
@@ -122,8 +147,7 @@ const SILENT_KEY = /[{,]\s*silent\s*(?::|,|\})/;
  */
 export function silentCalls(src, names) {
   if (!src.includes('silent')) return [];
-  const code = blankCommentBodies(src);
-  const blanked = blankLiterals(src);
+  const { code, blanked } = measure('lex', () => blankLiterals(src, { includeCommentOnly: true }));
   const imported = new Set([...code.matchAll(/import\s*\{([^}]*)\}\s*from/g)]
     .flatMap((m) => m[1].split(',').map((part) => part.trim().split(/\s+as\s+/).pop())));
   const hits = [];
@@ -133,8 +157,8 @@ export function silentCalls(src, names) {
     const open = match.index + match[0].length - 1;
     const close = matchBracket(blanked, open);
     if (close === -1) continue;
-    splitTopLevel(blanked, code, open + 1, close - 1).forEach((arg, index) => {
-      if (arg.startsWith('{') && SILENT_KEY.test(arg)) {
+    splitTopLevel(blanked, code, open + 1, close - 1).forEach(({ start, end }, index) => {
+      if (hasSilentKey(blanked, code, start, end)) {
         hits.push({ line: src.slice(0, match.index).split('\n').length, name, index });
       }
     });
@@ -165,13 +189,17 @@ const read = (file) => ({ file, src: readFileSync(join(CLIENT_ROOT, file), 'utf8
 
 describe('silent options reach the API wrapper that reads them (#9951)', () => {
   it('has no { silent } passed to a position the wrapper drops', () => {
-    const tracked = trackedSourceFiles(CLIENT_ROOT);
+    profile?.clear();
+    const tracked = measure('discovery', () => trackedSourceFiles(CLIENT_ROOT));
     expect(tracked.length).toBeGreaterThan(100);
-    const wrappers = tracked.filter((file) => SERVICE_FILE.test(file)).flatMap((file) => wrapperExports(read(file).src));
+    const files = measure('read', () => tracked.map(read));
+    const wrappers = measure('wrappers', () => files.filter(({ file }) => SERVICE_FILE.test(file)).flatMap(({ src }) => wrapperExports(src)));
     // A broken parse would otherwise pass by judging nothing.
     expect(wrappers.length).toBeGreaterThan(500);
 
-    const violations = findDroppedSilent(tracked.map(read), wrappers);
+    const violations = measure('calls', () => findDroppedSilent(files, wrappers));
+    // Explicit profiling must survive CI's suppression of passing-test consoles.
+    if (profile) process.stdout.write(`⏱ API wrapper scan: files=${files.length}, wrappers=${wrappers.length}, ${[...profile].map(([stage, ms]) => `${stage}=${ms.toFixed(1)}ms`).join(', ')}\n`);
     expect(
       violations,
       'These calls pass `{ silent: … }` to an API wrapper whose parameter at that position does not '
@@ -219,6 +247,31 @@ describe('silent options reach the API wrapper that reads them (#9951)', () => {
     expect(silentCalls(`${imp}// noOptions(id, { silent: true })`, names)).toEqual([]);
   });
 
+  it('keeps dynamic endpoints, nested defaults, and calls inside template interpolation visible', () => {
+    const wrappers = wrapperExports(`
+      export const dynamic = (id, data = { label: \`item-\${id}\` }, extra) =>
+        request(\`/things/\${id ? 'nested)' : 'other'}\`, { body: JSON.stringify(data), ...extra });
+      export async function dropped(id = choose({ nested: [1, 2] })) {
+        return request(\`/things/\${id}\`);
+      }
+    `);
+    expect(wrappers.map(({ name, params }) => [name, params.length])).toEqual([
+      ['dynamic', 3], ['dropped', 1],
+    ]);
+    const files = [{ file: 'dynamic.jsx', src: `
+      import { dynamic } from './services/api';
+      dynamic(id, { value: 'literal }, separator' }, { silent: true });
+      dynamic(id, { silent: true });
+      const label = \`prefix \${api.dropped(choose({ nested: [1, 2] }), { silent: true })}\`;
+      // api.dropped(id, { silent: true });
+      const sample = 'api.dropped(id, { silent: true })';
+    ` }];
+    expect(findDroppedSilent(files, wrappers)).toEqual([
+      'dynamic.jsx:4 dynamic(…) passes { silent } as argument 2',
+      'dynamic.jsx:5 dropped(…) passes { silent } as argument 2',
+    ]);
+  });
+
   it('flags a call whose position the wrapper drops and accepts a forwarding one', () => {
     const wrappers = wrapperExports(`
       export const noOptions = (id) => request(\`/x/\${id}\`);
@@ -228,5 +281,41 @@ describe('silent options reach the API wrapper that reads them (#9951)', () => {
       { file: 'a.jsx', src: "import { noOptions, named } from './services/api';\nnoOptions(1, { silent: true });\nnamed(1, { silent: true });" },
     ];
     expect(findDroppedSilent(files, wrappers)).toEqual(['a.jsx:2 noOptions(…) passes { silent } as argument 2']);
+  });
+
+  it('recognizes silent property keys without reading literal values as properties (#11535)', () => {
+    const wrappers = wrapperExports(`
+      export const dynamic = (id, data, extra) =>
+        request(\`/things/\${id}\`, { body: JSON.stringify(data), ...extra });
+    `);
+    const files = [{ file: 'literalPayload.jsx', src: `
+      import { dynamic } from './services/api';
+      dynamic(id, { value: 'literal }, silent: false' }, { silent: true });
+      dynamic(id, { value: "literal }, silent: false" }, { silent: true });
+      dynamic(id, { value: \`literal }, silent: false\` }, { silent: true });
+      dynamic(id, { value: /}, silent: false/ }, { silent: true });
+      dynamic(id, { /* }, silent: false */ value: choose({ nested: [1, 2] }) }, { silent: true });
+      const label = \`prefix \${dynamic(id, { value: 'literal }, silent: false' }, { silent: true })}\`;
+      dynamic(id, { value: 'literal }, silent: false', silent: false });
+      dynamic(id, { value: choose({ nested: [1, 2] }), silent });
+      dynamic(id, { 'silent': false });
+      dynamic(id, { "silent": false });
+      const dropped = \`prefix \${dynamic(id, { silent: true })}\`;
+      const shorthand = \`prefix \${dynamic(id, { silent })}\`;
+      dynamic(id, {}, { 'silent': true });
+      dynamic(id, { nested: [{ silent: true }] });
+      dynamic(id, { value: 'literal }, "silent": false', ['silent']: false });
+      dynamic(id, { value: choose({ nested: [1, 2] }), silent /* a real key */: false });
+    ` }];
+    expect(findDroppedSilent(files, wrappers)).toEqual([
+      'literalPayload.jsx:9 dynamic(…) passes { silent } as argument 2',
+      'literalPayload.jsx:10 dynamic(…) passes { silent } as argument 2',
+      'literalPayload.jsx:11 dynamic(…) passes { silent } as argument 2',
+      'literalPayload.jsx:12 dynamic(…) passes { silent } as argument 2',
+      'literalPayload.jsx:13 dynamic(…) passes { silent } as argument 2',
+      'literalPayload.jsx:14 dynamic(…) passes { silent } as argument 2',
+      'literalPayload.jsx:16 dynamic(…) passes { silent } as argument 2',
+      'literalPayload.jsx:18 dynamic(…) passes { silent } as argument 2',
+    ]);
   });
 });

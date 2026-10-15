@@ -1,5 +1,6 @@
 import { Copy, Plus, Trash2 } from 'lucide-react';
 import { compositionDraft, renderStyleLabel } from './compositionDraft.js';
+import { composedDrawsLyrics } from '../../lib/musicVideoLayers.js';
 
 // Client-minted ids keep a freshly added row addressable across saves (see LyricsPanel).
 const mintId = () => `mtc-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
@@ -74,7 +75,7 @@ export default function TypographyPanel({ project, onEditLocal, onSave }) {
             onBlur={() => save()} className={`${inputCls} w-20`} />
         </div>
         <button type="button" onClick={copyLyrics} disabled={timedLyrics.length === 0}
-          title={timedLyrics.length === 0 ? 'Time some lyric lines first' : 'Replace the text cues with the timed lyric lines'}
+          title={timedLyrics.length === 0 ? 'Time some lyric lines first' : 'Replace the text cues with the timed lyric lines as plain subtitles (they replace the lyric type in the final render)'}
           className="flex items-center gap-1 text-port-accent min-h-[44px] sm:min-h-0 disabled:opacity-50">
           <Copy size={13} /> Copy timed lyrics ({timedLyrics.length})
         </button>
@@ -83,7 +84,8 @@ export default function TypographyPanel({ project, onEditLocal, onSave }) {
           className="flex items-center gap-1 text-port-accent min-h-[44px] sm:min-h-0"><Plus size={13} /> Text cue</button>
       </div>
 
-      {composed && cues.length === 0 && <p className="mt-2 text-port-text-muted">No text cues yet — a composed render with none renders as plain cuts.</p>}
+      {composed && composedDrawsLyrics({ ...project, composition }) && <p className="mt-2 text-port-text-muted">The final render draws your timed lyrics, as in the player. Text cues are optional; a Subtitle cue replaces the lyrics.</p>}
+      {composed && !composedDrawsLyrics({ ...project, composition }) && cues.length === 0 && <p className="mt-2 text-port-text-muted">No lyrics or text cues to draw, so the final render is plain cuts.</p>}
       {footage && cues.length > 0 && <p className="mt-2 text-port-warning" role="status">Footage renders plain cuts, so these text cues will not appear. Choose Composed in Project settings to lay them over the footage.</p>}
       {codeMode && <p className="mt-2 text-port-text-muted">Code-rendered draws the song in code. Text cues stay stored and come back if you switch to Composed.</p>}
       {composition.mode === 'document' && <p className="mt-2 text-port-text-muted">The composition document reads these cues from <code>PORTOS_MV.textCues</code>: the layered template draws Hero cues as kinetic words on their sung times and uses Subtitle cues (or, with none, the timed lyrics) as subtitles.</p>}

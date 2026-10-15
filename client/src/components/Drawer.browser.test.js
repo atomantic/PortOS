@@ -16,7 +16,7 @@ const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
 
 // Native :disabled includes inherited fieldset state and the first-legend
 // exception. Happy DOM does not model it, so exercise actual browser tab order.
-describe.skipIf(!chrome && !auditCdp)('Drawer native disabled-state focus boundaries', () => {
+describe.skipIf(!chrome && !auditCdp)('modal native keyboard boundaries', () => {
   let fixture;
   let browser;
   let page;
@@ -31,7 +31,7 @@ describe.skipIf(!chrome && !auditCdp)('Drawer native disabled-state focus bounda
       root: fileURLToPath(new URL('../..', import.meta.url)),
       cacheDir: join(temp, 'vite-cache'),
       // Pre-bundle only what this fixture renders, not the whole app's graph.
-      optimizeDeps: { entries: ['src/components/Drawer.jsx'], include: ['react', 'react-dom/client'] },
+      optimizeDeps: { entries: ['src/components/Drawer.jsx', 'src/components/RapidReader.jsx'], include: ['react', 'react-dom/client'] },
       plugins: [react(), {
         name: 'drawer-focus-fixture',
         resolveId(id) { if (id === '/drawer-fixture.jsx') return '\0drawer-fixture.jsx'; },
@@ -41,15 +41,23 @@ describe.skipIf(!chrome && !auditCdp)('Drawer native disabled-state focus bounda
             import React, { useState } from 'react';
             import { createRoot } from 'react-dom/client';
             import Drawer from '/src/components/Drawer.jsx';
+            import { RapidReaderModal } from '/src/components/RapidReader.jsx';
             const h = React.createElement;
             function Editor() {
               const [open, setOpen] = useState(false);
               const [saving, setSaving] = useState(true);
+              const [readerOpen, setReaderOpen] = useState(false);
+              const disclosures = new URLSearchParams(location.search).has('disclosures');
               return h(React.Fragment, null,
                 h('button', { id: 'opener', onClick: () => setOpen(true) }, 'Open editor'),
                 h('button', { id: 'outside' }, 'Outside'),
+                h('button', { id: 'reader-opener', onClick: () => setReaderOpen(true) }, 'Open reader'),
+                h(RapidReaderModal, { open: readerOpen, text: 'Synthetic accessible reading passage.',
+                  autoPlay: false, onClose: () => setReaderOpen(false) }),
                 h(Drawer, { open, title: 'Edit draft', onClose: () => setOpen(false) },
-                  h('fieldset', { disabled: saving },
+                  disclosures ? h('details', null,
+                    h('summary', null, 'Advanced'),
+                    h('button', { id: 'detail-action' }, 'Detail action')) : h('fieldset', { disabled: saving },
                     h('legend', null, 'Draft ', h('button', { id: 'cancel', onClick: () => setSaving(false) }, 'Cancel save')),
                     h('input', { 'aria-label': 'Title' }),
                     h('button', { id: 'save', tabIndex: 0 }, 'Save draft'))));
@@ -78,6 +86,8 @@ describe.skipIf(!chrome && !auditCdp)('Drawer native disabled-state focus bounda
         }
       }
       if (!page) throw new Error('Dedicated PortOS audit target is missing');
+      const session = await page.context().newCDPSession(page);
+      await session.send('Emulation.setFocusEmulationEnabled', { enabled: true });
     } else {
       page = await browser.newPage();
     }
@@ -118,6 +128,47 @@ describe.skipIf(!chrome && !auditCdp)('Drawer native disabled-state focus bounda
     expect(await save.evaluate(el => el === document.activeElement)).toBe(true);
     await page.keyboard.press('Tab');
     expect(await close.evaluate(el => el === document.activeElement)).toBe(true);
+    await page.keyboard.press('Escape');
+    expect(await opener.evaluate(el => el === document.activeElement)).toBe(true);
+  }, 30000);
+
+  it('includes native summaries and excludes content of closed disclosures from wrap boundaries', async () => {
+    await page.goto(`${origin}drawer-test?disclosures`);
+    const opener = page.getByRole('button', { name: 'Open editor' });
+    await opener.focus();
+    await page.keyboard.press('Enter');
+    const close = page.getByRole('button', { name: 'Close settings' });
+    const summary = page.locator('summary');
+    const action = page.getByRole('button', { name: 'Detail action' });
+    await close.waitFor();
+    await page.keyboard.press('Shift+Tab');
+    expect(await summary.evaluate(el => el === document.activeElement)).toBe(true);
+    await page.keyboard.press('Tab');
+    expect(await close.evaluate(el => el === document.activeElement)).toBe(true);
+    await page.keyboard.press('Tab');
+    expect(await summary.evaluate(el => el === document.activeElement)).toBe(true);
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Tab');
+    expect(await action.evaluate(el => el === document.activeElement)).toBe(true);
+    await page.keyboard.press('Tab');
+    expect(await close.evaluate(el => el === document.activeElement)).toBe(true);
+    await page.keyboard.press('Escape');
+    expect(await opener.evaluate(el => el === document.activeElement)).toBe(true);
+  }, 30000);
+
+  it('reaches the Rapid Reader transcript and opens it with Space without starting playback', async () => {
+    await page.goto(`${origin}drawer-test`);
+    const opener = page.getByRole('button', { name: 'Open reader' });
+    await opener.focus();
+    await page.keyboard.press('Enter');
+    await page.getByRole('button', { name: 'Show two words at a time' }).focus();
+    await page.keyboard.press('Tab');
+    const summary = page.locator('summary');
+    expect(await summary.evaluate(el => el === document.activeElement)).toBe(true);
+    await page.keyboard.press('Space');
+    expect(await page.locator('details').evaluate(el => el.open)).toBe(true);
+    expect(await page.getByText('Synthetic accessible reading passage.', { exact: true }).isVisible()).toBe(true);
+    expect(await page.getByRole('button', { name: 'Play', exact: true }).count()).toBe(1);
     await page.keyboard.press('Escape');
     expect(await opener.evaluate(el => el === document.activeElement)).toBe(true);
   }, 30000);

@@ -233,6 +233,17 @@ only audio. A cue's state at a time is a pure function of that time
 The scratch directory is removed when the render ends, swept at boot, and
 excluded from backups.
 
+With timed lyrics and no Subtitle text cues (Hero cues are titles over the
+words, not a stand-in for them), a composed render also draws the sung lyrics
+in the shared lyric type, exactly as the storyboard animatic shows them: it
+stages the animatic's lyric overlay page (`documentTemplates/lyricOverlay`)
+beside the typography page and captures it over each line's window
+(`composedLyricWindows`, the first onset to two seconds past the line's end).
+Each shot's lyric placement, style and size apply; a title card shot already draws its
+text (else its sung line), so the overlay keeps its lines off it. A Subtitle cue hands the words
+back to the text cues, so "Copy timed lyrics" swaps the lyric type for plain
+subtitles.
+
 A composed render also honors each scene's visual layer (#8985): its
 generated footage (the default), its selected still frame with a deterministic
 hold, push-in or pan, or a title card — a solid colour whose text is drawn by
@@ -416,7 +427,7 @@ snapshot freezes (`server/services/musicVideo/documentRender.js`):
   { width, height, fps, frames, durationSec }, song: { durationSec, bpm, beats,
   downbeats, sections, words }, lyrics, lyricMarkers, scenes: [{ sceneId,
   label, startSec, endSec, shotMode, visualLayer, stillMove, cardText,
-  cardColor, textZone, lyricRole, lyricText, direction, media: { kind, src, inSec, outSec, fps,
+  cardColor, textZone, lyricRole, lyricSize, lyricText, direction, media: { kind, src, inSec, outSec, fps,
   width, height } | null }], textCues, composition: { mode, style, posterSec,
   overlay } }`. Load it with `<script src="portos-mv.js">`; the sandbox
   refuses `fetch`.
@@ -502,9 +513,11 @@ and its repeats come back as sung lines unless `hookRepeats: 'hook'`),
 at most one per shot). A per-line override or the line's own `role` wins,
 then the shot's `lyricRole`, then the lyric sheet: the line's `lyricMarkers`
 delivery direction (spoken/shouted lines stamp), else its section header
-(choruses, hooks, refrains and drops are hooks), else `line`. Each shot's `textZone` (`lower-left`, `upper-right`,
-centred `upper` / `lower`, `center`, or `none` to keep the shot clear) places
-the words so they never cover the subject. A line never shows before its first word onset, stays at
+(choruses, hooks, refrains and drops are hooks), else `line`. Each shot's `textZone` (the corners `upper-left`, `upper-right`,
+`lower-left`, `lower-right`, centred `upper` / `lower`, `center`, or `none` to
+keep the shot clear) places the words so they never cover the subject, and its
+`lyricSize` (`small`, `large`, or null for normal; `LYRIC_SIZE_SCALE`) scales the
+type and its share of the frame, never below the floor. A line never shows before its first word onset, stays at
 least 0.8s, and sung type stays at least 56px at 1080p. Type stays out of the
 picture's way: one caption covers at most 6% of the frame (hooks 10%, data
 readouts 4%; `LYRIC_FIT`) in at most two balanced rows, shrinking to fit but

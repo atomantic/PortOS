@@ -12,6 +12,33 @@ const items = [
 ];
 
 describe('EntityCombobox', () => {
+  it('keeps keyboard creation disabled while busy without submitting the surrounding form', async () => {
+    const user = userEvent.setup();
+    const onCreate = vi.fn();
+    const onSubmit = vi.fn(event => event.preventDefault());
+    const picker = busy => (
+      <form onSubmit={onSubmit}>
+        <EntityCombobox items={[]} value="Synthetic world" onChange={() => {}}
+          onPick={() => {}} onCreate={onCreate} busy={busy} inputId="busy-picker" />
+        <button type="submit">Save</button>
+      </form>
+    );
+    const { rerender } = render(picker(true));
+    const input = screen.getByRole('combobox');
+    await user.click(input);
+    expect(screen.getByRole('option')).toBeDisabled();
+    await user.keyboard('{Enter}');
+    expect(onCreate).not.toHaveBeenCalled();
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(input).toHaveFocus();
+    expect(input).toHaveAttribute('aria-expanded', 'true');
+    rerender(picker(false));
+    await user.keyboard('{Enter}');
+    expect(onCreate).toHaveBeenCalledTimes(1);
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(input).toHaveAttribute('aria-expanded', 'false');
+  });
+
   it('keeps keyboard focus and Enter aligned through navigation, filtering and reopening', async () => {
     const user = userEvent.setup();
     const onPick = vi.fn();

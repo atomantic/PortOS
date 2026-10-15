@@ -1,7 +1,9 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { CARDINALITIES, ACCOUNT_IDS, mediaFixture, messageFixture } from './collectionFixtureData.js';
+import { seedFixtureRecords } from './collectionFixtureSeed.js';
 
 // This is the only worker entrypoint. Validate BEFORE dynamic server imports.
 const root = process.cwd();
@@ -18,6 +20,18 @@ let io;
 let db;
 let closing;
 let phase = 'imports';
+const counts = { images: 0, videos: 0, accounts: 0, messages: 0 };
+const workMs = { files: 0, index: 0 };
+const progress = nextPhase => {
+  phase = nextPhase;
+  if (process.connected) process.send({ type: 'progress', phase, counts,
+    workMs: { files: Math.round(workMs.files), index: Math.round(workMs.index) } });
+};
+const writeSeedFile = async (path, contents) => {
+  const started = performance.now();
+  await writeFile(path, contents);
+  workMs.files += performance.now() - started;
+};
 const close = () => closing ||= (async () => {
   if (server) {
     if (io) await new Promise(resolveIo => io.close(resolveIo));
@@ -33,13 +47,14 @@ process.once('SIGTERM', stop);
 process.once('disconnect', stop);
 
 async function start() {
+  progress('imports');
   const require = createRequire(join(root, 'server/package.json'));
   const express = require('express');
   const sharp = require('sharp');
   db = await import('../../server/lib/db.js');
   const { PATHS } = await import('../../server/lib/paths.js');
   if (resolve(PATHS.data) !== join(root, 'data')) throw new Error('Fixture data root mismatch');
-  phase = 'database';
+  progress('database');
   const identity = await db.query('SELECT current_database() AS db, current_schema() AS schema');
   if (identity.rows[0].db !== 'portos_test' || identity.rows[0].schema !== schema) throw new Error('Fixture DB isolation mismatch');
   const { mediaDdl } = await import('../../server/lib/db/schema/media.js');
@@ -51,36 +66,50 @@ async function start() {
   const { imageToRow, videoToRow } = await import('../../server/services/mediaAssetIndex/logic.js');
   await Promise.all(['images', 'videos', 'video-thumbnails', 'messages/cache'].map(dir => mkdir(join(PATHS.data, dir), { recursive: true })));
   const png = await sharp({ create: { width: 640, height: 360, channels: 3, background: '#335577' } }).png().toBuffer();
-  phase = 'media-seed';
-  for (let index = 0; index < CARDINALITIES.images; index++) {
+  progress('image-seed');
+  await seedFixtureRecords(CARDINALITIES.images, async index => {
     const image = mediaFixture('image', index);
-    await writeFile(join(PATHS.images, image.filename), png);
-    await writeFile(join(PATHS.images, image.filename.replace('.png', '.metadata.json')), JSON.stringify(image));
+    await writeSeedFile(join(PATHS.images, image.filename), png);
+    await writeSeedFile(join(PATHS.images, image.filename.replace('.png', '.metadata.json')), JSON.stringify(image));
+    const started = performance.now();
     await upsertAsset(imageToRow(image));
-  }
+    workMs.index += performance.now() - started;
+  }, completed => {
+    counts.images = completed;
+    progress('image-seed');
+  });
   const clip = await readFile(join(root, 'scripts/perf/assets/synthetic.mp4'));
   const videos = [];
-  for (let index = 0; index < CARDINALITIES.videos; index++) {
+  progress('video-seed');
+  await seedFixtureRecords(CARDINALITIES.videos, async index => {
     const video = mediaFixture('video', index);
-    videos.push(video);
-    await writeFile(join(PATHS.data, 'videos', video.filename), clip);
-    await writeFile(join(PATHS.data, 'video-thumbnails', video.thumbnail), png);
+    videos[index] = video;
+    await writeSeedFile(join(PATHS.data, 'videos', video.filename), clip);
+    await writeSeedFile(join(PATHS.data, 'video-thumbnails', video.thumbnail), png);
+    const started = performance.now();
     await upsertAsset(videoToRow(video));
-  }
-  await writeFile(join(PATHS.data, 'video-history.json'), JSON.stringify(videos));
-  phase = 'inbox-seed';
+    workMs.index += performance.now() - started;
+  }, completed => {
+    counts.videos = completed;
+    progress('video-seed');
+  });
+  await writeSeedFile(join(PATHS.data, 'video-history.json'), JSON.stringify(videos));
+  progress('inbox-seed');
   const accounts = {};
   for (const [accountIndex, id] of ACCOUNT_IDS.entries()) {
     accounts[id] = { id, name: 'Synthetic inbox ' + (accountIndex + 1), type: 'gmail', provider: 'api',
       email: 'fixture' + accountIndex + '@example.com', enabled: false, syncConfig: {}, lastSyncAt: null };
     const messages = Array.from({ length: CARDINALITIES.messages / CARDINALITIES.accounts },
       (_, index) => messageFixture(id, index + accountIndex * CARDINALITIES.messages / CARDINALITIES.accounts));
-    await writeFile(join(PATHS.messages, 'cache', id + '.json'), JSON.stringify({ syncCursor: null, messages }));
+    await writeSeedFile(join(PATHS.messages, 'cache', id + '.json'), JSON.stringify({ syncCursor: null, messages }));
+    counts.accounts++;
+    counts.messages += messages.length;
+    progress('inbox-seed');
   }
   await writeFile(join(PATHS.messages, 'accounts.json'), JSON.stringify(accounts));
   await writeFile(join(PATHS.data, 'settings.json'), JSON.stringify({ timezone: 'UTC', instances: [] }));
 
-  phase = 'routes';
+  progress('routes');
   const { createImageGalleryHandlers } = await import('../../server/routes/imageGalleryRead.js');
   const { createVideoHistoryItemRead } = await import('../../server/routes/videoHistoryRead.js');
   const { messageInboxRead, messageDetailRead } = await import('../../server/routes/messageInboxRead.js');

@@ -38,7 +38,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { htmlCompositionContractSchemaFor } from '../../lib/validation.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
-import { clipSpeedRate, clipOffsetSec, documentSceneVisualLayer, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_TEXT_ZONES } from '../../lib/musicVideoLayers.js';
+import { clipSpeedRate, clipOffsetSec, documentSceneVisualLayer, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_LYRIC_SIZES, MUSIC_VIDEO_TEXT_ZONES } from '../../lib/musicVideoLayers.js';
 import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
 import { documentDirectoryForRender } from './compositionDocument.js';
 import { musicVideoSongDocument } from './compositionRender.js';
@@ -232,6 +232,7 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
         cardColor: typeof scene.cardColor === 'string' ? scene.cardColor : null,
         textZone: MUSIC_VIDEO_TEXT_ZONES.includes(scene.textZone) ? scene.textZone : null,
         lyricRole: MUSIC_VIDEO_LYRIC_ROLES.includes(scene.lyricRole) ? scene.lyricRole : null,
+        lyricSize: MUSIC_VIDEO_LYRIC_SIZES.includes(scene.lyricSize) ? scene.lyricSize : null,
         lyricText: typeof scene.lyricText === 'string' ? scene.lyricText : null,
         visualIntent: typeof scene.visualIntent === 'string' ? scene.visualIntent : null,
         direction: sceneDirection(project, scene.sceneId),

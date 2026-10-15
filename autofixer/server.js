@@ -159,8 +159,12 @@ async function saveSession(sessionId, prompt, output, metadata, patch) {
 
 // Get error logs for a process
 async function getProcessLogs(processName) {
-  const { stdout: errLogs } = await execPm2(['logs', processName, '--lines', '100', '--nostream', '--err']).catch(() => ({ stdout: '' }));
-  const { stdout: outLogs } = await execPm2(['logs', processName, '--lines', '50', '--nostream', '--out']).catch(() => ({ stdout: '' }));
+  const { stdout: errLogs } = await execPm2(['logs', processName, '--lines', '100', '--nostream', '--err']).catch(() => {
+    throw new Error(`PM2 stderr logs unavailable for ${processName.replace(/[\r\n]/g, ' ').slice(0, 120)} — skipping repair`);
+  });
+  const { stdout: outLogs } = await execPm2(['logs', processName, '--lines', '50', '--nostream', '--out']).catch(() => {
+    throw new Error(`PM2 stdout logs unavailable for ${processName.replace(/[\r\n]/g, ' ').slice(0, 120)} — skipping repair`);
+  });
   return { errLogs, outLogs };
 }
 

@@ -18,14 +18,12 @@ import { isPerformanceScene, planPerformanceRepair } from '../../lib/musicVideoS
 import SceneTakeStrip from './SceneTakeStrip.jsx';
 import { sceneEndFramePlanFor } from './SceneEndFrame.jsx';
 import SceneFrames from './SceneFrames.jsx';
-import { CLIP_TIMING_FPS, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_TEXT_ZONES, MUSIC_VIDEO_VISUAL_LAYERS, clipReversed, sceneHasAuthoredSpan } from '../../lib/musicVideoLayers.js';
+import { CLIP_TIMING_FPS, MUSIC_VIDEO_VISUAL_LAYERS, clipReversed, composedDrawsLyrics, sceneHasAuthoredSpan } from '../../lib/musicVideoLayers.js';
 
 // #8985: what a composed render shows for this scene's span.
 const LAYER_LABELS = { footage: 'Footage', still: 'Still image', card: 'Title card', code: 'Code-drawn' };
 const STILL_MOVE_LABELS = [['hold', 'Hold'], ['push', 'Push in'], ['pan', 'Pan']];
 // #10583: the shared lyric type's zone and style for this shot (composition documents).
-const TEXT_ZONE_LABELS = { 'lower-left': 'Lower left', 'upper-right': 'Upper right', upper: 'Upper centre', lower: 'Lower centre', center: 'Centre', none: 'No lyrics' };
-const LYRIC_ROLE_LABELS = { line: 'Sung line', hook: 'Hook slam', stamp: 'Stamp', data: 'Data caption' };
 const SHOT_MODE_LABELS = { cutaway: 'Cutaway', performance: 'Performance (lip-sync)', music: 'Performance (music-driven)' };
 const PRIMARY_BUTTON = 'flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap';
 const SECONDARY_BUTTON = 'flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap';
@@ -41,6 +39,7 @@ import SceneFrameFit from './SceneFrameFit.jsx';
 import SceneCutEffect from './SceneCutEffect.jsx';
 import { plannedTransitions } from '../../lib/musicVideoCutEffects.js';
 import SceneGlitches from './SceneGlitches.jsx';
+import SceneLyricType from './SceneLyricType.jsx';
 import SceneTransitions from './SceneTransitions.jsx';
 import SceneImageEffect from './SceneImageEffect.jsx';
 import ScenePicturePreview from './ScenePicturePreview.jsx';
@@ -242,6 +241,8 @@ export default function SceneCard({
           planned={plannedTransitions(project?.productionReview?.draft?.storyboard).get(scene.sceneId)} />
         {/* Glitches at moments inside the shot, set and moved on a slider; they add no time. */}
         <SceneGlitches fieldId={fieldId} scene={scene} onChange={applyPatch} />
+        {/* Where the lyrics over this shot sit, their style and size, whenever the render draws lyrics (a card draws its own text). */}
+        {(documentComposition || (layer !== 'card' && composedDrawsLyrics(project))) && <SceneLyricType fieldId={fieldId} scene={scene} onChange={applyPatch} />}
         {/* Everything set once and rarely revisited: timing, shot mode, layer, and a non-footage shot's camera. */}
         <details className="group/settings rounded border border-port-border">
           <summary className="flex min-h-[44px] cursor-pointer items-center gap-2 px-2 text-xs marker:content-none sm:min-h-[32px] [&::-webkit-details-marker]:hidden">
@@ -316,24 +317,6 @@ export default function SceneCard({
                 onChange={(e) => onEditLocal(scene.sceneId, { cardColor: e.target.value })}
                 onBlur={(e) => onSave(scene.sceneId, { cardColor: e.target.value })}
                 className="h-8 w-10 min-h-[44px] sm:min-h-0 bg-port-bg border border-port-border rounded" />
-            </>
-          )}
-          {documentComposition && (
-            <>
-              <label htmlFor={fieldId('text-zone')}>Lyrics</label>
-              <select id={fieldId('text-zone')} value={scene.textZone || ''} onChange={(e) => applyPatch({ textZone: e.target.value || null })}
-                title="Where the lyric type may sit in this shot, so it stays off the subject"
-                className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0">
-                <option value="">Default zone</option>
-                {MUSIC_VIDEO_TEXT_ZONES.map((value) => <option key={value} value={value}>{TEXT_ZONE_LABELS[value]}</option>)}
-              </select>
-              <label htmlFor={fieldId('lyric-role')} className="sr-only">Lyric style</label>
-              <select id={fieldId('lyric-role')} value={scene.lyricRole || ''} onChange={(e) => applyPatch({ lyricRole: e.target.value || null })}
-                title="The lyric style of the lines sung over this shot"
-                className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0">
-                <option value="">Style from the lyric sheet</option>
-                {MUSIC_VIDEO_LYRIC_ROLES.map((value) => <option key={value} value={value}>{LYRIC_ROLE_LABELS[value]}</option>)}
-              </select>
             </>
           )}
         </div>

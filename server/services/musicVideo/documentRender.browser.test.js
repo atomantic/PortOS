@@ -19,20 +19,23 @@ import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy, ownTestBodies }
 import { browserSuiteCanRun } from '../../lib/browserSuiteGate.js';
 
 const { it, drain } = ownTestBodies(vitestIt);
-const ownedChildren = vi.hoisted(() => []);
+const lifecycle = vi.hoisted(() => ({ diagnostics: null }));
+vi.mock('node:fs/promises', async original => {
+  const actual = await original();
+  return { ...actual, rm: (...args) => lifecycle.diagnostics
+    ? lifecycle.diagnostics.remove(actual.rm, ...args) : actual.rm(...args) };
+});
 vi.mock('../../lib/childProcess.js', async original => {
   const actual = await original();
   return { ...actual, spawn(...args) {
     const child = actual.spawn(...args);
-    const profileArg = args[1]?.find(arg => arg.startsWith('--user-data-dir=') && arg.includes('portos-composition-browser-'));
-    if (profileArg) {
-      const owned = { profile: profileArg.slice('--user-data-dir='.length), closed: false };
-      child.once('close', () => { owned.closed = true; });
-      ownedChildren.push(owned);
-    }
+    lifecycle.diagnostics?.track(child, args[1]);
     return child;
   } };
 });
+const { createOwnedBrowserDiagnostics } = await import('../../test/ownedBrowserDiagnostics.js');
+lifecycle.diagnostics = createOwnedBrowserDiagnostics();
+const ownedChildren = lifecycle.diagnostics.children;
 
 // This suite measures encoder pixels; the actual operator boundary is exercised in musicVideoProductionReview.browser.test.js.
 vi.mock('./productionReview.js', async original => ({ ...await original(), assertProductionApproval: () => {} }));
@@ -106,8 +109,8 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     try {
       await drain();
       for (const owned of ownedChildren) {
-        expect(owned.closed, 'owned capture child closed before fixture teardown').toBe(true);
-        expect(existsSync(owned.profile), 'owned capture profile removed before fixture teardown').toBe(false);
+        expect(owned.closed, `owned capture child closed before fixture teardown; ${lifecycle.diagnostics.describe(owned)}`).toBe(true);
+        expect(existsSync(owned.profile), `owned capture profile removed before fixture teardown; ${lifecycle.diagnostics.describe(owned)}`).toBe(false);
       }
     } finally { await _cleanupTestBrowser({ browser, proc, cleanup: () => {} }); }
   });
@@ -794,8 +797,8 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     } finally { testSignal = originalSignal; }
     expect(ownedChildren).toHaveLength(before + 1);
     const owned = ownedChildren.at(-1);
-    expect(owned.closed).toBe(true);
-    expect(existsSync(owned.profile)).toBe(false);
+    expect(owned.closed, lifecycle.diagnostics.describe(owned)).toBe(true);
+    expect(existsSync(owned.profile), lifecycle.diagnostics.describe(owned)).toBe(false);
     expect(existsSync(`${outputPath}.silent.mp4`)).toBe(false);
     expect(browser.isConnected()).toBe(true);
   }, 30000);

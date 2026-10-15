@@ -45,7 +45,7 @@ import { getProject, listProjects, updateProject, mutateProjectRecord } from './
 import { applyProjectPatch } from './projectsLogic.js';
 import { MUSIC_VIDEO_FRAME_FITS, clipOffsetSec, clipReversed, clipSpeedRate, isSelfDrawnLayer, sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { musicVideoAspect, musicVideoRenderCanvas } from '../../lib/musicVideoAspect.js';
-import { projectTypographyPlan } from './composition.js';
+import { composedLyricWindows, projectTypographyPlan } from './composition.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
 import { documentRenderInitScripts, encodeDocumentComposition, prepareDocumentRender, sweepDocumentScratch } from './documentRender.js';
 import { renderTypographyOverlays, removeCompositionScratch, sweepCompositionScratch } from './compositionRender.js';
@@ -995,10 +995,13 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
     const outputPath = join(PATHS.videos, filename);
     const { args, totalDuration, canonW, canonH, fps, sections } = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, frameGrid: composed, soundBed, grade: composed ? project.composition?.grade : null, beats: project.audioAnalysis?.beats, aspect });
     // #8984: a composed project lays its timed text cues over the cut, and a
-    // title card's text (#8985) joins them over its own section. No renderable
-    // cue (plain mode, or nothing timed) skips the overlay capture entirely.
+    // title card's text (#8985) joins them over its own section, and without
+    // subtitle cues the sung lyrics are drawn in the shared lyric type, as the
+    // storyboard animatic shows them. Nothing to draw (plain mode, or nothing
+    // timed) skips the overlay capture entirely.
     const { cues, style } = projectTypographyPlan(project, clips, sections, totalDuration);
-    const composition = cues.length > 0 ? project.composition : null;
+    const lyricWindows = composedLyricWindows(project, totalDuration);
+    const composition = cues.length > 0 || lyricWindows.length > 0 ? project.composition : null;
 
     await assertCurrentRenderApproval(projectId, project, options);
     // A long filter graph goes to ffmpeg in this file, removed once ffmpeg exits.
@@ -1233,6 +1236,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
     const { signal } = job.overlayAbort;
     renderTypographyOverlays({
       jobId, cues, style, width: canonW, height: canonH, fps, durationSec: totalDuration, signal,
+      lyrics: lyricWindows.length > 0 ? { project, windows: lyricWindows } : null,
       onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: 0.5 * fraction }),
     }).then(async (overlays) => {
       await assertCurrentRenderApproval(projectId, project, options);

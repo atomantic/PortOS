@@ -59,8 +59,9 @@
  *   - selectedTextEncoder: id of the active text encoder
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, openSync, closeSync, rmSync } from 'fs';
 import { join, dirname } from 'path';
+import { randomUUID } from 'node:crypto';
 import { PATHS, expandHome } from './fileUtils.js';
 import { isPlainObject } from './objects.js';
 import {
@@ -1188,15 +1189,25 @@ export const getShippedMediaRegistry = () => structuredClone(DEFAULT_REGISTRY);
 // Write-then-rename so a crash mid-write can't truncate the registry — it holds
 // every user-added model and the shipped-defaults ledger the upgrade merge reads.
 const writeRegistryAtomic = (reg) => {
-  const temporary = `${REGISTRY_FILE}.tmp`;
-  writeFileSync(temporary, JSON.stringify(reg, null, 2) + '\n');
-  renameSync(temporary, REGISTRY_FILE);
+  const temporary = `${REGISTRY_FILE}.${randomUUID()}.tmp`;
+  // Exclusive creation establishes ownership before cleanup is allowed.
+  const fd = openSync(temporary, 'wx');
+  try {
+    try {
+      writeFileSync(fd, JSON.stringify(reg, null, 2) + '\n');
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(temporary, REGISTRY_FILE);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
 };
 
 const seedIfMissing = () => {
   if (existsSync(REGISTRY_FILE)) return;
   ensureDir(REGISTRY_FILE);
-  writeFileSync(REGISTRY_FILE, JSON.stringify(DEFAULT_REGISTRY, null, 2) + '\n');
+  writeRegistryAtomic(DEFAULT_REGISTRY);
   console.log(`📝 Seeded media model registry: ${REGISTRY_FILE}`);
 };
 

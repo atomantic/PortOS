@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import MusicVideoLayout, { stepState } from './MusicVideoLayout.jsx';
-import { MUSIC_VIDEO_STAGES } from '../../lib/musicVideoStages.js';
+import { MUSIC_VIDEO_PAGES, MUSIC_VIDEO_STAGES } from '../../lib/musicVideoStages.js';
 
 // Both the step list (md+) and the phone icon bar are "Steps"; only one shows at a time.
 const stepNavs = () => screen.getAllByRole('navigation', { name: 'Steps' });
@@ -12,7 +12,7 @@ const progressFor = (current, states = {}) => ({
 });
 
 describe('music-video step navigation', () => {
-  it('lists the six steps with a state word and one fact each, and opens a step on click', () => {
+  it('lists the six steps with a state word and one fact each, then Assets, and opens a step on click', () => {
     const onStageChange = vi.fn();
     render(<MusicVideoLayout project={{ id: 'example-project', name: 'Example Project', version: 2 }} stage="board" trackLabel="Example Track"
       onStageChange={onStageChange} progress={progressFor('board', { setup: 'done', 'cast-sets': 'done' })}
@@ -28,13 +28,16 @@ describe('music-video step navigation', () => {
       '4Shots' + 'Not started',
       '5Final render' + 'Not started',
       '6Publish' + 'Not started',
+      'Assets',
     ]);
     expect(steps[2]).toHaveAttribute('aria-current', 'step');
     fireEvent.click(steps[3]);
     expect(onStageChange).toHaveBeenCalledWith('produce');
+    fireEvent.click(steps[6]);
+    expect(onStageChange).toHaveBeenCalledWith('assets');
     // The phone bar says each state to screen readers, since it shows only icons.
     expect(within(phoneBar()).getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
-      'Song, Done', 'Look, Done', 'Plan, Needs you', 'Shots, Not started', 'Final render, Not started', 'Publish, Not started',
+      'Song, Done', 'Look, Done', 'Plan, Needs you', 'Shots, Not started', 'Final render, Not started', 'Publish, Not started', 'Assets',
     ]);
     // The step names what "done" means under its title, and labels the panel.
     expect(screen.getByRole('tabpanel', { name: 'Plan' })).toBeInTheDocument();
@@ -99,13 +102,13 @@ describe('music-video step navigation', () => {
     expect(screen.getByRole('status', { name: 'Project status' })).toHaveClass('sr-only');
   });
 
-  it('keeps every step in the phone icon bar, each with its own icon', () => {
+  it('keeps every step and Assets in the phone icon bar, each with its own icon', () => {
     render(<MusicVideoLayout project={{ id: 'example-project', name: 'Example Project' }} stage="publish"
       onStageChange={() => {}} progress={progressFor('publish')} spend={{ spentUsd: 0 }} />);
     const navigation = within(phoneBar());
     expect(navigation.queryByRole('combobox')).not.toBeInTheDocument();
     const tabs = navigation.getAllByRole('tab');
-    expect(tabs).toHaveLength(MUSIC_VIDEO_STAGES.length);
+    expect(tabs).toHaveLength(MUSIC_VIDEO_STAGES.length + MUSIC_VIDEO_PAGES.length);
     const icons = tabs.map((tab) => tab.querySelector('svg')?.getAttribute('class'));
     expect(icons.every(Boolean)).toBe(true);
     expect(new Set(icons).size).toBe(tabs.length);
