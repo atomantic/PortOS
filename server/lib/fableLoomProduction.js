@@ -819,14 +819,6 @@ export function buildEpisodeProductionPlan({
       if (lockedCanon && !existingHold && node.visualCanon?.storyboardImageApproved !== true) {
         holdBlockers.push('Locked canon video requires an author-approved storyboard image.');
       }
-      if (node.interactionWindow?.enabled) {
-        for (const holdId of holdLoops) {
-          const occupancy = assets?.audioOccupancy?.[holdId];
-          if (occupancy && !validateAudioOccupancy(occupancy).safeForLiveVoice) {
-            holdBlockers.push(`Hold loop "${holdId}" is not safe for live voice.`);
-          }
-        }
-      }
 
       const holdReady = videoHasPrompt && holdBlockers.length === 0;
       plannedAssets.push({
