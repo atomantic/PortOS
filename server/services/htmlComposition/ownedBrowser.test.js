@@ -181,6 +181,7 @@ describe('owned composition capture browser lifecycle', () => {
   });
 
   it('launches the jailed pipe browser without a DevTools port or inherited tokens', async () => {
+    vi.stubEnv('MAC_CHROMIUM_TMPDIR', '/synthetic/test-temp');
     answerHandshake();
     const owner = await launchCompositionBrowser({
       isolation: 'required',
@@ -196,6 +197,7 @@ describe('owned composition capture browser lifecycle', () => {
     expect(args.join('\n')).not.toContain('proxy-bypass');
     expect(args).not.toContain('--remote-debugging-port=0');
     expect(options.env.USER).toBe('portos-preview');
+    expect(options.env.MAC_CHROMIUM_TMPDIR).toBe('/synthetic/test-temp');
     expect(options.env.PORTOS_API_TOKEN).toBeUndefined();
     expect(options.detached).toBe(true);
     await owner.close();
