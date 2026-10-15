@@ -1,9 +1,27 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
-import useProviderCatalog, { __resetProviderCatalogCache } from './useProviderCatalog.js';
+import useProviderCatalog, { __resetProviderCatalogCache, invalidateProviderCatalog } from './useProviderCatalog.js';
 
 const api = vi.hoisted(() => ({ getProviderCatalog: vi.fn(), createProviderPreset: vi.fn() }));
 vi.mock('../services/api.js', () => api);
+const socket = vi.hoisted(() => {
+  const listeners = new Map();
+  return {
+    on(event, listener) {
+      listeners.set(event, [...(listeners.get(event) || []), listener]);
+    },
+    emit(event) { for (const listener of listeners.get(event) || []) listener(); },
+    listenerCount(event) { return (listeners.get(event) || []).length; },
+  };
+});
+vi.mock('../services/socket.js', () => ({ default: socket }));
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
+}
 
 const CATALOG = {
   harnesses: [
@@ -19,6 +37,7 @@ const CATALOG = {
   effortLevelsByModel: { pi: {}, claude: {} },
   presets: [{ id: 'claude-code', name: 'Claude', enabled: true }],
 };
+const UPDATED_CATALOG = { ...CATALOG, harnesses: CATALOG.harnesses.map((h) => ({ ...h, enabled: true })) };
 
 beforeEach(() => {
   __resetProviderCatalogCache();
@@ -154,24 +173,78 @@ describe('invalidateProviderCatalog', () => {
   // picker's compose flow must reflect it without a reload (#7567): one
   // invalidation re-reads the catalog in every mounted hook, keeping the
   // stale rows rendered until the new ones land.
-  it('re-reads the catalog in every mounted hook and keeps the stale rows until it lands', async () => {
-    const { invalidateProviderCatalog } = await import('./useProviderCatalog.js');
+  it.each(['local mutation', 'providers:changed', 'connect'])('shares a replacement read after %s, keeping useful old rows while loading', async (event) => {
     const { result: a } = renderHook(() => useProviderCatalog());
     const { result: b } = renderHook(() => useProviderCatalog());
     await waitFor(() => expect(a.current.loading).toBe(false));
     await waitFor(() => expect(b.current.loading).toBe(false));
 
-    const next = { ...CATALOG, harnesses: CATALOG.harnesses.map((h) => ({ ...h, enabled: true })) };
-    let release;
-    api.getProviderCatalog.mockImplementationOnce(() => new Promise((resolve) => { release = () => resolve(next); }));
-    act(() => { invalidateProviderCatalog(); });
+    const replacement = deferred();
+    api.getProviderCatalog.mockReturnValueOnce(replacement.promise);
+    act(() => { event === 'local mutation' ? invalidateProviderCatalog() : socket.emit(event); });
     // In flight: the old rows are still what renders, not an empty catalog.
     expect(a.current.harnesses.find((h) => h.id === 'claude').enabled).toBe(false);
+    expect(a.current.loading).toBe(true);
+    expect(b.current.loading).toBe(true);
     expect(api.getProviderCatalog).toHaveBeenCalledTimes(2);
-    await act(async () => { release(); });
+    await act(async () => { replacement.resolve(UPDATED_CATALOG); });
     await waitFor(() => expect(a.current.harnesses.find((h) => h.id === 'claude').enabled).toBe(true));
     await waitFor(() => expect(b.current.harnesses.find((h) => h.id === 'claude').enabled).toBe(true));
     // One shared fetch served both hooks, as on the first read.
+    expect(api.getProviderCatalog).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['providers:changed', 'connect'])('invalidates between mounts on %s without fetching for a disabled consumer', async (event) => {
+    const first = renderHook(() => useProviderCatalog());
+    await waitFor(() => expect(first.result.current.loading).toBe(false));
+    first.unmount();
+    api.getProviderCatalog.mockResolvedValue(UPDATED_CATALOG);
+    act(() => { socket.emit(event); });
+    expect(api.getProviderCatalog).toHaveBeenCalledTimes(1);
+
+    const next = renderHook(({ enabled }) => useProviderCatalog(enabled), { initialProps: { enabled: false } });
+    act(() => { socket.emit(event); });
+    expect(api.getProviderCatalog).toHaveBeenCalledTimes(1);
+    expect(next.result.current.loading).toBe(false);
+    next.rerender({ enabled: true });
+    await waitFor(() => expect(next.result.current.harnesses).toEqual(UPDATED_CATALOG.harnesses));
+    expect(api.getProviderCatalog).toHaveBeenCalledTimes(2);
+    next.unmount();
+    // Listener lifetime belongs to the cache, not to any individual mount.
+    expect(socket.listenerCount('providers:changed')).toBe(1);
+    expect(socket.listenerCount('connect')).toBe(1);
+  });
+
+  it.each(['before replacement', 'after replacement', 'failure after replacement'])('ignores an obsolete initial request settling %s', async (order) => {
+    const obsolete = deferred();
+    const replacement = deferred();
+    api.getProviderCatalog.mockReturnValueOnce(obsolete.promise).mockReturnValueOnce(replacement.promise);
+    const first = renderHook(() => useProviderCatalog());
+    const second = renderHook(() => useProviderCatalog());
+    act(() => { socket.emit('providers:changed'); });
+    expect(api.getProviderCatalog).toHaveBeenCalledTimes(2);
+
+    if (order === 'before replacement') {
+      await act(async () => { obsolete.resolve(CATALOG); });
+      expect(first.result.current.loading).toBe(true);
+      expect(first.result.current.harnesses).toEqual([]);
+      expect(second.result.current.loading).toBe(true);
+    }
+    await act(async () => { replacement.resolve(UPDATED_CATALOG); });
+    if (order !== 'before replacement') {
+      await act(async () => {
+        if (order === 'failure after replacement') obsolete.reject(new Error('old request failed'));
+        else obsolete.resolve(CATALOG);
+      });
+    }
+    expect(first.result.current.harnesses).toEqual(UPDATED_CATALOG.harnesses);
+    expect(second.result.current.harnesses).toEqual(UPDATED_CATALOG.harnesses);
+    expect(first.result.current.loading).toBe(false);
+    first.unmount();
+    second.unmount();
+    const later = renderHook(() => useProviderCatalog());
+    await waitFor(() => expect(later.result.current.loading).toBe(false));
+    expect(later.result.current.harnesses).toEqual(UPDATED_CATALOG.harnesses);
     expect(api.getProviderCatalog).toHaveBeenCalledTimes(2);
   });
 });
