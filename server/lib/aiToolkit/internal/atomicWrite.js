@@ -1,11 +1,11 @@
 /**
  * Atomic file write helper for the aiToolkit.
  *
- * Vendored copy of server/lib/fileUtils.js#atomicWrite so the toolkit stays
+ * Vendored copy of server/lib/fileCore.js#atomicWrite so the toolkit stays
  * self-contained (no imports out to sibling PortOS modules — see AGENTS.md
  * "AI Toolkit" section). Keep in sync with the upstream implementation:
  *
- *   PARITY REQUIREMENT: every change to server/lib/fileUtils.js#atomicWrite
+ *   PARITY REQUIREMENT: every change to server/lib/fileCore.js#atomicWrite
  *   must be mirrored here and vice-versa. The critical invariant is the
  *   payload-coercion line: Buffer must pass through unchanged (JSON.stringify
  *   on a Buffer produces `{"type":"Buffer","data":[...]}`, corrupting binary
@@ -16,7 +16,7 @@
  * a partial write. Accepts a string, a Buffer, or any JSON-serializable value.
  */
 
-import { mkdir, writeFile, rename, unlink } from 'fs/promises';
+import { chmod, mkdir, stat, writeFile, rename, unlink } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { dirname } from 'path';
 
@@ -49,12 +49,23 @@ export async function atomicWrite(filePath, data) {
   // `{"type":"Buffer","data":[...]}` which corrupts binary writes (PNG, etc.).
   const payload = typeof data === 'string' || Buffer.isBuffer(data) ? data : JSON.stringify(data, null, 2);
   await ensureDir(dirname(filePath));
+  // Read permissions before creating the temp so a restricted destination is
+  // never replaced with a default-mode file. Only ENOENT means a fresh create.
+  const existingMode = await stat(filePath).then((s) => s.mode & 0o777, (err) => {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  });
   const tmp = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
-  await writeFile(tmp, payload);
-  // Persistent Windows lock after the retry window: fail the write and leave the
-  // destination untouched. Never move it aside to a `.bak` (#9564, mirrors #9556).
-  const err = await renameWithWindowsRetries(tmp, filePath);
-  if (!err) return;
-  await unlink(tmp).catch(() => {});
-  throw err;
+  try {
+    // A failed write may already have produced partial bytes; cleanup owns the
+    // entire preparation, including restoring mode bits tightened by umask.
+    await writeFile(tmp, payload, existingMode !== null ? { mode: existingMode } : undefined);
+    if (existingMode !== null) await chmod(tmp, existingMode);
+    // Persistent Windows lock: fail without moving the destination aside.
+    const err = await renameWithWindowsRetries(tmp, filePath);
+    if (err) throw err;
+  } catch (err) {
+    await unlink(tmp).catch(() => {});
+    throw err;
+  }
 }

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as fsPromises from 'fs/promises';
@@ -10,6 +10,9 @@ vi.mock('fs/promises', async (importOriginal) => {
   return {
     ...actual,
     rename: vi.fn((...args) => actual.rename(...args)),
+    writeFile: vi.fn((...args) => actual.writeFile(...args)),
+    stat: vi.fn((...args) => actual.stat(...args)),
+    chmod: vi.fn((...args) => actual.chmod(...args)),
   };
 });
 
@@ -24,7 +27,6 @@ let restorePlatform = () => {};
 
 beforeEach(() => {
   tmpRoot = mkdtempSync(join(tmpdir(), 'ai-toolkit-atomicwrite-'));
-  restorePlatform = pinPlatform('win32');
   fsPromises.rename.mockClear();
   fsPromises.rename.mockImplementation((...args) => realFsPromises.rename(...args));
 });
@@ -32,12 +34,15 @@ beforeEach(() => {
 afterEach(() => {
   restorePlatform();
   restorePlatform = () => {};
-  fsPromises.rename.mockReset();
-  fsPromises.rename.mockImplementation((...args) => realFsPromises.rename(...args));
+  for (const name of ['rename', 'writeFile', 'stat', 'chmod']) {
+    fsPromises[name].mockReset();
+    fsPromises[name].mockImplementation((...args) => realFsPromises[name](...args));
+  }
   rmSync(tmpRoot, { recursive: true, force: true });
 });
 
 describe('AI Toolkit atomicWrite Windows lock retries', () => {
+  beforeEach(() => { restorePlatform = pinPlatform('win32'); });
   it('succeeds when the lock clears within the retry window', async () => {
     const target = join(tmpRoot, 'transient.json');
     writeFileSync(target, '{"v":1}');
@@ -59,5 +64,56 @@ describe('AI Toolkit atomicWrite Windows lock retries', () => {
     expect(readFileSync(target, 'utf8')).toBe('{"v":1}');
     expect(fsPromises.rename).toHaveBeenCalledTimes(RETRY_ATTEMPTS);
     expect(readdirSync(tmpRoot)).toEqual(['persistent.json']);
+  });
+});
+
+describe('AI Toolkit atomicWrite preparation failures', () => {
+  it('removes a partially written temp file and can retry without changing the original on failure', async () => {
+    const target = join(tmpRoot, 'state.json');
+    writeFileSync(target, 'original');
+    const failure = Object.assign(new Error('synthetic disk full'), { code: 'ENOSPC' });
+    fsPromises.writeFile.mockImplementationOnce(async (path, _data, options) => {
+      await realFsPromises.writeFile(path, 'partial', options);
+      throw failure;
+    });
+
+    await expect(atomicWrite(target, 'replacement')).rejects.toBe(failure);
+    expect(readFileSync(target, 'utf8')).toBe('original');
+    expect(readdirSync(tmpRoot)).toEqual(['state.json']);
+    await atomicWrite(target, 'replacement');
+    expect(readFileSync(target, 'utf8')).toBe('replacement');
+    expect(readdirSync(tmpRoot)).toEqual(['state.json']);
+  });
+
+  it.each(['stat', 'chmod'])('preserves the original when %s fails', async (operation) => {
+    const target = join(tmpRoot, 'private.json');
+    writeFileSync(target, 'original', { mode: 0o600 });
+    const failure = Object.assign(new Error(`synthetic ${operation} failure`), { code: 'EIO' });
+    fsPromises[operation].mockRejectedValueOnce(failure);
+
+    await expect(atomicWrite(target, 'replacement')).rejects.toBe(failure);
+    expect(readFileSync(target, 'utf8')).toBe('original');
+    expect(readdirSync(tmpRoot)).toEqual(['private.json']);
+  });
+
+  it.skipIf(process.platform === 'win32')('preserves an existing owner-only mode', async () => {
+    const target = join(tmpRoot, 'private.json');
+    writeFileSync(target, 'original');
+    chmodSync(target, 0o600);
+
+    await atomicWrite(target, 'replacement');
+
+    expect(readFileSync(target, 'utf8')).toBe('replacement');
+    expect(statSync(target).mode & 0o777).toBe(0o600);
+  });
+
+  it('creates a missing file and preserves binary bytes', async () => {
+    const target = join(tmpRoot, 'new.bin');
+    const bytes = Buffer.from([0, 128, 255]);
+
+    await atomicWrite(target, bytes);
+
+    expect(readFileSync(target)).toEqual(bytes);
+    expect(readdirSync(tmpRoot)).toEqual(['new.bin']);
   });
 });
