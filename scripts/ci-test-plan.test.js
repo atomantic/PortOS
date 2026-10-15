@@ -20,6 +20,7 @@ import {
   SLASHDO_GITLINK_PATH,
   sourceReferencePattern,
   splitByRunner,
+  structuralTestsFor,
   WINDOWS_CONTRACT_TESTS,
   WINDOWS_RISK_RULES,
 } from './ci-test-plan.js';
@@ -67,6 +68,37 @@ const TRACKED = [
   'scripts/migrations/210-example.test.js',
   'scripts/fix-windows-console.js',
 ];
+
+it('selects the checkout-cache boundary for every config, loader and fixture input', () => {
+  const contract = 'scripts/workspaceCaches.test.js';
+  const inputs = [
+    '.github/workflows/ci.yml', 'package.json', 'ecosystem.config.cjs',
+    'client/package.json', 'client/package-lock.json', 'server/package.json', 'server/package-lock.json',
+    'client/vite.config.js', 'client/vite.buildEnv.js', 'client/vite.chunkGroups.js',
+    'client/vitest.config.js', 'client/src/test/timeouts.js',
+    'server/vitest.config.js', 'server/vitest.config.db.js', 'server/vitest.setup.js',
+    'server/test/admissionSetup.js', 'server/test/mediaRegistryEnvironment.js',
+    'scripts/dev-start.js', 'scripts/publish-client-build.js',
+    'scripts/lib/vitestTempRootFixture.js', 'scripts/lib/vitestTempRoot.js',
+    'scripts/lib/vitestStaleRunRoots.js', 'scripts/lib/dbTestFiles.js',
+    'scripts/vitestCiPool.js', 'scripts/vitestTempRootSetup.js',
+    'scripts/lib/envFile.cjs', 'scripts/lib/databaseSettings.cjs',
+    'lib/portosAuthCore.js', 'server/lib/eidoverseProxyRoutes.js',
+  ];
+  const trackedFiles = [...TRACKED, ...inputs, contract];
+  for (const input of inputs) {
+    // Prove the selector itself, even for inputs that also force full CI.
+    expect(structuralTestsFor([input], new Set(trackedFiles)), input).toContain(contract);
+    const plan = buildCiTestPlan([input], { trackedFiles });
+    expect(plan.server.mode === 'full' || plan.server.files.includes(contract), input).toBe(true);
+  }
+  for (const input of ['docs/CONTRIBUTING.md', 'server/services/auth.js']) {
+    const plan = buildCiTestPlan([input], { trackedFiles });
+    expect(plan.full, input).toBe(false);
+    expect(plan.server.files, input).not.toContain(contract);
+  }
+  expect(structuralTestsFor(inputs, new Set())).not.toContain(contract);
+});
 
 const REVIEW_LOOP_SNAPSHOT = 'server/services/promptSections/__snapshots__/reviewLoopMatrix/local-gh.txt';
 const REVIEW_LOOP_OWNER = 'server/services/promptSections/reviewLifecycleMatrix.test.js';

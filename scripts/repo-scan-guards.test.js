@@ -50,6 +50,9 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
  * entry.
  */
 const STRUCTURALLY_SELECTED = new Map([
+  // Its recursive walk snapshots disposable cache trees; the explicit input
+  // selector covers the real configs, launchers and copied runtime helpers.
+  ['scripts/workspaceCaches.test.js', 'structuralTestsFor: checkout cache/config/loader inputs'],
   // structuralTestsFor() in ci-test-plan.js adds these whenever any
   // client/src/**.jsx (a11y) or .js/.jsx (mounted-ref) file changes, which is
   // the only way either can start failing.
