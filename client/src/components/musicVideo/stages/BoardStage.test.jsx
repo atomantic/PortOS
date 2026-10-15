@@ -84,6 +84,30 @@ describe('BoardStage thumbnail media badges', () => {
   });
 });
 
+describe('BoardStage effects', () => {
+  // Uniquely catches a badge in the wrong slot, a count that misses a slot, or the effect filter not narrowing the board.
+  it('badges each shot\'s start, mid-shot and end effects, counts every option, and shows only the shots using one', () => {
+    const scenes = [
+      scene(1, { transitionIn: 'vhs-glitch', glitches: [{ atSec: 1, style: 'film-burn' }, { atSec: 2, style: 'vhs-glitch' }], cutEffect: { style: 'dissolve' } }),
+      scene(2, { transitionOut: 'vhs-glitch' }),
+      scene(3),
+    ];
+    renderBoard(board(scenes));
+    expect(screen.getByRole('button', { name: 'Open Shot 1 · Part 1' }).getAttribute('aria-describedby')).toContain('scene-effects-s1');
+    expect(document.getElementById('scene-effects-s1').textContent).toBe('VHS glitchStart: VHS glitch.Film burn+1Mid-shot: Film burn, VHS glitch.DissolveEnd: Dissolve.');
+    expect(document.getElementById('scene-effects-s3')).toBeNull();
+    const row = (name) => [...screen.getByRole('button', { name }).closest('tr').querySelectorAll('td')].map((td) => td.textContent);
+    expect(row('Show shots with VHS glitch')).toEqual(['1', '1', '1', '2']);
+    expect(row('Show shots with Dissolve')).toEqual(['—', '—', '1', '1']);
+    expect(screen.getByRole('button', { name: 'Shutter: not used' }).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Show shots with Film burn' }));
+    expect(screen.getByTestId('search').textContent).toBe('?effect=film-burn');
+    expect(screen.queryByText('Shot 2 · Part 2')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Stop showing only shots with Film burn' }));
+    expect(screen.getByText('Shot 2 · Part 2')).toBeTruthy();
+  });
+});
+
 describe('BoardStage thumbnail lock marks', () => {
   it('marks locked, still-only and changed shots, and leaves open ones bare', () => {
     const scenes = [scene(1), scene(2), scene(3), scene(4)];
