@@ -48,6 +48,12 @@ describe('lyricType roles', () => {
     expect(type.lines.map((l) => l.role)).toEqual(['stamp', 'hook', 'stamp']);
   });
 
+  it('ranks a shot\'s lyricRole above sectionRoles', () => {
+    const song = { ...MV, lyricMarkers: [], scenes: [{ sceneId: 'a', startSec: 0, endSec: 3.5, lyricRole: 'hook' }],
+      song: { ...MV.song, sections: [{ label: 'Verse 1', startSec: 0 }] } };
+    expect(roles(song, { sectionRoles: { verse: 'stamp' } })).toEqual(['hook', 'stamp', 'stamp']);
+  });
+
   it('slams a chorus phrase the first time it is sung and brings its repeats back as sung lines', () => {
     const chorus = (id, start) => ({ id, text: 'We Light the signal', startSec: start, words: words('We Light the signal', start) });
     const song = {

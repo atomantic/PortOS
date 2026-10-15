@@ -297,12 +297,14 @@ export function createLyricType(mv = globalThis.PORTOS_MV, options = {}) {
     const words = wordsForLine(line, songWords);
     if (!words.length) return null;
     let role = roles[index];
-    let explicit = !!(line.role || options.overrides?.[line.id] || options.overrides?.[index]);
+    const pinned = !!(line.role || options.overrides?.[line.id] || options.overrides?.[index]);
+    let explicit = pinned;
     const section = (mv?.song?.sections || []).filter((s) => finite(s?.startSec) && s.startSec <= words[0].startSec + 1e-6).pop();
     const kind = section?.label ? String(section.label).trim().toLowerCase().replace(/\s+\d+$/, '') : null;
-    if (!explicit && LYRIC_ROLES.includes(sectionRoles[kind])) { role = sectionRoles[kind]; explicit = true; }
+    if (!pinned && LYRIC_ROLES.includes(sectionRoles[kind])) { role = sectionRoles[kind]; explicit = true; }
     const shot = sceneAt(words[0].startSec);
-    if (!explicit && LYRIC_ROLES.includes(shot?.lyricRole)) { role = shot.lyricRole; explicit = true; }
+    // The shot's lyricRole outranks sectionRoles; only a line's own role or an override outranks it.
+    if (!pinned && LYRIC_ROLES.includes(shot?.lyricRole)) { role = shot.lyricRole; explicit = true; }
     return { index, id: line.id ?? null, text: String(line.text).trim(), role, explicit, words, strike: !!line.strike, endSec: line.endSec, shot, zoneOf: line.zone };
   }).filter(Boolean).sort((a, b) => a.words[0].startSec - b.words[0].startSec);
 
