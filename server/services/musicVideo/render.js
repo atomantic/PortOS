@@ -1,7 +1,7 @@
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
-import { assertProductionApproval, clipLocks, productionReviewBasis } from './productionReview.js';
+import { assertProductionApproval, clipLocks, nameShots, productionReviewBasis } from './productionReview.js';
 import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 /**
  * Music Video — render pipeline (#1760, Phase 2).
@@ -752,9 +752,7 @@ export function assertCurrentClipDependencies(project) {
     .filter((scene) => locks?.[scene.sceneId] !== 'locked')
     .filter((scene) => musicVideoTakeChanges(project, scene, (scene.takes || []).find((take) => take.kind === 'video' && take.assetId === scene.videoHistoryId)).length);
   if (!stale.length) return;
-  const order = [...(project.scenes || [])].filter((scene) => Number.isFinite(scene.startSec)).sort((a, b) => a.startSec - b.startSec);
-  const numbers = stale.map((scene) => order.indexOf(scene) + 1).filter((n) => n > 0).sort((a, b) => a - b);
-  const shots = numbers.length === stale.length ? `${numbers.length === 1 ? 'Shot' : 'Shots'} ${numbers.join(', ')}` : `${stale.length} shots`;
+  const shots = nameShots(project, stale.map((scene) => scene.sceneId));
   // A document storyboard has no clip locks, so a new render is its only fix.
   const fix = locks ? 'Lock the clip to keep it as it is, or render a new one' : 'Render a new one';
   throw new ServerError(`${shots}: the clip was made from frames that have since changed. ${fix}`,
