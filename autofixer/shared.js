@@ -70,7 +70,13 @@ export const INDEX_FILE = join(AUTOFIXER_DIR, 'index.json');
 
 // Load apps from PortOS
 export async function loadApps() {
-  const data = await readFile(APPS_FILE, 'utf8').catch(() => '{"apps":{}}');
-  const parsed = JSON.parse(data);
-  return Object.entries(parsed.apps || {}).map(([id, app]) => ({ id, ...app }));
+  try {
+    const parsed = JSON.parse(await readFile(APPS_FILE, 'utf8'));
+    return Object.entries(parsed.apps || {}).map(([id, app]) => ({ id, ...app }));
+  } catch (error) {
+    // A not-yet-created registry remains a valid empty installation.
+    if (error.code === 'ENOENT') return [];
+    // File paths, parser excerpts and read errors may contain private data.
+    throw Object.assign(new Error('App registry unavailable'), { code: 'APPS_UNAVAILABLE' });
+  }
 }
