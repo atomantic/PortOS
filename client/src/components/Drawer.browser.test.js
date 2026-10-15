@@ -167,6 +167,8 @@ describe.skipIf(!chrome && !auditCdp)('modal native keyboard boundaries', () => 
     expect(await summary.evaluate(el => el === document.activeElement)).toBe(true);
     await page.keyboard.press('Space');
     expect(await page.locator('details').evaluate(el => el.open)).toBe(true);
+    // Native toggle delivery and React's transcript commit follow details.open.
+    await page.getByText('Synthetic accessible reading passage.', { exact: true }).waitFor({ state: 'visible' });
     expect(await page.getByText('Synthetic accessible reading passage.', { exact: true }).isVisible()).toBe(true);
     expect(await page.getByRole('button', { name: 'Play', exact: true }).count()).toBe(1);
     await page.keyboard.press('Escape');
