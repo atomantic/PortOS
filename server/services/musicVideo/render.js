@@ -60,7 +60,7 @@ import { AUDIO_NORM, buildAudioBedMix } from '../videoTimeline/audioBedMix.js';
 import { musicVideoEvents } from './events.js';
 import { projectSoundBed } from './soundBed.js';
 import { intercutClips } from './intercut.js';
-import { beatToggleCuts, sceneCutEffect } from '../../lib/musicVideoCutEffects.js';
+import { cutEffectCuts, plannedTransitions, sceneCutEffect } from '../../lib/musicVideoCutEffects.js';
 import { imageEffectGlitchFrames, mergeGlitchFrames, musicVideoTransitionFilter, sceneTransitions, shotGlitchFrames, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
 import { stillMoveForCamera } from '../../lib/cameraMovements.js';
 import { isEndFrameImageEffect, musicVideoImageEffectFilter, sceneImageEffect } from '../../lib/musicVideoImageEffects.js';
@@ -122,9 +122,9 @@ const round3 = (n) => Math.round(n * 1000) / 1000;
 // window was padded to the provider minimum) and ends at `edit.outSec`. It
 // never loops: repeating a sung take would desync the mouth from the song.
 const performanceEdit = (scene) => selectedPerformanceInstruction(scene)?.edit ?? null;
-// A shot's switched-on cut effect for its clip, or nothing.
-const cutEffectOf = (scene) => {
-  const effect = sceneCutEffect(scene);
+// A shot's switched-on cut effect for its clip (else the one its storyboard row plans), or nothing.
+const cutEffectOf = (scene, planned) => {
+  const effect = sceneCutEffect(scene, planned.get(scene.sceneId));
   return effect?.enabled ? { cutEffect: effect } : {};
 };
 
@@ -235,6 +235,7 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
       status: 400, code: 'NO_SCENE_CLIPS',
     });
   }
+  const planned = plannedTransitions(project.productionReview?.draft?.storyboard);
   const history = scenes.some((s) => sceneVisualLayer(s, { layered }) === 'footage') ? await loadHistory() : [];
   const historyMap = new Map((Array.isArray(history) ? history : []).map((h) => [h.id, h]));
   const missing = [];
@@ -246,7 +247,7 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
     if (layer !== 'footage') {
       const spanSec = authoredSpan(scene);
       if (spanSec == null) { untimed.push(scene.sceneId); continue; }
-      const section = { sceneId: scene.sceneId, layer, inSec: 0, outSec: spanSec, duration: spanSec, sourceSec: spanSec, ...sceneTransitions(scene), ...cutEffectOf(scene) };
+      const section = { sceneId: scene.sceneId, layer, inSec: 0, outSec: spanSec, duration: spanSec, sourceSec: spanSec, ...sceneTransitions(scene), ...cutEffectOf(scene, planned) };
       // A composed render has no code to run: a code shot (#10297) is a black
       // ground the typography layer draws over, cut exactly like a blank card.
       if (layer === 'code') {
@@ -324,7 +325,7 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
       // VHS glitches on its cuts (musicVideoTransitions.js) ride over the edit without moving it.
       ...sceneTransitions(scene),
       // So does a beat toggle on its cut out (musicVideoCutEffects.js).
-      ...cutEffectOf(scene),
+      ...cutEffectOf(scene, planned),
     });
   }
   if (missing.length > 0) {
@@ -582,15 +583,17 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
     }
     return clipInput;
   };
-  // A beat toggle (musicVideoCutEffects.js) flips the picture to the next shot's clip
-  // on the beats before a cut. That clip runs on the song's clock, read from an input
-  // of its own, so its own section starts exactly where it would without the toggle.
+  // A beat toggle or dissolve (musicVideoCutEffects.js) shows the next shot's clip over
+  // the end of a shot: flipping to it on the beats, or fading it in. That clip runs on the
+  // song's clock, read from an input of its own, so its own section starts exactly where
+  // it would without the effect. A fade through black darkens the sections either side.
   const sectionFrame = (sec) => Math.round(sec * fps);
-  const toggles = beatToggleCuts(plan.map(({ c, startSec, endSec }) => ({
+  const cutEffects = cutEffectCuts(plan.map(({ c, startSec, endSec }) => ({
     sceneId: c.sceneId, startFrame: sectionFrame(startSec), endFrame: sectionFrame(endSec),
     partner: !!c.intercutOf, cutEffect: c.cutEffect,
   })), { fps, beats });
-  const prerolls = toggles.map((t) => {
+  const fades = cutEffects.filter((t) => t.style === 'fade-black');
+  const prerolls = cutEffects.filter((t) => t.incoming).map((t) => {
     const { c } = plan[t.index + 1];
     // The footage just before the incoming shot's in-point, on the output timebase
     // its speed and offset already set; any part before the clip starts holds its first frame.
@@ -611,14 +614,20 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
   inputs.push('-i', audioPath);
   for (const overlay of overlays) inputs.push('-itsoffset', String(overlay.startSec), '-i', overlay.path);
 
-  const filters = plan.map(({ c, frames }, i) => `${sectionChain(c, inputOf[i], { canonW, canonH, fps, frames, frameGrid })}[${prerolls.some((p) => p.index === i) ? 'vraw' : 'v'}${i}]`);
+  const fadeChain = (i, frames) => [
+    ...fades.filter((f) => f.index === i - 1 && f.inFrames > 0).map((f) => `,fade=t=in:s=0:n=${f.inFrames}`),
+    ...fades.filter((f) => f.index === i).map((f) => `,fade=t=out:s=${Math.max(0, frames - f.outFrames)}:n=${f.outFrames}`),
+  ].join('');
+  const filters = plan.map(({ c, frames }, i) => `${sectionChain(c, inputOf[i], { canonW, canonH, fps, frames, frameGrid })}${fadeChain(i, frames)}[${prerolls.some((p) => p.index === i) ? 'vraw' : 'v'}${i}]`);
   for (const p of prerolls) {
     const { frames, startSec } = plan[p.index];
     const start = sectionFrame(startSec);
     const pad = Math.max(0, frames - p.windowFrames);
     const shown = p.incoming.map(([a, b]) => `between(n,${a - start},${b - start - 1})`).join('+');
     filters.push(`${sectionChain(p.clip, p.input, { canonW, canonH, fps, frames: p.windowFrames, frameGrid })}[pre${p.index}]`);
-    filters.push(`[pre${p.index}]tpad=start=${pad}:color=black,setpts=N/(${fps}*TB)[prepad${p.index}]`);
+    // A dissolve fades the incoming clip in across its window, fully in on the cut.
+    const fadeIn = p.style === 'dissolve' ? `format=yuva420p,fade=t=in:s=0:n=${p.windowFrames + 1}:alpha=1,` : '';
+    filters.push(`[pre${p.index}]${fadeIn}tpad=start=${pad}:color=black,setpts=N/(${fps}*TB)[prepad${p.index}]`);
     filters.push(`[vraw${p.index}][prepad${p.index}]overlay=eof_action=pass:enable='${shown}'[v${p.index}]`);
   }
   const gradeFilter = musicVideoGradeFilter(grade, plan.map(({ c, startSec, endSec }) => ({ sceneId: c.sceneId, startSec, endSec })), { fps });
