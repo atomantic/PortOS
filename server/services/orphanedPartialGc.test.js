@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { createWriteStream } from 'fs';
 import { mkdtemp, mkdir, readdir, rm, utimes, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
@@ -6,6 +7,12 @@ import { staticImportClosure } from '../lib/staticImportGraph.js';
 import { SERVER_DIR, collectServerSources, readServerSource } from '../lib/testHelper.js';
 
 vi.mock('./hfToken.js', () => ({ getHfToken: async () => null }));
+vi.mock('fs', async (importOriginal) => {
+  const fs = await importOriginal();
+  return { ...fs, createWriteStream: vi.fn(fs.createWriteStream) };
+});
+
+const realFs = await vi.importActual('fs');
 
 const { sweepOrphanedDownloadPartials } = await import('./orphanedPartialGc.js');
 const { downloadSlotstreamModel, _resetSlotstreamDownloadsForTests } = await import('./slotstreamModelManager.js');
@@ -27,6 +34,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await rm(sweepDir, { recursive: true, force: true });
+  vi.mocked(createWriteStream).mockReset().mockImplementation(realFs.createWriteStream);
   vi.unstubAllGlobals();
 });
 
@@ -49,6 +57,28 @@ describe('sweepOrphanedDownloadPartials', () => {
   // predicate covers a slot the GC never names.
   it('protects a shard a live Slotstream download is writing, without naming Slotstream', async () => {
     const shardPartial = join(sweepDir, DIR_NAME, 'model.safetensors.partial');
+    // Observe the real write callback: file creation or byte-count progress
+    // can arrive before the write finishes and resets the mtime we age below.
+    const firstWrite = new Promise((resolve, reject) => {
+      vi.mocked(createWriteStream).mockImplementationOnce((path, options) => {
+        expect(path).toBe(shardPartial);
+        const stream = realFs.createWriteStream(path, options);
+        const write = stream.write.bind(stream);
+        stream.write = (chunk, encoding, callback) => {
+          if (typeof encoding === 'function') {
+            callback = encoding;
+            encoding = undefined;
+          }
+          return write(chunk, encoding, (error) => {
+            callback?.(error);
+            if (error) reject(error);
+            else resolve();
+          });
+        };
+        stream.once('error', reject);
+        return stream;
+      });
+    });
     let release;
     const gate = new Promise((r) => { release = r; });
     vi.stubGlobal('fetch', vi.fn(async (url) => {
@@ -69,16 +99,21 @@ describe('sweepOrphanedDownloadPartials', () => {
     }));
 
     const download = downloadSlotstreamModel({ model: REPO, cacheDir: sweepDir });
-    await vi.waitFor(async () => expect(await readdir(join(sweepDir, DIR_NAME))).toContain('model.safetensors.partial'));
-    // Age it past the gate so ONLY the in-flight protection can save it.
-    await utimes(shardPartial, new Date(ANCIENT), new Date(ANCIENT));
+    try {
+      await Promise.race([firstWrite, download.then((result) => {
+        throw new Error(`Download settled before its first write: ${JSON.stringify(result)}`);
+      })]);
+      expect(await readdir(join(sweepDir, DIR_NAME))).toContain('model.safetensors.partial');
+      // Age it past the gate so ONLY the in-flight protection can save it.
+      await utimes(shardPartial, new Date(ANCIENT), new Date(ANCIENT));
 
-    expect(await sweepOrphanedDownloadPartials({ dirs: [sweepDir] }))
-      .toMatchObject({ deleted: 0, keptProtected: 1 });
-    expect(await readdir(join(sweepDir, DIR_NAME))).toContain('model.safetensors.partial');
-
-    release();
-    await download;
+      expect(await sweepOrphanedDownloadPartials({ dirs: [sweepDir] }))
+        .toMatchObject({ deleted: 0, keptProtected: 1 });
+      expect(await readdir(join(sweepDir, DIR_NAME))).toContain('model.safetensors.partial');
+    } finally {
+      release();
+      await download;
+    }
   });
 });
 

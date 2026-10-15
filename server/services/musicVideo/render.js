@@ -287,40 +287,39 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
     // clip so the caller gets the clean MISSING_CLIPS 4xx, matching the duration guard.
     if (!measured.width || measured.width <= 0 || !measured.height || measured.height <= 0) { missing.push(scene.videoHistoryId); continue; }
     const edit = performanceEdit(scene);
-    let inSec = edit ? Math.min(edit.inSec, duration) : 0;
-    let outSec = edit ? Math.min(edit.outSec, duration) : duration;
-    let sourceSec = duration - inSec;
+    const sourceInSec = edit ? Math.min(edit.inSec, duration) : 0;
+    const sourceOutSec = edit ? Math.min(edit.outSec, duration) : duration;
     // A hand-set speed and offset (clipSpeedRate / clipOffsetSec) put the clip on the
     // output timebase: sectionChain plays it at `rate` and holds its first frame for
     // `leadSec` before the trim, so the in/out points here are output seconds.
     const rate = clipSpeedRate(scene);
-    const start = inSec + clipOffsetSec(scene);
-    const timing = rate !== 1 || start !== inSec;
-    const leadSec = timing ? round3(Math.max(0, -start)) : 0;
-    if (timing) {
-      const sourceIn = Math.min(duration, Math.max(0, start));
-      outSec = round3(leadSec + Math.max(sourceIn, outSec) / rate);
-      inSec = round3(sourceIn / rate);
-      sourceSec = round3(leadSec + (duration - sourceIn) / rate);
-    }
+    const offsetSourceInSec = sourceInSec + clipOffsetSec(scene);
+    const retimed = rate !== 1 || offsetSourceInSec !== sourceInSec;
+    const leadSec = retimed ? round3(Math.max(0, -offsetSourceInSec)) : 0;
+    const clampedSourceInSec = Math.min(duration, Math.max(0, offsetSourceInSec));
+    // Keep source coordinates immutable. Only retimed clips round to milliseconds;
+    // an untouched performance edit keeps its original precision.
+    const playbackInSec = retimed ? round3(clampedSourceInSec / rate) : sourceInSec;
+    const playbackOutSec = retimed ? round3(leadSec + Math.max(clampedSourceInSec, sourceOutSec) / rate) : sourceOutSec;
+    const playableDurationSec = retimed ? round3(leadSec + (duration - clampedSourceInSec) / rate) : duration - sourceInSec;
     clips.push({
       sceneId: scene.sceneId,
       videoPath,
       width: measured.width,
       height: measured.height,
       fps: measured.fps || 24,
-      duration: outSec - inSec,
+      duration: playbackOutSec - playbackInSec,
       // The playable source length (from the in-point on) survives the snap
       // below (which rewrites `duration` to the rendered span) so coverage can
       // be judged against it.
-      sourceSec,
+      sourceSec: playableDurationSec,
       // A reversed clip is read once, backwards, and holds its last frame rather than looping.
       loop: edit || clipReversed(scene) ? false : sceneLoops(scene),
       ...(clipReversed(scene) ? { reverse: true } : {}),
       ...(rate !== 1 ? { rate } : {}),
       ...(leadSec > 0 ? { leadSec } : {}),
-      inSec,
-      outSec,
+      inSec: playbackInSec,
+      outSec: playbackOutSec,
       ...footageFrameFit(scene),
       // VHS glitches on its cuts (musicVideoTransitions.js) ride over the edit without moving it.
       ...sceneTransitions(scene),
@@ -385,15 +384,11 @@ export function beatSnapClips(clips, beats, { toleranceSec = 0.12, minClipSec = 
     const planned = Number.isInteger(scene?.sectionIndex) && scene.sectionIndex >= 0;
     // A measured word-gap repair owns its edit boundary independently of beats.
     if ((scene?.beatAligned || planned || selectedPerformanceInstruction(scene)?.repair) && sceneHasAuthoredSpan(scene)) {
-      // inSec stays 0 here deliberately: this only ever trims how much of the
-      // clip plays, never which frames — there is no in-point/out-point
-      // distinction. A legacy planned scene commonly spans much longer than
-      // one generated 6–10s source clip; buildMusicVideoFfmpegArgs loops a
-      // looping input, so the authored timeline duration is allowed to exceed
-      // the source duration instead of silently truncating the final song. A
-      // non-looping shot that does so is refused before render (#8964).
-      // A performance clip (#8977) keeps its edit in-point; every other clip
-      // starts at 0 as before.
+      // Keep the resolved playback in-point, including performance edits and
+      // hand-set clip offsets; only the authored output span changes here.
+      // A looping input may repeat to fill a span longer than its source.
+      // Insufficient coverage for a non-looping shot is refused before render
+      // (#8964), using the preserved playable duration in sourceSec.
       const inSec = clip.inSec || 0;
       const spanSec = Math.max(minClipSec, scene.endSec - scene.startSec);
       running += spanSec;
@@ -446,8 +441,9 @@ const evenPx = (n) => Math.max(2, Math.round(n / 2) * 2);
 // fitted, letterboxed and trimmed; a still (#8985) is cover-cropped and moved
 // deterministically (every frame is a pure function of its frame number); a
 // card is a solid colour the typography layer writes its text over. On the
-// frame grid every section is cut to an exact frame count.
-function sectionChain(c, input, { canonW, canonH, fps, frames, frameGrid }) {
+// frame grid every section is cut to an exact frame count. `inputRefs` names
+// the allocated ffmpeg inputs: clip (null for a card), optional end or still.
+function sectionChain(c, inputRefs, { canonW, canonH, fps, frames, frameGrid }) {
   // On the frame grid a footage in-point (a performance edit, an intercut
   // piece #9290) is a start frame; stills and cards always start at 0.
   const startFrame = !c.layer && c.inSec > 0 ? Math.round(c.inSec * fps) : 0;
@@ -468,8 +464,8 @@ function sectionChain(c, input, { canonW, canonH, fps, frames, frameGrid }) {
     // An end frame (an end-frame image effect) is fitted and moved exactly like the still.
     const fitted = (id) => `[${id}:v]fps=${fps},scale=${coverW}:${coverH}:force_original_aspect_ratio=increase,crop=${coverW}:${coverH},setsar=1,`
       + `${move}format=yuv420p,${trim},setpts=PTS-STARTPTS`;
-    const id = typeof input === 'object' ? input.clip : input;
-    const end = typeof input === 'object' && input.end != null ? `${fitted(input.end)}[fxend${id}];` : '';
+    const id = inputRefs.clip;
+    const end = inputRefs.end != null ? `${fitted(inputRefs.end)}[fxend${id}];` : '';
     return end + fitted(id)
       + musicVideoImageEffectFilter(c.effect, { width: canonW, height: canonH, fps, key: id, atSec: c.effectAtSec || 0, end: end ? `fxend${id}` : null });
   }
@@ -488,11 +484,11 @@ function sectionChain(c, input, { canonW, canonH, fps, frames, frameGrid }) {
   const cover = `scale=${canonW}:${canonH}:force_original_aspect_ratio=increase,crop=${canonW}:${canonH},setsar=1`;
   const fit = `scale=${canonW}:${canonH}:force_original_aspect_ratio=decrease,setsar=1`;
   const centered = `overlay=(W-w)/2:(H-h)/2:shortest=1`;
-  const id = typeof input === 'number' ? input : input.clip;
+  const id = inputRefs.clip;
   if (c.frameFit === 'fill') return `[${id}:v]${cover},${timed}`;
   // The shot's still, cover-fitted like a still section, fills the gaps beside the whole clip.
-  if (c.frameFit === 'still' && typeof input === 'object') {
-    return `[${input.still}:v]fps=${fps},${cover}[edge${id}];[${id}:v]${fit},${timed}[clip${id}];[edge${id}][clip${id}]${centered}`;
+  if (c.frameFit === 'still' && inputRefs.still != null) {
+    return `[${inputRefs.still}:v]fps=${fps},${cover}[edge${id}];[${id}:v]${fit},${timed}[clip${id}];[edge${id}][clip${id}]${centered}`;
   }
   // The clip itself, zoomed, blurred, faded and noisy with scanlines, like a worn tape behind it.
   if (c.frameFit === 'vhs') {
@@ -554,7 +550,7 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
   if (plan.length === 0) throw new Error('buildMusicVideoFfmpegArgs: no section spans a frame');
 
   const inputs = [];
-  const inputOf = [];
+  const sectionInputs = [];
   // A generated scene clip is a reusable shot source, while the director's
   // timeline owns how long that shot appears in the music video. A LOOPING
   // clip input repeats so a 6–10s Grok/local result can fill a longer verse or
@@ -564,7 +560,7 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
   // single image; a card needs no input (its colour is a filter source).
   let nextInput = 0;
   const addInput = (c) => {
-    if (c.layer === 'card') return null;
+    if (c.layer === 'card') return { clip: null };
     const clipInput = nextInput++;
     if (c.layer === 'still') {
       inputs.push('-loop', '1', '-framerate', String(fps), '-i', c.imagePath);
@@ -581,7 +577,7 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
       inputs.push('-loop', '1', '-framerate', String(fps), '-i', c.stillPath);
       return { clip: clipInput, still: nextInput++ };
     }
-    return clipInput;
+    return { clip: clipInput };
   };
   // A beat toggle or dissolve (musicVideoCutEffects.js) shows the next shot's clip over
   // the end of a shot: flipping to it on the beats, or fading it in. That clip runs on the
@@ -608,7 +604,7 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
     };
     return { ...t, clip };
   });
-  for (const { c } of plan) inputOf.push(addInput(c));
+  for (const { c } of plan) sectionInputs.push(addInput(c));
   for (const preroll of prerolls) preroll.input = addInput(preroll.clip);
   const audioIdx = nextInput; // master audio follows the section inputs
   inputs.push('-i', audioPath);
@@ -618,7 +614,7 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
     ...fades.filter((f) => f.index === i - 1 && f.inFrames > 0).map((f) => `,fade=t=in:s=0:n=${f.inFrames}`),
     ...fades.filter((f) => f.index === i).map((f) => `,fade=t=out:s=${Math.max(0, frames - f.outFrames)}:n=${f.outFrames}`),
   ].join('');
-  const filters = plan.map(({ c, frames }, i) => `${sectionChain(c, inputOf[i], { canonW, canonH, fps, frames, frameGrid })}${fadeChain(i, frames)}[${prerolls.some((p) => p.index === i) ? 'vraw' : 'v'}${i}]`);
+  const filters = plan.map(({ c, frames }, i) => `${sectionChain(c, sectionInputs[i], { canonW, canonH, fps, frames, frameGrid })}${fadeChain(i, frames)}[${prerolls.some((p) => p.index === i) ? 'vraw' : 'v'}${i}]`);
   for (const p of prerolls) {
     const { frames, startSec } = plan[p.index];
     const start = sectionFrame(startSec);
