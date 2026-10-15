@@ -126,6 +126,7 @@ Field rules:
 - \`concerns\` records missing context; use \`defer\` when it prevents a sound decision.
   Every accepted defect belongs in \`findings\` with \`"blocking": true\`,
   including warnings and nits. Severity never exempts a finding from resolution.
+- Previously accepted rules are revisable. Prefer investing effort in high-quality fixes. Reassess value and feasibility before retiring a rule that is no longer useful or has no current solution worth pursuing; remove it from linting or quality scanning with concise rationale. Difficulty alone is not an exemption, and reassessment is not permission to hide a known important defect merely to pass checks.
 - \`title\` and \`suggestion\` are optional. \`suggestion\` must be the literal
   replacement for the single anchored line, with no code fence and no
   surrounding prose — omit it when the fix is not a one-line edit.`;

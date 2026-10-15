@@ -19,7 +19,14 @@ PortOS is agent-developed: every accepted review, lint, test, or quality finding
 must be fixed, including warnings and nits. Severity determines sequencing, not
 whether a finding is resolved. Reject a false positive or irrelevant rule with
 concrete rationale; disable a deliberately rejected lint rule instead of leaving
-it as a tolerated warning. Enforced lint rules are errors.
+it as a tolerated warning. Rules retained after reassessment are errors.
+
+Previously accepted rules are revisable. Prefer investing effort in high-quality
+fixes. Reassess value and feasibility before retiring a rule that is no longer
+useful or has no current solution worth pursuing; remove it from linting or
+quality scanning with concise rationale. Difficulty alone is not an exemption,
+and reassessment is not permission to hide a known important defect merely to
+pass checks.
 
 Do not suppress findings, weaken tests, demote rules, or disable useful checks to
 get green. A hardware, permission, or genuinely user-owned decision blocker must

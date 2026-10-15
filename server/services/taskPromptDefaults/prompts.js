@@ -3605,7 +3605,9 @@ For each recommendation in REVIEW.md, evaluate:
 Categorize into:
 - **IMPLEMENT**: Every accepted issue, including warnings and nits
 - **PLAN**: Accepted work genuinely blocked by hardware, permissions, a user-owned decision, or a dependency — track the evidence, owner, and next step; it remains unresolved
-- **REJECT**: A demonstrated false positive, irrelevant rule, or product proposal explicitly declined with rationale; low severity or effort alone is not rejection
+- **REJECT**: A demonstrated false positive, rule retired after reassessing its value or current feasibility, or product proposal explicitly declined with rationale; low severity alone is not rejection
+
+Previously accepted rules are revisable. Prefer investing effort in high-quality fixes. Reassess value and feasibility before retiring a rule that is no longer useful or has no current solution worth pursuing; remove it from linting or quality scanning with concise rationale. Difficulty alone is not an exemption, and reassessment is not permission to hide a known important defect merely to pass checks.
 - **DONE**: Already implemented (found in the changelog, git history, or codebase)
 
 ## Phase 3 — Implement
@@ -3806,7 +3808,7 @@ Merge them one at a time and let CI settle between merges, since lockfile change
 
 The bundled slashdo \`release\` workflow is the single source of truth for release mechanics. Do not duplicate its branch, version, changelog, readiness, test/build, PR, review, CI, merge, tag, or report steps here.
 
-The PortOS Code Review Defaults rendered into \`{reviewers}\` are advisory for this run. Use exactly that reviewer list and no other when review is available. The task builder attaches the same list to the bundled slashdo invocation; do not invoke a bare workflow that falls back to saved slashdo defaults. Code review is optional: run configured reviewers when available and address valid findings, but an empty, unavailable, timed-out, malformed, no-verdict, or otherwise inconclusive review does not itself stop the release. Known unresolved accepted findings still block release regardless of severity.
+The PortOS Code Review Defaults rendered into \`{reviewers}\` are advisory for this run. Use exactly that reviewer list and no other when review is available. The task builder attaches the same list to the bundled slashdo invocation; do not invoke a bare workflow that falls back to saved slashdo defaults. Code review is optional: run configured reviewers when available and address valid findings, but an empty, unavailable, timed-out, malformed, no-verdict, or otherwise inconclusive review does not itself stop the release. Known unresolved accepted findings still block release regardless of severity. Previously accepted rules are revisable. Prefer investing effort in high-quality fixes. Reassess value and feasibility before retiring a rule that is no longer useful or has no current solution worth pursuing; remove it from linting or quality scanning with concise rationale. Difficulty alone is not an exemption, and reassessment is not permission to hide a known important defect merely to pass checks.
 
 Run the bundled \`/do:release\` workflow (or its equivalent \`release\` skill) in autonomous mode with no \`--interactive\` flag. It owns release readiness, version/changelog finalization, tests/build, optional code review, PR creation, CI, merge, tagging, and the final report. Every accepted finding must be resolved before merge or release; required CI and release tests/build checks must also pass — and a failing test or red CI run is work for Step 4, not a reason to end the run.
 

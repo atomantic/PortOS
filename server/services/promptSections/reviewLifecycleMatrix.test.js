@@ -158,6 +158,11 @@ it.each(['local', 'inline', 'followUp'])('requires resolving accepted findings i
   const section = render({ phase, forge: 'gh', leaveOpen: false, verbose: true });
   expect(section).toContain('Resolve every accepted finding; severity only determines sequencing');
   expect(section).toContain('A round cap never makes unresolved accepted findings clean');
+  expect(section).toContain('Previously accepted rules are revisable');
+  expect(section).toContain('Prefer investing effort in high-quality fixes');
+  expect(section).toContain('Difficulty alone is not an exemption');
+  expect(section).toContain('no current solution worth pursuing');
+  expect(section).toContain('not permission to hide a known important defect');
   expect(section).not.toContain('skip repository-wide audits, style, refactoring preferences, speculation, and nits');
   expect(section).not.toContain('Marginal findings alone do not earn another round');
 });

@@ -743,6 +743,9 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(current).toContain('Every accepted finding must be resolved before merge or release');
     expect(current).toContain('Known unresolved accepted findings still block release regardless of severity');
     expect(current).not.toContain('Only CI is the review/merge gate');
+    expect(current).toContain('Previously accepted rules are revisable');
+    expect(current).toContain('Prefer investing effort in high-quality fixes');
+    expect(current).toContain('Difficulty alone is not an exemption');
     expect(current).toContain('inconclusive review does not itself stop the release');
     // The operator's toggles are rendered at dispatch.
     expect(current).toContain('{releaseOptions}');
@@ -1114,10 +1117,13 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(current).toMatch(/`linkedIssues` is empty has no requirement to\s+match at all/);
   });
 
-  it('review triage cannot reject accepted defects for low value or effort', () => {
+  it('review triage resolves accepted defects and permits reasoned rule reassessment', () => {
     const prompt = DEFAULT_TASK_PROMPTS['code-reviewer-implement'];
     expect(prompt).toContain('Every accepted issue, including warnings and nits');
-    expect(prompt).toContain('low severity or effort alone is not rejection');
+    expect(prompt).toContain('low severity alone is not rejection');
+    expect(prompt).toContain('Prefer investing effort in high-quality fixes');
+    expect(prompt).toContain('Difficulty alone is not an exemption');
+    expect(prompt).toContain('rule retired after reassessing its value or current feasibility');
     expect(prompt).not.toContain('implement the best ones');
     expect(prompt).not.toContain('REJECT**: Low value');
   });

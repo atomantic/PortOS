@@ -166,6 +166,11 @@ describe('issues-only audit dispatch never acquires code-shipping instructions (
     const prompt = renderPrompt(task);
     expect(prompt).toContain('Excessive code comments');
     expect(prompt).toContain('Every accepted finding requires resolution regardless of severity');
+    expect(prompt).toContain('Previously accepted rules are revisable');
+    expect(prompt).toContain('Prefer investing effort in high-quality fixes');
+    expect(prompt).toContain('Difficulty alone is not an exemption');
+    expect(prompt).toContain('no current solution worth pursuing');
+    expect(prompt).toContain('not permission to hide a known important defect');
     expect(prompt).toContain('warnings and nits are not exemptions');
     expect(prompt).toContain('Never hide findings, weaken tests, or disable useful checks');
     expect(prompt).toContain('safety rationale, external contracts, and justified workarounds');

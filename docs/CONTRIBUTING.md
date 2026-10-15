@@ -38,8 +38,10 @@ For DB-backed tests, provision the separate test database first (`npm run setup:
 
 Resolve every accepted finding, including warnings and nits; severity only sets
 work order. Both lint trees fail on warnings. Enable useful rules as errors and
-fix their findings. A rule rejected as irrelevant must be off with a documented
-rationale, never left at warning level. Do not weaken tests or suppress useful
+invest effort in high-quality fixes. Difficulty alone is not an exemption.
+Previously accepted rules can be reassessed: retire rules that are no longer
+useful or have no current solution worth pursuing, recording a concise rationale.
+Retired rules stay off, never at warning level. Do not weaken tests or suppress useful
 checks to obtain a green result. Follow [the accepted-findings policy](../AGENTS.md#resolve-every-accepted-finding)
 for genuine blockers and tracked deferrals.
 
