@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
+import { startOwnedBrowserFixture } from '../../../../test/browserFixture.js';
 import { browserSuiteCanRun } from '../../../../lib/browserSuiteGate.js';
 
 const require = createRequire(import.meta.url);
@@ -16,12 +17,13 @@ const root = dirname(fileURLToPath(import.meta.url));
 const threeRoot = dirname(require.resolve('three'));
 
 describe.skipIf(!canRun)('toon world headless dish proof', () => {
-  let browser, page;
+  let browser, browserFixture, page;
   const errors = [];
   beforeAll(async () => {
-    browser = await chromium.launch({ executablePath: chrome, headless: true,
+    browserFixture = await startOwnedBrowserFixture({ chromium, launchOptions: { executablePath: chrome, headless: true,
       args: ['--mute-audio', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
-        '--disable-frame-rate-limit', '--disable-background-timer-throttling', '--disable-renderer-backgrounding'] });
+        '--disable-frame-rate-limit', '--disable-background-timer-throttling', '--disable-renderer-backgrounding'] } });
+    browser = browserFixture.browser;
     page = await browser.newPage({ viewport: { width: 640, height: 360 } });
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
@@ -37,7 +39,7 @@ describe.skipIf(!canRun)('toon world headless dish proof', () => {
     await page.goto('http://toon.test/');
     await page.waitForFunction(() => window.proof);
   }, 30000);
-  afterAll(async () => { await browser?.close(); });
+  afterAll(async () => { await browserFixture?.close(); });
 
   it('renders thick, separated dishes and refuses hidden ink with optical passes on/off', async () => {
     const results = await page.evaluate(() => window.proof());

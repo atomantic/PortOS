@@ -50,6 +50,9 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
  * entry.
  */
 const STRUCTURALLY_SELECTED = new Map([
+  // The checkout-cache contracts now share a recursive fixture helper rather
+  // than scanning in either test file. They need no scanner exemption here;
+  // ci-test-plan.test.js pins explicit selection into their respective runners.
   // structuralTestsFor() in ci-test-plan.js adds these whenever any
   // client/src/**.jsx (a11y) or .js/.jsx (mounted-ref) file changes, which is
   // the only way either can start failing.

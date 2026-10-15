@@ -264,7 +264,7 @@ function runViteBuild(stageDir, clientDir) {
     throw new Error('publish-client-build owns Vite --outDir; remove the custom value');
   }
   const viteBin = join(clientDir, 'node_modules', 'vite', 'bin', 'vite.js');
-  const child = spawn(process.execPath, [viteBin, 'build', ...viteArgs, '--outDir', stageDir, '--emptyOutDir'], {
+  const child = spawn(process.execPath, [viteBin, 'build', '--configLoader', 'runner', ...viteArgs, '--outDir', stageDir, '--emptyOutDir'], {
     cwd: clientDir,
     env: {
       ...process.env,

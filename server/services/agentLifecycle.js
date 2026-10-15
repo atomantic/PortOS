@@ -59,7 +59,6 @@ import { finalizeAgent, releaseAgentLane, retireDeadAgent, stampLiExecutionVerdi
 import { extractFinalSummary } from './agentSummaryExtraction.js';
 import { handleOrphanedTask } from './agentManagement.js';
 
-const ROOT_DIR = PATHS.root;
 const AGENTS_DIR = PATHS.cosAgents;
 
 /**
@@ -540,6 +539,9 @@ async function handleAdmittedAgentCompletion(agentId, exitCode, success, duratio
     // `registerAgent` writes those fields into metadata precisely so this
     // question survives a restart, and nothing mutates them mid-run.
     const persistedAgent = await getAgentRecord(agentId).catch(() => null);
+    // Re-adoption used to omit the cwd. Prefer the durable registration even
+    // for an already-recovered entry, which may carry a missing or stale path.
+    const workspacePath = persistedAgent?.metadata?.workspacePath || agent.workspacePath || null;
 
     // Already-finalized backstop, mirroring the untracked branch above. Another
     // owner may have written the terminal record before this event arrived —
@@ -589,8 +591,7 @@ async function handleAdmittedAgentCompletion(agentId, exitCode, success, duratio
     const runStartedAt = toEpochMs(agent.startedAt);
     let effectiveSuccess = success;
     if (!effectiveSuccess && task?.id) {
-      const workspacePath = agent.workspacePath || ROOT_DIR;
-      const commitFound = await committedDuringRun(workspacePath, runStartedAt);
+      const commitFound = workspacePath && await committedDuringRun(workspacePath, runStartedAt);
       if (commitFound) {
         emitLog('warn', `Agent ${agentId} reported failure (exit ${exitCode}) but work completed - commit found for task ${task.id}`, { agentId, taskId: task.id, exitCode });
         effectiveSuccess = true;
@@ -634,7 +635,6 @@ async function handleAdmittedAgentCompletion(agentId, exitCode, success, duratio
 
     // Extract pipeline output summary before completion writes metadata to disk
     if (task?.metadata?.pipeline && effectiveSuccess) {
-      const workspacePath = agent.workspacePath || ROOT_DIR;
       const summary = await extractPipelineOutputSummary(task, workspacePath, outputBuffer).catch(err => {
         console.log(`⚠️ Failed to extract pipeline summary for ${agentId}: ${err.message}`);
         return null;
@@ -679,7 +679,10 @@ async function handleAdmittedAgentCompletion(agentId, exitCode, success, duratio
         duration,
         outputBuffer,
         errorAnalysis,
-        workspacePath: agent.workspacePath || null,
+        workspacePath,
+        // A recovered run with no known cwd must not borrow the primary
+        // checkout's sentinel or checkpoint through the normal hook fallback.
+        recovery: agent.recoveredFromRunner === true || !workspacePath,
         prExpected: runnerPrClaimExpected,
         // The run window the commit criterion is evaluated against (#3637).
         startedAt: Number.isFinite(runStartedAt) ? runStartedAt : null,

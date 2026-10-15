@@ -66,7 +66,7 @@ const EXCLUSIVE_TESTS = [
   '../scripts/writersRoomPromotionCleanup.test.js',
 ];
 
-export function vitestCaptureProjects(test) {
+export function vitestCaptureProjects(test, { cacheDir } = {}) {
   const { include, exclude, ...shared } = test;
   // Vite concatenates inherited include arrays: extending the broad root
   // glob would also run EVERY unit file in the capture project. Copy shared
@@ -76,6 +76,8 @@ export function vitestCaptureProjects(test) {
   return [
     {
       extends: false,
+      // These projects also opt out of Vite config inheritance.
+      cacheDir,
       test: {
         ...shared,
         name: 'parallel',
@@ -86,6 +88,8 @@ export function vitestCaptureProjects(test) {
     },
     {
       extends: false,
+      // These projects also opt out of Vite config inheritance.
+      cacheDir,
       test: {
         ...shared,
         name: 'capture',

@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { chromium } from 'playwright-core';
+import { startOwnedBrowserFixture } from '../test/browserFixture.js';
 import sharp from 'sharp';
 import { browserSuiteCanRun } from './browserSuiteGate.js';
 import { filmLookFilterMarkup, filmLookPreset, filmLookRuntimeSource } from './filmLook.js';
@@ -25,9 +26,12 @@ const composition = '<script>portosComposition = { fps: 30, seek() {} };</script
 const html = (head, body) => `<!doctype html><html><head><style>html,body{margin:0;width:100%;height:100%}</style>${head}</head><body>${body}</body></html>`;
 
 describe.skipIf(!canRun)('film look runtime in Chrome', () => {
-  let browser;
-  beforeAll(async () => { browser = await chromium.launch({ executablePath: chrome, headless: true }); });
-  afterAll(async () => { await browser?.close(); });
+  let browser, browserFixture;
+  beforeAll(async () => {
+    browserFixture = await startOwnedBrowserFixture({ chromium, launchOptions: { executablePath: chrome, headless: true } });
+    browser = browserFixture.browser;
+  });
+  afterAll(async () => { await browserFixture?.close(); });
 
   it('paints cached grain and tape under the worker media CSP and blends the cast with the document pixels', async ({ signal }) => {
     const { PATHS } = await import('./paths.js');
