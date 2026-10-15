@@ -1464,6 +1464,7 @@ export async function finalizeAgent({
   error,
   completionReason,
   workspacePath = null,
+  recovery = false,
   prExpected = false,
   startedAt = null,
 }) {
@@ -1681,7 +1682,7 @@ export async function finalizeAgent({
   // of awaiting here is that the agent still counts against the CoS concurrency
   // gate for the hook's duration, so the dispatch is hard-bounded — see
   // withOutputHookTimeout.
-  let hookResult = await dispatchTaskOutputHookOnce({ agentId, task, success: judgedVerdict.success, workspacePath });
+  let hookResult = await dispatchTaskOutputHookOnce({ agentId, task, success: judgedVerdict.success, workspacePath, recovery });
   // A private assessment's deliverable is the validated, persisted report.
   // A skipped, thrown or timed-out hook cannot establish that deliverable,
   // even when the CLI exited zero. Keep other task types' existing semantics.
