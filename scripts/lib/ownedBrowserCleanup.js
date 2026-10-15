@@ -36,4 +36,3 @@ export const reapOwnedBrowser = async (server, budgetMs) => {
   const state = exit !== null ? ` (process exited with ${exit})` : killFailure.endsWith('exit status') ? '' : ' (no exit status)';
   throw new Error(`browser close ${closeFailure}, then its kill ${killFailure}${state}`);
 };
-
