@@ -1081,6 +1081,32 @@ describe('full inbox coverage contract', () => {
     }));
   });
 
+  it('keeps full Gmail bodies in the cache and broadcasts only progress until the saved completion', async () => {
+    const count = 200; // Gmail's full-sync transport ceiling.
+    const body = 'x'.repeat(8192);
+    const io = { emit: vi.fn((event) => {
+      if (event === 'messages:sync:completed') {
+        expect(saved.messages.filter(message => message.bodyText === body)).toHaveLength(count);
+      }
+    }) };
+    gmailApi.list.mockImplementation(async ({ q, pageToken, maxResults }) => {
+      const start = Number(pageToken || 0);
+      const end = Math.min(start + maxResults, count);
+      return { data: q === 'in:inbox' ? {
+        messages: Array.from({ length: end - start }, (_, i) => ({ id: `synthetic-${start + i}` })),
+        ...(end < count ? { nextPageToken: String(end) } : {}),
+      } : {} };
+    });
+    gmailApi.get.mockImplementation(async ({ id }) => ({ data: {
+      id, labelIds: ['INBOX'], payload: { headers: [], mimeType: 'text/plain', body: { data: Buffer.from(body).toString('base64url') } },
+    } }));
+
+    expect(await syncAccount(VALID_UUID, io, { mode: 'full' })).toMatchObject({ newMessages: count });
+    expect(io.emit).toHaveBeenCalledWith('messages:sync:completed', expect.objectContaining({ newMessages: count }));
+    expect(io.emit.mock.calls.some(([, payload]) => payload.messages)).toBe(false);
+    expect(Buffer.byteLength(JSON.stringify(io.emit.mock.calls))).toBeLessThan(100_000);
+  });
+
   it('preserves identity and evaluation through failure and retry, then reconciles complete snapshots', async () => {
     gmailApi.get.mockImplementationOnce(async () => ({
       data: { id: 'a', labelIds: ['INBOX', 'UNREAD'], payload: { headers: [] } },
