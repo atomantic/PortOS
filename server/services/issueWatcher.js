@@ -192,9 +192,8 @@ function normalizeFinding(finding, anchors) {
   const path = trimTo(finding.path, 500);
   const side = String(finding.side || '').toUpperCase();
   const line = Number(finding.line);
-  // A finding without an explicit boolean is blocking. The watcher must not
-  // turn an incomplete model response into an automatic merge.
-  const blocking = finding.blocking !== false;
+  // Legacy blocking:false is a severity hint, never permission to merge a finding.
+  const blocking = true;
   const rendered = renderFinding(finding, { blocking });
   if (!path || side !== 'RIGHT' || !Number.isInteger(line) || line < 1 || !rendered) return null;
   if (!anchors.has(`${path}\u0000${side}\u0000${line}`)) return null;
@@ -1400,10 +1399,7 @@ function reviewPlanFor(decision, diff, target) {
     findings: normalizedFindings.map(({ comment }) => comment),
     blockingFindings,
     hasInvalidFinding,
-    // An approval with only explicitly non-blocking findings is still a real
-    // GitHub code review: the comments travel with the APPROVE event, while
-    // the findings stay as follow-up work instead of blocking this PR. Every
-    // other ambiguous/negative case remains a non-merging review.
+    // An approval cannot override an accepted finding, whatever its severity.
     canApprove: decision.verdict === 'approve'
       && !hasInvalidFinding
       && !diffInsufficient

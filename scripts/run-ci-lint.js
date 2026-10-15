@@ -30,12 +30,8 @@ export function touchesServer(repoFiles) {
   return repoFiles.some((path) => /^server\/(?!node_modules\/).*\.(?:m?js)$|^server\/biome\.jsonc$/i.test(path));
 }
 
-/**
- * Biome argv for the server tree. Only `noUndeclaredVariables` is an error; the
- * unused-variable rule is a warning (server/biome.jsonc), so no `--error-on-warnings`.
- * Diagnostics are capped so the known unused-variable backlog does not drown real errors.
- */
-export const SERVER_LINT_ARGS = ['lint', '--max-diagnostics=20', '.'];
+// Both trees reject warnings, including diagnostics whose severity comes from tool defaults.
+export const SERVER_LINT_ARGS = ['lint', '--error-on-warnings', '--max-diagnostics=20', '.'];
 
 /** Build the Biome argv for a lint run. Pure, so the CI matrix is testable. */
 export function buildLintArgs({ mode, clientFiles = [] }) {

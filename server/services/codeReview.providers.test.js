@@ -111,7 +111,7 @@ describe('configured provider reviewers', () => {
       ['a bare fence with surrounding whitespace', `\n  \`\`\`\n${findings}\n\`\`\`\n`],
     ])('accepts the complete envelope wrapped whole in %s', async (_label, text) => {
       expect(await review(text)).toMatchObject({ ok: true, verdict: 'findings',
-        findings: '## Blocking\n\n- example.js:2: The sum now subtracts. Restore the addition.' });
+        findings: '## Priority findings — resolution required\n\n- example.js:2: The sum now subtracts. Restore the addition.' });
       expect(runCliProviderPrompt.mock.lastCall[0]).toMatchObject({ provider: { id: 'antigravity-cli', effort: 'low' }, model: 'gemini-3.8-flash', exactPins: true, codeReview: true });
       expect(await review('```json\n{"verdict":"clean","findings":[]}\n```')).toMatchObject({ ok: true, verdict: 'clean', findings: 'No findings.' });
     });
