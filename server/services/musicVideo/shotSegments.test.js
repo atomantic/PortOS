@@ -30,6 +30,8 @@ const { buildMusicVideoFfmpegArgs } = await import('./render.js');
 
 afterAll(cleanupTempDataRoots);
 
+// Runs against the installed ffmpeg; skipped where none is on PATH (Linux CI).
+const hasFfmpeg = (() => { try { execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' }); execFileSync('ffprobe', ['-version'], { stdio: 'ignore' }); return true; } catch { return false; } })();
 const run = (args) => execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', ...args]);
 const probe = (path, entries) => execFileSync('ffprobe', ['-v', 'error', '-count_frames', '-show_entries', entries, '-of', 'default=nw=1:nk=1', path]).toString().trim().split('\n');
 
@@ -44,6 +46,7 @@ const footage = (sceneId, path, over = {}) => ({
 
 let media;
 beforeAll(() => {
+  if (!hasFfmpeg) return;
   media = join(ROOT(), 'fixture');
   mkdirSync(media, { recursive: true });
   for (const [name, src] of [['a', 'testsrc2'], ['b', 'smptebars'], ['c', 'rgbtestsrc']]) {
@@ -59,7 +62,7 @@ beforeAll(() => {
   ];
 });
 
-describe('shot segments', () => {
+describe.skipIf(!hasFfmpeg)('shot segments', () => {
   it('stitch to the picture the whole-film graph draws, with the song under it', async () => {
     const plan = await planShotSegments(project());
     expect(plan.segments.map((s) => [s.sceneId, s.frames])).toEqual([['a', 24], ['b', 24], ['c', 24]]);
