@@ -695,7 +695,7 @@ export function removeScene(project, sceneId) {
 // the song, its section, and the lyric sung there. A reorder leaves these on
 // their positions and moves only the shot (prompts, frames, clips, takes,
 // direction, camera), so swapping two shots keeps the song timing intact.
-const SCENE_SLOT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'sectionIndex', 'sectionLabel', 'lyricText', 'lyricRole'];
+const SCENE_SLOT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'sectionIndex', 'sectionLabel', 'lyricText', 'lyricRole', 'lyricSize'];
 const DRAFT_SHOT_SLOT_FIELDS = ['startSec', 'endSec', 'lyricCueIds'];
 const pickSlot = (record, fields) => Object.fromEntries(fields.filter((k) => k in record).map((k) => [k, record[k]]));
 const withoutSlot = (record, fields) => Object.fromEntries(Object.entries(record).filter(([k]) => !fields.includes(k)));

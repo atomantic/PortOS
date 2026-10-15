@@ -104,6 +104,8 @@ describe('Swap from unused', () => {
     });
     render(<SceneTakePicker open projectId="mv-1" scene={{ sceneId: 's8' }} kind="image" onPlace={vi.fn()} shotNumbers={new Map()} />);
     await waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(60));
+    // The footer starts observing in an effect that can land after the first page paints.
+    await waitFor(() => expect(observers.length).toBeGreaterThan(0));
     act(() => observers.at(-1).fire());
     await waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(70));
     expect(screen.queryByRole('button', { name: /Show more/ })).toBeNull();
