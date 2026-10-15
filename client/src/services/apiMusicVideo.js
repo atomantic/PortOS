@@ -291,6 +291,16 @@ export const cancelMusicVideoShotRender = (id, sceneId, options = {}) =>
 // A rendered shot's silent segment, to play.
 export const musicVideoShotRenderUrl = (id, name) =>
   `/api/music-video/${encodeURIComponent(id)}/shot-renders/${encodeURIComponent(name)}`;
+// The shots rendered so far stitched in order with the song (`light`: a phone copy):
+// { name, light, durationSec, shots, totalShots, complete }. Play it at musicVideoShotRenderUrl(id, name).
+export const buildMusicVideoRenderPreview = (id, { light = false } = {}, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/shot-renders/preview`, { method: 'POST', body: JSON.stringify({ light }), ...options });
+// The video-wide film looks cached over the current takes:
+// { available, error?, total, looks: [{ id, look, current, rendered, bytes }] }.
+export const getMusicVideoFilmLooks = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/film-looks`, options);
+export const deleteMusicVideoFilmLook = (id, lookId, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/film-looks/${encodeURIComponent(lookId)}`, { method: 'DELETE', ...options });
 
 // EventSource URL for a render job's progress stream (consumed by useSseProgress).
 export const musicVideoRenderEventsUrl = (jobId) =>

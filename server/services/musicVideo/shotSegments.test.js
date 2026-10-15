@@ -6,7 +6,7 @@
  */
 import { describe, it, expect, vi, afterAll, beforeAll } from 'vitest';
 import { execFileSync } from 'child_process';
-import { existsSync, mkdirSync } from 'fs';
+import { existsSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
@@ -25,9 +25,15 @@ vi.mock('./render.js', async (importOriginal) => {
   };
 });
 
-const { planShotSegments, renderMissingSegments, stitchSegments } = await import('./shotSegments.js');
+// The look pass draws in a browser; here it keeps the base picture, which is
+// enough to follow which look file each segment lands in.
+vi.mock('./filmLookFinish.js', () => ({ applyFilmLookFinish: vi.fn(async () => true) }));
+vi.mock('./projects.js', () => ({ getProject: vi.fn(async (id) => (id === fixture.project?.id ? fixture.project : null)) }));
+
+const { planShotSegments, renderMissingSegments, renderSegment, stitchSegments, pruneSegments, listFilmLooks, deleteFilmLook, buildRenderPreview } = await import('./shotSegments.js');
 const { buildMusicVideoFfmpegArgs } = await import('./render.js');
 const { musicVideoEvents } = await import('./events.js');
+const { applyFilmLookFinish } = await import('./filmLookFinish.js');
 
 afterAll(cleanupTempDataRoots);
 
@@ -116,5 +122,107 @@ describe.skipIf(!hasFfmpeg)('shot segments', () => {
     // A shot set to a clean look skips the look pass under a looked video.
     const clean = await planShotSegments(project({ scenes: scenes.map((s) => (s.sceneId === 'c' ? { ...s, filmLook: { preset: 'none' } } : s)), filmLook: look }));
     expect(clean.segments[2].path).toBe(clean.segments[2].basePath);
+  }, 60000);
+
+  it('keeps each film look to swap back to, plays what is rendered so far, and deletes a look', async () => {
+    const lookA = { preset: 'vhs', grain: 0.3 };
+    const lookB = { preset: 'super8', grain: 0.6 };
+    fixture.project = project({ filmLook: lookA });
+    const planA = await planShotSegments(fixture.project);
+    await renderMissingSegments(planA, { concurrency: 2 });
+
+    const whole = await buildRenderPreview(fixture.project.id);
+    expect(whole).toMatchObject({ shots: 3, totalShots: 3, complete: true });
+    expect(whole.durationSec).toBeCloseTo(3, 5);
+    const wholePath = join(planA.dir, whole.name);
+    expect(probe(wholePath, 'stream=codec_type').sort()).toEqual(['audio', 'video']);
+
+    fixture.project = project({ filmLook: lookB });
+    const planB = await planShotSegments(fixture.project);
+    await renderMissingSegments(planB, { concurrency: 2 });
+    await pruneSegments(planB);
+    // The other look's files survive the prune: switching back only stitches.
+    expect(planA.segments.every((s) => existsSync(s.path))).toBe(true);
+    const listed = await listFilmLooks(fixture.project.id);
+    expect(listed.total).toBe(3);
+    expect(listed.looks.map((l) => [l.look.preset, l.current, l.rendered])).toEqual([['super8', true, 3], ['vhs', false, 3]]);
+
+    const left = await deleteFilmLook(fixture.project.id, listed.looks[1].id);
+    expect(left.looks.map((l) => l.look.preset)).toEqual(['super8']);
+    expect(planA.segments.some((s) => existsSync(s.path))).toBe(false);
+    expect(planB.segments.every((s) => existsSync(s.path))).toBe(true);
+
+    // A missing shot in the middle: the player stops before it.
+    rmSync(planB.segments[1].path);
+    const partial = await buildRenderPreview(fixture.project.id);
+    expect(partial).toMatchObject({ shots: 1, totalShots: 3, complete: false });
+    expect(partial.durationSec).toBeCloseTo(1, 5);
+    // Only the newest preview is kept.
+    expect(existsSync(wholePath)).toBe(false);
+    expect(probe(join(planB.dir, partial.name), 'stream=nb_read_frames')).toContain('24');
+  }, 60000);
+
+  it('deletes the look in use from a cache made before looks were listed, and drops a pinned shot\'s old look', async () => {
+    fixture.project = project({ filmLook: { preset: 'polaroid', grain: 0.4 } });
+    const plan = await planShotSegments(fixture.project);
+    await renderMissingSegments(plan, { concurrency: 2 });
+    rmSync(join(plan.dir, 'looks.json'));
+    const listed = await listFilmLooks(fixture.project.id);
+    const inUse = listed.looks.find((l) => l.current);
+    expect(inUse.rendered).toBe(3);
+    rmSync(join(plan.dir, 'looks.json'));
+    const left = await deleteFilmLook(fixture.project.id, inUse.id);
+    expect(plan.segments.some((s) => existsSync(s.path))).toBe(false);
+    expect(left.looks.map((l) => l.rendered)).toEqual([0]);
+
+    // A shot's own look keeps only its current file once it changes.
+    const pin = (grain) => project({ scenes: project().scenes.map((sc) => (sc.sceneId === 'c' ? { ...sc, filmLook: { preset: 'polaroid', grain } } : sc)) });
+    const before = await planShotSegments(pin(0.2));
+    await renderMissingSegments(before, { concurrency: 2 });
+    const after = await planShotSegments(pin(0.5));
+    await renderMissingSegments(after, { concurrency: 2 });
+    await pruneSegments(after);
+    expect(existsSync(before.segments[2].path)).toBe(false);
+    expect(existsSync(after.segments[2].path)).toBe(true);
+  }, 60000);
+
+  it('tries a shot whose film look failed again before failing the render', async () => {
+    fixture.project = project({ id: 'mv-segments-retry-test', filmLook: { preset: 'vhs', grain: 0.7 } });
+    const plan = await planShotSegments(fixture.project);
+    applyFilmLookFinish.mockRejectedValueOnce(new Error('render seek timed out @ 0.021s'));
+    await renderMissingSegments(plan, { concurrency: 1 });
+    expect(plan.segments.every((s) => existsSync(s.path))).toBe(true);
+
+    const again = await planShotSegments(project({ id: 'mv-segments-retry-test', filmLook: { preset: 'vhs', grain: 0.8 } }));
+    // A shot that fails both times fails the render.
+    applyFilmLookFinish.mockClear().mockRejectedValue(new Error('stalled'));
+    await expect(renderMissingSegments(again, { concurrency: 1 })).rejects.toThrow(/stalled/);
+    expect(applyFilmLookFinish).toHaveBeenCalledTimes(4);
+    applyFilmLookFinish.mockResolvedValue(true);
+  }, 60000);
+
+  it('lists a look rendered only shot by shot, and drops an un-pinned shot\'s old look', async () => {
+    const id = 'mv-segments-shot-test';
+    const lookA = { preset: 'vhs', grain: 0.1 };
+    fixture.project = project({ id, filmLook: lookA });
+    const planA = await planShotSegments(fixture.project);
+    await renderSegment(planA, planA.segments[0]);
+    fixture.project = project({ id, filmLook: { preset: 'super8', grain: 0.1 } });
+    const planB = await planShotSegments(fixture.project);
+    await renderSegment(planB, planB.segments[0]);
+    const listed = await listFilmLooks(id);
+    expect(listed.looks.map((l) => [l.look.preset, l.rendered])).toEqual([['super8', 1], ['vhs', 1]]);
+    await pruneSegments(planB);
+    expect(existsSync(planA.segments[0].path)).toBe(true);
+
+    // A shot's own look was never listed, so once the shot is un-pinned its file goes.
+    const pinnedScenes = project().scenes.map((sc) => (sc.sceneId === 'c' ? { ...sc, filmLook: { preset: 'polaroid', grain: 0.2 } } : sc));
+    const pinned = await planShotSegments(project({ id, scenes: pinnedScenes, filmLook: fixture.project.filmLook }));
+    await renderSegment(pinned, pinned.segments[2]);
+    expect(pinned.segments[2].path).not.toBe(pinned.segments[2].basePath);
+    const unpinned = await planShotSegments(fixture.project);
+    await pruneSegments(unpinned);
+    expect(existsSync(pinned.segments[2].path)).toBe(false);
+    expect(existsSync(pinned.segments[2].basePath)).toBe(true);
   }, 60000);
 });

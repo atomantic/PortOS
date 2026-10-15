@@ -12,7 +12,7 @@ import { existsSync } from 'fs';
 import { unlink } from 'fs/promises';
 import { pipeline } from 'stream/promises';
 import { Router } from 'express';
-import { musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoShotLockSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoContinueShotSchema, musicVideoPoolUseSchema, musicVideoPoolMarkSchema, musicVideoPoolSearchQuerySchema, musicVideoPoolDeleteSchema, musicVideoPoolImportSchema, musicVideoLibrarySearchQuerySchema, musicVideoPoolAddSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoLyricAnchorSyncSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
+import { musicVideoRenderPreviewSchema, musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoShotLockSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoContinueShotSchema, musicVideoPoolUseSchema, musicVideoPoolMarkSchema, musicVideoPoolSearchQuerySchema, musicVideoPoolDeleteSchema, musicVideoPoolImportSchema, musicVideoLibrarySearchQuerySchema, musicVideoPoolAddSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoLyricAnchorSyncSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
 import { productionReadiness } from '../services/musicVideo/productionReview.js';
 import { finishedOutsideBlocker } from '../lib/musicVideoFinishedOutside.js';
 import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, lockProductionShots, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, syncLyricAnchors, removeStaleStoryboardRows, reviseProductionFromFeedback, revertProductionInput } from '../services/musicVideo/productionReviewService.js';
@@ -732,6 +732,21 @@ router.post('/:id/shots/:sceneId/render', asyncHandler(async (req, res) => {
 router.post('/:id/shots/:sceneId/render/cancel', asyncHandler(async (req, res) => {
   const { cancelShotRender } = await import('../services/musicVideo/shotSegments.js');
   res.json({ ok: cancelShotRender(req.params.id, req.params.sceneId) });
+}));
+// The shots rendered so far, stitched in order with the song (a seam check
+// while the rest renders), and the film looks cached over the current takes.
+router.post('/:id/shot-renders/preview', asyncHandler(async (req, res) => {
+  const { light } = validateRequest(musicVideoRenderPreviewSchema, req.body ?? {});
+  const { buildRenderPreview } = await import('../services/musicVideo/shotSegments.js');
+  res.json(await buildRenderPreview(req.params.id, { light: light === true }));
+}));
+router.get('/:id/film-looks', asyncHandler(async (req, res) => {
+  const { listFilmLooks } = await import('../services/musicVideo/shotSegments.js');
+  res.json(await listFilmLooks(req.params.id));
+}));
+router.delete('/:id/film-looks/:lookId', asyncHandler(async (req, res) => {
+  const { deleteFilmLook } = await import('../services/musicVideo/shotSegments.js');
+  res.json(await deleteFilmLook(req.params.id, req.params.lookId));
 }));
 router.get('/:id/shot-renders/:name', asyncHandler(async (req, res) => {
   const { shotSegmentFile } = await import('../services/musicVideo/shotSegments.js');

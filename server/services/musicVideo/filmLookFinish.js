@@ -39,6 +39,9 @@ function filmLookFinishPage({ width, height, fps, durationSec, offsetSec = 0, sr
   const js = `(() => {
   const FPS = ${fps}, DURATION = ${durationSec}, OFFSET = ${offsetSec}, WIDTH = ${width}, HEIGHT = ${height};
   const FRAME_GRACE_MS = 1000;
+  // A loaded host can take many seconds to decode the first frame; kept under
+  // the browser's 30 s command deadline so the stall is named, then retried.
+  const SEEK_TIMEOUT_MS = 25000;
   const video = document.getElementById('source');
   const loaded = new Promise((resolve, reject) => {
     if (video.readyState >= 2) { resolve(); return; }
@@ -52,7 +55,7 @@ function filmLookFinishPage({ width, height, fps, durationSec, offsetSec = 0, sr
       let presented = typeof video.requestVideoFrameCallback !== 'function';
       let grace = null;
       let settled = false;
-      const timer = setTimeout(() => { cleanup(); reject(new Error('render seek timed out @ ' + target.toFixed(3) + 's')); }, 15000);
+      const timer = setTimeout(() => { cleanup(); reject(new Error('render seek timed out @ ' + target.toFixed(3) + 's')); }, SEEK_TIMEOUT_MS);
       const finish = () => { if (seeked && presented) { cleanup(); resolve(); } };
       const onSeeked = () => {
         seeked = true;
