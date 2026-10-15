@@ -168,13 +168,22 @@ async function verifiedReviewCoordinator(agent, repository) {
   const meta = task?.metadata;
   if (!task || task.taskType !== 'internal'
     || !isTruthyMeta(meta?.reviewLoopFollowUp) || isTruthyMeta(meta?.reviewLoopLeaveOpen)
-    || meta?.forkHead || target.url !== meta?.reviewLoopPRUrl || target.branch !== meta?.reviewLoopPRBranch
+    || resolvePrCompletion(meta) === PR_COMPLETIONS.LEAVE_OPEN || agent.metadata?.prCompletionPolicy === PR_COMPLETIONS.LEAVE_OPEN
+    || target.url !== meta?.reviewLoopPRUrl || target.branch !== meta?.reviewLoopPRBranch
     || agent.metadata?.worktreeBranch !== target.branch || !agent.metadata?.workspacePath) return false;
   const pr = parsePullRequestUrl(target.url);
   if (!pr || repositoryKey({ host: pr.host, fullName: `${pr.owner}/${pr.repo}` }) !== repository
     || String(meta.reviewLoopPRNumber) !== String(pr.number)
     || meta.reviewLoopPRHost !== pr.host || meta.reviewLoopPROwner !== pr.owner || meta.reviewLoopPRRepo !== pr.repo) return false;
-  return checkoutOnBranch(agent.metadata.workspacePath, target.branch, repository);
+  if (!await checkoutOnBranch(agent.metadata.workspacePath, target.branch, repository)) return false;
+  if (!meta.forkHead && !meta.reviewLoopForkTarget && !target.fork && !target.workspacePath) return true;
+  if (target.workspacePath !== agent.metadata.workspacePath || !agent.metadata.sourceWorkspace
+    || agent.metadata.sourceWorkspace === target.workspacePath || target.fork?.url !== target.url) return false;
+  const { verifyForkReviewMergeTarget } = await import('./forkReviewMergeTarget.js');
+  const headSha = await verifyForkReviewMergeTarget({ target: target.fork, taskTarget: meta.reviewLoopForkTarget,
+    forkHead: meta.forkHead, sourceWorkspace: agent.metadata.sourceWorkspace,
+    workspacePath: target.workspacePath, branch: target.branch });
+  return headSha ? { headSha } : false;
 }
 
 // Generic PR delivery (#11435): an operator-configured task whose prompt told
@@ -221,7 +230,14 @@ export async function claimMergeAdmission({ agentId, action, token, outcome }) {
     if (!repository) return refuse('repository-unreadable');
     // Releasing an owned token must remain possible after merge deletes or
     // switches the checkout. Acquire/check still require the assigned target.
-    if (action !== 'release' && !await measure('origin', () => verifiedParticipant(agent, repository))) {
+    const participant = action === 'release' ? true : await measure('origin', () => verifiedParticipant(agent, repository));
+    if (!participant) {
+      const task = await liveTask(agent);
+      if (agent.metadata?.reviewLoopMergeTarget?.fork || (task?.taskType === 'internal'
+        && isTruthyMeta(task.metadata?.reviewLoopFollowUp) && task.metadata?.forkHead)) {
+        return { admitted: false, reason: 'fork-review-target-unverified', retryable: false,
+          message: 'Leave the PR/worktree intact. Verify the live PR head, base, fork remote and upstream; old or changed targets require a fresh supported follow-up.' };
+      }
       return refuse('claim-owner-unverified');
     }
     if (action === 'acquire') {
@@ -229,7 +245,10 @@ export async function claimMergeAdmission({ agentId, action, token, outcome }) {
         !validLease(held, key) || (held.agentId === agentId && (!sameAgent(held, agent) || key !== repository)))) {
         return refuse('lease-owner-mismatch');
       }
-      return admit(state, save, repository, { kind: 'agent', ...binding(agent) }, measure);
+      const held = state.mergeAdmissions[repository];
+      if (participant.headSha && held?.agentId === agentId && !expired(held) && held.headSha !== participant.headSha) return refuse('lease-head-changed');
+      return admit(state, save, repository, { kind: 'agent', ...binding(agent),
+        ...(participant.headSha ? { headSha: participant.headSha } : {}) }, measure);
     }
     const lease = state.mergeAdmissions[repository];
     if (!validLease(lease, repository) || lease.kind !== 'agent' || !sameAgent(lease, agent) || lease.token !== token) {
@@ -237,6 +256,7 @@ export async function claimMergeAdmission({ agentId, action, token, outcome }) {
     }
     // An expired holder must stop and re-acquire before merging; releasing
     // its own still-unclaimed lease stays permitted.
+    if (action === 'check' && participant.headSha && lease.headSha !== participant.headSha) return refuse('lease-head-changed');
     if (action === 'check') return expired(lease) ? refuse('lease-expired') : { admitted: true, token, repository };
     if (action !== 'release' || !MERGE_ADMISSION_OUTCOMES.includes(outcome)) return refuse('outcome-required');
     delete state.mergeAdmissions[repository];

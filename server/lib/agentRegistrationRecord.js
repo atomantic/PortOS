@@ -283,7 +283,11 @@ export function buildAgentRegistration({
     reviewLoopMergeTarget: task.taskType === 'internal'
       && isTruthyMeta(task.metadata?.reviewLoopFollowUp)
       && !isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)
-      ? { url: task.metadata.reviewLoopPRUrl, branch: task.metadata.reviewLoopPRBranch }
+      ? { url: task.metadata.reviewLoopPRUrl, branch: task.metadata.reviewLoopPRBranch,
+        ...(task.metadata.forkHead ? {
+          workspacePath,
+          fork: task.metadata.reviewLoopForkTarget ? structuredClone(task.metadata.reviewLoopForkTarget) : null,
+        } : {}) }
       : null,
     // Generic PR delivery (#11435): the worktree PortOS just provisioned and its
     // head branch, stamped only when this run's prompt carries the merge
