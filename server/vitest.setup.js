@@ -55,6 +55,22 @@ import { rmSync } from 'fs';
 import { mockNoPeers } from './lib/mockPathsDataRoot.js';
 import './test/admissionSetup.js';
 
+// Use real builtins: suite-level fs/os mocks must not redirect fixture ownership.
+// setupFiles runs before each suite's imports, including import-time registry loads.
+const registryIo = await vi.importActual('node:fs');
+const registryOs = await vi.importActual('node:os');
+const registryPath = await vi.importActual('node:path');
+const priorRegistryFile = process.env.PORTOS_MEDIA_MODELS_FILE;
+if (!priorRegistryFile) {
+  const root = registryIo.mkdtempSync(registryPath.join(registryOs.tmpdir(), 'portos-suite-media-'));
+  process.env.PORTOS_MEDIA_MODELS_FILE = registryPath.join(root, 'media-models.json');
+  afterAll(() => {
+    if (priorRegistryFile === undefined) delete process.env.PORTOS_MEDIA_MODELS_FILE;
+    else process.env.PORTOS_MEDIA_MODELS_FILE = priorRegistryFile;
+    registryIo.rmSync(root, { recursive: true, force: true });
+  });
+}
+
 // The server intentionally logs expected error paths, lifecycle transitions,
 // and fallback decisions. With console interception disabled (see the config),
 // `--silent=passed-only` cannot suppress those lines: PR #5296 emitted 15,355
