@@ -308,6 +308,7 @@ export function cloneProjectRecord(source, {
     // #9010: the source's in-flight render mark is not the clone's.
     renderingOn: null,
     renderPartialFilename: null,
+    renderResume: null,
     deleted: false,
     deletedAt: null,
   };

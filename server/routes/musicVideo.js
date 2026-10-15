@@ -708,8 +708,9 @@ router.get('/:id/sharing-copy/download', asyncHandler(async (req, res) => {
 // Assemble the scenes' i2v clips into one MP4 over the track as the master audio
 // bed. Kickoff returns { jobId }; progress streams over SSE (mirrors
 // videoTimeline). Per-project mutex returns 409 with the live jobId for re-attach.
+// A shot-by-shot render started here picks up again after a server restart.
 router.post('/:id/render', asyncHandler(async (req, res) => {
-  res.json(await renderMusicVideo(req.params.id));
+  res.json(await renderMusicVideo(req.params.id, { resumable: true }));
 }));
 
 // Read-only: the live final-render job for a project (null when none runs on

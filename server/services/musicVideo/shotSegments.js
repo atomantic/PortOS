@@ -22,7 +22,7 @@
 import { createHash, randomUUID } from 'crypto';
 import { existsSync } from 'fs';
 import { copyFile, mkdir, readdir, rename, rm, stat, writeFile } from 'fs/promises';
-import { availableParallelism, tmpdir } from 'os';
+import { availableParallelism, tmpdir, totalmem } from 'os';
 import { join } from 'path';
 import { PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -41,6 +41,7 @@ import { nameShots } from './productionReview.js';
 import { getProject } from './projects.js';
 import { musicVideoEvents } from './events.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
+import { trackedRenderMap } from '../renderActivity.js';
 
 export const SHOT_SEGMENT_DIR = 'music-video-segments';
 // Bump when a segment's encode changes in a way its key cannot see.
@@ -278,8 +279,17 @@ async function renderShotBase(plan, segment, outputPath, { jobId, signal, onProg
   }
 }
 
+// Each segment in flight may hold a film-look browser (about one core, since
+// the filter rasterizes serially) and an encoder. Two thirds of the cores keep
+// the server and the user's own apps responsive; the memory term keeps a small
+// machine from running out of RAM with a browser per shot.
+const SEGMENT_MAX_CONCURRENCY = 12;
+const SEGMENT_BYTES_EACH = 3 * 1024 ** 3;
+
 /** How many segments render at once: each may hold a browser and an encoder. */
-export const segmentConcurrency = ({ cores = availableParallelism() } = {}) => Math.max(1, Math.min(3, Math.floor(cores / 4)));
+export const segmentConcurrency = ({ cores = availableParallelism(), memoryBytes = totalmem() } = {}) => Math.max(1, Math.min(
+  SEGMENT_MAX_CONCURRENCY, Math.floor((cores * 2) / 3), Math.floor(memoryBytes / SEGMENT_BYTES_EACH),
+));
 
 /**
  * Render every missing segment of `plan` (`concurrency` at a time). `onProgress`
@@ -300,6 +310,8 @@ export async function renderMissingSegments(plan, { signal, onProgress, concurre
         await renderSegment(plan, segment, { signal, onProgress: (f) => { done.set(segment, f); report(); } });
         done.set(segment, 1);
         report();
+        // An open shot card flips to Rendered (and can play it) mid-render.
+        if (segment.sceneId) emitShotRender({ projectId: plan.project?.id, sceneId: segment.sceneId, state: 'rendered', progress: 1 });
       } catch (err) {
         if (signal?.aborted || err.code === 'CANCELED') throw err;
         failures.push(err);
@@ -411,7 +423,10 @@ function segmentStatus(plan) {
 }
 
 // One shot render per shot at a time: `${projectId}:${sceneId}` → { controller }.
-const shotJobs = new Map();
+const shotJobs = trackedRenderMap('music-video-shot', {
+  noun: 'music video shot render',
+  link: (key) => { const [projectId, sceneId] = key.split(':'); return `/music-video/${encodeURIComponent(projectId)}/scene/${encodeURIComponent(sceneId)}`; },
+});
 const shotJobKey = (projectId, sceneId) => `${projectId}:${sceneId}`;
 
 const emitShotRender = (payload) => musicVideoEvents.emit('shot-render', payload);

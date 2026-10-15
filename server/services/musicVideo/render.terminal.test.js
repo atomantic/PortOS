@@ -113,7 +113,7 @@ import { maintenance } from '../../lib/maintenanceAdmission.js';
 const tick = () => new Promise((r) => setTimeout(r, 0));
 const lastProc = () => h.procs[h.procs.length - 1];
 // A terminal project write: the status plus the cleared in-flight mark (#9010).
-const settled = (status, extra = {}) => ({ status, ...extra, renderingOn: null, renderPartialFilename: null });
+const settled = (status, extra = {}) => ({ status, ...extra, renderingOn: null, renderPartialFilename: null, renderResume: null });
 
 const prime = (projectId) => {
   getProject.mockResolvedValue({
@@ -421,6 +421,35 @@ describe('recoverStuckMusicVideoRenders (#8430)', () => {
     errorSpy.mockRestore();
     logSpy.mockRestore();
   });
+
+  it('starts an interrupted shot-by-shot render again from its cached shots, a bounded number of times', async () => {
+    const { recoverStuckMusicVideoRenders } = await import('./render.js');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    prime('resume-1');
+    getProject.mockResolvedValue({
+      id: 'resume-1', name: 'P', trackId: 't1', status: 'ready',
+      scenes: [{ sceneId: 's1', order: 0, videoHistoryId: 'h1' }],
+      composition: { version: 1, mode: 'composed', textCues: [], style: { color: '#ffffff', font: 'sans' }, posterSec: null },
+    });
+    const store = seedStore([
+      { id: 'resume-1', status: 'rendering', renderResume: { attempt: 0 } },
+      { id: 'spent-1', status: 'rendering', renderResume: { attempt: 2 } },
+      { id: 'plain-2', status: 'rendering', renderResume: null },
+    ]);
+
+    await recoverStuckMusicVideoRenders();
+    expect(statusOf(store)).toEqual({ 'resume-1': 'ready', 'spent-1': 'ready', 'plain-2': 'ready' });
+    expect(store.get('resume-1').renderResume).toBeNull();
+    expect(seg.plans).toHaveLength(0);
+
+    await vi.runOnlyPendingTimersAsync();
+    vi.useRealTimers();
+    await tick();
+    expect(seg.plans.map((plan) => plan.project.id)).toEqual(['resume-1']);
+    expect(updateProject).toHaveBeenCalledWith('resume-1', expect.objectContaining({ status: 'rendering', renderResume: { attempt: 1 } }));
+    logSpy.mockRestore();
+  });
 });
 
 it('chooses the loudest section midpoint within the rendered duration', async () => {
@@ -523,6 +552,13 @@ describe('composed render lifecycle (#8984)', () => {
     await renderMusicVideo('plain-1');
     expect(h.overlays.calls).toHaveLength(0);
     expect(lastProc().args).not.toContain('-itsoffset');
+  });
+
+  it('marks a render the user started as resumable after a restart', async () => {
+    primeComposed('mark-1', { mode: 'composed' });
+    await renderMusicVideo('mark-1', { resumable: true });
+    await tick();
+    expect(updateProject).toHaveBeenCalledWith('mark-1', expect.objectContaining({ status: 'rendering', renderResume: { attempt: 0 } }));
   });
 
   it('cancels while shots render: no stitch, prior status restored, slot released', async () => {

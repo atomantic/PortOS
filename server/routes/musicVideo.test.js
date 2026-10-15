@@ -840,7 +840,7 @@ describe('musicVideo routes', () => {
     it('POST /:id/render kicks off the render and returns the jobId', async () => {
       const r = await request(app).post('/api/music-video/mv-1/render').send({});
       expect(r.status).toBe(200);
-      expect(renderSvc.renderMusicVideo).toHaveBeenCalledWith('mv-1');
+      expect(renderSvc.renderMusicVideo).toHaveBeenCalledWith('mv-1', { resumable: true });
       expect(r.body).toEqual({ jobId: 'job-1' });
     });
 

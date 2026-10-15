@@ -64,11 +64,12 @@ import { cutEffectCuts, plannedTransitions, sceneCutEffect } from '../../lib/mus
 import { imageEffectGlitchFrames, mergeGlitchFrames, musicVideoTransitionFilter, sceneTransitions, shotGlitchFrames, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
 import { stillMoveForCamera } from '../../lib/cameraMovements.js';
 import { isEndFrameImageEffect, musicVideoImageEffectFilter, sceneImageEffect } from '../../lib/musicVideoImageEffects.js';
+import { trackedRenderMap } from '../renderActivity.js';
 
 // Per-project render mutex (keyed by projectId so two projects can render in
 // parallel; same-project re-entry returns 409 with the live jobId for re-attach).
 const jobs = new Map();
-const projectRenders = new Map();
+const projectRenders = trackedRenderMap('music-video-final', { noun: 'music video render', link: (key) => `/music-video/${encodeURIComponent(key)}` });
 // Reserved synchronously the instant a render is accepted, BEFORE the async
 // prep (ffmpeg/audio/clip resolution) — so a double-click or second client
 // can't pass the 409 check during that await window and spawn a duplicate.
@@ -97,7 +98,7 @@ export const isLocalRenderMark = (renderingOn, instanceId) => !renderingOn || re
 
 // Every terminal project write clears the in-flight mark's stamp and the
 // partial-output pointer alongside the status.
-const settledRender = (status, extra = {}) => ({ status, ...extra, renderingOn: null, renderPartialFilename: null });
+const settledRender = (status, extra = {}) => ({ status, ...extra, renderingOn: null, renderPartialFilename: null, renderResume: null });
 
 // Tell listeners (the autonomous run waiting on its final render) that a render
 // job reached a terminal state. Emitted after the project record's terminal
@@ -1039,7 +1040,10 @@ async function renderFromShotSegments(projectId, project, handOff, options) {
     maintenance.markCurrentUnsettled();
     console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→${status} write failed: ${err.message}`);
   });
-  await writeProject({ status: 'rendering', renderingOn, renderPartialFilename: filename, renderError: null }, 'rendering');
+  // The mark boot recovery reads to start this render again after a restart:
+  // the shots it finished are cached, so the rerun picks up where it stopped.
+  const renderResume = options.resumable ? { attempt: options.resumeAttempt || 0 } : null;
+  await writeProject({ status: 'rendering', renderingOn, renderPartialFilename: filename, renderError: null, renderResume }, 'rendering');
   const all = [...plan.segments, ...(plan.outro ? [plan.outro] : [])];
   const cached = all.filter((segment) => existsSync(segment.path)).length;
   console.log(`🎬 Rendering music video [${jobId.slice(0, 8)}]: project=${projectId.slice(0, 8)} segments=${all.length} cached=${cached} duration=${plan.songSec.toFixed(2)}s`);
@@ -1448,6 +1452,7 @@ export async function recoverStuckMusicVideoRenders() {
   // its (finished) file — that file is the gallery's, not a partial.
   let finished = null;
   let recovered = 0;
+  const resumes = [];
   for (const project of stuck) {
     // Re-checked against the FRESHEST record under the write lock: a peer sync
     // landing between the list and this write may have handed the mark to
@@ -1457,13 +1462,14 @@ export async function recoverStuckMusicVideoRenders() {
         && isLocalRenderMark(current.renderingOn, instanceId);
       if (!stillStuck) return { project: current, demoted: false };
       const targetStatus = current.renderHistoryId ? 'complete' : 'ready';
-      return { project: applyProjectPatch(current, settledRender(targetStatus)), demoted: true, partial: current.renderPartialFilename };
+      return { project: applyProjectPatch(current, settledRender(targetStatus)), demoted: true, partial: current.renderPartialFilename, resume: current.renderResume };
     }).catch((err) => {
       console.error(`❌ Music Video recovery: project ${project.id.slice(0, 8)} demotion write failed: ${err.message}`);
       return null;
     });
     if (!outcome?.demoted) continue;
     recovered++;
+    if (outcome.resume && (Number(outcome.resume.attempt) || 0) < MAX_RENDER_RESUMES) resumes.push({ projectId: project.id, attempt: (Number(outcome.resume.attempt) || 0) + 1 });
     // Only once the record no longer points at it. The filename came off a
     // (possibly peer-synced) record, so it is only resolved inside videos/.
     const { partial } = outcome;
@@ -1477,4 +1483,28 @@ export async function recoverStuckMusicVideoRenders() {
     if (partialPath) await unlink(partialPath).catch(() => {});
   }
   if (stuck.length > 0) console.log(`🎬 Music Video boot recovery: demoted ${recovered}/${stuck.length} stuck render(s)`);
+  if (resumes.length > 0) scheduleRenderResumes(resumes);
+}
+
+// A shot-by-shot final render the user started is started again after a
+// restart: every shot it finished is cached, so the rerun only renders the
+// shots left and stitches. Bounded, so a render that itself takes the server
+// down is not restarted forever.
+const MAX_RENDER_RESUMES = 2;
+const RENDER_RESUME_DELAY_MS = 15_000;
+
+function scheduleRenderResumes(resumes) {
+  // After boot settles (maintenance admission, the media lane): the render
+  // admits like any other.
+  setTimeout(async () => {
+    for (const { projectId, attempt } of resumes) {
+      try {
+        const { jobId } = await renderMusicVideo(projectId, { resumable: true, resumeAttempt: attempt });
+        console.log(`🎬 Music Video boot recovery: resumed the final render of ${projectId.slice(0, 8)} [${jobId.slice(0, 8)}] from its cached shots`);
+      } catch (err) {
+        console.error(`❌ Music Video boot recovery: could not resume the final render of ${projectId.slice(0, 8)}: ${err.message}`);
+        await updateProject(projectId, { renderError: `Interrupted by a server restart and could not restart: ${err.message}`.slice(0, 2000) }).catch(() => {});
+      }
+    }
+  }, RENDER_RESUME_DELAY_MS).unref?.();
 }

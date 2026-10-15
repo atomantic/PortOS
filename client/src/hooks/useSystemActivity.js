@@ -42,6 +42,7 @@ export const sameProcessingSnapshot = (a, b) => {
     && a.activity?.activeCount === b.activity?.activeCount
     && a.activity?.queuedCount === b.activity?.queuedCount
     && (a.appOperations || []).length === (b.appOperations || []).length
+    && JSON.stringify(a.renders || []) === JSON.stringify(b.renders || [])
     && a.jobs?.length === b.jobs?.length
     && (a.extras?.imageTo3d || []).length === (b.extras?.imageTo3d || []).length
     && (a.jobs || []).every((job, index) => job?.id === b.jobs[index]?.id

@@ -47,7 +47,7 @@ export default function ShotFinalRender({ project, scene, onChange, fieldId }) {
     else if (value !== 'own') onChange({ filmLook: filmLookPreset(value) });
   };
 
-  const state = status.error ? null : rendering ? `Rendering ${Math.round((live?.progress || 0) * 100)}%` : rendered ? 'Rendered' : shot ? 'Not rendered' : 'Not in the cut';
+  const state = status.error ? null : rendering ? (live ? `Rendering ${Math.round((live.progress || 0) * 100)}%` : 'Rendering') : rendered ? 'Rendered' : shot ? 'Not rendered' : 'Not in the cut';
   return (
     <section aria-label="Final render" className="min-w-0 space-y-2 rounded border border-port-border p-2">
       <div className="flex flex-wrap items-center gap-2">
