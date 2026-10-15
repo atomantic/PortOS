@@ -1,6 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync, symlinkSync } from 'node:fs';
+import { appendFileSync, statSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync, symlinkSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
+import { channel } from 'node:diagnostics_channel';
+import { EventEmitter } from 'node:events';
+import { fileURLToPath } from 'node:url';
+import { observeOwnedBrowsers } from '../server/test/ownedBrowserDiagnostics.js';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { teardown } from './vitestTempRootSetup.js';
@@ -17,8 +21,8 @@ describe('vitestTempRootSetup teardown', () => {
 
   function runTeardown(populate) {
     const root = mkdtempSync(join(tmpdir(), 'pvt-teardown-test-'));
-    populate(root);
     process.env.PORTOS_TEST_TEMP_ROOT = root;
+    populate(root);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     process.exitCode = undefined;
     teardown();
@@ -83,6 +87,104 @@ describe('vitestTempRootSetup teardown', () => {
       '⚠️ test temp leak: unowned- ×1',
     ]);
     expect(leaked.exitCode).toBe(1);
+  });
+
+  it('projects exact-child snapshots after observer disposal and preserves a later-appearance leak', () => {
+    const observations = channel('portos.composition-browser.lifecycle');
+    const leaked = runTeardown(root => {
+      const dispose = observeOwnedBrowsers(() => fileURLToPath(import.meta.url));
+      const profile = join(root, 'portos-composition-browser-Abc123');
+      mkdirSync(profile);
+      const child = new EventEmitter();
+      const productionClose = vi.fn();
+      child.on('close', productionClose);
+      observations.publish({ event: 'allocated', profile });
+      observations.publish({ event: 'child', profile, child });
+      observations.publish({ event: 'remove-start', profile });
+      rmSync(profile, { recursive: true });
+      observations.publish({ event: 'remove-resolved', profile });
+      child.exitCode = 0; // Public status alone does not fabricate a native exit event.
+      dispose();
+      expect(child.listenerCount('exit')).toBe(0);
+      expect(child.listeners('close')).toEqual([productionClose]);
+      const ended = readFileSync(join(root, '.leak-owners'), 'utf8');
+      child.emit('exit');
+      child.emit('close');
+      observations.publish({ event: 'remove-rejected', profile, code: 'EACCES' });
+      expect(readFileSync(join(root, '.leak-owners'), 'utf8')).toBe(ended);
+      // Reusing the environment must not revive the prior observer.
+      const disposeNext = observeOwnedBrowsers(() => fileURLToPath(import.meta.url));
+      observations.publish({ event: 'child', profile, child });
+      expect(child.listenerCount('exit')).toBe(0);
+      disposeNext();
+      mkdirSync(profile);
+      writeFileSync(join(profile, 'later'), 'synthetic later writer');
+    });
+    expect(leaked.exitCode).toBe(1);
+    expect(leaked.removed).toBe(true);
+    const report = leaked.warnings.join('\n');
+    expect(report).toContain('owner=scripts/vitestTempRootSetup.test.js');
+    expect(report).toContain('removal=resolved presentAfterRemoval=false presentAtGlobalGuard=true observer=ended');
+    expect(report).toContain('exitObserved=false closeObserved=false exitCode=0 signalCode=none');
+    expect(report).not.toContain('Abc123');
+  });
+
+  it('caps records, event history and public projection without copying private child or error values', () => {
+    const observations = channel('portos.composition-browser.lifecycle');
+    const leaked = runTeardown(root => {
+      const dispose = observeOwnedBrowsers(() => '/private/owner-sentinel.test.js');
+      for (let i = 0; i < 66; i++) {
+        const profile = join(root, `portos-composition-browser-${String(i).padStart(6, '0')}`);
+        mkdirSync(profile);
+        writeFileSync(join(profile, 'private-content-sentinel'), 'private output sentinel');
+        observations.publish({ event: 'allocated', profile });
+        if (!i) {
+          const child = Object.assign(new EventEmitter(), { pid: 987654321, exitCode: 'private-exit-sentinel', signalCode: 'private-signal-sentinel' });
+          observations.publish({ event: 'child', profile, child });
+          for (let event = 0; event < 30; event++) observations.publish({ event: 'remove-rejected', profile, code: 'private-error-sentinel' });
+        }
+      }
+      dispose();
+      const rows = readFileSync(join(root, '.leak-owners'), 'utf8').trim().split('\n');
+      expect(rows.every(row => Buffer.byteLength(row + '\n') <= 1024)).toBe(true);
+      expect(new Set(rows.map(row => row.split('\t')[0])).size).toBe(65); // 64 profiles + one cap marker
+    });
+    expect(leaked.exitCode).toBe(1);
+    const report = leaked.warnings.join('\n');
+    expect(leaked.warnings.filter(line => /composition profile \d+:/.test(line))).toHaveLength(8);
+    expect(report).toContain('58 additional entries');
+    expect(report).toContain('provenance=capped');
+    expect(report).toContain('removal=rejected:other');
+    expect(report).toContain('exitCode=other signalCode=other');
+    expect(report).toContain('truncated=true');
+    expect(report).not.toMatch(/sentinel|987654321|000000/);
+  });
+
+  it('reports unavailable or capped evidence rather than stale success after truncated metadata or write failure', () => {
+    const observations = channel('portos.composition-browser.lifecycle');
+    for (const boundary of ['truncated', 'write-failure', 'byte-cap']) {
+      const leaked = runTeardown(root => {
+        const profile = join(root, 'portos-composition-browser-Abc123');
+        mkdirSync(profile);
+        writeFileSync(join(profile, 'data'), 'synthetic');
+        if (boundary === 'write-failure') mkdirSync(join(root, '.leak-owners'));
+        const dispose = observeOwnedBrowsers(() => fileURLToPath(import.meta.url));
+        observations.publish({ event: 'allocated', profile });
+        observations.publish({ event: 'remove-resolved', profile });
+        dispose();
+        if (boundary === 'truncated') appendFileSync(join(root, '.leak-owners'), 'portos-composition-browser-Abc123\tprivate-sentinel\t{"v":1');
+        if (boundary === 'byte-cap') {
+          writeFileSync(join(root, '.leak-owners'), 'x'.repeat(8 * 1024 * 1024));
+          const stop = observeOwnedBrowsers(() => fileURLToPath(import.meta.url));
+          observations.publish({ event: 'allocated', profile });
+          stop();
+          expect(statSync(join(root, '.leak-owners')).size).toBe(8 * 1024 * 1024);
+        }
+      });
+      expect(leaked.exitCode).toBe(1);
+      expect(leaked.warnings.join('\n')).toContain(`provenance=${boundary === 'byte-cap' ? 'capped' : 'unavailable'}`);
+      expect(leaked.warnings.join('\n')).not.toMatch(/removal=resolved|private-sentinel/);
+    }
   });
 
   it('removes leaked cyclic and dangling links without walking or changing their targets', () => {

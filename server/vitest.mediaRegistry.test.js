@@ -12,12 +12,38 @@ it.each(['run', 'skip', 'collection-failure'])('isolates boot imports and explic
   const consumer = fileURLToPath(new URL('./test/fixtures/mediaRegistryImport.js', import.meta.url));
   const vitest = fileURLToPath(new URL('./node_modules/vitest/vitest.mjs', import.meta.url));
   const vitestApi = fileURLToPath(new URL('./node_modules/vitest/dist/index.js', import.meta.url));
+  const wrappedEnvironment = join(root, 'environment.mjs');
+  writeFileSync(wrappedEnvironment, `
+    import environment from ${JSON.stringify(environment)};
+    import { channel } from 'node:diagnostics_channel';
+    import { writeFileSync } from 'node:fs';
+    const lifecycle = channel('portos.composition-browser.lifecycle');
+    export default { ...environment, async setup(global, options) {
+      const priorSubscriber = lifecycle.hasSubscribers;
+      const owner = await environment.setup(global, options);
+      return { async teardown() {
+        await owner.teardown();
+        const child = lifecycle[Symbol.for('portos.synthetic-disposal-child')];
+        writeFileSync(child.mark, JSON.stringify({ priorSubscriber, afterSubscriber: lifecycle.hasSubscribers,
+          exit: child.listenerCount('exit'), close: child.listenerCount('close') }));
+      } };
+    } };
+  `);
   const config = join(root, 'vitest.config.mjs');
-  writeFileSync(config, `export default { test: { environment: ${JSON.stringify(environment)}, setupFiles: [${JSON.stringify(setup)}], maxWorkers: 1, fileParallelism: false } };`);
+  writeFileSync(config, `export default { test: { environment: ${JSON.stringify(wrappedEnvironment)}, setupFiles: [${JSON.stringify(setup)}], maxWorkers: 1, fileParallelism: false } };`);
   for (const name of ['first', 'second']) {
     writeFileSync(join(root, `${name}.test.mjs`), `
       import { it, expect } from ${JSON.stringify(vitestApi)};
       import { readFileSync, writeFileSync } from 'node:fs';
+      import { channel } from 'node:diagnostics_channel';
+      import { EventEmitter } from 'node:events';
+      const lifecycle = channel('portos.composition-browser.lifecycle');
+      const child = new EventEmitter();
+      child.mark = ${JSON.stringify(join(root, `${name}-disposal.json`))};
+      lifecycle[Symbol.for('portos.synthetic-disposal-child')] = child;
+      const profile = process.env.PORTOS_TEST_TEMP_ROOT + '/portos-composition-browser-${name}';
+      lifecycle.publish({ event: 'allocated', profile });
+      lifecycle.publish({ event: 'child', profile, child });
       import { registry } from ${JSON.stringify(consumer)};
       writeFileSync(${JSON.stringify(join(root, `${name}.json`))}, JSON.stringify({ path: process.env.PORTOS_MEDIA_MODELS_FILE, registry }));
       ${mode === 'collection-failure' ? 'throw new Error("synthetic collection failure");' : ''}
@@ -38,6 +64,10 @@ it.each(['run', 'skip', 'collection-failure'])('isolates boot imports and explic
     const result = run();
     expect(result.status, result.stdout + result.stderr).toBe(mode === 'collection-failure' ? 1 : 0);
     if (mode === 'collection-failure') expect(result.stderr).toContain('synthetic collection failure');
+    for (const name of ['first', 'second']) {
+      expect(JSON.parse(readFileSync(join(root, `${name}-disposal.json`), 'utf8')))
+        .toEqual({ priorSubscriber: false, afterSubscriber: false, exit: 0, close: 0 });
+    }
     const first = JSON.parse(readFileSync(join(root, 'first.json'), 'utf8'));
     const second = JSON.parse(readFileSync(join(root, 'second.json'), 'utf8'));
     expect(first.path).not.toBe(second.path);
@@ -53,4 +83,44 @@ it.each(['run', 'skip', 'collection-failure'])('isolates boot imports and explic
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+
+it('disposes a partial observation subscription when environment setup fails and preserves its error', () => {
+  const root = mkdtempSync(join(tmpdir(), 'media-setup-failure-'));
+  try {
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
+      import assert from 'node:assert/strict';
+      import fs from 'node:fs';
+      import { syncBuiltinESMExports } from 'node:module';
+      import { channel } from 'node:diagnostics_channel';
+      import { EventEmitter } from 'node:events';
+      const lifecycle = channel('portos.composition-browser.lifecycle');
+      const child = new EventEmitter();
+      const original = fs.mkdtempSync;
+      const failure = new Error('synthetic registry allocation failure');
+      fs.mkdtempSync = () => {
+        const profile = process.env.PORTOS_TEST_TEMP_ROOT + '/portos-composition-browser-setup';
+        lifecycle.publish({ event: 'allocated', profile });
+        lifecycle.publish({ event: 'child', profile, child });
+        throw failure;
+      };
+      syncBuiltinESMExports();
+      const { default: environment } = await import(${JSON.stringify(new URL('./test/mediaRegistryEnvironment.js', import.meta.url).href)});
+      await assert.rejects(environment.setup({ console: {} }, {}), error => error === failure);
+      assert.equal(lifecycle.hasSubscribers, false);
+      assert.equal(child.listenerCount('exit'), 0);
+      assert.equal(child.listenerCount('close'), 0);
+      fs.mkdtempSync = original;
+      syncBuiltinESMExports();
+      const next = await environment.setup({ console: {} }, {});
+      assert.equal(lifecycle.hasSubscribers, true);
+      await next.teardown();
+      assert.equal(lifecycle.hasSubscribers, false);
+    `], {
+      env: { ...process.env, PORTOS_TEST_TEMP_ROOT: root, PORTOS_MEDIA_MODELS_FILE: '' },
+      encoding: 'utf8', timeout: 20000,
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

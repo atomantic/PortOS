@@ -77,6 +77,7 @@ it('selects checkout-cache contracts only in their installed-dependency runners'
     'scripts/lib/vitestTempRootFixture.js', 'scripts/lib/vitestTempRoot.js',
     'scripts/lib/vitestStaleRunRoots.js', 'scripts/lib/dbTestFiles.js',
     'scripts/vitestCiPool.js', 'scripts/vitestTempRootSetup.js', 'server/lib/killWithEscalation.js',
+    'server/test/ownedBrowserDiagnostics.js', 'server/lib/mockPathsDataRoot.js',
   ];
   const server = [
     'server/package.json', 'server/package-lock.json',
