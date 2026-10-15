@@ -20,14 +20,20 @@
  *   line   default sung line: words rise and fade in on their onsets, the line
  *          drifts up and fades out 0.3s after its last word ends, once that
  *          word has shown for 0.8s.
- *   hook   chorus / title phrases: wide caps, centred in the zone, each word slams
- *          in on its onset, one outline-only accent word, cut on the next beat.
+ *   hook   chorus / title phrases: wide caps, centred in the zone (the lower band
+ *          unless the shot names one), each word slams in on its onset, one
+ *          outline-only accent word, cut on the next beat. A chorus phrase slams
+ *          the first time it is sung; later repeats come back as sung lines.
  *   stamp  short punches, negations, spoken lines: a three-frame stamp with a
  *          small tilt, optional strike-through.
  *   data   HUD captions, counters and tags in mono; numbers roll. At most one
  *          per shot. Set large enough to read on a phone, on an ink plate by
  *          default (`dataBacking: 'outline'` rings each word in ink instead), so
  *          a corner readout reads on a light picture either way.
+ *
+ * Type stays out of the way of the picture: each caption covers at most a small
+ * share of the frame (LYRIC_FIT.maxCover by role) and shrinks to fit, never below
+ * the phone-legible floor (LYRIC_TIMING.minPx at 1080px on the short side).
  *
  * Every frame is a pure function of song time, so a draft frame matches the full
  * render at that time. The file is plain ES2020 with no imports.
@@ -52,6 +58,14 @@ export const LYRIC_TIMING = Object.freeze({
   lineRiseSec: 0.2, lineRisePx: 16, lineExitDelaySec: 0.3, lineExitFrames: 8,
   hookSlamSec: 0.22, hookSlamFrom: 1.35, stampFrames: 3, stampFrom: 1.25, stampTiltDeg: 2,
   strikeSec: 0.2, dataRollSec: 0.4, minOnScreenSec: 0.8, lastWordHoldSec: 0.8, minPx: 56,
+});
+
+// How much of the frame one caption may cover (fraction of width × height, at its
+// full size), and its starting size at 1080px on the short side.
+export const LYRIC_FIT = Object.freeze({
+  maxCover: Object.freeze({ line: 0.06, stamp: 0.06, hook: 0.1, data: 0.04 }),
+  basePx: Object.freeze({ line: 60, stamp: 84, hook: 112, hookPortrait: 96, data: 48 }),
+  maxRows: 2,
 });
 
 const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
@@ -194,21 +208,21 @@ function zoneRect(zone, width, height) {
   switch (zone) {
     case 'none': return null;
     case 'center':
-      return { zone, x: insetX, y: height * 0.22, w: width - 2 * insetX, h: height * 0.56, align: 'center', anchor: 'middle' };
+      return { zone, x: insetX, y: height * 0.3, w: width - 2 * insetX, h: height * 0.4, align: 'center', anchor: 'middle' };
     case 'upper':
-      return { zone, x: insetX, y: insetY, w: width - 2 * insetX, h: height * 0.38, align: 'center', anchor: 'top' };
+      return { zone, x: insetX, y: insetY, w: width - 2 * insetX, h: height * 0.3, align: 'center', anchor: 'top' };
     case 'lower': {
-      const h = height * 0.38;
+      const h = height * 0.3;
       return { zone, x: insetX, y: height - insetY - h, w: width - 2 * insetX, h, align: 'center', anchor: 'bottom' };
     }
     case 'upper-right': {
-      const w = portrait ? width - 2 * insetX : width * 0.58;
-      return { zone, x: width - insetX - w, y: insetY, w, h: height * 0.38, align: 'right', anchor: 'top' };
+      const w = portrait ? width - 2 * insetX : width * 0.46;
+      return { zone, x: width - insetX - w, y: insetY, w, h: height * 0.3, align: 'right', anchor: 'top' };
     }
     case 'lower-left':
     default: {
-      const w = portrait ? width - 2 * insetX : width * 0.62;
-      const h = height * 0.38;
+      const w = portrait ? width - 2 * insetX : width * 0.5;
+      const h = height * 0.3;
       return { zone: 'lower-left', x: insetX, y: height - insetY - h, w, h, align: 'left', anchor: 'bottom' };
     }
   }
@@ -250,7 +264,10 @@ function rollNumbers(text, k) {
  *   overrides    `{ [lineId | index]: role }`
  *   sectionRoles `{ [sectionKind]: role }` — e.g. `{ verse: 'stamp' }`
  *   palette      `{ fill, ink, accent, strike }`; fonts `{ display, mono }`
- *   defaultZone  zone for a shot without textZone (hooks default to `center`)
+ *   defaultZone  zone for a shot without textZone (hooks default to `lower`)
+ *   hookRepeats  'line' (default): a chorus phrase slams once, its repeats are sung
+ *                lines; 'hook' slams every time. Roles set explicitly (a line's role,
+ *                overrides, sectionRoles, a shot's lyricRole) are kept as they are.
  *   boil         `{ px, fps }` ink-boil jitter (off by default; share the scene's line boil)
  *   exclusive    a visible hook hides the other roles (default true)
  *   dataBacking  how a data readout stays legible: 'plate' (an ink plate behind it,
@@ -280,24 +297,38 @@ export function createLyricType(mv = globalThis.PORTOS_MV, options = {}) {
     const words = wordsForLine(line, songWords);
     if (!words.length) return null;
     let role = roles[index];
+    let explicit = !!(line.role || options.overrides?.[line.id] || options.overrides?.[index]);
     const section = (mv?.song?.sections || []).filter((s) => finite(s?.startSec) && s.startSec <= words[0].startSec + 1e-6).pop();
     const kind = section?.label ? String(section.label).trim().toLowerCase().replace(/\s+\d+$/, '') : null;
-    if (!line.role && !options.overrides?.[line.id] && !options.overrides?.[index] && LYRIC_ROLES.includes(sectionRoles[kind])) role = sectionRoles[kind];
+    if (!explicit && LYRIC_ROLES.includes(sectionRoles[kind])) { role = sectionRoles[kind]; explicit = true; }
     const shot = sceneAt(words[0].startSec);
-    if (!line.role && !options.overrides?.[line.id] && !options.overrides?.[index] && LYRIC_ROLES.includes(shot?.lyricRole)) role = shot.lyricRole;
-    const zone = line.zone || shot?.textZone || (role === 'hook' ? 'center' : options.defaultZone || 'lower-left');
-    return { index, id: line.id ?? null, text: String(line.text).trim(), role, words, zone: TEXT_ZONES.includes(zone) ? zone : 'lower-left', strike: !!line.strike, endSec: line.endSec, shot };
+    if (!explicit && LYRIC_ROLES.includes(shot?.lyricRole)) { role = shot.lyricRole; explicit = true; }
+    return { index, id: line.id ?? null, text: String(line.text).trim(), role, explicit, words, strike: !!line.strike, endSec: line.endSec, shot, zoneOf: line.zone };
   }).filter(Boolean).sort((a, b) => a.words[0].startSec - b.words[0].startSec);
+
+  // A chorus phrase slams the first time it is sung; its repeats are sung lines.
+  if (options.hookRepeats !== 'hook') {
+    const slammed = new Set();
+    for (const line of timed) {
+      if (line.role !== 'hook' || line.explicit) continue;
+      const key = line.words.map((w) => norm(w.text)).join(' ');
+      if (slammed.has(key)) line.role = 'line'; else slammed.add(key);
+    }
+  }
+  const zoned = timed.map(({ zoneOf, explicit, ...line }) => {
+    const zone = zoneOf || line.shot?.textZone || (line.role === 'hook' ? 'lower' : options.defaultZone || 'lower-left');
+    return { ...line, zone: TEXT_ZONES.includes(zone) ? zone : 'lower-left' };
+  });
 
   // At most one data caption per shot: later ones in the same shot fall back to `line`.
   const dataShots = new Set();
-  for (const line of timed) {
+  for (const line of zoned) {
     if (line.role !== 'data') continue;
     const key = line.shot?.sceneId ?? `t${Math.floor(line.words[0].startSec)}`;
     if (dataShots.has(key)) line.role = 'line'; else dataShots.add(key);
   }
-  const lines = timed.map((line, i) => {
-    const next = timed.slice(i + 1).find((other) => line.role === 'line' || line.role === 'data'
+  const lines = zoned.map((line, i) => {
+    const next = zoned.slice(i + 1).find((other) => line.role === 'line' || line.role === 'data'
       ? other.zone === line.zone
       : other.role === line.role);
     const window = lineWindow(line.words, line.role, { beats, nextOnset: next?.words[0].startSec ?? null, fps, endSec: line.role === 'hook' ? line.endSec : null });
@@ -348,10 +379,9 @@ export function createLyricType(mv = globalThis.PORTOS_MV, options = {}) {
     return `700 ${Math.round(px)}px ${fonts.display}`;
   };
   const basePx = (role, unit, portrait) => {
-    if (role === 'hook') return (portrait ? 140 : 160) * unit;
-    if (role === 'stamp') return 110 * unit;
-    if (role === 'data') return 48 * unit;
-    return 68 * unit;
+    const B = LYRIC_FIT.basePx;
+    if (role === 'hook') return (portrait ? B.hookPortrait : B.hook) * unit;
+    return (B[role] || B.line) * unit;
   };
 
   /** Layout of a line in its zone: rows of words with x/y, font size (pure given measure). */
@@ -362,11 +392,23 @@ export function createLyricType(mv = globalThis.PORTOS_MV, options = {}) {
     const floor = (line.role === 'data' ? 40 : T.minPx) * unit;
     let px = basePx(line.role, unit, height > width);
     const items = line.words.map((w) => (line.role === 'hook' ? String(w.text).toUpperCase() : w.text));
-    const rowsAt = (size) => wrap(items.map((text, index) => ({ text, index })), rect.w, (item) => measure(`${item.text} `, fontFor(line.role, size)));
+    const rowsAt = (size) => {
+      const list = items.map((text, index) => ({ text, index }));
+      const width = (item) => measure(`${item.text} `, fontFor(line.role, size));
+      const rows = wrap(list, rect.w, width);
+      if (rows.length < 2) return rows;
+      // Balance the rows (no lone last word): the narrowest width that keeps the row count.
+      let lo = rect.w / rows.length; let hi = rect.w;
+      for (let k = 0; k < 12; k++) { const mid = (lo + hi) / 2; if (wrap(list, mid, width).length > rows.length) lo = mid; else hi = mid; }
+      return wrap(list, hi, width);
+    };
     let rows = rowsAt(px);
-    const maxRows = line.role === 'hook' ? 3 : 2;
-    while ((rows.length > maxRows || rows.length * px * 1.05 > rect.h) && px * 0.9 >= floor) { px *= 0.9; rows = rowsAt(px); }
-    const lineH = px * (line.role === 'data' ? 1.3 : 1.02);
+    const lineHOf = (size) => size * (line.role === 'data' ? 1.3 : 1.02);
+    // The area the caption's rows cover at a size (row widths × row height).
+    const cover = (size, at) => at.reduce((sum, row) => sum + row.reduce((w, item) => w + measure(`${item.text} `, fontFor(line.role, size)), 0), 0) * lineHOf(size);
+    const budget = (LYRIC_FIT.maxCover[line.role] ?? LYRIC_FIT.maxCover.line) * width * height;
+    while ((rows.length > LYRIC_FIT.maxRows || rows.length * px * 1.05 > rect.h || cover(px, rows) > budget) && px > floor + 1e-6) { px = Math.max(floor, px * 0.9); rows = rowsAt(px); }
+    const lineH = lineHOf(px);
     const blockH = rows.length * lineH;
     const top = rect.anchor === 'top' ? rect.y + px : rect.anchor === 'middle' ? rect.y + (rect.h - blockH) / 2 + px * 0.85 : rect.y + rect.h - blockH + px * 0.85;
     const placed = [];
@@ -473,4 +515,4 @@ export function createLyricType(mv = globalThis.PORTOS_MV, options = {}) {
 }
 
 // Classic-script templates (the layered engine) reach the module through this global.
-if (typeof globalThis !== 'undefined') globalThis.PORTOS_LYRIC_TYPE = { createLyricType, zoneRect, LYRIC_ROLES, TEXT_ZONES };
+if (typeof globalThis !== 'undefined') globalThis.PORTOS_LYRIC_TYPE = { createLyricType, zoneRect, LYRIC_ROLES, TEXT_ZONES, LYRIC_FIT };
