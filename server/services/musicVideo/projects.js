@@ -226,6 +226,10 @@ export async function deleteProject(id) {
   const result = await (await selectBackend()).deleteProject(id);
   // Soft-delete tombstone — push the deletion to subscribed peers immediately.
   emitRecordDeleted('musicVideoProject', id);
+  // Its cached shot segments are regenerable, and only this machine's.
+  await import('./shotSegments.js').then(({ removeProjectSegments }) => removeProjectSegments(id)).catch((err) => {
+    console.warn(`⚠️ Music Video ${id.slice(0, 8)}: could not remove its cached shot segments: ${err.message}`);
+  });
   return result;
 }
 

@@ -322,6 +322,19 @@ what the preview shows and what the render bakes:
   audio is copied back untouched. Paid clips are never regenerated to change
   the feel. The pass takes the second half of the render's progress bar and a
   cancel aborts it.
+- **Composed final renders go shot by shot** (`services/musicVideo/shotSegments.js`).
+  Each section of the cut is a cached segment in two stages: the base (its
+  frames from `buildMusicVideoFfmpegArgs`' `segment` mode, which draws the same
+  chain the whole-film graph draws there, cut effects borrowing the next shot,
+  fades, grade, glitches and the typography over it) and the look (the base
+  through the shot's film look on song time). A shot may keep its own look
+  (`scene.filmLook`; `null` follows the video's). A look change redoes only the
+  look stage of the shots it reaches, a shot change only that shot (and a
+  neighbor whose cut effect reads it). The shot card's **Final render** row
+  renders one shot now and plays it silent; **Render final** renders whatever
+  is missing, joins the segments by stream copy and lays the song under them.
+  Segments live in `data/music-video-segments/<projectId>/`, machine-local and
+  excluded from backups; publishing a final render drops ones it no longer uses.
 - **The composition document preview** carries playback mode with each seek
   into the OS-isolated preview worker. Playing frames use the same lightweight
   motion layers as the animatic: CSS focus/tone/saturation and weave on the

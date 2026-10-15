@@ -140,30 +140,47 @@ async function stageLyricOverlay(dir, project, { width, height, fps, durationSec
 }
 
 /**
+ * The frame windows the overlay capture draws, per page (`doc` for the timed
+ * text cues, `lyrics` for the sung lyrics), in the order renderTypographyOverlays
+ * emits its clips. Each window is snapped outward to the output frame grid and
+ * never runs past the video's last frame; `window` (`{ startFrame, endFrame }`,
+ * a per-shot segment) clips every one to that span. Pure.
+ */
+export function typographyOverlayWindows({ cues, lyricWindows = [], fps, durationSec, window = null }) {
+  const lastFrame = Math.round(durationSec * fps);
+  const lo = window ? Math.max(0, window.startFrame) : 0;
+  const hi = window ? Math.min(lastFrame, window.endFrame) : lastFrame;
+  const onGrid = (spans) => spans
+    .map((w) => {
+      const first = Math.max(lo, Math.floor(w.startSec * fps + 1e-6));
+      return { startSec: first / fps, frames: Math.min(hi, Math.ceil(w.endSec * fps - 1e-6)) - first };
+    })
+    .filter((w) => w.frames > 0);
+  return [
+    { name: 'doc', windows: onGrid(overlayWindows(cues)) },
+    { name: 'lyrics', windows: onGrid(lyricWindows) },
+  ].filter((p) => p.windows.length > 0);
+}
+
+/**
  * Render the overlay clips on a `width`×`height`, `fps` frame: the timed text
  * `cues` (already filtered by renderableCues) on the typography page, and, when
  * `lyrics` is `{ project, windows }` (composedLyricWindows), the sung lyrics in
  * the shared lyric type over those windows. Resolves `[{ path, startSec,
  * durationSec }]`, typography clips first, each set in time order.
+ * `window` limits the capture to one segment's frames (typographyOverlayWindows).
  * `onProgress(0..1)` reports captured frames; `signal` cancels.
  */
-export async function renderTypographyOverlays({ jobId, cues, style, width, height, fps, durationSec, lyrics = null, signal, onProgress }) {
-  // Snap each window outward to the output frame grid so every overlay frame
-  // lands exactly on a footage frame, and never past the video's last frame.
-  const lastFrame = Math.round(durationSec * fps);
-  const onGrid = (spans) => spans
-    .map((w) => {
-      const first = Math.floor(w.startSec * fps + 1e-6);
-      return { startSec: first / fps, frames: Math.min(lastFrame, Math.ceil(w.endSec * fps - 1e-6)) - first };
-    })
-    .filter((w) => w.frames > 0);
-  const pages = [
-    { name: 'doc', windows: onGrid(overlayWindows(cues)), stage: async (dir) => {
-      await writeFile(join(dir, 'index.html'), buildTypographyDocument({ cues, style, width, height, durationSec, fps }));
-      if (cues.some((c) => c.card || c.titleCard)) await copyFile(LYRIC_FONT_SOURCE, join(dir, LYRIC_FONT_FILE));
-    } },
-    { name: 'lyrics', windows: lyrics ? onGrid(lyrics.windows) : [], stage: (dir) => stageLyricOverlay(dir, lyrics.project, { width, height, fps, durationSec }) },
-  ].filter((p) => p.windows.length > 0);
+export async function renderTypographyOverlays({ jobId, cues, style, width, height, fps, durationSec, lyrics = null, window = null, signal, onProgress }) {
+  const pages = typographyOverlayWindows({ cues, lyricWindows: lyrics?.windows || [], fps, durationSec, window }).map(({ name, windows }) => ({
+    name, windows,
+    stage: name === 'doc'
+      ? async (dir) => {
+        await writeFile(join(dir, 'index.html'), buildTypographyDocument({ cues, style, width, height, durationSec, fps }));
+        if (cues.some((c) => c.card || c.titleCard)) await copyFile(LYRIC_FONT_SOURCE, join(dir, LYRIC_FONT_FILE));
+      }
+      : (dir) => stageLyricOverlay(dir, lyrics.project, { width, height, fps, durationSec }),
+  }));
   if (pages.length === 0) return [];
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw new Error('ffmpeg not found on PATH');

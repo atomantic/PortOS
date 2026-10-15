@@ -34,7 +34,7 @@ import { randomUUID } from 'crypto';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
-import { findFfmpeg, safeUnder, generateThumbnail, probeVideoDuration, probeVideoGeometry } from '../../lib/ffmpeg.js';
+import { BT709_CONTAINER_ARGS, H264_ENCODE_ARGS, findFfmpeg, safeUnder, generateThumbnail, probeVideoDuration, probeVideoGeometry } from '../../lib/ffmpeg.js';
 import { filterGraphViaFile } from '../../lib/ffmpegFilterGraph.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { cancelMusicVideoRenderJob, isMusicVideoRenderCanceled } from './renderCancellation.js';
@@ -503,6 +503,54 @@ function sectionChain(c, inputRefs, { canonW, canonH, fps, frames, frameGrid }) 
   return `[${id}:v]${fit},pad=${canonW}:${canonH}:(ow-iw)/2:(oh-ih)/2,${timed}`;
 }
 
+// One plan section of a composed render as its own silent, video-only encode
+// (shotSegments.js): the section's chain on the full film's timeline (cut
+// effects borrowing the next shot, fades either side, its grade and glitches on
+// absolute song frames, the typography windows over it), so the encoded frames
+// are the ones the whole-film render draws there. `segment` is `{ index,
+// maxFrames?, tagFilter? }`; `overlays` here are this window's captures, each
+// with its absolute song `startSec`.
+function buildSegmentArgs(segment, { plan, prerolls, addInput, sectionFilters, glitches, overlays, outputPath, grade, canonW, canonH, fps, sectionFrame, inputs, nextInput }) {
+  const index = segment.index;
+  if (!Number.isInteger(index) || !plan[index]) throw new Error(`buildMusicVideoFfmpegArgs: no section ${index}`);
+  const { c, frames, startSec, endSec } = plan[index];
+  const startFrame = sectionFrame(startSec);
+  const own = addInput(c);
+  const preroll = prerolls.find((p) => p.index === index);
+  if (preroll) preroll.input = addInput(preroll.clip);
+  const overlayBase = nextInput();
+  for (const overlay of overlays) inputs.push('-itsoffset', String(round3(overlay.startSec - startSec)), '-i', overlay.path);
+  const filters = sectionFilters(index, own, preroll, 'v0');
+  const gradeFilter = musicVideoGradeFilter(grade, [{ sceneId: c.sceneId, startSec, endSec }], { fps, offsetSec: startSec });
+  const local = glitches.filter((g) => g.frame >= startFrame && g.frame < startFrame + frames).map((g) => ({ ...g, frame: g.frame - startFrame }));
+  const glitchFilter = musicVideoTransitionFilter(local, { width: canonW, height: canonH });
+  const finishing = [gradeFilter, glitchFilter].filter(Boolean).join(',');
+  let label = 'v0';
+  if (finishing) { filters.push(`[v0]${finishing}[graded]`); label = 'graded'; }
+  overlays.forEach((_, k) => {
+    filters.push(`[${label}][${overlayBase + k}:v]overlay=eof_action=pass:format=auto[ov${k}]`);
+    label = `ov${k}`;
+  });
+  // Every segment is tagged the way the composition encoder tags its own, so
+  // shot segments, film-look passes and the outro join by stream copy.
+  filters.push(`[${label}]format=yuv420p${segment.tagFilter ? `,${segment.tagFilter}` : ''}[outv]`);
+  const outFrames = Number.isInteger(segment.maxFrames) ? Math.max(0, Math.min(frames, segment.maxFrames)) : frames;
+  const args = [
+    ...inputs,
+    '-filter_complex', filters.join(';'),
+    '-map', '[outv]',
+    '-frames:v', String(outFrames),
+    '-r', String(fps),
+    ...H264_ENCODE_ARGS,
+    ...BT709_CONTAINER_ARGS,
+    '-an',
+    '-movflags', '+faststart',
+    '-y',
+    outputPath,
+  ];
+  return { args, sceneId: c.sceneId, layer: c.layer || 'footage', frames: outFrames, startFrame, startSec, endSec: (startFrame + outFrames) / fps, canonW, canonH, fps, sections: plan.length };
+}
+
 // Pure: build the ffmpeg args for the master-bed render. Concats the clips
 // video-only (each scaled/padded to the canonical dims + fps and trimmed to its
 // snapped out-point) and maps ONE external audio input as the sole output audio.
@@ -526,7 +574,7 @@ function sectionChain(c, inputRefs, { canonW, canonH, fps, frames, frameGrid }) 
 // overlap the window, clipped to it and re-based to the excerpt's own timeline
 // (0 = `startSec`) so a contact sheet built from the excerpt file can sample
 // cut boundaries directly. `totalDuration` becomes the excerpt's own length.
-export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec = null, overlays = [], frameGrid: gridOption = false, excerpt = null, soundBed = null, grade = null, aspect = null, beats = [] } = {}) {
+export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec = null, overlays = [], frameGrid: gridOption = false, excerpt = null, soundBed = null, grade = null, aspect = null, beats = [], segment = null } = {}) {
   if (!Array.isArray(clips) || clips.length === 0) throw new Error('buildMusicVideoFfmpegArgs: empty clips');
   const frameGrid = gridOption || clips.some((c) => c.layer);
   // Stills and cards have no dimensions of their own: the first footage clip
@@ -608,29 +656,27 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
     };
     return { ...t, clip };
   });
-  for (const { c } of plan) sectionInputs.push(addInput(c));
-  for (const preroll of prerolls) preroll.input = addInput(preroll.clip);
-  const audioIdx = nextInput; // master audio follows the section inputs
-  inputs.push('-i', audioPath);
-  for (const overlay of overlays) inputs.push('-itsoffset', String(overlay.startSec), '-i', overlay.path);
-
   const fadeChain = (i, frames) => [
     ...fades.filter((f) => f.index === i - 1 && f.inFrames > 0).map((f) => `,fade=t=in:s=0:n=${f.inFrames}`),
     ...fades.filter((f) => f.index === i).map((f) => `,fade=t=out:s=${Math.max(0, frames - f.outFrames)}:n=${f.outFrames}`),
   ].join('');
-  const filters = plan.map(({ c, frames }, i) => `${sectionChain(c, sectionInputs[i], { canonW, canonH, fps, frames, frameGrid })}${fadeChain(i, frames)}[${prerolls.some((p) => p.index === i) ? 'vraw' : 'v'}${i}]`);
-  for (const p of prerolls) {
-    const { frames, startSec } = plan[p.index];
+  // One section's chain, ending on `out`; an incoming cut effect lays the next shot's preroll over its end.
+  const sectionFilters = (i, input, preroll, out) => {
+    const { c, frames, startSec } = plan[i];
+    const head = `${sectionChain(c, input, { canonW, canonH, fps, frames, frameGrid })}${fadeChain(i, frames)}`;
+    if (!preroll) return [`${head}[${out}]`];
     const start = sectionFrame(startSec);
-    const pad = Math.max(0, frames - p.windowFrames);
-    const shown = p.incoming.map(([a, b]) => `between(n,${a - start},${b - start - 1})`).join('+');
-    filters.push(`${sectionChain(p.clip, p.input, { canonW, canonH, fps, frames: p.windowFrames, frameGrid })}[pre${p.index}]`);
+    const pad = Math.max(0, frames - preroll.windowFrames);
+    const shown = preroll.incoming.map(([a, b]) => `between(n,${a - start},${b - start - 1})`).join('+');
     // A dissolve fades the incoming clip in across its window, fully in on the cut.
-    const fadeIn = p.style === 'dissolve' ? `format=yuva420p,fade=t=in:s=0:n=${p.windowFrames + 1}:alpha=1,` : '';
-    filters.push(`[pre${p.index}]${fadeIn}tpad=start=${pad}:color=black,setpts=N/(${fps}*TB)[prepad${p.index}]`);
-    filters.push(`[vraw${p.index}][prepad${p.index}]overlay=eof_action=pass:enable='${shown}'[v${p.index}]`);
-  }
-  const gradeFilter = musicVideoGradeFilter(grade, plan.map(({ c, startSec, endSec }) => ({ sceneId: c.sceneId, startSec, endSec })), { fps });
+    const fadeIn = preroll.style === 'dissolve' ? `format=yuva420p,fade=t=in:s=0:n=${preroll.windowFrames + 1}:alpha=1,` : '';
+    return [
+      `${head}[vraw${i}]`,
+      `${sectionChain(preroll.clip, preroll.input, { canonW, canonH, fps, frames: preroll.windowFrames, frameGrid })}[pre${i}]`,
+      `[pre${i}]${fadeIn}tpad=start=${pad}:color=black,setpts=N/(${fps}*TB)[prepad${i}]`,
+      `[vraw${i}][prepad${i}]overlay=eof_action=pass:enable='${shown}'[${out}]`,
+    ];
+  };
   // Cut transitions repaint a few frames around their cuts, under the typography, and add no time.
   const pieces = plan.map(({ c, startSec, endSec }) => ({
     sceneId: c.sceneId, startFrame: Math.round(startSec * fps), endFrame: Math.round(endSec * fps),
@@ -640,6 +686,19 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
   // A still's glitch to its end frame paints with the same frames.
   // So do the glitches a shot sets at moments inside it.
   const glitches = mergeGlitchFrames(transitionGlitchFrames(pieces), imageEffectGlitchFrames(pieces, fps), shotGlitchFrames(pieces, fps));
+
+  if (segment) {
+    return buildSegmentArgs(segment, { plan, prerolls, addInput, sectionFilters, glitches, overlays, outputPath, grade, canonW, canonH, fps, sectionFrame, inputs, nextInput: () => nextInput });
+  }
+
+  for (const { c } of plan) sectionInputs.push(addInput(c));
+  for (const preroll of prerolls) preroll.input = addInput(preroll.clip);
+  const audioIdx = nextInput; // master audio follows the section inputs
+  inputs.push('-i', audioPath);
+  for (const overlay of overlays) inputs.push('-itsoffset', String(overlay.startSec), '-i', overlay.path);
+
+  const filters = plan.flatMap((_, i) => sectionFilters(i, sectionInputs[i], prerolls.find((p) => p.index === i), `v${i}`));
+  const gradeFilter = musicVideoGradeFilter(grade, plan.map(({ c, startSec, endSec }) => ({ sceneId: c.sceneId, startSec, endSec })), { fps });
   const glitchFilter = musicVideoTransitionFilter(glitches, { width: canonW, height: canonH });
   const cutLabel = overlays.length > 0 ? 'cut0' : 'outv';
   const finishing = [gradeFilter, glitchFilter].filter(Boolean).join(',');
@@ -958,6 +1017,87 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
   return { jobId };
 }
 
+// A composed footage render (shotSegments.js): each shot section, its film
+// look and the outro come from the segment cache, rendering only what is
+// missing, then join by stream copy with the song laid under them once.
+async function renderFromShotSegments(projectId, project, handOff, options) {
+  const { planShotSegments, renderMissingSegments, stitchSegments, pruneSegments } = await import('./shotSegments.js');
+  const plan = await planShotSegments(project);
+  await ensureDir(PATHS.videos);
+  await ensureDir(PATHS.videoThumbnails);
+  const renderingOn = await ensureInstanceId();
+  await assertCurrentRenderApproval(projectId, project, options);
+  const jobId = randomUUID();
+  const filename = `music-video-${projectId.slice(0, 8)}-${Date.now()}.mp4`;
+  const outputPath = join(PATHS.videos, filename);
+  const job = { id: jobId, projectId, status: 'running', clients: [], process: null, totalDuration: plan.songSec, overlayAbort: new AbortController() };
+  jobs.set(jobId, job);
+  projectRenders.set(projectId, jobId);
+  handOff();
+  const priorStatus = project.status && project.status !== 'rendering' ? project.status : 'ready';
+  const writeProject = (patch, status) => updateProject(projectId, patch).catch((err) => {
+    maintenance.markCurrentUnsettled();
+    console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→${status} write failed: ${err.message}`);
+  });
+  await writeProject({ status: 'rendering', renderingOn, renderPartialFilename: filename, renderError: null }, 'rendering');
+  const all = [...plan.segments, ...(plan.outro ? [plan.outro] : [])];
+  const cached = all.filter((segment) => existsSync(segment.path)).length;
+  console.log(`🎬 Rendering music video [${jobId.slice(0, 8)}]: project=${projectId.slice(0, 8)} segments=${all.length} cached=${cached} duration=${plan.songSec.toFixed(2)}s`);
+  const { signal } = job.overlayAbort;
+  const finish = (status) => {
+    projectRenders.delete(projectId);
+    emitRenderSettled(projectId, job);
+    closeJobAfterDelay(jobs, jobId);
+    options.maintenancePermit?.finish();
+    return status;
+  };
+  Promise.resolve().then(async () => {
+    // Shots take 95% of the bar; joining and laying the song under them the rest.
+    await renderMissingSegments(plan, { signal, onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: 0.95 * fraction }) });
+    await assertCurrentRenderApproval(projectId, project, options);
+    const { durationSec } = await stitchSegments(plan, outputPath, { signal });
+    broadcastSse(job, { type: 'progress', progress: 1 });
+    return durationSec;
+  }).then(async (durationSec) => {
+    job.overlayAbort = null;
+    job.status = 'complete';
+    const section = (project.audioAnalysis?.sections || [])
+      .filter((entry) => Number.isFinite(entry.energy) && entry.startSec >= 0 && entry.endSec > entry.startSec && entry.startSec < plan.songSec)
+      .sort((a, b) => b.energy - a.energy || a.startSec - b.startSec)[0];
+    const posterSec = project.composition?.posterSec;
+    const atSec = typeof posterSec === 'number' && posterSec < plan.songSec ? posterSec
+      : section ? (section.startSec + Math.min(section.endSec, plan.songSec)) / 2 : undefined;
+    const thumb = await withBackupAssetPublication(async () => {
+      const poster = await generateThumbnail(outputPath, jobId, { atSec });
+      await appendToVideoHistory({
+        id: jobId, prompt: `Music Video: ${project.name}`, modelId: 'music-video', seed: 0,
+        width: plan.width, height: plan.height, numFrames: Math.round(durationSec * plan.fps), fps: plan.fps,
+        filename, thumbnail: poster, createdAt: new Date().toISOString(), musicVideoProjectId: projectId,
+      });
+      await writeProject(settledRender('complete', { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project) }), 'complete');
+      return poster;
+    });
+    finish('complete');
+    // Older takes of each shot are dropped once the new cut is published.
+    const pruned = await pruneSegments(plan).catch(() => 0);
+    console.log(`✅ Music video rendered [${jobId.slice(0, 8)}]: ${filename} (${all.length - cached} of ${all.length} segments rendered${pruned ? `, ${pruned} old dropped` : ''})`);
+    broadcastSse(job, { type: 'complete', result: { id: jobId, filename, thumbnail: thumb, path: `/data/videos/${filename}` } });
+  }).catch(async (err) => {
+    const canceled = signal.aborted || err?.code === 'CANCELED';
+    job.status = canceled ? 'canceled' : 'error';
+    const reason = canceled ? 'Render cancelled' : err.message;
+    job.lastError = reason;
+    const log = canceled ? console.log : console.error;
+    log(`${canceled ? '🛑' : '❌'} Music-video render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
+    await unlink(outputPath).catch(() => {});
+    broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
+    const status = canceled ? priorStatus : 'failed';
+    await writeProject(settledRender(status, { renderError: canceled ? null : reason.slice(0, 2000) }), status);
+    finish(status);
+  });
+  return { jobId };
+}
+
 async function assertCurrentRenderApproval(projectId, preparedProject, options) {
   const current = await getProject(projectId);
   // The final render needs the approved storyboard; the animated proof is optional.
@@ -997,6 +1137,10 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
     const seeked = seekedRendererFor(project);
     if (seeked) {
       return await renderSeekedMode(projectId, project, () => { handedOff = true; }, seeked, { ...options, maintenancePermit: permit });
+    }
+    // A composed cut renders shot by shot into the segment cache and stitches.
+    if (project.composition?.mode === 'composed') {
+      return await renderFromShotSegments(projectId, project, () => { handedOff = true; }, { ...options, maintenancePermit: permit });
     }
     const { ffmpeg, audioPath, composed, clips, audioDurationSec, soundBed, aspect } = await planMusicVideoRender(project);
     await ensureDir(PATHS.videos);
@@ -1291,6 +1435,10 @@ export async function recoverStuckMusicVideoRenders() {
   // Nor the outro scene's staged page.
   await sweepStatsOutroScratch().catch((err) => {
     console.warn(`⚠️ Music Video recovery: could not remove stale outro scratch: ${err.message}`);
+  });
+  // Nor a shot segment an interrupted render was writing (finished ones stay cached).
+  await import('./shotSegments.js').then(({ sweepPartialSegments }) => sweepPartialSegments()).catch((err) => {
+    console.warn(`⚠️ Music Video recovery: could not remove partial shot segments: ${err.message}`);
   });
   const instanceId = await ensureInstanceId();
   const stuck = (await listProjects()).filter((p) => p?.status === 'rendering'

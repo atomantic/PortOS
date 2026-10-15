@@ -718,6 +718,27 @@ router.get('/:id/render', (req, res) => {
   res.json({ jobId: getActiveRenderJobId(req.params.id) });
 });
 
+// Per-shot render segments (shotSegments.js): every shot's cache state, one
+// shot's render started or stopped, and a rendered shot's silent segment.
+router.get('/:id/shot-renders', asyncHandler(async (req, res) => {
+  const { getShotRenderStatus } = await import('../services/musicVideo/shotSegments.js');
+  res.json(await getShotRenderStatus(req.params.id));
+}));
+router.post('/:id/shots/:sceneId/render', asyncHandler(async (req, res) => {
+  const { startShotRender } = await import('../services/musicVideo/shotSegments.js');
+  res.status(202).json(await startShotRender(req.params.id, req.params.sceneId));
+}));
+router.post('/:id/shots/:sceneId/render/cancel', asyncHandler(async (req, res) => {
+  const { cancelShotRender } = await import('../services/musicVideo/shotSegments.js');
+  res.json({ ok: cancelShotRender(req.params.id, req.params.sceneId) });
+}));
+router.get('/:id/shot-renders/:name', asyncHandler(async (req, res) => {
+  const { shotSegmentFile } = await import('../services/musicVideo/shotSegments.js');
+  const path = shotSegmentFile(req.params.id, req.params.name);
+  if (!path) throw new ServerError('Shot render not found', { status: 404, code: 'NOT_FOUND' });
+  res.type('video/mp4').sendFile(path);
+}));
+
 // Read-only: this project's in-flight scene frame/clip renders (#10154), so a
 // reloaded board restores its spinners instead of letting a duplicate be submitted.
 router.get('/:id/scene-jobs', (req, res) => {

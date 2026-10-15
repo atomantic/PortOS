@@ -525,6 +525,7 @@ function buildScene(input, { order }) {
     ...(input.offsetFrames ? { offsetFrames: input.offsetFrames } : {}),
     ...(input.reverse ? { reverse: true } : {}),
     ...(input.holdLastFrame ? { holdLastFrame: true } : {}),
+    ...(input.filmLook ? { filmLook: normalizeFilmLook(input.filmLook) } : {}),
     ...(input.transitionIn ? { transitionIn: input.transitionIn } : {}),
     ...(input.transitionOut ? { transitionOut: input.transitionOut } : {}),
     ...(input.glitches?.length ? { glitches: input.glitches } : {}),
@@ -616,6 +617,7 @@ export function replaceScenes(project, sceneInputs) {
       ...(prior.offsetFrames ? { offsetFrames: prior.offsetFrames } : {}),
       ...(prior.reverse ? { reverse: true } : {}),
       ...(prior.holdLastFrame ? { holdLastFrame: true } : {}),
+      ...(prior.filmLook ? { filmLook: prior.filmLook } : {}),
       ...(prior.transitionIn ? { transitionIn: prior.transitionIn } : {}),
       ...(prior.transitionOut ? { transitionOut: prior.transitionOut } : {}),
       ...(prior.glitches?.length ? { glitches: prior.glitches } : {}),
@@ -635,7 +637,7 @@ export function replaceScenes(project, sceneInputs) {
 // takes, and whether it plays as a clip or its still with an image effect) without
 // adding a shot or lyric the storyboard approval did not cover.
 const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'label', 'prompt', 'framePrompt', 'visualIntent',
-  'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'reverse', 'holdLastFrame', 'transitionIn', 'transitionOut', 'glitches', 'cutEffect',
+  'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'reverse', 'holdLastFrame', 'filmLook', 'transitionIn', 'transitionOut', 'glitches', 'cutEffect',
   'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'frameReferenceIds'];
 
 /**
@@ -643,7 +645,9 @@ const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'label', 'p
  * scene id is unknown.
  */
 export function applySceneUpdate(project, sceneId, patch) {
-  const data = parseSceneOrThrow(musicVideoSceneUpdateSchema, patch);
+  const parsed = parseSceneOrThrow(musicVideoSceneUpdateSchema, patch);
+  // A shot's own look is stored complete; null returns it to the video's look.
+  const data = 'filmLook' in parsed ? { ...parsed, filmLook: parsed.filmLook ? normalizeFilmLook(parsed.filmLook) : null } : parsed;
   const scenes = project.scenes || [];
   const idx = scenes.findIndex((s) => s.sceneId === sceneId);
   if (idx < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
