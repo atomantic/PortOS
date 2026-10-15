@@ -14,7 +14,7 @@
 import { isTestRunner } from '../lib/runtimeEnv.js';
 
 const ACTIVITY_SOURCES = new Set([
-  'agents', 'media', 'imageTo3d', 'llm', 'mind', 'appOperations', 'backup', 'update',
+  'agents', 'media', 'imageTo3d', 'llm', 'mind', 'appOperations', 'backup', 'update', 'musicVideo',
 ]);
 
 export const SYSTEM_ACTIVITY_COALESCE_MS = 50;

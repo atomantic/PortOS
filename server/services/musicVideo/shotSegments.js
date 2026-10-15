@@ -41,6 +41,7 @@ import { nameShots } from './productionReview.js';
 import { getProject } from './projects.js';
 import { musicVideoEvents } from './events.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
+import { trackedRenderMap } from './renderActivity.js';
 
 export const SHOT_SEGMENT_DIR = 'music-video-segments';
 // Bump when a segment's encode changes in a way its key cannot see.
@@ -411,7 +412,7 @@ function segmentStatus(plan) {
 }
 
 // One shot render per shot at a time: `${projectId}:${sceneId}` → { controller }.
-const shotJobs = new Map();
+const shotJobs = trackedRenderMap('shot');
 const shotJobKey = (projectId, sceneId) => `${projectId}:${sceneId}`;
 
 const emitShotRender = (payload) => musicVideoEvents.emit('shot-render', payload);

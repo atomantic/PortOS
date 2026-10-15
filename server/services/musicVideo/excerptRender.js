@@ -49,9 +49,10 @@ import { musicVideoEvents } from './events.js';
 import { pilotDependencies, productionPilotRenderProject } from './productionPilot.js';
 import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
 import { excerptRangeFits } from '../../lib/musicVideoExcerptRange.js';
+import { trackedRenderMap } from './renderActivity.js';
 
 const jobs = new Map();
-const projectExcerptRenders = new Map();
+const projectExcerptRenders = trackedRenderMap('excerpt');
 const PENDING = Symbol('mv-excerpt-render-pending');
 
 export const attachExcerptRenderSseClient = (jobId, res) => attachSse(jobs, jobId, res);

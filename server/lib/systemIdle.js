@@ -119,6 +119,11 @@ export function summarizeSystemActivity(snapshot) {
     add('app-operations', `${pluralize(appOperations.length, 'app operation')} running`, appOperations.length);
   }
 
+  // A music-video final render runs for an hour or more outside the media
+  // queue; a restart through it loses the render (#11580 follow-up).
+  const musicVideoRenders = Number(snapshot?.musicVideo?.renders) || 0;
+  if (musicVideoRenders > 0) add('music-video-render', `${pluralize(musicVideoRenders, 'music video render')} running`, musicVideoRenders);
+
   if (snapshot?.update?.inProgress) add('update-in-progress', 'An update is already running', 1);
 
   // Milder than the others: a killed backup wastes a snapshot rather than
@@ -128,7 +133,7 @@ export function summarizeSystemActivity(snapshot) {
 
   const activeCount = jobs.filter((job) => job?.status === 'running').length
     + imageTo3d + activeAgents + activeLlmRuns + (mind?.thinking ? 1 : 0) + appOperations.length
-    + backupActive;
+    + backupActive + musicVideoRenders;
   const queuedCount = jobs.filter((job) => job?.status === 'queued').length
     + queuedAgents + (Number(mind?.queued) || 0);
 

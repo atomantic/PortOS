@@ -4,6 +4,8 @@ import { getActiveAgentIds, spawningTasks } from './agentState.js';
 import { readPersistentMindStateForSafetyCheck } from './cosState.js';
 import { filterLiveAgentIds } from './cosAgentLifecycle.js';
 import * as updateChecker from './updateChecker.js';
+import { pluralize } from '../lib/textUtils.js';
+import { countActiveMusicVideoRenders } from './musicVideo/renderActivity.js';
 
 // Shared refusal logic for the PortOS self-update path, called from both
 // POST /api/update/execute (server/routes/update.js) and the app:update
@@ -72,6 +74,12 @@ export async function getPersistentMindImageWorkGuard() {
   return persistentMindImageWorkGuard(snapshot.persistentMind);
 }
 
+/** The update restarts the server, which ends every in-flight music-video render. */
+export const musicVideoRendersActiveError = (n) => new ServerError(
+  `${pluralize(n, 'music video render')} running. Let it finish, or stop it, before updating: the update restarts PortOS and the render would be lost.`,
+  { status: 409, code: 'MUSIC_VIDEO_RENDER_ACTIVE', context: { renders: n } },
+);
+
 export const persistentMindStateUntrustedError = () => new ServerError(
   'Persistent Mind state could not be validated. Restore data/cos/state.json from backup before updating.',
   { status: 409, code: 'PERSISTENT_MIND_STATE_UNTRUSTED' },
@@ -104,6 +112,8 @@ export async function checkPortosUpdatePreflight({
 } = {}) {
   const activeCosAgents = await countActiveCosAgents();
   if (activeCosAgents > 0) throw agentsActiveError(activeCosAgents);
+  const musicVideoRenders = countActiveMusicVideoRenders();
+  if (musicVideoRenders > 0) throw musicVideoRendersActiveError(musicVideoRenders);
 
   const imageCheck = await getPersistentMindImageWorkGuard();
   if (!imageCheck.trusted) throw persistentMindStateUntrustedError();
