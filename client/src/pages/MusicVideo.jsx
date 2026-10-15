@@ -84,6 +84,7 @@ import ProduceStage from '../components/musicVideo/stages/ProduceStage.jsx';
 import ReviewStage from '../components/musicVideo/stages/ReviewStage.jsx';
 import { PUBLISH_TARGETS } from '../components/musicVideo/PublishPostingPanel.jsx';
 import PublishStage from '../components/musicVideo/stages/PublishStage.jsx';
+import AssetsStage from '../components/musicVideo/stages/AssetsStage.jsx';
 import { compositionDraft } from '../components/musicVideo/compositionDraft.js';
 import ContactSheetDrawer from '../components/musicVideo/ContactSheetDrawer.jsx';
 import DevArtifactDrawer from '../components/musicVideo/DevArtifactDrawer.jsx';
@@ -139,6 +140,7 @@ const approvalStageFor = (tab, project, readiness, proofActive) => (tab === 'pro
 const PLAYER_FIRST_STAGES = new Set(['board', 'produce', 'review']);
 const STAGE_VIEWS = {
   setup: SetupStage, 'cast-sets': CastSetsStage, board: PlanStage, produce: ProduceStage, review: ReviewStage, publish: PublishStage,
+  assets: AssetsStage,
 };
 
 
@@ -1234,6 +1236,7 @@ export default function MusicVideo() {
     reviewDraftState,
     activeSceneId: routeSceneId || null,
     onToggleSceneExpand: handleToggleSceneExpand,
+    onEditShot: editShot,
     autopilotRun,
     autonomous,
     runStage,
@@ -1644,7 +1647,8 @@ export default function MusicVideo() {
                 }}
               />
             )}
-            dock={withTitleCard(
+            // Assets is a contact sheet: it takes the whole column, no player beside it.
+            dock={activeStage === 'assets' ? null : withTitleCard(
               <PreviewDock
                 project={selected}
                 sources={previewSources}

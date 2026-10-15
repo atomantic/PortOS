@@ -33,6 +33,14 @@ export const MUSIC_VIDEO_STAGES = [
   { id: 'publish', label: 'Publish', title: 'Publish', doneWhen: 'Done when every platform you turned on has a post.' },
 ];
 
+/**
+ * Pages beside the steps: listed under them, unnumbered, and never a step the
+ * project is "at". Assets is every still and clip made for the video.
+ */
+export const MUSIC_VIDEO_PAGES = [
+  { id: 'assets', label: 'Assets', title: 'Assets' },
+];
+
 // Old links name the Compose tab, which is now part of Shots; the new names work as links too.
 const LEGACY_STAGE_IDS = { compose: 'produce', plan: 'board', shots: 'produce' };
 
@@ -353,8 +361,9 @@ export function publishPlatformProgress(project, publish = {}) {
   return { rows, posted, total: rows.length, done: rows.length ? posted === rows.length : posted > 0 };
 }
 
-/** Resolve the `:stage` route param (a retired id maps to its step); an unknown or missing value is null. */
-export const resolveStageParam = (value) => (isStageId(value) ? value : LEGACY_STAGE_IDS[value] || null);
+/** Resolve the `:stage` route param (a step or a page; a retired id maps to its step); an unknown or missing value is null. */
+export const resolveStageParam = (value) => (isStageId(value) || MUSIC_VIDEO_PAGES.some((page) => page.id === value)
+  ? value : LEGACY_STAGE_IDS[value] || null);
 
 // Footage-optional modes draw their own picture, so scene footage never gates Produce.
 export const FOOTAGE_OPTIONAL_MODES = new Set(['code', 'document', 'eidoverse']);
