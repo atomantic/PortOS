@@ -5,23 +5,25 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-it('isolates boot imports per suite and preserves an explicit registry fixture', () => {
+it.each(['run', 'skip', 'collection-failure'])('isolates boot imports and explicit fixtures when suites %s', (mode) => {
   const root = mkdtempSync(join(tmpdir(), 'media-setup-contract-'));
   const setup = fileURLToPath(new URL('./vitest.setup.js', import.meta.url));
+  const environment = fileURLToPath(new URL('./test/mediaRegistryEnvironment.js', import.meta.url));
   const consumer = fileURLToPath(new URL('./test/fixtures/mediaRegistryImport.js', import.meta.url));
   const vitest = fileURLToPath(new URL('./node_modules/vitest/vitest.mjs', import.meta.url));
   const vitestApi = fileURLToPath(new URL('./node_modules/vitest/dist/index.js', import.meta.url));
   const config = join(root, 'vitest.config.mjs');
-  writeFileSync(config, `export default { test: { setupFiles: [${JSON.stringify(setup)}], maxWorkers: 1, fileParallelism: false } };`);
+  writeFileSync(config, `export default { test: { environment: ${JSON.stringify(environment)}, setupFiles: [${JSON.stringify(setup)}], maxWorkers: 1, fileParallelism: false } };`);
   for (const name of ['first', 'second']) {
     writeFileSync(join(root, `${name}.test.mjs`), `
       import { it, expect } from ${JSON.stringify(vitestApi)};
       import { readFileSync, writeFileSync } from 'node:fs';
       import { registry } from ${JSON.stringify(consumer)};
-      it('loads during collection', () => {
+      writeFileSync(${JSON.stringify(join(root, `${name}.json`))}, JSON.stringify({ path: process.env.PORTOS_MEDIA_MODELS_FILE, registry }));
+      ${mode === 'collection-failure' ? 'throw new Error("synthetic collection failure");' : ''}
+      ${mode === 'skip' ? 'it.skip' : 'it'}('loads during collection', () => {
         const path = process.env.PORTOS_MEDIA_MODELS_FILE;
         expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual(registry);
-        writeFileSync(${JSON.stringify(join(root, `${name}.json`))}, JSON.stringify({ path, registry }));
       });
     `);
   }
@@ -34,7 +36,8 @@ it('isolates boot imports per suite and preserves an explicit registry fixture',
   });
   try {
     const result = run();
-    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.status, result.stdout + result.stderr).toBe(mode === 'collection-failure' ? 1 : 0);
+    if (mode === 'collection-failure') expect(result.stderr).toContain('synthetic collection failure');
     const first = JSON.parse(readFileSync(join(root, 'first.json'), 'utf8'));
     const second = JSON.parse(readFileSync(join(root, 'second.json'), 'utf8'));
     expect(first.path).not.toBe(second.path);
@@ -44,7 +47,7 @@ it('isolates boot imports per suite and preserves an explicit registry fixture',
     env.PORTOS_MEDIA_MODELS_FILE = join(root, 'explicit.json');
     writeFileSync(env.PORTOS_MEDIA_MODELS_FILE, JSON.stringify({ ...first.registry, fixtureMarker: 'explicit' }));
     const explicit = run();
-    expect(explicit.status, explicit.stdout + explicit.stderr).toBe(0);
+    expect(explicit.status, explicit.stdout + explicit.stderr).toBe(mode === 'collection-failure' ? 1 : 0);
     expect(JSON.parse(readFileSync(join(root, 'first.json'), 'utf8')).path).toBe(env.PORTOS_MEDIA_MODELS_FILE);
     expect(JSON.parse(readFileSync(env.PORTOS_MEDIA_MODELS_FILE, 'utf8')).fixtureMarker).toBe('explicit');
   } finally {

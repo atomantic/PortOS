@@ -98,4 +98,3 @@ describe('db/schema composer covers every module in the directory (#5682)', () =
     }
   });
 });
-// @vitest-environment node

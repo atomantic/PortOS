@@ -41,6 +41,8 @@ process.env.NODE_DISABLE_COMPILE_CACHE = '1';
 
 const config = defineConfig({
   test: {
+    // Environment teardown also owns collection-only/skipped suite fixtures.
+    environment: fileURLToPath(new URL('./test/mediaRegistryEnvironment.js', import.meta.url)),
     ...vitestCiPool(),
     // Workers get their own process.env — set it there as well as above.
     env: {

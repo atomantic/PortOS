@@ -55,20 +55,10 @@ import { rmSync } from 'fs';
 import { mockNoPeers } from './lib/mockPathsDataRoot.js';
 import './test/admissionSetup.js';
 
-// Use real builtins: suite-level fs/os mocks must not redirect fixture ownership.
-// setupFiles runs before each suite's imports, including import-time registry loads.
-const registryIo = await vi.importActual('node:fs');
-const registryOs = await vi.importActual('node:os');
-const registryPath = await vi.importActual('node:path');
-const priorRegistryFile = process.env.PORTOS_MEDIA_MODELS_FILE;
-if (!priorRegistryFile) {
-  const root = registryIo.mkdtempSync(registryPath.join(registryOs.tmpdir(), 'portos-suite-media-'));
-  process.env.PORTOS_MEDIA_MODELS_FILE = registryPath.join(root, 'media-models.json');
-  afterAll(() => {
-    if (priorRegistryFile === undefined) delete process.env.PORTOS_MEDIA_MODELS_FILE;
-    else process.env.PORTOS_MEDIA_MODELS_FILE = priorRegistryFile;
-    registryIo.rmSync(root, { recursive: true, force: true });
-  });
+// A per-file environment override must not silently bypass registry isolation.
+// The configured node environment owns cleanup even for skipped/failed imports.
+if (!process.env.PORTOS_MEDIA_MODELS_FILE) {
+  throw new Error('Server tests require the configured media registry environment or an explicit registry fixture');
 }
 
 // The server intentionally logs expected error paths, lifecycle transitions,
