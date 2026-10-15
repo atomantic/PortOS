@@ -254,12 +254,13 @@ export async function atomicWrite(filePath, data) {
   // a local user could race-read it during the window). A trailing chmod pins
   // the exact mode in case the umask tightened the create below it. New files
   // (stat fails with ENOENT) keep the umask default, exactly as before.
-  const existingMode = await stat(filePath).then((s) => s.mode & 0o777, () => null);
+  const existingMode = await stat(filePath).then((s) => s.mode & 0o777, (err) => {
+    // An unreadable mode is not an absent file: defaulting here could replace
+    // an owner-only store with a more permissive inode.
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  });
   const tmp = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
-  await writeFile(tmp, payload, existingMode !== null ? { mode: existingMode } : undefined);
-  if (existingMode !== null) {
-    await chmod(tmp, existingMode).catch(() => {});
-  }
   const renameWithWindowsRetries = async (from, to, {
     attempts = WIN_RETRY_ATTEMPTS,
     delayMs = WIN_RETRY_DELAY_MS,
@@ -292,6 +293,10 @@ export async function atomicWrite(filePath, data) {
     throw err;
   };
   try {
+    // writeFile can create a partial temp file before rejecting (e.g. ENOSPC).
+    // Own cleanup from that first write, and publish only once its mode is set.
+    await writeFile(tmp, payload, existingMode !== null ? { mode: existingMode } : undefined);
+    if (existingMode !== null) await chmod(tmp, existingMode);
     await replace();
   } catch (err) {
     await unlink(tmp).catch(() => {});
