@@ -37,4 +37,13 @@ describe('a shot\'s References row', () => {
     expect(onSave).toHaveBeenCalledWith('s1', { frameReferenceIds: ['r1', 'r2'] });
     vi.useRealTimers();
   });
+
+  // Uniquely catches a removed reference's preview staying open (its chip unmounts under the cursor, so no pointerleave).
+  it('closes the preview of a reference taken off the shot', () => {
+    render(<SceneFrameReferences project={project} scene={scene} onEditLocal={vi.fn()} onSave={vi.fn()} />);
+    fireEvent.pointerEnter(screen.getByTitle(/^Lead/), { pointerType: 'mouse' });
+    expect(screen.getByRole('figure', { name: /Preview of Lead/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Don't send Lead/ }));
+    expect(screen.queryByRole('figure')).toBeNull();
+  });
 });

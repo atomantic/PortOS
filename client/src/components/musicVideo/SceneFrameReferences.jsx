@@ -67,7 +67,7 @@ export default function SceneFrameReferences({ project, scene, onEditLocal, onSa
           <li key={ref.id} className={CHIP} {...previewProps(ref)}>
             {thumb(ref)}
             <span className="min-w-0 max-w-[10rem] truncate">{nameOf(ref)}</span>
-            <button type="button" onClick={unlessLongPress(() => set(ids.filter((id) => id !== ref.id)))} disabled={disabled} aria-label={`Don't send ${nameOf(ref)}`}
+            <button type="button" onClick={unlessLongPress(() => { set(ids.filter((id) => id !== ref.id)); setPreview((shown) => (shown?.id === ref.id ? null : shown)); })} disabled={disabled} aria-label={`Don't send ${nameOf(ref)}`}
               className="inline-flex min-h-[40px] min-w-[32px] items-center justify-center rounded hover:bg-port-border disabled:opacity-50 sm:min-h-[28px] sm:min-w-[24px]">
               <X size={12} aria-hidden="true" />
             </button>
