@@ -14,7 +14,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import express from 'express';
-import { rmSync } from 'node:fs';
+import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
@@ -142,6 +142,28 @@ describe('CoS task collection selectors', () => {
 
     expect(res.status).toBe(200);
     expect(cos.deleteTask).toHaveBeenCalledWith('sys-example', 'internal');
+  });
+});
+
+describe('CoS task responses after action-ledger failures', () => {
+  it.each(['post', 'delete'])('keeps a committed %s successful when the ledger cannot write', async (method) => {
+    const ledgerPath = join(tempRoot, 'user-action-events.json');
+    mkdirSync(ledgerPath);
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    cos.getTaskById.mockResolvedValue({ id: 'task-1', description: 'Example task' });
+    cos.deleteTask.mockResolvedValue({ success: true, taskId: 'task-1' });
+
+    try {
+      const url = method === 'post' ? '/api/cos/tasks' : '/api/cos/tasks/task-1';
+      const res = await request(buildApp())[method](url).send(method === 'post' ? { description: 'Example task' } : undefined);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject(method === 'post' ? { id: 'task-1', description: 'Example task' } : { success: true, taskId: 'task-1' });
+      expect(log).toHaveBeenCalledWith(expect.stringContaining(`Failed to record cos.task.${method === 'post' ? 'create' : 'delete'}`));
+    } finally {
+      rmSync(ledgerPath, { recursive: true, force: true });
+      log.mockRestore();
+    }
   });
 });
 

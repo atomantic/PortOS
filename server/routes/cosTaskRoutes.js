@@ -67,8 +67,14 @@ const pickDefined = (source, fields) => Object.fromEntries(
   fields.filter((field) => source?.[field] !== undefined).map((field) => [field, source[field]]),
 );
 
+// The task change has committed before these diagnostic ledger writes. A ledger
+// outage must not turn it into a failed request that encourages another mutation.
+const recordCommittedTaskAction = (action) => recordUserAction(action).catch((err) => {
+  console.error(`❌ Failed to record ${action.type} after task mutation: ${err.message}`);
+});
+
 async function logTaskCreated(req, task, taskData) {
-  await recordUserAction({
+  await recordCommittedTaskAction({
     type: 'cos.task.create',
     target: task.id,
     targetName: task.description,
@@ -535,7 +541,7 @@ router.put('/tasks/:id', asyncHandler(async (req, res) => {
   // An edit is not an idempotent retry — two saves of the same field are two
   // distinct operator actions — so the timestamp is part of the dedupe key.
   const happenedAt = new Date().toISOString();
-  await recordUserAction({
+  await recordCommittedTaskAction({
     type: 'cos.task.update',
     target: id,
     targetName: result?.description,
@@ -563,7 +569,7 @@ router.delete('/tasks/:id', asyncHandler(async (req, res) => {
     throw new ServerError(result.error, { status: 404, code: 'NOT_FOUND' });
   }
 
-  await recordUserAction({
+  await recordCommittedTaskAction({
     type: 'cos.task.delete',
     target: id,
     targetName: doomed?.description,
@@ -584,7 +590,7 @@ router.post('/tasks/:id/approve', asyncHandler(async (req, res) => {
     throw new ServerError(result.error, { status: 400, code: 'BAD_REQUEST' });
   }
 
-  await recordUserAction({
+  await recordCommittedTaskAction({
     type: 'cos.task.approve',
     target: id,
     targetName: result?.description,
@@ -673,7 +679,7 @@ router.post('/tasks/:id/spawn', asyncHandler(async (req, res) => {
   // Force-spawn is repeatable (spawn, it fails, spawn again), so each press is
   // its own row — hence the timestamp in the dedupe key.
   const happenedAt = new Date().toISOString();
-  await recordUserAction({
+  await recordCommittedTaskAction({
     type: 'cos.task.spawn',
     target: req.params.id,
     summary: `Force-spawned CoS task ${req.params.id}`,
