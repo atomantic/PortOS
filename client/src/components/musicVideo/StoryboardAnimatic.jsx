@@ -10,7 +10,7 @@ import { playthroughVersion } from './CompositionPreviewPlayer.jsx';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
 import { normalizeTitleCard } from '../../../../server/lib/musicVideoTitleCard.js';
-import { statsOutroSeconds } from '../../../../server/lib/musicVideoStatsOutro.js';
+import { normalizeStatsOutro, statsOutroSeconds } from '../../../../server/lib/musicVideoStatsOutro.js';
 import StatsOutroCanvas from './StatsOutroCanvas.jsx';
 import ShotStepper from './ShotStepper.jsx';
 import FrameStepper, { captureMediaFrame } from './FrameStepper.jsx';
@@ -453,6 +453,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   const { overlay, failed } = useLyricOverlay({ project, enabled: lyricsAvailable && lyricsOn, audioRef, time });
   // The cutting room floor outro: it plays when the song ends, and Ending plays it straight away; playing or seeking the song leaves it.
   const outro = useMusicVideoStatsOutro({ projectId: project.id, seconds: statsOutroSeconds(project.statsOutro), audioRef });
+  const outroLook = useMemo(() => normalizeStatsOutro(project.statsOutro), [project.statsOutro]);
   const songEndSec = Number(project.audioAnalysis?.durationSec) || 0;
   useEffect(() => {
     if (!seekRequest || applied.current === seekRequest.n || !audioRef.current) return;
@@ -539,7 +540,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
         <TransitionGlitch scenes={scenes} figureRef={figureRef} audioRef={audioRef} time={time} layered={layered}
           endSec={Number(project.audioAnalysis?.durationSec) || null} fps={ANIMATIC_FPS} />
         {overlay}
-        {outro.active && <StatsOutroCanvas stats={outro.stats} t={outro.t} durationSec={outro.seconds} />}
+        {outro.active && <StatsOutroCanvas stats={outro.stats} outro={outroLook} t={outro.t} durationSec={outro.seconds} />}
         </FilmLookFrame>
       </figure>
       <div className="flex min-w-0 flex-wrap items-center gap-2">

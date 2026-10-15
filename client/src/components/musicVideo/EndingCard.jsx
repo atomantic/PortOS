@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Play, RotateCcw, Scissors, Square, X } from 'lucide-react';
 import FilmLookFrame from '../media/FilmLookFrame.jsx';
 import StatsOutroCanvas from './StatsOutroCanvas.jsx';
@@ -6,12 +6,13 @@ import StatsOutroPanel from './StatsOutroPanel.jsx';
 import useMusicVideoStatsOutro from '../../hooks/useMusicVideoStatsOutro.js';
 import { getMusicVideoOutroStats } from '../../services/apiMusicVideo.js';
 import { formatCount } from '../../utils/formatters.js';
-import { STATS_OUTRO_DEFAULTS, normalizeStatsOutro, statsOutroDecisions, statsOutroRows } from '../../../../server/lib/musicVideoStatsOutro.js';
+import { normalizeStatsOutro, statsOutroRows } from '../../../../server/lib/musicVideoStatsOutro.js';
 
 const PREVIEW_FPS = 24;
 
-/** The ending's length: its own when on, else the length it would get when turned on. */
-const endingSeconds = (project) => normalizeStatsOutro(project.statsOutro)?.durationSec ?? STATS_OUTRO_DEFAULTS.durationSec;
+/** The ending as it shows: its own settings, else the ones it gets when turned on. */
+const endingLook = (project) => normalizeStatsOutro(project.statsOutro || {});
+const endingSeconds = (project) => endingLook(project).durationSec;
 
 // The frame a still of the ending shows: every count landed, before it fades out.
 const posterTime = (seconds) => Math.max(0, seconds - 1);
@@ -60,14 +61,14 @@ export function EndingThumbnail({ project, open, onOpen }) {
  * it shows. The counts and the floor's stills come from the project itself.
  */
 export default function EndingCard({ project, onEditLocal, onSave, onClose }) {
-  const seconds = endingSeconds(project);
+  const look = useMemo(() => endingLook(project), [project]);
+  const seconds = look.durationSec;
   const stats = useEndingStats(project.id);
   const preview = useMusicVideoStatsOutro({ projectId: project.id, seconds });
   const shown = preview.stats || stats;
   const t = preview.active ? preview.t : posterTime(seconds);
   const running = preview.active && preview.t < seconds;
-  const rows = shown ? statsOutroRows(shown) : [];
-  const decisions = shown ? statsOutroDecisions(shown) : 0;
+  const rows = shown ? statsOutroRows(shown, look.hidden) : [];
   return (
     <section aria-label="Ending: cutting room floor" className="space-y-2 rounded-lg border border-port-accent bg-port-card p-2">
       <div className="flex items-center justify-between gap-2">
@@ -84,7 +85,7 @@ export default function EndingCard({ project, onEditLocal, onSave, onClose }) {
         <div className="space-y-1.5">
           <figure className="relative aspect-video w-full overflow-hidden rounded border border-port-border bg-black">
             <FilmLookFrame look={project.filmLook} frame={Math.round(t * PREVIEW_FPS)} playing={running} className="h-full w-full">
-              <StatsOutroCanvas stats={shown} t={t} durationSec={seconds} />
+              <StatsOutroCanvas stats={shown} outro={look} t={t} durationSec={seconds} />
             </FilmLookFrame>
           </figure>
           <button type="button" onClick={running ? preview.stop : preview.start}
@@ -96,7 +97,6 @@ export default function EndingCard({ project, onEditLocal, onSave, onClose }) {
         </div>
         <div className="min-w-0 space-y-2">
           <StatsOutroPanel project={project} onEditLocal={onEditLocal} onSave={onSave} />
-          {rows.length > 0 && <p className="text-sm font-medium">Human directed · {formatCount(decisions, { fallback: '0' })} decisions</p>}
           {rows.length > 0 && (
             <dl aria-label="What the ending counts" className="space-y-0.5 text-xs">
               {rows.map((row) => (
@@ -107,7 +107,7 @@ export default function EndingCard({ project, onEditLocal, onSave, onClose }) {
               ))}
             </dl>
           )}
-          <p className="text-xs text-port-text-muted">Decisions are every shot, every image and video used, and every cut, move and effect. Unused stills fill the floor.</p>
+          <p className="text-xs text-port-text-muted">Unused stills fill the floor behind the counts.</p>
         </div>
       </div>
     </section>

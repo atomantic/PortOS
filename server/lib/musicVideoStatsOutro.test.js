@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { STATS_OUTRO_FLOOR_MAX, musicVideoOutroStats, statsOutroDecisions, normalizeStatsOutro, statsOutroRows, statsOutroSeconds } from './musicVideoStatsOutro.js';
+import { STATS_OUTRO_FLOOR_MAX, musicVideoOutroStats, normalizeStatsOutro, statsOutroRows, statsOutroSeconds } from './musicVideoStatsOutro.js';
 
 describe('cutting room floor outro', () => {
   it('is off unless turned on, and its length stays inside its limits', () => {
     expect(normalizeStatsOutro(null)).toBeNull();
     expect(statsOutroSeconds(null)).toBe(0);
     expect(statsOutroSeconds({ durationSec: 10 })).toBe(0);
-    expect(normalizeStatsOutro({ enabled: true })).toEqual({ enabled: true, durationSec: 8 });
+    expect(normalizeStatsOutro({ enabled: true })).toEqual({ enabled: true, durationSec: 8, title: 'Human Directed', subtitle: 'Human Imagined', hidden: [] });
+    // A cleared heading line stays cleared; unknown lines are dropped, the rest kept in display order.
+    expect(normalizeStatsOutro({ title: '  ', subtitle: ' Made by hand ', hidden: ['floor', 'nope', 'renders', 'floor'] }))
+      .toEqual({ enabled: false, durationSec: 8, title: '', subtitle: 'Made by hand', hidden: ['renders', 'floor'] });
     expect(statsOutroSeconds({ enabled: true, durationSec: 99 })).toBe(20);
     expect(statsOutroSeconds({ enabled: true, durationSec: 1 })).toBe(4);
   });
@@ -45,16 +48,15 @@ describe('cutting room floor outro', () => {
     });
     const rows = statsOutroRows(stats);
     expect(rows).toEqual([
-      { label: 'Renders reviewed', value: 8 },
-      { label: 'Images generated', value: 5 },
-      { label: 'Images used', value: 3, choice: true },
-      { label: 'Videos generated', value: 3 },
-      { label: 'Videos used', value: 1, choice: true },
-      { label: 'Cuts, moves & effects', value: 5, choice: true },
-      { label: 'Left on the floor', value: 4, accent: true },
+      { key: 'renders', label: 'Renders reviewed', value: 8 },
+      { key: 'images', label: 'Images generated', value: 5 },
+      { key: 'images', label: 'Images used', value: 3 },
+      { key: 'videos', label: 'Videos generated', value: 3 },
+      { key: 'videos', label: 'Videos used', value: 1 },
+      { key: 'edits', label: 'Cuts, moves & effects', value: 5 },
+      { key: 'floor', label: 'Left on the floor', value: 4, accent: true },
     ]);
-    // Every shot dreamed up is a decision, then each still and clip used and each cut, move and effect.
-    expect(statsOutroDecisions(stats)).toBe(2 + 3 + 1 + 5);
+    expect(statsOutroRows(stats, ['images', 'floor']).map((row) => row.label)).toEqual(['Renders reviewed', 'Videos generated', 'Videos used', 'Cuts, moves & effects']);
   });
 
   it('leaves out the choices never made and spreads the floor over the whole pile', () => {
