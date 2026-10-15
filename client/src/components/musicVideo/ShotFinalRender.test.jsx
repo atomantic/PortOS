@@ -2,6 +2,8 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 const handlers = new Map();
+const savedLooks = vi.hoisted(() => []);
+vi.mock('../../hooks/useFilmLookPresets.js', () => ({ default: () => ({ presets: savedLooks, save: vi.fn(), remove: vi.fn() }) }));
 vi.mock('../../services/socket', () => ({
   default: { on: vi.fn((event, fn) => handlers.set(event, fn)), off: vi.fn((event) => handlers.delete(event)) },
 }));
@@ -21,6 +23,7 @@ const shot = (sceneId, state, files = []) => ({ sceneId, state, rendering: false
 
 beforeEach(() => {
   vi.clearAllMocks();
+  savedLooks.length = 0;
   handlers.clear();
 });
 
@@ -53,6 +56,18 @@ describe('ShotFinalRender', () => {
     expect(screen.getByLabelText('Film look').value).toBe('polaroid');
     fireEvent.change(screen.getByLabelText('Film look'), { target: { value: 'video' } });
     expect(onChange).toHaveBeenLastCalledWith({ filmLook: null });
+  });
+
+  it('offers the saved looks, sets one on the shot, and shows it as picked', async () => {
+    savedLooks.push({ id: 'dusk-1', label: 'Dusk', look: { preset: 'custom', warmth: 0.4, grain: 0.2 } });
+    getMusicVideoShotRenders.mockResolvedValue({ available: true, shots: [shot('a', 'rendered', ['a.mp4'])], ready: 1, total: 1 });
+    const onChange = vi.fn();
+    const { rerender } = render(<ShotFinalRender project={project} scene={project.scenes[0]} onChange={onChange} fieldId={fieldId} />);
+    fireEvent.change(await screen.findByLabelText('Film look'), { target: { value: 'saved:dusk-1' } });
+    const look = onChange.mock.calls[0][0].filmLook;
+    expect(look).toMatchObject({ preset: 'custom', warmth: 0.4, grain: 0.2 });
+    rerender(<ShotFinalRender project={project} scene={{ sceneId: 'a', filmLook: look }} onChange={onChange} fieldId={fieldId} />);
+    expect(screen.getByLabelText('Film look').value).toBe('saved:dusk-1');
   });
 
   it('names the refusal when the cut cannot be planned, and stays away from other render styles', async () => {

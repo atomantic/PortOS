@@ -8,6 +8,7 @@ export {
   filmLookPreset,
   normalizeFilmLook,
   isFilmLookNeutral,
+  sameFilmLook,
   describeFilmLook,
   filmLookControl,
   filmLookFilterMarkup,

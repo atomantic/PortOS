@@ -184,6 +184,14 @@ export function describeFilmLook(look) {
   return [...new Set(phrases)].slice(0, 8).join(', ');
 }
 
+/** True when two looks set every control the same (their preset names aside). */
+export function sameFilmLook(a, b) {
+  const left = normalizeFilmLook(a);
+  const right = normalizeFilmLook(b);
+  if (!left || !right) return left === right;
+  return FILM_LOOK_CONTROLS.every((control) => left[control.id] === right[control.id]);
+}
+
 /** The control record for an id (label, term, hint, range). */
 export const filmLookControl = (id) => CONTROL_BY_ID.get(id) || null;
 

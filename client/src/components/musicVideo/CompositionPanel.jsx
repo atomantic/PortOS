@@ -35,7 +35,7 @@ export default function CompositionPanel({ board }) {
           </p>
         )}
         <GradePanel project={project} onSave={board.saveCompositionGrade} />
-        <FilmLookPanel project={project} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields} />
+        <FilmLookPanel project={project} activeSceneId={board.activeSceneId} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields} />
         {mode !== 'eidoverse' && <TypographyPanel project={project} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields} />}
         {mode === 'eidoverse' && <EidoverseVideoPanel key={project.id} project={project} onProject={board.replaceProject} productionReadiness={board.productionReadiness} />}
         {mode === 'code' && (
