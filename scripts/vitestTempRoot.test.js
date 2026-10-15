@@ -52,7 +52,6 @@ describe('real workspace runner temp lifecycle', () => {
         observations.publish({ event: 'remove-start', profile });
         expect(true).toBe(true);
       `);
-      args.push('--configLoader', 'native');
       const result = spawnSync(process.execPath, args, options);
       expect(result.error).toBeUndefined();
       expect(result.status).toBe(1);
