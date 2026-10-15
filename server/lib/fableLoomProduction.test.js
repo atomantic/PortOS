@@ -259,6 +259,50 @@ describe('fableLoomProduction', () => {
       });
     });
 
+    it('reports an unsafe hold loop once while preserving live voice blocking', () => {
+      const interactionNode = {
+        interactionWindow: { enabled: true, protagonistCharacterId: 'char-1' },
+      };
+      const options = {
+        loom: { id: 'loom-1', protagonistCharacterId: 'char-1' },
+        universe: { id: 'universe-1', characters: [{ id: 'char-1', voiceId: 'voice-1' }] },
+      };
+      const unsafe = plan(sceneEpisode({
+        node: interactionNode,
+        assets: {
+          audioOccupancy: {
+            'hold-1': {
+              durationMs: 5000,
+              characterDialogue: [{ startMs: 0, endMs: 2000, characterId: 'char-1' }],
+            },
+          },
+        },
+      }), options);
+      const unsafeAssets = unsafe.plannedAssets.filter((asset) => asset.nodeId === 'scene');
+      const warning = 'Hold loop "hold-1" is not safe for live voice.';
+
+      for (const asset of unsafeAssets) {
+        expect(asset.readiness.reasons.filter((reason) => reason === warning)).toHaveLength(1);
+        expect(asset.status).toBe('blocked');
+      }
+      expect(unsafeAssets.find((asset) => asset.type === 'video_hold').existingAssetId).toBe('hold-1');
+
+      const safe = plan(sceneEpisode({
+        node: interactionNode,
+        assets: {
+          audioOccupancy: {
+            'hold-1': { durationMs: 5000, music: [{ startMs: 0, endMs: 5000 }] },
+          },
+        },
+      }), options);
+      const safeAssets = safe.plannedAssets.filter((asset) => asset.nodeId === 'scene');
+      expect(safeAssets.find((asset) => asset.type === 'video_hold')).toMatchObject({
+        status: 'already_rendered',
+        readiness: { ready: true, reasons: [] },
+      });
+      expect(safeAssets.some((asset) => asset.readiness.reasons.includes(warning))).toBe(false);
+    });
+
     it('requires an approved storyboard for new locked-canon video but not for existing clips', () => {
       const universe = { id: 'universe-1', characters: [] };
       const lockedNode = { visualCanon: { mode: 'locked' } };

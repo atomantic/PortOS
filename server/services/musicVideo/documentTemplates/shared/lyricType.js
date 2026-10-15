@@ -40,7 +40,9 @@
  */
 
 export const LYRIC_ROLES = Object.freeze(['line', 'hook', 'stamp', 'data']);
-export const TEXT_ZONES = Object.freeze(['lower-left', 'upper-right', 'upper', 'lower', 'center', 'none']);
+export const TEXT_ZONES = Object.freeze(['lower-left', 'upper-right', 'upper', 'lower', 'center', 'none', 'lower-right', 'upper-left']);
+// A shot's lyric size scales the type's own size (and its share of the frame); null is normal.
+export const LYRIC_SIZE_SCALE = Object.freeze({ small: 0.8, large: 1.25 });
 
 export const DEFAULT_PALETTE = Object.freeze({ fill: '#f3ead7', ink: '#141217', accent: '#ff5a1f', strike: '#ff2a2a' });
 export const DEFAULT_FONTS = Object.freeze({ display: '"MV Archivo", "Arial Black", Impact, sans-serif', mono: '"MV Mono", Menlo, monospace' });
@@ -219,6 +221,15 @@ function zoneRect(zone, width, height) {
       const w = portrait ? width - 2 * insetX : width * 0.46;
       return { zone, x: width - insetX - w, y: insetY, w, h: height * 0.3, align: 'right', anchor: 'top' };
     }
+    case 'upper-left': {
+      const w = portrait ? width - 2 * insetX : width * 0.46;
+      return { zone, x: insetX, y: insetY, w, h: height * 0.3, align: 'left', anchor: 'top' };
+    }
+    case 'lower-right': {
+      const w = portrait ? width - 2 * insetX : width * 0.5;
+      const h = height * 0.3;
+      return { zone, x: width - insetX - w, y: height - insetY - h, w, h, align: 'right', anchor: 'bottom' };
+    }
     case 'lower-left':
     default: {
       const w = portrait ? width - 2 * insetX : width * 0.5;
@@ -392,7 +403,8 @@ export function createLyricType(mv = globalThis.PORTOS_MV, options = {}) {
     if (!rect) return null;
     const unit = Math.min(width, height) / 1080;
     const floor = (line.role === 'data' ? 40 : T.minPx) * unit;
-    let px = basePx(line.role, unit, height > width);
+    const scale = LYRIC_SIZE_SCALE[line.shot?.lyricSize] || 1;
+    let px = Math.max(floor, basePx(line.role, unit, height > width) * scale);
     const items = line.words.map((w) => (line.role === 'hook' ? String(w.text).toUpperCase() : w.text));
     const rowsAt = (size) => {
       const list = items.map((text, index) => ({ text, index }));
@@ -408,7 +420,7 @@ export function createLyricType(mv = globalThis.PORTOS_MV, options = {}) {
     const lineHOf = (size) => size * (line.role === 'data' ? 1.3 : 1.02);
     // The area the caption's rows cover at a size (row widths × row height).
     const cover = (size, at) => at.reduce((sum, row) => sum + row.reduce((w, item) => w + measure(`${item.text} `, fontFor(line.role, size)), 0), 0) * lineHOf(size);
-    const budget = (LYRIC_FIT.maxCover[line.role] ?? LYRIC_FIT.maxCover.line) * width * height;
+    const budget = (LYRIC_FIT.maxCover[line.role] ?? LYRIC_FIT.maxCover.line) * scale * scale * width * height;
     while ((rows.length > LYRIC_FIT.maxRows || rows.length * px * 1.05 > rect.h || cover(px, rows) > budget) && px > floor + 1e-6) { px = Math.max(floor, px * 0.9); rows = rowsAt(px); }
     const lineH = lineHOf(px);
     const blockH = rows.length * lineH;
@@ -517,4 +529,4 @@ export function createLyricType(mv = globalThis.PORTOS_MV, options = {}) {
 }
 
 // Classic-script templates (the layered engine) reach the module through this global.
-if (typeof globalThis !== 'undefined') globalThis.PORTOS_LYRIC_TYPE = { createLyricType, zoneRect, LYRIC_ROLES, TEXT_ZONES, LYRIC_FIT };
+if (typeof globalThis !== 'undefined') globalThis.PORTOS_LYRIC_TYPE = { createLyricType, zoneRect, LYRIC_ROLES, TEXT_ZONES, LYRIC_FIT, LYRIC_SIZE_SCALE };

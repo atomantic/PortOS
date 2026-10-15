@@ -677,3 +677,58 @@ describe('pool deletion and selection admission', () => {
     expect((await reload()).name).toBe('Queue recovered');
   });
 });
+
+describe('media from an earlier draft', () => {
+  // Uniquely catches an import that copies nothing the draft's shots hold, skips the stats tally, or restamps the draft's clips.
+  it('files the draft\'s stills and clips into this video\'s assets and stats, leaving the draft as it was', async () => {
+    for (const name of ['draft-still.png', 'draft-floor.png', 'mine.png']) seedImage(name);
+    seedVideoHistory([{ id: 'draft-clip', filename: 'draft-clip.mp4', prompt: 'draft motion' }]);
+    await addTake(sceneA.sceneId, { kind: 'image', assetId: 'mine.png', source: 'generated' });
+    const draft = await projects.createProject({ name: 'Example Draft' });
+    const draftShot = await projects.addProjectScene(draft.id, { prompt: 'an early idea' });
+    const draftTake = (body) => request(app).post(`/api/music-video/${draft.id}/scenes/${draftShot.sceneId}/takes`).send(body);
+    await draftTake({ kind: 'image', assetId: 'draft-still.png', source: 'generated' });
+    await draftTake({ kind: 'image', assetId: 'draft-floor.png', source: 'generated' });
+    await draftTake({ kind: 'video', assetId: 'draft-clip', source: 'generated' });
+    await draftTake({ kind: 'image', assetId: 'mine.png', source: 'generated' });
+
+    const imported = await request(app).post(`${base()}/media-pool/import`).send({ fromProjectId: draft.id });
+    expect(imported.status).toBe(200);
+    expect(imported.body).toMatchObject({ added: 3, total: 4 });
+    const fromDraft = imported.body.items.filter((item) => item.assetId.startsWith('draft-'));
+    expect(fromDraft.map((item) => `${item.kind}:${item.assetId}`).sort()).toEqual(['image:draft-floor.png', 'image:draft-still.png', 'video:draft-clip']);
+    expect(fromDraft.every((item) => item.sceneId === null && item.inUseBy.length === 0)).toBe(true);
+    // Again is a no-op.
+    expect((await request(app).post(`${base()}/media-pool/import`).send({ fromProjectId: draft.id })).body).toMatchObject({ added: 0 });
+
+    const stats = (await request(app).get(`${base()}/stats-outro`)).body.stats;
+    expect(stats.stills.made).toBe(3);
+    expect(stats.clips.made).toBe(1);
+    const { loadHistory } = await import('../services/videoGen/history.js');
+    expect((await loadHistory()).find((entry) => entry.id === 'draft-clip').musicVideo.projectId).toBe(draft.id);
+    expect((await request(app).post(`${base()}/media-pool/import`).send({ fromProjectId: project.id })).status).toBe(400);
+    expect((await request(app).post(`${base()}/media-pool/import`).send({ fromProjectId: 'mv-missing' })).status).toBe(404);
+  });
+});
+
+describe('media from the library', () => {
+  // Uniquely catches a library search offering files already in the video, missing a clip, or an add that files nothing.
+  it('finds unfiled stills and clips by prompt and adds the picks to this video\'s assets', async () => {
+    for (const name of ['sheet.png', 'filed.png', 'other.png']) seedImage(name);
+    writeFileSync(join(ROOT(), 'images', 'sheet.metadata.json'), JSON.stringify({ prompt: 'Character reference sheet for The Director', createdAt: '2026-01-02T00:00:00Z' }));
+    writeFileSync(join(ROOT(), 'images', 'filed.metadata.json'), JSON.stringify({ prompt: 'The Director at her desk' }));
+    writeFileSync(join(ROOT(), 'images', 'other.metadata.json'), JSON.stringify({ prompt: 'A mountain lake' }));
+    seedVideoHistory([{ id: 'director-clip', filename: 'director-clip.mp4', prompt: 'The director turns', createdAt: '2026-01-03T00:00:00Z' }]);
+    await addTake(sceneA.sceneId, { kind: 'image', assetId: 'filed.png', source: 'generated' });
+
+    const found = await request(app).get(`${base()}/media-pool/library?q=${encodeURIComponent('director')}`);
+    expect(found.body.items.map((item) => `${item.kind}:${item.assetId}`)).toEqual(['video:director-clip', 'image:sheet.png']);
+    expect((await request(app).get(`${base()}/media-pool/library?q=`)).status).toBe(400);
+
+    const added = await request(app).post(`${base()}/media-pool/add`).send({ items: found.body.items.map(({ kind, assetId }) => ({ kind, assetId })) });
+    expect(added.body.added).toBe(2);
+    expect(added.body.items.map((item) => item.assetId).sort()).toEqual(['director-clip', 'filed.png', 'sheet.png']);
+    expect((await request(app).get(`${base()}/media-pool/library?q=director`)).body.items).toEqual([]);
+    expect((await request(app).post(`${base()}/media-pool/add`).send({ items: [{ kind: 'image', assetId: 'missing.png' }] })).status).toBe(400);
+  });
+});

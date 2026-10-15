@@ -14,6 +14,10 @@ vi.mock('../../../services/apiMusicVideo.js', () => ({
   markMusicVideoPoolAssets: vi.fn(async () => ({ assetMarks: { 'image:early.png': 'bad' } })),
   deleteMusicVideoPoolAssets: vi.fn(async () => ({ deleted: 1 })),
   searchMusicVideoMediaPool: vi.fn(async () => ({ items: [] })),
+  listMusicVideoProjectSummaries: vi.fn(async () => ({ items: [{ id: 'mv-1', name: 'This video' }, { id: 'mv-draft', name: 'Early draft' }] })),
+  searchMusicVideoLibrary: vi.fn(async () => ({ items: [{ kind: 'image', assetId: 'sheet.png', prompt: 'Director sheet' }, { kind: 'video', assetId: 'old-clip', prompt: 'Director turns' }], more: false })),
+  addMusicVideoLibraryMedia: vi.fn(async () => ({ added: 1, items: [...pool, { kind: 'image', assetId: 'sheet.png', sceneId: null, clipIds: [] }] })),
+  importMusicVideoPool: vi.fn(async () => ({ added: 2, total: 3, items: [...pool, { kind: 'image', assetId: 'draft.png', sceneId: null, clipIds: [] }] })),
 }));
 const { default: AssetsStage } = await import('./AssetsStage.jsx');
 const api = await import('../../../services/apiMusicVideo.js');
@@ -48,5 +52,30 @@ describe('Music video Assets page', () => {
     await waitFor(() => expect(applyPoolMarks).toHaveBeenCalledWith('mv-1', { assetMarks: { 'image:early.png': 'bad' } }));
     fireEvent.click(screen.getByRole('button', { name: 'Open shot 1' }));
     expect(onEditShot).toHaveBeenCalledWith('s1');
+  });
+
+  // Uniquely catches the import offering this video as its own source, or the page not showing what it filed.
+  it('adds an earlier draft\'s media from a picker of the other videos', async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Add media from another video' }));
+    const picker = screen.getByLabelText('Add media from');
+    await waitFor(() => expect(within(picker).getAllByRole('option').map((o) => o.textContent)).toEqual(['Pick a video', 'Early draft']));
+    fireEvent.change(picker, { target: { value: 'mv-draft' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    await waitFor(() => expect(api.importMusicVideoPool).toHaveBeenCalledWith('mv-1', 'mv-draft', { silent: true }));
+    expect(await screen.findByText('Added 2 stills and clips from Early draft (1 were already here).')).toBeTruthy();
+    await waitFor(() => expect(tiles()).toHaveLength(5));
+  });
+
+  // Uniquely catches the library add sending files that weren't picked, or the page not showing what it filed.
+  it('adds picked media from a library prompt search', async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Add from the media library' }));
+    fireEvent.change(screen.getByLabelText('Search the media library by prompt'), { target: { value: 'director' } });
+    fireEvent.click(await screen.findByRole('button', { name: 'still: Director sheet' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add 1' }));
+    await waitFor(() => expect(api.addMusicVideoLibraryMedia).toHaveBeenCalledWith('mv-1', [{ kind: 'image', assetId: 'sheet.png' }], { silent: true }));
+    expect(await screen.findByText('Added 1 from the media library.')).toBeTruthy();
+    await waitFor(() => expect(tiles()).toHaveLength(5));
   });
 });

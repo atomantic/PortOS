@@ -52,7 +52,7 @@ import { EFFORT_LEVELS } from './providerModels.js';
 import { shotActionContractProblem } from './musicVideoActionContract.js';
 import { NARRATIVE_EVENT_KINDS } from './musicVideoNarrativeEvents.js';
 import { MUSIC_VIDEO_MEDIA } from './musicVideoMediumPlan.js';
-import { CLIP_OFFSET_FRAMES_RANGE, CLIP_SPEED_FPS_RANGE, MUSIC_VIDEO_FRAME_FITS, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_STILL_MOVES, MUSIC_VIDEO_TEXT_ZONES, MUSIC_VIDEO_VISUAL_LAYERS } from './musicVideoLayers.js';
+import { CLIP_OFFSET_FRAMES_RANGE, CLIP_SPEED_FPS_RANGE, MUSIC_VIDEO_FRAME_FITS, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_LYRIC_SIZES, MUSIC_VIDEO_STILL_MOVES, MUSIC_VIDEO_TEXT_ZONES, MUSIC_VIDEO_VISUAL_LAYERS } from './musicVideoLayers.js';
 import { MUSIC_VIDEO_SHOT_GLITCH_LIMIT, MUSIC_VIDEO_TRANSITIONS } from './musicVideoTransitions.js';
 import { BEAT_TOGGLE_OVERLAP, BEAT_TOGGLE_RATES, MUSIC_VIDEO_CUT_EFFECTS } from './musicVideoCutEffects.js';
 import { IMAGE_EFFECT_SEC_RANGE, MUSIC_VIDEO_IMAGE_EFFECTS } from './musicVideoImageEffects.js';
@@ -345,6 +345,21 @@ export const musicVideoPoolMarkSchema = z.object({
 
 /** Delete unused stills and clips from the media library (the asset manager's "Delete bad"). */
 export const musicVideoPoolDeleteSchema = z.object({
+  items: z.array(musicVideoPoolAssetSchema).min(1).max(500),
+}).strict();
+
+/** File another music video's whole pool (an earlier draft) into this video's collection. */
+export const musicVideoPoolImportSchema = z.object({
+  fromProjectId: z.string().min(1).max(200),
+}).strict();
+
+/** Search the whole media library for stills and clips to add to a video's assets. */
+export const musicVideoLibrarySearchQuerySchema = z.object({
+  q: z.string().trim().min(1).max(200),
+}).strict();
+
+/** File stills and clips from the media library into a video's assets. */
+export const musicVideoPoolAddSchema = z.object({
   items: z.array(musicVideoPoolAssetSchema).min(1).max(500),
 }).strict();
 
@@ -648,6 +663,7 @@ const sceneLayerFields = {
   // #10583: where a composition document's lyric type may sit in this shot, and the role of its lines.
   textZone: z.enum(MUSIC_VIDEO_TEXT_ZONES).nullable().optional(),
   lyricRole: z.enum(MUSIC_VIDEO_LYRIC_ROLES).nullable().optional(),
+  lyricSize: z.enum(MUSIC_VIDEO_LYRIC_SIZES).nullable().optional(),
 };
 
 // ---- Pre-production treatment (#8980) --------------------------------------

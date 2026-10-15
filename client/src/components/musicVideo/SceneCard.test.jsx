@@ -207,22 +207,27 @@ describe('planned camera move (#10589)', () => {
 });
 
 describe('lyric type per shot (#10583)', () => {
-  it('lets a composition-document shot pick its lyric zone and style, and clears back to the defaults', () => {
+  it('lets a shot pick where its lyrics sit, their style and size whenever the render draws lyrics', () => {
     const onSave = vi.fn();
     const scene = { sceneId: 's1', startSec: 0, endSec: 5, takes: [], textZone: 'upper-right' };
-    const { rerender } = render(<SceneCard scene={scene} index={0} layered onEditLocal={() => {}} onSave={onSave} />);
-    // Only a composition document draws the shared lyric type.
+    const composed = { composition: { mode: 'composed', textCues: [] }, lyricCues: [{ text: 'a sung line', startSec: 1, endSec: 3 }] };
+    const { rerender } = render(<SceneCard scene={scene} index={0} layered project={{ composition: { mode: 'composed', textCues: [] } }} onEditLocal={() => {}} onSave={onSave} />);
+    // A composed render with no timed lyrics draws none, so there is nothing to place.
     expect(screen.queryByLabelText('Lyrics')).toBeNull();
-    rerender(<SceneCard scene={scene} index={0} layered documentComposition onEditLocal={() => {}} onSave={onSave} />);
+    rerender(<SceneCard scene={scene} index={0} layered project={composed} onEditLocal={() => {}} onSave={onSave} />);
     expect(screen.getByLabelText('Lyrics').value).toBe('upper-right');
-    for (const [label, value] of [['Upper centre', 'upper'], ['Lower centre', 'lower']]) {
+    for (const [label, value] of [['Bottom', 'lower'], ['Bottom right', 'lower-right'], ['Top left', 'upper-left']]) {
       expect(screen.getByRole('option', { name: label }).value).toBe(value);
       fireEvent.change(screen.getByLabelText('Lyrics'), { target: { value } });
     }
-    fireEvent.change(screen.getByLabelText('Lyrics'), { target: { value: 'none' } });
     fireEvent.change(screen.getByLabelText('Lyric style'), { target: { value: 'stamp' } });
+    fireEvent.change(screen.getByLabelText('Lyric size'), { target: { value: 'small' } });
     fireEvent.change(screen.getByLabelText('Lyrics'), { target: { value: '' } });
-    expect(onSave.mock.calls).toEqual([['s1', { textZone: 'upper' }], ['s1', { textZone: 'lower' }], ['s1', { textZone: 'none' }], ['s1', { lyricRole: 'stamp' }], ['s1', { textZone: null }]]);
+    expect(onSave.mock.calls).toEqual([['s1', { textZone: 'lower' }], ['s1', { textZone: 'lower-right' }], ['s1', { textZone: 'upper-left' }],
+      ['s1', { lyricRole: 'stamp' }], ['s1', { lyricSize: 'small' }], ['s1', { textZone: null }]]);
+    // A composition document always draws the lyric type.
+    rerender(<SceneCard scene={scene} index={0} layered documentComposition onEditLocal={() => {}} onSave={onSave} />);
+    expect(screen.getByLabelText('Lyrics')).toBeTruthy();
   });
 });
 
