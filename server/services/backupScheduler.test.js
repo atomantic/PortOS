@@ -127,6 +127,28 @@ describe('startBackupScheduler', () => {
     );
   });
 
+  it('rejects unreadable run-time settings and recovers on the next scheduled invocation', async () => {
+    const settings = { backup: { enabled: true, destPath: '/example-backups' } };
+    getSettings.mockResolvedValue(settings);
+    await startBackupScheduler();
+    const handler = schedule.mock.calls[0][0].handler;
+
+    // The forgiving reader would turn this failed read into an empty object
+    // and let eventScheduler record the disabled skip as a successful run.
+    getSettings.mockResolvedValue({});
+    getSettingsWithStatus.mockResolvedValueOnce({ corrupt: true, settings: {} });
+    await expect(handler()).rejects.toThrow('Backup settings unreadable');
+    expect(runBackup).not.toHaveBeenCalled();
+
+    getSettings.mockResolvedValue(settings);
+    await handler();
+    expect(runBackup).toHaveBeenCalledTimes(1);
+    expect(runBackup).toHaveBeenCalledWith('/example-backups', null, {
+      excludePaths: [], disabledDefaultExcludes: [], retentionCount: null
+    });
+    expect(schedule).toHaveBeenCalledTimes(1);
+  });
+
   it('handler skips the run if backup was disabled since registration', async () => {
     getSettings.mockResolvedValueOnce({
       backup: { enabled: true, destPath: '/dest', excludePaths: [], disabledDefaultExcludes: [] }
