@@ -21,7 +21,7 @@
  * payloads. The Daily Log projects a body-presence predicate and a bounded
  * summary, so full `content`/`segments` never enter the cache.
  *
- * FRESHNESS — three signal classes, all of them covered:
+ * FRESHNESS — local writes, peer writes, and whole-store replacements:
  *   1. `${type}:upserted` / `${type}:deleted` — the per-record events every
  *      local write path emits (create/update/updateWith/updateMany/remove, and
  *      upsertWithId in its default mode). Patched incrementally, no re-scan.
@@ -30,7 +30,10 @@
  *      (`applyRemoteRecord`, silent to prevent the #1077 cross-peer echo) and
  *      `upsertWithId({ emitEvent: false })`. Without it an inbound sync or
  *      anti-entropy reconcile would leave this cache stale indefinitely.
- *   3. Nothing else writes brain entity records — `pruneTombstones` only hard-
+ *   3. `caches:invalidated` — live backup restores replace files directly, then
+ *      call `brainStorage.invalidateAllCaches`. Drop every projection and bump
+ *      generations so an older in-flight scan cannot repopulate the cache.
+ *   Nothing else writes brain entity records — `pruneTombstones` only hard-
  *      prunes tombstones, which `getAll` strips and which therefore were never
  *      in the projection, and `backfillOriginInstanceId` runs once at boot and
  *      touches no projected field.
@@ -240,6 +243,9 @@ for (const type of BRAIN_PROJECTION_TYPES) {
   brainEvents.on(`${type}:deleted`, ({ id } = {}) => patchDelete(type, id));
 }
 brainEvents.on('record:changed', ({ type } = {}) => invalidate(type));
+brainEvents.on('caches:invalidated', () => {
+  for (const type of BRAIN_PROJECTION_TYPES) invalidate(type);
+});
 
 /** Test hook — drop every projection and reset the in-flight/generation state. */
 export function __resetBrainSearchIndex() {
