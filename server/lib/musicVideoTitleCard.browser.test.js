@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
 import { chromium } from 'playwright-core';
+import { startOwnedBrowserFixture } from '../test/browserFixture.js';
 import sharp from 'sharp';
 import { browserSuiteCanRun } from './browserSuiteGate.js';
 import { filmLookRuntimeSource } from './filmLook.js';
@@ -37,7 +38,7 @@ async function brightIn(png, { left, top, width, height }) {
 }
 
 describe.skipIf(!canRun)('title card runtime in Chrome', () => {
-  let browser;
+  let browser, browserFixture;
   let page;
   const errors = [];
   const lowerLeft = { left: 0, top: H / 2, width: W / 2, height: H / 2 };
@@ -45,14 +46,15 @@ describe.skipIf(!canRun)('title card runtime in Chrome', () => {
   const shotAt = async (t) => { await page.evaluate((at) => globalThis.portosComposition.seek(at), t); return page.screenshot(); };
 
   beforeAll(async () => {
-    browser = await chromium.launch({ executablePath: chrome, headless: true });
+    browserFixture = await startOwnedBrowserFixture({ chromium, launchOptions: { executablePath: chrome, headless: true } });
+    browser = browserFixture.browser;
     page = await browser.newPage({ viewport: { width: W, height: H } });
     page.on('pageerror', (error) => errors.push(error.message));
     const card = { title: 'Example Song', artist: 'Example Artist', year: '2026', startSec: 2, endSec: 8, fadeSec: 0.5 };
     await page.setContent(`<!doctype html><html><head><style>html,body{margin:0;background:#000}</style>
 <script>${filmLookRuntimeSource({ preset: 'none' })}</script><script>${titleCardRuntimeSource(card)}</script></head><body>${DOCUMENT}</body></html>`);
   }, 30000);
-  afterAll(async () => { await browser?.close(); });
+  afterAll(async () => { await browserFixture?.close(); });
 
   it('draws the card in the lower-left inside its window, nothing outside it, and the same pixels on a repeat seek', async () => {
     const before = await shotAt(1);
