@@ -1461,8 +1461,8 @@ export function createTuiSessionController({
       // resume and the ordinary paste path still owns first delivery.
       if (agyResumeGate && promptSubmittedAt) {
         agyResumeGate.observe(stripped);
-        // A relaunched agy is up once its composer footer paints; only then is a
-        // "continue" a message to the model rather than keystrokes into a boot.
+        // A relaunched agy is up once its composer footer paints; only then is the
+        // completion request a message to the model rather than boot keystrokes.
         if (agyResumeAwaitingComposer && AGY_INPUT_READY_PATTERN.test(stripped)) {
           agyResumeAwaitingComposer = false;
           if (pasteController?.resubmit({ text: STALL_NUDGE_TEXT, label: 'agy resume nudge' })) {

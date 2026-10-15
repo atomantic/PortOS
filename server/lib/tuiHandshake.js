@@ -1690,8 +1690,8 @@ export function createToolPermissionGate() {
 // model narrates its next step ("Next: /do:pr"), ends its turn, and the TUI
 // returns to its idle composer. The run is not finished, the sentinel is not
 // written, and — since the wall-clock ceiling was removed — nothing else in the
-// unattended path will ever touch that session again. A human dropping into the
-// Shell tab and typing `continue` recovers it every time; this gate types it.
+// unattended path will ever touch that session again. This gate asks it to
+// finish the bounded work and record its verified outcome through the sentinel.
 //
 // Unlike the OOM and tool-permission gates, there is nothing to ARM on: the
 // condition IS the silence, so this one is poll-only. That also makes the
@@ -1732,10 +1732,15 @@ export const STALL_NUDGE_MAX_ATTEMPTS = 3;
 // never runs out and the run loops for hours on a local GPU. A run that has
 // needed this many nudges is not going to finish on the next one.
 export const STALL_NUDGE_MAX_TOTAL = 6;
-// What gets pasted. The same word a human types into the Shell tab: the TUI
-// still holds the conversation, and the unattended-run rules already live in
-// the prompt. A longer paste only clutters the composer.
-export const STALL_NUDGE_TEXT = 'continue';
+// The original prompt still owns scope, publication authority, and the exact
+// sentinel contract. Recovery asks for an honest disposition, not a success.
+export const STALL_NUDGE_TEXT = [
+  'Finish what you can and then write the completion sentinel. File GitHub issues for anything that is too big for this session.',
+  'Stay within the original task scope, permissions, and safety limits; do not bypass a refusal or permission block.',
+  'Follow the owning repository\'s issue-filing instructions: search for duplicates and reuse an existing issue, or file an actionable issue with redacted evidence, affected paths, a chosen next step, and acceptance criteria.',
+  'If issue filing is not authorized, unavailable, or fails, report the filing blocker and ready-to-file details as an INCOMPLETE disposition; do not claim it was filed.',
+  'Use the exact sentinel path and format from your existing completion instructions. Summarize verified work, checks, issue links, unresolved work, and blockers honestly; writing the sentinel does not itself mean the task succeeded.',
+].join(' ');
 
 /**
  * State machine for "nudge a TUI session that stopped mid-task".
