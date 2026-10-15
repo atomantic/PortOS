@@ -8,15 +8,15 @@
     "npm": ">=11.11.0"
   },
   "scripts": {
-    "dev": "vite --host 0.0.0.0 --port 5554",
+    "dev": "vite --configLoader runner --host 0.0.0.0 --port 5554",
     "build": "node ../scripts/publish-client-build.js",
     "build:analyze": "node ../scripts/publish-client-build.js --analyze",
     "lint": "biome lint --error-on-warnings src",
-    "preview": "vite preview",
-    "test": "vitest run",
-    "test:ci": "vitest run --bail=1 --silent=passed-only --reporter=default --reporter=github-actions",
-    "test:ci:related": "vitest related --run --bail=1 --silent=passed-only --reporter=default --reporter=github-actions",
-    "test:watch": "vitest"
+    "preview": "vite preview --configLoader runner",
+    "test": "vitest run --configLoader runner",
+    "test:ci": "vitest run --bail=1 --silent=passed-only --reporter=default --reporter=github-actions --configLoader runner",
+    "test:ci:related": "vitest related --run --bail=1 --silent=passed-only --reporter=default --reporter=github-actions --configLoader runner",
+    "test:watch": "vitest --configLoader runner"
   },
   "dependencies": {
     "@dnd-kit/core": "6.3.1",

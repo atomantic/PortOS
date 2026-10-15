@@ -10,6 +10,10 @@
 # this reason; unanchored, this one line covers every depth instead.
 node_modules
 
+# Reusable tool caches belong to the checkout, outside shared dependency links.
+/client/.cache/
+/server/.cache/
+
 # Build output
 dist/
 build/

@@ -43,7 +43,7 @@ export function createVitestTempFixture(host, workspace, body, config = 'vitest.
   delete env.VITEST_POOL_ID;
   delete env.VITEST_WORKER_ID;
   return {
-    args: [join(repo, workspace, 'node_modules/vitest/vitest.mjs'), 'run',
+    args: [join(repo, workspace, 'node_modules/vitest/vitest.mjs'), 'run', '--configLoader', 'runner',
       '--config', join(repo, workspace, config), '--root', root, '--maxWorkers', '1'],
     options: { cwd: join(repo, workspace), env, encoding: 'utf8', timeout: 20000 },
   };
