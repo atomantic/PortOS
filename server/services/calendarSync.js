@@ -83,6 +83,7 @@ export async function getEvents(options = {}) {
   if (accountId) {
     const cache = await loadCache(accountId);
     const account = await getAccount(accountId);
+    if (!account) return { events: [], total: 0 };
     let events = cache.events.map(e => ({ ...e, accountId: e.accountId || accountId }));
     events = filterDeclinedAndCancelled(events);
     events = filterByEnabledSubcalendars(events, account);
@@ -104,7 +105,7 @@ export async function getEvents(options = {}) {
   const accountIds = files
     .filter(file => file.endsWith('.json'))
     .map(file => file.replace('.json', ''))
-    .filter(id => UUID_RE.test(id));
+    .filter(id => UUID_RE.test(id) && accountMap.has(id));
   // Load each account's cache in parallel rather than serializing one disk read
   // per account before aggregating the combined calendar view.
   const caches = await Promise.all(
@@ -145,6 +146,7 @@ export async function purgeDisabledSubcalendars(accountId) {
 
 export async function getEvent(accountId, eventId) {
   const cache = await loadCache(accountId);
+  if (!await getAccount(accountId)) return null;
   const event = cache.events.find(e => e.id === eventId);
   if (!event) return null;
   return { ...event, accountId: event.accountId || accountId };
@@ -162,6 +164,7 @@ export async function deleteCache(accountId) {
         console.log(`🗑️ No calendar cache to delete for account ${accountId}`);
       } else {
         console.error(`❌ Failed to delete calendar cache for account ${accountId}: ${err.message}`);
+        throw err;
       }
     }
   });

@@ -7,7 +7,7 @@ vi.mock('../lib/fileUtils.js', async importOriginal => ({
 }));
 vi.mock('fs/promises', () => ({ readdir: vi.fn(), unlink: vi.fn() }));
 vi.mock('./calendarAccounts.js', () => ({
-  getAccount: vi.fn(), updateSyncStatus: vi.fn(async () => {}),
+  getAccount: vi.fn(), listAccounts: vi.fn(), updateSyncStatus: vi.fn(async () => {}),
   updateSubcalendars: vi.fn(), mergeDiscoveredSubcalendars: vi.fn(),
 }));
 vi.mock('./calendarApiSync.js', () => ({ syncOutlookCalendarApi: vi.fn() }));
@@ -24,10 +24,10 @@ vi.mock('./googleAuth.js', () => ({ getAuthenticatedClient: vi.fn() }));
 vi.mock('@googleapis/calendar', () => ({ calendar: vi.fn() }));
 
 import { atomicWrite, readJSONFile } from '../lib/fileUtils.js';
-import { unlink } from 'fs/promises';
-import { getAccount } from './calendarAccounts.js';
+import { readdir, unlink } from 'fs/promises';
+import { getAccount, listAccounts } from './calendarAccounts.js';
 import { syncOutlookCalendarApi } from './calendarApiSync.js';
-import { deleteCache, loadCache, purgeDisabledSubcalendars, syncAccount } from './calendarSync.js';
+import { deleteCache, getEvent, getEvents, loadCache, purgeDisabledSubcalendars, syncAccount } from './calendarSync.js';
 import { mcpSyncAccount, pushSyncEvents } from './calendarGoogleSync.js';
 import { apiSyncAccount } from './calendarGoogleApiSync.js';
 
@@ -65,6 +65,8 @@ beforeEach(() => {
   }]));
   persisted = new Map();
   getAccount.mockImplementation(async id => structuredClone(accounts.get(id) ?? null));
+  listAccounts.mockImplementation(async () => structuredClone([...accounts.values()]));
+  readdir.mockImplementation(async () => [...persisted.keys()].map(id => `${id}.json`));
   readJSONFile.mockImplementation(async (path, fallback) =>
     persisted.has(basename(path, '.json'))
       ? structuredClone(persisted.get(basename(path, '.json')))
@@ -121,6 +123,30 @@ describe('calendar cache mutation ownership', () => {
     await push('a', 'old-event');
     await Promise.all([deleteCache(ACCOUNT), push('b', 'fresh-event')]);
     expect(persisted.get(ACCOUNT).events.map(e => e.apiId)).toEqual(['fresh-event']);
+  });
+
+  // Catches swallowed unlink failures, orphan events escaping any read surface,
+  // or a rejected deletion poisoning the queue so cleanup cannot be retried.
+  it('reports failed deletion, hides its orphan cache, and retries without admitting delayed writes', async () => {
+    await push('a', 'removed-event');
+    await push('a', 'kept-event', OTHER);
+    accounts.get(OTHER).enabled = false; // Existing disabled accounts remain visible.
+    const expected = await getEvents({ accountId: OTHER });
+    accounts.delete(ACCOUNT);
+    const failure = Object.assign(new Error('Synthetic cache deletion denied'), { code: 'EACCES' });
+    unlink.mockRejectedValueOnce(failure);
+    await expect(deleteCache(ACCOUNT)).rejects.toBe(failure);
+    expect(persisted.has(ACCOUNT)).toBe(true);
+    expect(await getEvents()).toEqual(expected);
+    expect(await getEvents({ accountId: ACCOUNT })).toEqual({ events: [], total: 0 });
+    expect(await getEvent(ACCOUNT, persisted.get(ACCOUNT).events[0].id)).toBeNull();
+    expect(await getEvent(OTHER, expected.events[0].id)).toEqual(expected.events[0]);
+    await expect(push('b', 'late-event')).rejects.toMatchObject({ status: 404 });
+    await deleteCache(ACCOUNT);
+    expect(persisted.has(ACCOUNT)).toBe(false);
+    // An absent cache is a successful repeat deletion, not an I/O failure.
+    unlink.mockRejectedValueOnce(Object.assign(new Error('Synthetic missing cache'), { code: 'ENOENT' }));
+    await expect(deleteCache(ACCOUNT)).resolves.toBeUndefined();
   });
 
   it.each([false, true])('reconciles Outlook after clear (account removed: %s)', async removed => {

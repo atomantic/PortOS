@@ -46,6 +46,14 @@ async function configureIdentity(repo, identity = DEFAULT_IDENTITY) {
   await execGit(['config', 'commit.gpgsign', 'false'], repo);
 }
 
+async function keepMaintenanceAttached(repo) {
+  assertTempPath(repo, 'git maintenance configuration on a fixture repo');
+  // An awaited Git command can otherwise leave detached maintenance writing
+  // into .git/objects after the test starts removing its private sandbox.
+  await execGit(['config', 'maintenance.autoDetach', 'false'], repo);
+  await execGit(['config', 'gc.autoDetach', 'false'], repo);
+}
+
 async function stripOrigin(repo) {
   assertTempPath(repo, 'git remote surgery on a fixture repo');
   await execGit(['remote', 'remove', 'origin'], repo, { ignoreExitCode: true });
@@ -80,11 +88,13 @@ async function buildTemplate() {
   const origin = join(scratch, 'origin.git');
   assertTempPath(scratch, 'git init for the fixture template');
   await execGit(['init', '-b', 'main', repo], scratch);
+  await keepMaintenanceAttached(repo);
   await configureIdentity(repo);
   await writeFile(join(repo, 'initial.txt'), 'initial');
   await execGit(['add', '-A'], repo);
   await execGit(['commit', '-m', 'initial'], repo);
   await execGit(['init', '--bare', '-b', 'main', origin], scratch);
+  await keepMaintenanceAttached(origin);
   await execGit(['remote', 'add', 'origin', origin], repo);
   await execGit(['push', '-u', 'origin', 'main'], repo);
   // Copied sandboxes are torn down per-test; the template itself lives for
