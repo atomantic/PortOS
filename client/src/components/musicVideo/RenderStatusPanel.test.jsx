@@ -25,7 +25,7 @@ it('shows an amber out-of-date notice only when the final render is stale (#1014
 it('offers one tap that fixes the shots a render refusal names', async () => {
   const project = { id: 'mv-example', status: 'ready' };
   const onPatchShots = vi.fn(async () => {});
-  const failure = { projectId: project.id, code: 'STALE_PERFORMANCE_TAKES', message: 'Shots 3 (not lip-synced), 6 (re-timed): …',
+  const failure = { projectId: project.id, code: 'STALE_PERFORMANCE_TAKES', message: 'Shots 3 (no lip-sync record), 6 (re-timed): …',
     context: { stale: [{ sceneId: 'a', cutaway: true }, { sceneId: 'b', cutaway: false }, { sceneId: 'c', cutaway: true }] } };
   const { rerender } = render(<RenderFailure project={project} renderJob={{ failure }} onPatchShots={onPatchShots} />);
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Switch these 2 to Cutaway' })); });

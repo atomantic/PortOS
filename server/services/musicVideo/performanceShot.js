@@ -113,7 +113,7 @@ const playsInSync = (scene, madeAtSec) => Number.isFinite(madeAtSec) && clipSpee
   && Math.abs(madeAtSec + clipOffsetSec(scene) - scene.startSec) <= IN_SYNC_SEC;
 
 const STALE_REASON_LABELS = Object.freeze({
-  'not-lip-synced': 'not lip-synced',
+  'not-lip-synced': 'no lip-sync record',
   retimed: 're-timed',
   'audio-changed': 'sung window changed in the song',
 });
@@ -279,7 +279,7 @@ export async function assertCurrentPerformanceTakes(project, masterPath) {
     return !!scene?.takes?.some((take) => take.assetId === scene.videoHistoryId && take.shotInstruction?.audioConditioning);
   };
   const code = stale.some(suppliedAudio) ? 'MUSIC_VIDEO_STALE_SOURCE_AUDIO_TAKES' : 'STALE_PERFORMANCE_TAKES';
-  throw new ServerError(`${shots}: the selected take no longer sings with the song. ${fix}`,
+  throw new ServerError(`${shots}: the selected take may not sing in sync with the song. ${fix}`,
     { status: 422, code, context: { stale } });
 }
 
