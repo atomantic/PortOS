@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium } from 'playwright-core';
+import { startOwnedBrowserFixture } from '../../../../test/browserFixture.js';
 import { createLyricType, LYRIC_FIT, TEXT_ZONES } from './lyricType.js';
 
 // zoneRect is the module's public text-zone geometry, reached through the global classic scripts use.
@@ -270,9 +271,12 @@ const chrome = [process.env.CHROME_PATH, chromium.executablePath(), '/usr/bin/go
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].find((path) => path && existsSync(path));
 
 describe.skipIf(!chrome)('lyricType in the layered template (browser pixels)', () => {
-  let browser;
-  beforeAll(async () => { browser = await chromium.launch({ executablePath: chrome, headless: true }); }, 30000);
-  afterAll(async () => { await browser?.close(); });
+  let browser, browserFixture;
+  beforeAll(async () => {
+    browserFixture = await startOwnedBrowserFixture({ chromium, launchOptions: { executablePath: chrome, headless: true } });
+    browser = browserFixture.browser;
+  }, 30000);
+  afterAll(async () => { await browserFixture?.close(); });
 
   it('keeps the hook accent outlined in ink on cream, pale-sky and busy light frames', async () => {
     const page = await browser.newPage();

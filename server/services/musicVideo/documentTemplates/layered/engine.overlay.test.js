@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { chromium } from 'playwright-core';
+import { startOwnedBrowserFixture } from '../../../../test/browserFixture.js';
 import { gateAutoReview } from '../../autoReviewJudge.js';
 
 // The layered engine is a browser template copied into each document, so the overlay
@@ -64,9 +65,12 @@ const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
 ].find(path => path && existsSync(path));
 
 describe.skipIf(!chrome)('layered footage review through rendered browser pixels', () => {
-  let browser;
-  beforeAll(async () => { browser = await chromium.launch({ executablePath: chrome, headless: true }); }, 30000);
-  afterAll(async () => { await browser?.close(); });
+  let browser, browserFixture;
+  beforeAll(async () => {
+    browserFixture = await startOwnedBrowserFixture({ chromium, launchOptions: { executablePath: chrome, headless: true } });
+    browser = browserFixture.browser;
+  }, 30000);
+  afterAll(async () => { await browserFixture?.close(); });
 
   async function composed(source, flat = false) {
     const page = await browser.newPage();
