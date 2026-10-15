@@ -11,6 +11,7 @@
  */
 
 import { createRecordStoreBackendSelector } from '../../lib/pgFileFacade.js';
+import { withMusicMutation, musicMutationClient, afterMusicCommit } from '../musicMembershipMutation.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
 
 export {
@@ -48,7 +49,7 @@ export function _resetAlbumsBackend() {
 }
 
 export async function listAlbums(options = {}) {
-  return (await selectBackend()).listAlbums(options);
+  return (await selectBackend()).listAlbums({ ...options, client: musicMutationClient() });
 }
 
 export async function listAlbumIds(options = {}) {
@@ -56,7 +57,7 @@ export async function listAlbumIds(options = {}) {
 }
 
 export async function getAlbum(id, options = {}) {
-  return (await selectBackend()).getAlbum(id, options);
+  return (await selectBackend()).getAlbum(id, { ...options, client: musicMutationClient() });
 }
 
 function announceNewAlbum(id) {
@@ -65,21 +66,27 @@ function announceNewAlbum(id) {
 }
 
 export async function createAlbum(input) {
-  const album = await (await selectBackend()).createAlbum(input);
-  announceNewAlbum(album.id);
-  return album;
+  return withMusicMutation(async () => {
+    const album = await (await selectBackend()).createAlbum(input, { client: musicMutationClient() });
+    afterMusicCommit(() => announceNewAlbum(album.id));
+    return album;
+  });
 }
 
 export async function updateAlbum(id, patch) {
-  const next = await (await selectBackend()).updateAlbum(id, patch);
-  emitRecordUpdated('album', next.id);
-  return next;
+  return withMusicMutation(async () => {
+    const next = await (await selectBackend()).updateAlbum(id, patch, { client: musicMutationClient() });
+    afterMusicCommit(() => emitRecordUpdated('album', next.id));
+    return next;
+  });
 }
 
 export async function deleteAlbum(id) {
-  const result = await (await selectBackend()).deleteAlbum(id);
-  emitRecordDeleted('album', result.id);
-  return result;
+  return withMusicMutation(async () => {
+    const result = await (await selectBackend()).deleteAlbum(id, { client: musicMutationClient() });
+    afterMusicCommit(() => emitRecordDeleted('album', result.id));
+    return result;
+  });
 }
 
 /** Merge an incoming batch of album records from a peer (LWW, tombstone-aware). */

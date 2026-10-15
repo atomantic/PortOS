@@ -52,15 +52,17 @@ async function persist(exec, track) {
   return track;
 }
 
-export async function listTracks({ includeDeleted = false } = {}) {
+export async function listTracks({ includeDeleted = false, client } = {}) {
+  const exec = client ? client.query.bind(client) : query;
   const { rows } = includeDeleted
-    ? await query(`SELECT data FROM tracks ORDER BY created_at ASC`)
-    : await query(`SELECT data FROM tracks WHERE deleted = FALSE ORDER BY created_at ASC`);
+    ? await exec(`SELECT data FROM tracks ORDER BY created_at ASC${client ? ' FOR UPDATE' : ''}`)
+    : await exec(`SELECT data FROM tracks WHERE deleted = FALSE ORDER BY created_at ASC${client ? ' FOR UPDATE' : ''}`);
   return rows.map(rowToTrack);
 }
 
-export async function getTrack(id, { includeDeleted = false } = {}) {
-  const { rows } = await query(`SELECT data FROM tracks WHERE id = $1`, [id]);
+export async function getTrack(id, { includeDeleted = false, client } = {}) {
+  const exec = client ? client.query.bind(client) : query;
+  const { rows } = await exec(`SELECT data FROM tracks WHERE id = $1${client ? ' FOR UPDATE' : ''}`, [id]);
   const track = rowToTrack(rows[0]);
   if (!track) return null;
   return includeDeleted || !track.deleted ? track : null;
@@ -74,16 +76,16 @@ export async function listTrackIds({ includeDeleted = false } = {}) {
   return rows.map((r) => r.id);
 }
 
-export async function createTrack(input) {
+export async function createTrack(input, { client } = {}) {
   const track = buildTrackRecord(input, { id: `track-${randomUUID()}`, now: new Date().toISOString() });
   if (!track) throw new ServerError('Invalid track payload', { status: 400, code: 'VALIDATION' });
-  await persist(query, track);
+  await persist(client ? client.query.bind(client) : query, track);
   console.log(`🎵 Created track: ${track.id} (${track.title})`);
   return track;
 }
 
-export async function updateTrack(id, patch) {
-  return withTransaction(async (client) => {
+export async function updateTrack(id, patch, { client: transactionClient } = {}) {
+  const mutate = async (client) => {
     const sel = await client.query(`SELECT data FROM tracks WHERE id = $1 FOR UPDATE`, [id]);
     const current = rowToTrack(sel.rows[0]);
     if (!current || current.deleted) throw new ServerError('Track not found', { status: 404, code: 'NOT_FOUND' });
@@ -91,11 +93,12 @@ export async function updateTrack(id, patch) {
     if (!next) throw new ServerError('Invalid track payload', { status: 400, code: 'VALIDATION' });
     await persist(client.query.bind(client), next);
     return next;
-  });
+  };
+  return transactionClient ? mutate(transactionClient) : withTransaction(mutate);
 }
 
-export async function deleteTrack(id) {
-  return withTransaction(async (client) => {
+export async function deleteTrack(id, { client: transactionClient } = {}) {
+  const mutate = async (client) => {
     const sel = await client.query(`SELECT data FROM tracks WHERE id = $1 FOR UPDATE`, [id]);
     const current = rowToTrack(sel.rows[0]);
     if (!current || current.deleted) throw new ServerError('Track not found', { status: 404, code: 'NOT_FOUND' });
@@ -103,7 +106,8 @@ export async function deleteTrack(id) {
     const next = { ...current, deleted: true, deletedAt: now, updatedAt: now };
     await persist(client.query.bind(client), next);
     return { id };
-  });
+  };
+  return transactionClient ? mutate(transactionClient) : withTransaction(mutate);
 }
 
 /**

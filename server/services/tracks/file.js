@@ -10,6 +10,7 @@
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS, readJSONFile, atomicWrite, ensureDir } from '../../lib/fileUtils.js';
+import { readMusicFile, writeMusicFile } from '../musicMembershipMutation.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { sanitizeTrack, buildTrackRecord, applyTrackPatch, mergeTrackRecord } from './logic.js';
 import {
@@ -20,14 +21,18 @@ import {
 const TRACKS_FILE = join(PATHS.data, 'tracks.json');
 
 async function loadAll() {
-  // Tracks are durable user records; never save an empty fallback over unreadable bytes.
-  const raw = await readJSONFile(TRACKS_FILE, [], { strict: true });
-  return (Array.isArray(raw) ? raw : []).map(sanitizeTrack).filter(Boolean);
+  return readMusicFile('tracks', async () => {
+    // Tracks are durable user records; never save an empty fallback over unreadable bytes.
+    const raw = await readJSONFile(TRACKS_FILE, [], { strict: true });
+    return (Array.isArray(raw) ? raw : []).map(sanitizeTrack).filter(Boolean);
+  });
 }
 
 async function saveAll(tracks) {
-  await ensureDir(PATHS.data);
-  await atomicWrite(TRACKS_FILE, tracks);
+  return writeMusicFile('tracks', tracks, async (records) => {
+    await ensureDir(PATHS.data);
+    await atomicWrite(TRACKS_FILE, records);
+  });
 }
 
 // Tracks list in creation order (the album's trackIds drive display order).
