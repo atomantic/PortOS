@@ -41,7 +41,7 @@ import { normalizeFilmLook } from '../../lib/filmLook.js';
 import { normalizeTitleCard } from '../../lib/musicVideoTitleCard.js';
 import { normalizeStatsOutro } from '../../lib/musicVideoStatsOutro.js';
 import { remapTreatmentForClone, scenesFingerprint } from './treatment.js';
-import { anchorShotsToSungLyrics, carryStoryboardApproval } from './productionReview.js';
+import { anchorShotsToSungLyrics, carryStoryboardApproval, dropStaleStoryboardRows } from './productionReview.js';
 import { cuesSungWithin } from '../../lib/musicVideoLyricAnchors.js';
 import { normalizeMusicVideoAutomation } from '../../lib/musicVideoAutomation.js';
 
@@ -625,7 +625,8 @@ export function replaceScenes(project, sceneInputs) {
       ...(prior.direction ? { direction: prior.direction } : {}),
     };
   });
-  return { project: touch(project, { scenes }), scenes, replaced: existing.length };
+  // Rows bound to shots the new plan dropped go with them.
+  return { project: dropStaleStoryboardRows(touch(project, { scenes })), scenes, replaced: existing.length };
 }
 
 // Scene fields a director edits within an approved shot (its span, wording, selected
@@ -844,7 +845,21 @@ export function splitScene(project, sceneId, { backend = null, atSec = null } = 
 
   const nextScenes = [...scenes.slice(0, idx), ...pieces, ...scenes.slice(idx + 1)]
     .map((s, i) => ({ ...s, order: i }));
-  const next = touch(project, { scenes: nextScenes });
+  const extra = { scenes: nextScenes };
+  // The shot's storyboard row follows its first piece; each later piece gets a
+  // copy of the row's direction, all anchored to the lines sung over them.
+  const draft = project.productionReview?.draft;
+  const row = Array.isArray(draft?.storyboard) && draft.storyboardSource !== 'document'
+    ? draft.storyboard.find((shot) => shot?.sceneId === sceneId) : null;
+  if (row) {
+    const anchored = (piece) => cuesSungWithin(project.lyricCues, piece.startSec, piece.endSec).map((cue) => cue.id);
+    const span = (piece) => ('startSec' in row || 'endSec' in row ? { startSec: piece.startSec, endSec: piece.endSec } : {});
+    const rows = pieces.map((piece, i) => ({ ...row, ...(i ? { id: `shot-${piece.sceneId}`, sceneId: piece.sceneId } : {}),
+      ...span(piece), lyricCueIds: anchored(piece) }));
+    const storyboard = draft.storyboard.flatMap((shot) => (shot === row ? rows : [shot]));
+    extra.productionReview = { ...project.productionReview, draft: { ...draft, storyboard } };
+  }
+  const next = touch(project, extra);
   return { project: next, scenes: nextScenes.slice(idx, idx + count) };
 }
 

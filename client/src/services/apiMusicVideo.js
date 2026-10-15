@@ -596,6 +596,8 @@ export const addMusicVideoProductionFeedback = (id, body, options = {}) => reque
 export const revertMusicVideoProductionInput = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/revert`, { method: 'POST', body: JSON.stringify(body), ...options });
 export const reviseMusicVideoProductionFromFeedback = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/revise`, { method: 'POST', body: JSON.stringify(body), ...options });
 export const syncMusicVideoLyricAnchors = (id, body = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/lyric-anchors`, { method: 'POST', body: JSON.stringify(body), ...options });
+// Remove the storyboard rows left from deleted shots.
+export const removeMusicVideoStaleStoryboardRows = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/stale-rows`, { method: 'DELETE', ...options });
 export const resolveMusicVideoProductionFeedback = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/feedback/resolve`, { method: 'POST', body: JSON.stringify(body), ...options });
 // Drafting is free; generation and candidate selection are separate explicit actions.
 export const saveMusicVideoSongRevision = (id, fields, options = {}) => request(`/music-video/${encodeURIComponent(id)}/song-revision`, { method: 'POST', body: JSON.stringify(fields), ...options });
