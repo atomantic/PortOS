@@ -38,7 +38,7 @@ const { sseState, ytSseStates, getYtSseState } = vi.hoisted(() => {
 
 // This page suite exercises existing controls with production approvals already granted.
 // ProductionReviewPanel and route integration suites exercise the real approval refusals.
-const feedbackCalls = vi.hoisted(() => ({ resolveFeedback: vi.fn(async () => null), syncLyricAnchors: vi.fn(async () => null), revise: vi.fn(async () => ({ revision: { sceneIds: ['s-a'] } })) }));
+const feedbackCalls = vi.hoisted(() => ({ resolveFeedback: vi.fn(async () => null), syncLyricAnchors: vi.fn(async () => null), removeStaleRows: vi.fn(async () => null), revise: vi.fn(async () => ({ revision: { sceneIds: ['s-a'] } })) }));
 vi.mock('../hooks/useMusicVideoProductionReview.js', () => ({ default: ({ project }) => ({
   ...feedbackCalls,
   readiness: project?.productionReadiness || { readyForProduction: true, basis: {}, art: { approved: true, problems: [] }, storyboard: { approved: true, problems: [] }, proof: { approved: true, problems: [] } },
@@ -3434,6 +3434,24 @@ describe('stage checklist and project options', () => {
     expect(feedbackCalls.syncLyricAnchors).toHaveBeenCalledWith();
     fireEvent.click(within(shots).getByRole('button', { name: 'Shot 2' }));
     await waitFor(() => expect(document.getElementById('scene-s-b')).toBeTruthy());
+  });
+
+  // Uniquely catches a row left from a cut shot holding the board with no way to clear it from the checklist.
+  it('lists the storyboard rows left from deleted shots by time and action, and removes them in one tap', async () => {
+    const project = { ...PROJECT_ANALYZED, scenes: [{ sceneId: 's-a', label: 'Drummer', startSec: 0, endSec: 4 }],
+      productionReview: { draft: { storyboard: [] } },
+      productionReadiness: { readyForProduction: false, basis: {}, art: { approved: true, problems: [] },
+        storyboard: { approved: false, problems: ['Remove 2 storyboard rows left from deleted shots.'],
+          staleRows: [{ id: null, sceneId: 'gone-1', startSec: 62.5, endSec: 64.25, action: 'A figure skids across the floor' },
+            { id: null, sceneId: 'gone-2', startSec: 70, endSec: 71, action: '' }] }, proof: { approved: false, problems: [] } } };
+    await openProject(project, 'board');
+    const checklist = screen.getByRole('region', { name: 'What this step needs' });
+    expect(checklist).toHaveTextContent('Rows from deleted shots');
+    expect(checklist).toHaveTextContent('1:02.50–1:04.25 · A figure skids across the floor');
+    expect(checklist).toHaveTextContent('1:10.00–1:11.00');
+    expect(checklist).not.toHaveTextContent('Remove 2 storyboard rows');
+    fireEvent.click(within(checklist).getByRole('button', { name: /Remove all 2/ }));
+    expect(feedbackCalls.removeStaleRows).toHaveBeenCalledWith();
   });
 
   it('builds the cast & sets from the Look checklist when nothing is written yet', async () => {

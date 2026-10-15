@@ -777,9 +777,10 @@ const STORYBOARD_PROBLEM_GROUPS = [
 function storyboardProblemItems(readiness, scenes = []) {
   // Shots whose lyric anchors differ from the singing get a row of their own that names each shot.
   const anchors = lyricAnchorItem(readiness, scenes);
+  const stale = staleRowsItem(readiness);
   const problems = summarizeStoryboardProblems(readiness?.storyboard?.problems?.filter(notFeedback)
-    .filter((text) => !anchors || !ANCHOR_PROBLEM.test(text)));
-  if (readiness?.storyboard?.approved || (!problems.length && !anchors)) return [];
+    .filter((text) => (!anchors || !ANCHOR_PROBLEM.test(text)) && (!stale || !STALE_ROWS_PROBLEM.test(text))));
+  if (readiness?.storyboard?.approved || (!problems.length && !anchors && !stale)) return [];
   return [...STORYBOARD_PROBLEM_GROUPS.flatMap((group, index) => {
     const earlier = STORYBOARD_PROBLEM_GROUPS.slice(0, index);
     const mine = problems.filter((text) => group.test.test(text) && !earlier.some((g) => g.test.test(text)));
@@ -788,10 +789,31 @@ function storyboardProblemItems(readiness, scenes = []) {
     const stale = group.id === 'art' && staleApprovalText(readiness?.art?.stale);
     const details = stale ? mine.map((text) => (ART_APPROVAL_PROBLEM.test(text) ? `${stale} Approve it again on the Look step.` : text)) : mine;
     return [{ id: `board-${group.id}`, label: group.label, done: false, details, action: group.action }];
-  }), ...(anchors ? [anchors] : [])];
+  }), ...(stale ? [stale] : []), ...(anchors ? [anchors] : [])];
 }
 
 const ANCHOR_PROBLEM = /^Review lyric anchors for /;
+const STALE_ROWS_PROBLEM = /left from deleted shots\.$/;
+const ROW_ACTION_CHARS = 60;
+
+/**
+ * Storyboard rows left from shots that were cut: each by its old time span and
+ * action (the shot is gone, so there is no card to open), and one button that
+ * removes them all.
+ */
+function staleRowsItem(readiness) {
+  const rows = readiness?.storyboard?.staleRows;
+  if (!rows?.length || readiness?.storyboard?.approved) return null;
+  const span = (row) => (Number.isFinite(row.startSec) && Number.isFinite(row.endSec)
+    ? `${formatTimecode(row.startSec)}–${formatTimecode(row.endSec)}` : 'Untimed');
+  const action = (text) => (text.length > ROW_ACTION_CHARS ? `${text.slice(0, ROW_ACTION_CHARS).trimEnd()}…` : text);
+  return {
+    id: 'board-stale-rows', label: 'Rows from deleted shots', done: false,
+    detail: `${rows.length === 1 ? 'This storyboard row belongs' : 'These storyboard rows belong'} to a shot that was cut.`,
+    details: [...new Set(rows.map((row) => (row.action ? `${span(row)} · ${action(row.action)}` : span(row))))],
+    action: { label: rows.length === 1 ? 'Remove it' : `Remove all ${rows.length}`, run: 'remove-stale-rows' },
+  };
+}
 const ART_APPROVAL_PROBLEM = /^Review and approve the current art direction/;
 const quoted = (lines) => (lines.length ? lines.map((line) => `“${line}”`).join(' / ') : 'nothing');
 

@@ -15,7 +15,7 @@ import { Router } from 'express';
 import { musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoShotLockSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoContinueShotSchema, musicVideoPoolUseSchema, musicVideoPoolMarkSchema, musicVideoPoolSearchQuerySchema, musicVideoPoolDeleteSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoLyricAnchorSyncSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
 import { productionReadiness } from '../services/musicVideo/productionReview.js';
 import { finishedOutsideBlocker } from '../lib/musicVideoFinishedOutside.js';
-import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, lockProductionShots, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, syncLyricAnchors, reviseProductionFromFeedback, revertProductionInput } from '../services/musicVideo/productionReviewService.js';
+import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, lockProductionShots, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, syncLyricAnchors, removeStaleStoryboardRows, reviseProductionFromFeedback, revertProductionInput } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   validateRequest,
@@ -734,6 +734,9 @@ router.post('/:id/production-review/feedback/resolve', asyncHandler(async (req, 
 }));
 router.post('/:id/production-review/lyric-anchors', asyncHandler(async (req, res) => {
   res.json(await syncLyricAnchors(req.params.id, validateRequest(musicVideoLyricAnchorSyncSchema, req.body ?? {})));
+}));
+router.delete('/:id/production-review/stale-rows', asyncHandler(async (req, res) => {
+  res.json(await removeStaleStoryboardRows(req.params.id));
 }));
 // An explicit click: the only provider call is the stage's own revision.
 router.post('/:id/production-review/revise', asyncHandler(async (req, res) => {

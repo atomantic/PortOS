@@ -562,6 +562,23 @@ export function boardStoryboard(project, storyboard = project.productionReview?.
     .map(scene => boardShotFromScene(project, scene))];
 }
 
+/** Draft rows still bound to a Board scene that no longer exists: leftovers from a cut, merge or re-plan. */
+function staleStoryboardRows(project) {
+  const draft = project.productionReview?.draft;
+  if (!Array.isArray(draft?.storyboard) || draft.storyboardSource === 'document') return [];
+  const ids = new Set((project.scenes || []).map(scene => scene.sceneId));
+  return draft.storyboard.filter(shot => shot?.sceneId && !ids.has(shot.sceneId));
+}
+
+/** The project without its stale draft rows; unchanged when there are none. Unbound rows stay to be bound. */
+export function dropStaleStoryboardRows(project) {
+  const stale = staleStoryboardRows(project);
+  if (!stale.length) return project;
+  const draft = project.productionReview.draft;
+  return { ...project, productionReview: { ...project.productionReview,
+    draft: { ...draft, storyboard: draft.storyboard.filter(shot => !stale.includes(shot)) } } };
+}
+
 /**
  * Re-anchor the storyboard rows of `sceneIds` (every shot when null) to the
  * lyric lines sung over their scenes now, keeping each row's span in step with
@@ -623,6 +640,9 @@ export function productionReadiness(project) {
     }
   }
   const documentShots = draft.storyboardSource === 'document';
+  // Each row left from a deleted shot, by its span and action, so the checklist can name it and remove them all.
+  const staleRows = documentShots ? [] : staleStoryboardRows(project)
+    .map(shot => ({ id: shot.id || null, sceneId: shot.sceneId, startSec: shot.startSec ?? null, endSec: shot.endSec ?? null, action: shot.action || '' }));
   const scenes = documentShots ? (draft.storyboard || []).map(shot => ({ ...shot, sceneId: shot.id, label: shot.id })) : project.scenes || [];
   if (documentShots) {
     if (project.composition?.mode !== 'document' || !project.composition.document?.directory
@@ -631,7 +651,8 @@ export function productionReadiness(project) {
     }
     if (new Set(scenes.map(s => s.id)).size !== scenes.length || scenes.some(s => !text(s.id))) boardProblems.push('Document shots need unique source IDs.');
   } else {
-    if (draft.storyboard?.some(shot => !shot.sceneId || !scenes.some(s => s.sceneId === shot.sceneId))) boardProblems.push('Bind every draft shot to a real Board scene.');
+    if (draft.storyboard?.some(shot => !shot.sceneId)) boardProblems.push('Bind every draft shot to a real Board scene.');
+    if (staleRows.length) boardProblems.push(`Remove ${staleRows.length} storyboard row${staleRows.length === 1 ? '' : 's'} left from deleted shots.`);
     if (new Set((draft.storyboard || []).map(s => s.sceneId)).size !== draft.storyboard?.length) boardProblems.push('Each storyboard shot must bind to its own Board scene.');
   }
   if (!scenes.length) boardProblems.push('Create a timed shot storyboard.');
@@ -677,7 +698,7 @@ export function productionReadiness(project) {
     // The overlay text check is advice on the storyboard, like camera variety; it never blocks approval.
     storyboard: { approved: storyboardApproved, problems: [...new Set(boardProblems)], camera,
       // Board shots as reviewed, derived rows included, so the editor and approval card show what the gate checked.
-      shots: documentShots ? null : boardStoryboard(project), lyricAnchors, text: overlayTextReport(project, overlayTextBasis), stale: storyboardApproved ? null : staleApproval(project, 'storyboard', basis.storyboard, inputs),
+      shots: documentShots ? null : boardStoryboard(project), lyricAnchors, staleRows, text: overlayTextReport(project, overlayTextBasis), stale: storyboardApproved ? null : staleApproval(project, 'storyboard', basis.storyboard, inputs),
       shotLocks: locks, unlocked: byShot ? unlocked : [], clipLocks: clips,
       // Video shots whose clip is not locked yet: the board is finished when every shot is fully locked.
       clipsUnlocked: clips ? Object.keys(clips).filter(id => clips[id] && clips[id] !== 'locked') : [] },
