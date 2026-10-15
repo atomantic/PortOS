@@ -58,7 +58,7 @@ export function listActiveRenders() {
 }
 
 /** Total tracked renders in flight in this process. */
-export function countActiveRenders() {
+function countActiveRenders() {
   let total = 0;
   for (const { map } of kinds.values()) total += map.size;
   return total;
