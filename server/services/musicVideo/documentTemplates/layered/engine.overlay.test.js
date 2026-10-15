@@ -4,7 +4,6 @@ import { describe, expect, it } from 'vitest';
 // The layered engine is a browser template copied into each document, so the overlay
 // guard is exercised by evaluating just that helper against a recording fake context.
 const engine = readFileSync(new URL('./engine.js', import.meta.url), 'utf8');
-const lyricType = readFileSync(new URL('../shared/lyricType.js', import.meta.url), 'utf8');
 const helper = engine.slice(engine.indexOf('  const FOOTAGE_WASH_ALPHA'), engine.indexOf('  // Compare the same camera-transformed footage'));
 const W = 1920; const H = 1080;
 const footageOverlayContext = new Function('W', 'H', `${helper}\nreturn footageOverlayContext;`)(W, H);
