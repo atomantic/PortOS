@@ -350,7 +350,7 @@ export default function WorkflowTab({ apps, providers, providersLoaded }) {
   const fetchGraph = useCallback(async () => {
     const generation = ++fetchGeneration.current;
     setLoading(true);
-    const data = await api.getCosWorkflow(hours).catch(err => {
+    const data = await api.getCosWorkflow(hours, { silent: true }).catch(err => {
       if (generation === fetchGeneration.current) setError(err?.message || 'Failed to load schedule');
       return null;
     });
