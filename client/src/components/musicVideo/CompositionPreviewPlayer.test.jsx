@@ -128,7 +128,7 @@ describe('CompositionPreviewPlayer', () => {
     expect(socket.emit.mock.calls).toHaveLength(sent);
   });
 
-  it('reopens a disconnected preview with current controls and ignores the obsolete session', async () => {
+  it.each([false, true])('reopens a disconnected preview after a session error (frame recovered: %s) with current controls', async (frameRecovered) => {
     const look = { version: 1, preset: 'custom', grain: 0.4 };
     const { rerender } = render(<CompositionPreviewPlayer project={{ ...project, filmLook: look }} audioUrl='/song.mp3' />);
     await waitFor(() => expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled());
@@ -138,12 +138,14 @@ describe('CompositionPreviewPlayer', () => {
       for (const fn of socket.__handlers.get('generated-preview:error') || []) fn({ requestId: oldOpen.requestId, message: 'Synthetic seek failure' });
     });
     expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled();
-    act(() => {
-      for (const fn of socket.__handlers.get('generated-preview:frame') || []) {
-        fn({ requestId: oldOpen.requestId, generation: 1, mime: 'image/jpeg', data: btoa('recovered frame') });
-      }
-    });
-    expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled();
+    if (frameRecovered) {
+      act(() => {
+        for (const fn of socket.__handlers.get('generated-preview:frame') || []) {
+          fn({ requestId: oldOpen.requestId, generation: 1, mime: 'image/jpeg', data: btoa('recovered frame') });
+        }
+      });
+      expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled();
+    }
     act(() => {
       socket.connected = false;
       for (const fn of socket.__handlers.get('disconnect') || []) fn();
@@ -225,10 +227,10 @@ describe('CompositionPreviewPlayer', () => {
     expect(document.querySelector('iframe')).toBeNull();
   });
 
-  it('reports an explicit unavailable state and still does not mount an iframe', async () => {
+  it.each(['unavailable', 'error'])('reports a terminal opening %s without retrying on reconnect or mounting an iframe', async (terminalEvent) => {
     socket.emit.mockImplementation((event, payload) => {
       if (event !== 'generated-preview:open') return;
-      for (const fn of socket.__handlers.get('generated-preview:unavailable') || []) {
+      for (const fn of socket.__handlers.get(`generated-preview:${terminalEvent}`) || []) {
         fn({ requestId: payload.requestId, code: 'PREVIEW_ISOLATION_UNAVAILABLE', message: 'Isolated preview is unavailable on this host.' });
       }
     });
@@ -236,6 +238,15 @@ describe('CompositionPreviewPlayer', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Isolated preview is unavailable on this host.');
     expect(screen.getByText('Preview unavailable')).toBeInTheDocument();
     expect(document.querySelector('iframe')).toBeNull();
+    act(() => {
+      socket.connected = false;
+      for (const fn of socket.__handlers.get('disconnect') || []) fn();
+      socket.connected = true;
+      for (const fn of socket.__handlers.get('connect') || []) fn();
+    });
+    expect(opens()).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled();
+    expect(screen.getByText('Preview unavailable')).toBeInTheDocument();
   });
 
   it('applies film look and title-card edits made while the isolated worker is opening', async () => {

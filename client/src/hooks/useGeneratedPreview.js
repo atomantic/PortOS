@@ -166,7 +166,9 @@ export default function useGeneratedPreview({ active, request, controls = null }
     const onError = (payload) => {
       if (payload?.requestId && payload.requestId !== requestId) return;
       if (pending.current?.requestId !== requestId || !mounted.current) return;
-      stoppedStatus = 'error';
+      // A command/seek failure must not prevent replacing a lost session.
+      // Only failures before the open handshake suppress reconnect retries.
+      stoppedStatus = pending.current.sessionId ? null : 'error';
       setState((prev) => ({
         ...prev, status: 'error', ready: false, reason: payload.message || 'The isolated preview could not start.',
       }));
