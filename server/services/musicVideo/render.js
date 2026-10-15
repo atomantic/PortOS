@@ -287,40 +287,39 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
     // clip so the caller gets the clean MISSING_CLIPS 4xx, matching the duration guard.
     if (!measured.width || measured.width <= 0 || !measured.height || measured.height <= 0) { missing.push(scene.videoHistoryId); continue; }
     const edit = performanceEdit(scene);
-    let inSec = edit ? Math.min(edit.inSec, duration) : 0;
-    let outSec = edit ? Math.min(edit.outSec, duration) : duration;
-    let sourceSec = duration - inSec;
+    const sourceInSec = edit ? Math.min(edit.inSec, duration) : 0;
+    const sourceOutSec = edit ? Math.min(edit.outSec, duration) : duration;
     // A hand-set speed and offset (clipSpeedRate / clipOffsetSec) put the clip on the
     // output timebase: sectionChain plays it at `rate` and holds its first frame for
     // `leadSec` before the trim, so the in/out points here are output seconds.
     const rate = clipSpeedRate(scene);
-    const start = inSec + clipOffsetSec(scene);
-    const timing = rate !== 1 || start !== inSec;
-    const leadSec = timing ? round3(Math.max(0, -start)) : 0;
-    if (timing) {
-      const sourceIn = Math.min(duration, Math.max(0, start));
-      outSec = round3(leadSec + Math.max(sourceIn, outSec) / rate);
-      inSec = round3(sourceIn / rate);
-      sourceSec = round3(leadSec + (duration - sourceIn) / rate);
-    }
+    const offsetSourceInSec = sourceInSec + clipOffsetSec(scene);
+    const retimed = rate !== 1 || offsetSourceInSec !== sourceInSec;
+    const leadSec = retimed ? round3(Math.max(0, -offsetSourceInSec)) : 0;
+    const clampedSourceInSec = Math.min(duration, Math.max(0, offsetSourceInSec));
+    // Keep source coordinates immutable. Only retimed clips round to milliseconds;
+    // an untouched performance edit keeps its original precision.
+    const playbackInSec = retimed ? round3(clampedSourceInSec / rate) : sourceInSec;
+    const playbackOutSec = retimed ? round3(leadSec + Math.max(clampedSourceInSec, sourceOutSec) / rate) : sourceOutSec;
+    const playableDurationSec = retimed ? round3(leadSec + (duration - clampedSourceInSec) / rate) : duration - sourceInSec;
     clips.push({
       sceneId: scene.sceneId,
       videoPath,
       width: measured.width,
       height: measured.height,
       fps: measured.fps || 24,
-      duration: outSec - inSec,
+      duration: playbackOutSec - playbackInSec,
       // The playable source length (from the in-point on) survives the snap
       // below (which rewrites `duration` to the rendered span) so coverage can
       // be judged against it.
-      sourceSec,
+      sourceSec: playableDurationSec,
       // A reversed clip is read once, backwards, and holds its last frame rather than looping.
       loop: edit || clipReversed(scene) ? false : sceneLoops(scene),
       ...(clipReversed(scene) ? { reverse: true } : {}),
       ...(rate !== 1 ? { rate } : {}),
       ...(leadSec > 0 ? { leadSec } : {}),
-      inSec,
-      outSec,
+      inSec: playbackInSec,
+      outSec: playbackOutSec,
       ...footageFrameFit(scene),
       // VHS glitches on its cuts (musicVideoTransitions.js) ride over the edit without moving it.
       ...sceneTransitions(scene),
