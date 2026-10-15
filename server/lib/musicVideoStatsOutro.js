@@ -19,8 +19,8 @@
 
 export const STATS_OUTRO_LIMITS = Object.freeze({ durationMin: 4, durationMax: 20 });
 export const STATS_OUTRO_DEFAULTS = Object.freeze({ enabled: false, durationSec: 8 });
-/** How many unused stills lie on the floor behind the tally. */
-export const STATS_OUTRO_FLOOR_MAX = 14;
+/** How many unused stills are piled into the floor collage behind the tally. */
+export const STATS_OUTRO_FLOOR_MAX = 48;
 /** The fonts the scene draws in (bundled OFL faces, registered by each page). */
 export const STATS_OUTRO_FONTS = Object.freeze({
   head: Object.freeze({ family: 'MV Archivo', file: 'archivo-variable.woff2' }),
@@ -176,24 +176,43 @@ function drawStatsOutro(ctx, { width, height, t, durationSec, stats, images = []
   ctx.fillStyle = floorGrad;
   ctx.fillRect(0, 0, width, height);
 
-  // Prints and film offcuts dropped on the floor, landing one after another.
-  const prints = Math.max(8, (stats && Array.isArray(stats.floorImages) ? stats.floorImages.length : 0));
-  for (let i = 0; i < prints; i++) {
-    const land = ease((t - 0.1 - i * 0.07) / 0.5);
-    if (land <= 0) continue;
-    const size = unit * (0.2 + hash(i, 1) * 0.1);
+  // The floor is a collage: prints and film offcuts piled edge to edge over the whole frame,
+  // dropping in one after another. A grid of overlapping, tilted prints leaves no floor showing,
+  // and a second, sparser layer on top makes it read as a pile rather than a wall.
+  const floorCount = stats && Array.isArray(stats.floorImages) ? stats.floorImages.length : 0;
+  const cell = unit * 0.22;
+  const cols = Math.ceil(width / cell) + 1;
+  const rowsN = Math.ceil(height / (cell * 0.8)) + 1;
+  const spots = [];
+  for (let r = 0; r < rowsN; r++) {
+    for (let c = 0; c < cols; c++) spots.push({ x: (c - 0.5 + (r % 2) * 0.5) * cell, y: (r - 0.5) * cell * 0.8, scale: 1.3 });
+  }
+  const base = spots.length;
+  for (let k = 0; k < Math.ceil(base / 3); k++) spots.push({ x: hash(k, 7) * width, y: hash(k, 8) * height, scale: 1.1 });
+  // Shuffled so the pile lands all over the frame rather than row by row.
+  const order = spots.map((_, i) => i).sort((a, b) => hash(a, 9) - hash(b, 9));
+  const landOrder = [...order.filter((i) => i < base), ...order.filter((i) => i >= base)];
+  const dropGap = 1.6 / Math.max(1, landOrder.length);
+  landOrder.forEach((spotIndex, i) => {
+    const land = ease((t - 0.05 - i * dropGap) / 0.35);
+    if (land <= 0) return;
+    const spot = spots[spotIndex];
+    const size = cell * spot.scale * (0.92 + hash(spotIndex, 1) * 0.2);
     const w = size * 1.25;
     const h = size;
-    const x = (((i * 0.618034) + hash(i, 2) * 0.2) % 1) * (width + w) - w / 2;
-    const y = (((i * 0.381966) + hash(i, 3) * 0.3) % 1) * (height + h) - h / 2 + (1 - land) * -unit * 0.05;
-    const drift = t * unit * 0.004 * (0.5 + hash(i, 4));
-    const angle = (hash(i, 5) - 0.5) * 0.7;
+    const x = spot.x + (hash(spotIndex, 2) - 0.5) * cell * 0.35;
+    const y = spot.y + (hash(spotIndex, 3) - 0.5) * cell * 0.3 + (1 - land) * -unit * 0.04;
+    const drift = t * unit * 0.002 * (0.5 + hash(spotIndex, 4));
+    const angle = (hash(spotIndex, 5) - 0.5) * 0.6;
     ctx.save();
     ctx.translate(x + drift, y);
     ctx.rotate(angle);
-    ctx.scale(1 + (1 - land) * 0.12, 1 + (1 - land) * 0.12);
-    ctx.globalAlpha = land * 0.85;
-    const img = images[i] || null;
+    ctx.scale(1 + (1 - land) * 0.15, 1 + (1 - land) * 0.15);
+    ctx.globalAlpha = land;
+    // A soft shadow under each print gives the pile its depth.
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+    ctx.fillRect(-w / 2 - size * 0.02, -h / 2 + size * 0.04, w + size * 0.1, h + size * 0.14);
+    const img = floorCount ? images[spotIndex % floorCount] || null : null;
     const iw = img ? img.naturalWidth || img.width : 0;
     const ih = img ? img.naturalHeight || img.height : 0;
     if (iw > 0 && ih > 0) {
@@ -220,7 +239,7 @@ function drawStatsOutro(ctx, { width, height, t, durationSec, stats, images = []
       ctx.fillRect(-w / 2 + w * 0.06, -h / 2 + hole * 2, w * 0.88, h - hole * 4);
     }
     ctx.restore();
-  }
+  });
   // The prints sit in shadow, under the tally.
   ctx.fillStyle = 'rgba(8, 6, 5, 0.5)';
   ctx.fillRect(0, 0, width, height);

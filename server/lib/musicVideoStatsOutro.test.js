@@ -58,11 +58,11 @@ describe('cutting room floor outro', () => {
   });
 
   it('leaves out the choices never made and spreads the floor over the whole pile', () => {
-    const collectionItems = Array.from({ length: 40 }, (_, i) => ({ kind: 'image', ref: `still-${String(i).padStart(2, '0')}.png` }));
+    const collectionItems = Array.from({ length: 120 }, (_, i) => ({ kind: 'image', ref: `still-${String(i).padStart(3, '0')}.png` }));
     const stats = musicVideoOutroStats({ scenes: [{ sceneId: 's' }] }, { collectionItems });
     expect(stats.floorImages).toHaveLength(STATS_OUTRO_FLOOR_MAX);
-    expect(stats.floorImages[0]).toBe('still-00.png');
-    expect(stats.floorImages.at(-1) > 'still-35.png').toBe(true);
+    expect(stats.floorImages[0]).toBe('still-000.png');
+    expect(stats.floorImages.at(-1) > 'still-110.png').toBe(true);
     expect(statsOutroRows(stats).map((row) => row.label)).toEqual(['Renders reviewed', 'Images generated', 'Images used', 'Videos generated', 'Videos used', 'Left on the floor']);
   });
 });
