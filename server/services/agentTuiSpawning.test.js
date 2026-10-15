@@ -2136,7 +2136,7 @@ describe('spawnTuiAgent runtime', () => {
   // screen for a detector to match and — since the wall-clock ceiling was
   // removed — nothing would ever have touched it again. A human opened the Shell
   // tab and typed "continue", and it finished.
-  it("nudges a session that went quiet with the task unfinished", async () => {
+  it('dispatches bounded completion and issue-disposition guidance to a stalled session', async () => {
     await driveAgyToSubmittedPrompt();
     vi.mocked(shellService.pasteToSession).mockClear();
 
@@ -2149,9 +2149,23 @@ describe('spawnTuiAgent runtime', () => {
     await flushMicrotasks();
     expect(shellService.pasteToSession).toHaveBeenCalledWith(
       SESSION_ID,
-      STALL_NUDGE_TEXT,
+      expect.stringContaining('Finish what you can and then write the completion sentinel.'),
       expect.objectContaining({ label: expect.stringContaining("stalled") }),
     );
+    // Assert what the recovery boundary actually sends, independently of the
+    // shared constant, so reverting it to a generic "continue" is caught here.
+    const recoveryText = vi.mocked(shellService.pasteToSession).mock.calls[0][1];
+    expect(recoveryText).toContain('File GitHub issues for anything that is too big for this session.');
+    expect(recoveryText).toContain('original task scope, permissions, and safety limits');
+    expect(recoveryText).toContain('do not bypass a refusal or permission block');
+    expect(recoveryText).toContain('owning repository\'s issue-filing instructions');
+    expect(recoveryText).toContain('search for duplicates and reuse an existing issue');
+    expect(recoveryText).toContain('redacted evidence, affected paths, a chosen next step, and acceptance criteria');
+    expect(recoveryText).toContain('If issue filing is not authorized, unavailable, or fails');
+    expect(recoveryText).toContain('report the filing blocker and ready-to-file details as an INCOMPLETE disposition');
+    expect(recoveryText).toContain('do not claim it was filed');
+    expect(recoveryText).toContain('exact sentinel path and format from your existing completion instructions');
+    expect(recoveryText).toContain('writing the sentinel does not itself mean the task succeeded');
     // A nudge, never a verdict: the run carries on.
     expect(shellService.pasteToSession).toHaveBeenCalledTimes(1);
     expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
