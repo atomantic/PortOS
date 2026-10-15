@@ -1341,7 +1341,8 @@ async function runJobLifecycle(job, markDispatched, permit) {
       resolveTerminalState();
       const logPrefix = state === 'completed' ? '✅' : state === 'canceled' ? '🛑' : '❌';
       const logSuffix = state === 'failed' ? `: ${job.error}` : state === 'canceled' ? ' (was running)' : '';
-      console.log(`${logPrefix} media-job [${job.id.slice(0, 8)}] ${state}${logSuffix}`);
+      const log = state === 'failed' ? console.error : console.log;
+      log(`${logPrefix} media-job [${job.id.slice(0, 8)}] ${state}${logSuffix}`);
       const ssePayload =
         state === 'completed' ? { type: 'complete', result: job.result }
         : state === 'canceled' ? { type: 'canceled', reason: job.error }
