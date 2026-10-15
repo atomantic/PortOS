@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium } from 'playwright-core';
-import { createLyricType, TEXT_ZONES } from './lyricType.js';
+import { createLyricType, LYRIC_FIT, TEXT_ZONES } from './lyricType.js';
 
 // zoneRect is the module's public text-zone geometry, reached through the global classic scripts use.
 const { zoneRect } = globalThis.PORTOS_LYRIC_TYPE;
@@ -46,6 +46,28 @@ describe('lyricType roles', () => {
   it('lets a shot override the role of the lines sung over it', () => {
     const type = createLyricType({ ...MV, scenes: MV.scenes.map((s) => (s.sceneId === 'a' ? { ...s, lyricRole: 'stamp' } : s)) });
     expect(type.lines.map((l) => l.role)).toEqual(['stamp', 'hook', 'stamp']);
+  });
+
+  it('ranks a shot\'s lyricRole above sectionRoles', () => {
+    const song = { ...MV, lyricMarkers: [], scenes: [{ sceneId: 'a', startSec: 0, endSec: 3.5, lyricRole: 'hook' }],
+      song: { ...MV.song, sections: [{ label: 'Verse 1', startSec: 0 }] } };
+    expect(roles(song, { sectionRoles: { verse: 'stamp' } })).toEqual(['hook', 'stamp', 'stamp']);
+  });
+
+  it('slams a chorus phrase the first time it is sung and brings its repeats back as sung lines', () => {
+    const chorus = (id, start) => ({ id, text: 'We Light the signal', startSec: start, words: words('We Light the signal', start) });
+    const song = {
+      ...MV, scenes: [],
+      lyrics: [chorus('c0', 1), { id: 'v0', text: 'walking through the static', startSec: 4, words: words('walking through the static', 4) }, chorus('c1', 8)],
+      lyricMarkers: [{ type: 'section', kind: 'chorus', line: 0 }, { type: 'section', kind: 'verse', line: 1 }, { type: 'section', kind: 'chorus', line: 2 }],
+    };
+    const type = createLyricType(song);
+    expect(type.lines.map((l) => l.role)).toEqual(['hook', 'line', 'line']);
+    // The repeat takes the sung line's zone, not the hook's band.
+    expect(type.lines.map((l) => l.zone)).toEqual(['lower', 'lower-left', 'lower-left']);
+    expect(roles(song, { hookRepeats: 'hook' })).toEqual(['hook', 'line', 'hook']);
+    // A shot that asks for a hook slam keeps it.
+    expect(roles({ ...song, scenes: [{ sceneId: 'late', startSec: 7, endSec: 12, lyricRole: 'hook' }] })).toEqual(['hook', 'line', 'hook']);
   });
 });
 
@@ -151,7 +173,7 @@ describe('lyricType text zones', () => {
 
   it('places each line inside its shot\'s text zone, and keeps a `none` shot clear', () => {
     expect(verse.zone).toBe('upper-right');
-    expect(hook.zone).toBe('center');
+    expect(hook.zone).toBe('lower');
     expect(spoken.zone).toBe('none');
     expect(type.linesAt(8.2)).toEqual([]);
     for (const line of [verse, hook]) {
@@ -165,6 +187,35 @@ describe('lyricType text zones', () => {
       }
       expect(placed.px).toBeGreaterThanOrEqual(56);
     }
+  });
+
+  it('keeps each caption to a small share of the frame, shrinking long lines but never below the phone floor', () => {
+    const long = 'every frame we never used is stacked against the wall tonight';
+    const type = createLyricType({}, {
+      lines: ['line', 'hook', 'stamp', 'data'].map((role, i) => ({ text: long, role, startSec: i * 10, words: words(long, i * 10) })),
+    });
+    for (const [width, height] of [[1920, 1080], [1080, 1920], [1080, 1080]]) {
+      const unit = Math.min(width, height) / 1080;
+      for (const line of type.lines) {
+        const placed = type.layout(line, width, height, measure);
+        const rowH = placed.px * (line.role === 'data' ? 1.3 : 1.02);
+        const covered = placed.words.reduce((sum, word) => sum + word.w, 0) * rowH;
+        const floor = (line.role === 'data' ? 40 : 56) * unit;
+        expect(placed.px).toBeGreaterThanOrEqual(floor - 1e-6);
+        // Only the legibility floor may stop the shrink.
+        if (placed.px <= floor + 1e-6) continue;
+        expect(covered).toBeLessThanOrEqual(LYRIC_FIT.maxCover[line.role] * width * height + 1e-6);
+        expect(placed.rows).toBeLessThanOrEqual(LYRIC_FIT.maxRows);
+      }
+    }
+  });
+
+  it('balances a wrapped line instead of leaving its last word alone on a row', () => {
+    const text = 'I found a shot, then changed the scene';
+    const type = createLyricType({}, { lines: [{ text, role: 'line', zone: 'lower-left', startSec: 0, words: words(text, 0) }] });
+    const placed = type.layout(type.lines[0], 1920, 1080, measure);
+    const rows = [...new Set(placed.words.map((word) => word.y))].map((y) => placed.words.filter((word) => word.y === y).map((word) => word.text).join(' '));
+    expect(rows).toEqual(['I found a shot, then', 'changed the scene']);
   });
 
   it('accepts centred upper/lower shot zones and lays hooks clear of the frame centre', () => {

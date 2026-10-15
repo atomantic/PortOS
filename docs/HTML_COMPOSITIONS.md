@@ -494,8 +494,10 @@ Lines come from `PORTOS_MV.lyrics` with their aligned word times (or
 one of four roles: `line` (default sung line: words rise and fade in on their
 onsets, the line drifts up and fades 0.3s after its last word ends, but never
 before that word has shown for 0.8s), `hook` (wide
-caps centred in the zone, each word slams in on its onset, one outline-only
-accent word with ink beneath its light outline, cut on the next beat),
+caps centred in the zone, the lower band unless the shot names one, each word
+slams in on its onset, one outline-only accent word with ink beneath its light
+outline, cut on the next beat; a chorus phrase slams the first time it is sung
+and its repeats come back as sung lines unless `hookRepeats: 'hook'`),
 `stamp` (a three-frame stamp with a small tilt, optional strike-through) and `data` (mono HUD caption whose numbers roll;
 at most one per shot). A per-line override or the line's own `role` wins,
 then the shot's `lyricRole`, then the lyric sheet: the line's `lyricMarkers`
@@ -503,7 +505,10 @@ delivery direction (spoken/shouted lines stamp), else its section header
 (choruses, hooks, refrains and drops are hooks), else `line`. Each shot's `textZone` (`lower-left`, `upper-right`,
 centred `upper` / `lower`, `center`, or `none` to keep the shot clear) places
 the words so they never cover the subject. A line never shows before its first word onset, stays at
-least 0.8s, and sung type stays at least 56px at 1080p. Palette tokens
+least 0.8s, and sung type stays at least 56px at 1080p. Type stays out of the
+picture's way: one caption covers at most 6% of the frame (hooks 10%, data
+readouts 4%; `LYRIC_FIT`) in at most two balanced rows, shrinking to fit but
+never below that floor. Palette tokens
 (`fill`, `ink`, `accent`, `strike`), fonts and an optional ink-boil jitter are
 options. Upgrading a pre-module layered engine adds the module's two tags in
 front of the template's engine tag.
