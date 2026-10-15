@@ -14,6 +14,12 @@ describe('cutting room floor outro', () => {
   // The tally is the feature: every count must come from what the project records, each asset counted once.
   it('counts what was made, kept and turned down from the shots, the collection and the marks', () => {
     const project = {
+      // One lock by hand on s1 (still and clip), one an autopilot set, and one carried from a whole-board approval.
+      productionReview: {
+        shotApprovals: { s1: { approvedAt: 'x' }, s2: { approvedAt: 'x', approvedBy: 'autopilot' }, gone: { approvedAt: 'x' } },
+        clipApprovals: { s1: { videoHistoryId: 'clip-kept' }, s2: { videoHistoryId: 'v', fromBoardApproval: true } },
+      },
+      excerpts: [{ notes: [{ atSec: 1, note: 'tighten' }, { atSec: 2, note: 'too dark' }] }, { notes: [] }],
       assetMarks: { 'image:bad.png': 'bad', 'image:kept.png': 'bad', 'image:never-made.png': 'bad' },
       scenes: [
         {
@@ -40,13 +46,20 @@ describe('cutting room floor outro', () => {
       stills: { made: 5, kept: 3 }, // kept, rejected (now on s2), end, floor, bad
       clips: { made: 3, kept: 1 },
       rejected: 2, // clip-rejected, and bad.png by its mark; kept.png is in the cut and never-made.png was never made
+      locks: 2, notes: 2,
       shots: 2, lipSyncs: 1, transitions: 2, imageEffects: 1, cameraMoves: 1,
       floorImages: ['bad.png', 'floor.png'],
     });
     const rows = statsOutroRows(stats);
-    expect(rows.at(-1)).toEqual({ label: 'Left on the floor', value: 4, accent: true });
-    expect(rows.map((row) => row.label)).toEqual(['Stills made', 'Clips made', 'Takes rejected', 'Transitions placed', 'Image effects',
-      'Camera moves', 'Lip-sync shots', 'Shots in the cut', 'Left on the floor']);
+    expect(rows).toEqual([
+      { label: 'Renders reviewed', value: 8 },
+      { label: 'Takes chosen', value: 4, choice: true },
+      { label: 'Takes turned down', value: 2, choice: true },
+      { label: 'Shots locked by hand', value: 2, choice: true },
+      { label: 'Review notes written', value: 2, choice: true },
+      { label: 'Cuts, effects & moves', value: 5, choice: true },
+      { label: 'Left on the floor', value: 4, accent: true },
+    ]);
   });
 
   it('leaves out the choices never made and spreads the floor over the whole pile', () => {
@@ -55,6 +68,6 @@ describe('cutting room floor outro', () => {
     expect(stats.floorImages).toHaveLength(STATS_OUTRO_FLOOR_MAX);
     expect(stats.floorImages[0]).toBe('still-00.png');
     expect(stats.floorImages.at(-1) > 'still-35.png').toBe(true);
-    expect(statsOutroRows(stats).map((row) => row.label)).toEqual(['Stills made', 'Clips made', 'Shots in the cut', 'Left on the floor']);
+    expect(statsOutroRows(stats).map((row) => row.label)).toEqual(['Renders reviewed', 'Takes chosen', 'Left on the floor']);
   });
 });

@@ -140,7 +140,9 @@ describe('BoardStage ending', () => {
     expect(screen.getByTestId('search').textContent).toContain('ending=1');
     const card = screen.getByRole('region', { name: 'Ending: cutting room floor' });
     await waitFor(() => expect(card.textContent).toContain('Left on the floor'));
-    expect(card.textContent).toContain('Stills made30');
+    expect(card.textContent).toContain('Renders reviewed39');
+    // Takes chosen (16) and turned down (5) are the decisions; renders made are not.
+    expect(card.textContent).toContain('Human directed · 21 decisions');
     expect(screen.getByRole('button', { name: /Play 8s/ })).toBeTruthy();
     fireEvent.click(screen.getByLabelText(/Off/));
     expect(saveProjectFields).toHaveBeenCalledWith({ statsOutro: { enabled: true, durationSec: 8 } });

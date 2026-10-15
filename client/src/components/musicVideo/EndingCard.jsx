@@ -67,6 +67,7 @@ export default function EndingCard({ project, onEditLocal, onSave, onClose }) {
   const t = preview.active ? preview.t : posterTime(seconds);
   const running = preview.active && preview.t < seconds;
   const rows = shown ? statsOutroRows(shown) : [];
+  const decisions = rows.reduce((sum, row) => sum + (row.choice ? row.value : 0), 0);
   return (
     <section aria-label="Ending: cutting room floor" className="space-y-2 rounded-lg border border-port-accent bg-port-card p-2">
       <div className="flex items-center justify-between gap-2">
@@ -95,6 +96,7 @@ export default function EndingCard({ project, onEditLocal, onSave, onClose }) {
         </div>
         <div className="min-w-0 space-y-2">
           <StatsOutroPanel project={project} onEditLocal={onEditLocal} onSave={onSave} />
+          {rows.length > 0 && <p className="text-sm font-medium">Human directed · {formatCount(decisions, { fallback: '0' })} decisions</p>}
           {rows.length > 0 && (
             <dl aria-label="What the ending counts" className="space-y-0.5 text-xs">
               {rows.map((row) => (
@@ -105,7 +107,7 @@ export default function EndingCard({ project, onEditLocal, onSave, onClose }) {
               ))}
             </dl>
           )}
-          <p className="text-xs text-port-text-muted">Counted from your shots, takes, ✕ marks and this video&apos;s collection. Unused stills fill the floor.</p>
+          <p className="text-xs text-port-text-muted">Counted from your picks, rejections, ✕ marks, locks and review notes. Locks an autopilot set are not counted. Unused stills fill the floor.</p>
         </div>
       </div>
     </section>

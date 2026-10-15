@@ -1,14 +1,15 @@
 /**
  * Music Video — the cutting room floor outro: an optional closing scene that
- * plays after the song ends and tallies the human choices behind the video
- * (stills and clips made against the ones in the cut, takes rejected,
- * transitions, image effects, camera moves, lip-sync shots), over a floor of
- * the stills that did not make it. One record on the project
+ * plays after the song ends under the title "Human Directed" and tallies the
+ * human choices behind the video (the renders reviewed, the takes chosen and
+ * turned down, the shots locked by hand, the review notes written, the edit
+ * calls placed), over a floor of the stills that did not make it. One record on the project
  * (`project.statsOutro`, null = off) turns it on and sets how long it runs;
  * it adds that time after the song and never shortens it.
  *
  * Every count comes from what the project records (`musicVideoOutroStats`):
- * its shots' takes and selections, its media collection and its asset marks.
+ * its shots' takes and selections, its media collection, its asset marks, its
+ * shot locks and its draft review notes.
  * Media deleted from the library drops out of the counts with it.
  *
  * `drawStatsOutro` is the one painter for the storyboard animatic (a canvas
@@ -51,11 +52,13 @@ const TAKE_KINDS = Object.freeze({ image: 'image', endImage: 'image', video: 'vi
  * The tally from what the project records. `collectionItems` are the rows of
  * the video's media collection (`{ kind, ref }`): every still and clip made
  * for it, including ones no shot holds any more. Returns
- * `{ stills: { made, kept }, clips: { made, kept }, rejected, shots, lipSyncs,
- * transitions, imageEffects, cameraMoves, floorImages }` — `kept` is what a
- * shot uses now, `rejected` the takes rejected or marked ✕ bad, and
- * `floorImages` up to STATS_OUTRO_FLOOR_MAX unused stills (rejected first) to
- * lay on the floor. Pure.
+ * `{ stills: { made, kept }, clips: { made, kept }, rejected, locks, notes, shots,
+ * lipSyncs, transitions, imageEffects, cameraMoves, floorImages }` — `kept` is
+ * what a shot uses now, `rejected` the takes rejected or marked ✕ bad, `locks`
+ * the still and clip locks the director set by hand (not ones an autopilot or
+ * a whole-board approval set), `notes` the timecoded notes written on draft
+ * renders, and `floorImages` up to STATS_OUTRO_FLOOR_MAX unused stills
+ * (rejected first) to lay on the floor. Pure.
  */
 export function musicVideoOutroStats(project, { collectionItems = [] } = {}) {
   const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
@@ -95,6 +98,14 @@ export function musicVideoOutroStats(project, { collectionItems = [] } = {}) {
   // A take put back on a shot is no longer a rejection.
   for (const key of used) rejected.delete(key);
   const count = (keys, kind) => [...keys].filter((key) => key.startsWith(`${kind}:`)).length;
+  // Locks set by hand: an autopilot's or reviewer's lock names who set it, and a whole-board approval carried onto each shot is one call, not one per shot.
+  const sceneIds = new Set(scenes.map((scene) => scene?.sceneId));
+  const review = project?.productionReview || {};
+  const byHand = (approvals) => Object.entries(approvals && typeof approvals === 'object' ? approvals : {})
+    .filter(([sceneId, approval]) => sceneIds.has(sceneId) && approval && !approval.approvedBy && !approval.reviewer && !approval.fromBoardApproval).length;
+  const locks = byHand(review.shotApprovals) + byHand(review.clipApprovals);
+  const notes = (Array.isArray(project?.excerpts) ? project.excerpts : [])
+    .reduce((sum, excerpt) => sum + (Array.isArray(excerpt?.notes) ? excerpt.notes.length : 0), 0);
   const unusedStills = [...made].filter((key) => key.startsWith('image:') && !used.has(key)).sort();
   const floorPick = [...unusedStills.filter((key) => rejected.has(key)), ...unusedStills.filter((key) => !rejected.has(key))];
   // Spread over the whole pile rather than its first few, so the floor shows the project's range.
@@ -105,6 +116,8 @@ export function musicVideoOutroStats(project, { collectionItems = [] } = {}) {
     stills: { made: count(made, 'image'), kept: count(used, 'image') },
     clips: { made: count(made, 'video'), kept: count(used, 'video') },
     rejected: rejected.size,
+    locks,
+    notes,
     shots: scenes.length,
     lipSyncs,
     transitions,
@@ -119,9 +132,11 @@ export function musicVideoOutroStats(project, { collectionItems = [] } = {}) {
  * module scope, only to each other by name. */
 
 /**
- * The tally's lines, in order: `{ label, value, accent? }`. Stills and clips
- * always show; a choice the director never made (no transitions, say) is left
- * out rather than shown as a zero. The last line is what was left on the floor.
+ * The tally's lines, in order: `{ label, value, choice?, accent? }`. A
+ * `choice` line counts calls the director made; the heading's decision count
+ * is their sum. Renders reviewed and takes chosen always show; a kind of call
+ * never made (no review notes, say) is left out rather than shown as a zero.
+ * The last line is what was left on the floor.
  */
 function statsOutroRows(stats) {
   const n = (v) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.round(v) : 0);
@@ -129,15 +144,13 @@ function statsOutroRows(stats) {
   const stills = s.stills || {};
   const clips = s.clips || {};
   const rows = [
-    { label: 'Stills made', value: n(stills.made) },
-    { label: 'Clips made', value: n(clips.made) },
-    { label: 'Takes rejected', value: n(s.rejected), optional: true },
-    { label: 'Transitions placed', value: n(s.transitions), optional: true },
-    { label: 'Image effects', value: n(s.imageEffects), optional: true },
-    { label: 'Camera moves', value: n(s.cameraMoves), optional: true },
-    { label: 'Lip-sync shots', value: n(s.lipSyncs), optional: true },
-    { label: 'Shots in the cut', value: n(s.shots) },
-  ].filter((row) => !row.optional || row.value > 0).map(({ label, value }) => ({ label, value }));
+    { label: 'Renders reviewed', value: n(stills.made) + n(clips.made) },
+    { label: 'Takes chosen', value: n(stills.kept) + n(clips.kept), choice: true },
+    { label: 'Takes turned down', value: n(s.rejected), choice: true, optional: true },
+    { label: 'Shots locked by hand', value: n(s.locks), choice: true, optional: true },
+    { label: 'Review notes written', value: n(s.notes), choice: true, optional: true },
+    { label: 'Cuts, effects & moves', value: n(s.transitions) + n(s.imageEffects) + n(s.cameraMoves) + n(s.lipSyncs), choice: true, optional: true },
+  ].filter((row) => !row.optional || row.value > 0).map(({ optional: _optional, ...row }) => row);
   const floor = Math.max(0, n(stills.made) - n(stills.kept)) + Math.max(0, n(clips.made) - n(clips.kept));
   rows.push({ label: 'Left on the floor', value: floor, accent: true });
   return rows;
@@ -233,14 +246,18 @@ function drawStatsOutro(ctx, { width, height, t, durationSec, stats, images = []
   const lineH = 1.5;
   const headScale = 1.45;
   // Fit the block's height first, then its widest line.
-  // Plate: padding, heading, a gap, the rows, a foot, padding (in units of the row size).
-  const blockUnits = pad + headScale + 0.6 + rows.length * lineH + 0.5 + pad;
+  // Plate: padding, heading, the decision line, a gap, the rows, a foot, padding (in units of the row size).
+  const blockUnits = pad + headScale + 1.95 + rows.length * lineH + 0.5 + pad;
   let px = safeH / blockUnits;
   const rowFont = (size, weight = 500) => `${weight} ${Math.floor(size * 100) / 100}px ${body}`;
   const headFont = (size) => `800 ${Math.floor(size * 100) / 100}px ${head}`;
-  const headText = 'THE CUTTING ROOM FLOOR';
+  const headText = 'HUMAN DIRECTED';
+  const decisions = rows.reduce((sum, row) => sum + (row.choice ? row.value : 0), 0);
+  const shots = stats && typeof stats.shots === 'number' && stats.shots > 0 ? Math.round(stats.shots) : 0;
+  const subText = (v) => `${fmt(v)} DECISIONS${shots ? ` · ${fmt(shots)} SHOTS` : ''}`;
   const widest = (size) => Math.max(
     measure(headText, headFont(size * headScale)) + size * pad * 2,
+    measure(subText(Math.max(decisions, 10000)), rowFont(size, 600)) + size * pad * 2,
     ...rows.map((row) => measure(row.label.toUpperCase(), rowFont(size)) + measure(fmt(Math.max(row.value, 1000)), rowFont(size, 600)) + size * (2 + pad * 2)),
   );
   const wide = widest(px);
@@ -262,9 +279,14 @@ function drawStatsOutro(ctx, { width, height, t, durationSec, stats, images = []
   ctx.fillStyle = '#f3ead7';
   const headY = top + px * pad + px * headScale;
   ctx.fillText(headText, width / 2, headY);
+  // Under it, every call the director made, counting up with the rows.
+  ctx.font = rowFont(px, 600);
+  ctx.fillStyle = '#ff8a4c';
+  const subY = headY + px * 1.25;
+  ctx.fillText(subText(decisions * ease((t - 0.9) / Math.max(1, D * 0.5))), width / 2, subY);
   // A rule under the heading.
   ctx.fillStyle = 'rgba(243, 196, 107, 0.7)';
-  ctx.fillRect(left + px * pad, headY + px * 0.45, plateW - px * pad * 2, Math.max(1, px * 0.06));
+  ctx.fillRect(left + px * pad, subY + px * 0.55, plateW - px * pad * 2, Math.max(1, px * 0.06));
   // Rows arrive one by one in the first half of the scene, each counting up to its number.
   const firstRow = 0.9;
   const stagger = Math.min(0.4, Math.max(0.12, (D * 0.5 - firstRow) / Math.max(1, rows.length)));
@@ -273,7 +295,7 @@ function drawStatsOutro(ctx, { width, height, t, durationSec, stats, images = []
     const show = ease((t - start) / 0.35);
     if (show <= 0) return;
     const counted = row.value * ease((t - start) / 0.9);
-    const y = headY + px * 0.6 + px * lineH * (i + 1) + (1 - show) * px * 0.4;
+    const y = subY + px * 0.7 + px * lineH * (i + 1) + (1 - show) * px * 0.4;
     ctx.globalAlpha = plateIn * show;
     if (row.accent) {
       ctx.fillStyle = 'rgba(255, 122, 61, 0.14)';

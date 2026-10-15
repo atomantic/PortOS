@@ -70,7 +70,7 @@ export default function StatsOutroCanvas({ stats, t, durationSec }) {
       width={WIDTH}
       height={HEIGHT}
       role="img"
-      aria-label="The cutting room floor: what was made, kept and left out of this video"
+      aria-label="Human directed: the choices behind this video, and what was left on the cutting room floor"
       className="pointer-events-none absolute inset-0 h-full w-full"
       data-testid="animatic-stats-outro"
     />
