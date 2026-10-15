@@ -678,7 +678,10 @@ export function productionReadiness(project) {
     const shot = documentShots ? scene : draft.storyboard?.find(s => s.sceneId === scene.sceneId) || boardShotFromScene(project, scene);
     const missing = !(Number.isFinite(scene.startSec) && scene.endSec > scene.startSec) ? ['timing']
       : scene.endSec > duration ? ['an end inside the song'] : [];
-    missing.push(...['action', 'staging', 'camera', 'transition'].filter(key => !text(shot?.[key])));
+    // A Board shot with no camera note is a valid choice (a cutaway rendered from its start frame plays
+    // whatever motion its clip has); camera variety stays advice. Document shots spell out every field.
+    missing.push(...(documentShots ? ['action', 'staging', 'camera', 'transition'] : ['action', 'staging', 'transition'])
+      .filter(key => !text(shot?.[key])));
     if (missing.length) {
       boardProblems.push(`Complete timing, action, staging, camera and transition for ${scene.label || 'each shot'}.`);
       incompleteShots.push({ sceneId: scene.sceneId, missing });

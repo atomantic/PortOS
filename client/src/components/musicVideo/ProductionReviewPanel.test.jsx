@@ -354,7 +354,7 @@ describe('Approval problems with unsaved edits', () => {
     const board = { ...project, composition: { mode: 'concat' }, scenes: [{ sceneId: 's-a', label: 'Verse', startSec: 0, endSec: 4 }, { sceneId: 's-b', label: 'Chorus', startSec: 3.5, endSec: 8 }] };
     review.readiness.storyboard = { approved: false,
       problems: ['Storyboard shots must cover the master without unintended gaps or overlaps.', 'Complete timing, action, staging, camera and transition for Chorus.'],
-      coverage: [{ sceneId: 's-b', issue: 'overlap', startSec: 3.5, endSec: 4 }], incompleteShots: [{ sceneId: 's-b', missing: ['camera'] }] };
+      coverage: [{ sceneId: 's-b', issue: 'overlap', startSec: 3.5, endSec: 4 }], incompleteShots: [{ sceneId: 's-b', missing: ['staging'] }] };
     const onNavigate = vi.fn();
     render(<ProductionReviewPanel project={board} review={review} onOpenArtifact={vi.fn()} stage="storyboard" onNavigate={onNavigate} />);
     expect(screen.getByText('Finish these 2 items on the Plan step first:')).toBeTruthy();
