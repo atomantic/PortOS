@@ -75,6 +75,50 @@ beforeEach(() => {
   api.syncMessageAccount.mockResolvedValue({ newMessages: 0, pruned: 0 });
 });
 
+describe('InboxTab sync reconciliation', () => {
+  const rows = Array.from({ length: 50 }, (_, i) => ({
+    id: `synthetic-${i}`, externalId: `external-${i}`, accountId: syncedAccount.id,
+    subject: `Synthetic summary ${i}`, from: { name: 'Example Sender' }, date: HOUR_AGO, preview: 'Compact preview',
+  }));
+
+  it('coalesces completed syncs into one bounded summary read without hydrating bodies', async () => {
+    api.getMessageInbox.mockResolvedValue({ messages: rows, total: 5000 });
+    renderInbox([syncedAccount]);
+    await waitFor(() => expect(screen.getAllByText(/^Synthetic summary /)).toHaveLength(50));
+    const completed = socket.on.mock.calls.find(([event]) => event === 'messages:sync:completed')[1];
+    expect(socket.on.mock.calls.some(([event]) => event === 'messages:sync:message')).toBe(false);
+    api.getMessageInbox.mockResolvedValue({ messages: rows.map(row => ({ ...row, subject: row.subject.replace('summary', 'updated') })), total: 5500 });
+    act(() => {
+      completed({ accountId: syncedAccount.id, newMessages: 500, status: 'success' });
+      completed({ accountId: syncedAccount.id, newMessages: 0, status: 'partial' });
+    });
+    await waitFor(() => expect(screen.getAllByText(/^Synthetic updated /)).toHaveLength(50));
+    expect(api.getMessageInbox).toHaveBeenCalledTimes(2);
+    expect(api.getMessageInbox).toHaveBeenLastCalledWith({ summary: true }, expect.objectContaining({ silent: true }));
+    expect(api.getMessageDetail).not.toHaveBeenCalled();
+  });
+
+  it('ignores another account completion and reconciles the selected account on reconnect', async () => {
+    api.getMessageInbox.mockResolvedValue({ messages: rows, total: 5000 });
+    const view = renderInbox([syncedAccount]);
+    await waitFor(() => expect(screen.getAllByText(/^Synthetic summary /)).toHaveLength(50));
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: syncedAccount.id } });
+    await waitFor(() => expect(api.getMessageInbox).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getAllByText(/^Synthetic summary /)).toHaveLength(50));
+    const completed = socket.on.mock.calls.filter(([event]) => event === 'messages:sync:completed').at(-1)[1];
+    await act(async () => { completed({ accountId: 'other-account', status: 'success' }); });
+    expect(api.getMessageInbox).toHaveBeenCalledTimes(2);
+    const reconnect = socket.on.mock.calls.filter(([event]) => event === 'connect').at(-1)[1];
+    await act(async () => { reconnect(); });
+    expect(api.getMessageInbox).toHaveBeenCalledTimes(3);
+    expect(api.getMessageInbox).toHaveBeenLastCalledWith({ summary: true, accountId: syncedAccount.id }, expect.objectContaining({ silent: true }));
+    view.unmount();
+    expect(socket.off).toHaveBeenCalledWith('messages:sync:completed', completed);
+    await act(async () => { completed({ accountId: syncedAccount.id, status: 'success' }); });
+    expect(api.getMessageInbox).toHaveBeenCalledTimes(3);
+  });
+});
+
 describe('latestSyncAt', () => {
   it('returns null when no account has ever synced', () => {
     expect(latestSyncAt([neverSyncedAccount, { ...neverSyncedAccount, id: 'b' }])).toBeNull();
@@ -143,6 +187,7 @@ describe('InboxTab empty state', () => {
     fireEvent.click(screen.getAllByRole('button', { name: /sync unread/i }).at(-1));
 
     await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    await waitFor(() => expect(api.getMessageInbox).toHaveBeenCalledTimes(2));
     expect(toast.success).not.toHaveBeenCalled();
     expect(screen.getByText('Nothing synced yet')).toBeInTheDocument();
   });
@@ -299,7 +344,7 @@ describe('InboxTab message selection URL', () => {
     api.getMessageDetail.mockResolvedValue(message);
     renderInboxWithLocation([neverSyncedAccount], { route: '/messages/inbox?triage=reply' });
     expect(await screen.findByText('Short preview')).toBeInTheDocument();
-    expect(api.getMessageInbox).toHaveBeenCalledWith({ summary: true }, { silent: true });
+    expect(api.getMessageInbox).toHaveBeenCalledWith({ summary: true }, expect.objectContaining({ silent: true, signal: expect.any(AbortSignal) }));
     expect(api.getMessageDetail).not.toHaveBeenCalled();
 
     fireEvent.click(await screen.findByRole('button', { name: /a message to inspect/i }));

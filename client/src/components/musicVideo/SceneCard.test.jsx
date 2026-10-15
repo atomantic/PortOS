@@ -1,14 +1,18 @@
 import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-vi.mock('../../hooks/useVideoFileSrc.js', () => ({ useVideoFileSrc: () => ({}) }));
+vi.mock('../../hooks/useVideoFileSrc.js', () => ({ useVideoFileSrc: vi.fn(() => ({})) }));
 vi.mock('../../services/apiMusicVideo.js', async (importOriginal) => ({ ...(await importOriginal()), getMusicVideoMediaPool: vi.fn(async () => ({ items: [] })) }));
 import SceneCard from './SceneCard.jsx';
 import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
+import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 
 const GROK_MAX = GROK_VIDEO_DURATIONS.at(-1);
 // A card opens on the last Render on pick, so each test starts from the project setting.
-beforeEach(() => localStorage.clear());
+beforeEach(() => {
+  localStorage.clear();
+  useVideoFileSrc.mockReturnValue({});
+});
 
 describe('code shot (#10297)', () => {
   it('offers no frame or clip generation for a code shot in a layered composition', () => {
@@ -451,6 +455,120 @@ describe('frame fit for an off-shape clip', () => {
     fireEvent.change(pick, { target: { value: 'vhs' } });
     expect(onSave).toHaveBeenCalledWith('s1', { frameFit: 'vhs' });
     expect(onEditLocal).toHaveBeenCalledWith('s1', { frameFit: 'vhs' });
+  });
+});
+
+describe('clip playback and coverage', () => {
+  const scene = { sceneId: 's1', referenceImageId: 'still.png', videoHistoryId: 'clip-1', beatAligned: true,
+    startSec: 1.234, endSec: 10, loop: false, takes: [] };
+  const metadata = (video, sec, width = 768, height = 512) => {
+    Object.defineProperties(video, {
+      duration: { value: sec, configurable: true },
+      videoWidth: { value: width, configurable: true },
+      videoHeight: { value: height, configurable: true },
+    });
+    fireEvent.loadedMetadata(video);
+  };
+  const coverage = () => screen.queryByText(/Shot runs .* but its clip is/);
+
+  // Catches coverage based on raw file length, a stale clip's measurement, or a trim
+  // save that loses millisecond rounding; also pins metadata lifetime across hidden previews.
+  it('measures adjusted playback, retains it while hidden, invalidates a replacement, and trims the shot', () => {
+    const onSave = vi.fn();
+    const onEditLocal = vi.fn();
+    const props = { index: 0, expanded: true, layered: true, onSave, onEditLocal };
+    const adjusted = { ...scene, speedFps: 8, offsetFrames: 12 };
+    const { container, rerender } = render(<SceneCard {...props} scene={adjusted} />);
+    expect(coverage()).toBeNull();
+    metadata(container.querySelector('video'), NaN);
+    expect(coverage()).toBeNull();
+    metadata(container.querySelector('video'), 4.567);
+    expect(container.querySelector('video').playbackRate).toBeCloseTo(32 / 24);
+    expect(coverage().textContent).toContain('clip is 3.1s');
+    expect(screen.getByLabelText('Not 16:9')).toBeTruthy();
+    rerender(<SceneCard {...props} scene={{ ...adjusted, visualLayer: 'still' }} />);
+    expect(container.querySelector('section[aria-label="Render"] video')).toBeNull();
+    expect(coverage()).toBeTruthy();
+    rerender(<SceneCard {...props} scene={{ ...adjusted, videoHistoryId: 'clip-2' }} />);
+    expect(coverage()).toBeNull();
+    expect(screen.queryByLabelText('Not 16:9')).toBeNull();
+    metadata(container.querySelector('video'), 4.567);
+    fireEvent.click(screen.getByRole('button', { name: 'Trim to clip' }));
+    expect(onEditLocal).toHaveBeenLastCalledWith('s1', { endSec: 4.284 });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { endSec: 4.284 });
+    // Negative offset delays the clip rather than cutting its beginning.
+    rerender(<SceneCard {...props} scene={{ ...adjusted, videoHistoryId: 'clip-2', offsetFrames: -12 }} />);
+    expect(coverage().textContent).toContain('clip is 3.9s');
+  });
+
+  // Catches a changed tolerance, legacy absent-loop scenes no longer looping,
+  // or a reversed shot being offered a loop the renderer cannot use.
+  it('warns only beyond the tolerance, preserves legacy looping, and treats reverse as one pass', () => {
+    const onSave = vi.fn();
+    const props = { index: 0, expanded: true, onSave, onEditLocal: vi.fn() };
+    const bounded = { ...scene, startSec: 0, endSec: 4.25 };
+    const { container, rerender } = render(<SceneCard {...props} scene={bounded} />);
+    metadata(container.querySelector('video'), 4);
+    expect(coverage()).toBeNull();
+    rerender(<SceneCard {...props} scene={{ ...bounded, endSec: 4.251 }} />);
+    expect(coverage()).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Loop clip' }));
+    expect(onSave).toHaveBeenLastCalledWith('s1', { loop: true });
+    rerender(<SceneCard {...props} scene={{ ...bounded, endSec: 6, loop: undefined }} />);
+    expect(coverage()).toBeNull();
+    expect(screen.getByLabelText('Loop clip')).toBeChecked();
+    rerender(<SceneCard {...props} scene={{ ...bounded, endSec: 6, loop: undefined, reverse: true }} />);
+    expect(coverage()).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Loop clip' })).toBeNull();
+    expect(screen.getByLabelText('Loop clip')).toBeDisabled();
+    expect(screen.getByText('Reversed in the player')).toBeTruthy();
+  });
+
+  // Catches reconstructed URLs replacing imported filenames, native controls
+  // losing their playback ownership, or the lightbox opening before pause.
+  it('keeps the resolved container and fallback, and pauses before opening the clip lightbox', () => {
+    useVideoFileSrc.mockReturnValue({ src: '/data/videos/imported.webm' });
+    const onOpenPreview = vi.fn();
+    const props = { scene, index: 1, expanded: true, onEditLocal: vi.fn(), onSave: vi.fn(), onOpenPreview };
+    const { container, rerender } = render(<SceneCard {...props} />);
+    const video = container.querySelector('video');
+    expect(video.getAttribute('src')).toBe('/data/videos/imported.webm');
+    expect(video.controls).toBe(true);
+    const pause = vi.spyOn(video, 'pause').mockImplementation(() => {
+      expect(onOpenPreview).not.toHaveBeenCalled();
+    });
+    fireEvent.click(video);
+    expect(onOpenPreview).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'View scene 2 clip full size' }));
+    expect(pause).toHaveBeenCalledOnce();
+    expect(onOpenPreview).toHaveBeenCalledWith('video:clip-1');
+    useVideoFileSrc.mockReturnValue({ src: null });
+    rerender(<SceneCard {...props} scene={{ ...scene, videoHistoryId: 'clip-2' }} />);
+    expect(video.getAttribute('src')).toBe('/data/videos/clip-2.mp4');
+  });
+
+  // Catches source trim losing its scene argument or becoming enabled during
+  // take/render work or a clip lock after the preview moves out of SceneCard.
+  it('trims the source at the chosen frame and preserves every busy gate', async () => {
+    const { ShotLockContext } = await import('./ShotLock.jsx');
+    const onTrimClip = vi.fn();
+    const props = { scene, index: 0, expanded: true, onEditLocal: vi.fn(), onSave: vi.fn(), onTrimClip };
+    const { container, rerender } = render(<SceneCard {...props} />);
+    const video = container.querySelector('video');
+    vi.spyOn(video, 'pause').mockImplementation(() => {});
+    expect(screen.getByRole('button', { name: 'Start clip here' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Next frame' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start clip here' }));
+    expect(onTrimClip).toHaveBeenCalledWith(scene, 1 / 24);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Start clip here' })).toBeEnabled());
+    rerender(<SceneCard {...props} takeBusy />);
+    expect(screen.getByRole('button', { name: 'Next frame' })).toBeDisabled();
+    rerender(<SceneCard {...props} generatingVideo />);
+    expect(screen.getByRole('button', { name: 'Next frame' })).toBeDisabled();
+    rerender(<ShotLockContext.Provider value={{ locks: { s1: 'locked' }, clips: { s1: 'locked' }, toggle: () => {}, busy: false }}>
+      <SceneCard {...props} />
+    </ShotLockContext.Provider>);
+    expect(screen.getByRole('button', { name: 'Next frame' })).toBeDisabled();
   });
 });
 

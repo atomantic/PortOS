@@ -1,6 +1,6 @@
 import { messageLogError } from '../lib/messageLogError.js';
 
-import { browserSummaryId, browserDetailIdentities, messageIngestionIdentity, matchBrowserMessage, retainLegacyActivityIdentities } from '../lib/messageBrowserIdentity.js';
+import { browserSummaryId, browserDetailIdentities, messageIngestionIdentity, matchBrowserMessage, createBrowserMessageMatcher, retainLegacyActivityIdentities } from '../lib/messageBrowserIdentity.js';
 import { join } from 'path';
 import { atomicWrite, ensureDir, filterBySearch as genericFilterBySearch, PATHS, safeDate, safeJSONParse, UUID_RE, tryReadFile } from '../lib/fileUtils.js';
 import { getAccount, updateSyncStatus, markSentIngested, updateSendAsAliases } from './messageAccounts.js';
@@ -230,9 +230,10 @@ export async function syncAccount(accountId, io, options = {}) {
 
     // Preserve the DB identity of unambiguous pre-upgrade cache entries.
     retainLegacyActivityIdentities(cache.messages);
+    const matcher = createBrowserMessageMatcher(cache.messages, newMessages);
     const uniqueNew = [];
     for (const msg of newMessages) {
-      const existing = matchBrowserMessage(cache.messages, msg, newMessages);
+      const existing = matcher.match(msg);
       if (!msg.externalId || !existing) {
         uniqueNew.push(msg);
       } else {
@@ -258,6 +259,7 @@ export async function syncAccount(accountId, io, options = {}) {
         }
         // Set threadId if newly available
         if (msg.threadId && !existing.threadId) existing.threadId = msg.threadId;
+        matcher.refresh(existing);
       }
     }
     cache.messages.push(...uniqueNew);

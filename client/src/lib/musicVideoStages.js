@@ -4,7 +4,7 @@
  * spend. Pure functions over the project record so the header, the progress
  * strip and the tests all read the same answer.
  */
-import { isLayeredComposition, isSelfDrawnLayer, sceneRenderReady, sceneVisualLayer } from './musicVideoLayers.js';
+import { composedDrawsLyrics, isLayeredComposition, isSelfDrawnLayer, sceneRenderReady, sceneVisualLayer } from './musicVideoLayers.js';
 import {
   AUTONOMOUS_CHECKPOINT_LABELS, AUTONOMOUS_LYRICS_STEP_LABELS, AUTONOMOUS_SONG_STEP_LABELS, AUTONOMOUS_STATUS_LABELS,
 } from './musicVideoAutonomous.js';
@@ -31,6 +31,14 @@ export const MUSIC_VIDEO_STAGES = [
   { id: 'produce', label: 'Shots', title: 'Shots', doneWhen: 'Done when every shot is locked (a video shot: its still, then its clip) and the composition is ready.' },
   { id: 'review', label: 'Final render', title: 'Final render', doneWhen: 'Done when the full video is rendered from the approved plan and is up to date.' },
   { id: 'publish', label: 'Publish', title: 'Publish', doneWhen: 'Done when every platform you turned on has a post.' },
+];
+
+/**
+ * Pages beside the steps: listed under them, unnumbered, and never a step the
+ * project is "at". Assets is every still and clip made for the video.
+ */
+export const MUSIC_VIDEO_PAGES = [
+  { id: 'assets', label: 'Assets', title: 'Assets' },
 ];
 
 // Old links name the Compose tab, which is now part of Shots; the new names work as links too.
@@ -353,8 +361,9 @@ export function publishPlatformProgress(project, publish = {}) {
   return { rows, posted, total: rows.length, done: rows.length ? posted === rows.length : posted > 0 };
 }
 
-/** Resolve the `:stage` route param (a retired id maps to its step); an unknown or missing value is null. */
-export const resolveStageParam = (value) => (isStageId(value) ? value : LEGACY_STAGE_IDS[value] || null);
+/** Resolve the `:stage` route param (a step or a page; a retired id maps to its step); an unknown or missing value is null. */
+export const resolveStageParam = (value) => (isStageId(value) || MUSIC_VIDEO_PAGES.some((page) => page.id === value)
+  ? value : LEGACY_STAGE_IDS[value] || null);
 
 // Footage-optional modes draw their own picture, so scene footage never gates Produce.
 export const FOOTAGE_OPTIONAL_MODES = new Set(['code', 'document', 'eidoverse']);
@@ -366,7 +375,7 @@ const codeComposed = (project) => {
 };
 
 const composeDone = (project, mode) => {
-  if (mode === 'composed') return (project.composition?.textCues || []).length > 0;
+  if (mode === 'composed') return (project.composition?.textCues || []).length > 0 || composedDrawsLyrics(project);
   if (mode === 'document') return !!project.composition?.document;
   if (mode === 'eidoverse') return !!project.composition?.eidoverseScene?.inlineScript;
   if (mode === 'code') return codeComposed(project);
@@ -788,8 +797,43 @@ function storyboardProblemItems(readiness, scenes = []) {
     // An art approval that went stale says what changed, so the row is not a bare "approve first".
     const stale = group.id === 'art' && staleApprovalText(readiness?.art?.stale);
     const details = stale ? mine.map((text) => (ART_APPROVAL_PROBLEM.test(text) ? `${stale} Approve it again on the Look step.` : text)) : mine;
-    return [{ id: `board-${group.id}`, label: group.label, done: false, details, action: group.action }];
+    return [namedShots({ id: `board-${group.id}`, label: group.label, done: false, details, action: group.action }, readiness, scenes)];
   }), ...(stale ? [stale] : []), ...(anchors ? [anchors] : [])];
+}
+
+const MISSING_DETAILS_LINE = /^\d+ shots? missing timing, action, staging, camera or transition\.$/;
+const spanText = (startSec, endSec) => `${formatTimecode(startSec)}–${formatTimecode(endSec)}`;
+const gapSec = ({ startSec, endSec }) => `${(endSec - startSec).toFixed(2)} s`;
+const COVERAGE_TEXT = {
+  'late-start': (c) => `Nothing covers the start of the song, ${spanText(c.startSec, c.endSec)}`,
+  gap: (c) => `Gap of ${gapSec(c)} before this shot, ${spanText(c.startSec, c.endSec)}`,
+  overlap: (c) => `Overlaps the shot before by ${gapSec(c)}, ${spanText(c.startSec, c.endSec)}`,
+  'past-end': (c) => `Runs ${gapSec(c)} past the end of the song, ${spanText(c.startSec, c.endSec)}`,
+  'early-end': (c) => `Ends ${gapSec(c)} before the song does, ${spanText(c.startSec, c.endSec)}`,
+};
+
+/**
+ * The Shot coverage and Shot details rows name each shot they are about (a
+ * button to its card) and say what is wrong with it, in place of the generic
+ * sentence or count.
+ */
+function namedShots(item, readiness, scenes) {
+  const number = (sceneId) => scenes.findIndex((scene) => scene.sceneId === sceneId) + 1;
+  const label = (sceneId) => (number(sceneId) > 0 ? `Shot ${number(sceneId)}` : 'Shot');
+  const byShot = (entries, text) => [...entries.reduce((map, entry) => map.set(entry.sceneId,
+    [...(map.get(entry.sceneId) || []), text(entry)]), new Map())].map(([sceneId, lines]) => ({ sceneId, label: label(sceneId), text: lines.join(' · ') }));
+  const coverage = readiness?.storyboard?.coverage;
+  if (item.id === 'board-coverage' && coverage?.length) {
+    return { ...item, details: item.details.filter((text) => !/cover the master/.test(text)),
+      detail: 'Move these cuts so every moment of the song has exactly one shot.',
+      shots: byShot(coverage, (c) => (COVERAGE_TEXT[c.issue] || (() => c.issue))(c)) };
+  }
+  const incomplete = readiness?.storyboard?.incompleteShots;
+  if (item.id === 'board-shots' && incomplete?.length) {
+    return { ...item, details: item.details.filter((text) => !MISSING_DETAILS_LINE.test(text)),
+      shots: byShot(incomplete, (shot) => `Missing ${shot.missing.join(', ')}`) };
+  }
+  return item;
 }
 
 const ANCHOR_PROBLEM = /^Review lyric anchors for /;
@@ -986,7 +1030,13 @@ export function stageChecklist(stageId, project, readiness = project?.production
         ? [{ ...proofApproval, label: proofApproval.done ? proofApproval.label : 'Animated proof (optional)', optional: true, detail: null }] : [];
       const composition = project.composition || {};
       let work = null;
-      if (mode === 'composed') work = { id: 'composition', label: 'Timed typography added', done: (composition.textCues || []).length > 0, action: { label: 'Add typography', anchor: 'mv-typo-font' } };
+      if (mode === 'composed') {
+        const cues = (composition.textCues || []).length > 0;
+        // Timed lyrics with no subtitle cues are drawn by the render itself, as the player shows them.
+        work = composedDrawsLyrics(project)
+          ? { id: 'composition', label: 'Lyrics drawn over the footage', done: true }
+          : { id: 'composition', label: 'Timed typography added', done: cues, action: { label: 'Add typography', anchor: 'mv-typo-font' } };
+      }
       else if (mode === 'document') work = { id: 'composition', label: 'Composition document attached', done: !!composition.document, action: { label: 'Attach a document', anchor: 'mv-doc-folder' } };
       else if (mode === 'eidoverse') {
         const saved = !!composition.eidoverseScene?.inlineScript;

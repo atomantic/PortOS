@@ -295,7 +295,7 @@ describe('useOnDemandTaskToast — programmatic handler results', () => {
   });
 });
 
-it('updates one maintenance notification with an agent link and expires terminal progress', () => {
+it('shows one submission notification with an agent link and expires terminal progress', () => {
   toastSpy.mockClear();
   const { unmount } = renderHook(() => useOnDemandTaskToast());
   const update = handlers.get('cos:maintenance:updated');
@@ -303,7 +303,7 @@ it('updates one maintenance notification with an agent link and expires terminal
   update(run);
   update(run);
   expect(toastSpy).toHaveBeenCalledTimes(1);
-  expect(toastSpy.mock.calls[0][1]).toMatchObject({ id: 'maintenance-maint-example', duration: Infinity });
+  expect(toastSpy.mock.calls[0][1]).toMatchObject({ id: 'maintenance-maint-example', duration: 5000 });
   expect(toastSpy.mock.calls[0][0]().props.run.active.agentId).toBe('agent-example');
   // onDismiss dismisses the toast
   expect(typeof toastSpy.mock.calls[0][0]().props.onDismiss).toBe('function');

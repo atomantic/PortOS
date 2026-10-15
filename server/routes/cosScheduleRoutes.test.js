@@ -70,6 +70,19 @@ describe('CoS Schedule Routes', () => {
   });
 
   describe('GET /api/cos/schedule', () => {
+    it('surfaces unavailable schedule inputs as errors and recovers on the next read', async () => {
+      taskSchedule.getScheduleStatus
+        .mockRejectedValueOnce(new Error('app registry unavailable'))
+        .mockRejectedValueOnce(new Error('app cadence unavailable'))
+        .mockResolvedValueOnce({ tasks: {}, onDemandRequests: [] });
+
+      expect((await request(app).get('/api/cos/schedule')).status).toBe(500);
+      expect((await request(app).get('/api/cos/schedule')).status).toBe(500);
+      const recovered = await request(app).get('/api/cos/schedule');
+      expect(recovered.status).toBe(200);
+      expect(recovered.body).toEqual({ tasks: {}, onDemandRequests: [] });
+    });
+
     it('should return schedule status', async () => {
       taskSchedule.getScheduleStatus.mockResolvedValue({ tasks: [], enabled: true });
 

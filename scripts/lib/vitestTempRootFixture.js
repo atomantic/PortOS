@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const repo = fileURLToPath(new URL('../../', import.meta.url));
 
-export function createVitestTempFixture(host, workspace, body) {
+export function createVitestTempFixture(host, workspace, body, config = 'vitest.config.js') {
   const root = join(host, 'fixture');
   mkdirSync(root);
   symlinkSync(join(repo, workspace, 'node_modules'), join(root, 'node_modules'),
@@ -18,7 +18,8 @@ export function createVitestTempFixture(host, workspace, body) {
   writeFileSync(join(root, 'vitest.setup.js'), workspace === 'server'
     ? `import ${JSON.stringify(new URL('../../server/test/admissionSetup.js', import.meta.url).href)};\n`
     : '');
-  const testFile = workspace === 'client' ? 'src/lifecycle.test.js' : 'lifecycle.test.js';
+  const testFile = config === 'vitest.config.db.js' ? 'db.test.js'
+    : workspace === 'client' ? 'src/lifecycle.test.js' : 'lifecycle.test.js';
   writeFileSync(join(root, testFile), `
     import { test, expect } from 'vitest';
     import { tmpdir } from 'node:os';
@@ -27,6 +28,9 @@ export function createVitestTempFixture(host, workspace, body) {
     import { bootstrapVitestTempRoot } from ${JSON.stringify(new URL('./vitestTempRoot.js', import.meta.url).href)};
     test('lifecycle', async () => {
       const first = tmpdir();
+      // Check before re-bootstrap: the real config must already have forwarded
+      // Chromium's macOS temp override into every workspace worker.
+      expect(process.env.MAC_CHROMIUM_TMPDIR).toBe(first);
       expect(bootstrapVitestTempRoot()).toBe(first);
       expect(process.env.PORTOS_TEST_TEMP_ROOT).toBe(first);
       ${body}
@@ -40,7 +44,7 @@ export function createVitestTempFixture(host, workspace, body) {
   delete env.VITEST_WORKER_ID;
   return {
     args: [join(repo, workspace, 'node_modules/vitest/vitest.mjs'), 'run',
-      '--config', join(repo, workspace, 'vitest.config.js'), '--root', root, '--maxWorkers', '1'],
+      '--config', join(repo, workspace, config), '--root', root, '--maxWorkers', '1'],
     options: { cwd: join(repo, workspace), env, encoding: 'utf8', timeout: 20000 },
   };
 }

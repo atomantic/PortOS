@@ -3454,6 +3454,25 @@ describe('stage checklist and project options', () => {
     expect(feedbackCalls.removeStaleRows).toHaveBeenCalledWith();
   });
 
+  // Uniquely catches a coverage or details problem the director cannot trace to a shot.
+  it('names the shots behind Shot coverage and Shot details, each opening its card', async () => {
+    const project = { ...PROJECT_ANALYZED, scenes: [{ sceneId: 's-a', label: 'Drummer', startSec: 0, endSec: 4 }, { sceneId: 's-b', label: 'Singer', startSec: 4.5, endSec: 8 }],
+      productionReview: { draft: { storyboard: [] } },
+      productionReadiness: { readyForProduction: false, basis: {}, art: { approved: true, problems: [] },
+        storyboard: { approved: false, problems: ['Storyboard shots must cover the master without unintended gaps or overlaps.', 'Complete timing, action, staging, camera and transition for Singer.'],
+          coverage: [{ sceneId: 's-b', issue: 'gap', startSec: 4, endSec: 4.5 }],
+          incompleteShots: [{ sceneId: 's-b', missing: ['staging'] }] }, proof: { approved: false, problems: [] } } };
+    await openProject(project, 'board');
+    const checklist = screen.getByRole('region', { name: 'What this step needs' });
+    expect(within(checklist).getByRole('list', { name: 'Shot coverage shots' })).toHaveTextContent('Shot 2Gap of 0.50 s before this shot, 0:04.00–0:04.50');
+    expect(checklist).not.toHaveTextContent('without unintended gaps');
+    const details = within(checklist).getByRole('list', { name: 'Shot details shots' });
+    expect(details).toHaveTextContent('Shot 2Missing staging');
+    expect(checklist).not.toHaveTextContent('1 shot missing timing');
+    fireEvent.click(within(details).getByRole('button', { name: 'Shot 2' }));
+    await waitFor(() => expect(document.getElementById('scene-s-b')).toBeTruthy());
+  });
+
   it('builds the cast & sets from the Look checklist when nothing is written yet', async () => {
     const project = { ...PROJECT_ANALYZED, scenes: [], castAndSets: undefined, devArtifacts: [],
       productionReadiness: { readyForProduction: false, basis: {}, art: { approved: false, problems: ['Cast guide needs editable direction.'] },

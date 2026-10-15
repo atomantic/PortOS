@@ -15,6 +15,7 @@ import { existsSync, createReadStream } from 'fs';
 import { join } from 'path';
 import { createMutex } from '../lib/asyncMutex.js';
 import { appendFileGuarded, ensureDir, safeJSONParse, PATHS, atomicWrite } from '../lib/fileUtils.js';
+import { compareNewerWins } from '../lib/lwwTimestamp.js';
 
 const DATA_DIR = PATHS.brain;
 const SYNC_LOG_FILE = join(DATA_DIR, 'sync_log.jsonl');
@@ -360,14 +361,13 @@ export async function getChangesSince(sinceSeq, limit = 100) {
  * returning the surviving terminal entry.
  *
  * Incumbent wins ties (same timestamp) matching applyRemoteRecord.
- * Entries missing updatedAt are skipped.
+ * Missing/unparseable clocks lose; offsets compare by instant, as at apply time.
  */
 function replayTerminal(entries) {
   let accepted = null;
   for (const e of [...entries].sort((a, b) => a.seq - b.seq)) {
     const ts = e?.record?.updatedAt;
-    if (ts == null) continue;
-    if (accepted == null || ts > accepted.record.updatedAt) accepted = e;
+    if (compareNewerWins(ts, accepted?.record.updatedAt)) accepted = e;
   }
   return accepted;
 }
@@ -475,7 +475,7 @@ export async function compactLog(minSeq = 0, { force = false } = {}) {
         if (tailItems) {
           const supersededByTail = tailItems.some(i => {
             const tailTs = i.entry?.record?.updatedAt;
-            return tailTs != null && olderWinner.record?.updatedAt != null && tailTs > olderWinner.record.updatedAt;
+            return compareNewerWins(tailTs, olderWinner.record?.updatedAt);
           });
           if (supersededByTail) {
             continue;

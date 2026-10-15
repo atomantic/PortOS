@@ -96,7 +96,7 @@ export async function appendStatsOutro({ project, path, jobId, signal, onProgres
       imageSrcs.push(staged ? `media/${name}` : '');
     }
     await writeFile(join(scratch, 'index.html'), statsOutroPage({ stats, imageSrcs, width, height, fps, durationSec }));
-    await writeFile(join(scratch, 'app.js'), statsOutroPageSource({ stats, imageSrcs, width, height, fps, durationSec }));
+    await writeFile(join(scratch, 'app.js'), statsOutroPageSource({ stats, outro, imageSrcs, width, height, fps, durationSec }));
     signal?.throwIfAborted();
     // A render whose film look is drawn in its page (the seeked modes) has no later
     // pass to grade the outro, so the outro page draws the look itself.

@@ -20,6 +20,7 @@ export default defineConfig({
       TMPDIR: RUN_TEMP_ROOT,
       TMP: RUN_TEMP_ROOT,
       TEMP: RUN_TEMP_ROOT,
+      MAC_CHROMIUM_TMPDIR: RUN_TEMP_ROOT,
       NODE_DISABLE_COMPILE_CACHE: '1',
     },
     // Four DOM workers exhausted Testing Library's async budget on the public

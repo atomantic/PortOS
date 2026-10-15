@@ -12,7 +12,7 @@ import { existsSync } from 'fs';
 import { unlink } from 'fs/promises';
 import { pipeline } from 'stream/promises';
 import { Router } from 'express';
-import { musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoShotLockSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoContinueShotSchema, musicVideoPoolUseSchema, musicVideoPoolMarkSchema, musicVideoPoolSearchQuerySchema, musicVideoPoolDeleteSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoLyricAnchorSyncSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
+import { musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoShotLockSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoContinueShotSchema, musicVideoPoolUseSchema, musicVideoPoolMarkSchema, musicVideoPoolSearchQuerySchema, musicVideoPoolDeleteSchema, musicVideoPoolImportSchema, musicVideoLibrarySearchQuerySchema, musicVideoPoolAddSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoLyricAnchorSyncSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
 import { productionReadiness } from '../services/musicVideo/productionReview.js';
 import { finishedOutsideBlocker } from '../lib/musicVideoFinishedOutside.js';
 import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, lockProductionShots, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, syncLyricAnchors, removeStaleStoryboardRows, reviseProductionFromFeedback, revertProductionInput } from '../services/musicVideo/productionReviewService.js';
@@ -1582,6 +1582,35 @@ router.get('/:id/stats-outro', asyncHandler(async (req, res) => {
 router.patch('/:id/media-pool/marks', asyncHandler(async (req, res) => {
   const { items, mark } = validateRequest(musicVideoPoolMarkSchema, req.body);
   res.json(await markMediaPoolAssets(req.params.id, items.map((item) => `${item.kind}:${item.assetId}`), mark));
+}));
+
+// Bring an earlier draft's stills and clips into this video's assets (references; the draft is untouched).
+router.post('/:id/media-pool/import', asyncHandler(async (req, res) => {
+  const { fromProjectId } = validateRequest(musicVideoPoolImportSchema, req.body);
+  if (fromProjectId === req.params.id) throw new ServerError('Pick another video', { status: 400, code: 'VALIDATION_ERROR' });
+  const [project, from] = await Promise.all([getProject(req.params.id), getProject(fromProjectId)]);
+  if (!project || !from) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const { importMusicVideoPool, getMusicVideoMediaPool } = await import('../services/musicVideo/mediaPool.js');
+  const result = await importMusicVideoPool(project, from);
+  res.json({ ...result, items: (await getMusicVideoMediaPool(project)).items });
+}));
+
+// Media made for this video but never filed: search the whole library by prompt, then add picks.
+router.get('/:id/media-pool/library', asyncHandler(async (req, res) => {
+  const { q } = validateRequest(musicVideoLibrarySearchQuerySchema, req.query);
+  const project = await getProject(req.params.id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const { searchMediaLibraryForPool } = await import('../services/musicVideo/mediaPool.js');
+  res.json(await searchMediaLibraryForPool(project, q));
+}));
+
+router.post('/:id/media-pool/add', asyncHandler(async (req, res) => {
+  const { items } = validateRequest(musicVideoPoolAddSchema, req.body);
+  const project = await getProject(req.params.id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const { addLibraryMediaToPool, getMusicVideoMediaPool } = await import('../services/musicVideo/mediaPool.js');
+  const result = await addLibraryMediaToPool(project, items);
+  res.json({ ...result, items: (await getMusicVideoMediaPool(project)).items });
 }));
 
 router.post('/:id/media-pool/delete', asyncHandler(async (req, res) => {

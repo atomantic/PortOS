@@ -6,18 +6,19 @@ import SceneClipTiming from './SceneClipTiming.jsx';
 import SceneRejectUnused from './SceneRejectUnused.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { useEffect, useRef, useState } from 'react';
-import { Trash2, Activity, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, Video, Maximize2, AlertTriangle, Clapperboard, Shuffle } from 'lucide-react';
+import { Trash2, Activity, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, Video, AlertTriangle, Clapperboard, Shuffle } from 'lucide-react';
 import OverflowMenu from '../ui/OverflowMenu.jsx';
 import SceneTakePicker from './SceneTakePicker.jsx';
-import VideoStartTrimControl from '../media/VideoStartTrimControl.jsx';
 import { formatTimecode } from '../../utils/formatters.js';
-import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
+import useSceneClipPlayback from '../../hooks/useSceneClipPlayback.js';
+import SceneClipPreview from './SceneClipPreview.jsx';
+import SceneClipCoverageNotice from './SceneClipCoverageNotice.jsx';
 import PerformanceEvidence from './PerformanceEvidence.jsx';
 import { isPerformanceScene, planPerformanceRepair } from '../../lib/musicVideoShotTiming.js';
 import SceneTakeStrip from './SceneTakeStrip.jsx';
 import { sceneEndFramePlanFor } from './SceneEndFrame.jsx';
 import SceneFrames from './SceneFrames.jsx';
-import { CLIP_TIMING_FPS, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_TEXT_ZONES, MUSIC_VIDEO_VISUAL_LAYERS, clipOffsetSec, clipReversed, clipSpeedRate, sceneHasAuthoredSpan } from '../../lib/musicVideoLayers.js';
+import { CLIP_TIMING_FPS, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_TEXT_ZONES, MUSIC_VIDEO_VISUAL_LAYERS, clipReversed, sceneHasAuthoredSpan } from '../../lib/musicVideoLayers.js';
 
 // #8985: what a composed render shows for this scene's span.
 const LAYER_LABELS = { footage: 'Footage', still: 'Still image', card: 'Title card', code: 'Code-drawn' };
@@ -31,12 +32,12 @@ const SECONDARY_BUTTON = 'flex items-center gap-1 bg-port-bg border border-port-
 import { buildSceneTimingPresentation } from '../../lib/musicVideoSceneTiming.js';
 import SceneTimingPlan from './SceneTimingPlan.jsx';
 import SceneRenderProgress from './SceneRenderProgress.jsx';
-import { COVERAGE_TOLERANCE_SEC, SCENE_ATTENTION_LABELS, sceneAttention } from '../../lib/musicVideoSceneAttention.js';
+import { SCENE_ATTENTION_LABELS, sceneAttention } from '../../lib/musicVideoSceneAttention.js';
 import { ShotLockButton, useShotLock } from './ShotLock.jsx';
 import ScenePoster from './ScenePoster.jsx';
 import SceneRenderTarget, { lastRenderTarget, renderTargetOverrides } from './SceneRenderTarget.jsx';
 import SceneRenderInputs, { shotCardRenderRequest, shotCardRequestProblem } from './SceneRenderInputs.jsx';
-import SceneFrameFit, { sceneFrameFit } from './SceneFrameFit.jsx';
+import SceneFrameFit from './SceneFrameFit.jsx';
 import SceneCutEffect from './SceneCutEffect.jsx';
 import { plannedTransitions } from '../../lib/musicVideoCutEffects.js';
 import SceneGlitches from './SceneGlitches.jsx';
@@ -131,41 +132,13 @@ export default function SceneCard({
     }
   }, [expanded]);
 
-  // Pause the inline clip before opening the lightbox so the user can't hear
-  // two desynced copies — MediaLightbox autoplays unmuted, and the thumb's
-  // native controls let the user unmute it first (muted is only initial).
-  const clipPlayerRef = useRef(null);
-  // Resolve the clip's real stored filename rather than assuming `<id>.mp4` —
-  // an imported .mov/.webm keeps its own container (videoUpload.js), so the
-  // reconstructed path 404s for it (#8978). Falls back to the historical
-  // reconstruction while the lookup is in flight or if it fails, same as
-  // useVideoFileSrc's other ScenePreview-style callers.
-  const clipFile = useVideoFileSrc(scene.videoHistoryId, { enabled: !!scene.videoHistoryId });
-  const clipSrc = scene.videoHistoryId
-    ? (clipFile.src || `/data/videos/${scene.videoHistoryId}.mp4`)
-    : null;
-  // Source-clip length, read from the inline player's metadata and keyed to
-  // the clip it was measured from so a regenerated clip is re-measured.
+  // Keep playback mounted even when this shot shows a still or performance evidence.
+  const clipPlayback = useSceneClipPlayback(scene);
+  const { clipSrc, clipSec, clipSize, loops, playedSec } = clipPlayback;
   const [speakerDirty, setSpeakerDirty] = useState(false);
   const [speakerSaving, setSpeakerSaving] = useState(false);
-  const [clipMeta, setClipMeta] = useState(null);
   // Which slot's "Swap from unused" picker is open: 'image', 'video' or null.
   const [swapKind, setSwapKind] = useState(null);
-  const clipSec = clipMeta && clipMeta.id === scene.videoHistoryId ? clipMeta.sec : null;
-  const clipSize = clipMeta && clipMeta.id === scene.videoHistoryId && clipMeta.width > 0 ? { width: clipMeta.width, height: clipMeta.height } : null;
-  // Pre-#8964 scenes have no `loop` key and keep the legacy loop-to-fill render.
-  // A reversed clip is read once, backwards, so it holds rather than loops.
-  const loops = scene.loop !== false && !clipReversed(scene);
-  const spanSec = scene.beatAligned && typeof scene.startSec === 'number' && typeof scene.endSec === 'number'
-    ? scene.endSec - scene.startSec
-    : null;
-  // The clip's playing length with its hand-set speed and offset, as the render times it.
-  const clipRate = clipSpeedRate(scene);
-  const clipLead = clipOffsetSec(scene);
-  const playedSec = clipSec != null ? Math.max(0, -clipLead) + Math.max(0, clipSec - Math.max(0, clipLead)) / clipRate : null;
-  const shortBySec = !loops && spanSec != null && playedSec != null ? spanSec - playedSec : 0;
-  const underCovered = shortBySec > COVERAGE_TOLERANCE_SEC;
-  useEffect(() => { if (clipPlayerRef.current) clipPlayerRef.current.playbackRate = clipRate; }, [clipRate]);
   const applyPatch = (patch) => { onEditLocal(scene.sceneId, patch); onSave(scene.sceneId, patch); };
   const layer = MUSIC_VIDEO_VISUAL_LAYERS.includes(scene.visualLayer) ? scene.visualLayer : 'footage';
   const fieldId = (name) => `mv-scene-${scene.sceneId}-${name}`;
@@ -474,21 +447,7 @@ export default function SceneCard({
           <p className="break-words text-[11px] text-port-warning">{songChange.status === 'new' ? 'New shot for lines the revised song added.' : `Before the song revision: ${songChange.previousLyricText ? `♪ ${songChange.previousLyricText}` : 'instrumental'}`}</p>
         )}
         {(layer !== 'footage' || codeShot) && promptField}
-        {underCovered && (
-          <div role="alert" className="flex flex-wrap items-center gap-2 rounded border border-port-warning/40 bg-port-warning/10 px-2 py-1.5 text-xs text-port-warning">
-            <AlertTriangle size={13} className="shrink-0" />
-            <span className="min-w-0 flex-1 basis-48">
-              Shot runs {spanSec.toFixed(1)}s but its clip is {playedSec.toFixed(1)}s — the render won&apos;t repeat it.
-              Trim the shot, continue or regenerate a longer clip, or loop it on purpose.
-            </span>
-            <button type="button" onClick={() => applyPatch({ endSec: Math.round((scene.startSec + playedSec) * 1000) / 1000 })}
-              className="rounded bg-port-bg border border-port-border px-2 py-1 min-h-[44px] sm:min-h-0 text-port-text">Trim to clip</button>
-            {!clipReversed(scene) && (
-              <button type="button" onClick={() => applyPatch({ loop: true })}
-                className="rounded bg-port-bg border border-port-border px-2 py-1 min-h-[44px] sm:min-h-0 text-port-text">Loop clip</button>
-            )}
-          </div>
-        )}
+        <SceneClipCoverageNotice scene={scene} playback={clipPlayback} onChange={applyPatch} />
         {layer !== 'footage' && layered && !sceneHasAuthoredSpan(scene) && (
           <p role="alert" className="text-[11px] text-port-warning">
             Set a start and end — a {{ card: 'title card', code: 'code-drawn shot' }[layer] || 'still'} runs for exactly its span.
@@ -530,50 +489,9 @@ export default function SceneCard({
                 excerptId: performanceReview.excerptId, sourceAssetId: repairPlan.sourceAssetId, boundarySec: repairPlan.boundarySec,
               }) : null} />
           )}
-          {scene.videoHistoryId && !performance && (
-            <div className="relative w-full">
-              <video
-                ref={clipPlayerRef}
-                src={clipSrc}
-                className={`block w-full aspect-video ${sceneFrameFit(scene) === 'fill' ? 'object-cover' : 'object-contain'} rounded border border-port-border bg-black`}
-                muted
-                playsInline
-                preload="metadata"
-                controls
-                onLoadedMetadata={(e) => {
-                  e.currentTarget.playbackRate = clipRate;
-                  const sec = e.currentTarget.duration;
-                  const { videoWidth: width, videoHeight: height } = e.currentTarget;
-                  if (Number.isFinite(sec) && sec > 0) setClipMeta({ id: scene.videoHistoryId, sec, width, height });
-                }}
-              />
-              {/* This thumbnail plays the file as is; the player and the render play it backwards. */}
-              {clipReversed(scene) && (
-                <span className="port-media-overlay pointer-events-none absolute left-1 top-1 rounded px-1.5 py-0.5 text-[10px]">Reversed in the player</span>
-              )}
-              {/* Corner expand — do not put the open handler on <video> itself;
-                  that would fight native play/pause controls. Pause first so the
-                  lightbox's unmuted autoplay doesn't double-play the audio. */}
-              <button
-                type="button"
-                onClick={() => {
-                  clipPlayerRef.current?.pause();
-                  onOpenPreview?.(`video:${scene.videoHistoryId}`);
-                }}
-                aria-label={`View scene ${index + 1} clip full size`}
-                title={`View scene ${index + 1} clip full size`}
-                className="always-dark absolute top-1 right-1 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 p-1 flex items-center justify-center rounded bg-black/50 text-white hover:bg-black/80 focus:outline-none focus:ring-2 focus:ring-port-accent"
-              >
-                <Maximize2 className="w-3 h-3" />
-              </button>
-            </div>
-          )}
-          {/* Step to a later frame and keep the clip from there, as a new take of this shot. */}
-          {scene.videoHistoryId && !performance && onTrimClip && (
-            <VideoStartTrimControl videoRef={clipPlayerRef} sourceKey={scene.videoHistoryId}
-              disabled={takeBusy || !!generatingVideo || shotLock?.clip === 'locked'}
-              onTrim={(startSec) => onTrimClip(scene, startSec)} />
-          )}
+          <SceneClipPreview scene={scene} index={index} performance={performance} playback={clipPlayback}
+            onOpenPreview={onOpenPreview} onTrimClip={onTrimClip}
+            takeBusy={takeBusy} generatingVideo={generatingVideo} clipLocked={shotLock?.clip === 'locked'} />
           {/* Speed and offset by hand, from the same clip file, in the player and the final render. */}
           {scene.videoHistoryId && layer === 'footage' && (
             <SceneClipTiming fieldId={fieldId} scene={scene} onChange={applyPatch}

@@ -9,7 +9,7 @@
  */
 
 import { schedule, cancel, parseCronToPrevRun } from './eventScheduler.js';
-import { getSettings, getSettingsWithStatus, settingsEvents } from './settings.js';
+import { getSettingsWithStatus, settingsEvents } from './settings.js';
 import { runBackup, getState } from './backup.js';
 import { getUserTimezone, getTimezoneUpdatedAt } from './userTimezone.js';
 import { resolveBackupConfig } from '../lib/backupConfig.js';
@@ -61,7 +61,10 @@ function registrationInputs(settings) {
  * @param {string} logReason - what triggered this run, for the log line
  */
 async function runScheduledBackup(logReason) {
-  const fresh = await getSettings();
+  const { corrupt, settings: fresh } = await getSettingsWithStatus();
+  // Let eventScheduler record the failure instead of treating the forgiving
+  // reader's empty fallback as a successful disabled/destination-cleared skip.
+  if (corrupt) throw new Error('Backup settings unreadable — scheduled run was not started');
   const effective = resolveBackupConfig(fresh.backup);
   if (!effective.enabled) {
     console.log('💾 Backup scheduler: disabled since registration — skipping run');

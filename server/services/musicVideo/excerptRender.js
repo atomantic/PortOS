@@ -38,7 +38,7 @@ import { assertCurrentPerformanceTakes, withDraftPerformanceFallbacks } from './
 import { assertCurrentClipDependencies, planMusicVideoRender, buildMusicVideoFfmpegArgs, excerptBoundaryTimes, isLocalRenderMark, resolveMasterAudioPath, resolveSoundBedPath } from './render.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
 import { encodeDocumentComposition, prepareDocumentRender } from './documentRender.js';
-import { projectTypographyPlan } from './composition.js';
+import { composedLyricWindows, projectTypographyPlan } from './composition.js';
 import { renderTypographyOverlays, removeCompositionScratch } from './compositionRender.js';
 import { applyFilmLookFinish, filmLookFinishNeeded } from './filmLookFinish.js';
 import { startExcerptOnProject, applyExcerptPatch } from './excerpt.js';
@@ -326,7 +326,9 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
     const { cues: plannedCues, style } = projectTypographyPlan(project, clips, probe.sections, probe.totalDuration);
     const allCues = composed ? plannedCues : [];
     const cues = allCues.filter((c) => c.startSec < endClamped && c.endSec > startSec);
-    const composition = cues.length > 0 ? project.composition : null;
+    const lyricWindows = (composed ? composedLyricWindows(project, endClamped) : [])
+      .filter((w) => w.endSec > startSec).map((w) => ({ ...w, startSec: Math.max(w.startSec, startSec) }));
+    const composition = cues.length > 0 || lyricWindows.length > 0 ? project.composition : null;
 
     const totalDuration = endClamped - startSec;
     // A long filter graph goes to ffmpeg in this file, removed once ffmpeg exits.
@@ -500,6 +502,7 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
     const captureCues = cues.map((c) => ({ ...c, startSec: Math.max(c.startSec, startSec) }));
     renderTypographyOverlays({
       jobId, cues: captureCues, style, width: probe.canonW, height: probe.canonH, fps: probe.fps, durationSec: endClamped, signal,
+      lyrics: lyricWindows.length > 0 ? { project, windows: lyricWindows } : null,
       onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: 0.5 * fraction }),
     }).then(async (overlays) => {
       signal.throwIfAborted();

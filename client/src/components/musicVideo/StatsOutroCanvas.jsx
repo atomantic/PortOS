@@ -22,11 +22,12 @@ const floorSrc = (imageId) => (/\.png$/i.test(imageId)
 
 /**
  * The cutting room floor outro (lib/musicVideoStatsOutro.js) at scene time
- * `t`, painted by the same function the final render captures. `stats` is the
+ * `t`, painted by the same function the final render captures. `outro` is the
+ * normalized record (its heading lines and hidden tally lines). `stats` is the
  * server's tally (null while it loads: the floor and plate draw, the numbers
  * read zero until it lands).
  */
-export default function StatsOutroCanvas({ stats, t, durationSec }) {
+export default function StatsOutroCanvas({ stats, outro, t, durationSec }) {
   const canvasRef = useRef(null);
   const [images, setImages] = useState([]);
   const [fontsReady, setFontsReady] = useState(0);
@@ -61,8 +62,9 @@ export default function StatsOutroCanvas({ stats, t, durationSec }) {
   useEffect(() => {
     const ctx = canvasRef.current?.getContext?.('2d');
     if (!ctx) return;
-    drawStatsOutro(ctx, { width: WIDTH, height: HEIGHT, t, durationSec, stats, images });
-  }, [t, durationSec, stats, images, fontsReady]);
+    drawStatsOutro(ctx, { width: WIDTH, height: HEIGHT, t, durationSec, stats, outro, images });
+  }, [t, durationSec, stats, outro, images, fontsReady]);
+  const heading = [outro?.title, outro?.subtitle].filter(Boolean).join(', ');
 
   return (
     <canvas
@@ -70,7 +72,7 @@ export default function StatsOutroCanvas({ stats, t, durationSec }) {
       width={WIDTH}
       height={HEIGHT}
       role="img"
-      aria-label="The cutting room floor: what was made, kept and left out of this video"
+      aria-label={`${heading ? `${heading}: ` : ''}the choices behind this video, and what was left on the cutting room floor`}
       className="pointer-events-none absolute inset-0 h-full w-full"
       data-testid="animatic-stats-outro"
     />

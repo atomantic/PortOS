@@ -6,7 +6,10 @@ describe('cutting room floor outro', () => {
     expect(normalizeStatsOutro(null)).toBeNull();
     expect(statsOutroSeconds(null)).toBe(0);
     expect(statsOutroSeconds({ durationSec: 10 })).toBe(0);
-    expect(normalizeStatsOutro({ enabled: true })).toEqual({ enabled: true, durationSec: 8 });
+    expect(normalizeStatsOutro({ enabled: true })).toEqual({ enabled: true, durationSec: 8, title: 'Human Directed', subtitle: 'Human Imagined', hidden: [] });
+    // A cleared heading line stays cleared; unknown lines are dropped, the rest kept in display order.
+    expect(normalizeStatsOutro({ title: '  ', subtitle: ' Made by hand ', hidden: ['floor', 'nope', 'renders', 'floor'] }))
+      .toEqual({ enabled: false, durationSec: 8, title: '', subtitle: 'Made by hand', hidden: ['renders', 'floor'] });
     expect(statsOutroSeconds({ enabled: true, durationSec: 99 })).toBe(20);
     expect(statsOutroSeconds({ enabled: true, durationSec: 1 })).toBe(4);
   });
@@ -44,17 +47,24 @@ describe('cutting room floor outro', () => {
       floorImages: ['bad.png', 'floor.png'],
     });
     const rows = statsOutroRows(stats);
-    expect(rows.at(-1)).toEqual({ label: 'Left on the floor', value: 4, accent: true });
-    expect(rows.map((row) => row.label)).toEqual(['Stills made', 'Clips made', 'Takes rejected', 'Transitions placed', 'Image effects',
-      'Camera moves', 'Lip-sync shots', 'Shots in the cut', 'Left on the floor']);
+    expect(rows).toEqual([
+      { key: 'renders', label: 'Renders reviewed', value: 8 },
+      { key: 'images', label: 'Images generated', value: 5 },
+      { key: 'images', label: 'Images used', value: 3 },
+      { key: 'videos', label: 'Videos generated', value: 3 },
+      { key: 'videos', label: 'Videos used', value: 1 },
+      { key: 'edits', label: 'Cuts, moves & effects', value: 5 },
+      { key: 'floor', label: 'Left on the floor', value: 4, accent: true },
+    ]);
+    expect(statsOutroRows(stats, ['images', 'floor']).map((row) => row.label)).toEqual(['Renders reviewed', 'Videos generated', 'Videos used', 'Cuts, moves & effects']);
   });
 
   it('leaves out the choices never made and spreads the floor over the whole pile', () => {
-    const collectionItems = Array.from({ length: 40 }, (_, i) => ({ kind: 'image', ref: `still-${String(i).padStart(2, '0')}.png` }));
+    const collectionItems = Array.from({ length: 120 }, (_, i) => ({ kind: 'image', ref: `still-${String(i).padStart(3, '0')}.png` }));
     const stats = musicVideoOutroStats({ scenes: [{ sceneId: 's' }] }, { collectionItems });
     expect(stats.floorImages).toHaveLength(STATS_OUTRO_FLOOR_MAX);
-    expect(stats.floorImages[0]).toBe('still-00.png');
-    expect(stats.floorImages.at(-1) > 'still-35.png').toBe(true);
-    expect(statsOutroRows(stats).map((row) => row.label)).toEqual(['Stills made', 'Clips made', 'Shots in the cut', 'Left on the floor']);
+    expect(stats.floorImages[0]).toBe('still-000.png');
+    expect(stats.floorImages.at(-1) > 'still-110.png').toBe(true);
+    expect(statsOutroRows(stats).map((row) => row.label)).toEqual(['Renders reviewed', 'Images generated', 'Images used', 'Videos generated', 'Videos used', 'Left on the floor']);
   });
 });

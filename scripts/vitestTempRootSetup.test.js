@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync, symlinkSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -82,5 +83,39 @@ describe('vitestTempRootSetup teardown', () => {
       '⚠️ test temp leak: unowned- ×1',
     ]);
     expect(leaked.exitCode).toBe(1);
+  });
+
+  it('removes leaked cyclic and dangling links without walking or changing their targets', () => {
+    const sandbox = mkdtempSync(join(tmpdir(), 'pvt-link-teardown-'));
+    const root = join(sandbox, 'run');
+    const outside = join(sandbox, 'outside');
+    const fixture = join(root, 'fixture-links');
+    const directoryLink = process.platform === 'win32' ? 'junction' : 'dir';
+    try {
+      mkdirSync(fixture, { recursive: true });
+      mkdirSync(outside);
+      writeFileSync(join(outside, 'keep'), 'host data');
+      // Two links make the old follow-symlinks walk branch until ELOOP at
+      // every leaf. Run the real teardown in a bounded child so a regression
+      // cannot block the enclosing runner's event loop and its test timeout.
+      symlinkSync(fixture, join(fixture, 'a'), directoryLink);
+      symlinkSync(fixture, join(fixture, 'b'), directoryLink);
+      symlinkSync(outside, join(root, 'outside-link'), directoryLink);
+      symlinkSync(join(sandbox, 'missing'), join(root, 'dangling-link'), directoryLink);
+      const result = spawnSync(process.execPath, ['--input-type=module', '-e',
+        `import { teardown } from ${JSON.stringify(new URL('./vitestTempRootSetup.js', import.meta.url).href)}; teardown();`], {
+        env: { ...process.env, PORTOS_TEST_TEMP_ROOT: root },
+        encoding: 'utf8', timeout: 5000,
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(1);
+      for (const name of ['fixture-links', 'outside-link', 'dangling-link']) {
+        expect(result.stderr).toContain(`test temp leak: ${name} ×1`);
+      }
+      expect(existsSync(root)).toBe(false);
+      expect(readFileSync(join(outside, 'keep'), 'utf8')).toBe('host data');
+    } finally {
+      rmSync(sandbox, { recursive: true, force: true });
+    }
   });
 });

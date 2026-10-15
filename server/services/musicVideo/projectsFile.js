@@ -105,7 +105,7 @@ async function reorderProjectScenesUnqueued(id, orderedIds) {
 // ---- scene takes (#8965) — one load/modify/save per take operation ----------
 async function mutateProject(id, transform) {
   const { all, idx } = await loadAllAndIndex(id);
-  const outcome = transform(all[idx]);
+  const outcome = await transform(all[idx]);
   all[idx] = outcome.project;
   await saveAll(all);
   return outcome;
@@ -145,3 +145,8 @@ export const reviewSceneTake = serialized(reviewSceneTakeUnqueued);
 // Generic pure-transform mutation (#8980 treatment ops): `transform(project)`
 // returns `{ project, ...result }`; resolves to that outcome.
 export const mutateProjectRecord = serialized(mutateProject);
+
+/** Hold the same file tail as every writer; cleanup uses the unqueued mutation. */
+export function withProjectMutation(work) {
+  return queueWrite(() => work({ mutateProjectRecord: mutateProject }));
+}

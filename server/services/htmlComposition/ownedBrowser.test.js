@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { access, rm } from 'node:fs/promises';
+import { access, mkdir, rm } from 'node:fs/promises';
+import { createOwnedBrowserDiagnostics } from '../../test/ownedBrowserDiagnostics.js';
 
 const launch = vi.hoisted(() => ({ spawn: vi.fn() }));
 vi.mock('node:fs/promises', async original => {
@@ -15,8 +16,10 @@ const { launchCompositionBrowser } = await import('./ownedBrowser.js');
 let child;
 let profile;
 let startup;
+let diagnostics;
 const endpoint = 'ws://127.0.0.1:12345/devtools/browser/synthetic-browser';
 beforeEach(() => {
+  diagnostics = createOwnedBrowserDiagnostics();
   child = new EventEmitter();
   Object.assign(child, { pid: 12345, exitCode: null, signalCode: null, stderr: new PassThrough() });
   child.kill = vi.fn(signal => {
@@ -32,6 +35,7 @@ beforeEach(() => {
   };
   launch.spawn.mockReset().mockImplementation((_, args) => {
     profile = args.find(arg => arg.startsWith('--user-data-dir=')).slice('--user-data-dir='.length);
+    diagnostics.track(child, args);
     queueMicrotask(startup);
     return child;
   });
@@ -49,6 +53,56 @@ afterEach(() => {
 });
 
 describe('owned composition capture browser lifecycle', () => {
+  it('keeps close pending until removal settles and distinguishes later profile recreation in diagnostics', async () => {
+    const owner = await launchCompositionBrowser();
+    const remove = rm.getMockImplementation();
+    let release;
+    let started;
+    const removing = new Promise(resolve => { started = resolve; });
+    const pending = new Promise(resolve => { release = resolve; });
+    vi.mocked(rm).mockImplementationOnce((...args) => diagnostics.remove(async (...values) => {
+      started();
+      await pending;
+      return remove(...values);
+    }, ...args));
+    let settled = false;
+    const closing = owner.close().finally(() => { settled = true; });
+    try {
+      await removing;
+      const owned = diagnostics.children[0];
+      expect(settled).toBe(false);
+      expect(diagnostics.describe(owned)).toContain('exit=true close=true removal=pending presentAfterRemoval=unknown presentNow=true');
+      release();
+      await closing;
+      expect(diagnostics.describe(owned)).toContain('removal=resolved presentAfterRemoval=false presentNow=false');
+      // A later writer is a negative control, not evidence about Chrome helpers.
+      await mkdir(profile);
+      const report = diagnostics.describe(owned);
+      expect(report).toContain('removal=resolved presentAfterRemoval=false presentNow=true');
+      expect(report).not.toContain(profile);
+    } finally {
+      release();
+      await closing;
+      await remove(profile, { recursive: true, force: true });
+    }
+  });
+
+  it('retains the exact removal rejection while diagnostics distinguish it from recreation', async () => {
+    const owner = await launchCompositionBrowser();
+    const remove = rm.getMockImplementation();
+    const error = Object.assign(new Error('synthetic private profile path'), { code: 'EACCES' });
+    vi.mocked(rm).mockImplementationOnce((...args) => diagnostics.remove(() => Promise.reject(error), ...args));
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(owner.close()).rejects.toBe(error);
+      const report = diagnostics.describe(diagnostics.children[0]);
+      expect(report).toContain('removal=rejected:EACCES presentAfterRemoval=true presentNow=true');
+      expect(report).not.toContain(profile);
+      expect(report).not.toContain(error.message);
+      expect(log).toHaveBeenCalledWith('❌ Composition browser profile cleanup failed (other)');
+    } finally { await remove(profile, { recursive: true, force: true }); }
+  });
+
   it('uses the configured executable with a fresh sandboxed profile and disposes only its child', async () => {
     setUid(1000);
     const owner = await launchCompositionBrowser();
@@ -181,6 +235,7 @@ describe('owned composition capture browser lifecycle', () => {
   });
 
   it('launches the jailed pipe browser without a DevTools port or inherited tokens', async () => {
+    vi.stubEnv('MAC_CHROMIUM_TMPDIR', '/synthetic/test-temp');
     answerHandshake();
     const owner = await launchCompositionBrowser({
       isolation: 'required',
@@ -196,6 +251,7 @@ describe('owned composition capture browser lifecycle', () => {
     expect(args.join('\n')).not.toContain('proxy-bypass');
     expect(args).not.toContain('--remote-debugging-port=0');
     expect(options.env.USER).toBe('portos-preview');
+    expect(options.env.MAC_CHROMIUM_TMPDIR).toBe('/synthetic/test-temp');
     expect(options.env.PORTOS_API_TOKEN).toBeUndefined();
     expect(options.detached).toBe(true);
     await owner.close();

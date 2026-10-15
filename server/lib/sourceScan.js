@@ -89,23 +89,21 @@ function regexCanStartAfter(prev, chars, at) {
   return KEYWORDS_BEFORE_REGEX.has(wordEndingAt(chars, end));
 }
 
-/**
- * Replace the contents of comments, string/template literals, and regex
- * literals with spaces, preserving LENGTH so every index still maps back to the
- * original source. Everything downstream (bracket walks, `await` matching) then
- * sees code only — and a caller that needs a literal's text (a socket event
- * name, say) can still read it out of the original string at the same offset.
- * @param {string} src
- * @param {{keepLiteralText?: boolean}} [options] `keepLiteralText` leaves
- *   string/template/regex CONTENT in place and blanks only comments — reach it
- *   through `blankCommentBodies`. The lex is identical either way, so the two
- *   modes cannot disagree about where a comment ends and a literal begins.
- * @returns {string} same length as `src`
- */
-export function blankLiterals(src, { keepLiteralText = false } = {}) {
+// One state machine for both public modes and the paired-view scan. Only the
+// paired view assembles the comment-only output from spans; legacy callers
+// keep one output array.
+function lexSource(src, { keepLiteralText = false, includeCommentOnly = false } = {}) {
   const out = src.split('');
+  const comments = includeCommentOnly ? [] : null;
+  let commentEnd = 0;
   const n = src.length;
   const blank = (i) => { if (i < n && src[i] !== '\n') out[i] = ' '; };
+  const recordComment = (start, end) => {
+    if (!comments) return;
+    const until = Math.min(end, n);
+    comments.push(src.slice(commentEnd, start), out.slice(start, until).join(''));
+    commentEnd = until;
+  };
   // Blanks a character belonging to a LITERAL rather than to a comment.
   const blankLit = keepLiteralText ? () => {} : blank;
   // Brace depths of the code regions opened by `${` inside template literals,
@@ -137,12 +135,16 @@ export function blankLiterals(src, { keepLiteralText = false } = {}) {
     }
 
     if (c === '/' && src[i + 1] === '/') {
+      const start = i;
       while (i < n && src[i] !== '\n') { blank(i); i += 1; }
+      recordComment(start, i);
       continue;
     }
     if (c === '/' && src[i + 1] === '*') {
+      const start = i;
       while (i < n && !(src[i] === '*' && src[i + 1] === '/')) { blank(i); i += 1; }
       blank(i); blank(i + 1); i += 2;
+      recordComment(start, i);
       continue;
     }
     if (c === "'" || c === '"') {
@@ -189,7 +191,28 @@ export function blankLiterals(src, { keepLiteralText = false } = {}) {
     i += 1;
   }
 
-  return out.join('');
+  const blanked = out.join('');
+  return comments ? { blanked, code: comments.join('') + src.slice(commentEnd) } : blanked;
+}
+
+/**
+ * Replace the contents of comments, string/template literals, and regex
+ * literals with spaces, preserving LENGTH so every index still maps back to the
+ * original source. Everything downstream (bracket walks, `await` matching) then
+ * sees code only — and a caller that needs a literal's text (a socket event
+ * name, say) can still read it out of the original string at the same offset.
+ * @param {string} src
+ * @param {{keepLiteralText?: boolean, includeCommentOnly?: boolean}} [options] `keepLiteralText` leaves
+ *   string/template/regex CONTENT in place and blanks only comments — reach it
+ *   through `blankCommentBodies`. The lex is identical either way, so the two
+ *   modes cannot disagree about where a comment ends and a literal begins.
+ *   `includeCommentOnly` returns both `{ code, blanked }` views from one
+ *   traversal; `code` equals `blankCommentBodies(src)` and `blanked` equals
+ *   the default `blankLiterals(src)`. This paired mode overrides `keepLiteralText`.
+ * @returns {string|{code: string, blanked: string}} each view has the same length as `src`
+ */
+export function blankLiterals(src, { keepLiteralText = false, includeCommentOnly = false } = {}) {
+  return lexSource(src, { keepLiteralText: includeCommentOnly ? false : keepLiteralText, includeCommentOnly });
 }
 
 /**

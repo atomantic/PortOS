@@ -41,6 +41,8 @@ process.env.NODE_DISABLE_COMPILE_CACHE = '1';
 
 const config = defineConfig({
   test: {
+    // Environment teardown also owns collection-only/skipped suite fixtures.
+    environment: fileURLToPath(new URL('./test/mediaRegistryEnvironment.js', import.meta.url)),
     ...vitestCiPool(),
     // Workers get their own process.env — set it there as well as above.
     env: {
@@ -49,6 +51,7 @@ const config = defineConfig({
       TMPDIR: RUN_TEMP_ROOT,
       TMP: RUN_TEMP_ROOT,
       TEMP: RUN_TEMP_ROOT,
+      MAC_CHROMIUM_TMPDIR: RUN_TEMP_ROOT,
     },
     // 30s on every platform (#7951). This WAS 10s off Windows, and the split
     // has always been a fiction: the cost it budgets for is vitest's transform

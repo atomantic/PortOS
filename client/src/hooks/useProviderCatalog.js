@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { createProviderPreset, getProviderCatalog } from '../services/api';
+import socket from '../services/socket.js';
 import { harnessLabel } from '../utils/providerHarnesses.js';
 import { parseProviderRef } from '../utils/providerRef.js';
 
@@ -12,6 +13,8 @@ import { parseProviderRef } from '../utils/providerRef.js';
  * share ONE `/providers/catalog` fetch rather than firing N of them.
  */
 let inFlight = null;
+let generation = 0;
+let listenersInstalled = false;
 
 // Mounted hooks, notified when the shared cache is dropped so they re-read.
 // The AI Providers page (#7567) toggles a harness, edits a service or saves a
@@ -24,10 +27,11 @@ const EMPTY_CATALOG = Object.freeze({
 });
 
 function fetchCatalog() {
+  const readGeneration = generation;
   inFlight ||= getProviderCatalog({ silent: true })
     .catch((err) => {
       console.warn(`⚠️ Provider catalog fetch failed: ${err?.message || err}`);
-      inFlight = null;
+      if (readGeneration === generation) inFlight = null;
       return null;
     });
   return inFlight;
@@ -35,6 +39,7 @@ function fetchCatalog() {
 
 /** Test seam — drop the shared cache so each case starts from "never fetched". */
 export function __resetProviderCatalogCache() {
+  generation += 1;
   inFlight = null;
 }
 
@@ -44,8 +49,19 @@ export function __resetProviderCatalogCache() {
  * enablement toggle, a service create/edit/delete/refresh, a bootstrap save.
  */
 export function invalidateProviderCatalog() {
+  generation += 1;
   inFlight = null;
   for (const notify of subscribers) notify();
+}
+
+// Like the providers API cache, keep one pair of listeners for the lifetime of
+// the shared cache, including between mounts. A reconnect can recover a write
+// missed while disconnected; neither event fetches until a consumer is enabled.
+function listenForProviderChanges() {
+  if (listenersInstalled) return;
+  socket.on('providers:changed', invalidateProviderCatalog);
+  socket.on('connect', invalidateProviderCatalog);
+  listenersInstalled = true;
 }
 
 /**
@@ -97,28 +113,31 @@ export function invalidateProviderCatalog() {
  * }}
  */
 export default function useProviderCatalog(enabled = true) {
-  const [state, setState] = useState({ catalog: null, loaded: false });
+  const [state, setState] = useState({ catalog: null, loaded: false, generation });
+
+  // A revision change must retrigger an already-loading picker too. Merely
+  // setting loaded=false leaves its obsolete request as the only active read.
+  useEffect(() => {
+    listenForProviderChanges();
+    const notify = () => setState((current) => ({ ...current, loaded: false, generation }));
+    subscribers.add(notify);
+    return () => { subscribers.delete(notify); };
+  }, []);
 
   useEffect(() => {
     if (!enabled || state.loaded) return undefined;
     let canceled = false;
+    const readGeneration = generation;
     fetchCatalog().then((catalog) => {
-      if (!canceled) setState({ catalog, loaded: true });
+      if (!canceled && readGeneration === generation) {
+        setState((current) => ({ ...current, catalog: catalog ?? current.catalog, loaded: true }));
+      }
     });
     // A cancel (popover closed mid-flight) leaves `loaded` false, so reopening
     // re-reads rather than rendering a result that never arrived — free when
     // the first fetch already succeeded, since the shared cache still has it.
     return () => { canceled = true; };
-  }, [enabled, state.loaded]);
-
-  // An invalidation flips `loaded` off; the fetch effect above then re-reads.
-  // The stale catalog stays rendered until the new one lands — a picker never
-  // blanks mid-toggle.
-  useEffect(() => {
-    const notify = () => setState((current) => ({ ...current, loaded: false }));
-    subscribers.add(notify);
-    return () => { subscribers.delete(notify); };
-  }, []);
+  }, [enabled, state.loaded, state.generation]);
 
   const catalog = state.catalog || EMPTY_CATALOG;
 

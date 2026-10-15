@@ -45,7 +45,7 @@ describe('storyboard readiness after verified lyric timing', () => {
   });
 
   it('keeps a director-edited draft shot over the derived row', () => {
-    const edited = { sceneId: 's1', lyricCueIds: ['c1'], action: 'She laughs', staging: 'Close-up', camera: '', transition: 'Cut' };
+    const edited = { sceneId: 's1', lyricCueIds: ['c1'], action: 'She laughs', staging: '', camera: 'Close-up', transition: 'Cut' };
     const { storyboard } = productionReadiness(project({ draftShots: [edited] }));
     expect(storyboard.shots[0]).toEqual(edited);
     expect(storyboard.problems).toContain('Complete timing, action, staging, camera and transition for Verse.');
@@ -302,5 +302,31 @@ describe('storyboard rows stay bound to the shots on the board', () => {
     const board = project({ draftShots: [row('s1'), row('s2')] });
     const { project: replanned } = replaceScenes(board, [{ label: 'Verse', startSec: 0, endSec: 4 }, { label: 'New', startSec: 4, endSec: 6, visualIntent: 'x' }, { label: 'Tag', startSec: 6, endSec: 8, visualIntent: 'y' }]);
     expect(replanned.productionReview.draft.storyboard.map((shot) => shot.sceneId)).toEqual(['s1']);
+  });
+});
+
+describe('naming the shots behind Shot coverage and Shot details', () => {
+  // Uniquely catches a cutaway with no camera note blocking the board it was locked on.
+  it('lets a Board shot leave its camera blank', () => {
+    const planned = project({ draftShots: [{ sceneId: 's1', lyricCueIds: ['c1'], action: 'She looks up', staging: 'Desk', camera: '', transition: 'Cut' }] });
+    const bare = { ...planned, castAndSets: { status: 'approved', direction: { world: {} } } };
+    const { storyboard } = productionReadiness(bare);
+    expect(storyboard.incompleteShots).toEqual([]);
+    expect(storyboard.problems.filter((p) => SHOT_PROBLEM.test(p))).toEqual([]);
+  });
+
+  // Uniquely catches the coverage and details checks failing a board without saying which shot to fix.
+  it('names the shot at each gap, overlap and song-end mismatch, and what each incomplete shot is missing', () => {
+    const base = project();
+    const scenes = [{ ...base.scenes[0], endSec: 3 }, { ...base.scenes[1], sceneId: 's2', label: 'Insert', startSec: 3.5, endSec: 5 },
+      { ...base.scenes[1], sceneId: 's3', label: 'Outro', startSec: 4.8, endSec: 8.5, visualIntent: '' }];
+    const { storyboard } = productionReadiness({ ...base, scenes });
+    expect(storyboard.coverage).toEqual([
+      { sceneId: 's2', issue: 'gap', startSec: 3, endSec: 3.5 },
+      { sceneId: 's3', issue: 'overlap', startSec: 4.8, endSec: 5 },
+      { sceneId: 's3', issue: 'past-end', startSec: 8, endSec: 8.5 },
+    ]);
+    expect(storyboard.incompleteShots).toEqual([{ sceneId: 's3', missing: ['an end inside the song', 'action'] }]);
+    expect(productionReadiness(base).storyboard).toMatchObject({ coverage: [], incompleteShots: [] });
   });
 });

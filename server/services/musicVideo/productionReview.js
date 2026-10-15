@@ -657,16 +657,34 @@ export function productionReadiness(project) {
   }
   if (!scenes.length) boardProblems.push('Create a timed shot storyboard.');
   const timedScenes = scenes.filter(s => Number.isFinite(s.startSec) && s.endSec > s.startSec).sort((a, b) => a.startSec - b.startSec);
-  if (timedScenes.length && (timedScenes[0].startSec > 1 / 24
-    || Math.abs(timedScenes.at(-1).endSec - duration) > 1 / 24
-    || timedScenes.some((s, i) => i > 0 && Math.abs(s.startSec - timedScenes[i - 1].endSec) > 1 / 24))) {
-    boardProblems.push('Storyboard shots must cover the master without unintended gaps or overlaps.');
+  // Each place the shots leave the song uncovered or covered twice, on the shot where it happens, so the checklist can name it.
+  const coverage = [];
+  if (timedScenes.length) {
+    const [first, last] = [timedScenes[0], timedScenes.at(-1)];
+    if (first.startSec > 1 / 24) coverage.push({ sceneId: first.sceneId, issue: 'late-start', startSec: 0, endSec: first.startSec });
+    timedScenes.forEach((s, i) => {
+      const prev = timedScenes[i - 1];
+      if (!prev || Math.abs(s.startSec - prev.endSec) <= 1 / 24) return;
+      coverage.push({ sceneId: s.sceneId, issue: s.startSec > prev.endSec ? 'gap' : 'overlap',
+        startSec: Math.min(s.startSec, prev.endSec), endSec: Math.max(s.startSec, prev.endSec) });
+    });
+    if (Math.abs(last.endSec - duration) > 1 / 24) coverage.push({ sceneId: last.sceneId, issue: last.endSec > duration ? 'past-end' : 'early-end',
+      startSec: Math.min(last.endSec, duration), endSec: Math.max(last.endSec, duration) });
   }
+  if (coverage.length) boardProblems.push('Storyboard shots must cover the master without unintended gaps or overlaps.');
+  // Each shot missing timing or storyboard fields, with what is missing.
+  const incompleteShots = [];
   for (const scene of scenes) {
     const shot = documentShots ? scene : draft.storyboard?.find(s => s.sceneId === scene.sceneId) || boardShotFromScene(project, scene);
-    if (!(Number.isFinite(scene.startSec) && scene.endSec > scene.startSec && scene.endSec <= duration)
-      || !shot || ['action', 'staging', 'camera', 'transition'].some(key => !text(shot[key]))) {
+    const missing = !(Number.isFinite(scene.startSec) && scene.endSec > scene.startSec) ? ['timing']
+      : scene.endSec > duration ? ['an end inside the song'] : [];
+    // A Board shot with no camera note is a valid choice (a cutaway rendered from its start frame plays
+    // whatever motion its clip has); camera variety stays advice. Document shots spell out every field.
+    missing.push(...(documentShots ? ['action', 'staging', 'camera', 'transition'] : ['action', 'staging', 'transition'])
+      .filter(key => !text(shot?.[key])));
+    if (missing.length) {
       boardProblems.push(`Complete timing, action, staging, camera and transition for ${scene.label || 'each shot'}.`);
+      incompleteShots.push({ sceneId: scene.sceneId, missing });
     }
     // A shot anchors every line sung over it, counted from the line's first sung word (lib/musicVideoLyricAnchors.js).
     const sung = cuesSungWithin(cues, scene.startSec, scene.endSec);
@@ -698,7 +716,7 @@ export function productionReadiness(project) {
     // The overlay text check is advice on the storyboard, like camera variety; it never blocks approval.
     storyboard: { approved: storyboardApproved, problems: [...new Set(boardProblems)], camera,
       // Board shots as reviewed, derived rows included, so the editor and approval card show what the gate checked.
-      shots: documentShots ? null : boardStoryboard(project), lyricAnchors, staleRows, text: overlayTextReport(project, overlayTextBasis), stale: storyboardApproved ? null : staleApproval(project, 'storyboard', basis.storyboard, inputs),
+      shots: documentShots ? null : boardStoryboard(project), lyricAnchors, staleRows, coverage, incompleteShots, text: overlayTextReport(project, overlayTextBasis), stale: storyboardApproved ? null : staleApproval(project, 'storyboard', basis.storyboard, inputs),
       shotLocks: locks, unlocked: byShot ? unlocked : [], clipLocks: clips,
       // Video shots whose clip is not locked yet: the board is finished when every shot is fully locked.
       clipsUnlocked: clips ? Object.keys(clips).filter(id => clips[id] && clips[id] !== 'locked') : [] },

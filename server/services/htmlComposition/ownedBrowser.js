@@ -39,7 +39,7 @@ async function removeProfile(profile, attempts = 20, delayMs = 50) {
 // still denies IP egress.
 function previewBrowserEnv() {
   const env = { USER: 'portos-preview' };
-  for (const key of ['PATH', 'HOME', 'TMPDIR', 'TEMP', 'TMP', 'LANG', 'LC_ALL', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT']) {
+  for (const key of ['PATH', 'HOME', 'TMPDIR', 'TEMP', 'TMP', 'MAC_CHROMIUM_TMPDIR', 'LANG', 'LC_ALL', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT']) {
     if (process.env[key]) env[key] = process.env[key];
   }
   return env;
