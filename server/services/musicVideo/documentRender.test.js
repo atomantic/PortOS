@@ -8,14 +8,14 @@
 
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
 vi.mock('../htmlComposition/encode.js', async (importOriginal) => ({ ...(await importOriginal()), encodeComposition: vi.fn(async () => { throw new Error('stop at encoder'); }) }));
 const { encodeComposition } = await import('../htmlComposition/encode.js');
 
-const { browser } = vi.hoisted(() => ({ browser: { seen: null, contract: null, visibility: null, sampleTimes: [], send: null, closed: [] } }));
+const { browser } = vi.hoisted(() => ({ browser: { seen: null, contract: null, visibility: null, sampleTimes: [], send: null, closed: [], frameCallbacks: true, capabilityProbes: 0, version: 'Chrome/155.0.8059.41', versionCalls: [] } }));
 vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-mv-document-stage-'),
 }));
@@ -24,6 +24,7 @@ vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await imp
 vi.mock('../../lib/ffmpeg.js', async (importOriginal) => ({
   ...(await importOriginal()),
   findFfmpeg: async () => 'ffmpeg',
+  probeVideoGeometry: vi.fn(async () => null),
   runFfmpegProcess: vi.fn(async ({ args }) => {
     if (args.includes('-n')) await writeFile(args.at(-1), await readFile(args[args.indexOf('-i') + 1]));
     return { ok: true };
@@ -43,6 +44,13 @@ vi.mock('../htmlComposition/browser.js', () => ({
     browser.seen = { directory, data: window.PORTOS_MV, media, song: JSON.parse(await read(joinPath(dir, 'song.json'), 'utf8')), initScripts: options?.initScripts ?? [] };
     return {
       async evaluate(expression) {
+        if (expression.includes('requestVideoFrameCallback')) {
+          browser.capabilityProbes++;
+          const prototype = {};
+          if (browser.frameCallbacks === true || browser.frameCallbacks === 'request-only') prototype.requestVideoFrameCallback = () => {};
+          if (browser.frameCallbacks === true || browser.frameCallbacks === 'cancel-only') prototype.cancelVideoFrameCallback = () => {};
+          return new Function('HTMLVideoElement', `return (${expression});`)({ prototype });
+        }
         if (expression.includes('reviewFootage')) { browser.sampleTimes.push(Number(/c.seek\(([^,]+)/.exec(expression)[1])); return browser.visibility; }
         if (expression.includes('canPlayType')) return 'probably';
         if (browser.contract) return browser.contract;
@@ -50,17 +58,24 @@ vi.mock('../htmlComposition/browser.js', () => ({
       },
       check() {},
       async close() { browser.closed.push({ directory, assetsPresent: (await list(dir)).includes('portos-mv.js') }); },
-      async send(...args) { return browser.send?.(...args) ?? {}; },
+      async send(...args) {
+        if (args[0] === 'Browser.getVersion') {
+          browser.versionCalls.push(args);
+          if (browser.version instanceof Error) throw browser.version;
+          return browser.version == null ? {} : { product: browser.version };
+        }
+        return browser.send?.(...args) ?? {};
+      },
     };
   },
 }));
 
-const { runFfmpegProcess } = await import('../../lib/ffmpeg.js');
+const { runFfmpegProcess, probeVideoGeometry } = await import('../../lib/ffmpeg.js');
 const { PATHS } = await import('../../lib/paths.js');
 const { encodeDocumentComposition, documentRenderClock, openIsolatedDocumentPreview, resolveSceneMedia } = await import('./documentRender.js');
 
 afterAll(() => cleanupTempDataRoots());
-beforeEach(() => { runFfmpegProcess.mockClear(); browser.seen = null; browser.contract = null; browser.visibility = null; browser.sampleTimes = []; browser.send = null; browser.closed = []; });
+beforeEach(() => { runFfmpegProcess.mockClear(); probeVideoGeometry.mockReset(); probeVideoGeometry.mockResolvedValue(null); browser.seen = null; browser.contract = null; browser.visibility = null; browser.sampleTimes = []; browser.send = null; browser.closed = []; browser.frameCallbacks = true; browser.capabilityProbes = 0; browser.version = 'Chrome/155.0.8059.41'; browser.versionCalls = []; });
 
 const performanceTake = (assetId) => ({ takeId: 'mvt-p', kind: 'video', assetId, status: 'candidate', shotInstruction: { shotMode: 'performance', edit: { inSec: 0.5, outSec: 3.5 } } });
 
@@ -95,8 +110,68 @@ async function fixture({ shipped = {} } = {}) {
 
 const encode = (project, plan, jobId) => encodeDocumentComposition({ project, plan, jobId, audioPath: join(PATHS.data, 'none.wav'), outputPath: join(PATHS.videos, `${jobId}.mp4`) });
 const scratchEntries = async () => (await readdir(join(PATHS.data, 'music-video-song-renders')).catch(() => []));
+async function canonicalPreview() {
+  const value = await fixture(), directory = join(PATHS.data, value.plan.directory);
+  await cp(new URL('./documentTemplates/layered/', import.meta.url), directory, { recursive: true });
+  await cp(new URL('./documentTemplates/shared/', import.meta.url), directory, { recursive: true });
+  await cp(new URL('../../lib/musicVideoImageEffects.js', import.meta.url), join(directory, 'musicVideoImageEffects.js'));
+  value.project.composition.document = { directory: value.plan.directory };
+  return value;
+}
 
 describe('isolated document preview ownership', () => {
+  it.each([
+    { label: 'Chrome', product: 'Chrome/155.0.8059.41', supported: true },
+    { label: 'headless Chrome', product: 'HeadlessChrome/155.0.8059.41', supported: true },
+    { label: 'older baseline', product: 'Chrome/154.0.8037.57', supported: false },
+    { label: 'unknown product', product: 'OtherBrowser/155.0.8059.41', supported: false },
+    { label: 'missing product', product: null, supported: false },
+    { label: 'malformed version', product: 'Chrome/155oops', supported: false },
+    { label: 'unsafe major', product: 'Chrome/9007199254740992.0.0.0', supported: false },
+    { label: 'nonfinite major', product: `Chrome/${'9'.repeat(400)}.0.0.0`, supported: false },
+    { label: 'rejected version probe', product: new Error('Synthetic version probe failure'), supported: false },
+  ])('requires the verified owned capture protocol baseline before advertising playback ($label)', async ({ product, supported }) => {
+    const { project } = await canonicalPreview(); browser.version = product;
+    const preview = await openIsolatedDocumentPreview({ project, jobId: 'preview-protocol' });
+    try {
+      expect(browser.versionCalls).toEqual([['Browser.getVersion', {}, null]]);
+      expect(preview.playbackAdapter).toMatchObject({ adapted: true, captureProtocolSupported: supported });
+      if (supported) expect(preview.playback).toMatchObject({ version: 1 });
+      else {
+        expect(preview.playback).toBeUndefined();
+        expect(preview.playbackAdapter.reason).toBe('unsupported-capture-protocol');
+        expect(browser.capabilityProbes).toBe(0);
+      }
+      expect(browser.closed).toEqual([]); // Exact fallback retains the caller's usable page.
+    } finally { await preview.page.close(); await rm(preview.scratchRoot, { recursive: true, force: true }); }
+  });
+
+  it.each([{ mode: true, supported: true }, { mode: false, supported: false },
+    { mode: 'request-only', supported: false }, { mode: 'cancel-only', supported: false }])('advertises cooperative capability only after a supported browser probe ($mode)', async ({ mode, supported }) => {
+    const { project } = await canonicalPreview(); browser.frameCallbacks = mode;
+    const preview = await openIsolatedDocumentPreview({ project, jobId: `preview-capability-${mode}` });
+    try {
+      expect(browser.capabilityProbes).toBe(1);
+      expect(preview.playbackAdapter).toMatchObject({ adapted: true, runtimeSupported: supported });
+      if (supported) expect(preview.playback).toMatchObject({ version: 1 });
+      else expect(preview.playback).toBeUndefined();
+      expect(browser.seen.data.scenes.find(scene => scene.media?.kind === 'video').media.fps).toBe(24);
+    } finally { await preview.page.close(); await rm(preview.scratchRoot, { recursive: true, force: true }); }
+  });
+
+  it('keeps the actual open path on exact fallback when host staging cannot measure video fps', async () => {
+    const { project } = await canonicalPreview();
+    await writeFile(join(PATHS.data, 'video-history.json'), JSON.stringify([{ id: 'vh-a', filename: 'clip-a.mp4', width: 1280, height: 720 }]));
+    const preview = await openIsolatedDocumentPreview({ project, jobId: 'preview-unknown-fps' });
+    try {
+      expect(probeVideoGeometry).toHaveBeenCalled();
+      expect(preview.playback).toBeUndefined();
+      expect(preview.playbackAdapter).toMatchObject({ adapted: false, reason: 'unsupported-video-fps' });
+      expect(browser.capabilityProbes).toBe(0);
+      expect(browser.seen.data.scenes.find(scene => scene.media?.kind === 'video').media.fps).toBeNull();
+    } finally { await preview.page.close(); await rm(preview.scratchRoot, { recursive: true, force: true }); }
+  });
+
   it.each(['metrics failure', 'cancellation'])('closes its opened page before removing staged assets after %s', async failure => {
     const { project, plan } = await fixture();
     project.composition.document = { directory: plan.directory };

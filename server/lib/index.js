@@ -23,6 +23,7 @@ export * from './codeAnimationPackage.js';
 export * from './codeAnimationAcceptance.js';
 export * from './codeAnimationContainment.js';
 export * from './generatedPreviewSandbox.js';
+export * from './generatedPreviewPlaybackSchema.js';
 export * from './autonomousJobTask.js';
 export * from './asyncApiSpec.js';
 export * from './avatarVariants.js';

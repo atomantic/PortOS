@@ -355,9 +355,15 @@ export async function openIsolatedDocumentPreview({ project, jobId, signal, onEv
   });
   let staged;
   let page;
+  let playbackAdapter;
   try {
+    const { adaptStagedDocumentPreview } = await import('./documentPreviewPlayback.js');
     staged = await stageMusicVideoComposition(plan.directory, jobId, musicVideoSongDocument(project), {
-      prepare: (dir) => stageDocumentData(dir, data, media, signal),
+      prepare: async (dir) => {
+        await stageDocumentData(dir, data, media, signal);
+        signal?.throwIfAborted();
+        playbackAdapter = await adaptStagedDocumentPreview(dir, { scenes: data.scenes });
+      },
     });
     signal?.throwIfAborted();
     page = await openComposition(staged.directory, {
@@ -370,8 +376,30 @@ export async function openIsolatedDocumentPreview({ project, jobId, signal, onEv
       width: plan.width, height: plan.height, deviceScaleFactor: 1, mobile: false,
     });
     signal?.throwIfAborted();
+    let playbackAvailable = false;
+    if (playbackAdapter?.adapted) {
+      let captureProtocolSupported = false;
+      try {
+        const version = await page.send('Browser.getVersion', {}, null);
+        const match = typeof version?.product === 'string' && /^(?:HeadlessChrome|Chrome)\/(\d+)\.\d+\.\d+\.\d+$/.exec(version.product);
+        const major = match ? Number(match[1]) : NaN;
+        // 155 is our verified cap=1 capture-lifetime baseline, not the first
+        // Chromium release to declare these optional screencast parameters.
+        captureProtocolSupported = Number.isSafeInteger(major) && major >= 155;
+      } catch { /* Unknown protocol support keeps the existing exact path. */ }
+      signal?.throwIfAborted();
+      const runtimeSupported = captureProtocolSupported && await page.evaluate(
+        `typeof HTMLVideoElement.prototype.requestVideoFrameCallback === 'function' && typeof HTMLVideoElement.prototype.cancelVideoFrameCallback === 'function'`,
+      );
+      signal?.throwIfAborted();
+      playbackAvailable = captureProtocolSupported && runtimeSupported;
+      playbackAdapter = { ...playbackAdapter, runtimeSupported, captureProtocolSupported,
+        ...(!captureProtocolSupported ? { reason: 'unsupported-capture-protocol' }
+          : !runtimeSupported ? { reason: 'unsupported-frame-callbacks' } : {}) };
+    }
     return {
-      page, scratchRoot: staged.scratchRoot,
+      page, scratchRoot: staged.scratchRoot, playbackAdapter,
+      ...(playbackAvailable ? { playback: { ...playbackAdapter, version: 1 } } : {}),
       width: plan.width, height: plan.height, fps: plan.fps, durationSec: plan.durationSec,
     };
   } catch (error) {
