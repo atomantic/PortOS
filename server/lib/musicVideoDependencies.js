@@ -25,6 +25,8 @@ const layerRef = (scene) => ({ role: 'layer', sceneId: scene.sceneId, assetId: s
     // A glitch over its cuts changes the render; a shot without one keeps its evidence.
     .concat(['transitionIn', 'transitionOut'].filter((key) => scene[key]).map((key) => [key, scene[key]]))
     .concat(scene.glitches?.length ? [['glitches', scene.glitches]] : [])
+    // A shot's own film look changes the render; a shot following the video's keeps its evidence.
+    .concat(scene.filmLook ? [['filmLook', scene.filmLook]] : [])
     .concat(scene.cutEffect && scene.cutEffect.enabled !== false ? [['cutEffect', scene.cutEffect]] : [])
     // An image effect over a still changes the render; a still without one keeps its evidence.
     .concat(scene.imageEffect ? [['imageEffect', scene.imageEffect], ['imageEffectSec', scene.imageEffectSec ?? null]] : [])

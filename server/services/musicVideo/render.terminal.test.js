@@ -77,6 +77,25 @@ vi.mock('./compositionRender.js', () => ({
 }));
 vi.mock('./projects.js', () => ({ getProject: vi.fn(), listProjects: vi.fn(async () => []), updateProject: vi.fn(async () => ({})), mutateProjectRecord: vi.fn() }));
 vi.mock('../instanceIdentity.js', () => ({ ensureInstanceId: vi.fn(async () => 'inst-self') }));
+// A composed render goes shot by shot (shotSegments.js): the segment work is
+// held open until a test settles it, or rejects on the render's abort signal.
+const seg = vi.hoisted(() => ({ plans: [], render: null, stitch: vi.fn(async () => ({ durationSec: 2, songSec: 2 })) }));
+vi.mock('./shotSegments.js', () => ({
+  planShotSegments: vi.fn(async (project) => {
+    // Planning refuses what the whole-film plan refuses (missing stills, untimed sections).
+    await (await import('./render.js')).planMusicVideoRender(project);
+    const plan = { project, songSec: 2, width: 910, height: 512, fps: 24, segments: [{ sceneId: 's1', path: '/data/seg/a.mp4', frames: 48 }], outro: null };
+    seg.plans.push(plan);
+    return plan;
+  }),
+  renderMissingSegments: vi.fn((plan, { signal, onProgress }) => new Promise((resolve, reject) => {
+    seg.render = { resolve, onProgress };
+    signal.addEventListener('abort', () => reject(Object.assign(new Error('Render cancelled'), { code: 'CANCELED' })), { once: true });
+  })),
+  stitchSegments: (...args) => seg.stitch(...args),
+  pruneSegments: vi.fn(async () => 0),
+  sweepPartialSegments: vi.fn(async () => {}),
+}));
 
 import { buildTypographyDocument } from './composition.js';
 import { renderMusicVideo, getRenderJobStatus, cancelRender } from './render.js';
@@ -110,6 +129,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.procs.length = 0;
   h.overlays.calls.length = 0;
+  seg.render = null;
+  seg.plans.length = 0;
 });
 
 describe('renderMusicVideo terminal handling (#2386)', () => {
@@ -504,42 +525,53 @@ describe('composed render lifecycle (#8984)', () => {
     expect(lastProc().args).not.toContain('-itsoffset');
   });
 
-  it('cancels during overlay capture: no ffmpeg, prior status restored, scratch removed, slot released', async () => {
+  it('cancels while shots render: no stitch, prior status restored, slot released', async () => {
     primeComposed('cancel-1', { mode: 'composed', textCues: [cue] });
     const { jobId } = await renderMusicVideo('cancel-1');
-    expect(h.overlays.calls).toHaveLength(1);
-    expect(h.procs).toHaveLength(0);
+    await tick();
+    expect(seg.render).toBeTruthy();
     expect(cancelRender(jobId)).toBe(true);
     await tick();
     await tick();
     expect(getRenderJobStatus(jobId).status).toBe('canceled');
+    expect(seg.stitch).not.toHaveBeenCalled();
     expect(h.procs).toHaveLength(0);
-    expect(updateProject).toHaveBeenLastCalledWith('cancel-1', settled('complete'));
-    expect(removeCompositionScratch).toHaveBeenCalledWith(jobId);
+    expect(updateProject).toHaveBeenLastCalledWith('cancel-1', settled('complete', { renderError: null }));
     expect(cancelRender(jobId)).toBe(false);
     const again = await renderMusicVideo('cancel-1');
     expect(again.jobId).not.toBe(jobId);
   });
 
-  it('lays the captured overlays over the cut and honors the chosen poster frame', async () => {
+  it('renders the missing shots, stitches them into the published file and honors the chosen poster frame', async () => {
     primeComposed('composed-1', { mode: 'composed', textCues: [cue], posterSec: 1 });
     const { jobId } = await renderMusicVideo('composed-1');
-    // The 768x512 fixture clips sit in a 16:9 video, at their height.
-    expect(h.overlays.calls[0]).toMatchObject({ jobId, width: 910, height: 512, fps: 24, cues: [expect.objectContaining({ id: 'c1' })] });
-    h.overlays.resolve([{ path: '/data/overlay-0.mov', startSec: 0.5, durationSec: 1 }]);
     await tick();
-    const { args } = lastProc();
-    expect(args.slice(args.indexOf('-itsoffset'), args.indexOf('-itsoffset') + 4)).toEqual(['-itsoffset', '0.5', '-i', '/data/overlay-0.mov']);
-    expect(args[args.indexOf('-filter_complex') + 1]).toContain('[cut0][2:v]overlay=eof_action=pass:format=auto[outv]');
-    expect(args[args.indexOf('-map') + 1]).toBe('[outv]');
-    lastProc().emit('spawn');
-    lastProc().emit('close', 0, null);
+    seg.render.onProgress(0.5);
+    expect(broadcastSse).toHaveBeenCalledWith(expect.anything(), { type: 'progress', progress: 0.475 });
+    seg.render.resolve(0);
     await tick();
-    expect(generateThumbnail).toHaveBeenCalledWith(expect.any(String), jobId, { atSec: 1 });
+    await tick();
+    await tick();
+    const [plan, outputPath] = seg.stitch.mock.calls[0];
+    expect(plan).toBe(seg.plans.at(-1));
+    expect(outputPath).toMatch(/^\/data\/videos\/music-video-composed/);
+    expect(generateThumbnail).toHaveBeenCalledWith(outputPath, jobId, { atSec: 1 });
     expect(getRenderJobStatus(jobId).status).toBe('complete');
-    expect(removeCompositionScratch).toHaveBeenCalledWith(jobId);
+    expect(updateProject).toHaveBeenCalledWith('composed-1', expect.objectContaining({ status: 'complete', renderHistoryId: jobId }));
     // Nothing is left to cancel once the render has finished.
     expect(cancelRender(jobId)).toBe(false);
+  });
+
+  it('a failed shot settles the render as failed with the shot it names', async () => {
+    primeComposed('composed-2', { mode: 'composed' });
+    seg.stitch.mockRejectedValueOnce(new Error('Shot 2: ffmpeg failed: boom'));
+    const { jobId } = await renderMusicVideo('composed-2');
+    await tick();
+    seg.render.resolve(0);
+    await tick();
+    await tick();
+    expect(getRenderJobStatus(jobId)).toEqual({ status: 'error', error: 'Shot 2: ffmpeg failed: boom' });
+    expect(updateProject).toHaveBeenLastCalledWith('composed-2', settled('failed', { renderError: 'Shot 2: ffmpeg failed: boom' }));
   });
 });
 
@@ -570,38 +602,6 @@ describe('layered sections (#8985)', () => {
     expect(filterGraph(args)).not.toContain('color=');
     expect(filterGraph(args)).toContain('concat=n=2:v=1:a=0[outv]');
     expect(h.overlays.calls).toHaveLength(0);
-  });
-
-  it('cuts footage, a still and a titled card on one frame grid and draws the card text over its section', async () => {
-    primeLayered('layers-1', 'composed');
-    const { jobId } = await renderMusicVideo('layers-1');
-    // The card's title is captured for exactly its section: [2s clip][2s still][1.01s card → 24 frames].
-    expect(h.overlays.calls[0]).toMatchObject({ jobId, width: 910, height: 512,
-      cues: [{ id: 'card-s3', text: 'Verse two', startSec: 4, endSec: 5, placement: 'center', emphasis: 'hero' }] });
-    h.overlays.resolve([{ path: '/data/overlay-0.mov', startSec: 4, durationSec: 1 }]);
-    await tick();
-    const { args } = lastProc();
-    expect(args.slice(args.indexOf('-loop'), args.indexOf('-loop') + 6)).toEqual(['-loop', '1', '-framerate', '24', '-i', '/data/images/frame.png']);
-    const graph = filterGraph(args);
-    expect(graph).toContain('trim=end_frame=48,setpts=PTS-STARTPTS[v0]');
-    expect(graph).toMatch(/crop=768:512:x='\(iw-ow\)\*n\/47'.*trim=end_frame=48,setpts=PTS-STARTPTS\[v1\]/);
-    expect(graph).toContain('color=c=0x112233:s=768x512:r=24,setsar=1,format=yuv420p,trim=end_frame=24,setpts=PTS-STARTPTS[v2]');
-    // The song is still the one and only audio: two section inputs, then the master.
-    expect(args[args.lastIndexOf('-map') + 1]).toBe('2:a');
-  });
-
-  it.each([['HUD counters', 'pop', 'Menlo'], [undefined, 'fade', 'Georgia']])('applies shared card and font treatment %s at the full render entrypoint', async (graphicLanguage, template, font) => {
-    const id = `typography-${template}`;
-    primeLayered(id, 'composed');
-    const project = await getProject(id);
-    getProject.mockResolvedValue({ ...project, composition: { ...project.composition, style: { font: 'serif' } }, treatment: { brief: { graphicLanguage } } });
-    const { jobId } = await renderMusicVideo(id);
-    const options = h.overlays.calls[0];
-    expect(options.cues[0]).toMatchObject({ id: 'card-s3', template });
-    expect(options.style).toEqual({ font: 'serif', graphicLanguage });
-    expect(buildTypographyDocument(options)).toContain(font);
-    cancelRender(jobId);
-    await tick();
   });
 
   it('refuses a still with no reference frame and an untimed card, without spawning', async () => {

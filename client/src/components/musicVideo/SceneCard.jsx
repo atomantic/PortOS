@@ -4,6 +4,7 @@ import SceneCameraControls from './SceneCameraControls.jsx';
 import SceneStartFrame from './SceneStartFrame.jsx';
 import SceneClipTiming from './SceneClipTiming.jsx';
 import SceneRejectUnused from './SceneRejectUnused.jsx';
+import ShotFinalRender from './ShotFinalRender.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { useEffect, useRef, useState } from 'react';
 import { Trash2, Activity, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, Video, AlertTriangle, Clapperboard, Shuffle } from 'lucide-react';
@@ -561,6 +562,8 @@ export default function SceneCard({
         </>
         )}
         {codeShot && shotSettings}
+        {/* This shot's piece of the composed final render: cached or not, Render shot, its film look. */}
+        {project?.composition?.mode === 'composed' && <ShotFinalRender project={project} scene={scene} onChange={applyPatch} fieldId={fieldId} />}
         {(scene.visualIntent || scene.direction || scene.direction?.actionContract) && (
           <details className="group/direction rounded border border-port-border">
             <summary className="flex min-h-[44px] cursor-pointer items-center gap-2 px-2 text-xs marker:content-none sm:min-h-[32px] [&::-webkit-details-marker]:hidden">

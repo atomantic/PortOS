@@ -52,30 +52,22 @@ html,body{margin:0;width:${width}px;height:${height}px;overflow:hidden;backgroun
 }
 
 /**
- * Append the project's outro to the finished render at `path`, in place.
- * Resolves the seconds it added (0 when the outro is off; the file is then
- * untouched). Rejects on failure or when `signal` aborts, leaving `path` as
- * it was.
+ * Capture the project's outro alone, silent, into `outputPath` on a
+ * `width`×`height` frame at `fps`. Resolves its seconds (0 when the outro is
+ * off; nothing is written). `stats` (getMusicVideoOutroStats) may be passed in
+ * when the caller already read it. Rejects on failure or when `signal` aborts.
  */
-export async function appendStatsOutro({ project, path, jobId, signal, onProgress, withFilmLook = false }) {
+export async function renderStatsOutroClip({ project, outputPath, width, height, fps, jobId, signal, onProgress, withFilmLook = false, stats: knownStats = null }) {
   const outro = normalizeStatsOutro(project?.statsOutro);
   if (!outro?.enabled) return 0;
   if (typeof jobId !== 'string' || !/^[A-Za-z0-9_-]+$/.test(jobId)) throw new Error('Invalid outro job id');
-  const { findFfmpeg, runFfmpegProcess, probeVideoGeometry } = await import('../../lib/ffmpeg.js');
   const { openComposition } = await import('../htmlComposition/browser.js');
   const { encodeComposition } = await import('../htmlComposition/encode.js');
   const { ensureImageThumbnail } = await import('../../lib/imageThumbnail.js');
-  const ffmpeg = await findFfmpeg();
-  if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
-  const geometry = await probeVideoGeometry(path);
-  if (!geometry) throw new ServerError('The rendered video could not be measured for its outro', { status: 500, code: 'STATS_OUTRO_PROBE' });
-  const { width, height, fps } = geometry;
   const durationSec = outro.durationSec;
-  const stats = await getMusicVideoOutroStats(project);
+  const stats = knownStats || await getMusicVideoOutroStats(project);
   const directory = `${STATS_OUTRO_SCRATCH_DIR}/${jobId}`;
   const scratch = join(PATHS.data, directory);
-  const clip = `${path}.outro.mp4`;
-  const joined = `${path}.outro-joined.mp4`;
   let page;
   try {
     await rm(scratch, { recursive: true, force: true });
@@ -103,12 +95,38 @@ export async function appendStatsOutro({ project, path, jobId, signal, onProgres
     const look = withFilmLook ? normalizeFilmLook(project?.filmLook) : null;
     const initScripts = look && !isFilmLookNeutral(look) ? [filmLookRuntimeSource(look)] : [];
     page = await openComposition(directory, { signal, ownedBrowser: true, initScripts });
-    await encodeComposition(page, { width, height, fps, durationSec }, clip, {
-      signal, onProgress: (fraction) => onProgress?.(fraction * 0.6),
-    });
+    await encodeComposition(page, { width, height, fps, durationSec }, outputPath, { signal, onProgress });
     page.check();
     await page.close({ verify: true });
     page = null;
+    return durationSec;
+  } finally {
+    if (page) await page.close().catch(() => {});
+    await rm(scratch, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/**
+ * Append the project's outro to the finished render at `path`, in place.
+ * Resolves the seconds it added (0 when the outro is off; the file is then
+ * untouched). Rejects on failure or when `signal` aborts, leaving `path` as
+ * it was.
+ */
+export async function appendStatsOutro({ project, path, jobId, signal, onProgress, withFilmLook = false }) {
+  const outro = normalizeStatsOutro(project?.statsOutro);
+  if (!outro?.enabled) return 0;
+  if (typeof jobId !== 'string' || !/^[A-Za-z0-9_-]+$/.test(jobId)) throw new Error('Invalid outro job id');
+  const { findFfmpeg, runFfmpegProcess, probeVideoGeometry } = await import('../../lib/ffmpeg.js');
+  const ffmpeg = await findFfmpeg();
+  if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
+  const geometry = await probeVideoGeometry(path);
+  if (!geometry) throw new ServerError('The rendered video could not be measured for its outro', { status: 500, code: 'STATS_OUTRO_PROBE' });
+  const { width, height, fps } = geometry;
+  const clip = `${path}.outro.mp4`;
+  const joined = `${path}.outro-joined.mp4`;
+  try {
+    const durationSec = await renderStatsOutroClip({ project, outputPath: clip, width, height, fps, jobId, signal, withFilmLook,
+      onProgress: (fraction) => onProgress?.(fraction * 0.6) });
     signal?.throwIfAborted();
     // Join the cut and the outro, with silence under the outro. Both pictures
     // are brought to the cut's frame, rate and pixel format first.
@@ -131,8 +149,6 @@ export async function appendStatsOutro({ project, path, jobId, signal, onProgres
     console.log(`🎞️ Music-video outro [${jobId.slice(0, 8)}]: ${durationSec}s cutting room floor after the song`);
     return durationSec;
   } finally {
-    if (page) await page.close().catch(() => {});
-    await rm(scratch, { recursive: true, force: true }).catch(() => {});
     await rm(clip, { force: true }).catch(() => {});
     await rm(joined, { force: true }).catch(() => {});
   }

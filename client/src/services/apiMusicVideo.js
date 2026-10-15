@@ -278,6 +278,20 @@ export const regenerateMusicVideoCodeSection = (id, sectionId, body = {}, option
     method: 'POST', body: JSON.stringify(body), ...options,
   });
 
+// ---- Per-shot render segments ----
+// Every shot's cache state for the composed final render:
+// { available, error?, shots: [{ sceneId, state: 'rendered'|'stale', rendering, look, files }], outro, ready, total }.
+export const getMusicVideoShotRenders = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/shot-renders`, options);
+// Render one shot's segments into the cache; progress arrives on `music-video:shot-render`.
+export const renderMusicVideoShot = (id, sceneId, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/shots/${encodeURIComponent(sceneId)}/render`, { method: 'POST', ...options });
+export const cancelMusicVideoShotRender = (id, sceneId, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/shots/${encodeURIComponent(sceneId)}/render/cancel`, { method: 'POST', ...options });
+// A rendered shot's silent segment, to play.
+export const musicVideoShotRenderUrl = (id, name) =>
+  `/api/music-video/${encodeURIComponent(id)}/shot-renders/${encodeURIComponent(name)}`;
+
 // EventSource URL for a render job's progress stream (consumed by useSseProgress).
 export const musicVideoRenderEventsUrl = (jobId) =>
   `/api/music-video/render/${encodeURIComponent(jobId)}/events`;

@@ -636,6 +636,8 @@ const sceneLayerFields = {
   reverse: z.boolean().nullable().optional(),
   // A clip shorter than its shot holds its last frame for the rest of the shot; null clears it.
   holdLastFrame: z.boolean().nullable().optional(),
+  // The shot's own film look (lib/filmLook.js), kept when the video's look changes; null follows the video's.
+  filmLook: filmLookSchema.nullable().optional(),
   // A VHS glitch over the cut into / out of this shot (musicVideoTransitions.js); null clears it.
   transitionIn: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),
   transitionOut: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),
