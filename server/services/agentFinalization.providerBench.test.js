@@ -91,6 +91,7 @@ import { finalizeAgent } from './agentFinalization.js';
 import { detectImmediateFallbackSignal } from '../lib/aiToolkit/errorDetection.js';
 import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { COOLDOWN_MS_BY_CATEGORY } from '../lib/providerCooldown.js';
+import { processAgentCompletion } from './agentCompletion.js';
 
 const failedRun = (errorAnalysis, providerId = 'antigravity-tui') => finalizeAgent({
   agentId: 'agent-1',
@@ -112,6 +113,21 @@ const failedRun = (errorAnalysis, providerId = 'antigravity-tui') => finalizeAge
 beforeEach(() => vi.clearAllMocks());
 
 describe('finalizeAgent provider sidelining', () => {
+  it('resolves a missing provider lazily and still completes when its cooldown cannot persist', async () => {
+    const analysis = detectImmediateFallbackSignal(
+      "We're finishing verifying your account eligibility. This usually takes a moment. Please try again shortly."
+    );
+    getActiveProviderMock.mockResolvedValueOnce({ id: 'fallback-provider' });
+    markProviderUnavailableMock.mockRejectedValueOnce(new Error('cooldown write failed'));
+
+    const outcome = await failedRun(analysis, null);
+
+    expect(getActiveProviderMock).toHaveBeenCalledOnce();
+    expect(markProviderUnavailableMock).toHaveBeenCalledWith('fallback-provider', expect.objectContaining({ reason: 'auth-error' }));
+    expect(outcome.success).toBe(false);
+    expect(processAgentCompletion).toHaveBeenCalledWith('agent-1', expect.any(Object), false, '');
+  });
+
   it('benches the provider on the agy eligibility signal', async () => {
     const analysis = detectImmediateFallbackSignal(
       "We're finishing verifying your account eligibility. This usually takes a moment. Please try again shortly."
