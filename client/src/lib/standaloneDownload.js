@@ -57,9 +57,10 @@ export async function prepareDownload({ url, filename }, signal, onProgress) {
       chunks.push(value);
       received += value.byteLength;
       // No Content-Length (chunked): stop as soon as the file proves too big.
+      // Its real size is unknown, so report none rather than the bytes read.
       if (received > SHARE_SHEET_MAX_BYTES) {
         reader.cancel().catch(() => {});
-        throw tooLarge(received);
+        throw tooLarge(total);
       }
       onProgress?.({ received, total });
     }

@@ -132,7 +132,7 @@ it.each(['Content-Length', 'streamed size'])('sends a file too big for phone mem
   renderLink();
   fireEvent.click(screen.getByRole('link', { name: 'Download example' }));
   if (measure !== 'Content-Length') await waitFor(() => expect(screen.getByRole('progressbar')).toBeInTheDocument()).then(() => act(async () => stream.step()));
-  expect(await screen.findByRole('status')).toHaveTextContent('101 MB, too big for the phone');
+  expect(await screen.findByRole('status')).toHaveTextContent(measure === 'Content-Length' ? 'This file is 101 MB, too big for the phone' : 'This file is over 100 MB, too big for the phone');
   expect(stream.cancel).toHaveBeenCalled();
   expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
