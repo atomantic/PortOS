@@ -1,7 +1,7 @@
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
-import { assertProductionApproval, productionReviewBasis } from './productionReview.js';
+import { assertProductionApproval, clipLocks, nameShots, productionReviewBasis } from './productionReview.js';
 import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 /**
  * Music Video — render pipeline (#1760, Phase 2).
@@ -132,17 +132,17 @@ const cutEffectOf = (scene, planned) => {
 // final frame (tpad) rather than repeating footage. Longer shortfalls block the
 // render until the director resolves them.
 const COVERAGE_TOLERANCE_SEC = 0.25;
-const COVERAGE_RESOLUTIONS = Object.freeze(['trim', 'continue', 'replace', 'loop']);
+const COVERAGE_RESOLUTIONS = Object.freeze(['hold', 'trim', 'continue', 'replace', 'loop']);
 
 /**
  * Pure: the snapped clips whose authored span needs more footage than their
- * non-looping source clip provides. Returns
+ * non-looping source clip provides (one set to hold its last frame is covered). Returns
  * `[{ sceneId, spanSec, clipSec, shortBySec }]` (empty when every shot is covered).
  */
 function findCoverageShortfalls(clips, { toleranceSec = COVERAGE_TOLERANCE_SEC } = {}) {
   const out = [];
   for (const clip of Array.isArray(clips) ? clips : []) {
-    if (clip.layer || clip.loop !== false) continue;
+    if (clip.layer || clip.loop !== false || clip.holdLastFrame) continue;
     const spanSec = clip.outSec - clip.inSec;
     const clipSec = clip.sourceSec ?? clip.duration;
     if (spanSec - clipSec > toleranceSec) {
@@ -239,6 +239,7 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
   const history = scenes.some((s) => sceneVisualLayer(s, { layered }) === 'footage') ? await loadHistory() : [];
   const historyMap = new Map((Array.isArray(history) ? history : []).map((h) => [h.id, h]));
   const missing = [];
+  const missingShots = [];
   const missingStills = [];
   const untimed = [];
   const clips = [];
@@ -274,18 +275,18 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
     }
     const entry = historyMap.get(scene.videoHistoryId);
     const videoPath = entry && entry.filename ? safeUnder(PATHS.videos, entry.filename) : null;
-    if (!entry || !videoPath || !existsSync(videoPath)) { missing.push(scene.videoHistoryId); continue; }
+    if (!entry || !videoPath || !existsSync(videoPath)) { missing.push(scene.videoHistoryId); missingShots.push(scene.sceneId); continue; }
     // Hosted renders (Grok/fal/reactor) record no frame count or dimensions;
     // measure the file itself rather than reject a clip that exists (#8977).
     const measured = entry.numFrames && entry.fps && entry.width && entry.height
       ? entry
       : { ...entry, ...(await probeVideoGeometry(videoPath)) };
     const duration = measured.numFrames && measured.fps ? measured.numFrames / measured.fps : null;
-    if (!duration || duration <= 0) { missing.push(scene.videoHistoryId); continue; }
+    if (!duration || duration <= 0) { missing.push(scene.videoHistoryId); missingShots.push(scene.sceneId); continue; }
     // A dimensionless history entry would make buildMusicVideoFfmpegArgs emit
     // `scale=undefined:undefined` (opaque ffmpeg failure); treat it as a missing
     // clip so the caller gets the clean MISSING_CLIPS 4xx, matching the duration guard.
-    if (!measured.width || measured.width <= 0 || !measured.height || measured.height <= 0) { missing.push(scene.videoHistoryId); continue; }
+    if (!measured.width || measured.width <= 0 || !measured.height || measured.height <= 0) { missing.push(scene.videoHistoryId); missingShots.push(scene.sceneId); continue; }
     const edit = performanceEdit(scene);
     const sourceInSec = edit ? Math.min(edit.inSec, duration) : 0;
     const sourceOutSec = edit ? Math.min(edit.outSec, duration) : duration;
@@ -316,6 +317,8 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
       // A reversed clip is read once, backwards, and holds its last frame rather than looping.
       loop: edit || clipReversed(scene) ? false : sceneLoops(scene),
       ...(clipReversed(scene) ? { reverse: true } : {}),
+      // The director chose to hold the last frame over a shot longer than its clip.
+      ...(scene.holdLastFrame === true ? { holdLastFrame: true } : {}),
       ...(rate !== 1 ? { rate } : {}),
       ...(leadSec > 0 ? { leadSec } : {}),
       inSec: playbackInSec,
@@ -328,17 +331,18 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
     });
   }
   if (missing.length > 0) {
-    throw new ServerError(`Missing source clips for ${missing.length} scene(s)`, {
+    const one = missing.length === 1;
+    throw new ServerError(`${nameShots(project, missingShots)}: the selected clip file ${one ? 'is' : 'are'} missing or unreadable. Pick another take or render a new one`, {
       status: 404, code: 'MISSING_CLIPS', context: { missingClipIds: missing },
     });
   }
   if (missingStills.length > 0) {
-    throw new ServerError(`${missingStills.length} still section(s) have no reference frame — generate or pick one first`, {
+    throw new ServerError(`${nameShots(project, missingStills)}: no still frame to show. Generate or pick one first`, {
       status: 404, code: 'MISSING_STILLS', context: { sceneIds: missingStills },
     });
   }
   if (untimed.length > 0) {
-    throw new ServerError(`${untimed.length} still or card section(s) need a start and end time`, {
+    throw new ServerError(`${nameShots(project, untimed)}: give ${untimed.length === 1 ? 'this still or card' : 'these stills or cards'} a start and end time`, {
       status: 422, code: 'UNTIMED_SECTIONS', context: { sceneIds: untimed },
     });
   }
@@ -742,10 +746,20 @@ export function excerptBoundaryTimes(sections, cues, startSec, endSec, { fps = 2
 // every scene's clip, and refuse a render whose shots don't cover their
 // authored span. Both callers build on the exact same resolved clip list, so
 // an excerpt frame matches what a full render would produce at that song time.
+//
+// A shot whose clip is locked renders as locked: the director approved that
+// clip as it is, so frames changed after it was made no longer block.
+// Any other stale clip blocks, naming its shots (numbered in song order) and the fix.
 export function assertCurrentClipDependencies(project) {
+  const locks = clipLocks(project);
   const stale = (project.scenes || []).filter((scene) => scene.videoHistoryId && scene.visualLayer !== 'still' && !isSelfDrawnLayer(scene.visualLayer))
+    .filter((scene) => locks?.[scene.sceneId] !== 'locked')
     .filter((scene) => musicVideoTakeChanges(project, scene, (scene.takes || []).find((take) => take.kind === 'video' && take.assetId === scene.videoHistoryId)).length);
-  if (stale.length) throw new ServerError('Selected clips were derived from changed plates — preview and repair their dependencies before rendering',
+  if (!stale.length) return;
+  const shots = nameShots(project, stale.map((scene) => scene.sceneId));
+  // A document storyboard has no clip locks, so a new render is its only fix.
+  const fix = locks ? 'Lock the clip to keep it as it is, or render a new one' : 'Render a new one';
+  throw new ServerError(`${shots}: the clip was made from frames that have since changed. ${fix}`,
     { status: 422, code: 'STALE_CLIP_DEPENDENCIES', context: { sceneIds: stale.map((scene) => scene.sceneId) } });
 }
 
@@ -769,11 +783,11 @@ export async function planMusicVideoRender(project, { draft = false } = {}) {
   const snapped = beatSnapClips(rawClips, beats, { scenes: project.scenes });
   // #8964: a new (non-looping) shot must never silently repeat footage to
   // fill its span. Refuse the render and name the shots that need a trim,
-  // a continuation, a replacement clip, or an explicit loop.
+  // a continuation, a replacement clip, an explicit loop, or a held last frame.
   const shortfalls = findCoverageShortfalls(snapped);
   if (shortfalls.length > 0) {
     throw new ServerError(
-      `${shortfalls.length} shot${shortfalls.length === 1 ? ' is' : 's are'} longer than ${shortfalls.length === 1 ? 'its' : 'their'} source clip — trim, continue, replace, or loop ${shortfalls.length === 1 ? 'it' : 'them'} before rendering`,
+      `${nameShots(project, shortfalls.map((entry) => ({ sceneId: entry.sceneId, note: `${entry.shortBySec}s short` })))}: longer than ${shortfalls.length === 1 ? 'its' : 'their'} clip. Hold the last frame, trim, continue, replace, or loop ${shortfalls.length === 1 ? 'it' : 'them'} before rendering`,
       { status: 422, code: 'INSUFFICIENT_CLIP_COVERAGE', context: { shortfalls, resolutions: COVERAGE_RESOLUTIONS } },
     );
   }

@@ -44,7 +44,8 @@ export default function useMusicVideoRenderJob({ project, onRendered, onFailed, 
       setFailure({ projectId, message: frame.error || 'Render failed' });
       onFailed?.(projectId, frame.error || 'Render failed');
     },
-    onKickoffError: (error, projectId) => { setFailure({ projectId, message: error?.message || 'Failed to start render' }); },
+    // A refusal keeps its code and context, so the banner can offer the fix it names.
+    onKickoffError: (error, projectId) => { setFailure({ projectId, message: error?.message || 'Failed to start render', code: error?.code, context: error?.context }); },
     successToast: () => 'Music video rendered',
     errorFallback: 'Render failed',
     canceledMessage: 'Render cancelled',
@@ -116,6 +117,7 @@ export default function useMusicVideoRenderJob({ project, onRendered, onFailed, 
     cancel,
     cancelling: !!slot.jobId && cancelRequestedFor === slot.jobId,
     failure,
+    clearFailure: () => setFailure(null),
     reattaching,
     reattach,
     start: (id) => {

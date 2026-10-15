@@ -21,7 +21,7 @@ const layerRef = (scene) => ({ role: 'layer', sceneId: scene.sceneId, assetId: s
     // A chosen frame fit changes the render; a shot left to fill keeps its evidence.
     .concat(scene.frameFit && scene.frameFit !== 'fill' ? [['frameFit', scene.frameFit]] : [])
     // A hand-set clip speed or offset changes the render; a shot left as rendered keeps its evidence.
-    .concat(['speedFps', 'offsetFrames', 'reverse'].filter((key) => scene[key]).map((key) => [key, scene[key]]))
+    .concat(['speedFps', 'offsetFrames', 'reverse', 'holdLastFrame'].filter((key) => scene[key]).map((key) => [key, scene[key]]))
     // A glitch over its cuts changes the render; a shot without one keeps its evidence.
     .concat(['transitionIn', 'transitionOut'].filter((key) => scene[key]).map((key) => [key, scene[key]]))
     .concat(scene.glitches?.length ? [['glitches', scene.glitches]] : [])

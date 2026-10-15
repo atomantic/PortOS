@@ -26,7 +26,9 @@ import {
   resolveSceneClips,
   resolveMasterAudioPath,
   renderMusicVideo,
+  assertCurrentClipDependencies,
 } from './render.js';
+import { setShotLocks } from './productionReview.js';
 import { findFfmpeg, probeVideoGeometry } from '../../lib/ffmpeg.js';
 import { loadHistory } from '../videoGen/local.js';
 import { getTrack } from '../tracks/index.js';
@@ -528,5 +530,20 @@ describe('partial-board production pilot rendering (#9351)', () => {
     expect(project.scenes).toHaveLength(3);
     expect(project.composition.mode).toBe('document');
     expect(project.scenes[0].videoHistoryId).toBeUndefined();
+  });
+});
+
+describe('clips made from frames that changed since', () => {
+  // Uniquely catches a locked clip still blocking the render, or the refusal not naming its shots.
+  it('names the shots in song order, and lets a locked clip render as it is', () => {
+    const shot = (sceneId, startSec) => ({ sceneId, startSec, endSec: startSec + 2, prompt: 'a lighthouse', referenceImageId: `${sceneId}-new.png`, videoHistoryId: `${sceneId}-clip`,
+      takes: [{ takeId: `${sceneId}-t`, kind: 'video', assetId: `${sceneId}-clip`, sourceImageId: `${sceneId}-old.png`, status: 'selected' }] });
+    const project = { id: 'mv-1', scenes: [shot('late', 6), shot('early', 0), shot('fine', 3)] };
+    project.scenes[2].takes[0].sourceImageId = 'fine-new.png';
+    expect(() => assertCurrentClipDependencies(project)).toThrow('Shots 1, 3: the clip was made from frames that have since changed. Lock the clip to keep it as it is, or render a new one');
+
+    const stillLocked = setShotLocks(project, { sceneIds: ['late'], locked: true });
+    const clipLocked = setShotLocks(stillLocked, { sceneIds: ['late'], locked: true, stage: 'video' });
+    expect(() => assertCurrentClipDependencies(clipLocked)).toThrow(/^Shot 1: /);
   });
 });

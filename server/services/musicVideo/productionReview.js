@@ -194,6 +194,27 @@ export function clipLocks(project, locks = shotLocks(project)) {
 export const clipLocked = (project, sceneId) => project.productionReview?.clipApprovals?.[sceneId]
   && clipLocks(project)?.[sceneId] === 'locked';
 
+/** Each timed scene's shot number as the board shows it: song order, from 1. */
+export function shotNumbers(project) {
+  const order = (project.scenes || []).filter(scene => Number.isFinite(scene?.startSec)).sort((a, b) => a.startSec - b.startSec);
+  return new Map(order.map((scene, i) => [scene.sceneId, i + 1]));
+}
+
+/**
+ * Names shots for an error message in song order: "Shot 4", "Shots 2, 9", or
+ * with notes "Shots 2 (re-timed), 9 (not lip-synced)". `entries` are sceneIds
+ * or `{ sceneId, note }`. Untimed scenes have no number, so a list that holds
+ * one falls back to a count ("3 shots").
+ */
+export function nameShots(project, entries) {
+  const numbers = shotNumbers(project);
+  const items = entries.map(entry => (typeof entry === 'string' ? { sceneId: entry } : entry))
+    .map(({ sceneId, note }) => ({ n: numbers.get(sceneId), note }));
+  if (items.some(({ n }) => !n)) return `${items.length} ${items.length === 1 ? 'shot' : 'shots'}`;
+  const list = items.sort((a, b) => a.n - b.n).map(({ n, note }) => (note ? `${n} (${note})` : `${n}`)).join(', ');
+  return `${items.length === 1 ? 'Shot' : 'Shots'} ${list}`;
+}
+
 /** What a locked clip freezes: the inputs it was rendered from, and the selected clip itself. */
 const CLIP_LOCKED_FIELDS = ['prompt', 'framePrompt', 'visualIntent', 'camera', 'direction', 'startSec', 'endSec', 'lyricText',
   'referenceImageId', 'endImageId', 'shotMode', 'performanceSpeaker', 'performanceStyle', 'visualLayer', 'loop', 'videoHistoryId', 'codeClip', 'speedFps', 'offsetFrames', 'reverse'];

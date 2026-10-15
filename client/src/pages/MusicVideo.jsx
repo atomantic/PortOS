@@ -769,6 +769,26 @@ export default function MusicVideo() {
       .catch((err) => toast.error(err?.message || 'Failed to add scene'));
   };
 
+  // A render refusal's one-tap fix: the same patch on each shot it names.
+  // Sequential, like auto-arrange, so each PATCH merges against the last.
+  const patchShots = (sceneIds, patch, doneMessage) => {
+    if (!selected || !sceneIds.length) return Promise.resolve();
+    const snapshot = selected;
+    const ids = new Set(sceneIds);
+    replaceProject({ ...selected, scenes: selected.scenes.map((s) => (ids.has(s.sceneId) ? { ...s, ...patch } : s)) });
+    return (async () => {
+      for (const sceneId of sceneIds) await updateMusicVideoScene(selected.id, sceneId, patch, { silent: true });
+    })()
+      .then(() => {
+        renderJob.clearFailure();
+        toast.success(`${doneMessage} — render again`);
+      })
+      .catch((err) => {
+        replaceProject(snapshot);
+        toast.error(err?.message || 'Could not change the shots');
+      });
+  };
+
   // Optimistic local edit; PATCH on blur (silent — this owns its error toast).
   const editSceneLocal = (sceneId, patch) => {
     replaceProject({ ...selected, scenes: selected.scenes.map((s) => (s.sceneId === sceneId ? { ...s, ...patch } : s)) });
@@ -1259,6 +1279,7 @@ export default function MusicVideo() {
     videoSettings,
     sceneMedia,
     renderJob,
+    onPatchShots: patchShots,
     production,
     castSets,
     devArtifacts,
