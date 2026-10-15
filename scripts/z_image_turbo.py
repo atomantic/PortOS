@@ -264,6 +264,30 @@ def decode_qwen21_latents(pipe, latents, height: int, width: int):
     return pipe.image_processor.postprocess(decoded[:, :, 0], output_type="pil")
 
 
+def release_text_encoder_before_denoising(pipe) -> None:
+    """Free Qwen 2.1's text encoder once the prompt is encoded.
+
+    The pipeline keeps its Qwen VL text encoder resident through every
+    denoising step although the loop only reads the embeddings, which pushes a
+    32 GB Mac deep into swap. The encoder is dropped on the transformer's first
+    forward: by then the prompt, the negative prompt and any reference images
+    are all encoded, by the pipeline's own code. Passing precomputed
+    `prompt_embeds` instead doesn't work with reference images, because the
+    pipeline call can't take the image-token mask that comes with them."""
+    transformer = getattr(pipe, "transformer", None)
+    if transformer is None or getattr(pipe, "text_encoder", None) is None:
+        return
+    handle = None
+
+    def release(_module, _args):
+        handle.remove()
+        pipe.text_encoder = None
+        gc.collect()
+        torch.mps.empty_cache()
+
+    handle = transformer.register_forward_pre_hook(release)
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="PortOS Z-Image-Turbo runner")
     p.add_argument("--model", required=True, help="model id (e.g. z-image-turbo-bf16)")
@@ -356,6 +380,7 @@ def main() -> None:
     if qwen21_mps:
         pipe.vae.to(dtype=torch.float32)
         encode_references_in_vae_dtype(pipe)
+        release_text_encoder_before_denoising(pipe)
 
     seed = args.seed if args.seed is not None else int(torch.randint(0, 2**31 - 1, (1,)).item())
     generator = make_generator(device, seed)

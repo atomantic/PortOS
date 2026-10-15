@@ -230,6 +230,85 @@ class RunnerContract(unittest.TestCase):
                     self.assertEqual(result.mode, 'RGBA')
                     self.assertEqual(result.getpixel((0, 0))[3], 64)
 
+    def test_qwen21_mps_frees_the_text_encoder_before_denoising(self):
+        emptied = []
+        torch = SimpleNamespace(
+            bfloat16='bf16', float32='fp32', inference_mode=contextlib.nullcontext,
+            mps=SimpleNamespace(empty_cache=lambda: emptied.append(True)),
+            backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False)),
+            cuda=SimpleNamespace(is_available=lambda: False),
+        )
+        with patch.dict(sys.modules, {'torch': torch}):
+            runner = importlib.import_module('z_image_turbo')
+        for device, references in (('mps', 0), ('mps', 2), ('cpu', 0)):
+            with self.subTest(device=device, references=references), tempfile.TemporaryDirectory() as directory:
+                source = Path(directory) / 'source.png'
+                Image.new('RGBA', (16, 16)).save(source)
+                argv = ['runner', '--model', 'qwen-image-2.1', '--repo', 'Qwen/Qwen-Image-2.1',
+                        '--pipeline-class', 'QwenImage21Pipeline', '--prompt', 'A lighthouse',
+                        '--negative-prompt', 'blurry', '--guidance', '4', '--steps', '3',
+                        '--seed', '1', '--output', str(Path(directory) / 'output.png')]
+                if references:
+                    argv += ['--reference-images'] + [str(source)] * references
+                pipe = EncodingQwen21Pipeline()
+                emptied.clear()
+                with patch.object(sys, 'argv', argv), patch.multiple(
+                    runner, pick_device=lambda _: device,
+                    load_pipeline=lambda *a, **kw: (pipe, device),
+                    emit_image_execution_marker=lambda *a: None,
+                    apply_memory_optimizations=lambda *a, **kw: None,
+                    apply_loras=lambda *a: None,
+                    make_generator=lambda *a: 'generator',
+                    make_stepwise_callback=lambda *a, **kw: None,
+                    decode_qwen21_latents=lambda *a: [Image.new('RGBA', (8, 8))],
+                ), contextlib.redirect_stderr(io.StringIO()):
+                    runner.main()
+                # The prompt and negative prompt (with any reference images)
+                # are encoded by a live encoder; on MPS no denoising step runs
+                # with it still resident, elsewhere it stays untouched.
+                self.assertEqual(pipe.encoded, [('A lighthouse', references), ('blurry', references)])
+                resident = device != 'mps'
+                self.assertEqual(pipe.encoder_resident_per_step, [resident] * 3)
+                self.assertEqual(emptied, [] if resident else [True])
+                self.assertEqual(pipe.transformer.hooks, {})
+
+
+class FakeTransformer:
+    def __init__(self):
+        self.hooks = {}
+
+    def register_forward_pre_hook(self, hook):
+        key = object()
+        self.hooks[key] = hook
+        return SimpleNamespace(remove=lambda: self.hooks.pop(key))
+
+    def __call__(self, *args):
+        for hook in list(self.hooks.values()):
+            hook(self, args)
+
+
+class EncodingQwen21Pipeline:
+    """Mirrors the 2.1 call order: encode every prompt, then denoise."""
+
+    def __init__(self):
+        self.text_encoder = object()
+        self.transformer = FakeTransformer()
+        self.vae = SimpleNamespace(to=lambda **_: None, config=SimpleNamespace(latents_mean=None))
+        self._encode_vae_image = lambda image, _generator: image
+        self.encoded = []
+        self.encoder_resident_per_step = []
+
+    def __call__(self, prompt, height, width, num_inference_steps, generator,
+                 true_cfg_scale=1.0, image=None, negative_prompt=None, output_type='pil'):
+        for text in (prompt, negative_prompt):
+            if self.text_encoder is None:
+                raise AssertionError('text encoder released before the prompt was encoded')
+            self.encoded.append((text, len(image or [])))
+        for _ in range(num_inference_steps):
+            self.transformer()
+            self.encoder_resident_per_step.append(self.text_encoder is not None)
+        return SimpleNamespace(images=[Image.new('RGBA', (8, 8))])
+
 
 if __name__ == '__main__':
     unittest.main()
