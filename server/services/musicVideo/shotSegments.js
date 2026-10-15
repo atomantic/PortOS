@@ -254,6 +254,8 @@ async function renderSegmentFiles(plan, segment, { signal, onProgress }) {
         label: `Music-video film look ${segment.outro ? 'ending card' : `shot ${segment.sceneId.slice(0, 8)}`}`,
         onProgress: (f) => onProgress?.(1 - lookShare + f * lookShare) });
       await rename(partial, segment.path);
+      // A shot rendered from its card lists its look too, so it can be deleted later.
+      if (!segment.ownLook) await rememberFilmLook(plan.dir, segment.look);
     } catch (err) {
       await rm(partial, { force: true }).catch(() => {});
       if (signal.aborted) throw Object.assign(new Error('Render cancelled'), { code: 'CANCELED' });
@@ -383,23 +385,27 @@ export async function stitchSegments(plan, outputPath, { signal, segments = [...
 
 /**
  * Remove cached files the current plan no longer uses: older takes of each
- * shot, with every look rendered over them. Other video looks over a current
- * take stay, so a look can be restored without rendering (deleteFilmLook drops
- * one). The rendered-so-far previews are replaced by their own builder.
+ * shot, with every look rendered over them. Each listed video look over a
+ * current take stays, so a look can be restored without rendering
+ * (deleteFilmLook drops one); a look that isn't listed could never be found
+ * again, so its files go. The rendered-so-far previews are replaced by their
+ * own builder.
  */
 export async function pruneSegments(plan) {
   const keep = new Set([...plan.segments, ...(plan.outro ? [plan.outro] : [])].flatMap((s) => [s.path, s.basePath]));
   // Only takes that play the video's look keep its other looks; a shot's own
   // look keeps just its current file, as before.
-  const bases = new Set(videoLookSegments(plan).map((s) => `${s.outro ? 'outro-' : ''}${s.baseKey}`));
+  await lookWrites.get(plan.dir);
+  const listed = Object.values(await readFilmLooks(plan.dir)).map((entry) => entry?.look).filter(Boolean);
+  for (const segment of videoLookSegments(plan)) {
+    for (const look of listed) keep.add(segmentLookPath(plan, segment, look));
+  }
   const names = await readdir(plan.dir).catch(() => []);
   let removed = 0;
   for (const name of names) {
     const path = join(plan.dir, name);
     if (keep.has(path) || [...inFlight.keys()].some((p) => path.startsWith(p))) continue;
-    if (name.endsWith('.partial.mp4') || name === LOOKS_FILE || name.startsWith('preview-')) continue;
-    const look = /^((?:outro-)?[0-9a-f]{32})-[0-9a-f]{32}\.mp4$/.exec(name);
-    if (look && bases.has(look[1])) continue;
+    if (name.endsWith('.partial.mp4') || name.startsWith(LOOKS_FILE) || name.startsWith('preview-')) continue;
     await rm(path, { force: true }).then(() => { removed += 1; }, () => {});
   }
   return removed;

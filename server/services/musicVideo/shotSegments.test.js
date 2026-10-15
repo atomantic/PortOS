@@ -30,7 +30,7 @@ vi.mock('./render.js', async (importOriginal) => {
 vi.mock('./filmLookFinish.js', () => ({ applyFilmLookFinish: vi.fn(async () => true) }));
 vi.mock('./projects.js', () => ({ getProject: vi.fn(async (id) => (id === fixture.project?.id ? fixture.project : null)) }));
 
-const { planShotSegments, renderMissingSegments, stitchSegments, pruneSegments, listFilmLooks, deleteFilmLook, buildRenderPreview } = await import('./shotSegments.js');
+const { planShotSegments, renderMissingSegments, renderSegment, stitchSegments, pruneSegments, listFilmLooks, deleteFilmLook, buildRenderPreview } = await import('./shotSegments.js');
 const { buildMusicVideoFfmpegArgs } = await import('./render.js');
 const { musicVideoEvents } = await import('./events.js');
 
@@ -183,5 +183,30 @@ describe.skipIf(!hasFfmpeg)('shot segments', () => {
     await pruneSegments(after);
     expect(existsSync(before.segments[2].path)).toBe(false);
     expect(existsSync(after.segments[2].path)).toBe(true);
+  }, 60000);
+
+  it('lists a look rendered only shot by shot, and drops an un-pinned shot\'s old look', async () => {
+    const id = 'mv-segments-shot-test';
+    const lookA = { preset: 'vhs', grain: 0.1 };
+    fixture.project = project({ id, filmLook: lookA });
+    const planA = await planShotSegments(fixture.project);
+    await renderSegment(planA, planA.segments[0]);
+    fixture.project = project({ id, filmLook: { preset: 'super8', grain: 0.1 } });
+    const planB = await planShotSegments(fixture.project);
+    await renderSegment(planB, planB.segments[0]);
+    const listed = await listFilmLooks(id);
+    expect(listed.looks.map((l) => [l.look.preset, l.rendered])).toEqual([['super8', 1], ['vhs', 1]]);
+    await pruneSegments(planB);
+    expect(existsSync(planA.segments[0].path)).toBe(true);
+
+    // A shot's own look was never listed, so once the shot is un-pinned its file goes.
+    const pinnedScenes = project().scenes.map((sc) => (sc.sceneId === 'c' ? { ...sc, filmLook: { preset: 'polaroid', grain: 0.2 } } : sc));
+    const pinned = await planShotSegments(project({ id, scenes: pinnedScenes, filmLook: fixture.project.filmLook }));
+    await renderSegment(pinned, pinned.segments[2]);
+    expect(pinned.segments[2].path).not.toBe(pinned.segments[2].basePath);
+    const unpinned = await planShotSegments(fixture.project);
+    await pruneSegments(unpinned);
+    expect(existsSync(pinned.segments[2].path)).toBe(false);
+    expect(existsSync(pinned.segments[2].basePath)).toBe(true);
   }, 60000);
 });
