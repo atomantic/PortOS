@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { createRequire } from 'node:module';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -147,14 +148,19 @@ describe('checkout-owned Vite caches with shared dependencies', () => {
     }
   });
 
-  it('resolves real dev configs relative to each checkout without config-bundle scratch', async () => {
+  it.each(['npm', 'PM2'])('%s resolves real dev configs relative to each checkout without config-bundle scratch', async source => {
     const host = mkdtempSync(join(tmpdir(), 'workspace-dev-cache-'));
     try {
       const dependencies = primaryDependencies(host, 'client');
       const primary = [snapshot(join(dependencies, '.vite')), snapshot(join(dependencies, '.vite-temp'))];
-      const devArgs = JSON.parse(readFileSync(join(REPO, 'client/package.json'), 'utf8')).scripts.dev.split(' ');
+      const commands = {
+        npm: JSON.parse(readFileSync(join(REPO, 'client/package.json'), 'utf8')).scripts.dev.split(' '),
+        PM2: createRequire(import.meta.url)(join(REPO, 'ecosystem.config.cjs')).apps.find(app => app.name === 'portos-ui').args.split(' '),
+      };
+      const devArgs = commands[source];
       const loaderAt = devArgs.indexOf('--configLoader');
       const loader = loaderAt === -1 ? undefined : devArgs[loaderAt + 1];
+      expect(loader).toBe('runner');
       const fixtures = ['a', 'b'].map(name => checkout(host, name, 'client', 'vitest.config.js', dependencies));
       for (const fixture of fixtures) {
         const parent = dirname(fixture.root);

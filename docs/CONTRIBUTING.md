@@ -88,8 +88,9 @@ to the config file, including the server's derived capture projects, so shared
 They are reused across runs and removed with their checkout; temporary test
 roots retain their separate teardown lifecycle. CI caches the same owned paths.
 
-The npm Vite/Vitest commands and subprocess fixtures use `--configLoader runner`
-to load ESM configs without writing bundles into shared `node_modules/.vite-temp`.
+The npm Vite/Vitest commands, PM2's `portos-ui` launcher, and subprocess fixtures
+use `--configLoader runner` to load ESM configs without writing bundles into shared
+`node_modules/.vite-temp`.
 For a direct CLI invocation, include that flag too. Vite's default `bundle`
 loader writes unique temporary config files into the nearest dependency tree
 before config options can redirect caches, so explicitly selecting that loader
