@@ -55,6 +55,12 @@ import { rmSync } from 'fs';
 import { mockNoPeers } from './lib/mockPathsDataRoot.js';
 import './test/admissionSetup.js';
 
+// A per-file environment override must not silently bypass registry isolation.
+// The configured node environment owns cleanup even for skipped/failed imports.
+if (!process.env.PORTOS_MEDIA_MODELS_FILE) {
+  throw new Error('Server tests require the configured media registry environment or an explicit registry fixture');
+}
+
 // The server intentionally logs expected error paths, lifecycle transitions,
 // and fallback decisions. With console interception disabled (see the config),
 // `--silent=passed-only` cannot suppress those lines: PR #5296 emitted 15,355

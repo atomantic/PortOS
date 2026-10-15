@@ -39,6 +39,8 @@ export { DB_TEST_INCLUDE } from '../scripts/lib/dbTestFiles.js';
  */
 export default defineConfig({
   test: {
+    // Environment teardown also owns collection-only/skipped suite fixtures.
+    environment: fileURLToPath(new URL('./test/mediaRegistryEnvironment.js', import.meta.url)),
     testTimeout: process.platform === 'win32' ? 30000 : 15000,
     // Explicit 'vitest' imports only, matching vitest.config.js (#9049).
     globals: false,

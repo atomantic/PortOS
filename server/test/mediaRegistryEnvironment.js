@@ -1,0 +1,32 @@
+import { builtinEnvironments } from 'vitest/runtime';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+// Registry consumers persist during collection, before any test hook runs.
+// Vitest skips afterAll for wholly skipped files; environment teardown still
+// runs, including after collection failures. Own the fixture at that boundary.
+export default {
+  ...builtinEnvironments.node,
+  name: 'portos-media-registry',
+  viteEnvironment: 'ssr',
+  async setup(global, options) {
+    const node = await builtinEnvironments.node.setup(global, options);
+    const prior = process.env.PORTOS_MEDIA_MODELS_FILE;
+    const root = prior ? null : mkdtempSync(join(tmpdir(), 'portos-suite-media-'));
+    if (root) process.env.PORTOS_MEDIA_MODELS_FILE = join(root, 'media-models.json');
+    return {
+      async teardown() {
+        try {
+          if (root) {
+            if (prior === undefined) delete process.env.PORTOS_MEDIA_MODELS_FILE;
+            else process.env.PORTOS_MEDIA_MODELS_FILE = prior;
+            rmSync(root, { recursive: true, force: true });
+          }
+        } finally {
+          await node.teardown(global);
+        }
+      },
+    };
+  },
+};
