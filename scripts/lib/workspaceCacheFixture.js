@@ -58,10 +58,12 @@ function checkout(host, name, workspace, configName, dependencies) {
     link(join(REPO, 'scripts', file), join(parent, 'scripts', file));
   }
   if (workspace === 'server') {
-    mkdirSync(join(root, 'test'), { recursive: true });
-    // Both server configs load this environment relative to themselves. Copy
-    // its default export intact so registry setup and teardown still run.
-    copyFileSync(join(REPO, 'server/test/mediaRegistryEnvironment.js'), join(root, 'test/mediaRegistryEnvironment.js'));
+    // Both configs load this environment relative to themselves. Copy its
+    // Node-only support closure intact so setup and teardown run in this checkout.
+    for (const file of ['test/mediaRegistryEnvironment.js', 'test/ownedBrowserDiagnostics.js', 'lib/mockPathsDataRoot.js']) {
+      mkdirSync(dirname(join(root, file)), { recursive: true });
+      copyFileSync(join(REPO, 'server', file), join(root, file));
+    }
   }
   if (workspace === 'client') copyFileSync(join(REPO, 'client/src/test/timeouts.js'), join(root, 'src/test/timeouts.js'));
   if (workspace === 'server' && configName === 'vitest.config.js') {
