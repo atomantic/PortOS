@@ -1325,9 +1325,25 @@ describe('restorePostgres', () => {
   });
 
   it('returns skipped/no_dump when the sql file is absent', async () => {
-    vi.spyOn(fs, 'stat').mockRejectedValue(new Error('ENOENT'));
+    vi.spyOn(fs, 'stat').mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' }));
     const result = await restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: true });
     expect(result).toEqual({ status: 'skipped', reason: 'no_dump' });
+  });
+
+  it('reports unreadable dump metadata as a restore failure in preview and execution', async () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(fs, 'stat').mockRejectedValue(Object.assign(new Error('private storage detail'), { code: 'EIO' }));
+
+    for (const dryRun of [true, false]) {
+      expect(await restorePostgres('/dest', 'snap-1', { dryRun }))
+        .toMatchObject({ status: 'failed', reason: 'dump_unreadable' });
+    }
+
+    expect(errorLog).toHaveBeenCalledWith('❌ restore: dump metadata unreadable for snapshot snap-1 (EIO)');
+    expect(errorLog.mock.calls.flat().join(' ')).not.toContain('private storage detail');
+    expect(spawn).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
+    expect(executionRestore.prepare).not.toHaveBeenCalled();
   });
 
   // portos-db.sql is still being written while a backup runs. Replaying a half
@@ -4744,6 +4760,29 @@ describe('runBackup lifecycle', () => {
       if (marker) await fsp.writeFile(joinPath(dir, marker), '');
       return dir;
     }
+
+    it('logs a failed retention inventory without failing the completed backup or deleting snapshots', async () => {
+      const fsp = await actualFs();
+      const old = await seedSnapshot(machineHost, '2020-01-01T00-00-00', { generatedAt: '2020-01-01T00:00:00.000Z' });
+      const sourceRoot = joinPath(destRoot, 'snapshots', machineHost);
+      vi.spyOn(fs, 'readdir').mockImplementation((path, ...args) => String(path) === sourceRoot
+        ? Promise.reject(Object.assign(new Error('private storage detail'), { code: 'EACCES' }))
+        : fsp.readdir(path, ...args));
+      const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const io = { emit: vi.fn() };
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const pending = runBackup(destRoot, io, { retentionCount: 1 });
+      await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+      proc.emit('close', 0);
+
+      await expect(pending).resolves.toMatchObject({ status: 'ok', prunedSnapshots: 0 });
+      await expect(fsp.stat(old)).resolves.toBeDefined();
+      expect(io.emit).toHaveBeenCalledWith('backup:completed', expect.objectContaining({ status: 'ok' }));
+      expect(errorLog).toHaveBeenCalledWith('❌ Backup retention prune failed: Backup inventory unavailable: read-retention-namespace (EACCES)');
+      expect(errorLog.mock.calls.flat().join(' ')).not.toContain('private storage detail');
+      expect(isBackupInProgress()).toBe(false);
+    });
 
     it('prunes only the oldest completed snapshots in the current machine namespace, keeping failed/in-progress/other-source snapshots', async () => {
       const fsp = await actualFs();

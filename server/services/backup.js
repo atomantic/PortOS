@@ -1902,7 +1902,13 @@ async function restoreHeldDatabase({ snapshotDir, currentSource }, snapshotId, {
   if (pendingRecovery) return pendingRecovery;
   const sqlPath = join(snapshotDir, 'portos-db.sql');
 
-  const info = await stat(sqlPath).catch(() => null);
+  const info = await stat(sqlPath).catch(cause => {
+    if (cause?.code === 'ENOENT') return null;
+    const { filesystemCode } = inventoryReadError(cause, 'stat-database-dump').context;
+    console.error(`❌ restore: dump metadata unreadable for snapshot ${snapshotId} (${filesystemCode})`);
+    return false;
+  });
+  if (info === false) return DUMP_UNREADABLE;
   // An empty/0-byte dump is as good as absent — restoring it is a silent no-op.
   // Mirror dumpPostgres's empty-dump guard so a truncated snapshot can't read
   // as a successful "0 tables" restore.
