@@ -6,7 +6,7 @@ import StatsOutroPanel from './StatsOutroPanel.jsx';
 import useMusicVideoStatsOutro from '../../hooks/useMusicVideoStatsOutro.js';
 import { getMusicVideoOutroStats } from '../../services/apiMusicVideo.js';
 import { formatCount } from '../../utils/formatters.js';
-import { STATS_OUTRO_DEFAULTS, normalizeStatsOutro, statsOutroRows } from '../../../../server/lib/musicVideoStatsOutro.js';
+import { STATS_OUTRO_DEFAULTS, normalizeStatsOutro, statsOutroDecisions, statsOutroRows } from '../../../../server/lib/musicVideoStatsOutro.js';
 
 const PREVIEW_FPS = 24;
 
@@ -67,7 +67,7 @@ export default function EndingCard({ project, onEditLocal, onSave, onClose }) {
   const t = preview.active ? preview.t : posterTime(seconds);
   const running = preview.active && preview.t < seconds;
   const rows = shown ? statsOutroRows(shown) : [];
-  const decisions = rows.reduce((sum, row) => sum + (row.choice ? row.value : 0), 0);
+  const decisions = shown ? statsOutroDecisions(shown) : 0;
   return (
     <section aria-label="Ending: cutting room floor" className="space-y-2 rounded-lg border border-port-accent bg-port-card p-2">
       <div className="flex items-center justify-between gap-2">
@@ -107,7 +107,7 @@ export default function EndingCard({ project, onEditLocal, onSave, onClose }) {
               ))}
             </dl>
           )}
-          <p className="text-xs text-port-text-muted">Counted from your picks, rejections, ✕ marks, locks and review notes. Locks an autopilot set are not counted. Unused stills fill the floor.</p>
+          <p className="text-xs text-port-text-muted">Decisions are every shot, every image and video used, and every cut, move and effect. Unused stills fill the floor.</p>
         </div>
       </div>
     </section>

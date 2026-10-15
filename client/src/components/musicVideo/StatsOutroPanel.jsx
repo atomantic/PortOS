@@ -41,7 +41,7 @@ export default function StatsOutroPanel({ project, onEditLocal, onSave }) {
             </select>
           </div>
           <p className="min-w-0 flex-1 basis-48 text-xs text-port-text-muted">
-            A “Human directed” card counting your decisions: renders reviewed, takes chosen and turned down, shots locked, review notes, and cuts, effects and moves, over the unused stills. Ending plays it in the player.
+            A “Human directed” card: renders reviewed, images and videos generated against the ones used, and cuts, moves and effects, over the unused stills. Ending plays it in the player.
           </p>
         </div>
       )}

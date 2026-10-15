@@ -1,15 +1,14 @@
 /**
  * Music Video — the cutting room floor outro: an optional closing scene that
  * plays after the song ends under the title "Human Directed" and tallies the
- * human choices behind the video (the renders reviewed, the takes chosen and
- * turned down, the shots locked by hand, the review notes written, the edit
- * calls placed), over a floor of the stills that did not make it. One record on the project
+ * work behind the video (every render reviewed, the images and videos
+ * generated against the ones used, the cuts, moves and effects placed), over
+ * a floor of the stills that did not make it. One record on the project
  * (`project.statsOutro`, null = off) turns it on and sets how long it runs;
  * it adds that time after the song and never shortens it.
  *
  * Every count comes from what the project records (`musicVideoOutroStats`):
- * its shots' takes and selections, its media collection, its asset marks, its
- * shot locks and its draft review notes.
+ * its shots' takes and selections, its media collection and its asset marks.
  * Media deleted from the library drops out of the counts with it.
  *
  * `drawStatsOutro` is the one painter for the storyboard animatic (a canvas
@@ -52,13 +51,11 @@ const TAKE_KINDS = Object.freeze({ image: 'image', endImage: 'image', video: 'vi
  * The tally from what the project records. `collectionItems` are the rows of
  * the video's media collection (`{ kind, ref }`): every still and clip made
  * for it, including ones no shot holds any more. Returns
- * `{ stills: { made, kept }, clips: { made, kept }, rejected, locks, notes, shots,
- * lipSyncs, transitions, imageEffects, cameraMoves, floorImages }` — `kept` is
- * what a shot uses now, `rejected` the takes rejected or marked ✕ bad, `locks`
- * the still and clip locks the director set by hand (not ones an autopilot or
- * a whole-board approval set), `notes` the timecoded notes written on draft
- * renders, and `floorImages` up to STATS_OUTRO_FLOOR_MAX unused stills
- * (rejected first) to lay on the floor. Pure.
+ * `{ stills: { made, kept }, clips: { made, kept }, rejected, shots, lipSyncs,
+ * transitions, imageEffects, cameraMoves, floorImages }` — `kept` is what a
+ * shot uses now, `rejected` the takes rejected or marked ✕ bad, and
+ * `floorImages` up to STATS_OUTRO_FLOOR_MAX unused stills (rejected first) to
+ * lay on the floor. Pure.
  */
 export function musicVideoOutroStats(project, { collectionItems = [] } = {}) {
   const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
@@ -98,14 +95,6 @@ export function musicVideoOutroStats(project, { collectionItems = [] } = {}) {
   // A take put back on a shot is no longer a rejection.
   for (const key of used) rejected.delete(key);
   const count = (keys, kind) => [...keys].filter((key) => key.startsWith(`${kind}:`)).length;
-  // Locks set by hand: an autopilot's or reviewer's lock names who set it, and a whole-board approval carried onto each shot is one call, not one per shot.
-  const sceneIds = new Set(scenes.map((scene) => scene?.sceneId));
-  const review = project?.productionReview || {};
-  const byHand = (approvals) => Object.entries(approvals && typeof approvals === 'object' ? approvals : {})
-    .filter(([sceneId, approval]) => sceneIds.has(sceneId) && approval && !approval.approvedBy && !approval.reviewer && !approval.fromBoardApproval).length;
-  const locks = byHand(review.shotApprovals) + byHand(review.clipApprovals);
-  const notes = (Array.isArray(project?.excerpts) ? project.excerpts : [])
-    .reduce((sum, excerpt) => sum + (Array.isArray(excerpt?.notes) ? excerpt.notes.length : 0), 0);
   const unusedStills = [...made].filter((key) => key.startsWith('image:') && !used.has(key)).sort();
   const floorPick = [...unusedStills.filter((key) => rejected.has(key)), ...unusedStills.filter((key) => !rejected.has(key))];
   // Spread over the whole pile rather than its first few, so the floor shows the project's range.
@@ -116,8 +105,6 @@ export function musicVideoOutroStats(project, { collectionItems = [] } = {}) {
     stills: { made: count(made, 'image'), kept: count(used, 'image') },
     clips: { made: count(made, 'video'), kept: count(used, 'video') },
     rejected: rejected.size,
-    locks,
-    notes,
     shots: scenes.length,
     lipSyncs,
     transitions,
@@ -133,10 +120,9 @@ export function musicVideoOutroStats(project, { collectionItems = [] } = {}) {
 
 /**
  * The tally's lines, in order: `{ label, value, choice?, accent? }`. A
- * `choice` line counts calls the director made; the heading's decision count
- * is their sum. Renders reviewed and takes chosen always show; a kind of call
- * never made (no review notes, say) is left out rather than shown as a zero.
- * The last line is what was left on the floor.
+ * `choice` line counts calls the director made. The images and videos lines
+ * always show; cuts, moves and effects are left out when there are none. The
+ * last line is what was left on the floor.
  */
 function statsOutroRows(stats) {
   const n = (v) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.round(v) : 0);
@@ -145,15 +131,21 @@ function statsOutroRows(stats) {
   const clips = s.clips || {};
   const rows = [
     { label: 'Renders reviewed', value: n(stills.made) + n(clips.made) },
-    { label: 'Takes chosen', value: n(stills.kept) + n(clips.kept), choice: true },
-    { label: 'Takes turned down', value: n(s.rejected), choice: true, optional: true },
-    { label: 'Shots locked by hand', value: n(s.locks), choice: true, optional: true },
-    { label: 'Review notes written', value: n(s.notes), choice: true, optional: true },
-    { label: 'Cuts, effects & moves', value: n(s.transitions) + n(s.imageEffects) + n(s.cameraMoves) + n(s.lipSyncs), choice: true, optional: true },
+    { label: 'Images generated', value: n(stills.made) },
+    { label: 'Images used', value: n(stills.kept), choice: true },
+    { label: 'Videos generated', value: n(clips.made) },
+    { label: 'Videos used', value: n(clips.kept), choice: true },
+    { label: 'Cuts, moves & effects', value: n(s.transitions) + n(s.imageEffects) + n(s.cameraMoves) + n(s.lipSyncs), choice: true, optional: true },
   ].filter((row) => !row.optional || row.value > 0).map(({ optional: _optional, ...row }) => row);
   const floor = Math.max(0, n(stills.made) - n(stills.kept)) + Math.max(0, n(clips.made) - n(clips.kept));
   rows.push({ label: 'Left on the floor', value: floor, accent: true });
   return rows;
+}
+
+/** The decisions the heading counts: every shot dreamed up, plus each `choice` line. */
+function statsOutroDecisions(stats) {
+  const shots = stats && typeof stats.shots === 'number' && stats.shots > 0 ? Math.round(stats.shots) : 0;
+  return shots + statsOutroRows(stats).reduce((sum, row) => sum + (row.choice ? row.value : 0), 0);
 }
 
 /**
@@ -252,7 +244,7 @@ function drawStatsOutro(ctx, { width, height, t, durationSec, stats, images = []
   const rowFont = (size, weight = 500) => `${weight} ${Math.floor(size * 100) / 100}px ${body}`;
   const headFont = (size) => `800 ${Math.floor(size * 100) / 100}px ${head}`;
   const headText = 'HUMAN DIRECTED';
-  const decisions = rows.reduce((sum, row) => sum + (row.choice ? row.value : 0), 0);
+  const decisions = statsOutroDecisions(stats);
   const shots = stats && typeof stats.shots === 'number' && stats.shots > 0 ? Math.round(stats.shots) : 0;
   const subText = (v) => `${fmt(v)} DECISIONS${shots ? ` · ${fmt(shots)} SHOTS` : ''}`;
   const widest = (size) => Math.max(
@@ -326,7 +318,7 @@ function drawStatsOutro(ctx, { width, height, t, durationSec, stats, images = []
   ctx.restore();
 }
 
-export { statsOutroRows, drawStatsOutro };
+export { statsOutroRows, statsOutroDecisions, drawStatsOutro };
 
 /**
  * The render page's script: draws the outro full-frame on a canvas and
@@ -339,6 +331,7 @@ export function statsOutroPageSource({ stats, imageSrcs = [], width, height, fps
   const json = (value) => JSON.stringify(value).replace(/</g, '\\u003c');
   return `(() => {
   ${statsOutroRows.toString()}
+  ${statsOutroDecisions.toString()}
   ${drawStatsOutro.toString()}
   const STATS = ${json(stats)};
   const SRCS = ${json(imageSrcs)};
