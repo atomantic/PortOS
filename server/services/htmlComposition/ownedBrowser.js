@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { mkdtemp, rm, access, constants } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { tmpdir, constants as osConstants } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from '../../lib/childProcess.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
@@ -96,6 +96,11 @@ export async function launchCompositionBrowser({
   let closing;
   let profileCleanup;
   let terminationStarted;
+  // Fixed-size observations from this retained child only. Observation
+  // timestamps are monotonic milliseconds since ownership began.
+  const observedSince = performance.now();
+  const observed = { spawnMs: null, exitMs: null, closeMs: null, termMs: null, killMs: null };
+  const observedMs = () => Math.round(performance.now() - observedSince);
   const termination = { term: 'not-attempted', kill: 'not-attempted', error: 'none' };
   const safeSignalError = error => ['EPERM', 'ESRCH', 'EINVAL', 'ENOSYS'].includes(error?.code) ? error.code : 'other';
   const cleanupProfile = () => profileCleanup ??= removeProfile(profile);
@@ -103,6 +108,7 @@ export async function launchCompositionBrowser({
   const childClosed = new Promise(resolve => { closeResolve = resolve; });
   const onExit = () => {
     exited = true;
+    observed.exitMs ??= observedMs();
     // Chrome helpers may retain inherited stderr after the browser exits.
     // Release our pipe without signaling unrelated or discovered processes.
     proc?.stderr?.destroy();
@@ -113,6 +119,8 @@ export async function launchCompositionBrowser({
   };
   const onClose = () => {
     closed = true;
+    observed.closeMs ??= observedMs();
+    proc?.removeListener('error', onError);
     // A deadline can reject close() before the OS reports exit. Retain ownership
     // until the eventual close event and remove only this child's profile then.
     cleanupProfile().catch(error => console.error(`❌ Composition browser profile cleanup failed (${safeSignalError(error)})`));
@@ -140,11 +148,13 @@ export async function launchCompositionBrowser({
       transport?.removeListener('error', onPipeError);
       if (proc && !closed) {
         terminationStarted = performance.now();
+        const closeStartedMs = observedMs();
         const tracked = {
           get exitCode() { return proc.exitCode; },
           get signalCode() { return proc.signalCode; },
           kill(name) {
             const key = name === 'SIGTERM' ? 'term' : 'kill';
+            observed[`${key}Ms`] ??= observedMs();
             termination[key] = 'attempted';
             try {
               const accepted = signalChild(name);
@@ -162,7 +172,25 @@ export async function launchCompositionBrowser({
           stillRunning: () => !exited,
         });
         await Promise.race([childClosed, new Promise((_, reject) => {
-          deadline = setTimeout(() => reject(new Error(`Composition browser cleanup exceeded its deadline (exit=${exited}, stdioClosed=${Boolean(proc.stderr?.destroyed)}, term=${termination.term}, kill=${termination.kill}, signalError=${termination.error}, elapsedMs=${Math.round(performance.now() - terminationStarted)})`)), shutdownMs);
+          deadline = setTimeout(() => {
+            // Never interpolate arbitrary child properties, errors or output.
+            // Public status and observed events are separate evidence: accepted
+            // signals alone do not establish that the child has exited.
+            const exitCode = proc.exitCode == null ? 'none' : Number.isSafeInteger(proc.exitCode) ? proc.exitCode : 'other';
+            const signalCode = proc.signalCode == null ? 'none'
+              : typeof proc.signalCode === 'string' && Object.hasOwn(osConstants.signals, proc.signalCode) ? proc.signalCode : 'other';
+            const facts = {
+              exit: exited, stdioClosed: Boolean(proc.stderr?.destroyed),
+              term: termination.term, kill: termination.kill, signalError: termination.error,
+              elapsedMs: Math.round(performance.now() - terminationStarted),
+              spawned, closed, exitCode, signalCode,
+              exitListener: proc.listeners('exit').includes(onExit),
+              closeListener: proc.listeners('close').includes(onClose),
+              errorListener: proc.listeners('error').includes(onError),
+              ...observed, closeStartedMs, timeoutMs: observedMs(),
+            };
+            reject(new Error(`Composition browser cleanup exceeded its deadline (${Object.entries(facts).map(([key, value]) => `${key}=${value ?? 'unobserved'}`).join(', ')})`));
+          }, shutdownMs);
         })]);
       }
     } finally {
@@ -170,7 +198,6 @@ export async function launchCompositionBrowser({
       clearTimeout(deadline);
       // Wait for the process and our pipe to close before removing its profile.
       if (!proc || closed) {
-        proc?.removeListener('error', onError);
         await cleanupProfile();
       }
     }
@@ -198,7 +225,7 @@ export async function launchCompositionBrowser({
     proc = spawn(command, args, piped
       ? { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'], env: previewBrowserEnv(), detached: true }
       : safeChildProcessOptions({ stdio: ['ignore', 'ignore', 'pipe'] }));
-    proc.once('spawn', () => { spawned = true; });
+    proc.once('spawn', () => { spawned = true; observed.spawnMs = observedMs(); });
     proc.once('exit', onExit);
     proc.once('close', onClose);
     proc.on('error', onError);
