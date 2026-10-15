@@ -12,6 +12,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 import { isDirectlyInvoked } from '../lib/directInvocation.js';
+import { createFixtureStartup } from './collectionFixtureStartup.js';
 
 const codeRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -25,11 +26,13 @@ export function validateFixtureEnvironment(env = process.env, host = '127.0.0.1'
   if (env.PGSERVICE || env.PGSERVICEFILE || env.DATABASE_URL) throw new Error('Remove alternate database configuration');
 }
 
-/** Each invocation returns { url, cardinalities, close }; close is idempotent. */
+/** Returns { url, cardinalities, startup, close }; close is idempotent. */
 export async function startCollectionFixture({
   env = process.env, host = '127.0.0.1', clientDist = join(codeRoot, 'client/dist'),
+  startupLimits,
 } = {}) {
   validateFixtureEnvironment(env, host);
+  const startup = createFixtureStartup(startupLimits);
   await access(join(clientDist, 'index.html'));
   const require = createRequire(join(codeRoot, 'server/package.json'));
   const { Client } = require('pg');
@@ -71,6 +74,7 @@ export async function startCollectionFixture({
   process.once('SIGINT', onSignal);
   process.once('SIGTERM', onSignal);
   try {
+    startup.record({ phase: 'source-copy' });
     root = await realpath(await mkdtemp(join(tmpdir(), 'portos-collection-audit-')));
     // Copy code, never data, configuration, credentials, or the live checkout's
     // symlinks. A physical temp copy also preserves dataRoot's worktree guard.
@@ -82,12 +86,13 @@ export async function startCollectionFixture({
       await cp(join(codeRoot, file), join(root, file), { dereference: false });
     }
     await mkdir(join(root, 'scripts/perf'), { recursive: true });
-    for (const file of ['collectionFixtureWorker.js', 'collectionFixtureData.js']) {
+    for (const file of ['collectionFixtureWorker.js', 'collectionFixtureData.js', 'collectionFixtureSeed.js']) {
       await cp(join(codeRoot, 'scripts/perf', file), join(root, 'scripts/perf', file));
     }
     await cp(join(codeRoot, 'scripts/perf/assets'), join(root, 'scripts/perf/assets'), { recursive: true });
     await writeFile(join(root, 'package.json'), '{"type":"module"}\n');
     await symlink(join(codeRoot, 'server/node_modules'), join(root, 'server/node_modules'), 'junction');
+    startup.record({ phase: 'parent-database' });
     await db.connect();
     const identity = await db.query('SELECT current_database() AS name');
     if (identity.rows[0].name !== 'portos_test') throw new Error('Connected database is not portos_test');
@@ -109,31 +114,16 @@ export async function startCollectionFixture({
     });
     // Drain diagnostics without leaking paths, payloads, or credentials into reports.
     child.stderr.resume();
-    const ready = await new Promise((resolveReady, rejectReady) => {
-      const timer = setTimeout(() => rejectReady(new Error('Collection fixture readiness timed out')), 30000);
-      const finish = (error, value) => {
-        clearTimeout(timer);
-        child.removeListener('error', onError);
-        child.removeListener('exit', onExit);
-        child.removeListener('message', onMessage);
-        error ? rejectReady(error) : resolveReady(value);
-      };
-      const onError = () => finish(new Error('Collection fixture child failed to start'));
-      const onExit = () => finish(new Error('Collection fixture child exited before readiness'));
-      const onMessage = message => {
-        if (message?.type === 'ready') finish(null, message);
-        if (message?.type === 'failed') finish(new Error('Collection fixture initialization failed at ' + message.phase));
-      };
-      child.once('error', onError);
-      child.once('exit', onExit);
-      child.on('message', onMessage);
-    });
+    const ready = await startup.wait(child);
     if (stopped) throw new Error('Fixture startup interrupted');
     finishSetup();
     child.once('exit', () => { close().catch(() => { process.exitCode = 1; }); });
-    return { url: ready.url, cardinalities: ready.cardinalities, close };
+    return { url: ready.url, cardinalities: ready.cardinalities, startup: startup.snapshot(), close };
   } catch (error) {
     finishSetup();
+    // Capture only sanitized diagnostics; raw I/O/DB errors may contain secrets.
+    error.fixtureStartup ||= startup.snapshot();
+    error.fixtureFailure ||= 'setup-failed';
     await close();
     throw error;
   }
