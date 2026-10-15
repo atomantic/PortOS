@@ -17,7 +17,7 @@ import { isPerformanceScene, planPerformanceRepair } from '../../lib/musicVideoS
 import SceneTakeStrip from './SceneTakeStrip.jsx';
 import { sceneEndFramePlanFor } from './SceneEndFrame.jsx';
 import SceneFrames from './SceneFrames.jsx';
-import { MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_TEXT_ZONES, MUSIC_VIDEO_VISUAL_LAYERS, clipOffsetSec, clipReversed, clipSpeedRate, sceneHasAuthoredSpan } from '../../lib/musicVideoLayers.js';
+import { CLIP_TIMING_FPS, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_TEXT_ZONES, MUSIC_VIDEO_VISUAL_LAYERS, clipOffsetSec, clipReversed, clipSpeedRate, sceneHasAuthoredSpan } from '../../lib/musicVideoLayers.js';
 
 // #8985: what a composed render shows for this scene's span.
 const LAYER_LABELS = { footage: 'Footage', still: 'Still image', card: 'Title card', code: 'Code-drawn' };
@@ -46,6 +46,9 @@ import { isEndFrameImageEffect } from '../../lib/musicVideoImageEffects.js';
 
 // The two timeline-bound scene fields rendered as identical number inputs.
 const SCENE_TIME_FIELDS = [['Start', 'startSec'], ['End', 'endSec']];
+// A time as a frame of the 24 fps cut grid, the numbers the director counts in.
+const frameAt = (sec) => Math.round(sec * CLIP_TIMING_FPS);
+const frameSpan = (scene) => `fr ${frameAt(scene.startSec)}–${frameAt(scene.endSec)}`;
 
 /**
  * One scene on the board: ordering/delete, the shot + reference-frame prompts
@@ -233,7 +236,7 @@ export default function SceneCard({
   // The collapsed Shot settings row says what is set, so it rarely needs opening.
   const settingsSummary = [
     layer === 'footage' ? SHOT_MODE_LABELS[shotModeValue] : LAYER_LABELS[layer],
-    typeof scene.startSec === 'number' && typeof scene.endSec === 'number' ? `${scene.startSec.toFixed(2)}–${scene.endSec.toFixed(2)}s` : null,
+    typeof scene.startSec === 'number' && typeof scene.endSec === 'number' ? `${scene.startSec.toFixed(2)}–${scene.endSec.toFixed(2)}s (${frameSpan(scene)})` : null,
     scene.beatAligned ? 'beat-aligned' : null,
     layer === 'footage' && loops && !performance ? 'loops' : null,
     layer !== 'footage' && scene.camera?.move ? `camera ${scene.camera.move}` : null,
@@ -280,6 +283,7 @@ export default function SceneCard({
                 <input type="number" min="0" step="0.1" value={scene[key] ?? ''} className="w-20 bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0"
                   onChange={(e) => onEditLocal(scene.sceneId, { [key]: toValue(e.target.value) })}
                   onBlur={(e) => onSave(scene.sceneId, { [key]: toValue(e.target.value) })} />
+                {typeof scene[key] === 'number' && <span className="tabular-nums text-port-text-muted">fr {frameAt(scene[key])}</span>}
               </label>
             );
           })}
@@ -406,7 +410,7 @@ export default function SceneCard({
           </div>
           <div className="truncate text-[11px] text-port-text-muted">
             {typeof scene.startSec === 'number' && typeof scene.endSec === 'number'
-              ? `${(scene.endSec - scene.startSec).toFixed(2)}s · ${formatTimecode(scene.startSec)}–${formatTimecode(scene.endSec)}`
+              ? `${(scene.endSec - scene.startSec).toFixed(2)}s · ${formatTimecode(scene.startSec)}–${formatTimecode(scene.endSec)} · ${frameSpan(scene)}`
               : `#${scene.order + 1}`}
             {scene.referenceImageId ? ' · frame ready' : ''}
             {scene.videoHistoryId ? ' · video ready' : ''}

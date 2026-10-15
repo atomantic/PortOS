@@ -693,3 +693,14 @@ describe('reverse a shot\'s clip', () => {
     expect(screen.queryByLabelText(/^Reverse/)).toBeNull();
   });
 });
+
+describe('shot timing in frames', () => {
+  // Uniquely catches the shot's times shown without the 24 fps frame numbers the director counts in.
+  it('shows frame numbers beside the header times and the Start and End fields', () => {
+    const scene = { sceneId: 's1', startSec: 50.25, endSec: 52.125, takes: [] };
+    render(<SceneCard scene={scene} index={0} onEditLocal={() => {}} onSave={() => {}} />);
+    expect(screen.getByText(/1\.88s · .* · fr 1206–1251/)).toBeTruthy();
+    expect(screen.getByText('fr 1206')).toBeTruthy();
+    expect(screen.getByText('fr 1251')).toBeTruthy();
+  });
+});
