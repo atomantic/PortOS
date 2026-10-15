@@ -874,14 +874,15 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
     });
   });
 
-  it('removes a broken tree resolving to the parent without trusting its dirty status', async () => {
+  it('preserves a broken tree resolving to the parent without trusting its dirty status', async () => {
     scriptGit({ detectedToplevel: '/repo', porcelain: ' M src/parent-work.js' });
 
     const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x');
 
-    expect(result).toEqual({ merged: false, removed: true, uncommittedSaved: false, warnings: [] });
-    expect(rm).toHaveBeenCalledWith(join(PATHS.worktrees, 'agent-x'), { recursive: true, force: true });
-    expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(true);
+    expect(result).toMatchObject({ merged: false, removed: false, cleanupIncomplete: true });
+    expect(result.warnings.join(' ')).toContain('broken checkout identity');
+    expect(rm).not.toHaveBeenCalled();
+    expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(false);
     expect(execGitMock.mock.calls.some(([args]) => args[0] === 'status')).toBe(false);
     expect(execGitMock.mock.calls.some(([args]) => args[0] === 'worktree')).toBe(false);
   });
@@ -1013,23 +1014,23 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
         merge: false, preserveBranchWithCommits: true,
       });
 
-      expect(result.removed).toBe(true);
-      expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(evidence === true);
+      expect(result.removed).toBe(checkout === 'missing');
+      expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(checkout === 'missing' && evidence === true);
       if (evidence !== true) expect(result.warnings.join(' ')).toMatch(/preserved/);
     });
 
     it('preserves unlanded commits when the requested merge cannot use a checkout', async () => {
       const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', { merge: true });
 
-      expect(result).toMatchObject({ merged: false, removed: true });
+      expect(result).toMatchObject({ merged: false, removed: checkout === 'missing' });
       expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(false);
       expect(result.warnings.join(' ')).toMatch(/preserved/);
     });
 
-    it('keeps explicit no-preservation cleanup behavior', async () => {
+    it('only honors explicit branch disposal when the checkout is proven absent', async () => {
       await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', { merge: false });
 
-      expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(true);
+      expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(checkout === 'missing');
       expect(hasBranchMergeEvidenceMock).not.toHaveBeenCalled();
     });
 

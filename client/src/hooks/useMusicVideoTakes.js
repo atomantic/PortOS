@@ -116,9 +116,15 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
   );
 
   // Mark a take's file bad (or clear it): a project-wide mark, separate from rejecting it from this shot.
+  // A mark's answer: the project's marks, and the shots whose takes a Bad mark rejected.
+  const applyPoolMarks = (projectId, { assetMarks, scenes = [] } = {}) => {
+    if (assetMarks) patchProject?.(projectId, { assetMarks });
+    for (const scene of scenes) applyScene(projectId, scene);
+  };
+
   const markTake = (take, mark) => runTakeOp(
     (projectId) => markMusicVideoPoolAssets(projectId, [{ kind: take.kind === 'video' ? 'video' : 'image', assetId: take.assetId }], mark, { silent: true })
-      .then(({ assetMarks }) => { patchProject?.(projectId, { assetMarks }); return null; }),
+      .then((result) => { applyPoolMarks(projectId, result); return null; }),
     'Failed to mark the take',
   );
 
@@ -210,5 +216,5 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
     if (failures.length) toast.error(failures.slice(0, 3).join(' · '));
   };
 
-  return { busy, selectTake, placePoolItem, trimClipTake, reviewTake, rejectUnusedTakes, swapFrames, markTake, continueFromPrevious, importTake, importClipTake, exportHandoff, exportHandoffBundle, importHandoffFiles };
+  return { busy, selectTake, placePoolItem, trimClipTake, reviewTake, rejectUnusedTakes, swapFrames, markTake, applyPoolMarks, continueFromPrevious, importTake, importClipTake, exportHandoff, exportHandoffBundle, importHandoffFiles };
 }

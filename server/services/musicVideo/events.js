@@ -16,6 +16,9 @@ import { EventEmitter } from 'events';
 // synchronous external-SD-API lane (which returns the image filename inline and
 // lets the client add it as a take through the takes route; video renders
 // always ride the queue, so the clip attach is hook-only).
+//   'shot-render' → { projectId, sceneId, state: 'rendering'|'rendered'|'failed'|'canceled', progress?, error? }
+//     — a shot's cached render segment advancing (shotSegments.js), bridged to
+//     `music-video:shot-render` so the shot card shows it without a refetch.
 //   'scene-failure' → { projectId, sceneId, lastFailure: { lane, error, at } | null }
 //
 // `scene-image` / `scene-video` also carry the scene's `lastFailure` (null once a

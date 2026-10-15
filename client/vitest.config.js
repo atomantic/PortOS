@@ -9,6 +9,8 @@ import { TEST_TIMEOUT_MS } from './src/test/timeouts.js';
 const RUN_TEMP_ROOT = bootstrapVitestTempRoot();
 
 export default defineConfig({
+  // Anchor to the config, even when --root or the caller cwd differs.
+  cacheDir: fileURLToPath(new URL('./.cache/vitest', import.meta.url)),
   plugins: [react()],
   resolve: {
     // Share Three.js without bypassing its package exports with a directory alias.
@@ -20,6 +22,7 @@ export default defineConfig({
       TMPDIR: RUN_TEMP_ROOT,
       TMP: RUN_TEMP_ROOT,
       TEMP: RUN_TEMP_ROOT,
+      MAC_CHROMIUM_TMPDIR: RUN_TEMP_ROOT,
       NODE_DISABLE_COMPILE_CACHE: '1',
     },
     // Four DOM workers exhausted Testing Library's async budget on the public

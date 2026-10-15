@@ -29,6 +29,7 @@ import { checkSoundConsent, produceSoundtrack, muxSoundtrack } from './sound.js'
 import { renderViaMediaQueue, sampleFilm } from './stageRender.js';
 import { resolveBlenderExecution } from './execution.js';
 import { renderBlenderSequence, publishBlenderVideo } from './blenderRender.js';
+import { trackedRenderMap } from '../renderActivity.js';
 
 export const STAGE_RUN_KIND = 'production-stages';
 const STYLE_POINTS = [0.1, 0.5, 0.9];
@@ -38,7 +39,7 @@ const RESUMABLE = new Set(['interrupted', 'canceled', 'exhausted', 'failed']);
 const BUDGET_CODE = 'CODE_ANIMATION_BUDGET_EXHAUSTED';
 const CANCEL_CODE = 'CODE_ANIMATION_RUN_CANCELED';
 
-const activeRuns = new Map();
+const activeRuns = trackedRenderMap('code-animation', { noun: 'Code Animation production run', link: () => '/code-animation/production' });
 export const activeStageRunIds = () => [...activeRuns.keys()];
 
 const exhausted = dimension => new ServerError(`Production budget exhausted: ${dimension}`, { status: 409, code: BUDGET_CODE, context: { dimension } });

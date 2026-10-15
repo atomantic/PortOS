@@ -44,6 +44,17 @@ const loomRunSnapshot = (production) => Object.freeze({
 });
 
 export const SOCKET_EVENT_CONTRACTS = Object.freeze({
+  'messages:sync:completed': {
+    direction: 'server-to-client',
+    summary: 'Account cache persisted after sync; visible inbox consumers reconcile a bounded summary page. No message bodies.',
+    payloadSchema: {
+      type: 'object', required: ['accountId', 'newMessages', 'pruned', 'status'], additionalProperties: false,
+      properties: {
+        accountId: { type: 'string' }, newMessages: { type: 'integer', minimum: 0 },
+        pruned: { type: 'integer', minimum: 0 }, status: { type: 'string' }, reason: { type: 'string' },
+      },
+    },
+  },
   'cos:agent:feedback': {
     direction: 'server-to-client',
     summary: 'Persisted agent feedback after the pending-feedback index has been updated; CoS subscribers only.',

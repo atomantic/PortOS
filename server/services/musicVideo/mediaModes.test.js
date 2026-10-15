@@ -33,6 +33,8 @@ describe('whole-workflow media modes', () => {
     const project = await projects.createProject({ name: 'Example', mediaMode: 'code-images' });
     const scene = await projects.addProjectScene(project.id, { label: 'Scene' });
     await expect(projects.updateScene(project.id, scene.sceneId, { videoHistoryId: 'video-example' })).rejects.toMatchObject({ code: 'MUSIC_VIDEO_MEDIA_POLICY' });
+    await mkdir(PATHS.images, { recursive: true });
+    await writeFile(join(PATHS.images, 'example.png'), 'synthetic still');
     await projects.updateScene(project.id, scene.sceneId, { referenceImageId: 'example.png' });
     await expect(projects.updateProject(project.id, { mediaMode: 'code-only' })).rejects.toMatchObject({ code: 'MUSIC_VIDEO_MEDIA_POLICY' });
     expect((await projects.getProject(project.id)).scenes[0].referenceImageId).toBe('example.png');

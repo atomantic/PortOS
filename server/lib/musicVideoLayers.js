@@ -36,8 +36,25 @@ export const MUSIC_VIDEO_FRAME_FITS = ['fill', 'still', 'vhs', 'black'];
  * lines sung over it. Both are optional; a shot without them takes the sheet's roles
  * and the module's default zone.
  */
-export const MUSIC_VIDEO_TEXT_ZONES = ['lower-left', 'upper-right', 'upper', 'lower', 'center', 'none'];
+export const MUSIC_VIDEO_TEXT_ZONES = ['lower-left', 'upper-right', 'upper', 'lower', 'center', 'none', 'lower-right', 'upper-left'];
+// A shot's lyric size: a step down or up from the type's own size (null is normal).
+export const MUSIC_VIDEO_LYRIC_SIZES = ['small', 'large'];
 export const MUSIC_VIDEO_LYRIC_ROLES = ['line', 'hook', 'stamp', 'data'];
+
+/**
+ * Whether a composed render draws the sung lyrics itself, in the shared lyric
+ * type the storyboard animatic shows: a composed project with timed lyrics and
+ * no subtitle text cues (subtitle cues stand in for the lyrics; a hero cue is a
+ * title over them).
+ */
+export function composedDrawsLyrics(project) {
+  const composition = project?.composition;
+  if (composition?.mode !== 'composed') return false;
+  const timed = (cue) => cue?.text && Number.isFinite(cue.startSec) && Number.isFinite(cue.endSec);
+  if ((composition.textCues || []).some((cue) => timed(cue) && cue.emphasis !== 'hero')) return false;
+  return (Array.isArray(project.lyricCues) ? project.lyricCues : [])
+    .some((cue) => typeof cue?.text === 'string' && cue.text.trim() && Number.isFinite(cue.startSec));
+}
 
 /**
  * Whether a composition honours per-scene layers: a composed render cuts

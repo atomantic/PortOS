@@ -12,6 +12,7 @@
 
 import { randomUUID } from 'crypto';
 import { createRecordStoreBackendSelector } from '../../lib/pgFileFacade.js';
+import { withMusicMutation, musicMutationClient, afterMusicCommit } from '../musicMembershipMutation.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
 import { makeRender as makeRenderLogic } from './logic.js';
 
@@ -82,6 +83,9 @@ export function appendActiveTake(trackId, { audioFilename, engine, prompt, durat
   return run;
 }
 
+// The shared mutation boundary prepares both stores before reserving a client.
+export { selectBackend as prepareTracksBackend };
+
 /** Name of the active backend, or null before first call (for diagnostics/tests). */
 export function getTracksBackendName() {
   return getBackendName();
@@ -93,7 +97,7 @@ export function _resetTracksBackend() {
 }
 
 export async function listTracks(options = {}) {
-  return (await selectBackend()).listTracks(options);
+  return (await selectBackend()).listTracks({ ...options, client: musicMutationClient() });
 }
 
 export async function listTrackIds(options = {}) {
@@ -101,7 +105,7 @@ export async function listTrackIds(options = {}) {
 }
 
 export async function getTrack(id, options = {}) {
-  return (await selectBackend()).getTrack(id, options);
+  return (await selectBackend()).getTrack(id, { ...options, client: musicMutationClient() });
 }
 
 function announceNewTrack(id) {
@@ -110,21 +114,27 @@ function announceNewTrack(id) {
 }
 
 export async function createTrack(input) {
-  const track = await (await selectBackend()).createTrack(input);
-  announceNewTrack(track.id);
-  return track;
+  return withMusicMutation(async () => {
+    const track = await (await selectBackend()).createTrack(input, { client: musicMutationClient() });
+    afterMusicCommit(() => announceNewTrack(track.id));
+    return track;
+  });
 }
 
 export async function updateTrack(id, patch) {
-  const next = await (await selectBackend()).updateTrack(id, patch);
-  emitRecordUpdated('track', next.id);
-  return next;
+  return withMusicMutation(async () => {
+    const next = await (await selectBackend()).updateTrack(id, patch, { client: musicMutationClient() });
+    afterMusicCommit(() => emitRecordUpdated('track', next.id));
+    return next;
+  });
 }
 
 export async function deleteTrack(id) {
-  const result = await (await selectBackend()).deleteTrack(id);
-  emitRecordDeleted('track', result.id);
-  return result;
+  return withMusicMutation(async () => {
+    const result = await (await selectBackend()).deleteTrack(id, { client: musicMutationClient() });
+    afterMusicCommit(() => emitRecordDeleted('track', result.id));
+    return result;
+  });
 }
 
 /** Merge an incoming batch of track records from a peer (LWW, tombstone-aware). */

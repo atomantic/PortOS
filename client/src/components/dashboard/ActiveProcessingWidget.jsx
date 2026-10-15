@@ -106,6 +106,8 @@ function ActiveProcessingWidget() {
   const now = useTimeTick(1000);
   const ollama = telemetry?.ollama ?? data?.ollama;
   const appOperations = data?.appOperations || [];
+  // Renders outside the media queue (music video, video timeline, Code Animation).
+  const renders = data?.renders || [];
   const activeAgents = data?.agents?.active || 0;
   // Derived server-side (server/lib/systemIdle.js) and rendered as sent: the
   // unattended auto-updater refuses to restart the install on this same verdict,
@@ -115,7 +117,7 @@ function ActiveProcessingWidget() {
   // screen, but the idle headline is only the server's confirmed verdict.
   const confirmed = status === 'ready';
   const idle = confirmed && activity?.idle === true;
-  const runningJobs = jobs.filter((job) => job.status !== 'queued').length;
+  const runningJobs = jobs.filter((job) => job.status !== 'queued').length + renders.length;
   return (
     // @container on the widget's OWN root: a dashboard cell is ~250px wide on a
     // 2560px screen, so a viewport breakpoint here would pin the four-up metric
@@ -129,6 +131,7 @@ function ActiveProcessingWidget() {
         {!idle ? <div className="mb-3 grid grid-cols-2 gap-1.5 text-center @xs:grid-cols-5"><Metric icon={Bot} value={activeAgents} label="agents" /><Metric icon={Layers3} value={runningJobs} label="rendering" /><Metric icon={Cpu} value={llm?.trusted === false ? '?' : formatCount(llm?.active || 0)} label="LLM" /><Metric icon={Brain} value={mind?.thinking ? 'yes' : 'no'} label="thinking" /><Metric icon={Cpu} value={gpu?.laneBusy ? 'busy' : 'ready'} label="GPU" /></div> : null}
         {idle ? <Link to="/system-resources/overview" className="flex items-center justify-between rounded-lg border border-port-border bg-port-bg px-3 py-3 text-xs text-gray-400 transition-colors hover:border-port-accent/50 hover:text-gray-200"><span>Nothing is running</span><span>GPU {gpu?.status === 'available' ? 'ready' : gpu?.status || 'unknown'} →</span></Link> : null}
         <div className="space-y-1.5">{jobs.map((job) => <JobRow key={job.id} job={job} onCancel={cancel} />)}</div>
+        {renders.map((render, index) => <LaneRow key={`render-${render.kind}-${index}`} to={render.to || '/system-resources/overview'} icon={Film} label={render.noun ? render.noun.charAt(0).toUpperCase() + render.noun.slice(1) : 'Render'} detail={elapsed(render.startedAt, now)} />)}
         {(llm?.runs || []).map((run) => <LaneRow key={`llm-${run.runId}`} to={`/cos/runs?run=${encodeURIComponent(run.runId)}`} icon={Cpu} label={`${run.providerId || 'LLM'} · ${run.model || 'default model'} · ${run.source || 'run'}`} detail={elapsed(run.startedAt, now)} />)}
         {llm?.active > (llm?.runs?.length || 0) ? <LaneRow to="/cos/runs" icon={Cpu} label="Additional LLM runs" detail={formatCount(llm.active - (llm?.runs?.length || 0))} /> : null}
         {(ollama?.models || []).map((model) => <LaneRow key={`ollama-${model.id}`} to="/models/llms" icon={Cpu} label={`Ollama loaded · ${model.name || model.id}`} detail={[model.size == null ? 'size unknown' : formatBytes(model.size), model.sizeVram == null ? 'processor unknown' : model.sizeVram === 0 ? 'CPU' : model.size != null && model.sizeVram >= model.size ? 'GPU' : 'GPU/CPU'].join(' · ')} />)}

@@ -808,7 +808,7 @@ export async function deleteAgent(agentId) {
     try { await saveAgentIndex(); }
     catch (err) { if (inIndex) idx.set(agentId, previousDate); throw err; }
     if (existsSync(agentDir)) {
-      await rm(agentDir, { recursive: true }).catch(() => {});
+      await rm(agentDir, { recursive: true }).catch(err => console.error(`❌ Failed to remove agent ${agentId} directory: ${err.message}`));
     }
 
     cosEvents.emit('agents:changed', { action: 'deleted', agentId });

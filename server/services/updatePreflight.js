@@ -4,6 +4,8 @@ import { getActiveAgentIds, spawningTasks } from './agentState.js';
 import { readPersistentMindStateForSafetyCheck } from './cosState.js';
 import { filterLiveAgentIds } from './cosAgentLifecycle.js';
 import * as updateChecker from './updateChecker.js';
+import { listActiveRenders } from './renderActivity.js';
+import { summarizeSystemActivity } from '../lib/systemIdle.js';
 
 // Shared refusal logic for the PortOS self-update path, called from both
 // POST /api/update/execute (server/routes/update.js) and the app:update
@@ -72,6 +74,19 @@ export async function getPersistentMindImageWorkGuard() {
   return persistentMindImageWorkGuard(snapshot.persistentMind);
 }
 
+/**
+ * The update restarts the server, which ends every in-flight render outside the
+ * media queue. `renders` is a `listActiveRenders()` list; the line names each
+ * kind the way Live activity and the idle verdict do.
+ */
+export const rendersActiveError = (renders) => {
+  const running = summarizeSystemActivity({ renders }).blockers.map((blocker) => blocker.label).join(', ');
+  return new ServerError(
+    `${running}. Let ${renders.length === 1 ? 'it' : 'them'} finish, or stop ${renders.length === 1 ? 'it' : 'them'}, before updating: the update restarts PortOS and ${renders.length === 1 ? 'the render' : 'the renders'} would be lost.`,
+    { status: 409, code: 'RENDERS_ACTIVE', context: { renders: renders.length } },
+  );
+};
+
 export const persistentMindStateUntrustedError = () => new ServerError(
   'Persistent Mind state could not be validated. Restore data/cos/state.json from backup before updating.',
   { status: 409, code: 'PERSISTENT_MIND_STATE_UNTRUSTED' },
@@ -104,6 +119,8 @@ export async function checkPortosUpdatePreflight({
 } = {}) {
   const activeCosAgents = await countActiveCosAgents();
   if (activeCosAgents > 0) throw agentsActiveError(activeCosAgents);
+  const renders = listActiveRenders();
+  if (renders.length > 0) throw rendersActiveError(renders);
 
   const imageCheck = await getPersistentMindImageWorkGuard();
   if (!imageCheck.trusted) throw persistentMindStateUntrustedError();

@@ -19,20 +19,23 @@ import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy, ownTestBodies }
 import { browserSuiteCanRun } from '../../lib/browserSuiteGate.js';
 
 const { it, drain } = ownTestBodies(vitestIt);
-const ownedChildren = vi.hoisted(() => []);
+const lifecycle = vi.hoisted(() => ({ diagnostics: null }));
+vi.mock('node:fs/promises', async original => {
+  const actual = await original();
+  return { ...actual, rm: (...args) => lifecycle.diagnostics
+    ? lifecycle.diagnostics.remove(actual.rm, ...args) : actual.rm(...args) };
+});
 vi.mock('../../lib/childProcess.js', async original => {
   const actual = await original();
   return { ...actual, spawn(...args) {
     const child = actual.spawn(...args);
-    const profileArg = args[1]?.find(arg => arg.startsWith('--user-data-dir=') && arg.includes('portos-composition-browser-'));
-    if (profileArg) {
-      const owned = { profile: profileArg.slice('--user-data-dir='.length), closed: false };
-      child.once('close', () => { owned.closed = true; });
-      ownedChildren.push(owned);
-    }
+    lifecycle.diagnostics?.track(child, args[1]);
     return child;
   } };
 });
+const { createOwnedBrowserDiagnostics } = await import('../../test/ownedBrowserDiagnostics.js');
+lifecycle.diagnostics = createOwnedBrowserDiagnostics();
+const ownedChildren = lifecycle.diagnostics.children;
 
 // This suite measures encoder pixels; the actual operator boundary is exercised in musicVideoProductionReview.browser.test.js.
 vi.mock('./productionReview.js', async original => ({ ...await original(), assertProductionApproval: () => {} }));
@@ -65,9 +68,9 @@ vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await imp
 }));
 
 const { findFfmpeg } = await import('../../lib/ffmpeg.js');
-const { _cleanupTestBrowser, _waitForTestChrome, _testChromeCaptureArgs } = await import('../htmlComposition/testBrowserCleanup.js');
+const { _cleanupTestBrowser, _createTestArtifactsRoot, _waitForTestChrome, _testChromeCaptureArgs } = await import('../htmlComposition/testBrowserCleanup.js');
 
-afterAll(() => cleanupTempDataRoots());
+afterAll(() => { lifecycle.diagnostics.dispose(); cleanupTempDataRoots(); });
 
 const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -80,6 +83,7 @@ const canRun = browserSuiteCanRun('documentRender browser suite', { Chrome: chro
 describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
   let proc;
   let browser;
+  let artifacts;
   let PATHS, encodeDocumentComposition, prepareDocumentRender, documentRenderClock, importDocumentTemplate;
   let generateMixedMediaDocument, regenerateMixedMediaSection, acceptMixedMediaDocument, buildDocumentPreview, PREVIEW_MEDIA_BUDGET_BYTES, projects;
   beforeAll(async () => {
@@ -100,16 +104,17 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     proc = spawn(chrome, _testChromeCaptureArgs(profile), { stdio: ['ignore', 'ignore', 'pipe'] });
     const ws = await _waitForTestChrome(proc);
     endpoint = new URL(ws).origin.replace('ws:', 'http:');
-    browser = await chromium.connectOverCDP(endpoint);
+    artifacts = _createTestArtifactsRoot();
+    browser = await chromium.connectOverCDP(endpoint, { artifactsDir: artifacts.path });
   }, 30000);
   afterAll(async () => {
     try {
       await drain();
       for (const owned of ownedChildren) {
-        expect(owned.closed, 'owned capture child closed before fixture teardown').toBe(true);
-        expect(existsSync(owned.profile), 'owned capture profile removed before fixture teardown').toBe(false);
+        expect(owned.closed, `owned capture child closed before fixture teardown; ${lifecycle.diagnostics.describe(owned)}`).toBe(true);
+        expect(existsSync(owned.profile), `owned capture profile removed before fixture teardown; ${lifecycle.diagnostics.describe(owned)}`).toBe(false);
       }
-    } finally { await _cleanupTestBrowser({ browser, proc, cleanup: () => {} }); }
+    } finally { await _cleanupTestBrowser({ browser, proc, artifacts, cleanup: () => {} }); }
   });
 
   // Uniquely catches dropped effect data, missing staged modules and preview/export curve drift.
@@ -534,11 +539,11 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     const master = join(PATHS.music, 'timed-master.wav');
     execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=1.5', master]);
     const created = await projects.createProject({ name: 'Synthetic shot timing' });
+    await writeFile(join(PATHS.data, 'video-history.json'), JSON.stringify([{ id: 'vh-timed', filename: 'timed-rgb.webm', numFrames: 36, fps: 24, width: 64, height: 36 }]));
     await projects.mutateProjectRecord(created.id, current => ({ project: { ...current,
       audioAnalysis: { durationSec: 1.5, sections: [] },
       scenes: [{ sceneId: 'timed', startSec: 0, endSec: 1.5, videoHistoryId: 'vh-timed', ...timing }],
     } }));
-    await writeFile(join(PATHS.data, 'video-history.json'), JSON.stringify([{ id: 'vh-timed', filename: 'timed-rgb.webm', numFrames: 36, fps: 24, width: 64, height: 36 }]));
     await importDocumentTemplate(created.id);
     const project = await projects.getProject(created.id);
     const outputPath = join(PATHS.videos, 'timed-output.mp4');
@@ -567,11 +572,11 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
       '-f', 'lavfi', '-i', 'color=c=blue:s=64x36:r=24:d=0.5',
       '-filter_complex', '[0:v][1:v][2:v]concat=n=3:v=1:a=0', '-c:v', 'libvpx', clip]);
     const created = await projects.createProject({ name: 'Synthetic live shot timing' });
+    await writeFile(join(PATHS.data, 'video-history.json'), JSON.stringify([{ id: 'vh-live', filename: 'live-timed-rgb.webm', numFrames: 36, fps: 24, width: 64, height: 36 }]));
     await projects.mutateProjectRecord(created.id, current => ({ project: { ...current,
       audioAnalysis: { durationSec: 1.5, sections: [] },
       scenes: [{ sceneId: 'timed', startSec: 0, endSec: 1.5, videoHistoryId: 'vh-live', ...timing }],
     } }));
-    await writeFile(join(PATHS.data, 'video-history.json'), JSON.stringify([{ id: 'vh-live', filename: 'live-timed-rgb.webm', numFrames: 36, fps: 24, width: 64, height: 36 }]));
     await importDocumentTemplate(created.id);
     const preview = await buildDocumentPreview(await projects.getProject(created.id));
     const page = await browser.newPage();
@@ -612,12 +617,12 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     const master = join(PATHS.music, 'master.wav');
     execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=6', master]);
     const created = await projects.createProject({ name: 'Excerpt' });
+    await writeFile(join(PATHS.data, 'video-history.json'), JSON.stringify([{ id: 'vh-rgb', filename: 'rgb.webm', numFrames: 72, fps: 24, width: 640, height: 360 }]));
     await projects.mutateProjectRecord(created.id, (current) => ({ project: {
       ...current,
       audioAnalysis: { durationSec: 6, beats: [], downbeats: [], sections: [] },
       scenes: [{ sceneId: 'rgb', order: 0, startSec: 0, endSec: 3, videoHistoryId: 'vh-rgb' }],
     } }));
-    await writeFile(join(PATHS.data, 'video-history.json'), JSON.stringify([{ id: 'vh-rgb', filename: 'rgb.webm', numFrames: 72, fps: 24, width: 640, height: 360 }]));
     await importDocumentTemplate(created.id);
     const project = await projects.getProject(created.id);
     const plan = await prepareDocumentRender(project);
@@ -794,8 +799,8 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     } finally { testSignal = originalSignal; }
     expect(ownedChildren).toHaveLength(before + 1);
     const owned = ownedChildren.at(-1);
-    expect(owned.closed).toBe(true);
-    expect(existsSync(owned.profile)).toBe(false);
+    expect(owned.closed, lifecycle.diagnostics.describe(owned)).toBe(true);
+    expect(existsSync(owned.profile), lifecycle.diagnostics.describe(owned)).toBe(false);
     expect(existsSync(`${outputPath}.silent.mp4`)).toBe(false);
     expect(browser.isConnected()).toBe(true);
   }, 30000);
@@ -870,6 +875,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     const master = join(PATHS.music, 'generated-master.wav');
     execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=3', master]);
     const created = await projects.createProject({ name: 'Generated Example' });
+    await writeFile(join(PATHS.data, 'video-history.json'), JSON.stringify([{ id: 'vh-generated', filename: 'generated-rgb.webm', numFrames: 72, fps: 24, width: 640, height: 360 }]));
     await projects.mutateProjectRecord(created.id, (current) => ({ project: {
       ...current,
       audioAnalysis: { durationSec: 3, beats: [0, 1, 2], downbeats: [0, 1, 2], sections: [
@@ -889,7 +895,6 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
         ] },
       ],
     } }));
-    await writeFile(join(PATHS.data, 'video-history.json'), JSON.stringify([{ id: 'vh-generated', filename: 'generated-rgb.webm', numFrames: 72, fps: 24, width: 640, height: 360 }]));
     author.calls = 0;
     const staged = await generateMixedMediaDocument(created.id);
     expect(author.calls).toBe(1);

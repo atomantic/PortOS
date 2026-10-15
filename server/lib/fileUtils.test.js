@@ -23,6 +23,7 @@ vi.mock('fs/promises', async (importOriginal) => {
     readFile: vi.fn((...args) => actual.readFile(...args)),
     rename: vi.fn((...args) => actual.rename(...args)),
     writeFile: vi.fn((...args) => actual.writeFile(...args)),
+    chmod: vi.fn((...args) => actual.chmod(...args)),
     readdir: vi.fn((...args) => actual.readdir(...args)),
     stat: vi.fn((...args) => actual.stat(...args)),
   };
@@ -101,7 +102,7 @@ describe('importFileToDir', () => {
 });
 
 const restoreFsMocks = () => {
-  for (const name of ['readFile', 'rename', 'readdir', 'mkdir', 'stat']) {
+  for (const name of ['readFile', 'rename', 'readdir', 'mkdir', 'stat', 'writeFile', 'chmod']) {
     fsPromises[name].mockReset();
     fsPromises[name].mockImplementation((...args) => realFsPromises[name](...args));
   }
@@ -1339,6 +1340,7 @@ describe('fileUtils', () => {
     });
 
     afterEach(() => {
+      restoreFsMocks();
       rmSync(tmpRoot, { recursive: true, force: true });
     });
 
@@ -1352,6 +1354,48 @@ describe('fileUtils', () => {
       const target = join(tmpRoot, 'raw.json');
       await atomicWrite(target, '{"x":1}\n');
       expect(await readFile(target, 'utf8')).toBe('{"x":1}\n');
+    });
+
+    it('removes a partially written temp file after ENOSPC and allows a later retry', async () => {
+      const target = join(tmpRoot, 'state.json');
+      writeFileSync(target, 'original');
+      const failure = Object.assign(new Error('synthetic disk full'), { code: 'ENOSPC' });
+      fsPromises.writeFile.mockImplementationOnce(async (path, _data, options) => {
+        await realFsPromises.writeFile(path, 'partial', options);
+        throw failure;
+      });
+
+      await expect(atomicWrite(target, 'replacement')).rejects.toBe(failure);
+      expect(readFileSync(target, 'utf8')).toBe('original');
+      expect(readdirSync(tmpRoot)).toEqual(['state.json']);
+
+      await atomicWrite(target, 'replacement');
+      expect(readFileSync(target, 'utf8')).toBe('replacement');
+      expect(readdirSync(tmpRoot)).toEqual(['state.json']);
+    });
+
+    it('preserves the destination when its permissions cannot be read', async () => {
+      const target = join(tmpRoot, 'private.json');
+      writeFileSync(target, 'original', { mode: 0o600 });
+      const originalMode = (await realFsPromises.stat(target)).mode;
+      const failure = Object.assign(new Error('synthetic stat failure'), { code: 'EIO' });
+      fsPromises.stat.mockRejectedValueOnce(failure);
+
+      await expect(atomicWrite(target, 'replacement')).rejects.toBe(failure);
+      expect(readFileSync(target, 'utf8')).toBe('original');
+      expect((await realFsPromises.stat(target)).mode).toBe(originalMode);
+      expect(readdirSync(tmpRoot)).toEqual(['private.json']);
+    });
+
+    it('preserves the destination and removes the temp file when restoring its mode fails', async () => {
+      const target = join(tmpRoot, 'private.json');
+      writeFileSync(target, 'original', { mode: 0o600 });
+      const failure = Object.assign(new Error('synthetic chmod failure'), { code: 'EACCES' });
+      fsPromises.chmod.mockRejectedValueOnce(failure);
+
+      await expect(atomicWrite(target, 'replacement')).rejects.toBe(failure);
+      expect(readFileSync(target, 'utf8')).toBe('original');
+      expect(readdirSync(tmpRoot)).toEqual(['private.json']);
     });
 
     it.skipIf(process.platform === 'win32')(

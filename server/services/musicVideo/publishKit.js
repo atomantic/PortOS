@@ -27,9 +27,10 @@ import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
 import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
 import { buildChapters, buildSrt, buildPublishCopyPrompt, parsePublishCopy, normalizeCopyOptions, PUBLISH_PLATFORMS } from './publishKitText.js';
 import { canonicalizeSunoUrl, isSunoShareLink } from '../sunoShareLink.js';
+import { trackedRenderMap } from '../renderActivity.js';
 
 const jobs = new Map();
-const projectBuilds = new Map();
+const projectBuilds = trackedRenderMap('music-video-publish-kit', { noun: 'publishing kit build', link: (projectId) => `/music-video/${encodeURIComponent(projectId)}` });
 const MAX_THUMBNAILS = 6;
 // X caps a Premium upload's bitrate well under a 1080p master's; ~12 Mbps
 // keeps the analog grain without the upload being re-crushed.

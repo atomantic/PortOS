@@ -112,6 +112,16 @@ describe('useOnDemandTaskToast — parked outcome', () => {
     expect(toastSpy.mock.calls[0][0]).toMatch(/did not advance.*4 branch\(es\) still blocked/);
   });
 
+  it('distinguishes unverified issue reservations from branches already cleaned locally', () => {
+    renderHook(() => useOnDemandTaskToast());
+    fire({ taskType: 'branch-reconcile', outcome: 'parked', parkReason: 'claim-markers-held',
+      counts: { heldBranches: 0, heldDetached: 0, heldClaims: 1 },
+      skipCauses: { 'claim-reservation-owner-unverified': 1 } });
+    const message = toastSpy.mock.calls[0][0];
+    expect(message).toMatch(/local cleanup completed.*1 issue reservation\(s\) unverified/);
+    expect(message).not.toMatch(/branch\(es\) held|nothing to do/);
+  });
+
   it('shows typed branch holds and an automatic retry only when the server confirms eligibility', () => {
     renderHook(() => useOnDemandTaskToast());
     fire({ taskType: 'branch-reconcile', outcome: 'parked', parkReason: 'branches-blocked',
@@ -285,7 +295,7 @@ describe('useOnDemandTaskToast — programmatic handler results', () => {
   });
 });
 
-it('updates one maintenance notification with an agent link and expires terminal progress', () => {
+it('shows one submission notification with an agent link and expires terminal progress', () => {
   toastSpy.mockClear();
   const { unmount } = renderHook(() => useOnDemandTaskToast());
   const update = handlers.get('cos:maintenance:updated');
@@ -293,7 +303,7 @@ it('updates one maintenance notification with an agent link and expires terminal
   update(run);
   update(run);
   expect(toastSpy).toHaveBeenCalledTimes(1);
-  expect(toastSpy.mock.calls[0][1]).toMatchObject({ id: 'maintenance-maint-example', duration: Infinity });
+  expect(toastSpy.mock.calls[0][1]).toMatchObject({ id: 'maintenance-maint-example', duration: 5000 });
   expect(toastSpy.mock.calls[0][0]().props.run.active.agentId).toBe('agent-example');
   // onDismiss dismisses the toast
   expect(typeof toastSpy.mock.calls[0][0]().props.onDismiss).toBe('function');

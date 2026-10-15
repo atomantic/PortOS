@@ -36,8 +36,9 @@ function Stepper({ id, label, value, range, disabled, onSet, readout, less, more
 /**
  * A footage shot's clip timing, set by hand and played the same way by the
  * player and the final render, from the one clip file: Speed in frames per
- * second over the 24 fps grid, Offset in frames against the song, and Reverse.
- * `onChange(patch)` saves `{ speedFps }`, `{ offsetFrames }` (0 clears it) or `{ reverse }`.
+ * second over the 24 fps grid, Offset in frames against the song, Reverse, and
+ * Hold last frame for a clip shorter than its shot.
+ * `onChange(patch)` saves `{ speedFps }`, `{ offsetFrames }` (0 clears it), `{ reverse }` or `{ holdLastFrame }`.
  */
 export default function SceneClipTiming({ fieldId, scene, disabled = false, disabledReason = null, onChange }) {
   const speed = Number.isInteger(scene.speedFps) ? scene.speedFps : 0;
@@ -63,6 +64,12 @@ export default function SceneClipTiming({ fieldId, scene, disabled = false, disa
           Reverse <span className="text-port-text-muted">plays backwards, no loop</span>
         </label>
       )}
+      {/* Holding fills the shot without changing the clip, so a locked video keeps it open. */}
+      <label htmlFor={fieldId('hold')} className="flex min-h-[44px] items-center gap-2 text-xs sm:min-h-0">
+        <input id={fieldId('hold')} type="checkbox" checked={scene.holdLastFrame === true}
+          onChange={(e) => onChange({ holdLastFrame: e.target.checked || null })} />
+        Hold last frame <span className="text-port-text-muted">when the clip ends before the shot</span>
+      </label>
     </div>
   );
 }

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import ProductionReviewContext from './ProductionReviewContext.jsx';
 import OverlayTextCheck from './OverlayTextCheck.jsx';
 import { formatTimecode } from '../../utils/formatters.js';
-import { ART_DIRECTION_ANCHOR, artDirectionGaps, changeRequestBlocker, openChangeRequests, summarizeStoryboardProblems } from '../../lib/musicVideoStages.js';
+import { ART_DIRECTION_ANCHOR, artDirectionGaps, changeRequestBlocker, openChangeRequests, stageChecklist, summarizeStoryboardProblems } from '../../lib/musicVideoStages.js';
 
 const EMPTY = { cast: '', environments: '', visualLanguage: '', motionLanguage: '', guideArtifactId: null,
   lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [] };
@@ -110,10 +110,10 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
     if (review.busy) return 'Working…';
     const problems = shownProblems(stage);
     const requests = openRequests(stage);
-    // The storyboard step's checklist already lists each open item with its button, so the card only points there.
+    // The Plan checklist lists each open item with its button, so the card names them (planItems) and links there.
     if (stage === 'storyboard' && problems.length) {
-      const open = problems.length + (requests.length ? 1 : 0);
-      return open > 1 ? `Finish the ${open} open items above first.` : 'Finish the open item above first.';
+      const open = planItems().length || problems.length + (requests.length ? 1 : 0);
+      return open > 1 ? `Finish these ${open} items on the Plan step first:` : 'Finish this on the Plan step first:';
     }
     if (requests.length) return changeRequestBlocker(requests);
     // With no current proof, the Render button already says what to do; repeating it as a warning reads as required.
@@ -126,6 +126,12 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
     if (!evidenceComplete) return 'Complete the machine review notes (40+ characters each, plus limitations).';
     return null;
   };
+  // The Plan checklist's open rows, each with the shots it names, for the storyboard card to list.
+  const planItems = () => stageChecklist('board', project, ready).filter(item => !item.done && item.id.startsWith('board-'))
+    .map(item => {
+      const numbers = (item.shots || []).map(shot => shot.label.replace(/^Shot\s*/, '')).filter(Boolean);
+      return { id: item.id, text: numbers.length ? `${item.label} (${numbers.length === 1 ? 'shot' : 'shots'} ${numbers.join(', ')})` : item.label };
+    });
   // The problems listed under the help line: all of them, less the first when the help line is showing it
   // (it isn't while edits are unsaved or an action is running). A proof with nothing rendered lists none.
   const listedProblems = stage => {
@@ -237,6 +243,10 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
         }}>Request changes</button>
         </div>
         {approvalHelp(key) && <p id={fieldId(`${key}-approval-help`)} role="status" className="mt-1 text-sm text-port-warning">{approvalHelp(key)}</p>}
+        {key === 'storyboard' && !ready?.storyboard.approved && !!ready?.storyboard.problems.length && planItems().length > 0 && <div className="mt-1 text-sm">
+          <ul aria-label="Open Plan items" className="list-disc pl-5 text-port-text-muted">{planItems().map(item => <li key={item.id}>{item.text}</li>)}</ul>
+          {onNavigate && <button type="button" onClick={() => onNavigate('board')} className="mt-1 min-h-[44px] rounded border border-port-border px-2 py-1 text-port-accent sm:min-h-0">Open the Plan step</button>}
+        </div>}
         {listedProblems(key).length > 0 && <ul className="mt-1 list-disc pl-5 text-xs text-port-text-muted">{listedProblems(key).map(problem => <li key={problem}>{problem}</li>)}</ul>}
         {/* Camera variety (#10589) is advice, never a blocker on approval. */}
         {key === 'storyboard' && ready?.storyboard.camera?.notes?.length > 0 && <div role="note" aria-label="Camera variety notes" className="mt-2 text-xs text-port-text-muted">

@@ -8,6 +8,7 @@ import { getOriginInfo } from '../lib/gitRemote.js';
 import { isPlainObject } from '../lib/objects.js';
 import { parsePullRequestUrl } from '../lib/gitForge.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
+import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../lib/prDisposition.js';
 
 const retryAfterMs = 5000;
 export const ADMISSION_QUEUE_TIMEOUT_MS = 15_000;
@@ -140,28 +141,81 @@ async function admit(state, save, repository, owner, measure) {
   return { admitted: true, token: lease.token, repository };
 }
 
+const TERMINAL_TASK_STATUSES = ['completed', 'failed', 'cancelled'];
+
+// The persisted task this live agent runs, or null once it is absent or final.
+async function liveTask(agent) {
+  const { getTaskById } = await import('./cosTaskStore.js');
+  const task = await getTaskById(agent.taskId).catch(() => null);
+  return task?.id === agent.taskId && !TERMINAL_TASK_STATUSES.includes(task.status) ? task : null;
+}
+
+// The registered checkout must still name this repository and have the
+// assigned branch checked out; an unreadable checkout is not a match.
+async function checkoutOnBranch(workspace, branch, repository) {
+  if (repositoryKey(await getOriginInfo(workspace).catch(() => null)) !== repository) return false;
+  const { execGit } = await import('../lib/execGit.js');
+  const checkout = await execGit(['symbolic-ref', '--quiet', '--short', 'HEAD'], workspace).catch(() => null);
+  return checkout?.stdout?.trim() === branch;
+}
+
 // Review-loop authority comes from the registered launch AND its live internal
 // task. Never accept a repository/branch from the admission request or PR prose.
 async function verifiedReviewCoordinator(agent, repository) {
   const target = agent.metadata?.reviewLoopMergeTarget;
   if (!isPlainObject(target) || typeof target.branch !== 'string' || !target.branch) return false;
-  const { getTaskById } = await import('./cosTaskStore.js');
-  const task = await getTaskById(agent.taskId).catch(() => null);
+  const task = await liveTask(agent);
   const meta = task?.metadata;
-  if (task?.id !== agent.taskId || task.taskType !== 'internal'
-    || ['completed', 'failed', 'cancelled'].includes(task.status)
+  if (!task || task.taskType !== 'internal'
     || !isTruthyMeta(meta?.reviewLoopFollowUp) || isTruthyMeta(meta?.reviewLoopLeaveOpen)
-    || meta?.forkHead || target.url !== meta?.reviewLoopPRUrl || target.branch !== meta?.reviewLoopPRBranch
+    || resolvePrCompletion(meta) === PR_COMPLETIONS.LEAVE_OPEN || agent.metadata?.prCompletionPolicy === PR_COMPLETIONS.LEAVE_OPEN
+    || target.url !== meta?.reviewLoopPRUrl || target.branch !== meta?.reviewLoopPRBranch
     || agent.metadata?.worktreeBranch !== target.branch || !agent.metadata?.workspacePath) return false;
   const pr = parsePullRequestUrl(target.url);
   if (!pr || repositoryKey({ host: pr.host, fullName: `${pr.owner}/${pr.repo}` }) !== repository
     || String(meta.reviewLoopPRNumber) !== String(pr.number)
     || meta.reviewLoopPRHost !== pr.host || meta.reviewLoopPROwner !== pr.owner || meta.reviewLoopPRRepo !== pr.repo) return false;
-  const workspace = agent.metadata.workspacePath;
-  if (repositoryKey(await getOriginInfo(workspace).catch(() => null)) !== repository) return false;
-  const { execGit } = await import('../lib/execGit.js');
-  const checkout = await execGit(['symbolic-ref', '--quiet', '--short', 'HEAD'], workspace).catch(() => null);
-  return checkout?.stdout?.trim() === target.branch;
+  if (!await checkoutOnBranch(agent.metadata.workspacePath, target.branch, repository)) return false;
+  if (!meta.forkHead && !meta.reviewLoopForkTarget && !target.fork && !target.workspacePath) return true;
+  if (target.workspacePath !== agent.metadata.workspacePath || !agent.metadata.sourceWorkspace
+    || agent.metadata.sourceWorkspace === target.workspacePath || target.fork?.url !== target.url) return false;
+  const { verifyForkReviewMergeTarget } = await import('./forkReviewMergeTarget.js');
+  const headSha = await verifyForkReviewMergeTarget({ target: target.fork, taskTarget: meta.reviewLoopForkTarget,
+    forkHead: meta.forkHead, sourceWorkspace: agent.metadata.sourceWorkspace,
+    workspacePath: target.workspacePath, branch: target.branch });
+  return headSha ? { headSha } : false;
+}
+
+// Generic PR delivery (#11435): an operator-configured task whose prompt told
+// it to open AND merge its own PR from the worktree PortOS provisioned. The
+// target is the spawn-time binding (that worktree and its head branch), never
+// the request; the live task must still grant agent-owned delivery, and the
+// checkout must still be that branch of this repository. A generic run cannot
+// promote itself to claim authority: it admits only its own registered branch.
+async function verifiedWorktreeDelivery(agent, repository) {
+  const meta = agent.metadata;
+  const target = meta?.prDeliveryTarget;
+  if (!isPlainObject(target) || typeof target.branch !== 'string' || !target.branch
+    || typeof target.workspacePath !== 'string' || !target.workspacePath) return false;
+  const { PR_OPENED_BY } = await import('../lib/slashdoInvocation.js');
+  if (meta.isWorktree !== true || meta.configOpenPR !== true || meta.configClaimFlow
+    || ![PR_OPENED_BY.AGENT_SLASHDO, PR_OPENED_BY.AGENT_INLINE].includes(meta.prOpenedBy)
+    || meta.prCompletionPolicy === PR_COMPLETIONS.LEAVE_OPEN
+    || meta.worktreeBranch !== target.branch || meta.workspacePath !== target.workspacePath
+    || !meta.sourceWorkspace || meta.sourceWorkspace === target.workspacePath) return false;
+  const task = await liveTask(agent);
+  const taskMeta = task?.metadata;
+  if (!task || !isTruthyMeta(taskMeta?.openPR) || resolvePrCompletion(taskMeta) === PR_COMPLETIONS.LEAVE_OPEN
+    || leavesPrForHuman(task) || isTruthyMeta(taskMeta?.reviewLoopFollowUp) || isTruthyMeta(taskMeta?.readOnly)
+    || taskMeta?.forkHead) return false;
+  return checkoutOnBranch(target.workspacePath, target.branch, repository);
+}
+
+// Claim parents carry their registered claim binding; every other participant
+// must prove its registered target against live task and checkout state.
+async function verifiedParticipant(agent, repository) {
+  if (isTruthyMeta(agent.metadata?.claimPicksOwnBranch) || agent.metadata?.claimBranch) return true;
+  return await verifiedReviewCoordinator(agent, repository) || verifiedWorktreeDelivery(agent, repository);
 }
 
 /** The ID is the registered parent, never a worker-child ID or a cwd PID. */
@@ -176,14 +230,25 @@ export async function claimMergeAdmission({ agentId, action, token, outcome }) {
     if (!repository) return refuse('repository-unreadable');
     // Releasing an owned token must remain possible after merge deletes or
     // switches the checkout. Acquire/check still require the assigned target.
-    if (action !== 'release' && !(isTruthyMeta(agent.metadata?.claimPicksOwnBranch) || agent.metadata?.claimBranch)
-      && !await measure('origin', () => verifiedReviewCoordinator(agent, repository))) return refuse('claim-owner-unverified');
+    const participant = action === 'release' ? true : await measure('origin', () => verifiedParticipant(agent, repository));
+    if (!participant) {
+      const task = await liveTask(agent);
+      if (agent.metadata?.reviewLoopMergeTarget?.fork || (task?.taskType === 'internal'
+        && isTruthyMeta(task.metadata?.reviewLoopFollowUp) && task.metadata?.forkHead)) {
+        return { admitted: false, reason: 'fork-review-target-unverified', retryable: false,
+          message: 'Leave the PR/worktree intact. Verify the live PR head, base, fork remote and upstream; old or changed targets require a fresh supported follow-up.' };
+      }
+      return refuse('claim-owner-unverified');
+    }
     if (action === 'acquire') {
       if (Object.entries(state.mergeAdmissions).some(([key, held]) =>
         !validLease(held, key) || (held.agentId === agentId && (!sameAgent(held, agent) || key !== repository)))) {
         return refuse('lease-owner-mismatch');
       }
-      return admit(state, save, repository, { kind: 'agent', ...binding(agent) }, measure);
+      const held = state.mergeAdmissions[repository];
+      if (participant.headSha && held?.agentId === agentId && !expired(held) && held.headSha !== participant.headSha) return refuse('lease-head-changed');
+      return admit(state, save, repository, { kind: 'agent', ...binding(agent),
+        ...(participant.headSha ? { headSha: participant.headSha } : {}) }, measure);
     }
     const lease = state.mergeAdmissions[repository];
     if (!validLease(lease, repository) || lease.kind !== 'agent' || !sameAgent(lease, agent) || lease.token !== token) {
@@ -191,6 +256,7 @@ export async function claimMergeAdmission({ agentId, action, token, outcome }) {
     }
     // An expired holder must stop and re-acquire before merging; releasing
     // its own still-unclaimed lease stays permitted.
+    if (action === 'check' && participant.headSha && lease.headSha !== participant.headSha) return refuse('lease-head-changed');
     if (action === 'check') return expired(lease) ? refuse('lease-expired') : { admitted: true, token, repository };
     if (action !== 'release' || !MERGE_ADMISSION_OUTCOMES.includes(outcome)) return refuse('outcome-required');
     delete state.mergeAdmissions[repository];

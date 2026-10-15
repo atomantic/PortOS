@@ -61,6 +61,7 @@ export * from './useKeyboardShortcuts.js';
 export { default as useMediaJobProgress } from './useMediaJobProgress.js';
 export * from './useMediaJobSse.js';
 export { default as useSceneBatch } from './useSceneBatch.js';
+export { default as useSceneClipPlayback } from './useSceneClipPlayback.js';
 export { default as useSceneRenderLifecycle } from './useSceneRenderLifecycle.js';
 export { default as useMusicVideoAutoReview } from './useMusicVideoAutoReview.js';
 export { default as useMusicVideoCastAndSets } from './useMusicVideoCastAndSets.js';
@@ -77,6 +78,8 @@ export { default as useMusicVideoModelSettings } from './useMusicVideoModelSetti
 export { default as useMusicVideoProduction } from './useMusicVideoProduction.js';
 export { default as useAutonomousMusicVideo } from './useAutonomousMusicVideo.js';
 export { default as useMusicVideoRenderJob } from './useMusicVideoRenderJob.js';
+export { default as useMusicVideoShotRenders } from './useMusicVideoShotRenders.js';
+export { default as useMusicVideoStatsOutro } from './useMusicVideoStatsOutro.js';
 export { default as useMusicVideoRevisions } from './useMusicVideoRevisions.js';
 export { default as useMusicVideoSceneMedia } from './useMusicVideoSceneMedia.js';
 export { default as useMusicVideoTakes } from './useMusicVideoTakes.js';

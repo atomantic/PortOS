@@ -80,8 +80,8 @@ export function clickableProps(handler, { role = 'button', disabled = false } = 
 }
 
 /**
- * True when a keystroke is a Space press on a focused button-like element,
- * where the browser will natively activate that button.
+ * True when a keystroke is a Space press on a focused button-like element or
+ * native disclosure summary, where the browser will activate the control.
  *
  * App-global single-key handlers bound to Space (the voice widget's
  * push-to-talk hotkey, page-level shortcut maps) must stand down for these:
@@ -98,7 +98,7 @@ export function isButtonActivation(event) {
   if (!isSpace) return false;
   const target = event.target;
   if (typeof target?.closest !== 'function') return false;
-  return target.closest('button, [role="button"]') != null;
+  return target.closest('button, [role="button"], details > summary:first-of-type') != null;
 }
 
 /**

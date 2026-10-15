@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import useMusicVideoShotRenders from '../../hooks/useMusicVideoShotRenders.js';
+import { formatCount } from '../../utils/formatters.js';
 import LlmRouteNote from './LlmRouteNote.jsx';
 import CancelRenderButton from './CancelRenderButton.jsx';
 import { Film, Music, Activity, Image as ImageIcon, Video, Wand2, X } from 'lucide-react';
@@ -247,6 +249,8 @@ export function RenderStyleSelect({ project, onRenderStyle }) {
 
 /** Render the complete video, or cancel the render in flight for this project. */
 export function RenderFinalButton({ project, renderJob, readiness }) {
+  // A composed render reuses every shot already rendered and stitches.
+  const { status: shotRenders } = useMusicVideoShotRenders(project);
   const scenes = project.scenes || [];
   const sceneCount = scenes.length;
   const mode = project.composition?.mode || 'concat';
@@ -310,6 +314,12 @@ export function RenderFinalButton({ project, renderJob, readiness }) {
       </button>
       {isDisabled && blockerReason && (
         <p className="text-xs text-port-text-muted">{blockerReason}</p>
+      )}
+      {shotRenders?.total > 0 && (
+        <p className="text-xs text-port-text-muted" data-testid="shot-renders-ready">
+          {shotRenders.ready === shotRenders.total ? 'Every shot is ready: Render final only stitches them.'
+            : `${formatCount(shotRenders.ready)} of ${formatCount(shotRenders.total)} shots ready. Render final renders the rest, then stitches.`}
+        </p>
       )}
     </div>
   );

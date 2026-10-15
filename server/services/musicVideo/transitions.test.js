@@ -1,17 +1,30 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { findFfmpeg } from '../../lib/ffmpeg.js';
-import { sceneTransitions, shotGlitchFrames, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
+import { findFfmpeg, findFfprobe } from '../../lib/ffmpeg.js';
+import { FILTER_GRAPH_ARG_LIMIT, filterGraphViaFile } from '../../lib/ffmpegFilterGraph.js';
+import { MUSIC_VIDEO_TRANSITION_STYLES, sceneTransitions, shotGlitchFrames, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
 import { buildMusicVideoFfmpegArgs } from './render.js';
 import { applySceneUpdate } from './projectsLogic.js';
 
 const ffmpeg = await findFfmpeg();
+const ffprobe = await findFfprobe();
 const dir = mkdtempSync(join(tmpdir(), 'portos-mv-transitions-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
-const run = (args) => execFileSync(ffmpeg, ['-v', 'error', ...args], { maxBuffer: 64 * 1024 * 1024 });
+// The unchanged 30-input fixture spawned up to 601 native threads with ffmpeg
+// 8.1.1 defaults; explicitly budgeting each decoder, encoder and filter pool
+// reduced the observed peak to 16. These tiny frames need no native fan-out.
+// Bound synchronous children too: Vitest's timer cannot interrupt execFileSync.
+const FFMPEG_BUDGET_MS = 25000; // Leave 5s of the existing 30s test budget for diagnostics/cleanup.
+const run = (args, timeout = FFMPEG_BUDGET_MS) => execFileSync(ffmpeg, [
+  '-v', 'error', '-nostdin', '-filter_threads', '1', '-filter_complex_threads', '1',
+  // Decoder options apply to the NEXT input; one leading -threads only caps
+  // the first of the long edit's 30 inputs. The final option caps the encoder.
+  ...args.slice(0, -1).flatMap((arg) => arg === '-i' ? ['-threads', '1', arg] : [arg]),
+  '-threads', '1', args.at(-1),
+], { timeout, killSignal: 'SIGKILL', maxBuffer: 64 * 1024 * 1024 });
 const FPS = 12;
 const W = 96;
 const H = 64;
@@ -75,8 +88,8 @@ describe('shotGlitchFrames', () => {
 });
 
 // Per-frame pixel spread of a raw gray video: ~0 on a flat colour, high once glitched.
-function frameSpreads(path) {
-  const raw = run(['-i', path, '-f', 'rawvideo', '-pix_fmt', 'gray', '-']);
+function frameSpreads(path, timeout) {
+  const raw = run(['-i', path, '-f', 'rawvideo', '-pix_fmt', 'gray', '-'], timeout);
   const size = W * H;
   return Array.from({ length: raw.length / size }, (_, f) => {
     const px = raw.subarray(f * size, (f + 1) * size);
@@ -106,6 +119,125 @@ describe.skipIf(!ffmpeg)('a VHS glitch on a cut in the final render', () => {
     const spreads = frameSpreads(output);
     expect(spreads).toHaveLength(2 * FPS);
     expect(spreads.map((s, f) => (s > 4 ? f : null)).filter((f) => f != null)).toEqual(expected);
+  });
+});
+
+// Uniquely catches the encode's output rate drifting from the project's fps
+// (ffmpeg 7.0 picked 25 fps and re-timed the graph's frames, #11476).
+describe('the render pins the output frame rate', () => {
+  const clipsAt = (fps, videoPath = 'c.mp4') => [0, 1].map((i) => ({ sceneId: `s${i}`, videoPath, width: W, height: H, fps, duration: 1, sourceSec: 1, loop: false, inSec: 0, outSec: 1, frameFit: 'fill' }));
+
+  it('passes the plan fps as an explicit output rate', () => {
+    const { args, fps } = buildMusicVideoFfmpegArgs(clipsAt(FPS), 's.wav', 'o.mp4', { audioDurationSec: 2, frameGrid: true });
+    expect(fps).toBe(FPS);
+    expect(args[args.indexOf('-r') + 1]).toBe(String(FPS));
+    expect(args.indexOf('-r')).toBeGreaterThan(args.indexOf('-filter_complex'));
+    expect(args.indexOf('-r')).toBeLessThan(args.indexOf('-c:v'));
+  });
+
+  it.skipIf(!ffmpeg || !ffprobe)('encodes a stream whose r_frame_rate is the plan fps with one frame per graph frame', () => {
+    const song = join(dir, 'fps-song.wav');
+    const clips = ['0x2050a0', '0xa05020'].map((color, i) => {
+      const videoPath = join(dir, `fps-clip${i}.mp4`);
+      run(['-f', 'lavfi', '-i', `color=${color}:s=${W}x${H}:r=${FPS}:d=1`, '-pix_fmt', 'yuv420p', '-y', videoPath]);
+      return { ...clipsAt(FPS, videoPath)[i] };
+    });
+    run(['-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-y', song]);
+    const output = join(dir, 'fps.mp4');
+    const plan = buildMusicVideoFfmpegArgs(clips, song, output, { audioDurationSec: 2, frameGrid: true });
+    run(plan.args.filter((arg, i) => !(arg === '-progress' || plan.args[i - 1] === '-progress')));
+    const probe = execFileSync(ffprobe, ['-v', 'error', '-select_streams', 'v:0', '-count_frames',
+      '-show_entries', 'stream=r_frame_rate,nb_read_frames', '-of', 'json', output],
+    { timeout: FFMPEG_BUDGET_MS, killSignal: 'SIGKILL' }).toString();
+    const stream = JSON.parse(probe).streams[0];
+    expect(stream.r_frame_rate).toBe(`${FPS}/1`);
+    expect(Number(stream.nb_read_frames)).toBe(2 * FPS);
+  });
+});
+
+// Uniquely catches a film or camera effect's filters failing in ffmpeg, adding
+// time, or painting outside its frames around the cut.
+describe.skipIf(!ffmpeg)('film and camera effects on a cut in the final render', () => {
+  const renderRgb = (name, transitionOut) => {
+    const song = join(dir, 'song.wav');
+    run(['-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-y', song]);
+    const clips = ['0x2050a0', '0xa05020'].map((color, i) => {
+      const videoPath = join(dir, `fx${i}.mp4`);
+      run(['-f', 'lavfi', '-i', `color=${color}:s=${W}x${H}:r=${FPS}:d=1`, '-pix_fmt', 'yuv420p', '-y', videoPath]);
+      return { sceneId: `s${i}`, videoPath, width: W, height: H, fps: FPS, duration: 1, sourceSec: 1, loop: false, inSec: 0, outSec: 1, frameFit: 'fill' };
+    });
+    if (transitionOut) clips[0].transitionOut = transitionOut;
+    const output = join(dir, `${name}.mp4`);
+    const plan = buildMusicVideoFfmpegArgs(clips, song, output, { audioDurationSec: 2, frameGrid: true });
+    run(plan.args.filter((arg, i) => !(arg === '-progress' || plan.args[i - 1] === '-progress')));
+    expect(plan.totalDuration).toBe(2);
+    return run(['-i', output, '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
+  };
+  it.each(['film-burn', 'light-leak', 'gate-jump', 'shutter', 'film-scratches', 'color-split'])('%s repaints only its frames around the cut', (style) => {
+    const clean = renderRgb('fx-clean', null);
+    const fx = renderRgb(`fx-${style}`, style);
+    expect(fx.length).toBe(clean.length);
+    const size = W * H * 3;
+    const changed = Array.from({ length: fx.length / size }, (_, f) => f)
+      .filter((f) => fx.subarray(f * size, (f + 1) * size).some((v, i) => Math.abs(v - clean[f * size + i]) > 6));
+    const { lead, frames } = MUSIC_VIDEO_TRANSITION_STYLES[style];
+    expect(changed.length).toBeGreaterThan(0);
+    expect(changed.every((f) => f >= FPS - lead && f < FPS - lead + frames.length)).toBe(true);
+  });
+});
+
+// Uniquely catches a long edit exceeding the cross-platform argument budget:
+// the graph must go by file and still render all 360 frames.
+describe.skipIf(!ffmpeg)('effects on every cut of a long edit', () => {
+  it('passes the filter graph to ffmpeg in a file and renders every frame', async () => {
+    const deadline = performance.now() + FFMPEG_BUDGET_MS;
+    const timings = [];
+    let version = 'unprobed';
+    let graphBytes = 0;
+    const remaining = () => {
+      const ms = Math.floor(deadline - performance.now());
+      if (ms <= 0) throw new Error(`Long-edit cumulative ${FFMPEG_BUDGET_MS}ms subprocess budget exhausted`);
+      return ms;
+    };
+    const measured = async (phase, fn) => {
+      const start = performance.now();
+      try {
+        return await fn();
+      } catch (err) {
+        // Avoid echoing the graph/argv: report the failing phase and a bounded
+        // ffmpeg stderr tail, including ETIMEDOUT and SIGKILL on a deadline.
+        const stderr = String(err.stderr || '').trim().slice(-1000).replace(/\r?\n/g, ' | ');
+        throw new Error(`Long-edit ${phase} failed: ${err.code || err.message}; signal=${err.signal || 'none'}; ${stderr}`);
+      } finally {
+        timings.push(`${phase}=${Math.round(performance.now() - start)}ms`);
+      }
+    };
+    try {
+      version = await measured('version', () => execFileSync(ffmpeg, ['-version'], { timeout: Math.min(5000, remaining()), killSignal: 'SIGKILL' }).toString().split('\n')[0]);
+      const song = join(dir, 'long-song.wav');
+      await measured('audio-fixture', () => run(['-f', 'lavfi', '-i', 'sine=frequency=440:duration=30', '-y', song], remaining()));
+      const videoPath = join(dir, 'long-clip.mp4');
+      await measured('video-fixture', () => run(['-f', 'lavfi', '-i', `testsrc2=s=${W}x${H}:r=${FPS}:d=1`, '-pix_fmt', 'yuv420p', '-y', videoPath], remaining()));
+      const styles = ['light-leak', 'vhs-rewind', 'film-burn'];
+      const clips = Array.from({ length: 30 }, (_, i) => ({
+        videoPath, width: W, height: H, fps: FPS, duration: 1, sourceSec: 1, loop: false, inSec: 0, outSec: 1, frameFit: 'fill',
+        ...sceneTransitions({ sceneId: `s${i}`, startSec: i, endSec: i + 1, transitionIn: styles[i % 3], transitionOut: styles[(i + 1) % 3], glitches: [{ atSec: 0.5, style: styles[(i + 2) % 3] }] }),
+        sceneId: `s${i}`,
+      }));
+      const output = join(dir, 'long-edit.mp4');
+      const plan = await measured('graph-plan', () => buildMusicVideoFfmpegArgs(clips, song, output, { audioDurationSec: 30, frameGrid: true }));
+      const graph = plan.args[plan.args.indexOf('-filter_complex') + 1];
+      expect(Buffer.byteLength(graph)).toBeGreaterThan(FILTER_GRAPH_ARG_LIMIT);
+      graphBytes = Buffer.byteLength(graph);
+      const encode = await measured('graph-file', () => filterGraphViaFile(ffmpeg, plan.args, join(dir, 'long-edit.filtergraph')));
+      expect(encode.args).not.toContain('-filter_complex');
+      expect(encode.args).not.toContain(graph);
+      expect(readFileSync(encode.file, 'utf8')).toBe(graph);
+      await measured('encode', () => run(encode.args.filter((arg, i) => !(arg === '-progress' || encode.args[i - 1] === '-progress')), remaining()));
+      expect(await measured('decode', () => frameSpreads(output, remaining()))).toHaveLength(30 * FPS);
+    } finally {
+      console.log(`⏱️ Long-edit ${version}; workers=${process.env.PORTOS_PREGATE_MAX_WORKERS || process.env.PORTOS_CI_MAX_WORKERS || 'runner default'}; threads=1/input,1/output,1/filter; budget=${FFMPEG_BUDGET_MS}ms; graph=${graphBytes}B; ${timings.join(', ')}`);
+    }
   });
 });
 

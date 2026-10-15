@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { anchorShotsToSungLyrics, productionReadiness, productionAlignmentBasis, approveProductionStage, carryProductionApprovals, carryShotLocks, assertShotApproval, assertClipUnlocked, setShotLocks } from './productionReview.js';
-import { addScenes, applySceneUpdate, mergeNextScene, removeScene } from './projectsLogic.js';
+import { anchorShotsToSungLyrics, dropStaleStoryboardRows, productionReadiness, productionAlignmentBasis, approveProductionStage, carryProductionApprovals, carryShotLocks, assertShotApproval, assertClipUnlocked, setShotLocks } from './productionReview.js';
+import { addScenes, applySceneUpdate, mergeNextScene, removeScene, replaceScenes, splitScene } from './projectsLogic.js';
 
 const WORD_PROBLEM = /bounded, positive-duration word timings/;
 const SHOT_PROBLEM = /^Complete timing, action, staging, camera and transition/;
@@ -45,7 +45,7 @@ describe('storyboard readiness after verified lyric timing', () => {
   });
 
   it('keeps a director-edited draft shot over the derived row', () => {
-    const edited = { sceneId: 's1', lyricCueIds: ['c1'], action: 'She laughs', staging: 'Close-up', camera: '', transition: 'Cut' };
+    const edited = { sceneId: 's1', lyricCueIds: ['c1'], action: 'She laughs', staging: '', camera: 'Close-up', transition: 'Cut' };
     const { storyboard } = productionReadiness(project({ draftShots: [edited] }));
     expect(storyboard.shots[0]).toEqual(edited);
     expect(storyboard.problems).toContain('Complete timing, action, staging, camera and transition for Verse.');
@@ -266,5 +266,67 @@ describe('lyric anchors follow the singing', () => {
     const { project: back } = applySceneUpdate(next, 's2', { endSec: 4.9 });
     expect(back.scenes.find((scene) => scene.sceneId === 's2').lyricText).toBeNull();
     expect(back.productionReview.draft.storyboard.find((shot) => shot.sceneId === 's2').lyricCueIds).toEqual([]);
+  });
+});
+
+describe('storyboard rows stay bound to the shots on the board', () => {
+  const row = (sceneId, extra = {}) => ({ sceneId, lyricCueIds: [], action: 'Reels spin', staging: 'Wide', camera: 'Locked off', transition: 'Cut', ...extra });
+
+  // Uniquely catches a row left from a cut shot holding the board until someone binds it to a shot that no longer exists.
+  it('names rows left from deleted shots and removes them in one go, keeping unbound rows to bind', () => {
+    const left = project({ draftShots: [row('s1', { lyricCueIds: ['c1'] }), row('gone', { startSec: 2, endSec: 3.5, action: 'Skid across the floor' }), { ...row(null), id: 'draft-9' }] });
+    const { storyboard } = productionReadiness(left);
+    expect(storyboard.staleRows).toEqual([{ id: null, sceneId: 'gone', startSec: 2, endSec: 3.5, action: 'Skid across the floor' }]);
+    expect(storyboard.problems).toContain('Remove 1 storyboard row left from deleted shots.');
+    expect(storyboard.problems).toContain('Bind every draft shot to a real Board scene.');
+    const cleaned = dropStaleStoryboardRows(left);
+    expect(cleaned.productionReview.draft.storyboard.map((shot) => shot.sceneId)).toEqual(['s1', null]);
+    expect(productionReadiness(cleaned).storyboard.staleRows).toEqual([]);
+    expect(dropStaleStoryboardRows(cleaned)).toBe(cleaned);
+  });
+
+  // Uniquely catches a split leaving its row on the whole old span while the new piece has none.
+  it('splits the row with the shot: each piece keeps the direction, anchored to its own lines', () => {
+    const board = project({ draftShots: [row('s1', { id: 'r1', startSec: 0, endSec: 4, lyricCueIds: ['c1'] }), row('s2')] });
+    const { project: split, scenes: [first, second] } = splitScene(board, 's1', { atSec: 2.5 });
+    const rows = split.productionReview.draft.storyboard;
+    expect(rows.map((shot) => shot.sceneId)).toEqual([first.sceneId, second.sceneId, 's2']);
+    expect(rows[0]).toMatchObject({ id: 'r1', startSec: 0, endSec: 2.5, lyricCueIds: ['c1'], action: 'Reels spin' });
+    expect(rows[1]).toMatchObject({ id: `shot-${second.sceneId}`, startSec: 2.5, endSec: 4, lyricCueIds: [], action: 'Reels spin' });
+    const { storyboard } = productionReadiness(split);
+    expect(storyboard.staleRows).toEqual([]);
+    expect(storyboard.problems.filter((p) => ANCHOR_PROBLEM.test(p))).toEqual([]);
+  });
+
+  it('drops the rows of shots a re-plan replaces', () => {
+    const board = project({ draftShots: [row('s1'), row('s2')] });
+    const { project: replanned } = replaceScenes(board, [{ label: 'Verse', startSec: 0, endSec: 4 }, { label: 'New', startSec: 4, endSec: 6, visualIntent: 'x' }, { label: 'Tag', startSec: 6, endSec: 8, visualIntent: 'y' }]);
+    expect(replanned.productionReview.draft.storyboard.map((shot) => shot.sceneId)).toEqual(['s1']);
+  });
+});
+
+describe('naming the shots behind Shot coverage and Shot details', () => {
+  // Uniquely catches a cutaway with no camera note blocking the board it was locked on.
+  it('lets a Board shot leave its camera blank', () => {
+    const planned = project({ draftShots: [{ sceneId: 's1', lyricCueIds: ['c1'], action: 'She looks up', staging: 'Desk', camera: '', transition: 'Cut' }] });
+    const bare = { ...planned, castAndSets: { status: 'approved', direction: { world: {} } } };
+    const { storyboard } = productionReadiness(bare);
+    expect(storyboard.incompleteShots).toEqual([]);
+    expect(storyboard.problems.filter((p) => SHOT_PROBLEM.test(p))).toEqual([]);
+  });
+
+  // Uniquely catches the coverage and details checks failing a board without saying which shot to fix.
+  it('names the shot at each gap, overlap and song-end mismatch, and what each incomplete shot is missing', () => {
+    const base = project();
+    const scenes = [{ ...base.scenes[0], endSec: 3 }, { ...base.scenes[1], sceneId: 's2', label: 'Insert', startSec: 3.5, endSec: 5 },
+      { ...base.scenes[1], sceneId: 's3', label: 'Outro', startSec: 4.8, endSec: 8.5, visualIntent: '' }];
+    const { storyboard } = productionReadiness({ ...base, scenes });
+    expect(storyboard.coverage).toEqual([
+      { sceneId: 's2', issue: 'gap', startSec: 3, endSec: 3.5 },
+      { sceneId: 's3', issue: 'overlap', startSec: 4.8, endSec: 5 },
+      { sceneId: 's3', issue: 'past-end', startSec: 8, endSec: 8.5 },
+    ]);
+    expect(storyboard.incompleteShots).toEqual([{ sceneId: 's3', missing: ['an end inside the song', 'action'] }]);
+    expect(productionReadiness(base).storyboard).toMatchObject({ coverage: [], incompleteShots: [] });
   });
 });

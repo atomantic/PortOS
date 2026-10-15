@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, beforeAll, afterAll, vi } from 'vitest';
+import { describe, it as vitestIt, expect, beforeEach, beforeAll, afterAll, vi } from 'vitest';
 import express from 'express';
 import sharp from 'sharp';
 import { mkdtemp, rm, writeFile, readFile, stat } from 'fs/promises';
@@ -6,12 +6,14 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { request } from '../lib/testHelper.js';
+import { ownTestBodies } from '../lib/mockPathsDataRoot.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
 // Sandbox PATHS.images to a tmp dir so the clean endpoint can read/write real
 // files without touching data/images/. The mock has to be installed BEFORE the
 // route module imports fileUtils.js, hence the dynamic import below.
 let sandbox;
+const { it, drain } = ownTestBodies(vitestIt);
 
 vi.mock('../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../lib/fileUtils.js');
@@ -84,7 +86,14 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await rm(sandbox, { recursive: true, force: true });
+  // Another worker's fail-fast cancellation settles Vitest's wrapper before
+  // this body's awaited clean request stops writing. Drain the actual body
+  // (including publication and assertions) before removing its gallery.
+  try {
+    await drain();
+  } finally {
+    await rm(sandbox, { recursive: true, force: true });
+  }
 });
 
 describe('POST /api/image-gen/:filename/clean', () => {

@@ -424,8 +424,8 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   const { reconcile, filterActionable, limitBranchesForAgent, formatInFlightForPrompt, actionableSignature, describeIdleReconcilePark, buildActiveOwnerIds } = await import('./branchReconcile.js');
   const { formatSupersededForPrompt } = await import('./supersededLedger.js');
   const { getActiveAgentIds } = await import('./agentState.js');
-  const { getAgents } = await import('./cos.js');
-  const liveAgents = await getAgents().catch((err) => {
+  const { readClaimOwnershipAgents } = await import('./cosClaimOwnership.js');
+  const liveAgents = await readClaimOwnershipAgents().catch((err) => {
     emitLog('warn', `branch-reconcile skipped for ${app.name}: active agent state unreadable (${err.message})`, { appId: app.id, analysisType: taskType });
     return null;
   });
@@ -450,7 +450,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   const result = await reconcile(app.repoPath, {
     cleanup: actions.cleanupMerged !== false,
     activeAgentIds,
-    claimOwners: { agents: liveAgents, readAgents: getAgents },
+    claimOwners: { agents: liveAgents, readAgents: readClaimOwnershipAgents },
     // The app's gh account pin, so a repo owned by another GitHub account is
     // polled with a credential that can see it (#7540).
     forgeAccount: app.forgeAccount || null
@@ -503,6 +503,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   const allActionable = filterActionable(result.inFlight, actions);
   const idlePark = describeIdleReconcilePark(result.skipped || [], heldLive, {
     wip: result.wip, detachedWorktrees: result.detachedWorktrees, superseded: result.superseded,
+    claimMarkersHeld: result.claimMarkersHeld,
     gated: result.inFlight.filter(branch => !allActionable.includes(branch))
   });
   if (allActionable.length === 0) {

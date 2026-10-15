@@ -59,6 +59,9 @@ export function bootstrapVitestTempRoot() {
   process.env.TMPDIR = root;
   process.env.TMP = root;
   process.env.TEMP = root;
+  // Chromium on macOS ignores TMPDIR in favor of this override. Without it,
+  // test-owned socket/download scratch escapes the root and its teardown.
+  process.env.MAC_CHROMIUM_TMPDIR = root;
   process.env.NODE_DISABLE_COMPILE_CACHE = '1';
   return root;
 }

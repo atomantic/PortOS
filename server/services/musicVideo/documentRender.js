@@ -38,7 +38,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { htmlCompositionContractSchemaFor } from '../../lib/validation.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
-import { clipSpeedRate, clipOffsetSec, documentSceneVisualLayer, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_TEXT_ZONES } from '../../lib/musicVideoLayers.js';
+import { clipSpeedRate, clipOffsetSec, documentSceneVisualLayer, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_LYRIC_SIZES, MUSIC_VIDEO_TEXT_ZONES } from '../../lib/musicVideoLayers.js';
 import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
 import { documentDirectoryForRender } from './compositionDocument.js';
 import { musicVideoSongDocument } from './compositionRender.js';
@@ -232,6 +232,7 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
         cardColor: typeof scene.cardColor === 'string' ? scene.cardColor : null,
         textZone: MUSIC_VIDEO_TEXT_ZONES.includes(scene.textZone) ? scene.textZone : null,
         lyricRole: MUSIC_VIDEO_LYRIC_ROLES.includes(scene.lyricRole) ? scene.lyricRole : null,
+        lyricSize: MUSIC_VIDEO_LYRIC_SIZES.includes(scene.lyricSize) ? scene.lyricSize : null,
         lyricText: typeof scene.lyricText === 'string' ? scene.lyricText : null,
         visualIntent: typeof scene.visualIntent === 'string' ? scene.visualIntent : null,
         direction: sceneDirection(project, scene.sceneId),
@@ -566,6 +567,15 @@ export async function encodeDocumentComposition({
 const PROBE_SCREENSHOT = Object.freeze({ format: 'png', optimizeForSpeed: true, fromSurface: true, captureBeyondViewport: false });
 // Backdrop luminance is measured on a half-size frame (plenty for a contrast percentile).
 const PROBE_BACKDROP_SCALE = 0.5;
+// Two animation frames after the seek and the text-hiding style: the first
+// commits what seek() painted, the second runs once that frame was produced, so
+// the backdrop screenshot cannot catch the page as it was before the seek (a
+// caption on a plate would read as pale on the bare page). Bounded for a page
+// that schedules no frames.
+const PROBE_PAINTED = `new Promise((resolve) => {
+  const timer = setTimeout(() => resolve(false), 1000);
+  requestAnimationFrame(() => requestAnimationFrame(() => { clearTimeout(timer); resolve(true); }));
+})`;
 
 /**
  * Open a project's composition document the way a render does (same staged
@@ -631,6 +641,8 @@ export async function probeDocumentText({ project, jobId, signal, sampleTimes, o
       const records = await page.evaluate('globalThis.__portosTextProbe.end()');
       let backdrop = null;
       if (Array.isArray(records) && records.length) {
+        await page.evaluate(PROBE_PAINTED);
+        page.check();
         const { data: png } = await page.send('Page.captureScreenshot', PROBE_SCREENSHOT);
         const width = Math.max(1, Math.round(target.width * PROBE_BACKDROP_SCALE));
         const { data: rgb, info } = await sharp(Buffer.from(png, 'base64')).removeAlpha().resize({ width }).raw().toBuffer({ resolveWithObject: true });

@@ -350,7 +350,13 @@ async function runCompletionCleanupSteps(context, { onStepError }) {
   await runStep('Plan question notification', () => notifyPlanQuestionIfNeeded(context));
   await runStep('Pipeline progression', () => handlePipelineProgression(context.task, context.agentId, context.effectiveSuccess));
   await runStep('Creative Director completion', () => advanceCreativeDirectorIfNeeded(context));
-  const cleanupWarnings = await runStep('Worktree cleanup', () => completeWorktreeCleanup(context));
+  // A terminal rejection is not proof that its audit artifacts were consumed.
+  // Keep the checkout and original signal available for explicit recovery.
+  const preserveAuditEvidence = auditEvidencePending(context);
+  if (preserveAuditEvidence) {
+    emitLog('warn', `Audit disposition incomplete for ${context.agentId}; preserving worktree and completion evidence`, { agentId: context.agentId });
+  }
+  const cleanupWarnings = preserveAuditEvidence ? [] : await runStep('Worktree cleanup', () => completeWorktreeCleanup(context));
   await runStep('Cleanup warning reporting', () => reportWorktreeCleanupWarnings({ ...context, cleanupWarnings }));
   // Last, and never fatal under either policy: a janitorial `rm` that hits EPERM
   // must not be able to abort the worktree cleanup and pipeline hand-off above.
@@ -520,6 +526,11 @@ async function advanceCreativeDirectorIfNeeded({ agentId, task, effectiveSuccess
   }
 }
 
+function auditEvidencePending({ task, agentState }) {
+  return Number(task?.metadata?.auditDispositionVersion ?? agentState?.metadata?.auditDispositionVersion) === 1
+    && agentState?.metadata?.auditFindings?.status !== 'complete';
+}
+
 /**
  * Delete the run's own `.agent-done-<agentId>` completion sentinel.
  *
@@ -538,7 +549,8 @@ async function advanceCreativeDirectorIfNeeded({ agentId, task, effectiveSuccess
  * which is the directory the run wrote its sentinel into (a worktree run
  * records its worktree here).
  */
-export async function removeCompletionSentinel({ agentId, agent, agentState }) {
+export async function removeCompletionSentinel({ agentId, agent, agentState, task }) {
+  if (auditEvidencePending({ task, agentState })) return;
   // An id that yields no usable slug makes `doneSentinelName` fall back to the
   // bare, unscoped `.agent-done` — which belongs to no run and may be a legacy
   // agent's live signal (the sweep protects it with an age floor for exactly

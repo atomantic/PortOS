@@ -1,3 +1,8 @@
+vi.mock('./branchCompletionPolicy.js', async () => ({
+  ...await vi.importActual('./branchCompletionPolicy.js'),
+  readBranchCompletionPolicies: vi.fn(async () => []),
+  readBranchCompletionHold: vi.fn(async () => null),
+}));
 /**
  * Unit tests for the Branch & PR Reconciler deterministic core.
  *
@@ -20,12 +25,20 @@ vi.mock('./git.js', () => ({
 vi.mock('../lib/execGit.js', () => ({
   execGit: vi.fn(async () => ({ stdout: '', exitCode: 0 }))
 }));
+vi.mock('./cosClaimOwnership.js', async (importOriginal) => ({
+  ...await importOriginal(), readClaimOwnershipAgents: async () => [],
+}));
 vi.mock('./worktreeManager.js', async () => {
   const { AGENT_SCRATCH_PATHS, matchesScratchRoot } = await import('../lib/agentScratchPaths.js');
   return {
     listWorktrees: vi.fn(async () => []),
     forceRemoveWorktreeDir: vi.fn(async () => ({ removed: true, warning: null })),
     reapMergedWorktrees: vi.fn(async () => ({ reaped: [], skipped: [] })),
+    readWorktreeStatus: async (path) => {
+      const { execGit } = await import('../lib/execGit.js');
+      const result = await execGit(['status', '--porcelain'], path, { ignoreExitCode: true }).catch(() => null);
+      return result?.exitCode === 0 ? result.stdout : null;
+    },
     // Real pure classifier semantics: empty porcelain = clean, and every non-empty
     // line is a real change path (the suite never feeds it lockfile churn) EXCEPT
     // PortOS's own runtime scratch, which the real classifier subtracts for every
@@ -298,32 +311,26 @@ const mockOwnedClaim = () => execGh.mockImplementation(async (args) => {
   return '[]';
 });
 
-describe('retired claim markers in reconcile', () => {
-  it('releases early-reaped claims on the enterprise host with the pinned account', async () => {
+describe('unverified issue reservations in reconcile', () => {
+  it('retires the local checkout while leaving possible same-account peer markers untouched before its first commit', async () => {
     mockOwnedClaim();
     getOriginInfo.mockResolvedValue({ hasOrigin: true, host: 'github.example.com', fullName: 'example/app' });
     wt.reapMergedWorktrees.mockResolvedValue({ reaped: [{ branch: 'claim/issue-42', branchDeleted: true }], skipped: [] });
     git.getBranches.mockResolvedValue([]);
-    await reconcile('/repo', { forgeAccount: 'app-account' });
-    expect(execGh).toHaveBeenCalledWith([
-      'issue', 'edit', '42', '--repo', 'github.example.com/example/app',
-      '--remove-assignee', '@me', '--remove-label', 'in-progress'
-    ], undefined, { cwd: '/repo', env: PINNED_ENV });
-    expect(execGh).toHaveBeenCalledWith(['api', 'user', '--hostname', 'github.example.com', '--jq', '.login'], undefined, { cwd: '/repo', env: PINNED_ENV });
-    expect(resolveForgeExecOptionsMock).toHaveBeenCalledWith('/repo', { forgeAccount: 'app-account' });
-    expect(resolveForgeExecOptionsMock).toHaveBeenCalledOnce();
+    const result = await reconcile('/repo', { forgeAccount: 'app-account' });
+    expect(result.cleaned).toEqual(['claim/issue-42']);
+    expect(result.claimMarkersHeld).toEqual([{ branch: 'claim/issue-42', issue: 42, reason: 'claim-reservation-owner-unverified', markerState: 'unknown', ownerState: 'unknown' }]);
+    expect(execGh.mock.calls.some(([args]) => args[0] === 'issue' || args[0] === 'api')).toBe(false);
   });
 
-  it('keeps the reap successful and logs once when marker release fails during a forge outage', async () => {
+  it('reports unverified reservations separately even when the forge is unavailable', async () => {
     wt.reapMergedWorktrees.mockResolvedValue({ reaped: [{ branch: 'claim/issue-42', branchDeleted: true }], skipped: [] });
-    execGh.mockRejectedValueOnce(new Error('forge unavailable'));
     ensureForgeReachableMock.mockResolvedValueOnce({ ok: false, status: 'unavailable' });
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const result = await reconcile('/repo');
     expect(result.cleaned).toEqual(['claim/issue-42']);
     expect(result.forgeUnavailable).toBe(true);
-    expect(log.mock.calls.filter(([line]) => line.includes('could not release claim markers for #42'))).toHaveLength(1);
-    log.mockRestore();
+    expect(result.claimMarkersHeld[0].reason).toBe('claim-reservation-owner-unverified');
+    expect(execGh).not.toHaveBeenCalled();
   });
 
   it('does not release protected claims, unrelated branches, or non-GitHub issues', async () => {
@@ -403,14 +410,14 @@ describe('cleanupMerged', () => {
     expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
   });
 
-  it('never tears down a locked / human-claim / active-agent worktree', async () => {
+  it('keeps legacy snapshot-only callers behind locked / human-claim / active-agent gates', async () => {
     git.hasBranchMergeEvidence.mockResolvedValue(true);
     const activeAgentIds = new Set(['agent-abc12345']);
     const res = await cleanupMerged('/repo', 'main', [
       { branch: 'locked-b', worktreePath: '/repo/data/cos/worktrees/locked', worktreeLocked: true },
       { branch: 'claim-b', worktreePath: '/repo/data/cos/worktrees/claim-foo' },
       { branch: 'active-b', worktreePath: '/repo/data/cos/worktrees/agent-abc12345' }
-    ], { activeAgentIds });
+    ], { activeAgentIds, claimOwners: { agents: [] } });
     expect(res.cleaned).toEqual([]);
     expect(res.skipped).toEqual([
       { branch: 'locked-b', reason: 'worktree-locked' },
@@ -433,15 +440,14 @@ describe('cleanupMerged', () => {
     expect(git.deleteBranch).toHaveBeenCalledWith('/repo', 'claim/issue-1933', { local: true });
   });
 
-  it('releases a retired issue claim with the repository credential after deletion', async () => {
+  it('leaves global issue markers untouched after successful local deletion without asserting they exist', async () => {
     mockOwnedClaim();
     git.hasBranchMergeEvidence.mockResolvedValue(true);
-    await cleanupMerged('/repo', 'main', [{ branch: 'claim/issue-42', worktreePath: '/repo/.claude/worktrees/retired' }]);
-    expect(execGh).toHaveBeenCalledWith([
-      'issue', 'edit', '42', '--repo', 'github.com/atomantic/PortOS',
-      '--remove-assignee', '@me', '--remove-label', 'in-progress'
-    ], undefined, { cwd: '/repo', env: PINNED_ENV });
-    expect(execGh.mock.invocationCallOrder[0]).toBeGreaterThan(git.deleteBranch.mock.invocationCallOrder[0]);
+    const result = await cleanupMerged('/repo', 'main', [{ branch: 'claim/issue-42', worktreePath: '/repo/.claude/worktrees/retired' }]);
+    expect(result.cleaned).toEqual(['claim/issue-42']);
+    expect(result.claimMarkersHeld).toEqual([{ branch: 'claim/issue-42', issue: 42, reason: 'claim-reservation-owner-unverified', markerState: 'unknown', ownerState: 'unknown' }]);
+    expect(git.deleteBranch).toHaveBeenCalled();
+    expect(execGh).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -485,13 +491,13 @@ describe('cleanupMerged', () => {
     expect(git.deleteBranch).toHaveBeenCalledWith('/repo', 'claim/issue-', { local: true });
   });
 
-  it('still protects a RECENT claim worktree even when merged + clean, and says when the hold lifts', async () => {
+  it('still protects a RECENT claim worktree for snapshot-only callers even when merged + clean, and says when the hold lifts', async () => {
     git.hasBranchMergeEvidence.mockResolvedValue(true);
     execGit.mockResolvedValue({ stdout: '', exitCode: 0 }); // clean
     const before = Date.now();
     const res = await cleanupMerged('/repo', 'main', [
       { branch: 'claim/issue-9999', worktreePath: '/repo/data/cos/worktrees/claim-issue-9999', worktreeAgeMs: 60 * 1000 } // 1 min old
-    ]);
+    ], { claimOwners: { agents: [] } });
     expect(res.cleaned).toEqual([]);
     expect(res.skipped).toHaveLength(1);
     expect(res.skipped[0]).toMatchObject({ branch: 'claim/issue-9999', reason: 'worktree-human-claim' });
@@ -512,12 +518,12 @@ describe('cleanupMerged', () => {
     git.hasBranchMergeEvidence.mockResolvedValue(true);
 
     execGit.mockResolvedValue({ stdout: '', exitCode: 0 }); // clean
-    const reaped = await cleanupMerged('/repo', 'main', [{ branch: 'claim/issue-0', ...shipped() }]);
+    const reaped = await cleanupMerged('/repo', 'main', [{ branch: 'claim/issue-0', ...shipped() }], { claimOwners: { agents: [] } });
     expect(reaped.cleaned).toEqual(['claim/issue-0']);
 
     // The dirty gate is independent — a shorter window never overrides it.
     execGit.mockResolvedValue({ stdout: ' M server/index.js', exitCode: 0 }); // dirty
-    const dirty = await cleanupMerged('/repo', 'main', [{ branch: 'claim/issue-1', ...shipped() }]);
+    const dirty = await cleanupMerged('/repo', 'main', [{ branch: 'claim/issue-1', ...shipped() }], { claimOwners: { agents: [] } });
     expect(dirty.cleaned).toEqual([]);
     expect(dirty.skipped).toEqual([{ branch: 'claim/issue-1', reason: 'worktree-dirty' }]);
 
@@ -526,7 +532,7 @@ describe('cleanupMerged', () => {
     // remote could not be read. The week-long window still applies.
     const unshipped = await cleanupMerged('/repo', 'main', [
       { branch: 'claim/issue-2', ...shipped({ upstreamGone: false }) }
-    ]);
+    ], { claimOwners: { agents: [] } });
     expect(unshipped.cleaned).toEqual([]);
     expect(unshipped.skipped[0]).toMatchObject({ branch: 'claim/issue-2', reason: 'worktree-human-claim' });
 
@@ -535,7 +541,7 @@ describe('cleanupMerged', () => {
     // caller is told when the short window lapses.
     const busy = await cleanupMerged('/repo', 'main', [
       { branch: 'claim/issue-3', ...shipped({ worktreeAgeMs: 60 * 1000 }) }
-    ]);
+    ], { claimOwners: { agents: [] } });
     expect(busy.cleaned).toEqual([]);
     expect(busy.skipped[0]).toMatchObject({ branch: 'claim/issue-3', reason: 'worktree-human-claim' });
     expect(Date.parse(busy.skipped[0].retryAt)).toBeLessThanOrEqual(Date.now() + SHIPPED_CLAIM_IDLE_MS);
@@ -1088,7 +1094,8 @@ describe('unreachable forge (#3358)', () => {
     const res = await reconcile('/repo');
     expect(res.cleaned).toEqual(['feature/done']);
     expect(wt.reapMergedWorktrees).toHaveBeenCalledWith('/repo', {
-      activeAgentIds: new Set(), includeClaudeTrees: true
+      activeAgentIds: new Set(), includeClaudeTrees: true,
+      claimOwners: { agents: [], readAgents: expect.any(Function) },
     });
     expect(wt.reapMergedWorktrees.mock.invocationCallOrder[0])
       .toBeLessThan(ensureForgeReachableMock.mock.invocationCallOrder[0]);
@@ -1177,7 +1184,9 @@ describe('reconcile', () => {
     worktreeMtimeMs = Date.now() - 4 * 60 * 60 * 1000;
     git.hasBranchMergeEvidence.mockResolvedValue(true);
 
-    const res = await reconcile('/repo');
+    // A snapshot-only caller cannot replace the human-claim age protection
+    // with a fresh registry proof under the binding lock.
+    const res = await reconcile('/repo', { claimOwners: { agents: [] } });
     expect(res.cleaned).toEqual([]);
     expect(res.skipped[0]).toMatchObject({ branch: 'claim/issue-4348', reason: 'worktree-human-claim' });
     expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();

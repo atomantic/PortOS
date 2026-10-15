@@ -84,6 +84,7 @@ import ProduceStage from '../components/musicVideo/stages/ProduceStage.jsx';
 import ReviewStage from '../components/musicVideo/stages/ReviewStage.jsx';
 import { PUBLISH_TARGETS } from '../components/musicVideo/PublishPostingPanel.jsx';
 import PublishStage from '../components/musicVideo/stages/PublishStage.jsx';
+import AssetsStage from '../components/musicVideo/stages/AssetsStage.jsx';
 import { compositionDraft } from '../components/musicVideo/compositionDraft.js';
 import ContactSheetDrawer from '../components/musicVideo/ContactSheetDrawer.jsx';
 import DevArtifactDrawer from '../components/musicVideo/DevArtifactDrawer.jsx';
@@ -139,6 +140,7 @@ const approvalStageFor = (tab, project, readiness, proofActive) => (tab === 'pro
 const PLAYER_FIRST_STAGES = new Set(['board', 'produce', 'review']);
 const STAGE_VIEWS = {
   setup: SetupStage, 'cast-sets': CastSetsStage, board: PlanStage, produce: ProduceStage, review: ReviewStage, publish: PublishStage,
+  assets: AssetsStage,
 };
 
 
@@ -767,6 +769,26 @@ export default function MusicVideo() {
       .catch((err) => toast.error(err?.message || 'Failed to add scene'));
   };
 
+  // A render refusal's one-tap fix: the same patch on each shot it names.
+  // Sequential, like auto-arrange, so each PATCH merges against the last.
+  const patchShots = (sceneIds, patch, doneMessage) => {
+    if (!selected || !sceneIds.length) return Promise.resolve();
+    const snapshot = selected;
+    const ids = new Set(sceneIds);
+    replaceProject({ ...selected, scenes: selected.scenes.map((s) => (ids.has(s.sceneId) ? { ...s, ...patch } : s)) });
+    return (async () => {
+      for (const sceneId of sceneIds) await updateMusicVideoScene(selected.id, sceneId, patch, { silent: true });
+    })()
+      .then(() => {
+        renderJob.clearFailure();
+        toast.success(`${doneMessage} — render again`);
+      })
+      .catch((err) => {
+        replaceProject(snapshot);
+        toast.error(err?.message || 'Could not change the shots');
+      });
+  };
+
   // Optimistic local edit; PATCH on blur (silent — this owns its error toast).
   const editSceneLocal = (sceneId, patch) => {
     replaceProject({ ...selected, scenes: selected.scenes.map((s) => (s.sceneId === sceneId ? { ...s, ...patch } : s)) });
@@ -1190,6 +1212,7 @@ export default function MusicVideo() {
     if (action.run === 'revise-feedback') { reviseFromFeedback(action.stage); return; }
     if (action.run === 'keep-approval') { keepApproval(action.stage); return; }
     if (action.run === 'sync-lyric-anchors') { productionReview.syncLyricAnchors(); return; }
+    if (action.run === 'remove-stale-rows') { productionReview.removeStaleRows(); return; }
     if (action.editShot) { editShot(action.editShot); return; }
     goToStage(action.stage || activeStage, action.anchor, action.params);
   };
@@ -1233,6 +1256,7 @@ export default function MusicVideo() {
     reviewDraftState,
     activeSceneId: routeSceneId || null,
     onToggleSceneExpand: handleToggleSceneExpand,
+    onEditShot: editShot,
     autopilotRun,
     autonomous,
     runStage,
@@ -1255,6 +1279,7 @@ export default function MusicVideo() {
     videoSettings,
     sceneMedia,
     renderJob,
+    onPatchShots: patchShots,
     production,
     castSets,
     devArtifacts,
@@ -1643,7 +1668,8 @@ export default function MusicVideo() {
                 }}
               />
             )}
-            dock={withTitleCard(
+            // Assets is a contact sheet: it takes the whole column, no player beside it.
+            dock={activeStage === 'assets' ? null : withTitleCard(
               <PreviewDock
                 project={selected}
                 sources={previewSources}

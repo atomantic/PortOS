@@ -6,12 +6,14 @@ const pool = [
   { kind: 'image', assetId: 'other.png', sceneId: 's12', prompt: 'Splicer close-up', clipIds: ['clip-12'] },
   { kind: 'image', assetId: 'floor.png', sceneId: null, prompt: 'Reel on the floor', clipIds: [] },
   { kind: 'image', assetId: 'blurry.png', sceneId: null, prompt: 'Out of focus', clipIds: [], mark: 'bad' },
+  { kind: 'image', assetId: 'bird.png', sceneId: null, prompt: null, clipIds: [] },
   { kind: 'video', assetId: 'clip-12', sceneId: 's12', sourceImageId: 'other.png' },
 ];
 vi.mock('../../services/apiMusicVideo.js', () => ({
   getMusicVideoMediaPool: vi.fn(async () => ({ items: pool })),
   markMusicVideoPoolAssets: vi.fn(async () => ({})),
   deleteMusicVideoPoolAssets: vi.fn(async () => ({ deleted: 1 })),
+  searchMusicVideoMediaPool: vi.fn(async () => ({ items: [] })),
 }));
 const { default: SceneTakePicker } = await import('./SceneTakePicker.jsx');
 const api = await import('../../services/apiMusicVideo.js');
@@ -36,6 +38,16 @@ describe('Swap from unused', () => {
     fireEvent.click(screen.getByRole('tab', { name: /Floor/ }));
     fireEvent.change(screen.getByLabelText('Search prompts or shot number'), { target: { value: 'reel' } });
     expect(screen.getAllByRole('listitem')).toHaveLength(1);
+  });
+
+  // Uniquely catches Swap's search missing a still whose prompt only the file itself carries (no take left to hold it).
+  it('finds a floor still by the prompt it was made from', async () => {
+    api.searchMusicVideoMediaPool.mockResolvedValueOnce({ items: [{ kind: 'image', assetId: 'bird.png' }] });
+    render(<SceneTakePicker open projectId="mv-1" scene={{ sceneId: 's8' }} kind="image" onPlace={vi.fn()} shotNumbers={new Map([['s8', 8]])} />);
+    fireEvent.click(await screen.findByRole('tab', { name: /Floor/ }));
+    fireEvent.change(screen.getByLabelText('Search prompts or shot number'), { target: { value: 'Falcon' } });
+    await waitFor(() => expect(api.searchMusicVideoMediaPool).toHaveBeenCalledWith('mv-1', 'Falcon', { silent: true }));
+    await waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(1));
   });
 
   // Uniquely catches a mark that never reaches the server, a Bad filter that misses a mark, or a delete that skips its confirm.
@@ -92,6 +104,8 @@ describe('Swap from unused', () => {
     });
     render(<SceneTakePicker open projectId="mv-1" scene={{ sceneId: 's8' }} kind="image" onPlace={vi.fn()} shotNumbers={new Map()} />);
     await waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(60));
+    // The footer starts observing in an effect that can land after the first page paints.
+    await waitFor(() => expect(observers.length).toBeGreaterThan(0));
     act(() => observers.at(-1).fire());
     await waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(70));
     expect(screen.queryByRole('button', { name: /Show more/ })).toBeNull();

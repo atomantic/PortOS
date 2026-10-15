@@ -1,12 +1,12 @@
 import { MUSIC_VIDEO_TRANSITIONS, MUSIC_VIDEO_TRANSITION_LABELS } from '../../lib/musicVideoTransitions.js';
 
 const SIDES = Object.freeze([
-  ['transitionIn', 'Glitch in', 'in', 'A VHS glitch over the cut into this shot. It adds no time: the cut stays where it is.'],
-  ['transitionOut', 'Glitch out', 'out', 'A VHS glitch over the cut to the next shot. It adds no time: the cut stays where it is.'],
+  ['transitionIn', 'Effect in', 'in', 'A glitch, film or camera effect over the cut into this shot. It adds no time: the cut stays where it is.'],
+  ['transitionOut', 'Effect out', 'out', 'A glitch, film or camera effect over the cut to the next shot. It adds no time: the cut stays where it is.'],
 ]);
 
 /**
- * The VHS glitch over the cut into and out of a shot, Off by default. It rides
+ * The effect over the cut into and out of a shot (a VHS glitch, a film or camera look), Off by default. It rides
  * on the cut in the animatic and the final render alike, and never moves a cut
  * or changes a lock.
  */

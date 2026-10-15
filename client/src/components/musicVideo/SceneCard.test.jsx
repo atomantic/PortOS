@@ -1,14 +1,18 @@
 import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-vi.mock('../../hooks/useVideoFileSrc.js', () => ({ useVideoFileSrc: () => ({}) }));
+vi.mock('../../hooks/useVideoFileSrc.js', () => ({ useVideoFileSrc: vi.fn(() => ({})) }));
 vi.mock('../../services/apiMusicVideo.js', async (importOriginal) => ({ ...(await importOriginal()), getMusicVideoMediaPool: vi.fn(async () => ({ items: [] })) }));
 import SceneCard from './SceneCard.jsx';
 import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
+import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 
 const GROK_MAX = GROK_VIDEO_DURATIONS.at(-1);
 // A card opens on the last Render on pick, so each test starts from the project setting.
-beforeEach(() => localStorage.clear());
+beforeEach(() => {
+  localStorage.clear();
+  useVideoFileSrc.mockReturnValue({});
+});
 
 describe('code shot (#10297)', () => {
   it('offers no frame or clip generation for a code shot in a layered composition', () => {
@@ -203,22 +207,27 @@ describe('planned camera move (#10589)', () => {
 });
 
 describe('lyric type per shot (#10583)', () => {
-  it('lets a composition-document shot pick its lyric zone and style, and clears back to the defaults', () => {
+  it('lets a shot pick where its lyrics sit, their style and size whenever the render draws lyrics', () => {
     const onSave = vi.fn();
     const scene = { sceneId: 's1', startSec: 0, endSec: 5, takes: [], textZone: 'upper-right' };
-    const { rerender } = render(<SceneCard scene={scene} index={0} layered onEditLocal={() => {}} onSave={onSave} />);
-    // Only a composition document draws the shared lyric type.
+    const composed = { composition: { mode: 'composed', textCues: [] }, lyricCues: [{ text: 'a sung line', startSec: 1, endSec: 3 }] };
+    const { rerender } = render(<SceneCard scene={scene} index={0} layered project={{ composition: { mode: 'composed', textCues: [] } }} onEditLocal={() => {}} onSave={onSave} />);
+    // A composed render with no timed lyrics draws none, so there is nothing to place.
     expect(screen.queryByLabelText('Lyrics')).toBeNull();
-    rerender(<SceneCard scene={scene} index={0} layered documentComposition onEditLocal={() => {}} onSave={onSave} />);
+    rerender(<SceneCard scene={scene} index={0} layered project={composed} onEditLocal={() => {}} onSave={onSave} />);
     expect(screen.getByLabelText('Lyrics').value).toBe('upper-right');
-    for (const [label, value] of [['Upper centre', 'upper'], ['Lower centre', 'lower']]) {
+    for (const [label, value] of [['Bottom', 'lower'], ['Bottom right', 'lower-right'], ['Top left', 'upper-left']]) {
       expect(screen.getByRole('option', { name: label }).value).toBe(value);
       fireEvent.change(screen.getByLabelText('Lyrics'), { target: { value } });
     }
-    fireEvent.change(screen.getByLabelText('Lyrics'), { target: { value: 'none' } });
     fireEvent.change(screen.getByLabelText('Lyric style'), { target: { value: 'stamp' } });
+    fireEvent.change(screen.getByLabelText('Lyric size'), { target: { value: 'small' } });
     fireEvent.change(screen.getByLabelText('Lyrics'), { target: { value: '' } });
-    expect(onSave.mock.calls).toEqual([['s1', { textZone: 'upper' }], ['s1', { textZone: 'lower' }], ['s1', { textZone: 'none' }], ['s1', { lyricRole: 'stamp' }], ['s1', { textZone: null }]]);
+    expect(onSave.mock.calls).toEqual([['s1', { textZone: 'lower' }], ['s1', { textZone: 'lower-right' }], ['s1', { textZone: 'upper-left' }],
+      ['s1', { lyricRole: 'stamp' }], ['s1', { lyricSize: 'small' }], ['s1', { textZone: null }]]);
+    // A composition document always draws the lyric type.
+    rerender(<SceneCard scene={scene} index={0} layered documentComposition onEditLocal={() => {}} onSave={onSave} />);
+    expect(screen.getByLabelText('Lyrics')).toBeTruthy();
   });
 });
 
@@ -454,6 +463,120 @@ describe('frame fit for an off-shape clip', () => {
   });
 });
 
+describe('clip playback and coverage', () => {
+  const scene = { sceneId: 's1', referenceImageId: 'still.png', videoHistoryId: 'clip-1', beatAligned: true,
+    startSec: 1.234, endSec: 10, loop: false, takes: [] };
+  const metadata = (video, sec, width = 768, height = 512) => {
+    Object.defineProperties(video, {
+      duration: { value: sec, configurable: true },
+      videoWidth: { value: width, configurable: true },
+      videoHeight: { value: height, configurable: true },
+    });
+    fireEvent.loadedMetadata(video);
+  };
+  const coverage = () => screen.queryByText(/Shot runs .* but its clip is/);
+
+  // Catches coverage based on raw file length, a stale clip's measurement, or a trim
+  // save that loses millisecond rounding; also pins metadata lifetime across hidden previews.
+  it('measures adjusted playback, retains it while hidden, invalidates a replacement, and trims the shot', () => {
+    const onSave = vi.fn();
+    const onEditLocal = vi.fn();
+    const props = { index: 0, expanded: true, layered: true, onSave, onEditLocal };
+    const adjusted = { ...scene, speedFps: 8, offsetFrames: 12 };
+    const { container, rerender } = render(<SceneCard {...props} scene={adjusted} />);
+    expect(coverage()).toBeNull();
+    metadata(container.querySelector('video'), NaN);
+    expect(coverage()).toBeNull();
+    metadata(container.querySelector('video'), 4.567);
+    expect(container.querySelector('video').playbackRate).toBeCloseTo(32 / 24);
+    expect(coverage().textContent).toContain('clip is 3.1s');
+    expect(screen.getByLabelText('Not 16:9')).toBeTruthy();
+    rerender(<SceneCard {...props} scene={{ ...adjusted, visualLayer: 'still' }} />);
+    expect(container.querySelector('section[aria-label="Render"] video')).toBeNull();
+    expect(coverage()).toBeTruthy();
+    rerender(<SceneCard {...props} scene={{ ...adjusted, videoHistoryId: 'clip-2' }} />);
+    expect(coverage()).toBeNull();
+    expect(screen.queryByLabelText('Not 16:9')).toBeNull();
+    metadata(container.querySelector('video'), 4.567);
+    fireEvent.click(screen.getByRole('button', { name: 'Trim to clip' }));
+    expect(onEditLocal).toHaveBeenLastCalledWith('s1', { endSec: 4.284 });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { endSec: 4.284 });
+    // Negative offset delays the clip rather than cutting its beginning.
+    rerender(<SceneCard {...props} scene={{ ...adjusted, videoHistoryId: 'clip-2', offsetFrames: -12 }} />);
+    expect(coverage().textContent).toContain('clip is 3.9s');
+  });
+
+  // Catches a changed tolerance, legacy absent-loop scenes no longer looping,
+  // or a reversed shot being offered a loop the renderer cannot use.
+  it('warns only beyond the tolerance, preserves legacy looping, and treats reverse as one pass', () => {
+    const onSave = vi.fn();
+    const props = { index: 0, expanded: true, onSave, onEditLocal: vi.fn() };
+    const bounded = { ...scene, startSec: 0, endSec: 4.25 };
+    const { container, rerender } = render(<SceneCard {...props} scene={bounded} />);
+    metadata(container.querySelector('video'), 4);
+    expect(coverage()).toBeNull();
+    rerender(<SceneCard {...props} scene={{ ...bounded, endSec: 4.251 }} />);
+    expect(coverage()).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Loop clip' }));
+    expect(onSave).toHaveBeenLastCalledWith('s1', { loop: true });
+    rerender(<SceneCard {...props} scene={{ ...bounded, endSec: 6, loop: undefined }} />);
+    expect(coverage()).toBeNull();
+    expect(screen.getByLabelText('Loop clip')).toBeChecked();
+    rerender(<SceneCard {...props} scene={{ ...bounded, endSec: 6, loop: undefined, reverse: true }} />);
+    expect(coverage()).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Loop clip' })).toBeNull();
+    expect(screen.getByLabelText('Loop clip')).toBeDisabled();
+    expect(screen.getByText('Reversed in the player')).toBeTruthy();
+  });
+
+  // Catches reconstructed URLs replacing imported filenames, native controls
+  // losing their playback ownership, or the lightbox opening before pause.
+  it('keeps the resolved container and fallback, and pauses before opening the clip lightbox', () => {
+    useVideoFileSrc.mockReturnValue({ src: '/data/videos/imported.webm' });
+    const onOpenPreview = vi.fn();
+    const props = { scene, index: 1, expanded: true, onEditLocal: vi.fn(), onSave: vi.fn(), onOpenPreview };
+    const { container, rerender } = render(<SceneCard {...props} />);
+    const video = container.querySelector('video');
+    expect(video.getAttribute('src')).toBe('/data/videos/imported.webm');
+    expect(video.controls).toBe(true);
+    const pause = vi.spyOn(video, 'pause').mockImplementation(() => {
+      expect(onOpenPreview).not.toHaveBeenCalled();
+    });
+    fireEvent.click(video);
+    expect(onOpenPreview).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'View scene 2 clip full size' }));
+    expect(pause).toHaveBeenCalledOnce();
+    expect(onOpenPreview).toHaveBeenCalledWith('video:clip-1');
+    useVideoFileSrc.mockReturnValue({ src: null });
+    rerender(<SceneCard {...props} scene={{ ...scene, videoHistoryId: 'clip-2' }} />);
+    expect(video.getAttribute('src')).toBe('/data/videos/clip-2.mp4');
+  });
+
+  // Catches source trim losing its scene argument or becoming enabled during
+  // take/render work or a clip lock after the preview moves out of SceneCard.
+  it('trims the source at the chosen frame and preserves every busy gate', async () => {
+    const { ShotLockContext } = await import('./ShotLock.jsx');
+    const onTrimClip = vi.fn();
+    const props = { scene, index: 0, expanded: true, onEditLocal: vi.fn(), onSave: vi.fn(), onTrimClip };
+    const { container, rerender } = render(<SceneCard {...props} />);
+    const video = container.querySelector('video');
+    vi.spyOn(video, 'pause').mockImplementation(() => {});
+    expect(screen.getByRole('button', { name: 'Start clip here' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Next frame' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start clip here' }));
+    expect(onTrimClip).toHaveBeenCalledWith(scene, 1 / 24);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Start clip here' })).toBeEnabled());
+    rerender(<SceneCard {...props} takeBusy />);
+    expect(screen.getByRole('button', { name: 'Next frame' })).toBeDisabled();
+    rerender(<SceneCard {...props} generatingVideo />);
+    expect(screen.getByRole('button', { name: 'Next frame' })).toBeDisabled();
+    rerender(<ShotLockContext.Provider value={{ locks: { s1: 'locked' }, clips: { s1: 'locked' }, toggle: () => {}, busy: false }}>
+      <SceneCard {...props} />
+    </ShotLockContext.Provider>);
+    expect(screen.getByRole('button', { name: 'Next frame' })).toBeDisabled();
+  });
+});
+
 describe('Sent to the model', () => {
   // Uniquely catches the card's Render sending anything other than what the card shows, or dropping the Song audio toggle.
   it('shows the prompt Render sends and hands it, with the song audio pick, to the render', () => {
@@ -503,13 +626,13 @@ describe('VHS glitch transitions', () => {
       return <SceneCard scene={scene} index={0} onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
     }
     render(<Harness />);
-    const out = screen.getByLabelText('Glitch out');
+    const out = screen.getByLabelText('Effect out');
     fireEvent.change(out, { target: { value: 'vhs-glitch' } });
     expect(onSave).toHaveBeenLastCalledWith('s1', { transitionOut: 'vhs-glitch' });
     expect(out.value).toBe('vhs-glitch');
     fireEvent.change(out, { target: { value: '' } });
     expect(onSave).toHaveBeenLastCalledWith('s1', { transitionOut: null });
-    expect(screen.getByLabelText('Glitch in').value).toBe('');
+    expect(screen.getByLabelText('Effect in').value).toBe('');
   });
 });
 
@@ -523,15 +646,15 @@ describe('In-shot glitches', () => {
       return <SceneCard scene={scene} index={0} onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
     }
     render(<Harness />);
-    fireEvent.click(screen.getByRole('button', { name: /Add glitch/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Add effect/ }));
     expect(onSave).toHaveBeenLastCalledWith('s1', { glitches: [{ atSec: 2, style: 'color-block' }] });
     const slider = screen.getByLabelText(/^at /);
     fireEvent.change(slider, { target: { value: '2.5' } });
     fireEvent.pointerUp(slider);
     expect(onSave).toHaveBeenLastCalledWith('s1', { glitches: [{ atSec: 2.5, style: 'color-block' }] });
-    fireEvent.change(screen.getByLabelText('Glitch 1 length'), { target: { value: '0.5' } });
+    fireEvent.change(screen.getByLabelText('Effect 1 length'), { target: { value: '0.5' } });
     expect(onSave).toHaveBeenLastCalledWith('s1', { glitches: [{ atSec: 2.5, style: 'color-block', lengthSec: 0.5 }] });
-    fireEvent.click(screen.getByRole('button', { name: 'Remove glitch 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove effect 1' }));
     expect(onSave).toHaveBeenLastCalledWith('s1', { glitches: null });
   });
 });
@@ -628,23 +751,42 @@ describe('clip speed and offset by hand', () => {
   });
 });
 
-// Uniquely catches the beat toggle control saving the wrong shape or losing its settings when switched off.
-describe('Beat toggle into the next shot', () => {
-  it('switches on with defaults, changes its settings and keeps them when switched off', () => {
+// Uniquely catches the cut effect picker saving the wrong shape, losing its
+// settings on Cut, or ignoring the transition the storyboard plans.
+describe('How a shot hands over to the next', () => {
+  function Harness({ initial = {}, project = null, isLast = false, onSave }) {
+    const [scene, setScene] = useState({ sceneId: 's1', startSec: 0, endSec: 4, takes: [], ...initial });
+    return <SceneCard scene={scene} index={0} isLast={isLast} project={project} onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
+  }
+
+  it('picks an effect with defaults, changes its settings and keeps them on Cut', () => {
     const onSave = vi.fn();
-    function Harness() {
-      const [scene, setScene] = useState({ sceneId: 's1', startSec: 0, endSec: 4, takes: [] });
-      return <SceneCard scene={scene} index={0} onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
-    }
-    render(<Harness />);
-    const toggle = screen.getByLabelText('Beat toggle into next shot');
-    fireEvent.click(toggle);
+    render(<Harness onSave={onSave} />);
+    const picker = screen.getByLabelText('Into next shot');
+    fireEvent.change(picker, { target: { value: 'beat-toggle' } });
     expect(onSave).toHaveBeenLastCalledWith('s1', { cutEffect: { style: 'beat-toggle', enabled: true, overlapSec: 1, rate: 'beat' } });
     fireEvent.change(screen.getByLabelText('Beat toggle speed'), { target: { value: 'half' } });
-    expect(onSave).toHaveBeenLastCalledWith('s1', { cutEffect: { style: 'beat-toggle', enabled: true, overlapSec: 1, rate: 'half' } });
-    fireEvent.click(toggle);
-    expect(onSave).toHaveBeenLastCalledWith('s1', { cutEffect: { style: 'beat-toggle', enabled: false, overlapSec: 1, rate: 'half' } });
-    expect(screen.getByLabelText('Beat toggle speed').value).toBe('half');
+    fireEvent.change(screen.getByLabelText('Into next shot length'), { target: { value: '2' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { cutEffect: { style: 'beat-toggle', enabled: true, overlapSec: 2, rate: 'half' } });
+    fireEvent.change(picker, { target: { value: 'dissolve' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { cutEffect: { style: 'dissolve', enabled: true, overlapSec: 2, rate: 'half' } });
+    expect(screen.queryByLabelText('Beat toggle speed')).toBeNull();
+    fireEvent.change(picker, { target: { value: '' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { cutEffect: { style: 'dissolve', enabled: false, overlapSec: 2, rate: 'half' } });
+    expect(picker.value).toBe('');
+  });
+
+  it('shows the storyboard\'s planned Dissolve until a pick, and offers only a fade to black on the last shot', () => {
+    const onSave = vi.fn();
+    const project = { productionReview: { draft: { storyboard: [{ sceneId: 's1', transition: 'Slow dissolve into the dream' }] } } };
+    const { unmount } = render(<Harness project={project} onSave={onSave} />);
+    expect(screen.getByLabelText('Into next shot').value).toBe('dissolve');
+    fireEvent.change(screen.getByLabelText('Into next shot'), { target: { value: '' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { cutEffect: { style: 'dissolve', enabled: false, overlapSec: 1, rate: 'beat' } });
+    unmount();
+    render(<Harness isLast onSave={onSave} />);
+    const end = screen.getByLabelText('At the end');
+    expect([...end.options].map((o) => o.text)).toEqual(['Cut', 'Fade to black']);
   });
 });
 
@@ -691,5 +833,16 @@ describe('reverse a shot\'s clip', () => {
     unmount();
     render(<Harness initial={{ sceneId: 's2', videoHistoryId: 'clip-1', shotMode: 'performance', startSec: 0, endSec: 4, takes: [] }} />);
     expect(screen.queryByLabelText(/^Reverse/)).toBeNull();
+  });
+});
+
+describe('shot timing in frames', () => {
+  // Uniquely catches the shot's times shown without the 24 fps frame numbers the director counts in.
+  it('shows frame numbers beside the header times and the Start and End fields', () => {
+    const scene = { sceneId: 's1', startSec: 50.25, endSec: 52.125, takes: [] };
+    render(<SceneCard scene={scene} index={0} onEditLocal={() => {}} onSave={() => {}} />);
+    expect(screen.getByText(/1\.88s · .* · fr 1206–1251/)).toBeTruthy();
+    expect(screen.getByText('fr 1206')).toBeTruthy();
+    expect(screen.getByText('fr 1251')).toBeTruthy();
   });
 });

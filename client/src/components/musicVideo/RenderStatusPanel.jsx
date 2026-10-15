@@ -1,5 +1,5 @@
 import Banner from '../ui/Banner.jsx';
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { Film, Download, Maximize2, AlertTriangle } from 'lucide-react';
 import { STALE_RENDER_MESSAGE } from '../../lib/musicVideoStages.js';
 import { assetDownloadUrl } from '../../lib/standaloneDownload.js';
@@ -93,10 +93,50 @@ export default function RenderStatusPanel({
   );
 }
 
-/** Persisted failures survive reload; kickoff/SSE failures stay bound to their project. */
-export function RenderFailure({ project, renderJob }) {
+const STALE_TAKE_CODES = new Set(['STALE_PERFORMANCE_TAKES', 'MUSIC_VIDEO_STALE_SOURCE_AUDIO_TAKES']);
+
+// The one-tap fix a render refusal names, for the shots it applies to: shots
+// with no lip-sync take become cutaways (a lip-sync take would lose its
+// in-point), and shots longer than their clip hold its last frame.
+function refusalFix(failure) {
+  const plural = (ids, one, many) => (ids.length === 1 ? one : many);
+  if (STALE_TAKE_CODES.has(failure?.code)) {
+    const ids = (failure.context?.stale || []).filter((entry) => entry.cutaway).map((entry) => entry.sceneId);
+    return ids.length ? { ids, patch: { shotMode: 'cutaway' }, label: `Switch ${plural(ids, 'it', `these ${ids.length}`)} to Cutaway`,
+      done: `Switched ${ids.length} shot${plural(ids, '', 's')} to Cutaway` } : null;
+  }
+  if (failure?.code === 'INSUFFICIENT_CLIP_COVERAGE') {
+    const ids = (failure.context?.shortfalls || []).map((entry) => entry.sceneId);
+    return ids.length ? { ids, patch: { holdLastFrame: true }, label: `Hold the last frame on ${plural(ids, 'it', `these ${ids.length}`)}`,
+      done: `Holding the last frame on ${ids.length} shot${plural(ids, '', 's')}` } : null;
+  }
+  return null;
+}
+
+/**
+ * Persisted failures survive reload; kickoff/SSE failures stay bound to their project.
+ * A refusal with a one-tap fix offers it: `onPatchShots(sceneIds, patch, doneMessage)`.
+ */
+export function RenderFailure({ project, renderJob, onPatchShots }) {
+  const [fixing, setFixing] = useState(false);
   if (renderJob?.active && renderJob.context === project.id) return null;
-  const error = renderJob?.failure?.projectId === project.id ? renderJob.failure.message
-    : project.status === 'failed' ? project.renderError : null;
-  return error ? <Banner tone="error" title="Render failed" className="break-words">{error}</Banner> : null;
+  const failure = renderJob?.failure?.projectId === project.id ? renderJob.failure : null;
+  const error = failure ? failure.message : project.status === 'failed' ? project.renderError : null;
+  if (!error) return null;
+  const fix = onPatchShots ? refusalFix(failure) : null;
+  const apply = () => {
+    setFixing(true);
+    Promise.resolve(onPatchShots(fix.ids, fix.patch, fix.done)).finally(() => setFixing(false));
+  };
+  return (
+    <Banner tone="error" title="Render failed" className="break-words">
+      {error}
+      {fix && (
+        <button type="button" onClick={apply} disabled={fixing}
+          className="mt-2 block min-h-[44px] sm:min-h-0 rounded border border-port-border bg-port-bg px-2 py-1 text-xs text-port-text hover:bg-port-border/40 disabled:opacity-50">
+          {fixing ? 'Saving…' : fix.label}
+        </button>
+      )}
+    </Banner>
+  );
 }

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { checkMusicVideoOverlayText, reverifyMusicVideoAlignment, importMusicVideoDocumentShots, getMusicVideoProductionReview, saveMusicVideoProductionDraft, prepareMusicVideoProductionReview,
   approveMusicVideoProductionReview, lockMusicVideoShots, renderMusicVideoProductionProof, musicVideoExcerptRenderEventsUrl,
-  cancelMusicVideoExcerptRender, importMusicVideoProductionPlanning, bindMusicVideoProductionShot, addMusicVideoProductionFeedback, resolveMusicVideoProductionFeedback, syncMusicVideoLyricAnchors, reviseMusicVideoProductionFromFeedback, revertMusicVideoProductionInput } from '../services/apiMusicVideo.js';
+  cancelMusicVideoExcerptRender, importMusicVideoProductionPlanning, bindMusicVideoProductionShot, addMusicVideoProductionFeedback, resolveMusicVideoProductionFeedback, syncMusicVideoLyricAnchors, removeMusicVideoStaleStoryboardRows, reviseMusicVideoProductionFromFeedback, revertMusicVideoProductionInput } from '../services/apiMusicVideo.js';
 import useSseJobSlot from './useSseJobSlot.js';
 
 /**
@@ -65,6 +65,8 @@ export default function useMusicVideoProductionReview({ project, replaceProject 
     resolveFeedback: (feedbackId, resolution) => call(() => resolveMusicVideoProductionFeedback(project.id, { feedbackId, resolution }, { silent: true })),
     // Anchor the flagged shots (or `sceneIds`) to the lyric lines sung over them.
     syncLyricAnchors: sceneIds => call(() => syncMusicVideoLyricAnchors(project.id, sceneIds ? { sceneIds } : {}, { silent: true })),
+    // Drop the storyboard rows left from deleted shots.
+    removeStaleRows: () => call(() => removeMusicVideoStaleStoryboardRows(project.id, { silent: true })),
     revise: stage => call(() => reviseMusicVideoProductionFromFeedback(project.id, { stage }, { silent: true })),
     revert: (stage, field) => call(() => revertMusicVideoProductionInput(project.id, { stage, field }, { silent: true })),
     importDocumentShots: body => call(() => importMusicVideoDocumentShots(project.id, body, { silent: true })),

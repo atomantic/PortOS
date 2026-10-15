@@ -13,6 +13,7 @@ const effects = vi.hoisted(() => ({
   startVocalSeparation: vi.fn(async () => ({ jobId: 'vocal-1' })),
   startLyricAlign: vi.fn(async () => ({ jobId: 'align-1' })),
   probeLoraEffect: vi.fn(async () => ({ status: 'active' })),
+  renderTimelineProject: vi.fn(async () => ({ jobId: 'render-1' })),
 }));
 
 vi.mock('../services/auth.js', () => ({
@@ -102,6 +103,17 @@ vi.mock('../services/loraEffectProbe.js', () => ({
   probeLoraEffect: effects.probeLoraEffect,
 }));
 
+vi.mock('../services/videoTimeline/local.js', () => ({
+  listProjects: vi.fn(async () => []),
+  getProject: vi.fn(async () => ({})),
+  createProject: vi.fn(async () => ({})),
+  updateProject: vi.fn(async () => ({})),
+  deleteProject: vi.fn(async () => ({})),
+  renderProject: effects.renderTimelineProject,
+  attachSseClient: vi.fn(() => true),
+  cancelRender: vi.fn(() => true),
+}));
+
 vi.mock('../services/loras.js', () => ({
   listLoras: vi.fn(async () => []),
   assertSafeLoraFilename: vi.fn(),
@@ -114,6 +126,7 @@ import tracksRoutes from './tracks.js';
 import roundsRoutes from './rounds.js';
 import musicVideoRoutes from './musicVideo.js';
 import lorasRoutes from './loras.js';
+import videoTimelineRoutes from './videoTimeline.js';
 
 const routes = [
   ['/api/devtools/video-download', { url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' }, effects.startVideoDownload],
@@ -124,6 +137,7 @@ const routes = [
   ['/api/music-video/proj-1/vocal-stem/separate', {}, effects.startVocalSeparation],
   ['/api/music-video/proj-1/lyrics/align', {}, effects.startLyricAlign],
   ['/api/loras/test-lora.safetensors/effect', {}, effects.probeLoraEffect],
+  ['/api/video-timeline/projects/proj-1/render', {}, effects.renderTimelineProject],
 ];
 
 const appFor = (address = '192.0.2.10') => {
@@ -138,6 +152,7 @@ const appFor = (address = '192.0.2.10') => {
   app.use('/api/rounds', roundsRoutes);
   app.use('/api/music-video', musicVideoRoutes);
   app.use('/api/loras', lorasRoutes);
+  app.use('/api/video-timeline', videoTimelineRoutes);
   app.use(errorMiddleware);
   return app;
 };
@@ -200,6 +215,18 @@ describe('media process execution operator authority', () => {
     const operator = appFor();
     const resOp = await post(operator, path, body, { Authorization: 'Bearer example-session' });
     expect(resOp.status).toBe(202);
+    expect(effect).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps timeline render available to local and operator callers', async () => {
+    const [path, body, effect] = routes.at(-1);
+    const resLocal = await post(appFor('127.0.0.1'), path, body);
+    expect(resLocal.status).toBe(200);
+    expect(effect).toHaveBeenCalledTimes(1);
+
+    state.enabled = true;
+    const resOp = await post(appFor(), path, body, { Authorization: 'Bearer example-session' });
+    expect(resOp.status).toBe(200);
     expect(effect).toHaveBeenCalledTimes(2);
   });
 

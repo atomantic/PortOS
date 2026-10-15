@@ -3062,6 +3062,45 @@ describe('generateVideo — Wan MLX-Gen contract', () => {
     expect(spawnDetached).not.toHaveBeenCalled();
   });
 
+  it('rejects mismatched Wan dependency roles before staging or spawning', async () => {
+    const { getVideoModels } = await import('../../lib/mediaModels.js');
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const catalog = getVideoModels();
+    vi.mocked(getVideoModels).mockReturnValueOnce(catalog.map((model) => (
+      model.id === 'wan22_t2v_a14b_lightning'
+        ? { ...model, requiredWeights: [{ ...model.requiredWeights[0], targetRoles: ['high_noise_transformer'] }] }
+        : model
+    )));
+
+    await expect(generateVideo({
+      modelId: 'wan22_t2v_a14b_lightning', prompt: 'a quiet lake',
+      width: 480, height: 256, numFrames: 81, fps: 20, mode: 'text',
+    })).rejects.toMatchObject({
+      status: 500, code: 'VIDEO_MODEL_MISCONFIGURED',
+      message: 'Wan model "wan22_t2v_a14b_lightning" has an invalid requiredWeights entry.',
+    });
+    expect(mockFindCachedRepoFile).not.toHaveBeenCalled();
+    expect(fsPromisesMock.mkdtemp).not.toHaveBeenCalled();
+    expect(spawnDetached).not.toHaveBeenCalled();
+  });
+
+  it('rejects a partially cached Wan adapter pair before staging or spawning', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    mockFindCachedRepoFile
+      .mockResolvedValueOnce('/mock/hf/high_noise_model.safetensors')
+      .mockResolvedValueOnce(null);
+
+    await expect(generateVideo({
+      modelId: 'wan22_t2v_a14b_lightning', prompt: 'a quiet lake',
+      width: 480, height: 256, numFrames: 81, fps: 20, mode: 'text',
+    })).rejects.toMatchObject({
+      status: 400, code: 'WAN22_REQUIRED_WEIGHT_NOT_CACHED',
+      message: 'Wan T2V Lightning is missing required weight Wan2.2-T2V-A14B-4steps-lora-rank64-Seko-V1.1/low_noise_model.safetensors. Download or repair its dependencies in Video Gen.',
+    });
+    expect(fsPromisesMock.mkdtemp).not.toHaveBeenCalled();
+    expect(spawnDetached).not.toHaveBeenCalled();
+  });
+
   it('rejects a T2V-only Wan chain before rendering chunk one', async () => {
     const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     vi.mocked(spawnDetached).mockClear();

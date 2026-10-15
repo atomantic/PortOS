@@ -1775,7 +1775,7 @@ async function resumeDelegatedProduction(projectId, run, { swapModels = false, l
   if (!adopt) {
     // Unlink first: the old run's own "canceled" event must no longer match this run.
     const out = await patchRun(projectId, (r) => ({ output: { productionRunId: null }, ...stagePatch(r, 'produce', { status: 'pending', error: null, step: null }) }));
-    if (current && PRODUCTION_LIVE.has(current.status)) await deps.cancelProduction(projectId, current.id).catch(() => {});
+    if (current && PRODUCTION_LIVE.has(current.status)) await settleChildStop([], projectId, run, 'cancel production', current.id, () => deps.cancelProduction(projectId, current.id));
     console.log(`🎬 Autonomous music video ${short(run.id)} starting a new production run${swapModels ? ' with the new models' : ''}`);
     advanceInBackground(projectId);
     return { project: out.project, run: presentAutonomousRun(out.run) };
@@ -1810,36 +1810,54 @@ async function resumeDelegatedProduction(projectId, run, { swapModels = false, l
   return { project: presentProjectAutonomousRun(latest), run: presentAutonomousRun(projectAutonomousRun(latest)) };
 }
 
+/**
+ * Stop one delegated child after the run is already marked stopped/canceled. A 404/409 means
+ * the child is gone or already terminal (benign); anything else is logged and recorded in
+ * `failures` so the response can say work may still be running. Never throws.
+ */
+async function settleChildStop(failures, projectId, run, action, childId, call) {
+  try {
+    await call();
+  } catch (err) {
+    if (err?.status === 404 || err?.status === 409) return;
+    const message = err?.message || String(err);
+    console.error(`❌ Autonomous music video ${short(run.id)} (project ${projectId}) could not ${action} ${childId}: ${message}`);
+    failures.push({ kind: action, id: childId, error: message });
+  }
+}
+
 // Read from the freshly patched record, so a job id stored a moment before the status flipped is seen.
-const cancelLocalSongJob = (run) => (run.stage === 'song' && run.output.localSongJobId
-  ? deps.cancelLocalSong(run.output.localSongJobId).catch(() => {})
+const cancelLocalSongJob = (projectId, run, failures) => (run.stage === 'song' && run.output.localSongJobId
+  ? settleChildStop(failures, projectId, run, 'cancel song job', run.output.localSongJobId, () => deps.cancelLocalSong(run.output.localSongJobId))
   : null);
 
 export async function stopAutonomousVideo(projectId) {
   const { run } = await requireRun(projectId);
   if (!['running', 'awaiting-approval', 'needs-human'].includes(run.status)) throw runError(409, 'NOT_RUNNING', `A ${run.status} run cannot be stopped`);
   const out = await patchRun(projectId, () => ({ status: 'stopped' }));
+  const childStopFailures = [];
   if (run.output.productionRunId) {
-    await deps.stopProduction(projectId, run.output.productionRunId).catch(() => {});
+    await settleChildStop(childStopFailures, projectId, run, 'stop production', run.output.productionRunId, () => deps.stopProduction(projectId, run.output.productionRunId));
   }
-  if (run.output.finalAutoReviewId) await deps.stopAutoReview(projectId, run.output.finalAutoReviewId).catch(() => {});
+  if (run.output.finalAutoReviewId) await settleChildStop(childStopFailures, projectId, run, 'stop auto-review', run.output.finalAutoReviewId, () => deps.stopAutoReview(projectId, run.output.finalAutoReviewId));
   sunoControllers.get(run.id)?.abort();
-  await cancelLocalSongJob(out.run);
-  return { project: out.project, run: presentAutonomousRun(out.run) };
+  await cancelLocalSongJob(projectId, out.run, childStopFailures);
+  return { project: out.project, run: presentAutonomousRun(out.run), childStopFailures };
 }
 
 export async function cancelAutonomousVideo(projectId) {
   const { run } = await requireRun(projectId);
   if (!(AUTONOMOUS_LIVE_STATUSES.includes(run.status) || run.status === 'failed')) throw runError(409, 'NOT_CANCELABLE', `A ${run.status} run cannot be canceled`);
   const out = await patchRun(projectId, () => ({ status: 'canceled', awaiting: null }));
-  if (run.output.renderJobId) await deps.cancelRender(run.output.renderJobId).catch(() => {});
-  if (run.output.finalAutoReviewId) await deps.cancelAutoReview(projectId, run.output.finalAutoReviewId).catch(() => {});
+  const childStopFailures = [];
+  if (run.output.renderJobId) await settleChildStop(childStopFailures, projectId, run, 'cancel render', run.output.renderJobId, () => deps.cancelRender(run.output.renderJobId));
+  if (run.output.finalAutoReviewId) await settleChildStop(childStopFailures, projectId, run, 'cancel auto-review', run.output.finalAutoReviewId, () => deps.cancelAutoReview(projectId, run.output.finalAutoReviewId));
   if (run.output.productionRunId) {
-    await deps.cancelProduction(projectId, run.output.productionRunId).catch(() => {});
+    await settleChildStop(childStopFailures, projectId, run, 'cancel production', run.output.productionRunId, () => deps.cancelProduction(projectId, run.output.productionRunId));
   }
   sunoControllers.get(run.id)?.abort();
-  await cancelLocalSongJob(out.run);
-  return { project: out.project, run: presentAutonomousRun(out.run) };
+  await cancelLocalSongJob(projectId, out.run, childStopFailures);
+  return { project: out.project, run: presentAutonomousRun(out.run), childStopFailures };
 }
 
 // ---- production completion -------------------------------------------------------

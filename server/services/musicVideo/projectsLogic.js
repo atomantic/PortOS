@@ -41,7 +41,7 @@ import { normalizeFilmLook } from '../../lib/filmLook.js';
 import { normalizeTitleCard } from '../../lib/musicVideoTitleCard.js';
 import { normalizeStatsOutro } from '../../lib/musicVideoStatsOutro.js';
 import { remapTreatmentForClone, scenesFingerprint } from './treatment.js';
-import { anchorShotsToSungLyrics, carryStoryboardApproval } from './productionReview.js';
+import { anchorShotsToSungLyrics, carryStoryboardApproval, dropStaleStoryboardRows } from './productionReview.js';
 import { cuesSungWithin } from '../../lib/musicVideoLyricAnchors.js';
 import { normalizeMusicVideoAutomation } from '../../lib/musicVideoAutomation.js';
 
@@ -308,6 +308,7 @@ export function cloneProjectRecord(source, {
     // #9010: the source's in-flight render mark is not the clone's.
     renderingOn: null,
     renderPartialFilename: null,
+    renderResume: null,
     deleted: false,
     deletedAt: null,
   };
@@ -524,6 +525,8 @@ function buildScene(input, { order }) {
     ...(input.speedFps ? { speedFps: input.speedFps } : {}),
     ...(input.offsetFrames ? { offsetFrames: input.offsetFrames } : {}),
     ...(input.reverse ? { reverse: true } : {}),
+    ...(input.holdLastFrame ? { holdLastFrame: true } : {}),
+    ...(input.filmLook ? { filmLook: normalizeFilmLook(input.filmLook) } : {}),
     ...(input.transitionIn ? { transitionIn: input.transitionIn } : {}),
     ...(input.transitionOut ? { transitionOut: input.transitionOut } : {}),
     ...(input.glitches?.length ? { glitches: input.glitches } : {}),
@@ -614,6 +617,8 @@ export function replaceScenes(project, sceneInputs) {
       ...(prior.speedFps ? { speedFps: prior.speedFps } : {}),
       ...(prior.offsetFrames ? { offsetFrames: prior.offsetFrames } : {}),
       ...(prior.reverse ? { reverse: true } : {}),
+      ...(prior.holdLastFrame ? { holdLastFrame: true } : {}),
+      ...(prior.filmLook ? { filmLook: prior.filmLook } : {}),
       ...(prior.transitionIn ? { transitionIn: prior.transitionIn } : {}),
       ...(prior.transitionOut ? { transitionOut: prior.transitionOut } : {}),
       ...(prior.glitches?.length ? { glitches: prior.glitches } : {}),
@@ -625,22 +630,25 @@ export function replaceScenes(project, sceneInputs) {
       ...(prior.direction ? { direction: prior.direction } : {}),
     };
   });
-  return { project: touch(project, { scenes }), scenes, replaced: existing.length };
+  // Rows bound to shots the new plan dropped go with them.
+  return { project: dropStaleStoryboardRows(touch(project, { scenes })), scenes, replaced: existing.length };
 }
 
 // Scene fields a director edits within an approved shot (its span, wording, selected
 // takes, and whether it plays as a clip or its still with an image effect) without
 // adding a shot or lyric the storyboard approval did not cover.
 const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'label', 'prompt', 'framePrompt', 'visualIntent',
-  'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'reverse', 'transitionIn', 'transitionOut', 'glitches', 'cutEffect',
-  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec'];
+  'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'reverse', 'holdLastFrame', 'filmLook', 'transitionIn', 'transitionOut', 'glitches', 'cutEffect',
+  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'frameReferenceIds'];
 
 /**
  * Apply a patch to a single scene. Returns `{ project, updated }`. Throws if the
  * scene id is unknown.
  */
 export function applySceneUpdate(project, sceneId, patch) {
-  const data = parseSceneOrThrow(musicVideoSceneUpdateSchema, patch);
+  const parsed = parseSceneOrThrow(musicVideoSceneUpdateSchema, patch);
+  // A shot's own look is stored complete; null returns it to the video's look.
+  const data = 'filmLook' in parsed ? { ...parsed, filmLook: parsed.filmLook ? normalizeFilmLook(parsed.filmLook) : null } : parsed;
   const scenes = project.scenes || [];
   const idx = scenes.findIndex((s) => s.sceneId === sceneId);
   if (idx < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
@@ -694,7 +702,7 @@ export function removeScene(project, sceneId) {
 // the song, its section, and the lyric sung there. A reorder leaves these on
 // their positions and moves only the shot (prompts, frames, clips, takes,
 // direction, camera), so swapping two shots keeps the song timing intact.
-const SCENE_SLOT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'sectionIndex', 'sectionLabel', 'lyricText', 'lyricRole'];
+const SCENE_SLOT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'sectionIndex', 'sectionLabel', 'lyricText', 'lyricRole', 'lyricSize'];
 const DRAFT_SHOT_SLOT_FIELDS = ['startSec', 'endSec', 'lyricCueIds'];
 const pickSlot = (record, fields) => Object.fromEntries(fields.filter((k) => k in record).map((k) => [k, record[k]]));
 const withoutSlot = (record, fields) => Object.fromEntries(Object.entries(record).filter(([k]) => !fields.includes(k)));
@@ -844,7 +852,21 @@ export function splitScene(project, sceneId, { backend = null, atSec = null } = 
 
   const nextScenes = [...scenes.slice(0, idx), ...pieces, ...scenes.slice(idx + 1)]
     .map((s, i) => ({ ...s, order: i }));
-  const next = touch(project, { scenes: nextScenes });
+  const extra = { scenes: nextScenes };
+  // The shot's storyboard row follows its first piece; each later piece gets a
+  // copy of the row's direction, all anchored to the lines sung over them.
+  const draft = project.productionReview?.draft;
+  const row = Array.isArray(draft?.storyboard) && draft.storyboardSource !== 'document'
+    ? draft.storyboard.find((shot) => shot?.sceneId === sceneId) : null;
+  if (row) {
+    const anchored = (piece) => cuesSungWithin(project.lyricCues, piece.startSec, piece.endSec).map((cue) => cue.id);
+    const span = (piece) => ('startSec' in row || 'endSec' in row ? { startSec: piece.startSec, endSec: piece.endSec } : {});
+    const rows = pieces.map((piece, i) => ({ ...row, ...(i ? { id: `shot-${piece.sceneId}`, sceneId: piece.sceneId } : {}),
+      ...span(piece), lyricCueIds: anchored(piece) }));
+    const storyboard = draft.storyboard.flatMap((shot) => (shot === row ? rows : [shot]));
+    extra.productionReview = { ...project.productionReview, draft: { ...draft, storyboard } };
+  }
+  const next = touch(project, extra);
   return { project: next, scenes: nextScenes.slice(idx, idx + count) };
 }
 

@@ -253,6 +253,7 @@ export const DEFAULT_EXCLUDES = [
   { path: '/music-video-compositions/', reason: 'In-flight music-video typography overlay scratch — removed when its render ends and swept at boot', overridable: false },
   { path: '/music-video-film-look/', reason: 'In-flight music-video film look pass (a staged link to the finished render) — removed when the pass ends', overridable: false },
   { path: '/music-video-stats-outro/', reason: 'In-flight music-video outro page (fonts and floor stills) — removed when its render ends and swept at boot', overridable: false },
+  { path: '/music-video-segments/', reason: 'Cached music-video shot segments — the final render re-renders any that are missing', overridable: true },
   { path: '/music-video-song-renders/', reason: 'In-flight music-video composition renders (a staged copy of the document plus scene media) — removed when the render ends and swept at boot', overridable: false },
   { path: '/launch-videos/*/*/proofs/', reason: 'Launch-video critique-loop contact sheets — re-rendered from the run composition', overridable: true },
   { path: '/cache/', reason: 'Remote-API metadata and licensed reading caches — regenerable on demand, and stale on restore anyway', overridable: false },
@@ -1132,7 +1133,11 @@ async function pruneOldSnapshots(destPath, retentionCount) {
   if (retentionCount === null || retentionCount === undefined) return { pruned: 0 };
 
   const sourceRoot = join(destPath, 'snapshots', MACHINE_HOST);
-  const entries = await readdir(sourceRoot, { withFileTypes: true }).catch(() => []);
+  // A completed snapshot was just written here; even ENOENT is a failed
+  // inventory, not proof that there is nothing to prune. Keep paths private.
+  const entries = await readdir(sourceRoot, { withFileTypes: true }).catch(cause => {
+    throw inventoryReadError(cause, 'read-retention-namespace');
+  });
   const candidateIds = entries
     .filter(entry => entry.isDirectory() && !entry.name.startsWith('.') && SNAPSHOT_ID_PATTERN.test(entry.name))
     .map(entry => entry.name);
@@ -1898,7 +1903,13 @@ async function restoreHeldDatabase({ snapshotDir, currentSource }, snapshotId, {
   if (pendingRecovery) return pendingRecovery;
   const sqlPath = join(snapshotDir, 'portos-db.sql');
 
-  const info = await stat(sqlPath).catch(() => null);
+  const info = await stat(sqlPath).catch(cause => {
+    if (cause?.code === 'ENOENT') return null;
+    const { filesystemCode } = inventoryReadError(cause, 'stat-database-dump').context;
+    console.error(`❌ restore: dump metadata unreadable for snapshot ${snapshotId} (${filesystemCode})`);
+    return false;
+  });
+  if (info === false) return DUMP_UNREADABLE;
   // An empty/0-byte dump is as good as absent — restoring it is a silent no-op.
   // Mirror dumpPostgres's empty-dump guard so a truncated snapshot can't read
   // as a successful "0 tables" restore.

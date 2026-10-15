@@ -113,6 +113,10 @@ export async function syncRunnerAgents() {
         task: task || { id: agent.taskId, taskType: inferredType, description: 'Recovered from runner' },
         runId: recoveredRunId,
         model: persisted?.metadata?.model || null,
+        // Completion hooks must read the registered worktree, not the task's
+        // primary checkout. The runner's cwd also survives an unreadable record.
+        workspacePath: persisted?.metadata?.workspacePath || agent.workspacePath || null,
+        recoveredFromRunner: true,
         hasStartedWorking: true,
         startedAt: agent.startedAt
       });

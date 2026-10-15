@@ -11,6 +11,7 @@ export {
   MUSIC_VIDEO_TRANSITION_STYLES,
   mergeGlitchFrames,
   blockBox,
+  edgeGlows,
   sceneImageEffectGlitchFrames,
   sceneShotGlitchFrames,
   sceneTransitions,

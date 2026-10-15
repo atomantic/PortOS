@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { findFfmpeg } from '../../lib/ffmpeg.js';
-import { beatToggleCuts, sceneCutEffect } from '../../lib/musicVideoCutEffects.js';
+import { cutEffectCuts, plannedCutEffect, plannedTransitions, sceneCutEffect } from '../../lib/musicVideoCutEffects.js';
 import { buildMusicVideoFfmpegArgs } from './render.js';
 import { applySceneUpdate } from './projectsLogic.js';
 
@@ -19,22 +19,64 @@ const toggle = (extra = {}) => sceneCutEffect({ cutEffect: { style: 'beat-toggle
 
 // Uniquely catches where a beat toggle flips: which beats (or half beats) in the
 // overlap, the even fallback with no beat grid, and which cuts carry one.
-describe('beatToggleCuts', () => {
+describe('cutEffectCuts', () => {
   const piece = (sceneId, startFrame, endFrame, extra = {}) => ({ sceneId, startFrame, endFrame, ...extra });
 
   it('flips to the incoming shot on each beat in the overlap before the cut, incoming first', () => {
-    const [cut] = beatToggleCuts([piece('a', 0, 24, { cutEffect: toggle() }), piece('b', 24, 48)], { fps: 24, beats: [0.25, 0.5, 0.75, 1] });
-    expect(cut).toEqual({ index: 0, cutFrame: 24, windowFrames: 12, incoming: [[12, 18]] });
-    const [half] = beatToggleCuts([piece('a', 0, 24, { cutEffect: toggle({ rate: 'half' }) }), piece('b', 24, 48)], { fps: 24, beats: [0.25, 0.5, 0.75, 1] });
+    const [cut] = cutEffectCuts([piece('a', 0, 24, { cutEffect: toggle() }), piece('b', 24, 48)], { fps: 24, beats: [0.25, 0.5, 0.75, 1] });
+    expect(cut).toEqual({ style: 'beat-toggle', index: 0, cutFrame: 24, windowFrames: 12, incoming: [[12, 18]] });
+    const [half] = cutEffectCuts([piece('a', 0, 24, { cutEffect: toggle({ rate: 'half' }) }), piece('b', 24, 48)], { fps: 24, beats: [0.25, 0.5, 0.75, 1] });
     expect(half).toMatchObject({ incoming: [[12, 15], [18, 21]] });
-    const [even] = beatToggleCuts([piece('a', 0, 24, { cutEffect: toggle() }), piece('b', 24, 48)], { fps: 24 });
+    const [even] = cutEffectCuts([piece('a', 0, 24, { cutEffect: toggle() }), piece('b', 24, 48)], { fps: 24 });
     expect(even.incoming).toEqual([[12, 15], [18, 21]]);
   });
 
   it('plays only when switched on, and never on an intercut partner or inside a split shot', () => {
-    expect(beatToggleCuts([piece('a', 0, 24, { cutEffect: toggle({ enabled: false }) }), piece('b', 24, 48)], { fps: 24 })).toEqual([]);
-    expect(beatToggleCuts([piece('a', 0, 24, { cutEffect: toggle() }), piece('b', 24, 48, { partner: true })], { fps: 24 })).toEqual([]);
-    expect(beatToggleCuts([piece('a', 0, 24, { cutEffect: toggle() }), piece('b', 24, 36), piece('a', 36, 48, { cutEffect: toggle() })], { fps: 24 })).toEqual([]);
+    expect(cutEffectCuts([piece('a', 0, 24, { cutEffect: toggle({ enabled: false }) }), piece('b', 24, 48)], { fps: 24 })).toEqual([]);
+    expect(cutEffectCuts([piece('a', 0, 24, { cutEffect: toggle() }), piece('b', 24, 48, { partner: true })], { fps: 24 })).toEqual([]);
+    expect(cutEffectCuts([piece('a', 0, 24, { cutEffect: toggle() }), piece('b', 24, 36), piece('a', 36, 48, { cutEffect: toggle() })], { fps: 24 })).toEqual([]);
+  });
+
+  // Uniquely catches a dissolve or fade landing off the cut, overrunning a short shot, or a fade missing the video's end.
+  it('fades a dissolve in before the cut, and a fade through black half each side of it or out at the end', () => {
+    const effect = (style, overlapSec) => sceneCutEffect({ cutEffect: { style, overlapSec } });
+    expect(cutEffectCuts([piece('a', 0, 24, { cutEffect: effect('dissolve', 0.5) }), piece('b', 24, 48)], { fps: 24 }))
+      .toEqual([{ style: 'dissolve', index: 0, cutFrame: 24, windowFrames: 12, incoming: [[12, 24]] }]);
+    // A dissolve longer than its shot starts after the shot's first frame.
+    expect(cutEffectCuts([piece('a', 0, 6, { cutEffect: effect('dissolve', 2) }), piece('b', 6, 48)], { fps: 24 })[0]).toMatchObject({ windowFrames: 5 });
+    expect(cutEffectCuts([piece('a', 0, 24, { cutEffect: effect('fade-black', 1) }), piece('b', 24, 48)], { fps: 24 }))
+      .toEqual([{ style: 'fade-black', index: 0, cutFrame: 24, outFrames: 12, inFrames: 12 }]);
+    expect(cutEffectCuts([piece('a', 0, 24), piece('b', 24, 48, { cutEffect: effect('fade-black', 1) })], { fps: 24 }))
+      .toEqual([{ style: 'fade-black', index: 1, cutFrame: 48, outFrames: 24, inFrames: 0 }]);
+    // Only a fade has anything to do on the last shot.
+    expect(cutEffectCuts([piece('a', 0, 24, { cutEffect: effect('dissolve', 1) })], { fps: 24 })).toEqual([]);
+  });
+});
+
+// Uniquely catches a storyboard row's planned transition being misread, or
+// overriding a shot that already picked its own (a plain cut included).
+describe('a transition the storyboard plans', () => {
+  it.each([
+    ['Dissolve', 'dissolve'],
+    ['Slow dissolve into the bedroom', 'dissolve'],
+    ['Crossfade to the band', 'dissolve'],
+    ['Fade to her dreaming', 'dissolve'],
+    ['Fade to black', 'fade-black'],
+    ['Slow fade out', 'fade-black'],
+    ['Entry: dissolve from the car. Exit: hard cut', null],
+    ['Entry: match cut. Exit: dissolve to the bed', 'dissolve'],
+    ['Fade in from black', null],
+    ['Cut', null],
+    ['Whip pan to the drummer', null],
+  ])('reads "%s" as %s', (text, style) => {
+    expect(plannedCutEffect(text)?.style ?? null).toBe(style);
+  });
+
+  it('stands in only until the shot picks an effect of its own', () => {
+    const planned = plannedTransitions([{ sceneId: 's1', transition: 'Dissolve' }]).get('s1');
+    expect(sceneCutEffect({ sceneId: 's1' }, planned)).toMatchObject({ style: 'dissolve', enabled: true, overlapSec: 1 });
+    expect(sceneCutEffect({ sceneId: 's1', cutEffect: { style: 'dissolve', enabled: false } }, planned)).toMatchObject({ enabled: false });
+    expect(sceneCutEffect({ sceneId: 's1', cutEffect: null }, planned)).toBeNull();
   });
 });
 
@@ -96,6 +138,49 @@ describe.skipIf(!ffmpeg)('a beat toggle across a cut in the final render', () =>
   });
 });
 
+// Uniquely catches a dissolve or a fade through black failing in ffmpeg, landing
+// off its frames, adding time, or a dissolve's incoming clip leaving the song's clock.
+describe.skipIf(!ffmpeg)('a dissolve and a fade through black across a cut in the final render', () => {
+  const song = join(dir, 'song.wav');
+  const outgoing = join(dir, 'fx-outgoing.mp4');
+  const incoming = join(dir, 'fx-incoming.mp4');
+  const render = (style) => {
+    run(['-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-y', song]);
+    run(['-f', 'lavfi', '-i', `color=white:s=${W}x${H}:r=${FPS}:d=1`, '-pix_fmt', 'yuv420p', '-y', outgoing]);
+    run(['-f', 'lavfi', '-i', `color=gray:s=${W}x${H}:r=${FPS}:d=1`, '-pix_fmt', 'yuv420p', '-y', incoming]);
+    const clip = (videoPath, i, extra = {}) => ({ sceneId: `s${i}`, videoPath, width: W, height: H, fps: FPS, duration: 1, sourceSec: 1, loop: false, inSec: 0, outSec: 1, frameFit: 'fill', ...extra });
+    const output = join(dir, `${style}.mp4`);
+    const cutEffect = sceneCutEffect({ cutEffect: { style, overlapSec: 0.5 } });
+    const plan = buildMusicVideoFfmpegArgs([clip(outgoing, 0, { cutEffect }), clip(incoming, 1)], song, output, { audioDurationSec: 2, frameGrid: true });
+    run(plan.args.filter((arg, i) => !(arg === '-progress' || plan.args[i - 1] === '-progress')));
+    expect(plan.totalDuration).toBe(2);
+    const means = frameMeans(output);
+    expect(means).toHaveLength(2 * FPS);
+    return means;
+  };
+
+  it('fades the incoming shot in over the last half second, fully in on the cut', () => {
+    const means = render('dissolve');
+    const gray = means[23];
+    // White until the window (frame 6), then stepping down toward the incoming gray, which holds from the cut.
+    expect(means.slice(0, 6).every((m) => m > 250)).toBe(true);
+    const window = means.slice(6, 12);
+    window.forEach((m, k) => expect(m).toBeLessThan(k === 0 ? 256 : window[k - 1]));
+    expect(window.every((m) => m > gray + 2)).toBe(true);
+    expect(means.slice(12).every((m) => Math.abs(m - gray) < 2)).toBe(true);
+  });
+
+  it('darkens into the cut and lifts after it', () => {
+    const means = render('fade-black');
+    expect(means.slice(0, 9).every((m) => m > 250)).toBe(true);
+    expect(means[11]).toBeLessThan(means[10]);
+    expect(means[11]).toBeLessThan(100);
+    expect(means[12]).toBeLessThan(20);
+    expect(means[14]).toBeGreaterThan(means[13]);
+    expect(Math.abs(means[15] - means[23])).toBeLessThan(2);
+  });
+});
+
 // Uniquely catches the scene PATCH refusing the effect, losing its settings when switched off, or taking an unknown style.
 describe('a shot\'s cut effect on the board', () => {
   const project = { id: 'mv-1', scenes: [{ sceneId: 's1', order: 0, startSec: 0, endSec: 4, takes: [] }] };
@@ -106,6 +191,6 @@ describe('a shot\'s cut effect on the board', () => {
     const { project: off } = applySceneUpdate(set, 's1', { cutEffect: { ...cutEffect, enabled: false } });
     expect(sceneCutEffect(off.scenes[0])).toEqual({ ...cutEffect, enabled: false });
     expect(applySceneUpdate(off, 's1', { cutEffect: null }).project.scenes[0].cutEffect).toBeNull();
-    expect(() => applySceneUpdate(project, 's1', { cutEffect: { style: 'crossfade' } })).toThrow();
+    expect(() => applySceneUpdate(project, 's1', { cutEffect: { style: 'wipe' } })).toThrow();
   });
 });

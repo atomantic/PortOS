@@ -81,6 +81,39 @@ describe('mergeUpdatedTaskInterval', () => {
 });
 
 describe('ScheduleTab on-demand feedback', () => {
+  it('retains the last schedule on a failed refresh, shows the failure, and recovers', async () => {
+    const user = userEvent.setup();
+    api.getCodeReviewDefaults.mockResolvedValue({});
+    const schedule = { tasks: { review: { type: 'on-demand', enabled: true, displayName: 'Example Review' } } };
+    api.getCosSchedule
+      .mockResolvedValueOnce(schedule)
+      .mockRejectedValueOnce(new Error('app cadence unavailable'))
+      .mockResolvedValueOnce({ ...schedule, tasks: { review: { ...schedule.tasks.review, displayName: 'Recovered Review' } } });
+    render(<MemoryRouter><ScheduleTab apps={[]} providers={[]} /></MemoryRouter>);
+    expect(await screen.findByText('Example Review')).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Schedule unavailable — showing the last loaded schedule');
+    expect(screen.getByRole('alert')).toHaveTextContent('app cadence unavailable');
+    expect(screen.getByText('Example Review')).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect(await screen.findByText('Recovered Review')).toBeVisible();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(api.getCosSchedule).toHaveBeenLastCalledWith({ silent: true });
+  });
+
+  it('allows an initial unavailable schedule to be retried successfully with an empty schedule', async () => {
+    const user = userEvent.setup();
+    api.getCodeReviewDefaults.mockResolvedValue({});
+    api.getCosSchedule.mockRejectedValueOnce(new Error('app registry unavailable')).mockResolvedValueOnce({ tasks: {} });
+    render(<MemoryRouter><ScheduleTab apps={[]} providers={[]} /></MemoryRouter>);
+    expect(await screen.findByText('Failed to load task schedule')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Task Schedule')).toBeVisible();
+    expect(screen.queryByText('Failed to load task schedule')).not.toBeInTheDocument();
+  });
+
   it('names the selected app and paints the returned request before the refresh settles', async () => {
     const user = userEvent.setup();
     const request = {

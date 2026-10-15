@@ -12,10 +12,10 @@ import { existsSync } from 'fs';
 import { unlink } from 'fs/promises';
 import { pipeline } from 'stream/promises';
 import { Router } from 'express';
-import { musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoShotLockSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoContinueShotSchema, musicVideoPoolUseSchema, musicVideoPoolMarkSchema, musicVideoPoolDeleteSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoLyricAnchorSyncSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
+import { musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoShotLockSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoContinueShotSchema, musicVideoPoolUseSchema, musicVideoPoolMarkSchema, musicVideoPoolSearchQuerySchema, musicVideoPoolDeleteSchema, musicVideoPoolImportSchema, musicVideoLibrarySearchQuerySchema, musicVideoPoolAddSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoLyricAnchorSyncSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
 import { productionReadiness } from '../services/musicVideo/productionReview.js';
 import { finishedOutsideBlocker } from '../lib/musicVideoFinishedOutside.js';
-import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, lockProductionShots, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, syncLyricAnchors, reviseProductionFromFeedback, revertProductionInput } from '../services/musicVideo/productionReviewService.js';
+import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, lockProductionShots, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, syncLyricAnchors, removeStaleStoryboardRows, reviseProductionFromFeedback, revertProductionInput } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   validateRequest,
@@ -708,8 +708,9 @@ router.get('/:id/sharing-copy/download', asyncHandler(async (req, res) => {
 // Assemble the scenes' i2v clips into one MP4 over the track as the master audio
 // bed. Kickoff returns { jobId }; progress streams over SSE (mirrors
 // videoTimeline). Per-project mutex returns 409 with the live jobId for re-attach.
+// A shot-by-shot render started here picks up again after a server restart.
 router.post('/:id/render', asyncHandler(async (req, res) => {
-  res.json(await renderMusicVideo(req.params.id));
+  res.json(await renderMusicVideo(req.params.id, { resumable: true }));
 }));
 
 // Read-only: the live final-render job for a project (null when none runs on
@@ -717,6 +718,27 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
 router.get('/:id/render', (req, res) => {
   res.json({ jobId: getActiveRenderJobId(req.params.id) });
 });
+
+// Per-shot render segments (shotSegments.js): every shot's cache state, one
+// shot's render started or stopped, and a rendered shot's silent segment.
+router.get('/:id/shot-renders', asyncHandler(async (req, res) => {
+  const { getShotRenderStatus } = await import('../services/musicVideo/shotSegments.js');
+  res.json(await getShotRenderStatus(req.params.id));
+}));
+router.post('/:id/shots/:sceneId/render', asyncHandler(async (req, res) => {
+  const { startShotRender } = await import('../services/musicVideo/shotSegments.js');
+  res.status(202).json(await startShotRender(req.params.id, req.params.sceneId));
+}));
+router.post('/:id/shots/:sceneId/render/cancel', asyncHandler(async (req, res) => {
+  const { cancelShotRender } = await import('../services/musicVideo/shotSegments.js');
+  res.json({ ok: cancelShotRender(req.params.id, req.params.sceneId) });
+}));
+router.get('/:id/shot-renders/:name', asyncHandler(async (req, res) => {
+  const { shotSegmentFile } = await import('../services/musicVideo/shotSegments.js');
+  const path = shotSegmentFile(req.params.id, req.params.name);
+  if (!path) throw new ServerError('Shot render not found', { status: 404, code: 'NOT_FOUND' });
+  res.type('video/mp4').sendFile(path);
+}));
 
 // Read-only: this project's in-flight scene frame/clip renders (#10154), so a
 // reloaded board restores its spinners instead of letting a duplicate be submitted.
@@ -734,6 +756,9 @@ router.post('/:id/production-review/feedback/resolve', asyncHandler(async (req, 
 }));
 router.post('/:id/production-review/lyric-anchors', asyncHandler(async (req, res) => {
   res.json(await syncLyricAnchors(req.params.id, validateRequest(musicVideoLyricAnchorSyncSchema, req.body ?? {})));
+}));
+router.delete('/:id/production-review/stale-rows', asyncHandler(async (req, res) => {
+  res.json(await removeStaleStoryboardRows(req.params.id));
 }));
 // An explicit click: the only provider call is the stage's own revision.
 router.post('/:id/production-review/revise', asyncHandler(async (req, res) => {
@@ -1558,6 +1583,15 @@ router.get('/:id/media-pool', asyncHandler(async (req, res) => {
   res.json(await getMusicVideoMediaPool(project));
 }));
 
+// Swap's search: the pool items whose prompts (the shot's text and the prompt each file was made from) hold the words.
+router.get('/:id/media-pool/search', asyncHandler(async (req, res) => {
+  const { q } = validateRequest(musicVideoPoolSearchQuerySchema, req.query);
+  const project = await getProject(req.params.id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const { searchMusicVideoMediaPool } = await import('../services/musicVideo/mediaPool.js');
+  res.json({ items: await searchMusicVideoMediaPool(project, q) });
+}));
+
 // The cutting room floor outro's tally: what was made, kept and turned down for this video.
 router.get('/:id/stats-outro', asyncHandler(async (req, res) => {
   const project = await getProject(req.params.id);
@@ -1569,7 +1603,36 @@ router.get('/:id/stats-outro', asyncHandler(async (req, res) => {
 // The asset manager: mark unused stills and clips ★ ingredient / ✕ bad, or delete them from the library.
 router.patch('/:id/media-pool/marks', asyncHandler(async (req, res) => {
   const { items, mark } = validateRequest(musicVideoPoolMarkSchema, req.body);
-  res.json({ assetMarks: await markMediaPoolAssets(req.params.id, items.map((item) => `${item.kind}:${item.assetId}`), mark) });
+  res.json(await markMediaPoolAssets(req.params.id, items.map((item) => `${item.kind}:${item.assetId}`), mark));
+}));
+
+// Bring an earlier draft's stills and clips into this video's assets (references; the draft is untouched).
+router.post('/:id/media-pool/import', asyncHandler(async (req, res) => {
+  const { fromProjectId } = validateRequest(musicVideoPoolImportSchema, req.body);
+  if (fromProjectId === req.params.id) throw new ServerError('Pick another video', { status: 400, code: 'VALIDATION_ERROR' });
+  const [project, from] = await Promise.all([getProject(req.params.id), getProject(fromProjectId)]);
+  if (!project || !from) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const { importMusicVideoPool, getMusicVideoMediaPool } = await import('../services/musicVideo/mediaPool.js');
+  const result = await importMusicVideoPool(project, from);
+  res.json({ ...result, items: (await getMusicVideoMediaPool(project)).items });
+}));
+
+// Media made for this video but never filed: search the whole library by prompt, then add picks.
+router.get('/:id/media-pool/library', asyncHandler(async (req, res) => {
+  const { q } = validateRequest(musicVideoLibrarySearchQuerySchema, req.query);
+  const project = await getProject(req.params.id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const { searchMediaLibraryForPool } = await import('../services/musicVideo/mediaPool.js');
+  res.json(await searchMediaLibraryForPool(project, q));
+}));
+
+router.post('/:id/media-pool/add', asyncHandler(async (req, res) => {
+  const { items } = validateRequest(musicVideoPoolAddSchema, req.body);
+  const project = await getProject(req.params.id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const { addLibraryMediaToPool, getMusicVideoMediaPool } = await import('../services/musicVideo/mediaPool.js');
+  const result = await addLibraryMediaToPool(project, items);
+  res.json({ ...result, items: (await getMusicVideoMediaPool(project)).items });
 }));
 
 router.post('/:id/media-pool/delete', asyncHandler(async (req, res) => {

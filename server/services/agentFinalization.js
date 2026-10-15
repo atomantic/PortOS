@@ -612,7 +612,7 @@ async function observePrClaim({ task, workspacePath, success, prExpected, agentS
         message: `This run requires an open draft ${noun}; the forge did not confirm that disposition for ${branch}` });
     }
     const issueNumber = issueNumberFromRef(branch);
-    if (issueNumber === null) return prObservation(PR_OBSERVATION.VERIFIED_CLAIM, { branch });
+    if (issueNumber === null) return prObservation(PR_OBSERVATION.VERIFIED_CLAIM, { branch, url: found.url });
     if (typeof found.body !== 'string') {
       // An unreadable body cannot distinguish a missing trailer from a present
       // one, so it is a forge failure, never the agent's.
@@ -622,10 +622,10 @@ async function observePrClaim({ task, workspacePath, success, prExpected, agentS
         inconclusive: true,
       });
     }
-    if (hasIssueClosingTrailer(found.body, issueNumber)) return prObservation(PR_OBSERVATION.VERIFIED_CLAIM, { branch });
+    if (hasIssueClosingTrailer(found.body, issueNumber)) return prObservation(PR_OBSERVATION.VERIFIED_CLAIM, { branch, url: found.url });
     if (hasIssuePartialTrailer(found.body, issueNumber)) {
       return prObservation(PR_OBSERVATION.VERIFIED_CLAIM, {
-        branch,
+        branch, url: found.url,
         advisory: `${titleNoun} for branch ${branch} partially ships issue #${issueNumber}; reconcile the remaining scope after merge.`,
       });
     }
@@ -1321,6 +1321,125 @@ function resolvePrEvidence({ primaryObservation, noChangeObservation }) {
   };
 }
 
+async function followUpAgentGoalFidelity({ agentId, task, fidelity, fidelityDowngrade }) {
+  // A finding that lives only in this run's record dies with the agent card
+  // nobody opened. When the user has configured it, the follow-up files the
+  // finding on the project's own tracker and/or queues the run that fixes it.
+  // Lazily imported: the filer reaches the apps roster, both forge CLIs, and
+  // (for a JIRA-tracked app) the JIRA client, and a static edge would put all
+  // of it on the closure of every suite that reaches finalization. Gated on the
+  // WIDEST trigger so a clean `ship` — the overwhelmingly common verdict — does
+  // not evaluate that graph just to be told there is nothing to act on.
+  if (resolvePrCompletion(task?.metadata) !== PR_COMPLETIONS.LEAVE_OPEN && goalFidelityFollowUpApplies(fidelity.review, 'any-finding')) {
+    const followUp = await import('./goalFidelityFollowUp.js')
+      .then(({ runGoalFidelityFollowUp }) => runGoalFidelityFollowUp({ agentId, task, review: fidelity.review, context: fidelity.context }))
+      .catch(err => {
+        emitLog('warn', `Goal-fidelity follow-up failed for ${agentId}: ${err.message}`, { agentId, taskId: task?.id });
+        return null;
+      });
+    if (followUp?.ran) {
+      emitLog('info', `📌 ${formatGoalFidelityFollowUpSummary(followUp)} for ${agentId}`, { agentId, taskId: task?.id });
+      // Recorded on the review so the agent card can link the issue and the
+      // queued task without re-deriving either from the tracker.
+      fidelity.review.followUp = {
+        ...(followUp.issue ? { issue: { number: followUp.issue.number, url: followUp.issue.url, duplicate: followUp.issue.duplicate === true } } : {}),
+        ...(followUp.issueError ? { issueError: followUp.issueError } : {}),
+        // The producer's verdict rides with the id: a task the loop policy HELD
+        // is not a queued one, and the card must not offer the manual fallback
+        // for a finding that already has a task waiting on the user.
+        ...(followUp.task?.id ? {
+          taskId: followUp.task.id,
+          ...(followUp.task.approvalRequired ? { taskApprovalRequired: true } : {}),
+          ...(followUp.task.duplicate ? { taskDuplicate: true } : {}),
+        } : {}),
+        ...(followUp.taskError ? { taskError: followUp.taskError } : {}),
+      };
+    }
+  }
+
+  if (fidelityDowngrade && !fidelity.review.followUp?.taskId) {
+    // The Review Hub bridges this into a review alert when no follow-up task
+    // exists. A queued (or deduplicated) CoS investigation already carries the
+    // same finding, including when it is waiting for approval, so a second
+    // dismissible alert only asks the user to triage the same work twice.
+    cosEvents.emit(GOAL_FIDELITY_HOLD_EVENT, { agentId, taskId: task?.id, review: fidelity.review });
+  }
+}
+
+async function sidelineFailedAgentProvider({ providerId, verdict, terminatedByUser }) {
+  if (!verdict.success && !terminatedByUser && verdict.errorAnalysis) {
+    // Bench the provider when the PROVIDER is what failed — not the agent's
+    // work. `origin: 'provider'` is agentErrorAnalysis's provenance flag (#2642),
+    // set only for structured provider chrome, never for a loose keyword sweep of
+    // a transcript the agent itself wrote. Without a bench the provider stays
+    // "available", so the very next dequeue picks it again and dies identically:
+    // that is how one `agy` account-verification block could take down a whole
+    // queue of tasks in under a minute. `resolveProviderBench` (shared with
+    // promptRunner) picks the window and declines to bench request-specific
+    // failures; the cooldown then routes the retry to a fallback
+    // (agentProviderResolution.js) and auto-expires without anyone intervening.
+    // Provenance is the WHOLE gate — deliberately not `|| category === 'usage-limit'
+    // || category === 'rate-limit'`, which is what this used to key on. Those
+    // categories have loose alternatives (a bare "rate limit" / "quota exceeded" an
+    // agent's own failing test can print), so a category-only check benches a
+    // healthy provider off the agent's transcript. Genuine limits already carry
+    // `origin: 'provider'` via their `structuredMarker`, so nothing real is lost.
+    // Every finalizeAgent caller analyzes through analyzeAgentFailure or
+    // detectImmediateFallbackSignal, and both stamp an origin on every branch.
+    const bench = verdict.errorAnalysis.origin === 'provider' ? resolveProviderBench(verdict.errorAnalysis) : null;
+    // Lazy provider lookup — resolve the active provider only when a marker
+    // fires AND the caller didn't already know the id, keeping the ordinary
+    // failure path free of a settings-file read.
+    const markerProviderId = bench ? providerId || (await getActiveProvider())?.id : null;
+    if (markerProviderId) {
+      // `markUsageLimit` parses its own window out of the provider's message
+      // ("resets 5pm"), so a usage limit keeps its dedicated marker.
+      const mark = bench.marker === 'usage-limit'
+        ? markProviderUsageLimit(markerProviderId, verdict.errorAnalysis)
+        : markProviderUnavailable(markerProviderId, {
+          reason: bench.category,
+          message: bench.message || 'Provider unavailable',
+          waitTimeMs: bench.waitTimeMs
+        });
+      await mark.catch(err => {
+        emitLog('warn', `Failed to sideline provider: ${err.message}`, { providerId: markerProviderId, category: bench.category });
+      });
+    }
+  }
+}
+
+async function recordScheduledAgentOutcome({ agentId, task, verdict, terminatedByUser, hookResult }) {
+  // Type-level consecutive-failure ledger (#2616): feed the per-type
+  // backoff/auto-park in taskSchedule. Only SCHEDULED task types carry
+  // `metadata.analysisType`; user/ad-hoc tasks don't participate — so this gate
+  // deliberately does NOT use resolveTaskHookType (#2727). That resolver falls back
+  // to `task.taskType`, which for an ad-hoc task is the CoS queue category
+  // ('internal', 'user'); ledgering those would invent a failure ledger for a
+  // "task type" that no schedule owns. "Which tasks run a hook" and "which task
+  // types back off" are genuinely different questions. The pure
+  // resolveTypeFailureSignal decides success vs failure vs skip — including the
+  // exit-0-but-unparseable-output case that must count as a failure.
+  const scheduledType = task?.metadata?.analysisType || null;
+  if (scheduledType) {
+    const signal = resolveTypeFailureSignal({
+      success: verdict.success,
+      terminatedByUser,
+      hookResult,
+      errorCategory: verdict.errorAnalysis?.category
+    });
+    if (signal.record !== 'skip') {
+      const ledgerAppId = task?.metadata?.app || null;
+      const { recordTaskTypeFailure, recordTaskTypeSuccess } = await import('./taskSchedule.js');
+      const ledgerUpdate = signal.record === 'failure'
+        ? recordTaskTypeFailure(scheduledType, ledgerAppId, { errorCategory: signal.category })
+        : recordTaskTypeSuccess(scheduledType, ledgerAppId);
+      await ledgerUpdate.catch(err => {
+        emitLog('warn', `⚠️ Task-type ledger update failed for ${scheduledType}: ${err.message}`, { taskType: scheduledType, agentId });
+      });
+    }
+  }
+}
+
 /**
  * Shared end-of-run state writes for all three spawn paths
  * (`handleAgentCompletion` runner-mode, TUI `finish`, direct-CLI `close`).
@@ -1345,6 +1464,7 @@ export async function finalizeAgent({
   error,
   completionReason,
   workspacePath = null,
+  recovery = false,
   prExpected = false,
   startedAt = null,
 }) {
@@ -1411,6 +1531,11 @@ export async function finalizeAgent({
     task, workspacePath, success: reportedSuccess, agentId, agentSummary,
   });
   const prEvidence = resolvePrEvidence({ primaryObservation: primaryPrObservation, noChangeObservation });
+  if (primaryPrObservation.outcome === PR_OBSERVATION.VERIFIED_CLAIM && primaryPrObservation.url) {
+    const { recordBranchCompletionPolicy } = await import('./branchCompletionPolicy.js');
+    await recordBranchCompletionPolicy({ agentId, task, repoPath: workspacePath,
+      branch: primaryPrObservation.branch, prUrl: primaryPrObservation.url });
+  }
   const branchProvenEmpty = prEvidence.branchProvenEmpty;
 
   // Record the verdict in the lifecycle ledger (#4540) — but ONLY for an outcome
@@ -1529,48 +1654,7 @@ export async function finalizeAgent({
     emitLog('warn', `Goal-fidelity review returned no verdict for ${agentId}: ${fidelity.error}`, { agentId, taskId: task?.id });
   }
   const judgedVerdict = resolveAgentFinalVerdict({ ...verdictEvidence, fidelityReview: fidelity.review });
-  // A finding that lives only in this run's record dies with the agent card
-  // nobody opened. When the user has configured it, the follow-up files the
-  // finding on the project's own tracker and/or queues the run that fixes it.
-  // Lazily imported: the filer reaches the apps roster, both forge CLIs, and
-  // (for a JIRA-tracked app) the JIRA client, and a static edge would put all
-  // of it on the closure of every suite that reaches finalization. Gated on the
-  // WIDEST trigger so a clean `ship` — the overwhelmingly common verdict — does
-  // not evaluate that graph just to be told there is nothing to act on.
-  if (resolvePrCompletion(task?.metadata) !== PR_COMPLETIONS.LEAVE_OPEN && goalFidelityFollowUpApplies(fidelity.review, 'any-finding')) {
-    const followUp = await import('./goalFidelityFollowUp.js')
-      .then(({ runGoalFidelityFollowUp }) => runGoalFidelityFollowUp({ agentId, task, review: fidelity.review, context: fidelity.context }))
-      .catch(err => {
-        emitLog('warn', `Goal-fidelity follow-up failed for ${agentId}: ${err.message}`, { agentId, taskId: task?.id });
-        return null;
-      });
-    if (followUp?.ran) {
-      emitLog('info', `📌 ${formatGoalFidelityFollowUpSummary(followUp)} for ${agentId}`, { agentId, taskId: task?.id });
-      // Recorded on the review so the agent card can link the issue and the
-      // queued task without re-deriving either from the tracker.
-      fidelity.review.followUp = {
-        ...(followUp.issue ? { issue: { number: followUp.issue.number, url: followUp.issue.url, duplicate: followUp.issue.duplicate === true } } : {}),
-        ...(followUp.issueError ? { issueError: followUp.issueError } : {}),
-        // The producer's verdict rides with the id: a task the loop policy HELD
-        // is not a queued one, and the card must not offer the manual fallback
-        // for a finding that already has a task waiting on the user.
-        ...(followUp.task?.id ? {
-          taskId: followUp.task.id,
-          ...(followUp.task.approvalRequired ? { taskApprovalRequired: true } : {}),
-          ...(followUp.task.duplicate ? { taskDuplicate: true } : {}),
-        } : {}),
-        ...(followUp.taskError ? { taskError: followUp.taskError } : {}),
-      };
-    }
-  }
-
-  if (fidelityDowngrade && !fidelity.review.followUp?.taskId) {
-    // The Review Hub bridges this into a review alert when no follow-up task
-    // exists. A queued (or deduplicated) CoS investigation already carries the
-    // same finding, including when it is waiting for approval, so a second
-    // dismissible alert only asks the user to triage the same work twice.
-    cosEvents.emit(GOAL_FIDELITY_HOLD_EVENT, { agentId, taskId: task?.id, review: fidelity.review });
-  }
+  await followUpAgentGoalFidelity({ agentId, task, fidelity, fidelityDowngrade });
 
   if (!terminatedByUser && !isPrivateSecurityTask(task)) {
     await persistCompletionSummary(agentId, { workspacePath, finalSummary });
@@ -1598,7 +1682,7 @@ export async function finalizeAgent({
   // of awaiting here is that the agent still counts against the CoS concurrency
   // gate for the hook's duration, so the dispatch is hard-bounded — see
   // withOutputHookTimeout.
-  let hookResult = await dispatchTaskOutputHookOnce({ agentId, task, success: judgedVerdict.success, workspacePath });
+  let hookResult = await dispatchTaskOutputHookOnce({ agentId, task, success: judgedVerdict.success, workspacePath, recovery });
   // A private assessment's deliverable is the validated, persisted report.
   // A skipped, thrown or timed-out hook cannot establish that deliverable,
   // even when the CLI exited zero. Keep other task types' existing semantics.
@@ -1762,75 +1846,9 @@ export async function finalizeAgent({
     emitLog('warn', `⚠️ Failed to update ${label} task ${task.id}: ${taskResult.error} (taskType=${taskType})`, { taskId: task.id, agentId, error: taskResult.error });
   }
 
-  if (!verdict.success && !terminatedByUser && verdict.errorAnalysis) {
-    // Bench the provider when the PROVIDER is what failed — not the agent's
-    // work. `origin: 'provider'` is agentErrorAnalysis's provenance flag (#2642),
-    // set only for structured provider chrome, never for a loose keyword sweep of
-    // a transcript the agent itself wrote. Without a bench the provider stays
-    // "available", so the very next dequeue picks it again and dies identically:
-    // that is how one `agy` account-verification block could take down a whole
-    // queue of tasks in under a minute. `resolveProviderBench` (shared with
-    // promptRunner) picks the window and declines to bench request-specific
-    // failures; the cooldown then routes the retry to a fallback
-    // (agentProviderResolution.js) and auto-expires without anyone intervening.
-    // Provenance is the WHOLE gate — deliberately not `|| category === 'usage-limit'
-    // || category === 'rate-limit'`, which is what this used to key on. Those
-    // categories have loose alternatives (a bare "rate limit" / "quota exceeded" an
-    // agent's own failing test can print), so a category-only check benches a
-    // healthy provider off the agent's transcript. Genuine limits already carry
-    // `origin: 'provider'` via their `structuredMarker`, so nothing real is lost.
-    // Every finalizeAgent caller analyzes through analyzeAgentFailure or
-    // detectImmediateFallbackSignal, and both stamp an origin on every branch.
-    const bench = verdict.errorAnalysis.origin === 'provider' ? resolveProviderBench(verdict.errorAnalysis) : null;
-    // Lazy provider lookup — resolve the active provider only when a marker
-    // fires AND the caller didn't already know the id, keeping the ordinary
-    // failure path free of a settings-file read.
-    const markerProviderId = bench ? providerId || (await getActiveProvider())?.id : null;
-    if (markerProviderId) {
-      // `markUsageLimit` parses its own window out of the provider's message
-      // ("resets 5pm"), so a usage limit keeps its dedicated marker.
-      const mark = bench.marker === 'usage-limit'
-        ? markProviderUsageLimit(markerProviderId, verdict.errorAnalysis)
-        : markProviderUnavailable(markerProviderId, {
-          reason: bench.category,
-          message: bench.message || 'Provider unavailable',
-          waitTimeMs: bench.waitTimeMs
-        });
-      await mark.catch(err => {
-        emitLog('warn', `Failed to sideline provider: ${err.message}`, { providerId: markerProviderId, category: bench.category });
-      });
-    }
-  }
+  await sidelineFailedAgentProvider({ providerId, verdict, terminatedByUser });
 
-  // Type-level consecutive-failure ledger (#2616): feed the per-type
-  // backoff/auto-park in taskSchedule. Only SCHEDULED task types carry
-  // `metadata.analysisType`; user/ad-hoc tasks don't participate — so this gate
-  // deliberately does NOT use resolveTaskHookType (#2727). That resolver falls back
-  // to `task.taskType`, which for an ad-hoc task is the CoS queue category
-  // ('internal', 'user'); ledgering those would invent a failure ledger for a
-  // "task type" that no schedule owns. "Which tasks run a hook" and "which task
-  // types back off" are genuinely different questions. The pure
-  // resolveTypeFailureSignal decides success vs failure vs skip — including the
-  // exit-0-but-unparseable-output case that must count as a failure.
-  const scheduledType = task?.metadata?.analysisType || null;
-  if (scheduledType) {
-    const signal = resolveTypeFailureSignal({
-      success: verdict.success,
-      terminatedByUser,
-      hookResult,
-      errorCategory: verdict.errorAnalysis?.category
-    });
-    if (signal.record !== 'skip') {
-      const ledgerAppId = task?.metadata?.app || null;
-      const { recordTaskTypeFailure, recordTaskTypeSuccess } = await import('./taskSchedule.js');
-      const ledgerUpdate = signal.record === 'failure'
-        ? recordTaskTypeFailure(scheduledType, ledgerAppId, { errorCategory: signal.category })
-        : recordTaskTypeSuccess(scheduledType, ledgerAppId);
-      await ledgerUpdate.catch(err => {
-        emitLog('warn', `⚠️ Task-type ledger update failed for ${scheduledType}: ${err.message}`, { taskType: scheduledType, agentId });
-      });
-    }
-  }
+  await recordScheduledAgentOutcome({ agentId, task, verdict, terminatedByUser, hookResult });
 
   await processAgentCompletion(agentId, task, verdict.success, outputBuffer);
 

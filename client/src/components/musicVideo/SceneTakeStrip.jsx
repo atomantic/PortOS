@@ -17,7 +17,8 @@ const KIND_LABEL = { image: 'Frame takes', video: 'Clip takes', endImage: 'End f
  *
  * Rejecting a take only says it is not for this shot: it stays available to
  * other shots in Swap. Bad is a separate mark (`marks`, the project's
- * assetMarks; `onMark(take, 'bad' | null)`) for files to clean up later.
+ * assetMarks; `onMark(take, 'bad' | null)`) for files to clean up later; the
+ * server also rejects a bad file's takes on the shots not using it.
  *
  * A legacy take (a pre-takes selection the server hasn't materialized yet) is
  * shown but has no actions — it has no take id to address. `grid` lays the
@@ -46,7 +47,7 @@ export default function SceneTakeStrip({
       <div className="text-[11px] text-port-text-muted">
         {KIND_LABEL[kind]} ({takes.length})
       </div>
-      <ul className={grid ? 'grid grid-cols-[repeat(auto-fill,minmax(6rem,1fr))] gap-2' : 'flex gap-2 overflow-x-auto pb-1'} aria-label={`${KIND_LABEL[kind]} for ${scene.label || `scene ${scene.order + 1}`}`}>
+      <ul className={grid ? 'grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-2 sm:grid-cols-[repeat(auto-fill,minmax(6rem,1fr))]' : 'flex gap-2 overflow-x-auto pb-1'} aria-label={`${KIND_LABEL[kind]} for ${scene.label || `scene ${scene.order + 1}`}`}>
         {takes.map((take) => {
           const isSelected = take.assetId === selected;
           const rejected = take.status === 'rejected';
@@ -82,10 +83,10 @@ export default function SceneTakeStrip({
                 )}
               </button>
               {/* Only what the director acts on: how a take was made stays in the hover title. */}
-              {(verdict || isSelected || rejected) && (
+              {/* "In use" is already on the thumbnail. */}
+              {(verdict || rejected) && (
                 <div className="text-[10px] text-port-text-muted truncate" title={take.originalName || take.prompt || takeProvenance(take)}>
                   {verdict && <span className={`mr-1 rounded px-1 ${VERDICT_TONE[verdict.tone]}`} title="Plate preflight verdict">{verdict.label}</span>}
-                  {isSelected ? <span className="font-semibold text-port-accent">In use</span> : null}
                   {rejected ? 'Not for this shot' : ''}
                 </div>
               )}
@@ -117,7 +118,7 @@ export default function SceneTakeStrip({
                   {onMark && (
                     <button type="button" disabled={busy} onClick={() => onMark(take, bad ? null : 'bad')} aria-pressed={bad}
                       className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] min-h-[32px] sm:min-h-0 disabled:opacity-50 ${bad ? 'bg-port-error/20 text-port-error' : 'bg-port-border'}`}
-                      title={bad ? 'Clear the bad mark' : 'Mark this file bad, to clean up when the project is done. It stays counted in the stats.'}>
+                      title={bad ? 'Clear the bad mark' : 'Mark this file bad, to clean up when the project is done. It is also rejected on every shot not using it, and stays counted in the stats.'}>
                       <Ban size={11} /> Bad
                     </button>
                   )}

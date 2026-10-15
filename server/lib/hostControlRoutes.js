@@ -200,6 +200,18 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
 
   // Sending a draft performs an external mail side effect as the operator (#11273).
   'POST /api/messages/drafts/:id/send',
+  // Provider launch opens Teams/Outlook tabs in the host CDP browser, and the
+  // Gmail enable helper navigates it to Google Cloud Console (#11433).
+  'POST /api/messages/launch/:accountId',
+  'POST /api/messages/gmail/enable-api',
+  // Archive and delete act on mail items in the external account (#11434).
+  'POST /api/messages/:accountId/:messageId/action',
+  // Selector tests drive the host CDP browser against live Outlook/Teams tabs,
+  // selector edits change that automation, and token extraction intercepts
+  // bearer tokens from those sessions (#11449).
+  'POST /api/messages/selectors/:provider/test',
+  'PUT /api/messages/selectors/:provider',
+  'POST /api/messages/debug/test-token',
 
   // Capture activation and existing live feeds require operator authority (#11272).
   // HEAD inherits the GET policy because Express invokes the same handler.
@@ -215,6 +227,11 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // A remote desktop session token proxies interactive mouse/keyboard/screen
   // control of the host desktop; a peer's Basic credential must not mint one (#10923).
   'POST /api/remote-desktop/sessions',
+
+  // Force-kills whatever host PID the caller names, not only a detected agent
+  // CLI — the same host-process control as the gated PM2 process action in
+  // routes/commands.js. CoS agent stop/kill by agent id stays open.
+  'DELETE /api/agents/:pid',
 
   // Universe Builder authoring (#10669) can dispatch tool-capable text/vision
   // providers or image agents, including API-first CLI/TUI fallback. Authorize
@@ -578,6 +595,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/video-gen/stitch',
   // Start trim probes/transcodes a new gallery clip with ffprobe/ffmpeg (#11418).
   'POST /api/video-gen/history/:id/trim-start',
+  // Timeline render spawns ffmpeg/ffprobe on the host for segments and audio (#11432).
+  'POST /api/video-timeline/projects/:id/render',
   'POST /api/sprites/:id/reference/generate',
   // Fork creates a record and immediately queues reference generation too.
   'POST /api/sprites/:id/fork',

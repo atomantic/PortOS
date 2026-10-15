@@ -6,6 +6,7 @@ image-generation paths below are useful entry points when tracing render jobs.
 
 | Module | Responsibility |
 | --- | --- |
+| `branchCompletionPolicy.js` | Retains explicit registered PR completion policy through agent archives. `readBranchCompletionHold` gates reconciliation by exact repository/branch/PR identity; human handoffs and configured review stay held, explicit releases require a fresh matching forge head, and verified merged retirement is a separate action. |
 | `databaseCutoverHandshake.js` | Narrow fenced-boot path for the ordinary server: at `verifying`/`verified` prove this process's own pool reaches the recorded target, publish a per-pid proof, and wait for admission release before the app graph loads. |
 | `databaseMaintenanceCutover.js` | Internal cutover worker body (transfer → forward-only `.env` mode commit → server restart with target proof → release → CoS restart) and `recoverDatabaseCutover(id)` same-operation recovery for the CLI/API. |
 | `databaseMaintenanceProducers.js` | Internal one-use coordinator stage: retain producer identity, stop this install's PM2 CoS/server, and verify fresh readback while admission remains fenced. |
@@ -28,3 +29,4 @@ image-generation paths below are useful entry points when tracing render jobs.
 | `fableLoom/production.js` | FableLoom production render planning and enqueueing. |
 | `appProcessTypes.js` | Dependency-free managed-app process-type vocabulary and PM2/desktop predicates. |
 | `appProcessStatus.js` | PM2-backed managed-app status projections, expected-exit policy, and custom PM2 home resolution. |
+| `forkReviewMergeTarget.js` | Captures a fresh fork review target from the base repository’s live PR; admission verifies the registered target, live task, exact checkout head, fork remote/upstream and live forge identity. |

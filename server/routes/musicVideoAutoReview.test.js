@@ -188,6 +188,11 @@ const start = (projectId, limits) => request(app).post(`${base(projectId)}/auto-
 
 beforeEach(() => {
   rmSync(join(ROOT(), 'music-video-projects.json'), { force: true });
+  mkdirSync(join(ROOT(), 'images'), { recursive: true });
+  for (const file of ['f1.png', 'f2.png', 'still-3.png', 'frame.png']) writeFileSync(join(ROOT(), 'images', file), 'synthetic still');
+  writeFileSync(join(ROOT(), 'video-history.json'), JSON.stringify(
+    ['clip-1', 'clip-2', 'clip-2b', 'another-take', 'accepted'].map(id => ({ id, filename: `${id}.mp4` })),
+  ));
   h.procs.length = 0;
   h.jobs.length = 0;
   h.verdicts.length = 0;

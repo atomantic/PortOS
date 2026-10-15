@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, afterAll, afterEach } from 'vitest';
 import express from 'express';
+import { mkdirSync, writeFileSync } from 'fs';
+import { join } from 'path';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
@@ -17,7 +19,13 @@ const app = express();
 app.use(express.json()); app.use('/api/music-video', routes); app.use(errorMiddleware);
 const fields = { title: 'Example song', style: 'Bright synth pop', lyrics: '[Verse]\nA new morning', instrumental: false };
 const post = (id, action = '', body = {}) => request(app).post(`/api/music-video/${id}/song-revision${action ? `/${action}` : ''}`).send(body);
+function seedArt() {
+  const images = join(lazyTempDataRoot('mv-song-revision-test-'), 'images');
+  mkdirSync(images, { recursive: true });
+  for (const file of ['art.png', 'intro.png']) writeFileSync(join(images, file), 'synthetic still');
+}
 async function fixture() {
+  seedArt();
   const source = await store.createProject({ name: 'Example video', uploadedAudioFilename: 'original.m4a', composition: { mode: 'code' } });
   await store.mutateProjectRecord(source.id, (p) => {
     const project = { ...p, status: 'complete', lyricCues: [{ id: 'cue-a', text: 'Old morning', startSec: 1, endSec: 2 }],
@@ -141,6 +149,7 @@ describe('revise the song from an imported track', () => {
     lyrics: '[Verse]\nLine a\nA brand new line\nLine b' };
   const timed = (project, times) => project.lyricCues.map((cue, i) => ({ ...cue, startSec: times[i][0], endSec: times[i][1] }));
   async function source() {
+    seedArt();
     const project = await store.createProject({ name: 'Example video', uploadedAudioFilename: 'original.m4a' });
     await store.mutateProjectRecord(project.id, (p) => ({ project: { ...p, status: 'complete', audioAnalysis: { durationSec: 30 },
       lyricCues: [{ id: 'cue-a', text: 'Line a', startSec: 10, endSec: 14 }, { id: 'cue-x', text: 'Old middle line', startSec: 14, endSec: 18 },

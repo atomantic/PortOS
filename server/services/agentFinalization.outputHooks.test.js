@@ -78,6 +78,7 @@ vi.mock('./taskSchedule.js', () => ({
 }));
 import { updateTask, addTask } from './cos.js';
 import { completeAgentRun } from './agentRunTracking.js';
+import { processAgentCompletion } from './agentCompletion.js';
 import { MAX_TASK_RETRIES, resolveFailedTaskUpdate } from './agentErrorAnalysis.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -120,6 +121,40 @@ describe('recovery output-hook dispatch (#3182)', () => {
     });
     hook = vi.fn().mockResolvedValue({ recorded: true });
     getTaskOutputHook.mockResolvedValue(hook);
+  });
+
+  it('awaits the scheduled outcome ledger and finishes even when that write fails', async () => {
+    const { recordTaskTypeSuccess, recordTaskTypeFailure } = await import('./taskSchedule.js');
+    let rejectLedger;
+    recordTaskTypeSuccess.mockReturnValueOnce(new Promise((_resolve, reject) => { rejectLedger = reject; }));
+    const completion = finalizeAgent({
+      agentId: persistedAgent.id, task: TASK, success: true, exitCode: 0,
+      duration: 1000, outputBuffer: '',
+    });
+
+    await vi.waitFor(() => expect(recordTaskTypeSuccess).toHaveBeenCalledWith('example-output-hook', 'app-example'));
+    expect(updateTask).toHaveBeenCalledWith(TASK.id, { status: 'completed' }, 'internal');
+    expect(processAgentCompletion).not.toHaveBeenCalled();
+    rejectLedger(new Error('ledger write failed'));
+
+    await expect(completion).resolves.toMatchObject({ success: true });
+    expect(recordTaskTypeFailure).not.toHaveBeenCalled();
+    expect(processAgentCompletion).toHaveBeenCalledWith(persistedAgent.id, TASK, true, '');
+    expect(emitLog).toHaveBeenCalledWith('warn', expect.stringContaining('ledger write failed'), expect.any(Object));
+  });
+
+  it('records an unparseable scheduled output as a failure but excludes ad-hoc and terminated tasks', async () => {
+    const { recordTaskTypeSuccess, recordTaskTypeFailure } = await import('./taskSchedule.js');
+    hook.mockResolvedValueOnce({ recorded: false, reason: 'unparseable-response' });
+    await finalizeAgent({ agentId: persistedAgent.id, task: TASK, success: true, exitCode: 0, duration: 1000, outputBuffer: '' });
+    expect(recordTaskTypeFailure).toHaveBeenCalledWith('example-output-hook', 'app-example', { errorCategory: 'unparseable-response' });
+    expect(recordTaskTypeSuccess).not.toHaveBeenCalled();
+
+    recordTaskTypeFailure.mockClear();
+    await finalizeAgent({ agentId: 'ad-hoc', task: { id: 'ad-hoc-task', taskType: 'user', metadata: {} }, success: true, outputBuffer: '' });
+    await finalizeAgent({ agentId: 'terminated', task: TASK, success: false, terminatedByUser: true, outputBuffer: '' });
+    expect(recordTaskTypeFailure).not.toHaveBeenCalled();
+    expect(recordTaskTypeSuccess).not.toHaveBeenCalled();
   });
 
   it('persists scanner limits independently of successful assessment delivery and completion replay', async () => {

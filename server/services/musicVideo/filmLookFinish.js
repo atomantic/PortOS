@@ -88,12 +88,14 @@ function filmLookFinishPage({ width, height, fps, durationSec, offsetSec = 0, sr
 /**
  * Re-encode the finished render at `path` through the project's film look, in
  * place. Resolves `true` when the pass ran, `false` when the look is neutral
- * (the file is untouched). `offsetSec` is the song time of the render's first
- * frame (an excerpt's window start) so the grain lands on song frames.
+ * (the file is untouched). `look` (a shot's own look) replaces the project's;
+ * `workers` caps the browsers a short window splits across. `offsetSec` is the
+ * song time of the render's first frame (an excerpt's window or a shot's start)
+ * so the grain lands on song frames.
  * Rejects on failure or when `signal` aborts, leaving `path` as it was.
  */
-export async function applyFilmLookFinish({ project, path, jobId, signal, onProgress, offsetSec = 0, label = 'Music-video film look' }) {
-  const look = normalizeFilmLook(project?.filmLook);
+export async function applyFilmLookFinish({ project, look: lookInput, path, jobId, signal, onProgress, offsetSec = 0, workers, label = 'Music-video film look' }) {
+  const look = normalizeFilmLook(lookInput === undefined ? project?.filmLook : lookInput);
   if (!look || isFilmLookNeutral(look)) return false;
   if (typeof jobId !== 'string' || !/^[A-Za-z0-9_-]+$/.test(jobId)) throw new Error('Invalid film look job id');
   const { findFfmpeg, runFfmpegProcess, probeVideoGeometry } = await import('../../lib/ffmpeg.js');
@@ -131,7 +133,7 @@ export async function applyFilmLookFinish({ project, path, jobId, signal, onProg
       });
     }
     const encoded = await encodeCompositionSegments(page, { width, height, fps, durationSec }, silent, {
-      openPage, encode: encodeComposition, signal, offsetSec,
+      openPage, encode: encodeComposition, signal, offsetSec, ...(workers ? { workers } : {}),
       onProgress: (fraction) => onProgress?.(fraction * 0.95),
       onRetry: ({ frame, attempt, segment, error }) => console.warn(`⚠️ ${label} [${jobId.slice(0, 8)}] ${segment == null ? '' : `worker ${segment + 1} `}restarting its browser at song frame ${frame} (retry ${attempt}): ${error.message}`),
     });

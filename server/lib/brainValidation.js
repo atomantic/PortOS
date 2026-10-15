@@ -5,6 +5,7 @@ import { EFFORT_LEVELS } from './providerModels.js';
 import { canonicalThreadRefKind } from './threadRefKinds.js';
 import { THREAD_STATUSES, THREAD_PRIORITIES } from './brainThreads.js';
 import { MAX_QUALITY } from './spacedRepetition.js';
+import { parseTsMs } from './lwwTimestamp.js';
 
 // Destination enum. `links` is reachable only from the bare-URL capture
 // short-circuit (a pasted URL is filed straight to the links collection) — the
@@ -590,7 +591,11 @@ const brainSyncChangeSchema = z.object({
   op: z.enum(['create', 'update', 'delete']),
   type: z.string(),
   id: z.string(),
-  record: z.record(z.unknown()).nullable().optional(),
+  // Missing records/clocks retain the legacy skipped-change behavior. A clock
+  // that IS supplied must be parseable; keep other record fields for newer peers.
+  record: z.object({
+    updatedAt: z.string().refine(value => parseTsMs(value) !== null, 'Invalid record timestamp').optional(),
+  }).passthrough().nullable().optional(),
   originInstanceId: z.string().optional(),
   ts: z.string()
 });

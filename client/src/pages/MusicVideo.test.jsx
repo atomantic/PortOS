@@ -38,7 +38,7 @@ const { sseState, ytSseStates, getYtSseState } = vi.hoisted(() => {
 
 // This page suite exercises existing controls with production approvals already granted.
 // ProductionReviewPanel and route integration suites exercise the real approval refusals.
-const feedbackCalls = vi.hoisted(() => ({ resolveFeedback: vi.fn(async () => null), syncLyricAnchors: vi.fn(async () => null), revise: vi.fn(async () => ({ revision: { sceneIds: ['s-a'] } })) }));
+const feedbackCalls = vi.hoisted(() => ({ resolveFeedback: vi.fn(async () => null), syncLyricAnchors: vi.fn(async () => null), removeStaleRows: vi.fn(async () => null), revise: vi.fn(async () => ({ revision: { sceneIds: ['s-a'] } })) }));
 vi.mock('../hooks/useMusicVideoProductionReview.js', () => ({ default: ({ project }) => ({
   ...feedbackCalls,
   readiness: project?.productionReadiness || { readyForProduction: true, basis: {}, art: { approved: true, problems: [] }, storyboard: { approved: true, problems: [] }, proof: { approved: true, problems: [] } },
@@ -2525,18 +2525,40 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     }), { silent: true }));
   });
 
-  // Uniquely catches Refine sending the shot prompt or the mood references instead of editing just this frame by the instruction.
-  it('refines the start frame by a short instruction, with that frame as the only reference', async () => {
+  // Uniquely catches Refine sending the shot prompt instead of the instruction, the frame not leading, or the shot's picked references not riding along.
+  it('refines the start frame by a short instruction, sending the references picked on the shot after that frame', async () => {
     await openProject({ ...SPEC_PROJECT, scenes: [{ ...SPEC_PROJECT.scenes[0], referenceImageId: 'start.png' }] }, 'produce');
+    // The automatic set shows as chips; swap the flagged Lead for the Pier set.
+    const refs = within(screen.getByRole('group', { name: 'References sent with the frames' }));
+    expect(refs.getByText('Auto: from the prompt')).toBeTruthy();
+    fireEvent.click(refs.getByRole('button', { name: "Don't send Lead" }));
+    expect(updateMusicVideoScene).toHaveBeenLastCalledWith('mv-spec', 's1', { frameReferenceIds: [] }, expect.anything());
+    fireEvent.click(refs.getByRole('button', { name: 'Add' }));
+    fireEvent.click(refs.getByRole('button', { name: /Pier/ }));
+    expect(updateMusicVideoScene).toHaveBeenLastCalledWith('mv-spec', 's1', { frameReferenceIds: ['r2'] }, expect.anything());
     fireEvent.click(screen.getByRole('button', { name: 'Refine' }));
     fireEvent.change(screen.getByLabelText('What to change in the start frame'), { target: { value: 'remove the hand' } });
     fireEvent.click(screen.getByRole('button', { name: 'Render refined start frame' }));
     await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
       prompt: 'remove the hand',
-      referenceImageFiles: ['start.png'],
+      referenceImageFiles: ['start.png', 'set.png'],
       musicVideo: { projectId: 'mv-spec', sceneId: 's1', compose: true, refine: true },
     }), { silent: true }));
     expect(screen.queryByLabelText('What to change in the start frame')).toBeNull();
+  });
+
+  // Uniquely catches a refine sending the frame plus 4 references, over the backends' 4-image cap.
+  it('refines a shot with four references by sending the frame plus the first three', async () => {
+    const references = ['a', 'b', 'c', 'd'].map((key) => ({ id: `r-${key}`, imageId: `${key}.png`, role: 'character', label: key, note: '', condition: true }));
+    await openProject({ ...SPEC_PROJECT, visualSpec: { ...SPEC_PROJECT.visualSpec, references },
+      scenes: [{ ...SPEC_PROJECT.scenes[0], referenceImageId: 'start.png' }] }, 'produce');
+    expect(screen.getByText('Refines and end frames send the frame plus the first 3.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Refine' }));
+    fireEvent.change(screen.getByLabelText('What to change in the start frame'), { target: { value: 'remove the hand' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Render refined start frame' }));
+    await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
+      referenceImageFiles: ['start.png', 'a.png', 'b.png', 'c.png'],
+    }), { silent: true }));
   });
 
   // Uniquely catches a trimmed clip landing only in Video Gen history, never as this shot's take, or not becoming the shot's clip.
@@ -2578,7 +2600,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     fireEvent.click(within(strip).getByRole('button', { name: /Use/ }));
     await waitFor(() => expect(selectMusicVideoSceneTake).toHaveBeenCalledWith('mv-takes', 's1', 't-b', { silent: true }));
     // The server's answer moves the selection; the other take now offers "Use".
-    await waitFor(() => expect(within(strip).getAllByText('In use', { selector: 'div > span' })).toHaveLength(1));
+    await waitFor(() => expect(within(strip).getAllByText('In use', { selector: 'button > span' })).toHaveLength(1));
     const items = within(strip).getAllByRole('listitem');
     expect(within(items[1]).queryByRole('button', { name: /Use/ })).toBeNull();
 
@@ -3411,6 +3433,43 @@ describe('stage checklist and project options', () => {
     fireEvent.click(within(checklist).getByRole('button', { name: /Anchor to the sung lyrics/ }));
     expect(feedbackCalls.syncLyricAnchors).toHaveBeenCalledWith();
     fireEvent.click(within(shots).getByRole('button', { name: 'Shot 2' }));
+    await waitFor(() => expect(document.getElementById('scene-s-b')).toBeTruthy());
+  });
+
+  // Uniquely catches a row left from a cut shot holding the board with no way to clear it from the checklist.
+  it('lists the storyboard rows left from deleted shots by time and action, and removes them in one tap', async () => {
+    const project = { ...PROJECT_ANALYZED, scenes: [{ sceneId: 's-a', label: 'Drummer', startSec: 0, endSec: 4 }],
+      productionReview: { draft: { storyboard: [] } },
+      productionReadiness: { readyForProduction: false, basis: {}, art: { approved: true, problems: [] },
+        storyboard: { approved: false, problems: ['Remove 2 storyboard rows left from deleted shots.'],
+          staleRows: [{ id: null, sceneId: 'gone-1', startSec: 62.5, endSec: 64.25, action: 'A figure skids across the floor' },
+            { id: null, sceneId: 'gone-2', startSec: 70, endSec: 71, action: '' }] }, proof: { approved: false, problems: [] } } };
+    await openProject(project, 'board');
+    const checklist = screen.getByRole('region', { name: 'What this step needs' });
+    expect(checklist).toHaveTextContent('Rows from deleted shots');
+    expect(checklist).toHaveTextContent('1:02.50–1:04.25 · A figure skids across the floor');
+    expect(checklist).toHaveTextContent('1:10.00–1:11.00');
+    expect(checklist).not.toHaveTextContent('Remove 2 storyboard rows');
+    fireEvent.click(within(checklist).getByRole('button', { name: /Remove all 2/ }));
+    expect(feedbackCalls.removeStaleRows).toHaveBeenCalledWith();
+  });
+
+  // Uniquely catches a coverage or details problem the director cannot trace to a shot.
+  it('names the shots behind Shot coverage and Shot details, each opening its card', async () => {
+    const project = { ...PROJECT_ANALYZED, scenes: [{ sceneId: 's-a', label: 'Drummer', startSec: 0, endSec: 4 }, { sceneId: 's-b', label: 'Singer', startSec: 4.5, endSec: 8 }],
+      productionReview: { draft: { storyboard: [] } },
+      productionReadiness: { readyForProduction: false, basis: {}, art: { approved: true, problems: [] },
+        storyboard: { approved: false, problems: ['Storyboard shots must cover the master without unintended gaps or overlaps.', 'Complete timing, action, staging, camera and transition for Singer.'],
+          coverage: [{ sceneId: 's-b', issue: 'gap', startSec: 4, endSec: 4.5 }],
+          incompleteShots: [{ sceneId: 's-b', missing: ['staging'] }] }, proof: { approved: false, problems: [] } } };
+    await openProject(project, 'board');
+    const checklist = screen.getByRole('region', { name: 'What this step needs' });
+    expect(within(checklist).getByRole('list', { name: 'Shot coverage shots' })).toHaveTextContent('Shot 2Gap of 0.50 s before this shot, 0:04.00–0:04.50');
+    expect(checklist).not.toHaveTextContent('without unintended gaps');
+    const details = within(checklist).getByRole('list', { name: 'Shot details shots' });
+    expect(details).toHaveTextContent('Shot 2Missing staging');
+    expect(checklist).not.toHaveTextContent('1 shot missing timing');
+    fireEvent.click(within(details).getByRole('button', { name: 'Shot 2' }));
     await waitFor(() => expect(document.getElementById('scene-s-b')).toBeTruthy());
   });
 

@@ -18,7 +18,7 @@ function GlitchRow({ fieldId, index, glitch, spanSec, onCommit, onRemove, disabl
   const id = (name) => fieldId(`glitch-${index}-${name}`);
   return (
     <li className="flex flex-wrap items-center gap-x-2 gap-y-1">
-      <label htmlFor={id('style')} className="sr-only">Glitch {index + 1} style</label>
+      <label htmlFor={id('style')} className="sr-only">Effect {index + 1} style</label>
       <select id={id('style')} value={glitch.style} disabled={disabled}
         onChange={(e) => onCommit({ style: e.target.value })}
         className="min-w-0 bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] sm:min-h-0 disabled:opacity-50">
@@ -31,14 +31,14 @@ function GlitchRow({ fieldId, index, glitch, spanSec, onCommit, onRemove, disabl
           onPointerUp={commitTime} onKeyUp={commitTime} onBlur={commitTime}
           className="min-w-0 flex-1 accent-port-accent min-h-[44px] sm:min-h-0" />
       </span>
-      <label htmlFor={id('length')} className="sr-only">Glitch {index + 1} length</label>
-      <select id={id('length')} value={glitch.lengthSec ?? ''} disabled={disabled} title="How long the glitch lasts"
+      <label htmlFor={id('length')} className="sr-only">Effect {index + 1} length</label>
+      <select id={id('length')} value={glitch.lengthSec ?? ''} disabled={disabled} title="How long the effect lasts"
         onChange={(e) => onCommit({ lengthSec: e.target.value === '' ? null : Number(e.target.value) })}
         className="bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] sm:min-h-0 disabled:opacity-50">
         <option value="">Short</option>
         {MUSIC_VIDEO_GLITCH_LENGTHS.map((sec) => <option key={sec} value={sec}>{LENGTH_LABELS[sec] || `${sec} s`}</option>)}
       </select>
-      <button type="button" onClick={onRemove} disabled={disabled} aria-label={`Remove glitch ${index + 1}`}
+      <button type="button" onClick={onRemove} disabled={disabled} aria-label={`Remove effect ${index + 1}`}
         className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded text-port-text-muted hover:text-port-error sm:min-h-[28px] sm:min-w-[28px] disabled:opacity-50">
         <X size={14} aria-hidden="true" />
       </button>
@@ -61,11 +61,11 @@ export default function SceneGlitches({ fieldId, scene, onChange, disabled = fal
   return (
     <div className="space-y-1 text-xs" data-testid="scene-glitches">
       <div className="flex items-center gap-2">
-        <span className={glitches.length ? 'text-port-accent' : 'text-port-text-muted'}>Glitches</span>
+        <span className={glitches.length ? 'text-port-accent' : 'text-port-text-muted'}>Effects</span>
         {glitches.length < MUSIC_VIDEO_SHOT_GLITCH_LIMIT && (
           <button type="button" onClick={add} disabled={disabled}
             className="inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 text-port-text-muted hover:text-port-text sm:min-h-[28px] disabled:opacity-50">
-            <Plus size={12} aria-hidden="true" /> Add glitch
+            <Plus size={12} aria-hidden="true" /> Add effect
           </button>
         )}
       </div>

@@ -47,6 +47,17 @@ describe('musicVideoFrameModelInput', () => {
     expect(input.promptAdditions).toEqual([expect.objectContaining({ id: 'edit-instructions', text: expect.stringContaining('[instruction]') })]);
   });
 
+  // Uniquely catches a refine or end frame that sends character references without saying what they are for.
+  it('names the first image as the one to edit, and says what the shot\'s other references are for', () => {
+    const refine = musicVideoFrameModelInput(project, scene, { authored: 'match his vest', refine: true, otherReferences: 2 });
+    expect(refine.prompt).toMatch(/^Edit the first reference image: match his vest\./);
+    expect(refine.prompt).toContain('The other reference images show the characters and places in this shot');
+    expect(ids(refine)).toEqual(['edit-instructions', 'other-references']);
+    const end = musicVideoFrameModelInput(project, scene, { slot: 'end', fromFrame: true, otherReferences: 1 });
+    expect(ids(end)).toEqual(['keep-reference', 'other-references']);
+    for (const input of [refine, end]) for (const item of input.promptAdditions.filter((a) => a.id === 'other-references')) expect(input.prompt).toContain(item.text);
+  });
+
   it('still composes a planned start frame with no seeded text, and sends nothing for an empty end frame or refine', () => {
     expect(musicVideoFrameModelInput(project, { sceneId: 's2' }).prompt.startsWith('grainy 16mm, ')).toBe(true);
     expect(musicVideoFrameModelInput(project, { sceneId: 's2' }, { slot: 'end' })).toEqual({ prompt: '', promptAdditions: [] });

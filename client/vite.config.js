@@ -177,6 +177,8 @@ export default defineConfig(({ command, mode }) => {
   const API_TARGET = `${API_SCHEME}://${API_HOST}:5555`;
 
   return {
+    // Dependencies may be shared by symlink; mutable caches belong to this checkout.
+    cacheDir: resolve(CONFIG_DIR, '.cache/vite'),
     define: {
       __APP_VERSION__: JSON.stringify(rootPkg.version),
       __BUILD_STAMP__: JSON.stringify(buildStamp())

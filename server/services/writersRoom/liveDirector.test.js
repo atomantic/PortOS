@@ -1,10 +1,13 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { makePathsProxy } from '../../lib/mockPathsDataRoot.js';
+import { makePathsProxy, ownTestBodies } from '../../lib/mockPathsDataRoot.js';
 
 let tempRoot;
+const fixtureRoots = new Set();
+const owned = ownTestBodies(it);
+const liveDirectorTest = owned.it;
 
 vi.mock('../../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../../lib/fileUtils.js');
@@ -41,6 +44,7 @@ const {
 
 beforeEach(() => {
   tempRoot = mkdtempSync(join(tmpdir(), 'wr-live-test-'));
+  fixtureRoots.add(tempRoot);
   runStagedLLM.mockReset();
   createProject.mockReset();
   setTreatment.mockReset();
@@ -49,10 +53,34 @@ beforeEach(() => {
   deleteCollection.mockReset();
 });
 
-afterEach(() => {
-  if (tempRoot && existsSync(tempRoot)) rmSync(tempRoot, { recursive: true, force: true });
-  vi.useRealTimers();
-});
+async function cleanupFixtures() {
+  let drainError;
+  try {
+    await owned.drain();
+  } catch (error) {
+    drainError = error;
+  }
+  const cleanupErrors = [];
+  try {
+    for (const root of fixtureRoots) {
+      try {
+        if (existsSync(root)) rmSync(root, { recursive: true, force: true });
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    }
+    fixtureRoots.clear();
+    tempRoot = undefined;
+  } finally {
+    vi.useRealTimers();
+  }
+  const errors = [drainError, ...cleanupErrors].filter(Boolean);
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) throw new AggregateError(errors, 'Live Director test fixture cleanup failed');
+}
+
+afterEach(cleanupFixtures);
+afterAll(cleanupFixtures);
 
 const OPTIONS_RESPONSE = {
   content: {
@@ -64,14 +92,14 @@ const OPTIONS_RESPONSE = {
 };
 
 describe('suggestContinuation', () => {
-  it('throws LIVE_MODE_OFF when the work has not opted in', async () => {
+  liveDirectorTest('throws LIVE_MODE_OFF when the work has not opted in', async () => {
     const work = await createWork({ title: 'Off' });
     await expect(suggestContinuation(work.id, { before: 'words here' }))
       .rejects.toMatchObject({ code: ERR_LIVE_MODE_OFF, status: 409 });
     expect(runStagedLLM).not.toHaveBeenCalled();
   });
 
-  it('runs the stage, shapes options, and bumps usage on success', async () => {
+  liveDirectorTest('runs the stage, shapes options, and bumps usage on success', async () => {
     runStagedLLM.mockResolvedValue(OPTIONS_RESPONSE);
     const work = await createWork({ title: 'On' });
     await updateWork(work.id, { liveMode: { enabled: true } });
@@ -83,7 +111,7 @@ describe('suggestContinuation', () => {
     expect(runStagedLLM).toHaveBeenCalledOnce();
   });
 
-  it('injects the work voice guide into the continue prompt when exemplars are set, empty otherwise (#2179)', async () => {
+  liveDirectorTest('injects the work voice guide into the continue prompt when exemplars are set, empty otherwise (#2179)', async () => {
     runStagedLLM.mockResolvedValue(OPTIONS_RESPONSE);
     const work = await createWork({ title: 'Voiced' });
     await updateWork(work.id, { liveMode: { enabled: true } });
@@ -101,7 +129,7 @@ describe('suggestContinuation', () => {
     expect(vars.voiceGuide).toContain('She counted the exits, then the lies.');
   });
 
-  it('charges budget even when the model returns zero usable options', async () => {
+  liveDirectorTest('charges budget even when the model returns zero usable options', async () => {
     // The LLM cost is incurred regardless of whether the response parsed into
     // usable options — sparing zero-option calls would open an unbounded-call
     // hole that never reaches the 429 cap.
@@ -114,7 +142,7 @@ describe('suggestContinuation', () => {
     expect(res.usage.count).toBe(1); // call reached the LLM → budget charged
   });
 
-  it('enforces the daily budget and rejects with BUDGET_EXCEEDED once spent', async () => {
+  liveDirectorTest('enforces the daily budget and rejects with BUDGET_EXCEEDED once spent', async () => {
     runStagedLLM.mockResolvedValue(OPTIONS_RESPONSE);
     const work = await createWork({ title: 'Capped' });
     await updateWork(work.id, { liveMode: { enabled: true, dailyCallBudget: 1 } });
@@ -125,7 +153,7 @@ describe('suggestContinuation', () => {
     expect(runStagedLLM).toHaveBeenCalledOnce(); // the blocked call never ran the stage
   });
 
-  it('treats dailyCallBudget 0 as unlimited', async () => {
+  liveDirectorTest('treats dailyCallBudget 0 as unlimited', async () => {
     runStagedLLM.mockResolvedValue(OPTIONS_RESPONSE);
     const work = await createWork({ title: 'Unlimited' });
     await updateWork(work.id, { liveMode: { enabled: true, dailyCallBudget: 0 } });
@@ -136,7 +164,7 @@ describe('suggestContinuation', () => {
     expect(res.usage.count).toBe(3);
   });
 
-  it('rejects an empty cursor context before spending an LLM call', async () => {
+  liveDirectorTest('rejects an empty cursor context before spending an LLM call', async () => {
     const work = await createWork({ title: 'Blank' });
     await updateWork(work.id, { liveMode: { enabled: true } });
     await expect(suggestContinuation(work.id, { before: '   ', after: '', selection: '' }))
@@ -144,7 +172,7 @@ describe('suggestContinuation', () => {
     expect(runStagedLLM).not.toHaveBeenCalled();
   });
 
-  it('rolls the budget over on a new UTC day', async () => {
+  liveDirectorTest('rolls the budget over on a new UTC day', async () => {
     runStagedLLM.mockResolvedValue(OPTIONS_RESPONSE);
     const work = await createWork({ title: 'Rollover' });
     await updateWork(work.id, { liveMode: { enabled: true, dailyCallBudget: 1 } });
@@ -162,13 +190,13 @@ describe('suggestContinuation', () => {
 });
 
 describe('reserveRenderPreview', () => {
-  it('throws LIVE_MODE_OFF when the work has not opted in', async () => {
+  liveDirectorTest('throws LIVE_MODE_OFF when the work has not opted in', async () => {
     const work = await createWork({ title: 'Off' });
     await expect(reserveRenderPreview(work.id))
       .rejects.toMatchObject({ code: ERR_LIVE_MODE_OFF, status: 409 });
   });
 
-  it('reserves a slot and bumps the distinct render counter on success', async () => {
+  liveDirectorTest('reserves a slot and bumps the distinct render counter on success', async () => {
     const work = await createWork({ title: 'On' });
     await updateWork(work.id, { liveMode: { enabled: true } });
 
@@ -182,7 +210,7 @@ describe('reserveRenderPreview', () => {
     expect(reloaded.liveMode.renderUsage).toMatchObject({ count: 1 });
   });
 
-  it('enforces the daily render budget separately from the suggest budget', async () => {
+  liveDirectorTest('enforces the daily render budget separately from the suggest budget', async () => {
     runStagedLLM.mockResolvedValue(OPTIONS_RESPONSE);
     const work = await createWork({ title: 'Capped' });
     await updateWork(work.id, { liveMode: { enabled: true, dailyRenderBudget: 1, dailyCallBudget: 5 } });
@@ -196,7 +224,7 @@ describe('reserveRenderPreview', () => {
     expect(res.usage.count).toBe(1);
   });
 
-  it('treats dailyRenderBudget 0 as unlimited', async () => {
+  liveDirectorTest('treats dailyRenderBudget 0 as unlimited', async () => {
     const work = await createWork({ title: 'Unlimited' });
     await updateWork(work.id, { liveMode: { enabled: true, dailyRenderBudget: 0 } });
 
@@ -206,7 +234,7 @@ describe('reserveRenderPreview', () => {
     expect(res.renderUsage.count).toBe(3);
   });
 
-  it('rolls the render budget over on a new UTC day', async () => {
+  liveDirectorTest('rolls the render budget over on a new UTC day', async () => {
     const work = await createWork({ title: 'Rollover' });
     await updateWork(work.id, { liveMode: { enabled: true, dailyRenderBudget: 1 } });
 
@@ -235,14 +263,14 @@ const BRIDGE_RESPONSE = {
 };
 
 describe('suggestCdBridge', () => {
-  it('throws LIVE_MODE_OFF when the work has not opted in', async () => {
+  liveDirectorTest('throws LIVE_MODE_OFF when the work has not opted in', async () => {
     const work = await createWork({ title: 'Off' });
     await expect(suggestCdBridge(work.id, { before: 'words here' }))
       .rejects.toMatchObject({ code: ERR_LIVE_MODE_OFF, status: 409 });
     expect(runStagedLLM).not.toHaveBeenCalled();
   });
 
-  it('shapes a proposal, clamps duration, and charges the SHARED suggest budget', async () => {
+  liveDirectorTest('shapes a proposal, clamps duration, and charges the SHARED suggest budget', async () => {
     runStagedLLM.mockResolvedValue(BRIDGE_RESPONSE);
     const work = await createWork({ title: 'On' });
     await updateWork(work.id, { liveMode: { enabled: true } });
@@ -257,7 +285,7 @@ describe('suggestCdBridge', () => {
     expect(reloaded.liveMode.renderUsage).toMatchObject({ count: 0 });
   });
 
-  it('returns a null proposal (but still charges budget) when fewer than 2 usable scenes come back', async () => {
+  liveDirectorTest('returns a null proposal (but still charges budget) when fewer than 2 usable scenes come back', async () => {
     runStagedLLM.mockResolvedValue({ content: { logline: 'x', synopsis: 'y', styleSpec: 'z', scenes: [{ intent: 'only one', prompt: 'shot' }] } });
     const work = await createWork({ title: 'Thin' });
     await updateWork(work.id, { liveMode: { enabled: true } });
@@ -267,7 +295,7 @@ describe('suggestCdBridge', () => {
     expect(res.usage.count).toBe(1); // reached the LLM → charged
   });
 
-  it('returns a null proposal when logline/synopsis is missing (would fail the send schema)', async () => {
+  liveDirectorTest('returns a null proposal when logline/synopsis is missing (would fail the send schema)', async () => {
     // 2 usable scenes but no headline — the send schema requires logline +
     // synopsis min(1), so a proposal missing them must not render a live Send.
     runStagedLLM.mockResolvedValue({ content: { logline: '', synopsis: '', styleSpec: 'z', scenes: [
@@ -281,7 +309,7 @@ describe('suggestCdBridge', () => {
     expect(res.usage.count).toBe(1); // reached the LLM → charged
   });
 
-  it('shares the daily budget with suggestContinuation (one pool, not two)', async () => {
+  liveDirectorTest('shares the daily budget with suggestContinuation (one pool, not two)', async () => {
     runStagedLLM.mockResolvedValue(BRIDGE_RESPONSE);
     const work = await createWork({ title: 'Shared' });
     await updateWork(work.id, { liveMode: { enabled: true, dailyCallBudget: 1 } });
@@ -292,7 +320,7 @@ describe('suggestCdBridge', () => {
       .rejects.toMatchObject({ code: ERR_BUDGET_EXCEEDED, status: 429 });
   });
 
-  it('rejects an empty cursor context before spending an LLM call', async () => {
+  liveDirectorTest('rejects an empty cursor context before spending an LLM call', async () => {
     const work = await createWork({ title: 'Blank' });
     await updateWork(work.id, { liveMode: { enabled: true } });
     await expect(suggestCdBridge(work.id, { before: '  ', after: '', selection: '' }))
@@ -312,7 +340,7 @@ describe('sendToCreativeDirector', () => {
     ],
   };
 
-  it('creates a project, seeds the treatment, resets to draft, and records the manifest link', async () => {
+  liveDirectorTest('creates a project, seeds the treatment, resets to draft, and records the manifest link', async () => {
     createProject.mockResolvedValue({ id: 'cd-1', collectionId: 'col-1' });
     setTreatment.mockImplementation(async (id, treatment) => ({ id, treatment, status: 'rendering' }));
     updateProject.mockImplementation(async (id, patch) => ({ id, ...patch }));
@@ -338,7 +366,7 @@ describe('sendToCreativeDirector', () => {
     expect(reloaded.cdProjectId).toBe('cd-1');
   });
 
-  it('rolls back the orphaned project AND its media collection when setTreatment fails', async () => {
+  liveDirectorTest('rolls back the orphaned project AND its media collection when setTreatment fails', async () => {
     createProject.mockResolvedValue({ id: 'cd-orphan', collectionId: 'col-orphan' });
     setTreatment.mockRejectedValue(new Error('treatment invalid'));
     deleteProject.mockResolvedValue({ ok: true });

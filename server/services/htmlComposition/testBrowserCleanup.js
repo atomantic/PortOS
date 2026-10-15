@@ -1,8 +1,9 @@
 import { spawn } from '../../lib/childProcess.js';
-import { closeSync, existsSync, openSync, opendirSync, readSync, statfsSync } from 'node:fs';
+import { closeSync, existsSync, lstatSync, mkdtempSync, openSync, opendirSync, readSync, rmSync, statfsSync } from 'node:fs';
 import { availableParallelism, tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
+import { recordTempRootOwner } from '../../lib/mockPathsDataRoot.js';
 
 // These owned browsers render on explicit seek(t), not wall/display time.
 // Chromium's display scheduler must not pace a song-length offline capture.
@@ -388,21 +389,54 @@ async function terminateOwnedChrome(proc, observeProcess) {
   }
 }
 
+// Playwright's CDP adapter otherwise mints its own `playwright-artifacts-*`
+// root and removes it from a Disconnected listener nobody awaits (#11584).
+// Pass `artifactsDir: path` to connectOverCDP and the handle to
+// _cleanupTestBrowser. The owner row names this test file if the root leaks.
+export function _createTestArtifactsRoot({ parent = tmpdir() } = {}) {
+  const path = mkdtempSync(join(parent, 'portos-cdp-artifacts-'));
+  const { dev, ino } = lstatSync(path);
+  recordTempRootOwner(path);
+  return Object.freeze({ path, dev, ino });
+}
+
+// The owned Chrome may still write downloads into the root until it exits.
+// Remove only the directory created above, and keep it as evidence when exit
+// is unconfirmed or the path no longer names that directory. No path in text.
+function removeTestArtifactsRoot({ path, dev, ino }, childSettled) {
+  if (!childSettled) return 'skipped; owned child exit unconfirmed, root preserved';
+  const current = lstatSync(path, { throwIfNoEntry: false });
+  if (current) {
+    if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== dev || current.ino !== ino) {
+      return 'refused; root identity changed';
+    }
+    rmSync(path, { recursive: true, force: true });
+  }
+  return lstatSync(path, { throwIfNoEntry: false }) ? 'incomplete; root still exists' : null;
+}
+
 // Test-only lifecycle boundary. Disconnect failure must not strand the owned
 // child, and neither failure may prevent removal of temporary test data.
 // A startup failure remains primary even if teardown also fails.
-export async function _cleanupTestBrowser({ browser, proc, cleanup, startupError, observeProcess = _testChromeProcessFacts }) {
+export async function _cleanupTestBrowser({ browser, proc, artifacts, cleanup, startupError, observeProcess = _testChromeProcessFacts }) {
   const errors = startupError ? [startupError] : [];
   const cleanupFailure = (stage, error) => {
     const code = /^[A-Z0-9_]{1,32}$/.test(error?.code) ? error.code : 'unknown';
     errors.push(new Error(`Test Chrome ${stage} cleanup failed (${code})`));
   };
+  let childSettled = false;
   try {
     await withinDeadline(() => browser?.close(), 5000, 'browser disconnect',
       () => `; process: ${describeProcess(proc, observeProcess)}`).catch(error => errors.push(error));
-    await terminateOwnedChrome(proc, observeProcess).catch(error => errors.push(error));
+    await terminateOwnedChrome(proc, observeProcess).then(() => { childSettled = true; }, error => errors.push(error));
   } finally {
     try { proc?.stderr?.destroy(); } catch (error) { cleanupFailure('stderr', error); }
+    if (artifacts) {
+      try {
+        const failure = removeTestArtifactsRoot(artifacts, childSettled);
+        if (failure) errors.push(new Error(`Test Chrome artifacts cleanup ${failure}`));
+      } catch (error) { cleanupFailure('artifacts', error); }
+    }
     try { await cleanup(); } catch (error) { cleanupFailure('temporary data', error); }
   }
   if (startupError && errors.length === 1) throw startupError;

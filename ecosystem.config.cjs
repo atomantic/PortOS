@@ -2,7 +2,10 @@
 // PM2 Ecosystem Configuration - shared constants and app definitions
 // =============================================================================
 const path = require('path');
-const LOG_DATE_FORMAT = 'YYYY-MM-DDTHH:mm:ss.SSS[Z]';
+// PM2 formats this with dayjs in the daemon process, whose timezone is NOT forced
+// to UTC by the child env. `Z` emits the real offset (+00:00 on UTC hosts, -08:00
+// elsewhere); a bracketed [Z] literal mislabels local wall-clock time as UTC (#11436).
+const LOG_DATE_FORMAT = 'YYYY-MM-DDTHH:mm:ss.SSSZ';
 const IS_WIN = process.platform === 'win32';
 
 // Shared env inherited by all apps (merged into each app's env)
@@ -166,6 +169,7 @@ const DATABASE_ENDPOINTS = {
 const PG_PORT = DATABASE_ENDPOINTS[pgMode === 'native' ? 'native' : 'docker'].port;
 
 module.exports = {
+  LOG_DATE_FORMAT,
   DATABASE_MODE: pgMode,
   DATABASE_ENDPOINTS,
   PORTS, // Export for other configs to reference
@@ -305,7 +309,7 @@ module.exports = {
       interpreter: 'node',
       log_date_format: LOG_DATE_FORMAT,
       windowsHide: IS_WIN,
-      args: `--host 0.0.0.0 --port ${PORTS.UI}`,
+      args: `--configLoader runner --host 0.0.0.0 --port ${PORTS.UI}`,
       env: {
         ...BASE_ENV,
         VITE_PORT: PORTS.UI

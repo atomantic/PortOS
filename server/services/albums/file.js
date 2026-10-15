@@ -10,6 +10,7 @@
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS, readJSONFile, atomicWrite, ensureDir } from '../../lib/fileUtils.js';
+import { readMusicFile, writeMusicFile } from '../musicMembershipMutation.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { sanitizeAlbum, buildAlbumRecord, applyAlbumPatch, mergeAlbumRecord } from './logic.js';
 import {
@@ -20,14 +21,18 @@ import {
 const ALBUMS_FILE = join(PATHS.data, 'albums.json');
 
 async function loadAll() {
-  // Albums are durable user records; never save an empty fallback over unreadable bytes.
-  const raw = await readJSONFile(ALBUMS_FILE, [], { strict: true });
-  return (Array.isArray(raw) ? raw : []).map(sanitizeAlbum).filter(Boolean);
+  return readMusicFile('albums', async () => {
+    // Albums are durable user records; never save an empty fallback over unreadable bytes.
+    const raw = await readJSONFile(ALBUMS_FILE, [], { strict: true });
+    return (Array.isArray(raw) ? raw : []).map(sanitizeAlbum).filter(Boolean);
+  });
 }
 
 async function saveAll(albums) {
-  await ensureDir(PATHS.data);
-  await atomicWrite(ALBUMS_FILE, albums);
+  return writeMusicFile('albums', albums, async (records) => {
+    await ensureDir(PATHS.data);
+    await atomicWrite(ALBUMS_FILE, records);
+  });
 }
 
 const byTitle = (a, b) => (a.title || '').localeCompare(b.title || '');

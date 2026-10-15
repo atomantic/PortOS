@@ -25,6 +25,7 @@ import { processAuditRecoveryOriginSchema } from './persistentMindProcessAudit.j
 import { normalizeReviewers } from './reviewerConfig.js';
 import { quotaBurnAgentMetadata } from './quotaBurnOrigin.js';
 import { claimOwnershipBinding } from './claimContinuation.js';
+import { explicitPrCompletion } from './prDisposition.js';
 
 /**
  * How this run is dispatched, as one closed vocabulary rather than the nested
@@ -54,6 +55,7 @@ export function buildAgentRegistration({
   localPromptBudget,
   leanMode,
   prOpenedBy,
+  mergesOwnPr = false,
   claimFlowTask,
   selectedModel,
   effort = null,
@@ -94,6 +96,8 @@ export function buildAgentRegistration({
     // before this shipped carries null, which the card reads as plain text.
     repoIssueUrl,
     worktreeBranch: worktreeInfo?.branchName || null,
+    // Keep explicit handoffs after task archival; omitted policy is not a grant.
+    prCompletionPolicy: explicitPrCompletion(task),
     isWorktree: !!worktreeInfo,
     isPersistentWorktree: !!worktreeInfo?.isPersistentWorktree,
     isRecovery: isTruthyMeta(task.metadata?.isRecovery),
@@ -279,7 +283,18 @@ export function buildAgentRegistration({
     reviewLoopMergeTarget: task.taskType === 'internal'
       && isTruthyMeta(task.metadata?.reviewLoopFollowUp)
       && !isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)
-      ? { url: task.metadata.reviewLoopPRUrl, branch: task.metadata.reviewLoopPRBranch }
+      ? { url: task.metadata.reviewLoopPRUrl, branch: task.metadata.reviewLoopPRBranch,
+        ...(task.metadata.forkHead ? {
+          workspacePath,
+          fork: task.metadata.reviewLoopForkTarget ? structuredClone(task.metadata.reviewLoopForkTarget) : null,
+        } : {}) }
+      : null,
+    // Generic PR delivery (#11435): the worktree PortOS just provisioned and its
+    // head branch, stamped only when this run's prompt carries the merge
+    // admission section for its own PR. Admission re-verifies the live task and
+    // checkout against it; neither the request nor PR prose can supply it.
+    prDeliveryTarget: mergesOwnPr && worktreeInfo?.branchName && workspacePath
+      ? { branch: worktreeInfo.branchName, workspacePath }
       : null,
     configSimplify: isTruthyMeta(task.metadata?.simplify),
     configReviewLoop: isTruthyMeta(task.metadata?.reviewLoop),

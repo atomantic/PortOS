@@ -2,7 +2,7 @@ import { MUSIC_VIDEO_MEDIA_MODES } from './musicVideoMediaPolicy.js';
 import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicVideoGrade.js';
 import { filmLookSchema } from './filmLookValidation.js';
 import { TITLE_CARD_FONTS, TITLE_CARD_LIMITS, TITLE_CARD_POSITIONS, TITLE_CARD_STYLES } from './musicVideoTitleCard.js';
-import { STATS_OUTRO_LIMITS } from './musicVideoStatsOutro.js';
+import { STATS_OUTRO_LIMITS, STATS_OUTRO_LINES } from './musicVideoStatsOutro.js';
 import { COVER_DESIGN_OPTIONS } from './musicVideoCoverOverlay.js';
 import { DISTROKID_REMEMBERED_OPTIONS } from './distrokidGenres.js';
 import { CROSS_LINK_EDIT_TARGETS } from './musicVideoCrossLinks.js';
@@ -52,7 +52,7 @@ import { EFFORT_LEVELS } from './providerModels.js';
 import { shotActionContractProblem } from './musicVideoActionContract.js';
 import { NARRATIVE_EVENT_KINDS } from './musicVideoNarrativeEvents.js';
 import { MUSIC_VIDEO_MEDIA } from './musicVideoMediumPlan.js';
-import { CLIP_OFFSET_FRAMES_RANGE, CLIP_SPEED_FPS_RANGE, MUSIC_VIDEO_FRAME_FITS, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_STILL_MOVES, MUSIC_VIDEO_TEXT_ZONES, MUSIC_VIDEO_VISUAL_LAYERS } from './musicVideoLayers.js';
+import { CLIP_OFFSET_FRAMES_RANGE, CLIP_SPEED_FPS_RANGE, MUSIC_VIDEO_FRAME_FITS, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_LYRIC_SIZES, MUSIC_VIDEO_STILL_MOVES, MUSIC_VIDEO_TEXT_ZONES, MUSIC_VIDEO_VISUAL_LAYERS } from './musicVideoLayers.js';
 import { MUSIC_VIDEO_SHOT_GLITCH_LIMIT, MUSIC_VIDEO_TRANSITIONS } from './musicVideoTransitions.js';
 import { BEAT_TOGGLE_OVERLAP, BEAT_TOGGLE_RATES, MUSIC_VIDEO_CUT_EFFECTS } from './musicVideoCutEffects.js';
 import { IMAGE_EFFECT_SEC_RANGE, MUSIC_VIDEO_IMAGE_EFFECTS } from './musicVideoImageEffects.js';
@@ -332,6 +332,11 @@ const musicVideoPoolAssetSchema = z.object({
   if (!parsed.success) ctx.addIssue({ code: 'custom', path: ['assetId'], message: parsed.error.issues[0].message });
 });
 
+/** A search over a video's media pool by the prompts its stills and clips were made from. */
+export const musicVideoPoolSearchQuerySchema = z.object({
+  q: z.string().trim().min(1).max(200),
+}).strict();
+
 /** ★ ingredient (good, not placed) or ✕ bad (to clean up); null clears the mark. */
 export const musicVideoPoolMarkSchema = z.object({
   items: z.array(musicVideoPoolAssetSchema).min(1).max(500),
@@ -340,6 +345,21 @@ export const musicVideoPoolMarkSchema = z.object({
 
 /** Delete unused stills and clips from the media library (the asset manager's "Delete bad"). */
 export const musicVideoPoolDeleteSchema = z.object({
+  items: z.array(musicVideoPoolAssetSchema).min(1).max(500),
+}).strict();
+
+/** File another music video's whole pool (an earlier draft) into this video's collection. */
+export const musicVideoPoolImportSchema = z.object({
+  fromProjectId: z.string().min(1).max(200),
+}).strict();
+
+/** Search the whole media library for stills and clips to add to a video's assets. */
+export const musicVideoLibrarySearchQuerySchema = z.object({
+  q: z.string().trim().min(1).max(200),
+}).strict();
+
+/** File stills and clips from the media library into a video's assets. */
+export const musicVideoPoolAddSchema = z.object({
   items: z.array(musicVideoPoolAssetSchema).min(1).max(500),
 }).strict();
 
@@ -602,6 +622,8 @@ export const musicVideoSceneCameraSchema = z.object({
 // Per-scene visual layer (#8985) — footage, a moved still, or a title card;
 // see musicVideoLayers.js. Only a composed render honors a non-footage layer.
 const sceneLayerFields = {
+  // The references (visual spec ids) sent with this shot's frame renders; absent or null = the automatic set.
+  frameReferenceIds: z.array(z.string().min(1).max(128)).max(MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES).nullable().optional(),
   camera: musicVideoSceneCameraSchema.nullable().optional(),
   visualLayer: z.enum(MUSIC_VIDEO_VISUAL_LAYERS).optional(),
   stillMove: z.enum(MUSIC_VIDEO_STILL_MOVES).optional(),
@@ -612,6 +634,10 @@ const sceneLayerFields = {
   offsetFrames: z.number().int().min(CLIP_OFFSET_FRAMES_RANGE.min).max(CLIP_OFFSET_FRAMES_RANGE.max).nullable().optional(),
   // The clip plays backwards (a footage shot; never a lip-sync performance).
   reverse: z.boolean().nullable().optional(),
+  // A clip shorter than its shot holds its last frame for the rest of the shot; null clears it.
+  holdLastFrame: z.boolean().nullable().optional(),
+  // The shot's own film look (lib/filmLook.js), kept when the video's look changes; null follows the video's.
+  filmLook: filmLookSchema.nullable().optional(),
   // A VHS glitch over the cut into / out of this shot (musicVideoTransitions.js); null clears it.
   transitionIn: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),
   transitionOut: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),
@@ -641,6 +667,7 @@ const sceneLayerFields = {
   // #10583: where a composition document's lyric type may sit in this shot, and the role of its lines.
   textZone: z.enum(MUSIC_VIDEO_TEXT_ZONES).nullable().optional(),
   lyricRole: z.enum(MUSIC_VIDEO_LYRIC_ROLES).nullable().optional(),
+  lyricSize: z.enum(MUSIC_VIDEO_LYRIC_SIZES).nullable().optional(),
 };
 
 // ---- Pre-production treatment (#8980) --------------------------------------
@@ -1303,6 +1330,9 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
 export const musicVideoStatsOutroSchema = z.object({
   enabled: z.boolean().optional(),
   durationSec: z.number().min(STATS_OUTRO_LIMITS.durationMin).max(STATS_OUTRO_LIMITS.durationMax).optional(),
+  title: z.string().max(STATS_OUTRO_LIMITS.textMax).optional(),
+  subtitle: z.string().max(STATS_OUTRO_LIMITS.textMax).optional(),
+  hidden: z.array(z.enum(STATS_OUTRO_LINES.map((line) => line.key))).max(STATS_OUTRO_LINES.length).optional(),
 }).strict();
 
 // The opening title card (lib/musicVideoTitleCard.js): song title, artist, year

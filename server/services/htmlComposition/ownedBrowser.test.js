@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { EventEmitter } from 'node:events';
+import { EventEmitter, getEventListeners } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { access, rm } from 'node:fs/promises';
+import { basename } from 'node:path';
+import { access, mkdir, rm } from 'node:fs/promises';
+import { createOwnedBrowserDiagnostics, readOwnedBrowserObservations } from '../../test/ownedBrowserDiagnostics.js';
 
 const launch = vi.hoisted(() => ({ spawn: vi.fn() }));
 vi.mock('node:fs/promises', async original => {
@@ -15,8 +17,10 @@ const { launchCompositionBrowser } = await import('./ownedBrowser.js');
 let child;
 let profile;
 let startup;
+let diagnostics;
 const endpoint = 'ws://127.0.0.1:12345/devtools/browser/synthetic-browser';
 beforeEach(() => {
+  diagnostics = createOwnedBrowserDiagnostics();
   child = new EventEmitter();
   Object.assign(child, { pid: 12345, exitCode: null, signalCode: null, stderr: new PassThrough() });
   child.kill = vi.fn(signal => {
@@ -32,6 +36,7 @@ beforeEach(() => {
   };
   launch.spawn.mockReset().mockImplementation((_, args) => {
     profile = args.find(arg => arg.startsWith('--user-data-dir=')).slice('--user-data-dir='.length);
+    diagnostics.track(child, args);
     queueMicrotask(startup);
     return child;
   });
@@ -41,7 +46,9 @@ beforeEach(() => {
 const originalGetuid = Object.getOwnPropertyDescriptor(process, 'getuid');
 const setUid = uid => Object.defineProperty(process, 'getuid', { value: () => uid, configurable: true, writable: true });
 afterEach(() => {
+  diagnostics.dispose();
   child.stderr.destroy();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   if (originalGetuid) Object.defineProperty(process, 'getuid', originalGetuid);
@@ -49,6 +56,66 @@ afterEach(() => {
 });
 
 describe('owned composition capture browser lifecycle', () => {
+  it('keeps close pending until removal settles and distinguishes later profile recreation in diagnostics', async () => {
+    const owner = await launchCompositionBrowser();
+    // Production ownership plus one shared diagnostic binding, even with both
+    // the environment observer and this suite's existing local observer.
+    expect(child.listenerCount('exit')).toBe(2);
+    expect(child.listenerCount('close')).toBe(2);
+    const remove = rm.getMockImplementation();
+    let release;
+    let started;
+    const removing = new Promise(resolve => { started = resolve; });
+    const pending = new Promise(resolve => { release = resolve; });
+    vi.mocked(rm).mockImplementationOnce((...args) => diagnostics.remove(async (...values) => {
+      started();
+      await pending;
+      return remove(...values);
+    }, ...args));
+    let settled = false;
+    const closing = owner.close().finally(() => { settled = true; });
+    try {
+      await removing;
+      const owned = diagnostics.children[0];
+      expect(settled).toBe(false);
+      const persisted = () => readOwnedBrowserObservations(process.env.PORTOS_TEST_TEMP_ROOT).observations.get(basename(profile));
+      expect(persisted()).toMatchObject({ owner: 'server/services/htmlComposition/ownedBrowser.test.js',
+        removal: 'pending', observer: 'active', exit: true, close: true });
+      expect(diagnostics.describe(owned)).toContain('exit=true close=true removal=pending presentAfterRemoval=unknown presentNow=true');
+      release();
+      await closing;
+      expect(diagnostics.describe(owned)).toContain('removal=resolved presentAfterRemoval=false presentNow=false');
+      expect(persisted()).toMatchObject({ removal: 'resolved', presentAfterRemoval: false });
+      // A later writer is a negative control, not evidence about Chrome helpers.
+      await mkdir(profile);
+      const report = diagnostics.describe(owned);
+      expect(report).toContain('removal=resolved presentAfterRemoval=false presentNow=true');
+      expect(report).not.toContain(profile);
+    } finally {
+      release();
+      await closing;
+      await remove(profile, { recursive: true, force: true });
+    }
+  });
+
+  it('retains the exact removal rejection while diagnostics distinguish it from recreation', async () => {
+    const owner = await launchCompositionBrowser();
+    const remove = rm.getMockImplementation();
+    const error = Object.assign(new Error('synthetic private profile path'), { code: 'EACCES' });
+    vi.mocked(rm).mockImplementationOnce((...args) => diagnostics.remove(() => Promise.reject(error), ...args));
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(owner.close()).rejects.toBe(error);
+      const report = diagnostics.describe(diagnostics.children[0]);
+      expect(report).toContain('removal=rejected:EACCES presentAfterRemoval=true presentNow=true');
+      expect(readOwnedBrowserObservations(process.env.PORTOS_TEST_TEMP_ROOT).observations.get(basename(profile)))
+        .toMatchObject({ removal: 'rejected:EACCES', presentAfterRemoval: true });
+      expect(report).not.toContain(profile);
+      expect(report).not.toContain(error.message);
+      expect(log).toHaveBeenCalledWith('❌ Composition browser profile cleanup failed (other)');
+    } finally { await remove(profile, { recursive: true, force: true }); }
+  });
+
   it('uses the configured executable with a fresh sandboxed profile and disposes only its child', async () => {
     setUid(1000);
     const owner = await launchCompositionBrowser();
@@ -181,6 +248,7 @@ describe('owned composition capture browser lifecycle', () => {
   });
 
   it('launches the jailed pipe browser without a DevTools port or inherited tokens', async () => {
+    vi.stubEnv('MAC_CHROMIUM_TMPDIR', '/synthetic/test-temp');
     answerHandshake();
     const owner = await launchCompositionBrowser({
       isolation: 'required',
@@ -196,6 +264,7 @@ describe('owned composition capture browser lifecycle', () => {
     expect(args.join('\n')).not.toContain('proxy-bypass');
     expect(args).not.toContain('--remote-debugging-port=0');
     expect(options.env.USER).toBe('portos-preview');
+    expect(options.env.MAC_CHROMIUM_TMPDIR).toBe('/synthetic/test-temp');
     expect(options.env.PORTOS_API_TOKEN).toBeUndefined();
     expect(options.detached).toBe(true);
     await owner.close();
@@ -259,17 +328,87 @@ describe('owned composition capture browser lifecycle', () => {
 });
 
 
-it('retains the cleanup deadline failure but removes its owned profile after a late close', async () => {
+it.each([
+  ['accepted signals without exit', null, null, false],
+  ['public exit status without an observed event', 7, null, false],
+  ['observed exit with delayed close', null, 'SIGKILL', true],
+  ['unexpected child status and error text', '/private/exit-status', '/private/signal-status', false],
+])('retains the deadline evidence and late profile ownership for %s', async (_, exitCode, signalCode, emitExit) => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
   child.kill = vi.fn(() => true);
-  const owner = await launchCompositionBrowser({ shutdownMs: 30 });
-  await expect(owner.close()).rejects.toThrow(/cleanup exceeded its deadline.*term=accepted, kill=accepted, signalError=none/);
+  const signalProcess = vi.spyOn(process, 'kill');
+  const controller = new AbortController();
+  const owner = await launchCompositionBrowser({ signal: controller.signal });
+  child.stderr.write('/private/browser-output\n');
+  expect(getEventListeners(controller.signal, 'abort')).toHaveLength(1);
+  // Separate the ownership clock from the shutdown budget in the snapshot.
+  await vi.advanceTimersByTimeAsync(2000);
+  let result;
+  const timersBeforeClose = vi.getTimerCount();
+  const closing = owner.close();
+  const settled = closing.then(() => { result = 'resolved'; }, error => { result = error; });
+  expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
+  await vi.advanceTimersByTimeAsync(999);
+  expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
+  await vi.advanceTimersByTimeAsync(1);
   expect(child.kill.mock.calls.map(([signal]) => signal)).toEqual(['SIGTERM', 'SIGKILL']);
+  await vi.advanceTimersByTimeAsync(200);
+  child.exitCode = exitCode;
+  child.signalCode = signalCode;
+  if (emitExit) child.emit('exit', exitCode, signalCode);
+  const malformed = typeof exitCode === 'string';
+  if (malformed) child.emit('error', Object.assign(new Error('/private/error-message'), { code: '/private/error-code' }));
+  await vi.advanceTimersByTimeAsync(3799);
+  expect(result).toBeUndefined();
+  expect(rm).not.toHaveBeenCalled();
   await expect(access(profile)).resolves.toBeUndefined();
-  child.signalCode = 'SIGKILL';
-  child.emit('exit', null, 'SIGKILL');
+  await vi.advanceTimersByTimeAsync(1);
+  await settled;
+  expect(result).toBeInstanceOf(Error);
+  const facts = Object.fromEntries(result.message.slice(result.message.indexOf('(') + 1, -1).split(', ').map(field => field.split('=')));
+  expect(facts).toEqual({
+    exit: String(emitExit), stdioClosed: String(emitExit),
+    term: 'accepted', kill: 'accepted', signalError: malformed ? 'other' : 'none', elapsedMs: '5000',
+    spawned: 'true', closed: 'false', exitCode: malformed ? 'other' : exitCode === null ? 'none' : String(exitCode),
+    signalCode: malformed ? 'other' : signalCode ?? 'none',
+    exitListener: String(!emitExit), closeListener: 'true', errorListener: 'true',
+    spawnMs: '0', exitMs: emitExit ? '3200' : 'unobserved', closeMs: 'unobserved',
+    termMs: '2000', killMs: '3000', closeStartedMs: '2000', timeoutMs: '7000',
+  });
+  expect(result.message).toMatch(/^Composition browser cleanup exceeded its deadline /);
+  for (const privateValue of [profile, '/synthetic/chrome', String(child.pid), endpoint, '/private/']) {
+    expect(result.message).not.toContain(privateValue);
+  }
+  expect(vi.getTimerCount()).toBe(timersBeforeClose);
+  expect(signalProcess).not.toHaveBeenCalled();
+  expect(child.listenerCount('error')).toBe(1);
+  expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
+  controller.abort();
+  expect(child.kill).toHaveBeenCalledTimes(2);
+  if (!emitExit) {
+    child.exitCode = null;
+    child.signalCode = 'SIGKILL';
+    child.emit('exit', null, 'SIGKILL');
+  }
+  expect(child.stderr.destroyed).toBe(true);
   // Exit alone is insufficient: the child must release inherited stdio first.
   await expect(access(profile)).resolves.toBeUndefined();
+  const remove = rm.getMockImplementation();
+  let removalFinished;
+  const removed = new Promise(resolve => { removalFinished = resolve; });
+  vi.mocked(rm).mockImplementationOnce(async (...args) => {
+    await remove(...args);
+    removalFinished();
+  });
   child.emit('close', null, 'SIGKILL');
-  await vi.waitFor(async () => { await expect(access(profile)).rejects.toThrow(); });
-  await expect(owner.close()).rejects.toThrow('cleanup exceeded its deadline');
+  await removed;
+  await expect(access(profile)).rejects.toThrow();
+  expect(rm).toHaveBeenCalledExactlyOnceWith(profile, { recursive: true, force: true });
+  expect(child.listenerCount('exit')).toBe(0);
+  expect(child.listenerCount('close')).toBe(0);
+  expect(child.listenerCount('error')).toBe(0);
+  expect(vi.getTimerCount()).toBe(timersBeforeClose);
+  expect(owner.close()).toBe(closing);
+  await expect(owner.close()).rejects.toBe(result);
+  expect(result.message).toContain('closeMs=unobserved');
 });

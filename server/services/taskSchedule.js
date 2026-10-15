@@ -1360,7 +1360,7 @@ async function resolveHiddenAppSchedules(taskType, interval, activeApps, allOver
   if (candidates.length === 0) return [];
 
   const checks = await mapWithConcurrency(candidates, 8, ({ app }) =>
-    shouldRunTask(taskType, app.id, { featureEnabled, schedule }).catch(() => null));
+    shouldRunTask(taskType, app.id, { featureEnabled, schedule }));
   return candidates.map(({ app, cronExpression }, i) => ({
     appId: app.id,
     appName: app.name || app.id,
@@ -1390,7 +1390,7 @@ export async function getScheduleStatus() {
   };
 
   // Fetch active apps once for per-app override aggregation
-  const activeApps = await getActiveApps().catch(() => []);
+  const activeApps = await getActiveApps();
   const totalAppCount = activeApps.length;
 
   for (const [taskType, interval] of Object.entries(schedule.tasks)) {

@@ -471,12 +471,44 @@ const featureDirectory = (path) => {
   return null;
 };
 
+// The cache boundary copies configs/helpers into synthetic checkouts and reads
+// launcher arguments as data. Those runtime edges are invisible to Vitest's
+// import graph; select their shared contract explicitly instead of running its
+// subprocesses on every unrelated or documentation-only change.
+const WORKSPACE_CACHE_COMMON_INPUTS = new Set([
+  '.github/workflows/ci.yml', 'package.json', 'scripts/lib/workspaceCacheFixture.js',
+  'scripts/lib/vitestTempRootFixture.js', 'scripts/lib/vitestTempRoot.js',
+  'scripts/lib/vitestStaleRunRoots.js', 'scripts/lib/dbTestFiles.js',
+  'scripts/vitestCiPool.js', 'scripts/vitestTempRootSetup.js', 'server/lib/killWithEscalation.js',
+  'server/test/ownedBrowserDiagnostics.js', 'server/lib/mockPathsDataRoot.js',
+]);
+const WORKSPACE_CACHE_SERVER_INPUTS = new Set([
+  'server/package.json', 'server/package-lock.json',
+  'server/vitest.config.js', 'server/vitest.config.db.js', 'server/vitest.setup.js',
+  'server/test/admissionSetup.js', 'server/test/mediaRegistryEnvironment.js',
+]);
+const WORKSPACE_CACHE_CLIENT_INPUTS = new Set([
+  'ecosystem.config.cjs', 'client/package.json', 'client/package-lock.json',
+  'client/vite.config.js', 'client/vite.buildEnv.js', 'client/vite.chunkGroups.js',
+  'client/vitest.config.js', 'client/src/test/timeouts.js',
+  'scripts/dev-start.js', 'scripts/publish-client-build.js',
+  'scripts/lib/envFile.cjs', 'scripts/lib/databaseSettings.cjs',
+  'lib/portosAuthCore.js', 'server/lib/eidoverseProxyRoutes.js',
+]);
+
 export const structuralTestsFor = (changedFiles, trackedSet) => {
   const selected = [];
   const add = (path) => {
     if (trackedSet.has(path)) selected.push(path);
   };
 
+  const sharedCacheInputChanged = changedFiles.some((path) => WORKSPACE_CACHE_COMMON_INPUTS.has(path));
+  if (sharedCacheInputChanged || changedFiles.some((path) => WORKSPACE_CACHE_SERVER_INPUTS.has(path))) {
+    add('scripts/workspaceCaches.test.js');
+  }
+  if (sharedCacheInputChanged || changedFiles.some((path) => WORKSPACE_CACHE_CLIENT_INPUTS.has(path))) {
+    add('client/src/test/workspaceCaches.test.js');
+  }
   if (changedFiles.some((path) => /^server\/lib\//.test(path))) {
     add('server/lib/index.test.js');
   }
@@ -1008,7 +1040,9 @@ export function emitGitHubPlan(plan) {
     suite_reasons: JSON.stringify(plan.suiteReasons),
   };
 
-  Object.entries(outputs).forEach(([name, value]) => writeStepOutput(name, value));
+  Object.entries(outputs).forEach(([name, value]) => {
+    writeStepOutput(name, value);
+  });
   console.log(JSON.stringify({ ...outputs, changed_files: plan.changedFiles }, null, 2));
 }
 

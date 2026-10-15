@@ -10,6 +10,7 @@ const __dirname_self = dirname(fileURLToPath(import.meta.url));
 
 let tmpDir;
 let registryFile;
+const priorRegistryFile = process.env.PORTOS_MEDIA_MODELS_FILE;
 
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), 'portos-media-models-'));
@@ -19,7 +20,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  delete process.env.PORTOS_MEDIA_MODELS_FILE;
+  if (priorRegistryFile === undefined) delete process.env.PORTOS_MEDIA_MODELS_FILE;
+  else process.env.PORTOS_MEDIA_MODELS_FILE = priorRegistryFile;
   rmSync(tmpDir, { recursive: true, force: true });
 });
 

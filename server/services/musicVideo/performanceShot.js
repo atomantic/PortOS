@@ -50,7 +50,9 @@ import {
   selectedPerformanceInstruction,
   SOURCE_AUDIO_MUSIC,
 } from '../../lib/musicVideoShotTiming.js';
+import { clipOffsetSec, clipReversed, clipSpeedRate } from '../../lib/musicVideoLayers.js';
 import { getProject } from './projects.js';
+import { clipLocks, nameShots } from './productionReview.js';
 import { assertVocalStemTimebase, resolveVocalStemPath } from './vocalStem.js';
 
 export const SHOT_INSTRUCTION_VERSION = 2;
@@ -89,11 +91,29 @@ async function sliceAudioWindow(sourcePath, outPath, { startSec, endSec }) {
 
 const refuse = (message, code, status = 400) => new ServerError(message, { status, code });
 
-// Recorded vs current scene times agree within a millisecond.
-const SAME_TIME_SEC = 0.001;
+// A shot's Offset moves its clip in whole 24 fps frames, so a slid shot whose
+// Offset lines its take back up with the song lands within half a frame.
+const IN_SYNC_SEC = 0.5 / 24;
+
+/**
+ * Whether a take still plays its sung audio under the words after the shot
+ * was re-timed. The render starts the take at its in-point plus `Offset`, at
+ * the shot's (new) start: the song moment it plays there is the one at its
+ * in-point (`madeAtSec`) plus that Offset. A shot whose start did not
+ * move (stretched or shortened at its end), or one slid with a matching
+ * Offset, is in sync; the render's coverage check still refuses a shot the
+ * take runs out under. A speed change always puts the mouth off the words.
+ */
+// The song moment a lip-sync take plays at its edit in-point, as the render
+// places it: the take's audio window starts at clip time 0.
+const madeAtSec = (instruction) => (Number.isFinite(instruction.audioWindow?.startSec)
+  ? instruction.audioWindow.startSec + instruction.edit.inSec : instruction.songInterval?.startSec);
+
+const playsInSync = (scene, madeAtSec) => Number.isFinite(madeAtSec) && clipSpeedRate(scene) === 1 && !clipReversed(scene)
+  && Math.abs(madeAtSec + clipOffsetSec(scene) - scene.startSec) <= IN_SYNC_SEC;
 
 const STALE_REASON_LABELS = Object.freeze({
-  'not-lip-synced': 'not lip-synced',
+  'not-lip-synced': 'no lip-sync record',
   retimed: 're-timed',
   'audio-changed': 'sung window changed in the song',
 });
@@ -143,7 +163,8 @@ function legacyMasterLookup(project, masterPath) {
  *     or an import made before the scene became a performance;
  *   - `audio-changed` (stale) — the master was replaced AND the take's own
  *     audio window sounds different in it;
- *   - `retimed` (stale) — the scene's song interval moved since the take;
+ *   - `retimed` (stale) — the shot moved since the take, and its Offset (or a
+ *     speed change) no longer plays the take's audio under the song;
  *   - `audio-rehashed` (NOT stale, informational) — the master's bytes
  *     changed (a re-master or re-encode) but the take's window did not.
  *
@@ -163,10 +184,10 @@ async function reviewPerformanceTakes(project, masterPath) {
     if (scene.videoHistoryId && !['still', 'card', 'code'].includes(scene.visualLayer) && supplied?.audioConditioning) {
       sha256 ??= await hashFile(masterPath);
       if (supplied.audioConditioning.sourceSha256 !== sha256) results.push({ sceneId: scene.sceneId, reason: 'source-audio-changed', stale: true });
-      else if (Math.round(scene.startSec * 48000) !== supplied.audioConditioning.startSample
-        || scene.endSec !== supplied.songInterval?.endSec) results.push({ sceneId: scene.sceneId, reason: 'retimed', stale: true });
+      else if (!playsInSync(scene, supplied.audioConditioning.startSample / 48000)) results.push({ sceneId: scene.sceneId, reason: 'retimed', stale: true });
     }
-    if (!isPerformanceScene(scene) || !scene.videoHistoryId) continue;
+    // A supplied-audio take (local LTX hearing the song) was judged above.
+    if (!isPerformanceScene(scene) || !scene.videoHistoryId || supplied?.audioConditioning) continue;
     const instruction = selectedPerformanceInstruction(scene);
     if (instruction) selected.push({ scene, instruction });
     else results.push({ sceneId: scene.sceneId, reason: 'not-lip-synced', stale: true });
@@ -186,7 +207,6 @@ async function reviewPerformanceTakes(project, masterPath) {
     return compareWindowFingerprint(fingerprint, currentEnvelope).same;
   };
   for (const { scene, instruction } of selected) {
-    const interval = instruction.songInterval || {};
     const rehashed = instruction.audio?.sha256 !== sha256;
     // A window that cannot be compared (decode failure) stays stale — the
     // pre-#9266 answer — rather than rendering a take out of sync.
@@ -195,7 +215,7 @@ async function reviewPerformanceTakes(project, masterPath) {
       return false;
     });
     if (!unchanged) results.push({ sceneId: scene.sceneId, reason: 'audio-changed', stale: true });
-    else if (!(Math.abs(interval.startSec - scene.startSec) <= SAME_TIME_SEC && Math.abs(interval.endSec - scene.endSec) <= SAME_TIME_SEC)) {
+    else if (!playsInSync(scene, madeAtSec(instruction))) {
       results.push({ sceneId: scene.sceneId, reason: 'retimed', stale: true });
     } else if (rehashed) results.push({ sceneId: scene.sceneId, reason: 'audio-rehashed', stale: false });
   }
@@ -230,29 +250,37 @@ export async function withDraftPerformanceFallbacks(project, masterPath) {
  * The one staleness gate every renderer that draws performance takes runs
  * (concat, composed, document, and their excerpts): a performance take sings
  * one stretch of one recording, so a re-timed scene or a changed sung window
- * would put mouth motion over the wrong audio. Throws 422
- * STALE_PERFORMANCE_TAKES naming each scene's reason.
+ * would put mouth motion over the wrong audio. A shot whose clip is locked
+ * renders as locked: the director approved that clip as it plays. Any other
+ * stale shot blocks, named by number with its reason. Throws 422
+ * STALE_PERFORMANCE_TAKES (or MUSIC_VIDEO_STALE_SOURCE_AUDIO_TAKES when a
+ * supplied-audio take is among them); `context.stale` lists
+ * `{ sceneId, reason, cutaway }`, `cutaway` marking the shots a switch to
+ * Cutaway fixes: those with no lip-sync take. A lip-sync take switched to
+ * Cutaway loses its in-point and plays from its first frame, out of sync.
  */
 export async function assertCurrentPerformanceTakes(project, masterPath) {
   const reviewed = await reviewPerformanceTakes(project, masterPath);
   const rehashed = reviewed.filter((r) => r.reason === 'audio-rehashed').length;
   if (rehashed > 0) console.log(`🎵 Music Video: ${rehashed} lip-sync take${rehashed === 1 ? '' : 's'} still match${rehashed === 1 ? 'es' : ''} the re-mastered song in ${rehashed === 1 ? 'its' : 'their'} sung window`);
-  const stale = reviewed.filter((r) => r.stale).map(({ sceneId, reason }) => ({ sceneId, reason }));
+  const locks = clipLocks(project);
+  const stale = reviewed.filter((r) => r.stale && locks?.[r.sceneId] !== 'locked')
+    .map(({ sceneId, reason }) => ({ sceneId, reason, cutaway: reason === 'not-lip-synced' }));
   if (stale.length === 0) return;
-  if (stale.some(({ sceneId }) => {
+  const shots = nameShots(project, stale.map(({ sceneId, reason }) => ({ sceneId, note: STALE_REASON_LABELS[reason] || reason })));
+  const one = stale.length === 1;
+  const them = one ? 'it' : 'them';
+  const fixes = [`Regenerate ${them}`,
+    ...(locks ? [`lock ${one ? 'its clip' : 'their clips'} to keep ${them} as ${one ? 'it plays' : 'they play'}`] : []),
+    ...(stale.every((entry) => entry.cutaway) ? [`switch ${them} to Cutaway`] : [])];
+  const fix = fixes.length > 1 ? `${fixes.slice(0, -1).join(', ')} or ${fixes.at(-1)}` : fixes[0];
+  const suppliedAudio = ({ sceneId }) => {
     const scene = project.scenes.find((entry) => entry.sceneId === sceneId);
-    return scene?.takes?.some((take) => take.assetId === scene.videoHistoryId && take.shotInstruction?.audioConditioning);
-  })) {
-    throw new ServerError('A supplied-audio shot no longer matches the selected recording or scene interval; regenerate it before rendering',
-      { status: 422, code: 'MUSIC_VIDEO_STALE_SOURCE_AUDIO_TAKES', context: { stale } });
-  }
-  const counts = new Map();
-  for (const { reason } of stale) counts.set(reason, (counts.get(reason) || 0) + 1);
-  const why = [...counts].map(([reason, n]) => `${n} ${STALE_REASON_LABELS[reason] || reason}`).join(', ');
-  throw new ServerError(
-    `${stale.length} performance shot${stale.length === 1 ? ' has' : 's have'} no lip-synced take of the current song interval and recording (${why}) — regenerate ${stale.length === 1 ? 'it' : 'them'}, or switch to Cutaway, before rendering`,
-    { status: 422, code: 'STALE_PERFORMANCE_TAKES', context: { stale } },
-  );
+    return !!scene?.takes?.some((take) => take.assetId === scene.videoHistoryId && take.shotInstruction?.audioConditioning);
+  };
+  const code = stale.some(suppliedAudio) ? 'MUSIC_VIDEO_STALE_SOURCE_AUDIO_TAKES' : 'STALE_PERFORMANCE_TAKES';
+  throw new ServerError(`${shots}: the selected take may not sing in sync with the song. ${fix}`,
+    { status: 422, code, context: { stale } });
 }
 
 /**

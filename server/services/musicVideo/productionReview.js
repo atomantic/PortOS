@@ -43,8 +43,8 @@ export const documentStoryboardBasis = project => hash({
 export const overlayTextBasis = project => hash({
   document: project.composition?.document?.directory || null, aspect: musicVideoAspect(project), source: source(project),
   textCues: project.composition?.textCues ?? null, overlay: project.composition?.overlay ?? null, style: project.composition?.style ?? null,
-  scenes: (project.scenes || []).map(({ sceneId, startSec, endSec, textZone, lyricRole, lyricText, cardText, referenceImageId, videoHistoryId, performanceEdit, visualLayer }) =>
-    ({ sceneId, startSec, endSec, textZone, lyricRole, lyricText, cardText, referenceImageId, videoHistoryId, performanceEdit, visualLayer })),
+  scenes: (project.scenes || []).map(({ sceneId, startSec, endSec, textZone, lyricRole, lyricSize, lyricText, cardText, referenceImageId, videoHistoryId, performanceEdit, visualLayer }) =>
+    ({ sceneId, startSec, endSec, textZone, lyricRole, lyricSize, lyricText, cardText, referenceImageId, videoHistoryId, performanceEdit, visualLayer })),
 });
 
 // Share the evidence contract between new decisions and persisted approvals:
@@ -193,6 +193,27 @@ export function clipLocks(project, locks = shotLocks(project)) {
 
 export const clipLocked = (project, sceneId) => project.productionReview?.clipApprovals?.[sceneId]
   && clipLocks(project)?.[sceneId] === 'locked';
+
+/** Each timed scene's shot number as the board shows it: song order, from 1. */
+export function shotNumbers(project) {
+  const order = (project.scenes || []).filter(scene => Number.isFinite(scene?.startSec)).sort((a, b) => a.startSec - b.startSec);
+  return new Map(order.map((scene, i) => [scene.sceneId, i + 1]));
+}
+
+/**
+ * Names shots for an error message in song order: "Shot 4", "Shots 2, 9", or
+ * with notes "Shots 2 (re-timed), 9 (not lip-synced)". `entries` are sceneIds
+ * or `{ sceneId, note }`. Untimed scenes have no number, so a list that holds
+ * one falls back to a count ("3 shots").
+ */
+export function nameShots(project, entries) {
+  const numbers = shotNumbers(project);
+  const items = entries.map(entry => (typeof entry === 'string' ? { sceneId: entry } : entry))
+    .map(({ sceneId, note }) => ({ n: numbers.get(sceneId), note }));
+  if (items.some(({ n }) => !n)) return `${items.length} ${items.length === 1 ? 'shot' : 'shots'}`;
+  const list = items.sort((a, b) => a.n - b.n).map(({ n, note }) => (note ? `${n} (${note})` : `${n}`)).join(', ');
+  return `${items.length === 1 ? 'Shot' : 'Shots'} ${list}`;
+}
 
 /** What a locked clip freezes: the inputs it was rendered from, and the selected clip itself. */
 const CLIP_LOCKED_FIELDS = ['prompt', 'framePrompt', 'visualIntent', 'camera', 'direction', 'startSec', 'endSec', 'lyricText',
@@ -562,6 +583,23 @@ export function boardStoryboard(project, storyboard = project.productionReview?.
     .map(scene => boardShotFromScene(project, scene))];
 }
 
+/** Draft rows still bound to a Board scene that no longer exists: leftovers from a cut, merge or re-plan. */
+function staleStoryboardRows(project) {
+  const draft = project.productionReview?.draft;
+  if (!Array.isArray(draft?.storyboard) || draft.storyboardSource === 'document') return [];
+  const ids = new Set((project.scenes || []).map(scene => scene.sceneId));
+  return draft.storyboard.filter(shot => shot?.sceneId && !ids.has(shot.sceneId));
+}
+
+/** The project without its stale draft rows; unchanged when there are none. Unbound rows stay to be bound. */
+export function dropStaleStoryboardRows(project) {
+  const stale = staleStoryboardRows(project);
+  if (!stale.length) return project;
+  const draft = project.productionReview.draft;
+  return { ...project, productionReview: { ...project.productionReview,
+    draft: { ...draft, storyboard: draft.storyboard.filter(shot => !stale.includes(shot)) } } };
+}
+
 /**
  * Re-anchor the storyboard rows of `sceneIds` (every shot when null) to the
  * lyric lines sung over their scenes now, keeping each row's span in step with
@@ -623,6 +661,9 @@ export function productionReadiness(project) {
     }
   }
   const documentShots = draft.storyboardSource === 'document';
+  // Each row left from a deleted shot, by its span and action, so the checklist can name it and remove them all.
+  const staleRows = documentShots ? [] : staleStoryboardRows(project)
+    .map(shot => ({ id: shot.id || null, sceneId: shot.sceneId, startSec: shot.startSec ?? null, endSec: shot.endSec ?? null, action: shot.action || '' }));
   const scenes = documentShots ? (draft.storyboard || []).map(shot => ({ ...shot, sceneId: shot.id, label: shot.id })) : project.scenes || [];
   if (documentShots) {
     if (project.composition?.mode !== 'document' || !project.composition.document?.directory
@@ -631,21 +672,40 @@ export function productionReadiness(project) {
     }
     if (new Set(scenes.map(s => s.id)).size !== scenes.length || scenes.some(s => !text(s.id))) boardProblems.push('Document shots need unique source IDs.');
   } else {
-    if (draft.storyboard?.some(shot => !shot.sceneId || !scenes.some(s => s.sceneId === shot.sceneId))) boardProblems.push('Bind every draft shot to a real Board scene.');
+    if (draft.storyboard?.some(shot => !shot.sceneId)) boardProblems.push('Bind every draft shot to a real Board scene.');
+    if (staleRows.length) boardProblems.push(`Remove ${staleRows.length} storyboard row${staleRows.length === 1 ? '' : 's'} left from deleted shots.`);
     if (new Set((draft.storyboard || []).map(s => s.sceneId)).size !== draft.storyboard?.length) boardProblems.push('Each storyboard shot must bind to its own Board scene.');
   }
   if (!scenes.length) boardProblems.push('Create a timed shot storyboard.');
   const timedScenes = scenes.filter(s => Number.isFinite(s.startSec) && s.endSec > s.startSec).sort((a, b) => a.startSec - b.startSec);
-  if (timedScenes.length && (timedScenes[0].startSec > 1 / 24
-    || Math.abs(timedScenes.at(-1).endSec - duration) > 1 / 24
-    || timedScenes.some((s, i) => i > 0 && Math.abs(s.startSec - timedScenes[i - 1].endSec) > 1 / 24))) {
-    boardProblems.push('Storyboard shots must cover the master without unintended gaps or overlaps.');
+  // Each place the shots leave the song uncovered or covered twice, on the shot where it happens, so the checklist can name it.
+  const coverage = [];
+  if (timedScenes.length) {
+    const [first, last] = [timedScenes[0], timedScenes.at(-1)];
+    if (first.startSec > 1 / 24) coverage.push({ sceneId: first.sceneId, issue: 'late-start', startSec: 0, endSec: first.startSec });
+    timedScenes.forEach((s, i) => {
+      const prev = timedScenes[i - 1];
+      if (!prev || Math.abs(s.startSec - prev.endSec) <= 1 / 24) return;
+      coverage.push({ sceneId: s.sceneId, issue: s.startSec > prev.endSec ? 'gap' : 'overlap',
+        startSec: Math.min(s.startSec, prev.endSec), endSec: Math.max(s.startSec, prev.endSec) });
+    });
+    if (Math.abs(last.endSec - duration) > 1 / 24) coverage.push({ sceneId: last.sceneId, issue: last.endSec > duration ? 'past-end' : 'early-end',
+      startSec: Math.min(last.endSec, duration), endSec: Math.max(last.endSec, duration) });
   }
+  if (coverage.length) boardProblems.push('Storyboard shots must cover the master without unintended gaps or overlaps.');
+  // Each shot missing timing or storyboard fields, with what is missing.
+  const incompleteShots = [];
   for (const scene of scenes) {
     const shot = documentShots ? scene : draft.storyboard?.find(s => s.sceneId === scene.sceneId) || boardShotFromScene(project, scene);
-    if (!(Number.isFinite(scene.startSec) && scene.endSec > scene.startSec && scene.endSec <= duration)
-      || !shot || ['action', 'staging', 'camera', 'transition'].some(key => !text(shot[key]))) {
+    const missing = !(Number.isFinite(scene.startSec) && scene.endSec > scene.startSec) ? ['timing']
+      : scene.endSec > duration ? ['an end inside the song'] : [];
+    // A Board shot with no camera note is a valid choice (a cutaway rendered from its start frame plays
+    // whatever motion its clip has); camera variety stays advice. Document shots spell out every field.
+    missing.push(...(documentShots ? ['action', 'staging', 'camera', 'transition'] : ['action', 'staging', 'transition'])
+      .filter(key => !text(shot?.[key])));
+    if (missing.length) {
       boardProblems.push(`Complete timing, action, staging, camera and transition for ${scene.label || 'each shot'}.`);
+      incompleteShots.push({ sceneId: scene.sceneId, missing });
     }
     // A shot anchors every line sung over it, counted from the line's first sung word (lib/musicVideoLyricAnchors.js).
     const sung = cuesSungWithin(cues, scene.startSec, scene.endSec);
@@ -677,7 +737,7 @@ export function productionReadiness(project) {
     // The overlay text check is advice on the storyboard, like camera variety; it never blocks approval.
     storyboard: { approved: storyboardApproved, problems: [...new Set(boardProblems)], camera,
       // Board shots as reviewed, derived rows included, so the editor and approval card show what the gate checked.
-      shots: documentShots ? null : boardStoryboard(project), lyricAnchors, text: overlayTextReport(project, overlayTextBasis), stale: storyboardApproved ? null : staleApproval(project, 'storyboard', basis.storyboard, inputs),
+      shots: documentShots ? null : boardStoryboard(project), lyricAnchors, staleRows, coverage, incompleteShots, text: overlayTextReport(project, overlayTextBasis), stale: storyboardApproved ? null : staleApproval(project, 'storyboard', basis.storyboard, inputs),
       shotLocks: locks, unlocked: byShot ? unlocked : [], clipLocks: clips,
       // Video shots whose clip is not locked yet: the board is finished when every shot is fully locked.
       clipsUnlocked: clips ? Object.keys(clips).filter(id => clips[id] && clips[id] !== 'locked') : [] },

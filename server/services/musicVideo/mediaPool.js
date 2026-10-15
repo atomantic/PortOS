@@ -55,6 +55,9 @@ export function droppedTakeAssets(before, after) {
  * Mark assets ★ ingredient (good, unplaced) or ✕ bad (to clean up); null
  * clears the mark. Marks live on the project (`assetMarks`, keyed
  * `<image|video>:<ref>`), so a still bad for one video stays fine in another.
+ * Bad also rejects the asset's takes on every shot not using it now; a shot's
+ * selection is never cleared, and clearing the mark leaves the rejects.
+ * `scenes` lists the shots whose takes changed.
  */
 export function markPoolAssets(project, keys, mark) {
   const assetMarks = { ...(project.assetMarks || {}) };
@@ -62,7 +65,19 @@ export function markPoolAssets(project, keys, mark) {
     if (mark) assetMarks[key] = mark;
     else delete assetMarks[key];
   }
-  return { project: { ...project, assetMarks } };
+  if (mark !== 'bad') return { project: { ...project, assetMarks }, scenes: [] };
+  const bad = new Set(keys);
+  const changed = [];
+  const scenes = (project.scenes || []).map((scene) => {
+    if (!Array.isArray(scene.takes)) return scene;
+    const reject = (take) => take?.status !== 'rejected' && bad.has(`${KIND_OF_SLOT[take?.kind]}:${take?.assetId}`)
+      && scene[TAKE_SLOT[take.kind]] !== take.assetId;
+    if (!scene.takes.some(reject)) return scene;
+    const next = { ...scene, takes: scene.takes.map((take) => (reject(take) ? { ...take, status: 'rejected' } : take)) };
+    changed.push(next);
+    return next;
+  });
+  return { project: { ...project, assetMarks, scenes }, scenes: changed };
 }
 
 /**
@@ -90,6 +105,26 @@ function forgetPoolAssets(project, keys) {
 
 const usedKeys = (project) => new Set((project?.scenes || []).flatMap((scene) => Object.entries(TAKE_SLOT)
   .map(([slot, field]) => (scene[field] ? `${KIND_OF_SLOT[slot]}:${scene[field]}` : null)).filter(Boolean)));
+
+/** Revalidate newly selected local media while project mutation admission is held.
+ * Existing missing selections and peer-qualified references retain their legacy semantics.
+ */
+export async function assertNewMediaSelections(before, after) {
+  const previous = usedKeys(before);
+  const added = [...usedKeys(after)].filter(key => !previous.has(key));
+  if (!added.length) return;
+  const [{ resolveGalleryImage }, { getHistoryItem }, { ServerError }] = await Promise.all([
+    import('../../lib/pathSafety.js'), import('../videoGen/history.js'), import('../../lib/errorHandler.js'),
+  ]);
+  for (const key of added) {
+    const separator = key.indexOf(':');
+    const kind = key.slice(0, separator);
+    const assetId = key.slice(separator + 1);
+    if (assetId.includes(':') || assetId.includes('/')) continue;
+    const exists = kind === 'image' ? resolveGalleryImage(assetId) : await getHistoryItem(assetId);
+    if (!exists) throw new ServerError(`${kind === 'image' ? 'Image' : 'Video'} not found in this install's media library`, { status: 400, code: 'TAKE_ASSET_NOT_FOUND' });
+  }
+}
 
 /** Each `<kind>:<id>` a shot uses now, mapped to the shots using it (still, clip or end frame slot), in board order. */
 const shotsUsing = (project) => {
@@ -216,12 +251,100 @@ export async function getMusicVideoMediaPool(project) {
 }
 
 /**
+ * File every still and clip of another video's pool (an earlier draft of the
+ * same song) into `project`'s collection, so its Assets page and stats outro
+ * count them. References only: no file is copied, the other video is not
+ * changed, and its clips keep their own provenance stamp. Resolves
+ * `{ added, total }`: how many were new here, of the other video's pool.
+ */
+export async function importMusicVideoPool(project, fromProject) {
+  const [{ findOrCreateMusicVideoCollection, bulkUpdateCollectionItems }, { items }] = await Promise.all([
+    import('../mediaCollections.js'), getMusicVideoMediaPool(fromProject),
+  ]);
+  const collection = await findOrCreateMusicVideoCollection({ projectId: project.id, projectName: project.name });
+  const present = new Set([...collection.items.map((item) => `${item.kind}:${item.ref}`),
+    ...projectTakeAssets(project).map((asset) => `${asset.kind}:${asset.ref}`)]);
+  const add = items.filter((item) => !present.has(`${item.kind}:${item.assetId}`)
+    && !item.assetId.includes(':') && !item.assetId.includes('/'))
+    .map((item) => ({ kind: item.kind, ref: item.assetId }));
+  if (add.length) await bulkUpdateCollectionItems(collection.id, { add });
+  console.log(`🗂️ music-video media pool: filed ${add.length} of ${items.length} item(s) from ${fromProject.id} into ${project.id}`);
+  return { added: add.length, total: items.length };
+}
+
+const LIBRARY_MATCH_MAX = 300;
+
+/**
+ * Stills and clips in the whole media library whose prompts hold every word of
+ * `query` and that are not in `project`'s pool yet: media made for the video
+ * but never filed (rendered before renders named their video). Newest first,
+ * at most 300: `{ items: [{ kind, assetId, prompt, createdAt }], more }`.
+ */
+export async function searchMediaLibraryForPool(project, query) {
+  const words = String(query).toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return { items: [], more: false };
+  const [{ items: pool }, { listGallery }, { loadHistory }] = await Promise.all([
+    getMusicVideoMediaPool(project), import('../imageGen/local.js'), import('../videoGen/history.js'),
+  ]);
+  const inPool = new Set(pool.map((item) => `${item.kind}:${item.assetId}`));
+  const matches = (prompt) => typeof prompt === 'string' && words.every((word) => prompt.toLowerCase().includes(word));
+  const found = [
+    ...(await listGallery()).filter((image) => matches(image.prompt) && !inPool.has(`image:${image.filename}`))
+      .map((image) => ({ kind: 'image', assetId: image.filename, prompt: image.prompt, createdAt: image.createdAt || null })),
+    ...(await loadHistory()).filter((entry) => entry?.id && matches(entry.prompt) && !inPool.has(`video:${entry.id}`))
+      .map((entry) => ({ kind: 'video', assetId: entry.id, prompt: entry.prompt, createdAt: entry.createdAt || null })),
+  ].sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  return { items: found.slice(0, LIBRARY_MATCH_MAX), more: found.length > LIBRARY_MATCH_MAX };
+}
+
+/**
+ * File stills and clips from the media library into `project`'s collection
+ * (the Assets page's "Add from the library"). Only files the library holds;
+ * a clip keeps whatever provenance stamp it has. Resolves `{ added }`.
+ */
+export async function addLibraryMediaToPool(project, items) {
+  const [{ findOrCreateMusicVideoCollection, bulkUpdateCollectionItems }, { resolveGalleryImage }, { getHistoryItem }, { ServerError }] = await Promise.all([
+    import('../mediaCollections.js'), import('../../lib/pathSafety.js'), import('../videoGen/history.js'), import('../../lib/errorHandler.js'),
+  ]);
+  for (const { kind, assetId } of items) {
+    const exists = kind === 'image' ? resolveGalleryImage(assetId) : await getHistoryItem(assetId);
+    if (!exists) throw new ServerError(`${kind === 'image' ? 'Image' : 'Video'} not found in this install's media library`, { status: 400, code: 'TAKE_ASSET_NOT_FOUND' });
+  }
+  const collection = await findOrCreateMusicVideoCollection({ projectId: project.id, projectName: project.name });
+  const present = new Set(collection.items.map((item) => `${item.kind}:${item.ref}`));
+  const add = [...new Map(items.filter(({ kind, assetId }) => !present.has(`${kind}:${assetId}`))
+    .map(({ kind, assetId }) => [`${kind}:${assetId}`, { kind, ref: assetId }])).values()];
+  if (add.length) await bulkUpdateCollectionItems(collection.id, { add });
+  return { added: add.length };
+}
+
+/**
+ * The pool items (`{ kind, assetId }`) whose prompts hold every word of `query`, case-insensitively:
+ * the take's prompt, the prompt saved beside a still (its image sidecar) and a clip's history prompt.
+ * Swap searches here because a still on the floor has no take left to carry its prompt.
+ */
+export async function searchMusicVideoMediaPool(project, query) {
+  const words = String(query).toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  const [{ items }, { loadHistory }, { readImageSidecar }] = await Promise.all([
+    getMusicVideoMediaPool(project), import('../videoGen/history.js'), import('../imageGen/local.js'),
+  ]);
+  const history = new Map((await loadHistory()).filter((entry) => entry?.id).map((entry) => [entry.id, entry]));
+  const sidecarPrompt = (assetId) => readImageSidecar(assetId)
+    .then(({ metadata }) => (typeof metadata?.prompt === 'string' ? metadata.prompt : '')).catch(() => '');
+  const texts = await Promise.all(items.map(async (item) => [item.prompt || '',
+    item.kind === 'video' ? history.get(item.assetId)?.prompt || '' : await sidecarPrompt(item.assetId)].join('\n').toLowerCase()));
+  return items.filter((_, index) => words.every((word) => texts[index].includes(word)))
+    .map(({ kind, assetId }) => ({ kind, assetId }));
+}
+
+/**
  * After stills or clips (`<image|video>:<ref>` keys) are deleted from the
  * media library: forget them on every music video that held them (unused
  * takes, marks, collection rows), in one pass per project, so nothing points
  * at a file that is gone. Best-effort, like the other filing.
  */
-export async function forgetDeletedMusicVideoAssets(keys) {
+export async function forgetDeletedMusicVideoAssets(keys, { mutateProjectRecord: admittedMutation } = {}) {
   const gone = new Set(keys);
   try {
     const [{ listProjects, mutateProjectRecord }, { getCollection, musicVideoCollectionId, bulkUpdateCollectionItems }] = await Promise.all([
@@ -231,7 +354,7 @@ export async function forgetDeletedMusicVideoAssets(keys) {
       const held = Object.keys(project.assetMarks || {}).some((key) => gone.has(key))
         || (project.scenes || []).some((scene) => (scene.takes || []).some((take) => gone.has(`${KIND_OF_SLOT[take?.kind]}:${take?.assetId}`)));
       // The take removal files dropped takes into the collection, so the rows go after it.
-      if (held) await mutateProjectRecord(project.id, (current) => forgetPoolAssets(current, keys));
+      if (held) await (admittedMutation || mutateProjectRecord)(project.id, (current) => forgetPoolAssets(current, keys));
       const collection = await getCollection(musicVideoCollectionId(project.id)).catch(() => null);
       const rows = (collection?.items || []).map((item) => `${item.kind}:${item.ref}`).filter((key) => gone.has(key));
       if (rows.length) await bulkUpdateCollectionItems(collection.id, { remove: rows });
@@ -248,22 +371,36 @@ export async function forgetDeletedMusicVideoAssets(keys) {
  * the batch on every music video (forgetDeletedMusicVideoAssets).
  */
 export async function deleteMusicVideoPoolAssets(project, items) {
+  const { withProjectMediaMutation, getProject, listProjects } = await import('./projects.js');
   const { ServerError } = await import('../../lib/errorHandler.js');
-  const pool = new Set((await getMusicVideoMediaPool(project)).items.map((item) => `${item.kind}:${item.assetId}`));
-  // A shot on any music video using it keeps it, not only this video's shots.
-  const { listProjects } = await import('./projects.js');
-  const usedAnywhere = new Set((await listProjects()).flatMap((other) => [...usedKeys(other)]));
-  const keys = items.map((item) => `${item.kind}:${item.assetId}`);
-  const refused = keys.filter((key) => !pool.has(key) || usedAnywhere.has(key));
-  if (refused.length) {
-    throw new ServerError(`${refused.length} of these ${refused.length === 1 ? 'is' : 'are'} on a shot or not made for this video`, { status: 409, code: 'POOL_ASSET_IN_USE' });
-  }
-  const [{ deleteGalleryImage }, { deleteHistoryItem }] = await Promise.all([
-    import('../galleryImageDeletion.js'), import('../videoGen/historyOps.js'),
-  ]);
-  for (const item of items) {
-    await (item.kind === 'image' ? deleteGalleryImage : deleteHistoryItem)(item.assetId, { forgetInMusicVideos: false });
-  }
-  await forgetDeletedMusicVideoAssets(keys);
-  return { deleted: items.length };
+  const { withBackupAssetPublication } = await import('../../lib/backupSnapshotBoundary.js');
+  // Backup admission precedes the project boundary, matching gallery/history
+  // deletion; one lease covers physical deletion and project cleanup.
+  return withBackupAssetPublication(() => withProjectMediaMutation(async (admitted) => {
+    const current = await getProject(project.id);
+    if (!current) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+    const pool = new Set((await getMusicVideoMediaPool(current)).items.map((item) => `${item.kind}:${item.assetId}`));
+    // A shot on any music video using it keeps it, not only this video's shots.
+    const usedAnywhere = new Set((await listProjects()).flatMap((other) => [...usedKeys(other)]));
+    const keys = items.map((item) => `${item.kind}:${item.assetId}`);
+    const refused = keys.filter((key) => !pool.has(key) || usedAnywhere.has(key));
+    if (refused.length) {
+      throw new ServerError(`${refused.length} of these ${refused.length === 1 ? 'is' : 'are'} on a shot or not made for this video`, { status: 409, code: 'POOL_ASSET_IN_USE' });
+    }
+    const [{ deleteGalleryImage }, { deleteHistoryItem }] = await Promise.all([
+      import('../galleryImageDeletion.js'), import('../videoGen/historyOps.js'),
+    ]);
+    const deleted = [];
+    try {
+      for (const item of items) {
+        await (item.kind === 'image' ? deleteGalleryImage : deleteHistoryItem)(item.assetId, { forgetInMusicVideos: false });
+        deleted.push(`${item.kind}:${item.assetId}`);
+      }
+    } finally {
+      // Even when a later deletion fails, forget the completed prefix. Keep the
+      // failed item's evidence, and let the original error reach the caller.
+      if (deleted.length) await forgetDeletedMusicVideoAssets(deleted, admitted);
+    }
+    return { deleted: deleted.length };
+  }));
 }

@@ -130,8 +130,13 @@ export default function EntityCombobox({
         if (u) { onPick(u); setOpen(false); }
         e.preventDefault();
       } else if (showCreateOption) {
-        onCreate();
-        setOpen(false);
+        // The virtually focused option is a disabled button while busy.
+        // Keep Enter consistent with pointer activation and consume it so it
+        // cannot fall through to a surrounding form's submit action.
+        if (!busy) {
+          onCreate();
+          setOpen(false);
+        }
         e.preventDefault();
       }
     }

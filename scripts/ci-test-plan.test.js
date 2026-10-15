@@ -20,6 +20,7 @@ import {
   SLASHDO_GITLINK_PATH,
   sourceReferencePattern,
   splitByRunner,
+  structuralTestsFor,
   WINDOWS_CONTRACT_TESTS,
   WINDOWS_RISK_RULES,
 } from './ci-test-plan.js';
@@ -67,6 +68,52 @@ const TRACKED = [
   'scripts/migrations/210-example.test.js',
   'scripts/fix-windows-console.js',
 ];
+
+it('selects checkout-cache contracts only in their installed-dependency runners', () => {
+  const serverContract = 'scripts/workspaceCaches.test.js';
+  const clientContract = 'client/src/test/workspaceCaches.test.js';
+  const shared = [
+    '.github/workflows/ci.yml', 'package.json', 'scripts/lib/workspaceCacheFixture.js',
+    'scripts/lib/vitestTempRootFixture.js', 'scripts/lib/vitestTempRoot.js',
+    'scripts/lib/vitestStaleRunRoots.js', 'scripts/lib/dbTestFiles.js',
+    'scripts/vitestCiPool.js', 'scripts/vitestTempRootSetup.js', 'server/lib/killWithEscalation.js',
+    'server/test/ownedBrowserDiagnostics.js', 'server/lib/mockPathsDataRoot.js',
+  ];
+  const server = [
+    'server/package.json', 'server/package-lock.json',
+    'server/vitest.config.js', 'server/vitest.config.db.js', 'server/vitest.setup.js',
+    'server/test/admissionSetup.js', 'server/test/mediaRegistryEnvironment.js',
+  ];
+  const client = [
+    'ecosystem.config.cjs', 'client/package.json', 'client/package-lock.json',
+    'client/vite.config.js', 'client/vite.buildEnv.js', 'client/vite.chunkGroups.js',
+    'client/vitest.config.js', 'client/src/test/timeouts.js',
+    'scripts/dev-start.js', 'scripts/publish-client-build.js',
+    'scripts/lib/envFile.cjs', 'scripts/lib/databaseSettings.cjs',
+    'lib/portosAuthCore.js', 'server/lib/eidoverseProxyRoutes.js',
+  ];
+  const trackedFiles = [...TRACKED, ...shared, ...server, ...client, serverContract, clientContract];
+  for (const [inputs, owners] of [[shared, [serverContract, clientContract]], [server, [serverContract]], [client, [clientContract]]]) {
+    for (const input of inputs) {
+      const selected = structuralTestsFor([input], new Set(trackedFiles));
+      const plan = buildCiTestPlan([input], { trackedFiles });
+      for (const [contract, runner] of [[serverContract, 'server'], [clientContract, 'client']]) {
+        expect(selected.includes(contract), input + ' -> ' + runner).toBe(owners.includes(contract));
+        // Full CI still runs both complete workspaces; scoped plans preserve ownership.
+        if (owners.includes(contract)) expect(plan[runner].mode === 'full' || plan[runner].files.includes(contract), input).toBe(true);
+      }
+      expect(plan.server.files, input).not.toContain(clientContract);
+      expect(plan.client.files, input).not.toContain(serverContract);
+    }
+  }
+  for (const input of ['docs/CONTRIBUTING.md', 'server/services/auth.js']) {
+    const plan = buildCiTestPlan([input], { trackedFiles });
+    expect(plan.full, input).toBe(false);
+    expect(plan.server.files, input).not.toContain(serverContract);
+    expect(plan.client.files, input).not.toContain(clientContract);
+  }
+  expect(structuralTestsFor([...shared, ...server, ...client], new Set())).toEqual([]);
+});
 
 const REVIEW_LOOP_SNAPSHOT = 'server/services/promptSections/__snapshots__/reviewLoopMatrix/local-gh.txt';
 const REVIEW_LOOP_OWNER = 'server/services/promptSections/reviewLifecycleMatrix.test.js';

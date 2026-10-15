@@ -3,7 +3,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { musicVideoEvents } from './events.js';
 import { shotCameraLabel } from '../../lib/cameraMovements.js';
-import { productionReadiness, boardStoryboard, seedArtDraft, productionReviewBasis, productionAlignmentBasis, documentStoryboardBasis, approveProductionStage, assertProductionApproval, assertShotApproval, assertClipUnlocked, setShotLocks, recordProductionFeedback, resolveProductionFeedback, revertApprovedInput, anchorShotsToSungLyrics, clipLocked } from './productionReview.js';
+import { productionReadiness, boardStoryboard, seedArtDraft, productionReviewBasis, productionAlignmentBasis, documentStoryboardBasis, approveProductionStage, assertProductionApproval, assertShotApproval, assertClipUnlocked, setShotLocks, recordProductionFeedback, resolveProductionFeedback, revertApprovedInput, anchorShotsToSungLyrics, clipLocked, dropStaleStoryboardRows, carryStoryboardApproval } from './productionReview.js';
 import { cuesSungWithin } from '../../lib/musicVideoLyricAnchors.js';
 
 const reviewProcessId = randomUUID();
@@ -128,11 +128,12 @@ export async function saveProductionDraft(id, draft) {
   const guard = await validateGuideSelection(await requireProject(id), () => draft.guideArtifactId);
   const { project } = await mutateProjectRecord(id, current => {
     guard(current);
-    return { project: { ...current,
+    // An editor copy saved after a shot was cut must not bring that shot's row back.
+    return { project: dropStaleStoryboardRows({ ...current,
     productionReview: { ...current.productionReview, draft,
       alignmentBasis: draft.timingStatus === 'verified'
         ? (current.productionReview?.draft?.timingStatus !== 'verified' ? productionAlignmentBasis(current) : current.productionReview?.alignmentBasis)
-        : null } } };
+        : null } }) };
   });
   return changed(project);
 }
@@ -158,8 +159,14 @@ export async function revertProductionInput(id, input) {
 }
 
 /** Lock or unlock Board shots for an authenticated reviewer, under the project write lock. */
+// Locking a shot's video finalizes it: its other frame and clip takes are rejected, as Reject unused does.
 export async function lockProductionShots(id, input) {
-  const { project } = await mutateProjectRecord(id, current => ({ project: setShotLocks(current, input) }));
+  const { rejectUnusedTakes } = await import('./takes.js');
+  const { project } = await mutateProjectRecord(id, current => {
+    const locked = setShotLocks(current, input);
+    if (input.stage !== 'video' || !input.locked) return { project: locked };
+    return { project: input.sceneIds.reduce((next, sceneId) => rejectUnusedTakes(next, sceneId).project, locked) };
+  });
   return changed(project);
 }
 
@@ -321,6 +328,16 @@ export async function syncLyricAnchors(id, { sceneIds = null } = {}) {
       return { ...scene, lyricText: sung.length ? sung.join(' / ').slice(0, 2000) : null };
     });
     return { project: { ...anchored, scenes, updatedAt: new Date().toISOString() } };
+  });
+  return changed(project);
+}
+
+/** Remove the storyboard rows left from deleted shots, keeping a current storyboard approval. */
+export async function removeStaleStoryboardRows(id) {
+  const { project } = await mutateProjectRecord(id, current => {
+    const pruned = dropStaleStoryboardRows(current);
+    if (pruned === current) return { project: current };
+    return { project: carryStoryboardApproval(current, { ...pruned, updatedAt: new Date().toISOString() }, 'Removed rows left from deleted shots') };
   });
   return changed(project);
 }

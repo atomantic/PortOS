@@ -20,6 +20,7 @@ encoder (e.g. HiDream-I1 loads Llama-3.1-8B-Instruct as `text_encoder_4`), so
 """
 
 import argparse
+import gc
 import inspect
 import os
 import sys
@@ -208,7 +209,24 @@ def encode_references_in_vae_dtype(pipe):
     pipe._encode_vae_image = encode_in_vae_dtype
 
 
+def release_denoising_components(pipe) -> None:
+    """Drop the transformer and text encoder once the denoising loop is done.
+
+    The full Qwen 2.1 pipeline sits on MPS with no offload, and its float32 VAE
+    decode needs another few GiB on top — on a 32 GB Mac that crossed the MPS
+    high-watermark and failed a finished 40-step render at its very last step.
+    The runner is one-shot per image, so nothing needs these modules again."""
+    for name in ("transformer", "text_encoder"):
+        if getattr(pipe, name, None) is not None:
+            setattr(pipe, name, None)
+    gc.collect()
+    mps = getattr(torch, "mps", None)
+    if mps is not None and torch.backends.mps.is_available():
+        mps.empty_cache()
+
+
 def decode_qwen21_latents(pipe, latents, height: int, width: int):
+    release_denoising_components(pipe)
     vae = pipe.vae
     unpacked = pipe._unpack_latents(latents, height, width, pipe.vae_scale_factor)
 
@@ -244,6 +262,30 @@ def decode_qwen21_latents(pipe, latents, height: int, width: int):
     if retried:
         print("⚠️ qwen-image-2.1 VAE decode recovered after a float32 retry", file=sys.stderr)
     return pipe.image_processor.postprocess(decoded[:, :, 0], output_type="pil")
+
+
+def release_text_encoder_before_denoising(pipe) -> None:
+    """Free Qwen 2.1's text encoder once the prompt is encoded.
+
+    The pipeline keeps its Qwen VL text encoder resident through every
+    denoising step although the loop only reads the embeddings, which pushes a
+    32 GB Mac deep into swap. The encoder is dropped on the transformer's first
+    forward: by then the prompt, the negative prompt and any reference images
+    are all encoded, by the pipeline's own code. Passing precomputed
+    `prompt_embeds` instead doesn't work with reference images, because the
+    pipeline call can't take the image-token mask that comes with them."""
+    transformer = getattr(pipe, "transformer", None)
+    if transformer is None or getattr(pipe, "text_encoder", None) is None:
+        return
+    handle = None
+
+    def release(_module, _args):
+        handle.remove()
+        pipe.text_encoder = None
+        gc.collect()
+        torch.mps.empty_cache()
+
+    handle = transformer.register_forward_pre_hook(release)
 
 
 def parse_args() -> argparse.Namespace:
@@ -338,6 +380,7 @@ def main() -> None:
     if qwen21_mps:
         pipe.vae.to(dtype=torch.float32)
         encode_references_in_vae_dtype(pipe)
+        release_text_encoder_before_denoising(pipe)
 
     seed = args.seed if args.seed is not None else int(torch.randint(0, 2**31 - 1, (1,)).item())
     generator = make_generator(device, seed)

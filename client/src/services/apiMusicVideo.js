@@ -178,6 +178,9 @@ export const selectMusicVideoSceneTake = (id, sceneId, takeId, options = {}) =>
   request(`${takesPath(id, sceneId)}/${encodeURIComponent(takeId)}/select`, { method: 'POST', ...options });
 // The project's unused stills and clips (the shot card's "Swap from unused") → { collectionId, items }.
 export const getMusicVideoMediaPool = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/media-pool`, options);
+/** Swap's prompt search: `{ items: [{ kind, assetId }] }`, the pool items whose prompts hold every word. */
+export const searchMusicVideoMediaPool = (id, q, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/media-pool/search?q=${encodeURIComponent(q)}`, options);
 /** The cutting room floor outro's tally for a video: `{ stats }`. */
 export const getMusicVideoOutroStats = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/stats-outro`, options);
 // Asset manager: mark unused pool items ★ 'ingredient' / ✕ 'bad' (null clears) → { assetMarks }.
@@ -186,6 +189,17 @@ export const markMusicVideoPoolAssets = (id, items, mark, options = {}) => reque
 });
 // Asset manager: delete unused pool items from the media library → { deleted }.
 export const deleteMusicVideoPoolAssets = (id, items, options = {}) => request(`/music-video/${encodeURIComponent(id)}/media-pool/delete`, {
+  method: 'POST', body: JSON.stringify({ items }), ...options,
+});
+// Asset manager: file another video's whole pool (an earlier draft) into this one → { added, total, items }.
+export const importMusicVideoPool = (id, fromProjectId, options = {}) => request(`/music-video/${encodeURIComponent(id)}/media-pool/import`, {
+  method: 'POST', body: JSON.stringify({ fromProjectId }), ...options,
+});
+// Asset manager: library stills and clips whose prompts hold every word, not in this video yet → { items, more }.
+export const searchMusicVideoLibrary = (id, q, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/media-pool/library?q=${encodeURIComponent(q)}`, options);
+// Asset manager: file library stills and clips into this video → { added, items }.
+export const addMusicVideoLibraryMedia = (id, items, options = {}) => request(`/music-video/${encodeURIComponent(id)}/media-pool/add`, {
   method: 'POST', body: JSON.stringify({ items }), ...options,
 });
 // Put a pool still or clip on a shot as its selection; `withAssetId` brings its partner → { scene }.
@@ -263,6 +277,20 @@ export const regenerateMusicVideoCodeSection = (id, sectionId, body = {}, option
   request(`/music-video/${encodeURIComponent(id)}/code/sections/${encodeURIComponent(sectionId)}/regenerate`, {
     method: 'POST', body: JSON.stringify(body), ...options,
   });
+
+// ---- Per-shot render segments ----
+// Every shot's cache state for the composed final render:
+// { available, error?, shots: [{ sceneId, state: 'rendered'|'stale', rendering, look, files }], outro, ready, total }.
+export const getMusicVideoShotRenders = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/shot-renders`, options);
+// Render one shot's segments into the cache; progress arrives on `music-video:shot-render`.
+export const renderMusicVideoShot = (id, sceneId, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/shots/${encodeURIComponent(sceneId)}/render`, { method: 'POST', ...options });
+export const cancelMusicVideoShotRender = (id, sceneId, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/shots/${encodeURIComponent(sceneId)}/render/cancel`, { method: 'POST', ...options });
+// A rendered shot's silent segment, to play.
+export const musicVideoShotRenderUrl = (id, name) =>
+  `/api/music-video/${encodeURIComponent(id)}/shot-renders/${encodeURIComponent(name)}`;
 
 // EventSource URL for a render job's progress stream (consumed by useSseProgress).
 export const musicVideoRenderEventsUrl = (jobId) =>
@@ -593,6 +621,8 @@ export const addMusicVideoProductionFeedback = (id, body, options = {}) => reque
 export const revertMusicVideoProductionInput = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/revert`, { method: 'POST', body: JSON.stringify(body), ...options });
 export const reviseMusicVideoProductionFromFeedback = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/revise`, { method: 'POST', body: JSON.stringify(body), ...options });
 export const syncMusicVideoLyricAnchors = (id, body = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/lyric-anchors`, { method: 'POST', body: JSON.stringify(body), ...options });
+// Remove the storyboard rows left from deleted shots.
+export const removeMusicVideoStaleStoryboardRows = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/stale-rows`, { method: 'DELETE', ...options });
 export const resolveMusicVideoProductionFeedback = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/feedback/resolve`, { method: 'POST', body: JSON.stringify(body), ...options });
 // Drafting is free; generation and candidate selection are separate explicit actions.
 export const saveMusicVideoSongRevision = (id, fields, options = {}) => request(`/music-video/${encodeURIComponent(id)}/song-revision`, { method: 'POST', body: JSON.stringify(fields), ...options });

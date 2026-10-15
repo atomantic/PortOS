@@ -246,18 +246,16 @@ jobs:
           node scripts/trusted-rebuilds.js server
           node scripts/trusted-rebuild-stamp.js write server
 
-      # After the install: `npm ci` wipes node_modules, so a restore ordered
-      # ahead of it is lost. Vite/Vitest write transform artifacts under
-      # node_modules/.vite (and historically .vitest); reusing them skips
-      # re-transforming unchanged files. Separate from the cache above, and
-      # deliberately: this is where a near miss is safe, so this is the entry
-      # that keeps restore-keys and stays warm across a lockfile bump.
+      # Reuse Vite/Vitest artifacts from checkout-owned .cache paths, outside
+      # node_modules (which may be shared by worktrees). Unlike the installed
+      # dependency tree above, these artifacts can safely use a near-miss
+      # restore and stay warm across a lockfile bump.
       - name: Cache Vitest transform artifacts
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            server/node_modules/.vite
-            server/node_modules/.vitest
+            server/.cache/vitest
+            server/.cache/vitest-db
           key: vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json', 'server/vitest.config.js', 'scripts/vitestCiPool.js') }}-${{ matrix.shard }}of${{ strategy.job-total }}
           restore-keys: |
             vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json') }}-
@@ -395,8 +393,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            client/node_modules/.vite
-            client/node_modules/.vitest
+            client/.cache/vitest
           key: vitest-client-${{ runner.os }}-${{ hashFiles('client/package-lock.json', 'client/vitest.config.js', 'scripts/vitestCiPool.js') }}-${{ matrix.shard }}of${{ strategy.job-total }}
           restore-keys: |
             vitest-client-${{ runner.os }}-${{ hashFiles('client/package-lock.json') }}-
@@ -634,18 +631,16 @@ jobs:
           node scripts/trusted-rebuilds.js server
           node scripts/trusted-rebuild-stamp.js write server
 
-      # After the install: `npm ci` wipes node_modules, so a restore ordered
-      # ahead of it is lost. Vite/Vitest write transform artifacts under
-      # node_modules/.vite (and historically .vitest); reusing them skips
-      # re-transforming unchanged files. Separate from the cache above, and
-      # deliberately: this is where a near miss is safe, so this is the entry
-      # that keeps restore-keys and stays warm across a lockfile bump.
+      # Reuse Vite/Vitest artifacts from checkout-owned .cache paths, outside
+      # node_modules (which may be shared by worktrees). Unlike the installed
+      # dependency tree above, these artifacts can safely use a near-miss
+      # restore and stay warm across a lockfile bump.
       - name: Cache Vitest transform artifacts
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            server/node_modules/.vite
-            server/node_modules/.vitest
+            server/.cache/vitest
+            server/.cache/vitest-db
           key: vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json', 'server/vitest.config.js', 'server/vitest.config.db.js', 'scripts/vitestCiPool.js') }}
           restore-keys: |
             vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json') }}-
@@ -828,18 +823,16 @@ jobs:
           node scripts/trusted-rebuilds.js server
           node scripts/trusted-rebuild-stamp.js write server
 
-      # After the install: `npm ci` wipes node_modules, so a restore ordered
-      # ahead of it is lost. Vite/Vitest write transform artifacts under
-      # node_modules/.vite (and historically .vitest); reusing them skips
-      # re-transforming unchanged files. Separate from the cache above, and
-      # deliberately: this is where a near miss is safe, so this is the entry
-      # that keeps restore-keys and stays warm across a lockfile bump.
+      # Reuse Vite/Vitest artifacts from checkout-owned .cache paths, outside
+      # node_modules (which may be shared by worktrees). Unlike the installed
+      # dependency tree above, these artifacts can safely use a near-miss
+      # restore and stay warm across a lockfile bump.
       - name: Cache Vitest transform artifacts
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            server/node_modules/.vite
-            server/node_modules/.vitest
+            server/.cache/vitest
+            server/.cache/vitest-db
           key: vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json', 'server/vitest.config.js', 'scripts/vitestCiPool.js') }}-${{ matrix.shard }}of${{ strategy.job-total }}
           restore-keys: |
             vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json') }}-
@@ -854,6 +847,8 @@ jobs:
         # (#10415). Observed healthy runs take 2-10 minutes.
         timeout-minutes: 15
         env:
+          # Outside the launcher's disposable temp root; recoverable after exit.
+          PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
           CI_TEST_MODE: ${{ needs.impact.outputs.windows_mode }}
           CI_TEST_FILES: ${{ needs.impact.outputs.windows_files }}
           CI_TEST_SOURCES: ${{ needs.impact.outputs.windows_sources }}
@@ -864,6 +859,14 @@ jobs:
           # (STATUS_DLL_INIT_FAILED) under per-file process churn (#10114).
           PORTOS_CI_MAX_WORKERS: 2
         run: node scripts/run-ci-tests.js server
+
+      - name: Preserve Windows test failure diagnostics
+        if: failure()
+        continue-on-error: true
+        timeout-minutes: 1
+        env:
+          PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
+        run: node scripts/ci-test-diagnostics.js
 
       - name: Report the failure, then cancel sibling CI jobs
         if: failure() && github.event_name == 'pull_request'

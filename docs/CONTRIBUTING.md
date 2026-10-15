@@ -78,6 +78,24 @@ See [VERSIONING.md](./VERSIONING.md) for full details.
 
 Pregate proves only the stages it runs; it does not replace required CI or resource-dependent checks. A full-suite plan runs only the always-run guards unless `--full` is supplied; DB suites, Windows, client build, and boot smoke are reported but not run by pregate.
 
+### Checkout-owned development caches
+
+Vite dev mode stores reusable dependency data in `client/.cache/vite`. Vitest
+uses `client/.cache/vitest`, `server/.cache/vitest`, and the separate
+`server/.cache/vitest-db` for DB suites. These ignored directories are anchored
+to the config file, including the server's derived capture projects, so shared
+`node_modules` links and a different invocation directory do not share writers.
+They are reused across runs and removed with their checkout; temporary test
+roots retain their separate teardown lifecycle. CI caches the same owned paths.
+
+The npm Vite/Vitest commands, PM2's `portos-ui` launcher, and subprocess fixtures
+use `--configLoader runner` to load ESM configs without writing bundles into shared
+`node_modules/.vite-temp`.
+For a direct CLI invocation, include that flag too. Vite's default `bundle`
+loader writes unique temporary config files into the nearest dependency tree
+before config options can redirect caches, so explicitly selecting that loader
+opts back into shared scratch. Existing shared caches are left in place.
+
 ### Changelog
 
 Nothing to write here — there is no per-branch changelog file or fragment.

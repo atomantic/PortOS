@@ -7,9 +7,9 @@ import { chromium } from 'playwright-core';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy, sweepStrayTempRoots } from '../../lib/mockPathsDataRoot.js';
 import { findFfmpeg, probeVideoDuration } from '../../lib/ffmpeg.js';
 import { PATHS } from '../../lib/fileUtils.js';
-import { _cleanupTestBrowser } from '../htmlComposition/testBrowserCleanup.js';
+import { _cleanupTestBrowser, _createTestArtifactsRoot } from '../htmlComposition/testBrowserCleanup.js';
 import { beatSnapClips, buildMusicVideoFfmpegArgs, resolveSceneClips } from './render.js';
-import { projectTypographyPlan, renderableCues, sectionCardCues } from './composition.js';
+import { composedLyricWindows, projectTypographyPlan, renderableCues, sectionCardCues } from './composition.js';
 import { COMPOSITION_SCRATCH_DIR, removeCompositionScratch, renderTypographyOverlays } from './compositionRender.js';
 
 let endpoint;
@@ -29,6 +29,7 @@ const ffmpeg = await findFfmpeg();
 if (!chrome || !ffmpeg) cleanupTempDataRoots();
 let proc;
 let browser;
+let artifacts;
 
 const FPS = 24;
 const run = (args) => execFileSync(ffmpeg, ['-v', 'error', ...args], { maxBuffer: 256 * 1024 * 1024 });
@@ -66,11 +67,12 @@ describe.skipIf(!chrome || !ffmpeg)('music-video typography overlay with real Ch
       });
     });
     endpoint = new URL(ws).origin.replace('ws:', 'http:');
-    browser = await chromium.connectOverCDP(endpoint);
+    artifacts = _createTestArtifactsRoot();
+    browser = await chromium.connectOverCDP(endpoint, { artifactsDir: artifacts.path });
   }, 30000);
 
   afterAll(async () => {
-    await _cleanupTestBrowser({ browser, proc, cleanup: cleanupTempDataRoots });
+    await _cleanupTestBrowser({ browser, proc, artifacts, cleanup: cleanupTempDataRoots });
     // Real ffprobe/ffmpeg subprocess work (#9032) — see sweepStrayTempRoots's doc.
     await sweepStrayTempRoots('portos-mv-composition-');
   });
@@ -132,6 +134,36 @@ describe.skipIf(!chrome || !ffmpeg)('music-video typography overlay with real Ch
     await removeCompositionScratch('job-a');
     await removeCompositionScratch('job-b');
     expect(await readdir(join(PATHS.data, COMPOSITION_SCRATCH_DIR))).toEqual([]);
+  }, 60000);
+
+  it('draws a composed render\'s lyrics in the shared lyric type when it has no subtitle cues', async () => {
+    const [w, h] = [320, 180];
+    const words = (text, start) => text.split(' ').map((word, i) => ({ w: word, startSec: start + i * 0.3, endSec: start + i * 0.3 + 0.25 }));
+    const project = {
+      audioAnalysis: { durationSec: 4 }, lyricMarkers: [], scenes: [],
+      lyricCues: [{ text: 'found a shot', startSec: 1, endSec: 1.85, words: words('found a shot', 1) }],
+      composition: { mode: 'composed', textCues: [] },
+    };
+    const windows = composedLyricWindows(project, 4);
+    const overlays = await renderTypographyOverlays({ jobId: 'job-lyrics', cues: [], style: {}, width: w, height: h, fps: FPS, durationSec: 4,
+      lyrics: { project, windows } });
+    expect(overlays).toEqual([{ path: expect.stringContaining('lyrics-overlay-0.mov'), startSec: 1, durationSec: 69 / FPS }]); // 1s to 1.85s + the 2s tail, snapped out to whole frames
+    const raw = frames(overlays[0].path, 'rgba');
+    const frameBytes = w * h * 4;
+    const drawn = (f) => {
+      const box = { n: 0, minY: h };
+      for (let p = 0; p < w * h; p++) {
+        if (raw[f * frameBytes + p * 4 + 3] <= 8) continue;
+        box.n += 1; box.minY = Math.min(box.minY, Math.floor(p / w));
+      }
+      return box;
+    };
+    // The whole line is up after its last onset, in the lower-left zone, and it has left by the window's end.
+    const shown = drawn(Math.round(0.9 * FPS));
+    expect(shown.n).toBeGreaterThan(100);
+    expect(shown.minY).toBeGreaterThan(h / 2);
+    expect(drawn(raw.length / frameBytes - 1).n).toBe(0);
+    await removeCompositionScratch('job-lyrics');
   }, 60000);
 
   // #8985 acceptance: footage, a still with a push-in, a code-rendered title

@@ -204,6 +204,59 @@ export function matchBrowserMessage(messages, incoming, batch = [incoming]) {
   const exact = messages.filter(message => messageIngestionIdentity(message) === key);
   if (exact.length === 1 && batch.filter(message => messageIngestionIdentity(message) === key).length === 1) return exact[0];
   if (exact.length) return null;
+  return matchCompatibleMessage(messages, incoming, batch);
+}
+
+/**
+ * One sync's exact-match index. The incoming batch stays unchanged; callers
+ * must refresh a cached record after mutating its identity. Keep every match
+ * in each bucket: duplicate identities are ambiguous, never last-write-wins.
+ * Legacy compatibility still uses the conservative scan below.
+ */
+export function createBrowserMessageMatcher(messages, batch) {
+  const byIdentity = new Map();
+  const knownKeys = new Map();
+  const batchCounts = new Map();
+  const add = (key, message) => {
+    const bucket = byIdentity.get(key) || [];
+    bucket.push(message);
+    byIdentity.set(key, bucket);
+  };
+  for (const message of messages) {
+    const key = messageIngestionIdentity(message);
+    knownKeys.set(message, key);
+    add(key, message);
+  }
+  for (const message of batch) {
+    const key = messageIngestionIdentity(message);
+    batchCounts.set(key, (batchCounts.get(key) || 0) + 1);
+  }
+  return {
+    match(incoming) {
+      const key = messageIngestionIdentity(incoming);
+      const exact = byIdentity.get(key);
+      if (exact?.length) return exact.length === 1 && batchCounts.get(key) === 1 ? exact[0] : null;
+      return matchCompatibleMessage(messages, incoming, batch);
+    },
+    refresh(message) {
+      const key = messageIngestionIdentity(message);
+      if (knownKeys.has(message) && knownKeys.get(message) === key) return;
+      let copies = 1;
+      if (knownKeys.has(message)) {
+        const oldKey = knownKeys.get(message);
+        const bucket = byIdentity.get(oldKey);
+        const remaining = bucket.filter(item => item !== message);
+        copies = bucket.length - remaining.length;
+        if (remaining.length) byIdentity.set(oldKey, remaining);
+        else byIdentity.delete(oldKey);
+      }
+      knownKeys.set(message, key);
+      for (let i = 0; i < copies; i++) add(key, message);
+    },
+  };
+}
+
+function matchCompatibleMessage(messages, incoming, batch) {
   const compatible = (message, candidate) => {
     const memberEvidence = message.providerRowId && message.providerRowId === candidate.providerRowId
       && candidate.browserMessageKind === 'member'

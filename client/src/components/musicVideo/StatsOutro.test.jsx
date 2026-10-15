@@ -42,7 +42,8 @@ describe('cutting room floor ending', () => {
     act(() => { audio.dispatchEvent(new Event('ended')); });
     expect(screen.getByTestId('animatic-stats-outro')).toBeTruthy();
     await waitFor(() => expect(getMusicVideoOutroStats).toHaveBeenCalledWith('p', { silent: true }));
-    expect(canvas.texts).toContain('THE CUTTING ROOM FLOOR');
+    expect(canvas.texts).toContain('HUMAN DIRECTED');
+    expect(canvas.texts).toContain('HUMAN IMAGINED');
     fireEvent.play(audio);
     expect(screen.queryByTestId('animatic-stats-outro')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /Ending/ }));
@@ -61,14 +62,21 @@ describe('cutting room floor ending', () => {
     expect(screen.queryByTestId('animatic-stats-outro')).toBeNull();
   });
 
-  it('turns on with its default length and saves a new length', () => {
+  it('turns on with its defaults and saves a new length, heading and shown lines', () => {
     const onSave = vi.fn(async () => {});
     const onEditLocal = vi.fn();
     const { rerender } = render(<StatsOutroPanel project={{ id: 'p', statsOutro: null }} onEditLocal={onEditLocal} onSave={onSave} />);
     fireEvent.click(screen.getByLabelText('Off'));
-    expect(onSave).toHaveBeenLastCalledWith({ statsOutro: { enabled: true, durationSec: 8 } });
-    rerender(<StatsOutroPanel project={{ id: 'p', statsOutro: { enabled: true, durationSec: 8 } }} onEditLocal={onEditLocal} onSave={onSave} />);
+    const on = { enabled: true, durationSec: 8, title: 'Human Directed', subtitle: 'Human Imagined', hidden: [] };
+    expect(onSave).toHaveBeenLastCalledWith({ statsOutro: on });
+    rerender(<StatsOutroPanel project={{ id: 'p', statsOutro: on }} onEditLocal={onEditLocal} onSave={onSave} />);
     fireEvent.change(screen.getByLabelText('Length'), { target: { value: '12' } });
-    expect(onSave).toHaveBeenLastCalledWith({ statsOutro: { enabled: true, durationSec: 12 } });
+    expect(onSave).toHaveBeenLastCalledWith({ statsOutro: { ...on, durationSec: 12 } });
+    const subtitle = screen.getByLabelText('Subheading (orange)');
+    fireEvent.change(subtitle, { target: { value: 'Dreamed by hand ' } });
+    fireEvent.blur(subtitle);
+    expect(onSave).toHaveBeenLastCalledWith({ statsOutro: { ...on, subtitle: 'Dreamed by hand' } });
+    fireEvent.click(screen.getByLabelText('Left on the floor'));
+    expect(onSave).toHaveBeenLastCalledWith({ statsOutro: { ...on, hidden: ['floor'] } });
   });
 });

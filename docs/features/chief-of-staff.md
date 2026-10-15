@@ -26,19 +26,45 @@ Autonomous agent manager that watches task files, spawns sub-agents, and maintai
 
 ## Repository merge admission
 
-Self-managed claim parents and the deterministic pending-merge sweep share one
-repository-scoped merge-instant lease (`server/services/cosMergeAdmission.js`).
-The host-control-gated `POST /api/cos/merge-admission` accepts the registered
-parent agent ID and `acquire`, `check`, or `release`; check/release require the
-returned token, and release records one of `merged`, `leave-open` or `resync`
-in the parent's `lastMergeAdmission`. Repository identity comes from that
-parent's registered source checkout and normalized origin host/repository, not
-its child worktree path.
+Every CoS run that lands its own pull request, plus the deterministic
+pending-merge sweep, shares one repository-scoped merge-instant lease
+(`server/services/cosMergeAdmission.js`). The host-control-gated
+`POST /api/cos/merge-admission` accepts the registered parent agent ID and
+`acquire`, `check`, or `release`; check/release require the returned token, and
+release records one of `merged`, `leave-open` or `resync` in the parent's
+`lastMergeAdmission`. Repository identity comes from that parent's registered
+source checkout and normalized origin host/repository, not its child worktree
+path, and never from the request.
+
+Acquire and check admit only a live (`running`) registered agent that is one of
+these participants; anything else is refused with `claim-owner-unverified`:
+
+- **Claim parent** — its registered claim binding (`claimBranch` or
+  `claimPicksOwnBranch`; see [Claim branch ownership](#claim-branch-ownership)).
+- **Review-loop coordinator** — an internal review/merge follow-up whose
+  registered `reviewLoopMergeTarget` still matches its live task's PR URL,
+  number and branch, and whose worktree is on that branch of this repository.
+- **Generic PR delivery** (#11435) — an operator-configured task whose prompt
+  told it to open and merge its own PR from the worktree PortOS provisioned
+  (`/do:pr` plus the CI merge gate, or the inline `git`/forge lifecycle). The
+  spawner stamps `prDeliveryTarget` — that worktree path and head branch — from
+  the same decision that put the admission section in the prompt. Admission
+  then requires the agent record to still name that worktree and branch with
+  agent-owned PR delivery, the live task to still be unfinished with `openPR`
+  on and a completion policy that merges (not leave-open, a JIRA handoff, a
+  review follow-up or a fork head), and the worktree's origin and checked-out
+  branch to match. The PR target is the one whose head is that registered
+  branch in this repository. A generic run never gains claim authority, and its
+  `/do:pr` runs with `--no-merge` so no saved slashdo default merges outside
+  the lease.
+
+Release needs only the owned token, so a lease cannot strand after the merge
+deletes or switches the checkout.
 
 The lease spans only the final verify-and-merge (#10803). Base sync, pregate,
-push and the required-CI wait run concurrently across claim runs and across
-every PR in a swarm, without admission. Once required CI is green on the exact
-pushed head, the parent acquires, re-reads the PR, and:
+push and the required-CI wait run concurrently across participating runs and
+across every PR in a swarm, without admission. Once required CI is green on the
+exact pushed head, the parent acquires, re-reads the PR, and:
 
 - merges pinned to that CI-verified head (`gh pr merge --match-head-commit`,
   GitLab `glab mr merge --sha`) when the forge reports it mergeable (`CLEAN`),
@@ -52,8 +78,8 @@ CI run: the forge's merge check is authoritative, as it is for manual merges.
 The remaining exposure is a semantic conflict between two individually green
 PRs, which post-merge default-branch CI catches — the same exposure manual and
 cross-install merges already carry. A refused acquire retries every 5 seconds
-and reports progress every minute; after 10 minutes the reviewed PR and claim
-are left open. Sweep deferrals preserve their retry budget; the sweep already
+and reports progress every minute; after 10 minutes the reviewed PR (and any
+claim) is left open — a refusal is never permission to merge without admission. Sweep deferrals preserve their retry budget; the sweep already
 holds the lease only around its own read → assess → pinned merge.
 
 Leases extend the existing machine-local CoS runtime ownership in

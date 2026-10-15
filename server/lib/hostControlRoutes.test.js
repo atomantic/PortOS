@@ -168,6 +168,28 @@ describe('outbound mail host-control policy (#11273)', () => {
     expect(isHostControlRoute('POST', '/api/messages/drafts')).toBe(false);
     expect(isHostControlRoute('POST', '/api/messages/drafts/33333333-3333-3333-3333-333333333333/approve')).toBe(false);
   });
+
+  it('gates external archive/delete actions while keeping message reads open (#11434)', () => {
+    const route = 'POST /api/messages/:accountId/:messageId/action';
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => method + ' ' + path));
+    expect(mounted.has(route)).toBe(true);
+    expect(hostControlRouteFor('POST', '/api/messages/acct-1/msg-1/action')).toBe(route);
+    expect(isHostControlRoute('GET', '/api/messages/acct-1/msg-1')).toBe(false);
+    expect(isHostControlRoute('POST', '/api/messages/acct-1/msg-1/read')).toBe(false);
+  });
+
+  it('gates selector testing/updates and token extraction while keeping selector reads open (#11449)', () => {
+    const mounted = new Set(getApiRouteCatalog().routes.map(({ method, path }) => method + ' ' + path));
+    for (const [method, path, route] of [
+      ['POST', '/api/messages/selectors/outlook/test', 'POST /api/messages/selectors/:provider/test'],
+      ['PUT', '/api/messages/selectors/outlook', 'PUT /api/messages/selectors/:provider'],
+      ['POST', '/api/messages/debug/test-token', 'POST /api/messages/debug/test-token'],
+    ]) {
+      expect(mounted.has(route)).toBe(true);
+      expect(hostControlRouteFor(method, path)).toBe(route);
+    }
+    expect(isHostControlRoute('GET', '/api/messages/selectors')).toBe(false);
+  });
 });
 
 describe('X (Twitter) review and browser automation policy', () => {

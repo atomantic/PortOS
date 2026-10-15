@@ -48,6 +48,8 @@ import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
 
 // ---- in-memory project store with a single write tail ----------------------
 const store = new Map();
+// Fault switches for the halt-failure path: `failOnList` makes the queue unreadable, which also arms `failWrites` so the halt write fails.
+const storeFault = { failOnList: false, failWrites: false };
 let writeTail = Promise.resolve();
 const clone = (v) => JSON.parse(JSON.stringify(v));
 vi.mock('./projects.js', () => ({
@@ -56,6 +58,7 @@ vi.mock('./projects.js', () => ({
   mutateProjectRecord: (id, transform) => {
     const run = writeTail.then(() => {
       if (!store.has(id)) throw Object.assign(new Error('Project not found'), { status: 404 });
+      if (storeFault.failWrites) throw new Error('store write failed');
       const out = transform(clone(store.get(id)));
       store.set(id, clone(out.project));
       return out;
@@ -73,7 +76,10 @@ let jobs;
 let nextJobId;
 const mediaJobEvents = new EventEmitter();
 const queue = {
-  listJobs: ({ kind } = {}) => jobs.filter((j) => !kind || j.kind === kind),
+  listJobs: ({ kind } = {}) => {
+    if (storeFault.failOnList) { storeFault.failWrites = true; throw new Error('queue unreadable'); }
+    return jobs.filter((j) => !kind || j.kind === kind);
+  },
   cancelJob: vi.fn(async (id) => {
     const job = jobs.find((j) => j.id === id);
     if (job) job.status = 'canceled';
@@ -225,6 +231,24 @@ describe('music video production run (#9066)', () => {
     await start();
     expect(theRun().pool.filter((route) => route.kind === 'video').every((route) => route.audio === 'supplied')).toBe(true);
     expect(theRun().pool.filter((route) => route.kind === 'image').some((route) => 'audio' in route)).toBe(false);
+  });
+
+  // Uniquely catches a failed halt being swallowed: the step failure and the halt failure both reach console.error with the project.
+  it('logs the step failure and the failed halt with the project, instead of swallowing the halt error', async () => {
+    seedProject();
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      storeFault.failOnList = true;
+      await service.startProduction('mv-example', { directive: 'moody, slow', pool: POOL, limits: LIMITS, reviewer: {} });
+      await service.__settleProductionForTests();
+      const lines = errors.mock.calls.map(([line]) => String(line));
+      expect(lines.some((line) => line.startsWith('❌') && line.includes('step failed: queue unreadable'))).toBe(true);
+      expect(lines.some((line) => line.startsWith('❌') && line.includes('could not halt project mv-example after the step failure: store write failed'))).toBe(true);
+    } finally {
+      storeFault.failOnList = false;
+      storeFault.failWrites = false;
+      errors.mockRestore();
+    }
   });
 
   it('produces a reviewed draft from one Start: frames, then clips, then the continuous-excerpt review', async () => {

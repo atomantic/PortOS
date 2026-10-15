@@ -40,7 +40,11 @@ process.env.NODE_ENV = 'test';
 process.env.NODE_DISABLE_COMPILE_CACHE = '1';
 
 const config = defineConfig({
+  // Anchor to the config, even when --root or the caller cwd differs.
+  cacheDir: fileURLToPath(new URL('./.cache/vitest', import.meta.url)),
   test: {
+    // Environment teardown also owns collection-only/skipped suite fixtures.
+    environment: fileURLToPath(new URL('./test/mediaRegistryEnvironment.js', import.meta.url)),
     ...vitestCiPool(),
     // Workers get their own process.env — set it there as well as above.
     env: {
@@ -49,6 +53,7 @@ const config = defineConfig({
       TMPDIR: RUN_TEMP_ROOT,
       TMP: RUN_TEMP_ROOT,
       TEMP: RUN_TEMP_ROOT,
+      MAC_CHROMIUM_TMPDIR: RUN_TEMP_ROOT,
     },
     // 30s on every platform (#7951). This WAS 10s off Windows, and the split
     // has always been a fiction: the cost it budgets for is vitest's transform
@@ -194,5 +199,5 @@ const config = defineConfig({
 // Both projects share the safety env, setup files and time budgets. The
 // root globalSetup owns one temp root across BOTH groups; project teardown
 // must not remove it while another group still needs it.
-config.test.projects = vitestCaptureProjects(config.test);
+config.test.projects = vitestCaptureProjects(config.test, { cacheDir: config.cacheDir });
 export default config;

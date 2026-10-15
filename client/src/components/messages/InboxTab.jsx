@@ -4,14 +4,13 @@ import { useNavigate, useSearchParams } from 'react-router';
 import toast from '../ui/Toast';
 import TabPills from '../ui/TabPills';
 import * as api from '../../services/api';
-import socket from '../../services/socket';
 import { timeAgo, formatDateNumeric } from '../../utils/formatters';
 import { pluralize } from '../../lib/textUtils';
 import MessageDetail from './MessageDetail';
 import AddToThreadButton from '../threads/AddToThreadButton';
 import { messageReadState, partitionAccountsBySyncMode } from '../../lib/messageSyncModes';
 import LoadFailedState from '../ui/LoadFailedState';
-import useLatestRequest from '../../hooks/useLatestRequest';
+import { useSocketResource } from '../../hooks/useSocketResource';
 
 const ACTION_CONFIG = {
   reply:   { icon: Reply,   color: 'text-port-accent',  bg: 'bg-port-accent/10',  hoverBg: 'hover:bg-port-accent/20',  label: 'Reply' },
@@ -21,6 +20,8 @@ const ACTION_CONFIG = {
 };
 
 const ACTION_ORDER = ['reply', 'review', 'archive', 'delete'];
+const INBOX_EVENTS = ['messages:sync:completed'];
+const EMPTY_MESSAGES = [];
 
 // Email sources that support archive/delete actions
 const ACTIONABLE_SOURCES = ['outlook', 'gmail'];
@@ -179,9 +180,6 @@ export default function InboxTab({ accounts }) {
   // Everything below iterates the list; the `null` load-failed sentinel is only
   // meaningful to the empty state, which reads `accounts` directly.
   const accountList = useMemo(() => accounts || [], [accounts]);
-  const [messages, setMessages] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [loadFailed, setLoadFailed] = useState(false);
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [selectedAccount, setSelectedAccount] = useState('');
@@ -230,25 +228,25 @@ export default function InboxTab({ accounts }) {
     return () => clearTimeout(debounceRef.current);
   }, [search]);
 
-  // A fast typist fires overlapping searches; an older, slower response must not
-  // replace the list for the query now in the box.
-  const beginRequest = useLatestRequest();
-  const fetchMessages = useCallback(async () => {
-    const isCurrent = beginRequest();
-    setLoading(true);
+  // Sync providers report progress without broadcasting message bodies. Read
+  // the bounded, filtered summary page only after the cache has been saved.
+  // The resource also reconciles missed completions on reconnect/tab show.
+  const readMessages = useCallback(async ({ signal }) => {
     const params = { summary: true };
     if (selectedAccount) params.accountId = selectedAccount;
     if (debouncedSearch) params.search = debouncedSearch;
-    const result = await api.getMessageInbox(params, { silent: true }).catch(() => null);
-    if (!isCurrent()) return;
-    setLoadFailed(result === null);
-    if (result) setMessages(result.messages || []);
-    setLoading(false);
-  }, [selectedAccount, debouncedSearch, beginRequest]);
-
-  useEffect(() => {
-    fetchMessages();
-  }, [fetchMessages]);
+    const result = await api.getMessageInbox(params, { silent: true, signal });
+    return result.messages || [];
+  }, [selectedAccount, debouncedSearch]);
+  const { data, loading, error, refetch: fetchMessages, updateData } = useSocketResource(readMessages, {
+    events: INBOX_EVENTS,
+    resourceKey: JSON.stringify([selectedAccount, debouncedSearch]),
+    // A locally requested multi-account sync owns one final refresh below.
+    matchesEvent: payload => !syncing && (!selectedAccount || payload?.accountId === selectedAccount),
+  });
+  const messages = data || EMPTY_MESSAGES;
+  const loadFailed = Boolean(error);
+  const setMessages = useCallback(updater => updateData(previous => updater(previous || EMPTY_MESSAGES)), [updateData]);
 
   // List rows are summaries. The selection URL is the only trigger for a full
   // body read, including when the selected message is already on this page.
@@ -279,33 +277,6 @@ export default function InboxTab({ accounts }) {
     if (messageId && !resolvedMessageAccount && !loading) closeMessage();
   }, [messageId, resolvedMessageAccount, loading, closeMessage]);
 
-  // Stream messages into the list as they arrive during sync
-  useEffect(() => {
-    const onSyncMessage = ({ messages: incoming }) => {
-      if (!incoming?.length) return;
-      setMessages(prev => {
-        const byExtId = new Map(prev.map(m => [m.externalId, m]));
-        let changed = false;
-        for (const msg of incoming) {
-          if (msg.externalId && byExtId.has(msg.externalId)) {
-            const existing = byExtId.get(msg.externalId);
-            byExtId.set(msg.externalId, { ...existing, ...msg, id: existing.id });
-            changed = true;
-          } else {
-            byExtId.set(msg.externalId || msg.id, msg);
-            changed = true;
-          }
-        }
-        if (!changed) return prev;
-        return Array.from(byExtId.values()).sort((a, b) =>
-          new Date(b.date || 0) - new Date(a.date || 0)
-        );
-      });
-    };
-    socket.on('messages:sync:message', onSyncMessage);
-    return () => socket.off('messages:sync:message', onSyncMessage);
-  }, []);
-
   const handleSync = async (mode) => {
     if (syncTargets.length === 0) return toast.error('No enabled accounts to sync');
     // Aggregate unread sync only runs on accounts that can measure read state; say
@@ -329,6 +300,9 @@ export default function InboxTab({ accounts }) {
       if (result.pruned) totalPruned += result.pruned;
     }
     setSyncing(false);
+    // Reconcile any completion skipped during this local batch, even if an
+    // HTTP response was lost after another account's cache was saved.
+    fetchMessages();
     // Every account failing is not a completed sync — stay quiet, and leave the
     // "never synced" state intact so the empty state keeps offering the retry.
     if (Object.keys(syncedNow).length === 0) return;
@@ -336,7 +310,6 @@ export default function InboxTab({ accounts }) {
     const parts = [`${totalNew} new`];
     if (totalPruned > 0) parts.push(`${totalPruned} removed`);
     toast.success(`Sync complete — ${parts.join(', ')}`);
-    fetchMessages();
   };
 
   const handleEvaluate = async () => {
