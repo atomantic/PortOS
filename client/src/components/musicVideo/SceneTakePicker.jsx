@@ -17,10 +17,10 @@ const SLOT_FIELD = { image: 'referenceImageId', video: 'videoHistoryId', endImag
 export const poolGroup = (item, sceneId) => (!item.sceneId ? 'floor' : item.sceneId === sceneId ? 'shot' : 'others');
 
 // The director's sort of the video's assets: ★ ingredients (good, not placed), unsorted, ✕ bad (to clean up).
-export const MARK_FILTERS = [
+const MARK_FILTERS = [
   { id: 'all', label: 'All' }, { id: 'ingredient', label: '★ Ingredients' }, { id: 'unsorted', label: 'Unsorted' }, { id: 'bad', label: '✕ Bad' },
 ];
-export const markOf = (item) => item.mark || 'unsorted';
+const markOf = (item) => item.mark || 'unsorted';
 // The shot's own frame in the other slot: its end frame when swapping the start, its start when swapping the end.
 const OTHER_FRAME = { image: { field: 'endImageId', takeKind: 'endImage', prompt: 'endFramePrompt', label: 'End frame' },
   endImage: { field: 'referenceImageId', takeKind: 'image', prompt: 'framePrompt', label: 'Start frame' } };
