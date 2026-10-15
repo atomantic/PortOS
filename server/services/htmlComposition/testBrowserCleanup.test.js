@@ -1,9 +1,11 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { _cleanupTestBrowser, _describeTestChromeStartup, _testChromeProcessFacts, _waitForTestChrome, _withTestCaptureDiagnostics } from './testBrowserCleanup.js';
+import { _cleanupTestBrowser, _createTestArtifactsRoot, _describeTestChromeStartup, _testChromeProcessFacts, _waitForTestChrome, _withTestCaptureDiagnostics } from './testBrowserCleanup.js';
 
 function child() {
   const proc = new EventEmitter();
@@ -631,5 +633,122 @@ describe('owned test Chrome cleanup', () => {
     expect(proc.stderr.destroy).toHaveBeenCalledOnce();
     expect(proc.listenerCount('exit')).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+// Playwright's CDP adapter mints `playwright-artifacts-*` itself unless told
+// otherwise, and removes it from a Disconnected listener nobody awaits (#11584).
+describe('fixture-owned CDP artifacts root', () => {
+  const originalRoot = process.env.PORTOS_TEST_TEMP_ROOT;
+  let runRoot;
+  beforeEach(() => {
+    runRoot = mkdtempSync(join(tmpdir(), 'cdp-artifacts-run-'));
+    process.env.PORTOS_TEST_TEMP_ROOT = runRoot;
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    if (originalRoot === undefined) delete process.env.PORTOS_TEST_TEMP_ROOT;
+    else process.env.PORTOS_TEST_TEMP_ROOT = originalRoot;
+    rmSync(runRoot, { recursive: true, force: true });
+  });
+  const exited = () => {
+    const proc = child();
+    proc.signalCode = 'SIGKILL';
+    return proc;
+  };
+
+  it('keeps the root through deferred browser writes after disconnect and removes it once the child exits', async () => {
+    vi.useFakeTimers();
+    const artifacts = _createTestArtifactsRoot({ parent: runRoot });
+    const proc = child();
+    let landed = false;
+    proc.kill.mockImplementation(signal => {
+      // Disconnect already resolved; Chrome may still land a download here.
+      // Writing into a directory removed too early throws out of this timer.
+      setTimeout(() => {
+        writeFileSync(join(artifacts.path, 'download.bin'), 'x');
+        landed = true;
+        proc.signalCode = signal;
+        proc.emit('exit', null, signal);
+      }, 100);
+      return true;
+    });
+    const result = _cleanupTestBrowser({ browser: { close: async () => {} }, proc, artifacts, cleanup: vi.fn() });
+    await vi.advanceTimersByTimeAsync(99);
+    expect(existsSync(artifacts.path)).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    await result;
+    expect(landed).toBe(true);
+    expect(existsSync(artifacts.path)).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('preserves the root as evidence when owned exit is unconfirmed', async () => {
+    vi.useFakeTimers();
+    const artifacts = _createTestArtifactsRoot({ parent: runRoot });
+    const proc = child();
+    proc.kill.mockImplementation(() => true);
+    const cleanup = vi.fn();
+    const result = _cleanupTestBrowser({ proc, artifacts, cleanup }).catch(error => error);
+    await vi.advanceTimersByTimeAsync(10000);
+    const error = await result;
+    expect(error.message).toContain('child termination exceeded 10000ms deadline');
+    expect(error.message).toContain('Test Chrome artifacts cleanup skipped; owned child exit unconfirmed, root preserved');
+    expect(error.message).not.toContain(runRoot);
+    expect(existsSync(artifacts.path)).toBe(true);
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it('refuses to remove a directory that replaced the created root', async () => {
+    const artifacts = _createTestArtifactsRoot({ parent: runRoot });
+    renameSync(artifacts.path, `${artifacts.path}-moved`);
+    mkdirSync(artifacts.path);
+    const error = await _cleanupTestBrowser({ proc: exited(), artifacts, cleanup: () => {} }).catch(caught => caught);
+    expect(error.message).toBe('Test Chrome artifacts cleanup refused; root identity changed');
+    expect(existsSync(artifacts.path)).toBe(true);
+    expect(existsSync(`${artifacts.path}-moved`)).toBe(true);
+  });
+
+  // The negative control restores the ownership gap: a root nobody removes.
+  it.each([
+    ['removes the owned root', true, [], undefined],
+    ['reports an unremoved root with its creating test (negative control)', false,
+      ['⚠️ test temp leak: portos-cdp-artifacts- ×1 (created by testBrowserCleanup.test.js)'], 1],
+  ])('global teardown %s', async (_name, passHandle, warnings, exitCode) => {
+    const artifacts = _createTestArtifactsRoot({ parent: runRoot });
+    writeFileSync(join(artifacts.path, 'trace.json'), '{}');
+    await _cleanupTestBrowser({ proc: exited(), artifacts: passHandle ? artifacts : undefined, cleanup: () => {} });
+    const { teardown } = await import('../../../scripts/vitestTempRootSetup.js');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const originalExit = process.exitCode;
+    let observed;
+    try {
+      process.exitCode = undefined;
+      teardown();
+      observed = process.exitCode;
+    } finally { process.exitCode = originalExit; }
+    expect(warn.mock.calls.map(([line]) => line)).toEqual(warnings);
+    expect(observed).toBe(exitCode);
+  });
+
+  it('every server CDP fixture passes a fixture-owned artifacts root', () => {
+    const unowned = source => [...source.matchAll(/chromium\.connectOverCDP\(/g)].filter(match => {
+      let depth = 1;
+      let end = match.index + match[0].length;
+      for (; end < source.length && depth; end++) depth += source[end] === '(' ? 1 : source[end] === ')' ? -1 : 0;
+      return !source.slice(match.index, end).includes('artifactsDir');
+    }).length;
+    expect(unowned('browser = await chromium.connectOverCDP(endpoint);')).toBe(1);
+    expect(unowned('chromium.connectOverCDP(await wait(proc), { artifactsDir: artifacts.path })')).toBe(0);
+    const server = fileURLToPath(new URL('../../', import.meta.url));
+    const listed = spawnSync('git', ['grep', '-l', '-F', 'chromium.connectOverCDP(', '--', '*.test.js'], { cwd: server, encoding: 'utf8' });
+    expect(listed.status).toBe(0);
+    // This file's probe strings above are not fixtures.
+    const files = listed.stdout.split('\n').filter(file => file && file !== 'services/htmlComposition/testBrowserCleanup.test.js');
+    expect(files.length).toBeGreaterThan(0);
+    expect(files.filter(file => unowned(readFileSync(join(server, file), 'utf8')))).toEqual([]);
   });
 });

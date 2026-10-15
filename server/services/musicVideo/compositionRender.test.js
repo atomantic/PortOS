@@ -7,7 +7,7 @@ import { chromium } from 'playwright-core';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy, sweepStrayTempRoots } from '../../lib/mockPathsDataRoot.js';
 import { findFfmpeg, probeVideoDuration } from '../../lib/ffmpeg.js';
 import { PATHS } from '../../lib/fileUtils.js';
-import { _cleanupTestBrowser } from '../htmlComposition/testBrowserCleanup.js';
+import { _cleanupTestBrowser, _createTestArtifactsRoot } from '../htmlComposition/testBrowserCleanup.js';
 import { beatSnapClips, buildMusicVideoFfmpegArgs, resolveSceneClips } from './render.js';
 import { composedLyricWindows, projectTypographyPlan, renderableCues, sectionCardCues } from './composition.js';
 import { COMPOSITION_SCRATCH_DIR, removeCompositionScratch, renderTypographyOverlays } from './compositionRender.js';
@@ -29,6 +29,7 @@ const ffmpeg = await findFfmpeg();
 if (!chrome || !ffmpeg) cleanupTempDataRoots();
 let proc;
 let browser;
+let artifacts;
 
 const FPS = 24;
 const run = (args) => execFileSync(ffmpeg, ['-v', 'error', ...args], { maxBuffer: 256 * 1024 * 1024 });
@@ -66,11 +67,12 @@ describe.skipIf(!chrome || !ffmpeg)('music-video typography overlay with real Ch
       });
     });
     endpoint = new URL(ws).origin.replace('ws:', 'http:');
-    browser = await chromium.connectOverCDP(endpoint);
+    artifacts = _createTestArtifactsRoot();
+    browser = await chromium.connectOverCDP(endpoint, { artifactsDir: artifacts.path });
   }, 30000);
 
   afterAll(async () => {
-    await _cleanupTestBrowser({ browser, proc, cleanup: cleanupTempDataRoots });
+    await _cleanupTestBrowser({ browser, proc, artifacts, cleanup: cleanupTempDataRoots });
     // Real ffprobe/ffmpeg subprocess work (#9032) — see sweepStrayTempRoots's doc.
     await sweepStrayTempRoots('portos-mv-composition-');
   });

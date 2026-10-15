@@ -12,7 +12,7 @@ import { loadHistory } from '../videoGen/history.js';
 import { videoGenEvents } from '../videoGen/events.js';
 import { renderComposition, cancel } from './index.js';
 import { installMotionKit } from './motionKit.js';
-import { _cleanupTestBrowser, _waitForTestChrome, _testChromeCaptureArgs } from './testBrowserCleanup.js';
+import { _cleanupTestBrowser, _createTestArtifactsRoot, _waitForTestChrome, _testChromeCaptureArgs } from './testBrowserCleanup.js';
 
 vi.mock('./encode.js', async importOriginal => {
   const actual = await importOriginal();
@@ -36,6 +36,7 @@ const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
 const ffmpeg = await findFfmpeg();
 let proc;
 let browser;
+let artifacts;
 let browserSession;
 
 // The delayed paint is intentional test input: a screenshot before the seek
@@ -60,7 +61,8 @@ describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpe
     proc = spawn(chrome, _testChromeCaptureArgs(profile), { stdio: ['ignore', 'ignore', 'pipe'] });
     const ws = await _waitForTestChrome(proc);
     endpoint = new URL(ws).origin.replace('ws:', 'http:');
-    browser = await chromium.connectOverCDP(endpoint);
+    artifacts = _createTestArtifactsRoot();
+    browser = await chromium.connectOverCDP(endpoint, { artifactsDir: artifacts.path });
     browserSession = await browser.newBrowserCDPSession();
   }, 30000);
 
@@ -80,7 +82,7 @@ describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpe
     }
   });
 
-  afterAll(() => _cleanupTestBrowser({ browser, proc, cleanup: cleanupTempDataRoots }));
+  afterAll(() => _cleanupTestBrowser({ browser, proc, artifacts, cleanup: cleanupTempDataRoots }));
 
   it('awaits every seek, encodes exactly 12 frames, disposes its private target and registers a thumbnail', async () => {
     const input = await composition();

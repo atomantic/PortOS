@@ -28,7 +28,7 @@ vi.mock('../services/auth.js', () => ({ isAuthEnabled: async () => true, verifyR
 let endpoint;
 vi.mock('../services/browserService.js', () => ({ loadConfig: async () => ({ chromePath: chrome }), cdpRequest: path => fetch(`${endpoint}${path}`) }));
 const { findFfmpeg } = await import('../lib/ffmpeg.js');
-const { _testChromeCaptureArgs, _waitForTestChrome, _cleanupTestBrowser } = await import('../services/htmlComposition/testBrowserCleanup.js');
+const { _testChromeCaptureArgs, _waitForTestChrome, _cleanupTestBrowser, _createTestArtifactsRoot } = await import('../services/htmlComposition/testBrowserCleanup.js');
 const chrome = [process.env.CHROME_PATH, chromium.executablePath(), '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome'].find(p => p && existsSync(p));
 const ffmpeg = await findFfmpeg();
 // Server-only CI intentionally does not install the client workspace. This
@@ -46,9 +46,9 @@ try {
 // Vitest skips cleanup hooks when no browser test can run.
 const canRun = browserSuiteCanRun('musicVideo browser suite', { Chrome: chrome, ffmpeg, 'client workspace dependencies': clientBundler }, { onUnavailable: cleanupTempDataRoots });
 
-let browser, proc, server;
+let browser, artifacts, proc, server;
 afterAll(async () => {
-  await _cleanupTestBrowser({ browser, proc, cleanup: () => {} });
+  await _cleanupTestBrowser({ browser, proc, artifacts, cleanup: () => {} });
   if (server) await new Promise(resolve => server.close(resolve));
   cleanupTempDataRoots();
 });
@@ -89,7 +89,8 @@ describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffm
     server = await new Promise(resolve => { const listener = app.listen(0, '127.0.0.1', () => resolve(listener)); });
     proc = spawn(chrome, _testChromeCaptureArgs(join(PATHS.data, 'test-chrome')), { stdio: ['ignore', 'ignore', 'pipe'] });
     endpoint = new URL(await _waitForTestChrome(proc)).origin.replace('ws:', 'http:');
-    browser = await chromium.connectOverCDP(endpoint);
+    artifacts = _createTestArtifactsRoot();
+    browser = await chromium.connectOverCDP(endpoint, { artifactsDir: artifacts.path });
     const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
     const errors = []; page.on('pageerror', e => errors.push(e.message));
     // The harness mounts no Toaster, so a failed UI request is otherwise invisible: record every

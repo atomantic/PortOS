@@ -14,7 +14,7 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 import { browserSuiteCanRun } from '../lib/browserSuiteGate.js';
 vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('mv-song-browser-') }));
 vi.mock('../services/settings.js', () => ({ getSettings: async () => ({}) }));
-const { _testChromeCaptureArgs, _waitForTestChrome, _cleanupTestBrowser } = await import('../services/htmlComposition/testBrowserCleanup.js');
+const { _testChromeCaptureArgs, _waitForTestChrome, _cleanupTestBrowser, _createTestArtifactsRoot } = await import('../services/htmlComposition/testBrowserCleanup.js');
 const chrome = [process.env.CHROME_PATH, chromium.executablePath(), '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome'].find(p => p && existsSync(p));
 const client = resolve(import.meta.dirname, '../../client');
 const requireClient = createRequire(join(client, 'package.json'));
@@ -23,7 +23,7 @@ try { bundler = ['vite', '@vitejs/plugin-react', '@tailwindcss/postcss'].map(nam
 catch (err) { if (err.code !== 'MODULE_NOT_FOUND') throw err; }
 const canRun = browserSuiteCanRun('song revision browser suite', { Chrome: chrome, 'client workspace dependencies': bundler }, { onUnavailable: cleanupTempDataRoots });
 // Prerequisite discovery may initialize mocked paths; skipped suites have no cleanup hooks.
-let browser, proc, server, io, songs, musicVideoEvents;
+let browser, artifacts, proc, server, io, songs, musicVideoEvents;
 const fixtureCleanup = new AbortController();
 const broadcast = event => io.emit('music-video:song-revision', event);
 afterAll(async () => {
@@ -31,7 +31,7 @@ afterAll(async () => {
   fixtureCleanup.abort();
   await songs?.__testing.settle(); songs?.__setSongRevisionDepsForTests();
   try {
-    await _cleanupTestBrowser({ browser, proc, cleanup: async () => {
+    await _cleanupTestBrowser({ browser, proc, artifacts, cleanup: async () => {
       try {
         if (io) await new Promise(resolve => io.close(resolve));
         else if (server) await new Promise(resolve => server.close(resolve));
@@ -93,7 +93,8 @@ describe.skipIf(!canRun)('song revision in Chrome (client dependencies required)
     server = await new Promise(resolve => { const listener = app.listen(0, '127.0.0.1', () => resolve(listener)); });
     io = new Server(server); musicVideoEvents.on('song-revision', broadcast);
     proc = spawn(chrome, _testChromeCaptureArgs(join(PATHS.data, 'chrome')), { stdio: ['ignore', 'ignore', 'pipe'] });
-    browser = await chromium.connectOverCDP(await _waitForTestChrome(proc));
+    artifacts = _createTestArtifactsRoot();
+    browser = await chromium.connectOverCDP(await _waitForTestChrome(proc), { artifactsDir: artifacts.path });
     const page = await browser.newPage({ viewport: { width: 1000, height: 900 } });
     const errors = []; page.on('pageerror', e => errors.push(e.message));
     await page.goto(`http://127.0.0.1:${server.address().port}`);
