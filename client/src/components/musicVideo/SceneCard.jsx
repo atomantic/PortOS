@@ -38,6 +38,7 @@ import SceneRenderTarget, { lastRenderTarget, renderTargetOverrides } from './Sc
 import SceneRenderInputs, { shotCardRenderRequest, shotCardRequestProblem } from './SceneRenderInputs.jsx';
 import SceneFrameFit, { sceneFrameFit } from './SceneFrameFit.jsx';
 import SceneCutEffect from './SceneCutEffect.jsx';
+import { plannedTransitions } from '../../lib/musicVideoCutEffects.js';
 import SceneGlitches from './SceneGlitches.jsx';
 import SceneTransitions from './SceneTransitions.jsx';
 import SceneImageEffect from './SceneImageEffect.jsx';
@@ -260,8 +261,9 @@ export default function SceneCard({
           span={sceneHasAuthoredSpan(scene) ? { startSec: scene.startSec, endSec: scene.endSec } : null} />
         {/* A VHS glitch riding on the cut into or out of this shot; never moves the cut. */}
         <SceneTransitions fieldId={fieldId} scene={scene} onChange={applyPatch} />
-        {/* Both clips flipping on the beats over the end of this shot, switched on or off. */}
-        <SceneCutEffect fieldId={fieldId} scene={scene} onChange={applyPatch} />
+        {/* How this shot hands over to the next: a cut, beat toggle, dissolve or fade, as its storyboard row plans until one is picked. */}
+        <SceneCutEffect fieldId={fieldId} scene={scene} isLast={!!isLast} onChange={applyPatch}
+          planned={plannedTransitions(project?.productionReview?.draft?.storyboard).get(scene.sceneId)} />
         {/* Glitches at moments inside the shot, set and moved on a slider; they add no time. */}
         <SceneGlitches fieldId={fieldId} scene={scene} onChange={applyPatch} />
         {/* Everything set once and rarely revisited: timing, shot mode, layer, and a non-footage shot's camera. */}

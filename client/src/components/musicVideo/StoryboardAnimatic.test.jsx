@@ -154,6 +154,38 @@ describe('StoryboardAnimatic clips', () => {
     expect(clipB.currentTime).toBeCloseTo(1.875, 2);
   });
 
+  // Uniquely catches the animatic's dissolve or fade through black (including one the
+  // storyboard plans) showing on frames the final render does not, or not ramping.
+  it('fades the next shot in over a dissolve and darkens through black around a fade', async () => {
+    const scenes = [
+      { sceneId: 'a', label: 'One', startSec: 0, endSec: 4, videoHistoryId: 'clip-a' },
+      { sceneId: 'b', label: 'Two', startSec: 4, endSec: 8, videoHistoryId: 'clip-b', cutEffect: { style: 'fade-black', enabled: true, overlapSec: 1 } },
+      { sceneId: 'c', label: 'Three', startSec: 8, endSec: 12, videoHistoryId: 'clip-c' },
+    ];
+    const project = { id: 'p', scenes, productionReview: { draft: { storyboard: [{ sceneId: 'a', transition: 'Dissolve' }] } } };
+    render(<StoryboardAnimatic project={project} audioUrl="/song.mp3" />);
+    const audio = screen.getByLabelText('Song for the storyboard animatic');
+    const at = (t) => { Object.defineProperty(audio, 'currentTime', { value: t, configurable: true }); fireEvent.timeUpdate(audio); };
+    at(2.9);
+    const incoming = await screen.findByTestId('beat-toggle-clip');
+    expect(incoming.style.opacity).toBe('0');
+    at(3.5);
+    const half = Number(incoming.style.opacity);
+    expect(half).toBeGreaterThan(0.4);
+    expect(half).toBeLessThan(0.6);
+    at(3.95);
+    expect(Number(incoming.style.opacity)).toBeGreaterThan(half);
+    at(7.4);
+    const black = await screen.findByTestId('fade-black');
+    expect(black.style.opacity).toBe('0');
+    at(7.75);
+    expect(Number(black.style.opacity)).toBeCloseTo(0.5, 2);
+    at(8.25);
+    expect(Number(black.style.opacity)).toBeCloseTo(0.5, 2);
+    at(8.6);
+    expect(black.style.opacity).toBe('0');
+  });
+
   it('loads the next shots\' clips ahead and cuts to the same loaded clip', async () => {
     const scenes = [
       { sceneId: 'a', label: 'One', startSec: 0, endSec: 1, referenceImageId: 'frame-a.png' },

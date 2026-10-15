@@ -628,23 +628,42 @@ describe('clip speed and offset by hand', () => {
   });
 });
 
-// Uniquely catches the beat toggle control saving the wrong shape or losing its settings when switched off.
-describe('Beat toggle into the next shot', () => {
-  it('switches on with defaults, changes its settings and keeps them when switched off', () => {
+// Uniquely catches the cut effect picker saving the wrong shape, losing its
+// settings on Cut, or ignoring the transition the storyboard plans.
+describe('How a shot hands over to the next', () => {
+  function Harness({ initial = {}, project = null, isLast = false, onSave }) {
+    const [scene, setScene] = useState({ sceneId: 's1', startSec: 0, endSec: 4, takes: [], ...initial });
+    return <SceneCard scene={scene} index={0} isLast={isLast} project={project} onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
+  }
+
+  it('picks an effect with defaults, changes its settings and keeps them on Cut', () => {
     const onSave = vi.fn();
-    function Harness() {
-      const [scene, setScene] = useState({ sceneId: 's1', startSec: 0, endSec: 4, takes: [] });
-      return <SceneCard scene={scene} index={0} onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
-    }
-    render(<Harness />);
-    const toggle = screen.getByLabelText('Beat toggle into next shot');
-    fireEvent.click(toggle);
+    render(<Harness onSave={onSave} />);
+    const picker = screen.getByLabelText('Into next shot');
+    fireEvent.change(picker, { target: { value: 'beat-toggle' } });
     expect(onSave).toHaveBeenLastCalledWith('s1', { cutEffect: { style: 'beat-toggle', enabled: true, overlapSec: 1, rate: 'beat' } });
     fireEvent.change(screen.getByLabelText('Beat toggle speed'), { target: { value: 'half' } });
-    expect(onSave).toHaveBeenLastCalledWith('s1', { cutEffect: { style: 'beat-toggle', enabled: true, overlapSec: 1, rate: 'half' } });
-    fireEvent.click(toggle);
-    expect(onSave).toHaveBeenLastCalledWith('s1', { cutEffect: { style: 'beat-toggle', enabled: false, overlapSec: 1, rate: 'half' } });
-    expect(screen.getByLabelText('Beat toggle speed').value).toBe('half');
+    fireEvent.change(screen.getByLabelText('Into next shot length'), { target: { value: '2' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { cutEffect: { style: 'beat-toggle', enabled: true, overlapSec: 2, rate: 'half' } });
+    fireEvent.change(picker, { target: { value: 'dissolve' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { cutEffect: { style: 'dissolve', enabled: true, overlapSec: 2, rate: 'half' } });
+    expect(screen.queryByLabelText('Beat toggle speed')).toBeNull();
+    fireEvent.change(picker, { target: { value: '' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { cutEffect: { style: 'dissolve', enabled: false, overlapSec: 2, rate: 'half' } });
+    expect(picker.value).toBe('');
+  });
+
+  it('shows the storyboard\'s planned Dissolve until a pick, and offers only a fade to black on the last shot', () => {
+    const onSave = vi.fn();
+    const project = { productionReview: { draft: { storyboard: [{ sceneId: 's1', transition: 'Slow dissolve into the dream' }] } } };
+    const { unmount } = render(<Harness project={project} onSave={onSave} />);
+    expect(screen.getByLabelText('Into next shot').value).toBe('dissolve');
+    fireEvent.change(screen.getByLabelText('Into next shot'), { target: { value: '' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { cutEffect: { style: 'dissolve', enabled: false, overlapSec: 1, rate: 'beat' } });
+    unmount();
+    render(<Harness isLast onSave={onSave} />);
+    const end = screen.getByLabelText('At the end');
+    expect([...end.options].map((o) => o.text)).toEqual(['Cut', 'Fade to black']);
   });
 });
 
