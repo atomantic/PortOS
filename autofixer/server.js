@@ -75,7 +75,6 @@ async function loadSettings() {
   return readJsonSafe(SETTINGS_FILE, {});
 }
 
-// Get all monitored process names from registered apps
 async function getMonitoredProcesses() {
   const apps = await loadApps();
   const processes = new Set();
@@ -157,7 +156,6 @@ async function saveSession(sessionId, prompt, output, metadata, patch) {
   await saveIndex(index);
 }
 
-// Get error logs for a process
 async function getProcessLogs(processName) {
   const { stdout: errLogs } = await execPm2(['logs', processName, '--lines', '100', '--nostream', '--err']).catch(() => {
     throw new Error(`PM2 stderr logs unavailable for ${processName.replace(/[\r\n]/g, ' ').slice(0, 120)} — skipping repair`);

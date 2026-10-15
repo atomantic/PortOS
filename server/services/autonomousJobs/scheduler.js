@@ -87,7 +87,6 @@ async function getDueJobs() {
         if (lastRun >= targetUtc) continue
       }
 
-      // If job is weekdaysOnly, skip weekends
       if (job.weekdaysOnly && !isWeekday(timezone)) continue
 
       due.push({
@@ -98,7 +97,6 @@ async function getDueJobs() {
     }
   }
 
-  // Sort by overdue time (most overdue first)
   due.sort((a, b) => b.overdueBy - a.overdueBy)
 
   return due

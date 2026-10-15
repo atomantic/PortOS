@@ -1,24 +1,5 @@
-/**
- * The generated-task/prompt BOUNDARY for the file-issues vs implement audit mode (#6380).
- *
- * Every other test of this contract stops at `isFileIssuesMode` or at the task
- * metadata. Neither proves the thing that actually matters: that an issues-only
- * run cannot ACQUIRE code-shipping instructions. The mode is enforced two hops
- * apart — the generator stamps `FILE_ISSUES_DELIVERY_SETTINGS`, and the prompt
- * builder reads `noCodeOutput` off that stamp to pick a completion contract — so
- * a change on either side can quietly re-arm `/do:push` on an audit that was
- * only ever supposed to file issues.
- *
- * This suite closes both hops: it GENERATES the real task for every audit type
- * in the catalog and RENDERS the final agent prompt from it, then asserts that
- * no commit/push/PR/auto-merge directive survives — and that the same pipeline
- * in implement mode still emits the ordinary code-delivery workflow, so the
- * assertions cannot pass by rendering nothing.
- *
- * Isolated file for the same reason `cosTaskGenerator.referenceWatch.test.js`
- * is: the mocked leaf graph (taskSchedule / taskPromptService / appActivity)
- * must not leak into the shared cosTaskGenerator suite.
- */
+// Generate real tasks and render final prompts: mode metadata alone cannot prove
+// that issues-only audits stay free of shipping instructions (#6380).
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -173,6 +154,30 @@ describe('issues-only audit dispatch never acquires code-shipping instructions (
     vi.clearAllMocks();
     promptTemplate.body = AUDIT_TEMPLATE;
     applicability.inapplicable = {};
+  });
+
+  it.each([true, false])('cognitive-load comment policy survives dispatch with fileIssues=%s', async (fileIssues) => {
+    const { DEFAULT_TASK_PROMPTS } = await import('./taskPromptDefaults.js');
+    const { getTaskInterval } = await import('./taskSchedule.js');
+    promptTemplate.body = DEFAULT_TASK_PROMPTS['better-cognitive-load'];
+    getTaskInterval.mockResolvedValue({ type: 'weekly', taskMetadata: { fileIssues } });
+
+    const task = await generate('better-cognitive-load');
+    const prompt = renderPrompt(task);
+    expect(prompt).toContain('Excessive code comments');
+    expect(prompt).toContain('safety rationale, external contracts, and justified workarounds');
+    expect(prompt).toContain('Preserve licenses, tool directives, meaningful type/JSDoc metadata');
+    expect(prompt).toContain('not a rewrite of user-facing documentation');
+    expect(prompt).toContain('review the diff for behavior preservation');
+    expect(prompt).not.toContain('{modeInstructions}');
+    expect(prompt).not.toMatch(/add (?:clear |helpful )?comments/i);
+    if (fileIssues) {
+      expectNoCodeDelivery(prompt, 'better-cognitive-load');
+      expect(prompt).toContain('Mode: file issues, change nothing');
+    } else {
+      expect(task.metadata.noCodeOutput).not.toBe(true);
+      expect(prompt).toContain('## Completion Workflow');
+    }
   });
 
   it('bails out before generating an audit that cannot apply, advancing the cadence', async () => {

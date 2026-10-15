@@ -22,7 +22,6 @@ const UI_HTML = await readFile(UI_TEMPLATE_FILE, 'utf8');
 
 const stagedFixes = createStagedFixStore({ root: AUTOFIXER_DIR, loadApps, execPm2 });
 
-// Load autofixer history
 async function loadHistory() {
   const data = await readFile(INDEX_FILE, 'utf8').catch(() => '[]');
   return stagedFixes.decorateHistory(JSON.parse(data));

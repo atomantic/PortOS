@@ -3,7 +3,7 @@
     "accessibility": "46f628a44a919bb788de8761e86ca0e1",
     "api-contract": "d52e00ec53eb5618df1a769efccc08f3",
     "app-launch-video": "271c1e8bc301ba02b4a2207e0abf8573",
-    "better-cognitive-load": "a1fe22f6ef936131456c55a6b0623204",
+    "better-cognitive-load": "882bbda803edcdef5a4308521050f8fd",
     "better-complexity": "c99f67b43ff54a1c8cf0176c721d9c06",
     "better-dependency-freedom": "8a79c8be829f926bbc7720ee29818d53",
     "better-dev-environment": "62523b82066e70ff1c786da22ccf0372",
@@ -68,7 +68,7 @@
     "accessibility": 5,
     "api-contract": 2,
     "app-launch-video": 8,
-    "better-cognitive-load": 1,
+    "better-cognitive-load": 2,
     "better-complexity": 2,
     "better-dependency-freedom": 1,
     "better-dev-environment": 1,
@@ -144,6 +144,9 @@
       "c5f125ac04d41921030f7cd36a3ff3ee",
       "e355d37fb682c1f6c2ad4c031a7988a7",
       "d9ce59c884841cdfcab7139d05778e74"
+    ],
+    "better-cognitive-load": [
+      "a1fe22f6ef936131456c55a6b0623204"
     ],
     "better-complexity": [
       "c92b99080d0453d70bb26a412fb48ce9"

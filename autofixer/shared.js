@@ -68,7 +68,6 @@ export const APPS_FILE = join(DATA_DIR, 'apps.json');
 export const AUTOFIXER_DIR = join(DATA_DIR, 'autofixer');
 export const INDEX_FILE = join(AUTOFIXER_DIR, 'index.json');
 
-// Load apps from PortOS
 export async function loadApps() {
   try {
     const parsed = JSON.parse(await readFile(APPS_FILE, 'utf8'));

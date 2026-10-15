@@ -1472,9 +1472,18 @@ shows is changed most often.
   where the caller needs the intent.
 - **Negated booleans** — \`notDisabled\`, \`hideNothing\`, \`skipUnlessMissing\` —
   anything forcing double-negative reasoning at a call site.
-- **Comments that compensate for the code** — a paragraph explaining what a
-  rename or an extraction would have made self-evident, and commented-out code
-  left behind as documentation.
+- **Excessive code comments** — redundant narration, stale explanations,
+  commented-out code, and verbose walkthroughs of obvious control flow. Read the
+  surrounding code before deciding what to remove or shorten. Keep concise context
+  that cannot be inferred from names and code paths: why, invariants, non-obvious
+  constraints, safety rationale, external contracts, and justified workarounds.
+  Preserve licenses, tool directives, meaningful type/JSDoc metadata, public API
+  documentation, and needed rationale. Prefer clearer code when it can express
+  the same information. Do not use comment counts or length quotas as targets.
+  This is code-comment maintenance, not a rewrite of user-facing documentation.
+  In file-issues mode, report concrete examples and the proposed cleanup without
+  editing source; in implement mode, remove or tighten excessive comments and
+  review the diff for behavior preservation.
 - **Action at a distance** — module-level mutable state, implicit ordering
   requirements between calls ("you must call init first"), and side effects
   hidden behind names that read as pure.

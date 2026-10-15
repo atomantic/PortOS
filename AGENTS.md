@@ -199,6 +199,17 @@ When CoS agents or AI tools work on managed apps outside PortOS, all research, p
 
 This complements the Security Model (the deployed product) — this section governs what agents may *write down* while working against real data.
 
+## Code comments
+
+Write comments for coding agents maintaining the code: concise context that cannot
+be inferred from names and control flow. Keep the why, invariants, non-obvious
+constraints, safety rationale, external contracts, and justified workarounds.
+Remove redundant narration, stale explanations, commented-out code, and verbose
+walkthroughs; prefer clear code when it can express the same information. Preserve
+licenses, tool directives, meaningful type/JSDoc metadata, public API documentation,
+and needed rationale. Do not use comment counts or length quotas as quality goals.
+This policy governs code comments, not user-facing guides or product copy.
+
 ## Code Conventions
 
 - **Error handling** — in Express request handlers, let errors bubble to centralized middleware instead of wrapping each handler in try/catch. Client code uses the shared error/save boundaries in `client/src/AGENTS.md`. **Process-boundary exception:** PTY/child-process/`setTimeout`/`setInterval` callbacks and any code running *outside* the Express request lifecycle, where an uncaught throw crashes the Node process. At those boundaries, wrap hook invocation in try/catch and log via the emoji-prefixed `console.error` style. Async event handlers that mutate shared module-level state (e.g. the TUI spawner's `handleData`) must also be serialized — chain them onto a per-session/per-actor `Promise.resolve()` queue rather than firing concurrently.

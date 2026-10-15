@@ -125,7 +125,6 @@ router.post('/links', asyncHandler(async (req, res) => {
   const { url, ...options } = validateRequest(linkInputSchema, req.body);
   if (deriveRepoLinkFields(url).isRepo && options.autoClone !== false) assertHostControl(req);
 
-  // Check if URL already exists
   const existing = await brainService.getLinkByUrl(url);
   if (existing) {
     throw new ServerError('Link with this URL already exists', {
