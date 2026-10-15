@@ -1047,13 +1047,18 @@ export default function MusicVideo() {
         `Music Video: ${selected.name}`,
       ));
     }
-    // Every take (#8965), selected first, so the take strips and contact sheet
+    // Every take (#8965), start and end frames included, selected first, so the take strips and contact sheet
     // can open any candidate in the shared lightbox.
     for (const scene of selected.scenes || []) {
       const frames = sceneTakeList(scene, 'image')
         .sort((a, b) => (b.assetId === scene.referenceImageId) - (a.assetId === scene.referenceImageId));
       for (const take of frames) {
         items.push(normalizeImage({ filename: take.assetId, prompt: take.prompt || scene.framePrompt || scene.prompt || '' }));
+      }
+      const endFrames = sceneTakeList(scene, 'endImage')
+        .sort((a, b) => (b.assetId === scene.endImageId) - (a.assetId === scene.endImageId));
+      for (const take of endFrames) {
+        items.push(normalizeImage({ filename: take.assetId, prompt: take.prompt || scene.endFramePrompt || scene.prompt || '' }));
       }
       const clips = sceneTakeList(scene, 'video')
         .sort((a, b) => (b.assetId === scene.videoHistoryId) - (a.assetId === scene.videoHistoryId));
