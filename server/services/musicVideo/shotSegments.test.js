@@ -25,7 +25,7 @@ vi.mock('./render.js', async (importOriginal) => {
   };
 });
 
-const { planShotSegments, renderMissingSegments, stitchSegments, shotFilmLook } = await import('./shotSegments.js');
+const { planShotSegments, renderMissingSegments, stitchSegments } = await import('./shotSegments.js');
 const { buildMusicVideoFfmpegArgs } = await import('./render.js');
 
 afterAll(cleanupTempDataRoots);
@@ -98,6 +98,8 @@ describe('shot segments', () => {
     const b = await planShotSegments(project({ scenes, filmLook: { preset: 'super8' } }));
     expect(a.segments[2].path).toBe(b.segments[2].path);
     expect(a.segments[0].path).not.toBe(b.segments[0].path);
-    expect(shotFilmLook({ filmLook: look }, { filmLook: { preset: 'none' } })).toBeNull();
+    // A shot set to a clean look skips the look pass under a looked video.
+    const clean = await planShotSegments(project({ scenes: scenes.map((s) => (s.sceneId === 'c' ? { ...s, filmLook: { preset: 'none' } } : s)), filmLook: look }));
+    expect(clean.segments[2].path).toBe(clean.segments[2].basePath);
   }, 60000);
 });

@@ -58,7 +58,7 @@ const safeProjectId = (projectId) => {
 export const shotSegmentDir = (projectId) => join(PATHS.data, SHOT_SEGMENT_DIR, safeProjectId(projectId));
 
 /** A shot's own pinned look, else the video's; null when the shot plays clean. Pure. */
-export function shotFilmLook(project, scene) {
+function shotFilmLook(project, scene) {
   const own = scene?.filmLook && typeof scene.filmLook === 'object' ? scene.filmLook : null;
   const look = normalizeFilmLook(own || project?.filmLook);
   return look && !isFilmLookNeutral(look) ? look : null;
@@ -69,7 +69,7 @@ export function shotFilmLook(project, scene) {
  * lies wholly outside `[lo, hi]` removed, at any depth — the part of a page's
  * data a segment's frames can depend on, for its key. Pure.
  */
-export function windowedKeyData(value, lo, hi) {
+function windowedKeyData(value, lo, hi) {
   const outside = (v) => v && typeof v === 'object' && Number.isFinite(v.startSec)
     && (v.startSec > hi || (Number.isFinite(v.endSec) ? v.endSec : v.startSec) < lo);
   if (Array.isArray(value)) return value.filter((v) => !outside(v)).map((v) => windowedKeyData(v, lo, hi));
@@ -389,7 +389,7 @@ export async function sweepPartialSegments() {
  * The shot panel's view of the cache: per shot, whether every section it plays
  * is rendered and whether one is rendering now, plus the playable files.
  */
-export function segmentStatus(plan) {
+function segmentStatus(plan) {
   const byShot = new Map();
   for (const segment of plan.segments) {
     const entry = byShot.get(segment.sceneId) || { sceneId: segment.sceneId, sections: 0, rendered: 0, rendering: false, startSec: segment.startSec, endSec: segment.endSec, files: [] };
