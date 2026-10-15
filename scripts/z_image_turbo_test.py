@@ -83,6 +83,8 @@ class FakeQwenDecodePipeline:
 
     def __init__(self, outcomes):
         self.vae = FakeVae(outcomes)
+        self.transformer = object()
+        self.text_encoder = object()
         self.image_processor = SimpleNamespace(postprocess=lambda decoded, output_type: [('image', decoded, output_type)])
 
     def _unpack_latents(self, _latents, _height, _width, _scale_factor):
@@ -154,6 +156,10 @@ class RunnerContract(unittest.TestCase):
                 self.assertEqual(images[0][0], 'image')
                 self.assertEqual(images[0][2], 'pil')
                 self.assertEqual(pipe.vae.decode_dtypes, expected_calls)
+                # The denoiser and text encoder must not stay resident through
+                # the float32 decode — that combination OOMs a 32 GB Mac.
+                self.assertIsNone(pipe.transformer)
+                self.assertIsNone(pipe.text_encoder)
                 self.assertEqual('recovered after a float32 retry' in stderr.getvalue(), expect_retry_log)
 
     def test_qwen21_decode_guard_fails_before_writing_non_finite_output(self):

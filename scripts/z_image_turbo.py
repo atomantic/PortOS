@@ -20,6 +20,7 @@ encoder (e.g. HiDream-I1 loads Llama-3.1-8B-Instruct as `text_encoder_4`), so
 """
 
 import argparse
+import gc
 import inspect
 import os
 import sys
@@ -208,7 +209,24 @@ def encode_references_in_vae_dtype(pipe):
     pipe._encode_vae_image = encode_in_vae_dtype
 
 
+def release_denoising_components(pipe) -> None:
+    """Drop the transformer and text encoder once the denoising loop is done.
+
+    The full Qwen 2.1 pipeline sits on MPS with no offload, and its float32 VAE
+    decode needs another few GiB on top — on a 32 GB Mac that crossed the MPS
+    high-watermark and failed a finished 40-step render at its very last step.
+    The runner is one-shot per image, so nothing needs these modules again."""
+    for name in ("transformer", "text_encoder"):
+        if getattr(pipe, name, None) is not None:
+            setattr(pipe, name, None)
+    gc.collect()
+    mps = getattr(torch, "mps", None)
+    if mps is not None and torch.backends.mps.is_available():
+        mps.empty_cache()
+
+
 def decode_qwen21_latents(pipe, latents, height: int, width: int):
+    release_denoising_components(pipe)
     vae = pipe.vae
     unpacked = pipe._unpack_latents(latents, height, width, pipe.vae_scale_factor)
 
