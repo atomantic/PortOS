@@ -38,6 +38,9 @@ const { selectBackend, getBackendName, reset } = createRecordStoreBackendSelecto
   requireDbMessage: 'Albums require PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file in .env for the unsupported file backend)',
 });
 
+// The shared mutation boundary prepares both stores before reserving a client.
+export { selectBackend as prepareAlbumsBackend };
+
 /** Name of the active backend, or null before first call (for diagnostics/tests). */
 export function getAlbumsBackendName() {
   return getBackendName();

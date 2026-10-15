@@ -1,6 +1,6 @@
 /** Local album/track unit of work. Federation retains its per-record LWW path. */
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { ensureSchema, withTransaction } from '../lib/db.js';
+import { withTransaction } from '../lib/db.js';
 import { isFileBackend } from '../lib/pgFileFacade.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
@@ -68,7 +68,11 @@ export function withMusicMutation(operation) {
       result = await mutations.run(context, operation);
       await commitFiles(context.files);
     } else {
-      await ensureSchema();
+      // Backend selection performs pool-based health/schema work. Finish it
+      // BEFORE checking out a transaction client: a cold burst can otherwise
+      // reserve the entire pool while its lock holder needs one more client.
+      const [albums, tracks] = await Promise.all([import('./albums/index.js'), import('./tracks/index.js')]);
+      await Promise.all([albums.prepareAlbumsBackend(), tracks.prepareTracksBackend()]);
       result = await withTransaction(async (client) => {
         // One domain lock, acquired before any row lock or membership read.
         // All LOCAL writers share it, including track metadata saves.

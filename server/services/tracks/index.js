@@ -83,6 +83,9 @@ export function appendActiveTake(trackId, { audioFilename, engine, prompt, durat
   return run;
 }
 
+// The shared mutation boundary prepares both stores before reserving a client.
+export { selectBackend as prepareTracksBackend };
+
 /** Name of the active backend, or null before first call (for diagnostics/tests). */
 export function getTracksBackendName() {
   return getBackendName();

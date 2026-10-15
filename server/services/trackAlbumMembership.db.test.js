@@ -1,19 +1,38 @@
 /** Real transactions against portos_test; no live database or media/provider work. */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
-import { randomUUID } from 'node:crypto';
-import { checkHealth, ensureSchema, query, close } from '../lib/db.js';
+import { checkHealth, query, close } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
+const fixture = await vi.hoisted(async () => {
+  const { randomUUID } = await import('node:crypto');
+  return { schema: 'music_membership_' + randomUUID().replaceAll('-', ''), created: false };
+});
 const fault = vi.hoisted(() => ({ failWrite: 0, writes: 0 }));
+// Every connection in this suite's pool has ONLY the invocation-owned schema
+// in its search path. Never initialize or clean up the shared public schema.
+vi.mock('pg', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, default: {
+    ...actual.default,
+    Pool: function Pool(options) {
+      return new actual.default.Pool({ ...options, options: '-csearch_path=' + fixture.schema });
+    },
+  } };
+});
 // Only inject a persistence failure. BEGIN/COMMIT/ROLLBACK, row locks, advisory
 // locks, reads and every other write still execute on the real PostgreSQL pool.
 vi.mock('../lib/db.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
+    ensureSchema: async () => {
+      if (!fixture.created) throw new Error('Fixture schema must exist before initializing music stores');
+      const { libraryDdl } = await import('../lib/db/schema/library.js');
+      for (const sql of libraryDdl) await actual.query(sql);
+    },
     withTransaction: (operation) => actual.withTransaction((client) => operation({
       query: async (sql, params) => {
         if (/^INSERT INTO (albums|tracks)\b/.test(sql) && ++fault.writes === fault.failWrite) {
@@ -36,7 +55,7 @@ vi.mock('../lib/pgFileFacade.js', async (importOriginal) => {
 
 const health = await checkHealth();
 const runDb = requireDbOrSkip('trackAlbumMembership.db.test', health.connected, health.error);
-const prefix = `Example membership ${randomUUID()}`;
+const prefix = 'Example membership fixture';
 const events = [];
 const subscribe = vi.fn(async () => {});
 let albums;
@@ -63,10 +82,14 @@ describe.skipIf(!runDb)('atomic local album membership on PostgreSQL', () => {
   beforeAll(async () => {
     expect((await query('SELECT current_database() AS name')).rows[0].name).toBe('portos_test');
     vi.stubEnv('MEMORY_BACKEND', '');
-    await ensureSchema();
+    await query(`CREATE SCHEMA ${fixture.schema}`);
+    fixture.created = true;
+    expect((await query('SHOW search_path')).rows[0].search_path).toBe(fixture.schema);
     albums = await import('./albums/index.js');
     tracks = await import('./tracks/index.js');
     membership = await import('./trackAlbumMembership.js');
+    await albums.prepareAlbumsBackend();
+    await tracks.prepareTracksBackend();
     bus = await import('./sharing/recordEvents.js');
     bus.recordEvents.on('updated', onUpdated);
     bus.recordEvents.on('deleted', onDeleted);
@@ -90,9 +113,12 @@ describe.skipIf(!runDb)('atomic local album membership on PostgreSQL', () => {
       bus.recordEvents.off('deleted', onDeleted);
       bus.__resetSubscriptionAdapter();
     }
-    await cleanup();
-    vi.unstubAllEnvs();
-    await close();
+    try {
+      if (fixture.created) await query(`DROP SCHEMA ${fixture.schema} CASCADE`);
+    } finally {
+      vi.unstubAllEnvs();
+      await close();
+    }
   });
 
   it('retains competing additions and admits only one claimant for the final slot', async () => {
