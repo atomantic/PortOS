@@ -157,6 +157,62 @@ describe('brainStorage tombstones', () => {
     expect(await brainStorage.getById('people', 'no-ts')).toBeNull();
   });
 
+  it('rejects malformed live and delete clocks through delta and snapshot sync without relaying them', async () => {
+    const created = await brainStorage.create('people', { name: 'Keep local' });
+    const since = brainSyncLog.getCurrentSeq();
+    const changes = [
+      { op: 'update', type: 'people', id: created.id, record: { name: 'Bad', updatedAt: 'not-a-date' } },
+      { op: 'delete', type: 'people', id: 'invalid-clock-delete', record: { updatedAt: 42 } },
+    ];
+
+    expect(await applyRemoteChanges(changes)).toMatchObject({ updated: 0, deleted: 0, skipped: 2 });
+    expect(await applyBrainSnapshot({ records: { people: {
+      [created.id]: { name: 'Bad snapshot', updatedAt: 'not-a-date' },
+      'invalid-clock-snapshot': { _deleted: true, updatedAt: { invalid: true } },
+    } } })).toMatchObject({ updated: 0, deleted: 0, skipped: 2 });
+    expect(await brainStorage.getById('people', created.id)).toMatchObject({ name: 'Keep local', updatedAt: created.updatedAt });
+    const raw = await brainStorage.getRawRecords('people');
+    expect(raw['invalid-clock-delete']).toBeUndefined();
+    expect(raw['invalid-clock-snapshot']).toBeUndefined();
+    expect((await brainSyncLog.getChangesSince(since)).changes).toEqual([]);
+  });
+
+  it('orders offset clocks by instant across live updates, deletes and snapshot reconciliation', async () => {
+    const id = 'offset-clock-order';
+    await applyRemoteChanges([{ op: 'create', type: 'people', id,
+      record: { name: 'Current', updatedAt: '2026-10-15T11:00:00.000Z' } }]);
+
+    // 12:00 +02 is 10:00 UTC, even though its text sorts after 11:00Z.
+    expect(await applyRemoteChanges([
+      { op: 'update', type: 'people', id, record: { name: 'Stale', updatedAt: '2026-10-15T12:00:00+02:00' } },
+      { op: 'delete', type: 'people', id, record: { updatedAt: '2026-10-15T12:00:00+02:00' } },
+    ])).toMatchObject({ updated: 0, deleted: 0, skipped: 2 });
+    expect(await brainStorage.getById('people', id)).toMatchObject({ name: 'Current' });
+
+    // 10:00 -02 is 12:00 UTC: this newer snapshot tombstone must win.
+    expect(await applyBrainSnapshot({ records: { people: {
+      [id]: { _deleted: true, updatedAt: '2026-10-15T10:00:00-02:00' },
+    } } })).toMatchObject({ deleted: 1 });
+    expect(await applyRemoteChanges([{ op: 'create', type: 'people', id,
+      record: { name: 'Stale revival', updatedAt: '2026-10-15T11:30:00Z' } }])).toMatchObject({ skipped: 1 });
+    expect(await brainStorage.getById('people', id)).toBeNull();
+    expect(await applyBrainSnapshot({ records: { people: {
+      [id]: { name: 'Newer revival', updatedAt: '2026-10-15T13:00:00Z' },
+    } } })).toMatchObject({ updated: 1 });
+    expect(await brainStorage.getById('people', id)).toMatchObject({ name: 'Newer revival' });
+  });
+
+  it('allows a valid peer clock to recover an already-persisted malformed incumbent', async () => {
+    const id = 'legacy-invalid-clock';
+    const dir = join(getTempRoot(), 'brain', 'people', id);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'index.json'), JSON.stringify({ name: 'Broken legacy', updatedAt: 'not-a-date' }));
+
+    expect(await applyRemoteChanges([{ op: 'update', type: 'people', id,
+      record: { name: 'Recovered', updatedAt: '2026-10-15T00:00:00Z' } }])).toMatchObject({ updated: 1 });
+    expect(await brainStorage.getById('people', id)).toMatchObject({ name: 'Recovered' });
+  });
+
   it('persists a _deleted create as a proper tombstone (defense-in-depth)', async () => {
     const res = await brainStorage.applyRemoteRecord(
       'projects', 'fwd-1',

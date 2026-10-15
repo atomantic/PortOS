@@ -566,6 +566,24 @@ describe('brainSyncLog', () => {
       expect(lines[0].seq).toBe(99); // max seq preserved
     });
 
+    it.each([0, 50])('preserves the valid newest instant across malformed and offset clocks at floor %i', async (floor) => {
+      const entries = [
+        { seq: 1, op: 'create', type: 'people', id: 'clock', record: { updatedAt: '2026-10-15T09:00:00Z' } },
+        { seq: 2, op: 'delete', type: 'people', id: 'clock', record: { updatedAt: '2026-10-15T11:00:00Z' } },
+        { seq: 3, op: 'update', type: 'people', id: 'clock', record: { updatedAt: 'not-a-date' } },
+        { seq: 99, op: 'create', type: 'people', id: 'clock', record: { updatedAt: '2026-10-15T12:00:00+02:00' } },
+      ];
+      writeLog(entries.map(entry => JSON.stringify(entry)).join('\n') + '\n');
+      await initSyncLog();
+
+      await compactLog(floor);
+
+      const { changes } = await getChangesSince(0);
+      expect(changes[0]).toMatchObject({ op: 'delete', record: { updatedAt: '2026-10-15T11:00:00Z' } });
+      expect(changes).toHaveLength(floor === 0 ? 1 : 2);
+      expect(getCurrentSeq()).toBe(99);
+    });
+
     it('preserves pre-floor LWW winner before verbatim tail when tail is stale under positive floor', async () => {
       // seq 1: create links x (Jan-01)
       // seq 2: delete links x (Jan-02) -> winning delete
