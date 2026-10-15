@@ -288,17 +288,25 @@ async function renderShotBase(plan, segment, outputPath, { jobId, signal, onProg
   }
 }
 
-// Each segment in flight may hold a film-look browser (about one core, since
-// the filter rasterizes serially) and an encoder. Two thirds of the cores keep
-// the server and the user's own apps responsive; the memory term keeps a small
-// machine from running out of RAM with a browser per shot.
-const SEGMENT_MAX_CONCURRENCY = 12;
+// Each segment in flight may hold a film-look browser and an encoder. Browsers
+// seeking video in parallel contend for the same decoder and compositor, so
+// past a few they slow each other down instead of adding throughput: twelve
+// on an 18-core Mac finished fewer shots than three and timed out seeks. The
+// memory term keeps a small machine from running out of RAM with a browser per
+// shot. PORTOS_MUSIC_VIDEO_SEGMENT_WORKERS overrides the count.
+const SEGMENT_MAX_CONCURRENCY = 4;
 const SEGMENT_BYTES_EACH = 3 * 1024 ** 3;
 
 /** How many segments render at once: each may hold a browser and an encoder. */
-export const segmentConcurrency = ({ cores = availableParallelism(), memoryBytes = totalmem() } = {}) => Math.max(1, Math.min(
-  SEGMENT_MAX_CONCURRENCY, Math.floor((cores * 2) / 3), Math.floor(memoryBytes / SEGMENT_BYTES_EACH),
-));
+export const segmentConcurrency = ({ cores = availableParallelism(), memoryBytes = totalmem(), override = process.env.PORTOS_MUSIC_VIDEO_SEGMENT_WORKERS } = {}) => {
+  const forced = Number.parseInt(override, 10);
+  if (Number.isInteger(forced) && forced > 0) return Math.min(forced, 32);
+  return Math.max(1, Math.min(SEGMENT_MAX_CONCURRENCY, Math.floor((cores * 2) / 3), Math.floor(memoryBytes / SEGMENT_BYTES_EACH)));
+};
+
+// A shot whose render fails (a stalled browser, an overloaded host) is tried
+// again after the rest of the queue before the whole render fails.
+const SEGMENT_ATTEMPTS = 2;
 
 /**
  * Render every missing segment of `plan` (`concurrency` at a time). `onProgress`
@@ -315,9 +323,11 @@ export async function renderMissingSegments(plan, { signal, onProgress, concurre
   report();
   const queue = all.filter((s) => done.get(s) < 1);
   const failures = [];
+  const attempts = new Map();
   const worker = async () => {
     while (queue.length && !signal?.aborted) {
       const segment = queue.shift();
+      attempts.set(segment, (attempts.get(segment) || 0) + 1);
       try {
         await renderSegment(plan, segment, { signal, onProgress: (f) => { done.set(segment, f); report(); } });
         done.set(segment, 1);
@@ -326,6 +336,13 @@ export async function renderMissingSegments(plan, { signal, onProgress, concurre
         if (segment.sceneId) emitShotRender({ projectId: plan.project?.id, sceneId: segment.sceneId, state: 'rendered', progress: 1 });
       } catch (err) {
         if (signal?.aborted || err.code === 'CANCELED') throw err;
+        done.set(segment, 0);
+        report();
+        if (attempts.get(segment) < SEGMENT_ATTEMPTS) {
+          console.warn(`⚠️ ${err.message}; trying it again after the other shots`);
+          queue.push(segment);
+          continue;
+        }
         failures.push(err);
         queue.length = 0;
       }

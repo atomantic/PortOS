@@ -45,9 +45,10 @@ const SCREENSHOT = Object.freeze({ format: 'png', optimizeForSpeed: true, fromSu
 // the window edge as an edge of the song.
 // A stalled or lost browser (a CDP command past its deadline on an overloaded
 // host, a crashed target) is not the document's fault, and seeks are
-// deterministic, so a fresh browser can redraw the same frame (#10839).
+// deterministic, so a fresh browser can redraw the same frame (#10839). A
+// film-look page's video seek that never settles is the same stall.
 // Anything else (a script error, a refused asset) fails as before.
-const RECOVERABLE_PAGE_FAILURE = /Browser command timed out|Composition browser target crashed|Composition browser target closed|Managed browser disconnected/;
+const RECOVERABLE_PAGE_FAILURE = /Browser command timed out|Composition browser target crashed|Composition browser target closed|Managed browser disconnected|render seek timed out/;
 const MAX_FRAME_RETRIES = 2;
 
 // `reopenPage(failedPage)` resolves a fresh page when a capture hits a

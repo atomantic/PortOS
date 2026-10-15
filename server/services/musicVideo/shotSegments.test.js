@@ -33,6 +33,7 @@ vi.mock('./projects.js', () => ({ getProject: vi.fn(async (id) => (id === fixtur
 const { planShotSegments, renderMissingSegments, renderSegment, stitchSegments, pruneSegments, listFilmLooks, deleteFilmLook, buildRenderPreview } = await import('./shotSegments.js');
 const { buildMusicVideoFfmpegArgs } = await import('./render.js');
 const { musicVideoEvents } = await import('./events.js');
+const { applyFilmLookFinish } = await import('./filmLookFinish.js');
 
 afterAll(cleanupTempDataRoots);
 
@@ -183,6 +184,21 @@ describe.skipIf(!hasFfmpeg)('shot segments', () => {
     await pruneSegments(after);
     expect(existsSync(before.segments[2].path)).toBe(false);
     expect(existsSync(after.segments[2].path)).toBe(true);
+  }, 60000);
+
+  it('tries a shot whose film look failed again before failing the render', async () => {
+    fixture.project = project({ id: 'mv-segments-retry-test', filmLook: { preset: 'vhs', grain: 0.7 } });
+    const plan = await planShotSegments(fixture.project);
+    applyFilmLookFinish.mockRejectedValueOnce(new Error('render seek timed out @ 0.021s'));
+    await renderMissingSegments(plan, { concurrency: 1 });
+    expect(plan.segments.every((s) => existsSync(s.path))).toBe(true);
+
+    const again = await planShotSegments(project({ id: 'mv-segments-retry-test', filmLook: { preset: 'vhs', grain: 0.8 } }));
+    // A shot that fails both times fails the render.
+    applyFilmLookFinish.mockClear().mockRejectedValue(new Error('stalled'));
+    await expect(renderMissingSegments(again, { concurrency: 1 })).rejects.toThrow(/stalled/);
+    expect(applyFilmLookFinish).toHaveBeenCalledTimes(4);
+    applyFilmLookFinish.mockResolvedValue(true);
   }, 60000);
 
   it('lists a look rendered only shot by shot, and drops an un-pinned shot\'s old look', async () => {
