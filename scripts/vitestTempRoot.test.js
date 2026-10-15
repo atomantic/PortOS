@@ -9,28 +9,30 @@ import { isProcessAlive } from '../server/test/processAlive.js';
 
 describe('real workspace runner temp lifecycle', () => {
   const workspace = 'server';
-  for (const outcome of ['success', 'failure', 'leak']) {
-    it(`${workspace} removes framework scratch on ${outcome}, preserving host artifacts`, () => {
-      const host = mkdtempSync(join(tmpdir(), 'vrt-'));
-      try {
-        // Even nanoid-looking pre-existing directories belong to the host.
-        const untouched = 'A'.repeat(21);
-        mkdirSync(join(host, untouched));
-        writeFileSync(join(host, untouched, 'keep'), 'host data');
-        const body = outcome === 'failure' ? "expect(true).toBe(false);"
-          : outcome === 'leak' ? "writeFileSync(join(tmpdir(), 'fixture-leak'), 'unexpected');"
-            : 'expect(true).toBe(true);';
-        const { args, options } = createVitestTempFixture(host, workspace, body);
-        const result = spawnSync(process.execPath, args, options);
-        expect(result.error).toBeUndefined();
-        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(outcome === 'success' ? 0 : 1);
-        if (outcome === 'leak') expect(result.stderr).toContain('test temp leak: fixture-leak');
-        expect(readdirSync(host).sort()).toEqual([untouched, 'fixture'].sort());
-      } finally {
-        rmSync(host, { recursive: true, force: true });
-      }
-    }, 25000);
-  }
+  describe.each(['vitest.config.js', 'vitest.config.db.js'])('%s', (config) => {
+    for (const outcome of ['success', 'failure', 'leak']) {
+      it(`${workspace} removes framework scratch on ${outcome}, preserving host artifacts`, () => {
+        const host = mkdtempSync(join(tmpdir(), 'vrt-'));
+        try {
+          // Even nanoid-looking pre-existing directories belong to the host.
+          const untouched = 'A'.repeat(21);
+          mkdirSync(join(host, untouched));
+          writeFileSync(join(host, untouched, 'keep'), 'host data');
+          const body = outcome === 'failure' ? "expect(true).toBe(false);"
+            : outcome === 'leak' ? "writeFileSync(join(tmpdir(), 'fixture-leak'), 'unexpected');"
+              : 'expect(true).toBe(true);';
+          const { args, options } = createVitestTempFixture(host, workspace, body, config);
+          const result = spawnSync(process.execPath, args, options);
+          expect(result.error).toBeUndefined();
+          expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(outcome === 'success' ? 0 : 1);
+          if (outcome === 'leak') expect(result.stderr).toContain('test temp leak: fixture-leak');
+          expect(readdirSync(host).sort()).toEqual([untouched, 'fixture'].sort());
+        } finally {
+          rmSync(host, { recursive: true, force: true });
+        }
+      }, 25000);
+    }
+  });
 
   it('reuses config ownership on reimport and reclaims it after interruption, preserving a live owner', async () => {
     const host = mkdtempSync(join(tmpdir(), 'vrt-'));

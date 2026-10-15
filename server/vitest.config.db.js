@@ -1,5 +1,10 @@
 import { defineConfig } from 'vitest/config';
+import { fileURLToPath } from 'node:url';
 import { DB_TEST_INCLUDE } from '../scripts/lib/dbTestFiles.js';
+import { bootstrapVitestTempRoot } from '../scripts/lib/vitestTempRoot.js';
+
+// This independent runner owns the same fixture/browser scratch as npm test.
+const RUN_TEMP_ROOT = bootstrapVitestTempRoot();
 
 // Same reason as vitest.config.js: an inherited NODE_ENV (PM2 exports
 // 'development') is NOT overridden by vitest's own default, and the DB guards
@@ -37,12 +42,18 @@ export default defineConfig({
     testTimeout: process.platform === 'win32' ? 30000 : 15000,
     // Explicit 'vitest' imports only, matching vitest.config.js (#9049).
     globals: false,
+    globalSetup: [fileURLToPath(new URL('../scripts/vitestTempRootSetup.js', import.meta.url))],
     setupFiles: ['./vitest.setup.js'],
     // One file at a time — these suites assume exclusive access to their tables.
     fileParallelism: false,
     env: {
       NODE_ENV: 'test',
       PGDATABASE: process.env.PGTESTDATABASE || 'portos_test',
+      NODE_DISABLE_COMPILE_CACHE: '1',
+      TMPDIR: RUN_TEMP_ROOT,
+      TMP: RUN_TEMP_ROOT,
+      TEMP: RUN_TEMP_ROOT,
+      MAC_CHROMIUM_TMPDIR: RUN_TEMP_ROOT,
     },
     include: DB_TEST_INCLUDE,
     exclude: [
