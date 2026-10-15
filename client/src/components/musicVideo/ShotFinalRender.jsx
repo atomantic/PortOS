@@ -74,7 +74,7 @@ export default function ShotFinalRender({ project, scene, onChange, fieldId }) {
           )}
         </span>
       </div>
-      {status.error && <p className="break-words text-[11px] text-port-warning">{status.error.message}</p>}
+      {status.error && <p role="status" className="break-words text-[11px] text-port-warning">{status.error.message}</p>}
       {live?.state === 'failed' && live.error && <p role="alert" className="break-words text-[11px] text-port-error">{live.error}</p>}
       {playing && file && (
         // The rendered shot as the final render cuts it: film look and text, without the song.
