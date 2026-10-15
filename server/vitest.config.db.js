@@ -38,6 +38,8 @@ export { DB_TEST_INCLUDE } from '../scripts/lib/dbTestFiles.js';
  * checkHealth consumer is left out.
  */
 export default defineConfig({
+  // Anchor to the config, even when --root or the caller cwd differs.
+  cacheDir: fileURLToPath(new URL('./.cache/vitest-db', import.meta.url)),
   test: {
     // Environment teardown also owns collection-only/skipped suite fixtures.
     environment: fileURLToPath(new URL('./test/mediaRegistryEnvironment.js', import.meta.url)),

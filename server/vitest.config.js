@@ -40,6 +40,8 @@ process.env.NODE_ENV = 'test';
 process.env.NODE_DISABLE_COMPILE_CACHE = '1';
 
 const config = defineConfig({
+  // Anchor to the config, even when --root or the caller cwd differs.
+  cacheDir: fileURLToPath(new URL('./.cache/vitest', import.meta.url)),
   test: {
     // Environment teardown also owns collection-only/skipped suite fixtures.
     environment: fileURLToPath(new URL('./test/mediaRegistryEnvironment.js', import.meta.url)),
@@ -197,5 +199,5 @@ const config = defineConfig({
 // Both projects share the safety env, setup files and time budgets. The
 // root globalSetup owns one temp root across BOTH groups; project teardown
 // must not remove it while another group still needs it.
-config.test.projects = vitestCaptureProjects(config.test);
+config.test.projects = vitestCaptureProjects(config.test, { cacheDir: config.cacheDir });
 export default config;
