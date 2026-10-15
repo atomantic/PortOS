@@ -23,7 +23,7 @@ import { assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy
  */
 
 import { setSceneLastFailure } from './takes.js';
-import { droppedTakeAssets, fileMusicVideoMedia } from './mediaPool.js';
+import { droppedTakeAssets, fileMusicVideoMedia, assertNewMediaSelections } from './mediaPool.js';
 import { presentMusicVideoDependencies, retainMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
 import { createRecordStoreBackendSelector } from '../../lib/pgFileFacade.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
@@ -40,6 +40,14 @@ const { selectBackend, getBackendName } = createRecordStoreBackendSelector({
   loadDbBackend: () => import('./projectsDB.js'),
   requireDbMessage: 'Music Video requires PostgreSQL — run `npm run setup:db` (dev/test only: set PGMODE=file in .env)',
 });
+
+/** Pool deletion joins the actual backend write boundary and cleans up without re-entering it. */
+export async function withProjectMediaMutation(work) {
+  const backend = await selectBackend();
+  return backend.withProjectMutation(({ mutateProjectRecord: mutateAdmitted }) => work({
+    mutateProjectRecord: (id, transform) => mutateProjectRecordAdmitted(id, transform, {}, mutateAdmitted),
+  }));
+}
 
 /** Name of the active backend, or null before first call (for diagnostics/tests). */
 export function getProjectsBackendName() {
@@ -189,9 +197,14 @@ export async function updateProject(id, patch) {
   const needsSnapshot = seeded?.concept?.universeId !== undefined || seeded?.concept?.characterStyleId !== undefined
     || seeded?.visualSpec?.moodBoardId !== undefined;
   const resolved = needsSnapshot ? await withStyleSnapshots(seeded, await backend.getProject(id)) : seeded;
-  const next = await backend.updateProject(id, resolved);
-  emitRecordUpdated('musicVideoProject', id);
-  return next;
+  if (!Array.isArray(resolved.scenes)) {
+    const next = await backend.updateProject(id, resolved);
+    emitRecordUpdated('musicVideoProject', id);
+    return next;
+  }
+  const { applyProjectPatch } = await import('./projectsLogic.js');
+  const { project } = await mutateProjectRecord(id, current => ({ project: applyProjectPatch(current, resolved) }));
+  return project;
 }
 
 /**
@@ -353,16 +366,12 @@ export async function markMediaPoolAssets(id, keys, mark) {
 // Append candidate takes to one scene: `{ scene, appended }`. A take fills its
 // slot only while the slot is empty — never replaces a selection (takes.js).
 export async function appendSceneTakes(id, sceneId, inputs) {
-  if (inputs.some(input => input.source === 'generated')) {
-    const { appendSceneTakes: append } = await import('./takes.js');
-    const outcome = await mutateProjectRecord(id, current => append(current, sceneId, inputs), { source: 'generation-completion' });
-    await fileAppendedTakes(outcome.project, outcome.appended.map(take => ({ sceneId, take })));
-    return { scene: outcome.project.scenes.find(scene => scene.sceneId === sceneId), appended: outcome.appended };
-  }
-  const result = await (await selectBackend()).appendSceneTakes(id, sceneId, inputs);
-  emitRecordUpdated('musicVideoProject', id);
-  await fileAppendedTakes(await getProject(id), result.appended.map(take => ({ sceneId, take })));
-  return result;
+  const { appendSceneTakes: append } = await import('./takes.js');
+  const outcome = await mutateProjectRecord(id, current => append(current, sceneId, inputs), {
+    source: inputs.some(input => input.source === 'generated') ? 'generation-completion' : null,
+  });
+  await fileAppendedTakes(outcome.project, outcome.appended.map(take => ({ sceneId, take })));
+  return { scene: outcome.project.scenes.find(scene => scene.sceneId === sceneId), appended: outcome.appended };
 }
 
 // Every take that lands also lands in the project's own collection (mediaPool.js).
@@ -382,8 +391,8 @@ export async function recordSceneFailure(id, sceneId, failure) {
 
 /** Append takes across scenes in one write (handoff import): `{ project, appended }`. */
 export async function appendTakesAcrossScenes(id, items) {
-  const result = await (await selectBackend()).appendTakesAcrossScenes(id, items);
-  emitRecordUpdated('musicVideoProject', id);
+  const { appendTakesAcrossScenes: append } = await import('./takes.js');
+  const result = await mutateProjectRecord(id, current => append(current, items));
   await fileAppendedTakes(result.project, result.appended.filter(Boolean));
   return result;
 }
@@ -483,10 +492,15 @@ export async function reviewSceneTake(id, sceneId, takeId, review) {
  * resolves to that outcome with the persisted project. Used by the treatment
  * service (#8980) so its revision checks run against the freshest record.
  */
-export async function mutateProjectRecord(id, transform, { source = null } = {}) {
+export function mutateProjectRecord(id, transform, options = {}) {
+  return mutateProjectRecordAdmitted(id, transform, options);
+}
+
+async function mutateProjectRecordAdmitted(id, transform, { source = null } = {}, mutate = null) {
   const { preserveAutomatedShotLocks } = source ? await import('./productionReview.js') : {};
   let dropped = null;
-  const outcome = await (await selectBackend()).mutateProjectRecord(id, (current) => {
+  const write = mutate || (await selectBackend()).mutateProjectRecord;
+  const outcome = await write(id, async (current) => {
     const outcome = transform(current);
     if (source) {
       const guarded = preserveAutomatedShotLocks(current, outcome.project, source);
@@ -499,6 +513,7 @@ export async function mutateProjectRecord(id, transform, { source = null } = {})
         if ('replaced' in outcome) outcome.replaced = 0;
       }
     }
+    await assertNewMediaSelections(current, outcome.project);
     dropped = { project: current, assets: droppedTakeAssets(current, outcome.project) };
     return { ...outcome, project: retainMusicVideoDependencies(current, outcome.project) };
   });

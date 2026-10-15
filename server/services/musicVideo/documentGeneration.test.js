@@ -1,7 +1,7 @@
 // Creative approval behavior is covered through production review routes and orchestration.
 vi.mock('./productionReview.js', async (load) => ({ ...await load(), assertProductionApproval: vi.fn() }));
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
@@ -356,7 +356,9 @@ describe('treatment-driven mixed-media document authoring', () => {
   it('preflights selected media before a provider call and stages a reviewable 30-second document', async () => {
     const id = await fixture();
     const original = await projects.getProject(id);
+    await writeFile(join(PATHS.images, 'missing.png'), 'synthetic still');
     await projects.mutateProjectRecord(id, (current) => ({ project: { ...current, scenes: current.scenes.map((s) => s.sceneId === 's-still' ? { ...s, referenceImageId: 'missing.png' } : s) } }));
+    await unlink(join(PATHS.images, 'missing.png')); // model a legacy selection whose file was removed
     await expect(generateMixedMediaDocument(id)).rejects.toMatchObject({ code: 'COMPOSITION_MEDIA_MISSING' });
     expect(h.calls).toBe(0);
     await projects.mutateProjectRecord(id, (current) => ({ project: { ...current, scenes: original.scenes } }));

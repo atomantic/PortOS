@@ -534,11 +534,11 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     const master = join(PATHS.music, 'timed-master.wav');
     execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=1.5', master]);
     const created = await projects.createProject({ name: 'Synthetic shot timing' });
+    await writeFile(join(PATHS.data, 'video-history.json'), JSON.stringify([{ id: 'vh-timed', filename: 'timed-rgb.webm', numFrames: 36, fps: 24, width: 64, height: 36 }]));
     await projects.mutateProjectRecord(created.id, current => ({ project: { ...current,
       audioAnalysis: { durationSec: 1.5, sections: [] },
       scenes: [{ sceneId: 'timed', startSec: 0, endSec: 1.5, videoHistoryId: 'vh-timed', ...timing }],
     } }));
-    await writeFile(join(PATHS.data, 'video-history.json'), JSON.stringify([{ id: 'vh-timed', filename: 'timed-rgb.webm', numFrames: 36, fps: 24, width: 64, height: 36 }]));
     await importDocumentTemplate(created.id);
     const project = await projects.getProject(created.id);
     const outputPath = join(PATHS.videos, 'timed-output.mp4');
@@ -567,11 +567,11 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
       '-f', 'lavfi', '-i', 'color=c=blue:s=64x36:r=24:d=0.5',
       '-filter_complex', '[0:v][1:v][2:v]concat=n=3:v=1:a=0', '-c:v', 'libvpx', clip]);
     const created = await projects.createProject({ name: 'Synthetic live shot timing' });
+    await writeFile(join(PATHS.data, 'video-history.json'), JSON.stringify([{ id: 'vh-live', filename: 'live-timed-rgb.webm', numFrames: 36, fps: 24, width: 64, height: 36 }]));
     await projects.mutateProjectRecord(created.id, current => ({ project: { ...current,
       audioAnalysis: { durationSec: 1.5, sections: [] },
       scenes: [{ sceneId: 'timed', startSec: 0, endSec: 1.5, videoHistoryId: 'vh-live', ...timing }],
     } }));
-    await writeFile(join(PATHS.data, 'video-history.json'), JSON.stringify([{ id: 'vh-live', filename: 'live-timed-rgb.webm', numFrames: 36, fps: 24, width: 64, height: 36 }]));
     await importDocumentTemplate(created.id);
     const preview = await buildDocumentPreview(await projects.getProject(created.id));
     const page = await browser.newPage();
@@ -612,12 +612,12 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     const master = join(PATHS.music, 'master.wav');
     execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=6', master]);
     const created = await projects.createProject({ name: 'Excerpt' });
+    await writeFile(join(PATHS.data, 'video-history.json'), JSON.stringify([{ id: 'vh-rgb', filename: 'rgb.webm', numFrames: 72, fps: 24, width: 640, height: 360 }]));
     await projects.mutateProjectRecord(created.id, (current) => ({ project: {
       ...current,
       audioAnalysis: { durationSec: 6, beats: [], downbeats: [], sections: [] },
       scenes: [{ sceneId: 'rgb', order: 0, startSec: 0, endSec: 3, videoHistoryId: 'vh-rgb' }],
     } }));
-    await writeFile(join(PATHS.data, 'video-history.json'), JSON.stringify([{ id: 'vh-rgb', filename: 'rgb.webm', numFrames: 72, fps: 24, width: 640, height: 360 }]));
     await importDocumentTemplate(created.id);
     const project = await projects.getProject(created.id);
     const plan = await prepareDocumentRender(project);
@@ -870,6 +870,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     const master = join(PATHS.music, 'generated-master.wav');
     execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=3', master]);
     const created = await projects.createProject({ name: 'Generated Example' });
+    await writeFile(join(PATHS.data, 'video-history.json'), JSON.stringify([{ id: 'vh-generated', filename: 'generated-rgb.webm', numFrames: 72, fps: 24, width: 640, height: 360 }]));
     await projects.mutateProjectRecord(created.id, (current) => ({ project: {
       ...current,
       audioAnalysis: { durationSec: 3, beats: [0, 1, 2], downbeats: [0, 1, 2], sections: [
@@ -889,7 +890,6 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
         ] },
       ],
     } }));
-    await writeFile(join(PATHS.data, 'video-history.json'), JSON.stringify([{ id: 'vh-generated', filename: 'generated-rgb.webm', numFrames: 72, fps: 24, width: 640, height: 360 }]));
     author.calls = 0;
     const staged = await generateMixedMediaDocument(created.id);
     expect(author.calls).toBe(1);

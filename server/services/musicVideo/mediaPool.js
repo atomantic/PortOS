@@ -106,6 +106,26 @@ function forgetPoolAssets(project, keys) {
 const usedKeys = (project) => new Set((project?.scenes || []).flatMap((scene) => Object.entries(TAKE_SLOT)
   .map(([slot, field]) => (scene[field] ? `${KIND_OF_SLOT[slot]}:${scene[field]}` : null)).filter(Boolean)));
 
+/** Revalidate newly selected local media while project mutation admission is held.
+ * Existing missing selections and peer-qualified references retain their legacy semantics.
+ */
+export async function assertNewMediaSelections(before, after) {
+  const previous = usedKeys(before);
+  const added = [...usedKeys(after)].filter(key => !previous.has(key));
+  if (!added.length) return;
+  const [{ resolveGalleryImage }, { getHistoryItem }, { ServerError }] = await Promise.all([
+    import('../../lib/pathSafety.js'), import('../videoGen/history.js'), import('../../lib/errorHandler.js'),
+  ]);
+  for (const key of added) {
+    const separator = key.indexOf(':');
+    const kind = key.slice(0, separator);
+    const assetId = key.slice(separator + 1);
+    if (assetId.includes(':') || assetId.includes('/')) continue;
+    const exists = kind === 'image' ? resolveGalleryImage(assetId) : await getHistoryItem(assetId);
+    if (!exists) throw new ServerError(`${kind === 'image' ? 'Image' : 'Video'} not found in this install's media library`, { status: 400, code: 'TAKE_ASSET_NOT_FOUND' });
+  }
+}
+
 /** Each `<kind>:<id>` a shot uses now, mapped to the shots using it (still, clip or end frame slot), in board order. */
 const shotsUsing = (project) => {
   const using = new Map();
@@ -256,7 +276,7 @@ export async function searchMusicVideoMediaPool(project, query) {
  * takes, marks, collection rows), in one pass per project, so nothing points
  * at a file that is gone. Best-effort, like the other filing.
  */
-export async function forgetDeletedMusicVideoAssets(keys) {
+export async function forgetDeletedMusicVideoAssets(keys, { mutateProjectRecord: admittedMutation } = {}) {
   const gone = new Set(keys);
   try {
     const [{ listProjects, mutateProjectRecord }, { getCollection, musicVideoCollectionId, bulkUpdateCollectionItems }] = await Promise.all([
@@ -266,7 +286,7 @@ export async function forgetDeletedMusicVideoAssets(keys) {
       const held = Object.keys(project.assetMarks || {}).some((key) => gone.has(key))
         || (project.scenes || []).some((scene) => (scene.takes || []).some((take) => gone.has(`${KIND_OF_SLOT[take?.kind]}:${take?.assetId}`)));
       // The take removal files dropped takes into the collection, so the rows go after it.
-      if (held) await mutateProjectRecord(project.id, (current) => forgetPoolAssets(current, keys));
+      if (held) await (admittedMutation || mutateProjectRecord)(project.id, (current) => forgetPoolAssets(current, keys));
       const collection = await getCollection(musicVideoCollectionId(project.id)).catch(() => null);
       const rows = (collection?.items || []).map((item) => `${item.kind}:${item.ref}`).filter((key) => gone.has(key));
       if (rows.length) await bulkUpdateCollectionItems(collection.id, { remove: rows });
@@ -283,22 +303,36 @@ export async function forgetDeletedMusicVideoAssets(keys) {
  * the batch on every music video (forgetDeletedMusicVideoAssets).
  */
 export async function deleteMusicVideoPoolAssets(project, items) {
+  const { withProjectMediaMutation, getProject, listProjects } = await import('./projects.js');
   const { ServerError } = await import('../../lib/errorHandler.js');
-  const pool = new Set((await getMusicVideoMediaPool(project)).items.map((item) => `${item.kind}:${item.assetId}`));
-  // A shot on any music video using it keeps it, not only this video's shots.
-  const { listProjects } = await import('./projects.js');
-  const usedAnywhere = new Set((await listProjects()).flatMap((other) => [...usedKeys(other)]));
-  const keys = items.map((item) => `${item.kind}:${item.assetId}`);
-  const refused = keys.filter((key) => !pool.has(key) || usedAnywhere.has(key));
-  if (refused.length) {
-    throw new ServerError(`${refused.length} of these ${refused.length === 1 ? 'is' : 'are'} on a shot or not made for this video`, { status: 409, code: 'POOL_ASSET_IN_USE' });
-  }
-  const [{ deleteGalleryImage }, { deleteHistoryItem }] = await Promise.all([
-    import('../galleryImageDeletion.js'), import('../videoGen/historyOps.js'),
-  ]);
-  for (const item of items) {
-    await (item.kind === 'image' ? deleteGalleryImage : deleteHistoryItem)(item.assetId, { forgetInMusicVideos: false });
-  }
-  await forgetDeletedMusicVideoAssets(keys);
-  return { deleted: items.length };
+  const { withBackupAssetPublication } = await import('../../lib/backupSnapshotBoundary.js');
+  // Backup admission precedes the project boundary, matching gallery/history
+  // deletion; one lease covers physical deletion and project cleanup.
+  return withBackupAssetPublication(() => withProjectMediaMutation(async (admitted) => {
+    const current = await getProject(project.id);
+    if (!current) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+    const pool = new Set((await getMusicVideoMediaPool(current)).items.map((item) => `${item.kind}:${item.assetId}`));
+    // A shot on any music video using it keeps it, not only this video's shots.
+    const usedAnywhere = new Set((await listProjects()).flatMap((other) => [...usedKeys(other)]));
+    const keys = items.map((item) => `${item.kind}:${item.assetId}`);
+    const refused = keys.filter((key) => !pool.has(key) || usedAnywhere.has(key));
+    if (refused.length) {
+      throw new ServerError(`${refused.length} of these ${refused.length === 1 ? 'is' : 'are'} on a shot or not made for this video`, { status: 409, code: 'POOL_ASSET_IN_USE' });
+    }
+    const [{ deleteGalleryImage }, { deleteHistoryItem }] = await Promise.all([
+      import('../galleryImageDeletion.js'), import('../videoGen/historyOps.js'),
+    ]);
+    const deleted = [];
+    try {
+      for (const item of items) {
+        await (item.kind === 'image' ? deleteGalleryImage : deleteHistoryItem)(item.assetId, { forgetInMusicVideos: false });
+        deleted.push(`${item.kind}:${item.assetId}`);
+      }
+    } finally {
+      // Even when a later deletion fails, forget the completed prefix. Keep the
+      // failed item's evidence, and let the original error reach the caller.
+      if (deleted.length) await forgetDeletedMusicVideoAssets(deleted, admitted);
+    }
+    return { deleted: deleted.length };
+  }));
 }
