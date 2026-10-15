@@ -22,7 +22,7 @@
 import { createHash, randomUUID } from 'crypto';
 import { existsSync } from 'fs';
 import { copyFile, mkdir, readdir, rename, rm, stat, writeFile } from 'fs/promises';
-import { availableParallelism, tmpdir } from 'os';
+import { availableParallelism, tmpdir, totalmem } from 'os';
 import { join } from 'path';
 import { PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -279,8 +279,17 @@ async function renderShotBase(plan, segment, outputPath, { jobId, signal, onProg
   }
 }
 
+// Each segment in flight may hold a film-look browser (about one core, since
+// the filter rasterizes serially) and an encoder. Two thirds of the cores keep
+// the server and the user's own apps responsive; the memory term keeps a small
+// machine from running out of RAM with a browser per shot.
+const SEGMENT_MAX_CONCURRENCY = 12;
+const SEGMENT_BYTES_EACH = 3 * 1024 ** 3;
+
 /** How many segments render at once: each may hold a browser and an encoder. */
-export const segmentConcurrency = ({ cores = availableParallelism() } = {}) => Math.max(1, Math.min(3, Math.floor(cores / 4)));
+export const segmentConcurrency = ({ cores = availableParallelism(), memoryBytes = totalmem() } = {}) => Math.max(1, Math.min(
+  SEGMENT_MAX_CONCURRENCY, Math.floor((cores * 2) / 3), Math.floor(memoryBytes / SEGMENT_BYTES_EACH),
+));
 
 /**
  * Render every missing segment of `plan` (`concurrency` at a time). `onProgress`
