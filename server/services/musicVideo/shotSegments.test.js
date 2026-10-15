@@ -160,4 +160,28 @@ describe.skipIf(!hasFfmpeg)('shot segments', () => {
     expect(existsSync(wholePath)).toBe(false);
     expect(probe(join(planB.dir, partial.name), 'stream=nb_read_frames')).toContain('24');
   }, 60000);
+
+  it('deletes the look in use from a cache made before looks were listed, and drops a pinned shot\'s old look', async () => {
+    fixture.project = project({ filmLook: { preset: 'polaroid', grain: 0.4 } });
+    const plan = await planShotSegments(fixture.project);
+    await renderMissingSegments(plan, { concurrency: 2 });
+    rmSync(join(plan.dir, 'looks.json'));
+    const listed = await listFilmLooks(fixture.project.id);
+    const inUse = listed.looks.find((l) => l.current);
+    expect(inUse.rendered).toBe(3);
+    rmSync(join(plan.dir, 'looks.json'));
+    const left = await deleteFilmLook(fixture.project.id, inUse.id);
+    expect(plan.segments.some((s) => existsSync(s.path))).toBe(false);
+    expect(left.looks.map((l) => l.rendered)).toEqual([0]);
+
+    // A shot's own look keeps only its current file once it changes.
+    const pin = (grain) => project({ scenes: project().scenes.map((sc) => (sc.sceneId === 'c' ? { ...sc, filmLook: { preset: 'polaroid', grain } } : sc)) });
+    const before = await planShotSegments(pin(0.2));
+    await renderMissingSegments(before, { concurrency: 2 });
+    const after = await planShotSegments(pin(0.5));
+    await renderMissingSegments(after, { concurrency: 2 });
+    await pruneSegments(after);
+    expect(existsSync(before.segments[2].path)).toBe(false);
+    expect(existsSync(after.segments[2].path)).toBe(true);
+  }, 60000);
 });

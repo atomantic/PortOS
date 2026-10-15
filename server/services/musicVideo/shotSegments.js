@@ -254,7 +254,6 @@ async function renderSegmentFiles(plan, segment, { signal, onProgress }) {
         label: `Music-video film look ${segment.outro ? 'ending card' : `shot ${segment.sceneId.slice(0, 8)}`}`,
         onProgress: (f) => onProgress?.(1 - lookShare + f * lookShare) });
       await rename(partial, segment.path);
-      if (!segment.ownLook) await rememberFilmLook(plan.dir, segment.look);
     } catch (err) {
       await rm(partial, { force: true }).catch(() => {});
       if (signal.aborted) throw Object.assign(new Error('Render cancelled'), { code: 'CANCELED' });
@@ -304,6 +303,9 @@ export const segmentConcurrency = ({ cores = availableParallelism(), memoryBytes
  * reports the share of frames ready, counting cached ones as done.
  */
 export async function renderMissingSegments(plan, { signal, onProgress, concurrency = segmentConcurrency() } = {}) {
+  // The video's look is listed even when every one of its shots was cached already.
+  const videoLook = videoLookSegments(plan).find((s) => s.look)?.look;
+  if (videoLook) await rememberFilmLook(plan.dir, videoLook);
   const all = [...plan.segments, ...(plan.outro ? [plan.outro] : [])];
   const total = all.reduce((sum, s) => sum + s.frames, 0) || 1;
   const done = new Map(all.map((s) => [s, existsSync(s.path) ? 1 : 0]));
@@ -381,18 +383,21 @@ export async function stitchSegments(plan, outputPath, { signal, segments = [...
 
 /**
  * Remove cached files the current plan no longer uses: older takes of each
- * shot, with every look rendered over them. Other looks over a current take
- * stay, so a look can be restored without rendering (deleteFilmLook drops one).
+ * shot, with every look rendered over them. Other video looks over a current
+ * take stay, so a look can be restored without rendering (deleteFilmLook drops
+ * one). The rendered-so-far previews are replaced by their own builder.
  */
 export async function pruneSegments(plan) {
   const keep = new Set([...plan.segments, ...(plan.outro ? [plan.outro] : [])].flatMap((s) => [s.path, s.basePath]));
-  const bases = new Set([...plan.segments, ...(plan.outro ? [plan.outro] : [])].map((s) => `${s.outro ? 'outro-' : ''}${s.baseKey}`));
+  // Only takes that play the video's look keep its other looks; a shot's own
+  // look keeps just its current file, as before.
+  const bases = new Set(videoLookSegments(plan).map((s) => `${s.outro ? 'outro-' : ''}${s.baseKey}`));
   const names = await readdir(plan.dir).catch(() => []);
   let removed = 0;
   for (const name of names) {
     const path = join(plan.dir, name);
     if (keep.has(path) || [...inFlight.keys()].some((p) => path.startsWith(p))) continue;
-    if (name.endsWith('.partial.mp4') || name === LOOKS_FILE) continue;
+    if (name.endsWith('.partial.mp4') || name === LOOKS_FILE || name.startsWith('preview-')) continue;
     const look = /^((?:outro-)?[0-9a-f]{32})-[0-9a-f]{32}\.mp4$/.exec(name);
     if (look && bases.has(look[1])) continue;
     await rm(path, { force: true }).then(() => { removed += 1; }, () => {});
@@ -607,7 +612,10 @@ export async function listFilmLooks(projectId) {
   const stored = await readFilmLooks(plan.dir);
   const current = normalizeFilmLook(project.filmLook);
   const currentId = current && !isFilmLookNeutral(current) ? filmLookId(current) : null;
-  if (currentId && !stored[currentId]) stored[currentId] = { look: current, savedAt: null };
+  if (currentId && !stored[currentId]) {
+    await rememberFilmLook(plan.dir, current);
+    stored[currentId] = { look: current, savedAt: new Date().toISOString() };
+  }
   const segments = videoLookSegments(plan);
   const looks = [];
   for (const [id, entry] of Object.entries(stored)) {
@@ -629,13 +637,14 @@ export async function listFilmLooks(projectId) {
 /** Delete one cached look's files over the current takes, and forget it. */
 export async function deleteFilmLook(projectId, lookId) {
   if (typeof lookId !== 'string' || !/^[0-9a-f]{32}$/.test(lookId)) throw new ServerError('Invalid film look id', { status: 400, code: 'VALIDATION_ERROR' });
-  const { plan } = await planForLooks(projectId);
+  const { project, plan } = await planForLooks(projectId);
   if (!plan || plan.error) throw new ServerError('This video has no shot renders to delete', { status: 409, code: 'NO_SHOT_RENDERS' });
   if ([...inFlight.keys()].some((path) => path.startsWith(plan.dir))) {
     throw new ServerError('Shots of this video are rendering. Delete the look after they finish, or stop the render', { status: 409, code: 'SHOT_RENDER_ACTIVE' });
   }
   const entry = (await readFilmLooks(plan.dir))[lookId];
-  const look = normalizeFilmLook(entry?.look);
+  const current = normalizeFilmLook(project.filmLook);
+  const look = normalizeFilmLook(entry?.look) || (current && filmLookId(current) === lookId ? current : null);
   let removed = 0;
   if (look) {
     for (const segment of videoLookSegments(plan)) {
