@@ -4,7 +4,7 @@
  * and glitches that cross a cut included), a tweak to one shot re-renders only
  * the segments it reaches, and a film look change keeps every base segment.
  */
-import { describe, it, expect, vi, afterAll, beforeAll } from 'vitest';
+import { describe, it, expect, vi, afterAll, afterEach, beforeAll } from 'vitest';
 import { execFileSync } from 'child_process';
 import { existsSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
@@ -30,12 +30,14 @@ vi.mock('./render.js', async (importOriginal) => {
 vi.mock('./filmLookFinish.js', () => ({ applyFilmLookFinish: vi.fn(async () => true) }));
 vi.mock('./projects.js', () => ({ getProject: vi.fn(async (id) => (id === fixture.project?.id ? fixture.project : null)) }));
 
-const { planShotSegments, renderMissingSegments, renderSegment, stitchSegments, pruneSegments, listFilmLooks, deleteFilmLook, buildRenderPreview } = await import('./shotSegments.js');
+const { planShotSegments, renderMissingSegments, renderSegment, segmentConcurrency, stitchSegments, pruneSegments, listFilmLooks, deleteFilmLook, buildRenderPreview } = await import('./shotSegments.js');
 const { buildMusicVideoFfmpegArgs } = await import('./render.js');
 const { musicVideoEvents } = await import('./events.js');
 const { applyFilmLookFinish } = await import('./filmLookFinish.js');
 
 afterAll(cleanupTempDataRoots);
+// A test that makes the look pass fail leaves it passing again for the next one.
+afterEach(() => { applyFilmLookFinish.mockReset(); applyFilmLookFinish.mockResolvedValue(true); });
 
 // Runs against the installed ffmpeg; skipped where none is on PATH (Linux CI).
 const hasFfmpeg = (() => { try { execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' }); execFileSync('ffprobe', ['-version'], { stdio: 'ignore' }); return true; } catch { return false; } })();
@@ -67,6 +69,21 @@ beforeAll(() => {
     footage('b', join(media, 'b.mp4')),
     footage('c', join(media, 'c.mp4')),
   ];
+});
+
+describe('segmentConcurrency', () => {
+  const GB = 1024 ** 3;
+  it('renders at most four shots at once, fewer on a small machine', () => {
+    expect(segmentConcurrency({ cores: 18, memoryBytes: 128 * GB, override: undefined })).toBe(4);
+    expect(segmentConcurrency({ cores: 4, memoryBytes: 128 * GB, override: undefined })).toBe(2);
+    expect(segmentConcurrency({ cores: 18, memoryBytes: 4 * GB, override: undefined })).toBe(1);
+  });
+  it('takes a positive override, capped at 32, and ignores anything else', () => {
+    expect(segmentConcurrency({ cores: 18, memoryBytes: 128 * GB, override: '6' })).toBe(6);
+    expect(segmentConcurrency({ cores: 18, memoryBytes: 128 * GB, override: '99' })).toBe(32);
+    expect(segmentConcurrency({ cores: 18, memoryBytes: 128 * GB, override: '0' })).toBe(4);
+    expect(segmentConcurrency({ cores: 18, memoryBytes: 128 * GB, override: 'many' })).toBe(4);
+  });
 });
 
 describe.skipIf(!hasFfmpeg)('shot segments', () => {
@@ -198,7 +215,6 @@ describe.skipIf(!hasFfmpeg)('shot segments', () => {
     applyFilmLookFinish.mockClear().mockRejectedValue(new Error('stalled'));
     await expect(renderMissingSegments(again, { concurrency: 1 })).rejects.toThrow(/stalled/);
     expect(applyFilmLookFinish).toHaveBeenCalledTimes(4);
-    applyFilmLookFinish.mockResolvedValue(true);
   }, 60000);
 
   it('lists a look rendered only shot by shot, and drops an un-pinned shot\'s old look', async () => {
