@@ -239,6 +239,7 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
   const history = scenes.some((s) => sceneVisualLayer(s, { layered }) === 'footage') ? await loadHistory() : [];
   const historyMap = new Map((Array.isArray(history) ? history : []).map((h) => [h.id, h]));
   const missing = [];
+  const missingShots = [];
   const missingStills = [];
   const untimed = [];
   const clips = [];
@@ -274,18 +275,18 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
     }
     const entry = historyMap.get(scene.videoHistoryId);
     const videoPath = entry && entry.filename ? safeUnder(PATHS.videos, entry.filename) : null;
-    if (!entry || !videoPath || !existsSync(videoPath)) { missing.push(scene.videoHistoryId); continue; }
+    if (!entry || !videoPath || !existsSync(videoPath)) { missing.push(scene.videoHistoryId); missingShots.push(scene.sceneId); continue; }
     // Hosted renders (Grok/fal/reactor) record no frame count or dimensions;
     // measure the file itself rather than reject a clip that exists (#8977).
     const measured = entry.numFrames && entry.fps && entry.width && entry.height
       ? entry
       : { ...entry, ...(await probeVideoGeometry(videoPath)) };
     const duration = measured.numFrames && measured.fps ? measured.numFrames / measured.fps : null;
-    if (!duration || duration <= 0) { missing.push(scene.videoHistoryId); continue; }
+    if (!duration || duration <= 0) { missing.push(scene.videoHistoryId); missingShots.push(scene.sceneId); continue; }
     // A dimensionless history entry would make buildMusicVideoFfmpegArgs emit
     // `scale=undefined:undefined` (opaque ffmpeg failure); treat it as a missing
     // clip so the caller gets the clean MISSING_CLIPS 4xx, matching the duration guard.
-    if (!measured.width || measured.width <= 0 || !measured.height || measured.height <= 0) { missing.push(scene.videoHistoryId); continue; }
+    if (!measured.width || measured.width <= 0 || !measured.height || measured.height <= 0) { missing.push(scene.videoHistoryId); missingShots.push(scene.sceneId); continue; }
     const edit = performanceEdit(scene);
     const sourceInSec = edit ? Math.min(edit.inSec, duration) : 0;
     const sourceOutSec = edit ? Math.min(edit.outSec, duration) : duration;
@@ -328,17 +329,18 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
     });
   }
   if (missing.length > 0) {
-    throw new ServerError(`Missing source clips for ${missing.length} scene(s)`, {
+    const one = missing.length === 1;
+    throw new ServerError(`${nameShots(project, missingShots)}: the selected clip file ${one ? 'is' : 'are'} missing or unreadable. Pick another take or render a new one`, {
       status: 404, code: 'MISSING_CLIPS', context: { missingClipIds: missing },
     });
   }
   if (missingStills.length > 0) {
-    throw new ServerError(`${missingStills.length} still section(s) have no reference frame — generate or pick one first`, {
+    throw new ServerError(`${nameShots(project, missingStills)}: no still frame to show. Generate or pick one first`, {
       status: 404, code: 'MISSING_STILLS', context: { sceneIds: missingStills },
     });
   }
   if (untimed.length > 0) {
-    throw new ServerError(`${untimed.length} still or card section(s) need a start and end time`, {
+    throw new ServerError(`${nameShots(project, untimed)}: give ${untimed.length === 1 ? 'this still or card' : 'these stills or cards'} a start and end time`, {
       status: 422, code: 'UNTIMED_SECTIONS', context: { sceneIds: untimed },
     });
   }
@@ -783,7 +785,7 @@ export async function planMusicVideoRender(project, { draft = false } = {}) {
   const shortfalls = findCoverageShortfalls(snapped);
   if (shortfalls.length > 0) {
     throw new ServerError(
-      `${shortfalls.length} shot${shortfalls.length === 1 ? ' is' : 's are'} longer than ${shortfalls.length === 1 ? 'its' : 'their'} source clip — trim, continue, replace, or loop ${shortfalls.length === 1 ? 'it' : 'them'} before rendering`,
+      `${nameShots(project, shortfalls.map((entry) => ({ sceneId: entry.sceneId, note: `${entry.shortBySec}s short` })))}: longer than ${shortfalls.length === 1 ? 'its' : 'their'} clip. Trim, continue, replace, or loop ${shortfalls.length === 1 ? 'it' : 'them'} before rendering`,
       { status: 422, code: 'INSUFFICIENT_CLIP_COVERAGE', context: { shortfalls, resolutions: COVERAGE_RESOLUTIONS } },
     );
   }

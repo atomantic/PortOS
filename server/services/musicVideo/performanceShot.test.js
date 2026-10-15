@@ -31,7 +31,8 @@ vi.mock('../videoGen/local.js', async () => {
 
 const { PATHS } = await import('../../lib/fileUtils.js');
 const { findFfmpeg, probeVideoStreamInfo } = await import('../../lib/ffmpeg.js');
-const { preparePerformanceShot, findStalePerformanceTakes, withDraftPerformanceFallbacks } = await import('./performanceShot.js');
+const { preparePerformanceShot, findStalePerformanceTakes, withDraftPerformanceFallbacks, assertCurrentPerformanceTakes } = await import('./performanceShot.js');
+const { setShotLocks } = await import('./productionReview.js');
 const fal = await import('../videoGen/fal.js');
 const { videoGenEvents } = await import('../videoGen/events.js');
 const { buildMusicVideoFfmpegArgs, beatSnapClips, resolveSceneClips } = await import('./render.js');
@@ -219,11 +220,16 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     expect(out.fps).toBe(24);
     expect(Math.abs(frames - 36)).toBeLessThanOrEqual(1);
 
-    // The take is only valid for the interval and recording it sang: a
-    // re-timed scene or a replaced song must be regenerated, not rendered.
+    // The take is only valid while it plays its sung audio under the song: a
+    // shot stretched at its end, or slid with an Offset that lines the take
+    // back up, still sings; a slide without one, or a speed change, does not.
     const songPath = join(PATHS.music, 'song.wav');
     expect(await findStalePerformanceTakes({ scenes: [withTake] }, songPath)).toEqual([]);
-    expect(await findStalePerformanceTakes({ scenes: [{ ...withTake, endSec: 22 }] }, songPath))
+    expect(await findStalePerformanceTakes({ scenes: [{ ...withTake, endSec: 22 }] }, songPath)).toEqual([]);
+    expect(await findStalePerformanceTakes({ scenes: [{ ...withTake, startSec: 20.5, offsetFrames: 12 }] }, songPath)).toEqual([]);
+    expect(await findStalePerformanceTakes({ scenes: [{ ...withTake, startSec: 20.5 }] }, songPath))
+      .toEqual([{ sceneId: 'mvs-1', reason: 'retimed' }]);
+    expect(await findStalePerformanceTakes({ scenes: [{ ...withTake, speedFps: 2 }] }, songPath))
       .toEqual([{ sceneId: 'mvs-1', reason: 'retimed' }]);
     // #9266: a re-master that changes the song OUTSIDE the take's window
     // (18.225–23.275) keeps the take; one that changes its sung window does not.
@@ -635,5 +641,25 @@ describe('draft fallbacks for stale performance shots', () => {
       ['a', 'cutaway', 'cut-2'], ['b', 'cutaway', null], ['c', 'cutaway', 'cut-3'],
     ]);
     expect(project.scenes[0].videoHistoryId).toBe('sync-1');
+  });
+});
+
+describe('the final render lip-sync gate', () => {
+  // Uniquely catches a refusal that does not name its shots, or a locked clip still blocking.
+  it('names the shots in song order with each reason, and lets a locked clip render as it plays', async () => {
+    const shot = (sceneId, startSec) => ({ sceneId, startSec, endSec: startSec + 2, shotMode: 'performance', prompt: 'a singer',
+      referenceImageId: `${sceneId}.png`, videoHistoryId: `${sceneId}-clip`,
+      takes: [{ takeId: `${sceneId}-t`, kind: 'video', assetId: `${sceneId}-clip`, sourceImageId: `${sceneId}.png`, status: 'selected' }] });
+    const project = { id: 'mv-1', scenes: [shot('late', 6), shot('early', 0), { ...shot('cut', 3), shotMode: 'cutaway' }] };
+    await expect(assertCurrentPerformanceTakes(project, 'unread.wav')).rejects.toMatchObject({
+      status: 422, code: 'STALE_PERFORMANCE_TAKES',
+      message: 'Shots 1 (not lip-synced), 3 (not lip-synced): the selected take no longer sings with the song. Regenerate them, lock their clips to keep them as they play or switch them to Cutaway',
+      context: { stale: [{ sceneId: 'late', reason: 'not-lip-synced', cutaway: true }, { sceneId: 'early', reason: 'not-lip-synced', cutaway: true }] },
+    });
+    const stillLocked = setShotLocks(project, { sceneIds: ['late'], locked: true });
+    const clipLocked = setShotLocks(stillLocked, { sceneIds: ['late'], locked: true, stage: 'video' });
+    await expect(assertCurrentPerformanceTakes(clipLocked, 'unread.wav')).rejects.toThrow(/^Shot 1 \(not lip-synced\): .* switch it to Cutaway$/);
+    const allLocked = setShotLocks(setShotLocks(clipLocked, { sceneIds: ['early'], locked: true }), { sceneIds: ['early'], locked: true, stage: 'video' });
+    await expect(assertCurrentPerformanceTakes(allLocked, 'unread.wav')).resolves.toBeUndefined();
   });
 });

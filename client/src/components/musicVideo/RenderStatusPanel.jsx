@@ -1,5 +1,5 @@
 import Banner from '../ui/Banner.jsx';
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { Film, Download, Maximize2, AlertTriangle } from 'lucide-react';
 import { STALE_RENDER_MESSAGE } from '../../lib/musicVideoStages.js';
 import { assetDownloadUrl } from '../../lib/standaloneDownload.js';
@@ -93,10 +93,33 @@ export default function RenderStatusPanel({
   );
 }
 
-/** Persisted failures survive reload; kickoff/SSE failures stay bound to their project. */
-export function RenderFailure({ project, renderJob }) {
+const CUTAWAY_FIXABLE = new Set(['STALE_PERFORMANCE_TAKES', 'MUSIC_VIDEO_STALE_SOURCE_AUDIO_TAKES']);
+
+/**
+ * Persisted failures survive reload; kickoff/SSE failures stay bound to their project.
+ * A lip-sync refusal offers one tap that switches its unlocked shots to Cutaway.
+ */
+export function RenderFailure({ project, renderJob, onSwitchToCutaway }) {
+  const [switching, setSwitching] = useState(false);
   if (renderJob?.active && renderJob.context === project.id) return null;
-  const error = renderJob?.failure?.projectId === project.id ? renderJob.failure.message
-    : project.status === 'failed' ? project.renderError : null;
-  return error ? <Banner tone="error" title="Render failed" className="break-words">{error}</Banner> : null;
+  const failure = renderJob?.failure?.projectId === project.id ? renderJob.failure : null;
+  const error = failure ? failure.message : project.status === 'failed' ? project.renderError : null;
+  if (!error) return null;
+  const cutaway = CUTAWAY_FIXABLE.has(failure?.code) && onSwitchToCutaway
+    ? (failure.context?.stale || []).filter((entry) => entry.cutaway).map((entry) => entry.sceneId) : [];
+  const switchAll = () => {
+    setSwitching(true);
+    Promise.resolve(onSwitchToCutaway(cutaway)).finally(() => setSwitching(false));
+  };
+  return (
+    <Banner tone="error" title="Render failed" className="break-words">
+      {error}
+      {cutaway.length > 0 && (
+        <button type="button" onClick={switchAll} disabled={switching}
+          className="mt-2 block min-h-[44px] sm:min-h-0 rounded border border-port-border bg-port-bg px-2 py-1 text-xs text-port-text hover:bg-port-border/40 disabled:opacity-50">
+          {switching ? 'Switching…' : `Switch ${cutaway.length === 1 ? 'it' : `these ${cutaway.length}`} to Cutaway`}
+        </button>
+      )}
+    </Banner>
+  );
 }

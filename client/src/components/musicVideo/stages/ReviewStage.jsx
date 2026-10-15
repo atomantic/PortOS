@@ -63,7 +63,7 @@ export default function ReviewStage({ board }) {
   return (
     <fieldset disabled={locked} className="min-w-0 space-y-3">
       {!project.renderHistoryId && <ReviewDraftPanel project={project} onOpen={board.openArtifact} draftState={board.reviewDraftState} />}
-      <RenderFailure project={project} renderJob={renderJob} />
+      <RenderFailure project={project} renderJob={renderJob} onSwitchToCutaway={board.onSwitchToCutaway} />
       {project.renderHistoryId ? <>{finalRender}{drafts}</> : <>{drafts}{finalRender}</>}
       <StageSection title="Dependency changes and repair"><DependencyImpactPanel project={project} busy={revisions.busy} onRepair={revisions.repair} /></StageSection>
     </fieldset>

@@ -19,7 +19,7 @@ export default function CompositionPanel({ board }) {
   const mode = project.composition?.mode;
   return (
     <fieldset disabled={locked} className="min-w-0">
-      <RenderFailure project={project} renderJob={board.renderJob} />
+      <RenderFailure project={project} renderJob={board.renderJob} onSwitchToCutaway={board.onSwitchToCutaway} />
       <div className="space-y-2 rounded-lg border border-port-border bg-port-card p-3">
         <div className="flex flex-wrap items-center gap-2 text-xs text-port-text-muted">
           <span>Render style: <span className="text-port-text">{renderStyleLabel(mode)}</span></span>
