@@ -56,6 +56,8 @@ describe('makeGitSandbox', () => {
       written++;
     }
     await execGit(['config', 'gc.auto', '1'], box.repo);
+    // Select the task whose pre-auto-gc hook this regression holds.
+    await execGit(['config', 'maintenance.gc.enabled', 'true'], box.repo);
     await writeFile(hookScript, `const fs = require('node:fs');
 const [entered, release] = process.argv.slice(2);
 fs.writeFileSync(entered, 'entered');
