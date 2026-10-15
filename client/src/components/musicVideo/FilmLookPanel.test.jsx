@@ -73,3 +73,21 @@ it('puts the list back when the save is refused', async () => {
   await waitFor(() => expect(screen.queryByRole('button', { name: 'Tape' })).not.toBeInTheDocument());
   expect(screen.getByRole('button', { name: 'Save as preset' })).toBeInTheDocument();
 });
+
+it('offers no save until the saved looks have been read, so a save never replaces looks it never saw', async () => {
+  const kept = { id: 'kept-1', label: 'Kept', look: { ...filmLookPreset('polaroid'), preset: 'custom' } };
+  api.getSettings.mockRejectedValueOnce(new Error('Offline')).mockResolvedValue({ filmLookPresets: [kept] });
+  const first = render(<Harness look={{ ...filmLookPreset('vhs'), preset: 'custom' }} />);
+  await waitFor(() => expect(api.getSettings).toHaveBeenCalledTimes(1));
+  await act(async () => {});
+  expect(screen.queryByRole('button', { name: 'Save as preset' })).not.toBeInTheDocument();
+  first.unmount();
+
+  // The next panel to open reads the list again and saves on top of it.
+  render(<Harness look={{ ...filmLookPreset('vhs'), preset: 'custom' }} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Save as preset' }));
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Tape' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(api.updateSettings).toHaveBeenCalledTimes(1));
+  expect(api.updateSettings.mock.calls[0][0].filmLookPresets.map((preset) => preset.label)).toEqual(['Kept', 'Tape']);
+});

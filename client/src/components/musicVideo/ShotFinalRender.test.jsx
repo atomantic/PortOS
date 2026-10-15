@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 const handlers = new Map();
 const savedLooks = vi.hoisted(() => []);
-vi.mock('../../hooks/useFilmLookPresets.js', () => ({ default: () => ({ presets: savedLooks, save: vi.fn(), remove: vi.fn() }) }));
+vi.mock('../../hooks/useFilmLookPresets.js', () => ({ default: () => ({ presets: savedLooks, loaded: true, save: vi.fn(), remove: vi.fn() }) }));
 vi.mock('../../services/socket', () => ({
   default: { on: vi.fn((event, fn) => handlers.set(event, fn)), off: vi.fn((event) => handlers.delete(event)) },
 }));

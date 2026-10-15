@@ -48,6 +48,7 @@ function SavedLooks({ look, saved, matched, onApply }) {
     setNaming(false);
     setName('');
   };
+  if (!saved.loaded) return null;
   return (
     <div className="space-y-1.5">
       {saved.presets.length > 0 && (
