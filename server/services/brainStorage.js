@@ -43,6 +43,7 @@ import * as brainSyncLog from './brainSyncLog.js';
 import { createCollectionStore } from '../lib/collectionStore.js';
 import { linkIsRepo, normalizeRepoLinkFields } from '../lib/repoLinkFields.js';
 import { supersedingTimestamp } from '../lib/tombstones.js';
+import { parseTsMs, compareNewerWins } from '../lib/lwwTimestamp.js';
 
 const DATA_DIR = PATHS.brain;
 
@@ -1378,18 +1379,23 @@ export async function applyRemoteRecord(type, id, record, op) {
   if (!store.isValidId(id)) {
     return { applied: false, reason: 'invalid_id' };
   }
+  // Both delta pulls and snapshots bypass the HTTP push schema. Reject invalid
+  // clocks here too, before any write or relay, while preserving missing-clock
+  // skips for legacy peers. Parseable offsets/legacy formats remain supported.
+  if (!record?.updatedAt) {
+    return { applied: false, reason: 'missing_timestamp' };
+  }
+  if (parseTsMs(record.updatedAt) === null) {
+    return { applied: false, reason: 'invalid_timestamp' };
+  }
   return store.queueRecordWrite(id, async () => {
     const existing = await store.loadOne(id);
 
     if (op === 'delete') {
-      // Require updatedAt on delete operations for last-writer-wins conflict resolution
-      if (!record?.updatedAt) {
-        return { applied: false, reason: 'missing_timestamp' };
-      }
       // LWW: skip if our copy (live record OR existing tombstone) is at least as
       // new as the incoming delete. The tombstone-vs-tombstone case makes a
       // repeated delete idempotent → not relayed → the echo loop converges.
-      if (existing && existing.updatedAt >= record.updatedAt) {
+      if (existing && !compareNewerWins(record.updatedAt, existing.updatedAt)) {
         return rejectedAgainst(existing, record, true);
       }
       // Tombstone in place even when no local record exists. A delete that
@@ -1400,18 +1406,11 @@ export async function applyRemoteRecord(type, id, record, op) {
         record.originInstanceId ?? existing?.originInstanceId
       ));
     } else {
-      // A create/update with no updatedAt has no LWW clock — `existing.updatedAt
-      // >= undefined` is always false, which would let it silently overwrite a
-      // tombstone and resurrect a deleted record. Reject it (mirrors the delete
-      // path) so the loop-breaker can't be defeated by a timestamp-less create.
-      if (!record?.updatedAt) {
-        return { applied: false, reason: 'missing_timestamp' };
-      }
       // Guard also fires when `existing` is a tombstone — a stale create (older
       // updatedAt than the recorded delete) is rejected, breaking the
       // resurrection loop. A genuinely newer create (later updatedAt than the
       // tombstone) still wins and legitimately revives the record.
-      if (existing && existing.updatedAt >= record.updatedAt) {
+      if (existing && !compareNewerWins(record.updatedAt, existing.updatedAt)) {
         return rejectedAgainst(existing, record, record._deleted === true);
       }
       // Defense-in-depth: a create carrying `_deleted` (a future peer, or a

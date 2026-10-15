@@ -26,6 +26,7 @@ vi.mock('../services/brainParity.js', () => ({
 }));
 
 import * as brainParity from '../services/brainParity.js';
+import * as brainSync from '../services/brainSync.js';
 import brainSyncRoutes from './brainSync.js';
 
 const buildApp = () => {
@@ -38,6 +39,32 @@ const buildApp = () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe('POST /api/brain/sync', () => {
+  it.each(['not-a-date', 42, { value: '2026-10-15' }])('rejects malformed record clocks before applying changes: %j', async (updatedAt) => {
+    const res = await request(buildApp()).post('/api/brain/sync').send({ changes: [{
+      seq: 1, op: 'update', type: 'people', id: 'peer-person',
+      record: { name: 'Remote person', updatedAt }, ts: '2026-10-15T00:00:00Z',
+    }] });
+
+    expect(res.status).toBe(400);
+    expect(brainSync.applyRemoteChanges).not.toHaveBeenCalled();
+  });
+
+  it('preserves legacy clock formats and unknown record fields', async () => {
+    brainSync.applyRemoteChanges.mockResolvedValue({ updated: 1 });
+    const change = {
+      seq: 1, op: 'update', type: 'people', id: 'peer-person',
+      record: { name: 'Remote person', updatedAt: '2026-10-15T12:00:00+02:00', futureField: { keep: true } },
+      ts: '2026-10-15T10:00:00Z',
+    };
+
+    const res = await request(buildApp()).post('/api/brain/sync').send({ changes: [change] });
+
+    expect(res.status).toBe(200);
+    expect(brainSync.applyRemoteChanges).toHaveBeenCalledWith([change]);
+  });
 });
 
 describe('GET /api/brain/reconcile/manifest', () => {
