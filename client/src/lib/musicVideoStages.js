@@ -788,8 +788,43 @@ function storyboardProblemItems(readiness, scenes = []) {
     // An art approval that went stale says what changed, so the row is not a bare "approve first".
     const stale = group.id === 'art' && staleApprovalText(readiness?.art?.stale);
     const details = stale ? mine.map((text) => (ART_APPROVAL_PROBLEM.test(text) ? `${stale} Approve it again on the Look step.` : text)) : mine;
-    return [{ id: `board-${group.id}`, label: group.label, done: false, details, action: group.action }];
+    return [namedShots({ id: `board-${group.id}`, label: group.label, done: false, details, action: group.action }, readiness, scenes)];
   }), ...(stale ? [stale] : []), ...(anchors ? [anchors] : [])];
+}
+
+const MISSING_DETAILS_LINE = /^\d+ shots? missing timing, action, staging, camera or transition\.$/;
+const spanText = (startSec, endSec) => `${formatTimecode(startSec)}–${formatTimecode(endSec)}`;
+const gapSec = ({ startSec, endSec }) => `${(endSec - startSec).toFixed(2)} s`;
+const COVERAGE_TEXT = {
+  'late-start': (c) => `Nothing covers the start of the song, ${spanText(c.startSec, c.endSec)}`,
+  gap: (c) => `Gap of ${gapSec(c)} before this shot, ${spanText(c.startSec, c.endSec)}`,
+  overlap: (c) => `Overlaps the shot before by ${gapSec(c)}, ${spanText(c.startSec, c.endSec)}`,
+  'past-end': (c) => `Runs ${gapSec(c)} past the end of the song, ${spanText(c.startSec, c.endSec)}`,
+  'early-end': (c) => `Ends ${gapSec(c)} before the song does, ${spanText(c.startSec, c.endSec)}`,
+};
+
+/**
+ * The Shot coverage and Shot details rows name each shot they are about (a
+ * button to its card) and say what is wrong with it, in place of the generic
+ * sentence or count.
+ */
+function namedShots(item, readiness, scenes) {
+  const number = (sceneId) => scenes.findIndex((scene) => scene.sceneId === sceneId) + 1;
+  const label = (sceneId) => (number(sceneId) > 0 ? `Shot ${number(sceneId)}` : 'Shot');
+  const byShot = (entries, text) => [...entries.reduce((map, entry) => map.set(entry.sceneId,
+    [...(map.get(entry.sceneId) || []), text(entry)]), new Map())].map(([sceneId, lines]) => ({ sceneId, label: label(sceneId), text: lines.join(' · ') }));
+  const coverage = readiness?.storyboard?.coverage;
+  if (item.id === 'board-coverage' && coverage?.length) {
+    return { ...item, details: item.details.filter((text) => !/cover the master/.test(text)),
+      detail: 'Move these cuts so every moment of the song has exactly one shot.',
+      shots: byShot(coverage, (c) => (COVERAGE_TEXT[c.issue] || (() => c.issue))(c)) };
+  }
+  const incomplete = readiness?.storyboard?.incompleteShots;
+  if (item.id === 'board-shots' && incomplete?.length) {
+    return { ...item, details: item.details.filter((text) => !MISSING_DETAILS_LINE.test(text)),
+      shots: byShot(incomplete, (shot) => `Missing ${shot.missing.join(', ')}`) };
+  }
+  return item;
 }
 
 const ANCHOR_PROBLEM = /^Review lyric anchors for /;

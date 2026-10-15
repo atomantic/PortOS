@@ -304,3 +304,20 @@ describe('storyboard rows stay bound to the shots on the board', () => {
     expect(replanned.productionReview.draft.storyboard.map((shot) => shot.sceneId)).toEqual(['s1']);
   });
 });
+
+describe('naming the shots behind Shot coverage and Shot details', () => {
+  // Uniquely catches the coverage and details checks failing a board without saying which shot to fix.
+  it('names the shot at each gap, overlap and song-end mismatch, and what each incomplete shot is missing', () => {
+    const base = project();
+    const scenes = [{ ...base.scenes[0], endSec: 3 }, { ...base.scenes[1], sceneId: 's2', label: 'Insert', startSec: 3.5, endSec: 5 },
+      { ...base.scenes[1], sceneId: 's3', label: 'Outro', startSec: 4.8, endSec: 8.5, visualIntent: '' }];
+    const { storyboard } = productionReadiness({ ...base, scenes });
+    expect(storyboard.coverage).toEqual([
+      { sceneId: 's2', issue: 'gap', startSec: 3, endSec: 3.5 },
+      { sceneId: 's3', issue: 'overlap', startSec: 4.8, endSec: 5 },
+      { sceneId: 's3', issue: 'past-end', startSec: 8, endSec: 8.5 },
+    ]);
+    expect(storyboard.incompleteShots).toEqual([{ sceneId: 's3', missing: ['an end inside the song', 'action'] }]);
+    expect(productionReadiness(base).storyboard).toMatchObject({ coverage: [], incompleteShots: [] });
+  });
+});
