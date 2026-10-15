@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import { musicVideoConditioningReferences, musicVideoReferenceChoices, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../../server/lib/musicVideoConditioning.js';
 import { MUSIC_VIDEO_OTHER_REFERENCES_NOTE } from '../../../../server/lib/musicVideoShotPrompt.js';
 
-const CHIP = 'inline-flex min-h-[44px] max-w-full items-center gap-1 rounded border border-port-border bg-port-bg p-0.5 text-xs sm:min-h-[32px]';
+// No iOS image callout or text selection, so a long-press opens the preview instead.
+const CHIP = 'inline-flex min-h-[44px] max-w-full select-none items-center gap-1 rounded border border-port-border bg-port-bg p-0.5 text-xs [-webkit-touch-callout:none] sm:min-h-[32px]';
+const LONG_PRESS_MS = 450;
 const thumb = (ref) => <img src={`/data/images/${encodeURIComponent(ref.imageId)}`} alt="" className="h-8 w-8 shrink-0 rounded bg-black object-cover" />;
 const nameOf = (ref) => ref.label || ref.role || 'Reference';
 
@@ -16,6 +18,11 @@ const nameOf = (ref) => ref.label || ref.role || 'Reference';
  */
 export default function SceneFrameReferences({ project, scene, onEditLocal, onSave, disabled = false }) {
   const [adding, setAdding] = useState(false);
+  // The reference shown large: hovering a chip with a mouse, or long-pressing it on a phone.
+  const [preview, setPreview] = useState(null);
+  const pressTimer = useRef(null);
+  const longPressed = useRef(false);
+  useEffect(() => () => clearTimeout(pressTimer.current), []);
   const choices = musicVideoReferenceChoices(project);
   if (!choices.length) return null;
   const chosen = musicVideoConditioningReferences(project, scene);
@@ -23,6 +30,28 @@ export default function SceneFrameReferences({ project, scene, onEditLocal, onSa
   const others = choices.filter((ref) => !ids.includes(ref.id));
   const auto = !Array.isArray(scene.frameReferenceIds);
   const full = ids.length >= MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES;
+  const previewProps = (ref) => ({
+    title: nameOf(ref),
+    onPointerEnter: (e) => { if (e.pointerType === 'mouse') setPreview(ref); },
+    onPointerLeave: (e) => {
+      clearTimeout(pressTimer.current);
+      if (e.pointerType === 'mouse') setPreview((shown) => (shown?.id === ref.id ? null : shown));
+    },
+    onPointerDown: (e) => {
+      if (e.pointerType === 'mouse') return;
+      longPressed.current = false;
+      clearTimeout(pressTimer.current);
+      pressTimer.current = setTimeout(() => { longPressed.current = true; setPreview(ref); }, LONG_PRESS_MS);
+    },
+    onPointerUp: () => clearTimeout(pressTimer.current),
+    onPointerCancel: () => clearTimeout(pressTimer.current),
+    onContextMenu: (e) => e.preventDefault(),
+  });
+  // A long-press only previews: the tap it ends with does not add or remove.
+  const unlessLongPress = (action) => () => {
+    if (longPressed.current) { longPressed.current = false; return; }
+    action();
+  };
   const set = (next) => { onEditLocal(scene.sceneId, { frameReferenceIds: next }); onSave(scene.sceneId, { frameReferenceIds: next }); };
 
   return (
@@ -35,10 +64,10 @@ export default function SceneFrameReferences({ project, scene, onEditLocal, onSa
       </div>
       <ul className="flex flex-wrap gap-1">
         {chosen.map((ref) => (
-          <li key={ref.id} className={CHIP}>
+          <li key={ref.id} className={CHIP} {...previewProps(ref)}>
             {thumb(ref)}
             <span className="min-w-0 max-w-[10rem] truncate">{nameOf(ref)}</span>
-            <button type="button" onClick={() => set(ids.filter((id) => id !== ref.id))} disabled={disabled} aria-label={`Don't send ${nameOf(ref)}`}
+            <button type="button" onClick={unlessLongPress(() => set(ids.filter((id) => id !== ref.id)))} disabled={disabled} aria-label={`Don't send ${nameOf(ref)}`}
               className="inline-flex min-h-[40px] min-w-[32px] items-center justify-center rounded hover:bg-port-border disabled:opacity-50 sm:min-h-[28px] sm:min-w-[24px]">
               <X size={12} aria-hidden="true" />
             </button>
@@ -60,13 +89,26 @@ export default function SceneFrameReferences({ project, scene, onEditLocal, onSa
         <ul aria-label="References to add" className="grid grid-cols-2 gap-1 sm:grid-cols-3 lg:grid-cols-4">
           {others.map((ref) => (
             <li key={ref.id} className="min-w-0">
-              <button type="button" onClick={() => { set([...ids, ref.id]); setAdding(false); }} disabled={disabled}
+              <button type="button" onClick={unlessLongPress(() => { set([...ids, ref.id]); setAdding(false); setPreview(null); })} disabled={disabled} {...previewProps(ref)}
                 className={`${CHIP} w-full text-left hover:bg-port-border/40`}>
                 {thumb(ref)}<span className="min-w-0 truncate">{nameOf(ref)}</span>
               </button>
             </li>
           ))}
         </ul>
+      )}
+      {preview && (
+        <figure aria-label={`Preview of ${nameOf(preview)}`} className="relative space-y-1 rounded border border-port-border bg-port-bg p-1">
+          <img src={`/data/images/${encodeURIComponent(preview.imageId)}`} alt="" className="max-h-[60vh] w-full rounded bg-black object-contain" />
+          <figcaption className="pr-10 text-xs text-port-text">
+            {nameOf(preview)}
+            {preview.note && <span className="block text-port-text-muted">{preview.note}</span>}
+          </figcaption>
+          <button type="button" onClick={() => setPreview(null)} aria-label="Close preview"
+            className="absolute bottom-1 right-1 inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded hover:bg-port-border sm:min-h-[32px] sm:min-w-[32px]">
+            <X size={14} aria-hidden="true" />
+          </button>
+        </figure>
       )}
       {chosen.length > 0 && (
         <details className="text-[11px] text-port-text-muted">
