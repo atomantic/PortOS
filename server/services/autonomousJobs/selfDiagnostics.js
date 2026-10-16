@@ -25,8 +25,8 @@
  * takes injectable deps so tests drive it without a live `gh` or filesystem.
  */
 
-import { spawn } from '../../lib/childProcess.js';import { PATHS, safeJSONParse } from '../../lib/fileUtils.js'
-import { withSpawnCwdEnv } from '../../lib/spawnCwd.js'
+import { runCliBounded } from '../../lib/runCliBounded.js'
+import { PATHS, safeJSONParse } from '../../lib/fileUtils.js'
 import { loadLearningData, computeWindowedStats } from '../taskLearning/store.js'
 
 // The label that marks the ONE persistent summary issue to reuse across runs, and
@@ -151,25 +151,8 @@ export function buildDiagnosticsIssueBody(failing, { generatedAt = new Date().to
 // I/O layer — `gh` shell + the handler. Injectable deps keep them testable.
 // ---------------------------------------------------------------------------
 
-/** Run a CLI, resolving `{ code, stdout, stderr }` (never rejects). Pure I/O. */
-function runCli(cmd, args, options = {}) {
-  return new Promise((resolve) => {
-    // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193). `options` may
-    // carry a caller-supplied `cwd`, so this wrapper owns the pin for every
-    // caller (mirrors layeredIntelligence/runCli.js, which has the same shape).
-    const child = spawn(cmd, args, {
-      shell: false,
-      ...options,
-      env: withSpawnCwdEnv(options.env ?? process.env, options.cwd),
-    })
-    let stdout = ''
-    let stderr = ''
-    child.stdout?.on('data', d => { stdout += d.toString() })
-    child.stderr?.on('data', d => { stderr += d.toString() })
-    child.on('close', code => resolve({ code, stdout, stderr }))
-    child.on('error', err => resolve({ code: -1, stdout: '', stderr: err.message }))
-  })
-}
+// The injectable default `exec` for the gh calls below; bounded so a stalled gh can't wedge the job.
+const runCli = runCliBounded
 
 /**
  * Locate OUR persistent summary issue to reuse. Matches only an open `monitoring`
