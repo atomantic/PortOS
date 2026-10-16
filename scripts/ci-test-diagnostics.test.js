@@ -165,6 +165,53 @@ describe('independent CI test failure recovery (#11552)', () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
+  it('projects fixed playback and browser failures without exporting message or call-log content', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'ci-diagnostics-playback-'));
+    const prior = process.env.PORTOS_CI_DIAGNOSTICS_PATH;
+    try {
+      const attempt = join(root, 'portos-vitest-fixture'); mkdirSync(attempt);
+      const path = join(attempt, 'run.json'); process.env.PORTOS_CI_DIAGNOSTICS_PATH = path;
+      const module = { moduleId: 'server/services/musicVideo/documentRender.browser.test.js', state: () => 'failed' };
+      const cases = [
+        ['Error', 'Generated drawing exceeded frame freshness', 'frame-freshness'],
+        ['Error', 'page.evaluate: Error: Generated drawing exceeded frame freshness\nprivate-sentinel', 'frame-freshness'],
+        ['Error', 'page.evaluate: Error: Generated preparation superseded', 'preparation-superseded'],
+        ['Error', 'page.evaluate: Error: Generated sections must draw synchronously', 'async-drawing'],
+        ['Error', 'page.evaluate: Error: Generated scene changed during drawing', 'scene-changed'],
+        ['Error', 'page.evaluate: Error: Generated source changed during drawing', 'source-changed'],
+        ...['TIMEOUT', 'FAILED', 'DISPOSED', 'ARGUMENT', 'ANCHOR', 'NOT_PREPARED'].map(code =>
+          ['Error', `page.evaluate: Error: PLAYBACK_${code}`, `playback-${code.toLowerCase().replaceAll('_', '-')}`]),
+        ['EvaluationStalledError', 'private-sentinel', 'browser-evaluation-stalled'],
+        ['Error', 'page.evaluate: Target crashed \nBrowser logs:\nprivate-sentinel', 'browser-crashed'],
+        ['Error', 'Target crashed ', 'browser-crashed'],
+        ['Error', 'Target crashed private-sentinel', 'other'],
+        ['TargetClosedError', 'private-sentinel', 'browser-closed'],
+        ['Error', 'page.evaluate: Target page, context or browser has been closed\nprivate-sentinel', 'browser-closed'],
+        ['TimeoutError', 'page.evaluate: Timeout 120000ms exceeded.\nprivate-sentinel', 'browser-timeout'],
+        ['Error', 'page.evaluate: Protocol error (Runtime.callFunctionOn): private-sentinel', 'browser-protocol'],
+        ['Error', 'Generated drawing exceeded frame freshness private-sentinel', 'other'],
+        ['Error', 'private-sentinel PLAYBACK_TIMEOUT', 'other'],
+        ['TimeoutError', 'private-sentinel', 'other'],
+      ];
+      for (const [name, message, kind] of cases) {
+        const hooks = vitestRunDiagnostics();
+        hooks.onInit({ onClose() {} });
+        hooks.onTestCaseResult({ module, name: 'private-sentinel', result: () => ({ state: 'failed', errors: [{ name, message, stack: 'private-sentinel' }] }) });
+        hooks.onTestModuleEnd(module);
+        const persisted = readFileSync(path, 'utf8');
+        expect(JSON.parse(persisted).failedCases[0].kind).toBe(kind);
+        expect(persisted).not.toContain('private-sentinel');
+        const output = (await collectTestDiagnostics(root, { logger: { warn() {} }, diagnose: async () => {}, writeSummary() {} })).join('\n');
+        expect(output).toContain(`${module.moduleId}=${kind}`);
+        expect(output).not.toContain('private-sentinel');
+      }
+    } finally {
+      if (prior === undefined) delete process.env.PORTOS_CI_DIAGNOSTICS_PATH;
+      else process.env.PORTOS_CI_DIAGNOSTICS_PATH = prior;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     ['windows-server', 'Run server tests on Windows', 'Preserve Windows test failure diagnostics', 'run-ci-tests.js'],
   ])('%s collects after failure and before sibling cancellation with bounded, non-masking failure handling', (jobId, testName, collectorName, launcherName) => {

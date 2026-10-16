@@ -81,7 +81,10 @@ export async function collectTestDiagnostics(root, {
         lines.push(`Module outcomes (up to 100): ${results.map(item => `${diagnosticTestFile(item.file)}=${item.state}`).join(', ') || 'none recorded'}`);
       }
       if (Array.isArray(run.failedCases)) {
-        const cases = run.failedCases.slice(0, 10).filter(item => item && ['timeout', 'assertion', 'other'].includes(item.kind));
+        const kinds = ['timeout', 'assertion', 'other', 'frame-freshness', 'preparation-superseded', 'async-drawing', 'scene-changed', 'source-changed',
+          'playback-timeout', 'playback-failed', 'playback-disposed', 'playback-argument', 'playback-anchor', 'playback-not-prepared',
+          'browser-closed', 'browser-timeout', 'browser-protocol', 'browser-crashed', 'browser-evaluation-stalled'];
+        const cases = run.failedCases.slice(0, 10).filter(item => item && kinds.includes(item.kind));
         lines.push(`Failed case categories (up to 10): ${cases.map(item => {
           const locations = Array.isArray(item.locations) ? item.locations.slice(0, 3).filter(location => location
             && [location.line, location.column].every(value => Number.isInteger(value) && value > 0 && value <= 10000000)) : [];

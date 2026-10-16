@@ -14,9 +14,29 @@ function errorDiagnostic(error, depth = 0) {
 const moduleStates = new Set(['queued', 'pending', 'passed', 'failed', 'skipped']);
 const threeFile = 'server/services/musicVideo/documentRender.browser.test.js';
 const threeCase = 'authors a local Three.js world and renders the same deterministic scene through module preview and export';
+const playbackFailures = new Map([
+  ['Generated drawing exceeded frame freshness', 'frame-freshness'],
+  ['Generated preparation superseded', 'preparation-superseded'],
+  ['Generated sections must draw synchronously', 'async-drawing'],
+  ['Generated scene changed during drawing', 'scene-changed'],
+  ['Generated source changed during drawing', 'source-changed'],
+  ...['TIMEOUT', 'FAILED', 'DISPOSED', 'ARGUMENT', 'ANCHOR', 'NOT_PREPARED'].map(code => [`PLAYBACK_${code}`, `playback-${code.toLowerCase().replaceAll('_', '-')}`]),
+]);
 function failureKind(errors) {
   const bounded = Array.isArray(errors) ? errors.slice(0, 10) : [];
   if (bounded.some(error => typeof error?.message === 'string' && /^(Test|Hook) timed out in \d{1,9}ms(?:\.| while waiting for )/.test(error.message))) return 'timeout';
+  for (const error of bounded) {
+    // Match fixed host messages or documented browser error shapes only. The
+    // message, private browser logs and call-log suffixes never leave this scope.
+    const first = typeof error?.message === 'string' ? error.message.slice(0, 400).split(/\r?\n/, 1)[0] : '';
+    const host = playbackFailures.get(first.replace(/^page\.evaluate: (?:Error: )?/, ''));
+    if (host) return host;
+    if (error?.name === 'EvaluationStalledError') return 'browser-evaluation-stalled';
+    if (/^(?:page\.evaluate: )?Target crashed $/.test(first)) return 'browser-crashed';
+    if (error?.name === 'TargetClosedError' || first === 'page.evaluate: Target page, context or browser has been closed') return 'browser-closed';
+    if (error?.name === 'TimeoutError' && /^page\.evaluate: Timeout \d{1,9}ms exceeded\.$/.test(first)) return 'browser-timeout';
+    if (/^page\.evaluate: Protocol error \(Runtime\.callFunctionOn\): /.test(first)) return 'browser-protocol';
+  }
   return bounded.some(error => error?.name === 'AssertionError') ? 'assertion' : 'other';
 }
 function failureLocations(errors, moduleId) {
