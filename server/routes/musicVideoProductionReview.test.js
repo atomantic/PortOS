@@ -373,6 +373,7 @@ describe('human-reviewed Music Video workflow', () => {
     await approve('art'); await approve('storyboard');
     const feedback = await comment('proof', 'request-changes', 'Keep the figure behind the doorway during the camera move.');
     const entry = feedback.body.project.productionReview.feedback.at(-1);
+    expect(feedback.body.feedbackId).toBe(entry.id);
     expect(feedback.body.readiness.art.approved).toBe(true);
     expect(feedback.body.readiness.storyboard.approved).toBe(true);
     expect(feedback.body.readiness.proof.problems.join(' ')).toContain('Keep the figure');

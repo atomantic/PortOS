@@ -626,6 +626,27 @@ async function reviewStoryboard(run, project) {
   return askReview(run, 'storyboard', buildStoryboardReviewPrompt({ ...ideaOf(run), concept: project.concept, shots, incomplete }));
 }
 
+async function fileReviseAndClose(projectId, { requests, revise, resolutionFor, reviewer }) {
+  const feedbackIds = [];
+  for (const request of requests) {
+    const { feedbackId } = await deps.addFeedback(projectId, request);
+    feedbackIds.push(feedbackId);
+  }
+  const failure = await revise().then(() => null, (err) => err);
+  for (const feedbackId of feedbackIds) {
+    try {
+      await deps.closeFeedback(projectId, { feedbackId, resolution: resolutionFor(failure), reviewer });
+    } catch (err) {
+      // Only tolerate a reviewer resolving this run's request while revision was in flight.
+      const entry = err.code === 'MUSIC_VIDEO_FEEDBACK_CLOSED'
+        ? (await getProject(projectId)).productionReview?.feedback?.find((item) => item.id === feedbackId) : null;
+      if (!entry?.resolvedAt) throw err;
+      console.warn(`🎬 Autonomous feedback ${feedbackId} was already resolved; preserving its resolution`);
+    }
+  }
+  return failure;
+}
+
 /**
  * Apply a revise verdict to a production stage; returns false when nothing could
  * be applied. A storyboard re-plan that fails throws, so the stage fails and a
@@ -642,18 +663,14 @@ async function applyProductionRevision(projectId, run, stage, review) {
   const known = new Set((project.productionReview?.draft?.storyboard || []).map((shot) => shot.sceneId));
   const changes = review.changes.filter((c) => known.has(c.sceneId));
   if (!changes.length || project.productionReview?.draft?.storyboardSource === 'document') return false;
-  const before = new Set((project.productionReview?.feedback || []).map((f) => f.id));
   const basis = productionReviewBasis(project).storyboard;
-  for (const change of changes) {
-    await deps.addFeedback(projectId, { stage, basis, target: change.sceneId, text: change.text, decision: 'request-changes' });
-  }
   const { route, ...plan } = await llmOf(run, 'plan');
-  const failure = await deps.reviseFromFeedback(projectId, { stage, ...plan }).then(() => null, (err) => err);
-  const created = ((await getProject(projectId)).productionReview?.feedback || []).filter((f) => !before.has(f.id) && !f.resolvedAt);
-  const resolution = failure ? `The re-plan failed (${trimTo(failure.message, 200)}); the orchestrator will ask again on Retry.` : 'Revised by the orchestrator.';
-  for (const entry of created) {
-    await deps.closeFeedback(projectId, { feedbackId: entry.id, resolution, reviewer: orchestratorIdentity(run, review.route) });
-  }
+  const failure = await fileReviseAndClose(projectId, {
+    requests: changes.map((change) => ({ stage, basis, target: change.sceneId, text: change.text, decision: 'request-changes' })),
+    revise: () => deps.reviseFromFeedback(projectId, { stage, ...plan }),
+    resolutionFor: (error) => error ? `The re-plan failed (${trimTo(error.message, 200)}); the orchestrator will ask again on Retry.` : 'Revised by the orchestrator.',
+    reviewer: orchestratorIdentity(run, review.route),
+  });
   if (failure) {
     throw runError(502, 'ORCHESTRATOR_REVISION_FAILED', `The storyboard re-plan failed: ${trimTo(failure.message, 200)}`);
   }
@@ -828,22 +845,19 @@ async function startFinalRevision(projectId, run, issues) {
 async function reauthorFinal(projectId, run, issues, { target = 'final' } = {}) {
   const project = await getProject(projectId);
   const basis = productionReviewBasis(project).proof;
-  const before = new Set((project.productionReview?.feedback || []).map((f) => f.id));
-  for (const issue of issues.slice(0, 12)) {
-    await deps.addFeedback(projectId, { stage: 'proof', basis, target: `${target}@${timecode(issue.atSec)}`, text: issue.text, decision: 'request-changes' });
-  }
   const authoring = !run.brief.llmStages?.authoring && run.brief.authoring ? run.brief.authoring : await llmOf(run, 'authoring');
   const input = { providerId: authoring.providerId, model: authoring.model || undefined, ...(authoring.effort ? { effort: authoring.effort } : {}) };
-  const failure = await (async () => {
-    if ((await getProject(projectId)).composition?.mode === 'code') return deps.generateCode(projectId, input);
-    const candidate = await deps.generateDocument(projectId, input);
-    return deps.acceptDocument(projectId, candidate.document.directory);
-  })().then(() => null, (err) => err);
-  // Requests stay open through authoring (the prompt carries them), then close either way.
-  const created = ((await getProject(projectId)).productionReview?.feedback || []).filter((f) => !before.has(f.id) && !f.resolvedAt);
-  const resolution = failure ? `The re-authoring failed (${trimTo(failure.message, 200)}); kept the film.`
-    : `Re-authored by the ${isOrchestratedRun(run) ? 'orchestrator' : 'autopilot'}.`;
-  for (const entry of created) await deps.closeFeedback(projectId, { feedbackId: entry.id, resolution, reviewer: runReviewer(run) });
+  const failure = await fileReviseAndClose(projectId, {
+    requests: issues.slice(0, 12).map((issue) => ({ stage: 'proof', basis, target: `${target}@${timecode(issue.atSec)}`, text: issue.text, decision: 'request-changes' })),
+    revise: async () => {
+      if ((await getProject(projectId)).composition?.mode === 'code') return deps.generateCode(projectId, input);
+      const candidate = await deps.generateDocument(projectId, input);
+      return deps.acceptDocument(projectId, candidate.document.directory);
+    },
+    resolutionFor: (error) => error ? `The re-authoring failed (${trimTo(error.message, 200)}); kept the film.`
+      : `Re-authored by the ${isOrchestratedRun(run) ? 'orchestrator' : 'autopilot'}.`,
+    reviewer: runReviewer(run),
+  });
   if (failure) throw failure;
 }
 
