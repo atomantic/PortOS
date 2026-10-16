@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { Package, Download, Copy, Sparkles, Image as ImageIcon, Captions, ListOrdered } from 'lucide-react';
+import { Package, Download, Copy, Sparkles, Captions, ListOrdered } from 'lucide-react';
 import useProviderModels from '../../hooks/useProviderModels.js';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import { copyToClipboard } from '../../lib/clipboard.js';
 import CoverArtPanel from './CoverArtPanel.jsx';
+import YoutubeThumbnailPanel from './YoutubeThumbnailPanel.jsx';
 import PublishCard from './PublishCard.jsx';
 import { formatCount, formatUsd } from '../../utils/formatters.js';
 
@@ -198,23 +199,11 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
                 <pre className="bg-port-bg border border-port-border rounded p-2 whitespace-pre-wrap break-words font-mono text-[11px]">{chaptersText(kit.chapters)}</pre>
               </div>
             )}
-            {kit.thumbnails?.length > 0 && (
-              <div className="space-y-1">
-                <span className="text-port-text-muted flex items-center gap-1"><ImageIcon size={12} /> Thumbnail: pick one, or add title text before uploading</span>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {kit.thumbnails.map((name) => (
-                    <button key={name} type="button" onClick={() => publishKit.selectThumbnail(name)} aria-pressed={kit.thumbnail === name}
-                      aria-label={`Use thumbnail ${name}`}
-                      className={`rounded overflow-hidden border-2 ${kit.thumbnail === name ? 'border-port-accent' : 'border-transparent'}`}>
-                      <img src={`/data/video-thumbnails/${name}`} alt="" className="w-full aspect-video object-cover" />
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
         )}
       </PublishCard>
+
+      <YoutubeThumbnailPanel key={`yt-${project?.id}`} project={project} publishKit={publishKit} />
 
       <CoverArtPanel key={project?.id} project={project} publishKit={publishKit} />
 

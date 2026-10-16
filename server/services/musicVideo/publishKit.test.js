@@ -21,6 +21,7 @@ const { findFfmpeg, runFfmpegProcess } = ffmpegService;
 const projects = await import('./projects.js');
 const { saveHistory } = await import('../videoGen/history.js');
 const kit = await import('./publishKit.js');
+const frames = await import('./thumbnailFrames.js');
 const excerptRender = await import('./excerptRender.js');
 const { captureMusicVideoEvidence } = await import('../../lib/musicVideoDependencies.js');
 const ffmpeg = await findFfmpeg();
@@ -171,7 +172,7 @@ describe('publishing kit build (#9281)', () => {
     const vertical = first.exports.find((e) => e.kind === 'vertical-9x16');
     const probed = await runFfmpegProcess({ bin: ffmpeg, args: ['-hide_banner', '-i', join(PATHS.videos, vertical.filename), '-f', 'null', '-'] });
     expect(probed.ok).toBe(true);
-    expect(first.thumbnails).toHaveLength(2); // the two performance shots
+    expect(first.thumbnails).toHaveLength(3); // the best frame of each shot
     expect(first.thumbnail).toBe(first.thumbnails[0]);
     expect(await readFile(join(PATHS.videos, first.captionsFilename), 'utf8')).toContain('the chorus line');
     expect(first.chapters.map((c) => c.label)).toEqual(['first verse line', 'the chorus line', 'last words']);
@@ -406,5 +407,59 @@ describe('publishing kit copy (#9281)', () => {
     await projects.mutateProjectRecord(id, (current) => ({ project: { ...current, publishKit: { thumbnails: ['a.jpg', 'b.jpg'], thumbnail: 'a.jpg' } } }));
     expect((await kit.selectPublishKitThumbnail(id, 'b.jpg')).project.publishKit.thumbnail).toBe('b.jpg');
     await expect(kit.selectPublishKitThumbnail(id, 'elsewhere.jpg')).rejects.toMatchObject({ status: 422 });
+  });
+});
+
+describe('thumbnail frames', () => {
+  const project = {
+    scenes: [scene(0, 10, 'Verse 1'), scene(10, 20, 'Chorus 1', 'cutaway')],
+    lyricCues: [cue('a line', 1, 6), cue('another line', 10, 20)],
+  };
+
+  it('looks inside each shot, away from its cuts, and where the shot has a moment with no lyric on screen, inside it', () => {
+    const candidates = frames.thumbnailCandidates(project, 20);
+    expect(candidates).toHaveLength(4);
+    // Shot 1: lyrics cover 1–6 s of its 1.5–8.5 s middle, so both frames come from 6–8.5 s.
+    const first = candidates.filter((c) => c.shot === 'mvs-0');
+    for (const c of first) { expect(c.t).toBeGreaterThanOrEqual(6); expect(c.t).toBeLessThanOrEqual(8.5); }
+    expect(first.every((c) => !c.lyric && c.performance)).toBe(true);
+    // Shot 2 is sung throughout: its frames stay off the cuts and are marked as maybe carrying a lyric.
+    const second = candidates.filter((c) => c.shot === 'mvs-10');
+    for (const c of second) { expect(c.t).toBeGreaterThan(11.4); expect(c.t).toBeLessThan(18.6); }
+    expect(second.every((c) => c.lyric && !c.performance)).toBe(true);
+    // Too many shots: an even spread across the song, at most `max`.
+    const many = { scenes: Array.from({ length: 40 }, (_, i) => scene(i, i + 1, `Shot ${i}`)) };
+    const spread = frames.thumbnailCandidates(many, 40, 10);
+    expect(spread).toHaveLength(10);
+    expect(spread[spread.length - 1].t).toBeGreaterThan(30);
+  });
+
+  it('keeps the best frame of each shot, best first, favoring the singer and frames with no lyric', () => {
+    const picked = frames.pickThumbnailFrames([
+      { name: 'a1', shot: 'a', score: 10, performance: false, lyric: false },
+      { name: 'a2', shot: 'a', score: 12, performance: false, lyric: false },
+      { name: 'b1', shot: 'b', score: 11, performance: true, lyric: false },
+      { name: 'c1', shot: 'c', score: 14, performance: false, lyric: true },
+      { name: 'd1', shot: 'd', score: NaN, performance: true, lyric: false },
+    ], 2);
+    // b1 (11 × 1.15 = 12.65) beats a2 (12) and c1 (14 × 0.75 = 10.5); a failed score never makes the cut.
+    expect(picked.map((c) => c.name)).toEqual(['b1', 'a2']);
+  });
+
+  it('scores a crisp frame over a blurred copy of it, and either over a near-black one', async () => {
+    const sharp = (await import('sharp')).default;
+    await mkdir(PATHS.videoThumbnails, { recursive: true });
+    const crisp = join(PATHS.videoThumbnails, 'score-crisp.png');
+    const blurred = join(PATHS.videoThumbnails, 'score-blurred.png');
+    const dark = join(PATHS.videoThumbnails, 'score-dark.png');
+    // A checkerboard: hard edges everywhere, which a blur or a dissolve smears.
+    const cells = Buffer.alloc(320 * 180 * 3);
+    for (let y = 0; y < 180; y++) for (let x = 0; x < 320; x++) cells.fill(((x >> 4) + (y >> 4)) % 2 ? 210 : 40, (y * 320 + x) * 3, (y * 320 + x) * 3 + 3);
+    await sharp(cells, { raw: { width: 320, height: 180, channels: 3 } }).png().toFile(crisp);
+    await sharp(crisp).blur(6).toFile(blurred);
+    await sharp(crisp).linear(0.08, 0).toFile(dark);
+    const [c, b, d] = await Promise.all([crisp, blurred, dark].map((p) => frames.scoreThumbnailFrame(p)));
+    expect(c).toBeGreaterThan(b * 1.5);
+    expect(b).toBeGreaterThan(d);
   });
 });

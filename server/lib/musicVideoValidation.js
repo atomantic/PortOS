@@ -877,6 +877,14 @@ export const musicVideoCoverArtComposeSchema = z.object({
   // false = a finished cover from elsewhere: squared and sized, no title or tag set on it.
   lettering: z.boolean().optional(),
 }).strict();
+// The YouTube thumbnail: a source composed 16:9 with the title in the cover's lettering.
+export const musicVideoYoutubeThumbnailComposeSchema = z.object({
+  source: coverArtSourceSchema.optional(),
+  title: z.string().max(60).optional(),
+  focusX: z.number().min(0).max(1).optional(),
+  focusY: z.number().min(0).max(1).optional(),
+  lettering: z.boolean().optional(),
+}).strict();
 export const musicVideoCoverArtDesignSchema = z.object({
   direction: z.string().max(1500).optional(),
   providerId: z.string().min(1).max(200).optional(),

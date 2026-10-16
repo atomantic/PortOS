@@ -54,7 +54,7 @@ describe('PublishPlatformsPanel (#9287)', () => {
 });
 
 describe('PublishKitPanel copy per platform (#9287)', () => {
-  const kitHook = { building: false, progress: 0, build: vi.fn(), drafting: false, saving: false, draftCopy: vi.fn(), saveCopy: vi.fn(), selectThumbnail: vi.fn() };
+  const kitHook = { building: false, progress: 0, build: vi.fn(), drafting: false, saving: false, draftCopy: vi.fn(), saveCopy: vi.fn(), composeThumbnail: vi.fn(), clearThumbnail: vi.fn() };
   const project = { id: 'mv-1', renderHistoryId: 'rh', publishKit: { copy: { youtube: { title: 'T' }, reddit: { title: 'R' } }, copyDraftedAt: 'x' } };
 
   it('shows copy only for enabled platforms (YouTube too when Suno is on)', () => {

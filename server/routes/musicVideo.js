@@ -49,6 +49,7 @@ import {
   musicVideoPromotionPlanSchema,
   musicVideoPublishThumbnailSchema,
   musicVideoCoverArtComposeSchema,
+  musicVideoYoutubeThumbnailComposeSchema,
   musicVideoCoverArtGenerateSchema,
   musicVideoCoverDesignSaveSchema,
   musicVideoArtistStyleSaveSchema,
@@ -1075,6 +1076,34 @@ router.patch('/:id/publish-kit/copy', asyncHandler(async (req, res) => {
 router.put('/:id/publish-kit/thumbnail', asyncHandler(async (req, res) => {
   const { filename } = validateRequest(musicVideoPublishThumbnailSchema, req.body || {});
   const { project } = await selectPublishKitThumbnail(req.params.id, filename);
+  res.json({ project });
+}));
+
+// The YouTube thumbnail: a source cropped 16:9 with the title set in the
+// cover's lettering. DELETE goes back to the picked video frame.
+router.post('/:id/publish-kit/youtube-thumbnail', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoYoutubeThumbnailComposeSchema, req.body ?? {});
+  const { composeProjectYoutubeThumbnail } = await import('../services/musicVideo/youtubeThumbnail.js');
+  const { project } = await composeProjectYoutubeThumbnail(req.params.id, input);
+  res.json({ project });
+}));
+
+router.delete('/:id/publish-kit/youtube-thumbnail', asyncHandler(async (req, res) => {
+  const { clearProjectYoutubeThumbnail } = await import('../services/musicVideo/youtubeThumbnail.js');
+  const { project } = await clearProjectYoutubeThumbnail(req.params.id);
+  res.json({ project });
+}));
+
+// Variants kept for YouTube's Test & Compare (up to three): add the made thumbnail, or drop one.
+router.post('/:id/publish-kit/youtube-thumbnail/tests', asyncHandler(async (req, res) => {
+  const { addYoutubeThumbnailTest } = await import('../services/musicVideo/youtubeThumbnail.js');
+  const { project } = await addYoutubeThumbnailTest(req.params.id);
+  res.json({ project });
+}));
+
+router.delete('/:id/publish-kit/youtube-thumbnail/tests/:filename', asyncHandler(async (req, res) => {
+  const { removeYoutubeThumbnailTest } = await import('../services/musicVideo/youtubeThumbnail.js');
+  const { project } = await removeYoutubeThumbnailTest(req.params.id, req.params.filename);
   res.json({ project });
 }));
 
