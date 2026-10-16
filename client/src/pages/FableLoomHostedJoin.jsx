@@ -19,6 +19,16 @@ import {
   Volume2,
 } from 'lucide-react';
 
+// Guest-facing wording for the live-conversation gates; any other code falls
+// back to the server's own message.
+const HOSTED_ERROR_MESSAGES = {
+  PLAYBACK_NOT_IN_HOLD_PHASE: 'The scene is still playing — wait for it to pause, then try again.',
+  PROTAGONIST_ONSCREEN: 'The protagonist is on screen right now — wait until they finish.',
+  HOLD_ASSET_OCCUPIED_BY_DIALOGUE: 'The protagonist is mid-line — wait until they finish.',
+  TURN_IN_PROGRESS: 'A reply is already in progress — wait a moment, then try again.',
+  EPISODE_SWITCH_IN_PROGRESS: 'The host is switching episodes — try again in a moment.',
+};
+
 export default function FableLoomHostedJoin() {
   const [sessionId, setSessionId] = useState(null);
   const [token, setToken] = useState(null);
@@ -39,6 +49,9 @@ export default function FableLoomHostedJoin() {
   const mountedRef = useMounted();
   const transcriptScrollRef = useRef(null);
   const audioPlayerRef = useRef(null);
+  // The socket effect closes over its first render; this ref keeps its
+  // `hosted:error` handler pointed at the current recorder state.
+  const discardRecordingRef = useRef(null);
 
   // 1. Parse session and token from URL fragment (#session=...&token=...)
   useEffect(() => {
@@ -89,6 +102,13 @@ export default function FableLoomHostedJoin() {
       if (data.phase === 'thinking') {
         setIsRecording(false);
       }
+    });
+
+    // The server refuses or fails a turn with this frame; without it a refused
+    // mic keeps "recording" into a turn the server already dropped.
+    s.on('hosted:error', (data) => {
+      discardRecordingRef.current?.();
+      setRecordingError(HOSTED_ERROR_MESSAGES[data?.code] || data?.message || 'Something went wrong. Please try again.');
     });
 
     s.on('hosted:turn:transcript', (item) => {
@@ -201,6 +221,21 @@ export default function FableLoomHostedJoin() {
       stopTracks();
       setIsRecording(false);
     }
+  };
+
+  // Retire the generation first so the recorder's onstop never ships the
+  // audio of a turn the server already refused.
+  discardRecordingRef.current = () => {
+    pressedRef.current = false;
+    ++startGenRef.current;
+    ++recordingGenRef.current;
+    const active = mediaRecorderRef.current;
+    mediaRecorderRef.current = null;
+    if (active) {
+      if (active.recorder.state !== 'inactive') active.recorder.stop();
+      active.stopTracks();
+    }
+    setIsRecording(false);
   };
 
   useEffect(() => () => {

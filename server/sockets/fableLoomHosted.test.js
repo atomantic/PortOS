@@ -453,14 +453,21 @@ describe('fableLoomHosted Socket.IO namespace', () => {
       expect(roomEvent('hosted:story:transition')).toBeUndefined();
     });
 
-    it('emits hosted:error to the audience when the turn fails', async () => {
+    it('reports a failed turn once to the room, then returns every client to idle', async () => {
       await audience.listeners['hosted:mic:start']();
       records.getLoom.mockRejectedValueOnce(new Error('loom read failed'));
 
       await audience.listeners['hosted:turn:text']({ text: 'go next' });
 
-      expect(audience.emitted.find((e) => e.event === 'hosted:error')?.data)
-        .toMatchObject({ code: 'TEXT_FAILED', message: 'loom read failed' });
+      const errors = roomEvents.filter((e) => e.event === 'hosted:error');
+      expect(errors).toHaveLength(1);
+      expect(errors[0].data).toMatchObject({ code: 'TURN_FAILED', message: 'loom read failed' });
+      expect(audience.emitted.find((e) => e.event === 'hosted:error')).toBeUndefined();
+      const names = roomEvents.map((e) => e.event);
+      const phaseAfterError = roomEvents.slice(names.indexOf('hosted:error') + 1)
+        .find((e) => e.event === 'hosted:turn:phase');
+      expect(phaseAfterError?.data).toMatchObject({ phase: 'idle' });
+      expect(getHostedSession(session.id).turnPhase).toBe('idle');
     });
 
     it('ignores hosted:turn:text when the session is not listening', async () => {

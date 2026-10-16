@@ -277,7 +277,7 @@ export function registerFableLoomHostedNamespace(io) {
       try {
         await processHostedUtterance(sessionId, { audioBuffer: finalAudio, io });
       } catch (err) {
-        socket.emit('hosted:error', { code: err.code || 'UTTERANCE_FAILED', message: err.message });
+        if (!err?.hostedReported) socket.emit('hosted:error', { code: err.code || 'UTTERANCE_FAILED', message: err.message });
       }
     });
 
@@ -288,7 +288,7 @@ export function registerFableLoomHostedNamespace(io) {
       try {
         await processHostedUtterance(sessionId, { textMessage: data?.text, io });
       } catch (err) {
-        socket.emit('hosted:error', { code: err.code || 'TEXT_FAILED', message: err.message });
+        if (!err?.hostedReported) socket.emit('hosted:error', { code: err.code || 'TEXT_FAILED', message: err.message });
       }
     });
 

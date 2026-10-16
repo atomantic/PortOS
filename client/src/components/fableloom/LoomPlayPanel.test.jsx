@@ -454,6 +454,20 @@ describe('LoomPlayPanel', () => {
     expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('Episode 2'));
   });
 
+  it('toasts hosted:error frames so the operator sees refused host actions', async () => {
+    const user = userEvent.setup();
+    render(<LoomPlayPanel loom={loom} episode={episode} />);
+
+    await user.click(screen.getByRole('button', { name: 'Host (QR)' }));
+    await user.click(screen.getByRole('button', { name: 'Start hosted session' }));
+
+    const hostedSocket = io.mock.results.at(-1).value;
+    const errorHandler = hostedSocket.on.mock.calls.find(([event]) => event === 'hosted:error')?.[1];
+    act(() => { errorHandler({ code: 'NODE_NOT_IN_EPISODE', message: 'node is not in this episode' }); });
+
+    expect(toast.error).toHaveBeenCalledWith('node is not in this episode');
+  });
+
   // #8112: the server rejects a second hosted:episode:switch sent while an
   // earlier one is still in flight (409 EPISODE_SWITCH_IN_PROGRESS). A host
   // who advances past the in-flight target before it settles would otherwise
