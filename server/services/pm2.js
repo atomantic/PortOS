@@ -275,14 +275,20 @@ function connectAndRun(action, timeoutMs = COMMAND_TIMEOUT_MS) {
     const client = new pm2.custom();
     let settled = false;
     const disconnect = () => {
-      try { client.disconnect(); }
-      catch (error) { console.error(`❌ PM2 client disconnect failed: ${error.message}`); }
+      try { client.disconnect(); return null; }
+      catch (error) {
+        console.error(`❌ PM2 client disconnect failed: ${error.message}`);
+        return Object.assign(new Error('PM2 client cleanup unconfirmed'), {
+          cause: error, code: 'PM2_CLEANUP_UNKNOWN', cleanupConfirmed: false, outcome: 'unknown',
+        });
+      }
     };
     const finish = (error, result) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      disconnect();
+      const cleanupError = disconnect();
+      if (cleanupError) error = Object.assign(error || cleanupError, { cleanupConfirmed: false });
       if (error) reject(error);
       else resolve(result);
     };

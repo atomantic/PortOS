@@ -75,6 +75,15 @@ it('a completed mutation closes only its own client while a list is pending', as
   expect(await pending).toEqual([]);
 });
 
+it('reports unavailable rather than success when an owned native client cannot disconnect', async () => {
+  const broken = client();
+  broken.list.mockImplementation(cb => cb(null, []));
+  broken.disconnect.mockImplementation(() => { throw new Error('socket teardown failed'); });
+  mocks.clients.push(broken);
+  expect(await listProcessesStrict()).toBeNull();
+  expect(vi.getTimerCount()).toBe(0);
+});
+
 it('waits for a timed-out custom-home CLI to close before releasing its shared read', async () => {
   const stalled = child();
   mocks.spawn.mockReturnValueOnce(stalled);
