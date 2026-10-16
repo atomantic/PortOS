@@ -8,6 +8,7 @@ import { FormField } from '../../ui/FormField';
 import * as api from '../../../services/api';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import { formatDateNumeric } from '../../../utils/formatters';
+import LoadFailedState from '../../ui/LoadFailedState';
 
 const CATEGORY_CONFIG = {
   creative: { label: 'Creative', icon: Lightbulb, color: 'text-purple-400', bg: 'bg-purple-500/20' },
@@ -45,6 +46,7 @@ export default function GoalsTab({ onRefresh }) {
   const [goalsData, setGoalsData] = useState(null);
   const [longevity, setLongevity] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [expandedGoal, setExpandedGoal] = useState(null);
   const [showNewGoal, setShowNewGoal] = useState(false);
   const [showBirthDate, setShowBirthDate] = useState(false);
@@ -55,13 +57,15 @@ export default function GoalsTab({ onRefresh }) {
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   const loadData = useCallback(async () => {
-    const [goals, longevityData] = await Promise.all([
-      api.getGoals().catch(() => null),
-      api.getLongevity().catch(() => null)
+    const [goalsResult, longevityResult] = await Promise.allSettled([
+      api.getGoals(), api.getLongevity()
     ]);
-    setGoalsData(goals);
-    setLongevity(longevityData);
-    if (goals?.birthDate) setBirthDateInput(goals.birthDate);
+    setLoadFailed(goalsResult.status === 'rejected');
+    if (goalsResult.status === 'fulfilled') {
+      setGoalsData(goalsResult.value);
+      if (goalsResult.value?.birthDate) setBirthDateInput(goalsResult.value.birthDate);
+    }
+    if (longevityResult.status === 'fulfilled') setLongevity(longevityResult.value);
     setLoading(false);
   }, []);
 
@@ -129,6 +133,10 @@ export default function GoalsTab({ onRefresh }) {
         <BrailleSpinner text="Loading" />
       </div>
     );
+  }
+
+  if (loadFailed) {
+    return <LoadFailedState title="Could not load goals." hint="Your existing goals may still be available." onRetry={() => { setLoading(true); loadData(); }} />;
   }
 
   const activeGoals = goalsData?.goals?.filter(g => g.status === 'active') || [];
