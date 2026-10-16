@@ -109,13 +109,13 @@ describe('independent CI test failure recovery (#11552)', () => {
   });
 
   it.each([
-    ['windows-server', 'Run server tests on Windows', 'Preserve Windows test failure diagnostics'],
-    ['database', 'Run cross-workspace browser suites', 'Preserve browser test failure diagnostics'],
-  ])('%s collects after failure and before sibling cancellation with bounded, non-masking failure handling', (jobId, testName, collectorName) => {
+    ['windows-server', 'Run server tests on Windows', 'Preserve Windows test failure diagnostics', 'run-ci-tests.js'],
+    ['database', 'Run cross-workspace browser suites', 'Preserve browser test failure diagnostics', 'watch-ci-tests.js'],
+  ])('%s collects after failure and before sibling cancellation with bounded, non-masking failure handling', (jobId, testName, collectorName, launcherName) => {
     const workflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
     const job = workflowJobs(workflow)[jobId];
     const start = job.indexOf(`      - name: ${collectorName}`);
-    expect(start).toBeGreaterThan(job.indexOf('run: node scripts/run-ci-tests.js server'));
+    expect(start).toBeGreaterThan(job.indexOf(`run: node scripts/${launcherName} server`));
     const end = job.indexOf('      - name: Report the failure, then cancel sibling CI jobs');
     expect(end).toBeGreaterThan(start);
     const step = job.slice(start, end);

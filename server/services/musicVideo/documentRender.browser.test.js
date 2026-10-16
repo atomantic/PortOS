@@ -277,6 +277,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
   const threeIt = existsSync(new URL('../../../client/node_modules/three/package.json', import.meta.url)) ? it : vitestIt.skip;
   threeIt('authors a local Three.js world and renders the same deterministic scene through module preview and export', async ({ signal }) => {
     let bodyError;
+    let page;
     const abort = () => {
       // The cached verdict is awaited below and by suite teardown. Termination
       // must begin before drain can wait on a blocked renderer evaluation.
@@ -343,7 +344,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
       });
     } finally { await reference.close(); }
     console.log('🎬 Generated Three stage: main-preview');
-    const page = await newPage({ viewport: { width: 1920, height: 1080 } });
+    page = await newPage({ viewport: { width: 1920, height: 1080 } });
     const errors = []; page.on('pageerror', (error) => errors.push(error.message));
     const warnings = []; page.on('console', (message) => { if (message.type() === 'warning') warnings.push(message.text()); });
     await page.evaluate(() => {
@@ -509,11 +510,15 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
       bodyError = error;
       throw error;
     } finally {
-      signal.removeEventListener('abort', abort);
-      if (signal.aborted) await closeFixture().catch(error => {
-        if (bodyError) throw new AggregateError([bodyError, error], 'Three test and owned browser cleanup failed', { cause: bodyError });
-        throw error;
-      });
+      const cleanupErrors = [];
+      try {
+        if (!signal.aborted && page && !page.isClosed()) await page.close().catch(error => cleanupErrors.push(error));
+        // Keep the listener installed while ordinary page closure is pending.
+        // If cancellation starts there, await its cached fixture verdict too.
+        if (signal.aborted) await closeFixture().catch(error => cleanupErrors.push(error));
+        if (cleanupErrors.length) throw new AggregateError([...(bodyError ? [bodyError] : []), ...cleanupErrors],
+          'Three test or owned browser cleanup failed', { cause: bodyError ?? cleanupErrors[0] });
+      } finally { signal.removeEventListener('abort', abort); }
     }
   }, 120000);
 

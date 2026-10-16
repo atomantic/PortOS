@@ -95,7 +95,7 @@ it('rejects empty browser coverage except explicitly deferred smoke-only inputs'
 });
 
 describe('ci.yml shard wiring', () => {
-  const runners = Object.entries(workflowJobs(WORKFLOW)).filter(([, body]) => body.includes('run-ci-tests.js'));
+  const runners = Object.entries(workflowJobs(WORKFLOW)).filter(([, body]) => /(?:run|watch)-ci-tests\.js/.test(body));
 
   it('builds every test runner matrix from the planner and hands each slice to the runner', () => {
     expect(runners.map(([id]) => id).sort()).toEqual(['client', 'database', 'server', 'windows-server']);

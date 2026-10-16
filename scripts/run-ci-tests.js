@@ -248,12 +248,15 @@ function runNpmWithReport(scope, script, extraArgs, reportPath, env, abortSignal
   const { command, args: spawnArgs } = prepareCliSpawn('npm', args, env);
   return new Promise((resolve) => {
     // npm is a launcher, not the entire test tree. Give this invocation its
-    // own POSIX group; Windows killProcessTree uses taskkill /T instead.
-    const processGroup = process.platform !== 'win32';
+    // own POSIX group; Windows killProcessTree uses taskkill /T instead. The
+    // browser supervisor instead owns the inherited group, so its independent
+    // watchdog can retire npm even if this launcher's event loop is stopped.
+    const processGroup = process.platform !== 'win32' && env.PORTOS_CI_TEST_SUPERVISED_GROUP !== '1';
     const childEnv = { ...env, PORTOS_CI_DIAGNOSTICS_PATH: runReportPath };
     // Only the workflow launcher owns durable attempts. Nested launcher
     // fixtures must not overwrite or add to the job's failure provenance.
     delete childEnv.PORTOS_CI_DIAGNOSTICS_DIR;
+    delete childEnv.PORTOS_CI_TEST_SUPERVISED_GROUP;
     const child = spawn(command, spawnArgs, {
       env: childEnv, cwd: repoRoot, detached: processGroup,
     });
