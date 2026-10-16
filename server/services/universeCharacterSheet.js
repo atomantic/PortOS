@@ -14,6 +14,7 @@
  */
 
 import { join, basename } from 'path';
+import { randomUUID } from 'node:crypto';
 import { PATHS, ensureDir, shortId, assertSafeFilename, copyFileGuarded, unlinkGuarded } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
@@ -22,7 +23,7 @@ import { getUniverse, updateUniverse } from './universeBuilder.js';
 import { purgeReferenceSheetFromAllUniverses } from './universeCanon.js';
 import { universeAestheticLine } from '../lib/universeVisualStyle.js';
 import { promptAddition } from '../lib/modelInput.js';
-import { enqueueJob, mediaJobEvents } from './mediaJobQueue/index.js';
+import { enqueueJob, getJob, mediaJobEvents } from './mediaJobQueue/index.js';
 import { buildUniverseRunTag } from './universeRunTag.js';
 import { IMAGE_GEN_MODE } from './imageGen/modes.js';
 import { resolveRenderTargetConfig } from './imageGen/cloudProviderConfig.js';
@@ -328,14 +329,6 @@ export function listSheetVariants() {
   }));
 }
 
-// `(universeId, characterId) → latest generationId requested` is owned by
-// `./universeCharacterSheetSlot.js` (extracted so universeBuilder.js can
-// clear slots on delete without an import cycle). The supersede-aware
-// contract is unchanged: a render claims the slot at enqueue, the
-// completion handler only stamps `referenceSheetImageRef` when the slot
-// still holds its jobId, and a newer render overwrites the slot so the
-// older one sees itself as superseded.
-
 // Single-dispatcher subscription so N pending sheets don't attach 4*N
 // listeners on the global `mediaJobEvents` emitter (Node defaults to a
 // 10-listener soft cap before warning). Each render claims an entry by
@@ -347,11 +340,34 @@ function ensureSheetDispatchListeners() {
   if (_sheetListenersAttached) return;
   _sheetListenersAttached = true;
   mediaJobEvents.on('started', (job) => sheetSubscribers.get(job?.id)?.onStarted?.(job));
-  mediaJobEvents.on('completed', (job) => sheetSubscribers.get(job?.id)?.onCompleted?.(job));
-  const onTerminal = (job) => sheetSubscribers.get(job?.id)?.onFailed?.(job);
+  mediaJobEvents.on('completed', (job) => {
+    sheetSubscribers.get(job?.id)?.onCompleted?.(job);
+    const tag = job?.params?.characterSheet;
+    if (!tag) return;
+    // The persisted job owns completion, even after restart or listener expiry.
+    void onSheetComplete({ ...tag, jobId: job.id, sourceFilename: job.result?.filename })
+      .catch((err) => {
+        console.error(`❌ Character sheet post-completion failed [${shortId(job.id)}]: ${err?.message}`);
+        return null;
+      }).then((result) => {
+        releasePendingSheetSlot(tag.universeId, tag.entryId, job.id, tag.variant);
+        mediaJobEvents.emit('reference-sheet:changed', {
+          universeId: tag.universeId, entryId: tag.entryId, jobId: job.id, variant: tag.variant,
+          status: result?.superseded ? 'superseded' : result ? 'ready' : 'failed',
+        });
+      });
+  });
+  const onTerminal = (job) => {
+    sheetSubscribers.get(job?.id)?.onFailed?.(job);
+    const tag = job?.params?.characterSheet;
+    if (tag) releasePendingSheetSlot(tag.universeId, tag.entryId, job.id, tag.variant);
+  };
   mediaJobEvents.on('failed', onTerminal);
   mediaJobEvents.on('canceled', onTerminal);
 }
+// Routes import this module before queue recovery starts at boot.
+ensureSheetDispatchListeners();
+
 function subscribeToSheetJob(jobId, handlers) {
   ensureSheetDispatchListeners();
   sheetSubscribers.set(jobId, handlers);
@@ -484,33 +500,29 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
     params.universeRun = universeRun;
   }
 
-  // Enqueue through mediaJobQueue so the render serializes through the right
-  // backend lane alongside Image Gen / Universe Builder renders. The queue
-  // dispatches by `params.mode` (codex → codex lane, local → GPU lane).
+  // Persist intent BEFORE enqueue can dispatch. The serialized universe write
+  // establishes ordering without timestamps or a process-local pending slot.
+  // Retain the token after completion/failure: an older job must stay superseded.
+  const requestId = randomUUID();
+  await updateUniverse(universeId, (latest) => {
+    const current = latest.characters?.find((entry) => entry.id === entryId);
+    if (!current) throw new ServerError('Character not found in universe', { status: 404, code: 'UNIVERSE_CANON_NOT_FOUND' });
+    return { characters: latest.characters.map((entry) => entry.id === entryId ? {
+      ...entry,
+      referenceSheetRequests: { ...entry.referenceSheetRequests, [variant]: requestId },
+    } : entry) };
+  });
+  params.characterSheet = { universeId, entryId, variant, requestId };
   const queued = await enqueueJob({ kind: 'image', params });
   const jobId = queued.jobId;
-  // Claim the latest-pending slot for this character + variant. onSheetComplete
-  // checks it before stamping — guards against an older-but-slower render
-  // finishing after a newer one and overwriting the newer pointer. The variant
-  // key keeps standard and blueprint slots independent so a blueprint render
-  // can't be superseded by an illustrated one or vice versa.
-  claimPendingSheetSlot(universeId, entryId, jobId, variant);
+  const latest = await getUniverse(universeId);
+  if (latest.characters?.find((entry) => entry.id === entryId)?.referenceSheetRequests?.[variant] === requestId) {
+    claimPendingSheetSlot(universeId, entryId, jobId, variant);
+  }
 
-  // Subscribe to the queue's completion bus via the shared sheet
-  // dispatcher (NOT imageGenEvents directly — the queue mediates the
-  // imageGen lifecycle and re-emits on mediaJobEvents with the full job
-  // record). The shared dispatcher caps listeners at 4 regardless of how
-  // many sheets are pending (see `subscribeToSheetJob` above), so a user
-  // running 10+ parallel character renders won't trip
-  // MaxListenersExceededWarning on the global emitter.
-  //
-  // Two-stage timeout: a generous queue-wait window covers the pre-start
-  // gap (so a sheet queued behind a long video / first-run-download
-  // doesn't detach mid-queue), then the `started` event resets the timer
-  // to the tighter run window. Without the reset, a sheet waiting 30+
-  // minutes behind a video job would lose its bookkeeping listener
-  // before onSheetComplete had a chance to run — file copy + character
-  // pointer stamp lost.
+  // Per-request listeners only track pending UI state. Expiry releases that
+  // state, while the permanent hook still owns publication from the job tag.
+  // Queue wait gets a longer window than active rendering.
   const QUEUE_WAIT_MS = 4 * 60 * 60 * 1000; // 4h — generous; survives chained video jobs.
   // 30min sits comfortably above the codex backend's 20min CODEX_TIMEOUT_MS
   // watchdog and the typical local FLUX.2 ceiling, so a legitimate slow
@@ -528,32 +540,25 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
     }, ms);
     timeoutHandle.unref?.();
   };
-  const detach = () => {
+  const detach = (release = true) => {
     if (timeoutHandle) { clearTimeout(timeoutHandle); timeoutHandle = null; }
     if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+    if (release) releasePendingSheetSlot(universeId, entryId, jobId, variant);
   };
   unsubscribe = subscribeToSheetJob(jobId, {
     onStarted: () => armTimeout(RUN_TIMEOUT_MS, 'exceeded run window'),
-    onCompleted: async (job) => {
-      detach();
-      const sourceFilename = job.result?.filename;
-      const result = await onSheetComplete({ universeId, entryId, jobId, sourceFilename, variant }).catch((err) => {
-        console.error(`❌ ${variantConfig.label} post-completion failed [${shortId(jobId)}]: ${err?.message}`);
-      });
-      releasePendingSheetSlot(universeId, entryId, jobId, variant);
-      mediaJobEvents.emit('reference-sheet:changed', {
-        universeId, entryId, jobId, variant,
-        status: result?.superseded ? 'superseded' : result ? 'ready' : 'failed',
-      });
-    },
+    onCompleted: () => detach(false),
     onFailed: (job) => {
       detach();
-      // Release the slot so a retry render doesn't get superseded by this dead one.
-      releasePendingSheetSlot(universeId, entryId, jobId, variant);
       console.log(`⚠️ ${variantConfig.label} render ${job.status} [${shortId(jobId)}]: ${job.error || 'unknown'}`);
     },
   });
   armTimeout(QUEUE_WAIT_MS, 'queue-wait timeout');
+  // Queue admission starts its worker before resolving. A fast completion or
+  // cancellation can precede this subscriber; never leave its terminal job pending.
+  const admittedJob = getJob(jobId);
+  if (['completed', 'failed', 'canceled'].includes(admittedJob?.status ?? queued.status)) detach();
+  else if (admittedJob?.status === 'running') armTimeout(RUN_TIMEOUT_MS, 'exceeded run window');
 
   // Deterministic destination filename — uses the queue's jobId so the client
   // can correlate the persisted pointer with this particular render.
@@ -584,7 +589,7 @@ export function onSheetComplete(completion) {
   return withBackupAssetPublication(() => publishCompletedSheet(completion));
 }
 
-async function publishCompletedSheet({ universeId, entryId, jobId, sourceFilename, variant = LEGACY_SHEET_VARIANT_ID }) {
+async function publishCompletedSheet({ universeId, entryId, jobId, sourceFilename, requestId, variant = LEGACY_SHEET_VARIANT_ID }) {
   if (!sourceFilename) return null;
   const variantConfig = getVariantConfig(variant);
   await ensureDir(PATHS.imageRefs);
@@ -597,49 +602,21 @@ async function publishCompletedSheet({ universeId, entryId, jobId, sourceFilenam
   await copyFileGuarded(srcPath, destPath);
   console.log(`📸 ${variantConfig.label} copied to image-refs: ${destFilename}`);
 
-  // If a newer render has been started for this character+variant while ours
-  // was in flight (OR the character was deleted, which clears all variants'
-  // slots), the slot no longer holds our jobId. Skip the stamp — the newer
-  // render will stamp its own filename when it finishes, and a deleted
-  // character would re-introduce an orphaned pointer. Without this, an
-  // older-but-slower render could overwrite a newer-but-finished pointer.
-  if (getPendingSheetSlot(universeId, entryId, variant) !== jobId) {
-    console.log(`⏭️ ${variantConfig.label} [${shortId(jobId)}] superseded by newer render — file saved, pointer not stamped`);
-    return { filename: destFilename, path: destPath, superseded: true };
-  }
-  // Stamp ONLY the variant's pointer (legacy field OR `referenceSheets` map
-  // slot) inside the write queue against the freshest persisted universe so
-  // a concurrent user edit (or sibling render landing close in time) can't
-  // clobber unrelated character fields. The sheet file lives in
-  // data/image-refs/, distinct from `imageRefs[]` (gallery, /data/images/) —
-  // polluting imageRefs would 404 the CanonCard thumbnail.
+  // Compare the durable request identity inside the serialized write. An
+  // absent character/token is superseded too; deletion must not revive a sheet.
   let stamped = false;
   await updateUniverse(universeId, (latest) => {
-    // Recheck inside the serialized write: a newer render can claim the slot
-    // while this completion waits for an earlier universe update.
-    if (getPendingSheetSlot(universeId, entryId, variant) !== jobId) return null;
     const latestList = Array.isArray(latest.characters) ? latest.characters : [];
     const latestIdx = latestList.findIndex((c) => c.id === entryId);
-    if (latestIdx < 0) return null;
+    if (latestIdx < 0 || !requestId || latestList[latestIdx].referenceSheetRequests?.[variant] !== requestId) return null;
     const nextList = latestList.map((e, i) => (
       i === latestIdx ? applySheetPointerToCharacter(e, variant, destFilename) : e
     ));
     stamped = true;
     return { characters: nextList };
   });
-  // Release the slot only after a successful stamp AND only if it still
-  // belongs to us — between the supersede check and this delete, a newer
-  // render could have started, claimed the slot, and arrived here in
-  // parallel. An unconditional delete would wipe the newer render's slot
-  // and cause its onSheetComplete to see "superseded" (slot empty ≠ jobId)
-  // and skip its own stamp — leaving the older filename persisted. A
-  // failed stamp leaves the slot owned by us so the next render-start
-  // cleanly overwrites it.
   releasePendingSheetSlot(universeId, entryId, jobId, variant);
-  if (!stamped) {
-    console.log(`⚠️ Character ${entryId} not found post-render — ${variantConfig.label.toLowerCase()} saved but not linked`);
-    return null;
-  }
+  if (!stamped) return { filename: destFilename, path: destPath, superseded: true };
   console.log(`📌 Character ${shortId(entryId)} [${variant}] = ${destFilename}`);
   return { filename: destFilename, path: destPath, variant };
 }

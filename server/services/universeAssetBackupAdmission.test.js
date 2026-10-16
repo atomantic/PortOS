@@ -40,11 +40,21 @@ vi.mock('./universeBuilder.js', () => ({
   },
 }));
 
+// Retain the same job identity and params from admission through terminal
+// publication, as the persisted queue does across process lifetimes.
+const queuedJobs = new Map();
 vi.mock('./mediaJobQueue/index.js', () => ({
   mediaJobEvents: new EventEmitter(),
-  enqueueJob: async () => ({ jobId: 'sheet-job', position: 1 }),
+  enqueueJob: async ({ kind, params }) => {
+    const job = { id: 'sheet-job', kind, params: structuredClone(params), status: 'queued' };
+    queuedJobs.set(job.id, job);
+    return { jobId: job.id, position: 1, status: job.status };
+  },
+  getJob: id => queuedJobs.get(id),
 }));
 vi.mock('./mediaCollections.js', () => ({ addItem: vi.fn(), ERR_DUPLICATE: 'DUPLICATE' }));
+// This suite owns universe references; music-video pool cleanup has its own contracts.
+vi.mock('./musicVideo/mediaPool.js', () => ({ forgetDeletedMusicVideoAssets: async () => {} }));
 vi.mock('./mediaAssetIndex/index.js', () => ({ indexImage: async () => {}, unindexImage: async () => {} }));
 vi.mock('./settings.js', () => ({ getSettings: async () => ({ imageGen: { mode: 'local', local: { modelId: 'dev' } } }) }));
 vi.mock('./universeRunTag.js', () => ({ buildUniverseRunTag: async () => null }));
@@ -88,6 +98,7 @@ initUniverseBuilderCollectionHook();
 afterAll(cleanupTempDataRoots);
 beforeEach(async () => {
   beforeRowWrite = async () => {};
+  queuedJobs.clear();
   await rm(PATHS.data, { recursive: true, force: true });
   await Promise.all([PATHS.images, PATHS.imageRefs].map(directory => mkdir(directory, { recursive: true })));
   await writeFile(renderPath(), 'synthetic render');
@@ -115,7 +126,9 @@ describe('render completion listeners', () => {
       job: async () => {
         const { jobId, destFilename } = await renderCharacterReferenceSheet('universe-1', 'character-1');
         sheet = destFilename;
-        return { id: jobId, kind: 'image', result: { filename: RENDER } };
+        const completed = { ...queuedJobs.get(jobId), status: 'completed', result: { filename: RENDER } };
+        queuedJobs.set(jobId, completed);
+        return structuredClone(completed);
       },
       changedFiles: async () => {
         expect(await readFile(join(PATHS.imageRefs, sheet), 'utf8')).toBe('synthetic render');

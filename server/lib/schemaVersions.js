@@ -80,7 +80,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // <=v11 peer would strip it in its `factual`-unaware `sanitizeTemplate`
   // and last-writer-wins the loss back, silently reclassifying the user's
   // Reality universe as fiction.
-  universes: 12,
+  // v13 = durable character sheet request identities (#11669). Older peers
+  // must not strip supersession state during an unrelated canon edit.
+  universes: 13,
   // v1 = post-split. Migrations 035/036 introduced the pipeline collection
   // layout for issues and series.
   // v2 = `stages.audio.audioMode` + `stages.audio.cues[]` added (whole-episode

@@ -163,19 +163,19 @@ describe('dataSync — universe category', () => {
     const snap = await dataSync.getSnapshot('universe');
     expect(snap.portosMeta).toBeDefined();
     expect(typeof snap.portosMeta.portosVersion).toBe('string');
-    expect(snap.portosMeta.schemaVersions.universes).toBe(12);
+    expect(snap.portosMeta.schemaVersions.universes).toBe(13);
   });
 
   it('applyRemote rejects when sender schemaVersions are AHEAD of local code', async () => {
     writeUniverseState({ universes: [], runs: [] });
     const result = await dataSync.applyRemote('universe', {
       universes: [{ id: 'u-new', name: 'Foundry', updatedAt: '2026-05-17T10:00:00Z' }],
-    }, { portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 13 } } });
+    }, { portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 14 } } });
     expect(result.applied).toBe(false);
     expect(result.count).toBe(0);
     expect(result.blockedBySchema).toBeDefined();
     expect(result.blockedBySchema.ahead).toEqual([
-      { category: 'universes', senderV: 13, receiverV: 12 },
+      { category: 'universes', senderV: 14, receiverV: 13 },
     ]);
     expect(result.blockedBySchema.senderPortosVersion).toBe('99.0.0');
     // Nothing was written.
@@ -211,6 +211,25 @@ describe('dataSync — universe category', () => {
     expect(clear.applied).toBe(true);
     persisted = readUniverseState();
     expect('moodBoardId' in persisted.universes[0]).toBe(false);
+  });
+
+  it('preserves durable sheet intent through old-peer sync and accepts current-peer supersession', async () => {
+    const first = '11111111-1111-4111-8111-111111111111';
+    const next = '22222222-2222-4222-8222-222222222222';
+    const base = { id: 'u-sheet', name: 'Example', createdAt: '2026-05-17T09:00:00Z' };
+    writeUniverseState({ universes: [{ ...base, updatedAt: '2026-05-17T10:00:00Z',
+      characters: [{ id: 'character-1', name: 'Example', referenceSheetRequests: { standard: first } }],
+    }], runs: [] });
+    const behind = await dataSync.applyRemote('universe', { universes: [{ ...base,
+      updatedAt: '2026-05-17T11:00:00Z', characters: [{ id: 'character-1', name: 'Peer edit' }],
+    }] }, { portosMeta: { schemaVersions: { universes: 12 } } });
+    expect(behind.applied).toBe(true);
+    expect(readUniverseState().universes[0].characters[0].referenceSheetRequests).toEqual({ standard: first });
+    const current = await dataSync.applyRemote('universe', { universes: [{ ...base,
+      updatedAt: '2026-05-17T12:00:00Z', characters: [{ id: 'character-1', name: 'Peer edit', referenceSheetRequests: { standard: next } }],
+    }] }, { portosMeta: { schemaVersions: { universes: 13 } } });
+    expect(current.applied).toBe(true);
+    expect(readUniverseState().universes[0].characters[0].referenceSheetRequests).toEqual({ standard: next });
   });
 
   it('applyRemote falls through for legacy senders that send NO portosMeta at all', async () => {

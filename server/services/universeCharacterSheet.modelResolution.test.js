@@ -13,10 +13,11 @@ const mocks = vi.hoisted(() => ({
   claimPendingSheetSlot: vi.fn(),
 }));
 
-vi.mock('./universeBuilder.js', () => ({ getUniverse: (...args) => mocks.getUniverse(...args) }));
+vi.mock('./universeBuilder.js', () => ({ getUniverse: (...args) => mocks.getUniverse(...args), updateUniverse: vi.fn() }));
 vi.mock('./settings.js', () => ({ getSettings: (...args) => mocks.getSettings(...args) }));
 vi.mock('./mediaJobQueue/index.js', () => ({
   enqueueJob: (...args) => mocks.enqueueJob(...args),
+  getJob: vi.fn(),
   mediaJobEvents: { on: vi.fn(), off: vi.fn() },
 }));
 vi.mock('./universeRunTag.js', () => ({ buildUniverseRunTag: (...args) => mocks.buildUniverseRunTag(...args) }));
