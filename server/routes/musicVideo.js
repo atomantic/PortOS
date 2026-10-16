@@ -112,6 +112,7 @@ import {
   reorderProjectScenes,
   splitProjectScene,
   mergeProjectNextScene,
+  mergeProjectPreviousScene,
   moveProjectSceneStart,
   setProjectMidiTranscription,
   appendSceneTakes,
@@ -1548,6 +1549,12 @@ router.post('/:id/scenes/:sceneId/split', asyncHandler(async (req, res) => {
 router.post('/:id/scenes/:sceneId/merge-next', asyncHandler(async (req, res) => {
   const { backend } = validateRequest(musicVideoSceneSplitSchema, req.body ?? {});
   res.json(await mergeProjectNextScene(req.params.id, req.params.sceneId, { backend }));
+}));
+
+// Merge a scene over the previous one: it starts where the previous one did, which is removed.
+router.post('/:id/scenes/:sceneId/merge-previous', asyncHandler(async (req, res) => {
+  const { backend } = validateRequest(musicVideoSceneSplitSchema, req.body ?? {});
+  res.json(await mergeProjectPreviousScene(req.params.id, req.params.sceneId, { backend }));
 }));
 
 // Move a shot's start; the shot before it ends at the same time, so the cut between them moves.

@@ -29,6 +29,7 @@ vi.mock('../services/musicVideo/projects.js', () => ({
   // Scene split (#8977) — exercised against the real store in musicVideoSceneSplit.test.js.
   splitProjectScene: vi.fn(),
   mergeProjectNextScene: vi.fn(),
+  mergeProjectPreviousScene: vi.fn(),
   setProjectMidiTranscription: vi.fn(async (id, midi) => ({ id, midiTranscription: midi })),
   // Scene takes (#8965) — exercised against the real store in musicVideoTakes.test.js.
   appendSceneTakes: vi.fn(),

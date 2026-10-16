@@ -268,6 +268,25 @@ describe('Merge with next (#10810)', () => {
   });
 });
 
+// Uniquely catches Merge over previous showing on the first shot, past the backend limit, or calling with the wrong shot.
+describe('Merge over previous', () => {
+  const scene = { sceneId: 's2', startSec: 4, endSec: 8, takes: [] };
+  const props = { index: 1, expanded: true, onEditLocal: vi.fn(), onSave: vi.fn() };
+
+  it('merges this shot over the previous one, and hides when first, in a document composition, or past the backend limit', () => {
+    const onMergePrevious = vi.fn();
+    const { rerender } = render(<SceneCard scene={scene} {...props} onMergePrevious={onMergePrevious} prevStartSec={0} lipSyncBackend="grok" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Merge over previous' }));
+    expect(onMergePrevious).toHaveBeenCalledWith('s2', 'grok');
+    rerender(<SceneCard scene={{ ...scene, endSec: 19 }} {...props} onMergePrevious={onMergePrevious} prevStartSec={0} lipSyncBackend="grok" />);
+    expect(screen.queryByRole('button', { name: 'Merge over previous' })).toBeNull();
+    rerender(<SceneCard scene={scene} {...props} index={0} onMergePrevious={onMergePrevious} prevStartSec={0} />);
+    expect(screen.queryByRole('button', { name: 'Merge over previous' })).toBeNull();
+    rerender(<SceneCard scene={scene} {...props} onMergePrevious={onMergePrevious} prevStartSec={0} documentComposition />);
+    expect(screen.queryByRole('button', { name: 'Merge over previous' })).toBeNull();
+  });
+});
+
 describe('scene timing and provider presentation (#11046)', () => {
   const scene = { sceneId: 'timing', startSec: 10, endSec: 12, referenceImageId: 'frame.png', takes: [] };
   const props = { index: 0, expanded: true, onEditLocal: vi.fn(), onSave: vi.fn() };
