@@ -89,7 +89,11 @@ router.delete('/snapshots/:snapshotId', asyncHandler(async (req, res) => {
 router.post('/restore', asyncHandler(async (req, res) => {
   const { snapshotId, source, subdirFilter, dryRun } = validateRequest(restoreRequestSchema, req.body);
   const settings = await getSettings();
-  const result = await backup.restoreSnapshot(settings.backup?.destPath, snapshotId, {
+  const destPath = settings.backup?.destPath;
+  if (!destPath) {
+    throw new ServerError('No backup destination configured in settings', { status: 400, code: 'BACKUP_NOT_CONFIGURED' });
+  }
+  const result = await backup.restoreSnapshot(destPath, snapshotId, {
     dryRun,
     subdirFilter,
     ...(source ? { source } : {}),
