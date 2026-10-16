@@ -71,6 +71,8 @@ describe('configured provider reviewers', () => {
       'pinned-coder', expect.stringContaining('untrusted contributor-controlled data'),
       expect.objectContaining({ allowModelRecovery: false }),
     );
+    expect(callProviderAISimple.mock.lastCall[2]).toContain('do not run commands or open files');
+    expect(callProviderAISimple.mock.lastCall[2]).not.toContain('When repository tools are available');
     expect(runCliProviderPrompt).not.toHaveBeenCalled();
     expect(resolveReviewerConfig({ reviewerModels: {} }, defaults, defaults.reviewers).reviewerModels).toEqual({});
   });
@@ -118,7 +120,7 @@ describe('configured provider reviewers', () => {
 
     // #10905: agy intermittently reached for shell commands to "inspect surrounding
     // source" in the scratch dir and headless mode aborted the run. A tool-free
-    // review must not invite tool use; an ordinary review keeps the guidance.
+    // review must not invite tool use, including an ordinary unconfined review.
     it('does not invite repository inspection in a tool-free claim review prompt', async () => {
       await review('{"verdict":"clean","findings":[]}');
       const toolFreePrompt = runCliProviderPrompt.mock.lastCall[0].prompt;
@@ -126,7 +128,8 @@ describe('configured provider reviewers', () => {
       expect(toolFreePrompt).not.toContain('When repository tools are available');
       runCliProviderPrompt.mockResolvedValue({ text: '{"verdict":"clean","findings":[]}', partial: false, exitCode: 0, stderr: '' });
       await runLocalCodeReview({ backend: agyBackend, model: 'gemini-3.8-flash', effort: 'low', diff: 'example diff' });
-      expect(runCliProviderPrompt.mock.lastCall[0].prompt).toContain('When repository tools are available');
+      expect(runCliProviderPrompt.mock.lastCall[0].prompt).toContain('do not run commands or open files');
+      expect(runCliProviderPrompt.mock.lastCall[0].prompt).not.toContain('When repository tools are available');
     });
 
     it.each([
@@ -284,6 +287,8 @@ describe('configured provider reviewers', () => {
       expect(await runLocalCodeReview({ backend, model: 'pinned-coder', diff: 'example diff', cwd: process.cwd() })).toMatchObject({ ok: true });
       const args = runCliProviderPrompt.mock.lastCall[0];
       expect(args).toMatchObject({ safetyProfile: 'public-review-gate', codeReview: true });
+      expect(args.prompt).toContain('do not run commands or open files');
+      expect(args.prompt).not.toContain('When repository tools are available');
       expect(args.cwd).not.toBe(process.cwd());
       await expect(access(args.cwd)).rejects.toThrow();
       runCliProviderPrompt.mockClear();
@@ -302,12 +307,27 @@ describe('configured provider reviewers', () => {
     expect(runCliProviderPrompt).not.toHaveBeenCalled();
   });
 
-  it('isolates an explicitly tool-free review even when a repository was supplied', async () => {
+  it.each(['claude', 'codex'])('keeps checkout access and inspection guidance for enforced %s review mode', async command => {
+    getProviderById.mockResolvedValue({ ...provider, type: 'cli', command });
+    runCliProviderPrompt.mockResolvedValue({ text: 'NO FINDINGS', partial: false });
+    expect(await runLocalCodeReview({ backend, diff: 'example diff', cwd: process.cwd() })).toMatchObject({ ok: true });
+    expect(runCliProviderPrompt.mock.lastCall[0]).toMatchObject({
+      cwd: process.cwd(), prompt: expect.stringContaining('When repository tools are available'),
+    });
+    expect(runCliProviderPrompt.mock.lastCall[0].prompt).not.toContain('do not run commands or open files');
+  });
+
+  it.each([
+    { kind: 'claim-review' },
+    { toolFree: true },
+    { isolateFromCheckout: true },
+  ])('isolates a review with %j even when a repository was supplied', async isolation => {
     getProviderById.mockResolvedValue({ ...provider, type: 'cli', command: 'claude' });
     runCliProviderPrompt.mockResolvedValue({ text: 'NO FINDINGS', partial: false });
-    const claimRequest = localReviewBridgeRequest({ kind: 'claim-review', backend, diff: 'example diff' }, process.cwd());
-    expect(await runLocalCodeReview(claimRequest)).toMatchObject({ ok: true });
+    const request = localReviewBridgeRequest({ backend, diff: 'example diff', ...isolation }, process.cwd());
+    expect(await runLocalCodeReview({ ...request, ...isolation })).toMatchObject({ ok: true });
     const args = runCliProviderPrompt.mock.lastCall[0];
+    expect(args.prompt).toContain('do not run commands or open files');
     expect(args.safetyProfile).toBe('public-review-gate');
     expect(args.cwd).not.toBe(process.cwd());
     await expect(access(args.cwd)).rejects.toThrow();

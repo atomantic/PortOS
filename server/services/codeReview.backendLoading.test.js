@@ -24,5 +24,8 @@ it('reads defaults without managers and reviews an explicit endpoint when capabi
     diff: 'example diff', baseUrl: 'http://localhost:11434',
   })).toMatchObject({ ok: true, findings: 'No findings.' });
   expect(fetchMock).toHaveBeenCalledTimes(1);
+  const prompt = JSON.parse(fetchMock.mock.calls[0][1].body).messages[0].content;
+  expect(prompt).toContain('do not run commands or open files');
+  expect(prompt).not.toContain('When repository tools are available');
   expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ reasoning_effort: 'high' });
 });
