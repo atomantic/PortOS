@@ -108,21 +108,30 @@ describe('independent CI test failure recovery (#11552)', () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it('collects after failure and before sibling cancellation with bounded, non-masking failure handling', () => {
+  it.each([
+    ['windows-server', 'Run server tests on Windows', 'Preserve Windows test failure diagnostics'],
+    ['database', 'Run cross-workspace browser suites', 'Preserve browser test failure diagnostics'],
+  ])('%s collects after failure and before sibling cancellation with bounded, non-masking failure handling', (jobId, testName, collectorName) => {
     const workflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
-    const windows = workflowJobs(workflow)['windows-server'];
-    expect(windows).toContain('PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics');
-    const start = windows.indexOf('      - name: Preserve Windows test failure diagnostics');
-    expect(start).toBeGreaterThan(windows.indexOf('run: node scripts/run-ci-tests.js server'));
-    const end = windows.indexOf('      - name: Report the failure, then cancel sibling CI jobs');
+    const job = workflowJobs(workflow)[jobId];
+    const start = job.indexOf(`      - name: ${collectorName}`);
+    expect(start).toBeGreaterThan(job.indexOf('run: node scripts/run-ci-tests.js server'));
+    const end = job.indexOf('      - name: Report the failure, then cancel sibling CI jobs');
     expect(end).toBeGreaterThan(start);
-    const step = windows.slice(start, end);
+    const step = job.slice(start, end);
     expect(step).toContain('if: failure()');
     expect(step).toContain('continue-on-error: true');
     expect(step).toContain('timeout-minutes: 1');
     expect(step).toContain('run: node scripts/ci-test-diagnostics.js');
-    const testStep = windows.slice(windows.indexOf('- name: Run server tests on Windows'), start);
+    const testStep = job.slice(job.indexOf(`- name: ${testName}`), start);
+    const durable = 'PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics';
+    expect(testStep).toContain(durable);
+    expect(step).toContain(durable);
+    const testMinutes = Number(testStep.match(/timeout-minutes:\s*(\d+)/)?.[1]);
+    const jobMinutes = Number(job.match(/^    timeout-minutes:\s*(\d+)/m)?.[1]);
+    expect(testMinutes).toBeGreaterThan(0);
+    expect(testMinutes).toBeLessThan(jobMinutes - 1);
     expect(testStep).not.toContain('continue-on-error');
-    expect(windows.slice(end)).toContain("if: failure() && github.event_name == 'pull_request'");
+    expect(job.slice(end)).toContain("if: failure() && github.event_name == 'pull_request'");
   });
 });
