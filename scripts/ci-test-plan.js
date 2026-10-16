@@ -146,6 +146,10 @@ export const WINDOWS_RISK_RULES = [
   // — green everywhere CI looked. These modules decide containment and worktree
   // identity, so they need a real Windows run.
   /^server\/lib\/(?:pathSafety|worktreeOwnership)(?:\.test)?\.js$/,
+  // Fail-fast fixture removal raced continuing writes on Windows (#11641).
+  // Exercise the ownership helper and affected fixture on the real filesystem.
+  /^server\/lib\/mockPathsDataRoot(?:\.test)?\.js$/,
+  /^server\/services\/cosAgentIndex\.completionOrder\.test\.js$/,
   // Same class, different mechanism: staticImportGraph keys its module map by
   // string-concatenating entry names with "/" but resolves edge targets with
   // path.relative, which answers with "\\" on Windows. Every edge into a
@@ -938,7 +942,12 @@ export function buildCiTestPlan(changedFiles, {
     smoke: hasServerSource,
     windows,
     windowsMode,
-    windowsFiles: windows ? windowsContractTests(trackedSet) : [],
+    windowsFiles: windows ? uniqueSorted([
+      ...windowsContractTests(trackedSet),
+      // Test-only changes have no source path for `vitest related` to follow.
+      // A risk tag must select the changed contract itself as well as baseline.
+      ...directTests.filter(path => isServerRunnerFile(path) && hasWindowsRiskFile([path])),
+    ]) : [],
     windowsSources: windowsMode === 'related' ? serverSources : [],
   }, { appRouteOnly });
 }

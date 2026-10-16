@@ -1412,6 +1412,8 @@ describe('Windows escalation on a full plan (#7440)', () => {
       'scripts/ps1-bom.test.js',
       'server/lib/bufferedSpawn.js',
       'server/lib/pathSafety.js',
+      'server/lib/mockPathsDataRoot.js',
+      'server/services/cosAgentIndex.completionOrder.test.js',
       'server/lib/staticImportGraph.js',
       'server/services/agentImportCycles.test.js',
       'server/services/worktreeManager.js',
@@ -1454,6 +1456,21 @@ describe('Windows escalation on a full plan (#7440)', () => {
       // `windows: true` here is a direct consequence of WINDOWS_RISK_RULES.
       expect(plan(['server/services/auth.js']).windows).toBe(false);
       expect(plan(['server/lib/bufferedSpawn.js']).windows).toBe(true);
+    });
+
+    it('selects the changed cancellation fixtures explicitly on Windows without widening unrelated tests (#11641)', () => {
+      const fixtures = ['server/lib/mockPathsDataRoot.test.js', 'server/services/cosAgentIndex.completionOrder.test.js'];
+      const unrelated = 'server/services/exampleUnrelated.test.js';
+      const trackedFiles = [...TRACKED, ...WINDOWS_CONTRACT_TESTS, ...fixtures, unrelated];
+      for (const changedFiles of [fixtures, ...fixtures.map(path => [path])]) {
+        const selected = buildCiTestPlan(changedFiles, { trackedFiles, clientDependencies: [] });
+        expect(selected.full).toBe(false);
+        expect(selected.windowsMode).toBe('files');
+        expect(selected.windowsFiles).toEqual([...new Set([...WINDOWS_CONTRACT_TESTS, ...changedFiles])].sort());
+        expect(selected.windowsFiles).not.toContain(unrelated);
+      }
+      const helper = 'server/lib/mockPathsDataRoot.js';
+      expect(buildCiTestPlan([helper], { trackedFiles: [...trackedFiles, helper], clientDependencies: [] }).windows).toBe(true);
     });
   });
 });
