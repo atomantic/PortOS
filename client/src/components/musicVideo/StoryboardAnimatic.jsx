@@ -16,6 +16,7 @@ import StatsOutroCanvas from './StatsOutroCanvas.jsx';
 import ShotStepper from './ShotStepper.jsx';
 import FrameStepper from './FrameStepper.jsx';
 import { capturePreviewFrame, lyricFrameCaptureBridge } from '../../lib/musicVideoFrameCapture.js';
+import PreviewVideo from './PreviewVideo.jsx';
 import { sceneFrameFit } from './SceneFrameFit.jsx';
 import TransitionGlitch from './TransitionGlitch.jsx';
 import ImageEffectStill from './ImageEffectStill.jsx';
@@ -346,9 +347,11 @@ function ShotClip({ scene, audioRef, time, current, preload = 'auto' }) {
   // The final render's frame fit: zoomed to fill, or whole over the still, the VHS edge or black bars.
   const fit = sceneFrameFit(scene);
   return (
-    <video
-      key={reload}
-      ref={videoRef}
+    <PreviewVideo
+      key={`${src}:${reload}`}
+      videoRef={videoRef}
+      audioRef={audioRef}
+      active={current}
       src={src}
       muted
       playsInline
@@ -436,7 +439,8 @@ function ToggleClip({ scene, toggle, audioRef, time, layered, fps }) {
     const el = mediaRef.current;
     const audio = audioRef.current;
     if (!el) return;
-    el.style.opacity = String(incomingOpacity(toggle, t, fps));
+    const surface = el.tagName === 'VIDEO' ? el.parentElement : el;
+    surface.style.opacity = String(incomingOpacity(toggle, t, fps));
     if (el.tagName !== 'VIDEO' || el.readyState < 1) return;
     const duration = Number.isFinite(el.duration) ? el.duration : null;
     const target = clipTimeAt(scene, Math.min(Math.max(t, toggle.windowStartSec), toggle.cutSec), duration, { early: true, fromSec: toggle.windowStartSec });
@@ -455,7 +459,7 @@ function ToggleClip({ scene, toggle, audioRef, time, layered, fps }) {
   const fit = sceneFrameFit(scene);
   const className = `pointer-events-none absolute inset-0 h-full w-full ${src && fit !== 'fill' ? 'object-contain' : 'object-cover'} ${fit === 'black' ? 'bg-black' : ''}`;
   if (src) {
-    return <video ref={mediaRef} src={src} muted playsInline preload="auto" onLoadedMetadata={() => apply(audioRef.current?.currentTime || 0)}
+    return <PreviewVideo key={src} videoRef={mediaRef} audioRef={audioRef} active={time >= toggle.windowStartSec && time < toggle.cutSec} src={src} muted playsInline preload="auto" onLoadedMetadata={() => apply(audioRef.current?.currentTime || 0)}
       data-testid="beat-toggle-clip" style={{ opacity: 0 }} className={className} />;
   }
   if (!scene.referenceImageId) return null;
@@ -552,7 +556,18 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
     await new Promise((resolve, reject) => {
       let handle;
       const timer = setTimeout(() => { cancelAnimationFrame(handle); reject(new Error('Preview did not settle')); }, 2000);
-      handle = requestAnimationFrame(() => { handle = requestAnimationFrame(() => { clearTimeout(timer); resolve(); }); });
+      let paints = 0;
+      const settle = () => {
+        const clips = [...(figureRef.current?.querySelectorAll('video[data-preview-video]') || [])]
+          .filter((video) => Number(getComputedStyle(video.parentElement).opacity) > 0);
+        const failedClip = clips.find((video) => video.dataset.previewError);
+        if (failedClip) { clearTimeout(timer); reject(new Error(failedClip.dataset.previewError)); return; }
+        if (++paints >= 2 && clips.every((video) => !video.seeking && video.dataset.pausedFrame === String(video.currentTime))) {
+          clearTimeout(timer); resolve(); return;
+        }
+        handle = requestAnimationFrame(settle);
+      };
+      handle = requestAnimationFrame(settle);
     });
     const unchanged = () => {
       const current = captureBasis.current;

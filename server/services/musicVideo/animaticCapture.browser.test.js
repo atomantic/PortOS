@@ -28,6 +28,7 @@ const canRun = browserSuiteCanRun('animatic frame capture', { Chrome: chrome, ff
 const still = { sceneId: 'still', order: 0, label: 'Example still', startSec: 0, endSec: 4, visualLayer: 'still', referenceImageId: 'grid.png', stillMove: 'hold' };
 const project = (scenes = [still], extra = {}) => ({ id: 'capture-fixture', name: 'Example capture', scenes, composition: { mode: 'composed' }, ...extra });
 let dir, server, fixture, page, lyricProject;
+const colorReferences = new Map();
 const errors = [];
 afterAll(async () => {
   await fixture?.close();
@@ -53,20 +54,40 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
     await sharp(Buffer.from(grid)).png().toFile(join(dir, 'grid.png'));
     await sharp({ create: { width: 200, height: 400, channels: 3, background: '#ff00ff' } }).png().toFile(join(dir, 'end.png'));
     execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=cyan:s=120x240:r=24:d=4', '-c:v', 'libvpx', join(dir, 'clip.webm')]);
+    // RGB chart -> explicit limited-range YUV matrix, never a metadata-only retag.
+    const colors = [[0, 255, 255], [255, 0, 255], [255, 255, 0], [255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255], [0, 0, 0]];
+    const frames = Buffer.alloc(480 * 240 * 3 * 96);
+    for (let f = 0; f < 96; f++) for (let y = 0; y < 240; y++) for (let x = 0; x < 480; x++) {
+      const gray = Math.floor(x / 30) * 17;
+      const rgb = y < 120 ? colors[Math.floor(x / 60)] : y < 200 ? [gray, gray, gray] : f % 2 ? [230, 40, 190] : [f * 2, 255 - f * 2, f];
+      const offset = ((f * 240 + y) * 480 + x) * 3;
+      for (let c = 0; c < 3; c++) frames[offset + c] = rgb[c];
+    }
+    for (const matrix of ['smpte170m', 'bt709']) {
+      const path = join(dir, `${matrix}.webm`);
+      execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'rawvideo', '-pixel_format', 'rgb24', '-video_size', '480x240', '-framerate', '24', '-i', 'pipe:0',
+        '-vf', `scale=out_color_matrix=${matrix}:out_range=tv,format=yuv420p`, '-colorspace', matrix, '-color_primaries', matrix, '-color_trc', matrix, '-color_range', 'tv',
+        '-c:v', 'libvpx-vp9', '-crf', '4', '-b:v', '2M', path], { input: frames });
+      // The composed FFmpeg renderer retains nonlinear source RGB/YUV values;
+      // compare its explicit matrix decode, independently of browser presentation.
+      const rgb = execFileSync(ffmpeg, ['-v', 'error', '-i', path, '-vf', `scale=in_color_matrix=${matrix}:in_range=tv:out_range=pc,format=rgb24`,
+        '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'], { maxBuffer: frames.length + 1024 });
+      colorReferences.set(matrix, rgb);
+    }
     execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=8', join(dir, 'song.wav')]);
     const app = express();
     app.get('/data/images/:id', (req, res) => res.sendFile(join(dir, req.params.id)));
-    app.get('/api/video-gen/history/:id', (req, res) => res.json({ id: req.params.id, filename: 'clip.webm', fps: 24, numFrames: 96, width: 120, height: 240 }));
+    app.get('/api/video-gen/history/:id', (req, res) => res.json({ id: req.params.id, filename: colorReferences.has(req.params.id) ? `${req.params.id}.webm` : 'clip.webm', fps: 24, numFrames: 96, width: 120, height: 240 }));
     app.get('/api/music-video/:id/stats-outro', (req, res) => res.json({ stats: { shots: 2, stills: { made: 3, kept: 1 }, clips: { made: 2, kept: 1 }, floorImages: [] } }));
     app.get('/api/music-video/:id/lyrics/overlay/preview', async (req, res, next) => {
       try { res.json(await buildLyricPlaythroughPreview(lyricProject, { overlay: true })); }
       catch (error) { next(error); }
     });
-    app.get('/data/videos/clip.webm', (req, res) => res.sendFile(join(dir, 'clip.webm')));
+    app.get('/data/videos/:name', (req, res) => res.sendFile(join(dir, req.params.name)));
     app.get('/song.wav', (req, res) => res.sendFile(join(dir, 'song.wav')));
     app.use(express.static(join(dir, 'dist')));
     server = await new Promise((done) => { const listener = app.listen(0, '127.0.0.1', () => done(listener)); });
-    fixture = await startOwnedBrowserFixture({ chromium, launchOptions: { executablePath: chrome, headless: true } });
+    fixture = await startOwnedBrowserFixture({ chromium, launchOptions: { executablePath: chrome, headless: true, args: ['--force-color-profile=srgb'] } });
     page = await fixture.browser.newPage({ viewport: { width: 1000, height: 800 } });
     page.on('pageerror', (error) => errors.push(error.message));
     await page.goto(`http://127.0.0.1:${server.address().port}`);
@@ -78,32 +99,16 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
     await page.waitForFunction((t) => Math.abs(document.querySelector('audio')?.currentTime - t) < 0.00001, t);
     await page.waitForFunction(() => [...document.querySelectorAll('figure img')].every((image) => image.complete && image.naturalWidth > 0));
   };
-  const capture = async (label = '', { decodedVideoReference = false } = {}) => {
+  const capture = async (label = '') => {
+    await page.evaluate(() => { window.uploads = []; window.captureErrors = []; });
+    await page.waitForFunction(() => [...document.querySelectorAll('video[data-preview-video]')].every(video => Number(getComputedStyle(video.parentElement).opacity) === 0 || (!video.seeking && video.dataset.pausedFrame === String(video.currentTime))));
     await page.getByRole('button', { name: 'Save frame', exact: true }).click();
     await page.waitForFunction(() => window.uploads.length > 0 || window.captureErrors.length > 0);
     expect(await page.evaluate(() => window.captureErrors), label).toEqual([]);
     const saved = Buffer.from(await page.evaluate(() => window.uploads.at(-1)));
     const picture = page.getByLabel('Storyboard animatic', { exact: true }).locator(':scope > div').first();
-    if (decodedVideoReference) await picture.evaluate((root) => {
-      // Chrome's native VIDEO display and Canvas2D currently convert source colors
-      // differently (tracked in #11630). Compare framing/effects to decoded pixels through the actual
-      // CSS layout, retaining the native-display discrepancy as separate evidence.
-      window.restoreVideoReference = [];
-      for (const video of root.querySelectorAll('video[data-ready="true"]:not([aria-hidden="true"])')) {
-        const canvas = document.createElement('canvas');
-        canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-        canvas.getContext('2d').drawImage(video, 0, 0);
-        canvas.className = video.className; canvas.style.cssText = video.style.cssText;
-        video.replaceWith(canvas);
-        window.restoreVideoReference.push(() => canvas.replaceWith(video));
-      }
-    });
     // Global notification chrome is outside the video frame being saved.
-    let displayed;
-    try { displayed = await picture.screenshot({ style: '[data-toast-id]{visibility:hidden}' }); }
-    finally {
-      if (decodedVideoReference) await page.evaluate(() => window.restoreVideoReference.forEach((restore) => restore()));
-    }
+    const displayed = await picture.screenshot({ style: '[data-toast-id]{visibility:hidden}' });
     const a = await sharp(saved).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
     const b = await sharp(displayed).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
     expect([a.info.width, a.info.height]).toEqual([b.info.width, b.info.height]);
@@ -133,8 +138,75 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
       await show(project([{ ...still, visualLayer: 'footage', videoHistoryId: 'clip', frameFit },
         { ...still, sceneId: 'next', order: 1, startSec: 4, endSec: 8, visualLayer: 'footage', videoHistoryId: 'preloaded' }]), 1);
       await page.waitForFunction(() => document.querySelector('video[data-ready="true"]:not([aria-hidden="true"])')?.seeking === false);
-      await capture(frameFit, { decodedVideoReference: true });
+      await capture(frameFit);
     }
+  });
+
+  it('keeps BT601/709 saturated colors and grayscale identical across paused preview, decoded pixels and PNG', async () => {
+    const points = [...Array.from({ length: 8 }, (_, i) => [i * 60 + 30, 60]), ...Array.from({ length: 16 }, (_, i) => [i * 30 + 15, 160]), [240, 220]];
+    const samples = (data, width, channels, locations) => locations.map(([x, y]) => [...data.subarray((y * width + x) * channels, (y * width + x) * channels + 3)]);
+    for (const matrix of ['smpte170m', 'bt709']) {
+      const value = project([{ ...still, referenceImageId: null, visualLayer: 'footage', videoHistoryId: matrix, frameFit: 'black' }]);
+      for (const t of [0.02, 2.02, 1.02, 1.06, 1.02]) {
+        await show(value, t);
+        const saved = await capture(`${matrix} @ ${t}`);
+        const pixels = await page.evaluate((points) => {
+          const video = document.querySelector('video[data-ready="true"]');
+          const canvas = video.nextElementSibling;
+          const ctx = canvas.getContext('2d');
+          const frame = new VideoFrame(video, { timestamp: 0 });
+          const metadata = frame.colorSpace.toJSON(); frame.close();
+          return { metadata, currentTime: video.currentTime, samples: points.map(([x, y]) => [...ctx.getImageData(x, y, 1, 1).data].slice(0, 3)) };
+        }, points);
+        expect(pixels.currentTime).toBeCloseTo(t, 5);
+        expect(pixels.metadata).toEqual({ matrix, primaries: matrix, transfer: matrix, fullRange: false });
+        const raw = await sharp(saved).raw().toBuffer({ resolveWithObject: true });
+        const scale = raw.info.width / 480;
+        const pngPoints = points.map(([x, y]) => [Math.floor(x * scale), Math.floor((raw.info.height - 240 * scale) / 2 + y * scale)]);
+        const exported = samples(raw.data, raw.info.width, raw.info.channels, pngPoints);
+        const offset = Math.floor(t * 24) * 480 * 240 * 3;
+        const reference = samples(colorReferences.get(matrix).subarray(offset), 480, 3, points);
+        for (let i = 0; i < points.length; i++) for (let c = 0; c < 3; c++) {
+          expect(Math.abs(exported[i][c] - pixels.samples[i][c]), `PNG ${matrix} ${i}/${c}`).toBeLessThanOrEqual(1);
+          expect(Math.abs(reference[i][c] - pixels.samples[i][c]), `FFmpeg ${matrix} ${i}/${c}`).toBeLessThanOrEqual(3);
+        }
+        if (t === 0.02) {
+          // Retain native-display negative evidence; it is diagnostic, not the
+          // reference used to relax the strict actual-preview capture assertion.
+          const video = page.locator('video[data-ready="true"]');
+          await video.evaluate(v => { v.style.visibility = ''; v.nextElementSibling.style.visibility = 'hidden'; });
+          let native;
+          try { native = await video.screenshot(); }
+          finally { await video.evaluate(v => { v.style.visibility = 'hidden'; v.nextElementSibling.style.visibility = ''; }); }
+          const nativePixels = await sharp(native).raw().toBuffer({ resolveWithObject: true });
+          const displayed = samples(nativePixels.data, nativePixels.info.width, nativePixels.info.channels, pngPoints);
+          console.log(`🎨 ${process.platform}/${process.arch} ${fixture.browser.version()} ${matrix} limited YUV -> sRGB: ${JSON.stringify({ native: displayed, decoded: pixels.samples, png: exported, ffmpeg: reference })}`);
+        }
+      }
+    }
+  }, 30000);
+
+  it('uses native continuous playback, then freezes the selected source frame on pause and resume', async () => {
+    await show(project([{ ...still, referenceImageId: null, visualLayer: 'footage', videoHistoryId: 'bt709' }]), 0.02);
+    await capture();
+    await page.evaluate(async () => { await document.querySelector('audio').play(); });
+    await page.waitForFunction(() => { const v = document.querySelector('video'); return !v.paused && v.currentTime > 0.3 && !v.dataset.pausedFrame && getComputedStyle(v).visibility === 'visible'; });
+    await page.evaluate(() => document.querySelector('audio').pause());
+    await capture();
+    await page.evaluate(async () => { await document.querySelector('audio').play(); });
+    await page.waitForFunction(() => !document.querySelector('video').paused && !document.querySelector('video').dataset.pausedFrame);
+    await page.evaluate(() => document.querySelector('audio').pause());
+    await capture();
+  });
+
+  it('shares both footage surfaces through an incoming dissolve and the selected exact film look', async () => {
+    await show(project([
+      { ...still, visualLayer: 'footage', videoHistoryId: 'smpte170m', cutEffect: { style: 'dissolve', enabled: true, overlapSec: 1 } },
+      { ...still, sceneId: 'incoming', order: 1, startSec: 4, endSec: 8, visualLayer: 'footage', videoHistoryId: 'bt709' },
+    ], { filmLook: filmLookPreset('vhs') }), 3.5);
+    await capture();
+    expect(await page.locator('canvas[data-paused-video]:visible').count()).toBe(2);
+    expect(await page.locator('[data-film-look="exact"]').count()).toBe(1);
   });
 
   it('saves end-frame effects, flash/develop, incoming dissolves and fade-black in their displayed order', async () => {
@@ -232,4 +304,22 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
     expect(await page.evaluate(() => window.captureErrors.at(-1))).toContain('Preview changed during capture');
     await page.unroute('**/api/music-video/*/stats-outro');
   });
+  it('reports an unavailable paused color surface without uploading a different native-video image', async () => {
+    await page.evaluate(() => {
+      const original = HTMLCanvasElement.prototype.getContext;
+      window.restoreContext = () => { HTMLCanvasElement.prototype.getContext = original; };
+      HTMLCanvasElement.prototype.getContext = function(...args) { return this.dataset.pausedVideo ? null : original.apply(this, args); };
+    });
+    try {
+      await show(project([{ ...still, visualLayer: 'footage', videoHistoryId: 'smpte170m' }]), 1.02);
+      await page.waitForFunction(() => document.querySelector('video')?.dataset.previewError);
+      await page.getByRole('button', { name: 'Save frame', exact: true }).click();
+      await page.waitForFunction(() => window.captureErrors.length > 0);
+      expect(await page.evaluate(() => window.uploads.length)).toBe(0);
+      expect(await page.evaluate(() => window.captureErrors.at(-1))).toContain('Frame capture unavailable');
+      expect(await page.locator('video').evaluate(v => getComputedStyle(v).visibility)).toBe('hidden');
+    } finally { await page.evaluate(() => window.restoreContext()); }
+    expect(errors).toEqual([]);
+  });
+
 });

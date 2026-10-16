@@ -9,12 +9,18 @@ export async function capturePreviewFrame(root, { iframeImages = new Map() } = {
   const width = Math.ceil(box.width);
   const height = Math.ceil(box.height);
   if (!width || !height || width * height > 16777216) throw new Error('Preview size unavailable');
+  for (const video of root.querySelectorAll('video[data-preview-video]')) {
+    const surface = getComputedStyle(video.parentElement);
+    if (surface.display === 'none' || surface.visibility === 'hidden' || Number(surface.opacity) === 0) continue;
+    if (video.dataset.previewError) throw new Error(video.dataset.previewError);
+    if (video.seeking || video.dataset.pausedFrame !== String(video.currentTime)) throw new Error('Video frame is still loading');
+  }
   const raster = (source, w, h) => {
     if (!w || !h) throw new Error('Preview media has not decoded');
     const canvas = document.createElement('canvas');
     const scale = Math.min(1, Math.sqrt(16777216 / (w * h)));
     canvas.width = Math.max(1, Math.round(w * scale)); canvas.height = Math.max(1, Math.round(h * scale));
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { colorSpace: 'srgb' });
     if (!ctx) throw new Error('Frame capture unavailable');
     ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
     return canvas.toDataURL('image/png');
@@ -75,14 +81,14 @@ export async function capturePreviewFrame(root, { iframeImages = new Map() } = {
   finally { clearTimeout(timer); }
   const canvas = document.createElement('canvas');
   canvas.width = width + 1; canvas.height = height;
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { colorSpace: 'srgb' });
   if (!ctx) throw new Error('Frame capture unavailable');
   ctx.drawImage(image, 0, 0);
   const probe = ctx.getImageData(width, height - 1, 1, 1).data;
   if (probe[0] !== 13 || probe[1] !== 231 || probe[2] !== 97 || probe[3] !== 255) throw new Error('This browser cannot capture the preview');
   const output = document.createElement('canvas');
   output.width = width; output.height = height;
-  const paint = output.getContext('2d');
+  const paint = output.getContext('2d', { colorSpace: 'srgb' });
   if (!paint) throw new Error('Frame capture unavailable');
   // The figure's black ground sits outside the film-look filter.
   paint.fillStyle = '#000'; paint.fillRect(0, 0, width, height);
@@ -102,7 +108,7 @@ export function lyricFrameCaptureBridge() {
       const output = document.createElement('canvas');
       output.width = innerWidth; output.height = innerHeight;
       if (!output.width || !output.height || output.width * output.height > 16777216) throw new Error('Invalid lyric frame');
-      const ctx = output.getContext('2d');
+      const ctx = output.getContext('2d', { colorSpace: 'srgb' });
       const layers = [...document.querySelectorAll('canvas')];
       if (!ctx || !layers.length) throw new Error('Lyric frame unavailable');
       for (const canvas of layers) {

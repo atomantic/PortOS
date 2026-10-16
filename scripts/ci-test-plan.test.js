@@ -1539,7 +1539,7 @@ describe('cross-workspace browser suites (#10312)', () => {
   it('selects animatic pixel coverage when only the compositor or Save frame control changes', () => {
     const cwd = fileURLToPath(new URL('../', import.meta.url));
     const suite = 'server/services/musicVideo/animaticCapture.browser.test.js';
-    for (const source of ['client/src/lib/musicVideoFrameCapture.js', 'client/src/components/musicVideo/FrameStepper.jsx']) {
+    for (const source of ['client/src/lib/musicVideoFrameCapture.js', 'client/src/components/musicVideo/FrameStepper.jsx', 'client/src/components/musicVideo/PreviewVideo.jsx']) {
       const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [source], cwd });
       const trackedFiles = inputs.trackedFiles.filter((path) => !/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path) || BROWSER_SUITES.includes(path));
       const plan = buildCiTestPlan(inputs.changedFiles, { ...inputs, trackedFiles });
