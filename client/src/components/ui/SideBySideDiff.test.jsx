@@ -18,8 +18,8 @@ describe('SideBySideDiff', () => {
 
   it('highlights removed words on the left and added words on the right', () => {
     const { container } = render(<SideBySideDiff oldText="The cat sat" newText="The dog sat" />);
-    const removed = container.querySelectorAll('.bg-port-error\\/20');
-    const added = container.querySelectorAll('.bg-port-success\\/20');
+    const removed = container.querySelectorAll('del');
+    const added = container.querySelectorAll('ins');
     expect(removed).toHaveLength(1);
     expect(added).toHaveLength(1);
     expect(removed[0].textContent).toBe('cat');

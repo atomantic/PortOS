@@ -17,6 +17,8 @@ describe('InlineDiff', () => {
   it('renders both stacked rows when the texts differ', () => {
     const { container } = render(<InlineDiff oldText="The cat sat" newText="The dog sat" />);
     expect(screen.queryByText('No changes.')).not.toBeInTheDocument();
+    expect(screen.getByText('Before')).toBeInTheDocument();
+    expect(screen.getByText('After')).toBeInTheDocument();
     // Two stacked diff rows — the red (removed) and green (added) divs.
     expect(container.querySelectorAll('.text-port-error.leading-relaxed')).toHaveLength(1);
     expect(container.querySelectorAll('.text-port-success.leading-relaxed')).toHaveLength(1);
@@ -24,9 +26,9 @@ describe('InlineDiff', () => {
 
   it('highlights only the changed words inside each row, not the unchanged ones', () => {
     const { container } = render(<InlineDiff oldText="The cat sat" newText="The dog sat" />);
-    // Removed-word span lives inside the red row.
-    const removedSpans = container.querySelectorAll('.text-port-error .bg-port-error\\/20');
-    const addedSpans = container.querySelectorAll('.text-port-success .bg-port-success\\/20');
+    // Native edit semantics distinguish changes without relying on color.
+    const removedSpans = container.querySelectorAll('del');
+    const addedSpans = container.querySelectorAll('ins');
     expect(removedSpans).toHaveLength(1);
     expect(addedSpans).toHaveLength(1);
     expect(removedSpans[0].textContent).toBe('cat');
@@ -44,6 +46,8 @@ describe('InlineDiff', () => {
     const buildHuge = (prefix) => Array.from({ length: 2500 }, (_, i) => `${prefix}${i}`).join(' ');
     const { container } = render(<InlineDiff oldText={buildHuge('a')} newText={buildHuge('b')} />);
     expect(screen.getByText(/Diff too large/i)).toBeInTheDocument();
+    expect(screen.getByText('Before')).toBeInTheDocument();
+    expect(screen.getByText('After')).toBeInTheDocument();
     // No per-word highlight spans — just the two flat color blocks.
     expect(container.querySelectorAll('.bg-port-error\\/20, .bg-port-success\\/20')).toHaveLength(0);
   });

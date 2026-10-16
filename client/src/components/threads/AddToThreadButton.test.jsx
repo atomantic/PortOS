@@ -70,7 +70,7 @@ describe('AddToThreadButton', () => {
     });
   });
 
-  it('focuses the search input, traps Tab, and returns focus after Escape', async () => {
+  it('traps focus and dismisses the suggestion list before the parent picker on Escape', async () => {
     render(<AddToThreadButton threadRef={sampleRef} />);
     const trigger = screen.getByRole('button', { name: 'Add to Brain thread' });
     trigger.focus();
@@ -82,6 +82,14 @@ describe('AddToThreadButton', () => {
     const close = screen.getByRole('button', { name: 'Close' });
     close.focus();
     fireEvent.keyDown(close, { key: 'Tab', shiftKey: true });
+    expect(input).toHaveFocus();
+
+    fireEvent.change(input, { target: { value: 'Sprint' } });
+    expect(input).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(screen.getByRole('dialog', { name: 'Add to Brain thread' })).toBeInTheDocument();
+    expect(input).toHaveAttribute('aria-expanded', 'false');
+    expect(input).toHaveValue('Sprint');
     expect(input).toHaveFocus();
 
     fireEvent.keyDown(input, { key: 'Escape' });
