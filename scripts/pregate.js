@@ -199,18 +199,51 @@ function defaultBaseRef() {
   return resolved || 'origin/main';
 }
 
-/** Parse argv into the flags documented in the header. */
+export const USAGE = `Usage: node scripts/pregate.js [--base <ref>] [--full] [--skip-lint] [--plan-only]
+
+  --base <ref>  compare against <ref> instead of the remote default branch
+  --full        run the complete suite when the plan demands it
+  --skip-lint   skip linting in both client and server workspaces
+  --plan-only   print the plan and stages without running them
+  -h, --help    display this usage`;
+
+/** Parse argv before doing any Git inspection or starting a child process. */
 export function parseArgs(argv) {
-  const baseIndex = argv.indexOf('--base');
-  return {
-    base: baseIndex === -1 ? null : argv[baseIndex + 1],
-    full: argv.includes('--full'),
-    skipLint: argv.includes('--skip-lint'),
-    planOnly: argv.includes('--plan-only'),
-  };
+  const options = { base: null, full: false, skipLint: false, planOnly: false, help: false };
+  for (let index = 0; index < argv.length; index += 1) {
+    const flag = argv[index];
+    switch (flag) {
+      case '--base': {
+        const value = argv[index + 1];
+        if (!value || value.startsWith('-')) throw new Error('--base requires a value.');
+        if (options.base === null) options.base = value;
+        index += 1;
+        break;
+      }
+      case '--full': options.full = true; break;
+      case '--skip-lint': options.skipLint = true; break;
+      case '--plan-only': options.planOnly = true; break;
+      case '--help':
+      case '-h': options.help = true; break;
+      default: throw new Error(`Unknown option: ${flag}.`);
+    }
+  }
+  return options;
 }
 
 function main() {
+  let options;
+  try {
+    options = parseArgs(process.argv.slice(2));
+  } catch (error) {
+    console.error(`❌ ${error.message}\n\n${USAGE}`);
+    process.exit(2);
+  }
+  if (options.help) {
+    console.log(USAGE);
+    process.exit(0);
+  }
+
   assertNodeVersion();
 
   const unmerged = spawnSync('git', ['ls-files', '-u', '-z'], { cwd: REPO_ROOT, encoding: 'utf8' });
@@ -224,7 +257,6 @@ function main() {
     process.exit(1);
   }
 
-  const options = parseArgs(process.argv.slice(2));
   const baseRef = options.base || defaultBaseRef();
 
   const mergeBase = spawnSync('git', ['merge-base', baseRef, 'HEAD'], { cwd: REPO_ROOT, encoding: 'utf8' });
@@ -281,10 +313,14 @@ function main() {
 
   const stages = resolvePlanStages(plan, { skipLint: options.skipLint, baseSha });
   const uncovered = Object.keys(UNCOVERED_SUITES).filter((key) => plan[key]);
-  uncovered.forEach((key) => console.log(`ℹ️ CI will also run: ${key} — not covered here; run ${UNCOVERED_SUITES[key]}`));
+  uncovered.forEach((key) => {
+    console.log(`ℹ️ CI will also run: ${key} — not covered here; run ${UNCOVERED_SUITES[key]}`);
+  });
 
   if (options.planOnly) {
-    stages.forEach((stage) => console.log(`• ${stage.name}: ${stage.script} ${stage.args.join(' ')}`));
+    stages.forEach((stage) => {
+      console.log(`• ${stage.name}: ${stage.script} ${stage.args.join(' ')}`);
+    });
     process.exit(0);
   }
 
