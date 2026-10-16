@@ -4,7 +4,7 @@ import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { chromium } from 'playwright-core';
-import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy, sweepStrayTempRoots } from '../../lib/mockPathsDataRoot.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 import { findFfmpeg, probeVideoDuration } from '../../lib/ffmpeg.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { _cleanupTestBrowser, _createTestArtifactsRoot } from '../htmlComposition/testBrowserCleanup.js';
@@ -30,6 +30,7 @@ if (!chrome || !ffmpeg) cleanupTempDataRoots();
 let proc;
 let browser;
 let artifacts;
+const detachedChromeProcessGroupId = () => process.platform === 'win32' ? undefined : proc?.pid;
 
 const FPS = 24;
 const run = (args) => execFileSync(ffmpeg, ['-v', 'error', ...args], { maxBuffer: 256 * 1024 * 1024 });
@@ -57,7 +58,7 @@ function assertInsideSafeArea(path, width, height) {
 describe.skipIf(!chrome || !ffmpeg)('music-video typography overlay with real Chrome and ffmpeg (#8984)', () => {
   beforeAll(async () => {
     const profile = join(PATHS.data, 'chrome-test-profile');
-    proc = spawn(chrome, ['--headless=new', '--mute-audio', '--no-sandbox', '--no-first-run', '--disable-background-networking', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
+    proc = spawn(chrome, ['--headless=new', '--mute-audio', '--no-sandbox', '--no-first-run', '--disable-background-networking', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform !== 'win32' });
     const ws = await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('Test Chrome did not start')), 20000);
       proc.once('error', reject);
@@ -72,10 +73,8 @@ describe.skipIf(!chrome || !ffmpeg)('music-video typography overlay with real Ch
   }, 30000);
 
   afterAll(async () => {
-    await _cleanupTestBrowser({ browser, proc, artifacts, cleanup: cleanupTempDataRoots });
-    // Real ffprobe/ffmpeg subprocess work (#9032) — see sweepStrayTempRoots's doc.
-    await sweepStrayTempRoots('portos-mv-composition-');
-  });
+    await _cleanupTestBrowser({ browser, proc, artifacts, cleanup: cleanupTempDataRoots, detachedProcessGroupId: detachedChromeProcessGroupId() });
+  }, 25000);
 
   it('lays timed text over the cut on one continuous audio master, covering the edit within a frame', async () => {
     const dir = join(PATHS.data, 'fixture');

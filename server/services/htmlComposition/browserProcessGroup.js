@@ -37,8 +37,10 @@ export function signalBrowserProcessGroup(pgid, signal, state, phase) {
   }
 }
 
-// Only the retained, closed child's detached group is eligible. Zombies cannot
-// write; a live leader at the departed PID means reuse and must not be signaled.
+// Only a group tied to the retained direct child's observed exit is eligible.
+// Zombies cannot write; a live leader at the departed PID means reuse and must
+// not be signaled. The caller may still hold an open stdio handle whose `close`
+// event is delayed by descendants, so `exit` is the required reaping boundary.
 export async function drainBrowserProcessGroup(pgid, deadline, graceMs, state = { error: 'none' }) {
   const failure = message => {
     const code = state.error === 'none' ? 'none' : safeCode(state.error);

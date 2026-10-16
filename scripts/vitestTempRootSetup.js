@@ -5,7 +5,7 @@
  */
 import { lstatSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { describeOwnedBrowserObservation, readOwnedBrowserObservations } from '../server/test/ownedBrowserDiagnostics.js';
+import { describeOwnedBrowserObservation, describeStageFixtureRoot, readOwnedBrowserObservations } from '../server/test/ownedBrowserDiagnostics.js';
 import { OWNER_FILE, killTestBrowsersUnder } from './lib/vitestStaleRunRoots.js';
 
 export function setup() {}
@@ -103,6 +103,11 @@ export function teardown() {
     console.warn(`⚠️ composition profile ${index + 1}: ${describeOwnedBrowserObservation(observations.get(name), state)}`);
   }
   if (composition.length > 8) console.warn(`⚠️ composition profile provenance capped: ${composition.length - 8} additional entries`);
+  const stages = entries.filter(name => name.startsWith('portos-code-animation-stages-'));
+  for (const [index, name] of stages.slice(0, 8).entries()) {
+    console.warn(`⚠️ stage fixture ${index + 1}: ${describeStageFixtureRoot(join(root, name), observations.get(name), state)}`);
+  }
+  if (stages.length > 8) console.warn(`⚠️ stage fixture provenance capped: ${stages.length - 8} additional entries`);
   if (entries.length) process.exitCode = 1;
 
   try {

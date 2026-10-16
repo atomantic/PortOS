@@ -45,6 +45,7 @@
  * target the default re-rooting wouldn't produce — it merges last.
  */
 
+import { channel } from 'node:diagnostics_channel';
 import { appendFileSync, mkdtempSync, readdirSync, rmSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, isAbsolute, join, relative, sep } from 'path';
@@ -110,11 +111,13 @@ export function recordTempRootOwner(dir, { owner, observation } = {}) {
  * @returns {string} absolute path to this prefix's temp root
  */
 const lazyRoots = new Map();
+const rootLifecycle = channel('portos.composition-browser.lifecycle');
 export function lazyTempDataRoot(prefix = 'portos-test-') {
   let root = lazyRoots.get(prefix);
   if (!root) {
     root = createTempDataRoot(prefix);
     lazyRoots.set(prefix, root);
+    rootLifecycle.publish({ event: 'allocated', profile: root });
   }
   return root;
 }
@@ -123,7 +126,16 @@ export function lazyTempDataRoot(prefix = 'portos-test-') {
 export function cleanupTempDataRoots() {
   // Retries cover ENOTEMPTY/EBUSY from a just-killed child (a test Chrome's
   // helpers) still flushing into the root while it is being removed.
-  for (const root of lazyRoots.values()) rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  for (const root of lazyRoots.values()) {
+    rootLifecycle.publish({ event: 'remove-start', profile: root });
+    try {
+      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      rootLifecycle.publish({ event: 'remove-resolved', profile: root });
+    } catch (error) {
+      rootLifecycle.publish({ event: 'remove-rejected', profile: root, code: error.code });
+      throw error;
+    }
+  }
   lazyRoots.clear();
 }
 

@@ -16,14 +16,16 @@ vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await imp
 }));
 vi.mock('../../lib/databaseMaintenanceJournal.js', () => ({ assertDatabaseAdmission: () => {} }));
 vi.mock('./productionReview.js', async (load) => ({ ...await load(), assertProductionApproval: vi.fn() }));
-// The publishing kit's encodes and thumbnails are written as placeholders; the
-// final render's poster is a fixed name.
+// Video encodes stay placeholders; thumbnails reach the REAL image scorer, so
+// their bytes are a valid 2x2 RGB PNG. The final render's poster is a fixed name.
+const thumbnailPng = vi.hoisted(() => Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAEklEQVQImWPQqDihUXGCAUIBACTuBaFpkxOkAAAAAElFTkSuQmCC', 'base64'));
 vi.mock('../../lib/ffmpeg.js', async (importOriginal) => ({
   ...(await importOriginal()),
   generateThumbnail: vi.fn(async () => 'thumb.jpg'),
   findFfmpeg: vi.fn(async () => 'ffmpeg'),
   runFfmpegProcess: vi.fn(async ({ args }) => {
-    await writeFile(args.at(-1), 'synthetic encode');
+    const output = args.at(-1);
+    await writeFile(output, output.endsWith('.jpg') ? thumbnailPng : 'synthetic encode');
     return { ok: true };
   }),
 }));
@@ -179,10 +181,18 @@ describe('publishing kit build', () => {
       const encoded = runFfmpegProcess.mock.calls.length;
       expect(encoded).toBeGreaterThan(frames);
       expect((await projects.getProject(id)).publishKit?.exports).toBeUndefined();
+      expect((await projects.getProject(id)).publishKit?.thumbnails).toBeUndefined();
       release();
       await waitFor(async () => expect((await projects.getProject(id)).publishKit?.exports?.length).toBe(encoded - frames));
-      for (const { filename } of (await projects.getProject(id)).publishKit.exports) {
+      const { publishKit } = await projects.getProject(id);
+      for (const { filename } of publishKit.exports) {
         expect(existsSync(join(PATHS.videos, filename))).toBe(true);
+      }
+      // The real scorer drops undecodable frames: a nonempty published list
+      // proves these synthetic bytes passed its decoder instead of becoming NaN.
+      expect(publishKit.thumbnails.length).toBeGreaterThan(0);
+      for (const filename of publishKit.thumbnails) {
+        expect(existsSync(join(PATHS.videoThumbnails, filename))).toBe(true);
       }
     } finally {
       release();

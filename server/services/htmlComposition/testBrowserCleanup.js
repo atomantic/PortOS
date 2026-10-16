@@ -4,6 +4,7 @@ import { availableParallelism, tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { recordTempRootOwner } from '../../lib/mockPathsDataRoot.js';
+import { drainBrowserProcessGroup } from './browserProcessGroup.js';
 
 // These owned browsers render on explicit seek(t), not wall/display time.
 // Chromium's display scheduler must not pace a song-length offline capture.
@@ -400,6 +401,19 @@ export function _createTestArtifactsRoot({ parent = tmpdir() } = {}) {
   return Object.freeze({ path, dev, ino });
 }
 
+// A successful explicit group drain settles this retained handle permanently.
+// Startup failure and afterAll can both enter cleanup; never probe or signal
+// the departed group's numeric identity a second time.
+const settledDetachedGroups = new WeakSet();
+const settledTestChromeProcesses = new WeakSet();
+
+// A fixture with a secondary teardown hook can guard root cleanup after the
+// browser helper throws. No retained process means discovery was skipped and
+// there is no live owned Chrome to block that cleanup.
+export function _testBrowserCleanupSettled(proc) {
+  return !proc || settledTestChromeProcesses.has(proc);
+}
+
 // The owned Chrome may still write downloads into the root until it exits.
 // Remove only the directory created above, and keep it as evidence when exit
 // is unconfirmed or the path no longer names that directory. No path in text.
@@ -416,28 +430,58 @@ function removeTestArtifactsRoot({ path, dev, ino }, childSettled) {
 }
 
 // Test-only lifecycle boundary. Disconnect failure must not strand the owned
-// child, and neither failure may prevent removal of temporary test data.
-// A startup failure remains primary even if teardown also fails.
-export async function _cleanupTestBrowser({ browser, proc, artifacts, cleanup, startupError, observeProcess = _testChromeProcessFacts }) {
+// child. An explicitly detached POSIX group must quiesce before its temp roots
+// are removed; an uncertain group keeps those roots as evidence. A startup
+// failure remains primary even if teardown also fails.
+export async function _cleanupTestBrowser({ browser, proc, artifacts, cleanup, startupError, detachedProcessGroupId, observeProcess = _testChromeProcessFacts }) {
   const errors = startupError ? [startupError] : [];
   const cleanupFailure = (stage, error) => {
     const code = /^[A-Z0-9_]{1,32}$/.test(error?.code) ? error.code : 'unknown';
     errors.push(new Error(`Test Chrome ${stage} cleanup failed (${code})`));
   };
   let childSettled = false;
+  let detachedGroupSettled = detachedProcessGroupId === undefined
+    || (proc && settledDetachedGroups.has(proc));
   try {
     await withinDeadline(() => browser?.close(), 5000, 'browser disconnect',
       () => `; process: ${describeProcess(proc, observeProcess)}`).catch(error => errors.push(error));
-    await terminateOwnedChrome(proc, observeProcess).then(() => { childSettled = true; }, error => errors.push(error));
+    await terminateOwnedChrome(proc, observeProcess).then(async () => {
+      childSettled = true;
+      if (detachedProcessGroupId === undefined || detachedGroupSettled) return;
+      if (process.platform === 'win32') {
+        errors.push(new Error('Test Chrome detached process groups are unsupported on Windows'));
+        return;
+      }
+      if (!Number.isSafeInteger(detachedProcessGroupId) || detachedProcessGroupId !== proc?.pid) {
+        errors.push(new Error('Test Chrome detached process group ownership unavailable'));
+        return;
+      }
+      try {
+        // terminateOwnedChrome waits for the retained direct child's `exit`
+        // event (Node has reaped it). `close` can wait on descendants that
+        // inherited stderr, so drain the exact detached group next; its live
+        // leader identity check refuses a reused PID before any signal.
+        await drainBrowserProcessGroup(detachedProcessGroupId, performance.now() + 5000, 1000);
+        detachedGroupSettled = true;
+        settledDetachedGroups.add(proc);
+      } catch (error) {
+        errors.push(error);
+      }
+    }, error => errors.push(error));
   } finally {
     try { proc?.stderr?.destroy(); } catch (error) { cleanupFailure('stderr', error); }
     if (artifacts) {
       try {
-        const failure = removeTestArtifactsRoot(artifacts, childSettled);
+        const failure = removeTestArtifactsRoot(artifacts, childSettled && detachedGroupSettled);
         if (failure) errors.push(new Error(`Test Chrome artifacts cleanup ${failure}`));
       } catch (error) { cleanupFailure('artifacts', error); }
     }
-    try { await cleanup(); } catch (error) { cleanupFailure('temporary data', error); }
+    if (detachedProcessGroupId !== undefined && (!childSettled || !detachedGroupSettled)) {
+      errors.push(new Error('Test Chrome temporary data cleanup skipped; detached process group unsettled, root preserved'));
+    } else {
+      try { await cleanup(); } catch (error) { cleanupFailure('temporary data', error); }
+    }
+    if (proc && childSettled && detachedGroupSettled) settledTestChromeProcesses.add(proc);
   }
   if (startupError && errors.length === 1) throw startupError;
   if (errors.length) throw new AggregateError(errors, errors.map(error => error.message).join('; '),
