@@ -437,7 +437,7 @@ describe('digital-twin.js', () => {
     });
 
     it('should throw if document already exists', async () => {
-      const meta = makeMeta();
+      const meta = makeMeta({ documents: [makeDocMeta({ filename: 'EXISTING.md' })] });
       await setupMetaFile(meta);
       existsSync.mockReturnValue(true);
 
