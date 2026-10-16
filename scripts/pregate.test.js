@@ -304,12 +304,24 @@ describe('downgradeFullPlan', () => {
 describe('parseArgs', () => {
   it('reads --base as a value, not a boolean', () => {
     expect(parseArgs(['--base', 'origin/release', '--full'])).toEqual({
-      base: 'origin/release', full: true, skipLint: false, planOnly: false,
+      base: 'origin/release', full: true, skipLint: false, planOnly: false, help: false,
     });
   });
 
+  it('keeps the first --base when the option is repeated', () => {
+    expect(parseArgs(['--base', 'origin/release', '--base', 'origin/main']).base).toBe('origin/release');
+  });
+
   it('defaults to a null base so the caller resolves the remote default branch', () => {
-    expect(parseArgs([])).toEqual({ base: null, full: false, skipLint: false, planOnly: false });
+    expect(parseArgs([])).toEqual({ base: null, full: false, skipLint: false, planOnly: false, help: false });
+  });
+
+  it('recognizes both help flags and rejects unknown flags or a missing base value', () => {
+    expect(parseArgs(['--help']).help).toBe(true);
+    expect(parseArgs(['-h']).help).toBe(true);
+    expect(() => parseArgs(['--unexpected'])).toThrow('Unknown option: --unexpected.');
+    expect(() => parseArgs(['--base'])).toThrow('--base requires a value.');
+    expect(() => parseArgs(['--base', '--full'])).toThrow('--base requires a value.');
   });
 });
 
@@ -341,6 +353,37 @@ describe('UNCOVERED_SUITES', () => {
 });
 
 describe('the gate end to end', () => {
+  it.each([
+    { args: ['--help'], status: 0, expected: 'Usage: node scripts/pregate.js', stderr: false },
+    { args: ['-h'], status: 0, expected: 'Usage: node scripts/pregate.js', stderr: false },
+    { args: ['--unknown'], status: 2, expected: 'Unknown option: --unknown.', stderr: true },
+    { args: ['--base'], status: 2, expected: '--base requires a value.', stderr: true },
+    { args: ['--base', '--full'], status: 2, expected: '--base requires a value.', stderr: true },
+  ])('handles $args before starting any subprocess', ({ args, status, expected, stderr }) => {
+    const preload = `
+      import childProcess from 'node:child_process';
+      import { syncBuiltinESMExports } from 'node:module';
+      const unexpectedSubprocess = () => { throw new Error('Subprocess started before argument validation'); };
+      childProcess.spawn = unexpectedSubprocess;
+      childProcess.exec = unexpectedSubprocess;
+      childProcess.execFile = unexpectedSubprocess;
+      childProcess.fork = unexpectedSubprocess;
+      childProcess.execSync = unexpectedSubprocess;
+      childProcess.spawnSync = unexpectedSubprocess;
+      childProcess.execFileSync = unexpectedSubprocess;
+      syncBuiltinESMExports();
+    `;
+    const result = spawnSync(process.execPath, [
+      '--import', `data:text/javascript,${encodeURIComponent(preload)}`,
+      join(REPO_ROOT, 'scripts', 'pregate.js'), ...args,
+    ], { cwd: REPO_ROOT, encoding: 'utf8' });
+    expect(result.status, result.stderr).toBe(status);
+    expect(stderr ? result.stderr : result.stdout).toContain(expected);
+    expect(`${result.stdout}\n${result.stderr}`).toContain('Usage: node scripts/pregate.js');
+    expect(`${result.stdout}\n${result.stderr}`).not.toContain('Subprocess started before argument validation');
+    expect(result.stdout).not.toContain('Planning against');
+  });
+
   // This catches validation deferred until after Git/planning, even when no
   // expensive check would run (plan-only). Every subprocess is a tripwire.
   it.each([{ flags: [] }, { flags: ['--full'] }, { flags: ['--plan-only'] }])('rejects unsupported Node before any subprocess with flags $flags', ({ flags }) => {
