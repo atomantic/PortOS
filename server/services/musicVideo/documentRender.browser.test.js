@@ -314,6 +314,78 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
       await window.portosComposition.seek(t);
       return { world: document.getElementById('world').toDataURL(), type: document.getElementById('type').toDataURL() };
     }, t);
+    const { readDocumentFiles } = await import('./compositionDocument.js');
+    const referenceFiles = await readDocumentFiles(project);
+    referenceFiles.set('engine.js', referenceFiles.get('engine-reference.js'));
+    const reference = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+    try {
+      await reference.setContent((await buildDocumentPreview(project, { files: referenceFiles })).html);
+      await reference.waitForFunction(() => typeof window.portosComposition?.seek === 'function');
+      for (const target of [page, reference]) await target.evaluate(() => {
+        window.priorThreeEvents = window.PORTOS_MV.song.narrativeEvents;
+        window.PORTOS_MV.song.narrativeEvents = [{ kind: 'silence', startFrame: 5, endFrame: 9 }];
+      });
+      for (const t of [0, 0.03125, 0.25, 0.5, 0.03125]) {
+        const expected = await reference.evaluate(async t => {
+          await window.portosComposition.seek(t);
+          return { world: document.getElementById('world').toDataURL(), type: document.getElementById('type').toDataURL() };
+        }, t);
+        expect(await at(t)).toEqual(expected);
+      }
+      for (const target of [page, reference]) await target.evaluate(() => window.portosComposition.layout({ width: 1080, height: 1920 }));
+      const portrait = await reference.evaluate(async () => {
+        await window.portosComposition.seek(0.03125);
+        return { world: document.getElementById('world').toDataURL(), type: document.getElementById('type').toDataURL() };
+      });
+      expect(await at(0.03125)).toEqual(portrait);
+      for (const target of [page, reference]) await target.evaluate(() => {
+        window.PORTOS_MV.song.narrativeEvents = window.priorThreeEvents;
+        window.portosComposition.layout({ width: 1920, height: 1080 });
+      });
+    } finally { await reference.close(); }
+    const live = await page.evaluate(async () => {
+      const api = window.portosComposition.previewPlayback;
+      const times = [], failures = [];
+      const original = window.PORTOS_MV_GENERATED.sections.world;
+      const receive = ({ data }) => { if (data?.type === 'portos-mv:playback-error') failures.push(data.message); };
+      addEventListener('message', receive);
+      window.PORTOS_MV_GENERATED.sections.world = (ctx, env) => { times.push(env.t); return original(ctx, env); };
+      try {
+        const prepared = await api.prepare({ epoch: 1, sequence: 1, t: 0 });
+        const started = performance.now();
+        const played = await api.play({ epoch: 1, sequence: 2, t: 0, workerTime: api.clock() });
+        for (let i = 0; i < 8; i++) await new Promise(resolve => requestAnimationFrame(resolve));
+        await api.pause({ epoch: 2, t: 0 });
+        return { prepared, played, times, failures, elapsedMs: performance.now() - started };
+      } finally { window.PORTOS_MV_GENERATED.sections.world = original; removeEventListener('message', receive); }
+    });
+    expect(live.prepared.status).toBe('prepared');
+    expect(live.played.status).toBe('playing');
+    expect(live.failures).toEqual([]);
+    expect(new Set(live.times).size).toBeGreaterThan(1);
+    console.log(`🎬 Generated Three cooperative observation: ${live.times.length - 1} live draws in ${Math.round(live.elapsedMs)}ms`);
+    const beforeCancel = await at(0);
+    await page.evaluate(() => {
+      window.originalTitleReady = window.__portosTitleCard.ready;
+      window.__portosTitleCard.ready = () => new Promise(resolve => { window.releaseThreeTitle = resolve; });
+      window.pendingThreeExact = window.portosComposition.seek(0.75);
+    });
+    await page.waitForFunction(() => typeof window.releaseThreeTitle === 'function');
+    try {
+      expect(await page.evaluate(() => ({ world: document.getElementById('world').toDataURL(), type: document.getElementById('type').toDataURL() }))).toEqual(beforeCancel);
+      await page.evaluate(async () => {
+        const paused = window.portosComposition.previewPlayback.pause({ epoch: 3, t: 0 });
+        window.releaseThreeTitle();
+        await Promise.all([paused, window.pendingThreeExact]);
+      });
+      expect(await page.evaluate(() => ({ world: document.getElementById('world').toDataURL(), type: document.getElementById('type').toDataURL() }))).toEqual(beforeCancel);
+    } finally {
+      await page.evaluate(async () => {
+        window.releaseThreeTitle();
+        await window.pendingThreeExact;
+        window.__portosTitleCard.ready = window.originalTitleReady;
+      });
+    }
     const first = await at(0);
     const textures = await page.evaluate(() => window.liveTextureCount());
     const moved = await at(0.5);

@@ -3,7 +3,7 @@ import { installLayeredPreviewPlayback } from './previewPlaybackRuntime.js';
 
 // Serialized beside the generated candidate's existing renderer. Original author
 // functions retain the existing synchronous/deterministic section contract.
-function installGeneratedCanvasPlayback(composition, bridge, installScheduler) {
+export function installGeneratedPlayback(composition, bridge, installScheduler) {
   let exactLease = 0, disposed = false, playing = false;
   const exactWork = new Set();
   const now = performance.now.bind(performance);
@@ -87,7 +87,7 @@ function installGeneratedCanvasPlayback(composition, bridge, installScheduler) {
 }
 
 const BRIDGE = `
-  (${installGeneratedCanvasPlayback.toString()})(globalThis.portosComposition, {
+  (${installGeneratedPlayback.toString()})(globalThis.portosComposition, {
     get ready() { return Promise.all([ready, globalThis.__portosTitleCard?.ready?.()]); },
     duration: DURATION, fps: FPS,
     state: eventState, scene: sceneAt, source: sourceFor,

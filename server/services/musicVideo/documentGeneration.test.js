@@ -118,7 +118,119 @@ async function candidateRuntime(document, { reference = false, fontGate = Promis
     page: { evaluate: source => runInContext(source, context) }, slow: () => { slow = true; } };
 }
 
+async function threeCandidate() {
+  const created = await projects.createProject({ name: 'Synthetic spatial song', mediaMode: 'code-only' });
+  await projects.mutateProjectRecord(created.id, current => ({ project: { ...current,
+    audioAnalysis: { durationSec: 1, beats: [], downbeats: [], sections: [{ id: 'world', startSec: 0, endSec: 1 }] },
+    composition: { mode: 'document', authoringRenderer: 'three' },
+  } }));
+  h.response = JSON.stringify({ sections: [{ id: 'world', source: `function render(ctx, env) {
+    ctx.scene.userData.t = env.t;
+    ctx.text.fillText(JSON.stringify({ t: env.t, localT: env.localT, frame: env.frame, width: env.width, height: env.height }), 1, 2);
+  }` }] });
+  return (await generateMixedMediaDocument(created.id)).document;
+}
+
+// Run the staged module's real scene/post logic; only the GPU and DOM are doubles.
+async function threeRuntime(document, { reference = false, fontGate = Promise.resolve(), titleGate = Promise.resolve() } = {}) {
+  const THREE = await import('three');
+  const traces = [], copies = [], renders = [], finishing = [], events = [];
+  let clock = 0, slow = false, rendererDisposed = false;
+  const makeCanvas = name => {
+    const context = { reset() {}, save() {}, restore() {}, strokeText() {},
+      fillText(label) { if (label.startsWith('{')) { traces.push(JSON.parse(label)); if (slow) clock += 100; } },
+      drawImage(back) { if (name !== 'back') copies.push([name, back.width, back.height]); },
+    };
+    return { width: 0, height: 0, getContext: () => context };
+  };
+  const world = makeCanvas('world'), type = makeCanvas('type');
+  function WebGLRenderer({ canvas }) {
+    let target = null;
+    return { shadowMap: {}, setPixelRatio() {},
+      setSize(w, h) { canvas.width = w; canvas.height = h; },
+      getContext: () => ({ getExtension: () => null, getParameter: () => 'software' }),
+      initRenderTarget() {}, setRenderTarget(next) { target = next; }, clear() {},
+      render(scene) { renders.push([scene.userData.t ?? null, target ? [target.width, target.height] : null]); },
+      dispose() { rendererDisposed = true; },
+    };
+  }
+  const sandbox = { THREE: { ...THREE, WebGLRenderer }, GeometryTHREE: THREE, setTimeout, clearTimeout,
+    performance: { now: () => clock }, requestAnimationFrame: () => 1, cancelAnimationFrame() {},
+    document: { getElementById: id => id === 'world' ? world : type, createElement: () => makeCanvas('back'), fonts: { load: () => fontGate } },
+    PORTOS_MV: { render: { width: 1920, height: 1080, fps: 24, durationSec: 1 }, song: {} },
+    PORTOS_MV_EVENT_STATE: (_song, t) => ({ t: t >= 0.2 && t < 0.4 ? 0.2 : Math.floor(t * 24) / 24,
+      hold: t >= 0.2 && t < 0.4, activeEvents: [], reactiveGain: 0 }),
+    __portosFilmLook: { frame: t => finishing.push(['look', t]), playback() {} },
+    __portosTitleCard: { ready: () => titleGate, draw: t => finishing.push(['title', t]) },
+    postMessage: event => events.push(event),
+  };
+  sandbox.window = sandbox;
+  const context = createContext(sandbox), root = join(PATHS.data, document.directory);
+  const kit = (await readFile(join(root, 'toonWorld.js'), 'utf8'))
+    .replace("import * as GeometryTHREE from './vendor/three.module.js';", '').replaceAll('export ', '');
+  runInContext(`${kit}\nglobalThis.toonWorld = { createInkPass, inkShader };`, context);
+  runInContext(await readFile(join(root, 'generated.js'), 'utf8'), context);
+  const source = (await readFile(join(root, reference ? 'engine-reference.js' : 'engine.js'), 'utf8'))
+    .replace("import * as toonWorld from './toonWorld.js';", '').replaceAll('export function ', 'function ');
+  runInContext(`${source}\nmount(THREE);`, context);
+  return { composition: sandbox.portosComposition, api: sandbox.portosComposition.previewPlayback, traces, copies, renders, finishing, events,
+    page: { evaluate: source => runInContext(source, context) }, slow: () => { slow = true; }, disposed: () => rendererDisposed };
+}
+
 describe('treatment-driven mixed-media document authoring', () => {
+  it('packages Three through the complete-frame producer without changing exact subframe or hold rendering', async () => {
+    const document = await threeCandidate(), root = join(PATHS.data, document.directory);
+    expect(JSON.parse(await readFile(join(root, 'preview-playback.json'), 'utf8'))).toEqual({ version: 1, contract: 'portos-complete-frame-v1' });
+    expect(await readFile(join(root, 'engine-reference.js'))).toEqual(await readFile(new URL('./documentTemplates/spatial/engine.js', import.meta.url)));
+    const native = await threeRuntime(document), reference = await threeRuntime(document, { reference: true });
+    try {
+      expect(await bindAuthoredPreviewPlayback(native.page)).toMatchObject({ supported: true, fps: 30 });
+      for (const t of [0.03125, 0.3, 0.5, 0.03125]) {
+        await native.composition.seek(t); await reference.composition.seek(t);
+      }
+      expect(native.traces.map(trace => trace.t)).toEqual([0.03125, 0.2, 0.5, 0.03125]);
+      expect(native.traces).toEqual(reference.traces);
+      expect(native.renders).toEqual(reference.renders);
+      native.composition.layout({ width: 1080, height: 1920 }); reference.composition.layout({ width: 1080, height: 1920 });
+      await native.composition.seek(0.51); await reference.composition.seek(0.51);
+      expect(native.traces).toEqual(reference.traces);
+      expect(native.copies.slice(-2)).toEqual([['world', 1080, 1920], ['type', 1080, 1920]]);
+      await expect(native.api.prepare({ epoch: 1, sequence: 1, t: 0.51 })).resolves.toEqual({ epoch: 1, sequence: 1, status: 'prepared', t: 0.51 });
+      const copies = native.copies.length, finishing = native.finishing.length;
+      native.slow();
+      await expect(native.api.prepare({ epoch: 2, sequence: 2, t: 0.7 })).rejects.toThrow('frame freshness');
+      expect(native.copies).toHaveLength(copies);
+      expect(native.finishing).toHaveLength(finishing);
+    } finally { await native.api.dispose(); }
+    expect(native.disposed()).toBe(true);
+  });
+
+  it('awaits Three and title fonts without publishing a canceled exact frame', async () => {
+    const document = await threeCandidate();
+    const font = Promise.withResolvers(), title = Promise.withResolvers();
+    const runtime = await threeRuntime(document, { fontGate: font.promise, titleGate: title.promise });
+    let exact, paused;
+    try {
+      exact = runtime.composition.seek(0.03125);
+      await new Promise(resolve => setImmediate(resolve));
+      expect(runtime.copies).toEqual([]);
+      font.resolve();
+      await new Promise(resolve => setImmediate(resolve));
+      expect(runtime.copies).toEqual([]);
+      paused = runtime.api.pause({ epoch: 1, t: 0 });
+      title.resolve();
+      await Promise.all([exact, paused]);
+      expect(runtime.copies).toEqual([]);
+      expect(runtime.finishing).toEqual([]);
+      await runtime.api.prepare({ epoch: 2, sequence: 1, t: 0.51 });
+      expect(runtime.copies).toEqual([['world', 1920, 1080], ['type', 1920, 1080]]);
+    } finally {
+      font.resolve(); title.resolve();
+      await Promise.allSettled([exact, paused]);
+      await runtime.api.dispose();
+    }
+  });
+
   it('packages an actual complete-frame producer for new Canvas candidates and preserves raw renderer state/reference', async () => {
     const id = await fixture();
     const drawing = 'function render(ctx, env) { ctx.fillText("authored", 1, 2); ctx.lineTo(env.frame, 3); ctx.stroke(); }';
@@ -684,5 +796,5 @@ it('refuses ambient Three.js random helpers and their aliases while allowing det
   }` }] });
   const candidate = await generateMixedMediaDocument(created.id);
   expect((await manifestAt(candidate.document)).renderer).toBe('three');
-  await expect(readFile(join(PATHS.data, candidate.document.directory, 'preview-playback.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(JSON.parse(await readFile(join(PATHS.data, candidate.document.directory, 'preview-playback.json'), 'utf8'))).toEqual({ version: 1, contract: 'portos-complete-frame-v1' });
 });

@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module';
 import { generatedCanvasPlaybackEngine } from './generatedCanvasPlayback.js';
+import { generatedThreePlaybackEngine } from './generatedThreePlayback.js';
 import { createHash } from 'node:crypto';
 import { assertDocumentMediaPolicy } from './documentMediaPolicy.js';
 /**
@@ -402,6 +403,11 @@ export async function readLyricOverlayDocumentFiles() {
 export async function stageGeneratedDocument(projectId, generatedFiles, { verifyCurrent, renderer = 'canvas' } = {}) {
   if (renderer === 'three') {
     const { files } = await collectTree(join(TEMPLATE_ROOT, 'spatial'), { excludeTests: true });
+    const originalEngine = await readFile(join(TEMPLATE_ROOT, 'spatial', 'engine.js'));
+    const staged = files.filter(file => file.rel !== 'engine.js');
+    staged.push({ rel: 'engine.js', data: generatedThreePlaybackEngine(originalEngine) },
+      { rel: 'engine-reference.js', data: originalEngine },
+      { rel: 'preview-playback.json', data: Buffer.from(JSON.stringify({ version: 1, contract: 'portos-complete-frame-v1' })) });
     const fonts = await collectTree(join(TEMPLATE_ROOT, 'layered', 'fonts'));
     const require = createRequire(import.meta.url);
     const packageRoot = dirname(dirname(require.resolve('three')));
@@ -410,12 +416,12 @@ export async function stageGeneratedDocument(projectId, generatedFiles, { verify
     for (const name of ['build/three.module.js', 'build/three.core.js', 'LICENSE']) {
       const data = await readFile(join(packageRoot, name));
       const rel = `vendor/${name.split('/').pop()}`;
-      files.push({ rel, data });
+      staged.push({ rel, data });
       dependencies.push({ path: rel, sha256: createHash('sha256').update(data).digest('hex') });
     }
-    files.push(...fonts.files.map((file) => ({ ...file, rel: `fonts/${file.rel}` })), ...generatedFiles,
+    staged.push(...fonts.files.map((file) => ({ ...file, rel: `fonts/${file.rel}` })), ...generatedFiles,
       { rel: 'dependencies.json', data: Buffer.from(JSON.stringify({ packages: [{ name: 'three', version: pkg.version, files: dependencies }], network: false })) });
-    return storeVersion(projectId, files, { kind: 'generated', name: 'Authored Three.js world' }, { draft: true, verifyCurrent });
+    return storeVersion(projectId, staged, { kind: 'generated', name: 'Authored Three.js world' }, { draft: true, verifyCurrent });
   }
   const { files } = await collectTree(join(TEMPLATE_ROOT, 'layered'), { excludeTests: true });
   const index = await readFile(join(TEMPLATE_ROOT, 'layered', 'index.html'), 'utf8');
