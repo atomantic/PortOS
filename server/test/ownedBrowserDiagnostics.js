@@ -1,5 +1,5 @@
 import { channel } from 'node:diagnostics_channel';
-import { closeSync, existsSync, openSync, readSync } from 'node:fs';
+import { closeSync, existsSync, lstatSync, openSync, opendirSync, readSync } from 'node:fs';
 import { basename, dirname, relative, resolve, sep } from 'node:path';
 import { constants as osConstants } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -139,8 +139,9 @@ export function observeOwnedBrowsers(getOwner) {
   let ended = false;
   let capped = false;
   const owners = new Map();
+  const roots = new Map();
   const diagnostics = createOwnedBrowserDiagnostics({ changed(owned) {
-    const observation = JSON.stringify({ v: 1, exitCode: owned.exitCode, signalCode: owned.signalCode, exit: owned.exited, close: owned.closed,
+    const observation = JSON.stringify({ v: 1, ...roots.get(owned.profile), exitCode: owned.exitCode, signalCode: owned.signalCode, exit: owned.exited, close: owned.closed,
       removal: owned.removal, presentAfterRemoval: owned.presentAfterRemoval,
       observer: ended ? 'ended' : 'active', events: owned.events, truncated: owned.truncated });
     recordTempRootOwner(owned.profile, { owner: owners.get(owned.profile) || 'unavailable', observation });
@@ -150,7 +151,7 @@ export function observeOwnedBrowsers(getOwner) {
     try {
       if (ended || !runRoot || !message || typeof message.profile !== 'string'
         || dirname(resolve(message.profile)) !== resolve(runRoot)
-        || !/^portos-composition-browser-[A-Za-z0-9]+$/.test(basename(message.profile))) return;
+        || !/^portos-(?:composition-browser|code-animation-stages)-[A-Za-z0-9]+$/.test(basename(message.profile))) return;
       let owned = diagnostics.children.find(item => item.profile === message.profile);
       if (message.event === 'allocated' && !owned) {
         if (diagnostics.children.length >= 64) {
@@ -159,6 +160,10 @@ export function observeOwnedBrowsers(getOwner) {
           return;
         }
         owners.set(message.profile, ownerFor(getOwner()));
+        if (basename(message.profile).startsWith('portos-code-animation-stages-')) {
+          const { dev, ino } = lstatSync(message.profile);
+          roots.set(message.profile, { v: 2, generation: roots.size + 1, dev, ino });
+        }
         owned = diagnostics.allocate(message.profile);
       }
       if (!owned) return;
@@ -212,7 +217,10 @@ export function readOwnedBrowserObservations(root) {
       let value;
       try { value = JSON.parse(encoded); } catch { observations.delete(dir); continue; }
       if (dir === '.composition-observer' && value?.v === 1 && value.state === 'capped') { state = 'capped'; continue; }
-      const valid = value?.v === 1
+      const stageRoot = value?.v === 2 && /^portos-code-animation-stages-[A-Za-z0-9]+$/.test(dir)
+        && ['generation', 'dev', 'ino'].every(key => Number.isSafeInteger(value[key]) && value[key] >= 0)
+        && value.generation >= 1 && value.generation <= 64;
+      const valid = (value?.v === 1 || stageRoot)
         && safeExit(value.exitCode === 'none' ? null : value.exitCode) === value.exitCode
         && safeSignal(value.signalCode === 'none' ? null : value.signalCode) === value.signalCode
         && typeof value.exit === 'boolean' && typeof value.close === 'boolean'
@@ -221,7 +229,9 @@ export function readOwnedBrowserObservations(root) {
         && Array.isArray(value.events) && value.events.length <= 16
         && value.events.every(event => typeof event === 'string' && /^(.*)@(\d{1,8})ms$/.test(event)
           && events.has(event.split('@')[0]) && Number(event.match(/@(\d+)ms$/)[1]) <= 86400000)
-        && Object.keys(value).sort().join(',') === 'close,events,exit,exitCode,observer,presentAfterRemoval,removal,signalCode,truncated,v';
+        && Object.keys(value).sort().join(',') === (stageRoot
+          ? 'close,dev,events,exit,exitCode,generation,ino,observer,presentAfterRemoval,removal,signalCode,truncated,v'
+          : 'close,events,exit,exitCode,observer,presentAfterRemoval,removal,signalCode,truncated,v');
       if (!valid) { observations.delete(dir); continue; }
       observations.set(dir, { ...value, owner: safeOwner(owner) ? owner : 'unavailable' });
     }
@@ -236,4 +246,35 @@ export function describeOwnedBrowserObservation(value, state) {
   return `owner=${value.owner} provenance=${state} snapshot=last-recorded fixture-before-global-backstop exitObserved=${value.exit} closeObserved=${value.close} exitCode=${value.exitCode} signalCode=${value.signalCode}`
     + ` removal=${value.removal} presentAfterRemoval=${value.presentAfterRemoval} presentAtGlobalGuard=true`
     + ` observer=${value.observer} events=${value.events.join(',')} truncated=${value.truncated}`;
+}
+
+// Inspect only the retained root, without following symlinks or printing names.
+// Bound both traversal and output; 'other' includes unknown application entries.
+export function describeStageFixtureRoot(path, value, state) {
+  let identity = 'unavailable';
+  const counts = { profile: 0, application: 0, other: 0 };
+  let visited = 0;
+  let capped = false;
+  let unreadable = false;
+  try {
+    const current = lstatSync(path);
+    identity = value?.v === 2 ? (current.dev === value.dev && current.ino === value.ino ? 'matches' : 'changed') : 'unavailable';
+    const walk = (directory, category, depth) => {
+      if (depth > 12 || visited >= 256) { capped = true; return; }
+      const dir = opendirSync(directory);
+      try {
+        let entry;
+        while ((entry = dir.readSync())) {
+          if (visited++ >= 256) { capped = true; break; }
+          const group = category || (entry.name === 'chrome-test-profile' ? 'profile'
+            : ['code-animation', 'videos', 'video-thumbnails', 'uploads', 'music'].includes(entry.name) ? 'application' : 'other');
+          counts[group]++;
+          if (entry.isDirectory() && !entry.isSymbolicLink()) walk(resolve(directory, entry.name), group, depth + 1);
+        }
+      } finally { dir.closeSync(); }
+    };
+    if (current.isDirectory() && !current.isSymbolicLink()) walk(path, null, 0);
+  } catch { unreadable = true; }
+  return `${describeOwnedBrowserObservation(value, state)} generation=${value?.v === 2 ? value.generation : 'unavailable'}`
+    + ` rootIdentity=${identity} profileEntries=${counts.profile} applicationEntries=${counts.application} otherEntries=${counts.other} contentsCapped=${capped} contentsUnreadable=${unreadable}`;
 }

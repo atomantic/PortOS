@@ -3,6 +3,7 @@
 // new revision, and finally encoded by the real renderer and ffmpeg. PostgreSQL
 // (portos_test) holds the project and run records; no provider is called.
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { channel } from 'node:diagnostics_channel';
 import { createHash } from 'node:crypto';
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { execFileSync, spawn } from 'node:child_process';
@@ -74,8 +75,10 @@ let projectId;
 
 describe.skipIf(!dbReady || !chrome || !ffmpeg || !ffprobe)('Production stages with real Chrome and ffmpeg', () => {
   beforeAll(async () => {
-    const profile = join(lazyTempDataRoot('portos-code-animation-stages-'), 'chrome-test-profile');
+    const root = lazyTempDataRoot('portos-code-animation-stages-');
+    const profile = join(root, 'chrome-test-profile');
     proc = spawn(chrome, _testChromeCaptureArgs(profile), { stdio: ['ignore', 'ignore', 'pipe'] });
+    channel('portos.composition-browser.lifecycle').publish({ event: 'child', profile: root, child: proc });
     try {
       const ws = await _waitForTestChrome(proc, 20000, { source: selected.source, executable: chrome, profile });
       endpoint = new URL(ws).origin.replace('ws:', 'http:');
