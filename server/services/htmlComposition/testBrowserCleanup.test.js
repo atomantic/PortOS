@@ -1,11 +1,17 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { _cleanupTestBrowser, _createTestArtifactsRoot, _describeTestChromeStartup, _testChromeProcessFacts, _waitForTestChrome, _withTestCaptureDiagnostics } from './testBrowserCleanup.js';
+
+async function waitForFile(path, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!existsSync(path) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+  if (!existsSync(path)) throw new Error('Timed out waiting for synthetic browser descendant marker');
+}
 
 function child() {
   const proc = new EventEmitter();
@@ -641,7 +647,9 @@ describe('owned test Chrome cleanup', () => {
 describe('fixture-owned CDP artifacts root', () => {
   const originalRoot = process.env.PORTOS_TEST_TEMP_ROOT;
   let runRoot;
+  let preserveRunRoot = false;
   beforeEach(() => {
+    preserveRunRoot = false;
     runRoot = mkdtempSync(join(tmpdir(), 'cdp-artifacts-run-'));
     process.env.PORTOS_TEST_TEMP_ROOT = runRoot;
     vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -652,7 +660,7 @@ describe('fixture-owned CDP artifacts root', () => {
     vi.restoreAllMocks();
     if (originalRoot === undefined) delete process.env.PORTOS_TEST_TEMP_ROOT;
     else process.env.PORTOS_TEST_TEMP_ROOT = originalRoot;
-    rmSync(runRoot, { recursive: true, force: true });
+    if (!preserveRunRoot) rmSync(runRoot, { recursive: true, force: true });
   });
   const exited = () => {
     const proc = child();
@@ -700,6 +708,94 @@ describe('fixture-owned CDP artifacts root', () => {
     expect(error.message).not.toContain(runRoot);
     expect(existsSync(artifacts.path)).toBe(true);
     expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it.skipIf(process.platform === 'win32')('preserves artifacts and data roots when detached-group ownership cannot be verified', async () => {
+    const artifacts = _createTestArtifactsRoot({ parent: runRoot });
+    const dataRoot = mkdtempSync(join(runRoot, 'owned-data-'));
+    const cleanup = vi.fn(() => rmSync(dataRoot, { recursive: true, force: true }));
+    const proc = exited();
+    // This deliberately names our own process group. The helper must fail
+    // closed before signaling it or deleting any root.
+    proc.pid = process.pid;
+
+    const error = await _cleanupTestBrowser({
+      proc, artifacts, cleanup, detachedProcessGroupId: process.pid,
+    }).catch(caught => caught);
+
+    expect(error.message).toContain('Composition browser group identity unavailable');
+    expect(error.message).toContain('Test Chrome temporary data cleanup skipped; detached process group unsettled, root preserved');
+    expect(existsSync(artifacts.path)).toBe(true);
+    expect(existsSync(dataRoot)).toBe(true);
+    expect(cleanup).not.toHaveBeenCalled();
+  });
+
+  it.skipIf(process.platform === 'win32')('waits for an owned detached descendant before removing roots', async () => {
+    const artifacts = _createTestArtifactsRoot({ parent: runRoot });
+    const dataRoot = mkdtempSync(join(runRoot, 'owned-data-'));
+    const ready = join(runRoot, 'descendant-ready');
+    const release = join(runRoot, 'descendant-release');
+    const wrote = join(runRoot, 'descendant-wrote');
+    const descendant = `
+      const fs = require('node:fs');
+      const path = require('node:path');
+      const [artifactsPath, dataPath, releasePath, wrotePath] = process.argv.slice(1);
+      const poll = setInterval(() => {
+        if (!fs.existsSync(releasePath)) return;
+        clearInterval(poll);
+        fs.mkdirSync(artifactsPath, { recursive: true });
+        fs.mkdirSync(dataPath, { recursive: true });
+        fs.writeFileSync(path.join(artifactsPath, 'late-write'), 'artifact');
+        fs.writeFileSync(path.join(dataPath, 'late-write'), 'data');
+        fs.writeFileSync(wrotePath, 'done');
+      }, 5);
+    `;
+    const parent = `
+      const fs = require('node:fs');
+      const { spawn } = require('node:child_process');
+      const descendant = spawn(process.execPath, ['-e', ${JSON.stringify(descendant)}, ${JSON.stringify(artifacts.path)}, ${JSON.stringify(dataRoot)}, ${JSON.stringify(release)}, ${JSON.stringify(wrote)}], { stdio: ['ignore', 'ignore', 'inherit'] });
+      descendant.unref();
+      fs.writeFileSync(${JSON.stringify(ready)}, 'ready');
+    `;
+    const proc = spawn(process.execPath, ['-e', parent], { detached: true, stdio: ['ignore', 'ignore', 'pipe'] });
+    let exited = false;
+    let closed = false;
+    const directExit = new Promise(resolve => proc.once('exit', () => { exited = true; resolve(); }));
+    const directClose = new Promise(resolve => proc.once('close', () => { closed = true; resolve(); }));
+    let groupSettled = false;
+
+    try {
+      await waitForFile(ready);
+      await directExit;
+      expect(exited).toBe(true);
+      expect(closed).toBe(false);
+
+      await _cleanupTestBrowser({
+        proc, artifacts,
+        cleanup: () => rmSync(dataRoot, { recursive: true, force: true }),
+        detachedProcessGroupId: proc.pid,
+      });
+      groupSettled = true;
+      await directClose;
+      expect(closed).toBe(true);
+
+      // The writer is blocked on this marker. A direct-child-only cleanup
+      // would return, then this release would recreate both removed roots.
+      writeFileSync(release, 'release');
+      await waitForFile(wrote, 1000).then(() => true, () => false);
+      expect(existsSync(wrote)).toBe(false);
+      expect(existsSync(artifacts.path)).toBe(false);
+      expect(existsSync(dataRoot)).toBe(false);
+    } finally {
+      if (!groupSettled) {
+        const finalCleanup = await _cleanupTestBrowser({
+          proc, artifacts,
+          cleanup: () => rmSync(dataRoot, { recursive: true, force: true }),
+          detachedProcessGroupId: proc.pid,
+        }).then(() => true, () => false);
+        preserveRunRoot = !finalCleanup;
+      }
+    }
   });
 
   it('refuses to remove a directory that replaced the created root', async () => {

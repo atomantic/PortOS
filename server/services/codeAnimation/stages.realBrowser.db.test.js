@@ -72,12 +72,13 @@ let proc;
 let browser;
 let artifacts;
 let projectId;
+const detachedChromeProcessGroupId = () => process.platform === 'win32' ? undefined : proc?.pid;
 
 describe.skipIf(!dbReady || !chrome || !ffmpeg || !ffprobe)('Production stages with real Chrome and ffmpeg', () => {
   beforeAll(async () => {
     const root = lazyTempDataRoot('portos-code-animation-stages-');
     const profile = join(root, 'chrome-test-profile');
-    proc = spawn(chrome, _testChromeCaptureArgs(profile), { stdio: ['ignore', 'ignore', 'pipe'] });
+    proc = spawn(chrome, _testChromeCaptureArgs(profile), { stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform !== 'win32' });
     channel('portos.composition-browser.lifecycle').publish({ event: 'child', profile: root, child: proc });
     try {
       const ws = await _waitForTestChrome(proc, 20000, { source: selected.source, executable: chrome, profile });
@@ -86,17 +87,17 @@ describe.skipIf(!dbReady || !chrome || !ffmpeg || !ffprobe)('Production stages w
       browser = await chromium.connectOverCDP(endpoint, { artifactsDir: artifacts.path });
     } catch (error) {
       // Retain the owned handle for afterAll if termination itself fails.
-      await _cleanupTestBrowser({ browser, proc, artifacts, cleanup: cleanupTempDataRoots, startupError: error });
+      await _cleanupTestBrowser({ browser, proc, artifacts, cleanup: cleanupTempDataRoots, startupError: error, detachedProcessGroupId: detachedChromeProcessGroupId() });
     }
-    // Enclose the existing startup (20s), version probe (up to 3s), disconnect
-    // (5s) and owned-child termination (10s) budgets without cutting off evidence.
-  }, 40000);
+    // Enclose startup (20s), version probe (up to 3s), disconnect (5s), direct
+    // child termination (10s), and detached-group drain (5s) budgets.
+  }, 50000);
 
   afterAll(async () => {
     if (projectId) await query('DELETE FROM code_animation_projects WHERE id = $1', [projectId]);
-    await _cleanupTestBrowser({ browser, proc, artifacts, cleanup: cleanupTempDataRoots });
+    await _cleanupTestBrowser({ browser, proc, artifacts, cleanup: cleanupTempDataRoots, detachedProcessGroupId: detachedChromeProcessGroupId() });
     await close();
-  }, 20000);
+  }, 25000);
 
   it('turns a frozen original into measured findings, a repaired revision and a real MP4, with a real style frame and pilot', async () => {
     projectId = (await createProductionProject({ manifest })).id;
