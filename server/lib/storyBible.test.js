@@ -976,7 +976,7 @@ describe('storyBible — canon control + server-owned field invariants', () => {
     // Pin the current set so a new server-owned addition is a deliberate
     // change (update both this test AND the corresponding render flow).
     expect([...SERVER_OWNED_CHARACTER_FIELDS]).toEqual([
-      'referenceSheetImageRef', 'referenceSheets',
+      'referenceSheetImageRef', 'referenceSheets', 'referenceSheetRequests',
     ]);
   });
 });
@@ -1780,4 +1780,23 @@ describe('storyBible — reveal-gated canon (#2178)', () => {
       expect(box.revealIssue).toBeNull();
     });
   });
+});
+
+// The durable render identity must survive canonical storage and stale client
+// edits, while model-generated content cannot create or replace it.
+it('round-trips server-owned sheet request identity and preserves it across stale edits', () => {
+  const requestId = '11111111-1111-4111-8111-111111111111';
+  const current = sanitizeCharacter({ id: 'character-1', name: 'Example', referenceSheetRequests: { standard: requestId, blueprint: requestId } });
+  expect(current.referenceSheetRequests).toEqual({ standard: requestId, blueprint: requestId });
+  const patched = mergePreservedSheetPointers(current, { ...current, name: 'Edited', referenceSheetRequests: {} }, () => false);
+  expect(sanitizeCharacter(patched).referenceSheetRequests).toEqual(current.referenceSheetRequests);
+  expect(stripCanonControlFields(current)).not.toHaveProperty('referenceSheetRequests');
+});
+
+it('preserves sheet request identity from pre-v13 peers but honors current peer supersession', () => {
+  const local = [{ id: 'character-1', referenceSheetRequests: { standard: '11111111-1111-4111-8111-111111111111' } }];
+  const legacy = [{ id: 'character-1', name: 'Peer edit', referenceSheetRequests: {} }];
+  expect(preserveLegacyCharacterFields(legacy, local, 12)[0].referenceSheetRequests).toEqual(local[0].referenceSheetRequests);
+  const newer = [{ id: 'character-1', referenceSheetRequests: { standard: '22222222-2222-4222-8222-222222222222' } }];
+  expect(preserveLegacyCharacterFields(newer, local, 13)).toEqual(newer);
 });
