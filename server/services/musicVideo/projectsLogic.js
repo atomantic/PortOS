@@ -841,6 +841,7 @@ export function splitScene(project, sceneId, { backend = null, atSec = null } = 
         sectionIndex: scene.sectionIndex ?? null,
         visualIntent: scene.visualIntent ?? null,
         visualLayer: scene.visualLayer ?? 'footage',
+        ...(scene.stillMove ? { stillMove: scene.stillMove } : {}),
         shotMode: scene.shotMode ?? 'cutaway',
         performanceSpeaker: scene.performanceSpeaker ?? null,
         performanceStyle: scene.performanceStyle ?? null,

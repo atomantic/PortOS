@@ -12,6 +12,7 @@ import {
   reorderScenes,
   mergeNextScene,
   mergePreviousScene,
+  splitScene,
   mirrorStatus,
   sanitizeProjectForSync,
   mergeProjectRecord,
@@ -583,6 +584,13 @@ describe('scene board operations', () => {
     expect(applySceneUpdate(project, scene.sceneId, { visualLayer: 'still', stillMove: 'hold' }).updated.stillMove).toBe('hold');
     const still = applySceneUpdate(project, scene.sceneId, { visualLayer: 'still', stillMove: 'push' }).project;
     expect(applySceneUpdate(still, scene.sceneId, { visualLayer: 'still' }).updated.stillMove).toBe('push');
+  });
+
+  // Uniquely catches a split still's later pieces losing the Move the shot set.
+  it('keeps a still\'s Move on every piece of a split', () => {
+    const { project, scene } = addScene(baseProject(), { prompt: 'a', visualLayer: 'still', stillMove: 'push', camera: { move: 'handheld' }, startSec: 0, endSec: 8 });
+    const split = splitScene(project, scene.sceneId, { atSec: 4 });
+    expect(split.project.scenes.map((s) => s.stillMove)).toEqual(['push', 'push']);
   });
 
   it('persists a shot\'s lyric-type zone and role and refuses unknown ones (#10583)', () => {
