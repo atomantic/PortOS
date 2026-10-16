@@ -74,6 +74,23 @@ export async function collectTestDiagnostics(root, {
       lines.push(`Vitest progress: reason=${reason}; completed=${run.completedCount}; unhandledErrors=${run.errorCount}.`);
       lines.push(`Queued/unfinished modules (up to 100): ${run.activeModules.slice(0, 100).map(diagnosticTestFile).join(', ') || 'none recorded'}`);
       lines.push(`Last completed modules (up to 100): ${run.completedModules.slice(-100).map(diagnosticTestFile).join(', ') || 'none recorded'}`);
+      // Older reporters omit these fields. New outcomes remain independently
+      // useful when interruption prevents the final JSON reporter from writing.
+      if (Array.isArray(run.moduleResults)) {
+        const results = run.moduleResults.slice(-100).filter(item => item && ['queued', 'pending', 'passed', 'failed', 'skipped', 'unavailable'].includes(item.state));
+        lines.push(`Module outcomes (up to 100): ${results.map(item => `${diagnosticTestFile(item.file)}=${item.state}`).join(', ') || 'none recorded'}`);
+      }
+      if (Array.isArray(run.failedCases)) {
+        const cases = run.failedCases.slice(0, 10).filter(item => item && ['timeout', 'assertion', 'other'].includes(item.kind));
+        lines.push(`Failed case categories (up to 10): ${cases.map(item => {
+          const locations = Array.isArray(item.locations) ? item.locations.slice(0, 3).filter(location => location
+            && [location.line, location.column].every(value => Number.isInteger(value) && value > 0 && value <= 10000000)) : [];
+          return `${diagnosticTestFile(item.file)}=${item.kind}`
+            + (item.identity === 'generated-three-preview-export' && diagnosticTestFile(item.file) === 'server/services/musicVideo/documentRender.browser.test.js'
+              ? ':generated-three-preview-export' : '')
+            + (locations.length ? ` at ${locations.map(location => `${location.line}:${location.column}`).join('/')}` : '');
+        }).join(', ') || 'none recorded'}`);
+      }
     } catch {
       lines.push('Diagnostic gap: Vitest progress unavailable; active test file is unknown.');
     }
