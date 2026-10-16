@@ -21,7 +21,7 @@ describe('cross-workspace browser suite registry', () => {
     for (const file of BROWSER_SUITES) {
       const expected = BROWSER_FIDELITY_TESTS[file] ?? [];
       const source = readFileSync(join(root, file), 'utf8');
-      const declarations = [...source.matchAll(/\bit\((['"`])(\[fidelity\][^\n]*?)\1/g)];
+      const declarations = [...source.matchAll(/\b(?:it|threeIt)\((['"`])(\[fidelity\][^\n]*?)\1/g)];
       // Catch a marker in any registered suite, including a new registration
       // shape this small literal-title extractor does not understand yet.
       expect(source.match(/\[fidelity\]/g)?.length ?? 0, file).toBe(declarations.length);
@@ -29,13 +29,13 @@ describe('cross-workspace browser suite registry', () => {
         title.includes('${fixture}') ? ['ramps', 'generated-shots'].map(fixture => title.replace('${fixture}', fixture)) : [title]);
       expect(tags, file).toEqual(expected);
       if (BROWSER_FIDELITY_ONLY_FILES.includes(file)) {
-        const all = [...source.matchAll(/\bit\((['"`])([^\n]*?)\1/g)].map(([, , title]) => title);
+        const all = [...source.matchAll(/\b(?:it|threeIt)\((['"`])([^\n]*?)\1/g)].map(([, , title]) => title);
         expect(all, `${file} must not hide a newly added smoke case`).toEqual(expected);
       }
     }
     const documentSource = readFileSync(join(root, 'server/services/musicVideo/documentRender.browser.test.js'), 'utf8');
     const smokeNames = [
-      'authors a local Three.js world and renders the same deterministic scene through module preview and export',
+      'generates and exports a Three.js scene with visible authored content',
       'renders a generated 3-second card/still/clip document with the selected performance in-point',
       'propagates a deadline through a pending seek and waits for owned Chrome cleanup',
     ];
