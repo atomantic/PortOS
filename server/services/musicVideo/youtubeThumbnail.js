@@ -227,7 +227,7 @@ export async function paintYoutubeThumbnail(projectId, { source, title, notes = 
   if (await pendingIsLive(previous)) throw thumbError(409, 'THUMBNAIL_IN_PROGRESS', 'A thumbnail is already being painted');
   const name = String(title || '').trim();
   if (!name) throw thumbError(422, 'VALIDATION_ERROR', 'Give the thumbnail a title');
-  const path = sourcePath(project, source);
+  const path = thumbnailSourcePath(project, source, projectYoutubeThumbnail(project));
   const settings = await deps.getSettings();
   const route = await deps.defaultRoute(settings);
   if (!route) throw thumbError(409, 'THUMBNAIL_ROUTE_UNAVAILABLE', 'Image generation is not set up. Choose an image generator in Settings and try again');

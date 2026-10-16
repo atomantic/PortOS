@@ -80,6 +80,14 @@ describe('YouTube thumbnail', () => {
     const { project } = await cover.saveCoverDesign(id, { layout: 'top-center' });
     expect(project.publishKit.youtubeThumbnail.filename).not.toBe(before);
     expect(project.publishKit.youtubeThumbnail.source).toEqual({ kind: 'thumbnail', filename: frame });
+    // Painting the title over that same kept frame still finds it.
+    const enqueue = vi.fn(async () => ({ jobId: 'job-example' }));
+    thumbs.__setYoutubeThumbnailDepsForTests({
+      getSettings: async () => ({}), defaultRoute: async () => ({ mode: 'codex', model: null }),
+      imageParams: async (_s, route, common) => ({ ...common, provider: route.mode }), enqueue, jobStatus: async () => 'queued',
+    });
+    await thumbs.paintYoutubeThumbnail(id, { source: { kind: 'thumbnail', filename: frame }, title: 'Example' });
+    expect(enqueue.mock.calls[0][0].params.referenceImagePaths).toEqual([join(PATHS.videoThumbnails, frame)]);
   });
 
   it('keeps up to three variants for Test & Compare, past the next thumbnail, and frees one once removed', async () => {
