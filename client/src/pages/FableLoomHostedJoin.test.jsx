@@ -158,6 +158,73 @@ describe('FableLoomHostedJoin', () => {
     vi.unstubAllGlobals();
   });
 
+  it('shows an over-cap recording refusal, aborts the turn, and keeps the guest connected', async () => {
+    const { MAX_VOICE_AUDIO_BYTES, RECORDING_TOO_LONG_MESSAGE } = await import('../lib/audioRecorder.js');
+    window.location.hash = '#session=sess-123&token=tok-abc';
+    const track = { stop: vi.fn() };
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [track] }) },
+    });
+    let recorder;
+    vi.stubGlobal('MediaRecorder', class {
+      constructor() { this.state = 'inactive'; this.mimeType = 'audio/webm'; recorder = this; }
+      start() { this.state = 'recording'; }
+      stop() { this.state = 'inactive'; this.onstop?.(); }
+    });
+    try {
+      render(<FableLoomHostedJoin />);
+      const button = screen.getByRole('button', { name: /hold talk/i });
+      fireEvent.pointerDown(button);
+      await waitFor(() => expect(recorder?.state).toBe('recording'));
+      recorder.ondataavailable({ data: new Blob([new Uint8Array(MAX_VOICE_AUDIO_BYTES + 1)]) });
+      fireEvent.pointerUp(button);
+      expect(screen.getByRole('alert')).toHaveTextContent(RECORDING_TOO_LONG_MESSAGE);
+      expect(mockSocket.emit).not.toHaveBeenCalledWith('hosted:mic:stop', expect.anything());
+      expect(mockSocket.emit).toHaveBeenCalledWith('hosted:turn:abort');
+      expect(mockSocket.disconnect).not.toHaveBeenCalled();
+      expect(track.stop).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('ignores an old oversized stop callback after a newer recording starts', async () => {
+    const { MAX_VOICE_AUDIO_BYTES } = await import('../lib/audioRecorder.js');
+    window.location.hash = '#session=sess-123&token=tok-abc';
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: { getUserMedia: vi.fn(async () => ({ getTracks: () => [{ stop: vi.fn() }] })) },
+    });
+    const recorders = [];
+    vi.stubGlobal('MediaRecorder', class {
+      constructor() { this.state = 'inactive'; this.mimeType = 'audio/webm'; recorders.push(this); }
+      start() { this.state = 'recording'; }
+      stop() { this.state = 'inactive'; }
+    });
+    try {
+      render(<FableLoomHostedJoin />);
+      const button = screen.getByRole('button', { name: /hold talk/i });
+      fireEvent.pointerDown(button);
+      await waitFor(() => expect(recorders).toHaveLength(1));
+      recorders[0].ondataavailable({ data: new Blob([new Uint8Array(MAX_VOICE_AUDIO_BYTES + 1)]) });
+      fireEvent.pointerUp(button);
+      fireEvent.pointerDown(button);
+      await waitFor(() => expect(recorders).toHaveLength(2));
+      act(() => recorders[0].onstop());
+      expect(mockSocket.emit).not.toHaveBeenCalledWith('hosted:turn:abort');
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      recorders[1].ondataavailable({ data: new Blob(['new recording']) });
+      fireEvent.pointerUp(button);
+      act(() => recorders[1].onstop());
+      await waitFor(() => expect(mockSocket.emit).toHaveBeenCalledWith('hosted:mic:stop', expect.any(Uint8Array)));
+      const bytes = mockSocket.emit.mock.calls.find(([event]) => event === 'hosted:mic:stop')[1];
+      expect(new TextDecoder().decode(bytes)).toBe('new recording');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('keeps audio chunks separate across two press and release cycles', async () => {
     window.location.hash = '#session=sess-123&token=tok-abc';
     const tracks = [{ stop: vi.fn() }, { stop: vi.fn() }];
