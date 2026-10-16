@@ -301,7 +301,7 @@ export default function LoomCanvas({
                 <text x={10} y={17} className="fill-port-text text-[11px] font-semibold pointer-events-none">
                   {truncate(node.title || 'Untitled scene', titleMax)}
                 </text>
-                <g transform={`translate(10, ${nodeH - 16})`} className="pointer-events-none">
+                <g transform={`translate(10, ${nodeH - 13})`} className="pointer-events-none">
                   {isStart && (
                     <g>
                       <Play size={10} className="text-port-accent" x={0} y={-8} />
@@ -320,7 +320,7 @@ export default function LoomCanvas({
                 {!node.isEnding && (
                   <text
                     x={nodeW - 10}
-                    y={nodeH - 15}
+                    y={nodeH - 12}
                     textAnchor="end"
                     className={node.playbackMode === 'cut'
                       ? 'fill-port-accent text-[9px] font-medium pointer-events-none'
@@ -352,7 +352,7 @@ export default function LoomCanvas({
                 x={pos.x + 8}
                 y={pos.y + 24}
                 width={nodeW - 16}
-                height={nodeH - 48}
+                height={nodeH - 52}
                 onPointerDown={(event) => handlePointerDown(event, node)}
                 onPointerMove={handlePointerMove}
                 onPointerUp={handlePointerUp}
