@@ -360,13 +360,13 @@ export const postGoalsSchema = z.object({
 export const postConfigUpdateSchema = z.object({
   mentalMath: z.object({
     enabled: z.boolean().optional(),
-    drillTypes: z.record(z.enum(MATH_DRILL_TYPES), drillTypeConfigSchema).optional()
+    drillTypes: z.partialRecord(z.enum(MATH_DRILL_TYPES), drillTypeConfigSchema).optional()
   }).optional(),
   llmDrills: z.object({
     enabled: z.boolean().optional(),
     providerId: z.string().nullable().optional(),
     model: z.string().nullable().optional(),
-    drillTypes: z.record(z.enum(LLM_DRILL_TYPES), llmDrillTypeConfigSchema).optional()
+    drillTypes: z.partialRecord(z.enum(LLM_DRILL_TYPES), llmDrillTypeConfigSchema).optional()
   }).optional(),
   rhetoricEvaluator: postRhetoricEvaluatorConfigSchema.optional(),
   // Deterministic cognitive drills — no provider, so no provider/model fields.
@@ -390,11 +390,8 @@ export const postConfigUpdateSchema = z.object({
   // — can be dropped from the daily rotation without deleting it (which would
   // throw away its mastery/schedule history). Keys are memory item ids, so this
   // is an open `z.string()` record rather than an enum.
-  // `partialRecord`, not `record`: an enum-keyed `z.record` is EXHAUSTIVE in
-  // zod 4 (every enum member required), which is why the sibling module blocks
-  // above force their UI to write a complete drillTypes map. These blocks are
-  // new, so they take the more forgiving contract — a patch may carry just the
-  // one flag it is changing.
+  // Sparse maps preserve older-client saves when the registry gains a drill,
+  // matching the other module blocks' incremental-update contract.
   memory: z.object({
     enabled: z.boolean().optional(),
     drillTypes: z.partialRecord(z.enum(MEMORY_DRILL_TYPES), drillTypeConfigSchema).optional(),
