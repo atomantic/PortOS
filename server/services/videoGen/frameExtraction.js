@@ -7,7 +7,7 @@ import { spawn } from '../../lib/childProcess.js';
 import { ensureDir, PATHS, UUID_RE, tryReadFile, copyFileGuarded, writeFileGuarded, unlinkGuarded, rmGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import {
-  findFfmpeg, safeUnder, extractEvaluationFrames, runFfmpegProcess,
+  findFfmpeg, safeUnder, extractEvaluationFrames, runFfmpegProcess, vfrSyncArgs,
 } from '../../lib/ffmpeg.js';
 import {
   TAIL_WINDOW_SECONDS, CANDIDATE_FPS, MAX_CANDIDATES, pickBestFrame,
@@ -41,7 +41,7 @@ async function decodeTailCandidates(ffmpeg, videoPath, candidateDir) {
     bin: ffmpeg,
     args: [
       '-sseof', `-${TAIL_WINDOW_SECONDS.toFixed(2)}`, '-i', videoPath,
-      '-vf', `fps=${CANDIDATE_FPS}`, '-vsync', 'vfr',
+      '-vf', `fps=${CANDIDATE_FPS}`, ...await vfrSyncArgs(ffmpeg),
       '-frames:v', String(MAX_CANDIDATES), '-y', outPattern,
     ],
     stderrTailBytes: 0,

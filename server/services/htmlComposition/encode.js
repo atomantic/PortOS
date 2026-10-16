@@ -6,7 +6,7 @@ import { availableParallelism, totalmem } from 'node:os';
 import { rm, writeFile } from 'node:fs/promises';
 import sharp from 'sharp';
 import { blurFrame } from './shutterBlur.js';
-import { findFfmpeg, runFfmpegProcess, probeVideoDuration, H264_ENCODE_ARGS, AAC_ENCODE_ARGS, BT709_CONTAINER_ARGS, bt709TagFilter, planLoudnessMaster, reportMasteredLoudness } from '../../lib/ffmpeg.js';
+import { findFfmpeg, runFfmpegProcess, probeVideoDuration, vfrSyncArgs, H264_ENCODE_ARGS, AAC_ENCODE_ARGS, BT709_CONTAINER_ARGS, bt709TagFilter, planLoudnessMaster, reportMasteredLoudness } from '../../lib/ffmpeg.js';
 
 // Size the viewport for this format, then let the composition reframe itself
 // (#8960) before any seek captures it. A composition without a layout hook
@@ -452,7 +452,7 @@ export async function encodeFileContactSheetAtTimes(videoPath, outputPath, times
     bin: ffmpeg,
     args: ['-hide_banner', '-loglevel', 'error', '-i', videoPath, '-vf',
       `select='${selectExpr}',scale=${tileWidth}:-2,tile=${columns}x${rows}:padding=4:color=black`,
-      '-vsync', 'vfr', '-frames:v', '1', '-y', outputPath],
+      ...await vfrSyncArgs(ffmpeg), '-frames:v', '1', '-y', outputPath],
   });
   if (!result.ok) throw new Error(`Excerpt contact sheet failed: ${result.reason}`);
   return { columns, rows };
