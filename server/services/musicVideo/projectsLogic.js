@@ -516,8 +516,7 @@ function buildScene(input, { order }) {
     visualIntent: input.visualIntent ?? null,
     // #8985: what a composed render shows for this span (render.js#sceneLayer).
     visualLayer: input.visualLayer ?? 'footage',
-    // A planned camera move (#10589) seeds the nearest still move, which the shot's Move picker then owns.
-    stillMove: input.stillMove ?? stillMoveForCamera(input.camera) ?? 'hold',
+    stillMove: input.stillMove ?? 'hold',
     // #10589: the planned camera move (absent on hand-added and pre-#10589 shots).
     ...(input.camera ? { camera: input.camera } : {}),
     cardText: input.cardText ?? null,
@@ -654,7 +653,12 @@ export function applySceneUpdate(project, sceneId, patch) {
   const scenes = project.scenes || [];
   const idx = scenes.findIndex((s) => s.sceneId === sceneId);
   if (idx < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
-  const merged = 'codeClip' in data ? { ...scenes[idx], ...data } : keepCodeClipWithItsClip(scenes[idx], { ...scenes[idx], ...data });
+  const kept = 'codeClip' in data ? { ...scenes[idx], ...data } : keepCodeClipWithItsClip(scenes[idx], { ...scenes[idx], ...data });
+  // A shot turning into a still takes the nearest move to its planned camera (#10589) unless
+  // it already has one; from then on its Move picker owns how the still moves.
+  const becomesStill = data.visualLayer === 'still' && scenes[idx].visualLayer !== 'still' && !('stillMove' in data) && (kept.stillMove ?? 'hold') === 'hold';
+  const seeded = becomesStill ? stillMoveForCamera(kept.camera) : null;
+  const merged = seeded ? { ...kept, stillMove: seeded } : kept;
   // Setting a slot directly (an older client, or a hand edit) still records the
   // asset as a take so the candidate list stays a superset of the selection.
   const touchesSlot = Object.values(TAKE_SLOT).some((field) => typeof data[field] === 'string');

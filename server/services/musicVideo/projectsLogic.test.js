@@ -575,10 +575,14 @@ describe('scene board operations', () => {
     expect(() => applySceneUpdate(project, scene.sceneId, { cardColor: 'red' })).toThrow();
   });
 
-  // Uniquely catches a planned camera move not seeding the still's Move, or overriding one the shot sets.
-  it('seeds a new still move from its planned camera, and keeps a move it is given', () => {
-    expect(addScene(baseProject(), { prompt: 'a', camera: { move: 'truck-left' } }).scene.stillMove).toBe('pan');
-    expect(addScene(baseProject(), { prompt: 'a', camera: { move: 'slow-dolly-in' }, stillMove: 'hold' }).scene.stillMove).toBe('hold');
+  // Uniquely catches a planned camera move not seeding a new still's Move, or overriding one the shot sets.
+  it('seeds a shot\'s still move from its planned camera when it becomes a still, and keeps a move it is given', () => {
+    const { project, scene } = addScene(baseProject(), { prompt: 'a', camera: { move: 'truck-left' } });
+    expect(scene.stillMove).toBe('hold');
+    expect(applySceneUpdate(project, scene.sceneId, { visualLayer: 'still' }).updated.stillMove).toBe('pan');
+    expect(applySceneUpdate(project, scene.sceneId, { visualLayer: 'still', stillMove: 'hold' }).updated.stillMove).toBe('hold');
+    const still = applySceneUpdate(project, scene.sceneId, { visualLayer: 'still', stillMove: 'push' }).project;
+    expect(applySceneUpdate(still, scene.sceneId, { visualLayer: 'still' }).updated.stillMove).toBe('push');
   });
 
   it('persists a shot\'s lyric-type zone and role and refuses unknown ones (#10583)', () => {
