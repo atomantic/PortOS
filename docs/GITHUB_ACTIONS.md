@@ -456,7 +456,10 @@ The selected work is split across parallel jobs:
   Chrome, FFmpeg and bundler prerequisites instead of silently skipping them.
   Ordinary PRs run the `smoke` profile: all existing assertions except the
   explicitly tagged `[fidelity]` grading/authoring cases. Scheduled, release,
-  and dispatched full runs execute every case. Profiles do not change pixels,
+  and dispatched full runs also execute ordinary fidelity cases. The explicit
+  `[local-performance]` playback case runs only in local fidelity, including when
+  hosted CI selects `full`. Hosted profiles retain generated Three render/export
+  and owned cleanup coverage. Profiles do not change pixels,
   render settings, tolerances, or cleanup assertions.
   A PR selecting a fidelity-owning file also requires the exact-head receipt
   described below; a smoke pass alone cannot admit it.
@@ -483,7 +486,7 @@ The selected work is split across parallel jobs:
 
 After publishing a relevant PR, run `node scripts/browser-fidelity.js --pr NUMBER`
 from its clean checkout using existing `gh` authentication. This command runs the
-canonical fidelity cases automatically, retains a local receipt, and publishes
+four registered fidelity cases automatically, retains a local receipt, and publishes
 an exact-commit status only after complete passing assertions and unchanged-source
 verification. It binds the PR head and that commit's source tree. It does not
 provision a runner, install credentials, or start PortOS.
@@ -499,11 +502,14 @@ rerun that gate job on the unchanged run once its other required jobs have passe
 A receipt cannot turn a cancelled or failed browser, Windows, or containment job
 green. A changed PR head requires new evidence; base-only movement does not. Hosted smoke tests the merge checkout; local fidelity proves the PR head only,
 not native integration of subsequent base changes. Scheduled/release full coverage
-remains the integration check for those fidelity cases. Default
+remains the integration check for the ordinary fidelity cases; hardware-sensitive
+`[local-performance]` acceptance stays local. Default
 pregate is not a substitute for this command or required CI.
 
-Hardware playback/GPU throughput remains distinct from these deterministic visual
-assertions. Software WebGL results do not certify physical-GPU performance, and
+The local playback case preserves full-resolution transport, frame freshness,
+preview/export parity and lens-coordinate regressions. Creative quality receives
+human review; hosted acceptance does not impose this playback performance budget.
+Software WebGL results do not certify physical-GPU performance, and
 Mac-local results cannot replace Windows compatibility or Linux containment.
 The profile split does not explain or repair previously unidentified hosted stalls.
 

@@ -5,6 +5,7 @@ import { delimiter, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { collectTestDiagnostics } from './ci-test-diagnostics.js';
+import vitestRunDiagnostics from './vitestRunDiagnostics.js';
 import { workflowJobs } from './lib/workflowJobs.js';
 
 const launcher = new URL('./run-ci-tests.js', import.meta.url).href;
@@ -88,6 +89,33 @@ describe('independent CI test failure recovery (#11552)', () => {
     expect(output).toContain('structured test report missing');
   });
 
+  it('recovers bounded completed outcomes without final JSON or private error details', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'ci-diagnostics-outcomes-'));
+    const prior = process.env.PORTOS_CI_DIAGNOSTICS_PATH;
+    try {
+      const attempt = join(root, 'portos-vitest-fixture'); mkdirSync(attempt);
+      const path = join(attempt, 'run.json');
+      process.env.PORTOS_CI_DIAGNOSTICS_PATH = path;
+      const hooks = vitestRunDiagnostics();
+      hooks.onInit({ onClose() {} });
+      for (let i = 0; i < 105; i++) hooks.onTestModuleEnd({ moduleId: 'server/lib/synthetic.test.js', state: () => 'passed' });
+      hooks.onTestModuleEnd({ moduleId: 'server/lib/synthetic.test.js', state: () => 'failed', errors: ['private-sentinel'] });
+      hooks.onTestModuleEnd({ moduleId: 'server/lib/unknown.test.js', state: () => 'private-sentinel' });
+      const persisted = JSON.parse(readFileSync(path, 'utf8'));
+      expect(persisted.moduleResults).toHaveLength(100);
+      expect(persisted.moduleResults.at(-1).state).toBe('unavailable');
+      expect(JSON.stringify(persisted)).not.toContain('private-sentinel');
+      const lines = await collectTestDiagnostics(root, { logger: { warn() {} }, diagnose: async () => {}, writeSummary() {} });
+      expect(lines.join('\n')).toContain('server/lib/synthetic.test.js=failed');
+      expect(lines.join('\n')).toContain('structured test report missing');
+      expect(lines.join('\n')).not.toContain('private-sentinel');
+    } finally {
+      if (prior === undefined) delete process.env.PORTOS_CI_DIAGNOSTICS_PATH;
+      else process.env.PORTOS_CI_DIAGNOSTICS_PATH = prior;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('keeps unavailable and invalid reports inconclusive even when summary and native collection fail', async () => {
     const root = mkdtempSync(join(tmpdir(), 'ci-diagnostics-invalid-'));
     try {
@@ -108,21 +136,30 @@ describe('independent CI test failure recovery (#11552)', () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it('collects after failure and before sibling cancellation with bounded, non-masking failure handling', () => {
+  it.each([
+    ['windows-server', 'Run server tests on Windows', 'Preserve Windows test failure diagnostics', 'run-ci-tests.js'],
+    ['database', 'Run cross-workspace browser suites', 'Preserve browser test failure diagnostics', 'watch-ci-tests.js'],
+  ])('%s collects after failure and before sibling cancellation with bounded, non-masking failure handling', (jobId, testName, collectorName, launcherName) => {
     const workflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
-    const windows = workflowJobs(workflow)['windows-server'];
-    expect(windows).toContain('PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics');
-    const start = windows.indexOf('      - name: Preserve Windows test failure diagnostics');
-    expect(start).toBeGreaterThan(windows.indexOf('run: node scripts/run-ci-tests.js server'));
-    const end = windows.indexOf('      - name: Report the failure, then cancel sibling CI jobs');
+    const job = workflowJobs(workflow)[jobId];
+    const start = job.indexOf(`      - name: ${collectorName}`);
+    expect(start).toBeGreaterThan(job.indexOf(`run: node scripts/${launcherName} server`));
+    const end = job.indexOf('      - name: Report the failure, then cancel sibling CI jobs');
     expect(end).toBeGreaterThan(start);
-    const step = windows.slice(start, end);
+    const step = job.slice(start, end);
     expect(step).toContain('if: failure()');
     expect(step).toContain('continue-on-error: true');
     expect(step).toContain('timeout-minutes: 1');
     expect(step).toContain('run: node scripts/ci-test-diagnostics.js');
-    const testStep = windows.slice(windows.indexOf('- name: Run server tests on Windows'), start);
+    const testStep = job.slice(job.indexOf(`- name: ${testName}`), start);
+    const durable = 'PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics';
+    expect(testStep).toContain(durable);
+    expect(step).toContain(durable);
+    const testMinutes = Number(testStep.match(/timeout-minutes:\s*(\d+)/)?.[1]);
+    const jobMinutes = Number(job.match(/^    timeout-minutes:\s*(\d+)/m)?.[1]);
+    expect(testMinutes).toBeGreaterThan(0);
+    expect(testMinutes).toBeLessThan(jobMinutes - 1);
     expect(testStep).not.toContain('continue-on-error');
-    expect(windows.slice(end)).toContain("if: failure() && github.event_name == 'pull_request'");
+    expect(job.slice(end)).toContain("if: failure() && github.event_name == 'pull_request'");
   });
 });

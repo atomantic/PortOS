@@ -74,6 +74,11 @@ export async function collectTestDiagnostics(root, {
       lines.push(`Vitest progress: reason=${reason}; completed=${run.completedCount}; unhandledErrors=${run.errorCount}.`);
       lines.push(`Queued/unfinished modules (up to 100): ${run.activeModules.slice(0, 100).map(diagnosticTestFile).join(', ') || 'none recorded'}`);
       lines.push(`Last completed modules (up to 100): ${run.completedModules.slice(-100).map(diagnosticTestFile).join(', ') || 'none recorded'}`);
+      // Completed outcomes survive interruptions before the final JSON report.
+      if (Array.isArray(run.moduleResults)) {
+        const results = run.moduleResults.slice(-100).filter(item => item && ['queued', 'pending', 'passed', 'failed', 'skipped', 'unavailable'].includes(item.state));
+        lines.push(`Module outcomes (up to 100): ${results.map(item => `${diagnosticTestFile(item.file)}=${item.state}`).join(', ') || 'none recorded'}`);
+      }
     } catch {
       lines.push('Diagnostic gap: Vitest progress unavailable; active test file is unknown.');
     }

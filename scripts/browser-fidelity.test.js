@@ -36,7 +36,7 @@ function fixture({ outcome = 'passed', changed = false, dirty = false, wrongTree
     expect(env.CHROME_PATH).toBe('/synthetic/chrome');
     const dir = join(env.PORTOS_CI_DIAGNOSTICS_DIR, 'portos-vitest-contract');
     mkdirSync(dir);
-    const report = { success: true, numFailedTests: 0, numFailedTestSuites: 0, numPassedTests: 3,
+    const report = { success: true, numFailedTests: 0, numFailedTestSuites: 0, numPassedTests: 4,
       testResults: Object.entries(BROWSER_FIDELITY_TESTS).map(([name, titles]) => ({ name,
         assertionResults: titles.map(title => ({ title, fullName: `suite ${title}`, status: 'passed' })) })) };
     if (outcome === 'skipped') report.testResults[0].assertionResults[0].status = 'pending';
@@ -65,7 +65,7 @@ describe('local fidelity publication through the existing runner and status boun
     const receipt = JSON.parse(readFileSync(result.receiptPath, 'utf8'));
     expect(receipt.target).toMatchObject({ head, base, tree, merge });
     expect(receipt.profile.files).toEqual(BROWSER_FIDELITY_FILES);
-    expect(receipt.profile.executed).toBe(3);
+    expect(receipt.profile.executed).toBe(4);
     expect(f.posts[1].context.length).toBeLessThanOrEqual(100);
     expect(f.posts[1].description).toMatch(/^receipt sha256=[a-f0-9]{64}$/);
     expect(JSON.stringify(receipt)).not.toMatch(/synthetic credential|synthetic key/);

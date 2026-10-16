@@ -25,6 +25,13 @@ const ownerFor = filepath => {
 const present = profile => { try { return existsSync(profile); } catch { return 'unknown'; } };
 const safeSignal = signal => signal == null ? 'none' : typeof signal === 'string' && Object.hasOwn(osConstants.signals, signal) ? signal : 'other';
 const safeExit = code => code == null ? 'none' : Number.isSafeInteger(code) && Math.abs(code) <= 2147483647 ? code : 'other';
+// Filesystem identities can exceed Number's exact range, notably on Windows.
+// Retain legacy safe numeric rows, but never accept an already-rounded identity.
+const fileIdentity = value => {
+  if (Number.isSafeInteger(value) && value >= 0) return String(value);
+  return typeof value === 'string' && /^(0|[1-9]\d{0,19})$/.test(value)
+    && BigInt(value) <= 18446744073709551615n ? value : null;
+};
 const elapsed = started => Math.min(86400000, Math.max(0, Math.round(performance.now() - started)));
 
 // One interpretation for both local assertion diagnostics and persisted worker
@@ -161,8 +168,8 @@ export function observeOwnedBrowsers(getOwner) {
         }
         owners.set(message.profile, ownerFor(getOwner()));
         if (basename(message.profile).startsWith('portos-code-animation-stages-')) {
-          const { dev, ino } = lstatSync(message.profile);
-          roots.set(message.profile, { v: 2, generation: roots.size + 1, dev, ino });
+          const { dev, ino } = lstatSync(message.profile, { bigint: true });
+          roots.set(message.profile, { v: 2, generation: roots.size + 1, dev: dev.toString(), ino: ino.toString() });
         }
         owned = diagnostics.allocate(message.profile);
       }
@@ -218,8 +225,8 @@ export function readOwnedBrowserObservations(root) {
       try { value = JSON.parse(encoded); } catch { observations.delete(dir); continue; }
       if (dir === '.composition-observer' && value?.v === 1 && value.state === 'capped') { state = 'capped'; continue; }
       const stageRoot = value?.v === 2 && /^portos-code-animation-stages-[A-Za-z0-9]+$/.test(dir)
-        && ['generation', 'dev', 'ino'].every(key => Number.isSafeInteger(value[key]) && value[key] >= 0)
-        && value.generation >= 1 && value.generation <= 64;
+        && Number.isSafeInteger(value.generation) && value.generation >= 1 && value.generation <= 64
+        && fileIdentity(value.dev) !== null && fileIdentity(value.ino) !== null;
       const valid = (value?.v === 1 || stageRoot)
         && safeExit(value.exitCode === 'none' ? null : value.exitCode) === value.exitCode
         && safeSignal(value.signalCode === 'none' ? null : value.signalCode) === value.signalCode
@@ -257,8 +264,8 @@ export function describeStageFixtureRoot(path, value, state) {
   let capped = false;
   let unreadable = false;
   try {
-    const current = lstatSync(path);
-    identity = value?.v === 2 ? (current.dev === value.dev && current.ino === value.ino ? 'matches' : 'changed') : 'unavailable';
+    const current = lstatSync(path, { bigint: true });
+    identity = value?.v === 2 ? (current.dev.toString() === fileIdentity(value.dev) && current.ino.toString() === fileIdentity(value.ino) ? 'matches' : 'changed') : 'unavailable';
     const walk = (directory, category, depth) => {
       if (depth > 12 || visited >= 256) { capped = true; return; }
       const dir = opendirSync(directory);

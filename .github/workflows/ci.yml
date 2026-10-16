@@ -707,13 +707,25 @@ jobs:
       # client bundler is missing, so a skip can never pass this step.
       - name: Run cross-workspace browser suites
         if: needs.impact.outputs.browser_files != '[]'
+        # The independent supervisor emits progress and owns a 12m deadline;
+        # this 15m step limit is only a fallback before the 20m job boundary.
+        timeout-minutes: 15
         env:
           PORTOS_BROWSER_TEST_PROFILE: ${{ github.event_name == 'pull_request' && github.base_ref != 'release' && inputs.full != true && 'smoke' || 'full' }}
+          PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
           CI_TEST_MODE: files
           CI_TEST_FILES: ${{ needs.impact.outputs.browser_files }}
           PORTOS_REQUIRE_BROWSER_SUITES: '1'
           PORTOS_TEST_QUIET: 1
-        run: node scripts/run-ci-tests.js server
+        run: node scripts/watch-ci-tests.js server
+
+      - name: Preserve browser test failure diagnostics
+        if: failure() && needs.impact.outputs.browser_files != '[]'
+        continue-on-error: true
+        timeout-minutes: 1
+        env:
+          PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
+        run: node scripts/ci-test-diagnostics.js
 
       - name: Report the failure, then cancel sibling CI jobs
         if: failure() && github.event_name == 'pull_request'
