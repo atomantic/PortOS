@@ -58,6 +58,8 @@ export default defineConfig({
       TMP: RUN_TEMP_ROOT,
       TEMP: RUN_TEMP_ROOT,
       MAC_CHROMIUM_TMPDIR: RUN_TEMP_ROOT,
+      // Keeps spawned npm from writing debug logs into the developer's ~/.npm/_logs.
+      npm_config_logs_max: '0',
     },
     include: DB_TEST_INCLUDE,
     exclude: [
