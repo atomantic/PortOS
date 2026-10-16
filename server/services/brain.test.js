@@ -241,6 +241,29 @@ describe('brain service', () => {
       );
     });
 
+    it('moves the entry to needs_review and emits when filing throws after a successful classification', async () => {
+      const { brainEvents } = storage;
+      storage.createInboxLog.mockResolvedValue({ id: 'inbox-fail', status: 'classifying' });
+      storage.updateInboxLog.mockResolvedValue({ id: 'inbox-fail' });
+      storage.createPerson.mockRejectedValue(new Error('db write failed'));
+      getProviderById.mockResolvedValue({ id: 'lmstudio', enabled: true, defaultModel: 'test-model' });
+      runPromptThroughProvider.mockResolvedValue({
+        text: JSON.stringify({ destination: 'people', confidence: 0.95, title: 'Alice', extracted: { name: 'Alice' } }),
+        model: 'test-model'
+      });
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const emitted = new Promise(resolve => brainEvents.once('classified', resolve));
+
+      await captureThought('met Alice');
+
+      expect(await emitted).toEqual({ entryId: 'inbox-fail', status: 'needs_review', error: 'db write failed' });
+      expect(storage.updateInboxLog).toHaveBeenCalledWith('inbox-fail', {
+        status: 'needs_review',
+        error: { message: 'db write failed' }
+      });
+      errSpy.mockRestore();
+    });
+
     it('omits the creative flag by default (non-creative captures stay unflagged)', async () => {
       storage.createInboxLog.mockResolvedValue({ id: 'inbox-005', status: 'classifying' });
 
