@@ -306,6 +306,42 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     const preview = await buildDocumentPreview(project);
     expect(preview.assets).toEqual([]);
     expect(preview.html).toContain("img-src 'none'");
+    const { readDocumentFiles } = await import('./compositionDocument.js');
+    const referenceFiles = await readDocumentFiles(project);
+    referenceFiles.set('engine.js', referenceFiles.get('engine-reference.js'));
+    console.log('🎬 Generated Three stage: reference-parity');
+    // Keep only one eager WebGL world alive: retain the reference pixels, then
+    // retire its page before creating the generated preview in the same browser.
+    const referenceFrames = [];
+    let portrait;
+    const reference = await newPage({ viewport: { width: 1920, height: 1080 } });
+    try {
+      await _withTestPreviewLoadDiagnostics(reference, async markReadiness => {
+        await reference.setContent((await buildDocumentPreview(project, { files: referenceFiles })).html);
+        markReadiness();
+        await reference.waitForFunction(() => typeof window.portosComposition?.seek === 'function');
+      });
+      await reference.evaluate(() => {
+        window.priorThreeEvents = window.PORTOS_MV.song.narrativeEvents;
+        window.PORTOS_MV.song.narrativeEvents = [{ kind: 'silence', startFrame: 5, endFrame: 9 }];
+      });
+      for (const t of [0, 0.03125, 0.25, 0.5, 0.03125]) {
+        const pixels = await reference.evaluate(async t => {
+          await window.portosComposition.seek(t);
+          return { world: document.getElementById('world').toDataURL(), type: document.getElementById('type').toDataURL() };
+        }, t);
+        referenceFrames.push({ t, pixels });
+      }
+      await reference.evaluate(() => window.portosComposition.layout({ width: 1080, height: 1920 }));
+      portrait = await reference.evaluate(async () => {
+        await window.portosComposition.seek(0.03125);
+        return { world: document.getElementById('world').toDataURL(), type: document.getElementById('type').toDataURL() };
+      });
+      await reference.evaluate(() => {
+        window.PORTOS_MV.song.narrativeEvents = window.priorThreeEvents;
+        window.portosComposition.layout({ width: 1920, height: 1080 });
+      });
+    } finally { await reference.close(); }
     console.log('🎬 Generated Three stage: main-preview');
     const page = await newPage({ viewport: { width: 1920, height: 1080 } });
     const errors = []; page.on('pageerror', (error) => errors.push(error.message));
@@ -333,39 +369,17 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
       await window.portosComposition.seek(t);
       return { world: document.getElementById('world').toDataURL(), type: document.getElementById('type').toDataURL() };
     }, t);
-    const { readDocumentFiles } = await import('./compositionDocument.js');
-    const referenceFiles = await readDocumentFiles(project);
-    referenceFiles.set('engine.js', referenceFiles.get('engine-reference.js'));
-    console.log('🎬 Generated Three stage: reference-parity');
-    const reference = await newPage({ viewport: { width: 1920, height: 1080 } });
-    try {
-      await _withTestPreviewLoadDiagnostics(reference, async markReadiness => {
-        await reference.setContent((await buildDocumentPreview(project, { files: referenceFiles })).html);
-        markReadiness();
-        await reference.waitForFunction(() => typeof window.portosComposition?.seek === 'function');
-      });
-      for (const target of [page, reference]) await target.evaluate(() => {
-        window.priorThreeEvents = window.PORTOS_MV.song.narrativeEvents;
-        window.PORTOS_MV.song.narrativeEvents = [{ kind: 'silence', startFrame: 5, endFrame: 9 }];
-      });
-      for (const t of [0, 0.03125, 0.25, 0.5, 0.03125]) {
-        const expected = await reference.evaluate(async t => {
-          await window.portosComposition.seek(t);
-          return { world: document.getElementById('world').toDataURL(), type: document.getElementById('type').toDataURL() };
-        }, t);
-        expect(await at(t)).toEqual(expected);
-      }
-      for (const target of [page, reference]) await target.evaluate(() => window.portosComposition.layout({ width: 1080, height: 1920 }));
-      const portrait = await reference.evaluate(async () => {
-        await window.portosComposition.seek(0.03125);
-        return { world: document.getElementById('world').toDataURL(), type: document.getElementById('type').toDataURL() };
-      });
-      expect(await at(0.03125)).toEqual(portrait);
-      for (const target of [page, reference]) await target.evaluate(() => {
-        window.PORTOS_MV.song.narrativeEvents = window.priorThreeEvents;
-        window.portosComposition.layout({ width: 1920, height: 1080 });
-      });
-    } finally { await reference.close(); }
+    await page.evaluate(() => {
+      window.priorThreeEvents = window.PORTOS_MV.song.narrativeEvents;
+      window.PORTOS_MV.song.narrativeEvents = [{ kind: 'silence', startFrame: 5, endFrame: 9 }];
+    });
+    for (const { t, pixels } of referenceFrames) expect(await at(t)).toEqual(pixels);
+    await page.evaluate(() => window.portosComposition.layout({ width: 1080, height: 1920 }));
+    expect(await at(0.03125)).toEqual(portrait);
+    await page.evaluate(() => {
+      window.PORTOS_MV.song.narrativeEvents = window.priorThreeEvents;
+      window.portosComposition.layout({ width: 1920, height: 1080 });
+    });
     console.log('🎬 Generated Three stage: cooperative-playback');
     const live = await page.evaluate(async () => {
       const api = window.portosComposition.previewPlayback;
