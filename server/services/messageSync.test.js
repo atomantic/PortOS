@@ -46,7 +46,7 @@ vi.mock('@googleapis/gmail', () => ({
     settings: { sendAs: { list: async () => ({ data: { sendAs: [] } }) } },
   } }),
 }));
-vi.mock('./googleAuth.js', () => ({ getAuthenticatedClient: async () => ({}) }));
+vi.mock('./googleAuth.js', () => ({ getAuthenticatedClient: async () => ({}), GOOGLE_API_TIMEOUT_MS: 30_000 }));
 
 vi.mock('./messageGmailSync.js', () => ({
   syncGmail: vi.fn()
@@ -504,6 +504,19 @@ describe('syncAccount', () => {
     expect(mockIo.emit).toHaveBeenCalledWith('messages:sync:started', { accountId: VALID_UUID, mode: 'unread' });
     expect(mockIo.emit).toHaveBeenCalledWith('messages:sync:completed', expect.objectContaining({ accountId: VALID_UUID, newMessages: 1 }));
     expect(mockIo.emit).toHaveBeenCalledWith('messages:changed', {});
+  });
+
+  it('releases the account lock after a Gmail request timeout', async () => {
+    getAccount.mockResolvedValue({ id: VALID_UUID, name: 'Gmail', type: 'gmail', enabled: true });
+    readFile.mockResolvedValue(JSON.stringify({ syncCursor: null, messages: [] }));
+    syncGmail.mockRejectedValueOnce(new Error('Google API request timed out'))
+      .mockResolvedValueOnce({ messages: [], status: 'success' });
+
+    await expect(syncAccount(VALID_UUID, mockIo)).resolves.toMatchObject({
+      error: 'Google API request timed out', status: 502,
+    });
+    await expect(syncAccount(VALID_UUID, mockIo)).resolves.toMatchObject({ status: 'success' });
+    expect(syncGmail).toHaveBeenCalledTimes(2);
   });
 
   it('should call syncPlaywright for outlook accounts with mode', async () => {

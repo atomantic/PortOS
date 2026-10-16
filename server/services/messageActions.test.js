@@ -5,7 +5,7 @@ vi.mock('./messageAccounts.js', () => ({ getAccount: mocks.account }));
 vi.mock('./messageSync.js', () => ({ getMessage: mocks.message, removeMessageFromCache: mocks.write }));
 vi.mock('./messagePlaywrightSync.js', () => ({ findOrOpenPage: async () => ({}), getPages: async () => [], isAuthPage: () => false, evaluateOnPage: mocks.evaluate }));
 vi.mock('./messageTriageRules.js', () => ({ recordCorrection: mocks.correction }));
-vi.mock('./googleAuth.js', () => ({ getAuthenticatedClient: async () => ({}) }));
+vi.mock('./googleAuth.js', () => ({ getAuthenticatedClient: async () => ({}), GOOGLE_API_TIMEOUT_MS: 30_000 }));
 vi.mock('@googleapis/gmail', () => ({ gmail: () => ({ users: { messages: { trash: mocks.trash, modify: mocks.modify } } }) }));
 import { executeAction } from './messageActions.js';
 const accountId = '11111111-1111-1111-1111-111111111111';

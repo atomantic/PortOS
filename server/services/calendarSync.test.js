@@ -19,6 +19,7 @@ vi.mock('./calendarAccounts.js', () => ({
 // 401 this test pins.
 vi.mock('./googleAuth.js', () => ({
   getAuthenticatedClient: vi.fn(async () => null),
+  GOOGLE_API_TIMEOUT_MS: 30_000,
 }));
 
 // tribe.js is loaded dynamically by logCalendarTouchpoints; mock it so the
