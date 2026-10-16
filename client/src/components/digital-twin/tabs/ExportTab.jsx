@@ -59,13 +59,18 @@ export default function ExportTab({ onRefresh: _onRefresh }) {
 
   const handleExport = async () => {
     setExporting(true);
-    const result = await api.exportSoul(
-      selectedFormat,
-      selectedDocs.length > 0 ? selectedDocs : null,
-      includeDisabled
-    );
-    setExportResult(result);
-    setExporting(false);
+    try {
+      const result = await api.exportSoul(
+        selectedFormat,
+        selectedDocs.length > 0 ? selectedDocs : null,
+        includeDisabled
+      );
+      setExportResult(result);
+    } catch {
+      // The request helper already shows the failure toast.
+    } finally {
+      setExporting(false);
+    }
   };
 
   const handleCopyExport = async () => {
