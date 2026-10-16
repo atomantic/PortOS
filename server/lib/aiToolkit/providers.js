@@ -73,6 +73,7 @@ export function createProviderService(config = {}) {
     cachedModelIds,
     sampleFile,
     defaultSamplePath: DEFAULT_SAMPLE_PATH,
+    cliProbeTimeouts: config.cliProbeTimeouts,
   });
   return { ...crud, ...catalog };
 }
