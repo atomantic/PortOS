@@ -303,11 +303,17 @@ const BUILDERS = {
     const cut = pickVerticalCut(project, options);
     const caption = text(kit.copy?.tiktok?.caption) || text(kit.copy?.shorts?.description).slice(0, 300);
     const duration = Number(project?.audioAnalysis?.durationSec);
+    if (!Number.isFinite(duration) || duration <= 0) throw missing('Analyze the song audio first so the Suno Hook window can be checked against its duration');
+    const startSec = Math.max(0, Number(cut.startSec) || 0);
+    const latestStart = Math.max(0, duration - 60);
+    // Keep the rendered video and its audio together. A 60-second window must
+    // fit; for shorter songs, only zero is eligible. Never shift only the audio.
+    if (startSec > latestStart) throw missing(`This cut starts at ${clock(startSec)}, after the latest Suno Hook window start ${clock(latestStart)}. Choose or render an earlier 9:16 cut`);
     return {
       video: { dir: 'videos', name: cut.filename }, songUrl: song, songId, title: text(project?.name),
-      durationSec: Number.isFinite(duration) && duration > 0 ? duration : null,
+      durationSec: duration,
       // The audio window opens where the cut's own audio does.
-      startSec: Math.max(0, Number(cut.startSec) || 0),
+      startSec,
       cutLayout: cut.layout,
       caption, showLyrics: options.showLyrics === true,
     };

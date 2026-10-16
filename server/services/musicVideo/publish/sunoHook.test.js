@@ -27,6 +27,24 @@ describe('Suno Hook payload', () => {
     } });
     expect(buildPublishPayload('sunoHook', fitted)).toMatchObject({ startSec: 20, cutLayout: 'fit', video: { name: 'kit.mp4' } });
   });
+  const fitted = (duration, startSec) => project({ audioAnalysis: { durationSec: duration }, excerpts: [], publishKit: {
+    ...project().publishKit, master: { renderHistoryId: 'r1' },
+    exports: [{ kind: 'vertical-9x16', filename: 'window.mp4', startSec, endSec: startSec + 20, layout: 'fit' }],
+  } });
+  it('uses the actual fractional duration and restricts shorter songs to zero', () => {
+    expect(buildPublishPayload('sunoHook', fitted(258.75, 198.75)).startSec).toBe(198.75);
+    expect(() => buildPublishPayload('sunoHook', fitted(258.75, 198.76))).toThrow(/earlier 9:16 cut/);
+    expect(buildPublishPayload('sunoHook', fitted(40, 0))).toMatchObject({ durationSec: 40, startSec: 0 });
+    expect(() => buildPublishPayload('sunoHook', fitted(40, 1))).toThrow(/earlier 9:16 cut/);
+    expect(() => buildPublishPayload('sunoHook', fitted(null, 0))).toThrow(/Analyze the song audio/);
+  });
+  it('rejects a late default cut but keeps an explicitly selected earlier video and audio together', () => {
+    const p = project();
+    p.excerpts.push({ id: 'late', status: 'complete', aspect: '9:16', filename: 'late.mp4', startSec: 150, endSec: 170,
+      dependencies: captureMusicVideoEvidence(p, { startSec: 150, endSec: 170 }) });
+    expect(() => buildPublishPayload('sunoHook', p)).toThrow(/latest Suno Hook window start 2:07/);
+    expect(buildPublishPayload('sunoHook', p, { cutId: 'e1' })).toMatchObject({ startSec: 42, video: { name: 'cut.mp4' } });
+  });
   it('refuses a missing song URL and a project with no vertical cut', () => {
     expect(() => buildPublishPayload('sunoHook', project({ publishKit: {} }))).toThrow(/Suno song URL/);
     expect(() => buildPublishPayload('sunoHook', project({ excerpts: [] }))).toThrow(/9:16/);
@@ -51,7 +69,7 @@ describe('pickSongRow', () => {
 const fmt = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
 const PILL = 'pointer-events-none rounded-full border-2 px-2 pt-1 pb-1.5 font-mono text-xs';
 function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = false } = {}) {
-  const state = { windowAt, clicked: [], drags: 0 };
+  const state = { windowAt, clicked: [], drags: 0, lyrics: true };
   const leaf = (text, cls, parentText = text) => ({ children: [], textContent: text, className: cls, offsetParent: {}, parentElement: { textContent: parentText } });
   const dom = {
     'span,div': () => [
@@ -86,6 +104,14 @@ function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = 
     url: () => 'https://suno.com/hooks/create',
     waitForTimeout: async () => {},
     locator: (sel) => locator(sel),
+    viewportSize: () => ({ width: 1280, height: 800 }),
+    getByRole: () => ({ or: () => ({
+      count: async () => 1,
+      evaluate: async fn => fn({ getAttribute: () => String(state.lyrics) }),
+      elementHandle: async () => ({ getAttribute: () => String(state.lyrics) }),
+      click: async () => { state.lyrics = !state.lyrics; state.clicked.push('Show Lyrics'); },
+    }) }),
+    waitForFunction: async (fn, arg) => { if (!fn(arg)) throw new Error('state did not change'); },
     evaluate: async (fn, arg) => {
       globalThis.document = { querySelectorAll: (sel) => dom[(Array.isArray(arg) && arg[0]) || sel]?.() ?? [] };
       return fn(arg);
