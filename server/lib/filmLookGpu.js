@@ -9,11 +9,12 @@
  * out of it and runs each one as a pass, so a change to the look reaches this
  * path by construction and an unknown primitive refuses (the caller then keeps
  * the SVG path). Each pass follows what Chrome's Skia raster backend does, not
- * just the spec, as measured against headless Chromium 141: premultiplied
- * 8-bit intermediates; the three-box blur at every sigma, reading past the
- * frame as transparent even for edgeMode="duplicate"; feOffset snapped to
- * whole pixels with antialiased frame edges; feComposite arithmetic without
- * clamping color to alpha; Skia's feTurbulence (the spec's lattice and
+ * just the spec, as measured against headless Chrome: premultiplied
+ * 8-bit intermediates; Gaussian blur below sigma 2 and a three-box
+ * approximation above, reading past the frame as transparent even for
+ * edgeMode="duplicate"; feOffset snapped to whole pixels (antialiased frame
+ * edges when presented directly); feComposite arithmetic without clamping
+ * color to alpha; Skia's feTurbulence (the spec's lattice and
  * gradients, permuted and stored as 16-bit, sampled half a pixel past the
  * pixel centre); and the result over the page's white base, where the filter
  * leaves alpha. `filmLookFinish.js` still compares a frame against the SVG
@@ -109,12 +110,11 @@ function turbulencePixel(tables, x, y, { baseFrequency = [0, 0], numOctaves = 1,
 }
 
 /**
- * The 1D kernel Chrome's raster blur engine applies for a standard deviation.
- * Chrome builds Skia without its small-sigma Gaussian pass, so every sigma
- * gets the three-box approximation (the spec's window d = ⌊σ·3·√(2π)/4 + ½⌋;
- * for an even d two boxes of d shifted against each other plus one of d + 1),
- * and a one-pixel window leaves the axis alone. Past Skia's 135 limit (a
- * 255-pixel window) Chrome blurs a downscaled copy; a sampled Gaussian stands
+ * The 1D blur kernel used to match Chrome's filter for a standard deviation.
+ * Small sigmas use the sampled Gaussian: a three-box approximation can turn
+ * a visible soft focus into no blur. Larger sigmas use the spec's window
+ * d = ⌊σ·3·√(2π)/4 + ½⌋ (for an even d, two boxes of d shifted against each
+ * other plus one of d + 1). Past Skia's 135 limit (a 255-pixel window) Chrome blurs a downscaled copy; a sampled Gaussian stands
  * in for that. `weights[i]` applies to offset `i - origin`; `boxes` and
  * `divisor` give the same kernel as three integer box sums. Null for no blur.
  * SELF-CONTAINED (inlined into the page).
@@ -129,9 +129,8 @@ function blurKernel(sigma) {
     for (let i = 0; i < weights.length; i++) weights[i] /= sum;
     return { weights, origin: radius };
   };
+  if (sigma < 2) return gaussian();
   const window = Math.max(1, Math.floor(Math.fround(sigma * 3 * Math.sqrt(2 * Math.PI) / 4 + 0.5)));
-  // A one-pixel window is no blur at all (Chrome skips the axis).
-  if (window === 1) return null;
   if (window >= 255) return gaussian();
   const box = (n) => new Float64Array(n).fill(1);
   const convolve = (a, b) => {
@@ -247,11 +246,13 @@ bool clipped() { vec2 p = gl_FragCoord.xy; return p.x < clip.x || p.y < clip.y |
 void main() { color = texelFetch(a, pixel(), 0); }`,
     flood: `uniform vec4 floodColor;
 void main() { color = clipped() ? vec4(0.0) : floodColor; }`,
-    offset: `uniform sampler2D a; uniform vec2 shift;
+    offset: `uniform sampler2D a; uniform vec2 shift; uniform int sampled;
 void main() {
   if (clipped()) { color = vec4(0.0); return; }
-  // Chrome samples an feOffset at the nearest whole pixel but antialiases the
-  // shifted frame's edges: a border pixel holds the edge pixel at its coverage.
+  // A downstream filter samples the translated image with transparent
+  // out-of-bounds texels; clamping would invent colored edge fringes.
+  if (sampled == 1) { color = fetch(a, pixel() - ivec2(floor(shift + 0.5))); return; }
+  // A terminal offset is drawn directly with antialiased frame coverage.
   ivec2 q = clamp(pixel() - ivec2(floor(shift + 0.5)), ivec2(0), ivec2(size) - 1);
   vec2 lo = max(floor(gl_FragCoord.xy), shift);
   vec2 hi = min(floor(gl_FragCoord.xy) + 1.0, shift + size);
@@ -664,7 +665,7 @@ void main() {
         run('flood', target, (u) => { clipUniform(u, region); gl.uniform4f(u.floodColor, ...color); });
         floodOf = { color, rect: pixelRect(region) };
       } else if (p.type === 'feOffset') {
-        run('offset', target, (u, bind) => { clipUniform(u, region); bind('a', a); gl.uniform2f(u.shift, num(attrs.dx), num(attrs.dy)); });
+        run('offset', target, (u, bind) => { clipUniform(u, region); bind('a', a); gl.uniform2f(u.shift, num(attrs.dx), num(attrs.dy)); gl.uniform1i(u.sampled, i < last - 1 ? 1 : 0); });
       } else if (p.type === 'feGaussianBlur') {
         const [sx, sy = sx] = String(attrs.stdDeviation || '0').trim().split(/[\s,]+/).map((value) => num(value));
         const blurX = Boolean(kernelTexture(sx)), blurY = Boolean(kernelTexture(sy));
@@ -687,7 +688,7 @@ void main() {
           blurAxis(temp.texture, sy, 1, target, region);
           temp.busy = false;
         } else if (blurX || blurY) blurAxis(a, blurX ? sx : sy, blurX ? 0 : 1, target, region);
-        else run('offset', target, (u, bind) => { clipUniform(u, region); bind('a', a); gl.uniform2f(u.shift, 0, 0); });
+        else run('offset', target, (u, bind) => { clipUniform(u, region); bind('a', a); gl.uniform2f(u.shift, 0, 0); gl.uniform1i(u.sampled, 0); });
       } else if (p.type === 'feColorMatrix') {
         let values;
         if ((attrs.type || 'matrix') === 'saturate') {

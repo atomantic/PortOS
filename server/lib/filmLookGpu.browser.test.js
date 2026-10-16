@@ -41,6 +41,11 @@ const extreme = normalizeFilmLook(Object.fromEntries(FILM_LOOK_CONTROLS.map((con
 const looks = [
   ...FILM_LOOK_PRESETS.filter(({ id }) => id !== 'none').map(({ id }) => [id, filmLookPreset(id)]),
   ['every control at its extreme', extreme],
+  // Isolate the regressions: small blurs were skipped/box-approximated, and
+  // translated channels invented colored edge pixels when sampled downstream.
+  ['soft focus 0.30', normalizeFilmLook({ defocus: 0.3 })],
+  ['soft focus 0.35', normalizeFilmLook({ defocus: 0.35 })],
+  ['color fringing 0.40', normalizeFilmLook({ chroma: 0.4 })],
 ];
 
 const psnr = (a, b) => {
@@ -80,7 +85,7 @@ describe.skipIf(!canRun)('film look on the GPU in Chrome', () => {
   // A video is read the way the page's compositor reads it, scaled to fill the
   // frame. WebGL's own video upload converted colour differently (about 30 dB
   // off on the soft-analog look) and copied another size unscaled.
-  it('draws a video of another size as the page fills the frame', async ({ skip }) => {
+  it.for(['soft-analog', 'neon-rain', 'vhs'])('draws %s over a video of another size as the page fills the frame', async (preset, { skip }) => {
     let clip;
     try {
       const dir = mkdtempSync(join(tmpdir(), 'film-look-gpu-video-'));
@@ -90,7 +95,7 @@ describe.skipIf(!canRun)('film look on the GPU in Chrome', () => {
       rmSync(dir, { recursive: true, force: true });
     } catch { skip(); }
     if (!available) skip();
-    const look = filmLookPreset('soft-analog');
+    const look = filmLookPreset(preset);
     const origin = 'http://film-look.test';
     const body = (extra) => `<video id="v" src="${origin}/clip.webm" muted style="display:block;width:${width}px;height:${height}px;object-fit:fill"></video>${extra}`;
     const open = async (extra) => {
