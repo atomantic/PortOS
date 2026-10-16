@@ -85,7 +85,9 @@ beforeEach(({ onTestFailed }) => {
     PGHOST: 'inherited.example.invalid', PGPORT: '1', PGUSER: 'inherited', PGDATABASE: 'inherited',
     PGHOSTADDR: '192.0.2.10', PGSERVICE: 'inherited', PGSERVICEFILE: '/example/pg_service.conf',
     PGOPTIONS: '-c search_path=inherited',
+    TMPDIR: join(root, 'tmp'),
   });
+  mkdirSync(join(root, 'tmp'));
 });
 afterEach(async () => {
   for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key];
@@ -173,6 +175,8 @@ describe.skipIf(process.platform === 'win32')('offline database transfer', () =>
     expect(load).toBe(`psql ${endpointArgs(target)} -v ON_ERROR_STOP=1 --single-transaction`);
     // Inherited libpq endpoint/option variables never reach the client tools.
     expect(stubs.receivedVariables()).toEqual(['PGPASSWORD']);
+    // The caller's TMPDIR is forwarded so import staging stays inside it.
+    expect(stubs.receivedTmpdirs()).toEqual([join(root, 'tmp')]);
     expect(stubs.calls()).not.toMatch(/inherited|192\.0\.2\.10/);
     expect(stubs.imported()).toBe(STUB_DUMP_COMPLETE);
     // The source recovery dump is retained, recorded, and bound to this operation.

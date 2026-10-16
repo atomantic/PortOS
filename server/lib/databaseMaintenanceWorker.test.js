@@ -86,7 +86,9 @@ beforeEach(() => {
   cutover = installCutoverStubs(root, stubs.dir, { source, target });
   writeFileSync(join(root, '.env'), 'PGMODE=native\n');
   strays = [];
-  env = { ...process.env, NODE_ENV: 'test', PORTOS_DATA_ROOT: root, PATH: `${stubs.bin}${delimiter}${process.env.PATH}`,
+  mkdirSync(join(root, 'tmp'));
+  env = { ...process.env, NODE_ENV: 'test', PORTOS_DATA_ROOT: root,
+    TMPDIR: join(root, 'tmp'), TMP: join(root, 'tmp'), TEMP: join(root, 'tmp'), PATH: `${stubs.bin}${delimiter}${process.env.PATH}`,
     PGPASSWORD: 'example-password', PGHOST: 'inherited.example.invalid', PGHOSTADDR: '192.0.2.10',
     NODE_OPTIONS: `--import=${installPm2Stub()}` };
   delete env.VITEST;
