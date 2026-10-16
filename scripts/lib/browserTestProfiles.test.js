@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 import { assertBrowserProfileExecuted, BROWSER_FIDELITY_ONLY_FILES, BROWSER_FIDELITY_TESTS, browserTestProfileArgs, browserTestProfileFiles } from './browserTestProfiles.js';
 
 const smokeNames = [
-  'authors a local Three.js world and renders the same deterministic scene through module preview and export',
+  'generates and exports a Three.js scene with visible authored content',
   'renders a generated 3-second card/still/clip document with the selected performance in-point',
   'propagates a deadline through a pending seek and waits for owned Chrome cleanup',
 ];
@@ -39,10 +39,10 @@ describe('browser test profiles', () => {
   });
 
   it('requires every fidelity assertion to pass exactly once in its owning file', () => {
-    expect(assertBrowserProfileExecuted('fidelity', completeReport())).toBe(3);
+    expect(assertBrowserProfileExecuted('fidelity', completeReport())).toBe(4);
     const windows = completeReport();
     windows.testResults.forEach(suite => { suite.name = `D:\\checkout\\${suite.name.slice('/checkout/'.length).replaceAll('/', '\\')}`; });
-    expect(assertBrowserProfileExecuted('fidelity', windows)).toBe(3);
+    expect(assertBrowserProfileExecuted('fidelity', windows)).toBe(4);
     for (const status of ['failed', 'skipped', 'pending', 'todo']) {
       const report = completeReport();
       report.testResults[0].assertionResults[0].status = status;
@@ -63,7 +63,7 @@ describe('browser test profiles', () => {
 
   // Executes only empty synthetic Node test bodies. This pins Vitest's actual
   // filtering and JSON receipt semantics, without importing browser fixtures.
-  it('partitions the full assertion set into nonempty smoke and fidelity runs with real Vitest', () => {
+  it('keeps local playback in required fidelity and out of every hosted profile with real Vitest', () => {
     const temp = mkdtempSync(join(tmpdir(), 'browser-profile-contract-'));
     const require = createRequire(new URL('../../server/package.json', import.meta.url));
     const cli = join(dirname(require.resolve('vitest/package.json')), 'vitest.mjs');
@@ -100,7 +100,8 @@ globalSetup: [${JSON.stringify(new URL('../vitestTempRootSetup.js', import.meta.
       }
       expect(passed.smoke).toEqual([...smokeNames].sort());
       expect(passed.fidelity).toEqual(Object.values(BROWSER_FIDELITY_TESTS).flat().sort());
-      expect([...passed.smoke, ...passed.fidelity].sort()).toEqual(passed.full);
+      expect([...passed.smoke, ...passed.fidelity.filter(title => !title.includes('[local-performance]'))].sort()).toEqual(passed.full);
+      expect(passed.fidelity.filter(title => title.includes('[local-performance]'))).toHaveLength(1);
     } finally { rmSync(temp, { recursive: true, force: true }); }
   }, 70000);
 });

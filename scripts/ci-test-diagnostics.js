@@ -18,22 +18,6 @@ export function diagnosticTestFile(value) {
   return /^[\w.-]+\.test\.[\w]+$/.test(name) ? `<outside-repository>/${name}` : '<unavailable>';
 }
 
-// This synthetic fixture's observation carries no raw renderer, error or path text.
-export function sanitizeThreePlaybackCost(value) {
-  if (!value || !['software', 'hardware-or-other', 'unknown'].includes(value.backend)
-    || typeof value.antialias !== 'boolean' || !Number.isInteger(value.logicalConcurrency)
-    || value.logicalConcurrency < 0 || value.logicalConcurrency > 1024
-    || !Array.isArray(value.rows) || value.rows.length > 12) return null;
-  const rows = [];
-  for (const row of value.rows) {
-    if (!row || !['exact', 'prepare', 'live'].includes(row.phase)
-      || !['drawMs', 'copyMs', 'totalMs'].every(key => Number.isFinite(row[key]) && row[key] >= 0 && row[key] <= 120000)
-      || !['created', 'deleted'].every(key => Number.isInteger(row[key]) && row[key] >= 0 && row[key] <= 1000000)) return null;
-    rows.push({ phase: row.phase, drawMs: row.drawMs, copyMs: row.copyMs, totalMs: row.totalMs, created: row.created, deleted: row.deleted });
-  }
-  return { backend: value.backend, antialias: value.antialias, logicalConcurrency: value.logicalConcurrency, rows };
-}
-
 export function persistTestDiagnostic(path, value) {
   try {
     writeFileSync(`${path}.tmp`, JSON.stringify(value));
@@ -90,30 +74,10 @@ export async function collectTestDiagnostics(root, {
       lines.push(`Vitest progress: reason=${reason}; completed=${run.completedCount}; unhandledErrors=${run.errorCount}.`);
       lines.push(`Queued/unfinished modules (up to 100): ${run.activeModules.slice(0, 100).map(diagnosticTestFile).join(', ') || 'none recorded'}`);
       lines.push(`Last completed modules (up to 100): ${run.completedModules.slice(-100).map(diagnosticTestFile).join(', ') || 'none recorded'}`);
-      // Older reporters omit these fields. New outcomes remain independently
-      // useful when interruption prevents the final JSON reporter from writing.
+      // Completed outcomes survive interruptions before the final JSON report.
       if (Array.isArray(run.moduleResults)) {
         const results = run.moduleResults.slice(-100).filter(item => item && ['queued', 'pending', 'passed', 'failed', 'skipped', 'unavailable'].includes(item.state));
         lines.push(`Module outcomes (up to 100): ${results.map(item => `${diagnosticTestFile(item.file)}=${item.state}`).join(', ') || 'none recorded'}`);
-      }
-      if (Array.isArray(run.failedCases)) {
-        const kinds = ['timeout', 'assertion', 'other', 'frame-freshness', 'preparation-superseded', 'async-drawing', 'scene-changed', 'source-changed',
-          'playback-timeout', 'playback-failed', 'playback-disposed', 'playback-argument', 'playback-anchor', 'playback-not-prepared',
-          'browser-closed', 'browser-timeout', 'browser-protocol', 'browser-crashed', 'browser-evaluation-stalled'];
-        const cases = run.failedCases.slice(0, 10).filter(item => item && kinds.includes(item.kind));
-        lines.push(`Failed case categories (up to 10): ${cases.map(item => {
-          const locations = Array.isArray(item.locations) ? item.locations.slice(0, 3).filter(location => location
-            && [location.line, location.column].every(value => Number.isInteger(value) && value > 0 && value <= 10000000)) : [];
-          return `${diagnosticTestFile(item.file)}=${item.kind}`
-            + (item.identity === 'generated-three-preview-export' && diagnosticTestFile(item.file) === 'server/services/musicVideo/documentRender.browser.test.js'
-              ? ':generated-three-preview-export' : '')
-            + (locations.length ? ` at ${locations.map(location => `${location.line}:${location.column}`).join('/')}` : '');
-        }).join(', ') || 'none recorded'}`);
-        for (const item of cases) {
-          if (item.identity !== 'generated-three-preview-export' || diagnosticTestFile(item.file) !== 'server/services/musicVideo/documentRender.browser.test.js') continue;
-          const cost = sanitizeThreePlaybackCost(item.threeCost);
-          if (cost) lines.push(`Generated Three cost: ${JSON.stringify(cost)}`);
-        }
       }
     } catch {
       lines.push('Diagnostic gap: Vitest progress unavailable; active test file is unknown.');

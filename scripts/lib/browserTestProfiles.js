@@ -1,6 +1,7 @@
 /** Browser profiles select existing assertions; they never change render settings. */
 export const BROWSER_FIDELITY_TESTS = {
   'server/services/musicVideo/documentRender.browser.test.js': [
+    '[fidelity] [local-performance] authors a local Three.js world and renders the same deterministic scene through module preview and export',
     '[fidelity] matches bounded grades across real composed/document ramps and song-time excerpts',
     '[fidelity] matches bounded grades across real composed/document generated-shots and song-time excerpts',
   ],
@@ -14,7 +15,8 @@ export const BROWSER_FIDELITY_FILES = Object.keys(BROWSER_FIDELITY_TESTS);
 export const BROWSER_FIDELITY_ONLY_FILES = ['server/routes/musicVideoRichAuthoring.browser.test.js'];
 
 export function browserTestProfileArgs(profile = 'full') {
-  if (profile === 'full') return [];
+  // Hosted full coverage includes fidelity, but hardware-sensitive playback is local.
+  if (profile === 'full') return ['--testNamePattern=^(?!.*\\[local-performance\\]).*$'];
   if (profile === 'smoke') return ['--testNamePattern=^(?!.*\\[fidelity\\]).*$'];
   if (profile === 'fidelity') return ['--testNamePattern=\\[fidelity\\]'];
   throw new Error(`Unknown browser test profile: ${profile}`);

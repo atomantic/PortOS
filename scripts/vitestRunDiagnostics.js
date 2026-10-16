@@ -1,5 +1,4 @@
-import { diagnosticTestFile, persistTestDiagnostic, sanitizeThreePlaybackCost } from './ci-test-diagnostics.js';
-import { fileURLToPath } from 'node:url';
+import { diagnosticTestFile, persistTestDiagnostic } from './ci-test-diagnostics.js';
 
 // The JSON reporter includes test failures, but drops run-level errors such as
 // unhandled rejections and worker crashes. Keep those independently of stdout.
@@ -12,70 +11,17 @@ function errorDiagnostic(error, depth = 0) {
 }
 
 const moduleStates = new Set(['queued', 'pending', 'passed', 'failed', 'skipped']);
-const threeFile = 'server/services/musicVideo/documentRender.browser.test.js';
-const threeCase = 'authors a local Three.js world and renders the same deterministic scene through module preview and export';
-const playbackFailures = new Map([
-  ['Generated drawing exceeded frame freshness', 'frame-freshness'],
-  ['Generated preparation superseded', 'preparation-superseded'],
-  ['Generated sections must draw synchronously', 'async-drawing'],
-  ['Generated scene changed during drawing', 'scene-changed'],
-  ['Generated source changed during drawing', 'source-changed'],
-  ...['TIMEOUT', 'FAILED', 'DISPOSED', 'ARGUMENT', 'ANCHOR', 'NOT_PREPARED'].map(code => [`PLAYBACK_${code}`, `playback-${code.toLowerCase().replaceAll('_', '-')}`]),
-]);
-function failureKind(errors) {
-  const bounded = Array.isArray(errors) ? errors.slice(0, 10) : [];
-  if (bounded.some(error => typeof error?.message === 'string' && /^(Test|Hook) timed out in \d{1,9}ms(?:\.| while waiting for )/.test(error.message))) return 'timeout';
-  for (const error of bounded) {
-    // Match fixed host messages or documented browser error shapes only. The
-    // message, private browser logs and call-log suffixes never leave this scope.
-    const first = typeof error?.message === 'string' ? error.message.slice(0, 400).split(/\r?\n/, 1)[0] : '';
-    const host = playbackFailures.get(first.replace(/^page\.evaluate: (?:Error: )?/, ''));
-    if (host) return host;
-    if (error?.name === 'EvaluationStalledError') return 'browser-evaluation-stalled';
-    if (/^(?:page\.evaluate: )?Target crashed $/.test(first)) return 'browser-crashed';
-    if (error?.name === 'TargetClosedError' || first === 'page.evaluate: Target page, context or browser has been closed') return 'browser-closed';
-    if (error?.name === 'TimeoutError' && /^page\.evaluate: Timeout \d{1,9}ms exceeded\.$/.test(first)) return 'browser-timeout';
-    if (/^page\.evaluate: Protocol error \(Runtime\.callFunctionOn\): /.test(first)) return 'browser-protocol';
-  }
-  return bounded.some(error => error?.name === 'AssertionError') ? 'assertion' : 'other';
-}
-function failureLocations(errors, moduleId) {
-  const file = diagnosticTestFile(moduleId);
-  if (!/^(server|client|scripts|lib|autofixer)\//.test(file)) return [];
-  const expected = fileURLToPath(new URL(`../${file}`, import.meta.url)).replace(/\\/g, '/');
-  const normalize = path => {
-    try { return (path.startsWith('file://') ? fileURLToPath(path) : path).replace(/\\/g, '/'); }
-    catch { return ''; }
-  };
-  if (typeof moduleId !== 'string' || normalize(moduleId) !== expected) return [];
-  const locations = [];
-  const admit = frame => {
-    if (typeof frame?.file !== 'string' || normalize(frame.file) !== expected
-      || ![frame.line, frame.column].every(value => Number.isInteger(value) && value > 0 && value <= 10000000)) return;
-    if (locations.length < 3 && !locations.some(item => item.line === frame.line && item.column === frame.column)) locations.push({ line: frame.line, column: frame.column });
-  };
-  for (const error of Array.isArray(errors) ? errors.slice(0, 10) : []) {
-    for (const frame of Array.isArray(error?.stacks) ? error.stacks.slice(0, 100) : []) admit(frame);
-    // Vitest may not have parsed the stack yet when this reporter hook runs.
-    for (const line of typeof error?.stack === 'string' ? error.stack.slice(0, 8000).split('\n').slice(0, 100) : []) {
-      const match = /^\s*at (?:.* \()?(.+?):(\d{1,8}):(\d{1,8})\)?$/.exec(line);
-      if (match) admit({ file: match[1], line: Number(match[2]), column: Number(match[3]) });
-    }
-  }
-  return locations;
-}
 
 export default function vitestRunDiagnostics() {
   let diagnostics = { reason: 'not-finished', errorCount: 0, errors: [], completedCount: 0 };
   const activeModules = new Set();
   const completedModules = [];
   const moduleResults = [];
-  const failedCases = [];
   const persist = () => {
     const path = process.env.PORTOS_CI_DIAGNOSTICS_PATH;
     if (!path) return;
     persistTestDiagnostic(path, { ...diagnostics, activeModules: [...activeModules].slice(0, 100),
-      completedModules, moduleResults, failedCases, exitCode: process.exitCode ?? null });
+      completedModules, moduleResults, exitCode: process.exitCode ?? null });
   };
   return {
     onInit(vitest) {
@@ -96,17 +42,6 @@ export default function vitestRunDiagnostics() {
       moduleResults.push({ file, state: moduleStates.has(state) ? state : 'unavailable' });
       if (moduleResults.length > 100) moduleResults.shift();
       diagnostics.completedCount += 1;
-      persist();
-    },
-    onTestCaseResult(test) {
-      const result = test.result();
-      if (result.state !== 'failed' || failedCases.length >= 10) return;
-      const file = diagnosticTestFile(test.module.moduleId);
-      const three = file === threeFile && test.name === threeCase;
-      const cost = three && (Array.isArray(result.errors) ? result.errors.slice(0, 10) : []).map(error => sanitizeThreePlaybackCost(error?.portosThreeCost)).find(Boolean);
-      failedCases.push({ file, ...(cost ? { threeCost: cost } : {}), kind: failureKind(result.errors), locations: failureLocations(result.errors, test.module.moduleId),
-        ...(file === threeFile && test.name === threeCase ? { identity: 'generated-three-preview-export' } : {}) });
-      // Persist before run-end/JSON reporting, which bail or teardown can prevent.
       persist();
     },
     onTestRunEnd(_modules, errors, reason) {

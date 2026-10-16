@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { collectTestDiagnostics } from './ci-test-diagnostics.js';
 import vitestRunDiagnostics from './vitestRunDiagnostics.js';
@@ -89,55 +89,26 @@ describe('independent CI test failure recovery (#11552)', () => {
     expect(output).toContain('structured test report missing');
   });
 
-  it('recovers bounded module outcomes and failure categories without final JSON or private error text', async () => {
+  it('recovers bounded completed outcomes without final JSON or private error details', async () => {
     const root = mkdtempSync(join(tmpdir(), 'ci-diagnostics-outcomes-'));
     const prior = process.env.PORTOS_CI_DIAGNOSTICS_PATH;
     try {
-      const attempt = join(root, 'portos-vitest-fixture');
-      mkdirSync(attempt);
+      const attempt = join(root, 'portos-vitest-fixture'); mkdirSync(attempt);
       const path = join(attempt, 'run.json');
       process.env.PORTOS_CI_DIAGNOSTICS_PATH = path;
       const hooks = vitestRunDiagnostics();
       hooks.onInit({ onClose() {} });
-      const file = 'server/services/musicVideo/documentRender.browser.test.js';
-      const module = { moduleId: fileURLToPath(new URL(`../${file}`, import.meta.url)), state: () => 'failed' };
-      hooks.onTestModuleQueued(module);
-      const failed = (name, errors) => hooks.onTestCaseResult({ module, name, result: () => ({ state: 'failed', errors }) });
-      failed('authors a local Three.js world and renders the same deterministic scene through module preview and export',
-        [{ name: 'Error', message: 'Test timed out in 120000ms while waiting for private-sentinel.',
-          stack: `private-sentinel\n    at private-sentinel (${module.moduleId}:321:17)\n    at /private-sentinel/documentRender.browser.test.js:99:9`,
-          stacks: [{ file: module.moduleId, line: 321, column: 17, method: 'private-sentinel' },
-            { file: '/private-sentinel/documentRender.browser.test.js', line: 5, column: 6 }] }]);
-      // The failed-case result is durable before module or run completion.
-      expect(JSON.parse(readFileSync(path, 'utf8')).failedCases).toEqual([
-        { file, kind: 'timeout', locations: [{ line: 321, column: 17 }], identity: 'generated-three-preview-export' },
-      ]);
-      failed('private-sentinel', [{ name: 'AssertionError', message: 'private-sentinel', actual: 'private-sentinel',
-        stack: `private-sentinel\n    at ${pathToFileURL(module.moduleId).href}:456:23\n    at private-sentinel (${module.moduleId}:10000001:1)` }]);
-      failed('private-sentinel', [{ name: 'private-sentinel', message: 'private-sentinel' }]);
-      hooks.onTestCaseResult({ module, name: 'private-sentinel', result: () => ({ state: 'passed', errors: [{ name: 'AssertionError' }] }) });
-      for (let i = 0; i < 12; i++) failed('private-sentinel', []);
-      hooks.onTestModuleEnd(module);
       for (let i = 0; i < 105; i++) hooks.onTestModuleEnd({ moduleId: 'server/lib/synthetic.test.js', state: () => 'passed' });
-      hooks.onTestModuleEnd(module);
-      hooks.onTestRunEnd([], [], 'interrupted');
+      hooks.onTestModuleEnd({ moduleId: 'server/lib/synthetic.test.js', state: () => 'failed', errors: ['private-sentinel'] });
+      hooks.onTestModuleEnd({ moduleId: 'server/lib/unknown.test.js', state: () => 'private-sentinel' });
       const persisted = JSON.parse(readFileSync(path, 'utf8'));
       expect(persisted.moduleResults).toHaveLength(100);
-      expect(persisted.failedCases).toHaveLength(10);
+      expect(persisted.moduleResults.at(-1).state).toBe('unavailable');
       expect(JSON.stringify(persisted)).not.toContain('private-sentinel');
-      const collect = () => collectTestDiagnostics(root, { logger: { warn() {} }, diagnose: async () => {}, writeSummary() {} });
-      const output = (await collect()).join('\n');
-      expect(output).toContain(`${file}=failed`);
-      expect(output).toContain(`${file}=timeout:generated-three-preview-export at 321:17`);
-      expect(output).toContain(`${file}=assertion at 456:23`);
-      expect(output).toContain(`${file}=other`);
-      expect(output).toContain('structured test report missing');
-      expect(output).not.toContain('private-sentinel');
-      persisted.moduleResults.push({ file, state: 'private-sentinel' });
-      persisted.failedCases[0] = { file, kind: 'private-sentinel', identity: 'private-sentinel' };
-      persisted.failedCases[1].locations.push({ line: 'private-sentinel', column: 1 });
-      writeFileSync(path, JSON.stringify(persisted));
-      expect((await collect()).join('\n')).not.toContain('private-sentinel');
+      const lines = await collectTestDiagnostics(root, { logger: { warn() {} }, diagnose: async () => {}, writeSummary() {} });
+      expect(lines.join('\n')).toContain('server/lib/synthetic.test.js=failed');
+      expect(lines.join('\n')).toContain('structured test report missing');
+      expect(lines.join('\n')).not.toContain('private-sentinel');
     } finally {
       if (prior === undefined) delete process.env.PORTOS_CI_DIAGNOSTICS_PATH;
       else process.env.PORTOS_CI_DIAGNOSTICS_PATH = prior;
@@ -165,109 +136,9 @@ describe('independent CI test failure recovery (#11552)', () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it('keeps bounded Three cost observations private and scoped to the exact failed fixture', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'ci-diagnostics-three-cost-'));
-    const prior = process.env.PORTOS_CI_DIAGNOSTICS_PATH;
-    try {
-      const attempt = join(root, 'portos-vitest-fixture'); mkdirSync(attempt);
-      const path = join(attempt, 'run.json'); process.env.PORTOS_CI_DIAGNOSTICS_PATH = path;
-      const file = 'server/services/musicVideo/documentRender.browser.test.js';
-      const title = 'authors a local Three.js world and renders the same deterministic scene through module preview and export';
-      const row = { phase: 'prepare', drawMs: 120.5, copyMs: 0.1, totalMs: 120.6, created: 0, deleted: 0 };
-      const safe = { backend: 'software', antialias: true, logicalConcurrency: 4, rows: [row] };
-      const collect = async () => (await collectTestDiagnostics(root, { logger: { warn() {} }, diagnose: async () => {}, writeSummary() {} })).join('\n');
-      for (const [metadata, valid] of [
-        [{ ...safe, renderer: 'private-sentinel', rows: [{ ...row, stack: 'private-sentinel' }] }, true],
-        [{ ...safe, backend: 'private-sentinel' }, false],
-        [{ ...safe, antialias: 'private-sentinel' }, false],
-        [{ ...safe, logicalConcurrency: 1025 }, false],
-        [{ ...safe, rows: Array(13).fill(row) }, false],
-        [{ ...safe, rows: [{ ...row, phase: 'prepare-private-sentinel' }] }, false],
-        [{ ...safe, rows: [{ ...row, drawMs: Infinity }] }, false],
-        [{ ...safe, rows: [{ ...row, copyMs: -1 }] }, false],
-        [{ ...safe, rows: [{ ...row, totalMs: 120001 }] }, false],
-        [{ ...safe, rows: [{ ...row, created: 1.5 }] }, false],
-        [{ ...safe, rows: [{ ...row, deleted: 1000001 }] }, false],
-      ]) {
-        const hooks = vitestRunDiagnostics(); hooks.onInit({ onClose() {} });
-        hooks.onTestCaseResult({ module: { moduleId: file }, name: title, result: () => ({ state: 'failed', errors: [{ message: 'private-sentinel', portosThreeCost: metadata }] }) });
-        const saved = JSON.parse(readFileSync(path, 'utf8'));
-        expect(saved.failedCases[0].threeCost).toEqual(valid ? safe : undefined);
-        expect(JSON.stringify(saved)).not.toContain('private-sentinel');
-        const output = await collect();
-        expect(output.includes('Generated Three cost:')).toBe(valid);
-        expect(output).not.toContain('private-sentinel');
-      }
-      const hooks = vitestRunDiagnostics(); hooks.onInit({ onClose() {} });
-      for (const [moduleId, name] of [[file, `${title} near-miss`], ['server/other.test.js', title]]) {
-        hooks.onTestCaseResult({ module: { moduleId }, name, result: () => ({ state: 'failed', errors: [{ portosThreeCost: safe }] }) });
-      }
-      const saved = JSON.parse(readFileSync(path, 'utf8'));
-      expect(saved.failedCases.every(item => !item.threeCost)).toBe(true);
-      for (const item of saved.failedCases) item.threeCost = safe;
-      saved.failedCases[1].identity = 'generated-three-preview-export';
-      writeFileSync(path, JSON.stringify(saved));
-      expect(await collect()).not.toContain('Generated Three cost:');
-      saved.failedCases[0].identity = 'generated-three-preview-export';
-      saved.failedCases[0].threeCost = { ...safe, rows: [{ ...row, drawMs: 'private-sentinel' }] };
-      writeFileSync(path, JSON.stringify(saved));
-      expect(await collect()).not.toContain('Generated Three cost:');
-    } finally {
-      if (prior === undefined) delete process.env.PORTOS_CI_DIAGNOSTICS_PATH;
-      else process.env.PORTOS_CI_DIAGNOSTICS_PATH = prior;
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it('projects fixed playback and browser failures without exporting message or call-log content', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'ci-diagnostics-playback-'));
-    const prior = process.env.PORTOS_CI_DIAGNOSTICS_PATH;
-    try {
-      const attempt = join(root, 'portos-vitest-fixture'); mkdirSync(attempt);
-      const path = join(attempt, 'run.json'); process.env.PORTOS_CI_DIAGNOSTICS_PATH = path;
-      const module = { moduleId: 'server/services/musicVideo/documentRender.browser.test.js', state: () => 'failed' };
-      const cases = [
-        ['Error', 'Generated drawing exceeded frame freshness', 'frame-freshness'],
-        ['Error', 'page.evaluate: Error: Generated drawing exceeded frame freshness\nprivate-sentinel', 'frame-freshness'],
-        ['Error', 'page.evaluate: Error: Generated preparation superseded', 'preparation-superseded'],
-        ['Error', 'page.evaluate: Error: Generated sections must draw synchronously', 'async-drawing'],
-        ['Error', 'page.evaluate: Error: Generated scene changed during drawing', 'scene-changed'],
-        ['Error', 'page.evaluate: Error: Generated source changed during drawing', 'source-changed'],
-        ...['TIMEOUT', 'FAILED', 'DISPOSED', 'ARGUMENT', 'ANCHOR', 'NOT_PREPARED'].map(code =>
-          ['Error', `page.evaluate: Error: PLAYBACK_${code}`, `playback-${code.toLowerCase().replaceAll('_', '-')}`]),
-        ['EvaluationStalledError', 'private-sentinel', 'browser-evaluation-stalled'],
-        ['Error', 'page.evaluate: Target crashed \nBrowser logs:\nprivate-sentinel', 'browser-crashed'],
-        ['Error', 'Target crashed ', 'browser-crashed'],
-        ['Error', 'Target crashed private-sentinel', 'other'],
-        ['TargetClosedError', 'private-sentinel', 'browser-closed'],
-        ['Error', 'page.evaluate: Target page, context or browser has been closed\nprivate-sentinel', 'browser-closed'],
-        ['TimeoutError', 'page.evaluate: Timeout 120000ms exceeded.\nprivate-sentinel', 'browser-timeout'],
-        ['Error', 'page.evaluate: Protocol error (Runtime.callFunctionOn): private-sentinel', 'browser-protocol'],
-        ['Error', 'Generated drawing exceeded frame freshness private-sentinel', 'other'],
-        ['Error', 'private-sentinel PLAYBACK_TIMEOUT', 'other'],
-        ['TimeoutError', 'private-sentinel', 'other'],
-      ];
-      for (const [name, message, kind] of cases) {
-        const hooks = vitestRunDiagnostics();
-        hooks.onInit({ onClose() {} });
-        hooks.onTestCaseResult({ module, name: 'private-sentinel', result: () => ({ state: 'failed', errors: [{ name, message, stack: 'private-sentinel' }] }) });
-        hooks.onTestModuleEnd(module);
-        const persisted = readFileSync(path, 'utf8');
-        expect(JSON.parse(persisted).failedCases[0].kind).toBe(kind);
-        expect(persisted).not.toContain('private-sentinel');
-        const output = (await collectTestDiagnostics(root, { logger: { warn() {} }, diagnose: async () => {}, writeSummary() {} })).join('\n');
-        expect(output).toContain(`${module.moduleId}=${kind}`);
-        expect(output).not.toContain('private-sentinel');
-      }
-    } finally {
-      if (prior === undefined) delete process.env.PORTOS_CI_DIAGNOSTICS_PATH;
-      else process.env.PORTOS_CI_DIAGNOSTICS_PATH = prior;
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
   it.each([
     ['windows-server', 'Run server tests on Windows', 'Preserve Windows test failure diagnostics', 'run-ci-tests.js'],
+    ['database', 'Run cross-workspace browser suites', 'Preserve browser test failure diagnostics', 'watch-ci-tests.js'],
   ])('%s collects after failure and before sibling cancellation with bounded, non-masking failure handling', (jobId, testName, collectorName, launcherName) => {
     const workflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
     const job = workflowJobs(workflow)[jobId];
