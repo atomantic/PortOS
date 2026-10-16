@@ -68,7 +68,8 @@ async function createDocumentLeased(data) {
   const filePath = documentWritePath(data.filename);
   await ensureSoulDir();
 
-  const meta = await loadMeta();
+  // loadMeta shares its cached object; publish these changes only after saveMeta succeeds.
+  const meta = structuredClone(await loadMeta());
 
   // A file with no meta entry is an orphan from a failed earlier create; adopt it.
   const fileExisted = existsSync(filePath);
@@ -100,7 +101,7 @@ async function createDocumentLeased(data) {
   meta.documents.push(docMeta);
   meta.documents.sort((a, b) => a.priority - b.priority);
   meta.deletedDocuments = clearTombstone(meta.deletedDocuments, data.filename, 'filename');
-  // Don't strand the file we just wrote: an orphan would block every retry.
+  // Remove only the file this attempt created; preserve a pre-existing orphan.
   await saveMeta(meta).catch(async (err) => {
     if (!fileExisted) await unlink(filePath).catch(() => {});
     throw err;
