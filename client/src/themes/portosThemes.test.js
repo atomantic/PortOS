@@ -387,9 +387,9 @@ describe('button compositor layer isolation and animation stabilization', () => 
   const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'index.css'), 'utf8');
 
   it('isolates buttons to their own GPU compositing layer to prevent WebKit backing-sharing ghosting', () => {
-    expect(css).toMatch(/:where\(button,\s*\[role="button"\]\)\s*\{[^}]*isolation:\s*isolate/);
-    expect(css).toMatch(/:where\(button,\s*\[role="button"\]\)\s*\{[^}]*backface-visibility:\s*hidden/);
-    expect(css).toMatch(/:where\(button,\s*\[role="button"\]\)\s*\{[^}]*transform:\s*translateZ\(0\)/);
+    expect(css).toMatch(/:where\(button,\s*\[role="button"\]:not\(svg \*\)\)\s*\{[^}]*isolation:\s*isolate/);
+    expect(css).toMatch(/:where\(button,\s*\[role="button"\]:not\(svg \*\)\)\s*\{[^}]*backface-visibility:\s*hidden/);
+    expect(css).toMatch(/:where\(button,\s*\[role="button"\]:not\(svg \*\)\)\s*\{[^}]*transform:\s*translateZ\(0\)/);
   });
 
   it('stabilizes .animate-spin on its own compositor layer with will-change and backface-visibility', () => {

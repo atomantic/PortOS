@@ -91,7 +91,7 @@ export default function FableLoomStory({ view = 'graph' }) {
   const seriesPlanOpen = episodeId === 'plan';
   const outlineOpen = view === 'outline';
   // Orientation keys off the PAGE, not the canvas. The canvas is the leftover
-  // after the 380px rail on `lg+`, so measuring it would stack a laptop graph
+  // after the 380–420px rail on `lg+`, so measuring it would stack a laptop graph
   // while the rail is still beside it.
   const [pageRef, pageWidth] = useContainerWidth();
   const graphOrientation = pageWidth > 0
@@ -587,7 +587,7 @@ export default function FableLoomStory({ view = 'graph' }) {
             title="Add episode"
             className="flex min-h-[36px] shrink-0 items-center rounded-full border border-dashed border-port-border px-3 text-xs text-port-text-muted hover:border-port-accent hover:text-port-accent"
           >
-            + <span className="hidden sm:inline">Episode</span>
+            <Plus size={13} aria-hidden="true" /><span className="ml-1 hidden sm:inline">Episode</span>
           </button>
           {episode && (
             <TabPills
@@ -689,8 +689,8 @@ export default function FableLoomStory({ view = 'graph' }) {
             data-testid={node ? 'scene-details-sheet' : 'loom-validation-rail'}
             aria-label={node ? `${node.title || 'Scene'} details` : 'Episode validation'}
             className={node
-              ? 'absolute inset-x-0 bottom-0 z-20 flex h-[calc(100%_-_0.75rem)] flex-col overflow-hidden rounded-t-2xl border border-b-0 border-port-border bg-port-card shadow-2xl motion-safe:animate-in motion-safe:slide-in-from-bottom-4 motion-safe:duration-200 lg:static lg:h-auto lg:w-[380px] lg:shrink-0 lg:rounded-none lg:border-y-0 lg:border-r-0 lg:border-l'
-              : 'flex max-h-[45%] flex-col overflow-hidden border-t border-port-border lg:max-h-none lg:w-[380px] lg:shrink-0 lg:border-t-0 lg:border-l'}
+              ? 'absolute inset-x-0 bottom-0 z-20 flex h-[calc(100%_-_0.75rem)] flex-col overflow-hidden rounded-t-2xl border border-b-0 border-port-border bg-port-card shadow-2xl motion-safe:animate-in motion-safe:slide-in-from-bottom-4 motion-safe:duration-200 lg:static lg:h-auto lg:w-[380px] 2xl:w-[420px] lg:shrink-0 lg:rounded-none lg:border-y-0 lg:border-r-0 lg:border-l'
+              : 'flex max-h-[45%] flex-col overflow-hidden border-t border-port-border lg:max-h-none lg:w-[380px] 2xl:w-[420px] lg:shrink-0 lg:border-t-0 lg:border-l'}
           >
             {node && (
               <div className="relative flex min-h-[4.5rem] shrink-0 items-center justify-center border-b border-port-border px-4 py-3 lg:hidden">
