@@ -54,7 +54,7 @@ afterAll(async () => {
 });
 
 describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffmpeg and client dependencies required)', () => {
-  it('authors and accepts a Three.js world through the real UI and renders its reviewed proof', async () => {
+  it('[fidelity] authors and accepts a Three.js world through the real UI and renders its reviewed proof', async () => {
     // Skipped suites do not run cleanup hooks: load data-owning services only here.
     const { PATHS } = await import('../lib/paths.js');
     const { default: router } = await import('./musicVideo.js');

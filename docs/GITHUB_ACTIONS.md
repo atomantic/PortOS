@@ -448,23 +448,18 @@ The selected work is split across parallel jobs:
   `Cache client node_modules` with the client job, so on a hit it pays no install.
 - **DB tests** — provisions only the isolated `portos_test` database and runs
   the serial DB suite when database-sensitive files changed.
-- **Cross-workspace browser suites** (same `database` job) — the
-  `BROWSER_SUITES` registered in `scripts/ci-test-plan.js` (`musicVideoProductionReview`,
-  `musicVideoRichAuthoring`, `musicVideoSongRevision`) bundle real client
-  components and drive them in Chrome. The `server` job installs no client
-  workspace, so they skip there and would otherwise skip in every CI job (#10312:
-  a `ProductionReviewPanel` prop change left all three harnesses blank behind a
-  green CI). The planner emits `browser_files`: every registered suite on a full
-  plan (a registry test fails when a suite using the gate is left out), otherwise the ones selected by a changed test or by the
-  basename lookup of a changed client source in a harness `entry` string. When it
-  is non-empty the `database` job also runs (even with `db` false), installs
-  the client workspace (sharing `Cache client node_modules`) and runs those files
-  with `PORTOS_REQUIRE_BROWSER_SUITES=1`, which makes
-  `server/lib/browserSuiteGate.js` throw instead of skip when Chrome, ffmpeg or
-  the client bundler is missing. Local runs without the prerequisites still skip.
-  Limit: selection follows the basename named in a harness entry, so a change to
-  a component the entry only imports transitively runs these suites on a full
-  plan or when a suite file itself changes, not on a scoped PR.
+- **Cross-workspace browser suites** (same `database` job) — the exact
+  `BROWSER_SUITES` registry in `scripts/lib/browserSuites.js` owns these tests.
+  Linux server shards exclude that registry with `PORTOS_CI_BROWSER_OWNER=unit`;
+  other browser files, including `overlayTextService`, keep their existing owner.
+  The planner selects affected registered files and the browser job requires
+  Chrome, FFmpeg and bundler prerequisites instead of silently skipping them.
+  Ordinary PRs run the `smoke` profile: all existing assertions except the
+  explicitly tagged `[fidelity]` grading/authoring cases. Scheduled, release,
+  and dispatched full runs execute every case. Profiles do not change pixels,
+  render settings, tolerances, or cleanup assertions.
+  A PR selecting a fidelity-owning file also requires the exact-head receipt
+  described below; a smoke pass alone cannot admit it.
 - **Windows server tests** — the same server selection, but only on full CI
   (the `main` → `release` PR, nightly, release, workflow dispatch) or when a
   Windows-sensitive surface changed (`.ps1` / `.cmd` spawn, PowerShell BOM,
@@ -478,9 +473,39 @@ The selected work is split across parallel jobs:
   cancelled jobs when nothing actually failed — as far as the gate job itself
   runs, which a run-wide cancel prevents. See "External cancellation and one
   automatic retry" below.
-- **Full CI Gate** — published only when the plan chose the complete suite, and
-  mirrors `CI Gate`'s result. This is the check the release workflow looks for;
+- **Full CI Gate** — published only when the plan chose the complete suite and
+  full Windows coverage, with the full browser profile executed in hosted CI.
+  Ordinary PR smoke runs cannot publish it, even with a local fidelity receipt.
+  It mirrors `CI Gate`'s result. This is the check the release workflow looks for;
   see "Reusing the release PR's CI run" below.
+
+### Browser fidelity evidence
+
+After publishing a relevant PR, run `node scripts/browser-fidelity.js --pr NUMBER`
+from its clean checkout using existing `gh` authentication. This command runs the
+canonical fidelity cases automatically, retains a local receipt, and publishes
+an exact-commit status only after complete passing assertions and unchanged-source
+verification. It binds the PR head and that commit's source tree. It does not
+provision a runner, install credentials, or start PortOS.
+
+The required CI gate checks the current head and its source tree, profile digest,
+trusted repository-owner publisher and latest status. Missing, stale, skipped, failed or incomplete
+results block admission. Local receipt JSON is an audit record; the trusted
+publisher's status attests execution, not a cryptographic proof of test behavior.
+Keep credentials outside the test subprocess.
+
+If evidence finishes after CI Gate failed only for missing fidelity evidence,
+rerun that gate job on the unchanged run once its other required jobs have passed.
+A receipt cannot turn a cancelled or failed browser, Windows, or containment job
+green. A changed PR head requires new evidence; base-only movement does not. Hosted smoke tests the merge checkout; local fidelity proves the PR head only,
+not native integration of subsequent base changes. Scheduled/release full coverage
+remains the integration check for those fidelity cases. Default
+pregate is not a substitute for this command or required CI.
+
+Hardware playback/GPU throughput remains distinct from these deterministic visual
+assertions. Software WebGL results do not certify physical-GPU performance, and
+Mac-local results cannot replace Windows compatibility or Linux containment.
+The profile split does not explain or repair previously unidentified hosted stalls.
 
 ### Full-suite sharding
 

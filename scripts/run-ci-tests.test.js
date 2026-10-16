@@ -1,4 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { delimiter, join } from 'path';
@@ -76,6 +78,22 @@ it('forwards the related matrix slice and all selectors through the real launche
   }
 });
 
+it('rejects empty browser coverage except explicitly deferred smoke-only inputs', () => {
+  for (const [profile, files, expected] of [
+    ['fidelity', [], 1], ['fidelity', ['server/lib/filmLook.browser.test.js'], 1],
+    ['full', [], 1], ['smoke', [], 1],
+    ['smoke', ['server/routes/musicVideoRichAuthoring.browser.test.js'], 0],
+  ]) {
+    const result = spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'server'], {
+      encoding: 'utf8', timeout: 10000,
+      env: { ...process.env, PORTOS_BROWSER_TEST_PROFILE: profile, CI_TEST_MODE: 'files',
+        CI_TEST_FILES: JSON.stringify(files), GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status, `${profile}: ${result.stderr}`).toBe(expected);
+  }
+});
+
 describe('ci.yml shard wiring', () => {
   const runners = Object.entries(workflowJobs(WORKFLOW)).filter(([, body]) => body.includes('run-ci-tests.js'));
 
@@ -108,6 +126,21 @@ describe('ci.yml shard wiring', () => {
     // The client workspace must be installed before the suites bundle it.
     expect(body.indexOf('npm ci --prefix client')).toBeGreaterThan(0);
     expect(body.indexOf('npm ci --prefix client')).toBeLessThan(start);
+  });
+
+  it('deduplicates only Linux browser ownership and admits PR fidelity separately', () => {
+    const jobs = workflowJobs(WORKFLOW);
+    expect(jobs.server).toContain('PORTOS_CI_BROWSER_OWNER: unit');
+    expect(jobs['windows-server']).not.toContain('PORTOS_CI_BROWSER_OWNER');
+    expect(jobs.database).toContain("github.event_name == 'pull_request' && github.base_ref != 'release' && inputs.full != true && 'smoke' || 'full'");
+    expect(jobs.gate.indexOf('node scripts/ci-gate-report.js')).toBeLessThan(
+      jobs.gate.indexOf('node scripts/verify-browser-fidelity.js'));
+    for (const name of ['CI_BROWSER_FILES', 'CI_EXPECTED_HEAD']) {
+      expect(jobs.gate).toContain(`${name}:`);
+    }
+    expect(jobs['full-gate']).toContain("(github.event_name != 'pull_request' || github.base_ref == 'release' || inputs.full == true)");
+    expect(jobs.gate).toContain('CI_GATE_RESULT_LINUX_CONTAINMENT:');
+    expect(jobs.gate).toContain('CI_GATE_RESULT_WINDOWS_SERVER:');
   });
 
   it('runs once-only steps on the first shard alone', () => {
@@ -330,6 +363,32 @@ describe('native crash diagnostics before retry/cancellation (#8152)', () => {
     expect(run.mock.calls[1]).toEqual(['server', 'test:ci', ['./services/sprites/walk.test.js']]);
   });
 
+  it('refuses an explicitly empty browser profile before invoking tests', async () => {
+    vi.stubEnv('PORTOS_BROWSER_TEST_PROFILE', '');
+    const run = vi.fn();
+    try {
+      await expect(spawnNpm('server', 'test:ci', ['selected.browser.test.js'], 'invalid', { run }))
+        .rejects.toThrow('Unknown browser test profile');
+      expect(run).not.toHaveBeenCalled();
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it('keeps browser profile selection on a recovered worker retry', async () => {
+    vi.stubEnv('PORTOS_BROWSER_TEST_PROFILE', 'smoke');
+    try {
+      const run = vi.fn().mockResolvedValueOnce({ status: 1, output })
+        .mockResolvedValueOnce({ status: 0, output: 'passed' });
+      expect(await spawnNpm('server', 'test:ci', ['selected.browser.test.js'], 'smoke', {
+        run, diagnose: vi.fn(),
+      })).toBe(0);
+      const filter = '--testNamePattern=^(?!.*\\[fidelity\\]).*$';
+      expect(run.mock.calls[0][2]).toEqual(['selected.browser.test.js', filter]);
+      expect(run.mock.calls[1][2]).toEqual(['./services/sprites/walk.test.js', filter]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('retains diagnostic evidence for recovered crashes without clearing unrelated assertion failures', async () => {
     for (const [originalOutput, expected] of [[output, 0], [output.replace('798 passed', '797 passed | 1 failed'), 1]]) {
       const run = vi.fn().mockResolvedValueOnce({ status: 1, output: originalOutput })
@@ -448,7 +507,49 @@ describe('structured failure diagnostics', () => {
 describe('report launcher subprocess lifecycle (#9804)', () => {
   const runnerUrl = new URL('./run-ci-tests.js', import.meta.url).href;
 
-  function launch(host, name, { blocking = false } = {}) {
+  it('retains temporary diagnostics when cancellation cannot verify child cleanup', async () => {
+    const host = mkdtempSync(join(tmpdir(), 'launcher-unverified-'));
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new PassThrough(), stderr: new PassThrough(), unref: vi.fn(),
+    });
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.useFakeTimers();
+    vi.doMock('child_process', () => ({ spawn: () => child }));
+    vi.doMock('node:os', async importOriginal => ({ ...await importOriginal(), tmpdir: () => host }));
+    vi.doMock('../server/lib/bufferedSpawn.js', async importOriginal => ({
+      ...await importOriginal(), killProcessTree: vi.fn(),
+    }));
+    vi.resetModules();
+    try {
+      const { runNpm } = await import('./run-ci-tests.js');
+      const controller = new AbortController();
+      const pending = runNpm('server', 'test:ci:related', [], {
+        env: { ...process.env, PORTOS_CI_DIAGNOSTICS_DIR: '' },
+        signal: controller.signal, cancellationTimeoutMs: 100,
+      });
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(100);
+      const result = await pending;
+      expect(result).toMatchObject({ status: 143, interrupted: 'SIGTERM', cleanupUnverified: true });
+      expect(result.error.message).toContain('cleanup unverified');
+      expect(result.diagnosticsPath).toBe(join(host, readdirSync(host)[0]));
+      expect(JSON.parse(readFileSync(join(result.diagnosticsPath, 'invocation.json'), 'utf8')))
+        .toMatchObject({ completed: false, status: 143, signal: 'SIGTERM' });
+      expect(errors).toHaveBeenCalledWith(expect.stringContaining(result.diagnosticsPath));
+    } finally {
+      vi.useRealTimers();
+      vi.doUnmock('child_process');
+      vi.doUnmock('node:os');
+      vi.doUnmock('../server/lib/bufferedSpawn.js');
+      vi.resetModules();
+      errors.mockRestore();
+      child.stdout.destroy();
+      child.stderr.destroy();
+      rmSync(host, { recursive: true, force: true });
+    }
+  });
+
+  function launch(host, name, { blocking = false, abortOnSignal = false } = {}) {
     const fixture = join(host, name);
     mkdirSync(fixture);
     const ready = join(fixture, 'ready.json');
@@ -473,7 +574,10 @@ describe('report launcher subprocess lifecycle (#9804)', () => {
     delete env.PORTOS_TEST_TEMP_ROOT;
     const child = spawn(process.execPath, ['--input-type=module', '-e', `
       import { runNpm } from ${JSON.stringify(runnerUrl)};
-      const result = await runNpm('server', 'test:ci:related', ${JSON.stringify(args)});
+      const controller = new AbortController();
+      if (${abortOnSignal}) process.once('SIGUSR2', () => controller.abort());
+      const result = await runNpm('server', 'test:ci:related', ${JSON.stringify(args)},
+        ${abortOnSignal} ? { signal: controller.signal } : {});
       process.exitCode = result.status;`], { env, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '';
     child.stdout.on('data', chunk => { output += chunk; });
@@ -519,13 +623,13 @@ describe('report launcher subprocess lifecycle (#9804)', () => {
   // Windows cannot deliver POSIX SIGINT/SIGTERM to a Node process; ordinary
   // outcomes and recovery below still exercise its real npm.cmd boundary.
   describe.skipIf(process.platform === 'win32')('graceful signals', () => {
-    for (const signal of ['SIGINT', 'SIGTERM']) {
+    for (const signal of ['SIGINT', 'SIGTERM', 'SIGUSR2']) {
       it(`${signal} fails the stage, stops descendants, and removes the report root`, async () => {
         const host = mkdtempSync(join(tmpdir(), 'rcl-'));
         let run;
         let pids;
         try {
-          run = launch(host, 'cancel', { blocking: true });
+          run = launch(host, 'cancel', { blocking: true, abortOnSignal: signal === 'SIGUSR2' });
           await waitFor(() => existsSync(run.ready), 'test worker did not start');
           pids = JSON.parse(readFileSync(run.ready, 'utf8'));
           expect(ownedRoot(host, run.child.pid)).toBeTruthy();

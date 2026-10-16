@@ -664,7 +664,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     await rm(second.outputPath, { force: true });
   }, 120000);
 
-  ['ramps', 'generated-shots'].forEach(fixture => it(`matches bounded grades across real composed/document ${fixture} and song-time excerpts`, async () => {
+  ['ramps', 'generated-shots'].forEach(fixture => it(`[fidelity] matches bounded grades across real composed/document ${fixture} and song-time excerpts`, async () => {
     // render.js initializes the media registry. Import it only when this test
     // runs: a skipped browser suite never executes afterAll cleanup.
     const { buildMusicVideoFfmpegArgs } = await import('./render.js');

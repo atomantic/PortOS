@@ -301,6 +301,7 @@ jobs:
       - name: Run server tests
         if: needs.impact.outputs.server_mode != 'skip'
         env:
+          PORTOS_CI_BROWSER_OWNER: unit
           CI_TEST_MODE: ${{ needs.impact.outputs.server_mode }}
           CI_TEST_FILES: ${{ needs.impact.outputs.server_files }}
           CI_TEST_SOURCES: ${{ needs.impact.outputs.server_sources }}
@@ -519,12 +520,9 @@ jobs:
         run: node scripts/cancel-current-ci-run.js
 
   database:
-    # Also the host for the cross-workspace browser suites (issue #10312): the
-    # server job installs no client workspace, so `server/**/*.browser.test.js`
-    # skip there. This job already has ffmpeg and a runner with Chrome, so it
-    # adds the client install and runs the files the planner selected with
-    # PORTOS_REQUIRE_BROWSER_SUITES set, which turns a missing prerequisite into
-    # a failure instead of a green skip. The DB steps run only when `db` is set.
+    # Owns the registered browser suites; the Linux unit job excludes that
+    # exact registry. PRs run smoke here and require exact-head fidelity evidence
+    # at the gate. Scheduled/release runs retain the complete browser profile.
     name: DB tests
     needs: impact
     if: needs.impact.outputs.db == 'true' || needs.impact.outputs.browser_files != '[]'
@@ -710,6 +708,7 @@ jobs:
       - name: Run cross-workspace browser suites
         if: needs.impact.outputs.browser_files != '[]'
         env:
+          PORTOS_BROWSER_TEST_PROFILE: ${{ github.event_name == 'pull_request' && github.base_ref != 'release' && inputs.full != true && 'smoke' || 'full' }}
           CI_TEST_MODE: files
           CI_TEST_FILES: ${{ needs.impact.outputs.browser_files }}
           PORTOS_REQUIRE_BROWSER_SUITES: '1'
@@ -961,6 +960,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+      statuses: read
     steps:
       # The gate needs the repo only for scripts/ci-gate-report.js, which
       # imports Node builtins only — no dependency install, no setup-node.
@@ -994,6 +994,15 @@ jobs:
           CI_GATE_RESULT_LINUX_CONTAINMENT: ${{ needs.linux-containment.result }}
         run: node scripts/ci-gate-report.js
 
+      - name: Require current browser fidelity evidence
+        if: github.event_name == 'pull_request' && github.base_ref != 'release' && inputs.full != true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CI_BROWSER_FILES: ${{ needs.impact.outputs.browser_files }}
+          CI_PULL_REQUEST: ${{ github.event.pull_request.number }}
+          CI_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/verify-browser-fidelity.js
+
   full-gate:
     # A second check run published ONLY when the impact plan chose the complete
     # suite. release.yml keys on this name to skip re-running CI on the push to
@@ -1012,7 +1021,7 @@ jobs:
     # force-full path — nightly, the main -> release PR, release, an explicit
     # full-CI request — keeps windows_mode == 'full', so the release
     # optimization is unaffected.
-    if: always() && needs.impact.outputs.full == 'true' && needs.impact.outputs.windows_mode == 'full'
+    if: always() && needs.impact.outputs.full == 'true' && needs.impact.outputs.windows_mode == 'full' && (github.event_name != 'pull_request' || github.base_ref == 'release' || inputs.full == true)
     needs: [impact, gate]
     runs-on: ubuntu-latest
     timeout-minutes: 10
