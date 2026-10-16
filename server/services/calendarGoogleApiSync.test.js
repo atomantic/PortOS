@@ -13,6 +13,7 @@ vi.mock('./googleAuth.js', () => ({ getAuthenticatedClient: vi.fn(), GOOGLE_API_
 vi.mock('./calendarAccounts.js', () => ({
   getAccount: vi.fn(),
   updateSubcalendars: vi.fn(async () => ({})),
+  updateSyncStatus: vi.fn(async () => ({})),
   mergeDiscoveredSubcalendars: vi.fn((existing, discovered) => discovered),
 }));
 
@@ -25,6 +26,7 @@ import { apiSyncAccount } from './calendarGoogleApiSync.js';
 import { calendar } from '@googleapis/calendar';
 import { getAuthenticatedClient } from './googleAuth.js';
 import { getAccount } from './calendarAccounts.js';
+import { updateSyncStatus } from './calendarAccounts.js';
 import { pushSyncEvents } from './calendarGoogleSync.js';
 
 const ACCOUNT_ID = '33333333-3333-3333-3333-333333333333';
@@ -35,6 +37,14 @@ const account = () => ({
   name: 'Example Account',
   type: 'google-calendar',
   subcalendars: [{ calendarId: CAL_ID, name: 'Work', enabled: true, dormant: false }],
+});
+
+const accountWithCalendars = () => ({
+  ...account(),
+  subcalendars: [
+    { calendarId: 'work@example.com', name: 'Work', enabled: true, dormant: false },
+    { calendarId: 'personal@example.com', name: 'Personal', enabled: true, dormant: false },
+  ],
 });
 
 const apiItem = (overrides = {}) => ({
@@ -131,6 +141,97 @@ describe('apiSyncAccount conference-metadata projection (#6289)', () => {
     expect(result.status).toBe('success');
   });
 
+  it('syncs healthy calendars when another fetch fails and preserves failed-calendar cache data', async () => {
+    getAccount.mockResolvedValue(accountWithCalendars());
+    const list = vi.fn(({ calendarId }) => calendarId === 'work@example.com'
+      ? Promise.resolve({ data: { items: [apiItem({ start: { dateTime: '2026-03-02T10:00:00-05:00' } })] } })
+      : Promise.reject(new Error('calendar permission revoked')));
+    calendar.mockReturnValue({ events: { list } });
+    const io = { emit: vi.fn() };
+
+    const result = await apiSyncAccount(ACCOUNT_ID, io);
+
+    expect(result.status).toBe('partial');
+    expect(result.calendars).toEqual(expect.arrayContaining([
+      expect.objectContaining({ calendarId: 'work@example.com', status: 'success' }),
+      expect.objectContaining({ calendarId: 'personal@example.com', status: 'error', error: 'calendar permission revoked' }),
+    ]));
+    expect(pushSyncEvents).toHaveBeenCalledTimes(1);
+    expect(pushSyncEvents).toHaveBeenCalledWith(
+      ACCOUNT_ID,
+      'work@example.com',
+      'Work',
+      [expect.objectContaining({ start: { dateTime: '2026-03-02T10:00:00-05:00' } })],
+      null,
+      expect.objectContaining({ dateRange: expect.any(Object) }),
+    );
+    expect(updateSyncStatus).toHaveBeenLastCalledWith(ACCOUNT_ID, 'partial');
+    expect(io.emit).toHaveBeenCalledWith('calendar:sync:completed', expect.objectContaining({
+      status: 'partial',
+      failedCalendars: [expect.objectContaining({ calendarId: 'personal@example.com' })],
+    }));
+  });
+
+  it('records an error and emits failure when every calendar fetch fails, then allows retry', async () => {
+    getAccount.mockResolvedValue(accountWithCalendars());
+    const list = vi.fn().mockRejectedValue(new Error('temporary Google outage'));
+    calendar.mockReturnValue({ events: { list } });
+    const io = { emit: vi.fn() };
+
+    await expect(apiSyncAccount(ACCOUNT_ID, io)).rejects.toThrow('Google API sync failed for all calendars');
+    expect(pushSyncEvents).not.toHaveBeenCalled();
+    expect(updateSyncStatus).toHaveBeenLastCalledWith(ACCOUNT_ID, 'error');
+    expect(io.emit).toHaveBeenCalledWith('calendar:sync:failed', expect.objectContaining({
+      method: 'api', calendars: expect.arrayContaining([expect.objectContaining({ error: 'temporary Google outage' })]),
+    }));
+
+    calendar.mockReturnValue({ events: { list: vi.fn().mockResolvedValue({ data: { items: [] } }) } });
+    await expect(apiSyncAccount(ACCOUNT_ID, null)).resolves.toMatchObject({ status: 'success' });
+    expect(pushSyncEvents).toHaveBeenCalledTimes(2);
+    expect(updateSyncStatus).toHaveBeenLastCalledWith(ACCOUNT_ID, 'success');
+  });
+
+  it('records rejected OAuth lookup and emits failure, then releases the account lock for retry', async () => {
+    const authError = Object.assign(new Error('OAuth token refresh failed'), { code: 'EAUTH' });
+    getAuthenticatedClient.mockRejectedValueOnce(authError);
+    const io = { emit: vi.fn() };
+
+    await expect(apiSyncAccount(ACCOUNT_ID, io)).rejects.toBe(authError);
+    expect(updateSyncStatus).toHaveBeenLastCalledWith(ACCOUNT_ID, 'error');
+    expect(io.emit).toHaveBeenCalledWith('calendar:sync:failed', expect.objectContaining({
+      accountId: ACCOUNT_ID, error: 'OAuth token refresh failed', method: 'api',
+    }));
+    expect(pushSyncEvents).not.toHaveBeenCalled();
+
+    mockListPage([]);
+    await expect(apiSyncAccount(ACCOUNT_ID, null)).resolves.toMatchObject({ status: 'success' });
+    expect(updateSyncStatus).toHaveBeenLastCalledWith(ACCOUNT_ID, 'success');
+  });
+
+  it('discards a failed calendar after a partial first page while syncing a healthy calendar', async () => {
+    getAccount.mockResolvedValue(accountWithCalendars());
+    const list = vi.fn(({ calendarId, pageToken }) => {
+      if (calendarId === 'work@example.com') return Promise.resolve({ data: { items: [apiItem({ id: 'healthy-event' })] } });
+      if (pageToken) return Promise.reject(Object.assign(new Error('second page unavailable'), { code: 'ETIMEDOUT' }));
+      return Promise.resolve({ data: { items: [apiItem({ id: 'partial-event' })], nextPageToken: 'page-2' } });
+    });
+    calendar.mockReturnValue({ events: { list } });
+
+    const result = await apiSyncAccount(ACCOUNT_ID, null);
+
+    expect(result.status).toBe('partial');
+    expect(result.calendars).toEqual(expect.arrayContaining([
+      expect.objectContaining({ calendarId: 'personal@example.com', status: 'error', code: 'ETIMEDOUT' }),
+    ]));
+    expect(list).toHaveBeenCalledWith(expect.objectContaining({ calendarId: 'personal@example.com', pageToken: undefined }));
+    expect(list).toHaveBeenCalledWith(expect.objectContaining({ calendarId: 'personal@example.com', pageToken: 'page-2' }));
+    expect(pushSyncEvents).toHaveBeenCalledTimes(1);
+    expect(pushSyncEvents).toHaveBeenCalledWith(
+      ACCOUNT_ID, 'work@example.com', 'Work', [expect.objectContaining({ id: 'healthy-event' })], null, expect.any(Object),
+    );
+    expect(pushSyncEvents.mock.calls.some(([, calendarId]) => calendarId === 'personal@example.com')).toBe(false);
+  });
+
   it('refuses to sync without configured OAuth rather than writing an empty cache', async () => {
     getAuthenticatedClient.mockResolvedValue(null);
 
@@ -182,7 +283,7 @@ describe('apiSyncAccount conference-metadata projection (#6289)', () => {
       // Keep the SDK's normal retry policy: each attempted request owns a
       // fresh deadline, rather than treating 30s as a whole-sync timeout.
       await vi.runAllTimersAsync();
-      expect(await result).toMatchObject({ error: { code: 'TimeoutError' } });
+      expect(await result).toMatchObject({ error: { cause: { code: 'TimeoutError' } } });
       expect(attempts.every(attempt => attempt.abortedAt - attempt.startedAt === 30_000)).toBe(true);
       expect(pushSyncEvents).not.toHaveBeenCalled();
       healthy = true;
