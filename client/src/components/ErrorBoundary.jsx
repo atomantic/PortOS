@@ -13,6 +13,16 @@ export default class ErrorBoundary extends Component {
     return { hasError: true, error };
   }
 
+  componentDidUpdate(previousProps) {
+    if (this.state.hasError && previousProps.resetKey !== this.props.resetKey) {
+      this.resetError();
+    }
+  }
+
+  resetError = () => {
+    this.setState({ hasError: false, error: null });
+  };
+
   componentDidCatch(error, errorInfo) {
     const report = () => {
       console.error(`💥 React Error: ${error.message}`, errorInfo);
@@ -41,7 +51,11 @@ export default class ErrorBoundary extends Component {
       // Callers can supply a custom fallback (including `null`) — used to degrade
       // gracefully inside non-DOM trees like the R3F Canvas, where the default
       // full-screen DOM error UI can't render.
-      if (this.props.fallback !== undefined) return this.props.fallback;
+      if (this.props.fallback !== undefined) {
+        return typeof this.props.fallback === 'function'
+          ? this.props.fallback(this.state.error, this.resetError)
+          : this.props.fallback;
+      }
       return (
         <div className="min-h-dvh-cap bg-port-bg flex items-center justify-center p-4">
           <div className="bg-port-card border border-port-border rounded-xl p-8 max-w-md w-full">
