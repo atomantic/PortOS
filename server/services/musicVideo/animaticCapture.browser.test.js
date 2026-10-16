@@ -27,7 +27,7 @@ const canRun = browserSuiteCanRun('animatic frame capture', { Chrome: chrome, ff
 
 const still = { sceneId: 'still', order: 0, label: 'Example still', startSec: 0, endSec: 4, visualLayer: 'still', referenceImageId: 'grid.png', stillMove: 'hold' };
 const project = (scenes = [still], extra = {}) => ({ id: 'capture-fixture', name: 'Example capture', scenes, composition: { mode: 'composed' }, ...extra });
-let dir, server, fixture, page, lyricProject;
+let dir, server, fixture, page, lyricProject, ffmpegVersion;
 const colorReferences = new Map();
 const errors = [];
 afterAll(async () => {
@@ -38,6 +38,7 @@ afterAll(async () => {
 
 describe.skipIf(!canRun)('saved storyboard pixels in a real browser', () => {
   beforeAll(async () => {
+    ffmpegVersion = execFileSync(ffmpeg, ['-version'], { encoding: 'utf8' }).split('\n')[0];
     dir = await mkdtemp(join(tmpdir(), 'portos-animatic-capture-'));
     await symlink(join(client, 'node_modules'), join(dir, 'node_modules'), 'dir');
     const entry = `import React,{useState} from 'react';import{createRoot}from'react-dom/client';import Animatic from ${JSON.stringify(join(client, 'src/components/musicVideo/StoryboardAnimatic.jsx'))};import toast,{Toaster}from ${JSON.stringify(join(client, 'src/components/ui/Toast.jsx'))};
@@ -166,10 +167,7 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
         const exported = samples(raw.data, raw.info.width, raw.info.channels, pngPoints);
         const offset = Math.floor(t * 24) * 480 * 240 * 3;
         const reference = samples(colorReferences.get(matrix).subarray(offset), 480, 3, points);
-        for (let i = 0; i < points.length; i++) for (let c = 0; c < 3; c++) {
-          expect(Math.abs(exported[i][c] - pixels.samples[i][c]), `PNG ${matrix} ${i}/${c}`).toBeLessThanOrEqual(1);
-          expect(Math.abs(reference[i][c] - pixels.samples[i][c]), `FFmpeg ${matrix} ${i}/${c}`).toBeLessThanOrEqual(3);
-        }
+        let displayed;
         if (t === 0.02) {
           // Retain native-display negative evidence; it is diagnostic, not the
           // reference used to relax the strict actual-preview capture assertion.
@@ -179,8 +177,16 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
           try { native = await video.screenshot(); }
           finally { await video.evaluate(v => { v.style.visibility = 'hidden'; v.nextElementSibling.style.visibility = ''; }); }
           const nativePixels = await sharp(native).raw().toBuffer({ resolveWithObject: true });
-          const displayed = samples(nativePixels.data, nativePixels.info.width, nativePixels.info.channels, pngPoints);
+          displayed = samples(nativePixels.data, nativePixels.info.width, nativePixels.info.channels, pngPoints);
           console.log(`🎨 ${process.platform}/${process.arch} ${fixture.browser.version()} ${matrix} limited YUV -> sRGB: ${JSON.stringify({ native: displayed, decoded: pixels.samples, png: exported, ffmpeg: reference })}`);
+        }
+        // CI intentionally silences console output. Preserve the complete
+        // independent measurements in the assertion failure, before bailing.
+        const evidence = JSON.stringify({ platform: process.platform, arch: process.arch, browser: fixture.browser.version(), ffmpegVersion,
+          matrix, t, metadata: pixels.metadata, native: displayed, decoded: pixels.samples, png: exported, ffmpeg: reference });
+        for (let i = 0; i < points.length; i++) for (let c = 0; c < 3; c++) {
+          expect(Math.abs(exported[i][c] - pixels.samples[i][c]), `PNG ${matrix} ${i}/${c}: ${evidence}`).toBeLessThanOrEqual(1);
+          expect(Math.abs(reference[i][c] - pixels.samples[i][c]), `FFmpeg ${matrix} ${i}/${c}: ${evidence}`).toBeLessThanOrEqual(3);
         }
       }
     }
