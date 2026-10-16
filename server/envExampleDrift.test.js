@@ -113,6 +113,7 @@ const INHERITED_ENV = {
   PGTESTDATABASE: 'test-harness override naming portos_test',
   PORTOS_REQUIRE_DB: 'CI flag that turns a skipped DB suite into a failure',
   PORTOS_REQUIRE_BROWSER_SUITES: 'CI flag that turns a skipped cross-workspace browser suite into a failure',
+  PORTOS_CI_BROWSER_OWNER: 'CI-only test ownership selector; Linux unit shards exclude suites owned by the browser job',
   PORTOS_TEST_PYTHON: 'test-harness interpreter override',
   PORTOS_TEST_QUIET: 'test-harness log silencer',
 };

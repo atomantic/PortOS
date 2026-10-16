@@ -7,6 +7,7 @@ import { staticImportSpecifiersFromSource } from '../server/lib/staticImportGrap
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { writeStepOutput } from './lib/githubOutput.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
+import { BROWSER_SUITES } from './lib/browserSuites.js';
 
 const TEST_FILE_RE = /\.(?:test|spec)\.[cm]?[jt]sx?$/i;
 const MODULE_SOURCE_RE = /\.[cm]?[jt]sx?$/i;
@@ -28,31 +29,8 @@ const MAX_CHANGED_CODE_FILES = 30;
 // editorial-leaf planner test sat exactly on it (#10312).
 const MAX_TARGETED_TEST_FILES = 125;
 
-// Server-runner suites that drive real client components in Chrome. The server
-// job installs no client workspace, so there they always skip; the `database`
-// job (client deps + Chrome + ffmpeg, PORTOS_REQUIRE_BROWSER_SUITES=1) is where
-// the files selected here run for real (issue #10312).
-//
-// An explicit list, not `*.browser.test.js`: only suites that guard `canRun`
-// with server/lib/browserSuiteGate.js can be told to fail instead of skip. The
-// registry test (browser-suite-registry.test.js) fails when a suite importing
-// the gate is left out.
-export const BROWSER_SUITES = [
-  'server/lib/filmLook.browser.test.js',
-  'server/lib/filmLookGpu.browser.test.js',
-  'server/lib/musicVideoTitleCard.browser.test.js',
-  'server/routes/musicVideoProductionReview.browser.test.js',
-  'server/routes/musicVideoRichAuthoring.browser.test.js',
-  'server/routes/musicVideoSongRevision.browser.test.js',
-  'server/services/federatedMedia/sourceAudio.browser.test.js',
-  'server/services/musicVideo/animaticCapture.browser.test.js',
-  'server/services/musicVideo/documentRender.browser.test.js',
-  'server/services/musicVideo/documentTemplates/layered/engine.overlay.browser.test.js',
-  'server/services/musicVideo/documentTemplates/shared/lyricType.browser.test.js',
-  'server/services/musicVideo/documentTemplates/shared/toonWorld.browser.test.js',
-  'server/services/musicVideo/publish/linkedin.browser.test.js',
-  'server/services/musicVideo/publish/sunoHook.browser.test.js',
-];
+// Preserve the planner's public registry export for existing callers.
+export { BROWSER_SUITES } from './lib/browserSuites.js';
 const browserSuitesIn = (paths) => uniqueSorted(paths.filter((path) => BROWSER_SUITES.includes(path)));
 
 // Python sidecar scripts (`scripts/generate_ltx2.py`, …). Vitest's import graph

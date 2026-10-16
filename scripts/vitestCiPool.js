@@ -47,6 +47,7 @@ export const EXCLUSIVE_CAPTURE_TESTS = [
   'services/musicVideo/documentTemplates/shared/lyricType.browser.test.js',
   'services/musicVideo/documentTemplates/shared/toonWorld.browser.test.js',
   'services/musicVideo/overlayTextService.browser.test.js',
+  'services/musicVideo/publish/sunoHook.browser.test.js',
   'routes/musicVideoProductionReview.browser.test.js',
   'routes/musicVideoRichAuthoring.browser.test.js',
 ];

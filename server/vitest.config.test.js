@@ -15,12 +15,18 @@
  * `development` value each one starts from.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { BROWSER_SUITES } from '../scripts/lib/browserSuites.js';
+import { pinPlatform } from './lib/testHelper.js';
+
+let restorePlatform;
 
 beforeEach(() => {
   vi.resetModules();
 });
 
 afterEach(() => {
+  restorePlatform?.();
+  restorePlatform = undefined;
   vi.doUnmock('./vitest.config.db.js');
   // Restores the pre-stub value even though the config under test reassigns
   // process.env.NODE_ENV directly.
@@ -51,5 +57,41 @@ describe('vitest.config.js', () => {
 describe('vitest.config.db.js', () => {
   it('forces NODE_ENV=test when loaded directly by npm run test:db', async () => {
     await expectForces('./vitest.config.db.js');
+  });
+});
+
+// Root exclusions apply before full, explicit-file and related selection. Both
+// projects must retain them: the capture group has its own explicit include list.
+describe('browser suite CI ownership', () => {
+  it.each([
+    ['linux', undefined, false],
+    ['linux', 'browser', false],
+    ['linux', 'unit', true],
+    ['win32', 'unit', false],
+  ])('collects the intended contracts on %s with owner %s', async (platform, owner, excluded) => {
+    restorePlatform = pinPlatform(platform);
+    vi.stubEnv('PORTOS_CI_BROWSER_OWNER', owner);
+    const { default: config } = await import('./vitest.config.js');
+    const suites = BROWSER_SUITES.map(path => path.slice('server/'.length));
+    const projects = config.test.projects.map(project => project.test);
+    const capture = projects.find(project => project.name === 'capture');
+    const parallel = projects.find(project => project.name === 'parallel');
+    const expected = excluded ? suites : [];
+    expect(config.test.exclude.filter(path => suites.includes(path))).toEqual(expected);
+    expect(capture.exclude.filter(path => suites.includes(path))).toEqual(expected);
+    for (const suite of suites) {
+      if (excluded) expect(parallel.exclude).toContain(suite);
+      else if (capture.include.includes(suite)) expect(capture.exclude).not.toContain(suite);
+      else {
+        expect(parallel.include).toContain('**/*.test.js');
+        expect(parallel.exclude).not.toContain(suite);
+      }
+    }
+    // This independent browser contract has no registry owner and must still run.
+    const overlay = 'services/musicVideo/overlayTextService.browser.test.js';
+    expect(suites).not.toContain(overlay);
+    expect(config.test.exclude).not.toContain(overlay);
+    expect(capture.include).toContain(overlay);
+    expect(capture.exclude).not.toContain(overlay);
   });
 });
