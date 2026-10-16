@@ -61,6 +61,19 @@ describe('GET /api/api-docs/openapi.json', () => {
     expect(res.body.externallyExposableApis.map((entry) => entry.id)).toEqual(['voice', 'sdapi']);
   });
 
+  it('documents weight downloads as POST mutations alongside read-only GET status', async () => {
+    const res = await request(buildApp()).get('/api/api-docs/catalog.json');
+    for (const path of [
+      '/api/image-gen/models/:modelId/download', '/api/video-gen/models/:modelId/download',
+      '/api/video-gen/ic-loras/:mode/download', '/api/video-gen/text-encoders/:id/download',
+      '/api/video-gen/text-encoder/download',
+    ]) {
+      const operations = res.body.operations.filter(operation => operation.path === path);
+      expect(operations.find(operation => operation.method === 'GET')).toMatchObject({ sideEffect: 'read' });
+      expect(operations.find(operation => operation.method === 'POST')).toMatchObject({ sideEffect: 'write' });
+    }
+  });
+
   it('serves the generated Socket.IO catalog and AsyncAPI 3 document', async () => {
     const events = await request(buildApp()).get('/api/api-docs/events.json');
     expect(events.status).toBe(200);

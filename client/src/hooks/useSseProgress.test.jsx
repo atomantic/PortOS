@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { StrictMode } from 'react';
+import { renderHook, act, waitFor } from '@testing-library/react';
 import { useSseProgress, isTerminalSseFrame } from './useSseProgress';
 import { MockEventSource, lastEventSource as last } from '../test/mockEventSource';
 
@@ -10,6 +11,7 @@ beforeEach(() => {
 
 afterEach(() => {
   delete global.EventSource;
+  vi.unstubAllGlobals();
 });
 
 describe('useSseProgress', () => {
@@ -98,4 +100,63 @@ it('reports a transient outage and recovers without ending the job stream', () =
   expect(last().closed).toBe(false);
   act(() => last().onopen());
   expect(result.current.isOpen).toBe(true);
+});
+
+describe('POST progress streams', () => {
+  it('starts once in StrictMode, decodes split frames and closes at completion', async () => {
+    const encoder = new TextEncoder();
+    const bytes = encoder.encode('data: {"type":"stage","message":"pulling"}\r\n\r\ndata: {"type":"progress","message":"café"}\n\ndata: {"type":"complete"}\n\n');
+    const split = bytes.indexOf(0xc3) + 1;
+    const fetchMock = vi.fn(async () => new Response(new ReadableStream({ start(controller) {
+      controller.enqueue(bytes.slice(0, split));
+      controller.enqueue(bytes.slice(split));
+      controller.close();
+    } })));
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderHook(() => useSseProgress('/download', { method: 'POST' }), { wrapper: StrictMode });
+    await waitFor(() => expect(result.current.closed).toBe(true));
+    expect(result.current.frames).toEqual([
+      { type: 'stage', message: 'pulling' }, { type: 'progress', message: 'café' }, { type: 'complete' },
+    ]);
+    expect(result.current.latestUrl).toBe('/download');
+    expect(result.current.isOpen).toBe(false);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0]).toEqual(['/download', expect.objectContaining({ method: 'POST' })]);
+    expect(MockEventSource.instances).toHaveLength(0);
+  });
+
+  it.each(['disconnect', 'eof', 'http'])('ends a %s failure visibly without retrying', async (failure) => {
+    const fetchMock = vi.fn(async () => failure === 'http'
+      ? new Response(JSON.stringify({ error: 'Unknown model' }), { status: 404 })
+      : new Response(new ReadableStream({ start(controller) {
+        if (failure === 'disconnect') controller.error(new Error('Network lost'));
+        else controller.close();
+      } })));
+    vi.stubGlobal('fetch', fetchMock);
+    const { result, rerender } = renderHook(() => useSseProgress('/download', { method: 'POST' }));
+    await waitFor(() => expect(result.current.closed).toBe(true));
+    expect(result.current.latest).toMatchObject({ type: 'error', message: expect.any(String) });
+    if (failure === 'http') expect(result.current.latest.message).toBe('Unknown model');
+    rerender();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(MockEventSource.instances).toHaveLength(0);
+  });
+
+  it('aborts on cancel, supersession and unmount, ignoring a stale response', async () => {
+    const requests = [];
+    vi.stubGlobal('fetch', vi.fn((url, { signal }) => new Promise(resolve => requests.push({ url, signal, resolve }))));
+    const { result, rerender, unmount } = renderHook(({ url }) => useSseProgress(url, { method: 'POST' }), { initialProps: { url: '/a' } });
+    await waitFor(() => expect(requests).toHaveLength(1));
+    rerender({ url: '/b' });
+    await waitFor(() => expect(requests).toHaveLength(2));
+    expect(requests[0].signal.aborted).toBe(true);
+    await act(async () => requests[0].resolve(new Response('data: {"type":"complete"}\n\n')));
+    expect(result.current.latest).toBeNull();
+    act(() => result.current.close());
+    expect(requests[1].signal.aborted).toBe(true);
+    rerender({ url: '/c' });
+    await waitFor(() => expect(requests).toHaveLength(3));
+    unmount();
+    expect(requests[2].signal.aborted).toBe(true);
+  });
 });

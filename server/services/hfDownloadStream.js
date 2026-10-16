@@ -1,5 +1,5 @@
 // SSE driver for HuggingFace repo pre-download endpoints. Image gen and video
-// gen both expose `GET /…/models/:id/download` (and video also a separate
+// gen both expose `POST /…/models/:id/download` (and video also a separate
 // `/text-encoder/download`); without this helper each route open-codes the
 // same `writeHead → send → cache-check → in-flight check → spawn → cleanup`
 // flow. A single in-flight Map keyed by repo also dedupes across routes:
