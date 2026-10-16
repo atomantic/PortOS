@@ -702,29 +702,159 @@ jobs:
         if: needs.impact.outputs.browser_files != '[]' && steps.client-modules.outputs.cache-hit != 'true'
         run: npm ci --prefix client
 
-      # Fail-closed: PORTOS_REQUIRE_BROWSER_SUITES makes the suites' canRun guard
-      # throw (see server/lib/browserSuiteGate.js) when Chrome, ffmpeg or the
-      # client bundler is missing, so a skip can never pass this step.
-      - name: Run cross-workspace browser suites
+      # Commit a small remote receipt before Chrome can start. Later immutable
+      # snapshots survive cancellation once uploaded, without a final collector.
+      - name: Prepare browser evidence
+        id: browser-evidence
         if: needs.impact.outputs.browser_files != '[]'
-        # The independent supervisor emits progress and owns a 12m deadline;
-        # this 15m step limit is only a fallback before the 20m job boundary.
-        timeout-minutes: 15
+        timeout-minutes: 1
         env:
+          CI_PR_HEAD: ${{ github.event.pull_request.head.sha }}
           PORTOS_BROWSER_TEST_PROFILE: ${{ github.event_name == 'pull_request' && github.base_ref != 'release' && inputs.full != true && 'smoke' || 'full' }}
-          PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
+          CI_TEST_FILES: ${{ needs.impact.outputs.browser_files }}
+        run: node scripts/browser-ci-evidence.js prepare
+
+      - name: Upload browser preflight before launch
+        if: needs.impact.outputs.browser_files != '[]'
+        timeout-minutes: 1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: browser-evidence-${{ github.run_id }}-${{ github.run_attempt }}-000
+          path: ${{ steps.browser-evidence.outputs.path }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Run cross-workspace browser suites
+        id: browser-evidence-start
+        if: needs.impact.outputs.browser_files != '[]'
+        timeout-minutes: 1
+        env:
           CI_TEST_MODE: files
           CI_TEST_FILES: ${{ needs.impact.outputs.browser_files }}
           PORTOS_REQUIRE_BROWSER_SUITES: '1'
           PORTOS_TEST_QUIET: 1
-        run: node scripts/watch-ci-tests.js server
+          EVIDENCE_ROOT: ${{ steps.browser-evidence.outputs.root }}
+        run: node scripts/browser-ci-evidence.js start "$EVIDENCE_ROOT"
+
+      - name: Capture browser evidence 1
+        id: browser-snapshot-1
+        if: always() && (steps.browser-evidence-start.outcome == 'success' || steps.browser-evidence-start.outcome == 'failure')
+        continue-on-error: true
+        timeout-minutes: 4
+        env:
+          EVIDENCE_ROOT: ${{ steps.browser-evidence.outputs.root }}
+        run: node scripts/browser-ci-evidence.js snapshot "$EVIDENCE_ROOT" 1
+
+      - name: Upload browser evidence 1
+        id: browser-upload-1
+        if: always() && steps.browser-snapshot-1.outputs.path != ''
+        continue-on-error: true
+        timeout-minutes: 1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: browser-evidence-${{ github.run_id }}-${{ github.run_attempt }}-001
+          path: ${{ steps.browser-snapshot-1.outputs.path }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Capture browser evidence 2
+        id: browser-snapshot-2
+        if: always() && (steps.browser-evidence-start.outcome == 'success' || steps.browser-evidence-start.outcome == 'failure') && steps.browser-snapshot-1.outputs.complete != 'true'
+        continue-on-error: true
+        timeout-minutes: 4
+        env:
+          EVIDENCE_ROOT: ${{ steps.browser-evidence.outputs.root }}
+        run: node scripts/browser-ci-evidence.js snapshot "$EVIDENCE_ROOT" 2
+
+      - name: Upload browser evidence 2
+        id: browser-upload-2
+        if: always() && steps.browser-snapshot-2.outputs.path != ''
+        continue-on-error: true
+        timeout-minutes: 1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: browser-evidence-${{ github.run_id }}-${{ github.run_attempt }}-002
+          path: ${{ steps.browser-snapshot-2.outputs.path }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Capture browser evidence 3
+        id: browser-snapshot-3
+        if: always() && (steps.browser-evidence-start.outcome == 'success' || steps.browser-evidence-start.outcome == 'failure') && steps.browser-snapshot-1.outputs.complete != 'true' && steps.browser-snapshot-2.outputs.complete != 'true'
+        continue-on-error: true
+        timeout-minutes: 4
+        env:
+          EVIDENCE_ROOT: ${{ steps.browser-evidence.outputs.root }}
+        run: node scripts/browser-ci-evidence.js snapshot "$EVIDENCE_ROOT" 3
+
+      - name: Upload browser evidence 3
+        id: browser-upload-3
+        if: always() && steps.browser-snapshot-3.outputs.path != ''
+        continue-on-error: true
+        timeout-minutes: 1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: browser-evidence-${{ github.run_id }}-${{ github.run_attempt }}-003
+          path: ${{ steps.browser-snapshot-3.outputs.path }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Capture browser evidence 4
+        id: browser-snapshot-4
+        if: always() && (steps.browser-evidence-start.outcome == 'success' || steps.browser-evidence-start.outcome == 'failure') && steps.browser-snapshot-1.outputs.complete != 'true' && steps.browser-snapshot-2.outputs.complete != 'true' && steps.browser-snapshot-3.outputs.complete != 'true'
+        continue-on-error: true
+        timeout-minutes: 4
+        env:
+          EVIDENCE_ROOT: ${{ steps.browser-evidence.outputs.root }}
+        run: node scripts/browser-ci-evidence.js snapshot "$EVIDENCE_ROOT" 4
+
+      - name: Upload browser evidence 4
+        id: browser-upload-4
+        if: always() && steps.browser-snapshot-4.outputs.path != ''
+        continue-on-error: true
+        timeout-minutes: 1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: browser-evidence-${{ github.run_id }}-${{ github.run_attempt }}-004
+          path: ${{ steps.browser-snapshot-4.outputs.path }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Capture browser evidence 5
+        id: browser-snapshot-5
+        if: always() && (steps.browser-evidence-start.outcome == 'success' || steps.browser-evidence-start.outcome == 'failure') && steps.browser-snapshot-1.outputs.complete != 'true' && steps.browser-snapshot-2.outputs.complete != 'true' && steps.browser-snapshot-3.outputs.complete != 'true' && steps.browser-snapshot-4.outputs.complete != 'true'
+        continue-on-error: true
+        timeout-minutes: 4
+        env:
+          EVIDENCE_ROOT: ${{ steps.browser-evidence.outputs.root }}
+        run: node scripts/browser-ci-evidence.js snapshot "$EVIDENCE_ROOT" 5
+
+      - name: Upload browser evidence 5
+        id: browser-upload-5
+        if: always() && steps.browser-snapshot-5.outputs.path != ''
+        continue-on-error: true
+        timeout-minutes: 1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: browser-evidence-${{ github.run_id }}-${{ github.run_attempt }}-005
+          path: ${{ steps.browser-snapshot-5.outputs.path }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Enforce browser verdict and evidence completion
+        if: always() && (steps.browser-evidence-start.outcome == 'success' || steps.browser-evidence-start.outcome == 'failure')
+        timeout-minutes: 1
+        env:
+          EVIDENCE_ROOT: ${{ steps.browser-evidence.outputs.root }}
+          CI_EVIDENCE_OUTCOMES: ${{ steps.browser-snapshot-1.outcome }},${{ steps.browser-upload-1.outcome }},${{ steps.browser-snapshot-2.outcome }},${{ steps.browser-upload-2.outcome }},${{ steps.browser-snapshot-3.outcome }},${{ steps.browser-upload-3.outcome }},${{ steps.browser-snapshot-4.outcome }},${{ steps.browser-upload-4.outcome }},${{ steps.browser-snapshot-5.outcome }},${{ steps.browser-upload-5.outcome }}
+        run: node scripts/browser-ci-evidence.js finish "$EVIDENCE_ROOT"
 
       - name: Preserve browser test failure diagnostics
         if: failure() && needs.impact.outputs.browser_files != '[]'
         continue-on-error: true
         timeout-minutes: 1
         env:
-          PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
+          PORTOS_CI_DIAGNOSTICS_DIR: ${{ steps.browser-evidence.outputs.root }}/diagnostics
         run: node scripts/ci-test-diagnostics.js
 
       - name: Report the failure, then cancel sibling CI jobs

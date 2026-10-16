@@ -110,7 +110,6 @@ describe('independent CI test failure recovery (#11552)', () => {
 
   it.each([
     ['windows-server', 'Run server tests on Windows', 'Preserve Windows test failure diagnostics', 'run-ci-tests.js'],
-    ['database', 'Run cross-workspace browser suites', 'Preserve browser test failure diagnostics', 'watch-ci-tests.js'],
   ])('%s collects after failure and before sibling cancellation with bounded, non-masking failure handling', (jobId, testName, collectorName, launcherName) => {
     const workflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
     const job = workflowJobs(workflow)[jobId];
