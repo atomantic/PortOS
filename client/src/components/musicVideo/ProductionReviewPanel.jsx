@@ -1,4 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
+import useMusicVideoProofReview from '../../hooks/useMusicVideoProofReview.js';
+import ProofReviewContent, { ProofRenderControls } from './ProofReviewContent.jsx';
 import ProductionReviewContext from './ProductionReviewContext.jsx';
 import OverlayTextCheck from './OverlayTextCheck.jsx';
 import { formatTimecode } from '../../utils/formatters.js';
@@ -8,7 +10,6 @@ const EMPTY = { cast: '', environments: '', visualLanguage: '', motionLanguage: 
   lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [] };
 const fieldClass = 'mt-1 w-full rounded border border-port-border bg-port-bg p-2 text-sm';
 const buttonClass = 'min-h-[44px] rounded border border-port-border px-3 py-2 text-sm disabled:opacity-50';
-const timeFieldClass = 'mt-1 block w-24 rounded border border-port-border bg-port-bg p-2 text-sm';
 const approveClass = 'min-h-[44px] rounded bg-port-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50';
 const labels = { art: 'Art direction', storyboard: 'Lyric-timed storyboard', proof: 'Animated proof' };
 // The proof is an optional check (the final render doesn't wait on it), so its heading says so.
@@ -17,7 +18,6 @@ const OPTIONAL = { proof: true };
 const STAGE_TABS = { art: 'cast-sets', storyboard: 'produce', proof: 'produce' };
 // Approving the storyboard locks every shot's still, so its box says so.
 const HEADINGS = { storyboard: { open: 'Lock all stills', approved: 'All stills locked' } };
-const EMPTY_PLAYBACK = { method: 'playback', timecodedNotes: '', visualReview: '', audioReview: '', limitations: '' };
 
 const FOLD_STYLE = { scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' };
 /**
@@ -48,7 +48,6 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
   const fieldId = key => `mv-review-${project.id}-${stage}-${key}`;
   const saved = project.productionReview?.draft || EMPTY;
   const [visibleArt, setVisibleArt] = useState(null);
-  const [proofMedia, setProofMedia] = useState(null);
   const artIdentity = JSON.stringify([project.id, saved.guideArtifactId, project.devArtifacts?.find(a => a.id === saved.guideArtifactId)?.version]);
   const [ownLocal, setOwnLocal] = useState(null);
   const [local, setLocal] = planning || [ownLocal, setOwnLocal];
@@ -58,9 +57,6 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
   const [resolutions, setResolutions] = useState({});
   const [importError, setImportError] = useState(null);
   const [savedRequestStage, setSavedRequestStage] = useState(null);
-  const [playbackReview, setPlaybackReview] = useState({ ...EMPTY_PLAYBACK, identity: null });
-  const [startSec, setStartSec] = useState(project.productionReview?.proof?.startSec || 0);
-  const [endSec, setEndSec] = useState(project.productionReview?.proof?.endSec || Math.min(20, project.audioAnalysis?.durationSec || 20));
   const ready = review.current === false ? null : review.readiness; // approvals never act on a stale revision
   const set = (key, value) => setLocal({ ...draft, [key]: value });
   const documentShots = draft.storyboardSource === 'document';
@@ -72,28 +68,8 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
   const shotKey = shot => shot.id || shot.sceneId;
   const setShot = (shot, key, value) => set('storyboard', shots.map(s => shotKey(s) === shotKey(shot) ? { ...s, [key]: value } : s));
   const blocked = dirty || review.busy || !ready;
-  const excerpt = project.excerpts?.find(e => e.id === project.productionReview?.proof?.excerptId);
-  const proofIdentity = JSON.stringify([project.id, ready?.basis.proof ?? project.productionReview?.proof?.basis ?? null, excerpt?.id, excerpt?.filename]);
-  const recordedProofReview = project.productionReview?.approvals?.proof?.proofReview;
-  const matchingRecordedReview = ready?.proof.approved && recordedProofReview?.excerptId === excerpt?.id
-    && recordedProofReview?.filename === excerpt?.filename ? recordedProofReview : null;
-  useEffect(() => { setPlaybackReview(current => current.identity === proofIdentity ? current
-    : { ...EMPTY_PLAYBACK, identity: proofIdentity }); }, [proofIdentity]);
-  const playback = playbackReview.identity === proofIdentity ? playbackReview : EMPTY_PLAYBACK;
-  const setPlayback = patch => setPlaybackReview({ ...playback, identity: proofIdentity, ...patch });
-  const playbackBlocked = proofMedia?.identity !== proofIdentity || !proofMedia?.ready || blocked || review.proof.active || !!ready?.proof.problems.length || excerpt?.status !== 'complete' || !excerpt.filename;
-  const machineReview = playback.method === 'machine';
-  const evidenceComplete = machineReview
-    ? playback.visualReview.trim().length >= 40 && playback.audioReview.trim().length >= 40 && !!playback.limitations.trim()
-    : true;
-  const approve = stage => {
-    return review.approve(stage, stage === 'proof' ? { watchedWithAudio: !machineReview,
-      ...(machineReview ? { method: 'machine', machineEvidence: {
-        visualReview: playback.visualReview.trim(), audioReview: playback.audioReview.trim(), limitations: playback.limitations.trim(),
-      } } : {}),
-      ...(playback.timecodedNotes.trim() ? { timecodedNotes: playback.timecodedNotes.trim() } : {}),
-      excerptId: excerpt.id, filename: excerpt.filename } : undefined);
-  };
+  const proof = useMusicVideoProofReview({ project, review, ready, blocked });
+  const approve = stage => review.approve(stage, stage === 'proof' ? proof.approvalPayload() : undefined);
 
   // Per-shot storyboard problems arrive one sentence per shot; the card counts them instead (the preview is the review).
   // Open change requests are named in one line (and settled from the step's Feedback row), never repeated as problems.
@@ -117,14 +93,10 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
     }
     if (requests.length) return changeRequestBlocker(requests);
     // With no current proof, the Render button already says what to do; repeating it as a warning reads as required.
-    if (stage === 'proof' && proofNeedsRender) return null;
+    if (stage === 'proof' && proof.needsRender) return null;
     if (problems.length) return problems.length > 1 ? `${problems[0]} (+${problems.length - 1} more below)` : problems[0];
     if (stage === 'art' && visibleArt !== artIdentity) return 'Open the visual guide below first.';
-    if (stage !== 'proof') return null;
-    if (review.proof.active) return 'Wait for the proof to finish rendering.';
-    if (playbackBlocked) return proofNeedsRender ? 'Render a 10–45 second chorus proof, then watch it with sound.' : 'Play the proof below with sound first.';
-    if (!evidenceComplete) return 'Complete the machine review notes (40+ characters each, plus limitations).';
-    return null;
+    return stage === 'proof' ? proof.approvalBlocker() : null;
   };
   // The Plan checklist's open rows, each with the shots it names, for the storyboard card to list.
   const planItems = () => stageChecklist('board', project, ready).filter(item => !item.done && item.id.startsWith('board-'))
@@ -135,7 +107,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
   // The problems listed under the help line: all of them, less the first when the help line is showing it
   // (it isn't while edits are unsaved or an action is running). A proof with nothing rendered lists none.
   const listedProblems = stage => {
-    if (!ready || ready[stage].approved || stage === 'storyboard' || (stage === 'proof' && proofNeedsRender)) return [];
+    if (!ready || ready[stage].approved || stage === 'storyboard' || (stage === 'proof' && proof.needsRender)) return [];
     const problems = shownProblems(stage);
     // The help line names a change request ahead of any problem, so then every problem is listed here.
     return dirty || review.busy || openRequests(stage).length ? problems : problems.slice(1);
@@ -150,73 +122,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
     if (target) { target.open = true; target.focus({ preventScroll: true }); }
   };
   const openRequests = stage => openChangeRequests(project, stage);
-  // Without a current proof the next thing to do is render one, so its controls lead the box.
-  const proofNeedsRender = !excerpt || ['error', 'canceled'].includes(excerpt.status)
-    || (project.productionReview?.proof?.basis && ready?.basis.proof && project.productionReview.proof.basis !== ready.basis.proof);
-  const renderControls = <div id="mv-review-render" tabIndex={-1} style={{ scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' }} className="flex flex-wrap items-end gap-2">
-    <label htmlFor={fieldId('proof-start')} className="text-sm">Chorus start (s)<input id={fieldId('proof-start')} type="number" min="0" step="0.01" value={startSec} onChange={e => setStartSec(Number(e.target.value))} className={timeFieldClass} /></label>
-    <label htmlFor={fieldId('proof-end')} className="text-sm">End (s)<input id={fieldId('proof-end')} type="number" min="0" step="0.01" value={endSec} onChange={e => setEndSec(Number(e.target.value))} className={timeFieldClass} /></label>
-    <button type="button" className={buttonClass} disabled={blocked || !ready?.storyboard.approved || review.proof.occupied || review.proof.active} onClick={() => review.renderProof({ startSec, endSec })}>{proofNeedsRender ? 'Render animated proof' : 'Render a new proof'}</button>
-  </div>;
-  const proofContent = <>
-    {!excerpt && <div className="space-y-1 text-sm" aria-label="Proof approval prerequisites">
-      {!ready?.art.approved && <p><a href="#mv-review-art" onClick={jump('cast-sets', 'mv-review-art')} className="text-port-accent underline">Approve the art direction</a> first.</p>}
-      {ready?.art.approved && !ready?.storyboard.approved && <p><a href="#mv-review-storyboard" onClick={jump('produce', 'mv-review-storyboard')} className="text-port-accent underline">Lock the stills</a> first.</p>}
-    </div>}
-    {excerpt && <p className="text-xs text-port-text-muted break-words">{excerpt.filename || excerpt.status} · {project.productionReview?.proof?.basis === ready?.basis.proof ? 'Current source revision' : 'Source changed — render a new proof'}</p>}
-    {excerpt?.status === 'error' && excerpt.error && <p role="alert" className="text-sm text-port-error break-words">{excerpt.error}</p>}
-
-      <details aria-label="Saved choreography for proof comparison" className="rounded border border-port-border bg-port-bg p-3">
-        <summary className="min-h-[44px] cursor-pointer text-sm font-medium">Saved energy target and timed choreography</summary>
-        <p className="mt-1 whitespace-pre-wrap text-sm">{saved.motionLanguage || 'Save an energy target and timed choreography in the planning editor before judging the proof.'}</p>
-        <p className="mt-2 text-xs text-port-text-muted">Compare playback with this saved plan. If the chosen energy or actions are missing, record revision feedback with a time range before approving.</p>
-      </details>
-      {!proofNeedsRender && renderControls}
-      {review.proof.occupied && !review.proof.active && <p role="status">Review evidence is rendering in another project. Wait for it to finish before starting another.</p>}
-      {review.proof.active && <p role="status">{review.proof.connected === false ? 'Connecting to review render…' : `Rendering review evidence — ${review.proof.percent ?? 0}%.`} Production approvals are separate.</p>}
-      {excerpt?.status === 'complete'  && excerpt.filename && <video key={proofIdentity} controls className="mt-2 w-full rounded" aria-label="Animated proof with master audio" src={`/data/videos/${encodeURIComponent(excerpt.filename)}`}
-        onLoadedData={() => setProofMedia({ identity: proofIdentity, ready: true })}
-        onError={() => setProofMedia({ identity: proofIdentity, ready: false, error: true })} />}
-      {excerpt?.status === 'complete' && (proofMedia?.identity !== proofIdentity || !proofMedia.ready) && <p role={proofMedia?.identity === proofIdentity && proofMedia.error ? 'alert' : 'status'} className="text-sm">
-        {proofMedia?.identity === proofIdentity && proofMedia.error ? 'This proof could not be played. Restore the exact file or render a new proof before approving.' : 'Load and play this exact proof with sound before recording your review.'}
-      </p>}
-      {matchingRecordedReview && <section aria-label="Recorded proof review" className="rounded border border-port-border p-3">
-        <h4 className="text-sm font-medium">Recorded proof review</h4>
-        <p className="text-xs text-port-text-muted">{matchingRecordedReview.method === 'machine' ? 'Machine review — no human playback claimed' : 'Playback review'}</p>
-        {matchingRecordedReview.machineEvidence && <dl className="text-sm space-y-2">
-          <dt>Visual review</dt><dd>{matchingRecordedReview.machineEvidence.visualReview}</dd>
-          <dt>Audio review</dt><dd>{matchingRecordedReview.machineEvidence.audioReview}</dd>
-          <dt>Review limitations</dt><dd>{matchingRecordedReview.machineEvidence.limitations}</dd>
-        </dl>}
-        {matchingRecordedReview.energyComparison && <p className="mt-1 whitespace-pre-wrap text-sm">{matchingRecordedReview.energyComparison}</p>}
-        {matchingRecordedReview.timecodedNotes && <p className="mt-2 whitespace-pre-wrap text-sm">{matchingRecordedReview.timecodedNotes}</p>}
-      </section>}
-      {/* The review notes belong to a proof; with none to watch they would only be disabled clutter. */}
-      {!proofNeedsRender && <>
-      <label htmlFor={fieldId('review-method')} className="block text-sm">Review method
-        <select id={fieldId('review-method')} disabled={playbackBlocked} value={playback.method}
-          onChange={e => setPlayback({ method: e.target.value })} className={fieldClass}>
-          <option value="playback">Playback with audio</option>
-          <option value="machine">Machine review with visual and audio evidence</option>
-        </select>
-      </label>
-      {machineReview && <fieldset className="space-y-3">
-        <legend className="text-sm font-medium">Machine review evidence</legend>
-        {[
-          ['visualReview', 'Visual and motion observations', 8000],
-          ['audioReview', 'Audio and alignment observations', 8000],
-          ['limitations', 'Review limitations', 4000],
-        ].map(([key, label, maxLength]) => <label key={key} htmlFor={fieldId(key)} className="block text-sm">{label}
-          <textarea id={fieldId(key)} rows={3} maxLength={maxLength} disabled={playbackBlocked} value={playback[key]}
-            onChange={e => setPlayback({ [key]: e.target.value })} className={fieldClass} />
-        </label>)}
-      </fieldset>}
-      <label htmlFor={fieldId('playback-notes')} className="block text-sm">Notes (optional)
-        <textarea id={fieldId('playback-notes')} rows={2} maxLength={4000} disabled={playbackBlocked} value={playback.timecodedNotes} onChange={e => setPlayback({ timecodedNotes: e.target.value })} className={fieldClass}
-          placeholder="0:04 — turn lands on the downbeat" />
-      </label>
-      </>}
-  </>;
+  const renderControls = <ProofRenderControls proof={proof} fieldId={fieldId} review={review} ready={ready} blocked={blocked} />;
   const key = stage;
   const label = labels[stage];
   // Art with no written direction or guide has nothing to approve: the box says
@@ -227,13 +133,13 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
     <ApprovalBox id={`mv-review-${key}`} stage={key} label={label} optional={!!OPTIONAL[key]} approved={!!ready?.[key].approved} waiting={artWaiting}>
         {artWaiting ? <p role="status" className="mt-1 text-sm text-port-text-muted">Opens once the art direction is written and a visual guide is chosen.</p> : <>
         {/* The decision comes first, at the top of the box, with one line on what it still needs. */}
-        {key === 'proof' && proofNeedsRender && !ready?.[key].approved && <div className="mt-2">{renderControls}</div>}
+        {key === 'proof' && proof.needsRender && !ready?.[key].approved && <div className="mt-2">{renderControls}</div>}
         <div className="mt-2 flex flex-wrap items-center gap-2">
-        {!ready?.[key].approved && !(key === 'proof' && proofNeedsRender) && <button type="button" className={approveClass} onClick={() => approve(key)}
+        {!ready?.[key].approved && !(key === 'proof' && proof.needsRender) && <button type="button" className={approveClass} onClick={() => approve(key)}
           aria-describedby={approvalHelp(key) ? fieldId(`${key}-approval-help`) : undefined}
-          disabled={blocked || (key === 'art' && visibleArt !== artIdentity) || ready?.[key].approved || !!ready?.[key].problems.length
-            || (key === 'proof' && (playbackBlocked || !evidenceComplete))}>
-          {key === 'proof' ? machineReview ? 'Approve proof with machine evidence' : 'Approve proof — watched with sound' : HEADINGS[key]?.open || `Approve ${label.toLowerCase()}`}
+          disabled={key === 'proof' ? proof.approvalDisabled
+            : blocked || (key === 'art' && visibleArt !== artIdentity) || ready?.[key].approved || !!ready?.[key].problems.length}>
+          {key === 'proof' ? proof.approvalLabel : HEADINGS[key]?.open || `Approve ${label.toLowerCase()}`}
         </button>}
         <button type="button" className={buttonClass} onClick={() => {
           setFeedback({ ...feedback, stage: key, decision: 'request-changes' });
@@ -256,7 +162,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
         {/* The overlay text pass (document compositions): advice too, shown before the shot list. */}
         {key === 'storyboard' && ready?.storyboard.text && <OverlayTextCheck report={ready.storyboard.text} busy={review.busy}
           onCheck={() => review.checkOverlayText()} onSeek={onSeek} />}
-        {key === 'proof' ? proofContent : <ProductionReviewContext stage={key} project={project} shots={shots} onOpenArtifact={onOpenArtifact} onArtReady={available => setVisibleArt(available ? artIdentity : null)} onSeek={onSeek} />}
+        {key === 'proof' ? <ProofReviewContent proof={proof} fieldId={fieldId} jump={jump} saved={saved} review={review} project={project} ready={ready} blocked={blocked} /> : <ProductionReviewContext stage={key} project={project} shots={shots} onOpenArtifact={onOpenArtifact} onArtReady={available => setVisibleArt(available ? artIdentity : null)} onSeek={onSeek} />}
         </>}
     </ApprovalBox>
     {dirty && <p role="status" className="text-sm">Save your planning edits before approving this revision.</p>}
