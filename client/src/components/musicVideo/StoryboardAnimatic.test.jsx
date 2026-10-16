@@ -220,10 +220,10 @@ describe('StoryboardAnimatic clips', () => {
     expect(clip.muted).toBe(true);
     // The still stays underneath, and the clip stays transparent until it has a frame.
     expect(container.querySelector('img').getAttribute('src')).toBe('/data/images/frame-a.png');
-    expect(clip.className).toContain('opacity-0');
+    expect(clip.parentElement.className).toContain('opacity-0');
     Object.defineProperty(clip, 'readyState', { value: 4, configurable: true });
     fireEvent.loadedData(clip);
-    expect(clip.className).toContain('opacity-100');
+    expect(clip.parentElement.className).toContain('opacity-100');
     const audio = screen.getByLabelText('Song for the storyboard animatic');
     Object.defineProperty(audio, 'currentTime', { value: 12, configurable: true });
     fireEvent.timeUpdate(audio);
@@ -249,13 +249,13 @@ describe('StoryboardAnimatic clips', () => {
     const toggle = await screen.findByTestId('beat-toggle-clip');
     await waitFor(() => expect(toggle.getAttribute('src')).toBe('/data/videos/clip-b.mov'));
     Object.defineProperty(toggle, 'readyState', { value: 4, configurable: true });
-    expect(toggle.style.opacity).toBe('0');
+    expect(toggle.parentElement.style.opacity).toBe('0');
     at(3.2);
-    expect(toggle.style.opacity).toBe('1');
+    expect(toggle.parentElement.style.opacity).toBe('1');
     // 0.8 s before the shot starts: 1.2 s of clip before its 1.5 s in-point.
     expect(toggle.currentTime).toBeCloseTo(0.3, 2);
     at(3.7);
-    expect(toggle.style.opacity).toBe('0');
+    expect(toggle.parentElement.style.opacity).toBe('0');
     // Past the cut the incoming shot's own clip starts where it would without the toggle.
     const clipB = screen.getByLabelText('Clip for Two');
     Object.defineProperty(clipB, 'readyState', { value: 4, configurable: true });
@@ -278,13 +278,13 @@ describe('StoryboardAnimatic clips', () => {
     const at = (t) => { Object.defineProperty(audio, 'currentTime', { value: t, configurable: true }); fireEvent.timeUpdate(audio); };
     at(2.9);
     const incoming = await screen.findByTestId('beat-toggle-clip');
-    expect(incoming.style.opacity).toBe('0');
+    expect(incoming.parentElement.style.opacity).toBe('0');
     at(3.5);
-    const half = Number(incoming.style.opacity);
+    const half = Number(incoming.parentElement.style.opacity);
     expect(half).toBeGreaterThan(0.4);
     expect(half).toBeLessThan(0.6);
     at(3.95);
-    expect(Number(incoming.style.opacity)).toBeGreaterThan(half);
+    expect(Number(incoming.parentElement.style.opacity)).toBeGreaterThan(half);
     at(7.4);
     const black = await screen.findByTestId('fade-black');
     expect(black.style.opacity).toBe('0');
@@ -313,12 +313,12 @@ describe('StoryboardAnimatic clips', () => {
     expect(screen.getByLabelText('Clip for Three').getAttribute('preload')).toBe('metadata');
     Object.defineProperty(next, 'readyState', { value: 4, configurable: true });
     fireEvent.seeked(next);
-    expect(next.className).toContain('opacity-0');
+    expect(next.parentElement.className).toContain('opacity-0');
     const audio = screen.getByLabelText('Song for the storyboard animatic');
     Object.defineProperty(audio, 'currentTime', { value: 1.2, configurable: true });
     fireEvent.timeUpdate(audio);
     expect(screen.getByLabelText('Clip for Two')).toBe(next);
-    expect(next.className).toContain('opacity-100');
+    expect(next.parentElement.className).toContain('opacity-100');
     expect(await screen.findByLabelText('Clip for Four')).toBeTruthy();
   });
 
