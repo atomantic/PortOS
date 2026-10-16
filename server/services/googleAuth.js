@@ -12,6 +12,7 @@ const SCOPES = [
   'https://www.googleapis.com/auth/calendar',
   'https://www.googleapis.com/auth/gmail.modify'
 ];
+export const GOOGLE_API_TIMEOUT_MS = 30_000;
 export const OAUTH_REDIRECT_URI = `http://${process.env.PUBLIC_HOST || 'localhost'}:${process.env.PORT || PORTS.API}/api/calendar/google/oauth/callback`;
 
 let oAuth2Client = null;

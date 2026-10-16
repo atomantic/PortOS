@@ -1,6 +1,6 @@
 import { calendar } from '@googleapis/calendar';
 import { ServerError } from '../lib/errorHandler.js';
-import { getAuthenticatedClient } from './googleAuth.js';
+import { getAuthenticatedClient, GOOGLE_API_TIMEOUT_MS } from './googleAuth.js';
 import { getAccount, updateSubcalendars, mergeDiscoveredSubcalendars } from './calendarAccounts.js';
 import { pushSyncEvents, getSyncDateRange } from './calendarGoogleSync.js';
 
@@ -30,7 +30,7 @@ async function runApiSyncAccount(accountId, io) {
   io?.emit('calendar:sync:started', { accountId, method: 'api' });
   console.log(`📅 Starting Google API sync for ${account.name} (${enabledCalendars.length} calendars)`);
 
-  const cal = calendar({ version: 'v3', auth });
+  const cal = calendar({ version: 'v3', auth, timeout: GOOGLE_API_TIMEOUT_MS });
   const { pastDate, futureDate } = getSyncDateRange();
 
   let totalNew = 0;
@@ -110,7 +110,7 @@ export async function apiDiscoverCalendars(accountId) {
   const auth = await getAuthenticatedClient();
   if (!auth) throw new ServerError('Google OAuth not configured', { status: 401 });
 
-  const cal = calendar({ version: 'v3', auth });
+  const cal = calendar({ version: 'v3', auth, timeout: GOOGLE_API_TIMEOUT_MS });
   const allCalendars = [];
   let pageToken;
 

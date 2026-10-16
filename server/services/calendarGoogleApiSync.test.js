@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // API response authoritative enough to clear a stale join link (#6289).
 vi.mock('@googleapis/calendar', () => ({ calendar: vi.fn() }));
 
-vi.mock('./googleAuth.js', () => ({ getAuthenticatedClient: vi.fn() }));
+vi.mock('./googleAuth.js', () => ({ getAuthenticatedClient: vi.fn(), GOOGLE_API_TIMEOUT_MS: 30_000 }));
 
 vi.mock('./calendarAccounts.js', () => ({
   getAccount: vi.fn(),
@@ -136,5 +136,65 @@ describe('apiSyncAccount conference-metadata projection (#6289)', () => {
 
     await expect(apiSyncAccount(ACCOUNT_ID, null)).rejects.toMatchObject({ status: 401 });
     expect(pushSyncEvents).not.toHaveBeenCalled();
+  });
+
+  it('aborts stalled SDK requests at the default deadline and releases the account lock', async () => {
+    const sdk = await vi.importActual('@googleapis/calendar');
+    vi.useFakeTimers();
+    // Node's native AbortSignal timer bypasses fake timers. Inject only its
+    // clock; the real SDK and transport still create and consume the deadline.
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation(ms => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException('Request timed out', 'TimeoutError')), ms);
+      return controller.signal;
+    });
+    const cleanup = new AbortController();
+    const started = Promise.withResolvers();
+    const attempts = [];
+    let healthy = false;
+    const auth = new sdk.auth.OAuth2({ transporterOptions: {
+      signal: cleanup.signal,
+      fetchImplementation: async (_url, { signal }) => {
+        if (healthy) return Response.json({ items: [] });
+        const attempt = { startedAt: Date.now(), signal, abortedAt: null };
+        attempts.push(attempt);
+        started.resolve();
+        return new Promise((_resolve, reject) => {
+          const abort = () => { attempt.abortedAt = Date.now(); reject(signal.reason); };
+          if (signal.aborted) abort();
+          else signal.addEventListener('abort', abort, { once: true });
+        });
+      },
+    } });
+    auth.setCredentials({ access_token: 'synthetic-token', expiry_date: Date.now() + 3_600_000 });
+    getAuthenticatedClient.mockResolvedValue(auth);
+    calendar.mockImplementation(sdk.calendar);
+    // Observe rejection immediately so advancing the clock cannot create an
+    // unhandled rejection before the assertions inspect the final SDK error.
+    const result = apiSyncAccount(ACCOUNT_ID, null).then(value => ({ value }), error => ({ error }));
+    try {
+      await started.promise;
+      await expect(apiSyncAccount(ACCOUNT_ID, null)).rejects.toMatchObject({ status: 409 });
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(attempts[0].signal.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(attempts[0].signal.aborted).toBe(true);
+      // Keep the SDK's normal retry policy: each attempted request owns a
+      // fresh deadline, rather than treating 30s as a whole-sync timeout.
+      await vi.runAllTimersAsync();
+      expect(await result).toMatchObject({ error: { code: 'TimeoutError' } });
+      expect(attempts.every(attempt => attempt.abortedAt - attempt.startedAt === 30_000)).toBe(true);
+      expect(pushSyncEvents).not.toHaveBeenCalled();
+      healthy = true;
+      await expect(apiSyncAccount(ACCOUNT_ID, null)).resolves.toMatchObject({ status: 'success' });
+      expect(pushSyncEvents).toHaveBeenCalledOnce();
+    } finally {
+      cleanup.abort();
+      await vi.runAllTimersAsync();
+      await result;
+      timeout.mockRestore();
+      vi.useRealTimers();
+      calendar.mockReset();
+    }
   });
 });

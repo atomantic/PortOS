@@ -47,6 +47,7 @@ vi.mock('@googleapis/calendar', () => ({
 
 vi.mock('./googleAuth.js', () => ({
   getAuthenticatedClient: vi.fn(async () => ({})),
+  GOOGLE_API_TIMEOUT_MS: 30_000,
   needsScopeUpgrade: vi.fn(() => false),
   getTokens: vi.fn(async () => ({ access_token: 'fake' })),
 }));
