@@ -277,6 +277,11 @@ const sanitizeDraftGate = (raw) => {
 
 const sanitizeTextStage = (raw) => ({
   ...sanitizeStage(raw),
+  // Execution ownership survives federation; missing legacy metadata stays unknown.
+  generation: isStr(raw?.generation?.id) && raw.generation.id.length <= 64
+    && isStr(raw.generation.instanceId) && raw.generation.instanceId.length <= 64
+    && raw.generation.id && raw.generation.instanceId
+    ? { id: raw.generation.id, instanceId: raw.generation.instanceId } : null,
   canonExtraction: sanitizeCanonExtraction(raw?.canonExtraction),
   descGaps: sanitizeDescGaps(raw?.descGaps),
   draftGate: sanitizeDraftGate(raw?.draftGate),

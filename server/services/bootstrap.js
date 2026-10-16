@@ -126,6 +126,7 @@ import { registerPostReminderSchedule } from './meatspacePostReminder.js';
 import { registerAutobiographyReminderSchedule } from './autobiographyReminder.js';
 import { recoverInterruptedRepoClones, recoverStuckClassifications } from './brain.js';
 import { recoverStuckAnalyses } from './writersRoom/evaluator.js';
+import { recoverStuckGeneratingStages } from './pipeline/textStages.js';
 import { recoverStuckAutoRuns } from './pipeline/autoRunner.js';
 import { recoverStuckAutopilots } from './pipeline/seriesAutopilot.js';
 import { recoverInFlightProjects } from './creativeDirector/recovery.js';
@@ -463,6 +464,7 @@ const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
   // after the log's currentSeq is loaded, or they'd write low/duplicate sequence
   // numbers and corrupt peer cursors.
   recoverStuckAnalyses().catch(err => logBootstrapFailure('❌ Writers Room recovery failed', err));
+  recoverStuckGeneratingStages().catch(err => logBootstrapFailure('❌ Pipeline text-stage recovery failed', err));
   recoverStuckAutoRuns().catch(err => logBootstrapFailure('❌ Pipeline auto-run recovery failed', err));
   recoverStuckAutopilots().catch(err => logBootstrapFailure('❌ Pipeline autopilot recovery failed', err));
   recoverStuckMusicVideoRenders().catch(err => logBootstrapFailure('❌ Music Video recovery failed', err));

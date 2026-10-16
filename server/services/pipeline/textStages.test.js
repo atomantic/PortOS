@@ -18,6 +18,7 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   ensureDir: vi.fn().mockResolvedValue(undefined),
   atomicWrite: vi.fn(async (path, data) => { fileStore.set(path, data); }),
   readJSONFile: vi.fn(async (path, fallback) => (fileStore.has(path) ? fileStore.get(path) : fallback)),
+  readJSONFileStrict: vi.fn(async (path, fallback) => ({ ok: true, value: fileStore.has(path) ? fileStore.get(path) : fallback })),
 }));
 
 let uuidCounter = 0;
@@ -26,6 +27,7 @@ vi.mock('crypto', async () => {
   return { ...actual, randomUUID: () => `uuid-${++uuidCounter}` };
 });
 
+vi.mock('../instanceIdentity.js', () => ({ getInstanceId: vi.fn(async () => 'test-instance'), UNKNOWN_INSTANCE_ID: 'unknown' }));
 vi.mock('../instances.js', () => mockNoPeers());
 vi.mock('../sharing/peerSync.js', () => mockNoPeerSync());
 
@@ -191,6 +193,54 @@ describe('pipeline text stage generator', () => {
     const after = await issuesSvc.getIssue(issue.id);
     expect(after.stages.idea.status).toBe('error');
     expect(after.stages.idea.errorMessage).toContain('simulated provider 500');
+  });
+
+  it('recovers context failures after the generating write and preserves the prior draft', async () => {
+    const { issue } = await seed();
+    await issuesSvc.updateStage(issue.id, 'idea', { output: 'Prior draft', lastRunId: 'prior-run' });
+    const error = new Error('Context could not be built');
+    const options = { get seedInput() { throw error; } };
+    await expect(textStages.generateStage(issue.id, 'idea', options)).rejects.toBe(error);
+    expect((await issuesSvc.getIssue(issue.id)).stages.idea).toMatchObject({
+      status: 'error', errorMessage: error.message, output: 'Prior draft', lastRunId: 'prior-run', runHistory: [],
+    });
+  });
+
+  it('rethrows the original context error when persisting recovery also fails', async () => {
+    const { issue } = await seed();
+    const { atomicWrite } = await import('../../lib/fileUtils.js');
+    const error = new Error('Original context failure');
+    const options = { get seedInput() {
+      atomicWrite.mockRejectedValueOnce(new Error('Recovery storage failure'));
+      throw error;
+    } };
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await expect(textStages.generateStage(issue.id, 'idea', options)).rejects.toBe(error);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('Recovery storage failure'));
+    log.mockRestore();
+  });
+
+  it('recovers only abandoned local generations, preserving foreign and legacy work across sync', async () => {
+    const { series, issue } = await seed();
+    const foreign = await issuesSvc.createIssue({ seriesId: series.id, title: 'Peer work' });
+    const legacy = await issuesSvc.createIssue({ seriesId: series.id, title: 'Unknown work' });
+    await issuesSvc.updateStage(issue.id, 'idea', {
+      status: 'generating', output: 'Prior draft', generation: { id: 'interrupted', instanceId: 'test-instance' },
+    });
+    await issuesSvc.mergeIssuesFromSync([{ ...foreign, updatedAt: '2099-01-01T00:00:00.000Z',
+      stages: { ...foreign.stages, prose: { status: 'generating', generation: { id: 'peer-run', instanceId: 'peer-instance' } } },
+    }], { senderSchemaVersions: { pipelineIssues: 4 } });
+    await issuesSvc.updateStage(legacy.id, 'prose', { status: 'generating' });
+    expect(await textStages.recoverStuckGeneratingStages()).toBe(1);
+    expect((await issuesSvc.getIssue(issue.id)).stages.idea).toMatchObject({
+      status: 'error', output: 'Prior draft', errorMessage: 'Interrupted by a server restart — generate again.',
+    });
+    expect((await issuesSvc.getIssue(foreign.id)).stages.prose).toMatchObject({
+      status: 'generating', generation: { id: 'peer-run', instanceId: 'peer-instance' },
+    });
+    expect((await issuesSvc.getIssue(legacy.id)).stages.prose.status).toBe('generating');
+    expect(await textStages.recoverStuckGeneratingStages()).toBe(0);
+    expect((await textStages.generateStage(issue.id, 'idea')).stage.status).toBe('ready');
   });
 
   it('rejects unsupported stage ids', async () => {
@@ -1337,6 +1387,7 @@ describe('text-stage generation progress frames (#3393)', () => {
     await firstAtProvider;
     const second = textStages.generateStage(issue.id, 'prose', {});
     await secondAtProvider;
+    expect(await textStages.recoverStuckGeneratingStages()).toBe(0);
     finishSecond();
     await second;
     expect(framesOf(res).some((frame) => frame.type === 'complete')).toBe(false);
@@ -1345,7 +1396,42 @@ describe('text-stage generation progress frames (#3393)', () => {
 
     finishFirst();
     await first;
+    expect((await issuesSvc.getIssue(issue.id)).stages.prose.output).toBe('Second draft');
     expect(framesOf(res).filter((frame) => frame.type === 'complete')).toHaveLength(1);
+  });
+
+  it('a late provider failure cannot demote a newer live generation', async () => {
+    const { issue } = await seedProse();
+    let startedFirst;
+    let startedSecond;
+    let failFirst;
+    let finishSecond;
+    const firstAtProvider = new Promise((resolve) => { startedFirst = resolve; });
+    const secondAtProvider = new Promise((resolve) => { startedSecond = resolve; });
+    const firstCanFail = new Promise((resolve) => { failFirst = resolve; });
+    const secondCanFinish = new Promise((resolve) => { finishSecond = resolve; });
+    runnerSvc.executeApiRun.mockImplementationOnce(async ({ onComplete }) => {
+      startedFirst();
+      await firstCanFail;
+      onComplete({ success: false, error: 'Old run failed' });
+    }).mockImplementationOnce(async ({ onData, onComplete }) => {
+      startedSecond();
+      await secondCanFinish;
+      onData('New draft');
+      onComplete({ success: true });
+    });
+    const first = textStages.generateStage(issue.id, 'prose');
+    const firstFailed = expect(first).rejects.toThrow('Old run failed');
+    await firstAtProvider;
+    const second = textStages.generateStage(issue.id, 'prose');
+    await secondAtProvider;
+    failFirst();
+    await firstFailed;
+    expect((await issuesSvc.getIssue(issue.id)).stages.prose.status).toBe('generating');
+    expect(await textStages.recoverStuckGeneratingStages()).toBe(0);
+    finishSecond();
+    await second;
+    expect((await issuesSvc.getIssue(issue.id)).stages.prose).toMatchObject({ status: 'ready', output: 'New draft' });
   });
 
   it('streams start → context → generate → complete on the single-shot path', async () => {

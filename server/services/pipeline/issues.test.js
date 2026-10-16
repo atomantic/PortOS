@@ -1024,6 +1024,27 @@ describe('pipeline issues service', () => {
         });
       });
 
+      it.each([null, { pipelineIssues: 3 }])('retains generation ownership only for unchanged stage revisions from legacy schema %j', async (senderSchemaVersions) => {
+        const created = await svc.createIssue({ seriesId: 'ser-1', title: 'Local work' });
+        const generation = { id: 'generation-one', instanceId: 'local-instance' };
+        const { issue: local } = await svc.updateStage(created.id, 'prose', { status: 'generating', generation });
+        const { generation: omitted, ...legacyStage } = local.stages.prose;
+        expect(omitted).toEqual(generation);
+        await svc.mergeIssuesFromSync([{ ...local, title: 'Peer title edit', updatedAt: '2099-01-01T00:00:00.000Z',
+          stages: { ...local.stages, prose: legacyStage },
+        }], { senderSchemaVersions });
+        const retained = await svc.getIssue(local.id);
+        expect(retained.title).toBe('Peer title edit');
+        expect(retained.stages.prose.generation).toEqual(generation);
+
+        // The peer starts different work without an owner-aware schema. Keeping
+        // the previous marker here would falsely authorize local boot recovery.
+        await svc.mergeIssuesFromSync([{ ...retained, updatedAt: '2099-01-02T00:00:00.000Z',
+          stages: { ...retained.stages, prose: { ...legacyStage, updatedAt: '2099-01-02T00:00:00.000Z' } },
+        }], { senderSchemaVersions });
+        expect((await svc.getIssue(local.id)).stages.prose).toMatchObject({ status: 'generating', generation: null });
+      });
+
       it('allows a v3 sender to intentionally replace climax', async () => {
         const local = await svc.createIssue({ seriesId: 'ser-1', title: 'Decisive Choice' });
         const withClimax = await svc.updateIssue(local.id, { arcRole: 'climax' });

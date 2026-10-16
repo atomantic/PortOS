@@ -13,7 +13,7 @@ import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord,
   flushBaseHashes, deleteSyncBaseHash, withBaseHashFlushBatch,
 } from '../../lib/conflictJournal.js';
-import { store, readState, saveIssuesNow, renumberInline, sanitizeIssue } from './issuesShared.js';
+import { store, readState, saveIssuesNow, renumberInline, sanitizeIssue, TEXT_STAGE_IDS } from './issuesShared.js';
 import { isStr } from '../../lib/textUtils.js';
 
 /**
@@ -104,6 +104,20 @@ export async function mergeIssuesFromSync(remoteIssues, {
           // newer fields while preserving the local v3-only role.
           if (senderCannotRepresentClimax && local.arcRole === 'climax' && sanitized.arcRole !== 'climax') {
             sanitized = { ...sanitized, arcRole: 'climax' };
+          }
+          // Legacy peers may edit the issue while round-tripping an unchanged
+          // stage through a sanitizer that drops generation ownership. Retain
+          // the marker only for the exact same stage revision. An actual stage
+          // edit has unknown execution ownership, never the old local owner's.
+          if (senderSchemaVersions === null || (Number(senderSchemaVersions.pipelineIssues) || 0) < 4) {
+            for (const stageId of TEXT_STAGE_IDS) {
+              const prior = local.stages[stageId];
+              const incoming = sanitized.stages[stageId];
+              if (prior.generation && !incoming.generation
+                && JSON.stringify({ ...prior, generation: null }) === JSON.stringify({ ...incoming, generation: null })) {
+                sanitized.stages[stageId] = { ...incoming, generation: prior.generation };
+              }
+            }
           }
           // Non-blocking conflict journal — archive the losing local issue on
           // a true 3-way divergence; always advances the base hash. Never

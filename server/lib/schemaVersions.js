@@ -95,7 +95,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // ahead-version transfer; when its older snapshot is later received by a v3
   // peer, the merge preserves an existing climax role instead of letting the
   // older sanitizer's omission LWW-strip or overwrite it.
-  pipelineIssues: 3,
+  // v4 = text-stage generation identity for owner-scoped restart recovery.
+  // Older sanitizers strip it; gate transfers to keep execution ownership intact.
+  pipelineIssues: 4,
   // v2 = `series.arc.readerMap` added (Unified Story Builder). Additive +
   // gracefully-degrading, but version-gated so a not-yet-upgraded peer can't
   // round-trip a series through its readerMap-unaware sanitizer and LWW-strip
