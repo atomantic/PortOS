@@ -201,6 +201,19 @@ function lineWindow(words, role, { beats = [], nextOnset = null, fps = 24, endSe
   return { startSec: onset, exitSec, endSec: exitSec + fade };
 }
 
+// The lyric zones a title card in each spot (TITLE_CARD_POSITIONS) would collide with, and where a
+// line steps to instead: the same side across the frame, else the first clear corner.
+const TITLE_CARD_ZONES = Object.freeze({
+  'lower-left': ['lower-left', 'lower'], 'lower-right': ['lower-right', 'lower'],
+  'upper-left': ['upper-left', 'upper'], 'upper-right': ['upper-right', 'upper'],
+  'lower-center': ['lower', 'lower-left', 'lower-right'], center: ['center'],
+});
+const ZONE_FLIP = Object.freeze({
+  'lower-left': 'upper-left', 'lower-right': 'upper-right', lower: 'upper',
+  'upper-left': 'lower-left', 'upper-right': 'lower-right', upper: 'lower', center: 'lower',
+});
+const ZONE_FALLBACKS = Object.freeze(['upper-right', 'upper-left', 'lower-right', 'lower-left']);
+
 /** The pixel box a text zone allows on a width × height frame (null for `none`). */
 function zoneRect(zone, width, height) {
   const unit = Math.min(width, height) / 1080;
@@ -328,8 +341,21 @@ export function createLyricType(mv = globalThis.PORTOS_MV, options = {}) {
       if (slammed.has(key)) line.role = 'line'; else slammed.add(key);
     }
   }
+  // While the title card shows, a line placed by default steps off the card's corner; a zone the
+  // line or its shot names stays where it was put.
+  const card = mv?.titleCard;
+  const cardWindows = (Array.isArray(card?.windows) ? card.windows : []).filter((w) => finite(w?.startSec) && finite(w?.endSec));
+  const cardZones = TITLE_CARD_ZONES[card?.position] || [];
+  const clearOfCard = (zone, line) => {
+    if (!cardZones.includes(zone)) return zone;
+    const from = line.words[0].startSec;
+    const until = Math.max(finite(line.endSec) ? line.endSec : 0, line.words[line.words.length - 1].endSec ?? from) + T.lastWordHoldSec + T.lineExitDelaySec;
+    if (!cardWindows.some((w) => from < w.endSec && until > w.startSec)) return zone;
+    return [ZONE_FLIP[zone], ...ZONE_FALLBACKS].find((other) => other && !cardZones.includes(other)) || zone;
+  };
   const zoned = timed.map(({ zoneOf, explicit, ...line }) => {
-    const zone = zoneOf || line.shot?.textZone || (line.role === 'hook' ? 'lower' : options.defaultZone || 'lower-left');
+    const named = zoneOf || line.shot?.textZone;
+    const zone = named || clearOfCard(line.role === 'hook' ? 'lower' : options.defaultZone || 'lower-left', line);
     return { ...line, zone: TEXT_ZONES.includes(zone) ? zone : 'lower-left' };
   });
 

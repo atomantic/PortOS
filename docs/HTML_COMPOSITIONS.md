@@ -395,7 +395,9 @@ same card again in its own window (`outroStartSec`–`outroEndSec`, song time);
 turning it on times that window from the song's length (`titleCardOutroWindow`:
 as long as the opening one, ending a second before the song does). The runtime's
 fade covers both windows, and a composed cut gets one capture cue per window
-(`titleCardWindows`).
+(`titleCardWindows`). While the card shows, a lyric line in a default zone that
+would collide with the card's corner steps across the frame (a lower-left card
+sends it to the upper left); a Text zone set on the line's shot stays as set.
 
 The card is not part of the composition document. `titleCardRuntimeSource()`
 is a page script installed beside it, in the live preview's head (live edits
@@ -441,8 +443,8 @@ snapshot freezes (`server/services/musicVideo/documentRender.js`):
   downbeats, sections, words }, lyrics, lyricMarkers, scenes: [{ sceneId,
   label, startSec, endSec, shotMode, visualLayer, stillMove, cardText,
   cardColor, textZone, lyricRole, lyricSize, lyricText, direction, media: { kind, src, inSec, outSec, fps,
-  width, height } | null }], textCues, composition: { mode, style, posterSec,
-  overlay } }`. Load it with `<script src="portos-mv.js">`; the sandbox
+  width, height } | null }], titleCard: { position, windows: [{ startSec, endSec }] }
+  | null, textCues, composition: { mode, style, posterSec, overlay } }`. Load it with `<script src="portos-mv.js">`; the sandbox
   refuses `fetch`.
   A shot's `speedFps`/`offsetFrames` are baked into the staged clip, so a render
   seeks `media.inSec + (t - startSec)`. The live preview bridges the original
