@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pause, Play } from 'lucide-react';
-import { normalizeTitleCard } from '../../../../server/lib/musicVideoTitleCard.js';
+import { normalizeTitleCard, titleCardVisible, titleCardWindows } from '../../../../server/lib/musicVideoTitleCard.js';
 import useMounted from '../../hooks/useMounted.js';
 import useGeneratedPreview from '../../hooks/useGeneratedPreview.js';
 import ShotStepper, { shotSteps } from './ShotStepper.jsx';
@@ -16,8 +16,7 @@ export const playthroughVersion = (project) => JSON.stringify([
   (project.lyricMarkers || []).map((m) => [m.type, m.label, m.line]),
   (project.scenes || []).map((s) => [s.startSec, s.endSec, s.textZone, s.lyricRole, s.lyricSize]),
   // The lyrics step off the title card's corner while it shows.
-  project.titleCard ? [project.titleCard.enabled, project.titleCard.position, project.titleCard.startSec, project.titleCard.endSec,
-    project.titleCard.outro, project.titleCard.outroStartSec, project.titleCard.outroEndSec] : null,
+  titleCardVisible(project.titleCard) ? [project.titleCard.position, titleCardWindows(project.titleCard)] : null,
 ]);
 
 /** The lyric line sung at song time `t`, from the project's timed cues. */

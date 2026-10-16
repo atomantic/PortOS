@@ -45,7 +45,7 @@ vi.mock('../../services/socket', () => ({ default: socket }));
 const uploadGalleryImage = vi.hoisted(() => vi.fn(async () => ({ filename: 'upload-1234abcd.png' })));
 vi.mock('../../services/apiSystem.js', () => ({ uploadGalleryImage }));
 
-import CompositionPreviewPlayer from './CompositionPreviewPlayer.jsx';
+import CompositionPreviewPlayer, { playthroughVersion } from './CompositionPreviewPlayer.jsx';
 
 const DOCUMENT = { directory: 'music-video/mv-1/composition/doc-a', entry: 'index.html' };
 const project = {
@@ -69,6 +69,16 @@ beforeEach(() => {
   socket.emit.mockImplementation(socket.reply);
   socket.__handlers.clear();
   socket.connected = true;
+});
+
+describe('playthroughVersion', () => {
+  // Uniquely catches the lyric overlay keeping a stale layout when the title card starts or stops showing.
+  it('rebuilds the lyric page when the title card gains or loses its text', () => {
+    const card = { enabled: true, title: '', artist: '', year: '', extra: '', position: 'lower-left', startSec: 2, endSec: 8, outro: false };
+    const blank = playthroughVersion({ titleCard: card });
+    expect(playthroughVersion({ titleCard: { ...card, title: 'Example Song' } })).not.toBe(blank);
+    expect(playthroughVersion({ titleCard: null })).toBe(blank);
+  });
 });
 
 describe('CompositionPreviewPlayer', () => {
