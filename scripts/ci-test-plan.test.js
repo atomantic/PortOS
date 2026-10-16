@@ -1166,6 +1166,18 @@ describe('CI test impact planner', () => {
     expect(winHelper.windows).toBe(true);
   });
 
+  it.each(['js', 'test.js'])('runs owned-browser Windows contracts when its %s file changes', extension => {
+    const source = 'server/services/htmlComposition/ownedBrowser.js';
+    const test = 'server/services/htmlComposition/ownedBrowser.test.js';
+    const plan = buildCiTestPlan([`server/services/htmlComposition/ownedBrowser.${extension}`], {
+      trackedFiles: [...TRACKED, source, test],
+    });
+    expect(plan.windows).toBe(true);
+    expect(plan.windowsFiles).toContain(test);
+    expect(plan.windowsMode).toBe(extension === 'js' ? 'related' : 'files');
+    expect(plan.windowsSources).toEqual(extension === 'js' ? [source] : []);
+  });
+
   it('keeps the complete Windows suite for an explicit full-CI request', () => {
     const plan = buildCiTestPlan(['server/lib/bufferedSpawn.js'], {
       trackedFiles: TRACKED,
@@ -1408,6 +1420,7 @@ describe('Windows escalation on a full plan (#7440)', () => {
       'server/cos-runner/index.js',
       'server/services/shell.js',
       'server/services/agentTuiSpawning.js',
+      'server/services/htmlComposition/ownedBrowser.js',
       'server/services/autonomousJobs/execution.shellSpawn.js',
       'server/services/voice/fineTuning.js',
       'server/services/imageGen/codex.js',

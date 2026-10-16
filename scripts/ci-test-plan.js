@@ -163,6 +163,7 @@ export const WINDOWS_RISK_RULES = [
   /^server\/cos-runner\//,
   /^server\/services\/(?:shell|pm2|appBuilder)\b/,
   /^server\/services\/agentTuiSpawning(?:\.test)?\.js$/,
+  /^server\/services\/htmlComposition\/ownedBrowser(?:\.test)?\.js$/,
   /^server\/services\/autonomousJobs\/execution\.shellSpawn/,
   // The voice fine-tuning service spawns a real Python trainer and settles the
   // job from its `close`/`error` events, so its assertions are the child-process
@@ -182,6 +183,7 @@ export const WINDOWS_RISK_RULES = [
 // spawn, shell, PowerShell, PTY, and path regressions without rerunning every
 // platform-independent server assertion. Full CI still runs the entire suite.
 export const WINDOWS_CONTRACT_TESTS = [
+  'server/services/htmlComposition/ownedBrowser.test.js',
   'scripts/ps1-bom.test.js',
   'server/cos-runner/allowedCommands.parity.test.js',
   'server/cos-runner/allowedCommands.test.js',

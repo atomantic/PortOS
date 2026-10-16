@@ -253,27 +253,32 @@ describe('owned composition capture browser lifecycle', () => {
   });
 
   it('launches the jailed pipe browser without a DevTools port or inherited tokens', async () => {
-    vi.stubEnv('MAC_CHROMIUM_TMPDIR', '/synthetic/test-temp');
-    answerHandshake();
-    const owner = await launchCompositionBrowser({
-      isolation: 'required',
-      support: { platform: 'linux', seatbeltAvailable: false, bubblewrapAvailable: true },
-    });
-    expect(owner.mechanism).toBe('linux-bubblewrap');
-    const [executable, args, options] = launch.spawn.mock.calls[0];
-    expect(executable).toBe('/usr/bin/bwrap');
-    expect(args).toContain('--unshare-net');
-    expect(args).toContain('--remote-debugging-pipe');
-    expect(args).toContain('--no-sandbox');
-    expect(args.some((arg) => String(arg).includes('127.0.0.1:9'))).toBe(true);
-    expect(args.join('\n')).not.toContain('proxy-bypass');
-    expect(args).not.toContain('--remote-debugging-port=0');
-    expect(options.env.USER).toBe('portos-preview');
-    expect(options.env.MAC_CHROMIUM_TMPDIR).toBe('/synthetic/test-temp');
-    expect(options.env.PORTOS_API_TOKEN).toBeUndefined();
-    expect(options.detached).toBe(true);
-    await owner.close();
-    expect(process.kill).toHaveBeenCalledWith(-child.pid, 'SIGTERM');
+    const restorePlatform = pinPlatform('linux');
+    try {
+      vi.stubEnv('MAC_CHROMIUM_TMPDIR', '/synthetic/test-temp');
+      answerHandshake();
+      const owner = await launchCompositionBrowser({
+        isolation: 'required',
+        support: { platform: 'linux', seatbeltAvailable: false, bubblewrapAvailable: true },
+      });
+      expect(owner.mechanism).toBe('linux-bubblewrap');
+      const [executable, args, options] = launch.spawn.mock.calls[0];
+      expect(executable).toBe('/usr/bin/bwrap');
+      expect(args).toContain('--unshare-net');
+      expect(args).toContain('--remote-debugging-pipe');
+      expect(args).toContain('--no-sandbox');
+      expect(args.some((arg) => String(arg).includes('127.0.0.1:9'))).toBe(true);
+      expect(args.join('\n')).not.toContain('proxy-bypass');
+      expect(args).not.toContain('--remote-debugging-port=0');
+      expect(options.env.USER).toBe('portos-preview');
+      expect(options.env.MAC_CHROMIUM_TMPDIR).toBe('/synthetic/test-temp');
+      expect(options.env.PORTOS_API_TOKEN).toBeUndefined();
+      expect(options.detached).toBe(true);
+      await owner.close();
+      expect(process.kill).toHaveBeenCalledWith(-child.pid, 'SIGTERM');
+    } finally {
+      restorePlatform();
+    }
   });
 
   it('keeps the egress negative control on the pipe without a jail or network flags', async () => {
