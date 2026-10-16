@@ -8,6 +8,9 @@
  */
 
 import { join } from 'path';
+import { stat, access } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { compactSource } from '../mediaAssetIndex/logic.js';
 import { PATHS, readJSONFile, atomicWrite } from '../../lib/fileUtils.js';
 
 const HISTORY_FILE = join(PATHS.data, 'video-history.json');
@@ -18,7 +21,57 @@ const HISTORY_FILE = join(PATHS.data, 'video-history.json');
 // render history. The Media History page also counts this list ("Show more (N
 // remaining)"), where a fake 0 reads as fact. Absent stays a real first-run empty.
 export const loadHistory = () => readJSONFile(HISTORY_FILE, [], { strict: true });
-export const saveHistory = (h) => atomicWrite(HISTORY_FILE, h);
+let compactSnapshot;
+let compactRead;
+let revisionEpoch = 0;
+export async function saveHistory(h) {
+  await atomicWrite(HISTORY_FILE, h);
+  revisionEpoch++;
+  compactSnapshot = undefined;
+}
+
+async function historyRevision() {
+  try {
+    const info = await stat(HISTORY_FILE, { bigint: true });
+    await access(HISTORY_FILE, constants.R_OK);
+    return [info.dev, info.ino, info.size, info.mtimeNs, info.ctimeNs].join(':');
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+function freezeRecord(value) {
+  if (value && typeof value === 'object') {
+    for (const child of Object.values(value)) freezeRecord(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+/** Fresh, immutable card/filter data; search and detail still use loadHistory. */
+export function loadCompactHistory() {
+  if (compactRead) return compactRead;
+  compactRead = (async () => {
+    // One builder owns admission. A save during its read invalidates the epoch;
+    // external writers/replacements are detected on both sides of the read.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const epoch = revisionEpoch;
+      const before = await historyRevision();
+      if (before !== null && compactSnapshot?.revision === before && epoch === revisionEpoch) {
+        return compactSnapshot.rows;
+      }
+      const history = await loadHistory();
+      const after = await historyRevision();
+      if (epoch !== revisionEpoch || before !== after) continue;
+      const rows = freezeRecord(history.map(compactSource));
+      compactSnapshot = after === null ? undefined : { revision: after, rows };
+      return rows;
+    }
+    throw new Error('Video history changed repeatedly while reading its compact snapshot');
+  })().finally(() => { compactRead = undefined; });
+  return compactRead;
+}
 
 // Resolve ONE entry by its history id, or `null` when no entry carries it (#4165).
 // A history id is NOT the filename stem — `videoGen/local.js` names a clip

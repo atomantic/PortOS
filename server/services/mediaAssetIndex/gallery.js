@@ -40,7 +40,9 @@ export async function listGalleryPage({
   kind = 'image', media = false, cover = false, videoSnapshot, collectionSnapshot, collectionId, universeId, entryCategory, entryKind, mediaKeys,
 } = {}, diskReader) {
   const mixed = media || kind !== 'image';
-  const videos = mixed ? videoSnapshot ?? await (await import('../videoGen/history.js')).loadHistory() : undefined;
+  const videoReader = mixed && videoSnapshot == null ? await import('../videoGen/history.js') : null;
+  const videos = mixed ? videoSnapshot ?? await (compact && !q.trim()
+    ? videoReader.loadCompactHistory() : videoReader.loadHistory()) : undefined;
   const scope = await resolveScope({ collectionId, starred, mediaKeys, collectionSnapshot });
   const filters = { kind: kind === 'all' ? undefined : kind, q, hidden, filename,
     universeId, entryCategory, entryKind, mediaKeys: scope.mediaKeys, excludeKeys: scope.excludeKeys, videos };

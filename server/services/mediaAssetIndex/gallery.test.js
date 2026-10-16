@@ -4,7 +4,7 @@ import { imageToRow } from './logic.js';
 import { query } from '../../lib/db.js';
 
 const { listAnnotations, loadHistory, listCollections, getCollection } = vi.hoisted(() => ({ listAnnotations: vi.fn(), loadHistory: vi.fn(), listCollections: vi.fn(), getCollection: vi.fn() }));
-vi.mock('../videoGen/history.js', () => ({ loadHistory }));
+vi.mock('../videoGen/history.js', () => ({ loadHistory, loadCompactHistory: loadHistory }));
 vi.mock('../mediaCollections.js', () => ({ listCollections, getCollection }));
 vi.mock('../mediaAnnotations.js', () => ({ listAnnotations }));
 
