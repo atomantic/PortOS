@@ -2,6 +2,8 @@ import { messageLogError } from '../lib/messageLogError.js';
 
 import { browserSummaryId, browserDetailIdentities, messageIngestionIdentity, matchBrowserMessage, createBrowserMessageMatcher, retainLegacyActivityIdentities } from '../lib/messageBrowserIdentity.js';
 import { join } from 'path';
+import { access, stat } from 'node:fs/promises';
+import { constants } from 'node:fs';
 import { atomicWrite, ensureDir, filterBySearch as genericFilterBySearch, PATHS, safeDate, safeJSONParse, UUID_RE, tryReadFile } from '../lib/fileUtils.js';
 import { getAccount, updateSyncStatus, markSentIngested, updateSendAsAliases } from './messageAccounts.js';
 import { defaultSyncModeForAccountType, syncModesForAccountType } from '../lib/messageTransport.js';
@@ -9,6 +11,7 @@ import { getLocalParts } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
+import { createBoundedStateMap } from '../lib/boundedStateMap.js';
 
 const CACHE_DIR = join(PATHS.messages, 'cache');
 // `syncLocks` is a boolean re-entrancy guard that rejects a *duplicate* in-flight
@@ -23,6 +26,8 @@ const syncLocks = new Map();
 // makes each one await the previous and re-read the freshest persisted state
 // inside its serialized region — mirroring `issueWriteTail` in pipeline/issues.js.
 const accountWriteQueue = createKeyCachedQueue();
+const summarySnapshots = createBoundedStateMap({ maxSize: 8 });
+const summaryReads = new Map();
 function queueAccountWrite(accountId, work) {
   return accountWriteQueue(accountId, work);
 }
@@ -84,40 +89,121 @@ async function loadCache(accountId) {
   return parsed;
 }
 
+function messageSummary(message) {
+  return {
+    id: message.id,
+    accountId: message.accountId,
+    externalId: message.externalId,
+    threadId: message.threadId,
+    subject: message.subject,
+    from: message.from && { name: message.from.name, email: message.from.email },
+    date: message.date,
+    source: message.source,
+    isRead: message.isRead,
+    isUnread: message.isUnread,
+    isPinned: message.isPinned,
+    isFlagged: message.isFlagged,
+    // Detach the short preview so V8 cannot retain the full body behind it.
+    preview: typeof message.bodyText === 'string' ? message.bodyText.slice(0, 100).split('').join('') : '',
+    evaluation: message.evaluation && {
+      action: message.evaluation.action,
+      priority: message.evaluation.priority,
+    },
+  };
+}
+
+async function cacheRevision(filePath) {
+  try {
+    const info = await stat(filePath, { bigint: true });
+    await access(filePath, constants.R_OK);
+    return [info.dev, info.ino, info.size, info.mtimeNs, info.ctimeNs].join(':');
+  } catch {
+    // Match loadCache's missing/unreadable fallback, without serving old rows.
+    return null;
+  }
+}
+
+function invalidateSummary(accountId) {
+  summarySnapshots.delete(accountId);
+  const pending = summaryReads.get(accountId);
+  if (pending) pending.generation++;
+}
+
+function loadSummaryCache(accountId) {
+  if (!UUID_RE.test(accountId)) throw new Error(`Invalid accountId: ${accountId}`);
+  const current = summaryReads.get(accountId);
+  if (current) return current.promise;
+  const pending = { generation: 0 };
+  pending.promise = (async () => {
+    const filePath = join(CACHE_DIR, `${accountId}.json`);
+    // No TTL freshness window: local writes invalidate immediately, while
+    // restore/external replacements and permission changes change the revision.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const generation = pending.generation;
+      const before = await cacheRevision(filePath);
+      const snapshot = summarySnapshots.get(accountId);
+      if (before !== null && snapshot?.revision === before && generation === pending.generation) {
+        return snapshot.cache;
+      }
+      summarySnapshots.delete(accountId);
+      const full = await loadCache(accountId);
+      const after = await cacheRevision(filePath);
+      if (before !== after || generation !== pending.generation) continue;
+      const messages = full.messages.map(message => {
+        const row = messageSummary(message);
+        if (row.from) Object.freeze(row.from);
+        if (row.evaluation) Object.freeze(row.evaluation);
+        return Object.freeze(row);
+      });
+      const cache = { messages: Object.freeze(messages) };
+      if (after !== null) summarySnapshots.set(accountId, { revision: after, cache });
+      return cache;
+    }
+    throw new Error('Message cache changed repeatedly while reading its summary snapshot');
+  })().finally(() => { summaryReads.delete(accountId); });
+  summaryReads.set(accountId, pending);
+  return pending.promise;
+}
+
 async function saveCache(accountId, cache) {
   const filePath = join(CACHE_DIR, `${accountId}.json`);
   await atomicWrite(filePath, cache);
+  invalidateSummary(accountId);
 }
 
 export async function getMessages(options = {}) {
-  const { accountId, search, unevaluatedOnly, messageIds, limit = 50, offset = 0 } = options;
+  const { accountId, search, unevaluatedOnly, messageIds, summary = false, limit = 50, offset = 0 } = options;
+  const readCache = summary && !search ? loadSummaryCache : loadCache;
+  let result;
   // If specific account, just load that cache
   if (accountId) {
-    const cache = await loadCache(accountId);
+    const cache = await readCache(accountId);
     let messages = cache.messages.map(m => ({ ...m, accountId: m.accountId || accountId }));
     messages = filterMessages(messages, { search, unevaluatedOnly, messageIds });
-    return {
+    result = {
       messages: messages.sort((a, b) => safeDate(b.date) - safeDate(a.date)).slice(offset, offset + limit),
       total: messages.length
     };
+  } else {
+    // Otherwise aggregate across all account caches
+    await ensureDir(CACHE_DIR);
+    const { readdir } = await import('fs/promises');
+    const files = await readdir(CACHE_DIR).catch(() => []);
+    const accountIds = files
+      .filter(file => file.endsWith('.json'))
+      .map(file => file.replace('.json', ''))
+      .filter(id => UUID_RE.test(id));
+    // Load each account's cache in parallel rather than serializing one disk read
+    // per account before we can aggregate the combined inbox.
+    const caches = await Promise.all(
+      accountIds.map(async id => ({ id, cache: await readCache(id) }))
+    );
+    // Bound the cross-account merge to `accounts × (offset+limit)` heads instead
+    // of spreading + globally sorting every message across every account (#2540).
+    result = aggregatePagedMessages(caches, { search, unevaluatedOnly, messageIds, limit, offset });
   }
-
-  // Otherwise aggregate across all account caches
-  await ensureDir(CACHE_DIR);
-  const { readdir } = await import('fs/promises');
-  const files = await readdir(CACHE_DIR).catch(() => []);
-  const accountIds = files
-    .filter(file => file.endsWith('.json'))
-    .map(file => file.replace('.json', ''))
-    .filter(id => UUID_RE.test(id));
-  // Load each account's cache in parallel rather than serializing one disk read
-  // per account before we can aggregate the combined inbox.
-  const caches = await Promise.all(
-    accountIds.map(async id => ({ id, cache: await loadCache(id) }))
-  );
-  // Bound the cross-account merge to `accounts × (offset+limit)` heads instead
-  // of spreading + globally sorting every message across every account (#2540).
-  return aggregatePagedMessages(caches, { search, unevaluatedOnly, messageIds, limit, offset });
+  // Search keeps its full-body semantics; only the selected page is projected.
+  return summary && search ? { ...result, messages: result.messages.map(messageSummary) } : result;
 }
 
 /** Remove only a confirmed action target, serialized with sync/refresh writes. */
@@ -140,6 +226,7 @@ export async function deleteCache(accountId) {
     await unlink(filePath).catch(err => {
       if (err.code !== 'ENOENT') throw err;
     });
+    invalidateSummary(accountId);
     console.log(`🗑️ Message cache deleted for account ${accountId}`);
   });
 }

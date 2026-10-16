@@ -14,33 +14,11 @@ export const messageInboxRead = asyncHandler(async (req, res) => {
   const result = await messageSync.getMessages({
     accountId,
     search,
+    summary: req.query.summary === 'true',
     limit: parsedLimit,
     offset: parsedOffset
   });
-  // Summary is opt-in so older clients and automation retain the full-record
-  // contract. Search and pagination above still run against the full cache.
-  res.json(req.query.summary === 'true' ? {
-    ...result,
-    messages: result.messages.map(message => ({
-      id: message.id,
-      accountId: message.accountId,
-      externalId: message.externalId,
-      threadId: message.threadId,
-      subject: message.subject,
-      from: message.from && { name: message.from.name, email: message.from.email },
-      date: message.date,
-      source: message.source,
-      isRead: message.isRead,
-      isUnread: message.isUnread,
-      isPinned: message.isPinned,
-      isFlagged: message.isFlagged,
-      preview: typeof message.bodyText === 'string' ? message.bodyText.slice(0, 100) : '',
-      evaluation: message.evaluation && {
-        action: message.evaluation.action,
-        priority: message.evaluation.priority,
-      },
-    })),
-  } : result);
+  res.json(result);
 });
 
 
