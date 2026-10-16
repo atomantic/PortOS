@@ -3,6 +3,9 @@ vi.mock('./productionReview.js', async (load) => ({ ...await load(), assertProdu
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, readFile, writeFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createContext, runInContext } from 'node:vm';
+import { bindAuthoredPreviewPlayback } from './authoredPreviewPlayback.js';
+import { titleCardRuntimeSource } from '../../lib/musicVideoTitleCard.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
 const h = vi.hoisted(() => ({ calls: 0, prompt: '', response: '', onSubmit: null, onPrepare: null, provider: { id: 'stub-provider' }, args: null }));
@@ -67,7 +70,165 @@ async function fixture() {
   return created.id;
 }
 
+// Execute the actual newly staged candidate (or its preserved raw reference)
+// without a browser. The context deliberately models persistent font/path state.
+async function candidateRuntime(document, { reference = false, fontGate = Promise.resolve(), titleFontGate = null } = {}) {
+  const traces = [], copies = [], events = [], finishing = [], overlays = [];
+  let clock = 0, slow = false;
+  const makeCanvas = () => {
+    const stack = [], path = [];
+    const ctx = { font: '10px sans-serif',
+      save() { stack.push(this.font); }, restore() { this.font = stack.pop(); },
+      beginPath() { path.length = 0; }, lineTo(...point) { path.push(point); },
+      fillText(text) { if (text === 'authored') { traces.push({ font: this.font, path: path.slice() }); if (slow) clock += 100; } },
+      stroke() {}, drawImage(...args) { copies.push(args); },
+      createImageData(w, h) { return { data: new Uint8ClampedArray(w * h * 4) }; },
+      createLinearGradient() { return { addColorStop() {} }; }, createRadialGradient() { return { addColorStop() {} }; },
+      createPattern() { return {}; }, measureText(text) { return { width: String(text).length * 10 }; },
+    };
+    const context = new Proxy(ctx, { get(target, key) { return key in target ? target[key] : () => {}; } });
+    let width = 1920, height = 1080;
+    const reset = () => { ctx.font = '10px sans-serif'; path.length = 0; stack.length = 0; };
+    return { get width() { return width; }, set width(value) { width = value; reset(); },
+      get height() { return height; }, set height(value) { height = value; reset(); },
+      dataset: {}, style: {}, setAttribute() {}, getContext: () => context };
+  };
+  const front = makeCanvas();
+  const sandbox = { setTimeout, clearTimeout, performance: { now: () => clock }, requestAnimationFrame: () => 1, cancelAnimationFrame() {},
+    innerWidth: 1920, innerHeight: 1080,
+    document: { body: { appendChild(node) { node.isConnected = true; overlays.push(node); } }, getElementById: () => front, createElement: () => makeCanvas(),
+      fonts: { load: font => titleFontGate && font.includes('MV Title') ? titleFontGate : fontGate } },
+    PORTOS_MV: { render: { width: 1920, height: 1080, fps: 24, durationSec: 30 }, song: {}, composition: {},
+      scenes: [{ sceneId: 'code', startSec: 0, endSec: 30, visualLayer: 'code' }] },
+    PORTOS_MV_EVENT_STATE: (_song, t) => ({ t, frame: Math.floor(t * 24), hold: false, activeEvents: [], reactiveGain: 0 }),
+    PORTOS_LYRIC_TYPE: { createLyricType: () => ({ ready: Promise.resolve(), draw(ctx, t) { ctx.font = `lyric-${t}`; } }) },
+    __portosFilmLook: { frame: t => finishing.push(['look', t]), playback() {} },
+    __portosTitleCard: { draw: t => finishing.push(['title', t]) }, postMessage: event => events.push(event),
+  };
+  sandbox.window = sandbox;
+  const context = createContext(sandbox);
+  const root = join(PATHS.data, document.directory);
+  if (titleFontGate) {
+    delete sandbox.__portosTitleCard;
+    runInContext(titleCardRuntimeSource({ title: 'Real delayed title', font: 'oswald', startSec: 0, endSec: 4 }), context);
+  }
+  runInContext(await readFile(join(root, 'generated.js'), 'utf8'), context);
+  runInContext(await readFile(join(root, reference ? 'engine-reference.js' : 'engine.js'), 'utf8'), context);
+  return { api: sandbox.portosComposition.previewPlayback, composition: sandbox.portosComposition, traces, copies, events, finishing, overlays,
+    page: { evaluate: source => runInContext(source, context) }, slow: () => { slow = true; } };
+}
+
 describe('treatment-driven mixed-media document authoring', () => {
+  it('packages an actual complete-frame producer for new Canvas candidates and preserves raw renderer state/reference', async () => {
+    const id = await fixture();
+    const drawing = 'function render(ctx, env) { ctx.fillText("authored", 1, 2); ctx.lineTo(env.frame, 3); ctx.stroke(); }';
+    h.response = JSON.stringify({ sections: ['intro', 'still', 'clip'].map(id => ({ id, source: drawing })) });
+    const { document } = await generateMixedMediaDocument(id);
+    const root = join(PATHS.data, document.directory);
+    expect(JSON.parse(await readFile(join(root, 'preview-playback.json'), 'utf8'))).toEqual({ version: 1, contract: 'portos-complete-frame-v1' });
+    expect(await readFile(join(root, 'engine-reference.js'))).toEqual(await readFile(new URL('./documentTemplates/layered/engine.js', import.meta.url)));
+    expect(await readFile(join(root, 'generated.js'), 'utf8')).toContain(drawing);
+    const native = await candidateRuntime(document), reference = await candidateRuntime(document, { reference: true });
+    expect(await bindAuthoredPreviewPlayback(native.page)).toMatchObject({ supported: true, fps: 30 });
+    for (const t of [0.75, 1.5, 0.75, 2, 0.75]) {
+      await native.composition.seek(t); await reference.composition.seek(t);
+    }
+    expect(native.traces.length, JSON.stringify((await manifestAt(document)).song.sections)).toBeGreaterThan(0);
+    expect(native.traces).toEqual(reference.traces);
+    expect(native.traces.at(-1).font).toBe('lyric-2');
+    for (const [width, height] of [[1920, 1080], [1080, 1920], [1920, 1080]]) {
+      native.composition.layout({ width, height }); reference.composition.layout({ width, height });
+      await native.composition.seek(0.75); await reference.composition.seek(0.75);
+      expect(native.traces).toEqual(reference.traces);
+    }
+    await reference.composition.seek(0.5);
+    expect(await native.api.prepare({ epoch: 1, sequence: 7, t: 0.5 })).toEqual({ epoch: 1, sequence: 7, status: 'prepared', t: 0.5 });
+    expect(native.traces).toEqual(reference.traces);
+    const copies = native.copies.length, finishing = native.finishing.length;
+    native.slow();
+    await expect(native.api.prepare({ epoch: 2, sequence: 8, t: 0.75 })).rejects.toThrow('frame freshness');
+    expect(native.copies).toHaveLength(copies);
+    expect(native.finishing).toHaveLength(finishing);
+    expect(native.events.at(-1)).toMatchObject({ type: 'portos-mv:playback-error', epoch: 2 });
+    await native.api.dispose();
+  });
+
+  it('awaits real title readiness for first exact capture and cooperative preparation', async () => {
+    const id = await fixture();
+    const { document } = await generateMixedMediaDocument(id);
+    for (const cooperative of [false, true]) {
+      let release;
+      const titleFontGate = new Promise(resolve => { release = resolve; });
+      const runtime = await candidateRuntime(document, { titleFontGate });
+      let finished = false;
+      const capture = (cooperative ? runtime.api.prepare({ epoch: 1, sequence: 1, t: 1 }) : runtime.composition.seek(1))
+        .then(() => { finished = true; });
+      await new Promise(resolve => setImmediate(resolve));
+      expect(finished).toBe(false);
+      expect(runtime.copies).toEqual([]);
+      release();
+      await capture;
+      expect(runtime.copies.length).toBeGreaterThan(0);
+      await runtime.api.dispose();
+    }
+  });
+
+  it('cancels the real title font wait before visible exact work on pause or disposal', async () => {
+    const id = await fixture();
+    const { document } = await generateMixedMediaDocument(id);
+    for (const method of ['pause', 'dispose']) {
+      let release;
+      const titleFontGate = new Promise(resolve => { release = resolve; });
+      const runtime = await candidateRuntime(document, { titleFontGate });
+      const exact = runtime.composition.seek(1);
+      await new Promise(resolve => setImmediate(resolve));
+      const stopping = runtime.api[method]({ epoch: 2 });
+      expect(runtime.copies).toEqual([]);
+      expect(runtime.overlays).toEqual([]);
+      release();
+      await Promise.all([exact, stopping]);
+      expect(runtime.copies).toEqual([]);
+      expect(runtime.overlays).toEqual([]);
+      if (method !== 'dispose') await runtime.api.dispose();
+    }
+  });
+
+  it('waits for host readiness, retires pending preparation, and rejects explicit async drawing before publication', async () => {
+    const id = await fixture();
+    let release;
+    const fontGate = new Promise(resolve => { release = resolve; });
+    const { document } = await generateMixedMediaDocument(id);
+    const pending = await candidateRuntime(document, { fontGate });
+    const preparation = pending.api.prepare({ epoch: 1, sequence: 1, t: 0.5 }).catch(error => error);
+    await Promise.resolve();
+    expect(pending.copies).toEqual([]);
+    const pausing = pending.api.pause({ epoch: 2 });
+    release();
+    expect(await preparation).toMatchObject({ message: 'Generated preparation superseded' });
+    expect(await pausing).toEqual({ epoch: 2, status: 'paused' });
+    expect(pending.copies).toEqual([]);
+    await pending.api.dispose();
+
+    let rejectFonts;
+    const failingFonts = new Promise((_resolve, reject) => { rejectFonts = reject; });
+    const failed = await candidateRuntime(document, { fontGate: failingFonts });
+    const failedPreparation = failed.api.prepare({ epoch: 1, sequence: 1, t: 0.5 });
+    const failure = expect(failedPreparation).rejects.toThrow('Packaged fonts unavailable');
+    rejectFonts(new Error('Packaged fonts unavailable'));
+    await failure;
+    expect(failed.copies).toEqual([]);
+    expect(failed.events.at(-1)).toMatchObject({ type: 'portos-mv:playback-error', epoch: 1 });
+    await failed.api.dispose();
+
+    h.response = JSON.stringify({ sections: ['intro', 'still', 'clip'].map(id => ({ id, source: 'function render(ctx, env) { return Promise.resolve(); }' })) });
+    const asynchronous = await candidateRuntime((await generateMixedMediaDocument(id)).document);
+    await expect(asynchronous.api.prepare({ epoch: 1, sequence: 1, t: 0.5 })).rejects.toThrow('synchronously');
+    expect(asynchronous.copies).toEqual([]);
+    expect(asynchronous.finishing).toEqual([]);
+    expect(asynchronous.events.at(-1)).toMatchObject({ type: 'portos-mv:playback-error' });
+    await asynchronous.api.dispose();
+  });
+
   it('runs authoring on the pinned provider with its effort, and drops effort for a provider that has none (#9545)', async () => {
     const id = await fixture();
     h.provider = { id: 'stub-provider', type: 'cli', command: 'claude' };
@@ -523,4 +684,5 @@ it('refuses ambient Three.js random helpers and their aliases while allowing det
   }` }] });
   const candidate = await generateMixedMediaDocument(created.id);
   expect((await manifestAt(candidate.document)).renderer).toBe('three');
+  await expect(readFile(join(PATHS.data, candidate.document.directory, 'preview-playback.json'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
