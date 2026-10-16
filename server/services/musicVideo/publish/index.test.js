@@ -74,6 +74,24 @@ async function readyProject() {
 }
 
 describe('publish drafts (#9282)', () => {
+  it('rejects an unreachable Hook cut before connecting a browser or uploading', async () => {
+    const { id } = await projects.createProject({ name: 'Synthetic hook' });
+    await projects.mutateProjectRecord(id, current => ({ project: { ...current,
+      audioAnalysis: { durationSec: 258 }, publishKit: {
+        links: { song: 'https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc' },
+        master: { renderHistoryId: current.renderHistoryId },
+        exports: [{ kind: 'vertical-9x16', filename: 'late.mp4', startSec: 199, endSec: 225 }],
+      },
+    } }));
+    const { connect } = fakeBrowser();
+    const hook = adapter({ label: 'Suno Hook' });
+    await expect(preparePublishDraft(id, 'sunoHook', {}, { connect, adapters: { sunoHook: hook },
+      platforms: { sunoHook: { enabled: true, account: null } },
+    })).rejects.toMatchObject({ status: 422, message: expect.stringMatching(/latest Suno Hook window start 3:18/) });
+    expect(connect).not.toHaveBeenCalled();
+    expect(hook.prepare).not.toHaveBeenCalled();
+  });
+
   it('fills a Substack post on the publication named under Where you post', async () => {
     const { id } = await projects.createProject({ name: 'Release' });
     await projects.mutateProjectRecord(id, (current) => ({ project: { ...current, publishKit: {
