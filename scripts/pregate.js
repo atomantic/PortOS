@@ -38,6 +38,7 @@ import { fileURLToPath } from 'url';
 import { ALWAYS_RUN_TESTS, structuralTestsFor } from './ci-test-plan.js';
 import { assertNodeVersion } from './checkNodeVersion.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
+import { needsBrowserFidelity } from './lib/browserFidelity.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -55,6 +56,27 @@ export const UNCOVERED_SUITES = Object.freeze({
   build: 'npm run build',
   smoke: 'npm run smoke',
 });
+
+/**
+ * Plan lines for the cross-workspace browser selection CI consumes
+ * (`browser_files`). `receipt` is the native fidelity receipt state when known
+ * ('valid' | 'absent'); the receipt is a PR-head commit status, so a local plan
+ * normally cannot see it and says CI verifies it.
+ */
+export function describeBrowserSelection(files, receipt = null) {
+  if (files.length === 0) return ['ℹ️ Browser suites: none selected — no native browser-fidelity receipt required.'];
+  const lines = [`ℹ️ Browser suites: ${files.length} selected (${files.join(', ')}).`];
+  if (!needsBrowserFidelity(files)) {
+    lines.push('ℹ️ Native browser-fidelity receipt: not required for this selection.');
+  } else if (receipt === 'valid') {
+    lines.push('ℹ️ Native browser-fidelity receipt: required — present and valid.');
+  } else if (receipt === 'absent') {
+    lines.push('⚠️ Native browser-fidelity receipt: required — ABSENT; CI will fail until the trusted receipt for the PR head is posted.');
+  } else {
+    lines.push('⚠️ Native browser-fidelity receipt: required — not checkable locally; CI verifies a trusted receipt for the exact PR head.');
+  }
+  return lines;
+}
 
 /** Local pregate worker budget per Vitest workspace; see scripts/vitestCiPool.js. */
 export const PREGATE_DEFAULT_MAX_WORKERS = '4';
@@ -299,6 +321,7 @@ function main() {
     server: { mode: raw.server_mode, files: JSON.parse(raw.server_files), sources: JSON.parse(raw.server_sources) },
     client: { mode: raw.client_mode, files: JSON.parse(raw.client_files), sources: JSON.parse(raw.client_sources) },
     lint: { mode: raw.lint_mode, files: JSON.parse(raw.lint_files) },
+    browser: { files: JSON.parse(raw.browser_files ?? '[]') },
     db: raw.db,
     windows: raw.windows,
     build: raw.build,
@@ -316,6 +339,8 @@ function main() {
   uncovered.forEach((key) => {
     console.log(`ℹ️ CI will also run: ${key} — not covered here; run ${UNCOVERED_SUITES[key]}`);
   });
+
+  describeBrowserSelection(plan.browser?.files ?? []).forEach((line) => console.log(line));
 
   if (options.planOnly) {
     stages.forEach((stage) => {
