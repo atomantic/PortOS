@@ -1658,7 +1658,7 @@ export default function MusicVideo() {
             spend={projectSpend(selected)}
             status={projectStatus}
             notes={stepNotes(selected, productionReview.readiness, publish)}
-            autopilot={autopilotStatus(selected)}
+            autopilot={autopilotStatus(selected, productionReview.readiness)}
             onOpenSettings={openHeaderSettings}
             playerFirst={playerFirst}
             previewExpanded={dockExpanded}

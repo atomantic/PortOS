@@ -95,6 +95,7 @@ describe('deriveStages / deriveNextAction', () => {
     expect(stateOf(parked).produce).toBe('done');
     expect(stateOf(parked).review).toBe('done');
     expect(deriveNextAction(parked).id).not.toBe('resume-production');
+    expect(autopilotStatus(parked)).toMatchObject({ short: 'Autopilot', tone: 'muted' });
     // A run still working keeps Shots open, and a parked run with shots left still owns the header.
     expect(stateOf({ ...finished, productionRuns: [run()] }).produce).toBe('active');
     const unfinished = { ...parked, scenes: [scene({ videoHistoryId: null, referenceImageId: null })] };

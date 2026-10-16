@@ -293,7 +293,7 @@ const autonomousChipLabel = (auto, { phase, step }) => {
  * state, else a live or parked production run, else just "Autopilot". Tones are
  * `ok`, `warn` or `muted`; `short` is the phone label.
  */
-export function autopilotStatus(project) {
+export function autopilotStatus(project, readiness = project?.productionReadiness) {
   const auto = project?.autonomousRun;
   const { phase, step } = autonomousRunPhase(auto);
   if (phase !== 'inactive') {
@@ -301,7 +301,8 @@ export function autopilotStatus(project) {
     return { label: autonomousChipLabel(auto, { phase, step }), short: running ? 'Autopilot running' : 'Autopilot needs you', tone: running ? 'muted' : 'warn' };
   }
   const run = currentProductionRun(project);
-  if (run && RESUMABLE_RUN_STATUSES.has(run.status)) {
+  // A parked run whose shots are all done since needs nothing from the director.
+  if (run && RESUMABLE_RUN_STATUSES.has(run.status) && deriveStages(project, readiness).liveRun) {
     const running = run.status === 'running';
     return { label: PRODUCTION_RUN_LABELS[run.status] || 'Production paused', short: running ? 'Autopilot running' : 'Autopilot needs you', tone: running ? 'muted' : 'warn' };
   }
