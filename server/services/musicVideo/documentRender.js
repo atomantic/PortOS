@@ -2,7 +2,7 @@ import { assertMusicVideoMediaSelections, musicVideoMediaMode } from '../../lib/
 import { isEndFrameImageEffect, sceneImageEffect } from '../../lib/musicVideoImageEffects.js';
 import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 import { filmLookRuntimeSource, isFilmLookNeutral } from '../../lib/filmLook.js';
-import { titleCardVisible } from '../../lib/musicVideoTitleCard.js';
+import { titleCardVisible, titleCardWindows } from '../../lib/musicVideoTitleCard.js';
 import { titleCardRuntime } from './titleCardFonts.js';
 /**
  * Music Video — render a project's composition document over the song.
@@ -271,6 +271,10 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
     lyrics,
     lyricMarkers: Array.isArray(project?.lyricMarkers) ? project.lyricMarkers : [],
     scenes,
+    // Where and when the title card shows, so the lyric type keeps its default zones off it.
+    titleCard: titleCardVisible(project?.titleCard)
+      ? { position: project.titleCard.position || 'lower-left', windows: titleCardWindows(project.titleCard) }
+      : null,
     textCues: (composition.textCues || []).filter((cue) => cue?.text && cue.startSec != null && cue.endSec != null),
     composition: {
       mode: composition.mode || 'concat',

@@ -9,12 +9,15 @@ import FrameStepper from './FrameStepper.jsx';
 const buttonCls = 'flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
 
 // What the lyric playthrough page is built from: the song length, the word times,
-// the sheet's sections and the shots' timing and text zones. A change rebuilds it.
+// the sheet's sections, the shots' timing and text zones, and the title card's spot. A change rebuilds it.
 export const playthroughVersion = (project) => JSON.stringify([
   project.audioAnalysis?.durationSec ?? null,
   (project.lyricCues || []).map((cue) => [cue.text, cue.startSec, cue.endSec, (cue.words || []).map((w) => [w.startSec, w.endSec])]),
   (project.lyricMarkers || []).map((m) => [m.type, m.label, m.line]),
   (project.scenes || []).map((s) => [s.startSec, s.endSec, s.textZone, s.lyricRole, s.lyricSize]),
+  // The lyrics step off the title card's corner while it shows.
+  project.titleCard ? [project.titleCard.enabled, project.titleCard.position, project.titleCard.startSec, project.titleCard.endSec,
+    project.titleCard.outro, project.titleCard.outroStartSec, project.titleCard.outroEndSec] : null,
 ]);
 
 /** The lyric line sung at song time `t`, from the project's timed cues. */

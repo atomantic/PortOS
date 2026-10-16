@@ -286,6 +286,22 @@ describe('lyricType text zones', () => {
     expect(normal).toBe(60);
   });
 
+  it('steps a default-zoned line off the title card\'s corner while the card shows, but keeps a zone the shot names', () => {
+    const mv = (textZone) => ({
+      titleCard: { position: 'lower-left', windows: [{ startSec: 0, endSec: 2 }, { startSec: 10, endSec: 14 }] },
+      scenes: [{ sceneId: 's', startSec: 0, endSec: 20, textZone }],
+    });
+    const lines = [
+      { text: 'under the end card', role: 'line', startSec: 11, words: words('under the end card', 11) },
+      { text: 'after the card', role: 'line', startSec: 16, words: words('after the card', 16) },
+    ];
+    expect(createLyricType(mv(null), { lines }).lines.map((l) => l.zone)).toEqual(['upper-left', 'lower-left']);
+    expect(createLyricType(mv('lower-left'), { lines }).lines.map((l) => l.zone)).toEqual(['lower-left', 'lower-left']);
+    // A hook's centred band shares the card's lower edge too.
+    const hook = createLyricType(mv(null), { lines: [{ text: 'big hook', role: 'hook', startSec: 0.5, words: words('big hook', 0.5) }] });
+    expect(hook.lines[0].zone).toBe('upper');
+  });
+
   it('reframes zones for a portrait frame', () => {
     const rect = zoneRect('lower-left', 1080, 1920);
     expect(rect.x + rect.w).toBeCloseTo(1080 - rect.x, 6);
