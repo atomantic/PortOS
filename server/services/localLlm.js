@@ -379,7 +379,7 @@ const DOWNLOAD_IDLE_TIMEOUT_MS = 60_000
  * aborts after `idleMs` without bytes. `signal` aborts early (client gone).
  * Resolves `{ error }` on any failure, `{}` on success — never throws.
  */
-export async function downloadWithStallGuard(url, destPath, signal, { headerMs = DOWNLOAD_HEADER_TIMEOUT_MS, idleMs = DOWNLOAD_IDLE_TIMEOUT_MS } = {}) {
+async function downloadWithStallGuard(url, destPath, signal, { headerMs = DOWNLOAD_HEADER_TIMEOUT_MS, idleMs = DOWNLOAD_IDLE_TIMEOUT_MS } = {}) {
   const ac = new AbortController()
   let stall = null
   let timer = null
