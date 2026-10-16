@@ -20,6 +20,7 @@ vi.mock('crypto', async () => {
   return { ...actual, randomUUID: () => `uuid-${++uuidCounter}` };
 });
 
+vi.mock('../instanceIdentity.js', () => ({ getInstanceId: vi.fn(async () => 'test-instance'), UNKNOWN_INSTANCE_ID: 'unknown' }));
 vi.mock('../instances.js', () => mockNoPeers());
 vi.mock('../sharing/peerSync.js', () => mockNoPeerSync());
 

@@ -29,8 +29,8 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
   });
 
   it('declares pipeline collection layout versions', () => {
-    // pipelineIssues v3 adds the independently persisted climax arc role.
-    expect(PORTOS_SCHEMA_VERSIONS.pipelineIssues).toBe(3);
+    // pipelineIssues v4 preserves text-stage generation ownership.
+    expect(PORTOS_SCHEMA_VERSIONS.pipelineIssues).toBe(4);
     // pipelineSeries bumped to 14 for authored arc.seriesDesign; v13 added characterArcs[].evolution
     // (#6440) (v2 = readerMap, v3 = tickingClock, v4 = styleGuide,
     // v5 = coverImage, v6 = characterArcs, v7 = factCritical + factReference,
@@ -92,7 +92,7 @@ describe('buildPortosMeta', () => {
     const meta = await buildPortosMeta();
     expect(meta.portosVersion).toMatch(/^\d+\.\d+\.\d+/);
     expect(meta.schemaVersions.universes).toBe(12);
-    expect(meta.schemaVersions.pipelineIssues).toBe(3);
+    expect(meta.schemaVersions.pipelineIssues).toBe(4);
     expect(meta.schemaVersions.pipelineSeries).toBe(14);
   });
 

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { join } from 'node:path';
 
 const fixture = vi.hoisted(() => ({ files: new Map(), account: { id: '11111111-1111-4111-8111-111111111111', type: 'gmail', enabled: true } }));
 vi.mock('../lib/fileUtils.js', async importOriginal => ({
@@ -25,14 +26,14 @@ import { syncAccount } from './messageSync.js';
 import { sendGmail } from './messageGmailSync.js';
 
 const json = body => new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
-const tokensPath = '/mock/calendar/google-auth/tokens.json';
+const tokensPath = join('/mock/calendar', 'google-auth', 'tokens.json');
 let ownedPromises;
 
 beforeEach(async () => {
   ownedPromises = [];
   fixture.files.clear();
   await clearAuth();
-  fixture.files.set('/mock/calendar/google-auth/credentials.json', JSON.stringify({ clientId: 'example-client', clientSecret: 'example-secret' }));
+  fixture.files.set(join('/mock/calendar', 'google-auth', 'credentials.json'), JSON.stringify({ clientId: 'example-client', clientSecret: 'example-secret' }));
   fixture.files.set(tokensPath, JSON.stringify({ access_token: 'expired-access', refresh_token: 'durable-refresh', expiry_date: 1 }));
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
