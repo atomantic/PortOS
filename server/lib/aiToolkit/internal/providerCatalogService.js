@@ -119,7 +119,7 @@ async function killOwnedProbe(child, killSignal, directExited = false) {
   return waitForProbeGroupExit(child.pid);
 }
 
-function execFileBounded(file, args, { timeout, killSignal = 'SIGTERM', ...options }) {
+function execFileBounded(file, args, { timeout, killSignal = 'SIGTERM' }) {
   return new Promise((resolve) => {
     let child = null;
     let spawned = false;
@@ -149,7 +149,6 @@ function execFileBounded(file, args, { timeout, killSignal = 'SIGTERM', ...optio
     try {
       child = execFile(file, args, {
         windowsHide: true,
-        ...options,
         timeout: 0,
         ...(process.platform === 'win32' ? {} : { detached: true }),
       }, (error, stdout, stderr) => {
