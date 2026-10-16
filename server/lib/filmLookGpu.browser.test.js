@@ -87,6 +87,90 @@ describe.skipIf(!canRun).each([
     expect(psnr(svg, gpu)).toBeGreaterThanOrEqual(40);
   }, 60000);
 
+  // Independent video pixels, not two consumers of one canvas. The untagged
+  // SD clip decodes as NV12/SMPTE-C on macOS hardware and I420 in software;
+  // only the former omits the primary conversion during canvas staging.
+  it.for(['untagged SD', 'converted BT709'])('preserves native source colors and Neon rain for %s', async (kind, { skip }) => {
+    if (!available) skip();
+    const w = 640, h = 360, tagged = kind === 'converted BT709';
+    const dir = mkdtempSync(join(tmpdir(), 'film-look-primary-'));
+    const path = join(dir, 'clip.mp4');
+    const pages = [];
+    try {
+      // testsrc is RGB: this performs a real matrix conversion, not a relabel
+      // of the SD YUV bytes. Both frame and container tags mirror the encoder.
+      execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i',
+        `${tagged ? 'testsrc' : 'testsrc2'}=s=${w}x${h}:r=24`, '-t', '0.25',
+        ...(tagged ? ['-vf', 'scale=out_color_matrix=bt709:out_range=tv,format=yuv420p,setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709',
+          '-color_primaries', 'bt709', '-color_trc', 'bt709', '-colorspace', 'bt709'] : []),
+        '-c:v', 'libx264', '-threads', '1', '-pix_fmt', 'yuv420p', '-y', path], { timeout: 10000 });
+      const clip = readFileSync(path);
+      const yuv = execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-threads', '1', '-i', path,
+        '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'yuv420p', 'pipe:1'], { timeout: 10000, maxBuffer: w * h * 2 });
+      // Uniform bar interiors avoid chroma-siting differences. Decode the
+      // independent YUV planes with the declared limited-range 601/709 matrix.
+      const xs = [40, 140, 340, 440, 540];
+      const rawSamples = xs.map(x => {
+        const p = w * h, uv = 100 * (w / 2) + x / 2;
+        const y = (yuv[200 * w + x] - 16) / 219, u = (yuv[p + uv] - 128) / 224, v = (yuv[p * 1.25 + uv] - 128) / 224;
+        const kr = tagged ? 0.2126 : 0.299, kb = tagged ? 0.0722 : 0.114, kg = 1 - kr - kb;
+        return [y + 2 * (1 - kr) * v, y - 2 * kb * (1 - kb) / kg * u - 2 * kr * (1 - kr) / kg * v, y + 2 * (1 - kb) * u]
+          .map(c => Math.round(Math.max(0, Math.min(1, c)) * 255));
+      });
+      const expectedRaw = tagged ? [[0, 0, 0], [0, 254, 255], [254, 255, 0], [0, 255, 1], [0, 0, 0]]
+        : [[254, 0, 0], [0, 255, 1], [0, 0, 255], [255, 0, 254], [1, 255, 255]];
+      rawSamples.forEach((rgb, i) => rgb.forEach((c, j) => expect(Math.abs(c - expectedRaw[i][j])).toBeLessThanOrEqual(2)));
+      const origin = 'http://film-look-primary.test';
+      const open = async gpu => {
+        const p = await fixture.browser.newPage({ viewport: { width: w, height: h } });
+        pages.push(p);
+        await p.route(`${origin}/**`, route => route.fulfill(route.request().url().endsWith('.mp4')
+          ? { body: clip, contentType: 'video/mp4' }
+          : { contentType: 'text/html', body: `<!doctype html><style>*{margin:0}video,canvas{display:block;width:${w}px;height:${h}px}#out{position:fixed;left:0;top:0}</style>
+            <video id="v" src="/clip.mp4" muted preload="auto"></video><svg id="fx" width="0" height="0" style="position:absolute"></svg>
+            ${gpu ? `<canvas id="out" width="${w}" height="${h}"></canvas><script>${filmLookGpuRuntimeSource()}</script>` : ''}` }));
+        await p.goto(`${origin}/`);
+        await p.waitForFunction(() => document.getElementById('v').readyState >= 2, null, { timeout: 10000 });
+        // The paused first frame is the frame independently decoded above.
+        return p;
+      };
+      const svg = await open(false), gpu = await open(true);
+      const metadata = await svg.evaluate(() => {
+        const snapshot = new VideoFrame(document.getElementById('v'));
+        try { return { format: snapshot.format, ...snapshot.colorSpace.toJSON() }; }
+        finally { snapshot.close(); }
+      });
+      expect(metadata).toMatchObject({ fullRange: false, matrix: tagged ? 'bt709' : 'smpte170m', primaries: tagged ? 'bt709' : 'smpte170m' });
+      expect(['NV12', 'I420']).toContain(metadata.format);
+      expect(metadata.transfer).toBe(tagged || metadata.format === 'NV12' ? 'bt709' : 'smpte170m');
+      const native = await sharp(await svg.screenshot()).removeAlpha().raw().toBuffer();
+      if (!tagged) {
+        const expectedNative = metadata.format === 'NV12'
+          ? [[248, 36, 0], [63, 251, 0], [26, 35, 255], [249, 52, 255], [69, 253, 255]] : rawSamples;
+        xs.forEach((x, i) => expectedNative[i].forEach((c, j) => expect(Math.abs(native[(200 * w + x) * 3 + j] - c)).toBeLessThanOrEqual(3)));
+      }
+      const look = filmLookPreset('neon-rain');
+      await gpu.evaluate(({ look, w, h }) => {
+        globalThis.primaryRenderer = globalThis.__portosFilmLookGpu.create(document.getElementById('out'));
+        globalThis.primaryRenderer.render(document.getElementById('v'), look, { frame: 0, width: w, height: h, until: 0 });
+      }, { look, w, h });
+      const source = await sharp(await gpu.screenshot()).removeAlpha().raw().toBuffer();
+      expect(psnr(native, source)).toBeGreaterThanOrEqual(40);
+      const { filter, css } = filmLookFilterMarkup(look, { frame: 0, width: w, height: h });
+      await svg.evaluate(({ filter, css }) => {
+        document.getElementById('fx').innerHTML = `<defs>${filter}</defs>`;
+        document.documentElement.style.filter = css;
+      }, { filter, css });
+      await gpu.evaluate(({ look, w, h }) => globalThis.primaryRenderer.render(document.getElementById('v'), look, { frame: 0, width: w, height: h }), { look, w, h });
+      const reference = await sharp(await svg.screenshot()).removeAlpha().raw().toBuffer();
+      const finished = await sharp(await gpu.screenshot()).removeAlpha().raw().toBuffer();
+      expect(psnr(reference, finished)).toBeGreaterThanOrEqual(40);
+    } finally {
+      await Promise.all(pages.map(p => p.close()));
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60000);
+
   // A video is read the way the page's compositor reads it, scaled to fill the
   // frame. WebGL's own video upload converted colour differently (about 30 dB
   // off on the soft-analog look) and copied another size unscaled.

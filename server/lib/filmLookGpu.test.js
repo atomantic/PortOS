@@ -3,7 +3,7 @@ import { runInNewContext } from 'node:vm';
 import { FILM_LOOK_PRESETS, filmLookFilterMarkup, filmLookPreset } from './filmLook.js';
 import { _filmLookGpuTestHooks, filmLookGpuRuntimeSource } from './filmLookGpu.js';
 
-const { blurKernel, parseFilmLookFilter, turbulencePixel, turbulenceTables } = _filmLookGpuTestHooks;
+const { blurKernel, parseFilmLookFilter, turbulencePixel, turbulenceTables, needsSmpte170mConversion } = _filmLookGpuTestHooks;
 
 // Bytes headless Chromium 141 drew for a lone <feTurbulence> (64×48, sRGB,
 // userSpaceOnUse), read back from an unpremultiplied PNG screenshot over a
@@ -20,6 +20,16 @@ const CHROME_TURBULENCE = [
 ];
 
 describe('film look on the GPU', () => {
+  it('corrects only the measured NV12 SMPTE170M primary contract', () => {
+    const colorSpace = { primaries: 'smpte170m', matrix: 'smpte170m', transfer: 'bt709', fullRange: false };
+    expect(needsSmpte170mConversion({ format: 'NV12', colorSpace })).toBe(true);
+    for (const frame of [undefined, {}, { format: 'NV12' },
+      ...['I420', 'RGBA', null].map(format => ({ format, colorSpace })),
+      ...[{ primaries: 'bt709' }, { matrix: 'bt709' }, { transfer: 'smpte170m' }, { fullRange: true }, { fullRange: null }]
+        .map(patch => ({ format: 'NV12', colorSpace: { ...colorSpace, ...patch } })),
+    ]) expect(needsSmpte170mConversion(frame)).toBe(false);
+  });
+
   it('reproduces the feTurbulence pixels Chrome draws for a seed, not just their statistics', () => {
     for (const { seed, samples, ...options } of CHROME_TURBULENCE) {
       const tables = turbulenceTables(seed);
