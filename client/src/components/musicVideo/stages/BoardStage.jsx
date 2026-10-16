@@ -2,6 +2,7 @@ import { useContext, useEffect, useLayoutEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { Plus, Image as ImageIcon, Film, Code2, Type, FlagTriangleRight, Lock, LockOpen, X } from 'lucide-react';
 import ContactSheetButton from '../ContactSheetButton.jsx';
+import LockAllShots from '../LockAllShots.jsx';
 import SceneCard from '../SceneCard.jsx';
 import EndingCard, { EndingThumbnail } from '../EndingCard.jsx';
 import ScenePoster from '../ScenePoster.jsx';
@@ -174,6 +175,7 @@ export default function BoardStage({ board }) {
       <div id="mv-scene-board" className="flex items-center justify-between">
         <h3 className="text-sm font-medium">Scene board</h3>
         <div className="flex items-center gap-2">
+          <LockAllShots scenes={scenes} layered={layered} />
           <ContactSheetButton onOpen={board.openContactSheet} />
           <button onClick={board.onAddScene} className="flex min-h-[44px] items-center gap-1 rounded bg-port-accent px-2 py-1.5 text-sm text-white sm:min-h-0">
             <Plus size={15} /> Add scene
