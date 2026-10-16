@@ -3,7 +3,17 @@ import os from 'os';
 import path from 'path';
 import fs from 'fs';
 import { EventEmitter } from 'events';
+import { Writable } from 'node:stream';
 import { pinPlatform } from '../lib/testHelper.js';
+
+// Only the stall-guard cases opt in: fake network time must not race a real
+// filesystem sink. The macOS swap workflow below keeps real download writes.
+const downloadSink = vi.hoisted(() => ({ create: null }));
+vi.mock('fs', async original => {
+  const actual = await original();
+  return { ...actual, createWriteStream: (...args) => downloadSink.create
+    ? downloadSink.create(...args) : actual.createWriteStream(...args) };
+});
 
 // vi.mock factories are hoisted above the module body, so the mutable holder
 // and the mock objects must come from vi.hoisted (which runs first). The
@@ -860,29 +870,47 @@ describe('localLlm', () => {
       for (const n of tmpDirs()) fs.rmSync(path.join(os.tmpdir(), n), { recursive: true, force: true });
     });
 
-    const run = async (downloadFetch, advanceMs) => {
-      // setImmediate stays real: the loop below yields to real file I/O with it.
+    const run = async (downloadFetch, drive) => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       const restorePlatform = pinPlatform('darwin');
+      const started = Promise.withResolvers();
+      const sinkReady = Promise.withResolvers();
+      const bytes = [];
+      const progress = [];
+      const waiting = [];
+      downloadSink.create = () => {
+        const sink = new Writable({ write(chunk, _encoding, callback) {
+          bytes.push(...chunk);
+          for (const waiter of waiting) if (bytes.length >= waiter.count) waiter.resolve();
+          callback();
+        } });
+        sinkReady.resolve();
+        return sink;
+      };
       pathExistsImpl.fn = async (p) => p === '/Applications/Ollama.app';
       vi.stubGlobal('fetch', vi.fn(async (url, init) => {
         if (String(url).includes('api.github.com')) {
           return { ok: true, json: async () => ({ tag_name: 'v0.34.0', assets: [{ name: 'Ollama-darwin.zip', size: 1024, browser_download_url: 'https://example.com/Ollama-darwin.zip' }] }) };
         }
+        started.resolve();
         return downloadFetch(init);
       }));
       mocks.ollama.getStatus.mockResolvedValueOnce({ version: '0.33.3' });
       try {
-        let settled = false;
-        const p = svc.upgradeBackend('ollama').finally(() => { settled = true; });
-        // Step in small increments so each chunk's idle-timer reset lands before the clock
-        // moves on; keep stepping past the budget so post-download sleeps also fire.
-        for (let elapsed = 0; !settled && elapsed < advanceMs * 4; elapsed += 5_000) {
-          await vi.advanceTimersByTimeAsync(5_000);
-          for (let y = 0; y < 5; y++) await new Promise((r) => setImmediate(r));
-        }
-        return await p;
+        const p = svc.upgradeBackend('ollama', event => progress.push(event.message));
+        await started.promise;
+        await drive({ sinkReady: sinkReady.promise, waitForBytes: count => {
+          if (bytes.length >= count) return Promise.resolve();
+          const receipt = Promise.withResolvers();
+          waiting.push({ count, resolve: receipt.resolve });
+          return Promise.race([receipt.promise, p.then(result => {
+            throw new Error(`Upgrade ended before receiving ${count} bytes: ${result.error || 'completed'}`);
+          })]);
+        } });
+        return { result: await p, bytes, progress };
       } finally {
+        downloadSink.create = null;
+        vi.useRealTimers();
         mocks.ollama.getStatus.mockReset();
         vi.unstubAllGlobals();
         restorePlatform();
@@ -890,23 +918,27 @@ describe('localLlm', () => {
     };
 
     it('aborts a body that stops emitting, removes the temp dir and returns the stall error', async () => {
-      const r = await run(({ signal }) => ({
+      const { result: r } = await run(({ signal }) => ({
         ok: true,
         body: new ReadableStream({ start(c) { c.enqueue(new Uint8Array([1])); signal.addEventListener('abort', () => c.error(new Error('aborted'))); } })
-      }), 60_001);
+      }), async ({ waitForBytes }) => {
+        await waitForBytes(1);
+        await vi.advanceTimersByTimeAsync(60_001);
+      });
       expect(r).toEqual({ success: false, error: expect.stringMatching(/no data for 60 s/) });
       expect(tmpDirs()).toEqual([]);
     });
 
     it('aborts when no response headers arrive in time', async () => {
-      const r = await run(({ signal }) => new Promise((_res, rej) => signal.addEventListener('abort', () => rej(new Error('aborted')))), 30_001);
+      const { result: r } = await run(({ signal }) => new Promise((_res, rej) => signal.addEventListener('abort', () => rej(new Error('aborted')))),
+        () => vi.advanceTimersByTimeAsync(30_001));
       expect(r).toEqual({ success: false, error: expect.stringMatching(/no response from the server within 30 s/) });
       expect(tmpDirs()).toEqual([]);
     });
 
     it('does not abort a slow stream that keeps making progress', async () => {
       let n = 0;
-      const r = await run(() => ({
+      const { result, bytes, progress } = await run(() => ({
         ok: true,
         body: new ReadableStream({
           async pull(c) {
@@ -915,9 +947,18 @@ describe('localLlm', () => {
             c.enqueue(new Uint8Array([n]));
           }
         })
-      }), 200_000);
-      // Past the download the flow proceeds to the swap; whatever it fails on, it is not a stall.
-      expect(r.error || '').not.toMatch(/stalled/);
+      }), async ({ sinkReady, waitForBytes }) => {
+        await sinkReady;
+        for (let count = 1; count <= 30; count++) {
+          await vi.advanceTimersByTimeAsync(5_000);
+          await waitForBytes(count);
+        }
+        // Stop advancing virtual time at EOF; pipeline completion is owned by
+        // the sink, not an arbitrary number of real event-loop turns.
+      });
+      expect(bytes).toEqual(Array.from({ length: 30 }, (_, i) => i + 1));
+      expect(progress).toContain('Stopping running Ollama…');
+      expect(result).toEqual({ success: false, error: 'Extracted archive did not contain Ollama.app — release layout may have changed.' });
     });
   });
 
