@@ -33,7 +33,7 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { fileURLToPath } from 'url'
 import { pipeline } from 'stream/promises'
-import { Readable } from 'stream'
+import { Readable, Transform } from 'stream'
 import { ensureDir, pathExists, sleep } from '../lib/fileUtils.js'
 import { readPortosEnvValue, upsertPortosEnvLine } from '../lib/portosEnv.js'
 import { ServerError } from '../lib/errorHandler.js'
@@ -369,7 +369,47 @@ async function waitForOllamaVersion(timeoutMs = 30_000) {
  * version advanced, because a second install ahead of the bundle on PATH can
  * keep serving the old binary past a perfectly successful swap.
  */
-async function upgradeOllamaMacApp(emit) {
+const DOWNLOAD_HEADER_TIMEOUT_MS = 30_000
+const DOWNLOAD_IDLE_TIMEOUT_MS = 60_000
+
+/**
+ * Download `url` to `destPath` with stall detection instead of a total
+ * deadline (which would abort slow-but-progressing links): the response headers
+ * must arrive within `headerMs`, then every body chunk resets an idle timer that
+ * aborts after `idleMs` without bytes. `signal` aborts early (client gone).
+ * Resolves `{ error }` on any failure, `{}` on success — never throws.
+ */
+export async function downloadWithStallGuard(url, destPath, signal, { headerMs = DOWNLOAD_HEADER_TIMEOUT_MS, idleMs = DOWNLOAD_IDLE_TIMEOUT_MS } = {}) {
+  const ac = new AbortController()
+  let stall = null
+  let timer = null
+  const arm = (ms, message) => {
+    clearTimeout(timer)
+    timer = setTimeout(() => { stall = message; ac.abort() }, ms)
+  }
+  const onExternalAbort = () => ac.abort()
+  if (signal?.aborted) return { error: 'Download cancelled.' }
+  signal?.addEventListener('abort', onExternalAbort, { once: true })
+  try {
+    arm(headerMs, `Download stalled — no response from the server within ${Math.round(headerMs / 1000)} s. Check the connection and retry.`)
+    const dl = await fetch(url, { signal: ac.signal })
+    if (!dl?.ok || !dl.body) return { error: `Download failed: ${dl?.statusText || 'no response body'}` }
+    const idleMessage = `Download stalled — no data for ${Math.round(idleMs / 1000)} s. Check the connection and retry.`
+    arm(idleMs, idleMessage)
+    const touch = new Transform({ transform(chunk, _enc, cb) { arm(idleMs, idleMessage); cb(null, chunk) } })
+    await pipeline(Readable.fromWeb(dl.body), touch, createWriteStream(destPath), { signal: ac.signal })
+    return {}
+  } catch (err) {
+    if (stall) return { error: stall }
+    if (signal?.aborted) return { error: 'Download cancelled.' }
+    return { error: `Download failed: ${err.message}` }
+  } finally {
+    clearTimeout(timer)
+    signal?.removeEventListener('abort', onExternalAbort)
+  }
+}
+
+async function upgradeOllamaMacApp(emit, signal) {
   const appPath = '/Applications/Ollama.app'
 
   emit('Looking up the latest Ollama release on GitHub…')
@@ -394,18 +434,10 @@ async function upgradeOllamaMacApp(emit) {
   await ensureDir(tmpDir)
 
   emit(`Downloading Ollama ${release.tag_name} (${Math.round(asset.size / 1024 / 1024)} MB)…`)
-  // No timeout signal here: it would cover the entire multi-hundred-MB body
-  // stream, turning slow links into mid-download aborts. User-triggered and
-  // recoverable, so an unbounded stream is the lesser evil.
-  const dl = await fetch(asset.browser_download_url).catch((err) => ({ _err: err.message }))
-  if (dl._err || !dl?.ok || !dl.body) {
+  const dl = await downloadWithStallGuard(asset.browser_download_url, zipPath, signal)
+  if (dl.error) {
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {})
-    return { success: false, error: `Download failed: ${dl?._err || dl?.statusText || 'no response body'}` }
-  }
-  const pipeErr = await pipeline(Readable.fromWeb(dl.body), createWriteStream(zipPath)).then(() => null, (err) => err)
-  if (pipeErr) {
-    await rm(tmpDir, { recursive: true, force: true }).catch(() => {})
-    return { success: false, error: `Download failed: ${pipeErr.message}` }
+    return { success: false, error: dl.error }
   }
 
   emit('Stopping running Ollama…')
@@ -520,8 +552,9 @@ async function upgradeOllamaMacApp(emit) {
  *
  * @param {string} backend - 'ollama' | 'lmstudio'
  * @param {(p: { event: string, message: string }) => void} [onProgress]
+ * @param {AbortSignal} [signal] - aborts an in-flight Ollama.app download (client disconnect)
  */
-export async function upgradeBackend(backend, onProgress = () => {}) {
+export async function upgradeBackend(backend, onProgress = () => {}, signal) {
   if (!isBackend(backend)) return { success: false, error: `Unknown backend: ${backend}` }
   const emit = (message) => onProgress({ event: 'start', message })
   const label = backend === 'ollama' ? 'Ollama' : 'LM Studio'
@@ -546,7 +579,7 @@ export async function upgradeBackend(backend, onProgress = () => {}) {
   // macOS Ollama with a .app present — direct download is the only path that
   // actually replaces the binary that's serving requests.
   if (backend === 'ollama' && await pathExists(macAppPath('ollama'))) {
-    return upgradeOllamaMacApp(emit)
+    return upgradeOllamaMacApp(emit, signal)
   }
 
   // Everything else: route through Homebrew.

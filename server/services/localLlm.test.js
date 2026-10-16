@@ -856,6 +856,52 @@ describe('localLlm', () => {
   // ran. Before #7238 the old bundle was `rm`'d first and its failure swallowed,
   // which could leave the machine with no Ollama at all, or a nested
   // Ollama.app/Ollama.app reported as a successful upgrade.
+  describe('downloadWithStallGuard', () => {
+    const dest = () => path.join(os.tmpdir(), `portos-stall-test-${Date.now()}-${Math.random().toString(36).slice(2)}.zip`);
+    afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+    it('aborts with the stall error when the body stops emitting', async () => {
+      vi.useFakeTimers();
+      vi.stubGlobal('fetch', vi.fn(async (_url, { signal }) => ({
+        ok: true,
+        body: new ReadableStream({
+          start(c) { c.enqueue(new Uint8Array([1])); signal.addEventListener('abort', () => c.error(new Error('aborted'))); }
+        })
+      })));
+      const p = svc.downloadWithStallGuard('https://example.com/x.zip', dest());
+      await vi.advanceTimersByTimeAsync(60_001);
+      expect(await p).toEqual({ error: expect.stringMatching(/no data for 60 s/) });
+    });
+
+    it('does not abort a slow stream that keeps making progress', async () => {
+      vi.useFakeTimers();
+      let n = 0;
+      vi.stubGlobal('fetch', vi.fn(async () => ({
+        ok: true,
+        body: new ReadableStream({
+          async pull(c) {
+            if (n++ >= 4) return c.close();
+            await new Promise((r) => setTimeout(r, 40_000));
+            c.enqueue(new Uint8Array([n]));
+          }
+        })
+      })));
+      const out = dest();
+      const p = svc.downloadWithStallGuard('https://example.com/x.zip', out);
+      await vi.advanceTimersByTimeAsync(200_000);
+      expect(await p).toEqual({});
+      fs.rmSync(out, { force: true });
+    });
+
+    it('aborts when no response headers arrive within the header deadline', async () => {
+      vi.useFakeTimers();
+      vi.stubGlobal('fetch', vi.fn((_url, { signal }) => new Promise((_res, rej) => signal.addEventListener('abort', () => rej(new Error('aborted'))))));
+      const p = svc.downloadWithStallGuard('https://example.com/x.zip', dest());
+      await vi.advanceTimersByTimeAsync(30_001);
+      expect(await p).toEqual({ error: expect.stringMatching(/no response from the server within 30 s/) });
+    });
+  });
+
   describe('upgradeBackend — macOS Ollama.app swap', () => {
     const APP = '/Applications/Ollama.app';
     const aside = () => [...appFs.entries.keys()].filter((p) => p.startsWith(`${APP}.portos-old-`));
