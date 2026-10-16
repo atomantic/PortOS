@@ -747,7 +747,7 @@ describe('overlay text pass before the final render', () => {
   const textEntries = () => (runOf()?.orchestration?.reviews || []).filter((r) => r.checkpoint === 'text');
   const start = () => service.startAutonomousVideo({ prompt: 'p', tools: ['code:render'], authoring: { providerId: 'prov', model: 'm' } });
 
-  it('sends a generated document\'s text problems back to its author, checks again, then renders', async () => {
+  it.each([false, true])('preserves concurrent human feedback and resolutions during text re-authoring (failure: %s)', async (fails) => {
     doubles.acceptDocument.mockImplementation(async (id, directory) => {
       calls.push('accept-document');
       store.get(id).composition.document = { directory, source: { kind: 'generated' } };
@@ -756,29 +756,44 @@ describe('overlay text pass before the final render', () => {
     doubles.addFeedback = vi.fn(async (id, entry) => {
       const project = store.get(id);
       project.productionReview.feedback = [...(project.productionReview.feedback || []), { id: `fb-${entry.target}`, ...entry }];
+      return { feedbackId: `fb-${entry.target}` };
     });
     doubles.closeFeedback = vi.fn(async (id, { feedbackId, resolution, reviewer }) => {
       const project = store.get(id);
+      if (project.productionReview.feedback.find((f) => f.id === feedbackId)?.resolvedAt) {
+        throw Object.assign(new Error('Already resolved'), { code: 'MUSIC_VIDEO_FEEDBACK_CLOSED' });
+      }
       project.productionReview.feedback = project.productionReview.feedback.map((f) => (f.id === feedbackId ? { ...f, resolution, resolvedBy: reviewer, resolvedAt: 'now' } : f));
     });
+    doubles.generateDocument.mockImplementationOnce(async () => ({ document: { directory: 'first' } }))
+      .mockImplementationOnce(async (id) => {
+        const feedback = store.get(id).productionReview.feedback;
+        if (!fails) feedback[0] = { ...feedback[0], resolvedAt: 'human-time', resolution: 'Human reviewed it.' };
+        feedback.push({ id: 'human-during-authoring', stage: 'proof', text: 'Keep this open', decision: 'request-changes' });
+        if (fails) throw new Error('author offline');
+        return { document: { directory: 'revised' } };
+      });
     service.__setAutonomousDepsForTests(doubles);
     doubles.checkOverlayText
       .mockResolvedValueOnce({ status: 'complete', samples: 20, textSamples: 14, findings: [finding(3.5, '“20 MILLION YEARS” collides with “WHOLE SPECIES”.')] })
       .mockResolvedValueOnce({ status: 'complete', samples: 20, textSamples: 14, findings: [] });
     await start();
     await vi.waitFor(() => expect(runOf()?.output.renderJobId).toBe('render-1'));
-    expect(doubles.checkOverlayText).toHaveBeenCalledTimes(2);
+    expect(doubles.checkOverlayText).toHaveBeenCalledTimes(fails ? 1 : 2);
     expect(doubles.generateDocument).toHaveBeenCalledTimes(2);
     expect(doubles.renderVideo).toHaveBeenCalledOnce();
     expect(store.get('mv-auto').productionReview.feedback).toEqual([expect.objectContaining({ stage: 'proof', target: 'text@0:03',
-      text: '“20 MILLION YEARS” collides with “WHOLE SPECIES”.', resolution: 'Re-authored by the autopilot.', resolvedBy: expect.objectContaining({ kind: 'autopilot', runId: runOf().id }) })]);
-    expect(textEntries().map((r) => r.verdict)).toEqual(['revise', 'approve']);
-    expect(textEntries()[0]).toMatchObject({ route: null, issues: [{ atSec: 3.5, text: expect.stringContaining('collides') }] });
+      text: '“20 MILLION YEARS” collides with “WHOLE SPECIES”.', resolution: fails ? 'The re-authoring failed (author offline); kept the film.' : 'Human reviewed it.',
+      resolvedAt: fails ? 'now' : 'human-time' }),
+      expect.objectContaining({ id: 'human-during-authoring', text: 'Keep this open' })]);
+    expect(store.get('mv-auto').productionReview.feedback[1].resolvedAt).toBeUndefined();
+    expect(textEntries().map((r) => r.verdict)).toEqual(fails ? ['noted'] : ['revise', 'approve']);
+    if (!fails) expect(textEntries()[0]).toMatchObject({ route: null, issues: [{ atSec: 3.5, text: expect.stringContaining('collides') }] });
     // Check, re-author, check again, then render.
     const order = (fn, n = 0) => fn.mock.invocationCallOrder[n];
     expect(order(doubles.generateDocument, 1)).toBeGreaterThan(order(doubles.checkOverlayText, 0));
-    expect(order(doubles.checkOverlayText, 1)).toBeGreaterThan(order(doubles.acceptDocument, 1));
-    expect(order(doubles.renderVideo)).toBeGreaterThan(order(doubles.checkOverlayText, 1));
+    if (!fails) expect(order(doubles.checkOverlayText, 1)).toBeGreaterThan(order(doubles.acceptDocument, 1));
+    expect(order(doubles.renderVideo)).toBeGreaterThan(order(doubles.checkOverlayText, fails ? 0 : 1));
   });
 
   it('logs a hand-made document\'s problems for the director and renders it untouched', async () => {
@@ -1779,15 +1794,26 @@ describe('orchestrated mode (brief.orchestrator)', () => {
         draft: { ...project.productionReview.draft, timingStatus: 'verified', timingNotes: notes } };
     });
     // Change requests go through the real review records; the re-plan rewrites the named shot.
-    doubles.addFeedback = stub('feedback', async (id, input) => { store.set(id, clone(actual.recordProductionFeedback(clone(store.get(id)), input))); });
+    doubles.addFeedback = stub('feedback', async (id, input) => {
+      const project = actual.recordProductionFeedback(clone(store.get(id)), input);
+      store.set(id, clone(project));
+      return { feedbackId: project.productionReview.feedback.at(-1).id };
+    });
     doubles.closeFeedback = stub('resolve', async (id, input) => { store.set(id, clone(actual.resolveProductionFeedback(clone(store.get(id)), input))); });
     doubles.reviseFromFeedback = stub('replan', async (id) => {
       const project = store.get(id);
       project.scenes = project.scenes.map((scene) => ({ ...scene, prompt: 'Close on the scarf' }));
       project.productionReview.draft.storyboard = project.productionReview.draft.storyboard.map((shot) => ({ ...shot, action: 'Close on the scarf' }));
+      store.set(id, clone(actual.recordProductionFeedback(project, { stage: 'storyboard', basis: actual.productionReviewBasis(project).storyboard,
+        target: 'shot', text: 'Human note during planning', decision: 'structure-accepted' })));
     });
     // The first re-plan fails: the stage fails for a Retry instead of approving the unchanged shot.
-    doubles.reviseFromFeedback.mockRejectedValueOnce(new Error('planner offline'));
+    doubles.reviseFromFeedback.mockImplementationOnce(async (id) => {
+      const project = store.get(id);
+      store.set(id, clone(actual.recordProductionFeedback(project, { stage: 'storyboard', basis: actual.productionReviewBasis(project).storyboard,
+        target: 'shot', text: 'Human request during failed planning', decision: 'request-changes' })));
+      throw new Error('planner offline');
+    });
     service.__setAutonomousDepsForTests(doubles);
     doubles.analyzeSong.mockImplementation(async () => {
       Object.assign(store.get('mv-auto'), {
@@ -1820,7 +1846,13 @@ describe('orchestrated mode (brief.orchestrator)', () => {
     await settled('failed');
     expect(runOf()).toMatchObject({ errorCode: 'ORCHESTRATOR_REVISION_FAILED', error: expect.stringContaining('planner offline') });
     expect(store.get('mv-auto').productionReview.approvals?.storyboard).toBeFalsy();
-    expect(store.get('mv-auto').productionReview.feedback).toEqual([expect.objectContaining({ resolution: expect.stringContaining('ask again on Retry') })]);
+    expect(store.get('mv-auto').productionReview.feedback).toEqual([
+      expect.objectContaining({ resolution: expect.stringContaining('ask again on Retry') }),
+      expect.objectContaining({ text: 'Human request during failed planning' }),
+    ]);
+    const humanRequest = store.get('mv-auto').productionReview.feedback.at(-1);
+    expect(humanRequest.resolvedAt).toBeUndefined();
+    store.set('mv-auto', clone(actual.resolveProductionFeedback(store.get('mv-auto'), { feedbackId: humanRequest.id, resolution: 'Human reviewed it.' })));
 
     await service.resumeAutonomousVideo('mv-auto');
     await vi.waitFor(() => expect(runOf()?.output.renderJobId).toBe('render-1'));
@@ -1828,7 +1860,8 @@ describe('orchestrated mode (brief.orchestrator)', () => {
     expect(project.productionReview.draft).toMatchObject({ cast: 'A paper dancer in a red scarf', timingStatus: 'verified',
       storyboard: [{ camera: 'Slow push-in', action: 'Close on the scarf', lyricCueIds: ['c1', 'c2'] }] });
     // The orchestrator's change request was acted on and closed, so it no longer blocks approval.
-    expect(project.productionReview.feedback.at(-1)).toEqual(expect.objectContaining({ stage: 'storyboard', target: 'shot', resolution: 'Revised by the orchestrator.', resolvedAt: expect.any(String) }));
+    expect(project.productionReview.feedback.find((entry) => entry.text === 'Tighter on the scarf' && entry.resolution === 'Revised by the orchestrator.')).toMatchObject({ resolvedAt: expect.any(String) });
+    expect(project.productionReview.feedback.find((entry) => entry.text === 'Human note during planning').resolvedAt).toBeUndefined();
     expect(project.lyricCues[1]).toMatchObject({ startSec: 4, endSec: 20, words: [{ w: 'neon', conf: 'interpolated' }, { w: 'home', endSec: 20 }] });
     expect(project.productionReview.approvals).toMatchObject({ art: { approvedBy: 'orchestrator', reviewer: { kind: 'orchestrator', providerId: 'orch' } },
       storyboard: { approvedBy: 'orchestrator' } });

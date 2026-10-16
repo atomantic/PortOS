@@ -309,8 +309,11 @@ export async function attachProductionPilotProof(id, excerptId) {
 }
 
 export async function addProductionFeedback(id, input) {
-  const { project } = await mutateProjectRecord(id, current => ({ project: recordProductionFeedback(current, input) }));
-  return changed(project);
+  const { project, feedbackId } = await mutateProjectRecord(id, current => {
+    const next = recordProductionFeedback(current, input);
+    return { project: next, feedbackId: next.productionReview.feedback.at(-1).id };
+  });
+  return { ...changed(project), feedbackId };
 }
 /**
  * Anchor shots to the lyric lines sung over them: the shots named, else every
