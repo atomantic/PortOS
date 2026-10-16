@@ -267,7 +267,7 @@ export function describeStageFixtureRoot(path, value, state) {
         while ((entry = dir.readSync())) {
           if (visited++ >= 256) { capped = true; break; }
           const group = category || (entry.name === 'chrome-test-profile' ? 'profile'
-            : ['code-animation', 'videos', 'video-thumbnails', 'uploads', 'music'].includes(entry.name) ? 'application' : 'other');
+            : ['code-animations', 'videos', 'video-thumbnails', 'video-history.json', 'uploads', 'music'].includes(entry.name) ? 'application' : 'other');
           counts[group]++;
           if (entry.isDirectory() && !entry.isSymbolicLink()) walk(resolve(directory, entry.name), group, depth + 1);
         }

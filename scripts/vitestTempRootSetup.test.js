@@ -148,8 +148,8 @@ describe('vitestTempRootSetup teardown', () => {
         mkdirSync(join(first, 'chrome-test-profile'), { recursive: true });
         writeFileSync(join(first, 'chrome-test-profile', 'private-profile-sentinel'), 'private content');
         const second = lazyTempDataRoot('portos-code-animation-stages-');
-        mkdirSync(join(second, 'videos'));
-        writeFileSync(join(second, 'videos', 'private-video-sentinel'), 'private content');
+        mkdirSync(join(second, 'code-animations'));
+        writeFileSync(join(second, 'code-animations', 'private-project-sentinel'), 'private content');
         dispose();
       } finally {
         dispose();
