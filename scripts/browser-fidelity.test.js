@@ -94,6 +94,25 @@ describe('local fidelity publication through the existing runner and status boun
     expect(f.posts.map(post => post.state)).toEqual(['pending', 'failure']);
   });
 
+  it('refuses with a redacted underlying reason when a pre-admission operation throws', async () => {
+    const f = fixture();
+    f.options.toolchain = async () => { throw Error('spawn /Users/alice/bin/chrome failed GITHUB_TOKEN=sup3rs3cretvalue'); };
+    const error = await publishBrowserFidelity(f.options).catch(caught => caught);
+    expect(error.message).toContain('not admitted');
+    expect(error.reason).toContain('spawn <path> failed');
+    expect(error.reason).not.toMatch(/alice|sup3rs3cretvalue/);
+    expect(f.posts.map(post => post.state)).toEqual(['pending', 'failure']);
+    expect(f.run).not.toHaveBeenCalled();
+  });
+
+  it('keeps the existing refusal wording and surfaces the runner failure reason', async () => {
+    const f = fixture({ outcome: 'failed' });
+    const error = await publishBrowserFidelity(f.options).catch(caught => caught);
+    expect(error.message).toBe('Browser fidelity was not admitted; local diagnostics were retained.');
+    expect(error.reason).toBe('Browser fidelity failed or owned cleanup is unverified.');
+    expect(f.posts.map(post => post.state)).toEqual(['pending', 'failure']);
+  });
+
   it('fails pending publication after its bounded runner cancellation settles', async () => {
     vi.useFakeTimers();
     try {
