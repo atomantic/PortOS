@@ -13,6 +13,7 @@ import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
 import { timeAgo } from '../../../utils/formatters';
 import { normalizeUrl } from '../../../utils/urlNormalize';
+import LoadFailedState from '../../ui/LoadFailedState';
 
 export default function FeedsTab({ onRefresh }) {
   const [inputUrl, setInputUrl] = useState('');
@@ -20,6 +21,7 @@ export default function FeedsTab({ onRefresh }) {
   const [feeds, setFeeds] = useState([]);
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [feedsFailed, setFeedsFailed] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedFeedId, setSelectedFeedId] = useState(null);
   const [unreadOnly, setUnreadOnly] = useState(false);
@@ -27,8 +29,15 @@ export default function FeedsTab({ onRefresh }) {
   const inputRef = useRef(null);
 
   const fetchFeeds = useCallback(async () => {
-    const data = await api.getFeeds().catch(() => []);
-    setFeeds(data);
+    try {
+      const data = await api.getFeeds();
+      setFeedsFailed(false);
+      setFeeds(data || []);
+      return true;
+    } catch {
+      setFeedsFailed(true);
+      return false;
+    }
   }, []);
 
   const fetchItems = useCallback(async () => {
@@ -218,7 +227,9 @@ export default function FeedsTab({ onRefresh }) {
         </div>
       </div>
 
-      {feeds.length === 0 ? (
+      {feedsFailed ? (
+        <LoadFailedState title="Could not load feeds." hint="Your subscriptions may still be available." onRetry={async () => { setLoading(true); await fetchFeeds(); setLoading(false); }} />
+      ) : feeds.length === 0 ? (
         <div className="text-center py-12 text-gray-500">
           <Rss className="w-12 h-12 mx-auto mb-3 opacity-30" />
           <p>No feeds subscribed yet.</p>

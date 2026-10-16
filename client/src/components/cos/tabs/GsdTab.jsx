@@ -13,9 +13,11 @@ export default function GsdTab() {
 
   const fetchData = useCallback(async () => {
     const projectsData = await api.getGsdProjects().catch(() => null);
-    setFailed(projectsData === null);
+    const succeeded = projectsData !== null;
+    setFailed(!succeeded);
     if (projectsData) setProjects(projectsData.projects || projectsData || []);
     setLoading(false);
+    return succeeded;
   }, []);
 
   useEffect(() => {
@@ -24,9 +26,9 @@ export default function GsdTab() {
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    await fetchData();
+    const succeeded = await fetchData();
     setRefreshing(false);
-    toast.success('GSD data refreshed');
+    if (succeeded) toast.success('GSD data refreshed');
   };
 
   if (loading) {

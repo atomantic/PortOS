@@ -16,6 +16,7 @@ import { timeAgo } from '../utils/formatters';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import Modal from '../components/ui/Modal';
 import { FormField } from '../components/ui/FormField';
+import LoadFailedState from '../components/ui/LoadFailedState';
 
 const FILTERS = ['all', 'npm', 'secrets', 'archived'];
 const GITHUB_LOGIN_COMMAND = 'gh auth login --hostname github.com --web --clipboard';
@@ -32,6 +33,7 @@ export default function GitHub() {
   const [repos, setRepos] = useState({});
   const [secrets, setSecrets] = useState({});
   const [loading, setLoading] = useState(true);
+  const [reposFailed, setReposFailed] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [lastSync, setLastSync] = useState(null);
   const [repoListTruncated, setRepoListTruncated] = useState(false);
@@ -54,13 +56,15 @@ export default function GitHub() {
 
   const loadData = async () => {
     setLoading(true);
-    const [reposData, secretsData, statusData] = await Promise.all([
-      getGitHubRepos({ silent: true }).catch(() => ({})),
-      getGitHubSecrets({ silent: true }).catch(() => ({})),
-      getGitHubStatus({ silent: true }).catch(() => UNAVAILABLE_AUTH_STATUS)
+    const [reposResult, secretsResult, statusResult] = await Promise.allSettled([
+      getGitHubRepos({ silent: true }),
+      getGitHubSecrets({ silent: true }),
+      getGitHubStatus({ silent: true })
     ]);
-    setRepos(reposData || {});
-    setSecrets(secretsData || {});
+    setReposFailed(reposResult.status === 'rejected');
+    if (reposResult.status === 'fulfilled') setRepos(reposResult.value || {});
+    if (secretsResult.status === 'fulfilled') setSecrets(secretsResult.value || {});
+    const statusData = statusResult.status === 'fulfilled' ? statusResult.value : UNAVAILABLE_AUTH_STATUS;
     setAuthStatus(statusData);
     setLastSync(statusData?.lastRepoSync || null);
     setRepoListTruncated(statusData?.lastRepoSyncTruncated === true);
@@ -404,7 +408,9 @@ export default function GitHub() {
             </p>
           )}
 
-          {Object.keys(repos).length === 0 ? (
+          {reposFailed ? (
+            <LoadFailedState title="Could not load GitHub repositories." hint="Retry the local repository read." onRetry={loadData} />
+          ) : Object.keys(repos).length === 0 ? (
             <div className="text-center py-8">
               <p className="text-gray-400">No repos loaded yet.</p>
               <p className="text-gray-500 text-sm mt-1">Click "Sync Repos" to fetch from GitHub.</p>

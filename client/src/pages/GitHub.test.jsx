@@ -33,6 +33,21 @@ describe('GitHub account setup', () => {
     });
   });
 
+  it('distinguishes a failed repository read from a successful empty response', async () => {
+    mock.getGitHubRepos.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({});
+    render(
+      <MemoryRouter initialEntries={['/devtools/github']}>
+        <GitHub />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Could not load GitHub repositories.')).toBeInTheDocument();
+    expect(screen.queryByText('No repos loaded yet.')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('No repos loaded yet.')).toBeInTheDocument();
+  });
+
   it('offers an in-app GitHub login flow and prevents an anonymous repo sync', async () => {
     render(
       <MemoryRouter initialEntries={['/devtools/github']}>

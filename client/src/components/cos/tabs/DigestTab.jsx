@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   Calendar,
   RefreshCw,
@@ -20,14 +20,18 @@ import BrailleSpinner from '../../BrailleSpinner';
 import Banner from '../../ui/Banner';
 import { formatDateNumeric } from '../../../utils/formatters';
 import { pluralize } from '../../../lib/textUtils';
+import LoadFailedState from '../../ui/LoadFailedState';
 
 export default function DigestTab() {
   const [currentDigest, setCurrentDigest] = useState(null);
   const [weekProgress, setWeekProgress] = useState(null);
   const [digestList, setDigestList] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [selectedWeek, setSelectedWeek] = useState(null);
+  const selectedWeekRef = useRef(null);
+  const loadVersion = useRef(0);
   const [expandedSections, setExpandedSections] = useState({
     accomplishments: true,
     byTaskType: false,
@@ -35,37 +39,62 @@ export default function DigestTab() {
     insights: true
   });
 
-  useEffect(() => {
-    loadData();
-  }, []);
+  useEffect(() => { loadData(); }, []);
 
   const loadData = async () => {
+    const version = ++loadVersion.current;
     setLoading(true);
-    const [digest, progress, list] = await Promise.all([
-      api.getCosWeeklyDigest().catch(() => null),
-      api.getCosWeekProgress().catch(() => null),
-      api.listCosWeeklyDigests().catch(() => ({ digests: [] }))
+    const [digestResult, progressResult, listResult] = await Promise.allSettled([
+      api.getCosWeeklyDigest(), api.getCosWeekProgress(), api.listCosWeeklyDigests()
     ]);
-    setCurrentDigest(digest);
-    setWeekProgress(progress);
-    setDigestList(list.digests || []);
+    if (loadVersion.current !== version) return false;
+    setLoadFailed(digestResult.status === 'rejected');
+    if (digestResult.status === 'fulfilled') setCurrentDigest(digestResult.value);
+    if (progressResult.status === 'fulfilled') setWeekProgress(progressResult.value);
+    if (listResult.status === 'fulfilled') setDigestList(listResult.value?.digests || []);
     setLoading(false);
+    return digestResult.status === 'fulfilled';
   };
 
   const loadWeek = async (weekId) => {
+    const version = ++loadVersion.current;
     setLoading(true);
+    selectedWeekRef.current = weekId;
     setSelectedWeek(weekId);
-    const digest = await api.getCosWeeklyDigest(weekId).catch(() => null);
-    setCurrentDigest(digest);
-    setLoading(false);
+    setLoadFailed(false);
+    try {
+      const digest = await api.getCosWeeklyDigest(weekId);
+      if (loadVersion.current !== version) return false;
+      setCurrentDigest(digest);
+      setLoadFailed(false);
+      return true;
+    } catch {
+      if (loadVersion.current !== version) return false;
+      setLoadFailed(true);
+      return false;
+    } finally {
+      if (loadVersion.current === version) setLoading(false);
+    }
+  };
+
+  const retryLoad = () => {
+    if (selectedWeek) loadWeek(selectedWeek);
+    else loadData();
   };
 
   const handleGenerate = async () => {
+    const selectionAtStart = selectedWeekRef.current;
     setGenerating(true);
     const digest = await api.generateCosDigest().catch(() => null);
     if (digest) {
-      setCurrentDigest(digest);
-      await loadData();
+      if (selectedWeekRef.current === selectionAtStart) {
+        selectedWeekRef.current = null;
+        setSelectedWeek(null);
+        setCurrentDigest(digest);
+        await loadData();
+      } else {
+        await loadWeek(selectedWeekRef.current);
+      }
     }
     setGenerating(false);
   };
@@ -116,6 +145,8 @@ export default function DigestTab() {
 
   return (
     <div className="space-y-6">
+      {loadFailed && <LoadFailedState title="Could not load weekly digest data." hint="Retry the weekly digest load." onRetry={retryLoad} />}
+      {loading && currentDigest && <div className="flex justify-center py-6"><BrailleSpinner text="Loading digest" /></div>}
       {/* Header with Week Selector */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
@@ -192,13 +223,7 @@ export default function DigestTab() {
         </div>
       )}
 
-      {!currentDigest ? (
-        <div className="bg-port-card border border-port-border rounded-lg p-8 text-center">
-          <Calendar className="w-12 h-12 text-gray-600 mx-auto mb-3" />
-          <p className="text-gray-400">No digest data available yet.</p>
-          <p className="text-gray-500 text-sm mt-1">Complete some tasks and generate a digest to see your weekly summary.</p>
-        </div>
-      ) : (
+      {currentDigest && !loadFailed && !loading ? (
         <>
           {/* Summary Stats */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -414,7 +439,13 @@ export default function DigestTab() {
             )}
           </div>
         </>
-      )}
+      ) : !loadFailed && !loading ? (
+        <div className="bg-port-card border border-port-border rounded-lg p-8 text-center">
+          <Calendar className="w-12 h-12 text-gray-600 mx-auto mb-3" />
+          <p className="text-gray-400">No digest data available yet.</p>
+          <p className="text-gray-500 text-sm mt-1">Complete some tasks and generate a digest to see your weekly summary.</p>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -28,4 +28,15 @@ describe('GoalsTab', () => {
     expect(derive).toBeEnabled();
     expect(derive).toHaveTextContent('Re-derive');
   });
+
+  it('distinguishes a failed goals read from a successful empty response', async () => {
+    api.getGoals.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({ goals: [] });
+    render(<GoalsTab />);
+
+    expect(await screen.findByText('Could not load goals.')).toBeInTheDocument();
+    expect(screen.queryByText(/No goals yet/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText(/No goals yet/)).toBeInTheDocument();
+  });
 });
