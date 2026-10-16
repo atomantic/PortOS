@@ -201,7 +201,7 @@ export async function captureThought(text, providerOverride, modelOverride, { cr
     autoFile: autonomyMode !== 'dry-run',
     countsTowardBudget: true
   })
-    .catch(err => console.error(`❌ Background classification failed for ${inboxEntry.id}: ${err.message}`));
+    .catch(err => failClassification(inboxEntry.id, err));
 
   return {
     inboxLog: inboxEntry,
@@ -263,6 +263,23 @@ function repoCaptureMessage(repoIntake) {
   return queued.length
     ? `Repo saved — cloning, then queueing ${queued.join(' + ')}.`
     : 'Repo saved to Links — cloning now.';
+}
+
+/**
+ * Last-resort handler for a throw escaping classifyInBackground (e.g. the filing
+ * write failed after a successful AI call). Without it the entry stays
+ * `classifying` until the next boot's recoverStuckClassifications.
+ */
+async function failClassification(entryId, err) {
+  console.error(`❌ Background classification failed for ${entryId}: ${err.message}`);
+  const updated = await storage.updateInboxLog(entryId, {
+    status: 'needs_review',
+    error: { message: err.message }
+  }).catch(updateErr => {
+    console.error(`❌ Failed to mark ${entryId} needs_review: ${updateErr.message}`);
+    return null;
+  });
+  if (updated) brainEvents.emit('classified', { entryId, status: 'needs_review', error: err.message });
 }
 
 /**
@@ -744,7 +761,7 @@ export async function retryClassification(inboxLogId, providerOverride, modelOve
     autoFile: true,
     countsTowardBudget: false
   })
-    .catch(err => console.error(`❌ Background retry failed for ${inboxLogId}: ${err.message}`));
+    .catch(err => failClassification(inboxLogId, err));
 
   return {
     inboxLog: await storage.getInboxLogById(inboxLogId),
