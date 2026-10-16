@@ -38,6 +38,7 @@ import { ensureSceneTakes, keepCodeClipWithItsClip, TAKE_SLOT } from './takes.js
 import { normalizeComposition, invalidateCompositionTiming, withStoredCompositionDocument } from './composition.js';
 import { normalizeSoundBed } from './soundBed.js';
 import { normalizeFilmLook } from '../../lib/filmLook.js';
+import { stillMoveForCamera } from '../../lib/cameraMovements.js';
 import { normalizeTitleCard } from '../../lib/musicVideoTitleCard.js';
 import { normalizeStatsOutro } from '../../lib/musicVideoStatsOutro.js';
 import { remapTreatmentForClone, scenesFingerprint } from './treatment.js';
@@ -652,7 +653,12 @@ export function applySceneUpdate(project, sceneId, patch) {
   const scenes = project.scenes || [];
   const idx = scenes.findIndex((s) => s.sceneId === sceneId);
   if (idx < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
-  const merged = 'codeClip' in data ? { ...scenes[idx], ...data } : keepCodeClipWithItsClip(scenes[idx], { ...scenes[idx], ...data });
+  const kept = 'codeClip' in data ? { ...scenes[idx], ...data } : keepCodeClipWithItsClip(scenes[idx], { ...scenes[idx], ...data });
+  // A shot turning into a still takes the nearest move to its planned camera (#10589) unless
+  // it already has one; from then on its Move picker owns how the still moves.
+  const becomesStill = data.visualLayer === 'still' && scenes[idx].visualLayer !== 'still' && !('stillMove' in data) && (kept.stillMove ?? 'hold') === 'hold';
+  const seeded = becomesStill ? stillMoveForCamera(kept.camera) : null;
+  const merged = seeded ? { ...kept, stillMove: seeded } : kept;
   // Setting a slot directly (an older client, or a hand edit) still records the
   // asset as a take so the candidate list stays a superset of the selection.
   const touchesSlot = Object.values(TAKE_SLOT).some((field) => typeof data[field] === 'string');
@@ -835,6 +841,7 @@ export function splitScene(project, sceneId, { backend = null, atSec = null } = 
         sectionIndex: scene.sectionIndex ?? null,
         visualIntent: scene.visualIntent ?? null,
         visualLayer: scene.visualLayer ?? 'footage',
+        ...(scene.stillMove ? { stillMove: scene.stillMove } : {}),
         shotMode: scene.shotMode ?? 'cutaway',
         performanceSpeaker: scene.performanceSpeaker ?? null,
         performanceStyle: scene.performanceStyle ?? null,

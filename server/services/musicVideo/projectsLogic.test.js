@@ -12,6 +12,7 @@ import {
   reorderScenes,
   mergeNextScene,
   mergePreviousScene,
+  splitScene,
   mirrorStatus,
   sanitizeProjectForSync,
   mergeProjectRecord,
@@ -573,6 +574,23 @@ describe('scene board operations', () => {
     expect(updated).toMatchObject({ visualLayer: 'card', cardText: 'Verse two', cardColor: '#112233' });
     expect(() => applySceneUpdate(project, scene.sceneId, { visualLayer: 'hologram' })).toThrow();
     expect(() => applySceneUpdate(project, scene.sceneId, { cardColor: 'red' })).toThrow();
+  });
+
+  // Uniquely catches a planned camera move not seeding a new still's Move, or overriding one the shot sets.
+  it('seeds a shot\'s still move from its planned camera when it becomes a still, and keeps a move it is given', () => {
+    const { project, scene } = addScene(baseProject(), { prompt: 'a', camera: { move: 'truck-left' } });
+    expect(scene.stillMove).toBe('hold');
+    expect(applySceneUpdate(project, scene.sceneId, { visualLayer: 'still' }).updated.stillMove).toBe('pan');
+    expect(applySceneUpdate(project, scene.sceneId, { visualLayer: 'still', stillMove: 'hold' }).updated.stillMove).toBe('hold');
+    const still = applySceneUpdate(project, scene.sceneId, { visualLayer: 'still', stillMove: 'push' }).project;
+    expect(applySceneUpdate(still, scene.sceneId, { visualLayer: 'still' }).updated.stillMove).toBe('push');
+  });
+
+  // Uniquely catches a split still's later pieces losing the Move the shot set.
+  it('keeps a still\'s Move on every piece of a split', () => {
+    const { project, scene } = addScene(baseProject(), { prompt: 'a', visualLayer: 'still', stillMove: 'push', camera: { move: 'handheld' }, startSec: 0, endSec: 8 });
+    const split = splitScene(project, scene.sceneId, { atSec: 4 });
+    expect(split.project.scenes.map((s) => s.stillMove)).toEqual(['push', 'push']);
   });
 
   it('persists a shot\'s lyric-type zone and role and refuses unknown ones (#10583)', () => {

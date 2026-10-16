@@ -313,6 +313,18 @@ describe('resolveSceneClips', () => {
     expect(clips[0].duration).toBe(2); // 48/24
   });
 
+  // Uniquely catches a planned camera move overriding the Move the shot shows (the render panning a Hold still).
+  it('moves a still as its Move is set, whatever camera was planned for it', async () => {
+    loadHistory.mockResolvedValue([]);
+    const still = { order: 0, visualLayer: 'still', referenceImageId: 'frame.png', startSec: 0, endSec: 2, camera: { move: 'handheld', onBeat: true } };
+    const [held, panned, seeded] = await resolveSceneClips({ scenes: [
+      { ...still, sceneId: 's1', stillMove: 'hold' },
+      { ...still, sceneId: 's2', order: 1, startSec: 2, endSec: 4, stillMove: 'pan' },
+      { ...still, sceneId: 's3', order: 2, startSec: 4, endSec: 6 },
+    ] }, { layered: true });
+    expect([held.move, panned.move, seeded.move]).toEqual(['hold', 'pan', 'pan']);
+  });
+
   // Uniquely catches a hand-set speed or offset that never reaches the render, or reaches it by a copied clip.
   it('plays a hand-set speed and offset from the same clip file, on the output timebase', async () => {
     loadHistory.mockResolvedValue([{ id: 'h1', filename: 'a.mp4', width: 768, height: 512, fps: 24, numFrames: 96 }]);

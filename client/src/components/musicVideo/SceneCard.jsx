@@ -301,7 +301,7 @@ export default function SceneCard({
             <>
               <label htmlFor={fieldId('move')}>Move</label>
               <select id={fieldId('move')} value={scene.stillMove || 'hold'} onChange={(e) => applyPatch({ stillMove: e.target.value })}
-                disabled={!!scene.camera?.move} title={scene.camera?.move ? 'The planned camera move drives this still.' : undefined}
+                disabled={documentComposition && !!scene.camera?.move} title={documentComposition && scene.camera?.move ? 'The planned camera move drives this still.' : undefined}
                 className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0 disabled:opacity-50">
                 {STILL_MOVE_LABELS.map(([value, text]) => <option key={value} value={value}>{text}</option>)}
               </select>
