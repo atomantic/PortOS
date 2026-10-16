@@ -33,10 +33,13 @@ import { getVideoHistoryItem } from '../services/apiImageVideo.js';
  * `preload="none"` player can ignore `resolving` — nothing is fetched until the
  * user hits Play, by which time the lookup has long settled.
  *
+ * `geometry: true` asks the one-record read to measure missing source geometry;
+ * `fps` is null until a finite source cadence is known.
+ *
  * `enabled` keeps this lazy: the list grid must not fetch history for N cards,
  * so a card resolves only once the user actually presses play.
  */
-export function useVideoFileSrc(jobId, { enabled = true } = {}) {
+export function useVideoFileSrc(jobId, { enabled = true, geometry = false } = {}) {
   // Keyed by the id + attempt it was resolved FOR, so `resolving` can be derived
   // synchronously rather than set from an effect. An effect-set flag would
   // still be false for the first render after `enabled` flips true (effects run
@@ -46,7 +49,7 @@ export function useVideoFileSrc(jobId, { enabled = true } = {}) {
   const [attempt, setAttempt] = useState(0);
   const [resolved, setResolved] = useState({ jobId: null, attempt: -1, src: null });
   const active = Boolean(enabled && jobId);
-  const settled = resolved.jobId === jobId && resolved.attempt === attempt;
+  const settled = resolved.jobId === jobId && resolved.attempt === attempt && resolved.geometry === geometry;
   const resolving = active && !settled;
 
   useEffect(() => {
@@ -57,15 +60,15 @@ export function useVideoFileSrc(jobId, { enabled = true } = {}) {
     // reconstruction fallback (and its own missing-media UI) covers both, so a
     // toast would be noise on a page that already degrades gracefully.
     // Both paths settle on THIS jobId+attempt so `resolving` can never latch on.
-    getVideoHistoryItem(jobId, { silent: true })
+    getVideoHistoryItem(jobId, { silent: true, ...(geometry ? { geometry: true } : {}) })
       .then((entry) => {
         if (cancelled) return;
         const filename = typeof entry?.filename === 'string' ? entry.filename.trim() : '';
-        setResolved({ jobId, attempt, src: filename ? `/data/videos/${filename}` : null });
+        setResolved({ jobId, attempt, geometry, src: filename ? `/data/videos/${filename}` : null, fps: entry?.fps });
       })
-      .catch(() => { if (!cancelled) setResolved({ jobId, attempt, src: null }); });
+      .catch(() => { if (!cancelled) setResolved({ jobId, attempt, geometry, src: null }); });
     return () => { cancelled = true; };
-  }, [jobId, active, settled, attempt]);
+  }, [jobId, active, settled, attempt, geometry]);
 
   // Redo a settled lookup. A transient 5xx on the history call would otherwise
   // strand a timeline final forever: `src` stays null, the caller falls back to
@@ -74,5 +77,5 @@ export function useVideoFileSrc(jobId, { enabled = true } = {}) {
   // (`<ScenePreview onRetry={retry}>`) so one button recovers both layers.
   const retry = useCallback(() => setAttempt((a) => a + 1), []);
 
-  return { src: settled ? resolved.src : null, resolving, retry };
+  return { src: settled ? resolved.src : null, fps: settled && Number.isFinite(resolved.fps) && resolved.fps > 0 ? resolved.fps : null, resolving, retry };
 }

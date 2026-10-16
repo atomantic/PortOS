@@ -17,7 +17,7 @@ import FrameStepper, { captureMediaFrame } from './FrameStepper.jsx';
 import { sceneFrameFit } from './SceneFrameFit.jsx';
 import TransitionGlitch from './TransitionGlitch.jsx';
 import ImageEffectStill from './ImageEffectStill.jsx';
-import { clipOffsetSec, clipReversed, clipSpeedRate, isLayeredComposition } from '../../lib/musicVideoLayers.js';
+import { clipOffsetSec, clipReversed, clipSpeedRate, isLayeredComposition, sceneVisualLayer, stillFrameTransform } from '../../lib/musicVideoLayers.js';
 import { sceneImageEffect } from '../../lib/musicVideoImageEffects.js';
 import { plannedTransitions, sceneCutEffects } from '../../lib/musicVideoCutEffects.js';
 
@@ -342,7 +342,7 @@ function ShotClip({ scene, audioRef, time, current, preload = 'auto' }) {
   );
 }
 
-// Runs `apply(songTime)` on every animation frame while the song plays, and once more when it pauses:
+// Runs `apply(songTime)` on every animation frame while the song plays, and once more when it stops:
 // the song's timeupdate is far too coarse for a beat flip or a smooth fade.
 function useSongFrames(audioRef, apply) {
   useEffect(() => {
@@ -357,21 +357,43 @@ function useSongFrames(audioRef, apply) {
     const stop = () => { cancelAnimationFrame(handle); apply(audio.currentTime || 0); };
     audio.addEventListener('play', start);
     audio.addEventListener('pause', stop);
+    audio.addEventListener('ended', stop);
     if (!audio.paused) start();
     return () => {
       cancelAnimationFrame(handle);
       audio.removeEventListener('play', start);
       audio.removeEventListener('pause', stop);
+      audio.removeEventListener('ended', stop);
     };
   }, [audioRef, apply]);
 }
 
+function StillShot({ scene, audioRef, time, effect = null, fps, startSec = scene.startSec, endSec = scene.endSec }) {
+  const ref = useRef(null);
+  const getTime = useCallback(() => audioRef.current?.currentTime || 0, [audioRef]);
+  const apply = useCallback((t) => {
+    if (ref.current) ref.current.style.transform = stillFrameTransform(scene, t, { fps, startSec, endSec });
+  }, [scene, fps, startSec, endSec]);
+  useEffect(() => { apply(time); }, [time, apply]);
+  useSongFrames(audioRef, apply);
+  return (
+    <div className="h-full w-full overflow-hidden">
+      <div ref={ref} data-testid="animatic-still" className="h-full w-full">
+        {effect ? <ImageEffectStill src={`/data/images/${scene.referenceImageId}`} effect={effect}
+          endSrc={scene.endImageId ? `/data/images/${scene.endImageId}` : null}
+          startSec={startSec} time={time} playing={!!audioRef.current && !audioRef.current.paused} getTime={getTime} fps={fps} />
+          : <img src={`/data/images/${scene.referenceImageId}`} alt="" className="h-full w-full object-cover" />}
+      </div>
+    </div>
+  );
+}
+
 // How much of the incoming clip shows at song time `t`: on a toggle's flips, or a
 // dissolve's ramp, which reaches full on the cut as the render's alpha fade does.
-const incomingOpacity = (effect, t) => {
+const incomingOpacity = (effect, t, fps) => {
   if (effect.style !== 'dissolve') return effect.incoming.some(([a, b]) => t >= a && t < b) ? 1 : 0;
   if (t < effect.windowStartSec || t >= effect.cutSec) return 0;
-  return Math.min(1, (t - effect.windowStartSec) / (effect.cutSec - effect.windowStartSec + 1 / ANIMATIC_FPS));
+  return Math.min(1, (t - effect.windowStartSec) / (effect.cutSec - effect.windowStartSec + 1 / fps));
 };
 
 /**
@@ -380,15 +402,16 @@ const incomingOpacity = (effect, t) => {
  * before its in-point, and shows on the toggle's frames or fades in over the
  * dissolve's, as the final render overlays it. A shot without a clip shows its still.
  */
-function ToggleClip({ scene, toggle, audioRef, time }) {
+function ToggleClip({ scene, toggle, audioRef, time, layered, fps }) {
   const mediaRef = useRef(null);
-  const file = useVideoFileSrc(scene.videoHistoryId || null);
-  const src = scene.videoHistoryId ? file.src || (file.resolving ? null : `/data/videos/${scene.videoHistoryId}.mp4`) : null;
+  const still = sceneVisualLayer(scene, { layered }) === 'still';
+  const file = useVideoFileSrc(!still ? scene.videoHistoryId || null : null);
+  const src = !still && scene.videoHistoryId ? file.src || (file.resolving ? null : `/data/videos/${scene.videoHistoryId}.mp4`) : null;
   const apply = useCallback((t) => {
     const el = mediaRef.current;
     const audio = audioRef.current;
     if (!el) return;
-    el.style.opacity = String(incomingOpacity(toggle, t));
+    el.style.opacity = String(incomingOpacity(toggle, t, fps));
     if (el.tagName !== 'VIDEO' || el.readyState < 1) return;
     const duration = Number.isFinite(el.duration) ? el.duration : null;
     const target = clipTimeAt(scene, Math.min(Math.max(t, toggle.windowStartSec), toggle.cutSec), duration, { early: true, fromSec: toggle.windowStartSec });
@@ -397,7 +420,7 @@ function ToggleClip({ scene, toggle, audioRef, time }) {
     const running = !!audio && !audio.paused && t >= toggle.windowStartSec && t < toggle.cutSec;
     if (!running) el.pause?.();
     else if (el.paused) el.play?.()?.catch?.(() => {});
-  }, [toggle, scene, audioRef]);
+  }, [toggle, scene, audioRef, fps]);
   useEffect(() => { apply(time); }, [time, apply]);
   useEffect(() => {
     const el = mediaRef.current;
@@ -411,6 +434,10 @@ function ToggleClip({ scene, toggle, audioRef, time }) {
       data-testid="beat-toggle-clip" style={{ opacity: 0 }} className={className} />;
   }
   if (!scene.referenceImageId) return null;
+  if (layered) return <div ref={mediaRef} data-testid="beat-toggle-clip" style={{ opacity: 0 }} className={className}>
+    <StillShot scene={scene} audioRef={audioRef} time={time} fps={fps} effect={sceneImageEffect(scene, { layered })}
+      startSec={toggle.windowStartSec} endSec={toggle.cutSec} />
+  </div>;
   return <img ref={mediaRef} src={`/data/images/${scene.referenceImageId}`} alt="" data-testid="beat-toggle-clip" style={{ opacity: 0 }} className={className} />;
 }
 
@@ -451,9 +478,14 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   // While the song plays the look is the light playback version; paused, the exact render filter.
   const [playing, setPlaying] = useState(false);
   const lookAvailable = !isFilmLookNeutral(project.filmLook);
-  const songTime = useCallback(() => audioRef.current?.currentTime || 0, []);
   const toggleLook = () => setLookOn((on) => { safeWriteStorage(ANIMATIC_LOOK_KEY, on ? 'off' : 'on'); return !on; });
   const scenes = project.scenes || [];
+  const layered = isLayeredComposition(project);
+  // The first footage source sets the composed render's frame rate, even when the current shot is a still.
+  const lead = scenes.slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+    .find((scene) => scene.videoHistoryId && sceneVisualLayer(scene, { layered }) === 'footage');
+  const leadFile = useVideoFileSrc(layered ? lead?.videoHistoryId : null, { geometry: true });
+  const stillFps = leadFile.fps || ANIMATIC_FPS;
   const lyricsAvailable = hasTimedLyrics(project);
   const { overlay, failed } = useLyricOverlay({ project, enabled: lyricsAvailable && lyricsOn, audioRef, time });
   // The cutting room floor outro: it plays when the song ends, and Ending plays it straight away; playing or seeking the song leaves it.
@@ -491,7 +523,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   const beats = project.audioAnalysis?.beats;
   const storyboardRows = project.productionReview?.draft?.storyboard;
   const planned = useMemo(() => plannedTransitions(storyboardRows), [storyboardRows]);
-  const cutEffects = useMemo(() => sceneCutEffects(scenes, { fps: ANIMATIC_FPS, beats, endSec: songEndSec || null, planned }), [scenes, beats, songEndSec, planned]);
+  const cutEffects = useMemo(() => sceneCutEffects(scenes, { fps: stillFps, beats, endSec: songEndSec || null, planned }), [scenes, stillFps, beats, songEndSec, planned]);
   // A toggle or dissolve mounts its incoming clip a little ahead, so it has loaded when it starts showing.
   const nearToggles = cutEffects.filter((t) => t.incoming && time >= t.windowStartSec - 3 && time < t.cutSec);
   const nearFades = cutEffects.filter((t) => t.style === 'fade-black' && time >= t.outStartSec - 1 && time < t.inEndSec + 1);
@@ -499,12 +531,12 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   const timed = timedShots(scenes);
   const index = shot ? timed.indexOf(shot) : -1;
   // A still shot with an image effect plays the effect over its still, as the composed render does, not its clip.
-  const layered = isLayeredComposition(project);
   const shotEffect = shot ? sceneImageEffect(shot, { layered }) : null;
+  const stillShot = shot && layered && (sceneVisualLayer(shot, { layered }) === 'still' || !shot.videoHistoryId);
   // The shot on screen and the next few: each keeps one mounted clip, so the cut to the
   // next shot shows a clip that has already loaded and sits on its first frame.
   const clipShots = timed.slice(Math.max(index, 0), Math.max(index, 0) + 1 + CLIP_PRELOAD_SHOTS)
-    .filter((scene) => scene.videoHistoryId && !sceneImageEffect(scene, { layered }));
+    .filter((scene) => scene.videoHistoryId && sceneVisualLayer(scene, { layered }) === 'footage');
   const label = shot ? shot.label || `Shot ${index + 1}` : 'No shots yet';
   // With the lyrics drawn over the picture, a shot without a frame keeps its label and
   // intent under the picture instead, so no stand-in text sits under the sung words.
@@ -518,10 +550,8 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
         {/* The project's film look, as the final render applies it over the whole picture, lyrics included. */}
         <FilmLookFrame look={lookOn ? project.filmLook : null} frame={Math.round((outro.active ? songEndSec + outro.t : time) * ANIMATIC_FPS)}
           playing={playing || (outro.active && outro.t < outro.seconds)} className="h-full w-full">
-        {shot?.referenceImageId && shotEffect ? (
-          <ImageEffectStill key={shot.sceneId} src={`/data/images/${shot.referenceImageId}`} effect={shotEffect}
-            endSrc={shot.endImageId ? `/data/images/${shot.endImageId}` : null}
-            startSec={shot.startSec} time={time} playing={playing} getTime={songTime} fps={ANIMATIC_FPS} />
+        {shot?.referenceImageId && stillShot ? (
+          <StillShot key={shot.sceneId} scene={shot} audioRef={audioRef} time={time} fps={stillFps} effect={shotEffect} />
         ) : shot?.referenceImageId ? (
           // Behind a VHS-edged clip the still stands in, blurred and faded, for the render's blur of the clip.
           <img src={`/data/images/${shot.referenceImageId}`} alt=""
@@ -538,7 +568,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
         ))}
         {nearToggles.map((toggle) => {
           const incoming = scenes.find((scene) => scene.sceneId === toggle.toSceneId);
-          return incoming ? <ToggleClip key={`toggle:${toggle.toSceneId}:${incoming.videoHistoryId || ''}`} scene={incoming} toggle={toggle} audioRef={audioRef} time={time} /> : null;
+          return incoming ? <ToggleClip key={`toggle:${toggle.toSceneId}:${incoming.videoHistoryId || ''}`} scene={incoming} toggle={toggle} audioRef={audioRef} time={time} layered={layered} fps={stillFps} /> : null;
         })}
         {nearFades.map((fade) => <FadeBlack key={`fade:${fade.fromSceneId}`} fade={fade} audioRef={audioRef} time={time} />)}
         {/* The shots' VHS glitches on their cuts, on the frames the final render repaints. */}

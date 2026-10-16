@@ -11,9 +11,11 @@ const compiledVisual = vi.hoisted(() => ({
   version: 1, compilerVersion: '1.0.0', status: 'locked', assets: [], adapters: [], omitted: [], warnings: [],
 }));
 const probeVideoDuration = vi.hoisted(() => vi.fn(async () => 41.041281));
+const probeVideoGeometry = vi.hoisted(() => vi.fn());
 vi.mock('../lib/ffmpeg.js', async (importOriginal) => ({
   ...(await importOriginal()),
   probeVideoDuration,
+  probeVideoGeometry,
 }));
 const compileFableLoomVisualRequest = vi.hoisted(() => vi.fn(async ({ authoredPrompt, authoredNegativePrompt, sourceImagePath }) => ({
   prompt: authoredPrompt,
@@ -3013,6 +3015,34 @@ describe('videoGen routes', () => {
   });
 
   describe('GET /history/:id', () => {
+    // Hosted clips lack stored geometry; the animatic needs the cadence the renderer measures.
+    it('measures geometry only when requested and missing, without changing the stored entry', async () => {
+      const entry = { id: 'hosted', filename: 'hosted.mp4' };
+      videoGenService.getHistoryItem.mockResolvedValue(entry);
+      probeVideoGeometry.mockResolvedValue({ width: 1280, height: 720, fps: 30, numFrames: 60 });
+      const plain = await request(app).get('/api/video-gen/history/hosted');
+      expect(plain.body).toEqual(entry);
+      expect(probeVideoGeometry).not.toHaveBeenCalled();
+      const measured = await request(app).get('/api/video-gen/history/hosted?geometry=true');
+      expect(measured.status).toBe(200);
+      expect(measured.body).toEqual({ ...entry, width: 1280, height: 720, fps: 30, numFrames: 60 });
+      expect(probeVideoGeometry).toHaveBeenCalledTimes(1);
+      expect(entry).toEqual({ id: 'hosted', filename: 'hosted.mp4' });
+      videoGenService.getHistoryItem.mockResolvedValue(measured.body);
+      await request(app).get('/api/video-gen/history/hosted?geometry=true');
+      expect(probeVideoGeometry).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses unavailable geometry, unsafe filenames and malformed geometry requests', async () => {
+      videoGenService.getHistoryItem.mockResolvedValue({ id: 'hosted', filename: 'hosted.mp4' });
+      probeVideoGeometry.mockResolvedValue(null);
+      expect((await request(app).get('/api/video-gen/history/hosted?geometry=true')).status).toBe(422);
+      videoGenService.getHistoryItem.mockResolvedValue({ id: 'hosted', filename: '../outside.mp4' });
+      expect((await request(app).get('/api/video-gen/history/hosted?geometry=true')).status).toBe(422);
+      expect(probeVideoGeometry).toHaveBeenCalledTimes(1);
+      expect((await request(app).get('/api/video-gen/history/hosted?geometry=maybe')).status).toBe(400);
+    });
+
     // The point of the route (#4165): a timeline render's history id is a
     // randomUUID() that has nothing to do with its `timeline-*.mp4` filename,
     // so a client holding only the id learns the real file from HERE instead of
