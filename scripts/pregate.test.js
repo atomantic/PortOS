@@ -121,6 +121,7 @@ describe('pregate hidden-content invocation', () => {
       'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
       'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
       'scripts/lib/directInvocation.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
+      'scripts/lib/browserSuites.js',
       'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
       'server/lib/textUtils.js',
     ]) {
@@ -439,6 +440,7 @@ describe('the gate end to end', () => {
         'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
         'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
         'scripts/lib/directInvocation.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
+        'scripts/lib/browserSuites.js',
         'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
         'server/lib/textUtils.js',
       ]) {
