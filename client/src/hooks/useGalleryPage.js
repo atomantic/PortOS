@@ -11,6 +11,7 @@ export function useGalleryPage(filters = {}, { enabled = true, media = false, re
   const scope = JSON.stringify({ ...filters, q: query });
   const resetScope = `${scope}:${revision}`;
   const [pageScope, setPageScope] = useState(resetScope);
+  const [filterScope, setFilterScope] = useState(scope);
   const [offset, setOffset] = useState(0);
   const [nextOffset, setNextOffset] = useState(null);
   const [items, setItems] = useState([]);
@@ -25,7 +26,10 @@ export function useGalleryPage(filters = {}, { enabled = true, media = false, re
   retainedItems.current = items;
   loadedLength.current = items.length;
   if (pageScope !== resetScope) {
-    refreshLength.current = 0; setPageScope(resetScope); setOffset(0); setItems([]); setNextOffset(null);
+    const retain = preserveLoadedOnRefresh && filterScope === scope;
+    refreshLength.current = retain ? items.length : 0;
+    setPageScope(resetScope); setFilterScope(scope); setOffset(0);
+    if (!retain) { setItems([]); setNextOffset(null); }
   }
   const refresh = useCallback(() => {
     refreshLength.current = preserveLoadedOnRefresh ? loadedLength.current : 0;
@@ -77,8 +81,8 @@ export function useGalleryPage(filters = {}, { enabled = true, media = false, re
     return () => { cancelled = true; };
   }, [scope, offset, enabled, media, revision, paused, refreshKey]);
   const loadMore = useCallback(() => {
-    if (!loading && nextOffset !== null) setOffset(nextOffset);
-  }, [loading, nextOffset]);
+    if (!loading && !paused && nextOffset !== null) setOffset(nextOffset);
+  }, [loading, paused, nextOffset]);
   return useMemo(() => ({ items, setItems, total, setTotal, counts, loading, error,
     hasMore: nextOffset !== null, loadMore, refresh, retry }),
   [items, total, counts, loading, error, nextOffset, loadMore, refresh, retry]);

@@ -76,3 +76,29 @@ it('crosses an entirely new first page to retain the prior window and stops afte
   expect(fetchPage).toHaveBeenCalledTimes(3);
   expect(result.current.hasMore).toBe(true);
 });
+
+
+it('refreshes a retained favorites window after annotations change while filter changes reset it', async () => {
+  let rows = Array.from({ length: 180 }, (_, n) => ({ filename: `${n}.png` }));
+  let finishFirst;
+  fetchPage.mockImplementation(async ({ offset = 0, limit }) => ({ items: rows.slice(offset, offset + limit), total: rows.length, offset }));
+  const { result, rerender } = renderHook(({ revision, starred, paused }) => useGalleryPage({ starred }, { revision, paused, preserveLoadedOnRefresh: true }),
+    { initialProps: { revision: 'before', starred: true, paused: false } });
+  await waitFor(() => expect(result.current.items).toHaveLength(60));
+  act(() => result.current.loadMore());
+  await waitFor(() => expect(result.current.items).toHaveLength(120));
+  rows = rows.slice(1);
+  rerender({ revision: 'after', starred: true, paused: true });
+  expect(result.current.items).toHaveLength(120);
+  act(() => result.current.loadMore());
+  fetchPage.mockImplementationOnce(() => new Promise(resolve => { finishFirst = resolve; }));
+  rerender({ revision: 'after', starred: true, paused: false });
+  await waitFor(() => expect(finishFirst).toBeTypeOf('function'));
+  expect(fetchPage).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 0 }), { silent: true });
+  expect(result.current.items).toHaveLength(120);
+  await act(async () => finishFirst({ items: rows.slice(0, 60), total: rows.length, offset: 0 }));
+  await waitFor(() => expect(result.current.items[0].filename).toBe('1.png'));
+  expect(result.current.items).toHaveLength(120);
+  rerender({ revision: 'after', starred: false, paused: true });
+  expect(result.current.items).toEqual([]);
+});
