@@ -38,8 +38,8 @@ describe('film look on the GPU', () => {
     expect(blurKernel(0)).toBeNull();
     expect(blurKernel(0.03)).toBeNull();
     // Chrome 155 SVG: a white one-pixel column over black, sampled across its
-    // centre after feGaussianBlur stdDeviation="sigma 0". The old three-box
-    // path skipped .7361 entirely and approximated .9276 with the wrong kernel.
+    // centre after feGaussianBlur stdDeviation="sigma 0", using the hardware
+    // compositor. Software compositing below instead uses the raster boxes.
     for (const [sigma, bytes] of [
       [0.7361, [0, 3, 55, 139, 55, 3, 0]],
       [0.9276, [1, 11, 61, 110, 61, 11, 1]],
@@ -49,6 +49,8 @@ describe('film look on the GPU', () => {
       expect(kernel.weights).toHaveLength(bytes.length);
       kernel.weights.forEach((weight, i) => expect(Math.abs(Math.round(weight * 255) - bytes[i])).toBeLessThanOrEqual(1));
     }
+    expect(blurKernel(0.7361, 'box')).toBeNull();
+    expect(Array.from(blurKernel(0.9276, 'box').weights, w => Math.round(w * 255))).toEqual([21, 64, 85, 64, 21]);
     // σ 2.24 → d = 4: two boxes of 4 and one of 5, centred over 80.
     const box = blurKernel(2.24);
     expect(box.divisor).toBe(80);
@@ -78,5 +80,16 @@ describe('film look on the GPU', () => {
     runInNewContext(filmLookGpuRuntimeSource(), { globalThis: window, document: { createElement: () => ({ getContext: () => null }) } });
     expect(window.__portosFilmLookGpu.available()).toBe(false);
     expect(() => window.__portosFilmLookGpu.create({ getContext: () => null })).toThrow(/WebGL2/);
+  });
+
+  it('refuses an unknown blur response before allocating shader resources', () => {
+    const window = {};
+    let lost = false;
+    const context = { filter: 'none', fillRect() {}, drawImage() {}, getImageData: () => ({ data: new Uint8Array(28) }) };
+    runInNewContext(filmLookGpuRuntimeSource(), { globalThis: window,
+      document: { createElement: () => ({ getContext: () => context }) } });
+    const gl = { getExtension: name => name === 'EXT_color_buffer_float' ? {} : { loseContext: () => { lost = true; } } };
+    expect(() => window.__portosFilmLookGpu.create({ getContext: () => gl })).toThrow(/keep the SVG film look/);
+    expect(lost).toBe(true);
   });
 });

@@ -54,10 +54,15 @@ const psnr = (a, b) => {
   return sum === 0 ? 99 : 10 * Math.log10((255 * 255 * a.length) / sum);
 };
 
-describe.skipIf(!canRun)('film look on the GPU in Chrome', () => {
+// The same Chrome uses different SVG blur kernels with GPU compositing and
+// software rasterization. Exercise both without changing the pixel oracle.
+describe.skipIf(!canRun).each([
+  ['default compositor', []],
+  ['software compositor', ['--disable-gpu', '--enable-unsafe-swiftshader']],
+])('film look on the GPU in Chrome (%s)', (_backend, args) => {
   let fixture, svgPage, gpuPage, available;
   beforeAll(async () => {
-    fixture = await startOwnedBrowserFixture({ chromium, launchOptions: { executablePath: chrome, headless: true } });
+    fixture = await startOwnedBrowserFixture({ chromium, launchOptions: { executablePath: chrome, headless: true, args } });
     svgPage = await fixture.browser.newPage({ viewport: { width, height } });
     gpuPage = await fixture.browser.newPage({ viewport: { width, height } });
     await svgPage.setContent(page(`${picture}<svg id="fx" width="0" height="0" style="position:absolute"></svg>`));

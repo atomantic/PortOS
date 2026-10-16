@@ -10,8 +10,8 @@
  * path by construction and an unknown primitive refuses (the caller then keeps
  * the SVG path). Each pass follows what Chrome's Skia raster backend does, not
  * just the spec, as measured against headless Chrome: premultiplied
- * 8-bit intermediates; Gaussian blur below sigma 2 and a three-box
- * approximation above, reading past the frame as transparent even for
+ * 8-bit intermediates; a measured Gaussian or three-box blur for small sigmas,
+ * and a three-box approximation above, reading past the frame as transparent even for
  * edgeMode="duplicate"; feOffset snapped to whole pixels (antialiased frame
  * edges when presented directly); feComposite arithmetic without clamping
  * color to alpha; Skia's feTurbulence (the spec's lattice and
@@ -111,15 +111,16 @@ function turbulencePixel(tables, x, y, { baseFrequency = [0, 0], numOctaves = 1,
 
 /**
  * The 1D blur kernel used to match Chrome's filter for a standard deviation.
- * Small sigmas use the sampled Gaussian: a three-box approximation can turn
- * a visible soft focus into no blur. Larger sigmas use the spec's window
+ * Small sigmas use the browser's measured model: accelerated filters use a
+ * sampled Gaussian, while Chromium's raster path uses boxes (including an
+ * identity for small windows). Larger sigmas use the spec's window
  * d = ⌊σ·3·√(2π)/4 + ½⌋ (for an even d, two boxes of d shifted against each
  * other plus one of d + 1). Past Skia's 135 limit (a 255-pixel window) Chrome blurs a downscaled copy; a sampled Gaussian stands
  * in for that. `weights[i]` applies to offset `i - origin`; `boxes` and
  * `divisor` give the same kernel as three integer box sums. Null for no blur.
  * SELF-CONTAINED (inlined into the page).
  */
-function blurKernel(sigma) {
+function blurKernel(sigma, smallBlur = 'gaussian') {
   if (!(sigma > 0.03)) return null;
   const gaussian = () => {
     const radius = Math.ceil(3 * sigma);
@@ -129,8 +130,9 @@ function blurKernel(sigma) {
     for (let i = 0; i < weights.length; i++) weights[i] /= sum;
     return { weights, origin: radius };
   };
-  if (sigma < 2) return gaussian();
+  if (sigma < 2 && smallBlur === 'gaussian') return gaussian();
   const window = Math.max(1, Math.floor(Math.fround(sigma * 3 * Math.sqrt(2 * Math.PI) / 4 + 0.5)));
+  if (window === 1) return null;
   if (window >= 255) return gaussian();
   const box = (n) => new Float64Array(n).fill(1);
   const convolve = (a, b) => {
@@ -215,10 +217,37 @@ export function filmLookGpuRuntimeSource() {
 // premultiplied texture in image orientation (row 0 = top), as Skia's raster
 // filters keep them; the last pass flips into the canvas.
 function createFilmLookGpuRenderer(canvas, deps) {
-  const { markup, turbulenceTables, blurKernel, parseFilmLookFilter } = deps;
+  const { markup, turbulenceTables, blurKernel: makeBlurKernel, parseFilmLookFilter } = deps;
   const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, depth: false, stencil: false, premultipliedAlpha: true, preserveDrawingBuffer: true });
   if (!gl) throw new Error('WebGL2 is unavailable');
   if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('WebGL2 float render targets are unavailable');
+
+  // Probe once for this renderer, then retain the model across every frame.
+  // Canvas2D and DOM filters share Skia's active blur backend; a renderer name
+  // or OS cannot tell us whether the compositor uses Gaussian or raster boxes.
+  // The opaque impulse avoids alpha/unpremultiplication ambiguity. Refuse an
+  // unknown response so the caller preserves SVG and its independent 40 dB gate.
+  let smallBlur;
+  try {
+    const owner = canvas.ownerDocument || document;
+    const source = owner.createElement('canvas'), probe = owner.createElement('canvas');
+    source.width = probe.width = 31; source.height = probe.height = 31;
+    const input = source.getContext('2d'), context = probe.getContext('2d');
+    if (!input || !context || !('filter' in context)) throw new Error('filter probe unavailable');
+    input.fillStyle = '#000'; input.fillRect(0, 0, 31, 31);
+    input.fillStyle = '#fff'; input.fillRect(15, 0, 1, 31);
+    context.filter = 'blur(0.7361px)';
+    context.drawImage(source, 0, 0);
+    const pixels = context.getImageData(12, 15, 7, 1).data;
+    const models = { gaussian: [0, 3, 55, 139, 55, 3, 0], box: [0, 0, 0, 255, 0, 0, 0] };
+    smallBlur = Object.keys(models).find(model => models[model].every((value, i) =>
+      pixels[i * 4 + 3] === 255 && [0, 1, 2].every(c => Math.abs(pixels[i * 4 + c] - value) <= 1)));
+    if (!smallBlur) throw new Error('unrecognized filter probe');
+  } catch {
+    gl.getExtension('WEBGL_lose_context')?.loseContext();
+    throw new Error('Chrome blur model is unavailable; keep the SVG film look');
+  }
+  const blurKernel = sigma => makeBlurKernel(sigma, smallBlur);
 
   const VERTEX = `#version 300 es
 in vec2 position;
