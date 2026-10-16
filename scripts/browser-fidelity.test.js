@@ -109,7 +109,7 @@ describe('local fidelity publication through the existing runner and status boun
     const f = fixture({ outcome: 'failed' });
     const error = await publishBrowserFidelity(f.options).catch(caught => caught);
     expect(error.message).toBe('Browser fidelity was not admitted; local diagnostics were retained.');
-    expect(error.reason).toBe('Browser fidelity failed or owned cleanup is unverified.');
+    expect(error.reason).toBe('Fidelity structured result did not pass.');
     expect(f.posts.map(post => post.state)).toEqual(['pending', 'failure']);
   });
 
