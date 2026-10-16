@@ -40,11 +40,13 @@ export const EXCLUSIVE_CAPTURE_TESTS = [
   // Exact SVG-filter screenshots hit the 30s CI budget alongside parallel tests.
   'lib/filmLook.browser.test.js',
   'lib/filmLookGpu.browser.test.js',
+  'lib/musicVideoTitleCard.browser.test.js',
   'services/htmlComposition/index.test.js',
   'services/musicVideo/documentRender.browser.test.js',
   'services/musicVideo/documentTemplates/layered/engine.overlay.browser.test.js',
   'services/musicVideo/documentTemplates/shared/lyricType.browser.test.js',
   'services/musicVideo/documentTemplates/shared/toonWorld.browser.test.js',
+  'services/musicVideo/overlayTextService.browser.test.js',
   'routes/musicVideoProductionReview.browser.test.js',
   'routes/musicVideoRichAuthoring.browser.test.js',
 ];
