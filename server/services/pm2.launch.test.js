@@ -7,7 +7,7 @@ const mockPm2 = vi.hoisted(() => ({
   start: vi.fn()
 }));
 
-vi.mock('pm2', () => ({ default: mockPm2 }));
+vi.mock('pm2', () => ({ default: { custom: function () { return mockPm2; } } }));
 
 const mockSpawn = vi.hoisted(() => vi.fn());
 vi.mock('../lib/childProcess.js', async (importOriginal) => ({
