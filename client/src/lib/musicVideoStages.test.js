@@ -535,6 +535,14 @@ describe('stageChecklist', () => {
     const stale = { ...readiness, storyboard: { ...readiness.storyboard, stale: { changedFields: ['scene 2 prompt'] } } };
     expect(stills(stale).detail).toMatch(/^2 shots not locked yet\. .*changed since: scene 2 prompt/);
   });
+  // Uniquely catches the video count losing its one-tap way to the shots it counts.
+  it('counts the videos left to lock and shows them on the board', () => {
+    const readiness = { ...NOT_APPROVED, art: { approved: true, problems: [] },
+      storyboard: { approved: true, problems: [], unlocked: [], clipLocks: { s1: 'locked', s2: 'changed', s3: 'open' }, clipsUnlocked: ['s2', 's3'] } };
+    const clips = stageChecklist('produce', castProject({ scenes: [scene()] }), readiness).find((i) => i.id === 'lock-clips');
+    expect(clips).toMatchObject({ done: false, detail: '2 videos not locked yet. Lock each on its card once its clip is right.',
+      action: { label: 'Show these 2', anchor: 'mv-scene-board', params: { scenes: 'attention' } } });
+  });
   it('counts per-scene changes in a stale approval instead of naming every scene', () => {
     const prompts = Array.from({ length: 26 }, (_, i) => `scene ${i + 1} prompt`);
     expect(changedFieldsText(['storyboard shots', ...prompts, 'scene 4 timing'])).toBe('storyboard shots, 26 scene prompts, scene 4 timing');

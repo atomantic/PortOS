@@ -6,7 +6,7 @@ import SceneCard from '../SceneCard.jsx';
 import EndingCard, { EndingThumbnail } from '../EndingCard.jsx';
 import ScenePoster from '../ScenePoster.jsx';
 import ShotEffectsCard, { SceneEffectBadges } from '../ShotEffectsCard.jsx';
-import { ShotLockContext, SHOT_LOCK_LABELS, overallShotLock } from '../ShotLock.jsx';
+import { ShotLockContext, SHOT_LOCK_LABELS, overallShotLock, shotUnlocked } from '../ShotLock.jsx';
 import { shotNumbers } from '../ShotStepper.jsx';
 import { previousShot, shotHandoffSource } from '../../../../../server/lib/musicVideoHandoffFrame.js';
 import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
@@ -92,8 +92,10 @@ export default function BoardStage({ board }) {
     songReview: project.songRevision?.sceneReview || null,
     videoSettings: videoSettings.settings,
   };
-  // A locked shot is settled: its other takes are no longer something to review.
-  const codesById = new Map(scenes.map((scene) => [scene.sceneId, sceneAttention(scene, { ...attentionCtx, locked: shotLocks[scene.sceneId] === 'locked' })]));
+  // A locked shot is settled: its other takes are no longer something to review. A still or
+  // video the checklist counts as not locked yet needs attention too.
+  const codesById = new Map(scenes.map((scene) => [scene.sceneId, sceneAttention(scene, { ...attentionCtx,
+    locked: shotLocks[scene.sceneId] === 'locked', unlocked: shotUnlocked(lockValue, scene.sceneId) })]));
   const numbers = shotNumbers(scenes);
   const shotName = (scene) => [numbers.has(scene.sceneId) ? `Shot ${numbers.get(scene.sceneId)}` : null,
     scene.sectionLabel || scene.label].filter(Boolean).join(' · ') || `Scene ${scene.order + 1}`;

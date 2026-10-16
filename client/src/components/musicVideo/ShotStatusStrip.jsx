@@ -1,6 +1,6 @@
 import { useContext } from 'react';
 import { Link } from 'react-router';
-import { ShotLockContext, overallShotLock } from './ShotLock.jsx';
+import { ShotLockContext, overallShotLock, shotUnlocked } from './ShotLock.jsx';
 import { SCENE_ATTENTION_LABELS, sceneAttention } from '../../lib/musicVideoSceneAttention.js';
 
 /**
@@ -14,7 +14,7 @@ export default function ShotStatusStrip({ projectId, scenes, ctx }) {
   if (!scenes?.length) return null;
   const locked = (scene) => !!lockValue?.locks?.[scene.sceneId]
     && overallShotLock(lockValue.locks[scene.sceneId], lockValue.clips?.[scene.sceneId]) === 'locked';
-  const cells = scenes.map((scene) => ({ scene, codes: sceneAttention(scene, { ...ctx, locked: locked(scene) }) }));
+  const cells = scenes.map((scene) => ({ scene, codes: sceneAttention(scene, { ...ctx, locked: locked(scene), unlocked: shotUnlocked(lockValue, scene.sceneId) }) }));
   return (
     <ul aria-label="Shot status" className="flex flex-wrap gap-1">
       {cells.map(({ scene, codes }) => {

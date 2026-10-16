@@ -12,6 +12,7 @@ import { formatCount, formatDurationSec, formatTimecode } from '../utils/formatt
 import { isNonBlankStr } from './textUtils';
 import { modeLabel } from './imageGenModes.js';
 import { falSceneTake } from './musicVideoShotTiming.js';
+import { unlockedShots } from './musicVideoSceneAttention.js';
 import { getFalVideoModel } from './falVideoModels.js';
 import { latestMusicVideoReviewDraft } from '../../../server/lib/musicVideoReviewDraft.js';
 import { FINISHED_OUTSIDE_RERENDER_NOTE, finishedOutside, finishedOutsideCovers } from '../../../server/lib/musicVideoFinishedOutside.js';
@@ -697,7 +698,7 @@ export function summarizeStoryboardProblems(problems = []) {
 
 // Once any shot is locked one at a time, the board is approved when every shot is: say how many are left.
 function unlockedDetail(readiness, item) {
-  const left = readiness?.storyboard?.approved ? 0 : (readiness?.storyboard?.unlocked || []).length;
+  const left = unlockedShots(readiness).stills.length;
   if (!left) return item;
   const count = `${formatCount(left)} shot${left === 1 ? '' : 's'} not locked yet.`;
   // A stale board keeps its "changed since" text (and Keep approved) after the count.
@@ -1019,10 +1020,11 @@ export function stageChecklist(stageId, project, readiness = project?.production
       items.push(planOpen && !reviewed.done ? { ...stills, detail: 'Finish the plan first.', action: { label: 'Open the plan', stage: 'board' } } : stills);
       const clips = Object.values(readiness?.storyboard?.clipLocks || {});
       if (clips.some((state) => state === 'locked' || state === 'changed')) {
-        const left = (readiness.storyboard.clipsUnlocked || []).length;
+        const left = unlockedShots(readiness).videos.length;
+        // The board's Needs attention filter lists exactly these shots (and any other open work).
         items.push({ id: 'lock-clips', label: 'Every video locked', done: !left,
           detail: left ? `${formatCount(left)} video${left === 1 ? '' : 's'} not locked yet. Lock each on its card once its clip is right.` : null,
-          action: left ? { label: 'Open the shots', anchor: 'mv-scene-board' } : null });
+          action: left ? { label: left === 1 ? 'Show it' : `Show these ${formatCount(left)}`, anchor: 'mv-scene-board', params: { scenes: 'attention' } } : null });
       }
       const proofApproval = approval('proof', 'Animated proof', null);
       // Optional: never counted toward the step being done.

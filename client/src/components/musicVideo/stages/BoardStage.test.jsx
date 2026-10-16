@@ -108,6 +108,20 @@ describe('BoardStage effects', () => {
   });
 });
 
+// Uniquely catches the Needs attention filter leaving out a shot the checklist counts as not locked yet.
+describe('BoardStage Needs attention and locks', () => {
+  it('lists shots whose video or still the checklist counts as not locked yet', () => {
+    const scenes = [scene(1), scene(2), scene(3)];
+    render(<MemoryRouter initialEntries={['/?scenes=attention']}><ShotLockContext.Provider value={{ locks: { s1: 'locked', s2: 'locked', s3: 'open' },
+      clips: { s1: 'locked', s2: 'changed', s3: 'open' }, unlocked: { stills: ['s3'], videos: ['s2'] }, toggle: vi.fn() }}>
+      <BoardStage board={board(scenes)} /></ShotLockContext.Provider></MemoryRouter>);
+    expect(screen.getByRole('button', { name: 'Needs attention (2)' })).toBeTruthy();
+    expect(screen.queryByText('Shot 1 · Part 1')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Open Shot 2 · Part 2' }).textContent).toContain('Video not locked');
+    expect(screen.getByRole('button', { name: 'Open Shot 3 · Part 3' }).textContent).toContain('Still not locked');
+  });
+});
+
 describe('BoardStage thumbnail lock marks', () => {
   it('marks locked, still-only and changed shots, and leaves open ones bare', () => {
     const scenes = [scene(1), scene(2), scene(3), scene(4)];
