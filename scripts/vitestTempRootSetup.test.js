@@ -132,8 +132,9 @@ describe('vitestTempRootSetup teardown', () => {
 
   it('distinguishes a removed stage root recreated by a writer from a later lazy allocation', () => {
     const leaked = runTeardown(root => {
-      const prior = process.env.TMPDIR;
-      process.env.TMPDIR = root;
+      const tempKeys = ['TMPDIR', 'TMP', 'TEMP'];
+      const prior = Object.fromEntries(tempKeys.map(key => [key, process.env[key]]));
+      for (const key of tempKeys) process.env[key] = root;
       const dispose = observeOwnedBrowsers(() => fileURLToPath(import.meta.url));
       try {
         const first = lazyTempDataRoot('portos-code-animation-stages-');
@@ -153,8 +154,10 @@ describe('vitestTempRootSetup teardown', () => {
         dispose();
       } finally {
         dispose();
-        if (prior === undefined) delete process.env.TMPDIR;
-        else process.env.TMPDIR = prior;
+        for (const key of tempKeys) {
+          if (prior[key] === undefined) delete process.env[key];
+          else process.env[key] = prior[key];
+        }
       }
     });
     cleanupTempDataRoots();
