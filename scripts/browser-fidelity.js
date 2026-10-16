@@ -10,6 +10,7 @@ import { runNpm, toRunnerPath } from './run-ci-tests.js';
 import { BROWSER_FIDELITY_FILES, browserTestProfileArgs, assertBrowserProfileExecuted } from './lib/browserTestProfiles.js';
 import { browserFidelityTarget, browserFidelityContext, browserReceiptDigest, browserFidelityActor } from './lib/browserFidelity.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
+import { safeFailureReason } from './lib/fidelityDiagnostic.js';
 
 const repoRoot = fileURLToPath(new URL('../', import.meta.url));
 
@@ -141,9 +142,10 @@ export async function publishBrowserFidelity({ pr, repository, receiptPath, env 
     controller.signal.throwIfAborted();
     await post('success', `receipt sha256=${browserReceiptDigest(receipt)}`);
     return { receiptPath: output, diagnosticsPath: diagnostics, context, executed };
-  } catch {
+  } catch (cause) {
     await post('failure', 'Required browser fidelity failed, changed, or did not complete.').catch(() => {});
-    throw Object.assign(Error('Browser fidelity was not admitted; local diagnostics were retained.'), { diagnosticsPath: diagnostics });
+    throw Object.assign(Error('Browser fidelity was not admitted; local diagnostics were retained.'),
+      { diagnosticsPath: diagnostics, reason: safeFailureReason(cause) });
   } finally {
     clearTimeout(timer);
     process.removeListener('SIGINT', abort);
@@ -163,6 +165,8 @@ if (isDirectlyInvoked(import.meta.url)) {
     console.log(`Local diagnostics: ${result.diagnosticsPath}`);
   } catch (error) {
     console.error('❌ Browser fidelity was not admitted. Use --pr N on its clean current head with existing trusted gh authentication.');
+    const reason = error.reason ?? safeFailureReason(error);
+    if (reason) console.error(`Reason: ${reason}`);
     if (error.diagnosticsPath) console.error(`Local diagnostics retained: ${error.diagnosticsPath}`);
     process.exitCode = 1;
   }
