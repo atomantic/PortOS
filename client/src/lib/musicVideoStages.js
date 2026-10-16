@@ -293,7 +293,7 @@ const autonomousChipLabel = (auto, { phase, step }) => {
  * state, else a live or parked production run, else just "Autopilot". Tones are
  * `ok`, `warn` or `muted`; `short` is the phone label.
  */
-export function autopilotStatus(project) {
+export function autopilotStatus(project, readiness = project?.productionReadiness) {
   const auto = project?.autonomousRun;
   const { phase, step } = autonomousRunPhase(auto);
   if (phase !== 'inactive') {
@@ -301,7 +301,8 @@ export function autopilotStatus(project) {
     return { label: autonomousChipLabel(auto, { phase, step }), short: running ? 'Autopilot running' : 'Autopilot needs you', tone: running ? 'muted' : 'warn' };
   }
   const run = currentProductionRun(project);
-  if (run && RESUMABLE_RUN_STATUSES.has(run.status)) {
+  // A parked run whose shots are all done since needs nothing from the director.
+  if (run && RESUMABLE_RUN_STATUSES.has(run.status) && deriveStages(project, readiness).liveRun) {
     const running = run.status === 'running';
     return { label: PRODUCTION_RUN_LABELS[run.status] || 'Production paused', short: running ? 'Autopilot running' : 'Autopilot needs you', tone: running ? 'muted' : 'warn' };
   }
@@ -426,7 +427,6 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
   const mode = project?.composition?.mode || 'concat';
   const cast = project?.castAndSets || null;
   const run = currentProductionRun(project);
-  const liveRun = !!run && RESUMABLE_RUN_STATUSES.has(run.status);
   const planned = !!readiness?.storyboard.approved;
   const shotsPlanned = (project?.scenes || []).length > 0 && !!readiness && !readiness.storyboard.problems?.length;
   const castStopped = castSetsPhase(cast) === 'stopped';
@@ -434,11 +434,15 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
   // Code and document renders draw the picture themselves; scene footage is optional there.
   const produceDone = planned && clipsLockedDone(readiness) && footageReady(project);
 
+  const shotsDone = produceDone && composeDone(project || {}, mode);
+  // A run parked short of running (stopped, awaiting video) whose shots are all done since is
+  // finished in fact: it no longer holds Shots open or owns the header.
+  const liveRun = !!run && RESUMABLE_RUN_STATUSES.has(run.status) && (run.status === 'running' || !shotsDone);
   const done = {
     setup: projectHasAudio(project) && !!project?.audioAnalysis && lyricSetupState(project, readiness).ok,
     'cast-sets': castDone,
     board: planned || shotsPlanned,
-    produce: produceDone && composeDone(project || {}, mode),
+    produce: shotsDone,
     // A render made before later scene edits no longer counts as the final video.
     review: !!project?.renderHistoryId && !isFinalRenderStale(project),
     // #9281/#9282: published once every enabled platform has a recorded post.
@@ -466,7 +470,7 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
     else if (stage.id === current) state = blocked[stage.id] ? 'blocked' : 'active';
     return { ...stage, state, stale: !!stale[stage.id] };
   });
-  return { stages, current };
+  return { stages, current, liveRun };
 }
 
 // The approval panel the header sends the director to: unwritten art direction is written on the step, not approved.
@@ -529,8 +533,9 @@ export function deriveNextAction(project, {
   planning = false, analyzing = false, readiness = project?.productionReadiness, publish = {},
 } = {}) {
   if (!project) return null;
-  const { current } = deriveStages(project, readiness, publish);
-  const run = currentProductionRun(project);
+  const { current, liveRun } = deriveStages(project, readiness, publish);
+  const latestRun = currentProductionRun(project);
+  const run = latestRun && RESUMABLE_RUN_STATUSES.has(latestRun.status) && !liveRun ? null : latestRun;
   const cast = project.castAndSets || null;
   const scenes = project.scenes || [];
 
@@ -1112,6 +1117,14 @@ export function stepNotes(project, readiness = project?.productionReadiness, pub
     const ready = scenes.filter((scene) => sceneRenderReady(scene, { layered })).length;
     make = `${formatCount(ready)} of ${formatCount(scenes.length)} shots have their picture`;
   } else if (scenes.length) make = 'Picture drawn by the composition';
+  // Once the picture is in, an unfinished Shots step names what is left instead.
+  if (scenes.length && readiness && deriveStages(project, readiness, publish).stages.find((stage) => stage.id === 'produce')?.state !== 'done') {
+    const open = stageChecklist('produce', project, readiness, publish).filter((item) => !item.done && !item.optional);
+    const { stills, videos } = unlockedShots(readiness);
+    const unlocked = [stills.length && `${formatCount(stills.length)} ${stills.length === 1 ? 'still' : 'stills'}`,
+      videos.length && `${formatCount(videos.length)} ${videos.length === 1 ? 'video' : 'videos'}`].filter(Boolean).join(' and ');
+    if (open.length && !open.some((item) => item.id === 'footage')) make = unlocked ? `${unlocked} not locked` : `To do: ${open[0].label}`;
+  }
   // Before a final render, the drafts and proofs to watch are what Final render holds.
   const drafts = (project.excerpts || []).filter((e) => e.status === 'complete' && e.filename).length;
   const review = isFinalRenderStale(project) ? 'Out of date' : project.renderHistoryId ? 'Rendered'
