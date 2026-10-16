@@ -35,6 +35,7 @@ const { startExcerptRender } = await import('./excerptRender.js');
 const { importDocumentTemplate } = await import('./compositionDocument.js');
 const { encodeDocumentComposition } = await import('./documentRender.js');
 const { mutateVideoHistory } = await import('../videoGen/local.js');
+const { musicVideoEvents } = await import('./events.js');
 
 afterAll(() => cleanupTempDataRoots());
 
@@ -160,14 +161,32 @@ it('rejects a changed film between preparing its reviewed plan and starting the 
 it('persists a document failure for returning operators and clears it after a successful retry', async () => {
   const id = await documentProject();
   await importDocumentTemplate(id);
+  const renderAndWait = async () => {
+    let jobId;
+    const early = new Map();
+    const terminal = Promise.withResolvers();
+    const onRender = event => {
+      if (event.projectId !== id) return;
+      // A fast encoder can settle before dispatch returns its job ID.
+      if (!jobId) early.set(event.jobId, event);
+      else if (event.jobId === jobId) terminal.resolve(event);
+    };
+    musicVideoEvents.on('render', onRender);
+    try {
+      ({ jobId } = await renderMusicVideo(id));
+      return early.get(jobId) || await terminal.promise;
+    } finally {
+      musicVideoEvents.off('render', onRender);
+    }
+  };
   const message = 'Edit portosComposition.durationSec to a whole-frame duration and re-import the document.';
   encodeDocumentComposition.mockRejectedValueOnce(new Error(message));
-  await renderMusicVideo(id);
-  await vi.waitFor(async () => expect(await projects.getProject(id)).toMatchObject({
+  expect(await renderAndWait()).toMatchObject({ projectId: id, status: 'failed', error: `Composition document render failed: ${message}` });
+  expect(await projects.getProject(id)).toMatchObject({
     status: 'failed', renderError: `Composition document render failed: ${message}`,
-  }));
-  await renderMusicVideo(id);
-  await vi.waitFor(async () => expect(await projects.getProject(id)).toMatchObject({ status: 'complete', renderError: null }));
+  });
+  expect(await renderAndWait()).toMatchObject({ projectId: id, status: 'completed', error: null });
+  expect(await projects.getProject(id)).toMatchObject({ status: 'complete', renderError: null });
 });
 
 it.each(['error', 'canceled'])('persists document excerpt %s before notifying subscribers to refresh', async (status) => {
