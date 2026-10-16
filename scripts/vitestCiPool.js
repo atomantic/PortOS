@@ -66,6 +66,7 @@ const EXCLUSIVE_TESTS = [
   'scripts/run-local-code-review.test.js',
   'lib/workTracker.trackerInstructions.test.js',
   '../scripts/ci-test-plan.test.js',
+  '../scripts/persistentMindProcessAuditCleanup.test.js',
   '../scripts/writersRoomPromotionCleanup.test.js',
 ];
 
