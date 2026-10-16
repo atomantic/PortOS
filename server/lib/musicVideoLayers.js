@@ -20,6 +20,9 @@ export const MUSIC_VIDEO_VISUAL_LAYERS = ['footage', 'still', 'card', 'code'];
 /** Layers the composition draws itself: no reference frame and no clip to generate. */
 export const isSelfDrawnLayer = (layer) => layer === 'card' || layer === 'code';
 export const MUSIC_VIDEO_STILL_MOVES = ['hold', 'push', 'pan'];
+// Shared by the composed render and storyboard playback.
+export const STILL_PUSH_ZOOM = 0.12;
+export const STILL_PAN_TRAVEL = 0.15;
 
 /**
  * How a footage clip whose shape is not the video's fills the frame:

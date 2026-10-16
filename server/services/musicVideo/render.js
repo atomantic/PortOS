@@ -43,7 +43,7 @@ import { loadHistory, mutateVideoHistory } from '../videoGen/local.js';
 import { getTrack } from '../tracks/index.js';
 import { getProject, listProjects, updateProject, mutateProjectRecord } from './projects.js';
 import { applyProjectPatch } from './projectsLogic.js';
-import { MUSIC_VIDEO_FRAME_FITS, clipOffsetSec, clipReversed, clipSpeedRate, isSelfDrawnLayer, sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { MUSIC_VIDEO_FRAME_FITS, STILL_PAN_TRAVEL, STILL_PUSH_ZOOM, clipOffsetSec, clipReversed, clipSpeedRate, isSelfDrawnLayer, sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { musicVideoAspect, musicVideoRenderCanvas } from '../../lib/musicVideoAspect.js';
 import { composedLyricWindows, projectTypographyPlan } from './composition.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
@@ -439,9 +439,6 @@ function footageFrameFit(scene) {
 
 // The frame for a composed render with no footage to take dimensions from.
 const DEFAULT_CANVAS = Object.freeze({ width: 1280, height: 720, fps: 24 });
-// A still's push-in ends this much closer; a pan crosses this much extra width.
-const STILL_PUSH_ZOOM = 0.12;
-const STILL_PAN_TRAVEL = 0.15;
 const evenPx = (n) => Math.max(2, Math.round(n / 2) * 2);
 
 // One section's video chain (without its output label). A footage clip is

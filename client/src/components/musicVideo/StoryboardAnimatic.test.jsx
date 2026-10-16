@@ -28,10 +28,124 @@ describe('StoryboardAnimatic', () => {
     expect(screen.getByText('Shot 2 / 2')).toBeTruthy();
   });
 
+  // Pins the rendered frame endpoints and seeks, including an explicit Hold overriding a planned camera.
+  it('pushes and pans cover-fitted stills on the song clock, while Hold stays still', () => {
+    const still = { sceneId: 'still', startSec: 10, endSec: 12, referenceImageId: 'frame.png', visualLayer: 'still',
+      videoHistoryId: 'unused-clip', camera: { move: 'handheld' } };
+    const project = (stillMove) => ({ id: 'p', composition: { mode: 'composed' }, scenes: [{ ...still, stillMove }] });
+    const { rerender } = render(<StoryboardAnimatic project={project('push')} audioUrl="/song.mp3" />);
+    const audio = screen.getByLabelText('Song for the storyboard animatic');
+    const at = (t) => { audio.currentTime = t; fireEvent.timeUpdate(audio); };
+    const transform = () => screen.getByTestId('animatic-still').style.transform;
+    at(10);
+    expect(transform()).toBe('scale(1)');
+    expect(screen.queryByLabelText('Clip for this shot')).toBeNull();
+    expect(screen.getByTestId('animatic-still').querySelector('img').className).toContain('object-cover');
+    at(11);
+    expect(transform()).toBe('scale(1.06)');
+    at(12 - 1 / 24);
+    expect(transform()).toBe('scale(1.1175)');
+    at(20);
+    expect(transform()).toBe('scale(1.1175)');
+    at(10);
+    expect(transform()).toBe('scale(1)');
+    rerender(<StoryboardAnimatic project={project('pan')} audioUrl="/song.mp3" />);
+    expect(transform()).toBe('translateX(7.5%) scale(1.15)');
+    at(12 - 1 / 24);
+    expect(transform()).toBe('translateX(-7.5%) scale(1.15)');
+    rerender(<StoryboardAnimatic project={project('hold')} audioUrl="/song.mp3" />);
+    expect(transform()).toBe('none');
+    at(10);
+    expect(transform()).toBe('none');
+  });
+
+  // A retained clip on a still cannot set the render cadence; the first actual footage source does.
+  it('uses the lead footage frame rate for a mixed 30 fps render\'s still endpoint', async () => {
+    const { getVideoHistoryItem } = await import('../../services/apiImageVideo.js');
+    getVideoHistoryItem.mockImplementation(async (id) => ({ id, filename: `${id}.mov`, fps: id === 'lead' ? 30 : 60 }));
+    render(<StoryboardAnimatic project={{ id: 'p', composition: { mode: 'composed' }, scenes: [
+      { sceneId: 's', order: 0, startSec: 0, endSec: 2, visualLayer: 'still', referenceImageId: 'frame.png', stillMove: 'push', videoHistoryId: 'unused' },
+      { sceneId: 'f', order: 1, startSec: 2, endSec: 4, videoHistoryId: 'lead' },
+    ] }} audioUrl="/song.mp3" />);
+    await waitFor(() => expect(getVideoHistoryItem).toHaveBeenCalledWith('lead', { silent: true, geometry: true }));
+    await act(async () => {});
+    const audio = screen.getByLabelText('Song for the storyboard animatic');
+    audio.currentTime = 2 - 1 / 30;
+    fireEvent.timeUpdate(audio);
+    expect(screen.getByTestId('animatic-still').style.transform).toBe(`scale(${1 + 0.12 * 59 / 60})`);
+    getVideoHistoryItem.mockImplementation(async (id) => ({ id, filename: `${id}.mov` }));
+  });
+
+  // timeupdate is too slow for motion: playback must read currentTime on animation frames, then stop on pause.
+  it('moves a playing still between timeupdates and freezes it at the paused song time', () => {
+    const frames = new Map();
+    let nextFrame = 0;
+    vi.stubGlobal('requestAnimationFrame', (tick) => { frames.set(++nextFrame, tick); return nextFrame; });
+    vi.stubGlobal('cancelAnimationFrame', (id) => frames.delete(id));
+    try {
+      render(<StoryboardAnimatic project={{ id: 'p', composition: { mode: 'composed' }, scenes: [
+        { sceneId: 's', startSec: 0, endSec: 2, visualLayer: 'still', referenceImageId: 'frame.png', stillMove: 'push' },
+      ] }} audioUrl="/song.mp3" />);
+      const audio = screen.getByLabelText('Song for the storyboard animatic');
+      const still = screen.getByTestId('animatic-still');
+      fireEvent.play(audio);
+      audio.currentTime = 1;
+      act(() => {
+        const pending = [...frames.values()];
+        frames.clear();
+        pending.forEach((tick) => tick());
+      });
+      expect(still.style.transform).toBe('scale(1.06)');
+      audio.currentTime = 1.5;
+      fireEvent.pause(audio);
+      expect(still.style.transform).toBe('scale(1.09)');
+      audio.currentTime = 1.9;
+      act(() => {
+        const pending = [...frames.values()];
+        frames.clear();
+        pending.forEach((tick) => tick());
+      });
+      expect(still.style.transform).toBe('scale(1.09)');
+      fireEvent.play(audio);
+      audio.currentTime = 2;
+      fireEvent.ended(audio);
+      expect(still.style.transform).toBe('scale(1.1175)');
+      audio.currentTime = 0;
+      act(() => {
+        const pending = [...frames.values()];
+        frames.clear();
+        pending.forEach((tick) => tick());
+      });
+      expect(still.style.transform).toBe('scale(1.1175)');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  // A dissolve renders its incoming still's full move over the preroll window, then restarts for the shot itself.
+  it('moves the incoming still over the dissolve window, then starts its own shot move', () => {
+    render(<StoryboardAnimatic project={{ id: 'p', composition: { mode: 'composed' }, scenes: [
+      { sceneId: 'a', startSec: 0, endSec: 4, visualLayer: 'still', referenceImageId: 'a.png',
+        cutEffect: { style: 'dissolve', enabled: true, overlapSec: 1 } },
+      { sceneId: 'b', startSec: 4, endSec: 8, visualLayer: 'still', referenceImageId: 'b.png', stillMove: 'pan', videoHistoryId: 'unused' },
+    ] }} audioUrl="/song.mp3" />);
+    const audio = screen.getByLabelText('Song for the storyboard animatic');
+    const at = (t) => { audio.currentTime = t; fireEvent.timeUpdate(audio); };
+    at(3);
+    const incoming = screen.getByTestId('beat-toggle-clip');
+    expect(incoming.querySelector('video')).toBeNull();
+    expect(incoming.querySelector('[data-testid="animatic-still"]').style.transform).toBe('translateX(7.5%) scale(1.15)');
+    at(4 - 1 / 24);
+    expect(incoming.querySelector('[data-testid="animatic-still"]').style.transform).toBe('translateX(-7.5%) scale(1.15)');
+    at(4);
+    expect(screen.queryByTestId('beat-toggle-clip')).toBeNull();
+    expect(screen.getByTestId('animatic-still').style.transform).toBe('translateX(7.5%) scale(1.15)');
+  });
+
   // Uniquely catches the animatic showing a clip where the composed render plays a still's image effect.
   it('plays a still shot\'s camera flash develop over its still, not its clip, from the shot\'s start', () => {
     const effectShot = { sceneId: 'fx', label: 'Burger', startSec: 0, endSec: 6, referenceImageId: 'burger.png', videoHistoryId: 'clip-1',
-      visualLayer: 'still', imageEffect: 'flash-develop', imageEffectSec: 2 };
+      visualLayer: 'still', stillMove: 'push', imageEffect: 'flash-develop', imageEffectSec: 2 };
     render(<StoryboardAnimatic project={{ id: 'p', composition: { mode: 'composed' }, scenes: [effectShot] }} audioUrl="/song.mp3" />);
     const effect = screen.getByTestId('animatic-image-effect');
     expect(screen.queryByLabelText('Clip for Burger')).toBeNull();
@@ -41,6 +155,7 @@ describe('StoryboardAnimatic', () => {
     Object.defineProperty(audio, 'currentTime', { value: 3, configurable: true });
     fireEvent.timeUpdate(audio);
     expect(img.style.filter).toBe('contrast(1) saturate(1)');
+    expect(screen.getByTestId('animatic-still').style.transform).toBe('scale(1.06)');
   });
 });
 
