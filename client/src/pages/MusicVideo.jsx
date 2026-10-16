@@ -93,6 +93,7 @@ import GalleryVideoPicker from '../components/videoGen/GalleryVideoPicker.jsx';
 import { autoArrangeScenes } from '../lib/beatGrid.js';
 import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { videoPosterForJob } from '../lib/creativeDirectorPreview.js';
+import { unlockedShots } from '../lib/musicVideoSceneAttention.js';
 import { sceneTakeList } from '../lib/musicVideoTakes.js';
 import { pluralize } from '../lib/textUtils.js';
 import { formatCount, formatTimecode } from '../utils/formatters.js';
@@ -310,6 +311,7 @@ export default function MusicVideo() {
   const shotLocks = productionReview.readiness?.storyboard?.shotLocks;
   const shotLockValue = shotLocks
     ? { locks: shotLocks, clips: productionReview.readiness.storyboard.clipLocks || null,
+      unlocked: unlockedShots(productionReview.readiness),
       toggle: (sceneId, lock, stage) => productionReview.lockShots([sceneId], lock, stage), busy: productionReview.busy }
     : null;
   // Posting (#9282): fill each platform's post in the PortOS Browser, post on a second press.

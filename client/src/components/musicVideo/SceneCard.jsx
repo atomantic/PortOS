@@ -175,7 +175,7 @@ export default function SceneCard({
   const lockBlocked = !shotLock ? null
     : shotLock.clip === 'locked' ? 'Video locked. Unlock the video to render it again.'
       : shotLock.still !== 'locked' ? 'Lock the still first' : null;
-  const attention = sceneAttention(scene, { layered, footageOptional, lipSyncBackend, songDurationSec, clipSec: playedSec, failed: failedScenes || {}, songReview, videoSettings: falVideoSettings, locked });
+  const attention = sceneAttention(scene, { layered, footageOptional, lipSyncBackend, songDurationSec, clipSec: playedSec, failed: failedScenes || {}, songReview, videoSettings: falVideoSettings, locked, unlocked: shotLock?.unlocked ?? null });
   const songChange = songReview?.[scene.sceneId];
   const generatingLane = generatingFrame && generatingVideo ? 'Frame + clip' : generatingFrame ? 'Frame' : generatingVideo ? 'Clip' : null;
   // #10154: the server-persisted failure of the last render, shown until a
