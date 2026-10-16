@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import { generatedCanvasPlaybackEngine } from './generatedCanvasPlayback.js';
 import { createHash } from 'node:crypto';
 import { assertDocumentMediaPolicy } from './documentMediaPolicy.js';
 /**
@@ -420,7 +421,11 @@ export async function stageGeneratedDocument(projectId, generatedFiles, { verify
   const index = await readFile(join(TEMPLATE_ROOT, 'layered', 'index.html'), 'utf8');
   const marker = '<script src="engine.js"></script>';
   if (!index.includes(marker)) throw new Error('Layered template has no engine script');
-  const staged = files.filter((file) => file.rel !== 'index.html');
+  const originalEngine = await readFile(join(TEMPLATE_ROOT, 'layered', 'engine.js'));
+  const staged = files.filter((file) => file.rel !== 'index.html' && file.rel !== 'engine.js');
+  staged.push({ rel: 'engine.js', data: generatedCanvasPlaybackEngine(originalEngine) },
+    { rel: 'engine-reference.js', data: originalEngine },
+    { rel: 'preview-playback.json', data: Buffer.from(JSON.stringify({ version: 1, contract: 'portos-complete-frame-v1' })) });
   staged.push({ rel: 'index.html', data: Buffer.from(index.replace(marker, '<script src="generated.js"></script>\n' + marker)) });
   staged.push(...generatedFiles);
   return storeVersion(projectId, staged, { kind: 'generated', name: 'Mixed-media composition' }, { draft: true, verifyCurrent });

@@ -1,5 +1,5 @@
 /** Serialized into an admitted layered preview's private engine closure. */
-export function installLayeredPreviewPlayback(bridge) {
+export function installLayeredPreviewPlayback(bridge, composition = globalThis.portosComposition) {
   const FPS = 30;
   const FRAME_FRESH_MS = 100;
   let epoch = -1, lease = 0, sequence = -1, phase = 'idle', disposed = false, poisoned = false, motion = null;
@@ -357,5 +357,5 @@ export function installLayeredPreviewPlayback(bridge) {
       return Promise.allSettled([...pending]).then(() => { bridge.dispose(); active = null; return { epoch, status: 'disposed' }; });
     },
   };
-  Object.defineProperty(globalThis.portosComposition, 'previewPlayback', { value: api });
+  Object.defineProperty(composition, 'previewPlayback', { value: api });
 }

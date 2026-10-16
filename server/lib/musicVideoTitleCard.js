@@ -367,6 +367,8 @@ export function titleCardRuntimeSource(card = null, { fonts = {} } = {}) {
     drawTitleCard(ctx, card, t, { width, height });
   };
   const api = {
+    // Complete-frame producers await fonts without painting a visible layer.
+    ready,
     apply(next) {
       card = next && typeof next === 'object' ? next : null;
       const wait = ready();

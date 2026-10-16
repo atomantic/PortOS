@@ -5,7 +5,7 @@ description: Author and review a treatment-driven mixed-media music-video compos
 
 # Mixed-media composition authoring
 
-Use the Music Video **Compose → Document → Generate mixed-media composition** action after the song is analyzed, the treatment is approved, and each footage or still scene has a timed, selected local asset. The provider and model shown beside the button write only section drawing functions. No footage or still provider runs during this step. Missing selected media is a preflight error to resolve on the scene board.
+Use the Music Video **Compose → Document → Generate mixed-media composition** action after the song is analyzed, the treatment is approved, and each footage or still scene has a timed, selected local asset. The provider and model shown beside the button write only section drawing functions. Canvas sections finish all drawing before returning: no Promise, deferred drawing or retained ctx; the host awaits selected media and packaged fonts. No footage or still provider runs during this step. Missing selected media is a preflight error to resolve on the scene board.
 
 PortOS assembles the functions into an immutable candidate version of its layered document. The active document remains selected while the candidate is previewed. Scrub the candidate through each section boundary, selected clip in-point and out-point, repeated hooks and lyric onsets; play it with the master song to judge movement and audio alignment. Accept the reviewed version to render it, or discard it. **Regenerate section** writes a new candidate with the same shared style contract and every other section unchanged. If the treatment, song, scene timing or selected media changed, generate a fresh candidate.
 
