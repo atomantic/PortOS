@@ -304,7 +304,34 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     await acceptMixedMediaDocument(created.id, candidate.document.directory);
     author.response = null;
     const project = await projects.getProject(created.id);
-    const preview = await buildDocumentPreview(project);
+    const costFiles = await (await import('./compositionDocument.js')).readDocumentFiles(project);
+    let observedEngine = await readFile(costFiles.get('engine.js').abs, 'utf8');
+    const observe = (from, to) => {
+      if (observedEngine.split(from).length !== 2) throw new Error('Three cost observation seam changed');
+      observedEngine = observedEngine.replace(from, to);
+    };
+    // Observe only this synthetic page; preserve the reference engine and all
+    // rendering/assertion behavior. Raw GPU identity never leaves the page.
+    observe('renderer.setPixelRatio(1);', `renderer.setPixelRatio(1);
+const costGl = renderer.getContext(), costDebug = costGl.getExtension('WEBGL_debug_renderer_info');
+const costRenderer = String(costGl.getParameter(costDebug ? costDebug.UNMASKED_RENDERER_WEBGL : costGl.RENDERER));
+const cost = window.__threeCost = { backend: /swiftshader|llvmpipe|softpipe|software/i.test(costRenderer) ? 'software' : 'hardware-or-other', antialias: costGl.getContextAttributes()?.antialias === true, logicalConcurrency: navigator.hardwareConcurrency || 0, rows: [] };
+let programsCreated = 0, programsDeleted = 0;
+for (const method of ['createProgram', 'deleteProgram']) {
+  const original = costGl[method].bind(costGl);
+  costGl[method] = (...args) => { if (method === 'createProgram') programsCreated++; else programsDeleted++; return original(...args); };
+}`);
+    observe('    draw(...args);', `    const costStart = performance.now(), createdBefore = programsCreated, deletedBefore = programsDeleted;
+    draw(...args);
+    const drawEnd = performance.now();`);
+    observe('    staging.drawImage(canvas, 0, 0);', `    staging.drawImage(canvas, 0, 0);
+    const copyEnd = performance.now(), ms = value => Math.round(value * 1000) / 1000;
+    cost.rows.push({ phase: ['prepare', 'live'].includes(window.__threeCostPhase) ? window.__threeCostPhase : 'exact', drawMs: ms(drawEnd - costStart), copyMs: ms(copyEnd - drawEnd), totalMs: ms(copyEnd - costStart), created: programsCreated - createdBefore, deleted: programsDeleted - deletedBefore });
+    if (cost.rows.length > 12) cost.rows.shift();`);
+    const observedEnginePath = join(PATHS.data, 'observed-three-engine.js');
+    await writeFile(observedEnginePath, observedEngine);
+    costFiles.set('engine.js', { abs: observedEnginePath, size: Buffer.byteLength(observedEngine) });
+    const preview = await buildDocumentPreview(project, { files: costFiles });
     expect(preview.assets).toEqual([]);
     expect(preview.html).toContain("img-src 'none'");
     const { readDocumentFiles } = await import('./compositionDocument.js');
@@ -390,13 +417,20 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
       addEventListener('message', receive);
       window.PORTOS_MV_GENERATED.sections.world = (ctx, env) => { times.push(env.t); return original(ctx, env); };
       try {
+        window.__threeCostPhase = 'prepare';
         const prepared = await api.prepare({ epoch: 1, sequence: 1, t: 0 });
+        window.__threeCostPhase = 'live';
         const started = performance.now();
         const played = await api.play({ epoch: 1, sequence: 2, t: 0, workerTime: api.clock() });
         for (let i = 0; i < 8; i++) await new Promise(resolve => requestAnimationFrame(resolve));
         await api.pause({ epoch: 2, t: 0 });
         return { prepared, played, times, failures, elapsedMs: performance.now() - started };
       } finally { window.PORTOS_MV_GENERATED.sections.world = original; removeEventListener('message', receive); }
+    }).catch(async error => {
+      // The existing test abort owns fixture teardown if this observation blocks.
+      // A closed page or invalid observation must never replace the original error.
+      try { error.portosThreeCost = await page.evaluate(() => window.__threeCost); } catch { /* retain original error */ }
+      throw error;
     });
     expect(live.prepared.status).toBe('prepared');
     expect(live.played.status).toBe('playing');

@@ -165,6 +165,60 @@ describe('independent CI test failure recovery (#11552)', () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
+  it('keeps bounded Three cost observations private and scoped to the exact failed fixture', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'ci-diagnostics-three-cost-'));
+    const prior = process.env.PORTOS_CI_DIAGNOSTICS_PATH;
+    try {
+      const attempt = join(root, 'portos-vitest-fixture'); mkdirSync(attempt);
+      const path = join(attempt, 'run.json'); process.env.PORTOS_CI_DIAGNOSTICS_PATH = path;
+      const file = 'server/services/musicVideo/documentRender.browser.test.js';
+      const title = 'authors a local Three.js world and renders the same deterministic scene through module preview and export';
+      const row = { phase: 'prepare', drawMs: 120.5, copyMs: 0.1, totalMs: 120.6, created: 0, deleted: 0 };
+      const safe = { backend: 'software', antialias: true, logicalConcurrency: 4, rows: [row] };
+      const collect = async () => (await collectTestDiagnostics(root, { logger: { warn() {} }, diagnose: async () => {}, writeSummary() {} })).join('\n');
+      for (const [metadata, valid] of [
+        [{ ...safe, renderer: 'private-sentinel', rows: [{ ...row, stack: 'private-sentinel' }] }, true],
+        [{ ...safe, backend: 'private-sentinel' }, false],
+        [{ ...safe, antialias: 'private-sentinel' }, false],
+        [{ ...safe, logicalConcurrency: 1025 }, false],
+        [{ ...safe, rows: Array(13).fill(row) }, false],
+        [{ ...safe, rows: [{ ...row, phase: 'prepare-private-sentinel' }] }, false],
+        [{ ...safe, rows: [{ ...row, drawMs: Infinity }] }, false],
+        [{ ...safe, rows: [{ ...row, copyMs: -1 }] }, false],
+        [{ ...safe, rows: [{ ...row, totalMs: 120001 }] }, false],
+        [{ ...safe, rows: [{ ...row, created: 1.5 }] }, false],
+        [{ ...safe, rows: [{ ...row, deleted: 1000001 }] }, false],
+      ]) {
+        const hooks = vitestRunDiagnostics(); hooks.onInit({ onClose() {} });
+        hooks.onTestCaseResult({ module: { moduleId: file }, name: title, result: () => ({ state: 'failed', errors: [{ message: 'private-sentinel', portosThreeCost: metadata }] }) });
+        const saved = JSON.parse(readFileSync(path, 'utf8'));
+        expect(saved.failedCases[0].threeCost).toEqual(valid ? safe : undefined);
+        expect(JSON.stringify(saved)).not.toContain('private-sentinel');
+        const output = await collect();
+        expect(output.includes('Generated Three cost:')).toBe(valid);
+        expect(output).not.toContain('private-sentinel');
+      }
+      const hooks = vitestRunDiagnostics(); hooks.onInit({ onClose() {} });
+      for (const [moduleId, name] of [[file, `${title} near-miss`], ['server/other.test.js', title]]) {
+        hooks.onTestCaseResult({ module: { moduleId }, name, result: () => ({ state: 'failed', errors: [{ portosThreeCost: safe }] }) });
+      }
+      const saved = JSON.parse(readFileSync(path, 'utf8'));
+      expect(saved.failedCases.every(item => !item.threeCost)).toBe(true);
+      for (const item of saved.failedCases) item.threeCost = safe;
+      saved.failedCases[1].identity = 'generated-three-preview-export';
+      writeFileSync(path, JSON.stringify(saved));
+      expect(await collect()).not.toContain('Generated Three cost:');
+      saved.failedCases[0].identity = 'generated-three-preview-export';
+      saved.failedCases[0].threeCost = { ...safe, rows: [{ ...row, drawMs: 'private-sentinel' }] };
+      writeFileSync(path, JSON.stringify(saved));
+      expect(await collect()).not.toContain('Generated Three cost:');
+    } finally {
+      if (prior === undefined) delete process.env.PORTOS_CI_DIAGNOSTICS_PATH;
+      else process.env.PORTOS_CI_DIAGNOSTICS_PATH = prior;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('projects fixed playback and browser failures without exporting message or call-log content', async () => {
     const root = mkdtempSync(join(tmpdir(), 'ci-diagnostics-playback-'));
     const prior = process.env.PORTOS_CI_DIAGNOSTICS_PATH;

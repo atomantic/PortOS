@@ -18,6 +18,22 @@ export function diagnosticTestFile(value) {
   return /^[\w.-]+\.test\.[\w]+$/.test(name) ? `<outside-repository>/${name}` : '<unavailable>';
 }
 
+// This synthetic fixture's observation carries no raw renderer, error or path text.
+export function sanitizeThreePlaybackCost(value) {
+  if (!value || !['software', 'hardware-or-other', 'unknown'].includes(value.backend)
+    || typeof value.antialias !== 'boolean' || !Number.isInteger(value.logicalConcurrency)
+    || value.logicalConcurrency < 0 || value.logicalConcurrency > 1024
+    || !Array.isArray(value.rows) || value.rows.length > 12) return null;
+  const rows = [];
+  for (const row of value.rows) {
+    if (!row || !['exact', 'prepare', 'live'].includes(row.phase)
+      || !['drawMs', 'copyMs', 'totalMs'].every(key => Number.isFinite(row[key]) && row[key] >= 0 && row[key] <= 120000)
+      || !['created', 'deleted'].every(key => Number.isInteger(row[key]) && row[key] >= 0 && row[key] <= 1000000)) return null;
+    rows.push({ phase: row.phase, drawMs: row.drawMs, copyMs: row.copyMs, totalMs: row.totalMs, created: row.created, deleted: row.deleted });
+  }
+  return { backend: value.backend, antialias: value.antialias, logicalConcurrency: value.logicalConcurrency, rows };
+}
+
 export function persistTestDiagnostic(path, value) {
   try {
     writeFileSync(`${path}.tmp`, JSON.stringify(value));
@@ -93,6 +109,11 @@ export async function collectTestDiagnostics(root, {
               ? ':generated-three-preview-export' : '')
             + (locations.length ? ` at ${locations.map(location => `${location.line}:${location.column}`).join('/')}` : '');
         }).join(', ') || 'none recorded'}`);
+        for (const item of cases) {
+          if (item.identity !== 'generated-three-preview-export' || diagnosticTestFile(item.file) !== 'server/services/musicVideo/documentRender.browser.test.js') continue;
+          const cost = sanitizeThreePlaybackCost(item.threeCost);
+          if (cost) lines.push(`Generated Three cost: ${JSON.stringify(cost)}`);
+        }
       }
     } catch {
       lines.push('Diagnostic gap: Vitest progress unavailable; active test file is unknown.');

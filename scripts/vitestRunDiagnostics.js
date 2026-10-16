@@ -1,4 +1,4 @@
-import { diagnosticTestFile, persistTestDiagnostic } from './ci-test-diagnostics.js';
+import { diagnosticTestFile, persistTestDiagnostic, sanitizeThreePlaybackCost } from './ci-test-diagnostics.js';
 import { fileURLToPath } from 'node:url';
 
 // The JSON reporter includes test failures, but drops run-level errors such as
@@ -102,7 +102,9 @@ export default function vitestRunDiagnostics() {
       const result = test.result();
       if (result.state !== 'failed' || failedCases.length >= 10) return;
       const file = diagnosticTestFile(test.module.moduleId);
-      failedCases.push({ file, kind: failureKind(result.errors), locations: failureLocations(result.errors, test.module.moduleId),
+      const three = file === threeFile && test.name === threeCase;
+      const cost = three && (Array.isArray(result.errors) ? result.errors.slice(0, 10) : []).map(error => sanitizeThreePlaybackCost(error?.portosThreeCost)).find(Boolean);
+      failedCases.push({ file, ...(cost ? { threeCost: cost } : {}), kind: failureKind(result.errors), locations: failureLocations(result.errors, test.module.moduleId),
         ...(file === threeFile && test.name === threeCase ? { identity: 'generated-three-preview-export' } : {}) });
       // Persist before run-end/JSON reporting, which bail or teardown can prevent.
       persist();
