@@ -23,12 +23,16 @@ import {
 import {
   collectPregateChangedFiles,
   resolvePlanStages,
+  describeBrowserSelection,
   downgradeFullPlan,
   parseArgs,
   pregateWorkerEnv,
   UNCOVERED_SUITES,
   unmergedIndexPaths,
 } from './pregate.js';
+
+import { BROWSER_SUITES } from './lib/browserSuites.js';
+import { BROWSER_FIDELITY_FILES } from './lib/browserTestProfiles.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -120,7 +124,7 @@ describe('pregate hidden-content invocation', () => {
     for (const path of [
       'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
       'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
-      'scripts/lib/directInvocation.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
+      'scripts/lib/directInvocation.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
       'scripts/lib/browserSuites.js',
       'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
       'server/lib/textUtils.js',
@@ -482,7 +486,7 @@ describe('the gate end to end', () => {
       for (const path of [
         'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
         'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
-        'scripts/lib/directInvocation.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
+        'scripts/lib/directInvocation.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
         'scripts/lib/browserSuites.js',
         'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
         'server/lib/textUtils.js',
@@ -522,5 +526,31 @@ describe('the gate end to end', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('describeBrowserSelection', () => {
+  const selected = BROWSER_SUITES.slice(0, 10);
+  const fidelity = BROWSER_FIDELITY_FILES[0];
+
+  it('distinguishes no selection from a selection that needs a receipt', () => {
+    const none = describeBrowserSelection([]).join('\n');
+    expect(none).toContain('none selected');
+    expect(none).toContain('no native browser-fidelity receipt required');
+    const some = describeBrowserSelection([fidelity, ...selected]).join('\n');
+    expect(some).toContain('selected');
+    expect(some).toContain('receipt: required');
+  });
+
+  it('reports absent and valid receipt state', () => {
+    expect(describeBrowserSelection([fidelity], 'absent').join('\n')).toContain('ABSENT');
+    expect(describeBrowserSelection([fidelity], 'valid').join('\n')).toContain('present and valid');
+  });
+
+  it('shows the selection in --plan-only output', () => {
+    const out = execFileSync(process.execPath, [join(REPO_ROOT, 'scripts', 'pregate.js'), '--plan-only', '--skip-lint', '--base', 'HEAD'], {
+      cwd: REPO_ROOT, encoding: 'utf8',
+    });
+    expect(out).toContain('Browser suites:');
   });
 });
