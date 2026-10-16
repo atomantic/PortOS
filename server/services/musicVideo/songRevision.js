@@ -316,4 +316,9 @@ export async function resolveSongRevisionScenes(projectId, { revisionId, action,
   });
 }
 
-export const __testing = { settle: async () => { await Promise.all([...inflight.values()].map((entry) => entry.promise)); } };
+export const __testing = { settle: async () => {
+  const results = await Promise.allSettled([...inflight.values()].map((entry) => entry.promise));
+  const failures = results.filter(result => result.status === 'rejected').map(result => result.reason);
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) throw new AggregateError(failures, 'Song revision jobs failed during fixture settlement');
+} };

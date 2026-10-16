@@ -19,7 +19,7 @@ import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy, ownTestBodies }
 import { browserSuiteCanRun, chromeWithH264 } from '../../lib/browserSuiteGate.js';
 
 const { it, drain } = ownTestBodies(vitestIt);
-const lifecycle = vi.hoisted(() => ({ diagnostics: null }));
+const lifecycle = vi.hoisted(() => ({ diagnostics: null, chromeProcess: null, fixtureWritersSettled: false }));
 vi.mock('node:fs/promises', async original => {
   const actual = await original();
   return { ...actual, rm: (...args) => lifecycle.diagnostics
@@ -68,9 +68,12 @@ vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await imp
 }));
 
 const { findFfmpeg } = await import('../../lib/ffmpeg.js');
-const { _cleanupTestBrowser, _createTestArtifactsRoot, _waitForTestChrome, _testChromeCaptureArgs } = await import('../htmlComposition/testBrowserCleanup.js');
+const { _cleanupTestBrowser, _createTestArtifactsRoot, _waitForTestChrome, _testBrowserCleanupSettled, _testChromeCaptureArgs } = await import('../htmlComposition/testBrowserCleanup.js');
 
-afterAll(() => { lifecycle.diagnostics.dispose(); cleanupTempDataRoots(); });
+afterAll(() => {
+  lifecycle.diagnostics.dispose();
+  if (!lifecycle.chromeProcess || (lifecycle.fixtureWritersSettled && _testBrowserCleanupSettled(lifecycle.chromeProcess))) cleanupTempDataRoots();
+});
 
 const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -84,6 +87,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
   let proc;
   let browser;
   let artifacts;
+  const detachedChromeProcessGroupId = () => process.platform === 'win32' ? undefined : proc?.pid;
   let PATHS, encodeDocumentComposition, prepareDocumentRender, documentRenderClock, importDocumentTemplate;
   let generateMixedMediaDocument, regenerateMixedMediaSection, acceptMixedMediaDocument, buildDocumentPreview, PREVIEW_MEDIA_BUDGET_BYTES, projects;
   beforeAll(async () => {
@@ -101,7 +105,9 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     ({ buildDocumentPreview, PREVIEW_MEDIA_BUDGET_BYTES } = await import('./documentPreview.js'));
     projects = await import('./projects.js');
     const profile = join(PATHS.data, 'chrome-test-profile');
-    proc = spawn(chrome, _testChromeCaptureArgs(profile), { stdio: ['ignore', 'ignore', 'pipe'] });
+    proc = spawn(chrome, _testChromeCaptureArgs(profile), { stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform !== 'win32' });
+    lifecycle.chromeProcess = proc;
+    lifecycle.fixtureWritersSettled = false;
     const ws = await _waitForTestChrome(proc);
     endpoint = new URL(ws).origin.replace('ws:', 'http:');
     artifacts = _createTestArtifactsRoot();
@@ -114,8 +120,9 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
         expect(owned.closed, `owned capture child closed before fixture teardown; ${lifecycle.diagnostics.describe(owned)}`).toBe(true);
         expect(existsSync(owned.profile), `owned capture profile removed before fixture teardown; ${lifecycle.diagnostics.describe(owned)}`).toBe(false);
       }
-    } finally { await _cleanupTestBrowser({ browser, proc, artifacts, cleanup: () => {} }); }
-  });
+      lifecycle.fixtureWritersSettled = true;
+    } finally { await _cleanupTestBrowser({ browser, proc, artifacts, cleanup: () => {}, detachedProcessGroupId: detachedChromeProcessGroupId() }); }
+  }, 35000);
 
   // Uniquely catches dropped effect data, missing staged modules and preview/export curve drift.
   it('develops a still from white in the encoded document render and live preview', async () => {

@@ -105,6 +105,7 @@ window.renderFrame = (t) => {
 let proc;
 let browser;
 let artifacts;
+const detachedChromeProcessGroupId = () => process.platform === 'win32' ? undefined : proc?.pid;
 const decodeRaw = (input, extra = []) => execFileSync(ffmpeg, ['-v', 'error', '-i', input, ...extra, '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { maxBuffer: 80 * 1024 * 1024 });
 const meanAbsDiff = (a, b) => {
   let sum = 0;
@@ -115,7 +116,7 @@ const meanAbsDiff = (a, b) => {
 describe.skipIf(!chrome || !ffmpeg || !ffprobe)('Code Animation frame-exact export with real Chrome and ffmpeg', () => {
   beforeAll(async () => {
     const profile = join(lazyTempDataRoot('portos-code-animation-export-'), 'chrome-test-profile');
-    proc = spawn(chrome, ['--headless=new', '--mute-audio', '--no-sandbox', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--no-first-run', '--disable-background-networking', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
+    proc = spawn(chrome, ['--headless=new', '--mute-audio', '--no-sandbox', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--no-first-run', '--disable-background-networking', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform !== 'win32' });
     try {
       const ws = await _waitForTestChrome(proc);
       endpoint = new URL(ws).origin.replace('ws:', 'http:');
@@ -123,13 +124,13 @@ describe.skipIf(!chrome || !ffmpeg || !ffprobe)('Code Animation frame-exact expo
       browser = await chromium.connectOverCDP(endpoint, { artifactsDir: artifacts.path });
     } catch (error) {
       // Retain the owned handle for afterAll if termination itself fails.
-      await _cleanupTestBrowser({ browser, proc, artifacts, cleanup: cleanupTempDataRoots, startupError: error });
+      await _cleanupTestBrowser({ browser, proc, artifacts, cleanup: cleanupTempDataRoots, startupError: error, detachedProcessGroupId: detachedChromeProcessGroupId() });
     }
     // Enclose the existing startup (20s), disconnect (5s) and owned-child
     // termination (10s) budgets without cutting off evidence.
-  }, 40000);
+  }, 45000);
 
-  afterAll(() => _cleanupTestBrowser({ browser, proc, artifacts, cleanup: cleanupTempDataRoots }), 20000);
+  afterAll(() => _cleanupTestBrowser({ browser, proc, artifacts, cleanup: cleanupTempDataRoots, detachedProcessGroupId: detachedChromeProcessGroupId() }), 25000);
 
   it('exports duration × fps unique frames from a slow renderFrame, matching direct screenshots, as BT.709 H.264 with the controls hidden', async () => {
     state.html = FIXTURE;

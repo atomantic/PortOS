@@ -8,13 +8,13 @@ import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { chromium } from 'playwright-core';
-import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots, sweepStrayTempRoots } from '../lib/mockPathsDataRoot.js';
+import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 import { waitForAbort } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { browserSuiteCanRun } from '../lib/browserSuiteGate.js';
 vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('mv-song-browser-') }));
 vi.mock('../services/settings.js', () => ({ getSettings: async () => ({}) }));
-const { _testChromeCaptureArgs, _waitForTestChrome, _cleanupTestBrowser, _createTestArtifactsRoot } = await import('../services/htmlComposition/testBrowserCleanup.js');
+const { _testChromeCaptureArgs, _waitForTestChrome, _cleanupTestBrowser, _testBrowserCleanupSettled, _createTestArtifactsRoot } = await import('../services/htmlComposition/testBrowserCleanup.js');
 const chrome = [process.env.CHROME_PATH, chromium.executablePath(), '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome'].find(p => p && existsSync(p));
 const client = resolve(import.meta.dirname, '../../client');
 const requireClient = createRequire(join(client, 'package.json'));
@@ -24,27 +24,27 @@ catch (err) { if (err.code !== 'MODULE_NOT_FOUND') throw err; }
 const canRun = browserSuiteCanRun('song revision browser suite', { Chrome: chrome, 'client workspace dependencies': bundler }, { onUnavailable: cleanupTempDataRoots });
 // Prerequisite discovery may initialize mocked paths; skipped suites have no cleanup hooks.
 let browser, artifacts, proc, server, io, songs, musicVideoEvents;
+const detachedChromeProcessGroupId = () => process.platform === 'win32' ? undefined : proc?.pid;
 const fixtureCleanup = new AbortController();
 const broadcast = event => io.emit('music-video:song-revision', event);
 afterAll(async () => {
+  let cleanupError;
+  const recordCleanupError = error => { cleanupError = cleanupError ? new AggregateError([cleanupError, error], 'Song revision fixture cleanup failed') : error; };
   musicVideoEvents?.off('song-revision', broadcast);
   fixtureCleanup.abort();
-  await songs?.__testing.settle(); songs?.__setSongRevisionDepsForTests();
+  try { await songs?.__testing.settle(); } catch (error) { recordCleanupError(error); }
+  try { songs?.__setSongRevisionDepsForTests(); } catch (error) { recordCleanupError(error); }
+  try { await _cleanupTestBrowser({ browser, proc, artifacts, detachedProcessGroupId: detachedChromeProcessGroupId(), cleanup: () => {} }); }
+  catch (error) { recordCleanupError(error); }
   try {
-    await _cleanupTestBrowser({ browser, proc, artifacts, cleanup: async () => {
-      try {
-        if (io) await new Promise(resolve => io.close(resolve));
-        else if (server) await new Promise(resolve => server.close(resolve));
-      } finally {
-        cleanupTempDataRoots();
-      }
-    } });
-  } finally {
-    // A SIGKILLed Chrome leaves helper processes that can still flush into the
-    // profile (<root>/chrome) after the root was removed, recreating it (#10404).
-    await sweepStrayTempRoots('mv-song-browser-');
+    if (io) await new Promise((resolve, reject) => io.close(error => error ? reject(error) : resolve()));
+    else if (server) await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  } catch (error) { recordCleanupError(error); }
+  if (!cleanupError && _testBrowserCleanupSettled(proc)) {
+    try { cleanupTempDataRoots(); } catch (error) { recordCleanupError(error); }
   }
-});
+  if (cleanupError) throw cleanupError;
+}, 30000);
 
 describe.skipIf(!canRun)('song revision in Chrome (client dependencies required)', () => {
   it('forks, edits, generates, listens and selects without altering the previous version', async () => {
@@ -92,7 +92,7 @@ describe.skipIf(!canRun)('song revision in Chrome (client dependencies required)
     const app = express(); app.use(express.json()); app.use('/api/music-video', router); app.use('/data/music', express.static(PATHS.music)); app.use(express.static(join(ui, 'dist'))); app.use(errorMiddleware);
     server = await new Promise(resolve => { const listener = app.listen(0, '127.0.0.1', () => resolve(listener)); });
     io = new Server(server); musicVideoEvents.on('song-revision', broadcast);
-    proc = spawn(chrome, _testChromeCaptureArgs(join(PATHS.data, 'chrome')), { stdio: ['ignore', 'ignore', 'pipe'] });
+    proc = spawn(chrome, _testChromeCaptureArgs(join(PATHS.data, 'chrome')), { stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform !== 'win32' });
     artifacts = _createTestArtifactsRoot();
     browser = await chromium.connectOverCDP(await _waitForTestChrome(proc), { artifactsDir: artifacts.path });
     const page = await browser.newPage({ viewport: { width: 1000, height: 900 } });

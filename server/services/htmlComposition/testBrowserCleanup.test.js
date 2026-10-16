@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { _cleanupTestBrowser, _createTestArtifactsRoot, _describeTestChromeStartup, _testChromeProcessFacts, _waitForTestChrome, _withTestCaptureDiagnostics } from './testBrowserCleanup.js';
+import { _cleanupTestBrowser, _createTestArtifactsRoot, _describeTestChromeStartup, _testBrowserCleanupSettled, _testChromeProcessFacts, _waitForTestChrome, _withTestCaptureDiagnostics } from './testBrowserCleanup.js';
 
 async function waitForFile(path, timeoutMs = 2000) {
   const deadline = Date.now() + timeoutMs;
@@ -728,6 +728,8 @@ describe('fixture-owned CDP artifacts root', () => {
     expect(existsSync(artifacts.path)).toBe(true);
     expect(existsSync(dataRoot)).toBe(true);
     expect(cleanup).not.toHaveBeenCalled();
+    expect(_testBrowserCleanupSettled(proc)).toBe(false);
+    expect(_testBrowserCleanupSettled(undefined)).toBe(true);
   });
 
   it.skipIf(process.platform === 'win32')('waits for an owned detached descendant before removing roots', async () => {
@@ -776,6 +778,7 @@ describe('fixture-owned CDP artifacts root', () => {
         detachedProcessGroupId: proc.pid,
       });
       groupSettled = true;
+      expect(_testBrowserCleanupSettled(proc)).toBe(true);
       await directClose;
       expect(closed).toBe(true);
 

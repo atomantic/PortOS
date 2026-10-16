@@ -405,6 +405,14 @@ export function _createTestArtifactsRoot({ parent = tmpdir() } = {}) {
 // Startup failure and afterAll can both enter cleanup; never probe or signal
 // the departed group's numeric identity a second time.
 const settledDetachedGroups = new WeakSet();
+const settledTestChromeProcesses = new WeakSet();
+
+// A fixture with a secondary teardown hook can guard root cleanup after the
+// browser helper throws. No retained process means discovery was skipped and
+// there is no live owned Chrome to block that cleanup.
+export function _testBrowserCleanupSettled(proc) {
+  return !proc || settledTestChromeProcesses.has(proc);
+}
 
 // The owned Chrome may still write downloads into the root until it exits.
 // Remove only the directory created above, and keep it as evidence when exit
@@ -473,6 +481,7 @@ export async function _cleanupTestBrowser({ browser, proc, artifacts, cleanup, s
     } else {
       try { await cleanup(); } catch (error) { cleanupFailure('temporary data', error); }
     }
+    if (proc && childSettled && detachedGroupSettled) settledTestChromeProcesses.add(proc);
   }
   if (startupError && errors.length === 1) throw startupError;
   if (errors.length) throw new AggregateError(errors, errors.map(error => error.message).join('; '),
