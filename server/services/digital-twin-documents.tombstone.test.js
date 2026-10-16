@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
-import { existsSync, rmSync } from 'fs';
+import { existsSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
@@ -170,4 +170,53 @@ it('invalidates only after synchronized document files are available', async () 
   } finally {
     digitalTwinEvents.off('sync:completed', listener);
   }
+});
+
+describe('digital twin document create failure paths (#11681)', () => {
+  const metaPath = join(twinDir, 'meta.json');
+
+  it.each([
+    { name: 'new file', orphan: false },
+    { name: 'pre-existing orphan', orphan: true },
+  ])('retries a $name after a failed metadata write without leaking cached changes', async ({ orphan }) => {
+    // Keep cache expiry from hiding an immediate retry's stale-state regression.
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now());
+    try {
+      await saveMeta({ ...(await loadMeta()), deletedDocuments: [
+        { filename: FILENAME, deletedAt: new Date(Date.now() - 60_000).toISOString() },
+      ] });
+      const before = structuredClone(await loadMeta());
+      const persisted = readFileSync(metaPath, 'utf-8');
+      if (orphan) writeFileSync(docPath, 'orphan');
+      // A directory at the meta path makes the real metadata write fail.
+      rmSync(metaPath, { force: true });
+      mkdirSync(metaPath);
+      await expect(newDoc()).rejects.toThrow();
+      expect(existsSync(docPath)).toBe(orphan);
+      expect(await loadMeta()).toEqual(before);
+
+      // Repair I/O without resetting the cache, as an immediate user retry would.
+      rmSync(metaPath, { recursive: true, force: true });
+      writeFileSync(metaPath, persisted);
+      const created = await newDoc();
+      const saved = JSON.parse(readFileSync(metaPath, 'utf-8'));
+      expect(saved.documents).toEqual([expect.objectContaining({ id: created.id, filename: FILENAME })]);
+      expect(saved.deletedDocuments).toEqual([]);
+      expect(readFileSync(docPath, 'utf-8')).toBe(CONTENT);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('adopts an orphan file that has no meta entry', async () => {
+    writeFileSync(docPath, 'orphan');
+    const created = await newDoc();
+    expect(readFileSync(docPath, 'utf-8')).toBe(CONTENT);
+    expect((await loadMeta()).documents.map(d => d.id)).toContain(created.id);
+  });
+
+  it('still rejects a filename that is already in meta', async () => {
+    await newDoc();
+    await expect(newDoc()).rejects.toThrow(/already exists/);
+  });
 });
