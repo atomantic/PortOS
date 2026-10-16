@@ -98,7 +98,7 @@ beforeEach(async () => {
   videoGenEvents.removeAllListeners();
   getProject.mockReset();
   getTrack.mockReset();
-  // Queue-owned slices are deleted by the media-job queue, which these tests bypass.
+  // Preparation-only cases leave slices behind; generated takes remove theirs before completion.
   await rm(PATHS.uploads, { recursive: true, force: true });
   await mkdir(PATHS.music, { recursive: true });
   await writeFile(join(PATHS.music, 'song.wav'), songWav());
@@ -325,7 +325,8 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
       capability: { style: 'music', modelId: 'fal-ai/bytedance/omnihuman/v1.5', resolution: '1080p' } });
     expect(si.audio.conditioning).toMatchObject({ source: 'master', filename: 'song.wav', selection: 'music-driven' });
     expect(prepared).toMatchObject({ modelId: 'fal-ai/bytedance/omnihuman/v1.5', resolution: '1080p', enableTranscription: false });
-    const samples = pcm(await readFile(prepared.audioFilePath));
+    const sliceWav = await readFile(prepared.audioFilePath);
+    const samples = pcm(sliceWav);
     expect(samples.readInt16LE(0)).toBe(30000);
 
     await mkdir(PATHS.images, { recursive: true });
@@ -368,7 +369,8 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     });
     expect(posts[0].body.image_url).toMatch(/^https:\/\/cdn\.example\.com\/.+-start\.[a-z]+$/);
     expect(posts[0].body.audio_url).toMatch(/^https:\/\/cdn\.example\.com\/.+-audio\.wav$/);
-    expect(uploads.get(posts[0].body.audio_url)).toEqual(await readFile(prepared.audioFilePath));
+    expect(uploads.get(posts[0].body.audio_url)).toEqual(sliceWav);
+    await expect(readFile(prepared.audioFilePath)).rejects.toMatchObject({ code: 'ENOENT' });
     const { loadHistory } = await import('../videoGen/history.js');
     // 1.5s at $0.16/s.
     expect((await loadHistory()).find((h) => h.id === job.jobId)).toMatchObject({
@@ -394,6 +396,7 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     expect(prepared.shotInstruction.audioWindow).toEqual(window);
     expect(prepared.shotInstruction.edit).toEqual({ inSec: 20 - window.startSec, outSec: 21.5 - window.startSec, targetSec: 1.5 });
     expect(prepared.modelId).toBe(url);
+    const sliceWav = await readFile(prepared.audioFilePath);
 
     await mkdir(PATHS.images, { recursive: true });
     await writeFile(join(PATHS.images, 'frame.png'), Buffer.from('89504e470d0a1a0a', 'hex'));
@@ -432,7 +435,8 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     const start = frame === 'image_urls' ? posts[0].body.image_urls[0] : posts[0].body.image_url;
     expect(start).toMatch(/^https:\/\/cdn\.example\.com\/.+-start\.[a-z]+$/);
     expect(posts[0].body[audio]).toHaveLength(1);
-    expect(uploads.get(posts[0].body[audio][0])).toEqual(await readFile(prepared.audioFilePath));
+    expect(uploads.get(posts[0].body[audio][0])).toEqual(sliceWav);
+    await expect(readFile(prepared.audioFilePath)).rejects.toMatchObject({ code: 'ENOENT' });
     const { loadHistory } = await import('../videoGen/history.js');
     expect((await loadHistory()).find((h) => h.id === job.jobId)).toMatchObject({ modelId: `fal:${url}`, estimatedCostUsd: costUsd, audioDriven: true });
   }, 60_000);
@@ -576,7 +580,8 @@ describe.skipIf(!ffmpeg)('accepted-prefix continuation render (#9348)', () => {
     expect(prepared.shotInstruction.audioWindow).toEqual({ startSec: 14, endSec: 24, durationSec: 10 });
     expect(prepared.shotInstruction.edit).toEqual({ inSec: 0, outSec: 10, targetSec: 10 });
     expect(prepared.shotInstruction.repair).toMatchObject({ sourceAssetId: 'accepted', sourceTakeId: 'accepted-take', role: 'continuation' });
-    const sliced = pcm(await readFile(prepared.audioFilePath));
+    const sliceWav = await readFile(prepared.audioFilePath);
+    const sliced = pcm(sliceWav);
     expect(sliced.length / 2).toBe(10 * RATE);
     expect(sliced.readInt16LE((20 - 14) * RATE * 2)).toBe(30000);
     // A source edit to a short interval cannot make preparation pad backwards
@@ -602,7 +607,8 @@ describe.skipIf(!ffmpeg)('accepted-prefix continuation render (#9348)', () => {
       lipSync: { enableTranscription: prepared.enableTranscription }, shotInstruction: prepared.shotInstruction });
     expect(await waitForTerminal(generated.jobId)).toMatchObject({ type: 'completed' });
     expect(posts).toHaveLength(1);
-    expect(Buffer.from(posts[0].audio_url.replace(/^data:audio\/wav;base64,/, ''), 'base64')).toEqual(await readFile(prepared.audioFilePath));
+    expect(Buffer.from(posts[0].audio_url.replace(/^data:audio\/wav;base64,/, ''), 'base64')).toEqual(sliceWav);
+    await expect(readFile(prepared.audioFilePath)).rejects.toMatchObject({ code: 'ENOENT' });
     const landed = appendSceneTakes(repair.project, suffix.sceneId, [{ kind: 'video', assetId: generated.jobId, shotInstruction: prepared.shotInstruction }]).project;
     const clips = beatSnapClips(await resolveSceneClips(landed), [], { scenes: landed.scenes });
     expect(clips[0]).toMatchObject({ videoPath: acceptedPath, inSec: 0, outSec: 4, duration: 4, loop: false });
