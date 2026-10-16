@@ -1536,6 +1536,18 @@ it('projects transitive browser consumers through the planner CLI without replac
 
 describe('cross-workspace browser suites (#10312)', () => {
 
+  it('selects animatic pixel coverage when only the compositor or Save frame control changes', () => {
+    const cwd = fileURLToPath(new URL('../', import.meta.url));
+    const suite = 'server/services/musicVideo/animaticCapture.browser.test.js';
+    for (const source of ['client/src/lib/musicVideoFrameCapture.js', 'client/src/components/musicVideo/FrameStepper.jsx']) {
+      const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [source], cwd });
+      const trackedFiles = inputs.trackedFiles.filter((path) => !/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path) || BROWSER_SUITES.includes(path));
+      const plan = buildCiTestPlan(inputs.changedFiles, { ...inputs, trackedFiles });
+      expect(plan.full).toBe(false);
+      expect(plan.browserFiles).toContain(suite);
+    }
+  });
+
   it('selects every music-video browser suite when a client component they mount changes', () => {
     const cwd = fileURLToPath(new URL('../', import.meta.url));
     const source = 'client/src/components/musicVideo/ProductionReviewPanel.jsx';
