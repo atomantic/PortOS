@@ -274,30 +274,38 @@ function connectAndRun(action, timeoutMs = COMMAND_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     const client = new pm2.custom();
     let settled = false;
-    const disconnect = () => {
-      try { client.disconnect(); return null; }
-      catch (error) {
+    const disconnect = () => new Promise(resolveCleanup => {
+      let cleaned = false;
+      const done = error => {
+        if (cleaned) return;
+        cleaned = true;
+        clearTimeout(cleanupTimer);
+        if (!error) { resolveCleanup(null); return; }
         console.error(`❌ PM2 client disconnect failed: ${error.message}`);
-        return Object.assign(new Error('PM2 client cleanup unconfirmed'), {
+        resolveCleanup(Object.assign(new Error('PM2 client cleanup unconfirmed'), {
           cause: error, code: 'PM2_CLEANUP_UNKNOWN', cleanupConfirmed: false, outcome: 'unknown',
-        });
-      }
-    };
+        }));
+      };
+      const cleanupTimer = setTimeout(() => done(new Error('disconnect timed out')), KILL_GRACE_MS);
+      try { client.disconnect(done); }
+      catch (error) { done(error); }
+    });
     const finish = (error, result) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      const cleanupError = disconnect();
-      if (cleanupError) error = Object.assign(error || cleanupError, { cleanupConfirmed: false });
-      if (error) reject(error);
-      else resolve(result);
+      void disconnect().then(cleanupError => {
+        if (cleanupError) error = Object.assign(error || cleanupError, { cleanupConfirmed: false });
+        if (error) reject(error);
+        else resolve(result);
+      });
     };
     const timer = setTimeout(() => finish(Object.assign(new Error('pm2 RPC timed out; client disconnect requested, daemon outcome unknown'), {
       code: 'PM2_TIMEOUT', timedOut: true, cleanupConfirmed: false, outcome: 'unknown',
     })), timeoutMs);
     const onConnect = error => {
       // Connect can finish after its deadline and open new socket handles.
-      if (settled) { disconnect(); return; }
+      if (settled) { void disconnect(); return; }
       if (error) { finish(error); return; }
       Promise.resolve().then(() => {
         if (settled) return;

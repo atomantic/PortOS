@@ -6,7 +6,7 @@ vi.mock('pm2', () => ({ default: { custom: function () { return mocks.clients.sh
 vi.mock('../lib/childProcess.js', async original => ({ ...(await original()), spawn: mocks.spawn }));
 import { clearJlistCache, listProcessesStrict, stopApp } from './pm2.js';
 
-const client = () => ({ connect: vi.fn(cb => cb(null)), list: vi.fn(), stop: vi.fn(), disconnect: vi.fn() });
+const client = () => ({ connect: vi.fn(cb => cb(null)), list: vi.fn(), stop: vi.fn(), disconnect: vi.fn(cb => cb(null)) });
 const child = () => Object.assign(new EventEmitter(), {
   stdout: Object.assign(new EventEmitter(), { destroy: vi.fn() }),
   stderr: Object.assign(new EventEmitter(), { destroy: vi.fn() }),
@@ -55,7 +55,10 @@ it('closes a native connection that arrives after timeout without issuing its de
   const pending = listProcessesStrict();
   await vi.advanceTimersByTimeAsync(15_000);
   expect(await pending).toBeNull();
+  delayed.disconnect.mockImplementation(cb => cb(new Error('late socket cleanup failed')));
   delayed.connect.mock.calls[0][0](null);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(console.error).toHaveBeenCalledWith(expect.stringContaining('late socket cleanup failed'));
   expect(delayed.list).not.toHaveBeenCalled();
   expect(delayed.disconnect).toHaveBeenCalledTimes(2);
 });
@@ -78,9 +81,21 @@ it('a completed mutation closes only its own client while a list is pending', as
 it('reports unavailable rather than success when an owned native client cannot disconnect', async () => {
   const broken = client();
   broken.list.mockImplementation(cb => cb(null, []));
-  broken.disconnect.mockImplementation(() => { throw new Error('socket teardown failed'); });
+  broken.disconnect.mockImplementation(cb => cb(new Error('socket teardown failed')));
   mocks.clients.push(broken);
   expect(await listProcessesStrict()).toBeNull();
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it('bounds native teardown when disconnect never calls back', async () => {
+  const stalled = client();
+  stalled.list.mockImplementation(cb => cb(null, []));
+  stalled.disconnect.mockImplementation(() => {});
+  mocks.clients.push(stalled);
+  const pending = listProcessesStrict();
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(await pending).toBeNull();
+  expect(console.error).toHaveBeenCalledWith(expect.stringContaining('disconnect timed out'));
   expect(vi.getTimerCount()).toBe(0);
 });
 

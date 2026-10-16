@@ -3,7 +3,7 @@ import { EventEmitter } from 'events';
 
 const mockPm2 = vi.hoisted(() => ({
   connect: vi.fn(),
-  disconnect: vi.fn(),
+  disconnect: vi.fn(cb => cb(null)),
   start: vi.fn()
 }));
 
