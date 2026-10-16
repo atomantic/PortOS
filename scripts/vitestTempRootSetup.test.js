@@ -1,14 +1,19 @@
-import { appendFileSync, statSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync, symlinkSync } from 'node:fs';
+import { appendFileSync, lstatSync, statSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync, symlinkSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { channel } from 'node:diagnostics_channel';
 import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { cleanupTempDataRoots, lazyTempDataRoot } from '../server/lib/mockPathsDataRoot.js';
-import { observeOwnedBrowsers } from '../server/test/ownedBrowserDiagnostics.js';
+import { describeStageFixtureRoot, observeOwnedBrowsers, readOwnedBrowserObservations } from '../server/test/ownedBrowserDiagnostics.js';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { teardown } from './vitestTempRootSetup.js';
+
+vi.mock('node:fs', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, lstatSync: vi.fn(actual.lstatSync) };
+});
 
 describe('vitestTempRootSetup teardown', () => {
   const originalRoot = process.env.PORTOS_TEST_TEMP_ROOT;
@@ -173,6 +178,57 @@ describe('vitestTempRootSetup teardown', () => {
     expect(second).toContain('profileEntries=0 applicationEntries=2');
     expect(reports.join('\n')).not.toContain('private-');
     expect(reports.join('\n')).not.toContain('private content');
+  });
+
+  it('retains exact large filesystem identities through observation and rejects rounded or malformed records', async () => {
+    const actual = await vi.importActual('node:fs');
+    const root = mkdtempSync(join(tmpdir(), 'pvt-large-identity-'));
+    process.env.PORTOS_TEST_TEMP_ROOT = root;
+    const name = 'portos-code-animation-stages-Abc123';
+    const profile = join(root, name);
+    mkdirSync(profile);
+    let ino = 18014398509481984n;
+    let dev = 18446744073709551615n;
+    lstatSync.mockImplementation((path, options) => {
+      const stat = actual.lstatSync(path, options);
+      if (path === profile) {
+        expect(options).toEqual({ bigint: true });
+        stat.ino = ino;
+        stat.dev = dev;
+      }
+      return stat;
+    });
+    const dispose = observeOwnedBrowsers(() => fileURLToPath(import.meta.url));
+    try {
+      channel('portos.composition-browser.lifecycle').publish({ event: 'allocated', profile });
+      dispose();
+      const sidecar = join(root, '.leak-owners');
+      const row = readFileSync(sidecar, 'utf8').trim().split('\n').at(-1).split('\t');
+      const recorded = JSON.parse(row[2]);
+      expect(recorded).toMatchObject({ generation: 1, dev: dev.toString(), ino: ino.toString() });
+      const project = () => {
+        const { observations, state } = readOwnedBrowserObservations(root);
+        return describeStageFixtureRoot(profile, observations.get(name), state);
+      };
+      expect(project()).toContain('generation=1 rootIdentity=matches');
+      ino += 1n; // These adjacent IDs collapse to the same floating-point Number.
+      expect(Number(ino)).toBe(Number(recorded.ino));
+      expect(project()).toContain('generation=1 rootIdentity=changed');
+      const replace = identity => writeFileSync(sidecar, `${row[0]}\t${row[1]}\t${JSON.stringify({ ...recorded, ...identity })}\n`);
+      ino = 1n; dev = 2n;
+      replace({ ino: 1, dev: 2 });
+      expect(project()).toContain('generation=1 rootIdentity=matches');
+      for (const invalid of [18014398509481984, -1, '01', '-1', '1e3', '18446744073709551616', '9'.repeat(21)]) {
+        for (const field of ['ino', 'dev']) {
+          replace({ [field]: invalid });
+          expect(project()).toContain('generation=unavailable rootIdentity=unavailable');
+        }
+      }
+    } finally {
+      dispose();
+      lstatSync.mockImplementation(actual.lstatSync);
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('caps records, event history and public projection without copying private child or error values', () => {
