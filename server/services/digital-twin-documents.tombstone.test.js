@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
-import { existsSync, rmSync } from 'fs';
+import { existsSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
@@ -170,4 +170,29 @@ it('invalidates only after synchronized document files are available', async () 
   } finally {
     digitalTwinEvents.off('sync:completed', listener);
   }
+});
+
+describe('digital twin document create failure paths (#11681)', () => {
+  const metaPath = join(twinDir, 'meta.json');
+
+  it('removes the new file and rethrows when saving meta fails', async () => {
+    // A directory at the meta path makes the meta write fail without mocking.
+    rmSync(metaPath, { force: true });
+    mkdirSync(metaPath);
+    await expect(newDoc()).rejects.toThrow();
+    expect(existsSync(docPath)).toBe(false);
+    rmSync(metaPath, { recursive: true, force: true });
+  });
+
+  it('adopts an orphan file that has no meta entry', async () => {
+    writeFileSync(docPath, 'orphan');
+    const created = await newDoc();
+    expect(readFileSync(docPath, 'utf-8')).toBe(CONTENT);
+    expect((await loadMeta()).documents.map(d => d.id)).toContain(created.id);
+  });
+
+  it('still rejects a filename that is already in meta', async () => {
+    await newDoc();
+    await expect(newDoc()).rejects.toThrow(/already exists/);
+  });
 });

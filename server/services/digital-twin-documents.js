@@ -70,12 +70,12 @@ async function createDocumentLeased(data) {
 
   const meta = await loadMeta();
 
-  // Check if file already exists
-  if (existsSync(filePath)) {
+  // A file with no meta entry is an orphan from a failed earlier create; adopt it.
+  const fileExisted = existsSync(filePath);
+  if (fileExisted && documentRecords(meta).some(d => d?.filename === data.filename)) {
     throw new Error(`Document ${data.filename} already exists`);
   }
 
-  // Write the file
   await atomicWrite(filePath, data.content);
 
   // Re-creating a filename that was previously deleted must clear its tombstone
@@ -100,7 +100,11 @@ async function createDocumentLeased(data) {
   meta.documents.push(docMeta);
   meta.documents.sort((a, b) => a.priority - b.priority);
   meta.deletedDocuments = clearTombstone(meta.deletedDocuments, data.filename, 'filename');
-  await saveMeta(meta);
+  // Don't strand the file we just wrote: an orphan would block every retry.
+  await saveMeta(meta).catch(async (err) => {
+    if (!fileExisted) await unlink(filePath).catch(() => {});
+    throw err;
+  });
 
   console.log(`🧬 Created soul document: ${data.filename}`);
   return { ...docMeta, content: data.content };
