@@ -861,7 +861,8 @@ describe('localLlm', () => {
     });
 
     const run = async (downloadFetch, advanceMs) => {
-      vi.useFakeTimers();
+      // setImmediate stays real: the loop below yields to real file I/O with it.
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       const restorePlatform = pinPlatform('darwin');
       pathExistsImpl.fn = async (p) => p === '/Applications/Ollama.app';
       vi.stubGlobal('fetch', vi.fn(async (url, init) => {
@@ -872,9 +873,14 @@ describe('localLlm', () => {
       }));
       mocks.ollama.getStatus.mockResolvedValueOnce({ version: '0.33.3' });
       try {
-        const p = svc.upgradeBackend('ollama');
-        // Step in small increments so each chunk's idle-timer reset lands before the clock moves on.
-        for (let elapsed = 0; elapsed < advanceMs; elapsed += 1_000) await vi.advanceTimersByTimeAsync(1_000);
+        let settled = false;
+        const p = svc.upgradeBackend('ollama').finally(() => { settled = true; });
+        // Step in small increments so each chunk's idle-timer reset lands before the clock
+        // moves on; keep stepping past the budget so post-download sleeps also fire.
+        for (let elapsed = 0; !settled && elapsed < advanceMs * 4; elapsed += 5_000) {
+          await vi.advanceTimersByTimeAsync(5_000);
+          await new Promise((r) => setImmediate(r));
+        }
         return await p;
       } finally {
         mocks.ollama.getStatus.mockReset();
