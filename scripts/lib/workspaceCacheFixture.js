@@ -47,6 +47,7 @@ function checkout(host, name, workspace, configName, dependencies) {
   mkdirSync(parent);
   put(join(parent, 'package.json'), '{"type":"module"}');
   const fixture = createVitestTempFixture(parent, workspace, 'expect(true).toBe(true);', configName);
+  delete fixture.options.env.PORTOS_CI_BROWSER_OWNER;
   const root = fixture.args[fixture.args.indexOf('--root') + 1];
   unlinkSync(join(root, 'node_modules'));
   link(dependencies, join(root, 'node_modules'));
