@@ -89,6 +89,18 @@ describe('deriveStages / deriveNextAction', () => {
     expect(deriveNextAction(interrupted)).toMatchObject({ id: 'resume-production' });
   });
 
+  it('a parked run no longer holds Shots open once every shot is done', () => {
+    const finished = { productionReadiness: APPROVED, id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, ...LYRICS, scenes: [scene()], renderHistoryId: 'rh-1' };
+    const parked = { ...finished, productionRuns: [run({ status: 'awaiting-video' })] };
+    expect(stateOf(parked).produce).toBe('done');
+    expect(stateOf(parked).review).toBe('done');
+    expect(deriveNextAction(parked).id).not.toBe('resume-production');
+    // A run still working keeps Shots open, and a parked run with shots left still owns the header.
+    expect(stateOf({ ...finished, productionRuns: [run()] }).produce).toBe('active');
+    const unfinished = { ...parked, scenes: [scene({ videoHistoryId: null, referenceImageId: null })] };
+    expect(deriveNextAction(unfinished)).toMatchObject({ id: 'resume-production' });
+  });
+
   it('walks Storyboard → Make → Final render, then reports a finished project', () => {
     const planned = { productionReadiness: APPROVED, id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, scenes: [scene({ referenceImageId: null, videoHistoryId: null })] };
     expect(deriveStages(planned).current).toBe('produce');

@@ -426,7 +426,6 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
   const mode = project?.composition?.mode || 'concat';
   const cast = project?.castAndSets || null;
   const run = currentProductionRun(project);
-  const liveRun = !!run && RESUMABLE_RUN_STATUSES.has(run.status);
   const planned = !!readiness?.storyboard.approved;
   const shotsPlanned = (project?.scenes || []).length > 0 && !!readiness && !readiness.storyboard.problems?.length;
   const castStopped = castSetsPhase(cast) === 'stopped';
@@ -434,11 +433,15 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
   // Code and document renders draw the picture themselves; scene footage is optional there.
   const produceDone = planned && clipsLockedDone(readiness) && footageReady(project);
 
+  const shotsDone = produceDone && composeDone(project || {}, mode);
+  // A run parked short of running (stopped, awaiting video) whose shots are all done since is
+  // finished in fact: it no longer holds Shots open or owns the header.
+  const liveRun = !!run && RESUMABLE_RUN_STATUSES.has(run.status) && (run.status === 'running' || !shotsDone);
   const done = {
     setup: projectHasAudio(project) && !!project?.audioAnalysis && lyricSetupState(project, readiness).ok,
     'cast-sets': castDone,
     board: planned || shotsPlanned,
-    produce: produceDone && composeDone(project || {}, mode),
+    produce: shotsDone,
     // A render made before later scene edits no longer counts as the final video.
     review: !!project?.renderHistoryId && !isFinalRenderStale(project),
     // #9281/#9282: published once every enabled platform has a recorded post.
@@ -466,7 +469,7 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
     else if (stage.id === current) state = blocked[stage.id] ? 'blocked' : 'active';
     return { ...stage, state, stale: !!stale[stage.id] };
   });
-  return { stages, current };
+  return { stages, current, liveRun };
 }
 
 // The approval panel the header sends the director to: unwritten art direction is written on the step, not approved.
@@ -529,8 +532,9 @@ export function deriveNextAction(project, {
   planning = false, analyzing = false, readiness = project?.productionReadiness, publish = {},
 } = {}) {
   if (!project) return null;
-  const { current } = deriveStages(project, readiness, publish);
-  const run = currentProductionRun(project);
+  const { current, liveRun } = deriveStages(project, readiness, publish);
+  const latestRun = currentProductionRun(project);
+  const run = latestRun && RESUMABLE_RUN_STATUSES.has(latestRun.status) && !liveRun ? null : latestRun;
   const cast = project.castAndSets || null;
   const scenes = project.scenes || [];
 
