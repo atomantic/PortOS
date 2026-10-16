@@ -665,6 +665,17 @@ describe('stepNotes', () => {
     // Before the final render, Final render says how many drafts and proofs there are to watch.
     expect(stepNotes({ ...project, excerpts: [{ id: 'a', status: 'complete', filename: 'a.mp4' }, { id: 'b', status: 'complete', filename: 'b.mp4' }, { id: 'c', status: 'error' }] }).review).toBe('2 drafts to watch');
   });
+
+  it('names what keeps a pictured Shots step from done instead of the picture count', () => {
+    const project = { id: 'p', scenes: [scene(), scene({ sceneId: 's2' }), scene({ sceneId: 's3' })] };
+    const clipLocks = { s1: 'locked', s2: 'changed', s3: 'open' };
+    const locked = { ...APPROVED, storyboard: { approved: true, problems: [], unlocked: [], clipLocks, clipsUnlocked: ['s2', 's3'] } };
+    expect(stepNotes(project, locked).produce).toBe('2 videos not locked');
+    const stills = { ...locked, storyboard: { approved: false, problems: [], unlocked: ['s3'], clipLocks, clipsUnlocked: ['s2', 's3'] } };
+    expect(stepNotes(project, stills).produce).toBe('1 still and 2 videos not locked');
+    const done = { ...locked, storyboard: { ...locked.storyboard, clipLocks: { s1: 'locked', s2: 'locked', s3: 'locked' }, clipsUnlocked: [] } };
+    expect(stepNotes(project, done).produce).toBe('3 of 3 shots have their picture');
+  });
 });
 
 describe('preview source order on Storyboard', () => {

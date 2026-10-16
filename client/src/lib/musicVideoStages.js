@@ -1112,6 +1112,14 @@ export function stepNotes(project, readiness = project?.productionReadiness, pub
     const ready = scenes.filter((scene) => sceneRenderReady(scene, { layered })).length;
     make = `${formatCount(ready)} of ${formatCount(scenes.length)} shots have their picture`;
   } else if (scenes.length) make = 'Picture drawn by the composition';
+  // Once the picture is in, an unfinished Shots step names what is left instead.
+  if (scenes.length && readiness && deriveStages(project, readiness, publish).stages.find((stage) => stage.id === 'produce')?.state !== 'done') {
+    const open = stageChecklist('produce', project, readiness, publish).filter((item) => !item.done && !item.optional);
+    const { stills, videos } = unlockedShots(readiness);
+    const unlocked = [stills.length && `${formatCount(stills.length)} ${stills.length === 1 ? 'still' : 'stills'}`,
+      videos.length && `${formatCount(videos.length)} ${videos.length === 1 ? 'video' : 'videos'}`].filter(Boolean).join(' and ');
+    if (open.length && !open.some((item) => item.id === 'footage')) make = unlocked ? `${unlocked} not locked` : `To do: ${open[0].label}`;
+  }
   // Before a final render, the drafts and proofs to watch are what Final render holds.
   const drafts = (project.excerpts || []).filter((e) => e.status === 'complete' && e.filename).length;
   const review = isFinalRenderStale(project) ? 'Out of date' : project.renderHistoryId ? 'Rendered'
