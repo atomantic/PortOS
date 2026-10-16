@@ -61,6 +61,7 @@ function hasCompletionMarker(path) {
 function runDbScript(action, endpoint, argument, dumpDir, expectedSha256) {
   const env = { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? PATHS.installRoot,
     PGPASSWORD: process.env.PGPASSWORD || 'portos', PORTOS_DUMP_DIR: dumpDir, LC_ALL: 'C',
+    ...Object.fromEntries(["TMPDIR", "TMP", "TEMP"].filter(key => process.env[key]).map(key => [key, process.env[key]])),
     ...(expectedSha256 ? { PORTOS_IMPORT_SHA256: expectedSha256 } : {}) };
   const args = [join(PATHS.root, 'scripts', 'db.sh'), action, '--endpoint',
     endpoint.host, String(endpoint.port), endpoint.user, endpoint.database, argument];
