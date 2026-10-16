@@ -15,6 +15,7 @@ export default function RouteErrorFallback() {
   const error = useRouteError();
   const navigate = useNavigate();
   const message = getErrorMessage(error);
+  const isLoadError = isStaleChunkError(error, { duringRender: true }) || isRouteErrorResponse(error);
 
   const retry = async () => {
     if (isStaleChunkError(error, { duringRender: true })) {
@@ -38,7 +39,9 @@ export default function RouteErrorFallback() {
         </div>
         <h1 className="text-xl font-bold text-port-text text-center mb-2">PortOS could not load this page</h1>
         <p className="text-port-text-muted text-sm text-center mb-4">
-          The server may still be restarting, or this browser may have an outdated app asset. Try again in a moment.
+          {isLoadError
+            ? 'The server may still be restarting, or this browser may have an outdated app asset. Try again in a moment.'
+            : 'PortOS encountered an unexpected app error. Try again or return to the dashboard.'}
         </p>
         <Banner tone="error" size="md" className="mb-4">
           <p className="text-xs font-mono break-all">{message}</p>

@@ -64,6 +64,8 @@ describe('RouteErrorFallback', () => {
   it('returns to the dashboard without reloading', async () => {
     const user = userEvent.setup();
     await renderRouteError(new Error('Server unavailable'));
+    expect(screen.getByText(/unexpected app error/)).toBeInTheDocument();
+    expect(screen.queryByText(/server may still be restarting/)).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Go to dashboard' }));
 
@@ -74,6 +76,7 @@ describe('RouteErrorFallback', () => {
     await renderRouteError(new Response(null, { status: 503, statusText: 'Service Unavailable' }));
 
     expect(screen.getByText('Service Unavailable')).toBeInTheDocument();
+    expect(screen.getByText(/server may still be restarting/)).toBeInTheDocument();
   });
 
   it('reloads when retry is clicked', async () => {

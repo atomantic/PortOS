@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, within, act, fireEvent, waitFor } from '@testing-library/react';
-import { MemoryRouter, useLocation } from 'react-router';
+import { MemoryRouter, Routes, Route, createMemoryRouter, RouterProvider, useLocation } from 'react-router';
+import { reloadOnceForStaleChunk } from '../utils/staleChunkReload';
 import { PINNED_KEY } from '../utils/navWorkingSet.js';
 import * as api from '../services/api';
 import socket from '../services/socket';
@@ -54,7 +55,11 @@ vi.mock('./Logo', () => ({ default: () => null }));
 vi.mock('./NotificationDropdown', () => ({ default: () => null }));
 vi.mock('./voice/VoiceToggleButton', () => ({ default: () => null }));
 vi.mock('./voice/VoiceWidget', () => ({ default: () => null }));
-vi.mock('./CmdKSearch', () => ({ default: () => null }));
+vi.mock('./CmdKSearch', () => ({ default: () => <div data-testid="command-palette" /> }));
+vi.mock('../utils/staleChunkReload', async (importOriginal) => ({
+  ...await importOriginal(),
+  reloadOnceForStaleChunk: vi.fn().mockResolvedValue(false),
+}));
 vi.mock('./KeyboardHelp', () => ({ default: () => null }));
 
 // --- Socket: record handlers, never connect. ---
@@ -796,5 +801,86 @@ describe('Layout — keyboard navigation shell', () => {
       desktopMedia.dispatchEvent(new Event('change'));
     });
     expect(sidebar).toHaveAttribute('inert');
+  });
+});
+
+
+describe('Layout — page error containment', () => {
+  const renderFailingPage = async (failure) => {
+    const Page = () => {
+      if (failure.error) throw failure.error;
+      return <div>Recovered page</div>;
+    };
+    const router = createMemoryRouter([{ path: '*', element: (
+        <Routes>
+          <Route element={<Layout />}>
+            <Route path="broken" element={<Page />} />
+            <Route index element={<div>Dashboard page</div>} />
+          </Route>
+        </Routes>
+    ) }], { initialEntries: ['/broken'] });
+    render(<RouterProvider router={router} />);
+    await act(async () => {});
+    return router;
+  };
+
+  it('keeps command-palette access usable and retries the failed page', async () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const failure = { error: new Error('Malformed page record') };
+    try {
+      await renderFailingPage(failure);
+      expect(screen.getByRole('heading', { name: 'This page hit an error' })).toBeInTheDocument();
+      expect(screen.getByRole('alert')).toHaveTextContent('/broken');
+      expect(screen.getByText('Malformed page record').closest('details')).not.toHaveAttribute('open');
+      expect(screen.getByTestId('command-palette')).toBeInTheDocument();
+      const opened = vi.fn();
+      document.addEventListener(CMD_K_SEARCH_OPEN_EVENT, opened, { once: true });
+      fireEvent.click(screen.getAllByRole('button', { name: 'Open command palette' })[0]);
+      expect(opened).toHaveBeenCalledOnce();
+
+      failure.error = null;
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+      expect(screen.getByText('Recovered page')).toBeInTheDocument();
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
+  it('resets failures on sidebar and same-path search navigation', async () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const failure = { error: new Error('Broken record') };
+      const router = await renderFailingPage(failure);
+      fireEvent.click(screen.getByRole('link', { name: 'Dashboard' }));
+      expect(screen.getByText('Dashboard page')).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      await act(async () => router.navigate('/broken'));
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+      failure.error = null;
+      await act(async () => router.navigate('/broken?record=fixed'));
+      expect(screen.getByText('Recovered page')).toBeInTheDocument();
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
+  it('keeps automatic stale-chunk recovery and cache-purging retry inside the shell', async () => {
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    reloadOnceForStaleChunk.mockResolvedValue(false);
+    try {
+      await renderFailingPage({ error: new Error('Failed to fetch dynamically imported module') });
+      expect(reloadOnceForStaleChunk).toHaveBeenCalledOnce();
+      expect(screen.getByTestId('command-palette')).toBeInTheDocument();
+      reloadOnceForStaleChunk.mockResolvedValue(true);
+      await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Retry' })));
+      expect(reloadOnceForStaleChunk).toHaveBeenLastCalledWith({ forceCachePurge: true });
+      const reload = vi.fn();
+      vi.stubGlobal('location', { reload });
+      reloadOnceForStaleChunk.mockResolvedValue(false);
+      await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Retry' })));
+      expect(reload).toHaveBeenCalledOnce();
+    } finally {
+      errorLog.mockRestore();
+    }
   });
 });
