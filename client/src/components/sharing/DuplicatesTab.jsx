@@ -13,25 +13,30 @@ import { useEffect, useState, useCallback } from 'react';
 import { Loader2 } from 'lucide-react';
 import { listUniverseDuplicates, listSeriesDuplicates } from '../../services/api';
 import { useRecordMerge } from '../../hooks/useRecordMerge';
+import LoadFailedState from '../ui/LoadFailedState';
 import DuplicateGroup from './DuplicateGroup';
 import MergeModal from './MergeModal';
 
 export default function DuplicatesTab() {
   const [loading, setLoading] = useState(true);
-  const [universeGroups, setUniverseGroups] = useState([]);
-  const [seriesGroups, setSeriesGroups] = useState([]);
+  const [universeGroups, setUniverseGroups] = useState(null);
+  const [seriesGroups, setSeriesGroups] = useState(null);
   const [orphanCount, setOrphanCount] = useState(0);
   const [dismissed, setDismissed] = useState(() => new Set());
 
   const load = useCallback(async () => {
     setLoading(true);
     const [uni, ser] = await Promise.all([
-      listUniverseDuplicates({ silent: true }).catch(() => ({ groups: [] })),
-      listSeriesDuplicates({ silent: true }).catch(() => ({ series: [], orphanCount: 0 })),
+      listUniverseDuplicates({ silent: true })
+        .then((value) => ({ value: Array.isArray(value?.groups) ? value : null }))
+        .catch(() => ({ value: null })),
+      listSeriesDuplicates({ silent: true })
+        .then((value) => ({ value: Array.isArray(value?.series) ? value : null }))
+        .catch(() => ({ value: null })),
     ]);
-    setUniverseGroups(uni.groups || []);
-    setSeriesGroups(ser.series || []);
-    setOrphanCount(ser.orphanCount || 0);
+    setUniverseGroups(uni.value?.groups ?? null);
+    setSeriesGroups(ser.value?.series ?? null);
+    setOrphanCount(ser.value?.orphanCount || 0);
     setLoading(false);
   }, []);
 
@@ -45,9 +50,10 @@ export default function DuplicatesTab() {
     return <div className="flex items-center gap-2 text-gray-400 text-sm py-8"><Loader2 className="animate-spin" size={16} /> Scanning for duplicates…</div>;
   }
 
-  const visibleUniverse = universeGroups.filter((g) => !dismissed.has(groupKey('universe', g.normalizedName)));
-  const visibleSeries = seriesGroups.filter((g) => !dismissed.has(groupKey('series', g.normalizedName, g.universeId)));
+  const visibleUniverse = (universeGroups || []).filter((g) => !dismissed.has(groupKey('universe', g.normalizedName)));
+  const visibleSeries = (seriesGroups || []).filter((g) => !dismissed.has(groupKey('series', g.normalizedName, g.universeId)));
   const nothing = visibleUniverse.length === 0 && visibleSeries.length === 0;
+  const failed = universeGroups === null || seriesGroups === null;
 
   return (
     <div className="space-y-6">
@@ -56,7 +62,9 @@ export default function DuplicatesTab() {
         “Clandestiny”). Merge folds one into the other (unioning canon, re-pointing children) or rename one to keep both.
       </p>
 
-      {nothing && (
+      {universeGroups === null && <LoadFailedState title="Could not load universe duplicates." hint="Retry to try again." onRetry={load} />}
+      {seriesGroups === null && <LoadFailedState title="Could not load series duplicates." hint="Retry to try again." onRetry={load} />}
+      {nothing && !failed && (
         <div className="text-sm text-gray-500 py-8 text-center border border-port-border rounded-lg">
           ✓ No duplicates found.
           {orphanCount > 0 && <div className="mt-1 text-xs text-port-warning">{orphanCount} orphan series (no universe) — they’ll be adopted on next migration.</div>}
