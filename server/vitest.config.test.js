@@ -16,15 +16,17 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { BROWSER_SUITES } from '../scripts/lib/browserSuites.js';
+import { pinPlatform } from './lib/testHelper.js';
 
-const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+let restorePlatform;
 
 beforeEach(() => {
   vi.resetModules();
 });
 
 afterEach(() => {
-  Object.defineProperty(process, 'platform', platformDescriptor);
+  restorePlatform?.();
+  restorePlatform = undefined;
   vi.doUnmock('./vitest.config.db.js');
   // Restores the pre-stub value even though the config under test reassigns
   // process.env.NODE_ENV directly.
@@ -67,7 +69,7 @@ describe('browser suite CI ownership', () => {
     ['linux', 'unit', true],
     ['win32', 'unit', false],
   ])('collects the intended contracts on %s with owner %s', async (platform, owner, excluded) => {
-    Object.defineProperty(process, 'platform', { ...platformDescriptor, value: platform });
+    restorePlatform = pinPlatform(platform);
     vi.stubEnv('PORTOS_CI_BROWSER_OWNER', owner);
     const { default: config } = await import('./vitest.config.js');
     const suites = BROWSER_SUITES.map(path => path.slice('server/'.length));
