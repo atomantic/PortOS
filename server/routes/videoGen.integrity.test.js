@@ -131,6 +131,55 @@ describe('Video Gen integrity routes', () => {
     });
   });
 
+  it('keeps all four GET download paths read-only and equal to their collection status', async () => {
+    const collection = (await request(app).get('/api/video-gen/models/status')).body;
+    const cases = [
+      ['models/ltx2_unified', collection.models[0]],
+      ['text-encoder', collection.textEncoder],
+      [`text-encoders/${collection.textEncoderOptions[0].id}`, collection.textEncoderOptions[0]],
+      [`ic-loras/${collection.icLoras[0].id}`, collection.icLoras[0]],
+    ];
+    for (const [path, entry] of cases) {
+      const response = await request(app).get(`/api/video-gen/${path}/download?force=1`);
+      expect(response.status).toBe(200);
+      expect(response.headers['content-type']).toMatch(/application\/json/);
+      expect(response.body).toEqual(entry);
+      const invalid = await request(app).post(`/api/video-gen/${path}/download?force=true`);
+      expect(invalid.status).toBe(400);
+      expect(invalid.headers['content-type']).toMatch(/application\/json/);
+      expect(invalid.body).toMatchObject({ code: 'VALIDATION_ERROR', error: expect.any(String), timestamp: expect.any(Number) });
+    }
+    expect(sseDownload.start).not.toHaveBeenCalled();
+  });
+
+  it('rejects unknown POST targets with JSON before opening a stream', async () => {
+    for (const path of ['models/unknown', 'text-encoders/unknown', 'ic-loras/unknown']) {
+      const response = await request(app).post(`/api/video-gen/${path}/download`);
+      expect(response.status).toBe(404);
+      expect(response.headers['content-type']).toMatch(/application\/json/);
+      expect(response.body).toMatchObject({ error: expect.any(String), code: expect.any(String), timestamp: expect.any(Number) });
+    }
+    expect(sseDownload.start).not.toHaveBeenCalled();
+  });
+
+  it('POST downloads the shared encoder while local-path GET status stays available', async () => {
+    const response = await request(app).post('/api/video-gen/text-encoder/download?force=1');
+    expect(response.status).toBe(200);
+    expect(response.headers['content-type']).toMatch(/text\/event-stream/);
+    expect(response.text).toContain('"type":"complete"');
+    expect(sseDownload.start).toHaveBeenCalledWith(expect.objectContaining({ repo: 'org/text-encoder', force: true }));
+    sseDownload.start.mockClear();
+    vi.mocked(isHfRepoId).mockReturnValueOnce(false);
+    const status = await request(app).get('/api/video-gen/text-encoder/download');
+    expect(status.body).toMatchObject({ cached: true, integrity: null });
+    vi.mocked(isHfRepoId).mockReturnValueOnce(false);
+    const failure = await request(app).post('/api/video-gen/text-encoder/download');
+    expect(failure.status).toBe(400);
+    expect(failure.body.code).toBe('NOT_DOWNLOADABLE');
+    expect(failure.headers['content-type']).toMatch(/application\/json/);
+    expect(sseDownload.start).not.toHaveBeenCalled();
+  });
+
   it('GET /models/status surfaces integrity for cached models + text encoder', async () => {
     const res = await request(app).get('/api/video-gen/models/status');
     expect(res.status).toBe(200);
@@ -179,7 +228,7 @@ describe('Video Gen integrity routes', () => {
   });
 
   it('downloads the pinned base snapshot plus both exact Lightning files', async () => {
-    const res = await request(app).get('/api/video-gen/models/wan_lightning/download');
+    const res = await request(app).post('/api/video-gen/models/wan_lightning/download');
     expect(res.status).toBe(200);
     expect(sseDownload.start).toHaveBeenCalledWith(expect.objectContaining({
       repos: [
@@ -259,8 +308,8 @@ describe('Video Gen integrity routes', () => {
       );
     });
 
-    it('GET /text-encoders/:id/download pulls only the pinned file at its pinned revision', async () => {
-      const res = await request(app).get(`/api/video-gen/text-encoders/${encoder().id}/download`);
+    it('POST /text-encoders/:id/download pulls only the pinned file at its pinned revision', async () => {
+      const res = await request(app).post(`/api/video-gen/text-encoders/${encoder().id}/download`);
       expect(res.status).toBe(200);
       expect(sseDownload.start).toHaveBeenCalledWith(expect.objectContaining({
         repos: [{ repo: encoder().repo, revision: encoder().revision, only: encoder().files }],
@@ -268,8 +317,8 @@ describe('Video Gen integrity routes', () => {
       }));
     });
 
-    it('GET /text-encoders/:id/download threads force=1 for a repair re-fetch', async () => {
-      const res = await request(app).get(`/api/video-gen/text-encoders/${encoder().id}/download?force=1`);
+    it('POST /text-encoders/:id/download threads force=1 for a repair re-fetch', async () => {
+      const res = await request(app).post(`/api/video-gen/text-encoders/${encoder().id}/download?force=1`);
       expect(res.status).toBe(200);
       expect(sseDownload.start).toHaveBeenCalledWith(expect.objectContaining({ force: true }));
     });
@@ -286,7 +335,7 @@ describe('Video Gen integrity routes', () => {
 
     it.each(['download', 'repair'])('404s an unknown encoder id on /%s', async (action) => {
       const res = action === 'download'
-        ? await request(app).get('/api/video-gen/text-encoders/nope/download')
+        ? await request(app).post('/api/video-gen/text-encoders/nope/download')
         : await request(app).post('/api/video-gen/text-encoders/nope/repair').send({});
       expect(res.status).toBe(404);
       expect(res.body.code).toBe('VIDEO_TEXT_ENCODER_UNKNOWN');
@@ -296,7 +345,7 @@ describe('Video Gen integrity routes', () => {
     // so it must never reach this lane — otherwise the UI could offer a Download
     // button for something that isn't separately downloadable.
     it('404s the built-in stock option', async () => {
-      const res = await request(app).get('/api/video-gen/text-encoders/stock/download');
+      const res = await request(app).post('/api/video-gen/text-encoders/stock/download');
       expect(res.status).toBe(404);
     });
 

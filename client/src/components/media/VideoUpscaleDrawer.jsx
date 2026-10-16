@@ -30,17 +30,19 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled }) {
   const [planLoading, setPlanLoading] = useState(false);
   const [planError, setPlanError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
-  const [downloading, setDownloading] = useState(false);
+  const [downloadItemId, setDownloadItemId] = useState(null);
+  const downloading = open && downloadItemId === itemId;
+  const planRequestRef = useRef(0);
 
   // Fresh state per open (and per item, in case a second card is picked
   // before the drawer fully unmounts) so a stale method/plan never carries
   // over onto a different clip.
   useEffect(() => {
-    if (!open) return;
+    ++planRequestRef.current;
     setMethod('lanczos');
     setPlan(null);
     setPlanError(null);
-    setDownloading(false);
+    setDownloadItemId(null);
   }, [open, itemId]);
 
   // The generative plan drives the radio's disabled state AND its disclosure
@@ -96,12 +98,10 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled }) {
   // separate models page, since no such page manages this non-remix weight.
   const adapterKey = plan?.adapter?.key || null;
   const downloadUrl = downloading ? upscaleAdapterDownloadUrl(adapterKey) : null;
-  const dl = useSseProgress(downloadUrl, { enabled: !!downloadUrl });
+  const dl = useSseProgress(downloadUrl, { enabled: !!downloadUrl, method: 'POST' });
 
-  // Supersession token for the post-download plan re-probe below.
-  const planRequestRef = useRef(0);
   useEffect(() => {
-    if (!downloading || !dl.latest) return;
+    if (!downloading || !dl.closed || !dl.latest) return;
     // A request-generation ref, not a `let active` flag: `downloading` is in this
     // effect's own dependency array, so the write below re-runs the effect
     // immediately and a lifetime-scoped flag would be flipped by its own
@@ -110,14 +110,14 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled }) {
     // newer one supersedes it.
     if (dl.latest.type === 'complete') {
       const req = ++planRequestRef.current;
-      setDownloading(false);
+      setDownloadItemId(null);
       // Re-probe so `adapter.cached` flips and the option re-enables.
       getUpscalePlan(itemId, 'ltx').then((res) => { if (req === planRequestRef.current) setPlan(res?.plan || null); }).catch(() => {});
     } else if (dl.latest.type === 'error') {
-      setDownloading(false);
+      setDownloadItemId(null);
       toast.error(dl.latest.message || 'Adapter download failed');
     }
-  }, [dl.latest, downloading, itemId]);
+  }, [dl.closed, dl.latest, downloading, itemId]);
 
   const handleSubmit = useCallback(async () => {
     if (!itemId || submitting) return;
@@ -209,7 +209,7 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled }) {
                       ) : (
                         <button
                           type="button"
-                          onClick={() => setDownloading(true)}
+                          onClick={() => setDownloadItemId(itemId)}
                           className="text-port-accent hover:text-white underline"
                         >
                           Download adapter{plan.adapter?.sizeBytes ? ` (${formatBytes(plan.adapter.sizeBytes)})` : ''}

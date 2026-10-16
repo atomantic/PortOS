@@ -14,7 +14,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import {
-  validateRequest, imageCancelBodySchema, imageVisibilityBodySchema, imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE,
+  validateRequest, modelDownloadQuerySchema, modelDownloadParamsSchema, imageCancelBodySchema, imageVisibilityBodySchema, imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE,
 } from '../lib/validation.js';
 import { optionalUploadFields, optionalUpload } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
@@ -785,25 +785,26 @@ router.get('/models', (_req, res) => {
 // entries with `runner: 'mflux'` and a non-default name) report
 // `cached: null` so the UI can render "unknown" rather than a misleading
 // "not downloaded" state. Lazy generation still works regardless of badge.
+const imageModelCacheStatus = async (m) => {
+  const required = requiredReposForModel(m);
+  if (!required) return { id: m.id, repo: null, cached: null, sizeBytes: 0 };
+  // Inspect every required repo (main + any aux text encoders). The badge
+  // is `cached: true` only when ALL are cached; sizeBytes is the sum. The
+  // `pendingRepos` field lets the UI explain WHICH repos still need a pull
+  // so the user isn't surprised when clicking "Download" triggers >1 fetch.
+  const inspections = await Promise.all(required.map((r) => inspectModelCache(r)));
+  const cached = inspections.every((i) => i.cached);
+  const sizeBytes = inspections.reduce((sum, i) => sum + (i.sizeBytes || 0), 0);
+  const pendingRepos = required.filter((_, i) => !inspections[i].cached);
+  // Integrity is only meaningful for repos that finished downloading — run
+  // the cheap structural check across every cached required repo and report
+  // the worst result, so a corrupt aux encoder still surfaces a Repair state.
+  const integrity = cached ? aggregateVerifies(await Promise.all(required.map((r) => verifyModelCache(r)))) : null;
+  return { id: m.id, repo: required[0], cached, sizeBytes, requiredRepos: required, pendingRepos, integrity };
+};
+
 router.get('/models/status', asyncHandler(async (_req, res) => {
-  const statuses = await Promise.all(getImageModels().map(async (m) => {
-    const required = requiredReposForModel(m);
-    if (!required) return { id: m.id, repo: null, cached: null, sizeBytes: 0 };
-    // Inspect every required repo (main + any aux text encoders). The badge
-    // is `cached: true` only when ALL are cached; sizeBytes is the sum. The
-    // `pendingRepos` field lets the UI explain WHICH repos still need a pull
-    // so the user isn't surprised when clicking "Download" triggers >1 fetch.
-    const inspections = await Promise.all(required.map((r) => inspectModelCache(r)));
-    const cached = inspections.every((i) => i.cached);
-    const sizeBytes = inspections.reduce((sum, i) => sum + (i.sizeBytes || 0), 0);
-    const pendingRepos = required.filter((_, i) => !inspections[i].cached);
-    // Integrity is only meaningful for repos that finished downloading — run
-    // the cheap structural check across every cached required repo and report
-    // the worst result, so a corrupt aux encoder still surfaces a Repair state.
-    const integrity = cached ? aggregateVerifies(await Promise.all(required.map((r) => verifyModelCache(r)))) : null;
-    return { id: m.id, repo: required[0], cached, sizeBytes, requiredRepos: required, pendingRepos, integrity };
-  }));
-  res.json(statuses);
+  res.json(await Promise.all(getImageModels().map(imageModelCacheStatus)));
 }));
 
 // POST /models/verify — on-demand integrity re-scan. `deep:true` adds the
@@ -852,11 +853,21 @@ router.post('/models/:modelId/repair', asyncHandler(async (req, res) => {
 // disconnects mid-download; cross-route in-flight dedupe lives in
 // startHfDownloadStream so a FLUX repo shared with video gen can't spawn
 // two concurrent children.
+const downloadableImageModel = (req) => {
+  const { modelId } = validateRequest(modelDownloadParamsSchema, req.params);
+  const model = getImageModels().find((m) => m.id === modelId);
+  if (!model) throw new ServerError(`Unknown model id: ${modelId}`, { status: 404, code: 'UNKNOWN_MODEL' });
+  return model;
+};
+
 router.get('/models/:modelId/download', asyncHandler(async (req, res) => {
-  const model = getImageModels().find((m) => m.id === req.params.modelId);
-  if (!model) {
-    throw new ServerError(`Unknown model id: ${req.params.modelId}`, { status: 404 });
-  }
+  validateRequest(modelDownloadQuerySchema, req.query);
+  res.json(await imageModelCacheStatus(downloadableImageModel(req)));
+}));
+
+router.post('/models/:modelId/download', asyncHandler(async (req, res) => {
+  const { force } = validateRequest(modelDownloadQuerySchema, req.query);
+  const model = downloadableImageModel(req);
   const repos = requiredReposForModel(model);
   if (!repos) {
     throw new ServerError(`Model "${model.id}" has no HuggingFace repo on file — cannot pre-download.`, {
@@ -868,7 +879,7 @@ router.get('/models/:modelId/download', asyncHandler(async (req, res) => {
   // HiDream). The SSE stream tags each event with `repo` so the client can
   // show per-repo progress / log lines. `?force=1` (repair-initiated) re-fetches
   // even when the repo still looks cached, so a deleted shard isn't skipped.
-  await startHfDownloadStream({ req, res, repos, force: req.query.force === '1' });
+  await startHfDownloadStream({ req, res, repos, force });
 }));
 
 router.get('/loras', asyncHandler(async (_req, res) => {
