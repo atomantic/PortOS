@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createContext, runInContext } from 'node:vm';
+import { constants, createContext, runInContext } from 'node:vm';
 import { bindAuthoredPreviewPlayback, readAuthoredPreviewDeclaration } from './authoredPreviewPlayback.js';
 import { AUTHORED_PREVIEW_HANDSHAKE_MS, AUTHORED_PREVIEW_PLAYBACK_TARGET } from '../../lib/generatedPreviewPlaybackSchema.js';
 
@@ -29,7 +29,8 @@ const implementation = `
   globalThis.portosComposition = { previewPlayback: originalApi };
 `;
 function browser(source = implementation) {
-  const context = createContext({});
+  // A non-contextified VM global preserves browser-style throwing accessors.
+  const context = createContext(constants.DONT_CONTEXTIFY);
   const evaluate = expression => runInContext(expression, context, { timeout: 50 });
   evaluate(source);
   return { context, evaluate, page: { evaluate: vi.fn(evaluate) } };

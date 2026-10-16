@@ -10,7 +10,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
 import { cp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { runInNewContext } from 'node:vm';
+import { constants, createContext, runInContext } from 'node:vm';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
 vi.mock('../htmlComposition/encode.js', async (importOriginal) => ({ ...(await importOriginal()), encodeComposition: vi.fn(async () => { throw new Error('stop at encoder'); }) }));
@@ -47,7 +47,7 @@ vi.mock('../htmlComposition/browser.js', () => ({
       async evaluate(expression) {
         if (expression.includes('__portosAuthoredPreviewPlayback')) {
           browser.authoredInspections++;
-          return runInNewContext(expression, browser.authoredContext || {});
+          return runInContext(expression, browser.authoredContext);
         }
         if (expression.includes('requestVideoFrameCallback')) {
           browser.capabilityProbes++;
@@ -127,10 +127,12 @@ async function canonicalPreview() {
 async function authoredPreview(declaration = { version: 1, contract: 'portos-complete-frame-v1' }) {
   const value = await fixture({ shipped: { 'preview-playback.json': JSON.stringify(declaration), 'authored.js': '/* Immutable authored implementation fixture. */' } });
   value.project.composition.document = { directory: value.plan.directory };
-  browser.authoredContext = { portosComposition: { previewPlayback: {
+  // A non-contextified VM global preserves browser-style throwing accessors.
+  browser.authoredContext = createContext(constants.DONT_CONTEXTIFY);
+  browser.authoredContext.portosComposition = { previewPlayback: {
     version: 1, fps: 30, presentation: 'atomic-canvas-v1', mediaTiming: 'staged-output-v1',
     clock() { return 1; }, prepare() {}, play() {}, sync() {}, pause() {}, dispose() {},
-  } } };
+  } };
   return value;
 }
 
@@ -198,7 +200,7 @@ describe('declared authored preview admission through document open', () => {
 
   it('closes a page whose inspection throws before removing its assets', async () => {
     const { project, plan } = await authoredPreview();
-    runInNewContext("Object.defineProperty(globalThis, 'portosComposition', { get() { throw new Error('Synthetic authored root inspection failure'); } });", browser.authoredContext);
+    runInContext("Object.defineProperty(globalThis, 'portosComposition', { get() { throw new Error('Synthetic authored root inspection failure'); } });", browser.authoredContext);
     await expect(openIsolatedDocumentPreview({ project, jobId: 'authored-inspection-failed' })).rejects.toThrow('Synthetic authored root inspection failure');
     expect(browser.closed).toEqual([{ directory: browser.seen.directory, assetsPresent: true }]);
     expect(await scratchEntries()).toEqual([]);
