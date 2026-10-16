@@ -42,11 +42,10 @@ it('previews the look on the selected shot still, and on any other shot picked f
 it('saves the current look under a name, reapplies it from its chip, and deletes it', async () => {
   const custom = { ...filmLookPreset('polaroid'), preset: 'custom', warmth: 0.5 };
   render(<Harness look={custom} />);
-  await waitFor(() => expect(api.getSettings).toHaveBeenCalledTimes(1));
-  fireEvent.click(screen.getByRole('button', { name: 'Save as preset' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Save as preset' }));
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Warm dusk' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-  await waitFor(() => expect(api.updateSettings).toHaveBeenCalledTimes(1));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save' })));
+  expect(api.updateSettings).toHaveBeenCalledTimes(1);
   const [saved] = api.updateSettings.mock.calls[0][0].filmLookPresets;
   expect(saved).toMatchObject({ label: 'Warm dusk', look: { preset: 'custom', warmth: 0.5 } });
   expect(screen.getByRole('button', { name: 'Warm dusk' })).toHaveAttribute('aria-pressed', 'true');
@@ -57,37 +56,60 @@ it('saves the current look under a name, reapplies it from its chip, and deletes
   expect(screen.getByRole('button', { name: 'Warm dusk' })).toHaveAttribute('aria-pressed', 'true');
 
   fireEvent.click(screen.getByRole('button', { name: 'Delete saved look' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
-  await waitFor(() => expect(api.updateSettings).toHaveBeenCalledTimes(2));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Delete' })));
+  expect(api.updateSettings).toHaveBeenCalledTimes(2);
   expect(api.updateSettings.mock.calls[1][0]).toEqual({ filmLookPresets: [] });
   expect(screen.queryByRole('button', { name: 'Warm dusk' })).not.toBeInTheDocument();
 });
 
 it('puts the list back when the save is refused', async () => {
-  api.updateSettings.mockRejectedValueOnce(new Error('Refused'));
+  const pending = Promise.withResolvers();
+  api.updateSettings.mockReturnValueOnce(pending.promise);
   render(<Harness look={{ ...filmLookPreset('vhs'), preset: 'custom' }} />);
-  await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
-  fireEvent.click(screen.getByRole('button', { name: 'Save as preset' }));
-  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Tape' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-  await waitFor(() => expect(screen.queryByRole('button', { name: 'Tape' })).not.toBeInTheDocument());
-  expect(screen.getByRole('button', { name: 'Save as preset' })).toBeInTheDocument();
+  try {
+    fireEvent.click(await screen.findByRole('button', { name: 'Save as preset' }));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Tape' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.updateSettings).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('button', { name: 'Tape' })).toHaveAttribute('aria-pressed', 'true');
+    await act(async () => pending.reject(new Error('Refused')));
+    expect(screen.queryByRole('button', { name: 'Tape' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save as preset' })).toBeInTheDocument();
+  } finally {
+    await act(async () => pending.resolve({}));
+  }
 });
 
 it('offers no save until the saved looks have been read, so a save never replaces looks it never saw', async () => {
   const kept = { id: 'kept-1', label: 'Kept', look: { ...filmLookPreset('polaroid'), preset: 'custom' } };
-  api.getSettings.mockRejectedValueOnce(new Error('Offline')).mockResolvedValue({ filmLookPresets: [kept] });
+  const unavailable = Promise.withResolvers();
+  const pending = Promise.withResolvers();
+  api.getSettings.mockReturnValueOnce(unavailable.promise).mockReturnValueOnce(pending.promise);
   const first = render(<Harness look={{ ...filmLookPreset('vhs'), preset: 'custom' }} />);
-  await waitFor(() => expect(api.getSettings).toHaveBeenCalledTimes(1));
-  await act(async () => {});
-  expect(screen.queryByRole('button', { name: 'Save as preset' })).not.toBeInTheDocument();
-  first.unmount();
+  try {
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('button', { name: 'Save as preset' })).not.toBeInTheDocument();
+    expect(api.updateSettings).not.toHaveBeenCalled();
+    await act(async () => unavailable.reject(new Error('Offline')));
+    expect(screen.queryByRole('button', { name: 'Save as preset' })).not.toBeInTheDocument();
+    first.unmount();
 
-  // The next panel to open reads the list again and saves on top of it.
-  render(<Harness look={{ ...filmLookPreset('vhs'), preset: 'custom' }} />);
-  fireEvent.click(await screen.findByRole('button', { name: 'Save as preset' }));
-  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Tape' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-  await waitFor(() => expect(api.updateSettings).toHaveBeenCalledTimes(1));
-  expect(api.updateSettings.mock.calls[0][0].filmLookPresets.map((preset) => preset.label)).toEqual(['Kept', 'Tape']);
+    // Starting the retry still does not mean its saved looks have rendered.
+    render(<Harness look={{ ...filmLookPreset('vhs'), preset: 'custom' }} />);
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole('button', { name: 'Save as preset' })).not.toBeInTheDocument();
+    expect(api.updateSettings).not.toHaveBeenCalled();
+    await act(async () => pending.resolve({ filmLookPresets: [kept] }));
+    expect(screen.getByRole('button', { name: 'Kept' })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Save as preset' }));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Tape' } });
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save' })));
+    expect(api.updateSettings).toHaveBeenCalledTimes(1);
+    expect(api.updateSettings.mock.calls[0][0].filmLookPresets.map((preset) => preset.label)).toEqual(['Kept', 'Tape']);
+  } finally {
+    await act(async () => {
+      unavailable.resolve({ filmLookPresets: [] });
+      pending.resolve({ filmLookPresets: [kept] });
+    });
+  }
 });
