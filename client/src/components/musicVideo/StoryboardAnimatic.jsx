@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import FilmLookFrame from '../media/FilmLookFrame.jsx';
 import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage.js';
+import { uuidv4 } from '../../lib/uuid.js';
 import { isFilmLookNeutral } from '../../lib/filmLook.js';
 import { Captions, Film, Scissors } from 'lucide-react';
 import { formatDurationSec } from '../../utils/formatters.js';
@@ -13,7 +14,8 @@ import { normalizeTitleCard } from '../../../../server/lib/musicVideoTitleCard.j
 import { normalizeStatsOutro, statsOutroSeconds } from '../../../../server/lib/musicVideoStatsOutro.js';
 import StatsOutroCanvas from './StatsOutroCanvas.jsx';
 import ShotStepper from './ShotStepper.jsx';
-import FrameStepper, { captureMediaFrame } from './FrameStepper.jsx';
+import FrameStepper from './FrameStepper.jsx';
+import { capturePreviewFrame, lyricFrameCaptureBridge } from '../../lib/musicVideoFrameCapture.js';
 import { sceneFrameFit } from './SceneFrameFit.jsx';
 import TransitionGlitch from './TransitionGlitch.jsx';
 import ImageEffectStill from './ImageEffectStill.jsx';
@@ -54,6 +56,7 @@ function useLyricOverlay({ project, enabled, audioRef, time }) {
   const [preview, setPreview] = useState(null);
   const [failed, setFailed] = useState(false);
   const iframeRef = useRef(null);
+  const captureRef = useRef(null);
   const seekState = useRef({ inFlight: false, pending: null, ready: false, sentAt: 0 });
   const version = enabled ? playthroughVersion(project) : null;
   // The opening title card rides on the lyric layer, posted live so its panel's edits show at once.
@@ -66,6 +69,7 @@ function useLyricOverlay({ project, enabled, audioRef, time }) {
 
   useEffect(() => {
     let active = true;
+    captureRef.current?.reject(new Error('Lyric preview changed'));
     setPreview(null);
     setFailed(false);
     seekState.current = { inFlight: false, pending: null, ready: false, sentAt: 0 };
@@ -73,7 +77,7 @@ function useLyricOverlay({ project, enabled, audioRef, time }) {
     getMusicVideoLyricOverlayPreview(project.id, { silent: true })
       .then((next) => { if (active) setPreview(next); })
       .catch(() => { if (active) setFailed(true); });
-    return () => { active = false; };
+    return () => { active = false; captureRef.current?.reject(new Error('Lyric preview changed')); };
   }, [project.id, version]);
 
   const postSeek = useCallback((t) => {
@@ -103,7 +107,17 @@ function useLyricOverlay({ project, enabled, audioRef, time }) {
       } else if (message.type === 'portos-mv:seeked') {
         state.inFlight = false;
         if (state.pending != null) { const next = state.pending; state.pending = null; postSeek(next); }
+        else if (captureRef.current?.t === message.t) {
+          const capture = captureRef.current;
+          event.source.postMessage({ type: 'portos-mv:capture-lyrics', id: capture.id, t: capture.t }, '*');
+        }
+      } else if (message.type === 'portos-mv:captured-lyrics') {
+        const capture = captureRef.current;
+        if (!capture || message.id !== capture.id || message.t !== capture.t) return;
+        if (message.error || typeof message.png !== 'string' || message.png.length > 24000000 || !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(message.png)) capture.reject(new Error('Lyric frame unavailable'));
+        else capture.resolve(message.png);
       } else if (message.type === 'portos-mv:error') {
+        captureRef.current?.reject(new Error('Lyric frame unavailable'));
         setFailed(true);
       }
     };
@@ -136,15 +150,26 @@ function useLyricOverlay({ project, enabled, audioRef, time }) {
     };
   }, [preview, postSeek, audioRef]);
 
-  if (!preview?.html || failed) return { overlay: null, failed };
+  const capture = (t) => new Promise((resolve, reject) => {
+    if (!seekState.current.ready || failed || !iframeRef.current) { reject(new Error('Lyric frame unavailable')); return; }
+    const id = uuidv4();
+    const finish = (done, result) => { clearTimeout(timer); captureRef.current = null; done(result); };
+    const timer = setTimeout(() => finish(reject, new Error('Lyric capture timed out')), 5000);
+    captureRef.current = { id, t, resolve: (png) => finish(resolve, png), reject: (error) => finish(reject, error) };
+    // The existing serialized seek bridge finishes the requested song time first.
+    seekState.current.pending = null;
+    postSeek(t);
+  });
+  if (!preview?.html || failed) return { overlay: null, failed, capture };
   return {
     failed,
+    capture,
     overlay: (
       <iframe
         ref={iframeRef}
         title="Lyrics over the storyboard animatic"
         sandbox="allow-scripts"
-        srcDoc={preview.html}
+        srcDoc={`${preview.html}<script>(${lyricFrameCaptureBridge.toString()})();</script>`}
         // `color-scheme: normal` keeps the frame transparent under a dark parent page.
         style={{ colorScheme: 'normal' }}
         className="pointer-events-none absolute inset-0 h-full w-full border-0 bg-transparent"
@@ -477,6 +502,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   const [lookOn, setLookOn] = useState(() => safeReadStorage(ANIMATIC_LOOK_KEY) !== 'off');
   // While the song plays the look is the light playback version; paused, the exact render filter.
   const [playing, setPlaying] = useState(false);
+  const captureBasis = useRef(null);
   const lookAvailable = !isFilmLookNeutral(project.filmLook);
   const toggleLook = () => setLookOn((on) => { safeWriteStorage(ANIMATIC_LOOK_KEY, on ? 'off' : 'on'); return !on; });
   const scenes = project.scenes || [];
@@ -487,7 +513,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   const leadFile = useVideoFileSrc(layered ? lead?.videoHistoryId : null, { geometry: true });
   const stillFps = leadFile.fps || ANIMATIC_FPS;
   const lyricsAvailable = hasTimedLyrics(project);
-  const { overlay, failed } = useLyricOverlay({ project, enabled: lyricsAvailable && lyricsOn, audioRef, time });
+  const { overlay, failed, capture: captureLyrics } = useLyricOverlay({ project, enabled: lyricsAvailable && lyricsOn, audioRef, time });
   // The cutting room floor outro: it plays when the song ends, and Ending plays it straight away; playing or seeking the song leaves it.
   const outro = useMusicVideoStatsOutro({ projectId: project.id, seconds: statsOutroSeconds(project.statsOutro), audioRef });
   const outroLook = useMemo(() => normalizeStatsOutro(project.statsOutro), [project.statsOutro]);
@@ -512,11 +538,45 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   }, [seekTo]);
   // Edit shot pauses the song so the shot stays on screen while its card opens.
   const editShot = onEditShot ? (sceneId) => { audioRef.current?.pause?.(); onEditShot(sceneId); } : null;
-  // Save frame keeps the shot's picture: its clip's frame once that shows, else its still.
-  const captureFrame = () => {
-    const figure = figureRef.current;
-    const media = figure?.querySelector('video[data-ready="true"]:not([aria-hidden="true"])') || figure?.querySelector('img');
-    return captureMediaFrame(media);
+  captureBasis.current = { project, lyricsOn, lookOn, outro: outro.active, outroTime: outro.t, outroStats: outro.stats };
+  const captureFrame = async () => {
+    const basis = captureBasis.current;
+    const audio = audioRef.current;
+    audio?.pause();
+    outro.pause();
+    const at = audio?.currentTime || 0;
+    setTime(at);
+    setPlaying(false);
+    // Pause swaps the live film look for its exact filter and catches the shot up
+    // to the audio clock. Effects/clip seeks then get a paint before freezing.
+    await new Promise((resolve, reject) => {
+      let handle;
+      const timer = setTimeout(() => { cancelAnimationFrame(handle); reject(new Error('Preview did not settle')); }, 2000);
+      handle = requestAnimationFrame(() => { handle = requestAnimationFrame(() => { clearTimeout(timer); resolve(); }); });
+    });
+    const unchanged = () => {
+      const current = captureBasis.current;
+      return current.project === basis.project && current.lyricsOn === basis.lyricsOn && current.lookOn === basis.lookOn
+        && current.outro === basis.outro && current.outroTime === basis.outroTime && current.outroStats === basis.outroStats
+        && audio?.paused && audio.currentTime === at;
+    };
+    if (!unchanged()) throw new Error('Preview changed during capture');
+    const selected = shotAt(scenes, at);
+    if (!basis.outro && selected?.videoHistoryId && sceneVisualLayer(selected, { layered }) === 'footage') {
+      const figure = figureRef.current;
+      const clip = figure?.querySelector('video[data-ready="true"]:not([aria-hidden="true"])');
+      const fallback = [...(figure?.querySelectorAll('img') || [])].find((image) => image.getAttribute('src') === `/data/images/${selected.referenceImageId}` && image.complete && image.naturalWidth > 0);
+      if (!clip && !fallback) throw new Error('Video frame is still loading');
+    }
+    if (lyricsAvailable && lyricsOn && !overlay) throw new Error('Lyric frame unavailable');
+    const iframeImages = new Map();
+    const iframe = figureRef.current?.querySelector('iframe');
+    if (iframe) iframeImages.set(iframe, await captureLyrics(at));
+    if (!unchanged()) throw new Error('Preview changed during capture');
+    const blob = await capturePreviewFrame(figureRef.current?.firstElementChild, { iframeImages });
+    if (!unchanged()) throw new Error('Preview changed during capture');
+    const shotLabel = basis.outro ? 'Ending' : `Shot ${timedShots(scenes).indexOf(selected) + 1}`;
+    return { blob, time: at, fps: ANIMATIC_FPS, label: [project.name, shotLabel].filter(Boolean).join(' · ') };
   };
   // Cut effects (beat toggles, dissolves, fades through black), on the frames the final
   // render paints them (lib/musicVideoCutEffects.js), storyboard-planned ones included.
@@ -549,7 +609,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
       <figure ref={figureRef} aria-label="Storyboard animatic" className="relative aspect-video w-full overflow-hidden rounded border border-port-border bg-black">
         {/* The project's film look, as the final render applies it over the whole picture, lyrics included. */}
         <FilmLookFrame look={lookOn ? project.filmLook : null} frame={Math.round((outro.active ? songEndSec + outro.t : time) * ANIMATIC_FPS)}
-          playing={playing || (outro.active && outro.t < outro.seconds)} className="h-full w-full">
+          playing={playing || (outro.active && !outro.paused && outro.t < outro.seconds)} className="h-full w-full">
         {shot?.referenceImageId && stillShot ? (
           <StillShot key={shot.sceneId} scene={shot} audioRef={audioRef} time={time} fps={stillFps} effect={shotEffect} />
         ) : shot?.referenceImageId ? (

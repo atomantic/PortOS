@@ -6,9 +6,10 @@ const uploadGalleryImage = vi.fn(async () => ({ filename: 'upload-1234abcd.png' 
 vi.mock('../../services/apiSystem.js', () => ({ uploadGalleryImage: (...args) => uploadGalleryImage(...args) }));
 
 const toastSuccess = vi.fn();
-vi.mock('../ui/Toast', () => ({ default: { success: (...args) => toastSuccess(...args), error: vi.fn() } }));
+const toastError = vi.fn();
+vi.mock('../ui/Toast', () => ({ default: { success: (...args) => toastSuccess(...args), error: (...args) => toastError(...args) } }));
 
-afterEach(() => { uploadGalleryImage.mockClear(); toastSuccess.mockClear(); });
+afterEach(() => { uploadGalleryImage.mockClear(); toastSuccess.mockClear(); toastError.mockClear(); });
 
 describe('frame math', () => {
   it('numbers song frames and seeks to the middle of one', () => {
@@ -44,5 +45,22 @@ describe('FrameStepper', () => {
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Save frame/ })); });
     expect(uploadGalleryImage).toHaveBeenCalledWith(blob, { silent: true });
     expect(toastSuccess).toHaveBeenCalledWith('Saved Example Song · Shot 2 · frame 48 to the image gallery');
+  });
+
+  it('names the frozen audio frame and reports capture or upload failures without success', async () => {
+    const blob = new Blob(['png'], { type: 'image/png' });
+    const capture = vi.fn(async () => ({ blob, time: 3, fps: 24, label: 'Shot 2' }));
+    render(<FrameStepper time={0} onSeek={vi.fn()} capture={capture} />);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Save frame/ })); });
+    expect(toastSuccess).toHaveBeenCalledWith('Saved Shot 2 · frame 72 to the image gallery');
+    toastSuccess.mockClear(); uploadGalleryImage.mockClear();
+    capture.mockRejectedValueOnce(new Error('Missing layer'));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Save frame/ })); });
+    expect(uploadGalleryImage).not.toHaveBeenCalled();
+    expect(toastError).toHaveBeenCalledWith("Couldn't save frame 0: Missing layer");
+    uploadGalleryImage.mockRejectedValueOnce(new Error('Upload failed'));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Save frame/ })); });
+    expect(toastError).toHaveBeenLastCalledWith("Couldn't save Shot 2 · frame 72");
+    expect(toastSuccess).not.toHaveBeenCalled();
   });
 });
