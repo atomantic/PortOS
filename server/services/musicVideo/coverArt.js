@@ -63,7 +63,7 @@ export function __setCoverArtDepsForTests(overrides) { deps = { ...defaults, ...
  * default, else the PortOS image default (local, Codex, Grok, …). Null when
  * that backend cannot take a queued job or its cloud toggle is off.
  */
-async function defaultImageRoute(settings) {
+export async function defaultImageRoute(settings) {
   const [{ resolveRenderTargetConfig }, { QUEUEABLE_IMAGE_MODES }, { RENDER_TARGET }] = await Promise.all([
     import('../imageGen/cloudProviderConfig.js'), import('../../lib/generationModes.js'), import('../../lib/renderTargets.js'),
   ]);

@@ -354,6 +354,12 @@ export const composeMusicVideoYoutubeThumbnail = (id, body, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/publish-kit/youtube-thumbnail`, { method: 'POST', body: JSON.stringify(body || {}), ...options });
 export const clearMusicVideoYoutubeThumbnail = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/publish-kit/youtube-thumbnail`, { method: 'DELETE', ...options });
+// "Paint the title" with the image model: the exact prompt and its additions, then the queued job
+// (the result arrives over the `music-video:cover-art` socket event).
+export const previewMusicVideoThumbnailPaint = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish-kit/youtube-thumbnail/paint/preview`, { method: 'POST', body: JSON.stringify(body || {}), ...options });
+export const paintMusicVideoYoutubeThumbnail = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/publish-kit/youtube-thumbnail/paint`, { method: 'POST', body: JSON.stringify(body || {}), ...options });
 // Variants kept for YouTube's Test & Compare (up to three).
 export const addMusicVideoThumbnailTest = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/publish-kit/youtube-thumbnail/tests`, { method: 'POST', ...options });

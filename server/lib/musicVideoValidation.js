@@ -885,6 +885,12 @@ export const musicVideoYoutubeThumbnailComposeSchema = z.object({
   focusY: z.number().min(0).max(1).optional(),
   lettering: z.boolean().optional(),
 }).strict();
+// "Paint the title": the image model restyles a frame with the title drawn in. Preview takes no source.
+export const musicVideoYoutubeThumbnailPaintPreviewSchema = z.object({
+  title: z.string().trim().min(1).max(60),
+  notes: z.string().max(1500).optional(),
+}).strict();
+export const musicVideoYoutubeThumbnailPaintSchema = musicVideoYoutubeThumbnailPaintPreviewSchema.extend({ source: coverArtSourceSchema }).strict();
 export const musicVideoCoverArtDesignSchema = z.object({
   direction: z.string().max(1500).optional(),
   providerId: z.string().min(1).max(200).optional(),

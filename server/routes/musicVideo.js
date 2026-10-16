@@ -50,6 +50,8 @@ import {
   musicVideoPublishThumbnailSchema,
   musicVideoCoverArtComposeSchema,
   musicVideoYoutubeThumbnailComposeSchema,
+  musicVideoYoutubeThumbnailPaintSchema,
+  musicVideoYoutubeThumbnailPaintPreviewSchema,
   musicVideoCoverArtGenerateSchema,
   musicVideoCoverDesignSaveSchema,
   musicVideoArtistStyleSaveSchema,
@@ -1091,6 +1093,21 @@ router.post('/:id/publish-kit/youtube-thumbnail', asyncHandler(async (req, res) 
 router.delete('/:id/publish-kit/youtube-thumbnail', asyncHandler(async (req, res) => {
   const { clearProjectYoutubeThumbnail } = await import('../services/musicVideo/youtubeThumbnail.js');
   const { project } = await clearProjectYoutubeThumbnail(req.params.id);
+  res.json({ project });
+}));
+
+// "Paint the title": what the image model would receive, then the queued job
+// (its completion hook makes the result the thumbnail).
+router.post('/:id/publish-kit/youtube-thumbnail/paint/preview', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoYoutubeThumbnailPaintPreviewSchema, req.body ?? {});
+  const { buildThumbnailPaintPrompt } = await import('../services/musicVideo/youtubeThumbnail.js');
+  res.json(buildThumbnailPaintPrompt(input));
+}));
+
+router.post('/:id/publish-kit/youtube-thumbnail/paint', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoYoutubeThumbnailPaintSchema, req.body ?? {});
+  const { paintYoutubeThumbnail } = await import('../services/musicVideo/youtubeThumbnail.js');
+  const { project } = await paintYoutubeThumbnail(req.params.id, input);
   res.json({ project });
 }));
 

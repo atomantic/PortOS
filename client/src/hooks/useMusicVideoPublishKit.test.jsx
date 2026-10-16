@@ -14,6 +14,8 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   composeMusicVideoYoutubeThumbnail: vi.fn(),
   clearMusicVideoYoutubeThumbnail: vi.fn(),
   addMusicVideoThumbnailTest: vi.fn(),
+  paintMusicVideoYoutubeThumbnail: vi.fn(),
+  previewMusicVideoThumbnailPaint: vi.fn(),
   removeMusicVideoThumbnailTest: vi.fn(),
 }));
 vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), info: vi.fn(), success: vi.fn() } }));

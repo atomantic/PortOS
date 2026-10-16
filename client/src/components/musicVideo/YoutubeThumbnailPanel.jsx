@@ -1,6 +1,8 @@
-import { useMemo, useState } from 'react';
-import { Download, FlaskConical, Images, MonitorPlay, RotateCcw, X } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Brush, Download, FlaskConical, Images, MonitorPlay, RotateCcw, X } from 'lucide-react';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
+import SentPromptPanel from '../media/SentPromptPanel';
+import { previewMusicVideoThumbnailPaint } from '../../services/apiMusicVideo.js';
 import useMusicVideoCoverLettering from '../../hooks/useMusicVideoCoverLettering.js';
 import { YOUTUBE_THUMBNAIL_SIZE, canvasCoverWidths, coverOverlaySvg, normalizeCoverDesign } from '../../lib/musicVideoCoverOverlay.js';
 import { usePreviewFonts } from './CoverLetteringPanel.jsx';
@@ -29,6 +31,7 @@ export function thumbnailSources(project) {
   };
   // An image picked from history or uploaded is in none of the lists below.
   const current = kit.youtubeThumbnail?.source;
+  (kit.youtubeThumbnail?.generated || []).forEach((f, i) => add('image', f, `Painted ${i + 1}`));
   if (current?.kind === 'image') add('image', current.filename, 'Current thumbnail image');
   (kit.thumbnails || []).forEach((f, i) => add('thumbnail', f, i === 0 ? 'Video frame 1 (best)' : `Video frame ${i + 1}`));
   (project?.scenes || []).forEach((scene, i) => add('image', scene?.referenceImageId, `Shot ${i + 1}${scene?.sectionLabel ? ` (${scene.sectionLabel})` : ''}`));
@@ -44,7 +47,10 @@ export function thumbnailSources(project) {
  * song title set large in the cover's lettering, clear of the corner where
  * YouTube shows the length. The preview lays the title out with the code the
  * server renders with (lib/musicVideoCoverOverlay.js). Tapping an image makes
- * the thumbnail from it at once; the YouTube post uploads it.
+ * the thumbnail from it at once; the YouTube post uploads it. "Paint the title"
+ * has the image model redraw the picked image with the title painted in as
+ * display lettering, for livelier type than code can set; the brief PortOS
+ * adds shows as a chip with the full prompt before the send.
  */
 export default function YoutubeThumbnailPanel({ project, publishKit }) {
   const kit = project?.publishKit || {};
@@ -58,9 +64,21 @@ export default function YoutubeThumbnailPanel({ project, publishKit }) {
   const [focusY, setFocusY] = useState(Number.isFinite(thumb.focusY) ? thumb.focusY : 0.5);
   const [lettering, setLettering] = useState(thumb.lettering !== false);
   const [picked, setPicked] = useState(null);
+  // Follow each thumbnail the server makes (a painted one lands bare, with its own crop).
+  useEffect(() => {
+    if (!thumb.filename) return;
+    setLettering(thumb.lettering !== false);
+    setFocusX(Number.isFinite(thumb.focusX) ? thumb.focusX : 0.5);
+    setFocusY(Number.isFinite(thumb.focusY) ? thumb.focusY : 0.5);
+    setPicked(null);
+  }, [thumb.filename]); // eslint-disable-line react-hooks/exhaustive-deps
   // Which way the picked image overflows 16:9, so the one crop slider moves it the way it can go.
   const [wide, setWide] = useState(true);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [paintNotes, setPaintNotes] = useState('');
+  const [sentNotes, setSentNotes] = useState('');
+  const [paintPreview, setPaintPreview] = useState(null);
+  const [paintOpen, setPaintOpen] = useState(false);
   // The uploaded fonts matter only when the cover's design is set in one.
   const letterAssets = useMusicVideoCoverLettering({ enabled: lettering && String(art.design?.typeface || '').startsWith('font:') });
   const fonts = letterAssets.fonts || [];
@@ -87,6 +105,18 @@ export default function YoutubeThumbnailPanel({ project, publishKit }) {
   const tests = Array.isArray(kit.youtubeThumbnailTests) ? kit.youtubeThumbnailTests.filter((t) => t?.filename) : [];
   const inTest = Boolean(thumb.filename) && tests.some((t) => t.filename === thumb.filename);
   const crop = wide ? focusX : focusY;
+  const painting = Boolean(publishKit.paintingThumbnail || thumb.pending);
+  const paintTitle = title.trim();
+  // The exact prompt the paint would send, from the server's own builder, refreshed as the title or the committed notes change.
+  useEffect(() => {
+    if (!paintOpen || !project?.id || !paintTitle) { setPaintPreview(null); return undefined; }
+    let active = true;
+    previewMusicVideoThumbnailPaint(project.id, { title: paintTitle, ...(sentNotes ? { notes: sentNotes } : {}) }, { silent: true })
+      .then((res) => { if (active) setPaintPreview(res || null); })
+      .catch(() => { if (active) setPaintPreview(null); });
+    return () => { active = false; };
+  }, [paintOpen, project?.id, paintTitle, sentNotes]);
+  const paint = () => publishKit.paintThumbnail({ source: { kind: source.kind, filename: source.filename }, title: paintTitle, ...(paintNotes.trim() ? { notes: paintNotes.trim() } : {}) });
   const setCrop = (v) => (wide ? setFocusX(v) : setFocusY(v));
 
   return (
@@ -165,6 +195,22 @@ export default function YoutubeThumbnailPanel({ project, publishKit }) {
           </div>
         )}
       </div>
+      <details open={paintOpen} onToggle={(e) => setPaintOpen(e.currentTarget.open)} className="space-y-1 rounded border border-port-border p-2">
+        <summary className="cursor-pointer flex items-center gap-1 min-h-[44px] sm:min-h-0"><Brush size={13} /> Paint the title with the image model</summary>
+        <p className="text-port-text-muted">Redraws the picked image with the title painted in as bold lettering. The result becomes the thumbnail when it lands.</p>
+        <label htmlFor={idFor('paint-notes')} className="block text-[11px] text-port-text-muted">Lettering direction (optional)</label>
+        <textarea id={idFor('paint-notes')} value={paintNotes} maxLength={1500} rows={2} onChange={(e) => setPaintNotes(e.target.value)}
+          onBlur={() => setSentNotes(paintNotes.trim())} placeholder="Chrome 80s movie-poster letters with a hot pink glow"
+          className="w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs" />
+        {paintPreview && <SentPromptPanel prompt={sentNotes} sentPrompt={paintPreview.prompt} additions={paintPreview.promptAdditions || []} />}
+        <button type="button" onClick={paint} disabled={!source || busy || painting || !paintTitle} className={button}>
+          <Brush size={13} /> {publishKit.paintingThumbnail ? 'Queuing…' : thumb.pending ? 'Painting…' : 'Paint the title into this image'}
+        </button>
+        {!source && <p className="text-port-text-muted">Pick an image above first.</p>}
+        {thumb.pending && <p role="status" className="text-port-text-muted">Painting on {thumb.pending.mode || 'the image backend'}. The thumbnail updates when it lands.</p>}
+        {thumb.lastError && !thumb.pending && <p role="alert" className="text-port-warning">{thumb.lastError}</p>}
+      </details>
+
       <div className="space-y-1 rounded border border-port-border p-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="flex items-center gap-1"><FlaskConical size={13} /> A/B test ({tests.length} of {MAX_TESTS})</span>

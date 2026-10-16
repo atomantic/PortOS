@@ -11,6 +11,7 @@ import {
   composeMusicVideoYoutubeThumbnail,
   clearMusicVideoYoutubeThumbnail,
   addMusicVideoThumbnailTest,
+  paintMusicVideoYoutubeThumbnail,
   removeMusicVideoThumbnailTest,
   composeMusicVideoCoverArt,
   generateMusicVideoCoverArt,
@@ -37,6 +38,7 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
   const [savingLettering, setSavingLettering] = useState(false);
   const [requestingImage, setRequestingImage] = useState(false);
   const [composingThumbnail, setComposingThumbnail] = useState(false);
+  const [paintingThumbnail, setPaintingThumbnail] = useState(false);
 
   const reload = (id) => {
     if (!id) return;
@@ -106,6 +108,14 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
       .catch(() => null)
       .finally(() => setComposingThumbnail(false));
   };
+  // In flight from the click until the job is queued; after that the record's `pending` reports progress.
+  const paintThumbnail = (body) => {
+    setPaintingThumbnail(true);
+    return paintMusicVideoYoutubeThumbnail(projectId, body)
+      .then(apply)
+      .catch(() => null)
+      .finally(() => setPaintingThumbnail(false));
+  };
   const addThumbnailTest = () => addMusicVideoThumbnailTest(projectId).then(apply).catch(() => null);
   const removeThumbnailTest = (filename) => removeMusicVideoThumbnailTest(projectId, filename).then(apply).catch(() => null);
   const clearThumbnail = () => {
@@ -160,6 +170,8 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
     composeThumbnail,
     clearThumbnail,
     addThumbnailTest,
+    paintingThumbnail,
+    paintThumbnail,
     removeThumbnailTest,
     composing,
     composeCover,

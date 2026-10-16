@@ -3,7 +3,9 @@
  * composed 16:9 from a kit frame in the cover's lettering, the YouTube post
  * uploads it over the bare frame, a new cover design re-sets it, and the
  * Test & Compare set keeps up to three variants whose files outlive the next
- * thumbnail and go once removed.
+ * thumbnail and go once removed. "Paint the title" queues one tagged image
+ * job whose prompt carries the brief as a labeled addition, and its landing
+ * makes the painted image the thumbnail, bare.
  */
 import { describe, expect, it, vi, afterAll } from 'vitest';
 import { existsSync } from 'node:fs';
@@ -88,5 +90,48 @@ describe('YouTube thumbnail', () => {
     // A name the set never held is never deleted.
     await thumbs.removeYoutubeThumbnailTest(id, frame);
     expect(existsSync(join(PATHS.videoThumbnails, frame))).toBe(true);
+  });
+});
+
+describe('painting the title with the image model', () => {
+  it('queues the frame with the brief as an addition, and makes the painted image the thumbnail when it lands', async () => {
+    const { id, frame } = await projectWithFrame();
+    const enqueue = vi.fn(async () => ({ jobId: 'job-example' }));
+    thumbs.__setYoutubeThumbnailDepsForTests({
+      getSettings: async () => ({}), defaultRoute: async () => ({ mode: 'codex', model: null }),
+      imageParams: async (_s, route, common) => ({ ...common, provider: route.mode }), enqueue, jobStatus: async () => 'queued',
+    });
+    await thumbs.paintYoutubeThumbnail(id, { source: { kind: 'thumbnail', filename: frame }, title: 'Example Song', notes: 'chrome letters' });
+    const { params } = enqueue.mock.calls[0][0];
+    expect(params.prompt).toBe(thumbs.buildThumbnailPaintPrompt({ title: 'Example Song', notes: 'chrome letters' }).prompt);
+    expect(params.prompt).toContain('"Example Song"');
+    expect(params.prompt.endsWith('chrome letters')).toBe(true);
+    expect(params.promptAdditions).toEqual([expect.objectContaining({ id: 'youtube-thumbnail-brief' })]);
+    expect(params.referenceImagePaths).toEqual([join(PATHS.videoThumbnails, frame)]);
+    const requestId = params.musicVideo.youtubeThumbnail.requestId;
+    expect((await kitOf(id)).youtubeThumbnail.pending).toMatchObject({ requestId, jobId: 'job-example' });
+    await expect(thumbs.paintYoutubeThumbnail(id, { source: { kind: 'thumbnail', filename: frame }, title: 'Example Song' })).rejects.toMatchObject({ status: 409 });
+
+    // The painted image lands in the gallery; it becomes the thumbnail with nothing set over it.
+    await mkdir(PATHS.images, { recursive: true });
+    await sharp({ create: { width: 1536, height: 864, channels: 3, background: '#884422' } }).png().toFile(join(PATHS.images, 'painted-example.png'));
+    expect(await thumbs.onThumbnailImageSettled({ projectId: id, requestId, filename: 'painted-example.png' })).toBe(true);
+    const made = (await kitOf(id)).youtubeThumbnail;
+    expect(made).toMatchObject({ source: { kind: 'image', filename: 'painted-example.png' }, lettering: false, pending: null, generated: ['painted-example.png'] });
+    const stats = await sharp(await readFile(join(PATHS.videoThumbnails, made.filename))).stats();
+    expect(Math.max(...stats.channels.map((c) => c.stdev))).toBeLessThan(2);
+  });
+
+  it('records why a paint failed', async () => {
+    const { id, frame } = await projectWithFrame();
+    const enqueue = vi.fn(async () => ({ jobId: 'job-failing' }));
+    thumbs.__setYoutubeThumbnailDepsForTests({
+      getSettings: async () => ({}), defaultRoute: async () => ({ mode: 'codex', model: null }),
+      imageParams: async (_s, _r, common) => common, enqueue, jobStatus: async () => 'queued',
+    });
+    await thumbs.paintYoutubeThumbnail(id, { source: { kind: 'thumbnail', filename: frame }, title: 'Example Song' });
+    const requestId = enqueue.mock.calls[0][0].params.musicVideo.youtubeThumbnail.requestId;
+    await thumbs.onThumbnailImageSettled({ projectId: id, requestId, status: 'failed', error: 'The model refused' });
+    expect((await kitOf(id)).youtubeThumbnail).toMatchObject({ pending: null, lastError: 'The model refused' });
   });
 });
