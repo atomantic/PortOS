@@ -63,6 +63,33 @@ describe('useSystemActivity', () => {
     expect(result.current.snapshot.activity.idle).toBe(false);
   });
 
+  it('keeps the published state for an identical payload and publishes new top-level slices', async () => {
+    vi.useFakeTimers();
+    let renders = 0;
+    const { result } = renderHook(() => {
+      renders += 1;
+      return useSystemActivity();
+    });
+    await act(async () => { await Promise.resolve(); });
+    const readyState = result.current;
+    const readyRenderCount = renders;
+
+    await act(async () => {
+      fire('system:activity');
+      await vi.advanceTimersByTimeAsync(SYSTEM_ACTIVITY_COALESCE_MS);
+    });
+    expect(result.current).toBe(readyState);
+    expect(renders).toBe(readyRenderCount);
+
+    getSystemActivity.mockResolvedValue({ ...idle, backup: { inProgress: true } });
+    await act(async () => {
+      fire('system:activity');
+      await vi.advanceTimersByTimeAsync(SYSTEM_ACTIVITY_COALESCE_MS);
+    });
+    expect(result.current.snapshot.backup).toEqual({ inProgress: true });
+    expect(result.current).not.toBe(readyState);
+  });
+
   it('reconciles a missed frame when the socket reconnects', async () => {
     const { result } = renderHook(() => useSystemActivity());
     await act(async () => { await Promise.resolve(); });
