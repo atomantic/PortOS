@@ -28,10 +28,10 @@ import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js
 import { buildChapters, buildSrt, buildPublishCopyPrompt, parsePublishCopy, normalizeCopyOptions, PUBLISH_PLATFORMS } from './publishKitText.js';
 import { canonicalizeSunoUrl, isSunoShareLink } from '../sunoShareLink.js';
 import { trackedRenderMap } from '../renderActivity.js';
+import { pickThumbnailFrames, scoreThumbnailFrame, thumbnailCandidates } from './thumbnailFrames.js';
 
 const jobs = new Map();
 const projectBuilds = trackedRenderMap('music-video-publish-kit', { noun: 'publishing kit build', link: (projectId) => `/music-video/${encodeURIComponent(projectId)}` });
-const MAX_THUMBNAILS = 6;
 // X caps a Premium upload's bitrate well under a 1080p master's; ~12 Mbps
 // keeps the analog grain without the upload being re-crushed.
 // 9:16 canvas: the full frame fitted to width over a blurred, cover-scaled copy of itself, so edge text is never cropped.
@@ -70,16 +70,6 @@ async function finalRenderFile(project) {
   return { entry, path };
 }
 
-/** Frame times worth a thumbnail: performance-shot midpoints spread across the song, else even steps. */
-function thumbnailTimes(project, durationSec, max = MAX_THUMBNAILS) {
-  const perf = (project.scenes || [])
-    .filter((s) => s?.shotMode === 'performance' && Number.isFinite(s.startSec) && Number.isFinite(s.endSec) && s.endSec > s.startSec && s.startSec < durationSec)
-    .map((s) => (s.startSec + Math.min(s.endSec, durationSec)) / 2);
-  const pool = perf.length ? perf : Array.from({ length: max }, (_, i) => ((i + 0.5) / max) * durationSec);
-  if (pool.length <= max) return pool.map((t) => Math.round(t * 1000) / 1000);
-  return Array.from({ length: max }, (_, i) => pool[Math.floor((i * pool.length) / max)]).map((t) => Math.round(t * 1000) / 1000);
-}
-
 /** A file an older build left behind, deleted only once no project's kit still names it (a clone shares the record). */
 export async function releaseKitFiles(filenames, keep = []) {
   if (!filenames.length) return;
@@ -87,7 +77,11 @@ export async function releaseKitFiles(filenames, keep = []) {
   const referenced = new Set(keep);
   for (const p of others) {
     const kit = projectPublishKit(p);
-    for (const f of [...(kit.exports || []).map((e) => e.filename), ...(kit.thumbnails || []), kit.captionsFilename, kit.coverArt?.filename]) if (f) referenced.add(f);
+    // A made YouTube thumbnail (and each A/B variant) also holds the kit frame it was made from,
+    // so a rebuild leaves it there to re-set in new lettering.
+    const made = [kit.youtubeThumbnail, ...(Array.isArray(kit.youtubeThumbnailTests) ? kit.youtubeThumbnailTests : [])].filter(Boolean);
+    const madeFrom = made.map((t) => (t.source?.kind === 'thumbnail' ? t.source.filename : null));
+    for (const f of [...(kit.exports || []).map((e) => e.filename), ...(kit.thumbnails || []), kit.captionsFilename, kit.coverArt?.filename, ...made.map((t) => t.filename), ...madeFrom]) if (f) referenced.add(f);
   }
   for (const name of filenames) {
     if (referenced.has(name)) continue;
@@ -153,8 +147,8 @@ async function beginPublishKitBuild(projectId, jobId) {
           '-vf', VERTICAL_FIT_FILTER, ...X_VIDEO_ARGS,
           '-af', `asetpts=PTS-STARTPTS${edgeFadeFilter(teaser.endSec - teaser.startSec)}`, ...AUDIO_ARGS] }] : []),
     ];
-    const times = thumbnailTimes(project, durationSec);
-    const total = encodes.length + times.length;
+    const candidates = thumbnailCandidates(project, durationSec);
+    const total = encodes.length + candidates.length;
     const written = [];
     let done = 0;
     const step = () => broadcastSse(job, { type: 'progress', progress: Math.min(0.99, ++done / total) });
@@ -198,13 +192,19 @@ async function beginPublishKitBuild(projectId, jobId) {
       written.push(encode.filename);
       step();
     }
-    const thumbnails = [];
-    for (const [i, t] of times.entries()) {
+    // Cut every candidate, keep the best frame of each shot, and drop the rest.
+    // A thumbnail fills the 16:9 frame: a master of another shape is cropped, never boxed in black bars.
+    const scored = [];
+    for (const [i, c] of candidates.entries()) {
       const name = `${stem}-thumb-${i + 1}.jpg`;
-      const result = await runFfmpegProcess({ bin: ffmpeg, signal: job.abort.signal, args: ['-hide_banner', '-loglevel', 'error', '-ss', String(t), '-i', masterPath, '-frames:v', '1', '-vf', 'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2', '-q:v', '2', '-y', join(PATHS.videoThumbnails, name)] });
-      if (result.ok) { thumbnails.push(name); written.push(name); }
+      const path = join(PATHS.videoThumbnails, name);
+      const result = await runFfmpegProcess({ bin: ffmpeg, signal: job.abort.signal, args: ['-hide_banner', '-loglevel', 'error', '-ss', String(c.t), '-i', masterPath, '-frames:v', '1', '-vf', 'scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720', '-q:v', '2', '-y', path] });
+      if (result.ok) scored.push({ ...c, name, score: await scoreThumbnailFrame(path).catch(() => NaN) });
       step();
     }
+    const thumbnails = pickThumbnailFrames(scored).map((c) => c.name);
+    await Promise.all(scored.filter((c) => !thumbnails.includes(c.name)).map((c) => unlink(join(PATHS.videoThumbnails, c.name)).catch(() => {})));
+    written.push(...thumbnails);
     const srt = buildSrt(project);
     const captionsFilename = srt ? `${stem}-captions.srt` : null;
     if (srt) { await writeFile(join(PATHS.videos, captionsFilename), srt); written.push(captionsFilename); }

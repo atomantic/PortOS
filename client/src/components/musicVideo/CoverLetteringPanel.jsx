@@ -40,7 +40,7 @@ function loadFace(font) {
   return faceLoads.get(key);
 }
 // Re-renders once the uploaded faces are usable, so the preview's text widths are measured in them rather than in a fallback.
-function usePreviewFonts(fonts) {
+export function usePreviewFonts(fonts) {
   const [tick, setTick] = useState(0);
   useEffect(() => {
     if (!fonts?.length || typeof FontFace === 'undefined' || typeof document === 'undefined' || !document.fonts) return undefined;

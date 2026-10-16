@@ -11,6 +11,7 @@ import { coverFontSpec, tagTextFor, titleLinesFor } from '../../../server/lib/mu
 export {
   COVER_ART_SIZE,
   COVER_DESIGN_OPTIONS,
+  YOUTUBE_THUMBNAIL_SIZE,
   DEFAULT_COVER_DESIGN,
   coverOverlaySvg,
   coverTypefaceChoices,
@@ -25,7 +26,7 @@ const PROBE_PX = 100;
  * font size, measured on a canvas in the design's font stack. Null where a
  * canvas is unavailable, so the overlay falls back to the faces' average advance.
  */
-export function canvasCoverWidths(design, { title, tag, size }, fonts = []) {
+export function canvasCoverWidths(design, { title, tag, size, frame = 'cover' }, fonts = []) {
   const ctx = typeof document === 'undefined' ? null : document.createElement('canvas').getContext?.('2d');
   if (!ctx) return null;
   const measure = (kind, texts) => {
@@ -36,7 +37,7 @@ export function canvasCoverWidths(design, { title, tag, size }, fonts = []) {
     return (text) => out.get(text);
   };
   return {
-    title: measure('title', titleLinesFor(title, design, size, fonts)),
-    tag: measure('tag', [tagTextFor(tag, design)]),
+    title: measure('title', titleLinesFor(title, design, size, fonts, frame)),
+    tag: measure('tag', [tagTextFor(tag, design, frame)]),
   };
 }

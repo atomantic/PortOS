@@ -8,7 +8,11 @@ import {
   cancelMusicVideoPublishKit,
   draftMusicVideoPublishCopy,
   updateMusicVideoPublishCopy,
-  selectMusicVideoPublishThumbnail,
+  composeMusicVideoYoutubeThumbnail,
+  clearMusicVideoYoutubeThumbnail,
+  addMusicVideoThumbnailTest,
+  paintMusicVideoYoutubeThumbnail,
+  removeMusicVideoThumbnailTest,
   composeMusicVideoCoverArt,
   generateMusicVideoCoverArt,
   designMusicVideoCoverArt,
@@ -33,6 +37,8 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
   const [designing, setDesigning] = useState(false);
   const [savingLettering, setSavingLettering] = useState(false);
   const [requestingImage, setRequestingImage] = useState(false);
+  const [composingThumbnail, setComposingThumbnail] = useState(false);
+  const [paintingThumbnail, setPaintingThumbnail] = useState(false);
 
   const reload = (id) => {
     if (!id) return;
@@ -95,7 +101,30 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
       .catch(() => null)
       .finally(() => setSaving(false));
   };
-  const selectThumbnail = (filename) => selectMusicVideoPublishThumbnail(projectId, filename).then(apply).catch(() => null);
+  const composeThumbnail = (body) => {
+    setComposingThumbnail(true);
+    return composeMusicVideoYoutubeThumbnail(projectId, body)
+      .then(apply)
+      .catch(() => null)
+      .finally(() => setComposingThumbnail(false));
+  };
+  // In flight from the click until the job is queued; after that the record's `pending` reports progress.
+  const paintThumbnail = (body) => {
+    setPaintingThumbnail(true);
+    return paintMusicVideoYoutubeThumbnail(projectId, body)
+      .then(apply)
+      .catch(() => null)
+      .finally(() => setPaintingThumbnail(false));
+  };
+  const addThumbnailTest = () => addMusicVideoThumbnailTest(projectId).then(apply).catch(() => null);
+  const removeThumbnailTest = (filename) => removeMusicVideoThumbnailTest(projectId, filename).then(apply).catch(() => null);
+  const clearThumbnail = () => {
+    setComposingThumbnail(true);
+    return clearMusicVideoYoutubeThumbnail(projectId)
+      .then(apply)
+      .catch(() => null)
+      .finally(() => setComposingThumbnail(false));
+  };
   const composeCover = (body) => {
     setComposing(true);
     return composeMusicVideoCoverArt(projectId, body)
@@ -137,7 +166,13 @@ export default function useMusicVideoPublishKit({ project, replaceProject } = {}
     saving,
     draftCopy,
     saveCopy,
-    selectThumbnail,
+    composingThumbnail,
+    composeThumbnail,
+    clearThumbnail,
+    addThumbnailTest,
+    paintingThumbnail,
+    paintThumbnail,
+    removeThumbnailTest,
     composing,
     composeCover,
     designing,

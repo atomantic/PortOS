@@ -54,3 +54,29 @@ describe('cover lettering treatments', () => {
     expect(textY(alone, 'EXAMPLE SONG')).toBe(textY(apart, 'EXAMPLE SONG'));
   });
 });
+
+describe('YouTube thumbnail lettering', () => {
+  const THUMB = { title: 'Example Song Title', tag: 'Example Artist', size: { width: 1280, height: 720 }, frame: 'thumbnail' };
+  const fontSizes = (svg) => [...svg.matchAll(/font-size="([\d.]+)"/g)].map((m) => Number(m[1]));
+
+  it('sets the title larger than a cover would on the same height, with no artist name', () => {
+    const svg = coverOverlaySvg({ ...THUMB, design: { layout: 'bottom-left' } });
+    expect(svg).toContain('width="1280" height="720" viewBox="0 0 1280 720"');
+    expect(svg).not.toContain('EXAMPLE ARTIST');
+    const cover = coverOverlaySvg({ title: THUMB.title, tag: THUMB.tag, size: 720, design: { layout: 'bottom-left' } });
+    expect(Math.max(...fontSizes(svg))).toBeGreaterThan(Math.max(...fontSizes(cover)) * 1.4);
+  });
+
+  it('keeps a side-anchored title to one side and every bottom layout above the duration badge', () => {
+    // An average-advance layout: the line's right edge is x + chars × advance × size.
+    const left = coverOverlaySvg({ ...THUMB, design: { layout: 'bottom-left', typeface: 'sans' } });
+    const lines = [...left.matchAll(/<text x="([\d.]+)" y="[\d.]+"[^>]*font-size="([\d.]+)"[^>]*>([^<]+)<\/text>/g)];
+    expect(lines.length).toBeGreaterThan(1);
+    for (const [, x, fs, line] of lines) expect(Number(x) + line.length * 0.6 * 1.02 * Number(fs)).toBeLessThanOrEqual(1280 * 0.46 + 1);
+    for (const layout of ['bottom-left', 'bottom-center']) {
+      const svg = coverOverlaySvg({ ...THUMB, design: { layout } });
+      const lowest = Math.max(...[...svg.matchAll(/<text[^>]* y="([\d.]+)"/g)].map((m) => Number(m[1])));
+      expect(lowest).toBeLessThan(720 * (1 - 0.14));
+    }
+  });
+});

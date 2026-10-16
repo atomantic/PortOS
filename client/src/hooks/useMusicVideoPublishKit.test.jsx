@@ -11,7 +11,12 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   cancelMusicVideoPublishKit: vi.fn(() => Promise.resolve({ ok: true })),
   draftMusicVideoPublishCopy: vi.fn(),
   updateMusicVideoPublishCopy: vi.fn(),
-  selectMusicVideoPublishThumbnail: vi.fn(),
+  composeMusicVideoYoutubeThumbnail: vi.fn(),
+  clearMusicVideoYoutubeThumbnail: vi.fn(),
+  addMusicVideoThumbnailTest: vi.fn(),
+  paintMusicVideoYoutubeThumbnail: vi.fn(),
+  previewMusicVideoThumbnailPaint: vi.fn(),
+  removeMusicVideoThumbnailTest: vi.fn(),
 }));
 vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), info: vi.fn(), success: vi.fn() } }));
 beforeEach(() => { vi.clearAllMocks(); MockEventSource.reset(); vi.stubGlobal('EventSource', MockEventSource); });

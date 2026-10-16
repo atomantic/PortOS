@@ -44,6 +44,7 @@ const { renderMusicVideo } = await import('./render.js');
 const { startExcerptRender } = await import('./excerptRender.js');
 const { importDocumentTemplate } = await import('./compositionDocument.js');
 const { startPublishKitBuild } = await import('./publishKit.js');
+const { thumbnailCandidates } = await import('./thumbnailFrames.js');
 const { encodeDocumentComposition } = await import('./documentRender.js');
 const { runFfmpegProcess } = await import('../../lib/ffmpeg.js');
 const { mutateVideoHistory } = await import('../videoGen/local.js');
@@ -169,15 +170,17 @@ describe('publishing kit build', () => {
     runFfmpegProcess.mockClear();
     const release = await acquireBackupSnapshotCut();
     try {
+      const frames = thumbnailCandidates(await projects.getProject(id), 12.5).length;
       await startPublishKitBuild(id);
-      // Thumbnails are the build's last ffmpeg step.
-      await waitFor(async () => expect((await readdir(PATHS.videoThumbnails)).some(name => name.endsWith('-thumb-6.jpg'))).toBe(true));
+      // Thumbnail frames are the build's last ffmpeg step; unpicked ones are deleted, so watch the calls.
+      const lastFrame = `-thumb-${frames}.jpg`;
+      await waitFor(() => expect(runFfmpegProcess.mock.calls.some(([{ args }]) => args.at(-1).endsWith(lastFrame))).toBe(true));
       await settleSeveral();
       const encoded = runFfmpegProcess.mock.calls.length;
-      expect(encoded).toBeGreaterThan(6);
+      expect(encoded).toBeGreaterThan(frames);
       expect((await projects.getProject(id)).publishKit?.exports).toBeUndefined();
       release();
-      await waitFor(async () => expect((await projects.getProject(id)).publishKit?.exports?.length).toBe(encoded - 6));
+      await waitFor(async () => expect((await projects.getProject(id)).publishKit?.exports?.length).toBe(encoded - frames));
       for (const { filename } of (await projects.getProject(id)).publishKit.exports) {
         expect(existsSync(join(PATHS.videos, filename))).toBe(true);
       }

@@ -146,6 +146,12 @@ const releaseCover = (kit) => {
   return kit.thumbnail ? { dir: 'videoThumbnails', name: kit.thumbnail } : null;
 };
 
+// The thumbnail made under YouTube thumbnail when there is one, else the video frame picked (the best one, by default).
+const youtubeThumbnailFile = (kit) => {
+  if (kit.youtubeThumbnail?.filename) return { dir: 'videoThumbnails', name: kit.youtubeThumbnail.filename, made: true };
+  return kit.thumbnail ? { dir: 'videoThumbnails', name: kit.thumbnail } : null;
+};
+
 /** The 1080p encode a native video post (LinkedIn, Facebook) uploads. */
 function nativeVideo(project, kit, platform) {
   const clip = (kit.exports || []).find((e) => e.kind === 'x-1080p')?.filename;
@@ -178,7 +184,7 @@ const BUILDERS = {
       title: requireTitle('youtube', text(kit.copy?.youtube?.title)),
       ...youtubeDescription(kit, options),
       tags: (kit.copy?.youtube?.tags || []).map(text).filter(Boolean),
-      thumbnail: kit.thumbnail ? { dir: 'videoThumbnails', name: kit.thumbnail } : null,
+      thumbnail: youtubeThumbnailFile(kit),
       captions: kit.captionsFilename ? { dir: 'videos', name: kit.captionsFilename } : null,
     };
   },
@@ -401,7 +407,7 @@ export function publishPreviewParts(platform, project, payload) {
       add('Video', 'The final render');
       add('Title', p.title); add('Description', p.description);
       add('Tags', p.tags?.length ? p.tags.join(', ') : 'None');
-      add('Thumbnail', p.thumbnail ? 'The one picked under Release assets' : 'None');
+      add('Thumbnail', p.thumbnail ? (p.thumbnail.made ? 'The one made under YouTube thumbnail' : 'The video frame picked under YouTube thumbnail') : 'None');
       add('Captions', p.captions ? 'Lyric captions (SRT)' : 'None');
       break;
     case 'shorts':
