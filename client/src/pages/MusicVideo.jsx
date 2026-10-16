@@ -312,7 +312,8 @@ export default function MusicVideo() {
   const shotLockValue = shotLocks
     ? { locks: shotLocks, clips: productionReview.readiness.storyboard.clipLocks || null,
       unlocked: unlockedShots(productionReview.readiness),
-      toggle: (sceneId, lock, stage) => productionReview.lockShots([sceneId], lock, stage), busy: productionReview.busy }
+      toggle: (sceneId, lock, stage) => productionReview.lockShots([sceneId], lock, stage),
+      lockAll: productionReview.lockAll, busy: productionReview.busy }
     : null;
   // Posting (#9282): fill each platform's post in the PortOS Browser, post on a second press.
   const publishing = useMusicVideoPublishing({ project: selected, replaceProject });

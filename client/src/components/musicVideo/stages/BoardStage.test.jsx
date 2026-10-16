@@ -188,3 +188,33 @@ describe('BoardStage ending', () => {
     canvas.mockRestore();
   });
 });
+
+describe('BoardStage Lock all', () => {
+  const scenes = [
+    scene(1),
+    scene(2, { videoHistoryId: null }),
+    scene(3, { referenceImageId: null, videoHistoryId: null }),
+    scene(4),
+  ];
+  const locks = { s1: 'open', s2: 'changed', s3: 'open', s4: 'locked' };
+  const clips = { s1: 'open', s2: 'open', s3: 'open', s4: 'locked' };
+  const renderLockAll = (value) => render(<MemoryRouter><ShotLockContext.Provider value={{ locks, clips, toggle: vi.fn(), ...value }}>
+    <BoardStage board={board(scenes)} /></ShotLockContext.Provider></MemoryRouter>);
+
+  it('says what it locks and that unused takes get rejected, then locks stills before videos', async () => {
+    const lockAll = vi.fn(async () => ({ project: {} }));
+    renderLockAll({ lockAll });
+    fireEvent.click(screen.getByRole('button', { name: 'Lock all' }));
+    // Shot 3 has nothing picked and shot 4 is already locked; shot 2 has a still but no clip.
+    expect(screen.getByText('Lock 2 stills and 1 video?')).toBeTruthy();
+    expect(screen.getByText(/rejects that shot's unused takes/)).toBeTruthy();
+    expect(lockAll).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Lock them' }));
+    await waitFor(() => expect(lockAll).toHaveBeenCalledWith(['s1', 's2'], ['s1']));
+  });
+
+  it('hides when every picked still and clip is locked', () => {
+    renderLockAll({ lockAll: vi.fn(), locks: { ...locks, s1: 'locked', s2: 'locked' }, clips: { ...clips, s1: 'locked' } });
+    expect(screen.queryByRole('button', { name: 'Lock all' })).toBeNull();
+  });
+});

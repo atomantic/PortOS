@@ -6,7 +6,8 @@ import { Lock, LockOpen } from 'lucide-react';
  * lock — `locked`, `changed` (locked, then edited) or `open`; `clips` maps a
  * video shot to its clip's lock the same way (null for a shot with no video
  * step: a still, card or code shot locks once). `toggle(sceneId, lock, stage)`
- * locks or unlocks one shot's `still` or `video`. `unlocked` is `unlockedShots`
+ * locks or unlocks one shot's `still` or `video`; `lockAll(stills, videos)` locks
+ * many at once. `unlocked` is `unlockedShots`
  * (the shots the Shots checklist counts as not locked yet). Null outside a
  * project, or for a document storyboard, which has no per-shot locks.
  */
