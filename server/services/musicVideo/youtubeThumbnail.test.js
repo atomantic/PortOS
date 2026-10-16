@@ -68,6 +68,20 @@ describe('YouTube thumbnail', () => {
     expect(existsSync(join(PATHS.videoThumbnails, before))).toBe(false);
   });
 
+  it('still re-sets a thumbnail made from a kit frame after a rebuild drops that frame from the kit', async () => {
+    const { id, frame } = await projectWithFrame();
+    await thumbs.composeProjectYoutubeThumbnail(id, { source: { kind: 'thumbnail', filename: frame }, title: 'Example' });
+    // A rebuild: the kit names new frames and frees the old ones no project still holds.
+    const { releaseKitFiles } = await import('./publishKit.js');
+    await projects.mutateProjectRecord(id, (current) => ({ project: { ...current, publishKit: { ...current.publishKit, thumbnails: ['newer.jpg'], thumbnail: 'newer.jpg' } } }));
+    await releaseKitFiles([frame]);
+    expect(existsSync(join(PATHS.videoThumbnails, frame))).toBe(true);
+    const before = (await kitOf(id)).youtubeThumbnail.filename;
+    const { project } = await cover.saveCoverDesign(id, { layout: 'top-center' });
+    expect(project.publishKit.youtubeThumbnail.filename).not.toBe(before);
+    expect(project.publishKit.youtubeThumbnail.source).toEqual({ kind: 'thumbnail', filename: frame });
+  });
+
   it('keeps up to three variants for Test & Compare, past the next thumbnail, and frees one once removed', async () => {
     const { id, frame } = await projectWithFrame();
     await expect(thumbs.addYoutubeThumbnailTest(id)).rejects.toMatchObject({ status: 422 });

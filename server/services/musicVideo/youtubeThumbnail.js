@@ -29,6 +29,7 @@
  * thumbnail as it is now; making the next one leaves it in place.
  */
 import { randomUUID } from 'crypto';
+import { existsSync } from 'fs';
 import { basename } from 'path';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -71,6 +72,15 @@ export const projectYoutubeThumbnail = (project) => {
   return thumb && typeof thumb === 'object' ? thumb : {};
 };
 
+// A kit frame the made thumbnail was cut from stays usable after a rebuild drops it from the
+// kit (releaseKitFiles keeps its file), so new lettering and re-crops still find it.
+function thumbnailSourcePath(project, from, thumb) {
+  const name = basename(String(from?.filename || ''));
+  const kept = from?.kind === 'thumbnail' && thumb.source?.kind === 'thumbnail' && thumb.source.filename === name
+    && !(projectPublishKit(project).thumbnails || []).includes(name) ? safeUnder(PATHS.videoThumbnails, name) : null;
+  return kept && existsSync(kept) ? kept : sourcePath(project, from);
+}
+
 const unitOr = (value, fallback) => (Number.isFinite(value) ? value : (Number.isFinite(fallback) ? fallback : 0.5));
 
 /**
@@ -85,7 +95,7 @@ export async function composeProjectYoutubeThumbnail(projectId, { source = null,
   const art = projectCoverArt(project);
   const from = source || thumb.source;
   if (!from) throw thumbError(422, 'VALIDATION_ERROR', 'Pick an image for the thumbnail first');
-  const path = sourcePath(project, from);
+  const path = thumbnailSourcePath(project, from, thumb);
   const next = {
     source: { kind: from.kind, filename: String(from.filename).split(/[\\/]/).pop() },
     title: typeof title === 'string' ? title.trim() : (thumb.title ?? art.title ?? project.name ?? ''),

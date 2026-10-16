@@ -77,7 +77,11 @@ export async function releaseKitFiles(filenames, keep = []) {
   const referenced = new Set(keep);
   for (const p of others) {
     const kit = projectPublishKit(p);
-    for (const f of [...(kit.exports || []).map((e) => e.filename), ...(kit.thumbnails || []), kit.captionsFilename, kit.coverArt?.filename, kit.youtubeThumbnail?.filename, ...(Array.isArray(kit.youtubeThumbnailTests) ? kit.youtubeThumbnailTests.map((t) => t?.filename) : [])]) if (f) referenced.add(f);
+    // A made YouTube thumbnail (and each A/B variant) also holds the kit frame it was made from,
+    // so a rebuild leaves it there to re-set in new lettering.
+    const made = [kit.youtubeThumbnail, ...(Array.isArray(kit.youtubeThumbnailTests) ? kit.youtubeThumbnailTests : [])].filter(Boolean);
+    const madeFrom = made.map((t) => (t.source?.kind === 'thumbnail' ? t.source.filename : null));
+    for (const f of [...(kit.exports || []).map((e) => e.filename), ...(kit.thumbnails || []), kit.captionsFilename, kit.coverArt?.filename, ...made.map((t) => t.filename), ...madeFrom]) if (f) referenced.add(f);
   }
   for (const name of filenames) {
     if (referenced.has(name)) continue;
