@@ -3,11 +3,11 @@ import { EventEmitter } from 'events';
 
 const mockPm2 = vi.hoisted(() => ({
   connect: vi.fn(),
-  disconnect: vi.fn(),
+  disconnect: vi.fn(cb => cb(null)),
   start: vi.fn()
 }));
 
-vi.mock('pm2', () => ({ default: mockPm2 }));
+vi.mock('pm2', () => ({ default: { custom: function () { return mockPm2; } } }));
 
 const mockSpawn = vi.hoisted(() => vi.fn());
 vi.mock('../lib/childProcess.js', async (importOriginal) => ({

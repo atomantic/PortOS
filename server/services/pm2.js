@@ -7,7 +7,6 @@ import { createRequire } from 'module';
 import { homedir } from 'os';
 import { atomicWrite, safeJSONParse, sleep, tryReadFile } from '../lib/fileUtils.js';
 import { parseCommandArgs } from '../lib/commandSecurity.js';
-import { bufferedSpawnOrThrow } from '../lib/bufferedSpawn.js';
 import { parsePm2JlistStdout } from '../lib/pm2Jlist.js';
 import { PATHS } from '../lib/paths.js';
 
@@ -15,6 +14,9 @@ const IS_WIN = process.platform === 'win32';
 
 // TTL cache for jlist results to reduce CLI churn during rapid UI refreshes
 const JLIST_TTL_MS = 400;
+const JLIST_TIMEOUT_MS = 15_000;
+const COMMAND_TIMEOUT_MS = 60_000;
+const KILL_GRACE_MS = 1_000;
 const jlistCache = new Map();
 const jlistInflight = new Map();
 const cacheKey = (pm2Home) => pm2Home || '_default';
@@ -168,21 +170,68 @@ export function spawnPm2(pm2Args, opts = {}) {
  * and pm2.savedProcesses.test.js do — and assert the mock was reached.
  *
  * @param {string[]} pm2Args PM2 CLI arguments (e.g. ['jlist'])
- * @param {object} opts Spawn options (env, cwd, etc.)
+ * @param {object} opts Spawn options (env, cwd, etc.) plus timeoutMs (default 60s)
  * @returns {Promise<{stdout: string, stderr: string}>}
  */
-export function execPm2(pm2Args, opts = {}) {
+export function execPm2(pm2Args, { timeoutMs = COMMAND_TIMEOUT_MS, ...opts } = {}) {
+  return runPm2Command(pm2Args, opts, timeoutMs);
+}
+
+function runPm2Command(pm2Args, opts, timeoutMs, allowNonzeroWithoutStderr = false) {
   return new Promise((resolve, reject) => {
     const child = spawnPm2(pm2Args, opts);
     let stdout = '';
     let stderr = '';
-    child.stdout.on('data', (data) => { stdout += data.toString(); });
-    child.stderr.on('data', (data) => { stderr += data.toString(); });
-    child.on('close', (code) => {
-      if (code !== 0) return reject(new Error(stderr || `pm2 exited with code ${code}`));
-      resolve({ stdout, stderr });
-    });
-    child.on('error', (err) => reject(err));
+    let settled = false;
+    let timedOut = false;
+    let cleanupTimer;
+    const onStdout = data => { stdout += data.toString(); };
+    const onStderr = data => { stderr += data.toString(); };
+    const finish = (error, cleanupConfirmed = true) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(cleanupTimer);
+      child.stdout?.removeListener('data', onStdout);
+      child.stderr?.removeListener('data', onStderr);
+      child.removeListener('close', onClose);
+      child.removeListener('error', onError);
+      if (timedOut) {
+        // Killing the CLI cannot undo a mutation already accepted by the daemon.
+        error = Object.assign(new Error(`pm2 ${pm2Args.join(' ')} timed out after ${timeoutMs / 1000}s; CLI cleanup ${cleanupConfirmed ? 'confirmed' : 'unconfirmed'}, daemon outcome unknown`), {
+          code: 'PM2_TIMEOUT', timedOut: true, cleanupConfirmed, outcome: 'unknown',
+        });
+        if (!cleanupConfirmed) {
+          child.stdin?.destroy();
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+          child.unref?.();
+        }
+      }
+      if (error) reject(error);
+      else resolve({ stdout, stderr });
+    };
+    const onClose = code => finish(code === 0 || (allowNonzeroWithoutStderr && !stderr)
+      ? null : new Error(stderr || `pm2 exited with code ${code}`));
+    // An error after spawn (e.g. a failed kill) does not prove the child exited.
+    const onError = error => { if (!timedOut) finish(error); };
+    const signal = value => {
+      try { child.kill(value); }
+      catch (error) { console.error(`❌ PM2 CLI ${value} failed: ${error.message}`); }
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      cleanupTimer = setTimeout(() => {
+        cleanupTimer = setTimeout(() => finish(null, false), KILL_GRACE_MS);
+        signal('SIGKILL');
+      }, KILL_GRACE_MS);
+      // The direct child is Node running PM2, never a shell or managed app.
+      signal('SIGTERM');
+    }, timeoutMs);
+    child.stdout?.on('data', onStdout);
+    child.stderr?.on('data', onStderr);
+    child.on('close', onClose);
+    child.on('error', onError);
   });
 }
 
@@ -214,42 +263,57 @@ export function buildEnv(pm2Home) {
  * @param {string} pm2Home Optional custom PM2_HOME path
  * @returns {Promise<{success: boolean}>}
  */
-function spawnPm2Cli(action, name, pm2Home) {
-  return new Promise((resolve, reject) => {
-    const child = spawnPm2([action, name], {
-      env: buildEnv(pm2Home)
-    });
-    let stderr = '';
-    child.stderr.on('data', (data) => { stderr += data.toString(); });
-    child.on('close', (code) => {
-      if (code !== 0) return reject(new Error(stderr || `pm2 ${action} exited with code ${code}`));
-      clearJlistCache();
-      resolve({ success: true });
-    });
-    child.on('error', reject);
-  });
+async function spawnPm2Cli(action, name, pm2Home) {
+  await execPm2([action, name], { env: buildEnv(pm2Home) });
+  clearJlistCache(pm2Home);
+  return { success: true };
 }
 
-/**
- * Connect to PM2 daemon and run an action
- * Note: This uses the default PM2_HOME. For custom PM2_HOME, use CLI commands.
- */
-function connectAndRun(action) {
+/** Each operation owns its native client, including deadline teardown. */
+function connectAndRun(action, timeoutMs = COMMAND_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
-    pm2.connect((err) => {
-      if (err) {
-        return reject(err);
-      }
-      action(pm2)
-        .then((result) => {
-          pm2.disconnect();
-          resolve(result);
-        })
-        .catch((err) => {
-          pm2.disconnect();
-          reject(err);
-        });
+    const client = new pm2.custom();
+    let settled = false;
+    const disconnect = () => new Promise(resolveCleanup => {
+      let cleaned = false;
+      const done = error => {
+        if (cleaned) return;
+        cleaned = true;
+        clearTimeout(cleanupTimer);
+        if (!error) { resolveCleanup(null); return; }
+        console.error(`❌ PM2 client disconnect failed: ${error.message}`);
+        resolveCleanup(Object.assign(new Error('PM2 client cleanup unconfirmed'), {
+          cause: error, code: 'PM2_CLEANUP_UNKNOWN', cleanupConfirmed: false, outcome: 'unknown',
+        }));
+      };
+      const cleanupTimer = setTimeout(() => done(new Error('disconnect timed out')), KILL_GRACE_MS);
+      try { client.disconnect(done); }
+      catch (error) { done(error); }
     });
+    const finish = (error, result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      void disconnect().then(cleanupError => {
+        if (cleanupError) error = Object.assign(error || cleanupError, { cleanupConfirmed: false });
+        if (error) reject(error);
+        else resolve(result);
+      });
+    };
+    const timer = setTimeout(() => finish(Object.assign(new Error('pm2 RPC timed out; client disconnect requested, daemon outcome unknown'), {
+      code: 'PM2_TIMEOUT', timedOut: true, cleanupConfirmed: false, outcome: 'unknown',
+    })), timeoutMs);
+    const onConnect = error => {
+      // Connect can finish after its deadline and open new socket handles.
+      if (settled) { void disconnect(); return; }
+      if (error) { finish(error); return; }
+      Promise.resolve().then(() => {
+        if (settled) return;
+        return action(client);
+      }).then(result => finish(null, result), finish);
+    };
+    try { client.connect(onConnect); }
+    catch (error) { finish(error); }
   });
 }
 
@@ -319,15 +383,7 @@ export async function stopApp(name, pm2Home = null) {
  * @param {string} pm2Home Optional custom PM2_HOME path
  */
 export async function restartApp(name, pm2Home = null) {
-  // Each restart owns its CLI connection. Parallel managed-app restarts must
-  // not disconnect the shared PM2 client while another RPC is still pending.
-  await bufferedSpawnOrThrow(process.execPath, [PM2_BIN, 'restart', name], {
-    env: withoutInheritedPm2Config(buildEnv(pm2Home)),
-    timeoutMs: 60_000,
-    timeoutLabel: `pm2 restart ${name}`,
-  });
-  clearJlistCache(pm2Home);
-  return { success: true };
+  return spawnPm2Cli('restart', name, pm2Home);
 }
 
 /**
@@ -435,81 +491,24 @@ function fetchJlist(pm2Home = null) {
   const inflight = jlistInflight.get(key);
   if (inflight) return inflight;
 
-  let promise;
-
-  if (!pm2Home) {
-    // Default PM2_HOME: use PM2 Node.js API directly — no subprocess spawn, no cmd windows
-    promise = new Promise((resolve) => {
-      pm2.connect((err) => {
-        if (err) {
-          jlistInflight.delete(key);
-          logJlistFailure(pm2Home, err.message || String(err));
-          resolve(null);
-          return;
-        }
-        pm2.list((err, list) => {
-          pm2.disconnect();
-          jlistInflight.delete(key);
-          if (err) {
-            logJlistFailure(pm2Home, err.message || String(err));
-            resolve(null);
-            return;
-          }
-          if (!Array.isArray(list)) {
-            logJlistFailure(pm2Home, 'Invalid response from pm2.list (not an array)');
-            resolve(null);
-            return;
-          }
-          logJlistRecovery(pm2Home);
-          jlistCache.set(key, { data: list, ts: Date.now() });
-          resolve(list);
-        });
-      });
-    });
-  } else {
-    // Custom PM2_HOME: must use CLI since the Node.js API only supports the default home
-    promise = new Promise((resolve) => {
-      const child = spawnPm2(['jlist'], {
-        env: buildEnv(pm2Home)
-      });
-      let stdout = '';
-      let stderr = '';
-
-      child.stdout.on('data', (data) => {
-        stdout += data.toString();
-      });
-
-      child.stderr.on('data', (data) => {
-        stderr += data.toString();
-      });
-
-      child.on('close', (code) => {
-        jlistInflight.delete(key);
-        if (code !== 0) {
-          const stderrTail = stderr.length > 200 ? stderr.slice(-200) : stderr;
-          const errMsg = stderrTail.trim() || `exit ${code}`;
-          logJlistFailure(pm2Home, errMsg);
-          resolve(null);
-          return;
-        }
-        const list = parseJlistStdout(stdout);
-        if (list === null) {
-          logJlistFailure(pm2Home, 'Failed to parse pm2 jlist output (invalid JSON)');
-          resolve(null);
-          return;
-        }
-        logJlistRecovery(pm2Home);
-        jlistCache.set(key, { data: list, ts: Date.now() });
-        resolve(list);
-      });
-
-      child.on('error', (err) => {
-        jlistInflight.delete(key);
-        logJlistFailure(pm2Home, err.message || String(err));
-        resolve(null);
-      });
-    });
-  }
+  // Defer the read until the single-flight entry exists, even for a sync callback.
+  const promise = Promise.resolve().then(() => pm2Home
+    ? execPm2(['jlist'], { env: buildEnv(pm2Home), timeoutMs: JLIST_TIMEOUT_MS })
+      .then(({ stdout }) => parseJlistStdout(stdout))
+    : connectAndRun(client => new Promise((resolve, reject) => {
+      client.list((error, list) => error ? reject(error) : resolve(list));
+    }), JLIST_TIMEOUT_MS)
+  ).then(list => {
+    if (!Array.isArray(list)) throw new Error('Invalid PM2 process list response');
+    logJlistRecovery(pm2Home);
+    jlistCache.set(key, { data: list, ts: Date.now() });
+    return list;
+  }).catch(error => {
+    logJlistFailure(pm2Home, error.message || String(error));
+    return null;
+  }).finally(() => {
+    if (jlistInflight.get(key) === promise) jlistInflight.delete(key);
+  });
 
   jlistInflight.set(key, promise);
   return promise;
@@ -599,32 +598,10 @@ function mapProcess(proc) {
  * @param {string} pm2Home Optional custom PM2_HOME path
  */
 export async function getLogs(name, lines = 100, pm2Home = null) {
-  return new Promise((resolve, reject) => {
-    const args = ['logs', name, '--lines', String(lines), '--nostream', '--raw'];
-    const child = spawnPm2(args, {
-      env: buildEnv(pm2Home)
-    });
-
-    let stdout = '';
-    let stderr = '';
-
-    child.stdout.on('data', (data) => {
-      stdout += data.toString();
-    });
-
-    child.stderr.on('data', (data) => {
-      stderr += data.toString();
-    });
-
-    child.on('close', (code) => {
-      if (code !== 0 && stderr) {
-        return reject(new Error(stderr));
-      }
-      resolve(stdout);
-    });
-
-    child.on('error', reject);
-  });
+  const args = ['logs', name, '--lines', String(lines), '--nostream', '--raw'];
+  // Preserve the logs reader's historical partial-output contract on nonzero exit.
+  const { stdout } = await runPm2Command(args, { env: buildEnv(pm2Home) }, JLIST_TIMEOUT_MS, true);
+  return stdout;
 }
 
 /**
@@ -712,32 +689,20 @@ export async function startWithCommand(name, cwd, command, options = {}) {
  * tunes the autorestart=true nursing behavior, which no current caller uses
  * together with a custom pm2Home.
  */
-function spawnPm2StartCommand(name, cwd, script, args, { autorestart, maxRestarts, maxMemoryRestart, pm2Home, port = null }) {
-  return new Promise((resolve, reject) => {
-    const cliArgs = ['start', script, '--name', name, '--cwd', cwd];
-    if (!isJsScript(script)) cliArgs.push('--interpreter', 'none');
-    if (autorestart) {
-      cliArgs.push('--max-restarts', String(maxRestarts), '--restart-delay', '5000', '--max-memory-restart', String(maxMemoryRestart));
-    } else {
-      cliArgs.push('--no-autorestart');
-    }
-    if (args.length > 0) cliArgs.push('--', ...args);
-
-    // buildEnv drops the inherited PortOS PORT/HOST; put the app's own port
-    // back so this path pins the same value the Node API path above does.
-    const env = buildEnv(pm2Home);
-    if (port) env.PORT = String(port);
-
-    const child = spawnPm2(cliArgs, { env });
-    let stderr = '';
-    child.stderr.on('data', (data) => { stderr += data.toString(); });
-    child.on('close', (code) => {
-      if (code !== 0) return reject(new Error(stderr || `pm2 start exited with code ${code}`));
-      clearJlistCache();
-      resolve({ success: true });
-    });
-    child.on('error', reject);
-  });
+async function spawnPm2StartCommand(name, cwd, script, args, { autorestart, maxRestarts, maxMemoryRestart, pm2Home, port = null }) {
+  const cliArgs = ['start', script, '--name', name, '--cwd', cwd];
+  if (!isJsScript(script)) cliArgs.push('--interpreter', 'none');
+  if (autorestart) {
+    cliArgs.push('--max-restarts', String(maxRestarts), '--restart-delay', '5000', '--max-memory-restart', String(maxMemoryRestart));
+  } else {
+    cliArgs.push('--no-autorestart');
+  }
+  if (args.length > 0) cliArgs.push('--', ...args);
+  const env = buildEnv(pm2Home);
+  if (port) env.PORT = String(port);
+  await execPm2(cliArgs, { env });
+  clearJlistCache(pm2Home);
+  return { success: true };
 }
 
 /**
@@ -747,38 +712,12 @@ function spawnPm2StartCommand(name, cwd, script, args, { autorestart, maxRestart
  * @param {string[]} processNames Processes to start (--only flag)
  * @param {string} pm2Home Optional custom PM2_HOME
  */
-function spawnPm2StartEcosystem(cwd, ecosystemFile, processNames, pm2Home) {
-  return new Promise((resolve, reject) => {
-    const args = ['start', ecosystemFile];
-    if (processNames.length > 0) {
-      args.push('--only', processNames.join(','));
-    }
-
-    const child = spawnPm2(args, {
-      cwd,
-      env: buildEnv(pm2Home)
-    });
-    let stdout = '';
-    let stderr = '';
-
-    child.stdout.on('data', (data) => {
-      stdout += data.toString();
-    });
-
-    child.stderr.on('data', (data) => {
-      stderr += data.toString();
-    });
-
-    child.on('close', (code) => {
-      if (code !== 0) {
-        return reject(new Error(stderr || `pm2 start exited with code ${code}`));
-      }
-      clearJlistCache();
-      resolve({ success: true, output: stdout });
-    });
-
-    child.on('error', reject);
-  });
+async function spawnPm2StartEcosystem(cwd, ecosystemFile, processNames, pm2Home) {
+  const args = ['start', ecosystemFile];
+  if (processNames.length > 0) args.push('--only', processNames.join(','));
+  const { stdout } = await execPm2(args, { cwd, env: buildEnv(pm2Home) });
+  clearJlistCache(pm2Home);
+  return { success: true, output: stdout };
 }
 
 /**

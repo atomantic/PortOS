@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
-const mocks = vi.hoisted(() => ({ connect: vi.fn(), list: vi.fn(), disconnect: vi.fn() }));
-vi.mock('pm2', () => ({ default: mocks }));
+const mocks = vi.hoisted(() => ({ connect: vi.fn(), list: vi.fn(), disconnect: vi.fn(cb => cb(null)) }));
+vi.mock('pm2', () => ({ default: { custom: function () { return mocks; } } }));
 import { clearJlistCache, listMaintenanceProcesses, listProcessesStrict } from './pm2.js';
 
 afterEach(() => { vi.clearAllMocks(); clearJlistCache(); });
