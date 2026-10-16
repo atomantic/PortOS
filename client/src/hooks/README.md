@@ -304,6 +304,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useModelLifecycle` | Targeted 3D model lifecycle reads, cancellation and bounded transient recovery. | Image-to-3D and procedural model views. |
 
 | `useMusicVideoProductionReview` | Server-authoritative art/storyboard/proof approvals and SSE proof rendering, with stale-readiness suppression. | Music Video production review. |
+| `useMusicVideoProofReview` | Revision-bound animated-proof playback state, render range, approval blockers and evidence payload. Returns playback/media setters, `range`/`setRange`, and approval state/actions. | `ProductionReviewPanel` and its proof content. |
 
 | `useCalendarWindowEvents` | `useCalendarWindowEvents(startDate, endDate)` — sequential 200-event offset pages for a complete calendar window, account/event deduplication, retry and date/sync supersession. | Day/Week/Month grids; pair with CalendarWindowStatus to disclose incomplete availability. |
 
