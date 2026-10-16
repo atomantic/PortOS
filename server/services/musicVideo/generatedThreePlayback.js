@@ -41,6 +41,8 @@ globalThis.portosComposition = composition;
     }
   },
   dispose() {
+    for (const material of previousMaterials) material.dispose();
+    previousMaterials.clear();
     post.dispose(); renderer.dispose();
     canvas.width = 0; canvas.height = 0; overlay.width = 0; overlay.height = 0;
     stagedWorld.width = 0; stagedWorld.height = 0;
@@ -52,6 +54,17 @@ globalThis.portosComposition = composition;
 export function generatedThreePlaybackEngine(original) {
   let source = original.toString();
   for (const [from, to] of [
+    ['const post = createPost(THREE, renderer);', 'const post = createPost(THREE, renderer);\nlet previousMaterials = new Set();'],
+    ['    text.reset();\n    try {', '    text.reset();\n    let rendered = false;\n    try {'],
+    ['      drawWords(t);', '      drawWords(t);\n      rendered = true;'],
+    ['      for (const resource of resources) resource.dispose();', `      const materials = new Set([...resources].filter(resource => resource.isMaterial));
+      // Keep one frame's materials alive until the next fresh world has drawn,
+      // so Three can reuse shader programs before their reference count hits zero.
+      // Geometry, shadows and textures retain their immediate disposal contract.
+      for (const resource of resources) if (!resource.isMaterial) resource.dispose();
+      for (const material of previousMaterials) if (!rendered || !materials.has(material)) material.dispose();
+      if (!rendered) for (const material of materials) if (!previousMaterials.has(material)) material.dispose();
+      previousMaterials = rendered ? materials : new Set();`],
     ["const canvas = document.getElementById('world');", "const frontWorld = document.getElementById('world');\nconst canvas = document.createElement('canvas');"],
     ["const overlay = document.getElementById('type');", "const frontType = document.getElementById('type');\nconst overlay = document.createElement('canvas');"],
     ['  overlay.width = width; overlay.height = height;', '  overlay.width = width; overlay.height = height;\n  frontWorld.width = width; frontWorld.height = height; frontType.width = width; frontType.height = height;'],

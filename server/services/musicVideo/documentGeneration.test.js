@@ -118,13 +118,13 @@ async function candidateRuntime(document, { reference = false, fontGate = Promis
     page: { evaluate: source => runInContext(source, context) }, slow: () => { slow = true; } };
 }
 
-async function threeCandidate() {
+async function threeCandidate(source) {
   const created = await projects.createProject({ name: 'Synthetic spatial song', mediaMode: 'code-only' });
   await projects.mutateProjectRecord(created.id, current => ({ project: { ...current,
     audioAnalysis: { durationSec: 1, beats: [], downbeats: [], sections: [{ id: 'world', startSec: 0, endSec: 1 }] },
     composition: { mode: 'document', authoringRenderer: 'three' },
   } }));
-  h.response = JSON.stringify({ sections: [{ id: 'world', source: `function render(ctx, env) {
+  h.response = JSON.stringify({ sections: [{ id: 'world', source: source || `function render(ctx, env) {
     ctx.scene.userData.t = env.t;
     ctx.text.fillText(JSON.stringify({ t: env.t, localT: env.localT, frame: env.frame, width: env.width, height: env.height }), 1, 2);
   }` }] });
@@ -132,9 +132,9 @@ async function threeCandidate() {
 }
 
 // Run the staged module's real scene/post logic; only the GPU and DOM are doubles.
-async function threeRuntime(document, { reference = false, fontGate = Promise.resolve(), titleGate = Promise.resolve() } = {}) {
+async function threeRuntime(document, { reference = false, fontGate = Promise.resolve(), titleGate = Promise.resolve(), failDrawAt = null } = {}) {
   const THREE = await import('three');
-  const traces = [], copies = [], renders = [], finishing = [], events = [];
+  const traces = [], copies = [], renders = [], finishing = [], events = [], resources = [], overlap = [];
   let clock = 0, slow = false, rendererDisposed = false;
   const makeCanvas = name => {
     const context = { reset() {}, save() {}, restore() {}, strokeText() {},
@@ -150,7 +150,18 @@ async function threeRuntime(document, { reference = false, fontGate = Promise.re
       setSize(w, h) { canvas.width = w; canvas.height = h; },
       getContext: () => ({ getExtension: () => null, getParameter: () => 'software' }),
       initRenderTarget() {}, setRenderTarget(next) { target = next; }, clear() {},
-      render(scene) { renders.push([scene.userData.t ?? null, target ? [target.width, target.height] : null]); },
+      render(scene) {
+        overlap.push(resources.filter(item => !item.materialDisposed).length);
+        scene.traverse(object => {
+          if (!object.isMesh || !object.material || target) return;
+          const item = { materialDisposed: false, geometryDisposed: false };
+          object.material.addEventListener('dispose', () => { item.materialDisposed = true; });
+          object.geometry.addEventListener('dispose', () => { item.geometryDisposed = true; });
+          resources.push(item);
+        });
+        if (failDrawAt !== null && scene.userData.t === failDrawAt) throw new Error('Synthetic drawing failure');
+        renders.push([scene.userData.t ?? null, target ? [target.width, target.height] : null]);
+      },
       dispose() { rendererDisposed = true; },
     };
   }
@@ -173,7 +184,7 @@ async function threeRuntime(document, { reference = false, fontGate = Promise.re
   const source = (await readFile(join(root, reference ? 'engine-reference.js' : 'engine.js'), 'utf8'))
     .replace("import * as toonWorld from './toonWorld.js';", '').replaceAll('export function ', 'function ');
   runInContext(`${source}\nmount(THREE);`, context);
-  return { composition: sandbox.portosComposition, api: sandbox.portosComposition.previewPlayback, traces, copies, renders, finishing, events,
+  return { composition: sandbox.portosComposition, api: sandbox.portosComposition.previewPlayback, traces, copies, renders, finishing, events, resources, overlap,
     page: { evaluate: source => runInContext(source, context) }, slow: () => { slow = true; }, disposed: () => rendererDisposed };
 }
 
@@ -203,6 +214,29 @@ describe('treatment-driven mixed-media document authoring', () => {
       expect(native.finishing).toHaveLength(finishing);
     } finally { await native.api.dispose(); }
     expect(native.disposed()).toBe(true);
+  });
+
+  it('keeps shader material ownership across fresh worlds and releases it on drawing failure or disposal', async () => {
+    const document = await threeCandidate(`function render(ctx, env) {
+      ctx.scene.userData.t = env.t;
+      ctx.scene.add(new ctx.THREE.Mesh(new ctx.THREE.BoxGeometry(), new ctx.THREE.MeshBasicMaterial()));
+    }`);
+    const runtime = await threeRuntime(document, { failDrawAt: 0.5 });
+    try {
+      await runtime.composition.seek(0);
+      expect(runtime.resources).toEqual([{ materialDisposed: false, geometryDisposed: true }]);
+      await runtime.composition.seek(0.1);
+      expect(runtime.overlap).toEqual([0, 1]);
+      expect(runtime.resources).toEqual([{ materialDisposed: true, geometryDisposed: true }, { materialDisposed: false, geometryDisposed: true }]);
+      const copies = runtime.copies.length;
+      await expect(runtime.composition.seek(0.5)).rejects.toThrow('Synthetic drawing failure');
+      expect(runtime.copies).toHaveLength(copies);
+      expect(runtime.resources.every(item => item.materialDisposed && item.geometryDisposed)).toBe(true);
+      await runtime.composition.seek(0.75);
+      expect(runtime.resources.at(-1).materialDisposed).toBe(false);
+    } finally { await runtime.api.dispose(); }
+    expect(runtime.resources.every(item => item.materialDisposed && item.geometryDisposed)).toBe(true);
+    expect(runtime.disposed()).toBe(true);
   });
 
   it('awaits Three and title fonts without publishing a canceled exact frame', async () => {
