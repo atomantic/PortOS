@@ -85,8 +85,9 @@ const frameSpan = (scene) => `fr ${frameAt(scene.startSec)}–${frameAt(scene.en
  * A shot longer than that lane renders in one take (the lip-sync audio window,
  * or Grok's longest clip) offers `onSplit(sceneId, backend)`, which cuts it
  * into contiguous scenes at lyric pauses / phrase boundaries server-side.
- * Any scene but the last offers `onMergeNext(sceneId, backend)` (with `nextEndSec`, the next scene's end), the inverse;
- * it is hidden when the joined span would exceed that lane's longest take.
+ * Any scene but the last offers `onMergeNext(sceneId, backend)` (with `nextEndSec`, the next scene's end), the inverse,
+ * and any but the first `onMergePrevious(sceneId, backend)` (with `prevStartSec`), which keeps this shot and removes the
+ * one before; each is hidden when the joined span would exceed that lane's longest take.
  *
  * The card is a disclosure: collapsed it is one row — frame thumbnail, title,
  * timing, lyric line and status — and it opens on tap to the full editor:
@@ -121,7 +122,7 @@ export default function SceneCard({
   onMove, onDelete, onEditLocal, onSave,
   project = null, onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
   onOpenPreview, onSelectTake, onReviewTake, onRejectUnusedTakes = null, onSwapFrames = null, onMarkTake = null, onPoolMarked = null, onImportTake, onImportClipTake, onPlacePoolItem, onTrimClip, projectId = null, aspect = '16:9', videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false,
-  lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, onMoveStart = null, nextEndSec = null, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
+  lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, onMergePrevious = null, prevStartSec = null, onMoveStart = null, nextEndSec = null, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
   expanded, onToggleExpand, stepShot = null, footageOptional = false, failedScenes = null, songReview = null,
 }) {
   const detailsRef = useRef(null);
@@ -159,6 +160,7 @@ export default function SceneCard({
   const timing = buildSceneTimingPresentation({
     scene, layer, lipSyncBackend: renderLane, songDurationSec, falVideoSettings: renderSettings,
     nextEndSec, isLast, documentComposition, hasMergeNext: !!onMergeNext,
+    prevStartSec, isFirst: index === 0, hasMergePrevious: !!onMergePrevious,
     lineCues: isPerformanceScene(scene) && renderInputs.wholeLine === true ? project?.lyricCues || [] : null,
   });
   const { performance, capability, performanceBlocked, performanceCost } = timing;
@@ -233,7 +235,7 @@ export default function SceneCard({
             disabled={shotLock?.clip === 'locked'} disabledReason={shotLock?.clip === 'locked' ? 'Video locked. Unlock the video to retime it.' : null} />
         )}
         {/* What this shot's render covers and costs, and what blocks it, stays in view. */}
-        <SceneTimingPlan timing={timing} sceneId={scene.sceneId} lipSyncBackend={renderLane} onSplit={onSplit} onMergeNext={onMergeNext}
+        <SceneTimingPlan timing={timing} sceneId={scene.sceneId} lipSyncBackend={renderLane} onSplit={onSplit} onMergeNext={onMergeNext} onMergePrevious={onMergePrevious}
           span={sceneHasAuthoredSpan(scene) ? { startSec: scene.startSec, endSec: scene.endSec } : null} />
         {/* A VHS glitch riding on the cut into or out of this shot; never moves the cut. */}
         <SceneTransitions fieldId={fieldId} scene={scene} onChange={applyPatch} />

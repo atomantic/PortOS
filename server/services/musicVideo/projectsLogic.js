@@ -912,19 +912,39 @@ export function mergeNextScene(project, sceneId, { backend = null } = {}) {
   const scenes = project.scenes || [];
   const idx = scenes.findIndex((s) => s.sceneId === sceneId);
   if (idx < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
-  const scene = scenes[idx];
-  const following = scenes[idx + 1];
-  if (!following) throw new ServerError('This is the last scene — there is no next scene to merge.', { status: 400, code: 'MUSIC_VIDEO_MERGE_NO_NEXT' });
+  if (!scenes[idx + 1]) throw new ServerError('This is the last scene — there is no next scene to merge.', { status: 400, code: 'MUSIC_VIDEO_MERGE_NO_NEXT' });
+  return joinScenes(project, idx, { keep: 'first', backend });
+}
+
+/**
+ * Merge a scene over the one before it, the mirror of `mergeNextScene`: this
+ * scene keeps its id, takes and selections and starts where the previous scene
+ * started, and the previous scene is removed. Same refusals and clip rules.
+ * Returns `{ project, scene }`.
+ */
+export function mergePreviousScene(project, sceneId, { backend = null } = {}) {
+  const scenes = project.scenes || [];
+  const idx = scenes.findIndex((s) => s.sceneId === sceneId);
+  if (idx < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
+  if (idx === 0) throw new ServerError('This is the first scene — there is no previous scene to merge over.', { status: 400, code: 'MUSIC_VIDEO_MERGE_NO_PREVIOUS' });
+  return joinScenes(project, idx - 1, { keep: 'second', backend });
+}
+
+/** Join scenes `idx` and `idx + 1` into one spanning both, keeping the `first` or `second` scene's id and media. */
+function joinScenes(project, idx, { keep, backend }) {
+  const scenes = project.scenes || [];
+  const [first, second] = [scenes[idx], scenes[idx + 1]];
+  const [kept, removed] = keep === 'first' ? [first, second] : [second, first];
   if (project.composition?.mode === 'document') {
     throw new ServerError("This video's shot order comes from its composition document — merge the shots in the shot manifest instead.", { status: 400, code: 'MUSIC_VIDEO_MERGE_DOCUMENT' });
   }
   const lane = backend || project.videoSettings?.backend || null;
-  const startSec = scene.startSec;
-  const endSec = timedSec(following.endSec) ? following.endSec : scene.endSec;
-  if (timedSec(startSec) && timedSec(endSec) && (endSec <= startSec || (timedSec(scene.endSec) && endSec < scene.endSec))) {
+  const startSec = first.startSec;
+  const endSec = timedSec(second.endSec) ? second.endSec : first.endSec;
+  if (timedSec(startSec) && timedSec(endSec) && (endSec <= startSec || (timedSec(first.endSec) && endSec < first.endSec))) {
     throw new ServerError('The next scene ends before this one does — put the scenes in song order before merging them.', { status: 400, code: 'MUSIC_VIDEO_MERGE_OUT_OF_ORDER' });
   }
-  const maxSec = shotSplitLimit(scene, lane, project.videoSettings);
+  const maxSec = shotSplitLimit(kept, lane, project.videoSettings);
   if (maxSec != null) {
     if (!timedSec(startSec) || !timedSec(endSec)) {
       throw new ServerError('Both scenes need a start and end time before they can be merged on this backend.', { status: 400, code: 'MUSIC_VIDEO_MERGE_UNTIMED' });
@@ -935,34 +955,38 @@ export function mergeNextScene(project, sceneId, { backend = null } = {}) {
   }
 
   const now = new Date().toISOString();
-  let takes = ensureSceneTakes(scene, now);
-  const sharedClip = scene.videoHistoryId && scene.videoHistoryId === following.videoHistoryId;
-  if (sharedClip && !takes.some((t) => t.kind === 'video' && t.assetId === scene.videoHistoryId)) {
-    const kept = ensureSceneTakes(following, now).find((t) => t.kind === 'video' && t.assetId === scene.videoHistoryId);
-    if (kept) takes = [...takes, kept];
+  let takes = ensureSceneTakes(kept, now);
+  const sharedClip = kept.videoHistoryId && kept.videoHistoryId === removed.videoHistoryId;
+  if (sharedClip && !takes.some((t) => t.kind === 'video' && t.assetId === kept.videoHistoryId)) {
+    const shared = ensureSceneTakes(removed, now).find((t) => t.kind === 'video' && t.assetId === kept.videoHistoryId);
+    if (shared) takes = [...takes, shared];
   }
-  const lyricText = [scene.lyricText, following.lyricText].filter((t) => typeof t === 'string' && t.trim()).join(' / ').slice(0, 2000) || null;
+  const lyricText = [first.lyricText, second.lyricText].filter((t) => typeof t === 'string' && t.trim()).join(' / ').slice(0, 2000) || null;
   const merged = {
-    ...scene, endSec, lyricText, takes,
-    ...(isPerformanceScene(scene) ? { videoHistoryId: null } : {}),
+    ...kept, startSec, endSec, lyricText, takes,
+    ...(isPerformanceScene(kept) ? { videoHistoryId: null } : {}),
   };
 
   const nextScenes = [...scenes.slice(0, idx), merged, ...scenes.slice(idx + 2)].map((s, i) => ({ ...s, order: i }));
   const extra = { scenes: nextScenes };
   const sceneReview = project.songRevision?.sceneReview;
-  if (sceneReview && typeof sceneReview === 'object' && following.sceneId in sceneReview) {
+  if (sceneReview && typeof sceneReview === 'object' && removed.sceneId in sceneReview) {
     extra.songRevision = { ...project.songRevision,
-      sceneReview: Object.fromEntries(Object.entries(sceneReview).filter(([id]) => id !== following.sceneId)) };
+      sceneReview: Object.fromEntries(Object.entries(sceneReview).filter(([id]) => id !== removed.sceneId)) };
   }
   const draft = project.productionReview?.draft;
   if (Array.isArray(draft?.storyboard) && draft.storyboardSource !== 'document') {
-    const second = draft.storyboard.find((shot) => shot?.sceneId === following.sceneId);
+    const rowOf = (scene) => draft.storyboard.find((shot) => shot?.sceneId === scene.sceneId);
+    const [firstRow, secondRow] = [rowOf(first), rowOf(second)];
+    const gone = rowOf(removed);
     const storyboard = draft.storyboard
-      .filter((shot) => shot?.sceneId !== following.sceneId)
+      .filter((shot) => shot?.sceneId !== removed.sceneId)
       .map((shot) => {
-        if (shot?.sceneId !== scene.sceneId) return shot;
-        const cueIds = [...new Set([...(shot.lyricCueIds || []), ...(second?.lyricCueIds || [])])];
-        return { ...shot, endSec: timedSec(second?.endSec) ? second.endSec : endSec ?? shot.endSec, lyricCueIds: cueIds };
+        if (shot?.sceneId !== kept.sceneId) return shot;
+        const cueIds = [...new Set([...(firstRow?.lyricCueIds || []), ...(secondRow?.lyricCueIds || [])])];
+        return { ...shot,
+          ...(keep === 'second' ? { startSec: timedSec(gone?.startSec) ? gone.startSec : startSec ?? shot.startSec } : {}),
+          endSec: timedSec(secondRow?.endSec) ? secondRow.endSec : endSec ?? shot.endSec, lyricCueIds: cueIds };
       });
     extra.productionReview = { ...project.productionReview, draft: { ...draft, storyboard } };
   }

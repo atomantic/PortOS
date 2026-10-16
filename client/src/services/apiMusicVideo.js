@@ -141,6 +141,11 @@ export const mergeMusicVideoNextScene = (id, sceneId, backend, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/merge-next`, {
     method: 'POST', body: JSON.stringify(backend ? { backend } : {}), ...options,
   });
+// Merge a scene over the previous one: it starts where that one did, which is removed → { project, scene }.
+export const mergeMusicVideoPreviousScene = (id, sceneId, backend, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/merge-previous`, {
+    method: 'POST', body: JSON.stringify(backend ? { backend } : {}), ...options,
+  });
 // Move a shot's start; the shot before ends there too → { project, scene, previous }.
 export const moveMusicVideoSceneStart = (id, sceneId, startSec, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/start`, {

@@ -11,6 +11,7 @@ import {
   removeScene,
   reorderScenes,
   mergeNextScene,
+  mergePreviousScene,
   mirrorStatus,
   sanitizeProjectForSync,
   mergeProjectRecord,
@@ -661,6 +662,33 @@ describe('mergeNextScene', () => {
     const swapped = applySceneUpdate(project, ids[1], { startSec: 0, endSec: 2 }).project;
     expect(() => mergeNextScene(swapped, ids[0])).toThrow(/song order/);
     expect(() => mergeNextScene({ ...project, composition: { mode: 'document' } }, ids[0])).toThrow(/shot manifest/);
+  });
+});
+
+// Uniquely catches merge-over-previous keeping the wrong shot's id/clip or leaving the removed shot's span behind.
+describe('mergePreviousScene', () => {
+  it('extends a shot back over the previous one, which is removed', () => {
+    let project = baseProject();
+    const ids = [];
+    for (const [startSec, endSec, lyricText] of [[0, 4, 'line one'], [4, 9, 'line two'], [9, 12, 'line three']]) {
+      const r = addScene(project, { startSec, endSec, lyricText, sectionLabel: 'Verse' });
+      project = r.project; ids.push(r.scene.sceneId);
+    }
+    project = applySceneUpdate(project, ids[1], { videoHistoryId: 'clip-a' }).project;
+    project = applySceneUpdate(project, ids[2], { videoHistoryId: 'clip-b' }).project;
+    const withDraft = { ...project, productionReview: { draft: { storyboard: [
+      { sceneId: ids[0], startSec: 0, endSec: 4, lyricCueIds: ['c1'] },
+      { sceneId: ids[1], startSec: 4, endSec: 9, lyricCueIds: ['c2'] },
+      { sceneId: ids[2], startSec: 9, endSec: 12, lyricCueIds: ['c3'] },
+    ] } } };
+    const { project: next, scene } = mergePreviousScene(withDraft, ids[2]);
+    expect(next.scenes.map((s) => [s.sceneId, s.order])).toEqual([[ids[0], 0], [ids[2], 1]]);
+    expect(scene).toMatchObject({ sceneId: ids[2], startSec: 4, endSec: 12, lyricText: 'line two / line three', videoHistoryId: 'clip-b' });
+    expect(next.productionReview.draft.storyboard).toEqual([
+      { sceneId: ids[0], startSec: 0, endSec: 4, lyricCueIds: ['c1'] },
+      { sceneId: ids[2], startSec: 4, endSec: 12, lyricCueIds: ['c2', 'c3'] },
+    ]);
+    expect(() => mergePreviousScene(withDraft, ids[0])).toThrow(/no previous scene/);
   });
 });
 
