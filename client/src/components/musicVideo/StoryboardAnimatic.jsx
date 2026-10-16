@@ -190,15 +190,20 @@ function releaseVideo(video) {
  * clip's start holds its first frame that long, and the speed runs the clip faster
  * or slower, looping round the whole file as the render's looped input does.
  * `early` follows the song's clock before the shot starts too (a beat toggle
- * into it), reading the footage before its in-point back to the clip's start.
+ * into it, whose window opens at `fromSec`), reading the footage before its
+ * in-point; with less footage than that it plays on from the clip's first
+ * frame, as the render does, rather than holding it.
  */
-export function clipTimeAt(scene, t, clipSec = null, { early = false } = {}) {
+export function clipTimeAt(scene, t, clipSec = null, { early = false, fromSec = null } = {}) {
   const inSec = selectedPerformanceInstruction(scene)?.edit?.inSec ?? 0;
   const local = early ? t - (scene.startSec || 0) : Math.max(0, t - (scene.startSec || 0));
   const rate = clipSpeedRate(scene);
   const start = inSec + clipOffsetSec(scene);
   // A negative offset holds the first frame before the clip runs; otherwise it runs from `start`.
-  const at = start >= 0 ? Math.max(0, start + local * rate) : Math.max(0, local + start) * rate;
+  const position = (l) => (start >= 0 ? Math.max(0, start + l * rate) : Math.max(0, l + start) * rate);
+  const at = early && local < 0 && fromSec != null && fromSec <= t
+    ? position(fromSec - (scene.startSec || 0)) + (t - fromSec) * rate
+    : position(local);
   if (clipReversed(scene)) {
     // Backwards from the file's end, as the render reads it once: past its start it holds the first frame shown last.
     if (!(clipSec > 0)) return 0;
@@ -386,7 +391,7 @@ function ToggleClip({ scene, toggle, audioRef, time }) {
     el.style.opacity = String(incomingOpacity(toggle, t));
     if (el.tagName !== 'VIDEO' || el.readyState < 1) return;
     const duration = Number.isFinite(el.duration) ? el.duration : null;
-    const target = clipTimeAt(scene, Math.min(Math.max(t, toggle.windowStartSec), toggle.cutSec), duration, { early: true });
+    const target = clipTimeAt(scene, Math.min(Math.max(t, toggle.windowStartSec), toggle.cutSec), duration, { early: true, fromSec: toggle.windowStartSec });
     const tolerance = audio?.paused ? CLIP_PAUSED_DRIFT_SEC : CLIP_DRIFT_SEC;
     if (Math.abs((el.currentTime || 0) - target) > tolerance) el.currentTime = target;
     const running = !!audio && !audio.paused && t >= toggle.windowStartSec && t < toggle.cutSec;

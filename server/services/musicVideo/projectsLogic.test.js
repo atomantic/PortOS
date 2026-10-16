@@ -575,6 +575,12 @@ describe('scene board operations', () => {
     expect(() => applySceneUpdate(project, scene.sceneId, { cardColor: 'red' })).toThrow();
   });
 
+  // Uniquely catches a planned camera move not seeding the still's Move, or overriding one the shot sets.
+  it('seeds a new still move from its planned camera, and keeps a move it is given', () => {
+    expect(addScene(baseProject(), { prompt: 'a', camera: { move: 'truck-left' } }).scene.stillMove).toBe('pan');
+    expect(addScene(baseProject(), { prompt: 'a', camera: { move: 'slow-dolly-in' }, stillMove: 'hold' }).scene.stillMove).toBe('hold');
+  });
+
   it('persists a shot\'s lyric-type zone and role and refuses unknown ones (#10583)', () => {
     const { project, scene } = addScene(baseProject(), { prompt: 'a' });
     const { updated } = applySceneUpdate(project, scene.sceneId, { textZone: 'none', lyricRole: 'hook' });

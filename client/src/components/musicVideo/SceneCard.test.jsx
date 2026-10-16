@@ -158,14 +158,14 @@ describe('persisted render failure chip (#10154)', () => {
 });
 
 describe('planned camera move (#10589)', () => {
-  function Harness({ initial, onSave }) {
+  function Harness({ initial, onSave, documentComposition = false }) {
     const [scene, setScene] = useState(initial);
-    return <SceneCard scene={scene} index={0} layered onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
+    return <SceneCard scene={scene} index={0} layered documentComposition={documentComposition} onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
   }
 
   it('picks a catalog move, its speed and beat, and clears it', () => {
     const onSave = vi.fn();
-    render(<Harness initial={{ sceneId: 's1', visualLayer: 'still', startSec: 0, endSec: 5, takes: [] }} onSave={onSave} />);
+    render(<Harness initial={{ sceneId: 's1', visualLayer: 'still', startSec: 0, endSec: 5, takes: [] }} onSave={onSave} documentComposition />);
     const select = screen.getByLabelText('Camera');
     expect(select.value).toBe('');
     expect(screen.getByLabelText('Move').disabled).toBe(false);
@@ -177,6 +177,13 @@ describe('planned camera move (#10589)', () => {
     expect(onSave).toHaveBeenLastCalledWith('s1', { camera: { move: 'whip-pan', speed: 'fast', onBeat: true } });
     fireEvent.change(select, { target: { value: '' } });
     expect(onSave).toHaveBeenLastCalledWith('s1', { camera: null });
+  });
+
+  // Uniquely catches a composed render's still Move locked behind a planned camera it no longer follows.
+  it('keeps a composed still\'s Move in the director\'s hands with a camera planned', () => {
+    render(<Harness initial={{ sceneId: 's1', visualLayer: 'still', stillMove: 'hold', startSec: 0, endSec: 5, takes: [], camera: { move: 'handheld' } }} onSave={vi.fn()} />);
+    expect(screen.getByLabelText('Move').disabled).toBe(false);
+    expect(screen.getByLabelText('Move').value).toBe('hold');
   });
 
   it('puts a footage shot\'s camera beside its motion prompt and shows the text it adds', () => {

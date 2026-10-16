@@ -331,6 +331,18 @@ describe('StoryboardAnimatic clips', () => {
     expect(clipTimeAt(early, 11.25, 6)).toBeCloseTo(1);
   });
 
+  // Uniquely catches a beat toggle's incoming clip freezing on its first frame when it has
+  // less footage before its in-point than the toggle's window, where the render plays it on.
+  it('plays a toggle\'s incoming clip on from its first frame when it has too little footage before its in-point', () => {
+    const toggle = { early: true, fromSec: 9 };
+    expect(clipTimeAt({ startSec: 10 }, 9, 6, toggle)).toBe(0);
+    expect(clipTimeAt({ startSec: 10 }, 9.5, 6, toggle)).toBeCloseTo(0.5);
+    // A quarter second in: still from the first frame, not held for the first three quarters.
+    expect(clipTimeAt({ startSec: 10, offsetFrames: 6 }, 9.5, 6, toggle)).toBeCloseTo(0.5);
+    // With footage enough before its in-point it reads that footage.
+    expect(clipTimeAt({ startSec: 10, offsetFrames: 48 }, 9.5, 6, toggle)).toBeCloseTo(1.5);
+  });
+
   // Uniquely catches a reversed shot previewing forwards, or looping where the render holds.
   it('plays a reversed clip from its end, with its speed and offset, and holds once it runs out', () => {
     const back = { startSec: 10, reverse: true };

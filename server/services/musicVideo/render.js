@@ -266,13 +266,13 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
       }
       const imagePath = scene.referenceImageId ? safeUnder(PATHS.images, scene.referenceImageId) : null;
       if (!imagePath || !existsSync(imagePath)) { missingStills.push(scene.sceneId); continue; }
-      // A planned camera move (#10589) picks the nearest composed still move.
+      // The shot's Move plays as set; a planned camera move (#10589) only seeds it when the shot is made.
       // An image effect (a camera flash that develops, musicVideoImageEffects.js) plays over the still.
       // An end-frame effect also reads the shot's end frame; without it on disk the still plays alone.
       const effect = sceneImageEffect(scene, { layered });
       const endImagePath = effect && isEndFrameImageEffect(effect.effect) ? safeUnder(PATHS.images, scene.endImageId) : null;
       const playable = effect && (!isEndFrameImageEffect(effect.effect) || (endImagePath && existsSync(endImagePath)));
-      clips.push({ ...section, imagePath, move: stillMoveForCamera(scene.camera) || scene.stillMove || 'hold',
+      clips.push({ ...section, imagePath, move: scene.stillMove || stillMoveForCamera(scene.camera) || 'hold',
         ...(playable ? { effect, ...(endImagePath ? { endImagePath } : {}) } : {}) });
       continue;
     }
@@ -649,15 +649,17 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
   const prerolls = cutEffects.filter((t) => t.incoming).map((t) => {
     const { c } = plan[t.index + 1];
     // The footage just before the incoming shot's in-point, on the output timebase
-    // its speed and offset already set; any part before the clip starts holds its first frame.
+    // its speed and offset already set. With less footage than the window before
+    // the in-point it plays on from the clip's first frame instead: the flips
+    // always show moving footage, never a held frame.
     const windowSec = t.windowFrames / fps;
-    const shortSec = Math.max(0, windowSec - c.inSec);
+    const { leadSec = 0, ...shot } = c;
+    const inSec = Math.max(0, c.inSec - windowSec);
     const clip = c.layer ? { ...c, outSec: c.inSec + windowSec } : {
-      ...c,
-      inSec: Math.max(0, c.inSec - windowSec),
-      outSec: c.inSec + shortSec,
-      sourceSec: (c.sourceSec ?? c.duration) + windowSec,
-      ...(shortSec > 0 ? { leadSec: round3((c.leadSec || 0) + shortSec) } : {}),
+      ...shot,
+      inSec,
+      outSec: inSec + windowSec,
+      sourceSec: (c.sourceSec ?? c.duration) - leadSec + (c.inSec - inSec),
     };
     return { ...t, clip };
   });

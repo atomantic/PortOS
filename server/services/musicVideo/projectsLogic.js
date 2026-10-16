@@ -38,6 +38,7 @@ import { ensureSceneTakes, keepCodeClipWithItsClip, TAKE_SLOT } from './takes.js
 import { normalizeComposition, invalidateCompositionTiming, withStoredCompositionDocument } from './composition.js';
 import { normalizeSoundBed } from './soundBed.js';
 import { normalizeFilmLook } from '../../lib/filmLook.js';
+import { stillMoveForCamera } from '../../lib/cameraMovements.js';
 import { normalizeTitleCard } from '../../lib/musicVideoTitleCard.js';
 import { normalizeStatsOutro } from '../../lib/musicVideoStatsOutro.js';
 import { remapTreatmentForClone, scenesFingerprint } from './treatment.js';
@@ -515,7 +516,8 @@ function buildScene(input, { order }) {
     visualIntent: input.visualIntent ?? null,
     // #8985: what a composed render shows for this span (render.js#sceneLayer).
     visualLayer: input.visualLayer ?? 'footage',
-    stillMove: input.stillMove ?? 'hold',
+    // A planned camera move (#10589) seeds the nearest still move, which the shot's Move picker then owns.
+    stillMove: input.stillMove ?? stillMoveForCamera(input.camera) ?? 'hold',
     // #10589: the planned camera move (absent on hand-added and pre-#10589 shots).
     ...(input.camera ? { camera: input.camera } : {}),
     cardText: input.cardText ?? null,
