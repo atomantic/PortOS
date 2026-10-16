@@ -851,6 +851,76 @@ describe('localLlm', () => {
     });
   });
 
+  // The Ollama.app download is bounded by header + idle deadlines, not a total
+  // one: a stalled body aborts, a slow-but-progressing one must not (#11682).
+  describe('upgradeBackend — Ollama.app download stall guard', () => {
+    const tmpDirs = () => fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('portos-ollama-upgrade-'));
+    afterEach(() => {
+      vi.useRealTimers();
+      for (const n of tmpDirs()) fs.rmSync(path.join(os.tmpdir(), n), { recursive: true, force: true });
+    });
+
+    const run = async (downloadFetch, advanceMs) => {
+      // setImmediate stays real: the loop below yields to real file I/O with it.
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const restorePlatform = pinPlatform('darwin');
+      pathExistsImpl.fn = async (p) => p === '/Applications/Ollama.app';
+      vi.stubGlobal('fetch', vi.fn(async (url, init) => {
+        if (String(url).includes('api.github.com')) {
+          return { ok: true, json: async () => ({ tag_name: 'v0.34.0', assets: [{ name: 'Ollama-darwin.zip', size: 1024, browser_download_url: 'https://example.com/Ollama-darwin.zip' }] }) };
+        }
+        return downloadFetch(init);
+      }));
+      mocks.ollama.getStatus.mockResolvedValueOnce({ version: '0.33.3' });
+      try {
+        let settled = false;
+        const p = svc.upgradeBackend('ollama').finally(() => { settled = true; });
+        // Step in small increments so each chunk's idle-timer reset lands before the clock
+        // moves on; keep stepping past the budget so post-download sleeps also fire.
+        for (let elapsed = 0; !settled && elapsed < advanceMs * 4; elapsed += 5_000) {
+          await vi.advanceTimersByTimeAsync(5_000);
+          for (let y = 0; y < 5; y++) await new Promise((r) => setImmediate(r));
+        }
+        return await p;
+      } finally {
+        mocks.ollama.getStatus.mockReset();
+        vi.unstubAllGlobals();
+        restorePlatform();
+      }
+    };
+
+    it('aborts a body that stops emitting, removes the temp dir and returns the stall error', async () => {
+      const r = await run(({ signal }) => ({
+        ok: true,
+        body: new ReadableStream({ start(c) { c.enqueue(new Uint8Array([1])); signal.addEventListener('abort', () => c.error(new Error('aborted'))); } })
+      }), 60_001);
+      expect(r).toEqual({ success: false, error: expect.stringMatching(/no data for 60 s/) });
+      expect(tmpDirs()).toEqual([]);
+    });
+
+    it('aborts when no response headers arrive in time', async () => {
+      const r = await run(({ signal }) => new Promise((_res, rej) => signal.addEventListener('abort', () => rej(new Error('aborted')))), 30_001);
+      expect(r).toEqual({ success: false, error: expect.stringMatching(/no response from the server within 30 s/) });
+      expect(tmpDirs()).toEqual([]);
+    });
+
+    it('does not abort a slow stream that keeps making progress', async () => {
+      let n = 0;
+      const r = await run(() => ({
+        ok: true,
+        body: new ReadableStream({
+          async pull(c) {
+            if (n++ >= 30) return c.close();
+            await new Promise((res) => setTimeout(res, 5_000));
+            c.enqueue(new Uint8Array([n]));
+          }
+        })
+      }), 200_000);
+      // Past the download the flow proceeds to the swap; whatever it fails on, it is not a stall.
+      expect(r.error || '').not.toMatch(/stalled/);
+    });
+  });
+
   // The .app swap is the only upgrade path that REPLACES a working install on
   // disk, so each test below pins where the bundle ends up — not which commands
   // ran. Before #7238 the old bundle was `rm`'d first and its failure swallowed,
