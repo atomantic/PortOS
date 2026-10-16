@@ -105,7 +105,9 @@ npm run build
 PGDATABASE=portos_test node scripts/perf/browserCollectionAudit.mjs /tmp/collection-audit.json
 ~~~
 
-`COLLECTION_AUDIT_BROWSER` optionally selects a Chromium executable. The audit
+`COLLECTION_AUDIT_BROWSER` optionally selects a Chromium executable.
+`COLLECTION_AUDIT_CLIENT_DIST` optionally selects an isolated production client
+build for before/after comparisons; it never selects a live instance URL. The audit
 uses the existing server `playwright-core`, a fresh context for each cold route,
 no browser profile, no dev proxy, and no live-instance URL option. It owns and
 closes the fixture and browser, including on SIGINT/SIGTERM. An output filename
@@ -130,6 +132,13 @@ The report records:
   base64 binary). These exclude frame/TCP/TLS overhead and are separate from HTTP
   bytes; do not add a WebSocket handshake or frame twice. This is CDP accounting,
   not a packet capture.
+- Media History loaded at 60, 600 and at least 1,200 records, followed by a
+  responsive resize during scrolling and a return to the top. Each sample records
+  loaded/mounted/visible cards, columns, scroll geometry and CDP DOM nodes after
+  garbage collection. Mounts are bounded by two overscan rows on each side,
+  partial viewport rows and a focused row with keyboard neighbors (at most twelve
+  rows in this fixture), independent of loaded count. Keyboard focus survives
+  scrolling and responsive regrouping. No machine-specific timing gate applies.
 - Detail reads after opening a row, then the real Contacts tab click and a full
   measured 60-second idle window. Idle bytes/minute use actual elapsed time,
   with HTTP encoded/decoded and socket payload bytes separate. Requests count in
