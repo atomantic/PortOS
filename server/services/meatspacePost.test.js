@@ -1250,6 +1250,51 @@ describe('updatePostConfig — postConfigEvents', () => {
 
     expect(handler).toHaveBeenCalledTimes(1);
   });
+
+  it('retains independent patches submitted together and returns the committed configuration', async () => {
+    let persisted = { quickDurationMin: 5, llmDrills: { providerId: null, model: null } };
+    readJSONFile.mockImplementation(async () => structuredClone(persisted));
+    atomicWrite.mockImplementation(async (_path, config) => { persisted = structuredClone(config); });
+
+    const [, saved] = await Promise.all([
+      updatePostConfig({ llmDrills: { providerId: 'example-provider', model: 'example-model' } }),
+      updatePostConfig({ quickDurationMin: 10 }),
+    ]);
+
+    const expected = {
+      quickDurationMin: 10,
+      llmDrills: { providerId: 'example-provider', model: 'example-model' },
+    };
+    expect(persisted).toMatchObject(expected);
+    expect(saved).toMatchObject(expected);
+    expect(await getPostConfig()).toMatchObject(expected);
+  });
+
+  it('does not publish a failed save and lets the next queued patch use the last committed configuration', async () => {
+    let persisted = { quickDurationMin: 5, adaptive: { enabled: false } };
+    readJSONFile.mockImplementation(async () => structuredClone(persisted));
+    atomicWrite.mockRejectedValueOnce(new Error('Example write failure'))
+      .mockImplementation(async (_path, config) => { persisted = structuredClone(config); });
+    const handler = vi.fn();
+    postConfigEvents.on('post-config:updated', handler);
+
+    try {
+      const results = await Promise.allSettled([
+        updatePostConfig({ quickDurationMin: 10 }),
+        updatePostConfig({ adaptive: { enabled: true } }),
+      ]);
+
+      expect(results[0]).toMatchObject({ status: 'rejected', reason: { message: 'Example write failure' } });
+      expect(results[1]).toMatchObject({ status: 'fulfilled' });
+      expect(persisted).toMatchObject({ quickDurationMin: 5, adaptive: { enabled: true } });
+      expect(handler).toHaveBeenCalledExactlyOnceWith({
+        config: persisted,
+        updates: { adaptive: { enabled: true } },
+      });
+    } finally {
+      postConfigEvents.off('post-config:updated', handler);
+    }
+  });
 });
 
 // =============================================================================

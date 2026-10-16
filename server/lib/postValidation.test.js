@@ -1029,18 +1029,20 @@ describe('Practice Plan save body ↔ postConfigUpdateSchema (issue #3252)', () 
   });
 
   it('every enum-keyed drill-type record the body sends is complete', () => {
-    // The sibling module blocks use an EXHAUSTIVE z.record — a missing key is a
-    // 400, not a silent strip — so assert the registry supplies every enum member.
+    // The current UI must offer every drill even though older clients and
+    // incremental saves may submit only a subset of the server's registry.
     const body = practicePlanSaveBody();
     expect(Object.keys(body.mentalMath.drillTypes).sort()).toEqual([...MATH_DRILL_TYPE_IDS].sort());
     expect(Object.keys(body.llmDrills.drillTypes).sort()).toEqual([...LLM_DRILL_TYPE_IDS].sort());
     expect(Object.keys(body.cognitive.drillTypes).sort()).toEqual([...COGNITIVE_DRILL_TYPE_IDS].sort());
   });
 
-  it('rejects the same body with one drill type dropped, proving the guard bites', () => {
+  it('accepts a legacy plan body that predates a drill without inventing its settings', () => {
     const body = practicePlanSaveBody();
     delete body.llmDrills.drillTypes['bridge-word'];
-    expect(() => postConfigUpdateSchema.parse(body)).toThrow();
+    const parsed = postConfigUpdateSchema.parse(body);
+    expect(parsed).toEqual(body);
+    expect(parsed.llmDrills.drillTypes).not.toHaveProperty('bridge-word');
   });
 });
 

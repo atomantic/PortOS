@@ -64,4 +64,33 @@ describe('PUT /api/meatspace/post/config', () => {
     expect(r.status).toBe(200);
     expect(postService.updatePostConfig).toHaveBeenCalledWith({ adaptive: { enabled: true } });
   });
+
+  it('accepts sparse math and LLM drill maps without requiring unrelated drills', async () => {
+    const patch = {
+      mentalMath: { drillTypes: { multiplication: { enabled: false } } },
+      llmDrills: { drillTypes: { 'word-association': {
+        count: 3,
+        providerId: 'example-provider',
+        model: 'example-model',
+      } } },
+    };
+    postService.updatePostConfig.mockImplementation(async updates => updates);
+
+    const r = await request(app).put('/api/meatspace/post/config').send(patch);
+
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual(patch);
+    expect(postService.updatePostConfig).toHaveBeenCalledWith(patch);
+  });
+
+  it.each([
+    ['an unknown drill', { mentalMath: { drillTypes: { 'not-a-drill': { enabled: true } } } }],
+    ['an excessive LLM drill count', { llmDrills: { drillTypes: { 'word-association': { count: 21 } } } }],
+  ])('rejects %s before attempting a configuration write', async (_label, patch) => {
+    const r = await request(app).put('/api/meatspace/post/config').send(patch);
+
+    expect(r.status).toBe(400);
+    expect(r.body).toMatchObject({ error: 'Validation failed', code: 'VALIDATION_ERROR' });
+    expect(postService.updatePostConfig).not.toHaveBeenCalled();
+  });
 });
