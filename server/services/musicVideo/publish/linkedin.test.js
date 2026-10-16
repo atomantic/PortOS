@@ -7,7 +7,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { linkedinAdapter } from './linkedin.js';
 
-const EDITOR = '[role=dialog] .ql-editor[contenteditable=true]';
+const EDITOR = ':is(dialog[open], [role=dialog]) :is(.ql-editor, .ProseMirror)[contenteditable=true]';
 
 // A page whose elements exist only for locators. Like LinkedIn, attaching the
 // video swaps the composer for the media editor until its Next is pressed.

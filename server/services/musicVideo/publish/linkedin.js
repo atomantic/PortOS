@@ -4,7 +4,7 @@
  * links, when the director wants them, saved for the first comment instead.
  *
  * prepare() opens the feed's share box, uploads the 1080p encode through the
- * Add media chooser, steps through the media editor's Next (that only returns
+ * media chooser, steps through the media editor's Next (that only returns
  * to the composer), pastes the text, and waits for the upload. PortOS never
  * presses Post.
  *
@@ -13,18 +13,19 @@
  * is a first comment, types it into the post's comment box: the director
  * presses Comment.
  *
- * LinkedIn draws the share box inside a shadow root, which `document` queries
- * never reach, so everything here goes through Playwright locators (they pierce
- * open shadow roots), including the paste.
+ * Current composers use native dialogs and ProseMirror; older layouts use a
+ * role dialog and Quill inside an open shadow root. Locators support both,
+ * including the paste, without relying on document-only queries.
  */
 import { PUBLISH_STEP_TIMEOUT_MS as T, loginRequired, step } from './browser.js';
 
 const label = 'LinkedIn';
 const SHARE_URL = 'https://www.linkedin.com/feed/?shareActive=true';
 const SIGN_IN = /linkedin\.com\/(?:login|authwall|checkpoint|uas\/login|signup)/;
-const DIALOG = '[role=dialog]';
-const EDITOR = `${DIALOG} .ql-editor[contenteditable=true]`;
-const COMMENT_EDITOR = '.comments-comment-box .ql-editor[contenteditable=true], .comments-comment-texteditor .ql-editor[contenteditable=true]';
+const DIALOG = ':is(dialog[open], [role=dialog])';
+const RICH_EDITOR = ':is(.ql-editor, .ProseMirror)[contenteditable=true]';
+const EDITOR = `${DIALOG} ${RICH_EDITOR}`;
+const COMMENT_EDITOR = `:is(.comments-comment-box, .comments-comment-texteditor) ${RICH_EDITOR}`;
 // Drafts whose first comment was already typed: a reload of the post page must not type it twice.
 const commented = new WeakSet();
 const UPLOAD_WAIT_MS = 600_000;
@@ -37,8 +38,8 @@ const opening = (text) => String(text || '').split('\n').map((line) => line.trim
 const button = (page, name) => page.locator('button:visible, [role=button]:visible', { hasText: new RegExp(`^\\s*${name}\\s*$`) }).last();
 
 /**
- * Write `text` into the Quill editor `locator` matches. A synthetic paste keeps
- * the line breaks; when Quill ignores it, the lines are typed with Enter between.
+ * Paste into the matched rich editor; if ignored, type every newline boundary,
+ * including empty lines, so blank paragraphs survive keyboard fallback.
  */
 async function pasteInto(page, locator, text) {
   await locator.click({ timeout: T });
@@ -80,7 +81,7 @@ async function openComposer(page) {
 
 async function attachVideo(page, video) {
   await step(label, 'attach the video', async () => {
-    const button = page.locator(`${DIALOG} button[aria-label="Add media"], ${DIALOG} button[aria-label="Add a video"]`).first();
+    const button = page.locator(`${DIALOG} button:is([aria-label="Media"], [aria-label="Add media"], [aria-label="Add a video"])`).first();
     const [chooser] = await Promise.all([page.waitForEvent('filechooser', { timeout: T }), button.click({ timeout: T })]);
     await chooser.setFiles(video.path);
   });
