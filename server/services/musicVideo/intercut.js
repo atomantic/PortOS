@@ -229,8 +229,12 @@ export function intercutClips(clips, { scenes = [], sections = [], beats = [], b
     .filter(({ clip }) => !clip.layer && clip.videoPath && modes.get(clip.sceneId) !== 'performance' && !locked.has(clip.sceneId) && finite(clip.sourceSec) && clip.sourceSec > MIN_PIECE_SEC)
     .map((p) => ({ ...p, head: p.clip.outSec, start: p.clip.inSec, end: p.clip.inSec + p.clip.sourceSec }));
 
-  function takePartner(host, len) {
-    const pool = partners.filter((p) => p.clip.sceneId !== host.clip.sceneId && p.clip.videoPath !== host.clip.videoPath && p.end - p.start >= len - EPS);
+  // A piece ending where its partner's own shot begins would show that take's
+  // tail and then its start, which reads as the clip looping, so that shot is
+  // never the partner.
+  function takePartner(host, len, endT) {
+    const pool = partners.filter((p) => p.clip.sceneId !== host.clip.sceneId && p.clip.videoPath !== host.clip.videoPath && p.end - p.start >= len - EPS
+      && Math.abs(p.t0 - endT) > EPS);
     if (!pool.length) return null;
     const sameSection = pool.filter((p) => p.section?.index === host.section?.index);
     const candidates = sameSection.length ? sameSection : pool;
@@ -257,7 +261,7 @@ export function intercutClips(clips, { scenes = [], sections = [], beats = [], b
     for (let k = 0; k < bounds.length - 1; k += 1) {
       const a = bounds[k];
       const len = round3(bounds[k + 1] - a);
-      const partner = k % 2 === 1 ? takePartner(host, len) : null;
+      const partner = k % 2 === 1 ? takePartner(host, len, bounds[k + 1]) : null;
       if (partner) { out.push(partner); continue; }
       if (still) { out.push({ ...clip, inSec: 0, outSec: len, duration: len, sourceSec: len, ...(clip.effect ? { effectAtSec: round3(a - t0) } : {}) }); continue; }
       // The host keeps its own continuous time (a performance stays in sync).
