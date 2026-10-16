@@ -113,7 +113,7 @@ it('runs parallel units before exclusive, nonduplicated captures and cutover pro
       }
     `;
     for (const [name, other] of [['unit-a', 'unit-b'], ['unit-b', 'unit-a']]) {
-      put(`${name}.test.js`, common + `test('${name}', async () => {
+      put(`${name}.test.js`, `${common}test('${name}', async () => {
         expect(existsSync(marker('capture-lock'))).toBe(false);
         writeFileSync(marker('${name}-started'), '');
         await waitFor('${other}-started');
@@ -127,8 +127,10 @@ it('runs parallel units before exclusive, nonduplicated captures and cutover pro
       ['music', 'services/musicVideo/documentRender.browser.test.js'],
       ['cutover', 'services/databaseMaintenanceCutover.test.js'],
       ['assembly', 'services/creativeDirector/videoAssembly.test.js'],
+      ['process-audit-cleanup', '../scripts/persistentMindProcessAuditCleanup.test.js'],
     ]) {
-      put(path, common + `test('${name}', async () => {
+      put(path, `${common}test('${name}', async ({ task }) => {
+        expect(task.file.projectName).toBe('capture');
         expect(existsSync(marker('unit-a-done')) && existsSync(marker('unit-b-done'))).toBe(true);
         const lock = openSync(marker('capture-lock'), 'wx');
         try {
@@ -148,7 +150,7 @@ it('runs parallel units before exclusive, nonduplicated captures and cutover pro
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     const events = readFileSync(join(fixture, 'events'), 'utf8').trim().split('\n');
     expect(events.slice(0, 2).sort()).toEqual(['unit-a', 'unit-b']);
-    expect(events.slice(2).sort()).toEqual(['assembly', 'cutover', 'film-look', 'html', 'music']);
+    expect(events.slice(2).sort()).toEqual(['assembly', 'cutover', 'film-look', 'html', 'music', 'process-audit-cleanup']);
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
