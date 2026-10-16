@@ -30,6 +30,7 @@ vi.mock('../mediaAnnotations.js', () => ({ listAnnotations: async () => ({ 'vide
 let history;
 let file;
 let listGalleryPage;
+let listGalleryCollectionSummaries;
 beforeEach(async () => {
   vi.resetModules();
   if (io.root) await rm(io.root, { recursive: true, force: true });
@@ -39,13 +40,13 @@ beforeEach(async () => {
   io.accessError = null;
   file = join(io.root, 'video-history.json');
   history = await import('./history.js');
-  ({ listGalleryPage } = await import('../mediaAssetIndex/gallery.js'));
+  ({ listGalleryPage, listGalleryCollectionSummaries } = await import('../mediaAssetIndex/gallery.js'));
 });
 afterAll(async () => { await rm(io.root, { recursive: true, force: true }); });
 const persist = rows => writeFile(file, JSON.stringify(rows));
 
 describe('compact history through gallery reads', () => {
-  it('reuses one immutable bounded projection for concurrent and repeated 1,200-video pages', async () => {
+  it('reuses one immutable bounded projection for concurrent and repeated 1,200-video pages and covers', async () => {
     const rows = Array.from({ length: CARDINALITIES.videos }, (_, i) => mediaFixture('video', i));
     await persist(rows);
     const fullTimings = [];
@@ -63,6 +64,12 @@ describe('compact history through gallery reads', () => {
     const warmStart = performance.now();
     await listGalleryPage(options, async () => []);
     const warmMs = performance.now() - warmStart;
+    for (let index = 0; index < 2; index++) {
+      expect(await listGalleryCollectionSummaries(async () => [])).toEqual([{
+        id: 'unsorted', counts: { image: 0, video: 1200, all: 1200 }, total: 1200,
+        cover: '/data/video-thumbnails/synthetic-video-01199.png',
+      }]);
+    }
     expect(io.reads).toBe(1);
     expect(pages.every(page => page.items.length === 60 && page.total === 1080)).toBe(true);
     const snapshot = await history.loadCompactHistory();

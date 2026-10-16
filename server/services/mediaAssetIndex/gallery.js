@@ -122,7 +122,7 @@ export async function listGalleryFacets(diskReader) {
 /** Collection grid covers and counts, without downloading all image sidecars. */
 export async function listGalleryCollectionSummaries(diskReader) {
   const collections = await (await import('../mediaCollections.js')).listCollections();
-  const videoSnapshot = await (await import('../videoGen/history.js')).loadHistory();
+  const videoSnapshot = await (await import('../videoGen/history.js')).loadCompactHistory();
   if (!escapeHatch()) {
     const rows = await collectionCovers(collections.map(collection => ({
       id: collection.id, coverKey: collection.coverKey,
