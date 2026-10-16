@@ -320,6 +320,27 @@ describe('backup routes', () => {
   });
 
   describe('POST /api/backup/restore', () => {
+    it.each([
+      { description: 'missing backup settings', settings: {}, dryRun: true },
+      { description: 'missing backup settings', settings: {}, dryRun: false },
+      { description: 'missing destination', settings: { backup: {} }, dryRun: true },
+      { description: 'missing destination', settings: { backup: {} }, dryRun: false },
+      { description: 'empty destination', settings: { backup: { destPath: '' } }, dryRun: true },
+      { description: 'empty destination', settings: { backup: { destPath: '' } }, dryRun: false },
+    ])('returns a structured 400 without invoking restore for $description (dryRun=$dryRun)', async ({ settings, dryRun }) => {
+      getSettings.mockResolvedValue(settings);
+      const res = await request(buildApp())
+        .post('/api/backup/restore')
+        .send({ snapshotId: 'snap-1', dryRun });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toMatchObject({
+        error: 'No backup destination configured in settings',
+        code: 'BACKUP_NOT_CONFIGURED',
+      });
+      expect(backup.restoreSnapshot).not.toHaveBeenCalled();
+    });
+
     it('returns 400 when snapshotId is missing', async () => {
       getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });
       const res = await request(buildApp()).post('/api/backup/restore').send({});
