@@ -1504,6 +1504,9 @@ export function invalidateAllCaches() {
       index.generation[type] += 1;
     }
   }
+  // Live restores replace files without record events. Drop derived caches too,
+  // without turning cache invalidation into a write or federation announcement.
+  brainEvents.emit('caches:invalidated');
 }
 
 /**

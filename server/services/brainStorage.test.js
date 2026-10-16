@@ -48,6 +48,7 @@ vi.mock('./brainSyncLog.js', async () => {
 });
 
 import * as brainStorage from './brainStorage.js';
+import { getBrainProjections } from './brainSearchIndex.js';
 import * as brainSyncLog from './brainSyncLog.js';
 import { applyRemoteChanges } from './brainSync.js';
 import { applyBrainSnapshot, relayUnloggedRecords } from './brainReconcile.js';
@@ -62,6 +63,23 @@ beforeEach(() => {
 });
 
 const ISO = (s) => new Date(s).toISOString();
+
+it('refreshes search and graph projections after a live file restore', async () => {
+  const journalId = 'restore-journal';
+  const personId = 'restore-person';
+  await brainStorage.upsertWithId('journals', journalId, { content: 'Before restore' });
+  await brainStorage.upsertWithId('people', personId, { name: 'Before restore' });
+  expect((await getBrainProjections('journals')).find(row => row.id === journalId)?.summary).toBe('Before restore');
+  expect((await getBrainProjections('people')).find(row => row.id === personId)?.name).toBe('Before restore');
+
+  // Backup restores replace files directly, without per-record write events.
+  writeFileSync(join(getTempRoot(), 'brain', 'journals', journalId, 'index.json'), JSON.stringify({ id: journalId, content: 'Restored journal' }));
+  writeFileSync(join(getTempRoot(), 'brain', 'people', personId, 'index.json'), JSON.stringify({ id: personId, name: 'Restored person' }));
+  brainStorage.invalidateAllCaches();
+
+  expect((await getBrainProjections('journals')).find(row => row.id === journalId)?.summary).toBe('Restored journal');
+  expect((await getBrainProjections('people')).find(row => row.id === personId)?.name).toBe('Restored person');
+});
 
 describe('brainStorage tombstones', () => {
   it('remove() writes a tombstone instead of hard-deleting, and hides it from reads', async () => {
