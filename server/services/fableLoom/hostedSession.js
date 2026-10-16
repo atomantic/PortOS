@@ -878,8 +878,13 @@ export async function processHostedUtterance(sessionId, {
       code: err?.code || 'TURN_FAILED',
       message: err?.message || String(err),
     });
+    // Without a phase frame every client stays in `thinking` (mic and text
+    // input disabled) until a reload resyncs.
     session.turnPhase = 'idle';
+    emitIfLive('hosted:turn:phase', { phase: 'idle', turnId: turn.id });
     session.activeTurn = null;
+    // Tells the socket handlers this failure already reached the room.
+    if (err && typeof err === 'object') err.hostedReported = true;
     throw err;
   }
 }

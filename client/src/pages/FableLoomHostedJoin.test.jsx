@@ -266,4 +266,54 @@ describe('FableLoomHostedJoin', () => {
     expect(tracks.every((track) => track.stop.mock.calls.length === 1)).toBe(true);
     vi.unstubAllGlobals();
   });
+
+  const socketHandler = (event) => mockSocket.on.mock.calls.find(([name]) => name === event)?.[1];
+
+  it('discards an in-progress recording and shows the mapped message when the mic is refused', async () => {
+    window.location.hash = '#session=sess-123&token=tok-abc';
+    const track = { stop: vi.fn() };
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [track] }) },
+    });
+    let recorder;
+    vi.stubGlobal('MediaRecorder', class {
+      constructor() { this.state = 'inactive'; this.mimeType = 'audio/webm'; recorder = this; }
+      start() { this.state = 'recording'; }
+      stop() { this.state = 'inactive'; queueMicrotask(() => this.onstop?.()); }
+    });
+
+    render(<FableLoomHostedJoin />);
+    fireEvent.pointerDown(screen.getByRole('button', { name: /hold talk/i }));
+    await waitFor(() => expect(recorder?.state).toBe('recording'));
+    expect(screen.getByText(/release when done/i)).toBeInTheDocument();
+
+    act(() => { socketHandler('hosted:error')({ code: 'PROTAGONIST_ONSCREEN', message: 'raw server text' }); });
+
+    expect(recorder.state).toBe('inactive');
+    expect(track.stop).toHaveBeenCalled();
+    expect(screen.queryByText(/release when done/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(/protagonist is on screen/i);
+    await act(async () => { await Promise.resolve(); });
+    expect(mockSocket.emit).not.toHaveBeenCalledWith('hosted:mic:stop', expect.anything());
+    vi.unstubAllGlobals();
+  });
+
+  it('falls back to the server message and re-enables input after a failed turn returns to idle', () => {
+    window.location.hash = '#session=sess-123&token=tok-abc';
+    render(<FableLoomHostedJoin />);
+
+    act(() => { socketHandler('hosted:turn:phase')({ phase: 'thinking' }); });
+    expect(screen.getByRole('button', { name: /hold talk/i })).toBeDisabled();
+    expect(screen.getByPlaceholderText('Or type a message…')).toBeDisabled();
+
+    act(() => {
+      socketHandler('hosted:error')({ code: 'TURN_FAILED', message: 'loom read failed' });
+      socketHandler('hosted:turn:phase')({ phase: 'idle' });
+    });
+
+    expect(screen.getByRole('alert')).toHaveTextContent('loom read failed');
+    expect(screen.getByRole('button', { name: /hold talk/i })).not.toBeDisabled();
+    expect(screen.getByPlaceholderText('Or type a message…')).not.toBeDisabled();
+  });
 });
