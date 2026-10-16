@@ -72,7 +72,7 @@ describe('YouTube thumbnail lettering', () => {
     const left = coverOverlaySvg({ ...THUMB, design: { layout: 'bottom-left', typeface: 'sans' } });
     const lines = [...left.matchAll(/<text x="([\d.]+)" y="[\d.]+"[^>]*font-size="([\d.]+)"[^>]*>([^<]+)<\/text>/g)];
     expect(lines.length).toBeGreaterThan(1);
-    for (const [, x, fs, line] of lines) expect(Number(x) + line.length * 0.6 * 1.02 * Number(fs)).toBeLessThanOrEqual(1280 * 0.6 + 1);
+    for (const [, x, fs, line] of lines) expect(Number(x) + line.length * 0.6 * 1.02 * Number(fs)).toBeLessThanOrEqual(1280 * 0.46 + 1);
     for (const layout of ['bottom-left', 'bottom-center']) {
       const svg = coverOverlaySvg({ ...THUMB, design: { layout } });
       const lowest = Math.max(...[...svg.matchAll(/<text[^>]* y="([\d.]+)"/g)].map((m) => Number(m[1])));

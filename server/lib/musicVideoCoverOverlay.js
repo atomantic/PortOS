@@ -14,12 +14,14 @@ export const YOUTUBE_THUMBNAIL_SIZE = Object.freeze({ width: 1280, height: 720 }
 
 // How the lettering sits on each frame. A thumbnail is seen small in a feed
 // beside the channel name, so its title is set larger, keeps to one side of the
-// frame (leaving the other for the picture), stays clear of the bottom-right
-// corner where YouTube draws the duration, and carries no artist name.
+// frame (leaving the rest for the picture), stays clear of the bottom-right
+// corner where YouTube draws the duration, carries no artist name, and casts
+// a soft shadow so it reads over a busy frame.
 const FRAMES = {
-  cover: { textScale: 1, textWidth: 1, bottomClear: 0, tag: true },
-  thumbnail: { textScale: 1.7, textWidth: 0.6, bottomClear: 0.14, tag: false },
+  cover: { textScale: 1, textWidth: 1, bottomClear: 0, tag: true, shadow: false },
+  thumbnail: { textScale: 1.7, textWidth: 0.46, bottomClear: 0.14, tag: false, shadow: true },
 };
+const SHADOW_FILTER = '<filter id="shadow" x="-10%" y="-20%" width="120%" height="140%"><feGaussianBlur in="SourceAlpha" stdDeviation="6"/><feOffset dx="0" dy="3" result="b"/><feComponentTransfer><feFuncA type="linear" slope="0.75"/></feComponentTransfer><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter>';
 export const COVER_FRAMES = Object.freeze(Object.keys(FRAMES));
 
 // The vocabulary a design is written in (the drafting prompt offers exactly these).
@@ -145,7 +147,7 @@ function coverBox(size, frame = 'cover') {
 // The width a title may take: centered layouts span the frame, the others keep to the frame's textWidth.
 const titleRoom = (d, box) => {
   const full = box.width - 2 * box.margin;
-  return d.layout.endsWith('center') ? full : Math.min(full, box.width * box.textWidth);
+  return d.layout.endsWith('center') ? full : Math.min(full, box.width * box.textWidth - box.margin);
 };
 
 /** The title's lines as the design sets them (one line when it runs up the edge). */
@@ -202,6 +204,7 @@ function titleParts(title, d, box, widthOf, fonts, tagText, frame) {
     const attrs = `transform="translate(${n(margin + fontSize * ASCENT)} ${n(H - margin)}) rotate(-90)" ${fontAttrs(d, 'title', fontSize, fonts)} ${inkFor(d, fontSize)} font-size="${n(fontSize)}"`;
     text(attrs, lines[0], strips, [margin + fontSize * ASCENT * 0.5, 0, stencilGap(fontSize, unit), H]);
     if (stencil) { defs.push(stencilMask(box, strips)); parts.splice(parts.length - 1, 1, `<g mask="url(#stencil)">${parts[parts.length - 1]}</g>`); }
+    if (box.shadow) { defs.push(SHADOW_FILTER); parts.splice(parts.length - 1, 1, `<g filter="url(#shadow)">${parts[parts.length - 1]}</g>`); }
     return { parts, defs, tagSpot: null };
   }
 
@@ -248,6 +251,10 @@ function titleParts(title, d, box, widthOf, fonts, tagText, frame) {
   if (stencil) {
     defs.push(stencilMask(box, strips));
     parts.splice(titleStart, parts.length - titleStart, `<g mask="url(#stencil)">${parts.slice(titleStart).join('')}</g>`);
+  }
+  if (box.shadow) {
+    defs.push(SHADOW_FILTER);
+    parts.splice(titleStart, parts.length - titleStart, `<g filter="url(#shadow)">${parts.slice(titleStart).join('')}</g>`);
   }
   const tagSpot = tagText ? { x, anchor: center ? 'middle' : 'start', baseline: top + textH + tagGap + tagFs * 1.05 } : null;
   return { parts, defs, tagSpot };
