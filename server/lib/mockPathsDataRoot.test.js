@@ -8,7 +8,11 @@ import { mkdir, writeFile, rm } from 'node:fs/promises';
 import { createTempDataRoot, makePathsProxy, mockNoPeers, mockNoPeerSync, mockPathsDataRoot, ownTestBodies } from './mockPathsDataRoot.js';
 
 describe('ownTestBodies cancellation ordering (#11641)', () => {
-  it.each([false, true])('bounds the late-write cleanup race with ownership=%s', async tracked => {
+  // These controls also write real fixtures: own their outer Vitest bodies,
+  // not only the simulated cancelled bodies they exercise below.
+  const controls = ownTestBodies(it);
+  afterAll(() => controls.drain());
+  const lateWriteControl = tracked => async () => {
     const root = createTempDataRoot('portos-owned-body-');
     const controller = new AbortController();
     const entered = Promise.withResolvers();
@@ -62,9 +66,12 @@ describe('ownTestBodies cancellation ordering (#11641)', () => {
       await Promise.allSettled([body, cleanup]);
       await rm(root, { recursive: true, force: true });
     }
-  });
+  };
+  for (const tracked of [false, true]) {
+    controls.it(`bounds the late-write cleanup race with ownership=${tracked}`, lateWriteControl(tracked));
+  }
 
-  it('reports a body failure after cancellation and still permits finally cleanup', async () => {
+  controls.it('reports a body failure after cancellation and still permits finally cleanup', async () => {
     const root = createTempDataRoot('portos-owned-failure-');
     const controller = new AbortController();
     const entered = Promise.withResolvers(), release = Promise.withResolvers();
