@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import FableLoomHostedJoin from './FableLoomHostedJoin';
 
 // Mock socket.io-client
@@ -82,6 +83,44 @@ describe('FableLoomHostedJoin', () => {
     fireEvent.submit(input.closest('form'));
 
     expect(mockSocket.emit).toHaveBeenCalledWith('hosted:turn:text', { text: 'Look around the room' });
+  });
+
+  it('preserves an over-limit paste, refuses to send, and lets the guest shorten the message', async () => {
+    window.location.hash = '#session=sess-123&token=tok-abc';
+    const user = userEvent.setup();
+    render(<FableLoomHostedJoin />);
+    const input = screen.getByRole('textbox', { name: 'Message protagonist' });
+    expect(input).not.toHaveAttribute('maxlength');
+    expect(input).toHaveAccessibleDescription('0 / 1,000 characters');
+    await user.click(input);
+    await user.paste('x'.repeat(1001));
+    expect(input).toHaveValue('x'.repeat(1001));
+    expect(input).toHaveAccessibleDescription('1,001 / 1,000 characters Message exceeds 1,000 characters. Shorten it before sending.');
+    expect(screen.getByRole('alert')).toHaveTextContent('Shorten it before sending.');
+    expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled();
+    fireEvent.submit(input.closest('form'));
+    expect(mockSocket.emit).not.toHaveBeenCalled();
+
+    input.setSelectionRange(1000, 1001);
+    await user.keyboard('{Backspace}');
+    expect(input).toHaveValue('x'.repeat(1000));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(input).toHaveAccessibleDescription('1,000 / 1,000 characters');
+    await user.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(mockSocket.emit).toHaveBeenCalledWith('hosted:turn:text', { text: 'x'.repeat(1000) });
+    expect(input).toHaveAccessibleDescription('0 / 1,000 characters');
+  });
+
+  it('refuses over-limit typed input without cutting or clearing it', () => {
+    window.location.hash = '#session=sess-123&token=tok-abc';
+    render(<FableLoomHostedJoin />);
+    const input = screen.getByRole('textbox', { name: 'Message protagonist' });
+    const text = 'x'.repeat(1001);
+    fireEvent.change(input, { target: { value: text } });
+    fireEvent.submit(input.closest('form'));
+    expect(mockSocket.emit).not.toHaveBeenCalled();
+    expect(input).toHaveValue(text);
+    expect(input).toHaveAccessibleDescription('1,001 / 1,000 characters Message exceeds 1,000 characters. Shorten it before sending.');
   });
 
   it('releases a mic opened after push-to-talk was released', async () => {

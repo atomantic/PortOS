@@ -10,6 +10,7 @@ import { useEffect, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import { MAX_VOICE_AUDIO_BYTES, RECORDING_TOO_LONG_MESSAGE } from '../lib/audioRecorder.js';
 import useMounted from '../hooks/useMounted.js';
+import { formatCount } from '../utils/formatters.js';
 import {
   AlertCircle,
   Loader2,
@@ -28,6 +29,7 @@ const HOSTED_ERROR_MESSAGES = {
   TURN_IN_PROGRESS: 'A reply is already in progress — wait a moment, then try again.',
   EPISODE_SWITCH_IN_PROGRESS: 'The host is switching episodes — try again in a moment.',
 };
+const MAX_TEXT_CHARACTERS = 1000;
 
 export default function FableLoomHostedJoin() {
   const [sessionId, setSessionId] = useState(null);
@@ -253,7 +255,7 @@ export default function FableLoomHostedJoin() {
 
   const handleSendText = (e) => {
     e?.preventDefault();
-    if (!textInput.trim() || !socket) return;
+    if (!textInput.trim() || textInput.length > MAX_TEXT_CHARACTERS || !socket) return;
     socket.emit('hosted:turn:text', { text: textInput.trim() });
     setTextInput('');
   };
@@ -387,18 +389,28 @@ export default function FableLoomHostedJoin() {
             onChange={(e) => setTextInput(e.target.value)}
             placeholder="Or type a message…"
             aria-label="Message protagonist"
+            aria-describedby={textInput.length > MAX_TEXT_CHARACTERS ? 'hosted-text-count hosted-text-limit-error' : 'hosted-text-count'}
+            aria-invalid={textInput.length > MAX_TEXT_CHARACTERS}
             disabled={turnPhase === 'thinking' || turnPhase === 'speaking'}
             className="flex-1 bg-slate-800/80 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
           />
           <button
             type="submit"
             aria-label="Send message"
-            disabled={!textInput.trim() || turnPhase === 'thinking' || turnPhase === 'speaking'}
+            disabled={!textInput.trim() || textInput.length > MAX_TEXT_CHARACTERS || turnPhase === 'thinking' || turnPhase === 'speaking'}
             className="min-w-[44px] min-h-[44px] p-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg text-white transition-colors flex items-center justify-center"
           >
             <Send className="w-4 h-4" />
           </button>
         </form>
+        <p id="hosted-text-count" className="mt-1 text-right text-[11px] text-slate-400">
+          {formatCount(textInput.length)} / {formatCount(MAX_TEXT_CHARACTERS)} characters
+        </p>
+        {textInput.length > MAX_TEXT_CHARACTERS && (
+          <p id="hosted-text-limit-error" role="alert" className="text-xs text-red-400">
+            Message exceeds {formatCount(MAX_TEXT_CHARACTERS)} characters. Shorten it before sending.
+          </p>
+        )}
       </div>
     </main>
   );
