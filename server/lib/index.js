@@ -333,6 +333,7 @@ export * from './paths.js';
 export * from './pathSafety.js';
 export * from './uploads.js';
 export * from './icloudFile.js';
+export * from './runCliBounded.js';
 export * from './spawnCwd.js';
 export * from './sshHostAlias.js';
 export * from './schemaVersions.js';

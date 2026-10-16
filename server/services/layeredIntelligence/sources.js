@@ -3,7 +3,7 @@
  *
  * Reads each configured source (planned work, files, HTTP, shell, LI task metrics)
  * with injectable deps so tests drive them without a live filesystem, network or
- * forge CLI. Also owns the shared `runCli` primitive used by the forge filer.
+ * forge CLI. Forge CLI calls go through lib/runCliBounded.js.
  */
 
 import { join, resolve, relative, isAbsolute } from 'path';

@@ -1,7 +1,7 @@
 /**
  * Pure argv conventions for the GitLab CLI (`glab`) — no child-process access,
  * so the three runners that drive `glab` (services/gitlab.js#execGlab,
- * perpetualWork.js#runCli, layeredIntelligence/runCli.js) can share one
+ * perpetualWork.js#runCli, lib/runCliBounded.js) can share one
  * definition without inheriting each other's timeout policy. Mirrors
  * `cliProviderArgs.js` / `gitArgs.js`.
  */

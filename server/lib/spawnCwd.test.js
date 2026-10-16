@@ -287,7 +287,6 @@ describe('every cwd-passing spawn pins PWD', () => {
     ['lib/planIds.js', 'git only'],
     ['services/repoCloner.js', 'git clone/fetch only'],
     ['services/gitlab.js', 'glab only'],
-    ['services/perpetualWork.js', 'git/gh/glab probes only'],
     ['services/pm2Standardizer.js', 'git + pm2 only'],
     ['services/pm2.js', 'pm2 only'],
     ['services/appDeployer.js', 'deploy shell commands, not an AI CLI'],
@@ -353,7 +352,7 @@ describe('every cwd-passing spawn pins PWD', () => {
   // A spawn is in scope when its options carry a `cwd` — either written inline
   // (`spawn(cmd, args, { cwd, ... })`) or FORWARDED from a caller-supplied
   // options object (`spawn(cmd, args, { ...options })`, the shape of a generic
-  // wrapper like layeredIntelligence/runCli). The forwarding case matters as
+  // wrapper like lib/runCliBounded). The forwarding case matters as
   // much as the inline one: a wrapper that passes a caller's cwd through is
   // exactly where an unpinned spawn hides from a scan that only reads literals.
   //
@@ -430,7 +429,7 @@ describe('every cwd-passing spawn pins PWD', () => {
     // The forwarding-wrapper shape specifically — this one is invisible to a
     // scan that only reads inline `cwd:` literals, and missing it is what let an
     // unpinned caller-forwarded cwd through.
-    expect(found).toContain('services/layeredIntelligence/runCli.js');
+    expect(found).toContain('lib/runCliBounded.js');
   });
 
   // Every EXEMPT entry must correspond to a file the scan actually finds.

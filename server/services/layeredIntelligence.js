@@ -34,7 +34,6 @@ export * from './layeredIntelligence/awareness.js';
 export * from './layeredIntelligence/approvalFunnel.js';
 export * from './layeredIntelligence/gates.js';
 export * from './layeredIntelligence/prompt.js';
-export * from './layeredIntelligence/runCli.js';
 export * from './layeredIntelligence/sources.js';
 export * from './layeredIntelligence/semanticDedup.js';
 export * from './layeredIntelligence/forgeFiler.js';

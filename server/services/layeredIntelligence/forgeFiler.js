@@ -10,7 +10,7 @@ import { safeJSONParse } from '../../lib/fileUtils.js';
 import { normalizeIssueState } from '../../lib/forgeIssueState.js';
 import { LI_LABEL, LI_BLOCKING_LABEL, LI_LABEL_SPEC, LI_BLOCKING_LABEL_SPEC } from './constants.js';
 import { slugMarker, extractSlugFromBody } from './dedup.js';
-import { runCli } from './runCli.js';
+import { runCliBounded as runCli } from '../../lib/runCliBounded.js';
 import { withGlabJson } from '../../lib/glabArgs.js';
 import { fileForgeIssue, ensureForgeIssueLabels } from '../appIssues.js';
 
