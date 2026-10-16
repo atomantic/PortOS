@@ -388,6 +388,147 @@ const shortId = () => Math.random().toString(36).slice(2, 7);
 // of that conversation and a runaway caller would blow the model's window.
 const MAX_SYSTEM_CONTEXT_CHARS = 4000;
 
+// Journal dictation bypasses the model and emits only the newly appended segment.
+const runDictationTurn = async ({ userText, state, signal, emit }) => {
+  const trimmed = userText.trim();
+  // STT can return whitespace-only transcripts (Whisper on silent audio,
+  // trailing partials). Don't fire a bogus append event with { entry: null };
+  // just go idle and wait for the next utterance.
+  if (!trimmed) {
+    emit('voice:idle', { reason: 'empty-transcript' });
+    return { transcript: userText, reply: '' };
+  }
+  if (STOP_DICTATION_RE.test(trimmed)) {
+    state.dictation = { enabled: false, date: null };
+    emit('voice:dictation', { enabled: false });
+    const reply = 'Dictation off.';
+    const { wav, latencyMs } = await synthesize(reply, { signal });
+    // Report the real synth latency so the client's TTS timing stats
+    // reflect actual work, not a hardcoded zero.
+    if (!signal?.aborted) emit('voice:tts:audio', { sentence: reply, wav, latencyMs });
+    emit('voice:llm:delta', { delta: reply });
+    emit('voice:llm:done', { text: reply });
+    emit('voice:idle', { reason: 'turn-complete' });
+    return { transcript: userText, reply };
+  }
+  // Defensive: dictation can be enabled without a date (e.g. UI toggle
+  // without a date, or tool side-effect missing one). Default to today so
+  // we never throw here and kill the user's dictation turn.
+  let date = state.dictation.date;
+  if (!date) {
+    date = await getToday();
+    state.dictation.date = date;
+    console.warn(`🎙️  dictation missing date; defaulting to ${date}`);
+    emit('voice:dictation', { enabled: true, date });
+  }
+  const entry = await appendJournal(date, trimmed, { source: 'voice' });
+  // Ship only the delta (new segment + metadata) rather than the full
+  // entry. `entry.content` and `entry.segments` grow over the day, so
+  // emitting the whole record per utterance would push socket payload
+  // size and serialization cost toward O(n²) during long dictation
+  // sessions. The client patches local state from these fields.
+  const segments = Array.isArray(entry?.segments) ? entry.segments : [];
+  const segment = segments.length ? segments[segments.length - 1] : null;
+  emit('voice:dailyLog:appended', {
+    date,
+    text: trimmed,
+    segment,
+    segmentCount: segments.length,
+    updatedAt: entry?.updatedAt,
+  });
+  console.log(`🎙️  dictation → journal[${date}] +${trimmed.length} chars`);
+  emit('voice:idle', { reason: 'dictation-appended' });
+  return { transcript: userText, reply: '' };
+};
+
+// Execute one tool completely before the coordinator advances to its next call.
+// Host authority is passed through for dispatch-time revalidation; UI refresh
+// settles before the result is added to the next model iteration.
+const executeTurnToolCall = async ({ tc, cfg, emit, state, signal, hasHostControl, tlog, toolRuns }) => {
+  const t0 = Date.now();
+  let result;
+  let args = {};
+  // ctx.requestUiText lets ui_read pull the visible-text blob on demand
+  // (the client omits it from the index now). Bind state/emit/signal here
+  // so the tool just calls ctx.requestUiText() with no plumbing.
+  const ctx = {
+    sideEffects: [],
+    hasHostControl,
+    state,
+    signal,
+    // ui_describe_visually: capture the active tab (client round-trip) and
+    // describe it via the voice provider's vision endpoint. Provided here
+    // so tools.js stays free of socket/vision coupling.
+    captureScreenshot: () => requestScreenshot(emit, state, 15000, signal),
+    describeImage: (dataUrl, prompt) => describeScreenshot(dataUrl, prompt, cfg),
+    requestUiText: () => requestUiText(state, emit, signal),
+  };
+  try {
+    args = tc.function.arguments ? JSON.parse(tc.function.arguments) : {};
+    const argSummary = Object.keys(args).length ? Object.entries(args).map(([k, v]) => `${k}=${JSON.stringify(v).slice(0, 40)}`).join(' ') : '—';
+    tlog(`tool.start ${tc.function.name} ${argSummary}`);
+    result = await dispatchTool(tc.function.name, args, ctx);
+    const ms = Date.now() - t0;
+    toolRuns.push({ name: tc.function.name, ok: true, ms });
+    tlog(`tool.done  ${tc.function.name} ok ${ms}ms`);
+  } catch (err) {
+    const ms = Date.now() - t0;
+    result = { ok: false, error: err.message };
+    if (err.code === 'HOST_CONTROL_FORBIDDEN') {
+      emit('voice:error', { stage: 'tool', code: err.code, message: err.message });
+    }
+    toolRuns.push({ name: tc.function.name, ok: false, ms, error: err.message });
+    tlog(`tool.fail  ${tc.function.name} ${ms}ms err="${err.message}"`);
+  }
+  // Apply server-side side-effects (dictation state) and forward
+  // client-facing side-effects (navigation) over the socket.
+  for (const fx of ctx.sideEffects) {
+    if (fx.type === 'dictation' && state) {
+      // When disabling dictation, clear the date so it can't leak to the
+      // UI or be picked up by the next enable. A stale date is worse than
+      // null — it can cause surprising "jumped back to April 17" behavior.
+      const enabled = !!fx.enabled;
+      state.dictation = {
+        enabled,
+        date: enabled ? (fx.date || state.dictation?.date || null) : null,
+      };
+      emit('voice:dictation', { enabled: state.dictation.enabled, date: state.dictation.date });
+    } else if (fx.type === 'navigate') {
+      emit('voice:navigate', { path: fx.path });
+    } else if (fx.type === 'ui:click') {
+      emit('voice:ui:click', { target: fx.target });
+    } else if (fx.type === 'ui:fill') {
+      emit('voice:ui:fill', { target: fx.target, value: fx.value });
+    } else if (fx.type === 'ui:select') {
+      emit('voice:ui:select', { target: fx.target, option: fx.option });
+    } else if (fx.type === 'ui:check') {
+      emit('voice:ui:check', { target: fx.target, checked: fx.checked });
+    }
+  }
+  // If the tool mutated the UI (including client-side navigation), pause
+  // for the client's follow-up index push and attach the fresh summary to
+  // the tool result so the next LLM iteration can chain the next action
+  // against the new page state (e.g. click New Task → see the modal →
+  // fill Name → click Save, all in one turn; or ui_navigate → see the
+  // tasks page → click Add Task). Navigation involves a full React route
+  // change and a 250ms INITIAL_DELAY_MS before the client flushes its
+  // index, so give it a longer timeout than the ~120ms post-click push.
+  const hasUiEffect = ctx.sideEffects.some((fx) => typeof fx.type === 'string' && fx.type.startsWith('ui:'));
+  const hasNavigate = ctx.sideEffects.some((fx) => fx.type === 'navigate');
+  if ((hasUiEffect || hasNavigate) && !signal?.aborted) {
+    const tRefresh = Date.now();
+    const timeoutMs = hasNavigate ? 1500 : 800;
+    const refreshed = await waitForUiRefresh(state, timeoutMs, signal);
+    tlog(`tool.refresh ${tc.function.name} ${refreshed ? 'ok' : 'timeout'} ${Date.now() - tRefresh}ms`);
+    if (refreshed) {
+      const summary = summarizeUi(refreshed);
+      if (summary) result = { ...result, ui: summary };
+    }
+  }
+  emit('voice:tool', { name: tc.function.name, args, result });
+  return result;
+};
+
 export const runTurn = async ({ audio, text, mimeType, source, history = [], emit, signal, state, systemContext = null, hasHostControl }) => {
   const cfg = await getVoiceConfig();
   if (signal?.aborted) return { transcript: '', reply: '' };
@@ -447,9 +588,8 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
     }
   }
 
-  // Dictation mode short-circuits the LLM: the user's speech goes straight
-  // into the daily-log entry unless they say the stop phrase, which ends
-  // dictation and falls through to a normal confirmation turn.
+  // Dictation mode bypasses the LLM: speech goes into the daily log, and
+  // the stop phrase ends dictation with a canonical spoken reply.
   //
   // Only applies to spoken input. Typed input (the "Read back" button,
   // assistant-issued sendText, manual typing) bypasses dictation so the
@@ -458,55 +598,7 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
   // that hint in addition to the no-text case.
   const isSpokenInput = !text || source === 'voice';
   if (isSpokenInput && state?.dictation?.enabled) {
-    const trimmed = userText.trim();
-    // STT can return whitespace-only transcripts (Whisper on silent audio,
-    // trailing partials). Don't fire a bogus append event with { entry: null };
-    // just go idle and wait for the next utterance.
-    if (!trimmed) {
-      emit('voice:idle', { reason: 'empty-transcript' });
-      return { transcript: userText, reply: '' };
-    }
-    if (STOP_DICTATION_RE.test(trimmed)) {
-      state.dictation = { enabled: false, date: null };
-      emit('voice:dictation', { enabled: false });
-      const reply = 'Dictation off.';
-      const { wav, latencyMs } = await synthesize(reply, { signal });
-      // Report the real synth latency so the client's TTS timing stats
-      // reflect actual work, not a hardcoded zero.
-      if (!signal?.aborted) emit('voice:tts:audio', { sentence: reply, wav, latencyMs });
-      emit('voice:llm:delta', { delta: reply });
-      emit('voice:llm:done', { text: reply });
-      emit('voice:idle', { reason: 'turn-complete' });
-      return { transcript: userText, reply };
-    }
-    // Defensive: dictation can be enabled without a date (e.g. UI toggle
-    // without a date, or tool side-effect missing one). Default to today so
-    // we never throw here and kill the user's dictation turn.
-    let date = state.dictation.date;
-    if (!date) {
-      date = await getToday();
-      state.dictation.date = date;
-      console.warn(`🎙️  dictation missing date; defaulting to ${date}`);
-      emit('voice:dictation', { enabled: true, date });
-    }
-    const entry = await appendJournal(date, trimmed, { source: 'voice' });
-    // Ship only the delta (new segment + metadata) rather than the full
-    // entry. `entry.content` and `entry.segments` grow over the day, so
-    // emitting the whole record per utterance would push socket payload
-    // size and serialization cost toward O(n²) during long dictation
-    // sessions. The client patches local state from these fields.
-    const segments = Array.isArray(entry?.segments) ? entry.segments : [];
-    const segment = segments.length ? segments[segments.length - 1] : null;
-    emit('voice:dailyLog:appended', {
-      date,
-      text: trimmed,
-      segment,
-      segmentCount: segments.length,
-      updatedAt: entry?.updatedAt,
-    });
-    console.log(`🎙️  dictation → journal[${date}] +${trimmed.length} chars`);
-    emit('voice:idle', { reason: 'dictation-appended' });
-    return { transcript: userText, reply: '' };
+    return runDictationTurn({ userText, state, signal, emit });
   }
 
   // Short, hand-crafted assistant reply that bypasses the LLM. Used by the
@@ -729,87 +821,7 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
 
     for (const tc of callsWithIds) {
       if (signal?.aborted) break;
-      const t0 = Date.now();
-      let result;
-      let args = {};
-      // ctx.requestUiText lets ui_read pull the visible-text blob on demand
-      // (the client omits it from the index now). Bind state/emit/signal here
-      // so the tool just calls ctx.requestUiText() with no plumbing.
-      const ctx = {
-        sideEffects: [],
-        hasHostControl,
-        state,
-        signal,
-        // ui_describe_visually: capture the active tab (client round-trip) and
-        // describe it via the voice provider's vision endpoint. Provided here
-        // so tools.js stays free of socket/vision coupling.
-        captureScreenshot: () => requestScreenshot(emit, state, 15000, signal),
-        describeImage: (dataUrl, prompt) => describeScreenshot(dataUrl, prompt, cfg),
-        requestUiText: () => requestUiText(state, emit, signal),
-      };
-      try {
-        args = tc.function.arguments ? JSON.parse(tc.function.arguments) : {};
-        const argSummary = Object.keys(args).length ? Object.entries(args).map(([k, v]) => `${k}=${JSON.stringify(v).slice(0, 40)}`).join(' ') : '—';
-        tlog(`tool.start ${tc.function.name} ${argSummary}`);
-        result = await dispatchTool(tc.function.name, args, ctx);
-        const ms = Date.now() - t0;
-        toolRuns.push({ name: tc.function.name, ok: true, ms });
-        tlog(`tool.done  ${tc.function.name} ok ${ms}ms`);
-      } catch (err) {
-        const ms = Date.now() - t0;
-        result = { ok: false, error: err.message };
-        if (err.code === 'HOST_CONTROL_FORBIDDEN') {
-          emit('voice:error', { stage: 'tool', code: err.code, message: err.message });
-        }
-        toolRuns.push({ name: tc.function.name, ok: false, ms, error: err.message });
-        tlog(`tool.fail  ${tc.function.name} ${ms}ms err="${err.message}"`);
-      }
-      // Apply server-side side-effects (dictation state) and forward
-      // client-facing side-effects (navigation) over the socket.
-      for (const fx of ctx.sideEffects) {
-        if (fx.type === 'dictation' && state) {
-          // When disabling dictation, clear the date so it can't leak to the
-          // UI or be picked up by the next enable. A stale date is worse than
-          // null — it can cause surprising "jumped back to April 17" behavior.
-          const enabled = !!fx.enabled;
-          state.dictation = {
-            enabled,
-            date: enabled ? (fx.date || state.dictation?.date || null) : null,
-          };
-          emit('voice:dictation', { enabled: state.dictation.enabled, date: state.dictation.date });
-        } else if (fx.type === 'navigate') {
-          emit('voice:navigate', { path: fx.path });
-        } else if (fx.type === 'ui:click') {
-          emit('voice:ui:click', { target: fx.target });
-        } else if (fx.type === 'ui:fill') {
-          emit('voice:ui:fill', { target: fx.target, value: fx.value });
-        } else if (fx.type === 'ui:select') {
-          emit('voice:ui:select', { target: fx.target, option: fx.option });
-        } else if (fx.type === 'ui:check') {
-          emit('voice:ui:check', { target: fx.target, checked: fx.checked });
-        }
-      }
-      // If the tool mutated the UI (including client-side navigation), pause
-      // for the client's follow-up index push and attach the fresh summary to
-      // the tool result so the next LLM iteration can chain the next action
-      // against the new page state (e.g. click New Task → see the modal →
-      // fill Name → click Save, all in one turn; or ui_navigate → see the
-      // tasks page → click Add Task). Navigation involves a full React route
-      // change and a 250ms INITIAL_DELAY_MS before the client flushes its
-      // index, so give it a longer timeout than the ~120ms post-click push.
-      const hasUiEffect = ctx.sideEffects.some((fx) => typeof fx.type === 'string' && fx.type.startsWith('ui:'));
-      const hasNavigate = ctx.sideEffects.some((fx) => fx.type === 'navigate');
-      if ((hasUiEffect || hasNavigate) && !signal?.aborted) {
-        const tRefresh = Date.now();
-        const timeoutMs = hasNavigate ? 1500 : 800;
-        const refreshed = await waitForUiRefresh(state, timeoutMs, signal);
-        tlog(`tool.refresh ${tc.function.name} ${refreshed ? 'ok' : 'timeout'} ${Date.now() - tRefresh}ms`);
-        if (refreshed) {
-          const summary = summarizeUi(refreshed);
-          if (summary) result = { ...result, ui: summary };
-        }
-      }
-      emit('voice:tool', { name: tc.function.name, args, result });
+      const result = await executeTurnToolCall({ tc, cfg, emit, state, signal, hasHostControl, tlog, toolRuns });
       messages.push({
         role: 'tool',
         tool_call_id: tc.resolvedId,
