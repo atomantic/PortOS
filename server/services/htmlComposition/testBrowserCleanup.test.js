@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ownTestBodies } from '../../lib/mockPathsDataRoot.js';
 import { _cleanupTestBrowser, _createTestArtifactsRoot, _describeTestChromeStartup, _testBrowserCleanupSettled, _testChromeProcessFacts, _waitForTestChrome, _withTestCaptureDiagnostics } from './testBrowserCleanup.js';
 
 async function waitForFile(path, timeoutMs = 2000) {
@@ -583,6 +584,48 @@ describe('owned test Chrome cleanup', () => {
     expect(cleanup).toHaveBeenCalledOnce();
     expect(proc.stderr.destroy).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('retires a held evaluator before draining an aborted body even when browser disconnect stalls', async () => {
+    const proc = child(), deadline = new AbortController();
+    const evaluator = Promise.withResolvers(), disconnect = Promise.withResolvers(), entered = Promise.withResolvers();
+    const pageClosed = new Error('Owned page closed');
+    let invoke, closing, bodySettled = false, drainSettled = false;
+    const owned = ownTestBodies((_name, body) => { invoke = body; });
+    owned.it('held raw page evaluation', async () => {
+      entered.resolve();
+      try { await evaluator.promise; } finally { bodySettled = true; }
+    });
+    proc.once('exit', () => { evaluator.reject(pageClosed); disconnect.resolve(); });
+    const cleanup = vi.fn();
+    const close = () => closing ??= _cleanupTestBrowser({ browser: { close: () => disconnect.promise }, proc, cleanup });
+    const abort = () => { close().catch(() => {}); };
+    deadline.signal.addEventListener('abort', abort, { once: true });
+    const running = invoke({ signal: deadline.signal }).catch(error => error);
+    await entered.promise;
+    const draining = owned.drain().catch(error => error).finally(() => { drainSettled = true; });
+    try {
+      deadline.abort(new Error('Synthetic deadline'));
+      expect(close()).toBe(closing);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(bodySettled).toBe(false);
+      expect(drainSettled).toBe(false);
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(await running).toBe(pageClosed);
+      expect(await draining).toMatchObject({ errors: [pageClosed] });
+      await expect(closing).rejects.toThrow('browser disconnect exceeded 5000ms');
+      expect(bodySettled).toBe(true);
+      expect(drainSettled).toBe(true);
+      expect(proc.kill.mock.calls).toEqual([['SIGTERM'], ['SIGKILL']]);
+      expect(cleanup).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      deadline.signal.removeEventListener('abort', abort);
+      disconnect.resolve(); evaluator.reject(pageClosed);
+      if (proc.signalCode === null) { proc.signalCode = 'SIGTERM'; proc.emit('exit', null, 'SIGTERM'); }
+      await vi.runAllTimersAsync();
+      await Promise.allSettled([running, draining, closing]);
+    }
   });
 
   it.each([

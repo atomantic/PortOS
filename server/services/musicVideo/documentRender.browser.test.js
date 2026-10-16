@@ -88,6 +88,8 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
   let browser;
   let artifacts;
   const detachedChromeProcessGroupId = () => process.platform === 'win32' ? undefined : proc?.pid;
+  let closingFixture;
+  const closeFixture = () => closingFixture ??= _cleanupTestBrowser({ browser, proc, artifacts, cleanup: () => {}, detachedProcessGroupId: detachedChromeProcessGroupId() });
   let PATHS, encodeDocumentComposition, prepareDocumentRender, documentRenderClock, importDocumentTemplate;
   let generateMixedMediaDocument, regenerateMixedMediaSection, acceptMixedMediaDocument, buildDocumentPreview, PREVIEW_MEDIA_BUDGET_BYTES, projects;
   beforeAll(async () => {
@@ -121,7 +123,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
         expect(existsSync(owned.profile), `owned capture profile removed before fixture teardown; ${lifecycle.diagnostics.describe(owned)}`).toBe(false);
       }
       lifecycle.fixtureWritersSettled = true;
-    } finally { await _cleanupTestBrowser({ browser, proc, artifacts, cleanup: () => {}, detachedProcessGroupId: detachedChromeProcessGroupId() }); }
+    } finally { await closeFixture(); }
   }, 35000);
 
   // Uniquely catches dropped effect data, missing staged modules and preview/export curve drift.
@@ -273,7 +275,23 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
   // Server-only CI does not install client dependencies; the full local install
   // exercises this cross-workspace package/render contract alongside the UI proof.
   const threeIt = existsSync(new URL('../../../client/node_modules/three/package.json', import.meta.url)) ? it : vitestIt.skip;
-  threeIt('authors a local Three.js world and renders the same deterministic scene through module preview and export', async () => {
+  threeIt('authors a local Three.js world and renders the same deterministic scene through module preview and export', async ({ signal }) => {
+    let bodyError;
+    const abort = () => {
+      // The cached verdict is awaited below and by suite teardown. Termination
+      // must begin before drain can wait on a blocked renderer evaluation.
+      closeFixture().catch(() => {});
+    };
+    const newPage = async options => {
+      signal.throwIfAborted();
+      const page = await browser.newPage(options);
+      if (signal.aborted) { await closeFixture(); signal.throwIfAborted(); }
+      return page;
+    };
+    signal.addEventListener('abort', abort, { once: true });
+    try {
+    signal.throwIfAborted();
+    console.log('🎬 Generated Three stage: generation');
     const created = await projects.createProject({ name: 'Synthetic authored world', mediaMode: 'code-only' });
     await projects.mutateProjectRecord(created.id, (current) => ({ project: { ...current,
       audioAnalysis: { durationSec: 1, beats: [0, 0.5], downbeats: [0], sections: [{ id: 'world', label: 'World', startSec: 0, endSec: 1 }] },
@@ -288,7 +306,8 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     const preview = await buildDocumentPreview(project);
     expect(preview.assets).toEqual([]);
     expect(preview.html).toContain("img-src 'none'");
-    const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+    console.log('🎬 Generated Three stage: main-preview');
+    const page = await newPage({ viewport: { width: 1920, height: 1080 } });
     const errors = []; page.on('pageerror', (error) => errors.push(error.message));
     const warnings = []; page.on('console', (message) => { if (message.type() === 'warning') warnings.push(message.text()); });
     await page.evaluate(() => {
@@ -317,10 +336,14 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     const { readDocumentFiles } = await import('./compositionDocument.js');
     const referenceFiles = await readDocumentFiles(project);
     referenceFiles.set('engine.js', referenceFiles.get('engine-reference.js'));
-    const reference = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+    console.log('🎬 Generated Three stage: reference-parity');
+    const reference = await newPage({ viewport: { width: 1920, height: 1080 } });
     try {
-      await reference.setContent((await buildDocumentPreview(project, { files: referenceFiles })).html);
-      await reference.waitForFunction(() => typeof window.portosComposition?.seek === 'function');
+      await _withTestPreviewLoadDiagnostics(reference, async markReadiness => {
+        await reference.setContent((await buildDocumentPreview(project, { files: referenceFiles })).html);
+        markReadiness();
+        await reference.waitForFunction(() => typeof window.portosComposition?.seek === 'function');
+      });
       for (const target of [page, reference]) await target.evaluate(() => {
         window.priorThreeEvents = window.PORTOS_MV.song.narrativeEvents;
         window.PORTOS_MV.song.narrativeEvents = [{ kind: 'silence', startFrame: 5, endFrame: 9 }];
@@ -343,6 +366,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
         window.portosComposition.layout({ width: 1920, height: 1080 });
       });
     } finally { await reference.close(); }
+    console.log('🎬 Generated Three stage: cooperative-playback');
     const live = await page.evaluate(async () => {
       const api = window.portosComposition.previewPlayback;
       const times = [], failures = [];
@@ -364,14 +388,15 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     expect(live.failures).toEqual([]);
     expect(new Set(live.times).size).toBeGreaterThan(1);
     console.log(`🎬 Generated Three cooperative observation: ${live.times.length - 1} live draws in ${Math.round(live.elapsedMs)}ms`);
+    console.log('🎬 Generated Three stage: title-cancellation');
     const beforeCancel = await at(0);
     await page.evaluate(() => {
       window.originalTitleReady = window.__portosTitleCard.ready;
       window.__portosTitleCard.ready = () => new Promise(resolve => { window.releaseThreeTitle = resolve; });
       window.pendingThreeExact = window.portosComposition.seek(0.75);
     });
-    await page.waitForFunction(() => typeof window.releaseThreeTitle === 'function');
     try {
+      await page.waitForFunction(() => typeof window.releaseThreeTitle === 'function');
       expect(await page.evaluate(() => ({ world: document.getElementById('world').toDataURL(), type: document.getElementById('type').toDataURL() }))).toEqual(beforeCancel);
       await page.evaluate(async () => {
         const paused = window.portosComposition.previewPlayback.pause({ epoch: 3, t: 0 });
@@ -380,12 +405,13 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
       });
       expect(await page.evaluate(() => ({ world: document.getElementById('world').toDataURL(), type: document.getElementById('type').toDataURL() }))).toEqual(beforeCancel);
     } finally {
-      await page.evaluate(async () => {
-        window.releaseThreeTitle();
+      if (!signal.aborted && !page.isClosed()) await page.evaluate(async () => {
+        window.releaseThreeTitle?.();
         await window.pendingThreeExact;
         window.__portosTitleCard.ready = window.originalTitleReady;
       });
     }
+    console.log('🎬 Generated Three stage: lens-parity');
     const first = await at(0);
     const textures = await page.evaluate(() => window.liveTextureCount());
     const moved = await at(0.5);
@@ -455,6 +481,8 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     expect(warnings.filter((text) => text.includes('PCFSoftShadowMap'))).toEqual([]);
     expect(errors).toEqual([]);
     await page.close();
+    signal.throwIfAborted();
+    console.log('🎬 Generated Three stage: export');
     await mkdir(PATHS.music, { recursive: true }); await mkdir(PATHS.videos, { recursive: true });
     const master = join(PATHS.music, 'world.wav');
     execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=1', master]);
@@ -463,6 +491,16 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     expect(result).toMatchObject({ width: 1920, height: 1080, fps: 24 });
     const rendered = execFileSync(ffmpeg, ['-v', 'error', '-i', outputPath, '-frames:v', '1', '-vf', 'scale=64:36', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
     expect(rendered.reduce((sum, v, i) => sum + Math.abs(v-pixels[i]), 0) / pixels.length).toBeLessThan(15);
+    } catch (error) {
+      bodyError = error;
+      throw error;
+    } finally {
+      signal.removeEventListener('abort', abort);
+      if (signal.aborted) await closeFixture().catch(error => {
+        if (bodyError) throw new AggregateError([bodyError, error], 'Three test and owned browser cleanup failed', { cause: bodyError });
+        throw error;
+      });
+    }
   }, 120000);
 
   it('revokes idle preview media past the budget, keeps what a media element still plays, and asks again on reuse', async () => {
