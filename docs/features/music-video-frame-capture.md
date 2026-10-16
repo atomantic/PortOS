@@ -23,8 +23,9 @@ reports an error; it does not upload a blank image.
 This is a shared SDR preview/capture interpretation, not a color-specific
 correction. The browser decodes the source's matrix and range into sRGB Canvas2D.
 The composed renderer (`server/services/musicVideo/render.js`) processes source
-YUV through FFmpeg scale/format and encodes yuv420p. Its independent matrix-to-RGB
-decode is the numeric comparison in the regression. The layered document
+YUV through FFmpeg scale/format and encodes yuv420p. The regression independently
+checks encoded YUV against the source matrix and browser raw video planes.
+FFmpeg's matrix-to-RGB decode remains a diagnostic comparison. The layered document
 renderer also uses Canvas2D `drawImage`. This change does not add an HDR tone map,
 a wide-gamut mastering workflow, or a new primaries/transfer conversion to the
 final renderer; agreement with a calibrated native-video display is not claimed.
@@ -37,7 +38,8 @@ assertions verify matrix, primaries, transfer and range at the decoder boundary.
 Metadata-only BT709 tags on the original VP8 clip still reported SMPTE170M in
 Chrome, so that clip cannot stand in for a correctly decoded BT709 test.
 
-macOS arm64, headless Google Chrome 155.0.8059.80, forced sRGB display profile:
+macOS arm64, headless Google Chrome 155.0.8059.80, hardware-decoded NV12, forced
+sRGB display profile:
 
 | Source / patch | Native video screenshot RGB | Decoded canvas / paused preview / PNG RGB | FFmpeg matrix decode RGB |
 | --- | --- | --- | --- |
@@ -55,14 +57,37 @@ filters, extra animation frames, and a display-P3 canvas converted back to sRGB
 did not eliminate it. The VP9 matrix checks above distinguish that presentation
 boundary from an incorrectly tagged source.
 
-`server/services/musicVideo/animaticCapture.browser.test.js` retains native-video
-measurements as diagnostic evidence, while assertions compare the real paused
-preview screenshot to the saved PNG without replacing DOM nodes. The existing
-mean-channel-error limit stays below 1; patch readback/export differences are at
-most 1 and the independent FFmpeg comparison allows 3 for 8-bit decoder rounding.
-Forward/backward and adjacent-frame seeks check the alternating marker, and
-pause/resume checks native playback restoration. Fitting, incoming footage with
-film look, still motion/effects, lyrics, title and outro remain covered.
+The hosted Linux x64 diagnostic (Chrome 155.0.8059.39, FFmpeg 6.1.1) exposed a
+separate CPU conversion limit: BT709 magenta was `[254,0,244]` in native video,
+paused canvas and PNG, while FFmpeg produced `[253,0,253]`. Yellow, green and blue
+also differed in the blue channel. On the same local Chrome 155, disabling GPU
+and hardware video decoding changed NV12 to I420 and reproduced those blue
+values while browser raw YUV still matched FFmpeg exactly. FFmpeg 6.1.1 arm64/x64
+and FFmpeg 9.0.2 synthetic probes independently verified the encoded matrix.
+
+This is consistent with libyuv's default BT709 blue coefficient being capped at
+128/64 rather than 135/64; see the [pinned conversion source](https://chromium.googlesource.com/libyuv/libyuv/+/eeb06a6451ba2e21f8ff272c7b42fc62b9faecc5/source/row_common.cc#1645).
+The source YUV `[78,214,229]` predicts blue 244 with that approximation. Thus a
+universal three-level bound between FFmpeg RGB and browser RGB is invalid even
+when source tagging and decoding are correct. PortOS does not compensate for
+individual colors or promise identical RGB across CPU/GPU decoder paths.
+
+`server/services/musicVideo/animaticCapture.browser.test.js` validates source and
+presentation separately. Each saturated patch, grayscale step and moving marker
+must encode within two YUV levels of the mathematical limited-range 601/709
+matrix (the lossy chart's quantization bound). The browser's raw I420/NV12 planes
+must exactly match FFmpeg's decoded YUV for the requested frame, and matrix,
+primaries, transfer and range metadata must match. The paused product canvas must
+exactly match a fresh, independent sRGB draw of the source video. This catches
+stale canvas frames without treating the product canvas as its own reference.
+
+The real paused preview screenshot is compared to the saved PNG without replacing
+DOM nodes: mean channel error remains below 1, and patch readback/export differences
+remain at most 1. Native video and FFmpeg RGB remain diagnostic evidence; failures
+include complete synthetic samples and versions even when CI silences console
+output. Forward/backward and adjacent-frame seeks check the alternating marker,
+and pause/resume checks native playback restoration. Fitting, incoming footage
+with film look, still motion/effects, lyrics, title and outro remain covered.
 
 Run the fixture with:
 
@@ -71,8 +96,8 @@ npm test --prefix server -- services/musicVideo/animaticCapture.browser.test.js
 ```
 
 The CI planner selects it when the capture helper, Save frame control or paused
-video surface changes. Hosted Linux Chrome runs the same fixture and emits its
-own browser/version and numeric evidence. Local macOS results do not substitute
+video surface changes. Hosted Linux Chrome runs the same fixture; failing assertions retain its
+browser/version and numeric evidence. Local macOS results do not substitute
 for that CI result. Safari was present but could not create a WebDriver session
 because Allow remote automation was disabled; Safari pixels remain unverified.
 No browser settings were changed for this investigation.

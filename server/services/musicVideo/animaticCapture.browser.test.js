@@ -29,6 +29,13 @@ const still = { sceneId: 'still', order: 0, label: 'Example still', startSec: 0,
 const project = (scenes = [still], extra = {}) => ({ id: 'capture-fixture', name: 'Example capture', scenes, composition: { mode: 'composed' }, ...extra });
 let dir, server, fixture, page, lyricProject, ffmpegVersion;
 const colorReferences = new Map();
+const colorYuvReferences = new Map();
+const chartColors = [[0, 255, 255], [255, 0, 255], [255, 255, 0], [255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255], [0, 0, 0]];
+const chartRgb = (x, y, frame) => {
+  if (y < 120) return chartColors[Math.floor(x / 60)];
+  const gray = Math.floor(x / 30) * 17;
+  return y < 200 ? [gray, gray, gray] : frame % 2 ? [230, 40, 190] : [frame * 2, 255 - frame * 2, frame];
+};
 const errors = [];
 afterAll(async () => {
   await fixture?.close();
@@ -56,11 +63,9 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
     await sharp({ create: { width: 200, height: 400, channels: 3, background: '#ff00ff' } }).png().toFile(join(dir, 'end.png'));
     execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=cyan:s=120x240:r=24:d=4', '-c:v', 'libvpx', join(dir, 'clip.webm')]);
     // RGB chart -> explicit limited-range YUV matrix, never a metadata-only retag.
-    const colors = [[0, 255, 255], [255, 0, 255], [255, 255, 0], [255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255], [0, 0, 0]];
     const frames = Buffer.alloc(480 * 240 * 3 * 96);
     for (let f = 0; f < 96; f++) for (let y = 0; y < 240; y++) for (let x = 0; x < 480; x++) {
-      const gray = Math.floor(x / 30) * 17;
-      const rgb = y < 120 ? colors[Math.floor(x / 60)] : y < 200 ? [gray, gray, gray] : f % 2 ? [230, 40, 190] : [f * 2, 255 - f * 2, f];
+      const rgb = chartRgb(x, y, f);
       const offset = ((f * 240 + y) * 480 + x) * 3;
       for (let c = 0; c < 3; c++) frames[offset + c] = rgb[c];
     }
@@ -69,11 +74,13 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
       execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'rawvideo', '-pixel_format', 'rgb24', '-video_size', '480x240', '-framerate', '24', '-i', 'pipe:0',
         '-vf', `scale=out_color_matrix=${matrix}:out_range=tv,format=yuv420p`, '-colorspace', matrix, '-color_primaries', matrix, '-color_trc', matrix, '-color_range', 'tv',
         '-c:v', 'libvpx-vp9', '-crf', '4', '-b:v', '2M', path], { input: frames });
-      // The composed FFmpeg renderer retains nonlinear source RGB/YUV values;
-      // compare its explicit matrix decode, independently of browser presentation.
+      // Retain RGB as diagnostic evidence. CPU/GPU browser conversion need not
+      // match FFmpeg RGB; raw decoded YUV independently verifies the source.
       const rgb = execFileSync(ffmpeg, ['-v', 'error', '-i', path, '-vf', `scale=in_color_matrix=${matrix}:in_range=tv:out_range=pc,format=rgb24`,
         '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'], { maxBuffer: frames.length + 1024 });
       colorReferences.set(matrix, rgb);
+      colorYuvReferences.set(matrix, execFileSync(ffmpeg, ['-v', 'error', '-i', path, '-f', 'rawvideo', '-pix_fmt', 'yuv420p', 'pipe:1'],
+        { maxBuffer: frames.length + 1024 }));
     }
     execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=8', join(dir, 'song.wav')]);
     const app = express();
@@ -151,13 +158,27 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
       for (const t of [0.02, 2.02, 1.02, 1.06, 1.02]) {
         await show(value, t);
         const saved = await capture(`${matrix} @ ${t}`);
-        const pixels = await page.evaluate((points) => {
+        const pixels = await page.evaluate(async (points) => {
           const video = document.querySelector('video[data-ready="true"]');
           const canvas = video.nextElementSibling;
           const ctx = canvas.getContext('2d');
           const frame = new VideoFrame(video, { timestamp: 0 });
-          const metadata = frame.colorSpace.toJSON(); frame.close();
-          return { metadata, currentTime: video.currentTime, samples: points.map(([x, y]) => [...ctx.getImageData(x, y, 1, 1).data].slice(0, 3)) };
+          try {
+            const metadata = frame.colorSpace.toJSON();
+            const format = frame.format;
+            if (!['I420', 'NV12'].includes(format)) throw new Error(`Unexpected synthetic VP9 pixel format: ${format}`);
+            const bytes = new Uint8Array(frame.allocationSize());
+            const layout = await frame.copyTo(bytes);
+            const yuv = points.map(([x, y]) => [bytes[layout[0].offset + y * layout[0].stride + x], ...[1, 2].map(i => {
+              const plane = layout[format === 'NV12' ? 1 : i];
+              return bytes[plane.offset + Math.floor(y / 2) * plane.stride + (format === 'NV12' ? 2 * Math.floor(x / 2) + i - 1 : Math.floor(x / 2))];
+            })]);
+            // Read a new draw of the source video, never the product canvas.
+            const fresh = document.createElement('canvas'); fresh.width = video.videoWidth; fresh.height = video.videoHeight;
+            const decoded = fresh.getContext('2d', { colorSpace: 'srgb' }); decoded.drawImage(video, 0, 0);
+            const read = context => points.map(([x, y]) => [...context.getImageData(x, y, 1, 1).data].slice(0, 3));
+            return { metadata, format, yuv, currentTime: video.currentTime, samples: read(ctx), fresh: read(decoded) };
+          } finally { frame.close(); }
         }, points);
         expect(pixels.currentTime).toBeCloseTo(t, 5);
         expect(pixels.metadata).toEqual({ matrix, primaries: matrix, transfer: matrix, fullRange: false });
@@ -165,7 +186,17 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
         const scale = raw.info.width / 480;
         const pngPoints = points.map(([x, y]) => [Math.floor(x * scale), Math.floor((raw.info.height - 240 * scale) / 2 + y * scale)]);
         const exported = samples(raw.data, raw.info.width, raw.info.channels, pngPoints);
-        const offset = Math.floor(t * 24) * 480 * 240 * 3;
+        const frameIndex = Math.floor(t * 24);
+        const offset = frameIndex * 480 * 240 * 3;
+        const yuv = colorYuvReferences.get(matrix).subarray(frameIndex * 480 * 240 * 3 / 2);
+        const sourceYuv = points.map(([x, y]) => [yuv[y * 480 + x], yuv[480 * 240 + Math.floor(y / 2) * 240 + Math.floor(x / 2)],
+          yuv[480 * 240 * 5 / 4 + Math.floor(y / 2) * 240 + Math.floor(x / 2)]]);
+        const [kr, kb] = matrix === 'bt709' ? [0.2126, 0.0722] : [0.299, 0.114];
+        const expectedYuv = points.map(([x, y]) => {
+          const [r, g, b] = chartRgb(x, y, frameIndex).map(channel => channel / 255);
+          const luma = kr * r + (1 - kr - kb) * g + kb * b;
+          return [16 + 219 * luma, 128 + 112 * (b - luma) / (1 - kb), 128 + 112 * (r - luma) / (1 - kr)].map(Math.round);
+        });
         const reference = samples(colorReferences.get(matrix).subarray(offset), 480, 3, points);
         let displayed;
         if (t === 0.02) {
@@ -183,10 +214,15 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
         // CI intentionally silences console output. Preserve the complete
         // independent measurements in the assertion failure, before bailing.
         const evidence = JSON.stringify({ platform: process.platform, arch: process.arch, browser: fixture.browser.version(), ffmpegVersion,
-          matrix, t, metadata: pixels.metadata, native: displayed, decoded: pixels.samples, png: exported, ffmpeg: reference });
+          matrix, t, metadata: pixels.metadata, format: pixels.format, native: displayed, decoded: pixels.samples, fresh: pixels.fresh,
+          png: exported, ffmpeg: reference, sourceYuv, browserYuv: pixels.yuv, expectedYuv });
+        expect(pixels.yuv, `Source frame ${matrix} @ ${t}: ${evidence}`).toEqual(sourceYuv);
+        expect(pixels.samples, `Paused frame ${matrix} @ ${t}: ${evidence}`).toEqual(pixels.fresh);
         for (let i = 0; i < points.length; i++) for (let c = 0; c < 3; c++) {
           expect(Math.abs(exported[i][c] - pixels.samples[i][c]), `PNG ${matrix} ${i}/${c}: ${evidence}`).toBeLessThanOrEqual(1);
-          expect(Math.abs(reference[i][c] - pixels.samples[i][c]), `FFmpeg ${matrix} ${i}/${c}: ${evidence}`).toBeLessThanOrEqual(3);
+          // Quantization from the lossy VP9 chart is bounded independently of
+          // any browser or FFmpeg RGB conversion and checked for every frame.
+          expect(Math.abs(sourceYuv[i][c] - expectedYuv[i][c]), `Encoded YUV ${matrix} ${i}/${c}: ${evidence}`).toBeLessThanOrEqual(2);
         }
       }
     }
