@@ -2,7 +2,7 @@ import { readFile, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
-import { execFile } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import { promisify } from 'util';
 import { assertSecretEndpoint, evaluateSecretEndpoint } from '../endpointGuard.js';
 import { composeBootstrapSpawn } from './credentialBootstrap.js';
@@ -21,6 +21,169 @@ function resolveProbeSpawn(provider, defaultBin, args) {
 
 const execFileAsync = (file, args, options) =>
   promisify(execFile)(file, args, { windowsHide: true, ...options });
+
+const CLI_COMMAND_LOOKUP_TIMEOUT_MS = 5_000;
+const CLI_VERSION_PROBE_TIMEOUT_MS = 10_000;
+const PROBE_CLEANUP_CONFIRM_TIMEOUT_MS = 1_000;
+const WINDOWS_TREE_KILL_TIMEOUT_MS = 2_000;
+
+function destroyProbeStreams(child) {
+  for (const stream of [child?.stdin, child?.stdout, child?.stderr]) {
+    try { stream?.destroy(); } catch { /* the stream may already be closed */ }
+  }
+}
+
+function waitForProbeGroupExit(pid) {
+  return new Promise((resolve) => {
+    const deadline = Date.now() + PROBE_CLEANUP_CONFIRM_TIMEOUT_MS;
+    const check = () => {
+      try {
+        process.kill(-pid, 0);
+      } catch (err) {
+        if (err?.code === 'ESRCH') return resolve(true);
+        return resolve(false);
+      }
+      if (Date.now() >= deadline) return resolve(false);
+      const timer = setTimeout(check, 25);
+      timer.unref?.();
+    };
+    check();
+  });
+}
+
+function killWindowsProbeTree(child, directExited = false) {
+  if (!child?.pid) return Promise.resolve(false);
+  if (directExited || child.exitCode != null || child.signalCode != null) {
+    destroyProbeStreams(child);
+    return Promise.resolve(false);
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    let killer;
+    let timer;
+    const finish = (confirmed) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      destroyProbeStreams(child);
+      resolve(confirmed);
+    };
+    try {
+      killer = spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], {
+        shell: false,
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+    } catch {
+      try { child.kill('SIGKILL'); } catch { /* already gone */ }
+      return finish(false);
+    }
+    killer.once('error', () => finish(false));
+    killer.once('close', code => finish(code === 0));
+    timer = setTimeout(() => {
+      try { killer.kill('SIGKILL'); } catch { /* the tree-kill helper may already be gone */ }
+      finish(false);
+    }, WINDOWS_TREE_KILL_TIMEOUT_MS);
+    timer.unref?.();
+  });
+}
+
+async function killOwnedProbe(child, killSignal, directExited = false) {
+  if (!child?.pid) {
+    try { child?.kill(killSignal); } catch { /* the child may not have spawned */ }
+    destroyProbeStreams(child);
+    return false;
+  }
+  if (process.platform === 'win32') {
+    // Once the direct child exits, its PID may be reused. Do not invoke
+    // taskkill against that PID; descendant cleanup is then unconfirmed.
+    if (directExited) {
+      destroyProbeStreams(child);
+      return false;
+    }
+    return killWindowsProbeTree(child, directExited);
+  }
+
+  try {
+    process.kill(-child.pid, killSignal);
+  } catch (err) {
+    if (err?.code === 'ESRCH') {
+      destroyProbeStreams(child);
+      return true;
+    }
+    try { child.kill(killSignal); } catch { /* the direct child may already be gone */ }
+    destroyProbeStreams(child);
+    return false;
+  }
+  destroyProbeStreams(child);
+  return waitForProbeGroupExit(child.pid);
+}
+
+function execFileBounded(file, args, { timeout, killSignal = 'SIGTERM', ...options }) {
+  return new Promise((resolve) => {
+    let child = null;
+    let spawned = false;
+    let directExited = false;
+    let settled = false;
+    let timer;
+    let cleanupPromise = null;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ ...result, spawned });
+    };
+    const finishTimedOut = (result) => {
+      cleanupPromise ||= killOwnedProbe(child, killSignal, directExited);
+      cleanupPromise.then(
+        cleanupConfirmed => finish({ ...result, timedOut: true, cleanupConfirmed }),
+        () => finish({ ...result, timedOut: true, cleanupConfirmed: false }),
+      );
+    };
+
+    // This watchdog exclusively owns timeout cleanup. Keeping execFile's
+    // native timeout disabled avoids racing the tree cleanup below it.
+    timer = setTimeout(() => finishTimedOut({ error: null, stdout: '', stderr: '' }), timeout);
+    timer.unref?.();
+
+    try {
+      child = execFile(file, args, {
+        windowsHide: true,
+        ...options,
+        timeout: 0,
+        ...(process.platform === 'win32' ? {} : { detached: true }),
+      }, (error, stdout, stderr) => {
+        // execFile callbacks are asynchronous in Node. Deferring the handling
+        // also keeps synchronous test doubles from racing child assignment.
+        queueMicrotask(() => {
+          const timedOut = error?.code === 'ETIMEDOUT'
+            || (error?.killed === true && error?.signal === killSignal);
+          const result = { error, stdout: stdout || '', stderr: stderr || '' };
+          if (timedOut) finishTimedOut(result);
+          else {
+            // The executable can exit after daemonizing a helper that still
+            // holds the probe's stdio pipes. Clean the owned process group/tree
+            // even when execFile reports a normal exit. On Windows, the direct
+            // process has already exited by this callback; taskkill against its
+            // PID could target a reused PID, so only confirm the direct child.
+            cleanupPromise ||= process.platform === 'win32'
+              ? Promise.resolve(true)
+              : killOwnedProbe(child, killSignal, true);
+            cleanupPromise.then(
+              cleanupConfirmed => finish({ ...result, timedOut: false, cleanupConfirmed }),
+              () => finish({ ...result, timedOut: false, cleanupConfirmed: false }),
+            );
+          }
+        });
+      });
+      spawned = Boolean(child?.pid);
+      child?.once?.('exit', () => { directExited = true; });
+      child?.once?.('spawn', () => { spawned = true; });
+    } catch (error) {
+      finish({ error, stdout: '', stderr: '', timedOut: false });
+    }
+  });
+}
 
 const TOOL_USE_RE = new RegExp([
   'qwen',
@@ -54,7 +217,10 @@ export function createProviderCatalogService({
   cachedModelIds = null,
   sampleFile = null,
   defaultSamplePath,
+  cliProbeTimeouts = {},
 }) {
+  const lookupTimeoutMs = cliProbeTimeouts.lookup ?? CLI_COMMAND_LOOKUP_TIMEOUT_MS;
+  const versionTimeoutMs = cliProbeTimeouts.version ?? CLI_VERSION_PROBE_TIMEOUT_MS;
   return {
     async testProvider(id) {
       const data = await loadProviders();
@@ -65,8 +231,23 @@ export function createProviderCatalogService({
         const isWin32 = process.platform === 'win32';
         const lookup = isWin32 ? 'where' : 'which';
         const probeCommand = composeBootstrapSpawn(provider, provider.command, []).command;
-        const { stdout } = await execFileAsync(lookup, [probeCommand], { windowsHide: true })
-          .catch(() => ({ stdout: '', stderr: 'not found' }));
+        const lookupResult = await execFileBounded(lookup, [probeCommand], {
+          timeout: lookupTimeoutMs,
+          killSignal: 'SIGKILL',
+        });
+        if (lookupResult.timedOut) {
+          return {
+            success: false,
+            error: `Timed out looking up command '${probeCommand}' in PATH after ${lookupTimeoutMs} ms`,
+          };
+        }
+        if (lookupResult.spawned && !lookupResult.cleanupConfirmed) {
+          return {
+            success: false,
+            error: `Could not confirm cleanup after looking up '${probeCommand}' in PATH`,
+          };
+        }
+        const { stdout } = lookupResult;
         const commandPath = stdout.split(/\r?\n/).map(s => s.trim()).find(Boolean) || '';
 
         if (!commandPath) return { success: false, error: `Command '${probeCommand}' not found in PATH` };
@@ -78,15 +259,63 @@ export function createProviderCatalogService({
         const tryVersion = async (flag) => {
           try {
             const { command: execCommand, args: execArgs } = prepareWindowsSafeSpawn(invokePath, [flag]);
-            const out = await execFileAsync(execCommand, execArgs);
+            const out = await execFileBounded(execCommand, execArgs, {
+              timeout: versionTimeoutMs,
+              killSignal: 'SIGKILL',
+            });
+            if (out.timedOut) {
+              everSpawned = true;
+              return { version: null, timedOut: true, cleanupConfirmed: out.cleanupConfirmed };
+            }
+            if (out.spawned && !out.cleanupConfirmed) {
+              return { version: null, timedOut: false, cleanupConfirmed: false };
+            }
+            if (out.error) {
+              if (typeof out.error.code === 'number' || out.spawned) everSpawned = true;
+              return {
+                version: null,
+                timedOut: false,
+                cleanupConfirmed: out.spawned ? out.cleanupConfirmed : undefined,
+              };
+            }
             everSpawned = true;
-            return out?.stdout?.trim() || null;
-          } catch (err) {
-            if (typeof err?.code === 'number') everSpawned = true;
-            return null;
+            return { version: out.stdout.trim() || null, timedOut: false, cleanupConfirmed: out.cleanupConfirmed };
+          } catch {
+            return { version: null, timedOut: false };
           }
         };
-        const versionOut = (await tryVersion('--version')) || (await tryVersion('-v'));
+        const primaryVersion = await tryVersion('--version');
+        if (primaryVersion.cleanupConfirmed === false && !primaryVersion.timedOut) {
+          return {
+            success: false,
+            error: `Could not confirm cleanup after probing '${probeCommand}'`,
+          };
+        }
+        if (primaryVersion.timedOut && !primaryVersion.cleanupConfirmed) {
+          return {
+            success: false,
+            error: `Timed out probing '${probeCommand}', and process cleanup could not be confirmed`,
+          };
+        }
+        // A timeout is evidence that the binary spawned but did not answer.
+        // Do not spend another ten seconds launching a second version flag.
+        let fallbackVersion = null;
+        if (!primaryVersion.version && !primaryVersion.timedOut) {
+          fallbackVersion = await tryVersion('-v');
+        }
+        if (fallbackVersion?.timedOut && !fallbackVersion.cleanupConfirmed) {
+          return {
+            success: false,
+            error: `Timed out probing '${probeCommand}', and process cleanup could not be confirmed`,
+          };
+        }
+        if (fallbackVersion?.cleanupConfirmed === false) {
+          return {
+            success: false,
+            error: `Could not confirm cleanup after probing '${probeCommand}'`,
+          };
+        }
+        const versionOut = primaryVersion.version || fallbackVersion?.version;
         if (!everSpawned) {
           return {
             success: false,
