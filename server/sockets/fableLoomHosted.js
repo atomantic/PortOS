@@ -6,6 +6,7 @@
  * acquires general PortOS auth privileges or access to other socket events.
  */
 
+import { SOCKET_MEDIA_MAX_BYTES } from '../lib/socketPayloadLimits.js';
 import {
   _getInternalSession,
   abortHostedTurn,
@@ -27,7 +28,7 @@ import {
 // two seconds of headroom over the ~20 ms bursts the audience page ships, and
 // 8 MB is ~4 minutes of 16 kHz mono audio for a single turn.
 const MAX_MIC_FRAME_BYTES = 64 * 1024;
-const MAX_UTTERANCE_BYTES = 8 * 1024 * 1024;
+const MAX_UTTERANCE_BYTES = SOCKET_MEDIA_MAX_BYTES;
 const AUDIO_TOO_LARGE = Symbol('audio-too-large');
 
 // Socket payloads are untrusted: never let Buffer.from coerce arbitrary objects

@@ -3,6 +3,7 @@ import providerFallbackRoutes from './routes/providerFallbacks.js';
 import './services/databaseBootFence.js';
 import express from 'express';
 import { Server } from 'socket.io';
+import { SOCKET_MAX_PAYLOAD_BYTES } from './lib/socketPayloadLimits.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { PATHS } from './lib/fileUtils.js';
@@ -214,6 +215,7 @@ setHttpsEnabledAtBoot(httpsEnabled);
 
 // Socket.IO with relative path support for Tailscale
 const io = new Server(httpServer, {
+  maxHttpBufferSize: SOCKET_MAX_PAYLOAD_BYTES,
   // CORS headers are reflected only for handshakes allowRequest admits: the
   // same browser-relay guard as the HTTP gate refuses a foreign Origin or a
   // rebindable Host on both the polling and websocket transports, in both

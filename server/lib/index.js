@@ -75,6 +75,7 @@ export * as postRhetoric from './postRhetoric.js';
 export * as postValidation from './postValidation.js';
 export * as privacyValidation from './privacyValidation.js';
 export * as roundsValidation from './roundsValidation.js';
+export * from './socketPayloadLimits.js';
 export * as socketValidation from './socketValidation.js';
 export * from './socketEventContracts.js';
 export * from './socketEventInventory.js';

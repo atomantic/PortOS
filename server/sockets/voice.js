@@ -16,6 +16,7 @@
 // Inbound:  voice:capture:start | voice:call:audio | voice:capture:stop
 // Outbound: voice:capture:state
 
+import { SOCKET_MEDIA_MAX_BYTES } from '../lib/socketPayloadLimits.js';
 import { socketHasCurrentHostControl } from '../services/authGate.js';
 import { runTurn } from '../services/voice/pipeline.js';
 import { getVoiceConfig } from '../services/voice/config.js';
@@ -68,7 +69,9 @@ const HISTORY_MESSAGES = 24;
 // Payload size caps. Voice audio is typically 16 kHz mono PCM/WebM (~32 KB/s),
 // so 8 MB leaves headroom for ~4 min of audio even in WAV. Text utterances are
 // short; 4 KB covers any realistic spoken turn and rejects prompt-stuffing.
-const MAX_AUDIO_BYTES = 8 * 1024 * 1024;
+export const MAX_AUDIO_BYTES = SOCKET_MEDIA_MAX_BYTES;
+// Encoded data-URL string length, including the prefix; not decoded image bytes.
+export const MAX_SCREENSHOT_BYTES = SOCKET_MEDIA_MAX_BYTES;
 const MAX_TEXT_LEN = 4000;
 // Cap on the visible-text snapshot the client ships alongside each UI index.
 // Matches `MAX_TEXT_CHARS` in `client/src/services/domIndex.js` so the ~8 KB
@@ -363,8 +366,8 @@ export const registerVoiceHandlers = (socket) => {
   // captured tab (or null if capture failed / the user denied permission). The
   // requestId echoes the request so a late result can't resolve a newer waiter.
   // Cap the payload to bound memory from a runaway/malicious client — a
-  // full-screen PNG data URL is typically a few MB, so 16 MB is generous.
-  const MAX_SCREENSHOT_BYTES = 16 * 1024 * 1024;
+  // full-screen JPEG data URL is typically a few MB; cap the encoded string
+  // at 8 MiB so it fits the transport alongside packet metadata.
   socket.on('voice:screenshot:result', (payload) => {
     if (!payload || typeof payload !== 'object') return;
     const { requestId, dataUrl: raw } = payload;

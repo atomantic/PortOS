@@ -8,6 +8,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
+import { MAX_VOICE_AUDIO_BYTES, RECORDING_TOO_LONG_MESSAGE } from '../lib/audioRecorder.js';
 import useMounted from '../hooks/useMounted.js';
 import {
   AlertCircle,
@@ -28,10 +29,13 @@ export default function FableLoomHostedJoin() {
   const [transcript, setTranscript] = useState([]);
   const [textInput, setTextInput] = useState('');
   const [isRecording, setIsRecording] = useState(false);
+  const [recordingError, setRecordingError] = useState(null);
 
   const mediaRecorderRef = useRef(null);
   const pressedRef = useRef(false);
   const startGenRef = useRef(0);
+  // Release preserves final recorder callbacks; a newer press retires them.
+  const recordingGenRef = useRef(0);
   const mountedRef = useMounted();
   const transcriptScrollRef = useRef(null);
   const audioPlayerRef = useRef(null);
@@ -128,8 +132,10 @@ export default function FableLoomHostedJoin() {
   // Microphone recording controls
   const startRecording = async () => {
     if (pressedRef.current || mediaRecorderRef.current || turnPhase === 'thinking' || turnPhase === 'speaking' || turnPhase === 'ended') return;
+    setRecordingError(null);
     pressedRef.current = true;
     const generation = ++startGenRef.current;
+    const recordingGeneration = ++recordingGenRef.current;
     let stream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -155,13 +161,21 @@ export default function FableLoomHostedJoin() {
       };
 
       recorder.onstop = () => {
+        stopTracks();
+        if (!mountedRef.current || recordingGeneration !== recordingGenRef.current) return;
         const audioBlob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+        if (audioBlob.size > MAX_VOICE_AUDIO_BYTES) {
+          if (mountedRef.current) {
+            setRecordingError(RECORDING_TOO_LONG_MESSAGE);
+            socket?.emit('hosted:turn:abort');
+          }
+          return;
+        }
         audioBlob.arrayBuffer().then((buf) => {
-          if (mountedRef.current && socket) {
+          if (mountedRef.current && recordingGeneration === recordingGenRef.current && socket) {
             socket.emit('hosted:mic:stop', new Uint8Array(buf));
           }
         });
-        stopTracks();
       };
 
       recorder.start(100);
@@ -190,6 +204,7 @@ export default function FableLoomHostedJoin() {
   };
 
   useEffect(() => () => {
+    ++recordingGenRef.current;
     pressedRef.current = false;
     ++startGenRef.current;
     const active = mediaRecorderRef.current;
@@ -222,6 +237,7 @@ export default function FableLoomHostedJoin() {
 
   return (
     <main className="h-dvh-screen bg-slate-950 text-white flex flex-col justify-between max-w-md mx-auto relative overflow-y-auto shadow-2xl">
+      {recordingError && <p role="alert" className="px-4 text-sm text-red-400">{recordingError}</p>}
       <audio ref={audioPlayerRef} className="hidden" />
 
       {/* Header */}

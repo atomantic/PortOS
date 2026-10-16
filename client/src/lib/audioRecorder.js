@@ -9,7 +9,11 @@
 // `blobToWav16k`, `float32ToWav16k`) ARE shared with that module — it imports
 // them rather than keeping its own copy.
 
+import { SOCKET_MEDIA_MAX_BYTES } from '../../../server/lib/socketPayloadLimits.js';
 import { resumeAudioContext, acquireAudioSession } from './audioContext.js';
+
+export const MAX_VOICE_AUDIO_BYTES = SOCKET_MEDIA_MAX_BYTES;
+export const RECORDING_TOO_LONG_MESSAGE = 'Recording too long. Please record a shorter message.';
 
 export const TARGET_SAMPLE_RATE = 16000;
 
