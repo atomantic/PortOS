@@ -4,7 +4,94 @@ import { posixPath } from './testHelper.js';
 import { existsSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, sep } from 'path';
-import { createTempDataRoot, makePathsProxy, mockNoPeers, mockNoPeerSync, mockPathsDataRoot } from './mockPathsDataRoot.js';
+import { mkdir, writeFile, rm } from 'node:fs/promises';
+import { createTempDataRoot, makePathsProxy, mockNoPeers, mockNoPeerSync, mockPathsDataRoot, ownTestBodies } from './mockPathsDataRoot.js';
+
+describe('ownTestBodies cancellation ordering (#11641)', () => {
+  it.each([false, true])('bounds the late-write cleanup race with ownership=%s', async tracked => {
+    const root = createTempDataRoot('portos-owned-body-');
+    const controller = new AbortController();
+    const entered = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    let registered;
+    const owned = ownTestBodies((_name, body) => { registered = body; });
+    const writeLate = async () => {
+      entered.resolve();
+      await release.promise;
+      await mkdir(root, { recursive: true });
+      await writeFile(join(root, 'projection.json'), '{}');
+    };
+    owned.it('held write', writeLate);
+    const body = tracked ? registered({ signal: controller.signal }) : writeLate();
+    const cancelled = new Promise(resolve => controller.signal.addEventListener('abort', () => resolve('cancelled'), { once: true }));
+    // Model the runner wrapper settling on cancellation, while the real body
+    // is deterministically held at a write boundary rather than on a timer.
+    const wrapper = Promise.race([body, cancelled]);
+    let removing = false;
+    let cleanup;
+    try {
+      await entered.promise;
+      controller.abort();
+      expect(await wrapper).toBe('cancelled');
+      cleanup = (async () => {
+        if (tracked) await owned.drain();
+        removing = true;
+        await rm(root, { recursive: true, force: true });
+      })();
+      if (tracked) {
+        // Flush a resolved drain's continuation: a broken, early-resolving
+        // drain must fail here rather than race the filesystem assertions.
+        await Promise.resolve();
+        expect(removing).toBe(false);
+        expect(existsSync(root)).toBe(true);
+      } else {
+        await cleanup;
+        expect(existsSync(root)).toBe(false);
+      }
+      release.resolve();
+      await body;
+      await cleanup;
+      // Unowned cancellation recreates the removed fixture; ownership makes
+      // the same write finish before removal, leaving nothing behind.
+      expect(existsSync(join(root, 'projection.json'))).toBe(!tracked);
+      expect(existsSync(root)).toBe(!tracked);
+    } finally {
+      release.resolve();
+      // Preserve any assertion/body error while still settling both pieces
+      // of owned work before the unconditional fixture removal.
+      await Promise.allSettled([body, cleanup]);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reports a body failure after cancellation and still permits finally cleanup', async () => {
+    const root = createTempDataRoot('portos-owned-failure-');
+    const controller = new AbortController();
+    const entered = Promise.withResolvers(), release = Promise.withResolvers();
+    let registered;
+    const owned = ownTestBodies((_name, body) => { registered = body; });
+    const failure = new Error('synthetic late projection failure');
+    owned.it('held failure', async () => { entered.resolve(); await release.promise; throw failure; });
+    const observed = registered({ signal: controller.signal }).catch(error => error);
+    let cleanup;
+    try {
+      await entered.promise;
+      controller.abort();
+      cleanup = (async () => {
+        try { await owned.drain(); } finally { await rm(root, { recursive: true, force: true }); }
+      })();
+      const rejected = expect(cleanup).rejects.toMatchObject({ errors: [failure] });
+      release.resolve();
+      expect(await observed).toBe(failure);
+      await rejected;
+      expect(existsSync(root)).toBe(false);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([observed, cleanup]);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('mockPathsDataRoot', () => {
   describe('createTempDataRoot', () => {
