@@ -650,11 +650,10 @@ baseline, native video-frame request/cancel callbacks, and trusted finite select
 video cadence above 10 fps. This does not establish 30 fps for every source or
 document, 1080p/4K decoding, GPU presentation, or audible A/V synchronization.
 
-Existing generated version-1 documents, spatial engines and older/customized
-engines are not automatically opted in. Generated hosts currently ignore section
-Promise returns; changing that would change historical semantics. Future
-generation needs a new immutable candidate under an explicit authoring contract,
-then revision-bound review and acceptance. Custom authors implement the API and
+Previously generated documents with older or customized engines are not
+automatically opted in. Their hosts may ignore section Promise returns;
+rewriting them would change historical semantics. Generate and accept a new candidate
+to use the current generation contract. Custom authors implement the API and
 re-import; historical engine adoption remains an explicit version change.
 
 Two limits stay explicit. The lyric-overlay animatic still mounts the shipped
