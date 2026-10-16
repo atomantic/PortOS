@@ -63,5 +63,7 @@ export function bootstrapVitestTempRoot() {
   // test-owned socket/download scratch escapes the root and its teardown.
   process.env.MAC_CHROMIUM_TMPDIR = root;
   process.env.NODE_DISABLE_COMPILE_CACHE = '1';
+  // Spawned npm would otherwise write debug logs into the developer's ~/.npm/_logs, evicting real ones (logs-max default 10).
+  process.env.npm_config_logs_max = '0';
   return root;
 }

@@ -61,6 +61,8 @@ const config = defineConfig({
       TMP: RUN_TEMP_ROOT,
       TEMP: RUN_TEMP_ROOT,
       MAC_CHROMIUM_TMPDIR: RUN_TEMP_ROOT,
+      // Keeps spawned npm from writing debug logs into the developer's ~/.npm/_logs.
+      npm_config_logs_max: '0',
     },
     // 30s on every platform (#7951). This WAS 10s off Windows, and the split
     // has always been a fiction: the cost it budgets for is vitest's transform

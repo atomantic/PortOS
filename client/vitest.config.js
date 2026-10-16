@@ -23,6 +23,8 @@ export default defineConfig({
       TMP: RUN_TEMP_ROOT,
       TEMP: RUN_TEMP_ROOT,
       MAC_CHROMIUM_TMPDIR: RUN_TEMP_ROOT,
+      // Keeps spawned npm from writing debug logs into the developer's ~/.npm/_logs.
+      npm_config_logs_max: '0',
       NODE_DISABLE_COMPILE_CACHE: '1',
     },
     // Four DOM workers exhausted Testing Library's async budget on the public

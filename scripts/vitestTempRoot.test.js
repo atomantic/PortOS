@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -192,4 +192,20 @@ describe.skipIf(process.platform === 'win32')('orphaned test browser sweep', () 
       rmSync(host, { recursive: true, force: true });
     }
   }, 20000);
+});
+
+describe('npm debug log containment', () => {
+  const repo = fileURLToPath(new URL('../', import.meta.url));
+  it.each(['server/vitest.config.js', 'server/vitest.config.db.js', 'client/vitest.config.js'])(
+    '%s disables npm log files for workers',
+    config => {
+      const source = readFileSync(join(repo, config), 'utf8');
+      expect(source).toMatch(/npm_config_logs_max:\s*'0'/);
+    },
+  );
+
+  it('bootstrap disables npm log files for the runner process', () => {
+    const source = readFileSync(join(repo, 'scripts/lib/vitestTempRoot.js'), 'utf8');
+    expect(source).toMatch(/process\.env\.npm_config_logs_max\s*=\s*'0'/);
+  });
 });
