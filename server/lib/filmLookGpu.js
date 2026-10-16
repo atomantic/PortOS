@@ -9,11 +9,12 @@
  * out of it and runs each one as a pass, so a change to the look reaches this
  * path by construction and an unknown primitive refuses (the caller then keeps
  * the SVG path). Each pass follows what Chrome's Skia raster backend does, not
- * just the spec, as measured against headless Chromium 141: premultiplied
- * 8-bit intermediates; the three-box blur at every sigma, reading past the
- * frame as transparent even for edgeMode="duplicate"; feOffset snapped to
- * whole pixels with antialiased frame edges; feComposite arithmetic without
- * clamping color to alpha; Skia's feTurbulence (the spec's lattice and
+ * just the spec, as measured against headless Chrome: premultiplied
+ * 8-bit intermediates; a measured Gaussian or three-box blur for small sigmas,
+ * and a three-box approximation above, reading past the frame as transparent even for
+ * edgeMode="duplicate"; feOffset snapped to whole pixels (antialiased frame
+ * edges when presented directly); feComposite arithmetic without clamping
+ * color to alpha; Skia's feTurbulence (the spec's lattice and
  * gradients, permuted and stored as 16-bit, sampled half a pixel past the
  * pixel centre); and the result over the page's white base, where the filter
  * leaves alpha. `filmLookFinish.js` still compares a frame against the SVG
@@ -109,17 +110,17 @@ function turbulencePixel(tables, x, y, { baseFrequency = [0, 0], numOctaves = 1,
 }
 
 /**
- * The 1D kernel Chrome's raster blur engine applies for a standard deviation.
- * Chrome builds Skia without its small-sigma Gaussian pass, so every sigma
- * gets the three-box approximation (the spec's window d = ⌊σ·3·√(2π)/4 + ½⌋;
- * for an even d two boxes of d shifted against each other plus one of d + 1),
- * and a one-pixel window leaves the axis alone. Past Skia's 135 limit (a
- * 255-pixel window) Chrome blurs a downscaled copy; a sampled Gaussian stands
+ * The 1D blur kernel used to match Chrome's filter for a standard deviation.
+ * Small sigmas use the browser's measured model: accelerated filters use a
+ * sampled Gaussian, while Chromium's raster path uses boxes (including an
+ * identity for small windows). Larger sigmas use the spec's window
+ * d = ⌊σ·3·√(2π)/4 + ½⌋ (for an even d, two boxes of d shifted against each
+ * other plus one of d + 1). Past Skia's 135 limit (a 255-pixel window) Chrome blurs a downscaled copy; a sampled Gaussian stands
  * in for that. `weights[i]` applies to offset `i - origin`; `boxes` and
  * `divisor` give the same kernel as three integer box sums. Null for no blur.
  * SELF-CONTAINED (inlined into the page).
  */
-function blurKernel(sigma) {
+function blurKernel(sigma, smallBlur = 'gaussian') {
   if (!(sigma > 0.03)) return null;
   const gaussian = () => {
     const radius = Math.ceil(3 * sigma);
@@ -129,8 +130,8 @@ function blurKernel(sigma) {
     for (let i = 0; i < weights.length; i++) weights[i] /= sum;
     return { weights, origin: radius };
   };
+  if (sigma < 2 && smallBlur === 'gaussian') return gaussian();
   const window = Math.max(1, Math.floor(Math.fround(sigma * 3 * Math.sqrt(2 * Math.PI) / 4 + 0.5)));
-  // A one-pixel window is no blur at all (Chrome skips the axis).
   if (window === 1) return null;
   if (window >= 255) return gaussian();
   const box = (n) => new Float64Array(n).fill(1);
@@ -216,10 +217,37 @@ export function filmLookGpuRuntimeSource() {
 // premultiplied texture in image orientation (row 0 = top), as Skia's raster
 // filters keep them; the last pass flips into the canvas.
 function createFilmLookGpuRenderer(canvas, deps) {
-  const { markup, turbulenceTables, blurKernel, parseFilmLookFilter } = deps;
+  const { markup, turbulenceTables, blurKernel: makeBlurKernel, parseFilmLookFilter } = deps;
   const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, depth: false, stencil: false, premultipliedAlpha: true, preserveDrawingBuffer: true });
   if (!gl) throw new Error('WebGL2 is unavailable');
   if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('WebGL2 float render targets are unavailable');
+
+  // Probe once for this renderer, then retain the model across every frame.
+  // Canvas2D and DOM filters share Skia's active blur backend; a renderer name
+  // or OS cannot tell us whether the compositor uses Gaussian or raster boxes.
+  // The opaque impulse avoids alpha/unpremultiplication ambiguity. Refuse an
+  // unknown response so the caller preserves SVG and its independent 40 dB gate.
+  let smallBlur;
+  try {
+    const owner = canvas.ownerDocument || document;
+    const source = owner.createElement('canvas'), probe = owner.createElement('canvas');
+    source.width = probe.width = 31; source.height = probe.height = 31;
+    const input = source.getContext('2d'), context = probe.getContext('2d');
+    if (!input || !context || !('filter' in context)) throw new Error('filter probe unavailable');
+    input.fillStyle = '#000'; input.fillRect(0, 0, 31, 31);
+    input.fillStyle = '#fff'; input.fillRect(15, 0, 1, 31);
+    context.filter = 'blur(0.7361px)';
+    context.drawImage(source, 0, 0);
+    const pixels = context.getImageData(12, 15, 7, 1).data;
+    const models = { gaussian: [0, 3, 55, 139, 55, 3, 0], box: [0, 0, 0, 255, 0, 0, 0] };
+    smallBlur = Object.keys(models).find(model => models[model].every((value, i) =>
+      pixels[i * 4 + 3] === 255 && [0, 1, 2].every(c => Math.abs(pixels[i * 4 + c] - value) <= 1)));
+    if (!smallBlur) throw new Error('unrecognized filter probe');
+  } catch {
+    gl.getExtension('WEBGL_lose_context')?.loseContext();
+    throw new Error('Chrome blur model is unavailable; keep the SVG film look');
+  }
+  const blurKernel = sigma => makeBlurKernel(sigma, smallBlur);
 
   const VERTEX = `#version 300 es
 in vec2 position;
@@ -247,11 +275,13 @@ bool clipped() { vec2 p = gl_FragCoord.xy; return p.x < clip.x || p.y < clip.y |
 void main() { color = texelFetch(a, pixel(), 0); }`,
     flood: `uniform vec4 floodColor;
 void main() { color = clipped() ? vec4(0.0) : floodColor; }`,
-    offset: `uniform sampler2D a; uniform vec2 shift;
+    offset: `uniform sampler2D a; uniform vec2 shift; uniform int sampled;
 void main() {
   if (clipped()) { color = vec4(0.0); return; }
-  // Chrome samples an feOffset at the nearest whole pixel but antialiases the
-  // shifted frame's edges: a border pixel holds the edge pixel at its coverage.
+  // A downstream filter samples the translated image with transparent
+  // out-of-bounds texels; clamping would invent colored edge fringes.
+  if (sampled == 1) { color = fetch(a, pixel() - ivec2(floor(shift + 0.5))); return; }
+  // A terminal offset is drawn directly with antialiased frame coverage.
   ivec2 q = clamp(pixel() - ivec2(floor(shift + 0.5)), ivec2(0), ivec2(size) - 1);
   vec2 lo = max(floor(gl_FragCoord.xy), shift);
   vec2 hi = min(floor(gl_FragCoord.xy) + 1.0, shift + size);
@@ -664,7 +694,7 @@ void main() {
         run('flood', target, (u) => { clipUniform(u, region); gl.uniform4f(u.floodColor, ...color); });
         floodOf = { color, rect: pixelRect(region) };
       } else if (p.type === 'feOffset') {
-        run('offset', target, (u, bind) => { clipUniform(u, region); bind('a', a); gl.uniform2f(u.shift, num(attrs.dx), num(attrs.dy)); });
+        run('offset', target, (u, bind) => { clipUniform(u, region); bind('a', a); gl.uniform2f(u.shift, num(attrs.dx), num(attrs.dy)); gl.uniform1i(u.sampled, i < last - 1 ? 1 : 0); });
       } else if (p.type === 'feGaussianBlur') {
         const [sx, sy = sx] = String(attrs.stdDeviation || '0').trim().split(/[\s,]+/).map((value) => num(value));
         const blurX = Boolean(kernelTexture(sx)), blurY = Boolean(kernelTexture(sy));
@@ -687,7 +717,7 @@ void main() {
           blurAxis(temp.texture, sy, 1, target, region);
           temp.busy = false;
         } else if (blurX || blurY) blurAxis(a, blurX ? sx : sy, blurX ? 0 : 1, target, region);
-        else run('offset', target, (u, bind) => { clipUniform(u, region); bind('a', a); gl.uniform2f(u.shift, 0, 0); });
+        else run('offset', target, (u, bind) => { clipUniform(u, region); bind('a', a); gl.uniform2f(u.shift, 0, 0); gl.uniform1i(u.sampled, 0); });
       } else if (p.type === 'feColorMatrix') {
         let values;
         if ((attrs.type || 'matrix') === 'saturate') {

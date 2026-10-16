@@ -34,15 +34,28 @@ describe('film look on the GPU', () => {
     }
   });
 
-  it('blurs with Skia\'s three-box kernel, which skips a one-pixel window', () => {
-    // σ 0.7 rounds to a one-pixel box: Chrome leaves the axis untouched.
+  it('matches Chrome small-blur impulse pixels and keeps normalized large-blur box sums', () => {
     expect(blurKernel(0)).toBeNull();
-    expect(blurKernel(0.7)).toBeNull();
-    // σ 1 → d = 2: boxes of 2, 2 and 3 over 12, offset so the whole kernel stays centred.
-    const small = blurKernel(1);
-    expect(small.divisor).toBe(12);
-    expect(Array.from(small.weights, (w) => Math.round(w * 12))).toEqual([1, 3, 4, 3, 1]);
-    expect(small.origin).toBe(2);
+    expect(blurKernel(0.03)).toBeNull();
+    // Chrome 155 SVG: a white one-pixel column over black, sampled across its
+    // centre after feGaussianBlur stdDeviation="sigma 0", using the hardware
+    // compositor. Software compositing below instead uses the raster boxes.
+    for (const [sigma, bytes] of [
+      [0.7361, [0, 3, 55, 139, 55, 3, 0]],
+      [0.9276, [1, 11, 61, 110, 61, 11, 1]],
+    ]) {
+      const kernel = blurKernel(sigma);
+      expect(kernel.origin).toBe(3);
+      expect(kernel.weights).toHaveLength(bytes.length);
+      kernel.weights.forEach((weight, i) => expect(Math.abs(Math.round(weight * 255) - bytes[i])).toBeLessThanOrEqual(1));
+    }
+    expect(blurKernel(0.7361, 'box')).toBeNull();
+    expect(Array.from(blurKernel(0.9276, 'box').weights, w => Math.round(w * 255))).toEqual([21, 64, 85, 64, 21]);
+    // σ 2.24 → d = 4: two boxes of 4 and one of 5, centred over 80.
+    const box = blurKernel(2.24);
+    expect(box.divisor).toBe(80);
+    expect(Array.from(box.weights, (w) => Math.round(w * 80))).toEqual([1, 3, 6, 10, 13, 14, 13, 10, 6, 3, 1]);
+    expect(box.origin).toBe(5);
     for (const sigma of [3.1378, 20.46, 43.648, 110.484]) {
       const { weights, origin, boxes } = blurKernel(sigma);
       expect(weights.reduce((sum, w) => sum + w, 0)).toBeCloseTo(1, 5);
@@ -67,5 +80,16 @@ describe('film look on the GPU', () => {
     runInNewContext(filmLookGpuRuntimeSource(), { globalThis: window, document: { createElement: () => ({ getContext: () => null }) } });
     expect(window.__portosFilmLookGpu.available()).toBe(false);
     expect(() => window.__portosFilmLookGpu.create({ getContext: () => null })).toThrow(/WebGL2/);
+  });
+
+  it('refuses an unknown blur response before allocating shader resources', () => {
+    const window = {};
+    let lost = false;
+    const context = { filter: 'none', fillRect() {}, drawImage() {}, getImageData: () => ({ data: new Uint8Array(28) }) };
+    runInNewContext(filmLookGpuRuntimeSource(), { globalThis: window,
+      document: { createElement: () => ({ getContext: () => context }) } });
+    const gl = { getExtension: name => name === 'EXT_color_buffer_float' ? {} : { loseContext: () => { lost = true; } } };
+    expect(() => window.__portosFilmLookGpu.create({ getContext: () => gl })).toThrow(/keep the SVG film look/);
+    expect(lost).toBe(true);
   });
 });

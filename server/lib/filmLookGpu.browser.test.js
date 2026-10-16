@@ -41,6 +41,11 @@ const extreme = normalizeFilmLook(Object.fromEntries(FILM_LOOK_CONTROLS.map((con
 const looks = [
   ...FILM_LOOK_PRESETS.filter(({ id }) => id !== 'none').map(({ id }) => [id, filmLookPreset(id)]),
   ['every control at its extreme', extreme],
+  // Isolate the regressions: small blurs were skipped/box-approximated, and
+  // translated channels invented colored edge pixels when sampled downstream.
+  ['soft focus 0.30', normalizeFilmLook({ defocus: 0.3 })],
+  ['soft focus 0.35', normalizeFilmLook({ defocus: 0.35 })],
+  ['color fringing 0.40', normalizeFilmLook({ chroma: 0.4 })],
 ];
 
 const psnr = (a, b) => {
@@ -49,10 +54,15 @@ const psnr = (a, b) => {
   return sum === 0 ? 99 : 10 * Math.log10((255 * 255 * a.length) / sum);
 };
 
-describe.skipIf(!canRun)('film look on the GPU in Chrome', () => {
+// The same Chrome uses different SVG blur kernels with GPU compositing and
+// software rasterization. Exercise both without changing the pixel oracle.
+describe.skipIf(!canRun).each([
+  ['default compositor', []],
+  ['software compositor', ['--disable-gpu', '--enable-unsafe-swiftshader']],
+])('film look on the GPU in Chrome (%s)', (_backend, args) => {
   let fixture, svgPage, gpuPage, available;
   beforeAll(async () => {
-    fixture = await startOwnedBrowserFixture({ chromium, launchOptions: { executablePath: chrome, headless: true } });
+    fixture = await startOwnedBrowserFixture({ chromium, launchOptions: { executablePath: chrome, headless: true, args } });
     svgPage = await fixture.browser.newPage({ viewport: { width, height } });
     gpuPage = await fixture.browser.newPage({ viewport: { width, height } });
     await svgPage.setContent(page(`${picture}<svg id="fx" width="0" height="0" style="position:absolute"></svg>`));
@@ -80,7 +90,7 @@ describe.skipIf(!canRun)('film look on the GPU in Chrome', () => {
   // A video is read the way the page's compositor reads it, scaled to fill the
   // frame. WebGL's own video upload converted colour differently (about 30 dB
   // off on the soft-analog look) and copied another size unscaled.
-  it('draws a video of another size as the page fills the frame', async ({ skip }) => {
+  it.for(['soft-analog', 'neon-rain', 'vhs'])('draws %s over a video of another size as the page fills the frame', async (preset, { skip }) => {
     let clip;
     try {
       const dir = mkdtempSync(join(tmpdir(), 'film-look-gpu-video-'));
@@ -90,7 +100,7 @@ describe.skipIf(!canRun)('film look on the GPU in Chrome', () => {
       rmSync(dir, { recursive: true, force: true });
     } catch { skip(); }
     if (!available) skip();
-    const look = filmLookPreset('soft-analog');
+    const look = filmLookPreset(preset);
     const origin = 'http://film-look.test';
     const body = (extra) => `<video id="v" src="${origin}/clip.webm" muted style="display:block;width:${width}px;height:${height}px;object-fit:fill"></video>${extra}`;
     const open = async (extra) => {
