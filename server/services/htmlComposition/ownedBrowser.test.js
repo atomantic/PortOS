@@ -2,10 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter, getEventListeners } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { basename } from 'node:path';
+import { pinPlatform } from '../../lib/testHelper.js';
 import { access, mkdir, rm } from 'node:fs/promises';
 import { createOwnedBrowserDiagnostics, readOwnedBrowserObservations } from '../../test/ownedBrowserDiagnostics.js';
 
 const launch = vi.hoisted(() => ({ spawn: vi.fn() }));
+vi.mock('./browserProcessGroup.js', async original => ({ ...await original(), drainBrowserProcessGroup: vi.fn(async () => {}) }));
 vi.mock('node:fs/promises', async original => {
   const actual = await original();
   return { ...actual, rm: vi.fn(actual.rm) };
@@ -13,6 +15,7 @@ vi.mock('node:fs/promises', async original => {
 vi.mock('../../lib/childProcess.js', async original => ({ ...await original(), spawn: launch.spawn }));
 vi.mock('../browserService.js', () => ({ loadConfig: async () => ({ chromePath: '/synthetic/chrome' }) }));
 const { launchCompositionBrowser } = await import('./ownedBrowser.js');
+const { drainBrowserProcessGroup } = await import('./browserProcessGroup.js');
 
 let child;
 let profile;
@@ -20,6 +23,8 @@ let startup;
 let diagnostics;
 const endpoint = 'ws://127.0.0.1:12345/devtools/browser/synthetic-browser';
 beforeEach(() => {
+  vi.spyOn(process, 'kill').mockImplementation(() => true);
+  vi.mocked(drainBrowserProcessGroup).mockReset().mockResolvedValue();
   diagnostics = createOwnedBrowserDiagnostics();
   child = new EventEmitter();
   Object.assign(child, { pid: 12345, exitCode: null, signalCode: null, stderr: new PassThrough() });
@@ -369,6 +374,8 @@ it.each([
   expect(facts).toEqual({
     exit: String(emitExit), stdioClosed: String(emitExit),
     term: 'accepted', kill: 'accepted', signalError: malformed ? 'other' : 'none', elapsedMs: '5000',
+    groupTerm: process.platform === 'win32' ? 'not-attempted' : 'accepted', groupKill: process.platform === 'win32' ? 'not-attempted' : 'accepted',
+    groupSignalError: 'none', groupFailedSignal: 'none', groupFailedPhase: 'none',
     spawned: 'true', closed: 'false', exitCode: malformed ? 'other' : exitCode === null ? 'none' : String(exitCode),
     signalCode: malformed ? 'other' : signalCode ?? 'none',
     exitListener: String(!emitExit), closeListener: 'true', errorListener: 'true',
@@ -380,7 +387,7 @@ it.each([
     expect(result.message).not.toContain(privateValue);
   }
   expect(vi.getTimerCount()).toBe(timersBeforeClose);
-  expect(signalProcess).not.toHaveBeenCalled();
+  expect(signalProcess.mock.calls).toEqual(process.platform === 'win32' ? [] : [[-child.pid, 'SIGTERM'], [-child.pid, 'SIGKILL']]);
   expect(child.listenerCount('error')).toBe(1);
   expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
   controller.abort();
@@ -401,6 +408,7 @@ it.each([
     removalFinished();
   });
   child.emit('close', null, 'SIGKILL');
+  if (process.platform !== 'win32') expect(drainBrowserProcessGroup).toHaveBeenCalledWith(child.pid, performance.now() + 5000, 1000, expect.objectContaining({ error: 'none' }));
   await removed;
   await expect(access(profile)).rejects.toThrow();
   expect(rm).toHaveBeenCalledExactlyOnceWith(profile, { recursive: true, force: true });
@@ -411,4 +419,64 @@ it.each([
   expect(owner.close()).toBe(closing);
   await expect(owner.close()).rejects.toBe(result);
   expect(result.message).toContain('closeMs=unobserved');
+});
+
+it.skipIf(process.platform === 'win32')('waits for the retained group to stop before removing its profile', async () => {
+  let drained;
+  vi.mocked(drainBrowserProcessGroup).mockImplementationOnce(() => new Promise(resolve => { drained = resolve; }));
+  const owner = await launchCompositionBrowser();
+  expect(launch.spawn.mock.calls[0][2].detached).toBe(true);
+  const closing = owner.close();
+  expect(rm).not.toHaveBeenCalled();
+  await expect(access(profile)).resolves.toBeUndefined();
+  drained();
+  await closing;
+  await expect(access(profile)).rejects.toThrow();
+});
+
+it.skipIf(process.platform === 'win32')('preserves the profile when group quiescence cannot be established', async () => {
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+  vi.mocked(drainBrowserProcessGroup).mockRejectedValueOnce(new Error('Composition browser group observation failed'));
+  const owner = await launchCompositionBrowser();
+  await expect(owner.close()).rejects.toThrow('Composition browser group observation failed');
+  expect(rm).not.toHaveBeenCalled();
+  await expect(access(profile)).resolves.toBeUndefined();
+  expect(log).toHaveBeenCalled();
+  await rm(profile, { recursive: true, force: true });
+});
+
+it('keeps Windows legacy ownership on the retained direct child', async () => {
+  const restorePlatform = pinPlatform('win32');
+  try {
+    const owner = await launchCompositionBrowser();
+    expect(launch.spawn.mock.calls[0][2].detached).toBe(false);
+    await owner.close();
+    expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
+    expect(process.kill).not.toHaveBeenCalled();
+    expect(drainBrowserProcessGroup).not.toHaveBeenCalled();
+    await expect(access(profile)).rejects.toThrow();
+  } finally {
+    restorePlatform();
+  }
+});
+
+it.skipIf(process.platform === 'win32')('latches the first group failure across direct-child escalation and late cleanup', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+  child.kill = vi.fn(() => true);
+  vi.mocked(process.kill).mockImplementation(() => { throw Object.assign(new Error('/private/error'), { code: 'EPERM' }); });
+  const owner = await launchCompositionBrowser();
+  const result = owner.close().catch(error => error);
+  await vi.advanceTimersByTimeAsync(5000);
+  const error = await result;
+  expect(error.message).toContain('groupTerm=threw, groupKill=not-attempted, groupSignalError=EPERM');
+  expect(error.message).toContain('groupFailedSignal=SIGTERM, groupFailedPhase=shutdown');
+  expect(error.message).toContain('term=accepted, kill=accepted, signalError=none');
+  expect(error.message).not.toContain('/private');
+  expect(process.kill).toHaveBeenCalledExactlyOnceWith(-child.pid, 'SIGTERM');
+  expect(child.kill.mock.calls).toEqual([['SIGTERM'], ['SIGKILL']]);
+  child.emit('exit', 0, null);
+  child.emit('close', 0, null);
+  await vi.waitFor(() => expect(drainBrowserProcessGroup).toHaveBeenCalledWith(child.pid, 10000, 1000,
+    expect.objectContaining({ error: 'EPERM', failedSignal: 'SIGTERM', failedPhase: 'shutdown' })));
+  await vi.waitFor(() => expect(rm).toHaveBeenCalled());
 });
