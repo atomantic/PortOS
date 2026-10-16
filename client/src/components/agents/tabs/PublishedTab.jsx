@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
+import LoadFailedState from '../../ui/LoadFailedState';
 import { FormField } from '../../ui/FormField';
 import { timeAgo, formatDateTime } from '../../../utils/formatters';
 
@@ -9,6 +10,7 @@ export default function PublishedTab({ agentId }) {
   const [selectedAccountId, setSelectedAccountId] = useState('');
   const [published, setPublished] = useState({ posts: [], comments: [] });
   const [publishedLoading, setPublishedLoading] = useState(false);
+  const [publishedError, setPublishedError] = useState(false);
   const [publishedDays, setPublishedDays] = useState(7);
   const [loading, setLoading] = useState(true);
 
@@ -33,9 +35,15 @@ export default function PublishedTab({ agentId }) {
       return;
     }
     setPublishedLoading(true);
-    const data = await api.getAgentPublished({ agentId, accountId: selectedAccountId, days: publishedDays });
-    setPublished(data);
-    setPublishedLoading(false);
+    setPublishedError(false);
+    try {
+      const data = await api.getAgentPublished({ agentId, accountId: selectedAccountId, days: publishedDays }, { silent: true });
+      setPublished(data);
+    } catch {
+      setPublishedError(true);
+    } finally {
+      setPublishedLoading(false);
+    }
   }, [agentId, selectedAccountId, publishedDays]);
 
   useEffect(() => {
@@ -93,6 +101,7 @@ export default function PublishedTab({ agentId }) {
 
       {selectedAccountId && (
         <div className="bg-port-card border border-port-border rounded-lg p-4">
+          {publishedError ? <LoadFailedState title="Could not load published content." onRetry={loadPublished} /> : <>
           <div className="flex items-center gap-3 mb-4">
             <h3 className="font-semibold text-white">Published Content</h3>
             {published.posts.length > 0 && (
@@ -238,6 +247,7 @@ export default function PublishedTab({ agentId }) {
               No published content in the last {publishedDays} days
             </p>
           )}
+          </>}
         </div>
       )}
     </div>

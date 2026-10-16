@@ -6,6 +6,7 @@ vi.mock('../../../services/api', () => ({
   getAutomationSchedules: vi.fn(),
   getPlatformAccounts: vi.fn(),
   getScheduleStats: vi.fn(),
+  runAutomationScheduleNow: vi.fn(),
 }));
 
 import * as api from '../../../services/api';
@@ -35,5 +36,24 @@ describe('SchedulesTab', () => {
 
     expect(await screen.findByText('No schedules')).toBeInTheDocument();
     expect(api.getAutomationSchedules).toHaveBeenCalledTimes(2);
+  });
+
+  it('re-enables Run Now after the schedule request fails', async () => {
+    api.getAutomationSchedules.mockResolvedValue([{
+      id: 'schedule-1', agentId: 'agent-1', accountId: 'account-1', enabled: true,
+      action: { type: 'heartbeat', params: {} }, schedule: { type: 'interval', intervalMs: 60000 },
+      rateLimit: { maxPerDay: 5 },
+    }]);
+    api.getPlatformAccounts.mockResolvedValue([{ id: 'account-1', status: 'active', credentials: { username: 'example-user' } }]);
+    api.getScheduleStats.mockResolvedValue(null);
+    api.runAutomationScheduleNow.mockRejectedValueOnce(new Error('Run failed'));
+
+    render(<SchedulesTab agentId="agent-1" />);
+    const runButton = await screen.findByRole('button', { name: 'Run Now' });
+
+    await act(async () => { fireEvent.click(runButton); });
+
+    expect(runButton).toBeEnabled();
+    expect(runButton).toHaveTextContent('Run Now');
   });
 });

@@ -77,9 +77,14 @@ export default function GoalsTab({ onRefresh }) {
 
   const handleDeriveLongevity = async () => {
     setDerivingLongevity(true);
-    await api.deriveLongevity();
-    setDerivingLongevity(false);
-    await loadData();
+    try {
+      await api.deriveLongevity();
+      await loadData();
+    } catch {
+      // The request helper already shows the failure toast.
+    } finally {
+      setDerivingLongevity(false);
+    }
   };
 
   const handleCreateGoal = async () => {
