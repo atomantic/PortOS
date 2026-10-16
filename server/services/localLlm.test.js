@@ -879,7 +879,7 @@ describe('localLlm', () => {
         // moves on; keep stepping past the budget so post-download sleeps also fire.
         for (let elapsed = 0; !settled && elapsed < advanceMs * 4; elapsed += 5_000) {
           await vi.advanceTimersByTimeAsync(5_000);
-          await new Promise((r) => setImmediate(r));
+          for (let y = 0; y < 5; y++) await new Promise((r) => setImmediate(r));
         }
         return await p;
       } finally {
@@ -910,8 +910,8 @@ describe('localLlm', () => {
         ok: true,
         body: new ReadableStream({
           async pull(c) {
-            if (n++ >= 4) return c.close();
-            await new Promise((res) => setTimeout(res, 40_000));
+            if (n++ >= 30) return c.close();
+            await new Promise((res) => setTimeout(res, 5_000));
             c.enqueue(new Uint8Array([n]));
           }
         })
