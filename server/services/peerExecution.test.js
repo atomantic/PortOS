@@ -9,14 +9,14 @@ import { createPeerExecutionGrants } from './peerExecutionGrants.js';
 import { peerExecutionPreflightPayloadSchema, peerExecutionDispatchSchema, peerExecutionGrantSchema } from '../lib/peerAdminValidation.js';
 import { peerAdminPairBinding } from './peerAdministration.js';
 
-let directory, pair, ledger, grants, receiver, adapters, coordinator, store, epoch, operations, floors, proofs;
+let clock, directory, pair, ledger, grants, receiver, adapters, coordinator, store, epoch, operations, floors, proofs;
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const intent = { action: 'portos.restart' };
 const terminal = state => ['succeeded', 'failed'].includes(state);
 beforeEach(async () => {
   directory = mkdtempSync(join(tmpdir(), 'peer-execution-fixture-'));
   pair = { self: { instanceId: randomUUID() }, peer: { id: 'fixture-peer', instanceId: randomUUID(), syncSecret: 'fixture-pair-secret'.repeat(3) } };
-  epoch = randomUUID(); operations = new Map(); floors = new Map(); proofs = new Map();
+  clock = 1_000_000; epoch = randomUUID(); operations = new Map(); floors = new Map(); proofs = new Map();
   store = { version: 1, grants: [] };
   ledger = {
     authority: { read: () => ({ epoch, phase: 'ready' }), requireReady: value => { if (value !== epoch) throw Object.assign(new Error('stale epoch'), { code: 'STALE_EPOCH' }); } },
@@ -58,7 +58,7 @@ beforeEach(async () => {
   receiver = makeReceiver();
 });
 afterEach(() => rmSync(directory, { recursive: true, force: true }));
-const makeReceiver = () => createPeerExecutionReceiver({ ledger, grants, coordinator, adapters, terminalProofs: proofs,
+const makeReceiver = () => createPeerExecutionReceiver({ ledger, grants, coordinator, adapters, terminalProofs: proofs, now: () => clock,
   caller: async req => { if (req !== 'paired') throw Object.assign(new Error('pair required'), { status: 403 }); return pair; }, version: '1.0.0' });
 const grantInput = (extra = {}) => peerExecutionGrantSchema.parse({ peerId: pair.peer.id, action: intent.action,
   confirmedHostInstanceId: pair.self.instanceId, confirmedPeerInstanceId: pair.peer.instanceId,
@@ -144,6 +144,35 @@ describe('receiver execution public workflow with fixture-only side effects', ()
     if (change === 'generation') floors.set(intent.action, 100);
     if (change === 'evidence') adapters.prepare.mockResolvedValue({ version: 2, target: 'changed' });
     await active.finish(); await receiver.drain(); await idle();
+    expect(adapters.run).not.toHaveBeenCalled();
+  });
+  it('refuses a re-granted authority at drain time with the authority-changed code', async () => {
+    const active = coordinator.admit('render', 'Fixture render');
+    await grant(); const input = await prepare(); await receiver.dispatch('paired', input);
+    await vi.waitFor(() => expect(coordinator.status().state).toBe('draining'));
+    await grant();
+    await active.finish(); await receiver.drain(); await idle();
+    expect((await receiver.status('paired', input)).payload).toMatchObject({ state: 'failed', code: 'PEER_EXECUTION_AUTHORITY_CHANGED' });
+    expect(adapters.run).not.toHaveBeenCalled();
+  });
+  it('refuses a dispatch whose evidence digest differs from the signed preflight', async () => {
+    await grant(); const input = await prepare();
+    await expect(receiver.dispatch('paired', { ...input, evidenceDigest: '0'.repeat(64) })).rejects.toMatchObject({ code: 'PEER_EXECUTION_PREFLIGHT_STALE' });
+    expect(operations.size).toBe(0);
+    expect(adapters.run).not.toHaveBeenCalled();
+  });
+  it('refuses a dispatch after the signed preflight expired', async () => {
+    await grant(); const input = await prepare();
+    clock += 61_000;
+    await expect(receiver.dispatch('paired', input)).rejects.toMatchObject({ code: 'PEER_EXECUTION_PREFLIGHT_STALE' });
+    expect(operations.size).toBe(0);
+    expect(adapters.run).not.toHaveBeenCalled();
+  });
+  it('rechecks authority at dispatch when the grant is revoked after preflight', async () => {
+    await grant(); const input = await prepare();
+    await grant({ allowExecution: false });
+    await expect(receiver.dispatch('paired', input)).rejects.toMatchObject({ code: 'PEER_EXECUTION_GRANT_REQUIRED' });
+    expect(operations.size).toBe(0);
     expect(adapters.run).not.toHaveBeenCalled();
   });
   it('fences resume and never relaunches after an ambiguous launch or process restart', async () => {

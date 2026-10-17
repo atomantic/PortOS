@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMaintenanceAdmission } from '../lib/maintenanceAdmission.js';
+import { assertPeerExecutionCapability } from '../lib/maintenanceExclusive.js';
 import { _createPeerExecutionAdapters, peerExecutionEvidenceDigest, _verifyPeerExecutionCompletion } from './peerExecutionAdapters.js';
 
 const roots = [];
@@ -93,6 +94,34 @@ describe('fixed peer actions under exclusive receiver ownership', () => {
   });
 });
 
+describe('execution capability binding', () => {
+  const restartEvidence = { version: 1, intent: { action: 'portos.restart' }, target: { processes: [{ name: 'portos-server', pid: 1, scriptDigest: 'a'.repeat(64) }] } };
+
+  it('refuses a restart capability presented as an update or against a different evidence digest', () => {
+    const { capability } = owner(restartEvidence);
+    const digest = peerExecutionEvidenceDigest(restartEvidence);
+    expect(assertPeerExecutionCapability(capability, restartEvidence.intent, digest).intent).toEqual(restartEvidence.intent);
+    expect(() => assertPeerExecutionCapability(capability, { action: 'portos.update' }, digest)).toThrow(expect.objectContaining({ code: 'PEER_EXECUTION_CAPABILITY_REQUIRED' }));
+    expect(() => assertPeerExecutionCapability(capability, restartEvidence.intent, 'f'.repeat(64))).toThrow(expect.objectContaining({ code: 'PEER_EXECUTION_CAPABILITY_REQUIRED' }));
+  });
+
+  it('refuses the update executor a restart capability without launching', async () => {
+    const launchUpdate = vi.fn();
+    const adapters = _createPeerExecutionAdapters({ probeUpdate: async () => update(), launchUpdate });
+    const evidence = await adapters.prepare(intent);
+    const { capability } = owner(restartEvidence);
+    await expect(adapters.run(intent, evidence, { capability })).rejects.toMatchObject({ code: 'PEER_EXECUTION_CAPABILITY_REQUIRED' });
+    expect(launchUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses to claim a hold while admitted work is still running', () => {
+    const root = mkdtempSync(join(tmpdir(), 'peer-adapters-')); roots.push(root);
+    const coordinator = createMaintenanceAdmission(root);
+    coordinator.admit('render', 'Fixture render');
+    coordinator.begin({ reason: 'Fixture drain', owner: 'Fixture operator' });
+    expect(() => coordinator.observeIdle()).toThrow(expect.objectContaining({ code: 'MAINTENANCE_STALE' }));
+  });
+});
 
 describe('post-restart completion proof', () => {
   it('requires the matching durable launch, successful exit and every intended process to have restarted', () => {
