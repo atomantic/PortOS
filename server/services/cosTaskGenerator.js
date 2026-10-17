@@ -1249,6 +1249,9 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, {
   const { existingTaskTypes, appsWithPendingImprovement, blockedTaskTypes, appsWithBlockedImprovement } =
     buildImprovementDedupSets(existingTasks, { ignoreTaskId });
 
+  // One clock for the whole tick: cron eligibility lasts a single minute, and
+  // preparing earlier apps can take longer than that (#11755).
+  const tickNow = Date.now();
   let queued = 0;
 
   // Install-wide task types have no managed-app target: their cadence is
@@ -1262,7 +1265,7 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, {
   // analysis type, matching buildImprovementDedupSets for globally-scoped tasks
   // and ensuring one pending/blocked task suppresses only its own duplicate.
   queued += await queueDueInstallWideImprovementTasks({
-    dueTasks: await getDueTasks(), state, taskSchedule, existingTaskTypes,
+    dueTasks: await getDueTasks(null, { now: tickNow }), state, taskSchedule, existingTaskTypes,
     blockedTaskTypes, ignoreTaskId, wakeAfterRecord
   });
 
@@ -1277,15 +1280,25 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, {
 
   // Queue eligible improvement tasks for all managed apps (including PortOS)
   const apps = await getActiveApps().catch(() => []);
+  // Snapshot every app's due set against `tickNow` BEFORE any prepareTask runs:
+  // prepare does network and git work, so evaluating lazily would judge later
+  // apps against a clock that already left the cron minute.
+  const appDueSnapshots = [];
   for (const app of apps) {
+    const continuingTaskType = perpetualContinuation?.appId === app.id ? perpetualContinuation.taskType : null;
+    appDueSnapshots.push({
+      app, continuingTaskType,
+      dueTasks: await getDueTasks(app.id, { continuingTaskType, now: tickNow })
+    });
+  }
+
+  for (const { app, continuingTaskType, dueTasks } of appDueSnapshots) {
     // Capture every due clock slot before applying the background-drain cap.
     // Cron eligibility lasts one minute: a busy app or a sibling cron must not
     // discard that occurrence. Persist it now; spawn admission still enforces
     // concurrency, budgets and cooldowns when the task actually executes.
     // Use the readiness reason rather than the global interval: an app may
     // supply its own cron while the global task remains on-demand.
-    const continuingTaskType = perpetualContinuation?.appId === app.id ? perpetualContinuation.taskType : null;
-    const dueTasks = await getDueTasks(app.id, { continuingTaskType });
     const cronTasks = dueTasks.filter(task => task.reason === TASK_READINESS_REASON.CRON_DUE);
     const appBusy = appsWithPendingImprovement.has(app.id);
     if (appBusy && cronTasks.length === 0) {

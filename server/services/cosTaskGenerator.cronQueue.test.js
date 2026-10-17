@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('./cosEvents.js', () => ({ cosEvents: { emit: vi.fn(), on: vi.fn() }, emitLog: vi.fn() }));
 vi.mock('./apps.js', async (original) => ({
@@ -14,6 +14,7 @@ vi.mock('./taskSchedule.js', async (original) => ({
 import { queueEligibleImprovementTasks } from './cosTaskGenerator.js';
 import { getDueTasks, recordExecution } from './taskSchedule.js';
 import { loadAppActivity } from './appActivity.js';
+import { getActiveApps } from './apps.js';
 import { cosEvents } from './cosEvents.js';
 
 const state = { config: { improvementEnabled: true, appReviewCooldownMs: 60_000 } };
@@ -75,6 +76,40 @@ describe('scheduled managed-app queue admission', () => {
     await run();
     expect(recordExecution).not.toHaveBeenCalled();
     expect(cosEvents.emit).not.toHaveBeenCalled();
+  });
+
+  describe('multi-app tick', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+      getActiveApps.mockResolvedValue([{ id: 'example-app', name: 'Example App' }]);
+    });
+
+    it('queues every app on a shared cron slot even when earlier preparation outlasts the minute, once per minute', async () => {
+      const slotStart = new Date('2026-09-09T11:30:05Z').getTime();
+      const inSlot = now => Math.floor(now / 60_000) === Math.floor(slotStart / 60_000);
+      vi.useFakeTimers();
+      vi.setSystemTime(slotStart);
+      const apps = [{ id: 'app-1', name: 'App One' }, { id: 'app-2', name: 'App Two' }];
+      getActiveApps.mockResolvedValue(apps);
+      // Readiness is judged against the clock the caller supplies, as the real gate does.
+      const lastRun = {};
+      getDueTasks.mockImplementation(async (appId, { now = Date.now() } = {}) =>
+        appId && inSlot(now) && !lastRun[appId] ? [dueCron('do-release')] : []);
+      recordExecution.mockImplementation(async (_key, appId) => { lastRun[appId] = Date.now(); });
+      prepareTask.mockImplementation(async (taskType, app) => {
+        vi.advanceTimersByTime(90_000);
+        return { task: { description: taskType, metadata: { app: app.id, analysisType: taskType } }, pendingPerpetualDispatch: null };
+      });
+
+      await run();
+      expect(persistTask.mock.calls.map(([task]) => task.metadata.app)).toEqual(['app-1', 'app-2']);
+      expect(getDueTasks.mock.calls.filter(([id]) => id).every(([, opts]) => opts.now === slotStart)).toBe(true);
+
+      // A later tick must not re-queue an occurrence that was already recorded.
+      persistTask.mockClear();
+      await run();
+      expect(persistTask).not.toHaveBeenCalled();
+    });
   });
 
   it('retains one background drain per app and holds it behind unrelated work', async () => {

@@ -1392,6 +1392,23 @@ describe('taskSchedule', () => {
         })
       })
 
+      it('judges readiness against a pinned `now` instead of the wall clock', async () => {
+        vi.useFakeTimers()
+        vi.setSystemTime(new Date('2026-09-09T11:31:30Z'))
+        const actual = await vi.importActual('./eventScheduler.js')
+        parseCronToNextRun.mockImplementation(actual.parseCronToNextRun)
+        getAppTaskTypeInterval.mockResolvedValue(null)
+        mockSchedule({
+          tasks: { 'do-release': { type: 'cron', enabled: true, cronExpression: '30 4 * * *', runAfter: [] } },
+          executions: { 'task:do-release': { perApp: { 'app-1': { lastRun: '2026-09-08T05:01:00Z', count: 1 } } } }
+        })
+        const pinned = new Date('2026-09-09T11:30:20Z').getTime()
+        expect(await shouldRunTask('do-release', 'app-1')).toMatchObject({ shouldRun: false, reason: 'cron-cooldown' })
+        expect(await shouldRunTask('do-release', 'app-1', { now: pinned })).toMatchObject({ shouldRun: true, reason: 'cron-due' })
+        expect((await getDueTasks('app-1', { now: pinned })).map(t => t.taskType)).toContain('do-release')
+        expect((await getDueTasks('app-1')).map(t => t.taskType)).not.toContain('do-release')
+      })
+
       it('waits for the next per-app slot after downtime, including never-run tasks', async () => {
         vi.useFakeTimers()
         vi.setSystemTime(new Date('2026-09-09T12:00:00Z'))
