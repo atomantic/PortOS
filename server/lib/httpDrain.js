@@ -13,7 +13,8 @@
 //     the same way, so a WebSocket `Upgrade:` request on a still-open
 //     keep-alive socket gets a raw 503 instead of reaching those handlers.
 //     Sockets already upgraded before the drain began never emit 'upgrade'
-//     again — their owners close them;
+//     again — their owners close them, and `destroyUpgraded()` force-drops
+//     whatever is left (closeAllConnections() cannot see them);
 //   - in-flight responses are told not to keep their socket alive, and an open
 //     SSE stream (which never ends on its own) is dropped outright.
 //
@@ -72,6 +73,22 @@ export const createHttpDrain = (servers) => {
   };
   for (const server of listeners) server.prependListener('request', track);
 
+  // A socket handed to an 'upgrade' listener is detached from the HTTP server's
+  // connection tracking, so closeAllConnections() never destroys it, yet
+  // server.close() waits for it. Track them here (#11849; #6994 only raised the grace).
+  const upgraded = new Set();
+  const trackUpgrade = (req, socket) => {
+    upgraded.add(socket);
+    socket.once('close', () => upgraded.delete(socket));
+  };
+  for (const server of listeners) server.prependListener('upgrade', trackUpgrade);
+
+  // Call after the sockets' owners (Socket.IO) have sent their close frames.
+  const destroyUpgraded = () => {
+    for (const socket of upgraded) socket.destroy();
+    upgraded.clear();
+  };
+
   const begin = (windowMs) => {
     if (draining) return draining;
     draining = new Promise((resolve) => {
@@ -102,5 +119,5 @@ export const createHttpDrain = (servers) => {
     return draining;
   };
 
-  return { begin };
+  return { begin, destroyUpgraded };
 };

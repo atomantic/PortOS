@@ -159,4 +159,29 @@ describe('createHttpDrain', () => {
     expect(refused).toMatch(/connection: close/i);
     expect(upgradeCalls).toEqual([]);
   });
+
+  it('destroyUpgraded lets server.close() finish despite an upgraded socket whose peer never closes (#11849)', async () => {
+    const { server, port } = await listen((req, res) => res.end('ok'));
+    server.on('upgrade', (req, socket) => {
+      socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n');
+    });
+    const drain = createHttpDrain([server]);
+
+    const client = net.connect(port, '127.0.0.1');
+    const handshake = deferred();
+    client.once('data', handshake.resolve);
+    client.on('error', () => {});
+    client.write('GET /ws HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n');
+    await handshake.promise;
+
+    drain.begin(5000);
+    server.closeAllConnections();
+    const closed = new Promise((resolve) => server.close(resolve));
+    const outcome = await Promise.race([closed.then(() => 'closed'), new Promise((r) => setTimeout(() => r('stuck'), 200))]);
+    expect(outcome).toBe('stuck');
+
+    drain.destroyUpgraded();
+    expect(await Promise.race([closed.then(() => 'closed'), new Promise((r) => setTimeout(() => r('stuck'), 1000))])).toBe('closed');
+    client.destroy();
+  });
 });
