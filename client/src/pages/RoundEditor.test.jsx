@@ -65,3 +65,16 @@ describe('RoundEditor round→round navigation', () => {
     await waitFor(() => expect(screen.getByText('Song B')).toBeTruthy());
   });
 });
+
+describe('RoundEditor header', () => {
+  it('uses the wrapping shared PageHeader so the title and Save stay reachable on phones (#11895)', async () => {
+    api.getRound.mockReset().mockResolvedValue({ round: song('a', 'Song A') });
+    api.listRounds.mockReset().mockResolvedValue({ rounds: [song('a', 'Song A')] });
+    render(<MemoryRouter initialEntries={['/rounds/a']}><Harness /></MemoryRouter>);
+    const title = await screen.findByRole('heading', { level: 1, name: 'Song A' });
+    const row = title.closest('.flex-wrap');
+    expect(row).toBeTruthy();
+    expect(row.contains(screen.getByRole('button', { name: /^Save$/ }))).toBe(true);
+    expect(row.contains(screen.getByRole('link', { name: /Guide/ }))).toBe(true);
+  });
+});
