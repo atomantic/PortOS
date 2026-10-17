@@ -158,7 +158,8 @@ it('preserves the old raw spool when the truncation warning cannot persist', asy
   spool.pushRaw('old bytes'); await spool.drainRaw();
   state.beforeWrite = async path => { if (path.endsWith('state.json')) throw new Error('warning write refused'); };
   spool.pushRaw('new bytes');
-  await expect(spool.drainRaw()).rejects.toThrow('warning write refused');
+  // Reported, not thrown: drainRaw runs inside finish(), where a rejection would skip teardown.
+  await expect(spool.drainRaw()).resolves.toBeUndefined();
   expect(await readFile(join(state.root, 'raw.txt'), 'utf8')).toBe('old bytes');
   state.beforeWrite = null;
   spool.pushRaw('retry'); await spool.drainRaw();

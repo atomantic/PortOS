@@ -1073,8 +1073,16 @@ export function createTuiSessionController({
 
     // Drain pending parsed lines AND raw chunks before the final state
     // writes so completion events don't beat the last output batch to disk.
-    await drainLines();
-    await drainRaw();
+    // Non-fatal: the phase is already 'finalized', so a rejected drain (e.g.
+    // BACKUP_SNAPSHOT_BUSY while a long backup holds the snapshot cut) must not
+    // skip the teardown below — a later exit/Kill would find the run terminal
+    // and no-op, stranding the lane, the PTY and the worktree until restart.
+    for (const [drain, label] of [[drainLines, 'parsed output'], [drainRaw, 'raw PTY spool']]) {
+      await drain().catch(err => {
+        persistence.markUnsettled?.();
+        emitLog('warn', `TUI ${label} drain failed for ${agentId}: ${err.message}`, { agentId });
+      });
+    }
 
     // The teardown both in-process spawners share: paused early return, then
     // the host-shutdown abandon gate, the user-termination consume, the final
