@@ -191,6 +191,20 @@ export const uploadCatalogIngredientMediaFile = (id, body, options) =>
 export const recordCatalogIngredientVoiceMemo = (id, body, options) =>
   request(`/catalog/ingredients/${enc(id)}/media/voice`, { method: 'POST', body: JSON.stringify(body), ...options });
 
+// --- Reference sheets ---------------------------------------------------
+// Sheet kinds a record's type offers ({ variants: [{ id, label, description }] }),
+// the exact prompt a render would send ({ preview: { sentPrompt, … } }), and the
+// render itself ({ jobId, variant, delegatedTo }). `body` is { variant, ...overrides }.
+
+export const listCatalogSheetVariants = (id, options) =>
+  request(`/catalog/ingredients/${enc(id)}/sheets/variants`, options);
+
+export const previewCatalogSheet = (id, body = {}, options) =>
+  request(`/catalog/ingredients/${enc(id)}/sheets/preview`, { method: 'POST', body: JSON.stringify(body), ...options });
+
+export const renderCatalogSheet = (id, body = {}, options) =>
+  request(`/catalog/ingredients/${enc(id)}/sheets`, { method: 'POST', body: JSON.stringify(body), ...options });
+
 // --- Bulk import / export ----------------------------------------------
 
 export const bulkImportCatalogIngredients = (body, options) =>
