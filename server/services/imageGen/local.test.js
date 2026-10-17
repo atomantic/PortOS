@@ -1370,3 +1370,34 @@ it('settles a refused close-event publication and releases the process and heavy
     expect(attachSseClient(jobId, response)).toBe(false);
   } finally { admissionFault.error = null; vi.useRealTimers(); }
 });
+
+it('drives a child that dies during the heavy-claim handoff to a terminal state and releases the claim (#11761)', async () => {
+  mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+  mockIsFlux2VenvHealthy.mockResolvedValue(true);
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+  child.pid = 4242;
+  mockSpawn.mockReturnValue(child);
+  const heavyJobClaim = await import('../../lib/heavyJobClaim.js');
+  // The handoff awaits real file I/O in production; here the child's stderr and
+  // `close` land inside that window, before any real listener is attached.
+  const claimSpy = vi.spyOn(heavyJobClaim, 'claimHeavyLocalJob').mockResolvedValueOnce({
+    ok: true,
+    release: releaseClaim,
+    handoffTo: async () => {
+      child.stderr.emit('data', Buffer.from('Traceback: venv aborted on import\n'));
+      child.emit('close', 1, null);
+      await new Promise((resolve) => setImmediate(resolve));
+    },
+  });
+  const { imageGenEvents } = await import('../imageGenEvents.js');
+  const { getActiveJob } = await import('./local.js');
+  const releasedBefore = releaseClaim.mock.calls.length;
+  const failed = new Promise((resolve) => imageGenEvents.once('failed', resolve));
+  try {
+    await generateImage({ modelId: 'qwen-image-2.1', prompt: 'dies at startup' });
+    expect((await failed).error).toContain('Traceback: venv aborted on import');
+    expect(getActiveJob()).toBeNull();
+    expect(releaseClaim.mock.calls.length).toBe(releasedBefore + 1);
+  } finally { claimSpy.mockRestore(); }
+});

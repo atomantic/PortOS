@@ -309,6 +309,9 @@ export const ALWAYS_RUN_TESTS = [
   // Whole-tree scanner: any server file can log a failure through
   // `console.log`, and the guard only ever sees it as a path string.
   'server/logLevelConventions.test.js',
+  // Whole-tree scanner: any server file can spawn a child and await before
+  // attaching its error/exit listener (#11761), with no import edge to this file.
+  'server/childListenerOrderConventions.test.js',
   // Whole-tree scanner: any server/autofixer file can re-implement raw
   // `pm2 jlist` execution/parsing outside the two designated readers (#8164).
   'server/pm2JlistOwnership.guard.test.js',

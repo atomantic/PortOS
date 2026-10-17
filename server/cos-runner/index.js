@@ -305,6 +305,9 @@ app.post('/spawn-tui', lifecycle.spawnRoute(async (req, res) => {
   // preserves the shared escaping contract for paths/args passed to cmd.exe.
   const { command: ptyCommand, args: ptyArgs } = prepareCliSpawn(executable, args, childEnv);
   await securityScans.register(agentId, body.data.securityScanGrant);
+  // Read BEFORE pty.spawn so onData/onExit subscribe with no await after the
+  // spawn: a PTY that exits during the read would otherwise lose its exit (#11761).
+  const securityScan = await securityScans.read(agentId);
   // Both checks above cleared the executable, so a throw here is about the PTY
   // layer or the workspace — not the command. node-pty collapses those into one
   // opaque `posix_spawn failed: No such file or directory`, which read as a
@@ -349,7 +352,7 @@ app.post('/spawn-tui', lifecycle.spawnRoute(async (req, res) => {
     // node-pty reports pid 0 for ConPTY on Windows, so a pid probe is not a
     // liveness signal. onExit is the runner's authority; GET /agents reads this.
     exited: false,
-    securityScan: await securityScans.read(agentId),
+    securityScan,
     stopSecurityScan: () => securityScans.stop(agentId).catch(err => lifecycle.reportFailure(err)),
   };
   activeAgents.set(agentId, agent);
@@ -565,6 +568,10 @@ app.post('/spawn', lifecycle.spawnRoute(async (req, res) => {
 
   // Spawn the CLI process
   await securityScans.register(agentId, body.data.securityScanGrant);
+  // Read BEFORE spawn: Node reports a failed spawn (ENOENT/EACCES/EMFILE) via
+  // process.nextTick, so no await may sit between spawn() and the 'error'
+  // listener or the unhandled event kills the runner (#11761).
+  const securityScan = await securityScans.read(agentId);
   const claudeProcess = spawn(spawnCommand, finalSpawnArgs, {
     cwd,
     shell: false,
@@ -596,7 +603,7 @@ app.post('/spawn', lifecycle.spawnRoute(async (req, res) => {
     stripStdoutAnsi: isStreamJson ? (text) => text : createStreamingAnsiStripper(),
     stripStderrAnsi: createStreamingAnsiStripper(),
     workspacePath: cwd,
-    securityScan: await securityScans.read(agentId),
+    securityScan,
     stopSecurityScan: () => securityScans.stop(agentId).catch(err => lifecycle.reportFailure(err)),
   };
   activeAgents.set(agentId, agent);
