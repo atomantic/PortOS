@@ -35,6 +35,22 @@ beforeEach(() => {
   api.getEmbeddingStatus.mockResolvedValue(null);
 });
 
+describe('brain ConfigTab scheduled reviews opt-in', () => {
+  it('names the provider/model and persists the toggle', async () => {
+    api.getBrainSettings.mockResolvedValue({ defaultProvider: 'local', defaultModel: 'llama3.2:latest', confidenceThreshold: 0.6, scheduledReviewsEnabled: false });
+    api.updateBrainSettings.mockResolvedValue({ scheduledReviewsEnabled: true });
+    render(<ConfigTab />);
+
+    const toggle = await screen.findByLabelText(/Run daily digest and weekly review automatically/);
+    expect(toggle).not.toBeChecked();
+    expect(screen.getByText('llama3.2:latest', { selector: 'span' })).toBeInTheDocument();
+    await userEvent.click(toggle);
+    await userEvent.click(screen.getByRole('button', { name: /^Save/ }));
+
+    expect(api.updateBrainSettings).toHaveBeenCalledWith(expect.objectContaining({ scheduledReviewsEnabled: true }), { silent: true });
+  });
+});
+
 describe('brain ConfigTab provider pickers', () => {
   it('seeds the provider default into the classification model on a provider change', async () => {
     render(<ConfigTab />);

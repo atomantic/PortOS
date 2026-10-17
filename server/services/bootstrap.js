@@ -483,8 +483,6 @@ const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
   // QR play sessions and tears down the ones past their TTL, making no AI
   // provider call, so it is safe under AGENTS.md's "No cold-bootstrap LLM calls".
   startHostedSessionSweep({ io });
-  // Initialize brain scheduler for daily digests and weekly reviews
-  startBrainScheduler();
   // Initialize activity-digest scheduler — OFF by default; drafts daily-log
   // auto-summaries from the Human Activity timeline only when the user enables it
   // (Settings → Daily Log → Activity Digest). Silent + no LLM calls until then.
@@ -1021,7 +1019,11 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
           .then(({ restoreServe }) => restoreServe())
           .catch((err) => logBootstrapFailure('⚠️ tailcat serve restore failed', err, console.warn));
       },
-      initSyncOrchestrator
+      initSyncOrchestrator,
+      // Brain digests/reviews call an AI provider, so the scheduler arms only
+      // once the server is listening and only acts when the user opted in
+      // (`scheduledReviewsEnabled`).
+      startBrainScheduler
     }, 'postListen', isSmokeBoot())))
   }, 'postRoute', isSmokeBoot()));
 

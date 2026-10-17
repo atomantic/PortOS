@@ -50,7 +50,7 @@ export const SMOKE_BOOT_DISABLED_STEPS = Object.freeze({
     'initSharing',
     'recoverCreativeDirectorProjects'
   ]),
-  postListen: Object.freeze(['relayUnloggedBrainRecords', 'startPolling', 'initSyncOrchestrator'])
+  postListen: Object.freeze(['relayUnloggedBrainRecords', 'startPolling', 'initSyncOrchestrator', 'startBrainScheduler'])
 });
 
 /**
@@ -429,7 +429,8 @@ export const runPostListenSequence = ({
   backfillOriginInstanceId,
   relayUnloggedBrainRecords,
   startPolling,
-  initSyncOrchestrator
+  initSyncOrchestrator,
+  startBrainScheduler
 }) => {
   announceListening();
   setupProcessErrorHandlers();
@@ -438,6 +439,7 @@ export const runPostListenSequence = ({
       bestEffort(relayUnloggedBrainRecords(), logFailure('Brain relay sweep failed'));
       startPolling();
       initSyncOrchestrator();
+      startBrainScheduler();
     }),
     logFailure('Post-startup init failed')
   );
