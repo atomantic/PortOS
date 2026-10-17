@@ -463,7 +463,9 @@ export const AGY_INPUT_READY_PATTERN = /\?forshortcuts/i;
 export const OPENCODE_INPUT_READY_PATTERN = /askanything/i;
 // The update offer overlays the composer and defaults to Confirm. Escape
 // closes it without installing software or changing the operator's settings.
-const OPENCODE_UPDATE_PROMPT_PATTERN = /updateavailable.*anewreleasev[\d.]+isavailable\.wouldyouliketoupdatenow\?/i;
+// Match the heading and release announcement: the following question wraps
+// across screen rows with composer-border glyphs interleaved in the PTY stream.
+const OPENCODE_UPDATE_PROMPT_PATTERN = /updateavailable.*anewreleasev[\d.]+isavailable\./i;
 
 // Handshake markers are matched against a rolling window of whitespace-stripped
 // output rather than a single chunk, so a marker split across two PTY reads

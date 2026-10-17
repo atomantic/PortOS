@@ -1510,7 +1510,9 @@ describe('spawnTuiAgent runtime', () => {
     await vi.advanceTimersByTimeAsync(600);
     expect(pasteCount()).toBe(0);
     await capturedOnData(Buffer.from('Update\x1b[8;29H Available esc\nA new release v9.9.9 is avail'));
-    await capturedOnData(Buffer.from('able. Would you like to update now?\nSkip Confirm\n'));
+    // The composer border is painted between the two wrapped message rows.
+    await capturedOnData(Buffer.from('able. Would you like to\x1b[12;4H┃\n'));
+    await capturedOnData(Buffer.from('        update now?\n┃ Ask\n┃ Buil     Skip Confirm\n'));
     await vi.advanceTimersByTimeAsync(400);
     expect(vi.mocked(shellService.writeToSession).mock.calls.map(([, data]) => data)).toEqual(['\x1b']);
     expect(pasteCount()).toBe(0);

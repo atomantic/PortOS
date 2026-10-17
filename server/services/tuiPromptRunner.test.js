@@ -874,7 +874,8 @@ describe('executeTuiRun', () => {
       await vi.advanceTimersByTimeAsync(15000);
       expect(pty.write).not.toHaveBeenCalled();
       pty.emitData('\x1b[?2004hAsk anything…\nUpdate Available esc\n'
-        + 'A new release v9.9.9 is available. Would you like to update now?\nSkip Confirm\n');
+        + 'A new release v9.9.9 is available. Would you like to\x1b[12;4H┃\n'
+        + '        update now?\n┃ Ask\n┃ Buil     Skip Confirm\n');
       await vi.advanceTimersByTimeAsync(400);
       expect(pty.write.mock.calls.map(([data]) => data)).toEqual(['\x1b']);
       await vi.advanceTimersByTimeAsync(2000);
