@@ -30,6 +30,7 @@ import {
   catalogPruneRequestSchema,
   catalogEmbeddingsBackfillSchema,
   catalogMigrationRerunSchema,
+  catalogMusicVideoImportSchema,
   catalogBulkImportSchema,
   catalogBulkEntrySchema,
   catalogExportQuerySchema,
@@ -52,6 +53,7 @@ import { extractIngredientsForScrap } from '../services/catalogExtraction.js';
 import { ingestFromUrl, ingestFromFile, ingestFromVoice, ingestFromBrain } from '../services/catalogIngestSources.js';
 import { readImageGenerationMetadata, uploadIngredientMediaFile, recordIngredientVoiceMemo } from '../services/catalogMedia.js';
 import { migrateBibleToCatalog } from '../scripts/migrateBibleToCatalog.js';
+import { previewCatalogCastImport, commitCatalogCastImport } from '../services/musicVideo/catalogCast.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 
 const router = Router();
@@ -865,6 +867,18 @@ router.post('/migration/rerun', asyncHandler(async (req, res) => {
   const body = validateRequest(catalogMigrationRerunSchema, req.body || {});
   const result = await migrateBibleToCatalog({ force: body.force === true });
   res.json(result);
+}));
+
+// Music video cast import: every video's cast, sets and props not yet in the
+// catalog, each with a proposed create/link (dry run), then the reviewed
+// decisions applied. Deterministic ids make a repeated commit a no-op.
+router.get('/import/music-videos', asyncHandler(async (req, res) => {
+  res.json({ projects: await previewCatalogCastImport() });
+}));
+
+router.post('/import/music-videos', asyncHandler(async (req, res) => {
+  const { selections } = validateRequest(catalogMusicVideoImportSchema, req.body || {});
+  res.json(await commitCatalogCastImport(selections));
 }));
 
 // --- User-defined ingredient types --------------------------------------

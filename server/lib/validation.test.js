@@ -2186,6 +2186,9 @@ describe('validation.js', () => {
     it('rejects ".." traversal segments and absolute paths', () => {
       expect(subdirFilterSchema.safeParse('../other-dir').success).toBe(false);
       expect(subdirFilterSchema.safeParse('data/../../etc').success).toBe(false);
+      for (const v of ['brain/', './brain', 'brain/./x', 'brain//x']) {
+        expect(subdirFilterSchema.safeParse(v).success).toBe(false);
+      }
       expect(subdirFilterSchema.safeParse('/etc/passwd').success).toBe(false);
     });
 

@@ -49,6 +49,23 @@ describe('Cast & Sets approval basis', () => {
   });
 });
 
+describe('saving cast to the catalog after approval', () => {
+  const project = { id: 'p1', concept: { prompt: 'Example concept', subjects: [{ id: 'cs-protagonist', kind: 'character', name: 'Ada' }, { id: 's2', kind: 'place', name: 'Diner' }] },
+    visualSpec: {}, scenes: [], productionReview: { draft: {} } };
+  const stamp = (p) => ({ ...p, concept: { ...p.concept, subjects: [{ ...p.concept.subjects[0], ingredientId: 'cat-chr-1' }, { ...p.concept.subjects[1], localOnly: true }] } });
+
+  it('leaves the Cast & Sets and art approvals current, and a subject revert keeps the catalog link', () => {
+    const approved = approvedArt({ ...project, castAndSets: { status: 'approved', approvedAt: '2026-01-01T00:00:00.000Z', approvedInputs: castAndSetsApprovalInputs(project), approvedValues: castAndSetsApprovalValues(project) } });
+    const stamped = stamp(approved);
+    expect(castAndSetsApproval(stamped).stale).toBeNull();
+    expect(productionReadiness(stamped).art.stale).toBeNull();
+
+    const renamed = { ...stamped, concept: { ...stamped.concept, subjects: [{ ...stamped.concept.subjects[0], name: 'Ada Lane' }, stamped.concept.subjects[1]] } };
+    const reverted = revertApprovedInput(renamed, { stage: 'castAndSets', field: 'subjects' });
+    expect(reverted.concept.subjects).toEqual(stamp(project).concept.subjects);
+  });
+});
+
 describe('reverting a Cast & Sets approval (#10241)', () => {
   const project = { id: 'p1', concept: { prompt: 'Example concept', style: 'ink', subjects: [{ id: 's1' }] }, visualSpec: { palette: ['#000000'] } };
   const approved = { ...project, castAndSets: { status: 'approved', approvedInputs: castAndSetsApprovalInputs(project), approvedValues: castAndSetsApprovalValues(project) } };

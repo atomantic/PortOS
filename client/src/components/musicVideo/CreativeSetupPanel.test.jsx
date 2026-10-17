@@ -74,6 +74,21 @@ describe('creative setup', () => {
     expect(saved.visualSpec.references).toEqual([expect.objectContaining({ imageId: 'diner.png', role: 'set', label: 'Night diner', condition: false })]);
   });
 
+  it('links a catalog subject to its record and lets the director keep a new one in this video only', async () => {
+    const onSave = vi.fn(async () => {});
+    const cast = { ...project, concept: { subjects: [
+      { id: 'mvc-1', kind: 'character', name: 'Example singer', ingredientId: 'cat-chr-1' },
+      { id: 'mvc-2', kind: 'object', name: 'Glass guitar' },
+    ] } };
+    render(<MemoryRouter><CreativeSetupPanel project={cast} onSave={onSave} onPendingChange={vi.fn()} /></MemoryRouter>);
+    fireEvent.click(screen.getByText('Edit'));
+    expect(screen.getByRole('link', { name: 'Open in catalog' })).toHaveAttribute('href', '/casting/cat-chr-1');
+    fireEvent.click(screen.getByLabelText('Keep in this video only'));
+    fireEvent.click(screen.getByText('Save creative setup'));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0][0].concept.subjects[1]).toEqual(expect.objectContaining({ id: 'mvc-2', localOnly: true }));
+  });
+
   it('discards an unsaved cast when the director cancels setup', async () => {
     const onSave = open();
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Unsaved singer' } });
