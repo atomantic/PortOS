@@ -71,6 +71,10 @@ const DEFAULT_HAND_GESTURES = Object.freeze([
 
 const trim = (s) => (typeof s === 'string' ? s.trim() : '');
 
+// Style line a sheet carries when no universe supplies one (a catalog-only
+// record). Exported so the catalog renderer can list it as a prompt addition.
+export const DEFAULT_CHARACTER_SHEET_STYLE = 'Style: contemporary illustrated character design with confident line work and saturated, intentional color.';
+
 // Shared field bag used by every variant's prompt builder. Centralizes the
 // trim/flatten calls so a new variant only writes the style-specific layout
 // sentences. Pure — caller decides which fields to weave into its prompt.
@@ -144,7 +148,7 @@ export function buildCharacterReferenceSheetPrompt(universe, character) {
   // header lead, then the per-zone layout enumeration.
   const promptParts = [
     'CHARACTER REFERENCE SHEET — single dense reference page laid out in clear panels with thin borders, clean typography, and labeled zones.',
-    styleBits || 'Style: contemporary illustrated character design with confident line work and saturated, intentional color.',
+    styleBits || DEFAULT_CHARACTER_SHEET_STYLE,
     `Character header (top of sheet): ${headerBits}`,
     physical ? `Physical description: ${physical}` : '',
     statsLine ? `Stats panel (small table, left side of header): ${statsLine}.` : '',
@@ -243,7 +247,7 @@ export function buildCharacterBlueprintSheetPrompt(universe, character) {
   // "labels" that come out as gibberish glyphs.
   const promptParts = [
     `A character concept sheet of ${subject}, featuring detailed front, back, and side views, along with close-up sketches of facial features, costume details, and accessories. Annotated design notes and clearly labeled components are arranged across the layout, rendered in a refined blueprint style with glowing ${accent} accents and a structured ${base} base design, presented on a clean white background with a polished professional character design presentation.`,
-    styleBits || 'Style: contemporary illustrated character design with confident line work and saturated, intentional color.',
+    styleBits || DEFAULT_CHARACTER_SHEET_STYLE,
     `Header banner across the top of the sheet reads, in bold legible typography: "${name.toUpperCase()}${role ? ` — ${role.toUpperCase()}` : ''}".`,
     `Main turnaround zone (large, fills the left two-thirds of the sheet): four full-body views of ${name} at consistent scale — FRONT, 3/4, SIDE, BACK — all fully illustrated in the universe's color palette. Each view sits over a small caption strip; the four caption strips read, left to right: ${turnaroundLabels}.`,
     physical ? `Physical description (annotation paragraph next to the turnaround): ${physical}` : '',
@@ -319,6 +323,11 @@ function getVariantConfig(variant = LEGACY_SHEET_VARIANT_ID) {
   return SHEET_VARIANTS[variant];
 }
 
+/** The prompt builder for one character sheet variant (400 on an unknown id). */
+export function getSheetVariantBuilder(variant) {
+  return getVariantConfig(variant).build;
+}
+
 // Catalog for the UI — pure, no I/O. The client renders one panel row per
 // entry. New entries here become available everywhere without further wiring.
 export function listSheetVariants() {
@@ -383,34 +392,29 @@ function subscribeToSheetJob(jobId, handlers) {
  * 'blueprint' = annotated concept sheet on white). Defaults to 'standard'
  * so existing callers (and the legacy route) stay unchanged.
  */
-export async function renderCharacterReferenceSheet(universeId, entryId, options = {}) {
-  const variant = options.variant || LEGACY_SHEET_VARIANT_ID;
-  const variantConfig = getVariantConfig(variant);
-  const universe = await getUniverse(universeId);
-  const list = Array.isArray(universe.characters) ? universe.characters : [];
-  const character = list.find((c) => c.id === entryId);
-  if (!character) {
-    throw new ServerError(`Character ${entryId} not found in universe`, {
-      status: 404, code: 'UNIVERSE_CANON_NOT_FOUND',
-    });
-  }
-  // Same frozen-identity guard the character refine/expand flows enforce —
-  // the UI gates this too, but the route is reachable directly so the lock
-  // has to be enforced server-side as well. 409 mirrors refineUniverseCharacter.
-  if (character.locked === true) {
-    throw new ServerError(
-      `Character "${character.name}" is locked — unlock it before rendering a reference sheet`,
-      { status: 409, code: 'UNIVERSE_CANON_LOCKED' },
-    );
-  }
-
-  const built = variantConfig.build(universe, character);
-
+/**
+ * The queued image params for a sheet: typed overrides, labeled additions
+ * (#11317), size, and the cloud/local model choice. Shared by every sheet
+ * renderer AND its preview so what a preview shows is what the render sends.
+ *
+ * `styleLine` is the style block the template carries; it is listed as
+ * `styleChip` only when the template (not a typed override) is sent and the
+ * block is actually in it. A typed override is sent exactly as written.
+ * Returns `{ params, prompt, negativePrompt, modelId, activeMode }`.
+ */
+export async function buildSheetRenderParams({
+  built,
+  options = {},
+  styleLine = '',
+  renderPin = {},
+  styleChip = { id: 'universe-style', label: 'Universe style' },
+  negativesLabel = 'Character sheet negatives',
+}) {
   const prompt = typeof options.overridePrompt === 'string' && options.overridePrompt.trim()
-    ? options.overridePrompt.trim()
+    ? options.overridePrompt
     : built.prompt;
   const negativePrompt = typeof options.overrideNegativePrompt === 'string' && options.overrideNegativePrompt.trim()
-    ? options.overrideNegativePrompt.trim()
+    ? options.overrideNegativePrompt
     : built.negativePrompt;
 
   const settings = await getSettings();
@@ -418,13 +422,12 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
   // the media-job queue with the active mode set; codex and local are both
   // first-class. External SD-API has no multi-zone layout support, so it
   // gets a clear remediation rather than a silently-degraded render.
-  // Render-target ladder (#3231): the universe's persisted pin (Phase 3) →
+  // Render-target ladder (#3231): the record's persisted pin (Phase 3) →
   // the universe-character-sheet pin in settings.renderDefaults → the install
   // default → local.
-  const renderPin = recordRenderPin(universe);
   const sheetTarget = resolveRenderTargetConfig(settings, RENDER_TARGET.UNIVERSE_CHARACTER_SHEET, {
-    recordMode: renderPin.mode,
-    recordModel: renderPin.modelId,
+    recordMode: renderPin?.mode,
+    recordModel: renderPin?.modelId,
     fallbackMode: IMAGE_GEN_MODE.LOCAL,
   });
   const activeMode = sheetTarget.mode;
@@ -440,13 +443,12 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
   // user zooms. resolveSheetDimensions bumps codex up to 4K landscape while
   // local FLUX keeps its memory-tuned 2048×1536 defaults.
   const { width, height } = resolveSheetDimensions(activeMode, built.width, built.height);
-  // The sheet template is PortOS's own text around the character's fields; the
-  // universe style and the sheet negatives it carries are listed on the
-  // render's sent-prompt record (#11317). A typed override is sent as written.
-  const styleLine = universeAestheticLine(universe);
+  // The sheet template is PortOS's own text around the record's fields; the
+  // style and the sheet negatives it carries are listed on the render's
+  // sent-prompt record (#11317). A typed override is sent as written.
   const promptAdditions = [
-    prompt === built.prompt && styleLine && prompt.includes(styleLine.trim()) ? promptAddition('universe-style', 'Universe style', styleLine) : null,
-    negativePrompt === built.negativePrompt ? promptAddition('sheet-negatives', 'Character sheet negatives', built.negativePrompt) : null,
+    prompt === built.prompt && styleLine && prompt.includes(styleLine.trim()) ? promptAddition(styleChip.id, styleChip.label, styleLine) : null,
+    negativePrompt === built.negativePrompt ? promptAddition('sheet-negatives', negativesLabel, built.negativePrompt) : null,
   ].filter(Boolean);
   const baseParams = {
     mode: activeMode,
@@ -481,6 +483,61 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
       { status: 400, code: 'UNIVERSE_CHARACTER_SHEET_UNSUPPORTED_MODE' },
     );
   }
+  return { params, prompt, negativePrompt, modelId, activeMode };
+}
+
+// Load + guard one universe character and build its sheet params. Shared by
+// the render and its preview.
+async function prepareCharacterSheet(universeId, entryId, options) {
+  const variant = options.variant || LEGACY_SHEET_VARIANT_ID;
+  const variantConfig = getVariantConfig(variant);
+  const universe = await getUniverse(universeId);
+  const list = Array.isArray(universe.characters) ? universe.characters : [];
+  const character = list.find((c) => c.id === entryId);
+  if (!character) {
+    throw new ServerError(`Character ${entryId} not found in universe`, {
+      status: 404, code: 'UNIVERSE_CANON_NOT_FOUND',
+    });
+  }
+  // Same frozen-identity guard the character refine/expand flows enforce —
+  // the UI gates this too, but the route is reachable directly so the lock
+  // has to be enforced server-side as well. 409 mirrors refineUniverseCharacter.
+  if (character.locked === true) {
+    throw new ServerError(
+      `Character "${character.name}" is locked — unlock it before rendering a reference sheet`,
+      { status: 409, code: 'UNIVERSE_CANON_LOCKED' },
+    );
+  }
+  const built = variantConfig.build(universe, character);
+  const sheet = await buildSheetRenderParams({
+    built, options, styleLine: universeAestheticLine(universe), renderPin: recordRenderPin(universe),
+  });
+  return { variant, variantConfig, universe, character, ...sheet };
+}
+
+/** What a universe character's sheet render would send, without queueing it. */
+export async function previewCharacterReferenceSheet(universeId, entryId, options = {}) {
+  const { params } = await prepareCharacterSheet(universeId, entryId, options);
+  return {
+    sentPrompt: params.prompt,
+    ...(params.negativePrompt ? { sentNegativePrompt: params.negativePrompt } : {}),
+    promptAdditions: params.promptAdditions || [],
+  };
+}
+
+/**
+ * Returns immediately with `{ jobId, generationId, filename, path }`.
+ * Deferred copy + character stamp run when imageGenEvents emits 'completed';
+ * any failure there is logged (the client tracks the render via SSE).
+ *
+ * `variant` selects the sheet style ('standard' = illustrated turnaround,
+ * 'blueprint' = annotated concept sheet on white). Defaults to 'standard'
+ * so existing callers (and the legacy route) stay unchanged.
+ */
+export async function renderCharacterReferenceSheet(universeId, entryId, options = {}) {
+  const {
+    variant, variantConfig, universe, character, params, prompt, modelId, activeMode,
+  } = await prepareCharacterSheet(universeId, entryId, options);
 
   // Resolve (or create) the universe's media collection up front, then attach
   // a `universeRun` tag to the job so `universeBuilderCollectionHook` files

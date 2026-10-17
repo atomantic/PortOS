@@ -315,13 +315,15 @@ const INGREDIENT_LIGHT_COLS = 'id, type, name, payload, tags, embedding_model, o
 // Correlated subquery that yields the card-thumbnail media key for each row:
 // the live portrait when set, otherwise the most recent live reference image.
 // Non-image media kinds (audio/video/document) are excluded so a card never
-// points an <img> at an unrenderable key. Used only by listIngredients' light
-// path (see the note there).
+// points an <img> at an unrenderable key. Working images filed with a role —
+// reference sheets (`sheet:*`), looks (`look:*`) and plates — never become the
+// cover. Used only by listIngredients' light path (see the note there).
 const THUMBNAIL_KEY_SUBQUERY = `(
     SELECT m.media_key FROM catalog_ingredient_media m
      WHERE m.ingredient_id = catalog_ingredients.id
        AND m.deleted = false
        AND m.kind IN ('portrait', 'reference')
+       AND (m.role IS NULL OR NOT (m.role LIKE 'sheet:%' OR m.role LIKE 'look:%' OR m.role = 'plate'))
      ORDER BY (m.kind = 'portrait') DESC, m.created_at DESC
      LIMIT 1
   ) AS thumbnail_key`;
