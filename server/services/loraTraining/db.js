@@ -11,7 +11,7 @@
  * status/startedAt/completedAt writes. A bare read-modify-write would let a
  * stale read clobber a concurrent append, so `updateRun` chains every
  * mutation for the same id onto a per-id tail promise (the same discipline
- * as `issueWriteTail` in pipeline/issues.js). Writes to DIFFERENT runs stay
+ * as `queueSeriesIssuesWrite` in pipeline/issuesShared.js). Writes to DIFFERENT runs stay
  * parallel; the map entry is pruned once its chain settles.
  */
 

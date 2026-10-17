@@ -484,7 +484,7 @@ export async function spawnDirectly({
   // listener before the enqueue, so a blocked earlier write can never delay
   // killing the provider on a usage-limit signal. The close/error handlers
   // `await drainTranscriptWrites()` before finalize so the tail lands first.
-  // Mirrors shell.js `hookQueue` and pipeline/issues.js `issueWriteTail`.
+  // Mirrors shell.js `hookQueue` and pipeline/issuesShared.js `queueSeriesIssuesWrite`.
   let transcriptWriteTail = Promise.resolve();
   const enqueueTranscriptWrite = (fn) => {
     transcriptWriteTail = transcriptWriteTail.then(fn).catch((err) => {

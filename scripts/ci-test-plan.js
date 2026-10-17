@@ -280,6 +280,7 @@ export const ALWAYS_RUN_TESTS = [
   'docs/deps-doc.test.js',
   'docs/features/product-surfaces.test.js',
   'scripts/agent-instructions-files.test.js',
+  'scripts/doc-code-pointers.test.js',
   // Whole-tree scanner: a new browser suite can adopt the gate with no import
   // edge back to the registry it must join (#10312).
   'scripts/browser-suite-registry.test.js',

@@ -442,7 +442,7 @@ export async function getState() {
 // concurrent writers (e.g. an auto-window-activate PUT + a manual layout
 // save firing from the same browser, or palette + dashboard tabs) can't
 // interleave load → modify → write and lose each other's changes. Mirrors
-// the `issueWriteTail` / `cacheWriteTails` pattern documented in AGENTS.md
+// the `createKeyCachedQueue` / `cacheWriteTails` pattern documented in AGENTS.md
 // ("Async PATCH races on shared records — serialize writes server-side").
 let layoutsWriteTail = Promise.resolve();
 const queueLayoutsWrite = (fn) => {

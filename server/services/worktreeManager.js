@@ -209,7 +209,7 @@ export function addWorktreeWithRetry(args, repo, attempt = 1, firstError = null)
 }
 
 // Per-source-repo serialization tail for worktree-creating git operations —
-// the issueWriteTail pattern (see server/services/pipeline/issues.js). Git
+// the createKeyCachedQueue pattern (see server/services/pipeline/issuesShared.js). Git
 // serializes its own worktree bookkeeping behind a per-repo lock, so two
 // `git worktree add` calls in the same evaluation tick race and the loser is
 // blocked with `blockedCategory: worktree-failed` (#2193). A single promise
