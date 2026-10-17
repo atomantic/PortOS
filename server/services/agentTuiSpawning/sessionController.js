@@ -962,7 +962,7 @@ export function createTuiSessionController({
    * file, re-arms the watcher) — so finish() reopens the phase only after this
    * whole function settles.
    */
-  const runFinishDecision = async ({ success }) => {
+  const runFinishDecision = async ({ success, reason }) => {
     if (terminalRefusal) return { type: 'finalize' };
     // PortOS is going down. Whatever path got here — the PTY exiting under
     // TreeKill, a provider-signal failure, a paste that failed because the shell died —
@@ -1009,7 +1009,14 @@ export function createTuiSessionController({
     // mergeGateContract.js for the full decision table. The re-prompt expects
     // a fresh completion signal; a trigger that arrived while this was
     // deciding is the only thing that could say the session died meanwhile.
-    if (success && sentinelSummary !== null && mergeGateIsOwed && !mergeGateReprompted
+    //
+    // Never when a PTY exit (`shell-*`) is the deciding trigger: a dead
+    // session cannot answer the nudge, and `tui:exit` is already consumed, so
+    // nothing would ever finish the run. `resubmit()` cannot be the liveness
+    // test — a runner proxy accepts writes after its PTY died (#11861). The
+    // still-open PR takes the post-finalize merge path instead.
+    const sessionExited = reason?.startsWith('shell-');
+    if (success && sentinelSummary !== null && mergeGateIsOwed && !mergeGateReprompted && !sessionExited
       && await checkMergeGateCompliance(sentinelSummary)) {
       return { type: 'reprompt', replayParked: 'always' };
     }
@@ -1039,7 +1046,7 @@ export function createTuiSessionController({
     }
     sessionPhase = 'finishing';
 
-    let decision = await runFinishDecision({ success });
+    let decision = await runFinishDecision({ success, reason });
     // A refusal observed while a sentinel/probe was awaited outranks its result.
     if (terminalRefusal) {
       decision = { type: 'finalize' };

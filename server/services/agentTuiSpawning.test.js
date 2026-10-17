@@ -13,6 +13,7 @@ vi.mock('./shell.js', () => ({
   getSession: vi.fn(),
   getSessionProcess: vi.fn(),
   registerExternalSession: vi.fn(),
+  unregisterExternalSession: vi.fn(),
 }));
 
 // Only the spawn rpc is faked. The refusal/ambiguity classifier is the real one
@@ -852,6 +853,13 @@ describe('spawnTuiAgent runtime', () => {
     );
 
     await capturedOnExit({ exitCode: 1, signal: 15 });
+
+    // The runner proxy accepts writes after its PTY died, so only removing the
+    // record makes a later paste report the session gone (#11861) — and it has
+    // to happen before the run is finalized, which is where a nudge is decided.
+    expect(shellService.unregisterExternalSession).toHaveBeenCalledWith(SESSION_ID, { exitCode: 1 });
+    expect(vi.mocked(shellService.unregisterExternalSession).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(agentLifecycle.finalizeAgent).mock.invocationCallOrder[0]);
   });
 
   it('passes the repo-owner-pinned GH_TOKEN into the TUI session env (buildSafeEnv would otherwise strip it)', async () => {
@@ -2824,7 +2832,7 @@ describe('spawnTuiAgent runtime', () => {
 
     expect(activeAgents.has('agent-1')).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
-    expect(shellService.killSession).toHaveBeenCalledWith(SESSION_ID);
+    expect(shellService.registerExternalSession, 'a PTY that already exited is not registered').not.toHaveBeenCalled();
     expect(cosAgentLifecycle.updateAgent).not.toHaveBeenCalled();
   });
 
@@ -3459,6 +3467,14 @@ describe('spawnTuiAgent runtime', () => {
       for (let i = 0; i < 8; i += 1) await flushMicrotasks();
     };
 
+    // The sentinel watcher's fallback poll, past the 5000ms tick AND the 50ms
+    // settle delay `watchForFile` applies after a `detect()`. A nudge is only
+    // ever decided on this trigger: a PTY exit means nobody is left to read it.
+    const fireSentinelWatcher = async () => {
+      await vi.advanceTimersByTimeAsync(5100);
+      await settle();
+    };
+
     beforeEach(() => { sentinelExists = false; });
 
     it('leaves a read-only run with an open PR to PortOS without a merge re-prompt', async () => {
@@ -3492,8 +3508,7 @@ describe('spawnTuiAgent runtime', () => {
       await flushMicrotasks(); // initial watcher arms while quiet — must not self-fire
 
       sentinelExists = true; // the agent writes .agent-done
-      await capturedOnExit({ exitCode: 0, killed: false });
-      await settle();
+      await fireSentinelWatcher();
 
       // Round 1: nudged, not finalized. The reprompt path deletes the
       // sentinel (`rm` flips `sentinelExists` false, see withSentinel) and
@@ -3507,11 +3522,7 @@ describe('spawnTuiAgent runtime', () => {
       // blocker) and the RE-ARMED watcher's fallback poll picks it up —
       // proving the re-arm itself works, not just a second exit event.
       sentinelExists = true;
-      // Past the 5000ms poll AND the 50ms settle delay `watchForFile` applies
-      // after a `detect()` — a bare 5000ms advance lands exactly on the poll
-      // tick but not the settle timer it then schedules.
-      await vi.advanceTimersByTimeAsync(5100);
-      await settle();
+      await fireSentinelWatcher();
       await spawnPromise;
 
       // One nudge per run: round 2 finalizes instead of nudging again.
@@ -3554,12 +3565,34 @@ describe('spawnTuiAgent runtime', () => {
       await flushMicrotasks(); // initial watcher arms while quiet — must not self-fire
 
       sentinelExists = true; // the agent writes .agent-done
-      await capturedOnExit({ exitCode: 0, killed: false });
-      await settle();
+      await fireSentinelWatcher();
       await spawnPromise;
 
       expect(shellService.pasteToSession).toHaveBeenCalledTimes(1);
       expect(agentLifecycle.finalizeAgent).toHaveBeenCalledTimes(1);
+    });
+
+    // #11861: a runner proxy accepts a paste after its PTY died, so a truthy
+    // paste cannot prove the nudge reached anyone. When the exit is what
+    // decides, the run finalizes; the open PR takes the post-finalize path.
+    it('finalizes without nudging when a PTY exit is the deciding trigger, even if the paste would succeed', async () => {
+      vi.mocked(shellService.pasteToSession).mockReturnValue(999);
+      vi.mocked(probePrForBranch).mockResolvedValue({
+        prState: 'OPEN', prUrl: 'https://example.com/pr/1', prNumber: 1, cli: 'gh', readable: true,
+      });
+      withSentinel('## Summary\nShipped the fix and opened the PR.');
+
+      const spawnPromise = runSpawn({ task: openPrTask, workspacePath: '/tmp/ws' });
+      await flushMicrotasks(); // initial watcher arms while quiet — must not self-fire
+
+      sentinelExists = true; // the agent writes .agent-done, then exits first
+      await capturedOnExit({ exitCode: 0, killed: false });
+      await settle();
+      await spawnPromise;
+
+      expect(shellService.pasteToSession).not.toHaveBeenCalled();
+      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledTimes(1);
+      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
     });
 
     it('replays a finish() trigger dropped while the merge-gate check was deciding, instead of losing it', async () => {
@@ -3572,17 +3605,26 @@ describe('spawnTuiAgent runtime', () => {
       const spawnPromise = runSpawn({ task: openPrTask, workspacePath: '/tmp/ws' });
       await flushMicrotasks(); // initial watcher arms while quiet — must not self-fire
 
+      // Hold the forge probe so the second trigger lands mid-decision.
+      let releaseProbe;
+      vi.mocked(probePrForBranch).mockImplementationOnce(() => new Promise((resolve) => {
+        releaseProbe = () => resolve({
+          prState: 'OPEN', prUrl: 'https://example.com/pr/1', prNumber: 1, cli: 'gh', readable: true,
+        });
+      }));
+
       sentinelExists = true; // the agent writes .agent-done
-      // Two triggers fire back-to-back with no await between them: the first
-      // (a clean exit) starts the merge-gate decision; the second (a kill
-      // signal racing in right after) is dropped by the `finishing` guard
-      // while the first is still deciding. It must be replayed — not lost —
-      // once the first settles on "not finalizing after all", or the run
-      // would sit forever waiting for a nudge into a session that already died.
-      const p1 = capturedOnExit({ exitCode: 0, killed: false });
-      const p2 = capturedOnExit({ exitCode: 1, killed: true });
+      // The sentinel watcher starts the merge-gate decision; a kill signal
+      // racing in while it decides is parked by the `finishing` guard. It must
+      // be replayed — not lost — once the first settles on "not finalizing
+      // after all", or the run would sit forever waiting for a nudge into a
+      // session that already died.
+      await fireSentinelWatcher();
+      expect(releaseProbe).toBeTypeOf('function');
+      const exited = capturedOnExit({ exitCode: 1, killed: true });
+      releaseProbe();
       await settle();
-      await Promise.all([p1, p2]);
+      await exited;
       await spawnPromise;
 
       expect(shellService.pasteToSession).toHaveBeenCalledTimes(1);
@@ -3609,8 +3651,7 @@ describe('spawnTuiAgent runtime', () => {
       await flushMicrotasks(); // initial watcher arms while quiet — must not self-fire
 
       sentinelExists = true; // the agent writes .agent-done
-      await capturedOnExit({ exitCode: 0, killed: false });
-      await settle();
+      await fireSentinelWatcher();
       expect(shellService.pasteToSession).toHaveBeenCalledTimes(1);
       expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
 
