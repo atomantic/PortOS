@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useParams, useNavigate, useSearchParams } from 'react-router';
+import { Link, useParams, useNavigate, useSearchParams } from 'react-router';
 import * as api from '../services/api';
 import { BookOpen, Search, Network, FileText, BarChart3, Activity } from 'lucide-react';
 import LoadFailedState from '../components/ui/LoadFailedState';
@@ -160,7 +160,7 @@ export default function Wiki() {
       <div className="flex flex-col items-center justify-center h-full text-gray-500">
         <BookOpen size={48} className="mb-3 opacity-30" />
         <p className="text-sm">No Obsidian vaults connected</p>
-        <p className="text-xs mt-1">Go to Brain &gt; Notes to connect a vault first</p>
+        <p className="text-xs mt-1">Go to <Link to="/brain/notes" className="text-port-accent hover:underline">Brain &gt; Notes</Link> to connect a vault first</p>
       </div>
     );
   }
