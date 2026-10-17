@@ -457,10 +457,11 @@ async function enforceUpstreamOrUndoAdd(sourceWorkspace, branchName, worktreePat
  *   statically, notably one run's own `.agent-done-<agentId>` sentinel. Matched
  *   as roots: a directory entry also covers everything under it. They are still
  *   removed only when the rest of the tree is safe to remove.
- * @returns {{ clean: boolean, lockfileOnly: boolean, lockfilePaths: string[], realChangePaths: string[], hasRealChanges: boolean }}
+ * @returns {{ clean: boolean, lockfileOnly: boolean, lockfilePaths: string[], untrackedLockfilePaths: string[], realChangePaths: string[], hasRealChanges: boolean }}
  *   - clean: no changes at all
  *   - lockfileOnly: every change is an auto-generated lockfile (safe to discard)
  *   - lockfilePaths: paths of those lockfiles (strip the porcelain `XY ` status prefix)
+ *   - untrackedLockfilePaths: the subset of lockfilePaths that is untracked (`??`)
  *   - realChangePaths: paths of the NON-lockfile changes, same prefix stripping.
  *     Branch reconciliation intersects these with what the default branch has
  *     touched since the branch diverged, to spot work that may have been
@@ -475,7 +476,7 @@ export function classifyWorktreeDirt(porcelain, { ignoredPaths = [] } = {}) {
     .filter(Boolean)
     .filter(line => !matchesScratchRoot(toPath(line), ignored));
   if (lines.length === 0) {
-    return { clean: true, lockfileOnly: false, lockfilePaths: [], realChangePaths: [], hasRealChanges: false };
+    return { clean: true, lockfileOnly: false, lockfilePaths: [], untrackedLockfilePaths: [], realChangePaths: [], hasRealChanges: false };
   }
   const isLockfile = (line) => AUTO_GENERATED_LOCKFILES.some(f => line.endsWith(f));
   // `R old -> new` (rename) names two paths; the post-rename path is the one
@@ -486,9 +487,27 @@ export function classifyWorktreeDirt(porcelain, { ignoredPaths = [] } = {}) {
     clean: false,
     lockfileOnly,
     lockfilePaths: lockfileLines.map(toPath),
+    // Untracked (`??`) lockfiles have no index entry, so `git checkout --` cannot
+    // restore them; discardLockfileChanges deletes these instead.
+    untrackedLockfilePaths: lockfileLines.filter(line => line.startsWith('??')).map(toPath),
     realChangePaths: lines.filter((line) => !isLockfile(line)).map(toPath),
     hasRealChanges: !lockfileOnly
   };
+}
+
+/**
+ * Discard the auto-generated lockfile churn that `classifyWorktreeDirt` reported.
+ * Untracked lockfiles are deleted (git cannot restore what it does not track);
+ * tracked ones are restored from the index. Rejects if either step fails, so the
+ * caller decides whether the tree is still safe to remove.
+ */
+async function discardLockfileChanges(worktreePath, dirt) {
+  const untracked = new Set(dirt.untrackedLockfilePaths);
+  for (const path of untracked) {
+    await rm(join(worktreePath, path), { force: true });
+  }
+  const tracked = dirt.lockfilePaths.filter(path => !untracked.has(path));
+  if (tracked.length) await execGit(['checkout', '--', ...tracked], worktreePath);
 }
 
 /** A proven-absent directory is empty; an existing tree must identify itself.
@@ -1043,7 +1062,7 @@ async function adoptWorktreeUnlocked(agentId, sourceWorkspace, existingWorktreeP
   const dirt = classifyWorktreeDirt(porcelain);
   if (dirt.lockfileOnly) {
     console.log(`🧹 Discarding ${dirt.lockfilePaths.length} auto-generated lockfile change(s) in adopted worktree ${agentId}`);
-    await execGit(['checkout', '--', ...dirt.lockfilePaths], targetPath).catch(err => {
+    await discardLockfileChanges(targetPath, dirt).catch(err => {
       console.log(`⚠️ Lockfile discard failed in adopted worktree ${agentId}: ${err.message}`);
     });
   }
@@ -1211,7 +1230,13 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
     // (e.g., npm install resolving ^version to exact version in package-lock.json)
     if (dirt.lockfileOnly) {
       console.log(`🧹 Discarding ${dirt.lockfilePaths.length} auto-generated lockfile change(s) in worktree ${agentId}`);
-      await execGit(['checkout', '--', ...dirt.lockfilePaths], worktreePath);
+      // Never throws past removeWorktree: an undiscardable lockfile keeps the tree.
+      const discarded = await discardLockfileChanges(worktreePath, dirt).then(() => true, err => {
+        console.log(`⚠️ Lockfile discard failed in worktree ${agentId}, preserving to avoid data loss: ${err.message}`);
+        warnings.push(`Worktree preserved — lockfile discard failed in ${worktreePath}: ${err.message}`);
+        return false;
+      });
+      if (!discarded) return { merged: false, removed: false, uncommittedSaved: false, warnings };
     } else {
       // NAME the dirty paths. The bare message reads as "your work was left
       // behind" with no way to tell real uncommitted work from a transient

@@ -141,7 +141,7 @@ describe('Worktree dependency preparation', () => {
 
 describe('classifyWorktreeDirt (real exported helper)', () => {
   it('reports clean for empty / whitespace-only porcelain', () => {
-    expect(classifyWorktreeDirt('')).toEqual({ clean: true, lockfileOnly: false, lockfilePaths: [], realChangePaths: [], hasRealChanges: false });
+    expect(classifyWorktreeDirt('')).toEqual({ clean: true, lockfileOnly: false, lockfilePaths: [], untrackedLockfilePaths: [], realChangePaths: [], hasRealChanges: false });
     expect(classifyWorktreeDirt('  \n  ').clean).toBe(true);
     expect(classifyWorktreeDirt(null).clean).toBe(true);
   });
@@ -741,6 +741,42 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
     expect(calledWith(['merge', 'cos/task-1/agent-x', '--no-edit'])).toBe(false);
   });
 
+  // An untracked lockfile has no index entry, so `git checkout --` cannot restore it
+  // and used to reject the whole removal (#11867). It must be deleted instead.
+  it('removes a worktree whose only dirt is an untracked lockfile', async () => {
+    scriptGit({ porcelain: '?? package-lock.json' });
+
+    const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', { merge: false });
+
+    expect(result.removed).toBe(true);
+    expect(rm).toHaveBeenCalledWith(join(PATHS.worktrees, 'agent-x', 'package-lock.json'), { force: true });
+    expect(calledWith(['checkout', '--', 'package-lock.json'])).toBe(false);
+  });
+
+  it('restores a modified tracked lockfile with checkout before removal', async () => {
+    scriptGit({ porcelain: ' M pnpm-lock.yaml' });
+
+    const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', { merge: false });
+
+    expect(result.removed).toBe(true);
+    expect(calledWith(['checkout', '--', 'pnpm-lock.yaml'])).toBe(true);
+    expect(rm).not.toHaveBeenCalledWith(expect.stringContaining('pnpm-lock.yaml'), expect.anything());
+  });
+
+  it('preserves the worktree instead of rejecting when the lockfile discard fails', async () => {
+    scriptGit({ porcelain: ' M yarn.lock' });
+    const scripted = execGitMock.getMockImplementation();
+    execGitMock.mockImplementation((args, ...rest) => (args[0] === 'checkout'
+      ? Promise.reject(new Error('index is locked'))
+      : scripted(args, ...rest)));
+
+    const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', { merge: false });
+
+    expect(result).toMatchObject({ removed: false, merged: false, uncommittedSaved: false });
+    expect(result.warnings.join(' ')).toMatch(/lockfile discard failed/);
+    expect(calledWith(['worktree', 'remove', join(PATHS.worktrees, 'agent-x'), '--force'])).toBe(false);
+  });
+
   it('still removes an empty branch after a verified zero commit count', async () => {
     const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', { merge: true });
 
@@ -1246,6 +1282,17 @@ describe('adoptWorktree — resuming an interrupted run in its own worktree', ()
     execGitMock.mockRejectedValue(new Error('working trees containing submodules cannot be moved'));
 
     await expect(adoptWorktree('agent-new', '/repo', DEAD_TREE, 'cos/task-1/agent-dead')).resolves.toBeNull();
+  });
+
+  it('deletes an untracked lockfile rather than checking it out when adopting', async () => {
+    execGitMock.mockImplementation((args) => Promise.resolve({
+      stdout: args[0] === 'status' ? '?? package-lock.json' : '', stderr: '', exitCode: 0,
+    }));
+
+    await adoptWorktree('agent-new', '/repo', DEAD_TREE, 'cos/task-1/agent-dead');
+
+    expect(rm).toHaveBeenCalledWith(join(NEW_TREE, 'package-lock.json'), { force: true });
+    expect(execGitMock).not.toHaveBeenCalledWith(['checkout', '--', 'package-lock.json'], expect.anything());
   });
 
   it('is a no-op when the tree already sits at the destination', async () => {
