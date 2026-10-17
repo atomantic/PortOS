@@ -109,4 +109,18 @@ describe('ci.yml fail-fast cancellation contract', () => {
     expect(fullCi).toBeTruthy();
     expect(fullCi).toMatch(/\n    permissions:\n      contents: read\n      actions: write\n/);
   });
+
+  it('grants the release caller every scope a called ci.yml job declares', () => {
+    // A called workflow cannot hold a scope its calling job lacks; a missing
+    // grant is a startup_failure that publishes nothing (v2.97.0, statuses: read).
+    const releaseWorkflow = readFileSync(join(REPO_ROOT, '.github/workflows/release.yml'), 'utf8');
+    const fullCi = workflowJobs(releaseWorkflow)['full-ci'];
+    const granted = new Set([...fullCi.matchAll(/^ {6}(\w+): (?:read|write)$/gm)].map((m) => m[1]));
+    for (const [id, body] of Object.entries(jobs)) {
+      const block = body.match(/\n    permissions:\n((?:      \w+: (?:read|write)\n)+)/);
+      for (const m of (block?.[1] ?? '').matchAll(/ {6}(\w+): /g)) {
+        expect(granted.has(m[1]), `${id} needs ${m[1]}`).toBe(true);
+      }
+    }
+  });
 });

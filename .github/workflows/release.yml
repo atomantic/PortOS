@@ -62,6 +62,7 @@ jobs:
     permissions:
       contents: read
       actions: write
+      statuses: read
     uses: ./.github/workflows/ci.yml
     with:
       full: true
