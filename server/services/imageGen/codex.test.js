@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdir, writeFile, rm, readFile } from 'fs/promises';
-import { existsSync } from 'fs';
-import { join, relative, resolve } from 'path';
+import { existsSync, realpathSync } from 'fs';
+import { join, relative, resolve, basename } from 'path';
 import { tmpdir } from 'os';
 import { EventEmitter } from 'events';
 import sharp from 'sharp';
@@ -80,7 +80,11 @@ vi.mock('../../lib/fileUtils.js', async () => {
   // a spread-only override would leave the original PATHS.images intact
   // for any function closing over the actual module's binding.
   actual.PATHS.images = FAKE_IMAGES_DIR;
-  actual.PATHS.tmp = join(TEST_HOME, 'tmp');
+  // NOTE: do not invent PATHS keys here. An earlier revision set `PATHS.tmp`,
+  // a key the real object has never had, so the suite exercised a property
+  // that exists only under test while every production render threw
+  // ERR_INVALID_ARG_TYPE on it. The render scratch dir is rooted at the OS
+  // temp dir and needs no PATHS entry; `pathsKeysAreReal` below pins that.
   return {
     ...actual,
     ensureDir: vi.fn(async (dir) => mkdir(dir, { recursive: true })),
@@ -90,6 +94,8 @@ vi.mock('../../lib/fileUtils.js', async () => {
 // imageGenEvents is fine to import for real, but we don't want stray
 // listeners between tests. Reset its emitter state in beforeEach.
 const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
+// Read back through the mocked module so this is the same PATHS the service sees.
+const { PATHS } = await import('../../lib/fileUtils.js');
 const codex = await import('./codex.js');
 const { imageGenEvents } = await import('../imageGenEvents.js');
 const { spawn } = await import('../../lib/childProcess.js');
@@ -1061,7 +1067,14 @@ describe('Codex cached defaults and isolated workspace', () => {
     imageGenEvents.on('failed', failed);
     const job = await codex.generateImage({ prompt: 'synthetic' });
     const call = spawnCalls[0];
-    expect(call.options.cwd.startsWith(join(TEST_HOME, 'tmp', 'codex-image-'))).toBe(true);
+    // The property #11734 actually bought: the child's cwd is a fresh per-render
+    // directory under the OS temp root, NOT the server's own cwd (the PortOS
+    // checkout), so a hand-drawing codex cannot write into the working tree.
+    expect(basename(call.options.cwd).startsWith('portos-codex-image-')).toBe(true);
+    // realpath both sides: on macOS tmpdir() is /var/... while the resolved
+    // path is /private/var/..., so a raw prefix compare is platform-fragile.
+    expect(realpathSync(call.options.cwd).startsWith(realpathSync(tmpdir()))).toBe(true);
+    expect(call.options.cwd.startsWith(PATHS.installRoot)).toBe(false);
     expect(call.options.env.PWD).toBe(call.options.cwd);
     expect(call.args.at(-1)).toContain('Only the image_gen tool may produce this image');
     await writeFile(join(call.options.cwd, 'drawing.svg'), '<svg/>');
