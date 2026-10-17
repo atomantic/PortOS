@@ -17,7 +17,7 @@
 // PROVIDER_VENDORS registry (#3618), consumed by every dispatch site that
 // used to duplicate its own vendor if-chain.
 import { inferTuiCommand, applyCommandDefaults, injectTuiModelAndEffort } from './providerVendors.js';
-import { detectTuiRetryBanner, describeTuiRetryStall } from './aiToolkit/errorDetection.js';
+import { detectTuiRetryBanner, describeTuiRetryStall, ERROR_CATEGORIES } from './aiToolkit/errorDetection.js';
 
 // ─── Paste handshake constants ────────────────────────────────────────────
 
@@ -467,6 +467,32 @@ export const OPENCODE_INPUT_READY_PATTERN = /askanything/i;
 // across screen rows with composer-border glyphs interleaved in the PTY stream.
 const OPENCODE_UPDATE_PROMPT_PATTERN = /updateavailable.*anewreleasev[\d.]+isavailable\./i;
 
+// OpenCode rejects a model it cannot resolve with a startup toast, then paints
+// its composer with a DIFFERENT model — so the composer-ready signal is not
+// proof the task's model is the one that will answer. Matched against a tail
+// with whitespace AND box/block glyphs removed, because the toast wraps across
+// rows with the border between them. The id must be `provider/model`: that
+// shape keeps the whitespace-stripped match from firing on ordinary prose.
+const OPENCODE_MODEL_REJECTION_PATTERN = /Model([A-Za-z0-9][\w.-]*\/[\w.:@+/-]*?)isnotvalid/i;
+const BOX_AND_BLOCK_GLYPHS = /[\s\u2500-\u259F]+/g;
+
+/**
+ * Error analysis for an OpenCode startup model rejection. `model-not-found` is
+ * a request-specific category, so the cooldown policy leaves the provider's
+ * other models available (see isRequestSpecificCategory).
+ */
+function describeOpencodeModelRejection(rejectedModel) {
+  return {
+    category: ERROR_CATEGORIES.MODEL_NOT_FOUND,
+    actionable: true,
+    origin: 'provider',
+    message: `OpenCode rejected the selected model "${rejectedModel}" at startup, so no prompt was sent.`,
+    suggestedFix: 'Choose a model that `opencode models` lists for this provider, or clear the model override to use the CLI default. PortOS did not change any model setting.',
+    escalation: 'Pick a model OpenCode accepts (or clear the override to use the CLI default), then approve the retry.',
+    affectedModel: rejectedModel,
+  };
+}
+
 // Handshake markers are matched against a rolling window of whitespace-stripped
 // output rather than a single chunk, so a marker split across two PTY reads
 // (`? for short` | `cuts`) still matches. Sized to a few screens of chrome.
@@ -531,6 +557,10 @@ export function createInputReadyTracker({ readyTextPattern = null, launchShape =
   let hookReviewAnswered = false;
   let needsOpencodeUpdate = false;
   let opencodeUpdateAnswered = false;
+  // Latched on first sight and never cleared: callers consult it only before
+  // the prompt is delivered, so a later echo of the toast text is ignored.
+  let opencodeModelRejection = null;
+  let opencodeRejectionTail = '';
   let tail = '';
   // node-pty can split `ESC[?2004h` across reads. Keep only the trailing
   // prefix of that exact toggle so the next chunk can complete it without
@@ -559,6 +589,7 @@ export function createInputReadyTracker({ readyTextPattern = null, launchShape =
     get needsExternalImportsChoice() { return needsExternalImportsChoice; },
     get needsHookReview() { return needsHookReview; },
     get needsOpencodeUpdate() { return needsOpencodeUpdate; },
+    get opencodeModelRejection() { return opencodeModelRejection; },
     /** Spawner selected the affirmative trust choice. */
     ackTrustChoice() { needsTrust = false; trustAnswered = true; },
     /** Spawner reports the dismissal keystrokes went out; re-arms `ready`. */
@@ -615,6 +646,11 @@ export function createInputReadyTracker({ readyTextPattern = null, launchShape =
         if (!needsHookReview && !hookReviewAnswered && TUI_HOOK_REVIEW_PROMPT_PATTERN.test(tail)) needsHookReview = true;
         if (!needsOpencodeUpdate && !opencodeUpdateAnswered && OPENCODE_UPDATE_PROMPT_PATTERN.test(tail)) needsOpencodeUpdate = true;
         if (readyTextPattern && !sawReadyText && readyTextPattern.test(tail)) sawReadyText = true;
+        if (!opencodeModelRejection) {
+          opencodeRejectionTail = (opencodeRejectionTail + strippedText.replace(BOX_AND_BLOCK_GLYPHS, '')).slice(-OBSERVE_TAIL_MAX_LEN);
+          const rejected = OPENCODE_MODEL_REJECTION_PATTERN.exec(opencodeRejectionTail);
+          if (rejected) opencodeModelRejection = describeOpencodeModelRejection(rejected[1]);
+        }
       }
     },
   };

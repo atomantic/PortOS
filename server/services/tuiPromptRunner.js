@@ -1024,6 +1024,24 @@ ${prompt}`;
       }
       const now = Date.now();
       const elapsed = now - startTime;
+      // OpenCode answers an unresolvable model with a toast and then paints its
+      // composer for a replacement model; fail the run rather than let readiness
+      // deliver the prompt to (and scrape output from) that other model.
+      const opencodeRejection = isOpencodeSession ? inputReady.opencodeModelRejection : null;
+      if (opencodeRejection) {
+        clearInterval(readyTimer);
+        readyTimer = null;
+        finish({
+          success: false,
+          exitCode: 1,
+          error: opencodeRejection.message,
+          reason: 'opencode-model-rejected',
+          errorAnalysis: { ...opencodeRejection, configuredModel: provider.defaultModel },
+        }).catch((err) => {
+          console.error(`❌ TUI run ${runId} OpenCode model-rejection failure could not finalize: ${err?.message || err}`);
+        });
+        return;
+      }
       // Both dismissals below rewind the idle clock and clear `firstOutputAt`:
       // the idle path further down reads silence as readiness, and a dialog is
       // quietest right after it paints, so otherwise the keystroke and an idle
