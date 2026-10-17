@@ -16,7 +16,8 @@
  *      Agent API key is on (`~/.portos/agent-key.json`, or
  *      `$PORTOS_AGENT_KEY_FILE`; see lib/agentKeyFile.js)
  * The base URL is `$PORTOS_URL`, else the key file's `url`, else
- * http://127.0.0.1:5555. A path without a leading `/api/` or `/data/` gets
+ * the configured local HTTP listener (the loopback mirror when TLS is usable).
+ * A path without a leading `/api/` or `/data/` gets
  * `/api` prepended. The response body goes to stdout (JSON pretty-printed);
  * a non-2xx status exits 1 with the body on stderr.
  *
@@ -24,12 +25,28 @@
  */
 
 import { readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { PORTS } from '../server/lib/ports.js';
+import { resolveInstallRoot } from '../server/lib/dataRoot.js';
+import { certPaths } from '../lib/certPaths.js';
+import { hasTailscaleCert } from '../lib/tailscale-https.js';
+import { parseEnvFile, resolveHttpMirrorPort } from './lib/envFile.js';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { resolveAgentKeyFile } from '../lib/agentKeyFile.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 
-const DEFAULT_URL = 'http://127.0.0.1:5555';
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+const localConnection = (env) => {
+  const root = resolveInstallRoot(ROOT);
+  const { PORTOS_HTTP_PORT } = parseEnvFile(join(root, '.env'));
+  const apiPort = PORTS.API;
+  const mirrorPort = resolveHttpMirrorPort({ env, dotenv: { PORTOS_HTTP_PORT } });
+  const tls = hasTailscaleCert(certPaths(join(root, 'data')).dir);
+  return { apiPort, mirrorPort, tls, url: `http://127.0.0.1:${tls ? mirrorPort : apiPort}` };
+};
 export const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 const METHODS = new Set(['get', 'post', 'put', 'patch', 'delete']);
 const PRIORITIES = new Set(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']);
@@ -109,7 +126,7 @@ export const resolveCredentials = async (env = process.env) => {
   const keyFile = await readFile(resolveAgentKeyFile(env), 'utf8')
     .then((raw) => JSON.parse(raw))
     .catch(() => null);
-  const url = (env.PORTOS_URL || keyFile?.url || DEFAULT_URL).replace(/\/+$/, '');
+  const url = (env.PORTOS_URL || keyFile?.url || localConnection(env).url).replace(/\/+$/, '');
   const token = env.PORTOS_API_TOKEN || (typeof keyFile?.token === 'string' ? keyFile.token : null);
   return { url, token };
 };
@@ -159,7 +176,18 @@ export const main = async (argv = process.argv.slice(2), env = process.env) => {
   const headers = { Accept: 'application/json' };
   if (token) headers.Authorization = `Bearer ${token}`;
   if (body !== null) headers['Content-Type'] = 'application/json';
-  const { status, text } = await requestApi(`${url}${parsed.path}`, { method: parsed.method, headers, body, timeoutMs: parsed.timeoutMs ?? DEFAULT_TIMEOUT_MS });
+  const { status, text } = await requestApi(`${url}${parsed.path}`, { method: parsed.method, headers, body, timeoutMs: parsed.timeoutMs ?? DEFAULT_TIMEOUT_MS })
+    .catch((error) => {
+      const target = new URL(url);
+      if (error.code === 'ECONNRESET' && target.protocol === 'http:'
+        && ['127.0.0.1', 'localhost', '[::1]'].includes(target.hostname)) {
+        const local = localConnection(env);
+        if (local.tls && Number(target.port || 80) === local.apiPort) {
+          throw new Error(`Connection reset: this local API port is configured for HTTPS. Use PORTOS_URL=http://127.0.0.1:${local.mirrorPort} for its HTTP mirror.`, { cause: error });
+        }
+      }
+      throw error;
+    });
   let out = text;
   try { out = JSON.stringify(JSON.parse(text), null, 2); } catch { /* not JSON: print as-is */ }
   if (status >= 200 && status < 300) {
