@@ -362,6 +362,16 @@ describe('retiring an instance', () => {
     expect((await readStoreFile()).instances['inst-peer']).toBeUndefined();
   });
 
+  it('persists a tombstone for an instance this machine never held, and a newer re-delete', async () => {
+    const first = { instanceId: 'inst-gone', deletedAt: '2026-08-30T00:00:00.000Z' };
+    expect(await applyUsageRemote({ instances: {}, tombstones: [first] })).toEqual({ applied: false, count: 0 });
+    expect((await readStoreFile()).tombstones).toEqual([first]);
+
+    const newer = { instanceId: 'inst-gone', deletedAt: '2026-08-31T00:00:00.000Z' };
+    await applyUsageRemote({ instances: {}, tombstones: [newer] });
+    expect((await readStoreFile()).tombstones).toEqual([newer]);
+  });
+
   it('lets a machine that comes back supersede its own tombstone', async () => {
     await applyUsageRemote({ instances: { 'inst-peer': peerEntry() } });
     await forgetInstanceUsage('inst-peer');
