@@ -172,6 +172,23 @@ describe.skipIf(!runDb)('catalogDB facets + album filters (#1762)', () => {
     expect(items[0].usage).toEqual({ universe: 1, series: 1 });
   });
 
+  // Uniquely catches a newer reference sheet / look / plate becoming the card
+  // cover over an older plain reference image.
+  it('never picks a sheet, look or plate image as the card thumbnail', async () => {
+    const ing = await catalogDB.createIngredient({ type: 'place', name: `Thumb ${nonce}` });
+    createdIngredientIds.add(ing.id);
+    await catalogDB.attachMedia(ing.id, `plain-${nonce}.png`, 'reference');
+    await catalogDB.attachMedia(ing.id, `sheet-${nonce}.png`, 'reference', { role: 'sheet:environment' });
+    await catalogDB.attachMedia(ing.id, `look-${nonce}.png`, 'reference', { role: 'look:night' });
+    await catalogDB.attachMedia(ing.id, `plate-${nonce}.png`, 'reference', { role: 'plate' });
+    const { items } = await catalogDB.listIngredients({ ids: [ing.id], limit: 5 });
+    expect(items[0].thumbnailKey).toBe(`plain-${nonce}.png`);
+
+    await catalogDB.detachMedia(ing.id, `plain-${nonce}.png`, 'reference');
+    const after = await catalogDB.listIngredients({ ids: [ing.id], limit: 5 });
+    expect(after.items[0].thumbnailKey).toBeNull();
+  });
+
   it('getCatalogFacets aggregates type/universe/series/tag facets + bucket counts', async () => {
     const linked = await catalogDB.createIngredient({ type: 'character', name: `FacetLinked ${nonce}`, tags: [TAG] });
     const seriesLinked = await catalogDB.createIngredient({ type: 'character', name: `FacetSeries ${nonce}` });

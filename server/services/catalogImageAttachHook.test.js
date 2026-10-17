@@ -70,6 +70,17 @@ describe('catalogImageAttachHook', () => {
     expect(setPortraitMedia).not.toHaveBeenCalled();
   });
 
+  // Uniquely catches a reference sheet taking the portrait slot of a record
+  // with no media, or losing its `sheet:<variant>` role on the way to the row.
+  it('files a role-tagged render as a reference with its role, never the portrait', async () => {
+    mediaJobEvents.emit('completed', completedImageJob({
+      catalogAttach: { ingredientId: 'ing-sheet', kind: 'portrait', role: 'sheet:environment' },
+    }, 'sheet.png'));
+    await waitFor(() => attachMedia.mock.calls.length > 0);
+    expect(attachMedia).toHaveBeenCalledWith('ing-sheet', 'sheet.png', 'reference', { role: 'sheet:environment' });
+    expect(setPortraitMedia).not.toHaveBeenCalled();
+  });
+
   it('honors an explicit portrait kind even when a portrait already exists', async () => {
     listMediaForIngredient.mockResolvedValue([{ mediaKey: 'old.png', kind: 'portrait' }]);
     mediaJobEvents.emit('completed', completedImageJob({ catalogAttach: { ingredientId: 'ing-4', kind: 'portrait' } }, 'new.png'));

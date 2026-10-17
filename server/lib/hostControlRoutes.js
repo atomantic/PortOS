@@ -866,6 +866,10 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/catalog/ingest/file',
   'POST /api/catalog/ingest/voice',
   'POST /api/catalog/ingest/brain',
+  // A catalog reference sheet queues the same image render as the universe
+  // sheet route above, whose backend may be an agent harness (Codex). The
+  // preview only builds text and stays open.
+  'POST /api/catalog/ingredients/:id/sheets',
 
   // Importer, Brain and analytics AI (#11036): caller text, stored reference
   // data and a caller-chosen provider reach a non-tool-free runner. Authorize

@@ -379,6 +379,15 @@ export const catalogPortraitSetSchema = z.object({
   caption: z.string().trim().max(2_000).optional().nullable(),
 }).strict();
 
+// Reference-sheet render/preview body. The prompt overrides are the user's own
+// words and are sent exactly as typed — no trim (#11317).
+export const catalogSheetRenderSchema = z.object({
+  variant: z.string().trim().min(1).max(48).optional(),
+  overridePrompt: z.string().max(8000).optional(),
+  overrideNegativePrompt: z.string().max(2000).optional(),
+  modelId: z.string().trim().max(64).optional(),
+}).strict();
+
 // Media detach body — identifies the tuple to soft-delete.
 export const catalogMediaDetachSchema = z.object({
   mediaKey: z.string().trim().min(1).max(512),
