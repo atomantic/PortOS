@@ -106,13 +106,17 @@ const galleryImageFilenameSchema = (label) => z.string().max(256)
 
 router.get('/style-presets', (_req, res) => res.json(STYLE_PRESETS));
 
+// Rejected, never stripped: model input is not silently modified. spawn() also throws on NUL.
+const noNulPrompt = z.string().max(MAX_PROMPT_LENGTH)
+  .refine((v) => !v.includes('\0'), { message: 'Prompt may not contain a NUL character' });
+
 const generateSchema = z.object({
   promptAdditions: promptAdditionsSchema,
   // Empty prompt allowed — i2i / edit / unconditional generation don't require
   // one. The multipart FormData builder drops empty-string fields, so an empty
   // prompt arrives as `undefined`; default it to '' rather than rejecting.
-  prompt: z.string().max(MAX_PROMPT_LENGTH).optional().default(''),
-  negativePrompt: z.string().max(MAX_PROMPT_LENGTH).optional(),
+  prompt: noNulPrompt.optional().default(''),
+  negativePrompt: noNulPrompt.optional(),
   // Per-request backend override. If omitted, the dispatcher uses
   // `imageGen.mode` from settings.json.
   mode: z.enum(IMAGE_GEN_MODES).optional(),

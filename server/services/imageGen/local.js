@@ -742,6 +742,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   let proc;
   let claimHandedOff = false;
   let takeEarlyExit = null;
+  let startedEmitted = false;
   try {
     // `renderPrompt` — the user's prompt plus any LoRA activation tokens it was
     // missing (#4665). Identical to `prompt` when nothing was woven.
@@ -768,6 +769,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
 
     console.log(`🎨 Generating image [${jobId.slice(0, 8)}] local: ${modelId} ${width}x${height} steps=${actualSteps} references=${validReferenceImagePaths.length}`);
     imageGenEvents.emit('started', { generationId: jobId, totalSteps: actualSteps });
+    startedEmitted = true;
     activeJob = { ...meta, generationId: jobId, totalSteps: actualSteps, step: 0, progress: 0, currentImage: null, mode: IMAGE_GEN_MODE.LOCAL };
 
     proc = spawn(bin, args, safeChildProcessOptions({ env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] }));
@@ -785,7 +787,20 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     // event — unwind it exactly the way the busy branch above does, or a refusal
     // strands a `running` entry and its stepwise dir every time.
     if (!claimHandedOff) {
-      if (proc?.pid) maintenance.markCurrentUnsettled();
+      if (proc?.pid) {
+        maintenance.markCurrentUnsettled();
+        // No close handler is wired yet, so nothing else will ever reap this child.
+        try {
+          killWithEscalation(proc, { label: 'abandoned image child', stillRunning: () => true });
+        } catch (killErr) {
+          console.error(`❌ Abandoned image child would not stop [${jobId.slice(0, 8)}]: ${killErr.message}`);
+        }
+      }
+      if (activeProcess === proc) activeProcess = null;
+      if (activeJob?.generationId === jobId) activeJob = null;
+      if (startedEmitted) {
+        imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: err.message });
+      }
       await releaseHeavyClaim();
       jobs.delete(jobId);
       await removeStepwise();
@@ -809,6 +824,8 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     const reason = `Failed to spawn ${bin}: ${err.message}`;
     console.error(`❌ Image generation spawn error [${jobId.slice(0, 8)}]: ${reason}`);
     void releaseHeavyClaim();
+    // The close handler skips its own watcher.close() once finalized.
+    if (watcher) { try { watcher.close(); } catch { /* ignore */ } }
     void removeStepwise();
     dispatchTerminalEvent(
       jobId,
@@ -862,6 +879,11 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   try {
     watcher = fsWatch(stepwiseDir, (event) => {
       if (event === 'rename') processLatestFrame();
+    });
+    // Windows raises EPERM here when the watched dir is deleted; with no listener
+    // that is an uncaught exception and the server exits.
+    watcher.on?.('error', (err) => {
+      console.warn(`⚠️ Stepwise watcher error [${jobId.slice(0, 8)}]: ${err?.message}`);
     });
   } catch { /* if watch fails, we still get final image — degrade gracefully */ }
 

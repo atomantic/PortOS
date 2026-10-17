@@ -496,6 +496,15 @@ describe('Image Gen Routes', () => {
       expect(response.status).toBe(400);
     });
 
+    it('rejects a NUL character in the prompt or negative prompt with 400 (#11862)', async () => {
+      imageGen.generateImage.mockClear();
+      for (const body of [{ prompt: 'a\u0000b' }, { prompt: 'ok', negativePrompt: 'x\u0000' }]) {
+        const response = await request(app).post('/api/image-gen/generate').send(body);
+        expect(response.status).toBe(400);
+      }
+      expect(imageGen.generateImage).not.toHaveBeenCalled();
+    });
+
     it('should pass optional parameters', async () => {
       imageGen.generateImage.mockResolvedValue({ generationId: 'gen-002', filename: 'test2.png', path: '/data/images/test2.png' });
 
