@@ -1529,6 +1529,25 @@ describe('spawnTuiAgent runtime', () => {
     await spawnPromise;
   });
 
+  it('fails OpenCode startup on a rejected model without pasting into its replacement composer', async () => {
+    const spawnPromise = runSpawn({
+      provider: { ...defaultProvider, id: 'opencode-tui', name: 'OpenCode TUI' },
+      tuiConfig: { ...defaultTuiConfig, command: '/opt/bin/opencode', spawnCommand: 'opencode', commandLine: 'opencode' },
+    });
+    await flushMicrotasks();
+    await capturedOnData(Buffer.from('\x1b[?2004l\x1b[?2004hModel example-provider/exam'));
+    await capturedOnData(Buffer.from('ple-model\n┃ is not valid\nreplacement-provider/replacement-model\nAsk anything…\n'));
+    await vi.advanceTimersByTimeAsync(8000);
+    expect(pasteCount()).toBe(0);
+    await spawnPromise;
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledTimes(1);
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({
+      success: false,
+      completionReason: 'opencode-model-rejected',
+      errorAnalysis: expect.objectContaining({ category: 'model-not-found', affectedModel: 'example-provider/example-model' }),
+    }));
+  });
+
   it('codex hook-review offer: continues without trusting hooks before pasting the prompt', async () => {
     runSpawn();
     await flushMicrotasks();

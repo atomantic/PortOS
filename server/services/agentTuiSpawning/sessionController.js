@@ -1719,6 +1719,18 @@ export function createTuiSessionController({
       const now = Date.now();
       const elapsed = now - sessionStartedAt;
 
+      // OpenCode answers an unresolvable model with a toast and then paints its
+      // composer for a replacement model. Composer readiness would pass, so stop
+      // here: the prompt must never reach a model this task did not select.
+      const opencodeRejection = isOpencodeSession ? inputReady.opencodeModelRejection : null;
+      if (opencodeRejection) {
+        clearInterval(promptTimer);
+        promptTimer = null;
+        immediateFallbackAnalysis = { ...opencodeRejection, configuredModel: model };
+        safeFinishStartupFailure('opencode-model-rejected', opencodeRejection.message);
+        return;
+      }
+
       // Answer whatever startup dialog the TUI is showing — one per tick, in the
       // order answerStartupDialogs declares (external imports, hook review,
       // folder trust, OpenCode updates). These run for EVERY provider, not only the positive
