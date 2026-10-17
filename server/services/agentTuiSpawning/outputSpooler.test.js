@@ -100,6 +100,29 @@ describe('createOutputSpooler', () => {
     expect(metaCalls).toHaveLength(1);
   });
 
+  it('does not reject drainRaw when the truncation warning cannot be published, and retries it next flush', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const s = makeSpooler();
+    s.pushRaw('a'.repeat(80));
+    await s.drainRaw();
+    vi.mocked(writeFile).mockClear();
+    vi.mocked(updateAgent).mockRejectedValueOnce(new Error('BACKUP_SNAPSHOT_BUSY'));
+
+    s.pushRaw('b'.repeat(80)); // crosses the cap, but the metadata write fails
+    await expect(s.drainRaw()).resolves.toBeUndefined();
+    // The previous spool is preserved: nothing was dropped without the warning.
+    expect(vi.mocked(writeFile).mock.calls.filter(([p]) => p === RAW_FILE)).toHaveLength(0);
+    expect(errorSpy.mock.calls.some(([msg]) => String(msg).includes('state write failed'))).toBe(true);
+
+    s.pushRaw('c'.repeat(80)); // next flush retries the warning and then truncates
+    await s.drainRaw();
+    expect(vi.mocked(writeFile).mock.calls.filter(([p]) => p === RAW_FILE)).toHaveLength(1);
+    const metaCalls = vi.mocked(updateAgent).mock.calls.filter(([, p]) => p?.metadata?.rawSpoolTruncated === true);
+    expect(metaCalls).toHaveLength(2);
+
+    errorSpy.mockRestore();
+  });
+
   it('drainLines / drainRaw are no-ops when nothing is pending', async () => {
     const s = makeSpooler();
     await s.drainLines();
