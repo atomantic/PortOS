@@ -9,7 +9,7 @@ vi.mock('./instances.js', async () => ({
   // what these tests assert the sync loop does with them.
   ...(await vi.importActual('./instances.js')),
   getPeers: vi.fn(),
-  updatePeer: vi.fn().mockResolvedValue(undefined),
+  setPeerSchemaGap: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('./instanceIdentity.js', () => ({
   UNKNOWN_INSTANCE_ID: 'unknown',
@@ -167,10 +167,6 @@ describe('syncOrchestrator', () => {
     // this reset a later test inherits a prior test's (mutated) cursor and the
     // catalog rebuild/reset detection fires on it.
     readJSONFile.mockImplementation(async () => ({}));
-    // Default so clearPeerSchemaGap's `await getPeers()` (a best-effort lookup
-    // on every successful, non-blocked catalog drain) resolves to an array
-    // instead of throwing on undefined; tests that care about the peer lookup
-    // override this explicitly.
     getPeers.mockResolvedValue([]);
     vi.useFakeTimers();
     mockFetch.mockReset();
@@ -694,22 +690,12 @@ describe('syncOrchestrator', () => {
         sources: { applied: 0 }, refs: { applied: 0 }, relations: { applied: 0 },
         tags: { inserted: 0, updated: 0 }, media: { applied: 0 }, errors: [],
       });
-      const { updatePeer } = await import('./instances.js');
-      getPeers.mockResolvedValue([{
-        ...catalogPeer,
-        id: 'local-peer-row',
-        instanceId: catalogPeer.instanceId,
-        schemaGaps: {
-          catalog: { detectedAt: '2026-01-01T00:00:00.000Z', ahead: [{ category: 'catalog' }], behind: [], senderPortosVersion: '99.0.0' },
-        },
-      }]);
+      const { setPeerSchemaGap } = await import('./instances.js');
 
       await syncWithPeer(catalogPeer);
 
-      // A successful, non-blocked drain clears the gap it previously recorded —
-      // this fails if clearPeerSchemaGap early-returns (e.g. on an unmocked
-      // getPeers, or a peer lookup that never matches).
-      expect(updatePeer).toHaveBeenCalledWith('local-peer-row', { schemaGaps: null });
+      // A successful, non-blocked drain clears the gap it previously recorded.
+      expect(setPeerSchemaGap).toHaveBeenCalledWith(catalogPeer.instanceId, 'catalog', null);
     });
 
     it.each(['ahead', 'behind'])('records a %s catalog gap without advancing cursors, then retries', async (direction) => {
@@ -728,8 +714,7 @@ describe('syncOrchestrator', () => {
       mismatch.diff = { ahead: [], behind: [], [direction]: [gap] };
       applyCatalogChanges.mockRejectedValueOnce(mismatch);
 
-      const { updatePeer } = await import('./instances.js');
-      getPeers.mockResolvedValue([{ ...catalogPeer, id: 'local-peer-row', instanceId: catalogPeer.instanceId }]);
+      const { setPeerSchemaGap } = await import('./instances.js');
 
       const result = await syncWithPeer(catalogPeer);
 
@@ -738,15 +723,10 @@ describe('syncOrchestrator', () => {
       expect(result.catalog.blockedBySchema).toBeTruthy();
       expect(result.catalog.catalogSeqs.ingredients).toBeUndefined();
       // Gap persisted on the local peer row under schemaGaps.catalog.
-      expect(updatePeer).toHaveBeenCalledWith(
-        'local-peer-row',
-        expect.objectContaining({
-          schemaGaps: expect.objectContaining({
-            catalog: expect.objectContaining({
-              [direction]: [gap],
-            }),
-          }),
-        }),
+      expect(setPeerSchemaGap).toHaveBeenCalledWith(
+        catalogPeer.instanceId,
+        'catalog',
+        expect.objectContaining({ [direction]: [gap] }),
       );
       // The next cycle retries the same rows after peers upgrade.
       mockFetch.mockResolvedValue({ ok: true, json: async () => ({

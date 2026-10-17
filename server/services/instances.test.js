@@ -70,6 +70,7 @@ import {
   updatePeer,
   pairPeerSyncSecret,
   acceptPeerSyncSecretFromPeer,
+  setPeerSchemaGap,
   probePeer,
   probeAllPeers,
   queryPeer,
@@ -2106,6 +2107,40 @@ describe('instances.js', () => {
       expect(accepted.syncEnabled).toBe(false);
       expect(disconnectFromPeer).toHaveBeenCalledWith(peer.id);
       expect(await acceptPeerSyncSecretFromPeer('unknown-peer', 'synthetic-pair-secret-32-characters-long')).toBeNull();
+    });
+  });
+
+  describe('setPeerSchemaGap', () => {
+    const gap = (n) => ({ detectedAt: '2026-01-01T00:00:00.000Z', ahead: [n], behind: [], senderPortosVersion: '9.9.9' });
+    const seed = (schemaGaps) => {
+      const peer = { id: 'p1', instanceId: 'remote-1', ...(schemaGaps ? { schemaGaps } : {}) };
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'self-id' }, peers: [peer] });
+      return peer;
+    };
+
+    it('keeps both gaps when two categories are recorded concurrently', async () => {
+      const peer = seed();
+      await Promise.all([
+        setPeerSchemaGap('remote-1', 'universe', gap('universe')),
+        setPeerSchemaGap('remote-1', 'pipeline', gap('pipeline'))
+      ]);
+      expect(Object.keys(peer.schemaGaps).sort()).toEqual(['pipeline', 'universe']);
+    });
+
+    it('leaves exactly the recorded category when another is cleared concurrently', async () => {
+      const peer = seed({ B: gap('B') });
+      await Promise.all([
+        setPeerSchemaGap('remote-1', 'A', gap('A')),
+        setPeerSchemaGap('remote-1', 'B', null)
+      ]);
+      expect(Object.keys(peer.schemaGaps)).toEqual(['A']);
+    });
+
+    it('removes the schemaGaps key when the last gap clears and ignores unknown peers', async () => {
+      const peer = seed({ A: gap('A') });
+      await setPeerSchemaGap('remote-1', 'A', null);
+      expect(peer).not.toHaveProperty('schemaGaps');
+      expect(await setPeerSchemaGap('nobody', 'A', gap('A'))).toBeNull();
     });
   });
 });

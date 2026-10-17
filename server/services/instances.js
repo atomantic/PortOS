@@ -786,6 +786,30 @@ async function pairPeerSyncSecretNow(id) {
   return updated;
 }
 
+/**
+ * Set (gap object) or clear (null) one category's schema gap on the peer with
+ * the given remote instanceId. The read-modify-write runs inside the serialized
+ * withData write so parallel category syncs cannot overwrite each other's gaps
+ * (updatePeer replaces the whole map). An empty map is stored as no key.
+ */
+export async function setPeerSchemaGap(instanceId, category, gapOrNull) {
+  return withData(async (data) => {
+    const peer = data.peers.find((p) => p.instanceId === instanceId);
+    if (!peer) return null;
+    const gaps = peer.schemaGaps && typeof peer.schemaGaps === 'object' && !Array.isArray(peer.schemaGaps) ? { ...peer.schemaGaps } : {};
+    if (gapOrNull === null) {
+      if (!(category in gaps)) return peer;
+      delete gaps[category];
+    } else {
+      gaps[category] = gapOrNull;
+    }
+    if (Object.keys(gaps).length > 0) peer.schemaGaps = gaps;
+    else delete peer.schemaGaps;
+    instanceEvents.emit('peers:updated', data.peers);
+    return peer;
+  });
+}
+
 /** Save a pair secret only for the already-registered peer named by its identity header. */
 export async function acceptPeerSyncSecretFromPeer(instanceId, syncSecret) {
   let changed = false;
