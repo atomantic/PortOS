@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const pool = vi.hoisted(() => ({
   client: null,
@@ -23,6 +23,10 @@ function makeClient(query) {
     release: vi.fn(),
   };
 }
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -108,6 +112,36 @@ describe('withTransaction', () => {
     await expect(withTransaction(async () => { throw dropError; })).rejects.toBe(dropError);
 
     expect(client.release).toHaveBeenCalledWith(dropError);
+  });
+});
+
+// Cross-reference: db.guards.test.js covers assertWriteAllowed() directly; this
+// proves the withTransaction() client proxy actually routes writes through it.
+describe('withTransaction non-test database write guard', () => {
+  beforeEach(() => {
+    vi.stubEnv('PGDATABASE', 'portos');
+    vi.stubEnv('TEST_DB_OK', '');
+  });
+
+  it.each([
+    ['string DELETE', 'DELETE FROM universes'],
+    ['{ text } INSERT', { text: 'INSERT INTO x VALUES (1)' }],
+  ])('refuses a %s and never forwards it to the pg client', async (_label, statement) => {
+    const client = makeClient(vi.fn().mockResolvedValue({}));
+    pool.client = client;
+
+    await expect(withTransaction(c => c.query(statement))).rejects.toThrow(/Refusing to mutate/);
+
+    expect(client.query.mock.calls).toEqual([['BEGIN'], ['ROLLBACK']]);
+  });
+
+  it('still lets a SELECT through the guarded client', async () => {
+    const client = makeClient(vi.fn().mockResolvedValue({ rows: [] }));
+    pool.client = client;
+
+    await withTransaction(c => c.query('SELECT 1'));
+
+    expect(client.query.mock.calls).toEqual([['BEGIN'], ['SELECT 1'], ['COMMIT']]);
   });
 });
 
