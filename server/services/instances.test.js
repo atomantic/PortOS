@@ -83,12 +83,14 @@ import {
   enqueueReciprocalSync,
   DEFAULT_SYNC_CATEGORIES,
   startPolling,
-  stopPolling
+  stopPolling,
+  __resetPeersSeenOnlineForTests
 } from './instances.js';
 
 describe('instances.js', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    __resetPeersSeenOnlineForTests();
     vi.useFakeTimers();
     vi.stubGlobal('fetch', vi.fn());
     readJSONFile.mockResolvedValue({ self: null, peers: [] });
@@ -1421,20 +1423,20 @@ describe('instances.js', () => {
       expect(instanceEvents.emit).toHaveBeenCalledWith('peer:online', expect.any(Object));
     });
 
-    it('should not emit peer:online if already online', async () => {
+    it('emits peer:online on the first probe after boot for a peer persisted as online, then only on transitions (#11750)', async () => {
+      // The persisted status survives a restart, so without the per-process
+      // first-sighting rule an edit stranded by the restart is never retried.
       const peer = makePeer({ status: 'online' });
-      const peers = [peer];
-      readJSONFile.mockResolvedValue({ self: null, peers });
-
+      readJSONFile.mockResolvedValue({ self: null, peers: [peer] });
       const healthData = { instanceId: 'r-id' };
-      fetch
-        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(healthData) })
-        .mockResolvedValueOnce({ ok: false })
-        .mockResolvedValueOnce({ ok: false });
+      fetch.mockImplementation(async () => ({ ok: true, json: () => Promise.resolve(healthData) }));
+      const onlineEmits = () => instanceEvents.emit.mock.calls.filter(([name]) => name === 'peer:online').length;
 
       await probePeer(peer);
+      expect(onlineEmits()).toBe(1);
 
-      expect(instanceEvents.emit).not.toHaveBeenCalledWith('peer:online', expect.anything());
+      await probePeer(peer);
+      expect(onlineEmits()).toBe(1);
     });
 
     it('should return null if peer is removed during probe', async () => {
@@ -1565,6 +1567,27 @@ describe('instances.js', () => {
   });
 
   describe('handleAnnounce', () => {
+    it('emits peer:online once per process when an announce marks a known peer online (#11750)', async () => {
+      const peer = { id: 'peer-local', instanceId: 'peer-a', address: '192.0.2.10', port: 5555,
+        name: 'Example peer', status: 'online', directions: ['outbound'] };
+      readJSONFile.mockResolvedValue({ self: null, peers: [peer] });
+      const onlineEmits = () => instanceEvents.emit.mock.calls.filter(([name]) => name === 'peer:online').length;
+
+      await handleAnnounce({ instanceId: 'peer-a', address: '192.0.2.10', port: 5555 });
+      expect(onlineEmits()).toBe(1);
+
+      await handleAnnounce({ instanceId: 'peer-a', address: '192.0.2.10', port: 5555 });
+      expect(onlineEmits()).toBe(1);
+    });
+
+    it('does not emit peer:online for a forged announce that was not trusted', async () => {
+      const peer = { id: 'peer-local', instanceId: 'peer-a', address: '192.0.2.10', port: 5555,
+        name: 'Example peer', status: 'online', directions: ['outbound'] };
+      readJSONFile.mockResolvedValue({ self: null, peers: [peer] });
+      await handleAnnounce({ instanceId: 'peer-a', address: '198.51.100.99', port: 5555 });
+      expect(instanceEvents.emit).not.toHaveBeenCalledWith('peer:online', expect.anything());
+    });
+
     it('keeps an admitted peer identity, callback endpoint and consent unchanged after forged discovery', async () => {
       const peer = { id: 'peer-local', instanceId: 'peer-a', address: '192.0.2.10', port: 5555,
         host: 'configured.example.com', directions: ['inbound'], syncSecret: 'synthetic-pair-secret-32-characters-long',

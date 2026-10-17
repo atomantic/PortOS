@@ -25,6 +25,8 @@ import { existsSync } from 'fs';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { getBucket } from './buckets.js';
+import { getSeries } from '../pipeline/series.js';
+import { getUniverse } from '../universeBuilder.js';
 import { exportSeries, exportUniverse } from './exporter.js';
 import {
   recordEvents,
@@ -321,6 +323,41 @@ export async function reexportSubscribedRecord(recordKind, recordId) {
     if (typeof t.unref === 'function') t.unref();
     pendingTimers.set(sub.id, t);
   }
+}
+
+async function loadRecordUpdatedAt(recordKind, recordId) {
+  const record = recordKind === 'series' ? await getSeries(recordId)
+    : recordKind === 'universe' ? await getUniverse(recordId)
+      : null;
+  return isStr(record?.updatedAt) ? record.updatedAt : null;
+}
+
+/**
+ * Boot convergence for share buckets. The 3 s re-export debounce lives only in
+ * memory, so an edit made just before a restart/crash never reaches the bucket.
+ * Re-export every subscription whose record changed after its last export (or
+ * was never exported) through the same runExport + stampExport path the
+ * debounce uses. A subscription adopted from an import has no export yet; its
+ * baseline is the adoption time so an unedited imported record is not written
+ * straight back to the bucket it came from.
+ */
+export async function reconcileSubscriptionsOnBoot() {
+  const subscriptions = await listSubscriptions();
+  let reexported = 0;
+  for (const sub of subscriptions) {
+    const baseline = sub.lastExportedAt || (sub.adoptedFromImport ? sub.updatedAt : null);
+    const recordUpdatedAt = await loadRecordUpdatedAt(sub.recordKind, sub.recordId).catch(() => undefined);
+    // undefined = record missing/unreadable (nothing to export); null = no timestamp.
+    if (recordUpdatedAt === undefined) continue;
+    const stale = baseline
+      ? recordUpdatedAt !== null && recordUpdatedAt > baseline
+      : true;
+    if (!stale) continue;
+    await reexportNow(sub);
+    reexported += 1;
+  }
+  if (reexported > 0) console.log(`🔄 sharing.subscriptions: boot reconcile re-exported ${reexported} stale share${reexported === 1 ? '' : 's'}`);
+  return { checked: subscriptions.length, reexported };
 }
 
 // Track the listener handles we install so __resetForTests can remove just

@@ -19,6 +19,7 @@ import { join, basename, sep } from 'path';
 import { processManifest, processBacklog, handleUnshare, sharingEvents } from './importer.js';
 import { getBucket, listBuckets, ensureBucketLayout } from './buckets.js';
 import { isManifestPruning, pruneBucketManifests } from './manifest.js';
+import { reconcileSubscriptionsOnBoot } from './subscriptions.js';
 import { getInstanceId } from '../instanceIdentity.js';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 
@@ -187,6 +188,11 @@ async function attachAllWatchersNow() {
       });
     }
   }
+  // Re-export shares whose record changed after the last export — the in-memory
+  // re-export debounce does not survive a restart (#11750).
+  await reconcileSubscriptionsOnBoot().catch((err) => {
+    console.error(`❌ sharing.watcher: subscription reconcile failed: ${err.message}`);
+  });
   return { attached: watchers.size };
 }
 
