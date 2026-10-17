@@ -15,11 +15,12 @@
  */
 
 import { describe, it, expect, vi, afterEach, afterAll } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'fs';
 import { tmpdir } from 'os';
 import { isAbsolute, join, relative, sep } from 'path';
-import { appendFileGuarded, atomicWrite, copyFileGuarded, createWriteStreamGuarded, ensureDir, rmGuarded, unlinkGuarded, writeFileGuarded } from './fileCore.js';
+import { appendFileGuarded, atomicWrite, copyFileGuarded, createWriteStreamGuarded, ensureDir, renameGuarded, rmGuarded, unlinkGuarded, writeFileGuarded } from './fileCore.js';
 import { appendJSONLine } from './jsonIo.js';
+import { createCollectionStore } from './collectionStore.js';
 import { assertNotNewRealDataDir, assertNotRealDataWrite, isInsideRealDataRoot } from './testDataIsolation.js';
 import { isPathAtOrInsideDir } from './pathContainment.js';
 import { isTestRunner } from './runtimeEnv.js';
@@ -86,6 +87,18 @@ describe('isInsideRealDataRoot', () => {
     symlinkSync(join(REAL_DATA, 'provider-quotas.json'), link);
     expect(isInsideRealDataRoot(link)).toBe(true);
     rmSync(link, { force: true });
+  });
+
+  it('catches a target whose PARENT directory is a symlink into the real tree', () => {
+    // The final component does not exist and is not a link, so only the
+    // ancestor walk can see where the write would land.
+    const linkedParent = join(tempRoot, 'linked-parent');
+    symlinkSync(REAL_DATA, linkedParent);
+    try {
+      expect(isInsideRealDataRoot(join(linkedParent, 'new-file.json'))).toBe(true);
+    } finally {
+      rmSync(linkedParent, { force: true });
+    }
   });
 
   it('is not fooled by a non-string or empty target', () => {
@@ -176,6 +189,16 @@ describe('the guarded raw-fs wrappers', () => {
     expect(readFileSync(join(tempRoot, 'dest.txt'), 'utf8')).toBe('payload');
   });
 
+  it('renameGuarded judges the DESTINATION and leaves the source in place', async () => {
+    const src = join(tempRoot, 'rename-src.txt');
+    await writeFileGuarded(src, 'payload');
+    await expect(renameGuarded(src, join(REAL_DATA, 'renamed.txt'))).rejects.toThrow(/rename refused/);
+    expect(readFileSync(src, 'utf8')).toBe('payload');
+    const dest = join(tempRoot, 'rename-dest.txt');
+    await renameGuarded(src, dest);
+    expect(readFileSync(dest, 'utf8')).toBe('payload');
+  });
+
   it('rmGuarded refuses the real tree and allows a temp root', async () => {
     await expect(rmGuarded(join(REAL_DATA, 'probe.txt'))).rejects.toThrow(/rm refused/);
     const target = join(tempRoot, 'to-rm.txt');
@@ -218,5 +241,21 @@ describe('appendJSONLine', () => {
       /appendFile refused[\s\S]*portos-guard-probe\.jsonl/,
     );
     expect(existsSync(target)).toBe(false);
+  });
+});
+
+describe('collectionStore recursive delete', () => {
+  it('refuses a record directory that resolves into the real data tree', async () => {
+    const dir = join(tempRoot, 'guarded-collection');
+    mkdirSync(dir, { recursive: true });
+    const recordLink = join(dir, 'rec-1');
+    symlinkSync(join(REAL_DATA, 'guard-probe-record'), recordLink);
+    const store = createCollectionStore({ dir, type: 'guard-probe', schemaVersion: 1 });
+    try {
+      await expect(store.deleteOne('rec-1')).rejects.toThrow(/collectionStore delete refused/);
+      expect(lstatSync(recordLink).isSymbolicLink()).toBe(true);
+    } finally {
+      rmSync(recordLink, { force: true });
+    }
   });
 });
