@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'fs';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import { tmpdir } from 'os';
 
 const ID = '11111111-1111-4111-8111-111111111111';
@@ -24,7 +24,7 @@ vi.mock('../../lib/ffmpeg.js', async (importOriginal) => ({
   vfrSyncArgs: async () => [],
   runFfmpegProcess: vi.fn(async ({ args }) => {
     const out = args[args.length - 1];
-    scanDirs.push(out.replace(/\/cand-%03d\.png$/, ''));
+    scanDirs.push(dirname(out));
     await new Promise((r) => { release = r; });
     writeFileSync(out.replace('%03d', '001'), 'frame');
     return { ok: true };
