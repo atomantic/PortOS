@@ -38,7 +38,7 @@ import { createLineReader } from '../../lib/streamLines.js';
 import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { IMAGE_GEN_MODE, LOCAL_IMAGEGEN_DEFAULT_MODEL } from './modes.js';
-import { parseByteProgress, formatDownloadMessage } from '../videoGen/generateVideoHelpers.js';
+import { parseByteProgress, formatDownloadMessage, bufferChildExit } from '../videoGen/generateVideoHelpers.js';
 
 const IS_WIN = process.platform === 'win32';
 
@@ -741,6 +741,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   let bin, args;
   let proc;
   let claimHandedOff = false;
+  let takeEarlyExit = null;
   try {
     // `renderPrompt` — the user's prompt plus any LoRA activation tokens it was
     // missing (#4665). Identical to `prompt` when nothing was woven.
@@ -770,6 +771,10 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     activeJob = { ...meta, generationId: jobId, totalSteps: actualSteps, step: 0, progress: 0, currentImage: null, mode: IMAGE_GEN_MODE.LOCAL };
 
     proc = spawn(bin, args, safeChildProcessOptions({ env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] }));
+    // Same tick as the spawn, before the claim handoff below awaits file I/O: a
+    // child that dies inside that window would otherwise emit 'close' with no
+    // listener, leaving the job running and the GPU lane held forever (#11761).
+    takeEarlyExit = bufferChildExit(proc, { bufferOutput: true });
     activeProcess = proc;
     preparing = null;
     await heavyClaim.handoffTo?.(proc.pid);
@@ -1255,6 +1260,17 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       closeJobAfterDelay(jobs, jobId);
     });
   });
+
+  // Every real listener is on and nothing has awaited since: hand over whatever
+  // the child emitted during the claim handoff so a fast-dying render still
+  // reaches its terminal handlers and releases the claim.
+  const earlyExit = takeEarlyExit();
+  if (earlyExit) {
+    console.warn(`⚠️ Image render child exited before it was wired [${shortId}]`);
+    for (const { stream, chunk } of earlyExit.output || []) proc[stream].emit('data', chunk);
+    if (earlyExit.type === 'error') proc.emit('error', earlyExit.error);
+    else if (earlyExit.type === 'close') proc.emit('close', earlyExit.code, earlyExit.signal);
+  }
 
   return { jobId, filename, path: `/data/images/${filename}`, generationId: jobId, mode: IMAGE_GEN_MODE.LOCAL, model: modelId, seed: actualSeed };
 }
