@@ -241,6 +241,15 @@ describe('sharing/subscriptions', () => {
     throw new Error('until: condition never became true');
   }
 
+  // The tests drive the 3s re-export debounce by hand, but the export itself can
+  // also sleep: on Windows atomicWrite retries a locked rename (EPERM from AV or
+  // an open handle) after a setTimeout. A frozen fake clock never fires that
+  // retry, so the export (and an unsubscribe waiting on it) hangs. Let the fake
+  // clock follow real time so incidental sleeps still elapse.
+  function fakeDebounceTimers() {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'], shouldAdvanceTime: true });
+  }
+
   // Give a released export (which would write its manifest late) real time to finish.
   async function settleExports() {
     vi.useRealTimers();
@@ -258,7 +267,7 @@ describe('sharing/subscriptions', () => {
   }
 
   it('Stop sharing during an in-flight re-export does not resurrect the manifest or stamp state', async () => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    fakeDebounceTimers();
     const bucket = await buckets.createBucket({ name: 'B', path: tempBucket });
     const u = await universeBuilder.createUniverse({ name: 'U-race' });
     const sub = await subs.subscribe({ bucketId: bucket.id, recordKind: 'universe', recordId: u.id });
@@ -277,7 +286,7 @@ describe('sharing/subscriptions', () => {
   });
 
   it('deleting the record during an in-flight re-export leaves no manifest in the bucket', async () => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    fakeDebounceTimers();
     subs.installSubscriptionListener();
     const bucket = await buckets.createBucket({ name: 'B', path: tempBucket });
     const u = await universeBuilder.createUniverse({ name: 'U-del-race' });
@@ -298,7 +307,7 @@ describe('sharing/subscriptions', () => {
   });
 
   it('overlapping re-exports of one subscription run one after another', async () => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    fakeDebounceTimers();
     const bucket = await buckets.createBucket({ name: 'B', path: tempBucket });
     const u = await universeBuilder.createUniverse({ name: 'U-order' });
     const sub = await subs.subscribe({ bucketId: bucket.id, recordKind: 'universe', recordId: u.id });
