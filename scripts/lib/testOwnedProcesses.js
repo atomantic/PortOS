@@ -1,10 +1,9 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { isAbsolute, join, relative, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ownershipKeys = new Set(['PORTOS_TEST_TEMP_ROOT', 'TMPDIR', 'VITEST', 'NODE_ENV']);
-const reader = fileURLToPath(new URL('./darwinTestProcesses.py', import.meta.url));
 
 function legacyBrowserProcesses(pids, exec) {
   try {
@@ -62,6 +61,7 @@ export function readTestProcesses(pids = null, { platform = process.platform, ex
     const execute = exec ?? execFileSync;
     if (platform === 'darwin') {
       try {
+        const reader = join(dirname(fileURLToPath(import.meta.url)), 'darwinTestProcesses.py');
         return JSON.parse(execute('/usr/bin/python3', ['-I', '-S', reader], {
           input: JSON.stringify(pids), encoding: 'utf8', timeout: 5000,
           maxBuffer: 16 * 1024 * 1024, stdio: ['pipe', 'pipe', 'ignore'],
