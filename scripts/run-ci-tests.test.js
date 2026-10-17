@@ -35,8 +35,11 @@ vi.mock('./lib/githubOutput.js', async (importOriginal) => ({
 // just like the workspace configs; reporter diagnostics stay outside it.
 const FIXTURE_CONFIG = `
   import { bootstrapVitestTempRoot } from ${JSON.stringify(new URL('./lib/vitestTempRoot.js', import.meta.url).href)};
+  // Beside the config, not in <fixture>/node_modules/.vite, so removing the fixture removes the cache.
+  const cacheDir = import.meta.dirname + '/.vitest-cache';
   bootstrapVitestTempRoot();
-  export default { test: { globals: true, maxWorkers: 1, testTimeout: 60000,
+  export default { cacheDir,
+    test: { globals: true, maxWorkers: 1, testTimeout: 60000,
     globalSetup: [${JSON.stringify(new URL('./vitestTempRootSetup.js', import.meta.url).href)}] } };
 `;
 
@@ -597,7 +600,19 @@ describe('report launcher subprocess lifecycle (#9804)', () => {
         resolve({ code, signal, output });
       });
     });
-    return { child, closed, ready };
+    // Shared teardown: reads ready.json whenever present (even if the caller's
+    // waitFor threw first), kills the detached process group plus worker and
+    // descendant, and awaits the launcher's close before the caller removes host.
+    async function cleanup() {
+      killProcessTree(child, 'SIGKILL');
+      if (existsSync(ready)) {
+        const pids = JSON.parse(readFileSync(ready, 'utf8'));
+        if (pids.group) killProcessTree({ pid: pids.group }, 'SIGKILL', { processGroup: true });
+        for (const pid of [pids.worker, pids.descendant]) if (pid) killProcessTree({ pid }, 'SIGKILL');
+      }
+      await Promise.allSettled([closed]);
+    }
+    return { child, closed, ready, cleanup };
   }
 
   async function waitFor(check, message) {
@@ -639,11 +654,7 @@ describe('report launcher subprocess lifecycle (#9804)', () => {
           expect(ownedRoot(host, run.child.pid)).toBeUndefined();
           await waitFor(() => !alive(pids.worker) && !alive(pids.descendant), 'owned test processes survived cancellation');
         } finally {
-          run?.child.kill('SIGKILL');
-          if (pids) {
-            if (pids.group) killProcessTree({ pid: pids.group }, 'SIGKILL', { processGroup: true });
-            else for (const pid of [pids.worker, pids.descendant]) killProcessTree({ pid }, 'SIGKILL');
-          }
+          await run?.cleanup();
           rmSync(host, { recursive: true, force: true });
         }
       }, 35000);
@@ -695,13 +706,11 @@ describe('report launcher subprocess lifecycle (#9804)', () => {
       expect(existsSync(join(host, 'portos-vitest-legacy-old'))).toBe(false);
       expect(existsSync(join(host, 'portos-vitest-legacy-fresh'))).toBe(true);
     } finally {
-      for (const run of runs) {
-        if (process.platform === 'win32') killProcessTree(run.child, 'SIGKILL');
-        else run.child.kill('SIGTERM');
-      }
-      for (const pid of descendants) killProcessTree({ pid }, 'SIGKILL');
-      await Promise.allSettled(runs.map(run => run.closed));
+      await Promise.allSettled(runs.map(run => run.cleanup()));
       rmSync(host, { recursive: true, force: true });
     }
+    // Nothing may outlive teardown to recreate host (or its pvt-* roots) later.
+    await waitFor(() => descendants.every(pid => !alive(pid)), 'fixture processes survived teardown');
+    expect(existsSync(host)).toBe(false);
   }, 65000);
 });
