@@ -229,3 +229,31 @@ describe('triggerFeatureAgent', () => {
     expect(saved.agents[0].currentAgentId).toBeNull();
   });
 });
+
+describe('pending task pointer when dispatch never spawns', () => {
+  const pointer = async () => JSON.parse(await readFile(dataPath(), 'utf8')).agents[0].currentAgentId;
+
+  it.each([
+    ['task:held', (taskId) => ({ taskId, reason: 'local endpoint at capacity' })],
+    ['agent:error', (taskId) => ({ taskId, error: 'worktree creation failed' })]
+  ])('clears the pointer on %s so the agent is due and triggerable again', async (event, payload) => {
+    // Admission sets currentAgentId to the unpersisted task id; a held or failed
+    // spawn emits no agent lifecycle event, which used to wedge the agent forever.
+    const first = await triggerFeatureAgent(agent.id);
+    expect(first.triggered).toBe(true);
+    expect(await pointer()).toBe(first.taskId);
+
+    cosEvents.emit(event, payload(first.taskId));
+    await vi.waitFor(async () => expect(await pointer()).toBeNull());
+
+    const again = await triggerFeatureAgent(agent.id);
+    expect(again.triggered).toBe(true);
+  });
+
+  it('ignores a held task that belongs to no feature agent', async () => {
+    const first = await triggerFeatureAgent(agent.id);
+    cosEvents.emit('task:held', { taskId: 'other-task', reason: 'x' });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(await pointer()).toBe(first.taskId);
+  });
+});

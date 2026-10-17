@@ -429,3 +429,25 @@ describe('subAgentSpawner — runner connection events', () => {
     expect(dequeues).toHaveLength(1);
   });
 });
+
+describe('subAgentSpawner — release signals for unpersisted tasks', () => {
+  beforeEach(async () => {
+    await initSpawner();
+    vi.clearAllMocks();
+    setUseRunner(true);
+    isRunnerReachable.mockResolvedValue(true);
+    isUpdateInProgress.mockReturnValue(false);
+  });
+
+  it('emits task:held when a hold drops the task', async () => {
+    isRunnerReachable.mockResolvedValue(false);
+    await dispatch({ id: 'fa-run-1', metadata: {} });
+    expect(cosEvents.emit).toHaveBeenCalledWith('task:held', { taskId: 'fa-run-1', reason: 'CoS Runner is down' });
+  });
+
+  it('emits agent:error when spawnAgentForTask throws', async () => {
+    spawnAgentForTask.mockRejectedValueOnce(new Error('worktree failed'));
+    await dispatch({ id: 'fa-run-2', metadata: {} });
+    expect(cosEvents.emit).toHaveBeenCalledWith('agent:error', { taskId: 'fa-run-2', error: 'worktree failed' });
+  });
+});
