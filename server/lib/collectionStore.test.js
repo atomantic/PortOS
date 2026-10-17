@@ -382,6 +382,41 @@ describe('per-id write queue', () => {
     expect(good).toBe('ok');
   });
 
+  // Mutation guard: saveOne/deleteOne must go through the per-id queue, not call
+  // the *Now primitives directly. Drain real fs round-trips (not a timer) so an
+  // unqueued write/rm would have landed before we assert.
+  const flush = async () => { for (let i = 0; i < 25; i++) { await tick(); await readFile(join(dir, 'index.json')).catch(() => {}); } };
+  const holdQueue = (store, id) => {
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const held = store.queueRecordWrite(id, () => gate);
+    return { release, held };
+  };
+
+  it('deleteOne waits behind an in-flight write to the same id', async () => {
+    const store = createCollectionStore({ dir, type: 'widgets', schemaVersion: 1 });
+    await store.saveOne('a', { id: 'a', v: 1 });
+    const { release, held } = holdQueue(store, 'a');
+    const del = store.deleteOne('a');
+    await flush();
+    expect(existsSync(join(dir, 'a'))).toBe(true);
+    release();
+    await Promise.all([held, del]);
+    expect(existsSync(join(dir, 'a'))).toBe(false);
+  });
+
+  it('saveOne waits behind an in-flight write to the same id', async () => {
+    const store = createCollectionStore({ dir, type: 'widgets', schemaVersion: 1 });
+    await store.saveOne('a', { id: 'a', v: 1 });
+    const { release, held } = holdQueue(store, 'a');
+    const save = store.saveOne('a', { id: 'a', v: 2 });
+    await flush();
+    expect((await store.loadOne('a')).v).toBe(1);
+    release();
+    await Promise.all([held, save]);
+    expect((await store.loadOne('a')).v).toBe(2);
+  });
+
   it('queueRecordWrite rejects invalid ids', () => {
     const store = createCollectionStore({ dir, type: 'widgets', schemaVersion: 1 });
     expect(() => store.queueRecordWrite('../escape', () => null)).toThrow(/invalid record id/);
