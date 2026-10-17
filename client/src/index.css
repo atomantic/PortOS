@@ -31,6 +31,11 @@
    the candidate directly but is silently absent from the build. */
 @custom-variant roomy-viewport (@media (width >= 40rem) and (min-height: 800px));
 
+/* Chief of Staff page: the 320px status rail sits beside the work only when the
+   page's own container (the content area after the global sidebar) can hold the
+   rail plus a ~680px primary column. Needs an ancestor `@container/cos`. */
+@custom-variant cos-wide (@container cos (width >= 62.5rem));
+
 @theme {
   --color-port-bg: rgb(var(--port-bg));
   --color-port-card: rgb(var(--port-card));

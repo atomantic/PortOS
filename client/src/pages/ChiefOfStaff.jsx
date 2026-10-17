@@ -1114,7 +1114,9 @@ export default function ChiefOfStaff() {
         padded
         bodyClassName="p-3 lg:p-4"
         sideCollapsed={desktopPanelCollapsed}
-        sideClassName="flex flex-col gap-3 border-b lg:border-b-0 lg:border-r border-port-accent-2/20 bg-gradient-to-b from-port-card/80 to-port-card/40 p-3 lg:px-4 lg:py-6 lg:h-full lg:overflow-hidden"
+        splitContainer
+        splitColsClass={desktopPanelCollapsed ? 'cos-wide:grid-cols-[0px_1fr]' : 'cos-wide:grid-cols-[320px_1fr]'}
+        sideClassName="flex flex-col gap-3 border-b cos-wide:border-b-0 cos-wide:border-r border-port-accent-2/20 bg-gradient-to-b from-port-card/80 to-port-card/40 p-3 cos-wide:px-4 cos-wide:py-6 cos-wide:h-full cos-wide:overflow-hidden"
         sideHero
         sideBlocks={4}
         sideBlockColsClass="grid-cols-2"
@@ -1136,19 +1138,20 @@ export default function ChiefOfStaff() {
   );
 
   return (
-    <div className={`relative flex flex-col lg:grid ${desktopPanelCollapsed ? 'lg:grid-cols-[0px_1fr]' : 'lg:grid-cols-[320px_1fr]'} h-full overflow-hidden transition-[grid-template-columns] duration-200`}>
+    <div className="@container/cos h-full">
+    <div className={`relative flex flex-col cos-wide:grid ${desktopPanelCollapsed ? 'cos-wide:grid-cols-[0px_1fr]' : 'cos-wide:grid-cols-[320px_1fr]'} h-full overflow-hidden transition-[grid-template-columns] duration-200`}>
       {/* Agent Panel */}
       {!statusKnown ? (
-        <div className="min-w-0 overflow-hidden border-b lg:border-r border-port-border">
-          <div className={desktopPanelCollapsed ? 'lg:hidden' : ''}>{statusPlaceholder}</div>
+        <div className="min-w-0 overflow-hidden border-b cos-wide:border-r border-port-border">
+          <div className={desktopPanelCollapsed ? 'cos-wide:hidden' : ''}>{statusPlaceholder}</div>
         </div>
       ) : avatarStyle === 'ascii' ? (
         <>
           {/* Desktop: collapsed placeholder or full panel */}
           {desktopPanelCollapsed ? (
-            <div className="hidden lg:block overflow-hidden min-w-0" />
+            <div className="hidden cos-wide:block overflow-hidden min-w-0" />
           ) : (
-            <div className="hidden lg:block relative min-w-0 w-full max-w-full lg:w-[320px] lg:max-w-[320px]">
+            <div className="hidden cos-wide:block relative min-w-0 w-full max-w-full cos-wide:w-[320px] cos-wide:max-w-[320px]">
               <button
                 onClick={toggleDesktopPanel}
                 className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center absolute top-2 right-2 z-10 p-1.5 text-gray-500 hover:text-white transition-colors rounded-md hover:bg-white/5"
@@ -1170,7 +1173,7 @@ export default function ChiefOfStaff() {
             </div>
           )}
           {/* Keep the mobile queue reachable while retaining terminal identity. */}
-          <div className="lg:hidden">
+          <div className="cos-wide:hidden">
             <button onClick={toggleMobilePanel}
               className="flex items-center justify-between gap-2 w-full px-3 py-2 min-h-[44px]"
               aria-expanded={!agentPanelCollapsed} aria-controls="cos-terminal-mobile">
@@ -1194,9 +1197,9 @@ export default function ChiefOfStaff() {
       ) : desktopPanelCollapsed ? (
         /* Collapsed SVG - desktop placeholder, mobile shows compact header */
         <>
-          <div className="hidden lg:block overflow-hidden min-w-0" />
+          <div className="hidden cos-wide:block overflow-hidden min-w-0" />
           {/* Mobile: still show the compact header */}
-          <div className="lg:hidden border-b border-port-accent-2/20 bg-gradient-to-b from-port-card/80 to-port-card/40">
+          <div className="cos-wide:hidden border-b border-port-accent-2/20 bg-gradient-to-b from-port-card/80 to-port-card/40">
             <button
               onClick={toggleMobilePanel}
               className="flex items-center justify-between w-full px-3 py-2 bg-port-card/60 border-b border-port-accent-2/20 min-h-[40px]"
@@ -1236,11 +1239,11 @@ export default function ChiefOfStaff() {
           </div>
         </>
       ) : (
-        <div className="relative flex flex-col border-b lg:border-b-0 lg:border-r border-port-accent-2/20 bg-gradient-to-b from-port-card/80 to-port-card/40 shrink-0 w-full max-w-full min-w-0 lg:w-[320px] lg:max-w-[320px] overflow-x-hidden lg:h-full lg:overflow-y-auto scrollbar-hide">
+        <div className="relative flex flex-col border-b cos-wide:border-b-0 cos-wide:border-r border-port-accent-2/20 bg-gradient-to-b from-port-card/80 to-port-card/40 shrink-0 w-full max-w-full min-w-0 cos-wide:w-[320px] cos-wide:max-w-[320px] overflow-x-hidden cos-wide:h-full cos-wide:overflow-y-auto scrollbar-hide">
           {/* Desktop Collapse Button */}
           <button
             onClick={toggleDesktopPanel}
-            className="min-h-[44px] min-w-[44px] items-center justify-center hidden lg:flex absolute top-2 right-2 z-20 p-1.5 text-gray-500 hover:text-white transition-colors rounded-md hover:bg-white/5"
+            className="min-h-[44px] min-w-[44px] items-center justify-center hidden cos-wide:flex absolute top-2 right-2 z-20 p-1.5 text-gray-500 hover:text-white transition-colors rounded-md hover:bg-white/5"
             aria-label="Collapse CoS panel"
             title="Collapse CoS panel"
           >
@@ -1250,7 +1253,7 @@ export default function ChiefOfStaff() {
           {/* Mobile Collapse Toggle Header */}
           <button
             onClick={toggleMobilePanel}
-            className="lg:hidden flex items-center justify-between w-full px-3 py-2 bg-port-card/60 border-b border-port-accent-2/20 min-h-[40px]"
+            className="cos-wide:hidden flex items-center justify-between w-full px-3 py-2 bg-port-card/60 border-b border-port-accent-2/20 min-h-[40px]"
             aria-expanded={!agentPanelCollapsed}
             aria-controls="cos-agent-panel"
           >
@@ -1277,7 +1280,7 @@ export default function ChiefOfStaff() {
           {/* Collapsible Content */}
           <div
             id="cos-agent-panel"
-            className={`${agentPanelCollapsed ? 'hidden' : 'flex'} lg:flex min-w-0 w-full max-w-full relative overflow-hidden ${hasCanvasAvatar ? 'flex-none min-h-[180px] sm:min-h-[190px] md:min-h-[190px] lg:min-h-dvh-cap lg:[--dvh-cap:460px] lg:[--dvh-inset:1rem] xl:[--dvh-cap:620px]' : 'flex-1'}`}
+            className={`${agentPanelCollapsed ? 'hidden' : 'flex'} cos-wide:flex min-w-0 w-full max-w-full relative overflow-hidden ${hasCanvasAvatar ? 'flex-none min-h-[180px] sm:min-h-[190px] md:min-h-[190px] cos-wide:min-h-dvh-cap cos-wide:[--dvh-cap:460px] cos-wide:[--dvh-inset:1rem] xl:[--dvh-cap:620px]' : 'flex-1'}`}
           >
             {/* Background Effects */}
             <div
@@ -1297,7 +1300,7 @@ export default function ChiefOfStaff() {
               // + event log without clipping; without this cap the inset-0 canvas
               // grows with the panel on desktop, dragging the framed avatar down
               // into the stats grid below it.
-              <div className="absolute inset-0 lg:bottom-auto lg:h-dvh-cap lg:[--dvh-cap:460px] lg:[--dvh-inset:1rem] xl:[--dvh-cap:620px] z-[1] -translate-x-16 -translate-y-1 sm:translate-x-0 sm:-translate-y-6 md:-translate-y-8 lg:-translate-y-28 xl:-translate-y-36">
+              <div className="absolute inset-0 cos-wide:bottom-auto cos-wide:h-dvh-cap cos-wide:[--dvh-cap:460px] cos-wide:[--dvh-inset:1rem] xl:[--dvh-cap:620px] z-[1] -translate-x-16 -translate-y-1 sm:translate-x-0 sm:-translate-y-6 md:-translate-y-8 cos-wide:-translate-y-28 xl:-translate-y-36">
                 {renderAvatar(true)}
               </div>
             )}
@@ -1308,13 +1311,13 @@ export default function ChiefOfStaff() {
                 hasCanvasAvatar
                   ? 'absolute inset-y-0 left-0 w-[46%] p-2 sm:p-3'
                   : 'relative flex-1 w-full p-2'
-              } min-w-0 lg:relative lg:inset-auto lg:w-full lg:max-w-full lg:flex-none lg:min-h-full lg:px-4 lg:py-6 flex flex-col items-center z-10`}
+              } min-w-0 cos-wide:relative cos-wide:inset-auto cos-wide:w-full cos-wide:max-w-full cos-wide:flex-none cos-wide:min-h-full cos-wide:px-4 cos-wide:py-6 flex flex-col items-center z-10`}
             >
-              <div className="hidden lg:block text-sm font-semibold tracking-widest uppercase text-port-text-muted mb-1 font-mono">
+              <div className="hidden cos-wide:block text-sm font-semibold tracking-widest uppercase text-port-text-muted mb-1 font-mono">
                 Digital Assistant
               </div>
               <h1
-                className="hidden lg:block text-lg sm:text-xl lg:text-2xl xl:text-3xl font-bold mb-2 lg:mb-4"
+                className="hidden cos-wide:block text-lg sm:text-xl cos-wide:text-2xl xl:text-3xl font-bold mb-2 cos-wide:mb-4"
                 style={{
                   background: COS_TITLE_GRADIENT,
                   WebkitBackgroundClip: 'text',
@@ -1327,28 +1330,28 @@ export default function ChiefOfStaff() {
 
               {isGenericStatusMessage(statusMessage) && <StatusPill state={agentState} message={statusMessage} />}
               {!hasCanvasAvatar && renderAvatar()}
-              {hasCanvasAvatar && <div className="flex-none h-[5.75rem] sm:h-[4rem] md:h-[3rem] lg:h-[11rem] xl:h-[12rem]" aria-hidden="true" />}
-              <div className="hidden lg:block">
+              {hasCanvasAvatar && <div className="flex-none h-[5.75rem] sm:h-[4rem] md:h-[3rem] cos-wide:h-[11rem] xl:h-[12rem]" aria-hidden="true" />}
+              <div className="hidden cos-wide:block">
                 <StateLabel state={agentState} />
               </div>
-              <div className={`${hasCanvasAvatar ? 'sm:-mt-4 md:-mt-6 lg:mt-0' : ''} hidden sm:block`}>
+              <div className={`${hasCanvasAvatar ? 'sm:-mt-4 md:-mt-6 cos-wide:mt-0' : ''} hidden sm:block`}>
                 {!isGenericStatusMessage(statusMessage) && <StatusBubble message={statusMessage} />}
               </div>
 
               {/* Desktop Stats Grid - integrated into CoS sidebar (matches mobile compressed layout) */}
-              <div className="hidden lg:grid grid-cols-2 gap-1.5 w-full min-w-0 mt-3 relative z-10">
+              <div className="hidden cos-wide:grid grid-cols-2 gap-1.5 w-full min-w-0 mt-3 relative z-10">
                 {statsGridCards}
               </div>
 
               {status?.running && (
-                <div className="hidden lg:flex flex-1 min-h-0 w-full min-w-0 flex-col">
+                <div className="hidden cos-wide:flex flex-1 min-h-0 w-full min-w-0 flex-col">
                   <EventLog logs={eventLogs} />
                 </div>
               )}
             </div>
 
             {/* Mobile Stats Grid - shows core stats in compact 2-column layout */}
-            <div className={`${hasCanvasAvatar ? 'ml-[46%] w-[54%] flex-none self-start content-start' : 'flex-1 content-center'} grid grid-cols-2 gap-1.5 p-2 lg:hidden relative z-10`}>
+            <div className={`${hasCanvasAvatar ? 'ml-[46%] w-[54%] flex-none self-start content-start' : 'flex-1 content-center'} grid grid-cols-2 gap-1.5 p-2 cos-wide:hidden relative z-10`}>
               {statsGridCards}
             </div>
           </div>
@@ -1360,7 +1363,7 @@ export default function ChiefOfStaff() {
           grow this region and scroll here as before. */}
       <div className="flex flex-1 min-h-0 min-w-0 flex-col overflow-y-auto overflow-x-hidden p-3 lg:p-4">
         {desktopPanelCollapsed && (
-          <div className="hidden lg:flex sticky top-0 z-20 bg-port-bg items-center flex-wrap gap-3 mb-3">
+          <div className="hidden cos-wide:flex sticky top-0 z-20 bg-port-bg items-center flex-wrap gap-3 mb-3">
             <button onClick={toggleDesktopPanel} aria-label="Expand CoS panel"
               className="min-h-[44px] flex items-center gap-2 px-2 text-sm text-port-text">
               <PanelLeftOpen size={16} aria-hidden="true" /> CoS
@@ -1528,6 +1531,7 @@ export default function ChiefOfStaff() {
           </div>
         )}
       </div>
+    </div>
     </div>
   );
 }
