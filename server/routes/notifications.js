@@ -4,19 +4,19 @@
 
 import { Router } from 'express';
 import * as notifications from '../services/notifications.js';
+import { validateRequest, listNotificationsQuerySchema } from '../lib/validation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
 
 // GET /api/notifications - List all notifications
 router.get('/', asyncHandler(async (req, res) => {
-  const options = {
-    type: req.query.type,
-    unreadOnly: req.query.unreadOnly === 'true',
-    limit: req.query.limit ? parseInt(req.query.limit, 10) : undefined
-  };
-
-  const result = await notifications.getNotifications(options);
+  const query = validateRequest(listNotificationsQuerySchema, req.query);
+  const result = await notifications.getNotifications({
+    type: query.type,
+    unreadOnly: query.unreadOnly === 'true',
+    limit: query.limit
+  });
   res.json(result);
 }));
 

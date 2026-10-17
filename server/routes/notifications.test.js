@@ -114,6 +114,17 @@ describe('notifications routes', () => {
     });
   });
 
+  describe('GET /api/notifications query validation', () => {
+    it.each(['limit=-1', 'limit=0', 'limit=1001', 'limit=abc', 'limit=1.5', 'type=invalid', 'type=a&type=b', 'unreadOnly=yes'])(
+      'rejects %s with VALIDATION_ERROR',
+      async (qs) => {
+        const res = await request(buildApp()).get(`/api/notifications?${qs}`);
+        expect(res.status).toBe(400);
+        expect(res.body.code).toBe('VALIDATION_ERROR');
+      }
+    );
+  });
+
   describe('GET /api/notifications/count', () => {
     it('returns the unread count', async () => {
       notifications.getUnreadCount.mockResolvedValue(7);
