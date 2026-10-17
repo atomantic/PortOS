@@ -1035,6 +1035,7 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
 // missing, then join by stream copy with the song laid under them once.
 async function renderFromShotSegments(projectId, project, handOff, options) {
   const { planShotSegments, renderMissingSegments, stitchSegments, pruneSegments } = await import('./shotSegments.js');
+  const startedAtMs = Date.now();
   const plan = await planShotSegments(project);
   await ensureDir(PATHS.videos);
   await ensureDir(PATHS.videoThumbnails);
@@ -1095,7 +1096,7 @@ async function renderFromShotSegments(projectId, project, handOff, options) {
     });
     finish('complete');
     // Older takes of each shot are dropped once the new cut is published.
-    const pruned = await pruneSegments(plan).catch(() => 0);
+    const pruned = await pruneSegments(plan, { startedAtMs }).catch(() => 0);
     console.log(`✅ Music video rendered [${jobId.slice(0, 8)}]: ${filename} (${all.length - cached} of ${all.length} segments rendered${pruned ? `, ${pruned} old dropped` : ''})`);
     broadcastSse(job, { type: 'complete', result: { id: jobId, filename, thumbnail: thumb, path: `/data/videos/${filename}` } });
   }).catch(async (err) => {

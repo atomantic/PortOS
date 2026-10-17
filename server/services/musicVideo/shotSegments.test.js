@@ -6,7 +6,7 @@
  */
 import { describe, it, expect, vi, afterAll, afterEach, beforeAll } from 'vitest';
 import { execFileSync } from 'child_process';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, rmSync, utimesSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
@@ -253,6 +253,24 @@ describe.skipIf(!hasFfmpeg)('shot segments', () => {
     expect(existsSync(pinned.segments[2].path)).toBe(false);
     expect(existsSync(pinned.segments[2].basePath)).toBe(true);
   }, 60000);
+});
+
+describe('pruneSegments time floor', () => {
+  it('keeps a file written after the render started and still removes older unplanned ones', async () => {
+    fixture.project = project({ id: 'mv-segments-floor-test' });
+    const plan = await planShotSegments(fixture.project);
+    mkdirSync(plan.dir, { recursive: true });
+    const older = join(plan.dir, 'older-take.mp4');
+    const newer = join(plan.dir, 'newer-look.mp4');
+    writeFileSync(older, 'x');
+    writeFileSync(newer, 'x');
+    const startedAtMs = Date.now();
+    utimesSync(older, (startedAtMs - 5000) / 1000, (startedAtMs - 5000) / 1000);
+    utimesSync(newer, (startedAtMs + 5000) / 1000, (startedAtMs + 5000) / 1000);
+    await pruneSegments(plan, { startedAtMs });
+    expect(existsSync(older)).toBe(false);
+    expect(existsSync(newer)).toBe(true);
+  });
 });
 
 describe('renderSegment after a cancel', () => {
