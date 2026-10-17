@@ -119,6 +119,7 @@ describe('local fidelity publication through the existing runner and status boun
     const f = fixture();
     f.options.toolchain = async () => { throw Error('spawn /Users/alice/bin/chrome failed GITHUB_TOKEN=sup3rs3cretvalue'); };
     const error = await publishBrowserFidelity(f.options).catch(caught => caught);
+    roots.push(dirname(error.diagnosticsPath));
     expect(error.message).toContain('not admitted');
     expect(error.reason).toContain('spawn <path> failed');
     expect(error.reason).not.toMatch(/alice|sup3rs3cretvalue/);
