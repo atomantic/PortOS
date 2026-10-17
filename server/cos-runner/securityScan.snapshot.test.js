@@ -1,4 +1,5 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'fs';
 import { mkdtemp, mkdir, writeFile, readFile, rm, realpath, symlink, lstat, chmod } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -11,6 +12,12 @@ const managers = [];
 const git = (...args) => execFileSync('git', args, { cwd: source, encoding: 'utf8', env: { ...process.env,
   GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' } }).trim();
 const commit = () => { git('add', '.'); return git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Synthetic baseline'); };
+// A killed worker reparented to a PID 1 that does not reap stays a zombie, and kill(pid, 0) succeeds on it.
+function isRunning(pid) {
+  try { process.kill(pid, 0); } catch { return false; }
+  try { return !/^State:\s*[ZX]/m.test(readFileSync(`/proc/${pid}/status`, 'utf8')); } catch { return true; }
+}
+
 const grant = { model: 'example-model', effort: 'medium', auth: 'chatgpt', maxCostUsd: 'unlimited', timeLimitSeconds: 'unlimited' };
 
 // Keep the former vi.waitFor default budget. A missing marker must distinguish
@@ -241,7 +248,7 @@ describe.skipIf(process.platform === 'win32')('scanner committed snapshot bounda
       expect(pid).toBeGreaterThan(1);
       expect((await manager.stop('agent-fixture')).status).toBe('interrupted');
       expect((await run).evidence.cleanup).toBe('confirmed');
-      expect(() => process.kill(pid, 0)).toThrow();
+      expect(isRunning(pid)).toBe(false);
       expect(await lstat(join(root, 'launched.json')).catch(() => null)).toBeNull();
     } finally {
       preparation.dispose();
