@@ -120,7 +120,8 @@ import { startOrphanedPartialGc } from './orphanedPartialGc.js';
 import { startBeeperAttachmentGc } from './beeperAttachmentGc.js';
 import { startTribePurge } from './tribePurge.js';
 import { startScreenshotsGc } from './screenshotsGc.js';
-import { initBridge as initBrainMemoryBridge } from './brainMemoryBridge.js';
+import { initBridge as initBrainMemoryBridge, replayPersistedResync as replayBrainMemoryResync } from './brainMemoryBridge.js';
+import { flushAutoSync as flushIdeaLoomAutoSync } from './idealoomAutoSync.js';
 import { initDrillCache } from './meatspacePostDrillCache.js';
 import { registerPostReminderSchedule } from './meatspacePostReminder.js';
 import { registerAutobiographyReminderSchedule } from './autobiographyReminder.js';
@@ -985,6 +986,10 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
 
     runDatabasePhase: async () => {
       await runDatabaseBootPhase();
+      // Brain→memory resyncs a previous process queued but never finished. Runs
+      // after initSyncLog and the DB phase (the memory index needs both), in the
+      // background so a large backlog can't delay accepting requests.
+      replayBrainMemoryResync().catch((err) => logBootstrapFailure('❌ Brain memory resync replay failed', err));
       const { bindPeerExecutionIo, initializePeerExecution } = await import('./peerExecutionRuntime.js');
       bindPeerExecutionIo(io);
       await initializePeerExecution().catch(err => console.error(`❌ Peer execution recovery remains held: ${err.message}`));
@@ -1222,6 +1227,13 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
       closeServer(localHttpServer, 'Local HTTP mirror')
     ]);
 
+    // An IdeaLoom vault export still inside its 5s debounce would otherwise be
+    // lost. A local file write, so it overlaps the DB close below inside that
+    // close's budget rather than adding to the shutdown ceiling; no request can
+    // schedule another export now that the servers are closed.
+    const ideaLoomFlushed = withGrace('IdeaLoom auto-sync flush', 2500, ({ finish, finishWithError }) =>
+      flushIdeaLoomAutoSync().then(() => finish('✅ IdeaLoom auto-sync flushed'), (err) => finishWithError('⚠️ IdeaLoom auto-sync flush failed', err)));
+
     // Flush the media-job queue now that no request can admit another job
     // (#8325): terminal transitions and the latest progress reach the snapshot a
     // restart restores from. The file write is independent of Postgres, so it
@@ -1245,6 +1257,7 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
 
     await markerWritten;
     await mediaQueueFlushed;
+    await ideaLoomFlushed;
     clearTimeout(forceExitTimer);
     process.exit(0);
   };

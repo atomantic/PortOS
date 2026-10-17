@@ -7,6 +7,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // live in module scope so assertions can reach them after re-import.
 
 let bridgeFileContents = null; // null = file absent
+let pendingFileContents = null; // memory-resync-pending.json; null = absent
+const isPendingPath = (path) => String(path).endsWith('memory-resync-pending.json');
 
 const createMemory = vi.fn(async (data) => ({ id: `mem-${data.content?.slice(0, 6) || 'x'}` }));
 const updateMemory = vi.fn(async () => ({ id: 'updated' }));
@@ -21,16 +23,24 @@ const getDigests = vi.fn(async () => []);
 const getReviews = vi.fn(async () => []);
 const listJournals = vi.fn(async () => ({ records: [] }));
 const getJournal = vi.fn();
-const atomicWrite = vi.fn(async (filePath, data) => {
+const writeThroughMock = async (filePath, data) => {
   const payload = (typeof data === 'string' || Buffer.isBuffer(data)) ? data : JSON.stringify(data, null, 2);
   const { writeFile } = await import('fs/promises');
   return writeFile(filePath, payload);
-});
+};
+const atomicWrite = vi.fn(writeThroughMock);
 
 vi.mock('fs', () => ({ existsSync: vi.fn(() => bridgeFileContents !== null) }));
 vi.mock('fs/promises', () => ({
-  readFile: vi.fn(async () => bridgeFileContents ?? '{}'),
-  writeFile: vi.fn(async (_path, data) => { bridgeFileContents = data; }),
+  readFile: vi.fn(async (path) => {
+    if (!isPendingPath(path)) return bridgeFileContents ?? '{}';
+    if (pendingFileContents === null) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    return pendingFileContents;
+  }),
+  writeFile: vi.fn(async (path, data) => {
+    if (isPendingPath(path)) pendingFileContents = data;
+    else bridgeFileContents = data;
+  }),
 }));
 vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { brain: '/tmp/test-brain' },
@@ -65,6 +75,7 @@ async function loadBridge() {
 beforeEach(async () => {
   vi.clearAllMocks();
   bridgeFileContents = null;
+  pendingFileContents = null;
   // The mocked brainEvents emitter is created by the vi.mock factory, which
   // outlives vi.resetModules() — so each test's initBridge() stacks another
   // set of listeners on the SAME emitter, and one emit fans out to every
@@ -842,14 +853,18 @@ describe('brain bridge durable identity (#11007)', () => {
     let enteredWrite;
     const entered = new Promise(resolve => { enteredWrite = resolve; });
     const held = new Promise(resolve => { releaseWrite = resolve; });
-    atomicWrite.mockImplementationOnce(async (_path, data) => {
-      const snapshot = JSON.stringify(data);
-      enteredWrite();
-      await held;
-      bridgeFileContents = snapshot;
-    });
     await createMemory.withImplementation(async data => ({ id: `memory-${data.content}` }), async () => {
       bridge.queueResync([{ type: 'people', id: 'example' }]);
+      // Hold only the bridge map's first write; pending-set persists pass through.
+      let holdNext = true;
+      atomicWrite.mockImplementation(async (path, data) => {
+        if (!holdNext || isPendingPath(path)) return writeThroughMock(path, data);
+        holdNext = false;
+        const snapshot = JSON.stringify(data);
+        enteredWrite();
+        await held;
+        bridgeFileContents = snapshot;
+      });
       const flush = bridge.flushPendingResync();
       await entered;
       try {
@@ -901,5 +916,113 @@ describe('brain catch-up beyond old caps', () => {
     expect(getDigests).toHaveBeenCalledWith(Infinity);
     expect(getReviews).toHaveBeenCalledWith(Infinity);
     expect(await bridge.getEmbeddingCoverage()).toEqual({ total: 2002, missing: 0 });
+  });
+});
+
+describe('brainMemoryBridge — pending resyncs survive a restart (#11756)', () => {
+  const persisted = () => JSON.parse(pendingFileContents).entries.map(({ type, id, hardDelete }) => `${type}:${id}:${hardDelete}`);
+
+  // The first process "dies" mid-batch; fake timers keep its debounce timer from
+  // firing into a later test.
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('finishes records left behind after the first one settled', async () => {
+    const first = await loadBridge();
+    let hang;
+    getById.mockImplementation(async (_type, id) => {
+      if (id === 'b') await new Promise((resolve) => { hang = resolve; }); // process dies here
+      return { id, name: id };
+    });
+
+    first.queueResync([{ type: 'people', id: 'a' }, { type: 'people', id: 'b' }, { type: 'people', id: 'c' }]);
+    first.flushPendingResync(); // never settles: b is in flight, c still queued
+    await vi.waitFor(() => expect(hang).toBeTypeOf('function'));
+    await first.flushPendingResyncWrites();
+    expect(persisted()).toEqual(['people:b:false', 'people:c:false']); // a was removed once it settled
+
+    getById.mockClear();
+    getById.mockImplementation(async (_type, id) => ({ id, name: id }));
+    const second = await loadBridge();
+    expect(await second.replayPersistedResync()).toBe(2);
+    await second.flushPendingResync();
+
+    expect(getById.mock.calls.map(([, id]) => id)).toEqual(['b', 'c']);
+    await second.flushPendingResyncWrites();
+    expect(persisted()).toEqual([]);
+  });
+
+  it('archives a synced-in delete and hard-deletes a local one after the restart', async () => {
+    const first = await loadBridge();
+    first.queueResync([{ type: 'people', id: 'synced' }]);
+    first.queueResync([{ type: 'people', id: 'local', hardDelete: true }]);
+    first.queueResync([{ type: 'people', id: 'local' }]); // coalesced soft touch must not downgrade
+    await first.flushPendingResyncWrites();
+
+    const second = await loadBridge();
+    bridgeFileContents = JSON.stringify({
+      [second.bridgeKey('people', 'synced')]: 'mem-synced',
+      [second.bridgeKey('people', 'local')]: 'mem-local',
+    });
+    getById.mockResolvedValue(null); // both tombstoned
+    await second.replayPersistedResync();
+    await second.flushPendingResync();
+
+    expect(updateMemory).toHaveBeenCalledWith('mem-synced', { status: 'archived' });
+    expect(purgeMemory).toHaveBeenCalledWith('mem-local');
+    expect(purgeMemory).not.toHaveBeenCalledWith('mem-synced');
+  });
+
+  it('keeps an entry re-queued while its resync was in flight', async () => {
+    const bridge = await loadBridge();
+    let release;
+    getById.mockImplementationOnce(async () => { await new Promise((resolve) => { release = resolve; }); return { id: 'a', name: 'a' }; });
+    getById.mockResolvedValue({ id: 'a', name: 'a' });
+
+    bridge.queueResync([{ type: 'people', id: 'a' }]);
+    const flush = bridge.flushPendingResync();
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    bridge.queueResync([{ type: 'people', id: 'a' }]); // edited again mid-resync
+    release();
+    await flush;
+    await bridge.flushPendingResyncWrites();
+
+    expect(getById).toHaveBeenCalledTimes(2);
+    expect(persisted()).toEqual([]); // removed only after the re-queued pass settled
+  });
+
+  it('persists a journal day inside its debounce window and replays it', async () => {
+    const first = await loadBridge();
+    const { brainEvents } = await import('./brainStorage.js');
+    first.initBridge();
+    brainEvents.emit('journals:upserted', { entry: { id: '2026-01-02' } });
+    await first.flushPendingResyncWrites();
+    expect(persisted()).toEqual(['journals:2026-01-02:false']);
+
+    getJournal.mockResolvedValue({ id: '2026-01-02', date: '2026-01-02', content: 'hello' });
+    const second = await loadBridge();
+    await second.replayPersistedResync();
+    await second.flushPendingResync();
+
+    expect(getJournal).toHaveBeenCalledWith('2026-01-02');
+    expect(createMemory).toHaveBeenCalledTimes(1);
+  });
+
+  it('makes no embedding or store call at boot when nothing is pending', async () => {
+    const absent = await loadBridge();
+    expect(await absent.replayPersistedResync()).toBe(0);
+
+    pendingFileContents = JSON.stringify({ entries: [] });
+    const empty = await loadBridge();
+    expect(await empty.replayPersistedResync()).toBe(0);
+
+    pendingFileContents = '{not json';
+    const corrupt = await loadBridge();
+    expect(await corrupt.replayPersistedResync()).toBe(0);
+    await corrupt.flushPendingResync();
+
+    expect(generateMemoryEmbedding).not.toHaveBeenCalled();
+    expect(getById).not.toHaveBeenCalled();
+    expect(atomicWrite).not.toHaveBeenCalled();
   });
 });
