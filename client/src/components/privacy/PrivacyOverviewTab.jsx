@@ -54,8 +54,7 @@ export default function PrivacyOverviewTab({ subjectId }) {
   return (
     <div className="space-y-6">
       <p className="text-sm text-gray-500 max-w-2xl">
-        The Privacy Center is your system of record for personal identity facts and who holds them.
-        Vault values are encrypted at rest and never shown until you explicitly reveal them.
+        Vault values stay hidden until you reveal them.
       </p>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -147,15 +146,6 @@ export default function PrivacyOverviewTab({ subjectId }) {
           )}
         </div>
       </button>
-
-      <div className="flex flex-wrap gap-2">
-        <button onClick={() => goTo('vault')} className="px-3 py-2 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80">
-          Manage vault
-        </button>
-        <button onClick={() => goTo('organizations')} className="px-3 py-2 text-sm rounded border border-port-border text-gray-300 hover:text-white hover:bg-port-card">
-          Manage organizations
-        </button>
-      </div>
     </div>
   );
 }
