@@ -354,6 +354,18 @@ describe('fableLoomProduction', () => {
     expect(reasons().some(reason => /no approved voice binding/i.test(reason))).toBe(false);
   });
 
+  it('reports each missing protagonist and voice-binding blocker once on the dialogue asset', () => {
+    const episode = { ...sampleEpisode, nodes: [{ ...sampleEpisode.nodes[0], transitions: [],
+      interactionWindow: { enabled: true, protagonistCharacterId: 'char-1' } }] };
+    const plan = buildEpisodeProductionPlan({ episode, universe: { id: 'u1', characters: [] },
+      loom: { id: 'loom-1' }, localVoiceProfiles: [] });
+    const reasons = plan.plannedAssets.find(asset => asset.type === 'dialogue').readiness.reasons;
+    expect(reasons.filter(reason => /not present in the linked Universe/i.test(reason))).toHaveLength(1);
+    expect(reasons.filter(reason => /no approved voice binding/i.test(reason))).toHaveLength(1);
+    expect(reasons.some(reason => /not found in Universe|No approved voice binding for/.test(reason))).toBe(false);
+    expect(new Set(reasons).size).toBe(reasons.length);
+  });
+
   it('refuses exact-input planning when a node has no recorded provenance', () => {
     const plan = buildEpisodeProductionPlan({
       episode: sampleEpisode,
