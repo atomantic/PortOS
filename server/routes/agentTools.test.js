@@ -107,6 +107,35 @@ describe('Agent Tools Routes', () => {
     });
   });
 
+  describe('GET /feed and /relevant-posts query validation', () => {
+    it.each([
+      '/feed?accountId=acc-1&limit=-1',
+      '/feed?accountId=acc-1&limit=0',
+      '/feed?accountId=acc-1&limit=abc',
+      '/feed?accountId=acc-1&limit=101',
+      '/feed?accountId=acc-1&sort=bogus',
+      '/feed?accountId=a&accountId=b',
+      '/feed',
+      '/relevant-posts?agentId=agent-1&accountId=acc-1&maxResults=-1',
+      '/relevant-posts?agentId=agent-1&accountId=acc-1&maxResults=0',
+      '/relevant-posts?agentId=agent-1&accountId=acc-1&maxResults=abc',
+      '/relevant-posts?accountId=acc-1',
+    ])('400s %s before any lookup', async (path) => {
+      const res = await request(app).get(`/api/agents/tools${path}`);
+      expect(res.status).toBe(400);
+      expect(platformAccounts.getAccountWithCredentials).not.toHaveBeenCalled();
+      expect(findRelevantPosts).not.toHaveBeenCalled();
+    });
+
+    it('passes coerced numeric limit and default sort to the client', async () => {
+      platformAccounts.getAccountWithCredentials.mockResolvedValue(ACTIVE_ACCOUNT);
+      moltbookClient.getFeed = vi.fn().mockResolvedValue({ posts: [] });
+      const res = await request(app).get('/api/agents/tools/feed?accountId=acc-1&limit=5');
+      expect(res.status).toBe(200);
+      expect(moltbookClient.getFeed).toHaveBeenCalledWith('hot', 5);
+    });
+  });
+
   describe('POST /engage', () => {
     it('returns ACCOUNT_INACTIVE (400) for a non-active account', async () => {
       platformAccounts.getAccountWithCredentials.mockResolvedValue({ ...ACTIVE_ACCOUNT, status: 'suspended' });

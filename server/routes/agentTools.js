@@ -16,7 +16,9 @@ import {
   engageSchema,
   checkPostsSchema,
   createDraftSchema,
-  updateDraftSchema
+  updateDraftSchema,
+  agentToolsFeedQuerySchema,
+  agentToolsRelevantPostsQuerySchema
 } from '../lib/validation.js';
 import * as platformAccounts from '../services/platformAccounts.js';
 import * as agentPersonalities from '../services/agentPersonalities.js';
@@ -233,11 +235,7 @@ router.post('/engage', asyncHandler(async (req, res) => {
 
 // GET /feed - Browse Moltbook feed for an account
 router.get('/feed', asyncHandler(async (req, res) => {
-  const { accountId, sort = 'hot', limit = 25 } = req.query;
-
-  if (!accountId) {
-    throw new ServerError('accountId required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
+  const { accountId, sort, limit } = validateRequest(agentToolsFeedQuerySchema, req.query);
 
   console.log(`🛠️ GET /api/agents/tools/feed account=${accountId} sort=${sort}`);
 
@@ -247,22 +245,18 @@ router.get('/feed', asyncHandler(async (req, res) => {
   }
 
   const client = createMoltbookClient(account.credentials.apiKey);
-  const feed = await client.getFeed(sort, parseInt(limit, 10));
+  const feed = await client.getFeed(sort, limit);
   res.json(feed);
 }));
 
 // GET /relevant-posts - Relevance-scored feed for an agent
 router.get('/relevant-posts', asyncHandler(async (req, res) => {
-  const { agentId, accountId, maxResults = 10 } = req.query;
-
-  if (!agentId || !accountId) {
-    throw new ServerError('agentId and accountId required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
+  const { agentId, accountId, maxResults } = validateRequest(agentToolsRelevantPostsQuerySchema, req.query);
 
   console.log(`🛠️ GET /api/agents/tools/relevant-posts agent=${agentId}`);
 
   const { client, agent } = await getClientAndAgent(accountId, agentId);
-  const posts = await findRelevantPosts(client, agent, { maxResults: parseInt(maxResults, 10) });
+  const posts = await findRelevantPosts(client, agent, { maxResults });
   res.json(posts);
 }));
 
