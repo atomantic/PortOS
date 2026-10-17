@@ -43,7 +43,7 @@ import { normalizeTitleCard } from '../../lib/musicVideoTitleCard.js';
 import { normalizeStatsOutro } from '../../lib/musicVideoStatsOutro.js';
 import { remapTreatmentForClone, scenesFingerprint } from './treatment.js';
 import { anchorShotsToSungLyrics, carryStoryboardApproval, dropStaleStoryboardRows } from './productionReview.js';
-import { cuesSungWithin } from '../../lib/musicVideoLyricAnchors.js';
+import { cuesSungWithin, sungLyricTextWithin } from '../../lib/musicVideoLyricAnchors.js';
 import { normalizeMusicVideoAutomation } from '../../lib/musicVideoAutomation.js';
 
 export { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
@@ -672,8 +672,7 @@ export function applySceneUpdate(project, sceneId, patch) {
   const retimed = (('startSec' in data && data.startSec !== scenes[idx].startSec) || ('endSec' in data && data.endSec !== scenes[idx].endSec))
     && (project.lyricCues || []).some((cue) => typeof cue?.startSec === 'number');
   if (retimed && !('lyricText' in data)) {
-    const sung = cuesSungWithin(project.lyricCues, updated.startSec, updated.endSec).map((cue) => cue.text?.trim()).filter(Boolean);
-    updated.lyricText = sung.length ? sung.join(' / ').slice(0, 2000) : null;
+    updated.lyricText = sungLyricTextWithin(project.lyricCues, updated.startSec, updated.endSec);
   }
   assertMusicVideoMediaSelections({ ...project, scenes: [updated], visualSpec: null });
   const nextScenes = scenes.slice();
@@ -761,23 +760,6 @@ export function reorderScenes(project, orderedIds) {
 const SCENE_LABEL_MAX = 120;
 
 /**
- * The timed lyric lines sung during `[startSec, endSec]`, joined, or null. A
- * line held across a cut belongs to both pieces.
- */
-function lyricTextWithin(cues, startSec, endSec) {
-  const lines = (Array.isArray(cues) ? cues : [])
-    .filter((cue) => {
-      if (typeof cue?.startSec !== 'number') return false;
-      const cueEnd = typeof cue.endSec === 'number' ? cue.endSec : cue.startSec;
-      // Starts before the piece ends, and is still sounding (or starts) inside it.
-      return cue.startSec < endSec - 1e-6 && (cueEnd > startSec + 1e-6 || cue.startSec >= startSec - 1e-6);
-    })
-    .map((cue) => (typeof cue.text === 'string' ? cue.text.trim() : ''))
-    .filter(Boolean);
-  return lines.length ? lines.join(' / ').slice(0, 2000) : null;
-}
-
-/**
  * Split a shot longer than its backend can render in one take (#8977) into
  * contiguous scenes on musical boundaries (lib/musicVideoShotTiming.js
  * `planShotSplit`): a performance shot at its lip-sync provider's audio
@@ -817,7 +799,7 @@ export function splitScene(project, sceneId, { backend = null, atSec = null } = 
     return `${baseLabel.slice(0, SCENE_LABEL_MAX - suffix.length)}${suffix}`;
   };
   const hasTimedCues = (project.lyricCues || []).some((cue) => typeof cue?.startSec === 'number');
-  const pieceLyrics = (piece) => (hasTimedCues ? lyricTextWithin(project.lyricCues, piece.startSec, piece.endSec) : scene.lyricText ?? null);
+  const pieceLyrics = (piece) => (hasTimedCues ? sungLyricTextWithin(project.lyricCues, piece.startSec, piece.endSec) : scene.lyricText ?? null);
 
   const pieces = plan.pieces.map((piece, i) => {
     const timing = { label: pieceLabel(i), startSec: piece.startSec, endSec: piece.endSec, lyricText: pieceLyrics(piece) };
@@ -873,7 +855,7 @@ export function splitScene(project, sceneId, { backend = null, atSec = null } = 
     const storyboard = draft.storyboard.flatMap((shot) => (shot === row ? rows : [shot]));
     extra.productionReview = { ...project.productionReview, draft: { ...draft, storyboard } };
   }
-  const next = touch(project, extra);
+  const next = carryStoryboardApproval(project, touch(project, extra), 'Split a shot');
   return { project: next, scenes: nextScenes.slice(idx, idx + count) };
 }
 
