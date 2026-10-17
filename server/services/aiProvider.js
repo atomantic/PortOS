@@ -136,13 +136,19 @@ async function ensureLMStudioModelLoaded(provider, statusOp) {
 
   const listCtl = new AbortController();
   const listTimer = setTimeout(() => listCtl.abort(), LM_STUDIO_LIST_TIMEOUT_MS);
-  const listResp = await fetch(`${baseUrl}/api/v0/models`, {
-    method: 'GET',
-    signal: listCtl.signal
-  }).catch(() => null).finally(() => clearTimeout(listTimer));
-
-  if (!listResp?.ok) return null;
-  const payload = await listResp.json().catch(() => null);
+  let payload;
+  try {
+    const listResp = await fetch(`${baseUrl}/api/v0/models`, {
+      method: 'GET',
+      signal: listCtl.signal
+    });
+    if (!listResp.ok) return null;
+    payload = await listResp.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(listTimer);
+  }
   const llms = (payload?.data || []).filter(m => m.type === 'llm');
   if (llms.length === 0) {
     console.warn('⚠️ LM Studio has no downloaded LLMs — auto-load impossible');
@@ -167,18 +173,23 @@ async function ensureLMStudioModelLoaded(provider, statusOp) {
   const loadStart = Date.now();
   const loadCtl = new AbortController();
   const loadTimer = setTimeout(() => loadCtl.abort(), LM_STUDIO_LOAD_TIMEOUT_MS);
-  const loadResp = await fetch(`${baseUrl}/api/v1/models/load`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: target.id }),
-    signal: loadCtl.signal
-  }).catch(err => ({ ok: false, _err: err.message })).finally(() => clearTimeout(loadTimer));
-
-  if (!loadResp.ok) {
-    const errText = loadResp._err || await loadResp.text?.().catch(() => 'unknown error') || 'unknown error';
-    console.error(`❌ Failed to auto-load LM Studio model ${target.id}: ${errText}`);
-    statusOp?.update('error', `Failed to load ${target.id}: ${errText}`, { model: target.id });
+  try {
+    const loadResp = await fetch(`${baseUrl}/api/v1/models/load`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: target.id }),
+      signal: loadCtl.signal
+    });
+    if (!loadResp.ok) {
+      const errText = await loadResp.text().catch(() => 'unknown error');
+      throw new Error(errText || 'unknown error');
+    }
+  } catch (err) {
+    console.error(`❌ Failed to auto-load LM Studio model ${target.id}: ${err.message}`);
+    statusOp?.update('error', `Failed to load ${target.id}: ${err.message}`, { model: target.id });
     return null;
+  } finally {
+    clearTimeout(loadTimer);
   }
 
   const loadMs = Date.now() - loadStart;
@@ -219,55 +230,54 @@ async function postChatCompletion(provider, model, prompt, { temperature, max_to
       signal: controller.signal,
       body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], temperature, max_tokens })
     });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => 'Unknown error');
+      return { error: `Provider returned ${response.status}: ${errorText}`, status: response.status, body: errorText };
+    }
+
+    const data = await readResponseJson(response);
+    // A valid completion always carries `choices`; its absence means the 200 body
+    // wasn't the expected JSON (e.g. a proxy HTML page). Surface that as an error
+    // rather than masquerading a malformed body as an empty-but-successful reply.
+    const content = data.choices?.[0]?.message?.content;
+    if (typeof content !== 'string') {
+      return { error: 'Provider returned a malformed (non-JSON or unexpected) response body' };
+    }
+    // An empty/whitespace-only completion is unusable output, not a successful call —
+    // same class as the malformed body above. Classifying it here keeps the `ai:status`
+    // stream honest (a call that produced nothing must not report "done") and gives
+    // callers a single "the provider failed" signal to test: `result.error`.
+    if (!content.trim()) {
+      return { error: 'Provider returned an empty completion' };
+    }
+    // OpenAI-compatible bodies report token counts under `usage`; surface the completion
+    // token count so the AI Core landmark can size its activity beam by output volume
+    // (tokens/sec). Absent on some providers — callers treat a missing count as "unknown".
+    const completionTokens = Number.isFinite(data.usage?.completion_tokens) ? data.usage.completion_tokens : NaN;
+    const promptTokens = Number.isFinite(data.usage?.prompt_tokens) ? data.usage.prompt_tokens : NaN;
+    return {
+      text: content,
+      finishReason: normalizeReviewFinishReason(data?.choices?.[0]?.finish_reason),
+      tokens: Number.isFinite(completionTokens) ? completionTokens : undefined,
+      ...(Number.isFinite(promptTokens) || Number.isFinite(completionTokens)
+        ? { usage: {
+          ...(Number.isFinite(promptTokens) ? { inputTokens: promptTokens } : {}),
+          ...(Number.isFinite(completionTokens) ? { outputTokens: completionTokens } : {}),
+        } }
+        : {}),
+    };
   } catch (err) {
-    clearTimeout(timer);
-    signal?.removeEventListener('abort', onAbort);
     // undici wraps the real network error in `fetch failed`; the actionable
     // detail (ECONNRESET, model-specific transport quirk, etc.) lives in
     // `err.cause` and is otherwise silently discarded (#7669).
     const cause = err.cause;
     const causeDetail = cause ? ` (cause: ${[cause.code, cause.message].filter(Boolean).join(' ')})` : '';
     return { error: `Provider request failed: ${err.message}${causeDetail}` };
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', onAbort);
   }
-  clearTimeout(timer);
-  signal?.removeEventListener('abort', onAbort);
-
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => 'Unknown error');
-    return { error: `Provider returned ${response.status}: ${errorText}`, status: response.status, body: errorText };
-  }
-
-  const data = await readResponseJson(response);
-  // A valid completion always carries `choices`; its absence means the 200 body
-  // wasn't the expected JSON (e.g. a proxy HTML page). Surface that as an error
-  // rather than masquerading a malformed body as an empty-but-successful reply.
-  const content = data.choices?.[0]?.message?.content;
-  if (typeof content !== 'string') {
-    return { error: 'Provider returned a malformed (non-JSON or unexpected) response body' };
-  }
-  // An empty/whitespace-only completion is unusable output, not a successful call —
-  // same class as the malformed body above. Classifying it here keeps the `ai:status`
-  // stream honest (a call that produced nothing must not report "done") and gives
-  // callers a single "the provider failed" signal to test: `result.error`.
-  if (!content.trim()) {
-    return { error: 'Provider returned an empty completion' };
-  }
-  // OpenAI-compatible bodies report token counts under `usage`; surface the completion
-  // token count so the AI Core landmark can size its activity beam by output volume
-  // (tokens/sec). Absent on some providers — callers treat a missing count as "unknown".
-  const completionTokens = Number.isFinite(data.usage?.completion_tokens) ? data.usage.completion_tokens : NaN;
-  const promptTokens = Number.isFinite(data.usage?.prompt_tokens) ? data.usage.prompt_tokens : NaN;
-  return {
-    text: content,
-    finishReason: normalizeReviewFinishReason(data?.choices?.[0]?.finish_reason),
-    tokens: Number.isFinite(completionTokens) ? completionTokens : undefined,
-    ...(Number.isFinite(promptTokens) || Number.isFinite(completionTokens)
-      ? { usage: {
-        ...(Number.isFinite(promptTokens) ? { inputTokens: promptTokens } : {}),
-        ...(Number.isFinite(completionTokens) ? { outputTokens: completionTokens } : {}),
-      } }
-      : {}),
-  };
 }
 
 /**

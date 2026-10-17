@@ -207,15 +207,20 @@ async function isScanUrlSafe(target) {
 async function httpFetchLane(url, fetchImpl) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), HTTP_FETCH_TIMEOUT_MS);
-  const res = await fetchImpl(url, {
-    signal: controller.signal,
-    redirect: 'follow',
-    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PortOS-PrivacyScan/1.0)' },
-  }).catch(() => null);
-  clearTimeout(timer);
-  if (!res) return null;
-  const html = await res.text().catch(() => '');
-  return { status: res.status, html };
+  try {
+    const res = await fetchImpl(url, {
+      signal: controller.signal,
+      redirect: 'follow',
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PortOS-PrivacyScan/1.0)' },
+    });
+    const html = await res.text();
+    return { status: res.status, html };
+  } catch {
+    // An unreadable body is inconclusive, even when headers reported success.
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**

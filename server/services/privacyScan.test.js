@@ -5,7 +5,7 @@
  * wiring is exercised without Postgres.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 
 vi.mock('./privacyBrokers.js', async (importOriginal) => {
   const actual = await importOriginal();
@@ -125,6 +125,35 @@ describe('classifyScanResult', () => {
 describe('scanBroker — classify → record wiring', () => {
   const vectors = { names: [{ full: 'Jane Q Doe', firstName: 'Jane', lastName: 'Doe' }], locations: [{ city: 'Portland', state: 'OR' }] };
   const broker = { id: 'spokeo', urls: { search: 'https://b.example/{firstName}-{lastName}/{state}' } };
+
+  afterEach(() => vi.useRealTimers());
+
+  it.each(['read failure', 'deadline'])('keeps an HTTP 200 body %s inconclusive without recording not_found', async (failure) => {
+    vi.useFakeTimers();
+    brokers.recordScanVerdict.mockClear();
+    const browserFetch = vi.fn();
+    let started;
+    const bodyStarted = new Promise(resolve => { started = resolve; });
+    let requestSignal;
+    const fetchImpl = vi.fn(async (_url, { signal }) => {
+      requestSignal = signal;
+      return { status: 200, text: () => {
+        started();
+        if (failure === 'read failure') return Promise.reject(new Error('broken body'));
+        return new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('body aborted')), { once: true }));
+      } };
+    });
+    const pending = scanBroker(broker, vectors, { fetchImpl, browserFetch, urlSafe: async () => true });
+    await bodyStarted;
+    if (failure === 'deadline') {
+      await vi.advanceTimersByTimeAsync(15000);
+      expect(requestSignal.aborted).toBe(true);
+    }
+    expect(await pending).toEqual({ skipped: true, reason: 'fetch_failed' });
+    expect(brokers.recordScanVerdict).not.toHaveBeenCalled();
+    expect(browserFetch).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
 
   it('records a found verdict from the HTTP lane', async () => {
     const fetchImpl = vi.fn(async () => ({ status: 200, text: async () => 'Found: Jane Q Doe in Portland, OR — full profile' }));
