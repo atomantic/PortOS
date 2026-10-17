@@ -1,9 +1,49 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useNavigate, useSearchParams } from 'react-router';
+import { Link, useNavigate, useSearchParams } from 'react-router';
 import * as api from '../../../services/api';
 import { FolderOpen, RefreshCw, AlertTriangle } from 'lucide-react';
-import { timeAgo } from '../../../utils/formatters';
+import { timeAgo, formatDateTime } from '../../../utils/formatters';
 import { WIKI_CATEGORIES, PageTypeIcon } from '../constants.jsx';
+
+const WIKI_JOB_ID = 'job-wiki-maintenance';
+
+// Reads the maintenance job's real state; 'unavailable' keeps a failed fetch
+// from reading as "off". Read-only: never runs the job.
+function WikiMaintenanceStatus() {
+  const [state, setState] = useState({ status: 'loading', job: null });
+
+  useEffect(() => {
+    let cancelled = false;
+    api.getCosJobs({ silent: true })
+      .then(data => {
+        if (cancelled) return;
+        const job = (data?.jobs || []).find(j => j.id === WIKI_JOB_ID) || null;
+        setState({ status: 'ready', job });
+      })
+      .catch(() => { if (!cancelled) setState({ status: 'unavailable', job: null }); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const { status, job } = state;
+  if (status === 'loading') return null;
+  if (status === 'unavailable') {
+    return <p className="text-xs text-gray-600 mt-1">Wiki maintenance job status is unavailable right now.</p>;
+  }
+  if (job?.enabled) {
+    return (
+      <p className="text-xs text-gray-600 mt-1">
+        Weekly wiki maintenance is on
+        {job.nextRunAt ? <> — next run {formatDateTime(job.nextRunAt)}</> : null}.
+      </p>
+    );
+  }
+  return (
+    <p className="text-xs text-gray-600 mt-1">
+      Weekly wiki maintenance is off. Enable or run it in{' '}
+      <Link to="/cos/jobs" className="text-port-accent hover:underline">System Tasks</Link>.
+    </p>
+  );
+}
 
 export default function OverviewTab({ vaultId, stats, notes, allNotes, onRefresh }) {
   const navigate = useNavigate();
@@ -65,7 +105,7 @@ export default function OverviewTab({ vaultId, stats, notes, allNotes, onRefresh
           </div>
           <div className="divide-y divide-port-border/50">
             {recentPages.length === 0 ? (
-              <div className="p-4 text-center text-gray-500 text-sm">No wiki pages yet</div>
+              <div className="p-4 text-center text-gray-500 text-sm">No wiki pages yet. Add source files to the <code className="text-gray-300">raw/</code> folder in your vault.</div>
             ) : recentPages.map(note => (
               <button
                 key={note.path}
@@ -104,7 +144,7 @@ export default function OverviewTab({ vaultId, stats, notes, allNotes, onRefresh
               <div className="text-center py-6">
                 <AlertTriangle size={24} className="text-gray-600 mx-auto mb-2" />
                 <p className="text-sm text-gray-500">No lint report yet</p>
-                <p className="text-xs text-gray-600 mt-1">The weekly wiki maintenance job will generate one, or ask the LLM to lint the wiki</p>
+                <WikiMaintenanceStatus />
               </div>
             )}
           </div>
