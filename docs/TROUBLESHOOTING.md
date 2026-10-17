@@ -43,7 +43,7 @@ is probed independently and separately bounded, so one unreachable service
 degrades to a single line instead of hanging the report. It exits non-zero when
 a **required** prerequisite is unavailable; optional facts (TLS cert, `gh`,
 ffmpeg/python3/uv, the port block) are reported but never fail the run — a
-running install legitimately occupies ports 5553–5561.
+running install legitimately occupies ports in the PortOS band, 5553–5569.
 
 Details name no hostnames, usernames, IPs, or home-directory paths, so the
 output is safe to paste into a bug report as-is.

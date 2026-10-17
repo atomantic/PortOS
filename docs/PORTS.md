@@ -145,6 +145,7 @@ PortOS automatically detects ports from env vars:
 | 5553-5561 | PortOS core services (includes the `:5553` loopback mirror and the `portos-db` Docker container on `:5561`) |
 | 5562-5569 | Reserved for PortOS extensions. Assigned: 5562 whisper, 5563 Eidoverse bridge (on demand), 5564 slotstream (on demand), 5565 Tailcat ingress (on demand), 5566 jev scorer (on demand), 5568 llama-server. Unassigned but still reserved: 5567, 5569 |
 | 5570-5599 | User applications — **put managed apps here** |
+| 6000-6099 | Outside the PortOS band. Used by `GET /api/ports/scan` and `POST /api/ports/allocate` (`server/services/ports.js`), and by the PM2 Standardizer when it reassigns a colliding port (`server/services/pm2Standardizer.js`). Scaffolded apps still get 5570-5599 |
 
 > **A collision inside `5553-5569` is silent, not loud.** The natural assumption is
 > that a second listener on a taken port fails with `EADDRINUSE`, so an accidental
