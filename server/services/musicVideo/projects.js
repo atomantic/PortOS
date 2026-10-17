@@ -31,6 +31,7 @@ import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { VIDEO_GEN_MODE, resolveVideoMode } from '../videoGen/modes.js';
 import { getSettings } from '../settings.js';
 import { withStyleSnapshots } from './styleSnapshots.js';
+import { queueProjectCatalogLinkSync } from './catalogLinks.js';
 
 // Shared dispatcher (#2899). ensureSchema() runs inside the selector (mirroring
 // memoryBackend.js) so the backend is self-sufficient regardless of boot ordering.
@@ -182,12 +183,14 @@ export async function createProject(input) {
   const snapshotted = await withStyleSnapshots(seeded);
   const project = await (await selectBackend()).createProject(snapshotted);
   announceNewProject(project.id);
+  queueProjectCatalogLinkSync(project.id);
   return project;
 }
 
 export async function cloneProject(id, options = {}) {
   const project = await (await selectBackend()).cloneProject(id, options);
   announceNewProject(project.id);
+  queueProjectCatalogLinkSync(project.id);
   return project;
 }
 
@@ -197,13 +200,16 @@ export async function updateProject(id, patch) {
   const needsSnapshot = seeded?.concept?.universeId !== undefined || seeded?.concept?.characterStyleId !== undefined
     || seeded?.visualSpec?.moodBoardId !== undefined;
   const resolved = needsSnapshot ? await withStyleSnapshots(seeded, await backend.getProject(id)) : seeded;
+  const castChanged = resolved?.concept?.subjects !== undefined;
   if (!Array.isArray(resolved.scenes)) {
     const next = await backend.updateProject(id, resolved);
     emitRecordUpdated('musicVideoProject', id);
+    if (castChanged) queueProjectCatalogLinkSync(id);
     return next;
   }
   const { applyProjectPatch } = await import('./projectsLogic.js');
   const { project } = await mutateProjectRecord(id, current => ({ project: applyProjectPatch(current, resolved) }));
+  if (castChanged) queueProjectCatalogLinkSync(id);
   return project;
 }
 
@@ -226,6 +232,7 @@ export async function deleteProject(id) {
   const result = await (await selectBackend()).deleteProject(id);
   // Soft-delete tombstone — push the deletion to subscribed peers immediately.
   emitRecordDeleted('musicVideoProject', id);
+  queueProjectCatalogLinkSync(id);
   // Its cached shot segments are regenerable, and only this machine's.
   await import('./shotSegments.js').then(({ removeProjectSegments }) => removeProjectSegments(id)).catch((err) => {
     console.warn(`⚠️ Music Video ${id.slice(0, 8)}: could not remove its cached shot segments: ${err.message}`);

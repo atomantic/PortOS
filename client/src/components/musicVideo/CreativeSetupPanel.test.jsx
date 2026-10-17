@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import CreativeSetupPanel from './CreativeSetupPanel.jsx';
 import { getUniverse } from '../../services/apiUniverseBuilder.js';
@@ -11,6 +11,13 @@ const CLAUDIA = { id: 'claudia-slopcore', label: 'Claudia slopcore', summary: 'D
 vi.mock('../../services/apiMusicVideo.js', () => ({
   listMusicVideoCharacterStyles: vi.fn(async () => [CLAUDIA]),
   setMusicVideoCharacterStyleReference: vi.fn(async (_id, imageId) => ({ ...CLAUDIA, referenceImageId: imageId })),
+}));
+vi.mock('../IngredientPicker.jsx', () => ({
+  default: ({ open: isOpen, type, excludeIds, onSelect }) => (isOpen ? (
+    <div role="dialog" aria-label={`Pick ${type}`} data-exclude={excludeIds.join(',')}>
+      <button type="button" onClick={() => onSelect({ id: 'cat-plc-7', type: 'place', name: 'Night diner', thumbnailKey: 'diner.png', payload: { description: 'Chrome booths' } })}>Night diner</button>
+    </div>
+  ) : null),
 }));
 const project = { id: 'mv1', concept: {}, visualSpec: {} };
 const open = (onSave = vi.fn(async () => {})) => {
@@ -44,6 +51,29 @@ describe('creative setup', () => {
     });
     expect(onSave.mock.calls[0][0]).not.toHaveProperty('visualSpec');
   });
+  it('casts from the catalog and from universe canon with the catalog link, adding the catalog image as a look reference', async () => {
+    getUniverse.mockResolvedValue({ id: 'u1', name: 'Example universe', characters: [{ id: 'c1', ingredientId: 'cat-chr-1', name: 'Example singer', physicalDescription: 'Silver coat' }], places: [], objects: [] });
+    const onSave = open();
+    await screen.findByText('Example universe');
+    fireEvent.change(screen.getByLabelText('Universe'), { target: { value: 'u1' } });
+    await screen.findByText('Example singer');
+    fireEvent.change(screen.getByLabelText('Select cast'), { target: { value: 'c1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add places' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Pick place' })).getByText('Night diner'));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Add places' }));
+    expect(screen.getByRole('dialog', { name: 'Pick place' })).toHaveAttribute('data-exclude', 'cat-chr-1,cat-plc-7');
+    fireEvent.click(screen.getByText('Save creative setup'));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    const saved = onSave.mock.calls[0][0];
+    expect(saved.concept.subjects).toMatchObject([
+      { kind: 'character', name: 'Example singer', canonId: 'c1', ingredientId: 'cat-chr-1' },
+      { kind: 'place', name: 'Night diner', description: 'Chrome booths', ingredientId: 'cat-plc-7' },
+    ]);
+    expect(saved.concept.subjects[1]).not.toHaveProperty('canonId');
+    expect(saved.visualSpec.references).toEqual([expect.objectContaining({ imageId: 'diner.png', role: 'set', label: 'Night diner', condition: false })]);
+  });
+
   it('discards an unsaved cast when the director cancels setup', async () => {
     const onSave = open();
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Unsaved singer' } });

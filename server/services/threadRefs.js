@@ -62,6 +62,7 @@ const DB_REF_TABLES = Object.freeze({
   issue: { table: 'pipeline_issues', titleExpr: "COALESCE(NULLIF(data->>'title', ''), 'Issue ' || COALESCE(number::text, id))", liveClause: 'deleted = FALSE' },
   'writers-room': { table: 'writers_room_works', titleExpr: 'title', liveClause: 'deleted = FALSE' },
   'creative-director': { table: 'creative_director_projects', titleExpr: "NULLIF(data->>'title', '')", liveClause: 'deleted = FALSE' },
+  'music-video': { table: 'music_video_projects', titleExpr: "NULLIF(data->>'name', '')", liveClause: 'deleted = FALSE' },
   'catalog.ingredient': { table: 'catalog_ingredients', titleExpr: 'name', liveClause: 'deleted = FALSE', contextExpr: 'type' },
   'catalog.scrap': { table: 'catalog_scraps', titleExpr: "NULLIF(title, '')", liveClause: 'deleted = FALSE' },
 });

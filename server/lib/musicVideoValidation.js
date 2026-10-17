@@ -121,6 +121,9 @@ export const musicVideoConceptSchema = z.object({
     description: z.string().max(1000).optional(),
     role: z.enum(['protagonist', 'band', 'supporting']).optional(),
     canonId: z.string().max(64).optional(),
+    // The catalog record this subject was cast from (Casting / Environments /
+    // Objects). The project keeps its own name and description snapshot.
+    ingredientId: z.string().max(128).optional(),
   }).strict()).max(24).optional(),
 }).strict();
 
