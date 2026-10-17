@@ -14,7 +14,8 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import express from 'express';
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
@@ -295,6 +296,20 @@ describe('POST /api/cos/tasks — client-queued investigations (#6043)', () => {
     const [first, second] = cos.addTask.mock.calls.map(call => call[0].investigationFingerprint);
     expect(first).not.toBe(second);
     expect(clientInvestigationFingerprint({ description: INSTALL_FAILURE })).toBe(first);
+  });
+
+  it('refuses a worktree/PR task for an app whose directory is not a git repository', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'portos-nongit-'));
+    getAppById.mockResolvedValue({ id: 'app-1', name: 'Example App', repoPath: dir });
+    const res = await request(buildApp())
+      .post('/api/cos/tasks')
+      .send({ description: 'Do a thing', app: 'app-1', useWorktree: true, openPR: true });
+    rmSync(dir, { recursive: true, force: true });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('NOT_A_GIT_REPO');
+    expect(res.body.error).toContain('Example App is not a git repository');
+    expect(cos.addTask).not.toHaveBeenCalled();
   });
 
   it('leaves an ordinary task untouched by the investigation path', async () => {
