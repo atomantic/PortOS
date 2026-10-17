@@ -1,7 +1,6 @@
 import { writeFile, chmod } from 'fs/promises';
 import { join } from 'path';
-import { exec } from '../lib/childProcess.js';
-import { promisify } from 'util';
+import { runCliBounded } from '../lib/runCliBounded.js';
 import { ensureDir, ensureDirs } from '../lib/fileUtils.js';
 import { writeAgentInstructions } from '../lib/agentInstructionsFile.js';
 import {
@@ -9,8 +8,6 @@ import {
   toBundleId, toTargetName,
   generateDeployScript, generateScreenshotScript, generateMacScreenshotScript
 } from './xcodeScripts.js';
-
-const execAsync = promisify(exec);
 
 /** Every platform this scaffolder knows how to emit, in `project.yml` order. */
 const XCODE_PLATFORMS = ['ios', 'macos', 'watchos'];
@@ -561,11 +558,12 @@ final class ScreenshotTests: XCTestCase {
   addStep(multi ? 'Create multi-platform Xcode project' : 'Create iOS project', 'done');
 
   // Run xcodegen if available
-  const { stderr: xgenErr } = await execAsync('xcodegen generate', { cwd: repoPath })
-    .catch(err => ({ stderr: err.message }));
+  const result = await runCliBounded('xcodegen', ['generate'], {
+    cwd: repoPath, timeoutMs: 60_000, stdio: ['ignore', 'pipe', 'pipe'],
+  });
 
-  if (xgenErr && !xgenErr.includes('Created project')) {
-    addStep('Generate Xcode project', 'error', xgenErr);
+  if (result.code !== 0) {
+    addStep('Generate Xcode project', 'error', result.stderr.trim() || result.stdout.trim() || `xcodegen exited with code ${result.code}`);
   } else {
     addStep('Generate Xcode project', 'done');
   }

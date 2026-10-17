@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { join, resolve } from 'path';
 import { existsSync } from 'fs';
 import express from 'express';
-import { EventEmitter } from 'events';
 import { request } from '../lib/testHelper.js';
 
 // --- Mock the filesystem + subprocess boundary so we can assert ZERO
@@ -32,13 +31,6 @@ vi.mock('fs', () => ({
 
 vi.mock('../lib/childProcess.js', () => ({
   exec: vi.fn((cmd, opts, cb) => cb(null, { stdout: '', stderr: '' })),
-  spawn: vi.fn(() => {
-    const proc = new EventEmitter();
-    proc.stderr = new EventEmitter();
-    // Resolve the spawn promise on the next tick with a success exit code.
-    setImmediate(() => proc.emit('close', 0));
-    return proc;
-  })
 }));
 
 vi.mock('../services/apps.js', () => ({
@@ -58,10 +50,15 @@ vi.mock('../services/xcodeScaffold.js', () => ({ scaffoldXcode: vi.fn().mockReso
 vi.mock('./scaffoldPortOS.js', () => ({ scaffoldPortOS: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../services/xcodeScripts.js', () => ({ toTargetName: vi.fn(() => 'TestApp') }));
 
+vi.mock('../lib/runCliBounded.js', () => ({
+  runCliBounded: vi.fn().mockResolvedValue({ code: 0, stdout: '', stderr: '' }),
+}));
+
 import scaffoldRoutes from './scaffold.js';
 import { ensureDir } from '../lib/fileUtils.js';
 import { writeFile, readdir, rm } from 'fs/promises';
-import { spawn, exec } from '../lib/childProcess.js';
+import { exec } from '../lib/childProcess.js';
+import { runCliBounded } from '../lib/runCliBounded.js';
 import { createApp } from '../services/apps.js';
 import { scaffoldVite } from './scaffoldVite.js';
 import { scaffoldPortOS } from './scaffoldPortOS.js';
@@ -78,7 +75,7 @@ function makeApp() {
 function expectZeroMutations() {
   expect(ensureDir).not.toHaveBeenCalled();
   expect(writeFile).not.toHaveBeenCalled();
-  expect(spawn).not.toHaveBeenCalled();
+  expect(runCliBounded).not.toHaveBeenCalled();
   expect(exec).not.toHaveBeenCalled();
   expect(createApp).not.toHaveBeenCalled();
 }
@@ -158,6 +155,60 @@ describe('POST /api/scaffold — request validation before filesystem mutation (
     // (directory creation) and registered the app.
     expect(ensureDir).toHaveBeenCalledWith(join('/tmp/workspace', 'my-app'));
     expect(createApp).toHaveBeenCalledTimes(1);
+  });
+
+  it('bounds every git stage without prompting or disabling hooks and signing', async () => {
+    const res = await request(app).post('/api/scaffold').send(validBody);
+    expect(res.status).toBe(200);
+    expect(runCliBounded.mock.calls.map(([cmd, args]) => [cmd, args])).toEqual([
+      ['git', ['init']], ['git', ['add', '-A']], ['git', ['commit', '-m', 'Initial commit']],
+    ]);
+    for (const [, , options] of runCliBounded.mock.calls) {
+      expect(options).toMatchObject({
+        cwd: join('/tmp/workspace', 'my-app'), timeoutMs: 30_000,
+        stdio: ['ignore', 'pipe', 'pipe'], env: { GIT_TERMINAL_PROMPT: '0' },
+      });
+    }
+  });
+
+  it.each([0, 2])('rolls back instead of registering an app when git stage %i times out', async (stage) => {
+    for (let i = 0; i < stage; i++) runCliBounded.mockResolvedValueOnce({ code: 0, stdout: '', stderr: '' });
+    runCliBounded.mockResolvedValueOnce({ code: -1, stdout: '', stderr: 'timed out' });
+    const res = await request(app).post('/api/scaffold').send(validBody);
+    expect(res.status).toBe(500);
+    expect(rm).toHaveBeenCalledWith(join('/tmp/workspace', 'my-app'), { recursive: true, force: true });
+    expect(createApp).not.toHaveBeenCalled();
+  });
+
+  it('accepts successful GitHub creation even when the CLI prints progress on stderr', async () => {
+    runCliBounded.mockImplementation(async (command) => ({
+      code: 0, stdout: '', stderr: command === 'gh' ? 'Pushing to remote' : '',
+    }));
+    const res = await request(app).post('/api/scaffold').send({ ...validBody, createGitHubRepo: true });
+    expect(res.status).toBe(200);
+    expect(res.body.steps).toContainEqual(expect.objectContaining({ name: 'Create GitHub repo', status: 'done' }));
+    runCliBounded.mockResolvedValue({ code: 0, stdout: '', stderr: '' });
+  });
+
+  it.each([
+    [{ code: 1, stdout: 'Remote creation failed', stderr: '' }, 'Remote creation failed'],
+    [{ code: 2, stdout: '', stderr: '' }, 'gh repo create exited with code 2'],
+    [{ code: -1, stdout: '', stderr: 'timed out' }, 'timed out'],
+    [{ code: 1, stdout: '', stderr: 'Created repository but push failed' }, 'Created repository but push failed'],
+  ])('reports failed GitHub creation while preserving the registered local app (%j)', async (failure, detail) => {
+    runCliBounded.mockResolvedValueOnce({ code: 0, stdout: '', stderr: '' })
+      .mockResolvedValueOnce({ code: 0, stdout: '', stderr: '' })
+      .mockResolvedValueOnce({ code: 0, stdout: '', stderr: '' })
+      .mockResolvedValueOnce(failure);
+    const res = await request(app).post('/api/scaffold').send({ ...validBody, createGitHubRepo: true });
+    expect(res.status).toBe(200);
+    expect(res.body.steps).toContainEqual(expect.objectContaining({ name: 'Create GitHub repo', status: 'error', error: detail }));
+    expect(createApp).toHaveBeenCalledTimes(1);
+    expect(rm).not.toHaveBeenCalled();
+    expect(runCliBounded).toHaveBeenLastCalledWith('gh',
+      ['repo', 'create', 'my-app', '--source=.', '--push', '--private'],
+      expect.objectContaining({ timeoutMs: 60_000, stdio: ['ignore', 'pipe', 'pipe'],
+        env: expect.objectContaining({ GH_PROMPT_DISABLED: '1', GIT_TERMINAL_PROMPT: '0' }) }));
   });
 
   // Regression (#9650): a failed scaffold left the directory behind, so a retry
