@@ -323,4 +323,58 @@ describe('sharing/subscriptions', () => {
       return onDisk.id === live.lastManifestId;
     });
   });
+
+  describe('reconcileSubscriptionsOnBoot (#11750)', () => {
+    // Rewrite persisted lastExportedAt to simulate "exported before the edit"
+    // (past) or "exported after the last edit" (future) without sleeping.
+    async function setLastExportedAt(subId, iso) {
+      const fs = await import('fs');
+      const path = join(tempData, 'sharing', 'subscriptions.json');
+      const state = JSON.parse(fs.readFileSync(path, 'utf8'));
+      state.subscriptions.find((x) => x.id === subId).lastExportedAt = iso;
+      fs.writeFileSync(path, JSON.stringify(state));
+    }
+
+    it('re-exports a share whose record changed after lastExportedAt exactly once, and leaves an unchanged one alone', async () => {
+      const bucket = await buckets.createBucket({ name: 'B', path: tempBucket });
+      const stale = await universeBuilder.createUniverse({ name: 'U-stale' });
+      const fresh = await universeBuilder.createUniverse({ name: 'U-fresh' });
+      const staleSub = await subs.subscribe({ bucketId: bucket.id, recordKind: 'universe', recordId: stale.id });
+      const freshSub = await subs.subscribe({ bucketId: bucket.id, recordKind: 'universe', recordId: fresh.id });
+      await setLastExportedAt(staleSub.id, '2000-01-01T00:00:00.000Z');
+      await setLastExportedAt(freshSub.id, '2999-01-01T00:00:00.000Z');
+
+      const first = await subs.reconcileSubscriptionsOnBoot();
+      expect(first.reexported).toBe(1);
+      const [afterStale] = await subs.listSubscriptions({ recordId: stale.id });
+      const [afterFresh] = await subs.listSubscriptions({ recordId: fresh.id });
+      expect(afterStale.lastManifestId).not.toBe(staleSub.lastManifestId);
+      expect(afterFresh.lastManifestId).toBe(freshSub.lastManifestId);
+
+      // The stamp moved lastExportedAt past the record, so a second pass is a no-op.
+      expect((await subs.reconcileSubscriptionsOnBoot()).reexported).toBe(0);
+    });
+
+    it('exports a never-exported subscription, but not an import-adopted one whose record is unchanged', async () => {
+      const bucket = await buckets.createBucket({ name: 'B', path: tempBucket });
+      const never = await universeBuilder.createUniverse({ name: 'U-never' });
+      const adopted = await universeBuilder.createUniverse({ name: 'U-adopted' });
+      const neverSub = await subs.subscribe({ bucketId: bucket.id, recordKind: 'universe', recordId: never.id });
+      await setLastExportedAt(neverSub.id, null);
+      await subs.adoptImportedSubscription({ bucketId: bucket.id, recordKind: 'universe', recordId: adopted.id });
+
+      const result = await subs.reconcileSubscriptionsOnBoot();
+      expect(result.reexported).toBe(1);
+      const [reexported] = await subs.listSubscriptions({ recordId: never.id });
+      expect(reexported.lastExportedAt).toBeTruthy();
+      const [stillAdopted] = await subs.listSubscriptions({ recordId: adopted.id });
+      expect(stillAdopted.lastExportedAt).toBeNull();
+    });
+
+    it('skips a subscription whose record no longer exists', async () => {
+      const bucket = await buckets.createBucket({ name: 'B', path: tempBucket });
+      await subs.adoptImportedSubscription({ bucketId: bucket.id, recordKind: 'universe', recordId: 'missing-universe' });
+      await expect(subs.reconcileSubscriptionsOnBoot()).resolves.toMatchObject({ reexported: 0 });
+    });
+  });
 });

@@ -13,12 +13,14 @@ vi.mock('./buckets.js', () => ({
 }));
 vi.mock('./manifest.js', () => ({ isManifestPruning: vi.fn(), pruneBucketManifests: vi.fn() }));
 vi.mock('../instanceIdentity.js', () => ({ getInstanceId: vi.fn() }));
+vi.mock('./subscriptions.js', () => ({ reconcileSubscriptionsOnBoot: vi.fn() }));
 
 import { watch } from 'chokidar';
 import { processBacklog, processManifest, handleUnshare } from './importer.js';
 import { getBucket, listBuckets, ensureBucketLayout } from './buckets.js';
 import { isManifestPruning } from './manifest.js';
 import { getInstanceId } from '../instanceIdentity.js';
+import { reconcileSubscriptionsOnBoot } from './subscriptions.js';
 
 let shutdown;
 function deferred() {
@@ -54,6 +56,7 @@ beforeEach(() => {
     return watcher;
   });
   getInstanceId.mockReset().mockResolvedValue(null);
+  reconcileSubscriptionsOnBoot.mockReset().mockResolvedValue({ checked: 0, reexported: 0 });
   listBuckets.mockReset().mockResolvedValue([]);
   ensureBucketLayout.mockReset().mockResolvedValue(undefined);
   processBacklog.mockReset().mockResolvedValue(undefined);
@@ -230,6 +233,16 @@ describe('share-bucket watcher attachment lifecycle', () => {
     expect(watcher.closed).toBe(true);
     expect(listAttachedWatchers()).toEqual([]);
     expect(liveHandles()).toEqual([]);
+  });
+
+  it('boot attach reconciles stale share subscriptions, and a reconcile failure does not fail the attach', async () => {
+    const { attachAllWatchers, listAttachedWatchers } = await loadWatcher();
+    await attachAllWatchers();
+    expect(reconcileSubscriptionsOnBoot).toHaveBeenCalledTimes(1);
+
+    reconcileSubscriptionsOnBoot.mockRejectedValueOnce(new Error('export exploded'));
+    await expect(attachAllWatchers()).resolves.toEqual({ attached: listAttachedWatchers().length });
+    expect(reconcileSubscriptionsOnBoot).toHaveBeenCalledTimes(2);
   });
 
   it('shutdown drains overlapping admitted attachments and synchronously rejects later ones', async () => {

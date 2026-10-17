@@ -1425,8 +1425,11 @@ describe('peerSync', () => {
       // (the lastPushedHash short-circuit inside pushRecordToPeer is what
       // skips the actual HTTP call for unchanged records). This is the
       // mechanism that lets out-of-band file edits (e.g., a cleanup script
-      // that wrote tombstones directly to disk + a server restart)
-      // re-propagate via peer:online without needing a per-record edit.
+      // that wrote tombstones directly to disk) re-propagate via peer:online
+      // without needing a per-record edit. A server restart reaches this path
+      // too: instances.js emits peer:online on the first probe of each peer per
+      // process even when the persisted status was already online (#11750; see
+      // the boot-convergence test below).
       vi.mocked(peerFetch).mockClear();
       const second = await retryPendingPushesForPeer('peer-a');
       expect(second.walked).toBe(1); // walked, not skipped by the helper
@@ -1434,6 +1437,40 @@ describe('peerSync', () => {
       // The hash short-circuit inside pushRecordToPeer prevents the actual
       // HTTP call because the record content is unchanged since the first push.
       expect(vi.mocked(peerFetch)).not.toHaveBeenCalled();
+    });
+
+    it('boot convergence: the first peer:online after a restart pushes an edit stranded by the restart exactly once, a converged peer costs zero HTTP calls (#11750)', async () => {
+      const { instanceEvents } = await import('../instanceEvents.js');
+      const { installPeerSyncListener } = await import('./peerSync.js');
+      installPeerSyncListener();
+      const peer = {
+        id: 'local-a', instanceId: 'peer-a', enabled: true, syncEnabled: true, status: 'online',
+        directions: ['outbound'], syncCategories: { universe: true },
+      };
+      vi.mocked(listUniverses).mockResolvedValue([{ id: 'u1' }]);
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
+      await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
+      await __drainForTests();
+
+      // Converged peer: the boot-time event walks the sub but sends nothing.
+      vi.mocked(peerFetch).mockClear();
+      instanceEvents.emit('peer:online', peer);
+      await __drainForTests();
+      expect(vi.mocked(peerFetch)).not.toHaveBeenCalled();
+
+      // The record changed after the last push but the debounce never fired
+      // (the process restarted); the first boot event delivers it once.
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Edited just before restart' });
+      instanceEvents.emit('peer:online', peer);
+      await __drainForTests();
+      const pushCalls = () => vi.mocked(peerFetch).mock.calls.length;
+      expect(pushCalls()).toBeGreaterThan(0);
+
+      // A repeat event with the record unchanged since that push sends nothing.
+      const afterFirst = pushCalls();
+      instanceEvents.emit('peer:online', peer);
+      await __drainForTests();
+      expect(pushCalls()).toBe(afterFirst);
     });
 
     it('returns {walked: 0, pushed: 0} when the peer has no subscriptions', async () => {
