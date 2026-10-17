@@ -3,7 +3,7 @@ import { Loader2, Terminal, Wand2 } from 'lucide-react';
 import Drawer from '../Drawer';
 import ProviderModelSelector from '../ProviderModelSelector';
 import ReviewerPicker from '../cos/ReviewerPicker';
-import { DEFAULT_PR_COMPLETION, PR_COMPLETION_OPTIONS, prCompletionOption } from '../cos/constants';
+import { DEFAULT_PR_COMPLETION, DEPFREE_MODE_DEFAULT, DEPFREE_MODE_OPTIONS, PR_COMPLETION_OPTIONS, depfreeModeOption, prCompletionOption } from '../cos/constants';
 import useRunWithPicker from '../../hooks/useRunWithPicker';
 import useReviewerModelOptions from '../../hooks/useReviewerModelOptions';
 import { reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../../lib/reviewerModels';
@@ -82,6 +82,12 @@ function SlashDoRunDrawerBody({ open, command, label, appId, appName, onClose, o
   // agent-picked run the user just opted out of.
   const awaitingPick = isNext && work.mode === 'pick' && !work.target;
 
+  // `/do:depfree`-only: the removal bar the route forwards as `--heavy` /
+  // `--extreme`. Sent only for that command — no other body reads the flag.
+  const isDepfree = command === 'depfree';
+  const depfreeModeId = useId();
+  const [depfreeMode, setDepfreeMode] = useState(DEPFREE_MODE_DEFAULT);
+
   const handleQueue = async () => {
     setSubmitting(true);
     setSubmitError('');
@@ -93,6 +99,7 @@ function SlashDoRunDrawerBody({ open, command, label, appId, appName, onClose, o
       issueAuthorFilter: work.issueAuthorFilter || undefined,
       ...picker.pin,
       simplify,
+      ...(isDepfree ? { depfreeMode } : {}),
       // `isNext &&` states the route's contract rather than leaning on the picker
       // being unrendered: only the `next` branch of POST /tasks/slashdo reads these,
       // so sending them for another command would be a silent no-op.
@@ -146,6 +153,27 @@ function SlashDoRunDrawerBody({ open, command, label, appId, appName, onClose, o
               Simplify before committing
             </span>
           </label>
+          {isDepfree && (
+            <div>
+              <label htmlFor={depfreeModeId} className="block text-xs text-gray-400 mb-1">
+                Removal bar
+              </label>
+              <select
+                id={depfreeModeId}
+                value={depfreeMode}
+                onChange={e => setDepfreeMode(e.target.value)}
+                className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white text-sm focus:border-port-accent focus:outline-hidden"
+              >
+                {DEPFREE_MODE_OPTIONS.map(option => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+              <p className="text-xs text-gray-500 mt-1">
+                {depfreeModeOption(depfreeMode)?.description}.
+                {depfreeMode === 'extreme' && ' Pick the strongest model and max effort above; the command puts that tier on every sub-agent it spawns.'}
+              </p>
+            </div>
+          )}
           {/* Reviewer choices are `/do:next`-only: they're substituted into the
               claim prompt's reviewer CSV, and `POST /tasks/slashdo` reads them only
               on that branch. Every other `/do:*` body owns its own review/PR

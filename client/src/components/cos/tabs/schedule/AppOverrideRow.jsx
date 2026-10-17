@@ -1,7 +1,7 @@
 import { useState, memo } from 'react';
 import AppIcon from '../../../AppIcon';
 import CronInput from '../../../CronInput';
-import { AGENT_OPTIONS, BRANCHES_PER_AGENT_DEFAULT, BRANCHES_PER_AGENT_OPTIONS, BRANCHES_PER_AGENT_TASK_TYPES, ISSUE_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_TASK_TYPES, PR_COMPLETION_OPTIONS, pinnedPrCompletion, prCompletionOption, SWARM_COUNT_OPTIONS, SWARM_TASK_TYPES, toggleAppMetadataOverride, agentOptionButtonClass } from '../../constants';
+import { AGENT_OPTIONS, BRANCHES_PER_AGENT_DEFAULT, BRANCHES_PER_AGENT_OPTIONS, BRANCHES_PER_AGENT_TASK_TYPES, DEPFREE_MODE_OPTIONS, DEPFREE_MODE_TASK_TYPES, depfreeModeOption, ISSUE_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_TASK_TYPES, PR_COMPLETION_OPTIONS, pinnedPrCompletion, prCompletionOption, SWARM_COUNT_OPTIONS, SWARM_TASK_TYPES, toggleAppMetadataOverride, agentOptionButtonClass } from '../../constants';
 import AppProviderPin from '../../AppProviderPin';
 import { isCronExpression, describeCron } from '../../../../utils/cronHelpers';
 import ToggleSwitch from '../../../ToggleSwitch';
@@ -314,6 +314,22 @@ const AppOverrideRow = memo(function AppOverrideRow({ app, taskType, globalInter
           >
             <option value="">Inherit ({BRANCHES_PER_AGENT_OPTIONS.find(o => o.value === (globalTaskMetadata?.branchesPerAgent || BRANCHES_PER_AGENT_DEFAULT))?.label})</option>
             {BRANCHES_PER_AGENT_OPTIONS.map(opt => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        )}
+
+        {DEPFREE_MODE_TASK_TYPES.has(taskType) && (
+          <select
+            value={override?.taskMetadata?.depfreeMode ?? ''}
+            onChange={(e) => handleOverrideChange('depfreeMode', e.target.value)}
+            disabled={updating}
+            aria-label={`Removal bar for ${app.name}`}
+            title="How aggressively this app's dependency-freedom audit replaces packages (default / heavy / extreme)"
+            className="bg-port-card border border-port-border rounded px-2 py-1.5 text-xs text-white min-w-[120px] min-h-[40px]"
+          >
+            <option value="">Inherit ({depfreeModeOption(globalTaskMetadata?.depfreeMode)?.label})</option>
+            {DEPFREE_MODE_OPTIONS.map(opt => (
               <option key={opt.value} value={opt.value}>{opt.label}</option>
             ))}
           </select>

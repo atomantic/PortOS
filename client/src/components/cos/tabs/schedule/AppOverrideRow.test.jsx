@@ -222,6 +222,21 @@ describe('AppOverrideRow — branch-reconcile batch size', () => {
   });
 });
 
+describe('AppOverrideRow — dependency-freedom removal bar', () => {
+  it('allows an app to inherit or override the global removal bar', async () => {
+    const onUpdate = renderRow({
+      taskType: 'better-dependency-freedom',
+      globalTaskMetadata: { depfreeMode: 'heavy' },
+      override: { taskMetadata: { depfreeMode: 'extreme' } }
+    });
+    const select = screen.getByLabelText('Removal bar for Acme');
+    expect(select).toHaveValue('extreme');
+    expect(screen.getByRole('option', { name: /^Inherit \(Heavy/ })).toBeInTheDocument();
+    await act(async () => { fireEvent.change(select, { target: { value: '' } }); });
+    expect(onUpdate).toHaveBeenCalledWith('app-1', 'better-dependency-freedom', { taskMetadata: null });
+  });
+});
+
 // The per-app provider/model pin beats the task's own pin at spawn for EVERY task
 // type (#4783) — so the Schedule page, where that task pin is chosen, both shows
 // what an app is running on and lets it be changed there.

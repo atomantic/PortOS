@@ -24,7 +24,7 @@ import { ORCHESTRATION_MODES, ORCHESTRATION_ROLES } from './orchestrationProfile
 import { AGENT_RUN_EVENT_KINDS, RUN_EVENT_READ_LIMITS } from './agentRunEvents.js';
 import { TASK_STATUS_VALUES, TASK_PRIORITY_VALUES } from './taskParser.js';
 import { recurrenceRuleSchema } from './recurrenceValidation.js';
-import { AUDIT_TASK_TYPE_LIST } from './auditCatalog.js';
+import { AUDIT_TASK_TYPE_LIST, DEPFREE_MODES } from './auditCatalog.js';
 import { CLAIM_DRAIN_TASK_TYPES } from './qualitySchedulePlan.js';
 import { JOB_INTERVAL_VALUES } from './autonomousJobIntervals.js';
 import { jobFormFieldsSchema, jobFormValuesSchema } from './jobFormFields.js';
@@ -941,6 +941,12 @@ export const REPO_SYNC_ACTION_KEYS = ['syncPush', 'syncPull', 'switchDefault', '
 // prompt block, so a toggle cannot be dropped at one boundary.
 export const RELEASE_OPTION_KEYS = ['finishInFlight', 'mergeDependencyUpdates', 'resolveBlockers', 'autoDecide'];
 
+// better-dependency-freedom's removal bar vocabulary is catalog-owned (see
+// DEPFREE_MODES in lib/auditCatalog.js, beside the prompt block that renders
+// it); re-exported here so the validation barrel stays the one import for
+// task-metadata vocabularies.
+export { DEPFREE_MODES, DEFAULT_DEPFREE_MODE } from './auditCatalog.js';
+
 const ALLOWED_TASK_METADATA_KEYS = [
   ...PIPELINE_BEHAVIOR_FLAGS, 'readOnly', 'claimFlow',
   'cleanupMerged', 'openPr', 'resolveConflicts', 'autoMerge', 'finishAbandoned', 'autoClose',
@@ -1131,6 +1137,9 @@ export const slashdoTaskSchema = createCosTaskSchema
     issueContext: prefetchedIssueContextSchema.optional(),
     overrideContext: claimOverrideContextSchema,
     issueAuthorFilter: z.enum(ISSUE_AUTHOR_FILTERS).optional(),
+    // `/do:depfree`-only: the removal bar, forwarded as the command's
+    // `--heavy` / `--extreme` flag (the default bar sends no flag).
+    depfreeMode: z.enum(DEPFREE_MODES).optional(),
   });
 
 // The Pull Requests tab's "Run with" picker (mirrors the Issues tab's same
@@ -1288,6 +1297,13 @@ export function sanitizeTaskMetadata(raw) {
   // dispatch gate (which would fall back to the default anyway, silently).
   if (Object.prototype.hasOwnProperty.call(raw, 'verifyMode') && REPO_SYNC_VERIFY_MODES.includes(raw.verifyMode)) {
     clean.verifyMode = raw.verifyMode;
+    hasKeys = true;
+  }
+  // `depfreeMode` sets the dependency-freedom audit's removal bar — constrained
+  // to DEPFREE_MODES so a hand-edited schedule cannot smuggle in a string the
+  // prompt block would silently render as the default bar.
+  if (Object.prototype.hasOwnProperty.call(raw, 'depfreeMode') && DEPFREE_MODES.includes(raw.depfreeMode)) {
+    clean.depfreeMode = raw.depfreeMode;
     hasKeys = true;
   }
   // `issueAuthorFilter` gates claim-issue dispatch on issue authorship —
