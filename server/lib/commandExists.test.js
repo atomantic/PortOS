@@ -238,15 +238,18 @@ describe('commandOutput lifecycle (#10604)', () => {
     spawnMock.impl = null
     const script = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.stdout.write('alive')"
     const started = Date.now()
+    let settledAt
 
     try {
-      await expect(commandOutput(process.execPath, ['-e', script], { timeoutMs: 300 })).resolves.toBeNull()
+      const result = await commandOutput(process.execPath, ['-e', script], { timeoutMs: 300 })
+        .finally(() => { settledAt = Date.now() })
+      expect(result).toBeNull()
 
       expect(Date.now() - started).toBeLessThan(2_000)
       expect(existsSync(lastSpawn().opts.env.TMPDIR)).toBe(false)
       expect(await waitUntilGone(lastSpawn().child.pid)).toBe(true)
     } finally {
-      const graceRemaining = started + 300 + 2_100 - Date.now()
+      const graceRemaining = (settledAt ?? Date.now()) + 2_100 - Date.now()
       if (graceRemaining > 0) await new Promise(resolve => setTimeout(resolve, graceRemaining))
       await cleanupChild(lastSpawn()?.child)
     }
