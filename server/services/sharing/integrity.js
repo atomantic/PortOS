@@ -19,9 +19,10 @@ import { listLooms } from '../fableLoom/index.js';
 import { getPeers } from '../instances.js';
 import { assetIntegrityForRecord } from './peerSync.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
-import { peerFetch } from '../../lib/peerHttpClient.js';
+import { peerFetch, readPeerBody } from '../../lib/peerHttpClient.js';
 
 const PEER_INTEGRITY_TIMEOUT_MS = 15_000;
+const PEER_INTEGRITY_MAX_BYTES = 16 * 1024 * 1024;
 
 async function recordsForKind(kind) {
   if (kind === 'mediaCollection') return listCollections({ includeDeleted: true });
@@ -82,7 +83,7 @@ export async function getPeerIntegrity({ peerId, kind }) {
 
   const res = await peerFetch(
     `${peerBaseUrl(peer)}/api/peer-sync/manifest?kind=${encodeURIComponent(kind)}`,
-    { signal: AbortSignal.timeout(PEER_INTEGRITY_TIMEOUT_MS) },
+    { signal: AbortSignal.timeout(PEER_INTEGRITY_TIMEOUT_MS), maxBytes: PEER_INTEGRITY_MAX_BYTES },
     peer,
   ).catch(() => null);
 
@@ -94,7 +95,11 @@ export async function getPeerIntegrity({ peerId, kind }) {
   if (res.status === 404) return { available: false, reason: 'peer-too-old', records: [] };
   if (!res.ok) return { available: false, reason: 'fetch-failed', records: [] };
 
-  const body = await res.json().catch(() => null);
+  const body = await readPeerBody(res, 'json', {
+    idleTimeoutMs: PEER_INTEGRITY_TIMEOUT_MS,
+    maxBytes: PEER_INTEGRITY_MAX_BYTES,
+  }).catch(() => null);
+  if (!body) return { available: false, reason: 'fetch-failed', records: [] };
   // The peer response is untrusted — computeRecordIntegrity assumes every entry
   // is a non-null object with a string `id` (it reads `r.id` and keys a Map on
   // it). A hostile/malformed manifest (nulls, scalars, id-less objects) would
