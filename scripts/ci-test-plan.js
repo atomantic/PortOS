@@ -276,6 +276,7 @@ export const ALWAYS_RUN_TESTS = [
   // otherwise merge green.
   'docs/api-doc.test.js',
   'docs/auth-public-paths-doc.test.js',
+  'docs/doc-endpoint-methods.test.js',
   'docs/docs-index.test.js',
   'docs/deps-doc.test.js',
   'docs/features/product-surfaces.test.js',
