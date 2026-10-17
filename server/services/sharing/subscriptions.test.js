@@ -232,7 +232,9 @@ describe('sharing/subscriptions', () => {
 
   // vi.waitFor polls on setTimeout, which these tests fake; poll on setImmediate.
   async function until(check) {
-    for (let i = 0; i < 2000; i++) {
+    // Bound by wall-clock, not iterations: the export awaits real fs I/O, which a loaded CI box can stretch.
+    const deadline = Date.now() + 10000;
+    while (Date.now() < deadline) {
       if (await check()) return;
       await new Promise((r) => setImmediate(r));
     }
