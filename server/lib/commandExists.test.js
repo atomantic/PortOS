@@ -211,7 +211,13 @@ describe('commandOutput lifecycle (#10604)', () => {
   it('a failed scratch cleanup cannot replace the probe result', async () => {
     rmMock.fail = true
     spawnMock.impl = () => fakeChild(exitWith('v1'))
-    await expect(commandOutput('tool')).resolves.toBe('v1')
+    try {
+      await expect(commandOutput('tool')).resolves.toBe('v1')
+    } finally {
+      rmMock.fail = false
+      const { rmSync } = await vi.importActual('node:fs')
+      rmSync(lastSpawn().opts.env.TMPDIR, { recursive: true, force: true })
+    }
   })
 
   // Real processes, POSIX only: the deadline must settle the probe on time, and
