@@ -183,6 +183,15 @@ function parseFilmLookFilter(filter) {
   return primitives;
 }
 
+// Only this decoded-video contract was measured to omit the primary transform
+// in Canvas2D. Software I420 (including SMPTE170M transfer) already matches the
+// native compositor. Unknown contracts retain existing staging and admission.
+function needsSmpte170mConversion(frame) {
+  const space = frame?.colorSpace;
+  return frame?.format === 'NV12' && space?.primaries === 'smpte170m'
+    && space.matrix === 'smpte170m' && space.transfer === 'bt709' && space.fullRange === false;
+}
+
 /**
  * The browser source for the renderer. Defines `globalThis.__portosFilmLookGpu`:
  *
@@ -200,6 +209,7 @@ export function filmLookGpuRuntimeSource() {
   const turbulenceTables = ${turbulenceTables.toString()};
   const blurKernel = ${blurKernel.toString()};
   const parseFilmLookFilter = ${parseFilmLookFilter.toString()};
+  const needsSmpte170mConversion = ${needsSmpte170mConversion.toString()};
   const create = ${createFilmLookGpuRenderer.toString()};
   const available = () => {
     try {
@@ -208,7 +218,7 @@ export function filmLookGpuRuntimeSource() {
     } catch { return false; }
   };
   Object.defineProperty(globalThis, '__portosFilmLookGpu', { configurable: false, writable: false,
-    value: Object.freeze({ available, create: (canvas) => create(canvas, { markup, turbulenceTables, blurKernel, parseFilmLookFilter }) }) });
+    value: Object.freeze({ available, create: (canvas) => create(canvas, { markup, turbulenceTables, blurKernel, parseFilmLookFilter, needsSmpte170mConversion }) }) });
 })();`;
 }
 
@@ -217,7 +227,7 @@ export function filmLookGpuRuntimeSource() {
 // premultiplied texture in image orientation (row 0 = top), as Skia's raster
 // filters keep them; the last pass flips into the canvas.
 function createFilmLookGpuRenderer(canvas, deps) {
-  const { markup, turbulenceTables, blurKernel: makeBlurKernel, parseFilmLookFilter } = deps;
+  const { markup, turbulenceTables, blurKernel: makeBlurKernel, parseFilmLookFilter, needsSmpte170mConversion } = deps;
   const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, depth: false, stencil: false, premultipliedAlpha: true, preserveDrawingBuffer: true });
   if (!gl) throw new Error('WebGL2 is unavailable');
   if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('WebGL2 float render targets are unavailable');
@@ -271,8 +281,28 @@ bool clipped() { vec2 p = gl_FragCoord.xy; return p.x < clip.x || p.y < clip.y |
 `;
   const PROGRAMS = {
     // The source picture, flipped from texture upload order into image order.
-    source: `uniform sampler2D a;
-void main() { color = texelFetch(a, pixel(), 0); }`,
+    // inv(RGB709→XYZ) × RGBSMPTE-C→XYZ, using D65 white (.3127,.3290),
+    // 709 primaries (.64,.33),(.30,.60),(.15,.06) and SMPTE-C primaries
+    // (.63,.34),(.31,.595),(.155,.07). Chromium renders BT709 transfer with
+    // the sRGB curve (ui/gfx/color_space.cc), so transform in linear sRGB.
+    source: `uniform sampler2D a; uniform int convertPrimaries;
+vec3 linearRGB(vec3 c) {
+  return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), c));
+}
+vec3 encodedRGB(vec3 c) {
+  c = clamp(c, 0.0, 1.0);
+  return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c));
+}
+void main() {
+  color = texelFetch(a, pixel(), 0);
+  if (convertPrimaries == 1) {
+    vec3 c = linearRGB(unpremul(color).rgb);
+    c = mat3(0.939542064, 0.017772223, -0.001621600,
+             0.050181357, 0.965792862, -0.004369750,
+             0.010276579, 0.016434914, 1.005991350) * c;
+    color.rgb = encodedRGB(c) * color.a;
+  }
+}`,
     flood: `uniform vec4 floodColor;
 void main() { color = clipped() ? vec4(0.0) : floodColor; }`,
     offset: `uniform sampler2D a; uniform vec2 shift; uniform int sampled;
@@ -629,8 +659,21 @@ void main() {
   // texImage2D copies a video of another size unscaled instead of filling the
   // frame the way the page's object-fit does.
   let staging = null;
+  let convertPrimaries = false;
   const stage = (source) => {
+    convertPrimaries = false;
     if (typeof HTMLVideoElement === 'undefined' || !(source instanceof HTMLVideoElement)) return source;
+    if (typeof VideoFrame !== 'undefined') {
+      let snapshot;
+      try {
+        snapshot = new VideoFrame(source);
+        convertPrimaries = needsSmpte170mConversion(snapshot);
+      } catch { /* Metadata unavailable: preserve existing staging. */ }
+      finally { snapshot?.close(); }
+    }
+    // This tuple narrows applicability; it is not a universal browser promise.
+    // If a future canvas already converts it, the unchanged native-oracle
+    // fidelity gate rejects double conversion and safely retains SVG.
     staging ||= document.createElement('canvas');
     if (staging.width !== width || staging.height !== height) { staging.width = width; staging.height = height; }
     staging.getContext('2d', { alpha: false }).drawImage(source, 0, 0, width, height);
@@ -662,7 +705,10 @@ void main() {
     const frameRegion = [0, 0, width, height];
     const results = new Map();
     const sourceTarget = acquire();
-    run('source', sourceTarget, (u, bind) => bind('a', uploadTexture));
+    run('source', sourceTarget, (u, bind) => {
+      bind('a', uploadTexture);
+      gl.uniform1i(u.convertPrimaries, convertPrimaries ? 1 : 0);
+    });
     results.set('SourceGraphic', { target: sourceTarget, region: frameRegion });
     let previous = 'SourceGraphic';
     const release = (name) => {
@@ -791,4 +837,4 @@ void main() {
 }
 
 // The pieces the renderer inlines, for unit tests against what Chrome draws.
-export const _filmLookGpuTestHooks = Object.freeze({ turbulenceTables, turbulencePixel, blurKernel, parseFilmLookFilter });
+export const _filmLookGpuTestHooks = Object.freeze({ turbulenceTables, turbulencePixel, blurKernel, parseFilmLookFilter, needsSmpte170mConversion });
