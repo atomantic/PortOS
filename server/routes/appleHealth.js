@@ -6,7 +6,7 @@ import { uploadSingle } from '../lib/multipart.js';
 import { parseZip, collectZipEntry } from '../lib/zipStream.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
-import { healthIngestSchema } from '../lib/appleHealthValidation.js';
+import { healthIngestSchema, appleHealthLatestMetricsQuerySchema } from '../lib/appleHealthValidation.js';
 import { ingestHealthData } from '../services/appleHealthIngest.js';
 import { importAppleHealthXml } from '../services/appleHealthXml.js';
 import { importClinicalRecords } from '../services/appleHealthClinical.js';
@@ -64,7 +64,8 @@ router.get('/metrics/available', asyncHandler(async (req, res) => {
 // GET /api/health/metrics/latest
 // Returns most recent recorded value for each requested metric
 router.get('/metrics/latest', asyncHandler(async (req, res) => {
-  const metrics = req.query.metrics?.split(',').filter(Boolean) ?? [];
+  const query = validateRequest(appleHealthLatestMetricsQuerySchema, req.query);
+  const metrics = query.metrics?.split(',').filter(Boolean) ?? [];
   if (metrics.length === 0) return res.json({});
   const latest = await getLatestMetricValues(metrics);
   res.json(latest);
