@@ -156,4 +156,69 @@ describe('catalog sheet routes', () => {
     expect(res.body.preview.sentPrompt).toBe(typed);
     expect(res.body.preview.promptAdditions).toEqual([]);
   });
+
+  describe('look renders', () => {
+    const dressed = {
+      ...character,
+      payload: {
+        ...character.payload,
+        wardrobes: [{ id: 'wd-scarf', name: 'Red scarf', description: 'long red wool scarf over a grey travel coat' }],
+      },
+    };
+
+    // Catches a look landing as a generic sheet (wrong role), delegating to the
+    // universe renderer (it would never reach the Looks tab), or dropping the
+    // wardrobe text; and the preview drifting from what is queued (#11317).
+    it('previews and queues a look tagged look:<wardrobeId> through the catalog path, even when universe-linked', async () => {
+      mocks.getIngredient.mockResolvedValue(dressed);
+      mocks.listLiveRefsForIngredient.mockResolvedValue([{ refKind: 'universe', refId: 'universe-1' }]);
+      mocks.getUniverse.mockResolvedValue({
+        id: 'universe-1', name: 'Example Universe', influences: { embrace: ['ink and watercolor'] },
+        characters: [{ id: 'char-entry-1', name: 'Example Hero', ingredientId: 'cat-chr-1' }],
+      });
+      const body = { variant: 'look', wardrobeId: 'wd-scarf' };
+      const preview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send(body);
+      expect(preview.status).toBe(200);
+      const sent = preview.body.preview;
+      expect(sent.sentPrompt).toContain('long red wool scarf over a grey travel coat');
+      expect(sent.sentPrompt).toContain('Example Hero');
+
+      const res = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send(body);
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ variant: 'look', role: 'look:wd-scarf', delegatedTo: null });
+      const params = queuedParams();
+      expect(params.catalogAttach).toEqual({ ingredientId: 'cat-chr-1', kind: 'reference', role: 'look:wd-scarf' });
+      expect(params.characterSheet).toBeUndefined();
+      expect(sent.sentPrompt).toBe(params.prompt);
+      expect(sent.promptAdditions).toEqual(params.promptAdditions);
+      // Style and negatives travel as labeled additions; the negatives never
+      // ride in the positive prompt.
+      const negatives = params.promptAdditions.find((a) => a.id === 'sheet-negatives');
+      expect(negatives).toMatchObject({ label: 'Look negatives' });
+      expect(params.negativePrompt).toBe(negatives.text);
+      expect(params.prompt).not.toContain(negatives.text);
+      expect(params.promptAdditions.map((a) => a.id)).toContain('universe-style');
+    });
+
+    it('is not offered among the sheet variants', async () => {
+      mocks.getIngredient.mockResolvedValue(dressed);
+      const res = await request(app).get('/api/catalog/ingredients/cat-chr-1/sheets/variants');
+      expect(res.body.variants.map((v) => v.id)).not.toContain('look');
+    });
+
+    it('refuses an unknown wardrobe, a non-character, a missing wardrobeId and a stray one', async () => {
+      mocks.getIngredient.mockResolvedValue(dressed);
+      const wrong = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send({ variant: 'look', wardrobeId: 'wd-other' });
+      expect(wrong.status).toBe(400);
+      const missing = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send({ variant: 'look' });
+      expect(missing.status).toBe(400);
+      const stray = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets').send({ variant: 'blueprint', wardrobeId: 'wd-scarf' });
+      expect(stray.status).toBe(400);
+
+      mocks.getIngredient.mockResolvedValue({ ...place, payload: { ...place.payload, wardrobes: dressed.payload.wardrobes } });
+      const notCharacter = await request(app).post('/api/catalog/ingredients/cat-plc-1/sheets/preview').send({ variant: 'look', wardrobeId: 'wd-scarf' });
+      expect(notCharacter.status).toBe(400);
+      expect(mocks.enqueueJob).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -749,6 +749,7 @@ describe('CatalogIngredient — tabbed library record pages', () => {
       physicalDescription: 'Tall, green cloak.',
       referenceSheetImageRef: 'hero-standard.png',
       referenceSheets: { expressions: 'hero-expressions.png' },
+      wardrobes: [{ id: 'wardrobe-1', name: 'Red scarf', description: 'Long red wool scarf.', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }],
     },
     refs: [{ refKind: 'universe', refId: 'u-example', refName: 'Example Universe' }],
     sources: [],
@@ -871,12 +872,79 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     expect(screen.queryByLabelText('Name')).toBeNull();
   });
 
+  describe('Looks tab', () => {
+    // Catches the look render losing its wardrobe id or attaching under a role
+    // the Looks tab does not read back.
+    it('lists looks with their images, previews a look and renders it under its look role', async () => {
+      const api = await import('../services/apiCatalog');
+      api.renderCatalogSheet.mockResolvedValue({ jobId: 'look-job', variant: 'look', role: 'look:wardrobe-1', delegatedTo: null });
+      api.attachCatalogIngredientMedia.mockResolvedValue({});
+      await renderPage('/casting/cat-chr-hero/looks');
+      expect(await screen.findByRole('tab', { name: /Looks/ })).toHaveAttribute('aria-selected', 'true');
+      const card = screen.getByRole('article', { name: 'Look: Red scarf' });
+      expect(card.textContent).toContain('Long red wool scarf.');
+      await waitFor(() => expect(screen.getByAltText('Red scarf').getAttribute('src')).toBe('/data/images/look-1.png'));
+
+      fireEvent.click(screen.getByRole('button', { name: /^Generate$/ }));
+      expect(await screen.findByRole('button', { name: '+ Universe style' })).toBeTruthy();
+      expect(api.previewCatalogSheet).toHaveBeenLastCalledWith(
+        'cat-chr-hero', { variant: 'look', wardrobeId: 'wardrobe-1' }, { silent: true },
+      );
+      fireEvent.click(screen.getByRole('button', { name: /Render look/ }));
+      await waitFor(() => expect(api.renderCatalogSheet).toHaveBeenCalledWith(
+        'cat-chr-hero', { variant: 'look', wardrobeId: 'wardrobe-1' }, { silent: true },
+      ));
+      await waitFor(() => expect(api.attachCatalogIngredientMedia).toHaveBeenCalledWith(
+        'cat-chr-hero', { mediaKey: 'look-job.png', kind: 'reference', role: 'look:wardrobe-1' }, { silent: true },
+      ));
+    });
+
+    // Catches a look save dropping the rest of the saved payload, reusing or
+    // omitting ids, or failing to show the new look.
+    it('adds a look by saving payload.wardrobes with a stamped wd- id and the rest of the payload intact', async () => {
+      const added = { id: 'wd-new', name: 'Travel coat', description: 'Grey wool coat.' };
+      updateCatalogIngredient.mockImplementation(async (_id, patch) => ({
+        ...HERO, payload: { ...patch.payload, wardrobes: [HERO.payload.wardrobes[0], added] },
+      }));
+      await renderPage('/casting/cat-chr-hero/looks');
+      fireEvent.click(await screen.findByRole('button', { name: /Add look/ }));
+      fireEvent.change(screen.getByLabelText('Look name'), { target: { value: 'Travel coat' } });
+      fireEvent.change(screen.getByLabelText('Outfit description'), { target: { value: 'Grey wool coat.' } });
+      fireEvent.click(screen.getByRole('button', { name: /Save look/ }));
+
+      await waitFor(() => expect(updateCatalogIngredient).toHaveBeenCalledTimes(1));
+      const [id, patch] = updateCatalogIngredient.mock.calls[0];
+      expect(id).toBe('cat-chr-hero');
+      expect(patch.payload.physicalDescription).toBe('Tall, green cloak.');
+      expect(patch.payload.wardrobes[0]).toEqual(HERO.payload.wardrobes[0]);
+      expect(patch.payload.wardrobes[1]).toMatchObject({ name: 'Travel coat', description: 'Grey wool coat.' });
+      expect(patch.payload.wardrobes[1].id).toMatch(/^wd-[0-9a-f-]{36}$/);
+      expect(await screen.findByRole('article', { name: 'Look: Travel coat' })).toBeTruthy();
+      expect(screen.queryByText('Unsaved changes')).toBeNull();
+    });
+
+    // Catches a deleted look stranding its images under a role no tab shows.
+    it('deletes a look and leaves its images on References', async () => {
+      updateCatalogIngredient.mockImplementation(async (_id, patch) => ({ ...HERO, payload: patch.payload }));
+      const { router } = await renderPage('/casting/cat-chr-hero/looks');
+      fireEvent.click(await screen.findByRole('button', { name: 'Delete Red scarf' }));
+      expect(screen.getByText(/Its images move to References/)).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Delete look' }));
+      await waitFor(() => expect(updateCatalogIngredient.mock.calls[0]?.[1].payload.wardrobes).toEqual([]));
+      await waitFor(() => expect(screen.queryByRole('article', { name: 'Look: Red scarf' })).toBeNull());
+
+      await act(async () => { await router.navigate('/casting/cat-chr-hero/references'); });
+      await waitFor(() => expect(screen.getAllByRole('img').map((img) => img.getAttribute('src')))
+        .toContain('/data/images/look-1.png'));
+    });
+  });
+
   it('marks a reference image as a plate on the environment Plates tab', async () => {
     const api = await import('../services/apiCatalog');
     api.attachCatalogIngredientMedia.mockResolvedValue({ mediaKey: 'mood.png', kind: 'reference', role: 'plate' });
     getCatalogIngredientDetails.mockImplementation(async () => ({
       ...detailsOf({ ...HERO, id: 'cat-plc-1', type: 'place', name: 'Example Harbor', payload: {}, refs: [] }),
-      media: MEDIA,
+      media: MEDIA.filter((m) => m.mediaKey !== 'look-1.png'),
     }));
     await renderPage('/environments/cat-plc-1/plates');
     expect(await screen.findByRole('button', { name: 'Unmark plate' })).toBeTruthy();

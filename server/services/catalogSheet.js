@@ -8,6 +8,12 @@
  * `catalogAttach` with `role: 'sheet:<variant>'`; catalogImageAttachHook files
  * the finished image as a `reference` media row with that role (never the
  * portrait), and the card-cover query skips sheet roles.
+ *
+ * A `look` render (variant `look` + `wardrobeId`) dresses a character in one
+ * of its `payload.wardrobes`. It is driven from the record's Looks tab, so it
+ * is not listed among the sheet variants, and it always renders through the
+ * catalog path — even for a universe-linked character — tagged
+ * `role: 'look:<wardrobeId>'`.
  */
 
 import { ServerError } from '../lib/errorHandler.js';
@@ -30,7 +36,9 @@ import {
   DEFAULT_PRODUCT_SHEET_STYLE,
   buildEnvironmentSheetPrompt,
   buildProductSheetPrompt,
+  buildCharacterLookPrompt,
 } from './catalogSheetPrompts.js';
+import { CATALOG_LOOK_VARIANT_ID } from '../lib/catalogValidation.js';
 
 const CATALOG_SHEET_VARIANTS = Object.freeze({
   place: Object.freeze([Object.freeze({
@@ -70,6 +78,29 @@ export function listCatalogSheetVariants(type) {
   return variantsForType(type).map(({ id, label, description }) => ({ id, label, description }));
 }
 
+// The `look` variant for one wardrobe entry, or a 400 when the record is not
+// a character or the wardrobe is not one of its own.
+function lookVariantFor(ingredient, payload, wardrobeId) {
+  if (ingredient.type !== 'character') {
+    throw new ServerError(`A look render is only available for a character, not a ${ingredient.type}`,
+      { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const wardrobes = Array.isArray(payload.wardrobes) ? payload.wardrobes : [];
+  const wardrobe = wardrobes.find((w) => w && typeof w === 'object' && w.id === wardrobeId);
+  if (!wardrobe) {
+    throw new ServerError(`"${ingredient.name}" has no look with id "${wardrobeId ?? ''}"`,
+      { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  return {
+    id: CATALOG_LOOK_VARIANT_ID,
+    label: 'Look',
+    build: (universe, entry) => buildCharacterLookPrompt(universe, entry, wardrobe),
+    defaultStyle: DEFAULT_CHARACTER_SHEET_STYLE,
+    negativesLabel: 'Look negatives',
+    role: `look:${wardrobe.id}`,
+  };
+}
+
 // Load + guard the record, resolve its variant and any universe it links to.
 async function resolveSheetTarget(id, options) {
   const ingredient = await getIngredient(id);
@@ -81,10 +112,13 @@ async function resolveSheetTarget(id, options) {
       { status: 409, code: 'CATALOG_INGREDIENT_LOCKED' },
     );
   }
+  const isLook = options.variant === CATALOG_LOOK_VARIANT_ID;
   const variants = variantsForType(ingredient.type);
-  const variant = options.variant
-    ? variants.find((v) => v.id === options.variant)
-    : variants[0];
+  const variant = isLook
+    ? lookVariantFor(ingredient, payload, options.wardrobeId)
+    : options.variant
+      ? variants.find((v) => v.id === options.variant)
+      : variants[0];
   if (!variant) {
     throw new ServerError(
       `Sheet variant "${options.variant ?? ''}" is not available for a ${ingredient.type}`,
@@ -100,7 +134,7 @@ async function resolveSheetTarget(id, options) {
     const universe = await getUniverse(ref.refId).catch(() => null);
     if (universe) universes.push(universe);
   }
-  if (ingredient.type === 'character') {
+  if (ingredient.type === 'character' && !isLook) {
     for (const universe of universes) {
       const entry = (universe.characters || []).find((c) => c.ingredientId === id);
       if (entry) return { ingredient, payload, variant, delegate: { universeId: universe.id, entryId: entry.id } };
@@ -153,7 +187,7 @@ export async function renderCatalogSheet(id, options = {}) {
     return { ...result, delegatedTo: 'universe', universeId, entryId };
   }
   const { params, modelId, activeMode } = await buildCatalogSheet(target, options);
-  const role = `sheet:${target.variant.id}`;
+  const role = target.variant.role || `sheet:${target.variant.id}`;
   params.catalogAttach = { ingredientId: id, kind: 'reference', role };
   const queued = await enqueueJob({ kind: 'image', params });
   console.log(`🎨 Catalog ${target.variant.label} render — ingredient=${shortId(id)} job=${shortId(queued.jobId)} mode=${activeMode} model=${modelId}`);

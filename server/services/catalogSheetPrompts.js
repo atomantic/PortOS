@@ -1,5 +1,6 @@
 /**
- * Catalog reference-sheet prompt builders for places and objects.
+ * Catalog reference-sheet prompt builders for places and objects, plus the
+ * wardrobe look reference for a character.
  *
  * Same contract as the character builders in universeCharacterSheet.js:
  * `(universe, entry) → { prompt, negativePrompt, width, height, modelId }`,
@@ -10,7 +11,7 @@
 
 import { ServerError } from '../lib/errorHandler.js';
 import { universeAestheticLine } from '../lib/universeVisualStyle.js';
-import { REFERENCE_SHEET_CONSTANTS } from './universeCharacterSheet.js';
+import { DEFAULT_CHARACTER_SHEET_STYLE, REFERENCE_SHEET_CONSTANTS, extractCharacterPromptCommon } from './universeCharacterSheet.js';
 
 const { DEFAULT_WIDTH, DEFAULT_HEIGHT } = REFERENCE_SHEET_CONSTANTS;
 
@@ -100,6 +101,50 @@ export function buildProductSheetPrompt(universe, object) {
   return {
     prompt: promptParts.join('\n\n'),
     negativePrompt: 'hands, people, person, busy background, clutter, multiple different objects, text artifacts, watermark, signature, blurry, distorted proportions, inconsistent views, low contrast labels',
+    width: DEFAULT_WIDTH,
+    height: DEFAULT_HEIGHT,
+    modelId: null,
+  };
+}
+
+/**
+ * Look reference for a character wearing one of its wardrobes: the same
+ * person (identity from the record's own fields) in full-body views on a plain
+ * backdrop, no text. `wardrobe` is a `payload.wardrobes` entry.
+ */
+export function buildCharacterLookPrompt(universe, character, wardrobe) {
+  requireEntry(character, 'buildCharacterLookPrompt');
+  requireEntry(wardrobe, 'buildCharacterLookPrompt');
+  const styleBits = universeAestheticLine(universe || {});
+  const { name, age, pronouns, physical, silhouette, posture, special, visualIdentity, visualNotes } =
+    extractCharacterPromptCommon(character);
+  const lookName = trim(wardrobe.name) || 'Unnamed look';
+  const lookDescription = trim(wardrobe.description);
+
+  const identityBits = [
+    `Character: ${name}.`,
+    age ? `Age: ${age}.` : '',
+    pronouns ? `Pronouns: ${pronouns}.` : '',
+  ].filter(Boolean).join(' ');
+
+  const promptParts = [
+    `LOOK REFERENCE — a costume reference of one character, ${name}, wearing a single outfit, shown as three full-body views side by side at identical scale: FRONT, THREE-QUARTER and BACK, standing in a relaxed neutral pose on a plain seamless light-grey backdrop.`,
+    styleBits || DEFAULT_CHARACTER_SHEET_STYLE,
+    identityBits,
+    physical ? `Physical description: ${physical}` : '',
+    silhouette ? `Silhouette: ${silhouette}` : '',
+    posture ? `Posture: ${posture}` : '',
+    special ? `Special traits: ${special}` : '',
+    visualIdentity ? `Visual identity: ${visualIdentity}` : '',
+    visualNotes ? `Visual notes: ${visualNotes}` : '',
+    `Outfit: ${lookName}.`,
+    lookDescription ? `Outfit description: ${lookDescription}` : '',
+    `Every view shows the same person with the same face, hair, proportions and the complete outfit from head to toe, including footwear and accessories. Even, soft studio lighting. No props beyond what the outfit includes, no other people, no text, no labels, no captions.`,
+  ].filter(Boolean);
+
+  return {
+    prompt: promptParts.join('\n\n'),
+    negativePrompt: 'text, labels, captions, watermark, signature, multiple different characters, busy background, cropped feet, cropped head, inconsistent outfit between views, distorted anatomy, blurry',
     width: DEFAULT_WIDTH,
     height: DEFAULT_HEIGHT,
     modelId: null,

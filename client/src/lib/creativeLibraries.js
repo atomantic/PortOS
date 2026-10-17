@@ -11,7 +11,7 @@ const SHEETS = tab('sheets', 'Sheets');
 export const CREATIVE_LIBRARIES = Object.freeze([
   Object.freeze({
     id: 'casting', type: 'character', path: '/casting', label: 'Casting', singular: 'cast member', empty: 'No cast yet.',
-    detailTabs: Object.freeze([PROFILE, SHEETS, tab('references', 'References')]),
+    detailTabs: Object.freeze([PROFILE, SHEETS, tab('looks', 'Looks'), tab('references', 'References')]),
   }),
   Object.freeze({
     id: 'environments', type: 'place', path: '/environments', label: 'Environments', singular: 'environment', empty: 'No environments yet.',
@@ -60,7 +60,15 @@ export const PLATE_ROLE = 'plate';
 const roleOf = (m) => (typeof m?.role === 'string' ? m.role : '');
 export const isSheetMedia = (m) => roleOf(m).startsWith(SHEET_ROLE_PREFIX);
 export const isPlateMedia = (m) => roleOf(m) === PLATE_ROLE;
-export const isReferenceTabMedia = (m) => !isSheetMedia(m) && !isPlateMedia(m) && !roleOf(m).startsWith(LOOK_ROLE_PREFIX);
+// The wardrobe id a `look:<id>` media row belongs to, or null.
+export const lookIdOf = (m) => (roleOf(m).startsWith(LOOK_ROLE_PREFIX) ? roleOf(m).slice(LOOK_ROLE_PREFIX.length) : null);
+// `liveLookIds` (a Set of the record's wardrobe ids) keeps a deleted look's
+// images visible on References instead of stranding them under a dead role.
+export const isReferenceTabMedia = (m, liveLookIds = null) => {
+  if (isSheetMedia(m) || isPlateMedia(m)) return false;
+  const lookId = lookIdOf(m);
+  return lookId === null || (liveLookIds ? !liveLookIds.has(lookId) : false);
+};
 
 // Cover image for a card. Attached catalog media wins; canon-mirrored rows fall
 // back to the universe's starred or first render. Both are gallery files under
