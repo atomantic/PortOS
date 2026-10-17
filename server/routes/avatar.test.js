@@ -50,6 +50,20 @@ describe('avatar routes', () => {
       expect(res.body.error).toMatch(/avatar model/i);
     });
 
+    it('emits the standard envelope and no server-error log for the expected pre-generation 404', async () => {
+      pathExists.mockResolvedValue(false);
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const res = await request(buildApp()).get('/api/avatar/model.glb');
+        expect(res.status).toBe(404);
+        expect(res.body.code).toBe('NOT_FOUND');
+        expect(res.body.timestamp).toEqual(expect.any(Number));
+        expect(errorSpy).not.toHaveBeenCalled();
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
+
     it('streams model.glb content with correct headers', async () => {
       pathExists.mockResolvedValue(true);
       const fakeStream = Readable.from([Buffer.from('GLB-FAKE-CONTENT')]);
