@@ -412,9 +412,11 @@ export async function stitchSegments(plan, outputPath, { signal, segments = [...
  * current take stays, so a look can be restored without rendering
  * (deleteFilmLook drops one); a look that isn't listed could never be found
  * again, so its files go. The rendered-so-far previews are replaced by their
- * own builder.
+ * own builder. A file written at or after `startedAtMs` (a shot rendered while
+ * the final render ran) was made after this plan was cut, so the plan cannot
+ * tell whether it is current and it stays.
  */
-export async function pruneSegments(plan) {
+export async function pruneSegments(plan, { startedAtMs = Infinity } = {}) {
   const keep = new Set([...plan.segments, ...(plan.outro ? [plan.outro] : [])].flatMap((s) => [s.path, s.basePath]));
   // Only takes that play the video's look keep its other looks; a shot's own
   // look keeps just its current file, as before.
@@ -429,6 +431,8 @@ export async function pruneSegments(plan) {
     const path = join(plan.dir, name);
     if (keep.has(path) || [...inFlight.keys()].some((p) => path.startsWith(p))) continue;
     if (name.endsWith('.partial.mp4') || name.startsWith(LOOKS_FILE) || name.startsWith('preview-')) continue;
+    const info = await stat(path).catch(() => null);
+    if (!info || info.mtimeMs >= startedAtMs) continue;
     await rm(path, { force: true }).then(() => { removed += 1; }, () => {});
   }
   return removed;
