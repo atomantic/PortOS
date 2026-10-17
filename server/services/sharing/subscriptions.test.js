@@ -8,6 +8,9 @@ import { mockNoPeerSync, mockNoPeers, mockTestIdentity } from '../../lib/mockPat
 // temp dir before any service imports. beforeEach wipes + reseeds inside.
 const tempData = mkdtempSync(join(tmpdir(), 'portos-subs-test-data-'));
 let tempBucket;
+// Lets a test freeze the next export mid-flight (the exporter resolves the
+// instance id before it writes the manifest).
+const gate = vi.hoisted(() => ({ hold: null, held: 0, calls: 0 }));
 
 vi.mock('../../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../../lib/fileUtils.js');
@@ -25,7 +28,12 @@ vi.mock('../../lib/fileUtils.js', async () => {
 });
 vi.mock('../instances.js', () => mockNoPeers());
 vi.mock('../instanceIdentity.js', () => mockTestIdentity({
-  getInstanceId: () => Promise.resolve('inst-test'),
+  getInstanceId: async () => {
+    gate.calls++;
+    const hold = gate.hold;
+    if (hold) { gate.hold = null; gate.held++; await hold; }
+    return 'inst-test';
+  },
 }));
 vi.mock('./peerSync.js', () => mockNoPeerSync());
 vi.mock('../mediaJobQueue/index.js', () => ({ getJob: () => null }));
@@ -42,8 +50,10 @@ describe('sharing/subscriptions', () => {
     mkdirSync(join(tempData, 'images'), { recursive: true });
     tempBucket = mkdtempSync(join(tmpdir(), 'portos-subs-test-bucket-'));
     subs.__resetForTests();
+    gate.hold = null; gate.held = 0; gate.calls = 0;
   });
   afterEach(() => {
+    vi.useRealTimers();
     if (tempBucket) rmSync(tempBucket, { recursive: true, force: true });
   });
 
@@ -218,5 +228,97 @@ describe('sharing/subscriptions', () => {
     await vi.waitFor(async () => {
       expect(await subs.listSubscriptions({ recordId: u.id })).toEqual([]);
     }, { timeout: 2_000, interval: 20 });
+  });
+
+  // vi.waitFor polls on setTimeout, which these tests fake; poll on setImmediate.
+  async function until(check) {
+    for (let i = 0; i < 2000; i++) {
+      if (await check()) return;
+      await new Promise((r) => setImmediate(r));
+    }
+    throw new Error('until: condition never became true');
+  }
+
+  // Give a released export (which would write its manifest late) real time to finish.
+  async function settleExports() {
+    vi.useRealTimers();
+    await new Promise((r) => setTimeout(r, 250));
+  }
+
+  // Schedule a debounced re-export of the universe and freeze it mid-export.
+  async function holdNextExport(recordId) {
+    let release;
+    gate.hold = new Promise((r) => { release = r; });
+    await subs.reexportSubscribedRecord('universe', recordId);
+    await vi.advanceTimersByTimeAsync(3000);
+    await until(() => gate.held === 1);
+    return release;
+  }
+
+  it('Stop sharing during an in-flight re-export does not resurrect the manifest or stamp state', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const bucket = await buckets.createBucket({ name: 'B', path: tempBucket });
+    const u = await universeBuilder.createUniverse({ name: 'U-race' });
+    const sub = await subs.subscribe({ bucketId: bucket.id, recordKind: 'universe', recordId: u.id });
+    const fs = await import('fs');
+    const filePath = join(tempBucket, 'manifests', subs.subscriptionFilename({ ...sub, senderInstanceId: 'inst-test' }));
+
+    const release = await holdNextExport(u.id);
+
+    const unsub = subs.unsubscribe(sub.id);
+    release();
+    await unsub;
+    await settleExports();
+
+    expect(fs.existsSync(filePath)).toBe(false);
+    expect(await subs.listSubscriptions()).toEqual([]);
+  });
+
+  it('deleting the record during an in-flight re-export leaves no manifest in the bucket', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    subs.installSubscriptionListener();
+    const bucket = await buckets.createBucket({ name: 'B', path: tempBucket });
+    const u = await universeBuilder.createUniverse({ name: 'U-del-race' });
+    const sub = await subs.subscribe({ bucketId: bucket.id, recordKind: 'universe', recordId: u.id });
+    const fs = await import('fs');
+    const filePath = join(tempBucket, 'manifests', subs.subscriptionFilename({ ...sub, senderInstanceId: 'inst-test' }));
+
+    const release = await holdNextExport(u.id);
+
+    await universeBuilder.deleteUniverse(u.id);
+    await until(async () => (await subs.listSubscriptions({ recordId: u.id })).length === 0);
+    release();
+    vi.useRealTimers();
+    // unsubscribe waits out the export, then deletes.
+    await until(() => !fs.existsSync(filePath));
+    await settleExports();
+    expect(fs.existsSync(filePath)).toBe(false);
+  });
+
+  it('overlapping re-exports of one subscription run one after another', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const bucket = await buckets.createBucket({ name: 'B', path: tempBucket });
+    const u = await universeBuilder.createUniverse({ name: 'U-order' });
+    const sub = await subs.subscribe({ bucketId: bucket.id, recordKind: 'universe', recordId: u.id });
+
+    const release = await holdNextExport(u.id);
+    const callsWhileFirstHeld = gate.calls;
+
+    await subs.reexportSubscribedRecord('universe', u.id);
+    await vi.advanceTimersByTimeAsync(3000);
+    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+    expect(gate.calls).toBe(callsWhileFirstHeld); // second export has not started
+
+    release();
+    // After both exports finish the stamped manifest id is the one on disk
+    // (the second export wrote last).
+    const fs = await import('fs');
+    const filePath = join(tempBucket, 'manifests', subs.subscriptionFilename({ ...sub, senderInstanceId: 'inst-test' }));
+    await until(async () => {
+      const [live] = await subs.listSubscriptions({ recordId: u.id });
+      if (gate.calls <= callsWhileFirstHeld || live.lastManifestId === sub.lastManifestId) return false;
+      const onDisk = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      return onDisk.id === live.lastManifestId;
+    });
   });
 });
