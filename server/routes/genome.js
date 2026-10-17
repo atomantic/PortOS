@@ -12,7 +12,9 @@ import {
   genomeUpdateNotesSchema,
   epigeneticAddInterventionSchema,
   epigeneticLogEntrySchema,
-  epigeneticUpdateInterventionSchema
+  epigeneticUpdateInterventionSchema,
+  epigeneticRecommendationsQuerySchema,
+  epigeneticComplianceQuerySchema
 } from '../lib/genomeValidation.js';
 
 const router = Router();
@@ -156,14 +158,15 @@ router.get('/epigenetic', asyncHandler(async (req, res) => {
 
 // GET /api/meatspace/genome/epigenetic/recommendations — Get curated recommendations
 router.get('/epigenetic/recommendations', asyncHandler(async (req, res) => {
-  const categories = req.query.categories ? req.query.categories.split(',') : [];
+  const { categories: raw } = validateRequest(epigeneticRecommendationsQuerySchema, req.query);
+  const categories = raw ? raw.split(',') : [];
   const recommendations = epigeneticService.getRecommendations(categories);
   res.json({ recommendations });
 }));
 
 // GET /api/meatspace/genome/epigenetic/compliance — Get compliance summary
 router.get('/epigenetic/compliance', asyncHandler(async (req, res) => {
-  const days = parseInt(req.query.days, 10) || 30;
+  const { days } = validateRequest(epigeneticComplianceQuerySchema, req.query);
   const summary = await epigeneticService.getComplianceSummary(days);
   res.json(summary);
 }));

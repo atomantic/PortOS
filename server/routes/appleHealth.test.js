@@ -23,6 +23,11 @@ vi.mock('../services/appleHealthXml.js', () => ({
     return { days: 1, records: 2 };
   }),
 }));
+vi.mock('../services/appleHealthQuery.js', () => ({
+  getMetricSummary: vi.fn(), getDailyAggregates: vi.fn(), getAvailableDateRange: vi.fn(),
+  getCorrelationData: vi.fn(), getAvailableMetrics: vi.fn(),
+  getLatestMetricValues: vi.fn(async () => ({ step_count: 1 })),
+}));
 vi.mock('../services/appleHealthClinical.js', () => ({
   importClinicalRecords: vi.fn(async () => ({ imported: 0 })),
 }));
@@ -92,5 +97,18 @@ describe('POST /api/health/import/xml — ZIP extraction temp dir', () => {
 
     expect(res.status).toBe(400);
     expect(imports.paths).toHaveLength(0);
+  });
+});
+
+describe('GET /api/health/metrics/latest query validation', () => {
+  it('accepts a comma-separated metrics list and refuses repeated keys with 400', async () => {
+    const { getLatestMetricValues } = await import('../services/appleHealthQuery.js');
+    const ok = await request(buildApp()).get('/api/health/metrics/latest?metrics=step_count,heart_rate');
+    expect(ok.status).toBe(200);
+    expect(getLatestMetricValues).toHaveBeenCalledWith(['step_count', 'heart_rate']);
+
+    const repeated = await request(buildApp()).get('/api/health/metrics/latest?metrics=step_count&metrics=heart_rate');
+    expect(repeated.status).toBe(400);
+    expect(repeated.body.code).toBe('VALIDATION_ERROR');
   });
 });

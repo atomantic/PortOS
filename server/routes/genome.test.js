@@ -14,6 +14,8 @@ vi.mock('../services/clinvar.js', () => ({
 }));
 
 vi.mock('../services/epigenetic.js', () => ({
+  getRecommendations: vi.fn(() => [{ id: 'r1' }]),
+  getComplianceSummary: vi.fn(async () => ({ days: 30 })),
   logEntry: vi.fn(async () => ({
     id: 'log-1',
     date: '2026-09-11',
@@ -26,7 +28,7 @@ vi.mock('../services/epigenetic.js', () => ({
 
 const { deleteGenome } = await import('../services/genome.js');
 const { deleteClinvar, syncClinvar } = await import('../services/clinvar.js');
-const { logEntry } = await import('../services/epigenetic.js');
+const { logEntry, getRecommendations, getComplianceSummary } = await import('../services/epigenetic.js');
 const { default: genomeRoutes } = await import('./genome.js');
 
 const makeApp = () => {
@@ -119,5 +121,34 @@ describe('ClinVar sync progress', () => {
     const response = await request(makeApp()).post('/api/meatspace/genome/clinvar/sync').send({ requestId: 123 });
     expect(response.status).toBe(400);
     expect(syncClinvar).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET epigenetic query validation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('splits a single categories value and refuses repeated keys with 400', async () => {
+    const ok = await request(makeApp()).get('/api/meatspace/genome/epigenetic/recommendations?categories=a,b');
+    expect(ok.status).toBe(200);
+    expect(getRecommendations).toHaveBeenCalledWith(['a', 'b']);
+
+    const repeated = await request(makeApp()).get('/api/meatspace/genome/epigenetic/recommendations?categories=a&categories=b');
+    expect(repeated.status).toBe(400);
+    expect(repeated.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('defaults compliance days to 30 and refuses out-of-range or non-integer days', async () => {
+    const ok = await request(makeApp()).get('/api/meatspace/genome/epigenetic/compliance');
+    expect(ok.status).toBe(200);
+    expect(getComplianceSummary).toHaveBeenCalledWith(30);
+
+    for (const days of ['-5', '0', '999999999', 'abc', '1.5']) {
+      const res = await request(makeApp()).get(`/api/meatspace/genome/epigenetic/compliance?days=${days}`);
+      expect(res.status, days).toBe(400);
+      expect(res.body.code).toBe('VALIDATION_ERROR');
+    }
+    expect(getComplianceSummary).toHaveBeenCalledTimes(1);
   });
 });
