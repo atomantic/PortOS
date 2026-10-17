@@ -59,7 +59,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiReferenceRepos.js` | Per-app reference-repo registry. |
 | `apiReview.js` | Review hub. |
 | `apiCodeReview.js` | Code Review Defaults (Review Loop reviewer chain + per-backend local-LLM model). |
-| `apiCatalog.js` | Creative catalog ingredients (list/create/update/delete + `listCatalogIngredientsByIds` / facets) and scrap ingest (create/extract/commit + url/file/voice/brain). |
+| `apiCatalog.js` | Creative catalog ingredients (list/create/update/delete + `listCatalogIngredientsByIds` / facets) scrap ingest (create/extract/commit + url/file/voice/brain), and reference sheets (`listCatalogSheetVariants` / `previewCatalogSheet` / `renderCatalogSheet`). |
 | `apiCatalogTypes.js` | User-defined catalog ingredient types (list active registry + create/update/delete user types). |
 | `apiRuns.js` | Agent run history. |
 | `apiScaffold.js` | App scaffolding templates. |

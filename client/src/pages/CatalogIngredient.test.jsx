@@ -70,6 +70,17 @@ vi.mock('../services/apiCatalog', () => ({
   attachCatalogIngredientMedia: vi.fn(),
   setCatalogIngredientPortrait: vi.fn(),
   detachCatalogIngredientMedia: vi.fn(),
+  listCatalogSheetVariants: vi.fn(async () => ({ variants: [] })),
+  previewCatalogSheet: vi.fn(async () => ({ preview: null })),
+  renderCatalogSheet: vi.fn(),
+}));
+// Universe-delegated sheet renders announce completion on this broadcast.
+const { socketHandlers } = vi.hoisted(() => ({ socketHandlers: new Map() }));
+vi.mock('../services/socket', () => ({
+  default: {
+    on: (event, fn) => socketHandlers.set(event, fn),
+    off: (event) => socketHandlers.delete(event),
+  },
 }));
 
 vi.mock('../services/apiSystem', () => ({ generateImage: vi.fn() }));
@@ -96,7 +107,15 @@ vi.mock('../components/pipeline/MediaJobThumb', async () => {
   }
   return { default: MockMediaJobThumb };
 });
-vi.mock('../services/apiImageVideo', () => ({ listImageGalleryPage: vi.fn(async () => ({ items: [], total: 0, offset: 0, limit: 60 })) }));
+vi.mock('../services/apiImageVideo', () => ({
+  listImageGalleryPage: vi.fn(async () => ({ items: [], total: 0, offset: 0, limit: 60 })),
+  // Echo the request as the "sent" prompt, with its declared additions as chips.
+  previewImagePrompt: vi.fn(async (body) => ({
+    sentPrompt: body.prompt,
+    ...(body.negativePrompt ? { sentNegativePrompt: body.negativePrompt } : {}),
+    promptAdditions: body.promptAdditions || [],
+  })),
+}));
 vi.mock('../components/IngredientPicker', () => ({ default: () => null }));
 vi.mock('../components/MediaImage', () => ({ default: ({ src, alt }) => <img src={src} alt={alt} /> }));
 vi.mock('../components/loraTraining/CharacterLoraChip', () => ({ default: () => null }));
@@ -122,6 +141,9 @@ const renderPage = async (path = '/catalog/character/cat-chr-1') => {
   const router = createMemoryRouter([
     { path: '/catalog', element: <div>Catalog index</div> },
     { path: '/catalog/:type/:id', element: <CatalogIngredient /> },
+    { path: '/casting', element: <div>Casting index</div> },
+    { path: '/casting/:id/:tab?', element: <CatalogIngredient /> },
+    { path: '/environments/:id/:tab?', element: <CatalogIngredient /> },
   ], { initialEntries: [path] });
   const result = render(<RouterProvider router={router} />);
   await act(async () => {});
@@ -601,10 +623,10 @@ describe('CatalogIngredient — character sheet', () => {
     await waitFor(() => expect(screen.queryByDisplayValue('she/her')).toBeNull());
   });
 
-  // The universe style-preset layering is the headline "stays on-model" feature
-  // — pin that the linked universe is fetched by its refId and its embrace/avoid
-  // tokens reach the composed prompt + negative, not just the null path.
-  it('layers the linked universe style preset onto the composed prompt and negative', async () => {
+  // #11317: the box holds only the record's own words. The linked universe's
+  // style rides beside it as a labeled addition, the preview shows the exact
+  // composed text, and the render sends that same composed request.
+  it('keeps the universe style out of the prompt box and sends it as a labeled addition', async () => {
     const { getUniverse } = await import('../services/apiUniverseBuilder');
     const { generateImage } = await import('../services/apiSystem');
     getUniverse.mockResolvedValue({
@@ -618,19 +640,22 @@ describe('CatalogIngredient — character sheet', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /^Generate$/i }));
     const promptBox = await screen.findByPlaceholderText(/Describe the image to render/i);
-    // Preset embrace tokens prepend the subject prompt (diffusion weights earliest
-    // tokens heaviest) — see composeStyledPrompt.
-    await waitFor(() => expect(promptBox.value).toMatch(/neon noir/));
-    expect(promptBox.value).toMatch(/Ada Lovelace/);
     // Fetched by the ingredient's universe refId, silently (no error toast).
     expect(getUniverse).toHaveBeenCalledWith('u-1', { silent: true });
+    // The preview names the universe style as a chip once the universe loads.
+    fireEvent.click(await screen.findByRole('button', { name: '+ Universe style' }));
+    expect(screen.getByText(/neon noir, rain-slick streets/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: '+ Style negatives' })).toBeTruthy();
+    // The editable prompt is only the record's own seed — no preset tokens.
+    expect(promptBox.value).toBe('Ada Lovelace: Sharp eyes, ink-stained cuffs.. mentor, My Cool Universe');
+    expect(screen.getByLabelText(/Negative prompt/).value).toBe('');
 
     fireEvent.click(screen.getByRole('button', { name: /^Render$/i }));
     await waitFor(() => expect(generateImage).toHaveBeenCalled());
     const [payload] = generateImage.mock.calls[0];
-    expect(payload.prompt).toMatch(/neon noir/);
-    // Universe avoid tokens become the render's negative prompt.
+    expect(payload.prompt).toMatch(/^neon noir, rain-slick streets\. Ada Lovelace: Sharp eyes/);
     expect(payload.negativePrompt).toMatch(/cartoon/);
+    expect(payload.promptAdditions.map((addition) => addition.label)).toEqual(['Universe style', 'Style negatives']);
     getUniverse.mockResolvedValue(null); // restore default for any later test
   });
 
@@ -711,6 +736,176 @@ describe('CatalogIngredient — character sheet', () => {
 
     // SourcesPanel grounded evidence
     expect(screen.getByText('Grounded evidence')).toBeTruthy();
+  });
+});
+
+describe('CatalogIngredient — tabbed library record pages', () => {
+  const HERO = {
+    id: 'cat-chr-hero',
+    type: 'character',
+    name: 'Example Hero',
+    tags: [],
+    payload: {
+      physicalDescription: 'Tall, green cloak.',
+      referenceSheetImageRef: 'hero-standard.png',
+      referenceSheets: { expressions: 'hero-expressions.png' },
+    },
+    refs: [{ refKind: 'universe', refId: 'u-example', refName: 'Example Universe' }],
+    sources: [],
+  };
+  const MEDIA = [
+    { mediaKey: 'portrait.png', kind: 'portrait', role: null },
+    { mediaKey: 'mood.png', kind: 'reference', role: null },
+    { mediaKey: 'sheet-1.png', kind: 'reference', role: 'sheet:standard' },
+    { mediaKey: 'plate-1.png', kind: 'reference', role: 'plate' },
+    { mediaKey: 'look-1.png', kind: 'reference', role: 'look:wardrobe-1' },
+  ];
+  const SHEET_VARIANTS = [
+    { id: 'standard', label: 'Standard turnaround', description: 'Front, side and back views.' },
+    { id: 'expressions', label: 'Expression sheet', description: 'Six expressions.' },
+  ];
+
+  beforeEach(async () => {
+    const api = await import('../services/apiCatalog');
+    getCatalogIngredientDetails.mockImplementation(async () => ({ ...detailsOf(HERO), media: MEDIA }));
+    api.listCatalogSheetVariants.mockImplementation(async () => ({ variants: SHEET_VARIANTS }));
+    api.previewCatalogSheet.mockImplementation(async (_id, body) => ({
+      preview: {
+        sentPrompt: `Example style. ${body.variant} sheet of Example Hero`,
+        promptAdditions: [{ id: 'universe-style', label: 'Universe style', text: 'Example style.' }],
+      },
+    }));
+    api.renderCatalogSheet.mockReset();
+    api.attachCatalogIngredientMedia.mockReset();
+    socketHandlers.clear();
+  });
+
+  it('shows universe pointer sheets and sheet media on /casting/:id/sheets', async () => {
+    await renderPage('/casting/cat-chr-hero/sheets');
+    expect(await screen.findByRole('tab', { name: /Sheets/ })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByAltText('standard reference sheet').getAttribute('src')).toBe('/data/image-refs/hero-standard.png');
+    expect(screen.getByAltText('expressions reference sheet').getAttribute('src')).toBe('/data/image-refs/hero-expressions.png');
+    await waitFor(() => expect(screen.getByAltText('Standard turnaround').getAttribute('src')).toBe('/data/images/sheet-1.png'));
+    // Sheets don't carry the profile form or the general media panel.
+    expect(screen.queryByLabelText('Name')).toBeNull();
+    expect(screen.queryByAltText('mood.png')).toBeNull();
+  });
+
+  it('previews the chosen variant and posts it on Generate, then attaches the finished sheet', async () => {
+    const api = await import('../services/apiCatalog');
+    api.renderCatalogSheet.mockResolvedValue({ jobId: 'sheet-job', variant: 'expressions', role: 'sheet:expressions', delegatedTo: null });
+    api.attachCatalogIngredientMedia.mockResolvedValue({});
+    await renderPage('/casting/cat-chr-hero/sheets');
+
+    fireEvent.change(await screen.findByLabelText('Sheet kind'), { target: { value: 'expressions' } });
+    expect(screen.getByText('Six expressions.')).toBeTruthy();
+    expect(await screen.findByRole('button', { name: '+ Universe style' })).toBeTruthy();
+    await waitFor(() => expect(api.previewCatalogSheet).toHaveBeenLastCalledWith(
+      'cat-chr-hero', { variant: 'expressions' }, { silent: true },
+    ));
+
+    fireEvent.click(screen.getByRole('button', { name: /Generate sheet/ }));
+    await waitFor(() => expect(api.renderCatalogSheet).toHaveBeenCalledWith(
+      'cat-chr-hero', { variant: 'expressions' }, { silent: true },
+    ));
+    expect(toast.success).toHaveBeenCalledWith('Rendering Expression sheet…');
+    // The MediaJobThumb stub completes the job; the sheet attaches under its role.
+    await waitFor(() => expect(api.attachCatalogIngredientMedia).toHaveBeenCalledWith(
+      'cat-chr-hero', { mediaKey: 'sheet-job.png', kind: 'reference', role: 'sheet:expressions' }, { silent: true },
+    ));
+  });
+
+  it('refreshes canon pointers when a universe-delegated sheet is announced ready', async () => {
+    const api = await import('../services/apiCatalog');
+    api.renderCatalogSheet.mockResolvedValue({ jobId: 'canon-job', variant: 'standard', delegatedTo: 'universe' });
+    await renderPage('/casting/cat-chr-hero/sheets');
+    fireEvent.click(await screen.findByRole('button', { name: /Generate sheet/ }));
+    await waitFor(() => expect(socketHandlers.has('reference-sheet:changed')).toBe(true));
+    expect(api.attachCatalogIngredientMedia).not.toHaveBeenCalled();
+
+    getCatalogIngredientDetails.mockImplementation(async () => ({
+      ...detailsOf({ ...HERO, payload: { ...HERO.payload, referenceSheetImageRef: 'hero-standard-v2.png' } }),
+      media: MEDIA,
+    }));
+    await act(async () => {
+      socketHandlers.get('reference-sheet:changed')({ jobId: 'canon-job', status: 'ready' });
+    });
+    await waitFor(() => expect(screen.getByAltText('standard reference sheet').getAttribute('src'))
+      .toBe('/data/image-refs/hero-standard-v2.png'));
+  });
+
+  it('keeps an unsaved name edit across tab switches without a discard prompt', async () => {
+    const { router } = await renderPage('/casting/cat-chr-hero');
+    const nameInput = await screen.findByLabelText('Name');
+    fireEvent.change(nameInput, { target: { value: 'Example Hero Renamed' } });
+    expect(screen.getByText('Unsaved changes')).toBeTruthy();
+
+    await act(async () => { await router.navigate('/casting/cat-chr-hero/sheets'); });
+    expect(router.state.location.pathname).toBe('/casting/cat-chr-hero/sheets');
+    expect(screen.queryByText(/Discard your unsaved changes/)).toBeNull();
+    // A dirty profile gates the render, which reads the saved record.
+    expect(await screen.findByRole('button', { name: /Generate sheet/ })).toBeDisabled();
+
+    await act(async () => { await router.navigate('/casting/cat-chr-hero'); });
+    expect(screen.getByLabelText('Name').value).toBe('Example Hero Renamed');
+
+    // Leaving the record is still guarded.
+    await act(async () => { await router.navigate('/casting'); });
+    expect(router.state.location.pathname).toBe('/casting/cat-chr-hero');
+  });
+
+  it('falls back to Profile for an unknown tab', async () => {
+    await renderPage('/casting/cat-chr-hero/nonsense');
+    expect(await screen.findByRole('tab', { name: /Profile/ })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByLabelText('Name').value).toBe('Example Hero');
+  });
+
+  it('lists only reference media on References (no sheets, plates, or looks)', async () => {
+    await renderPage('/casting/cat-chr-hero/references');
+    await waitFor(() => expect(screen.getByAltText('portrait')).toBeTruthy());
+    const srcs = screen.getAllByRole('img').map((img) => img.getAttribute('src'));
+    expect(srcs).toContain('/data/images/mood.png');
+    expect(srcs).not.toContain('/data/images/sheet-1.png');
+    expect(srcs).not.toContain('/data/images/plate-1.png');
+    expect(srcs).not.toContain('/data/images/look-1.png');
+    expect(screen.queryByLabelText('Name')).toBeNull();
+  });
+
+  it('marks a reference image as a plate on the environment Plates tab', async () => {
+    const api = await import('../services/apiCatalog');
+    api.attachCatalogIngredientMedia.mockResolvedValue({ mediaKey: 'mood.png', kind: 'reference', role: 'plate' });
+    getCatalogIngredientDetails.mockImplementation(async () => ({
+      ...detailsOf({ ...HERO, id: 'cat-plc-1', type: 'place', name: 'Example Harbor', payload: {}, refs: [] }),
+      media: MEDIA,
+    }));
+    await renderPage('/environments/cat-plc-1/plates');
+    expect(await screen.findByRole('button', { name: 'Unmark plate' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Mark as plate' }));
+    await waitFor(() => expect(api.attachCatalogIngredientMedia).toHaveBeenCalledWith(
+      'cat-plc-1', { mediaKey: 'mood.png', kind: 'reference', role: 'plate', caption: null }, { silent: true },
+    ));
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Unmark plate' })).toHaveLength(2));
+  });
+
+  it('keeps /catalog/:type/:id untabbed with every panel on one page', async () => {
+    getCatalogIngredientDetails.mockImplementation(async () => ({
+      ...detailsOf({ id: 'cat-idea-1', type: 'idea', name: 'Example Idea', tags: [], payload: {}, refs: [], sources: [] }),
+      media: MEDIA,
+    }));
+    await renderPage('/catalog/idea/cat-idea-1');
+    expect(await screen.findByLabelText('Name')).toBeTruthy();
+    expect(screen.queryByRole('tablist')).toBeNull();
+    expect(screen.getByRole('heading', { name: /Media/ })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Relations' })).toBeTruthy();
+  });
+
+  it('prefills the image prompt with only the record\'s own words', async () => {
+    getCatalogIngredientDetails.mockImplementation(async () => ({ ...detailsOf({ ...HERO, refs: [] }), media: [] }));
+    await renderPage('/casting/cat-chr-hero/references');
+    fireEvent.click(await screen.findByRole('button', { name: /^Generate$/i }));
+    const promptBox = await screen.findByPlaceholderText(/Describe the image to render/i);
+    expect(promptBox.value).toBe('Example Hero: Tall, green cloak.');
+    expect(screen.getByLabelText(/Negative prompt/).value).toBe('');
   });
 });
 
