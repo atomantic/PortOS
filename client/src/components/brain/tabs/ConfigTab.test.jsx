@@ -45,7 +45,7 @@ describe('brain ConfigTab scheduled reviews opt-in', () => {
     expect(toggle).not.toBeChecked();
     expect(screen.getByText('llama3.2:latest', { selector: 'span' })).toBeInTheDocument();
     await userEvent.click(toggle);
-    await userEvent.click(screen.getByRole('button', { name: /^Save/ }));
+    await userEvent.click(screen.getAllByRole('button', { name: 'Save Changes' })[0]);
 
     expect(api.updateBrainSettings).toHaveBeenCalledWith(expect.objectContaining({ scheduledReviewsEnabled: true }), { silent: true });
   });
