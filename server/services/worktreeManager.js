@@ -1565,8 +1565,10 @@ export async function cleanupOrphanedWorktrees(sourceWorkspace, activeAgentIds) 
     const agentId = worktreeAgentId(wt.path);
     handledAgentIds.add(agentId);
     if (ownershipReason) continue;
+    // A detached HEAD has no branch to merge or measure; force-removing it would drop commits only its reflog holds.
+    if (wt.detached || !wt.branch) continue;
 
-    const branchName = wt.branch?.replace('refs/heads/', '') || '';
+    const branchName = wt.branch.replace('refs/heads/', '');
     // Attempt merge so committed work from preserved worktrees (e.g., PR/push failures) isn't lost.
     // If merge fails, the branch is preserved for manual recovery.
     const result = await removeWorktree(agentId, sourceWorkspace, branchName, { merge: true })
