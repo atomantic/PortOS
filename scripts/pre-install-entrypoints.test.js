@@ -43,9 +43,6 @@ const PRE_INSTALL_ENTRYPOINTS = [
  * `import()` inside the database probe for the same reason, which is why it
  * does not show up in this static walk.
  *
- * `cancel-current-ci-run.js` is here because it runs from an `if: failure()`
- * workflow step that may fire before or during a failed dependency install.
- *
  * `ci-gate-report.js` runs on the two gate jobs, which check out the repo for
  * this one script and deliberately install nothing; `ci-retry-cancelled-run.js`
  * is the whole body of the `workflow_run` recovery workflow, which does the
@@ -53,7 +50,6 @@ const PRE_INSTALL_ENTRYPOINTS = [
  * required check — or the thing that recovers a cancelled one — unloadable.
  */
 const BARE_CHECKOUT_SCRIPTS = [
-  'scripts/cancel-current-ci-run.js',
   'scripts/ci-gate-report.js',
   'scripts/ci-retry-cancelled-run.js',
   'scripts/doctor.js',

@@ -138,15 +138,13 @@ describe('independent CI test failure recovery (#11552)', () => {
 
   it.each([
     ['windows-server', 'Run server tests on Windows', 'Preserve Windows test failure diagnostics', 'run-ci-tests.js'],
-    ['database', 'Run cross-workspace browser suites', 'Preserve browser test failure diagnostics', 'watch-ci-tests.js'],
-  ])('%s collects after failure and before sibling cancellation with bounded, non-masking failure handling', (jobId, testName, collectorName, launcherName) => {
+    ['browser', 'Run cross-workspace browser suites', 'Preserve browser test failure diagnostics', 'watch-ci-tests.js'],
+  ])('%s collects after failure with bounded, non-masking failure handling', (jobId, testName, collectorName, launcherName) => {
     const workflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
     const job = workflowJobs(workflow)[jobId];
     const start = job.indexOf(`      - name: ${collectorName}`);
     expect(start).toBeGreaterThan(job.indexOf(`run: node scripts/${launcherName} server`));
-    const end = job.indexOf('      - name: Report the failure, then cancel sibling CI jobs');
-    expect(end).toBeGreaterThan(start);
-    const step = job.slice(start, end);
+    const step = job.slice(start);
     expect(step).toContain('if: failure()');
     expect(step).toContain('continue-on-error: true');
     expect(step).toContain('timeout-minutes: 1');
@@ -160,6 +158,5 @@ describe('independent CI test failure recovery (#11552)', () => {
     expect(testMinutes).toBeGreaterThan(0);
     expect(testMinutes).toBeLessThan(jobMinutes - 1);
     expect(testStep).not.toContain('continue-on-error');
-    expect(job.slice(end)).toContain("if: failure() && github.event_name == 'pull_request'");
   });
 });

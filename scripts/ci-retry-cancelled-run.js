@@ -21,9 +21,8 @@
  *     event payload, because the payload is a snapshot: a human can re-run
  *     the same run, or the event can be redelivered, while this job is
  *     still queued behind the very backlog it exists to survive.
- *   - No job may have concluded `failure`/`timed_out`. This repository cancels
- *     its own run from a failing job (scripts/cancel-current-ci-run.js), which
- *     makes the RUN read `cancelled` while a job really did fail.
+ *   - No job may have concluded `failure`/`timed_out`, or carry a failed step.
+ *     A run cancelled while one job was already red reads `cancelled` too.
  *   - No job may have hit its own `timeout-minutes`. GitHub reports such a
  *     job as `cancelled`, so only its check-run annotation tells it apart
  *     from an external cancel (#11910).

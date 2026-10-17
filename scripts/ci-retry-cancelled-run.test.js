@@ -4,7 +4,7 @@
  * looping forever, or fighting a legitimate `cancel-in-progress` supersession.
  *
  * The API-base and repository validation live in lib/githubActionsApi.test.js,
- * shared with scripts/cancel-current-ci-run.js.
+ * shared with scripts/ci-gate-report.js.
  */
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
@@ -145,10 +145,10 @@ describe('retryCancelledCiRun guards', () => {
   });
 
   it.each(['failure', 'timed_out'])(
-    'never retries a run whose job concluded %s — this repo self-cancels on a real red',
+    'never retries a run whose job concluded %s',
     async (conclusion) => {
-      // scripts/cancel-current-ci-run.js makes the RUN read `cancelled` while a
-      // job really failed. Retrying that re-runs the whole suite on a red tree.
+      // A run cancelled while one job was already red reads `cancelled`.
+      // Retrying that re-runs the whole suite on a red tree.
       const fetchStub = stubFetch({
         jobs: [{ name: 'Server tests', conclusion }, { name: 'Client', conclusion: 'cancelled' }],
       });
@@ -182,9 +182,9 @@ describe('retryCancelledCiRun guards', () => {
   });
 
   it('retries a job whose STEP failed but whose conclusion reads cancelled', async () => {
-    // The fail-fast self-cancel can land while the failing job is still in its
-    // post-steps, and GitHub then records that job as `cancelled`. Trusting the
-    // job conclusion alone would re-run a genuinely red tree.
+    // A cancel can land while the failing job is still in its post-steps, and
+    // GitHub then records that job as `cancelled`. Trusting the job conclusion
+    // alone would re-run a genuinely red tree.
     const fetchStub = stubFetch({
       jobs: [{
         name: 'Server tests',
@@ -461,9 +461,8 @@ describe('the wait before re-dispatching', () => {
   });
 
   it('catches a job whose failure only settles DURING the wait', async () => {
-    // The fail-fast self-cancel can land while the failing job is still in its
-    // post-steps, so the pre-wait listing can legitimately read clean. The
-    // post-wait re-read is the more reliable one, and must block the retry.
+    // A cancel can land while the failing job is still in its post-steps, so
+    // the pre-wait listing can legitimately read clean. The post-wait re-read is the more reliable one, and must block the retry.
     let stepsSettled = false;
     const impl = vi.fn(async (url) => {
       if (url.includes('/jobs?')) {

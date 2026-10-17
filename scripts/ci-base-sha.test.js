@@ -122,7 +122,7 @@ describe('ci.yml server node_modules cache', () => {
 
   it('caches the installed tree on every job that installs it', () => {
     expect(installers.map(([id]) => id).sort())
-      .toEqual(['database', 'server', 'windows-server']);
+      .toEqual(['browser', 'database', 'server', 'windows-server']);
 
     for (const [, body] of installers) expect(cacheEntry(body)).toMatch(/id: server-modules\b/);
   });

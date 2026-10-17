@@ -89,11 +89,10 @@ See [VERSIONING.md](./VERSIONING.md) for full details.
 
 Pregate proves only the stages it runs; it does not replace required CI or resource-dependent checks. A full-suite plan runs only the always-run guards unless `--full` is supplied; DB suites, Windows, client build, and boot smoke are reported but not run by pregate.
 
-Rendering PRs that select fidelity cases also run
-`node scripts/browser-fidelity.js --pr NUMBER` from the clean published head.
-The command runs the cases and publishes exact-head evidence using existing GitHub
-authentication; missing or stale evidence blocks CI Gate. See
-[Browser fidelity evidence](GITHUB_ACTIONS.md#browser-fidelity-evidence).
+PRs run the browser suites' smoke profile; the `[fidelity]` cases run nightly
+and on the release PR. To check them on a rendering PR before merging, run
+`node scripts/browser-fidelity.js --pr NUMBER` from the clean published head. See
+[Browser fidelity cases](GITHUB_ACTIONS.md#browser-fidelity-cases).
 
 ### Checkout-owned development caches
 

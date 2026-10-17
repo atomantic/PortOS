@@ -14,26 +14,23 @@
  *   - cancelled  — at least one job was `cancelled` and NOTHING failed. There
  *                  is no test failure to chase. Still non-zero: a cancelled
  *                  run proves nothing and must not be merged.
- *   - failure    — at least one job genuinely failed. Cancelled siblings are
- *                  reported as collateral, because the fail-fast step in
- *                  ci.yml cancels them on purpose.
+ *   - failure    — at least one job genuinely failed. Any cancelled jobs are
+ *                  listed beside it.
  *
  * The catch, and why this talks to the API at all: `needs.<job>.result` is the
- * job's CONCLUSION, and the fail-fast step cancels the run before GitHub writes
- * the failing job's `failure` conclusion. The culprit therefore arrives here as
- * `cancelled` like everything else, and the gate reported the cancelled verdict
- * on a run that really was red (issue 7574). A cancelled job keeps its STEPS'
+ * job's CONCLUSION, and a job that is cancelled mid-step (a run-wide cancel, or
+ * its own `timeout-minutes`) reads `cancelled` even when a step had already
+ * failed (issue 7574). A cancelled job keeps its STEPS'
  * conclusions, so when — and only when — the cancelled verdict is about to be
  * printed, the run's jobs are queried for a failed step. Best-effort by design:
  * an API failure falls back to today's wording rather than turning a cancelled
  * run red or green on a network blip.
  *
  * Scope, so the next reader is not misled: this runs only when the GATE job
- * itself runs. The two cancels differ here, and it matters. Our OWN fail-fast
- * cancel leaves the gate running — `if: always()` survives it, and the gate is
- * where a red run gets its verdict, which is why the culprit lookup above is
- * worth having. An EXTERNAL run-wide cancellation takes the gate with it, and
- * then the explanation comes from the recovery workflow instead — see
+ * itself runs. A job timeout leaves the gate running (`if: always()`), so the
+ * culprit lookup above explains it here. An EXTERNAL run-wide cancellation
+ * takes the gate with it, and then the explanation comes from the recovery
+ * workflow instead — see
  * "External cancellation and one automatic retry" in docs/GITHUB_ACTIONS.md.
  *
  * Reads `CI_GATE_RESULT_<JOB>` out of the environment rather than taking
@@ -132,7 +129,7 @@ export function summarizeGateResults(
         `❌ ${label}: selected CI jobs did not pass.`,
         `Failed jobs: ${failed.join(', ')}`,
         ...(cancelled.length
-          ? [`Cancelled alongside the failure (expected — the fail-fast step stops siblings): ${cancelled.join(', ')}`]
+          ? [`Also cancelled: ${cancelled.join(', ')}`]
           : []),
         finished(),
       ],
@@ -144,8 +141,8 @@ export function summarizeGateResults(
       return {
         verdict: 'failure',
         lines: [
-          `❌ ${label}: a job FAILED. Its conclusion reads cancelled because the fail-fast`
-            + ' step stopped the run before GitHub recorded the failure.',
+          `❌ ${label}: a job FAILED. Its conclusion reads cancelled because the run`
+            + ' was stopped before GitHub recorded the failure.',
           ...culprits.map((job) => `Failing job: ${formatFailedJob(job)}`),
           `Cancelled jobs: ${cancelled.join(', ')}`,
           finished(),
@@ -162,25 +159,19 @@ export function summarizeGateResults(
         finished(),
         // This distinction is load-bearing. The old line said "No test failed",
         // and twice (#7482, #7571) that sent a reader straight to the billing
-        // dashboard while a real assertion sat unread in a job log: a job that
-        // fails is cancelled by scripts/cancel-current-ci-run.js before its own
-        // reporting step runs, so its conclusion is `cancelled` too and NOTHING
-        // in the run metadata reads `failure`. That is now CHECKED rather than
+        // dashboard while a real assertion sat unread in a job log: a job
+        // cancelled mid-step concludes `cancelled` even when a step failed, so
+        // NOTHING in the run metadata reads `failure`. That is now CHECKED rather than
         // guessed — but only when the lookup ran, so the two states say
         // different things instead of sharing the more alarming wording.
         ...(culprits
           ? ["Checked every job's STEP conclusions too, and none failed — so this"
-            + ' is not the usual fail-fast cancel wearing a cancelled conclusion.']
+            + ' is not a failed step hidden behind a cancelled conclusion.']
           : ["This run's step conclusions could NOT be read, so a cancelled"
-            + ' conclusion here does NOT mean no test failed: PortOS fail-fasts,'
-            + ' the job that failed is cancelled out from under its own reporting'
-            + ' step, and a real red build then looks exactly like this.'
-            + ' READ THE JOB LOGS FIRST — and note that'
-            + ' `gh run view --job <id> --log-failed` prints NOTHING here, because'
-            + ' no step is marked failed. Use the full `--log` and grep for'
-            + ' `🛑 Requested cancellation` (written only when a job really'
-            + ' failed), `FAIL `, or `AssertionError`; the culprit is usually the'
-            + ' job that completed EARLIEST.']),
+            + ' conclusion here does NOT mean no test failed: a job cancelled'
+            + ' mid-step hides a failed step behind a cancelled conclusion.'
+            + ' READ THE JOB LOGS FIRST — use the full `--log` and grep for'
+            + ' `FAIL ` or `AssertionError`.']),
         // Every ci.yml job sets its own `timeout-minutes`, so the limit that
         // usually bites is the job's (20 minutes for DB tests), not GitHub's
         // 6-hour default. GitHub records either as `cancelled`, so a slow apt
@@ -222,7 +213,7 @@ export function summarizeGateResults(
  *
  * `null` on an unusable environment or a failed lookup, kept distinct from the
  * empty array: both keep the cancelled verdict, but only "looked and found
- * none" earns the wording that rules a fail-fast cancel out. A failed lookup
+ * none" earns the wording that rules a hidden failed step out. A failed lookup
  * must never invent a failure the run may not have, nor vouch for its absence.
  *
  * @param {NodeJS.ProcessEnv} env
