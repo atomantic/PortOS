@@ -96,15 +96,21 @@ async function agentDataCleanup() {
   // after a restart — the interrupted runs still recorded `running`, whose
   // `.agent-done` sentinel is exactly the resume state the abandon path
   // preserved on purpose (#3202). Only the sentinel sweep reads this; the
-  // worktree reaps below keep using `activeIds`, since an unfinished record left
-  // behind by a dead process is precisely what they exist to collect.
+  // worktree reaps below protect only live + paused ids, since an unfinished
+  // record left behind by a dead process is precisely what they exist to collect.
   const unfinishedIds = new Set(activeIds)
+  const pausedIds = new Set()
   if (cosState?.agents && typeof cosState.agents === 'object') {
     for (const [id, agent] of Object.entries(cosState.agents)) {
-      if (agent?.status === 'paused') activeIds.add(id)
+      if (agent?.status === 'paused') pausedIds.add(id)
       if (agent?.status !== 'completed' && agent?.status !== 'failed') unfinishedIds.add(id)
     }
   }
+  for (const id of pausedIds) activeIds.add(id)
+  // The worktree reaps run tens of seconds after the snapshot above, after the
+  // sentinel sweep and transcript pruning; an agent CoS dispatches meanwhile is
+  // absent from it. They re-read live liveness per tree through this (#11858).
+  const getLiveProtectedIds = () => new Set([...getActiveAgentIds(), ...pausedIds])
 
   // Worktree-less agents run in a REAL checkout — this repo, or a managed app's
   // own repo — so a sentinel their cleanup never reached sits there as untracked
@@ -153,7 +159,7 @@ async function agentDataCleanup() {
   // branch is fully merged into the default branch AND whose working tree is clean.
   // This is the bulk of the cleanup and cannot lose work (merged+clean ⇒ nothing
   // pending). It guards active agents and human `claim-*` worktrees.
-  const merged = await reapMergedWorktrees(PATHS.root, { activeAgentIds: activeIds }).catch((err) => {
+  const merged = await reapMergedWorktrees(PATHS.root, { activeAgentIds: getLiveProtectedIds }).catch((err) => {
     console.warn(`⚠️ Merged-worktree reap failed: ${err.message}`)
     return { reaped: [] }
   })
@@ -162,7 +168,7 @@ async function agentDataCleanup() {
   // merged (e.g. an agent died after committing but before its PR landed), attempt
   // to merge their commits back so the work isn't stranded. The helper guards
   // `claim-*` worktrees, so this can't touch a human's in-flight claim.
-  const worktreesReaped = await cleanupOrphanedWorktrees(PATHS.root, activeIds).catch((err) => {
+  const worktreesReaped = await cleanupOrphanedWorktrees(PATHS.root, getLiveProtectedIds).catch((err) => {
     console.warn(`⚠️ Orphaned worktree cleanup failed: ${err.message}`)
     return 0
   })

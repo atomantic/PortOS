@@ -1636,7 +1636,7 @@ describe('cleanupOrphanedWorktrees ownership and removal', () => {
       return Promise.resolve({ stdout: '', stderr: '', exitCode: 0 });
     });
 
-    expect(await cleanupOrphanedWorktrees('/repo', new Set(['agent-active']))).toBe(1);
+    expect(await cleanupOrphanedWorktrees('/repo', new Set(['agent-active']), { claimOwners: { agents: [] } })).toBe(1);
     expect(execGitMock.mock.calls.filter(([args]) => args[0] === 'worktree' && args[1] === 'remove'))
       .toEqual([[['worktree', 'remove', tree('agent-dead'), '--force'], '/repo']]);
     expect(execGitMock.mock.calls.filter(([args]) => args[0] === 'branch' && args[1] === '-D'))
@@ -1644,5 +1644,44 @@ describe('cleanupOrphanedWorktrees ownership and removal', () => {
     expect(execGitMock.mock.calls.filter(([args]) => args[0] === 'status').map(([, cwd]) => cwd))
       .toEqual([tree('agent-dead'), tree('agent-dirty')]);
     expect(rm).not.toHaveBeenCalled();
+  });
+
+  it('re-reads liveness and the agent registry per tree, so a tree claimed after the caller snapshot survives', async () => {
+    const entries = [
+      { path: '/repo', branch: 'main' },
+      { path: tree('agent-late'), branch: 'cos/task/agent-late' },
+      { path: tree('agent-registered'), branch: 'cos/task/agent-registered' },
+      { path: tree('agent-dead'), branch: 'cos/task/agent-dead' },
+    ];
+    const live = new Set();
+    const removedPaths = new Set();
+    execGitMock.mockImplementation((args, cwd) => {
+      if (args[0] === 'worktree' && args[1] === 'list') {
+        // CoS dispatches agent-late after the job snapshot, before this pass reaches its tree.
+        live.add('agent-late');
+        return Promise.resolve({ stdout: entries.filter(e => !removedPaths.has(e.path))
+          .flatMap(e => ['worktree ' + e.path, 'HEAD abc123', 'branch refs/heads/' + e.branch, '']).join('\n') });
+      }
+      if (args[0] === 'worktree' && args[1] === 'remove') removedPaths.add(args[2]);
+      if (args[0] === 'rev-parse') return Promise.resolve({ stdout: args[1] === '--show-toplevel' ? cwd : 'main' });
+      if (args[0] === 'rev-list') return Promise.resolve({ stdout: '0', stderr: '', exitCode: 0 });
+      return Promise.resolve({ stdout: '', stderr: '', exitCode: 0 });
+    });
+    const claimOwners = { agents: [{ id: 'agent-registered', status: 'running', workspacePath: tree('agent-registered'), sourceWorkspace: '/repo' }] };
+
+    expect(await cleanupOrphanedWorktrees('/repo', () => new Set(live), { claimOwners })).toBe(1);
+    expect(execGitMock.mock.calls.filter(([args]) => args[0] === 'worktree' && args[1] === 'remove'))
+      .toEqual([[['worktree', 'remove', tree('agent-dead'), '--force'], '/repo']]);
+    expect(execGitMock.mock.calls.filter(([args]) => args[0] === 'branch' && args[1] === '-D'))
+      .toEqual([[['branch', '-D', 'cos/task/agent-dead'], '/repo']]);
+  });
+
+  it('holds every tree when the agent registry cannot be read', async () => {
+    execGitMock.mockImplementation((args) => args[0] === 'worktree' && args[1] === 'list'
+      ? Promise.resolve({ stdout: ['worktree ' + tree('agent-dead'), 'HEAD abc123', 'branch refs/heads/cos/task/agent-dead', ''].join('\n') })
+      : Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }));
+
+    expect(await cleanupOrphanedWorktrees('/repo', () => new Set(), { claimOwners: { agents: null } })).toBe(0);
+    expect(execGitMock.mock.calls.some(([args]) => args[0] === 'worktree' && args[1] === 'remove')).toBe(false);
   });
 });
