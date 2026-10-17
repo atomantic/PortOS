@@ -849,7 +849,7 @@ describe('extractLastFrame — anchor selection', () => {
     expect(spawns[0]).not.toContain('-vframes');
     // Temp candidates are cleaned up rather than left in tmpdir.
     expect(vi.mocked(rm)).toHaveBeenCalledWith(
-      join(tmpdir(), `anchorcand-${ID}`),
+      expect.stringMatching(new RegExp(`anchorcand-${ID}-[0-9a-f-]{36}$`)),
       { recursive: true, force: true },
     );
     // Sidecar names the offset the anchor actually came from, derived from the
