@@ -20,6 +20,8 @@ const PRIMARY_KEY = { character: 'physicalDescription', place: 'description', ob
 const UNIVERSE_FIELD = { character: 'characters', place: 'places', object: 'objects' };
 const REFERENCE_ROLE = { character: 'character', place: 'set', object: 'prop' };
 
+const isMusicVideoCastId = (id, kind) => new RegExp(`^cat-${TYPE_PREFIX[kind]}-mv-[0-9a-f]{32}$`).test(String(id || ''));
+
 function musicVideoCastIngredientId(projectId, subject) {
   const seed = `music-video:${projectId}:${subject.kind}:${subject.id}`;
   return `cat-${TYPE_PREFIX[subject.kind]}-mv-${createHash('sha256').update(seed).digest('hex').slice(0, 32)}`;
@@ -87,7 +89,9 @@ async function planCatalogCast(project, candidates, deps, claimed = new Map()) {
       : null;
     const inUniverse = universeRows.find(({ ingredient }) => nameKey(ingredient.type, ingredient.name) === key)?.ingredient;
     const ownId = musicVideoCastIngredientId(project.id, { id: candidate.subjectId, kind: candidate.kind });
-    const target = canon ? { id: canon.ingredientId, name: canon.name }
+    // A canon entry keeps its ingredientId after its record is deleted.
+    const canonLive = canon ? await catalogDB.getIngredient(canon.ingredientId) : null;
+    const target = canonLive ? { id: canonLive.id, name: canonLive.name }
       : inUniverse || (await catalogDB.findIngredientsByName(candidate.kind, [candidate.name]))[0]
         || await catalogDB.getIngredient(ownId) || claimed.get(key);
     if (target) {
@@ -146,11 +150,19 @@ async function commitCatalogCast(projectId, decisions, deps) {
         stats.linked++;
         continue;
       }
-      // The link pointed at the record another video's subject was to create
-      // in this import, and that one was kept local: create this one instead.
-    } else if (d.action !== 'create') {
+      // Only the record another video's subject was to create in this import
+      // (kept local there) is made here, at that same id: a later video then
+      // links to it, and a tombstone at the id blocks it. Any other missing
+      // target was deleted by the director and stays unlinked.
+      if (!isMusicVideoCastId(d.ingredientId, subject.kind)) continue;
+      const item = { kind: subject.kind, name: subject.name, description: subject.description || '', imageId: images.get(subject.id) || null, ingredientId: d.ingredientId };
+      if (await createRecord(project, item, catalogDB)) {
+        stamps.set(subject.id, { ingredientId: item.ingredientId });
+        stats.created++;
+      }
       continue;
     }
+    if (d.action !== 'create') continue;
     const item = { kind: subject.kind, name: subject.name, description: subject.description || '', imageId: images.get(subject.id) || null, ingredientId: musicVideoCastIngredientId(projectId, subject) };
     if (await createRecord(project, item, catalogDB)) {
       stamps.set(subject.id, { ingredientId: item.ingredientId });
