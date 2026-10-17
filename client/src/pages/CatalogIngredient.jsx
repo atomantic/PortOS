@@ -305,16 +305,21 @@ export default function CatalogIngredient() {
   // the media kind (image→reference, audio, video) from the MIME and stores the
   // bytes in the matching federating library dir. Reconcile via refreshMedia.
   const handleUploadFile = useCallback(async (file) => {
-    if (!record || !file) return;
-    const dataBase64 = arrayBufferToBase64(await file.arrayBuffer());
-    const ok = await uploadCatalogIngredientMediaFile(
-      record.id,
-      { dataBase64, mimeType: file.type || 'application/octet-stream', filename: file.name },
-      { silent: true },
-    ).then(() => true).catch((err) => { toast.error(err?.message || 'Upload failed'); return false; });
-    if (!ok) return;
-    refreshMedia();
-    toast.success('File attached');
+    if (!record || !file) return false;
+    try {
+      const dataBase64 = arrayBufferToBase64(await file.arrayBuffer());
+      await uploadCatalogIngredientMediaFile(
+        record.id,
+        { dataBase64, mimeType: file.type || 'application/octet-stream', filename: file.name },
+        { silent: true },
+      );
+      refreshMedia();
+      toast.success('File attached');
+      return true;
+    } catch (err) {
+      toast.error(err?.message || 'Upload failed');
+      return false;
+    }
   }, [record, refreshMedia]);
 
   // Attach a recorded voice memo — the server transcribes it via Whisper and
@@ -375,10 +380,10 @@ export default function CatalogIngredient() {
   };
 
   const handleRestore = async (revisionId) => {
-    if (!record) return;
+    if (!record) return false;
     const updated = await restoreCatalogIngredientRevision(record.id, revisionId, {}, { silent: true })
       .catch((err) => { toast.error(err?.message || 'Restore failed'); return null; });
-    if (!updated) return;
+    if (!updated) return false;
     // Re-apply the restored state into the editable form so the page reflects
     // the rollback without a full reload.
     setRecord((prev) => ({ ...prev, ...updated }));
@@ -387,6 +392,7 @@ export default function CatalogIngredient() {
     setPayload(updated.payload && typeof updated.payload === 'object' ? { ...updated.payload } : {});
     toast.success('Restored');
     refreshRevisions();
+    return true;
   };
 
   const confirmDelete = async () => {
@@ -1219,8 +1225,11 @@ function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, on
   const doUpload = async (file) => {
     if (!file || busy) return;
     setBusy(true);
-    await onUploadFile(file);
-    setBusy(false);
+    try {
+      await onUploadFile(file);
+    } finally {
+      setBusy(false);
+    }
   };
 
   const onDrop = (e) => {
@@ -1604,9 +1613,11 @@ function RevisionsPanel({ revisions, current, fields, onRestore }) {
 
   const handleRestore = async (id) => {
     setRestoring(id);
-    await onRestore(id);
-    setRestoring(null);
-    setPendingRestore(null);
+    try {
+      if (await onRestore(id)) setPendingRestore(null);
+    } finally {
+      setRestoring(null);
+    }
   };
 
   return (
