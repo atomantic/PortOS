@@ -404,6 +404,7 @@ function buildLocalLlmInvocation({ localLlmBackends, reviewerModelMap, reviewerE
   const invocation = `Pipe the diff into PortOS's local-review bridge and extract its review text before evaluating it.${backendNote}
 \`\`\`bash
 REVIEW_RESPONSE=$(mktemp)
+trap 'rm -f "$REVIEW_RESPONSE" "\${REVIEW_RESPONSE}.findings"' EXIT
 ${diffCommand} | jq -Rs ${shellQuote(reviewInput)} | node ${shellQuote(LOCAL_REVIEW_BRIDGE_SCRIPT)} > "$REVIEW_RESPONSE"
 if ! jq -er 'select(.ok == true and (.verdict == "clean" or .verdict == "findings")) | .findings | select(type == "string" and length > 0)' "$REVIEW_RESPONSE" > "\${REVIEW_RESPONSE}.findings"; then
   echo "Local reviewer failed: $(jq -r '.error // "missing .findings in reviewer response"' "$REVIEW_RESPONSE")" >&2

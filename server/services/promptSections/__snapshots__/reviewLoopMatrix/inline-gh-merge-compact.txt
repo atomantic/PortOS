@@ -21,6 +21,7 @@ When the local phase satisfies the stop condition, skip the PR-side phase and re
 1. For EACH reviewer in order — `ollama` → `copilot` → `codex` → `@example-user` — run a full review-and-fix sub-loop before advancing to the next. **copilot**: request a Copilot review when you reach its turn (poll every 5–15s, max 5 min/round), then re-request on later rounds. **codex**: invoke that CLI to review this branch's diff against its base (use the CLI's own base-diff mode or `git diff main...HEAD`; on GitHub `gh pr diff 42` also works). When invoking a reviewer with a pinned model or reasoning effort, pass it: `codex --model gpt-5.6-sol -c model_reasoning_effort=high …`. Follow the **CLI Reviewer Procedure** section below for the exact headless invocation and review-only contract — do NOT probe the CLI or guess flags. **ollama**: Pipe the diff into PortOS's local-review bridge and extract its review text before evaluating it.
 ```bash
 REVIEW_RESPONSE=$(mktemp)
+trap 'rm -f "$REVIEW_RESPONSE" "${REVIEW_RESPONSE}.findings"' EXIT
 gh pr diff 42 | jq -Rs '{ backend: "ollama", timeoutMs: 1800000, diff: . }' | node /portos/server/scripts/run-local-code-review.mjs > "$REVIEW_RESPONSE"
 if ! jq -er 'select(.ok == true and (.verdict == "clean" or .verdict == "findings")) | .findings | select(type == "string" and length > 0)' "$REVIEW_RESPONSE" > "${REVIEW_RESPONSE}.findings"; then
   echo "Local reviewer failed: $(jq -r '.error // "missing .findings in reviewer response"' "$REVIEW_RESPONSE")" >&2
