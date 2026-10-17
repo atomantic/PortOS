@@ -473,8 +473,8 @@ The selected work is split across parallel jobs:
   "What a full plan costs the Windows job" below.
 - **Node minimum compatibility** — installs every workspace and runs the
   runtime gate on the oldest supported Node. On a pull request it runs only
-  when a `package.json`, a lockfile, `.nvmrc`, the gate script, its drift test
-  or `ci.yml` changed, since nothing else can change its answer; non-PR runs
+  when a `package.json`, a lockfile, an `.npmrc`, `.nvmrc`, the gate script or
+  its `directInvocation.js` import, its drift test or `ci.yml` changed, since nothing else can change its answer; non-PR runs
   always run it.
 - **CI Gate** — always reports one stable required-check result and fails if any
   selected job failed or was cancelled. Both block, but the message distinguishes

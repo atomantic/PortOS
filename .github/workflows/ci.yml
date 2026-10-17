@@ -108,7 +108,7 @@ jobs:
         env:
           CI_EVENT: ${{ github.event_name }}
         run: |
-          pattern='^((server/|client/|autofixer/)?package(-lock)?\.json|\.nvmrc|scripts/checkNodeVersion(\.test)?\.js|scripts/node-version-drift\.test\.js|\.github/workflows/ci\.yml)$'
+          pattern='^((server/|client/|autofixer/)?(package(-lock)?\.json|\.npmrc)|\.nvmrc|scripts/checkNodeVersion(\.test)?\.js|scripts/lib/directInvocation\.js|scripts/node-version-drift\.test\.js|\.github/workflows/ci\.yml)$'
           if [ "$CI_EVENT" != pull_request ] || git diff --name-only "$CI_BASE_SHA"...HEAD | grep -qE "$pattern"; then
             echo run=true >> "$GITHUB_OUTPUT"
           else
