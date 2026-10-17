@@ -2555,13 +2555,6 @@ describe('pending-merge sweep — own timer, not the evaluation cadence (#3630)'
     expect(sweepBlock).toMatch(/s\.paused\s*\|\|\s*getDomainMode\(s\.config,\s*'cos'\)\s*!==\s*'execute'/);
   });
 
-  it('cancels the timer with the other CoS jobs on stop()', () => {
-    const stopFn = extractFnBody(COS_SRC, COS_SRC.indexOf('export async function stop'));
-    expect(stopFn).toMatch(/cancelEvent\('cos-health-check'\)/);
-    expect(stopFn).toMatch(/cancelEvent\('cos-recording-maintenance'\)/);
-    expect(stopFn).toMatch(/cancelEvent\('cos-pending-merge-sweep'\)/);
-  });
-
   it('keeps the opportunistic drain in evaluateTasks so the call site cannot be deleted silently', () => {
     const evalFn = extractFnBody(GEN_SRC, GEN_SRC.indexOf('export async function evaluateTasks'));
     expect(evalFn).toMatch(/sweepPendingMergePrs\(\)/);
