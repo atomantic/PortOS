@@ -18,6 +18,7 @@ import toast from './ui/Toast';
 import TagPicker from './TagPicker';
 import { createCatalogIngredient } from '../services/apiCatalog';
 import { CATALOG_TYPES, getCatalogType } from '../lib/catalogTypes';
+import { ingredientPath } from '../lib/creativeLibraries';
 
 const TYPES = CATALOG_TYPES;
 
@@ -76,7 +77,7 @@ export default function QuickIdeaCapture() {
     toast.success(
       <span>
         Saved {typeMeta.label.toLowerCase()}.{' '}
-        <Link to={`/catalog/${created.type}/${created.id}`} className="underline">Open</Link>
+        <Link to={ingredientPath(created)} className="underline">Open</Link>
       </span>,
     );
   };

@@ -160,6 +160,18 @@ describe.skipIf(!runDb)('catalogDB facets + album filters (#1762)', () => {
     await query('DELETE FROM creative_director_projects WHERE id = $1', [cdId]).catch(() => {});
   });
 
+  it('counts usage per kind from live targets only, so a deleted universe stops counting', async () => {
+    const ing = await catalogDB.createIngredient({ type: 'character', name: `Usage ${nonce}` });
+    createdIngredientIds.add(ing.id);
+    await catalogDB.linkIngredientToRef(ing.id, 'universe', UNI_ID, 'cast-character');
+    await catalogDB.linkIngredientToRef(ing.id, 'universe', UNI_ID, 'mentioned');
+    await catalogDB.linkIngredientToRef(ing.id, 'universe', DEAD_UNI_ID, 'cast-character');
+    await catalogDB.linkIngredientToRef(ing.id, 'series', SER_ID, 'cast');
+
+    const { items } = await catalogDB.listIngredients({ ids: [ing.id], limit: 5 });
+    expect(items[0].usage).toEqual({ universe: 1, series: 1 });
+  });
+
   it('getCatalogFacets aggregates type/universe/series/tag facets + bucket counts', async () => {
     const linked = await catalogDB.createIngredient({ type: 'character', name: `FacetLinked ${nonce}`, tags: [TAG] });
     const seriesLinked = await catalogDB.createIngredient({ type: 'character', name: `FacetSeries ${nonce}` });

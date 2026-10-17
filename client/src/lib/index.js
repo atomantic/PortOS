@@ -39,6 +39,7 @@ export * from './characterFramework.js';
 export * from './characterIntegrity.js';
 export * from './catalogTypes.js';
 export * from './creativeDirectorPlan.js';
+export * from './creativeLibraries.js';
 export * from './creativeDirectorPreview.js';
 export * from './creativeDirectorStatus.js';
 export * from './editorialRoadmap.js';
