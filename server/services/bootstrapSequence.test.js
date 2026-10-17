@@ -872,6 +872,7 @@ describe('runPostListenSequence — inside the listen callback', () => {
       relayUnloggedBrainRecords: step('relayUnloggedBrainRecords', () => Promise.resolve(0)),
       startPolling: step('startPolling'),
       initSyncOrchestrator: step('initSyncOrchestrator'),
+      startBrainScheduler: step('startBrainScheduler'),
       ...overrides
     };
   };
@@ -885,7 +886,8 @@ describe('runPostListenSequence — inside the listen callback', () => {
       'backfillOriginInstanceId',
       'relayUnloggedBrainRecords',
       'startPolling',
-      'initSyncOrchestrator'
+      'initSyncOrchestrator',
+      'startBrainScheduler'
     ]);
   });
 

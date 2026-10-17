@@ -152,6 +152,7 @@ export const brainSettingsSchema = z.object({
   weeklyReviewDay: z.enum(['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']).default('sunday'),
   defaultProvider: z.string().default('lmstudio'),
   defaultModel: z.string().default('gptoss-20b'),
+  scheduledReviewsEnabled: z.boolean().default(false),
   lastDailyDigest: z.string().datetime().optional(),
   lastWeeklyReview: z.string().datetime().optional()
 });

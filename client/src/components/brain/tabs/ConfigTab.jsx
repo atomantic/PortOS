@@ -35,6 +35,7 @@ export default function ConfigTab({ onRefresh }) {
   const [selectedProvider, setSelectedProvider] = useState('');
   const [selectedModel, setSelectedModel] = useState('');
   const [confidenceThreshold, setConfidenceThreshold] = useState(0.6);
+  const [scheduledReviewsEnabled, setScheduledReviewsEnabled] = useState(false);
   const [dailyDigestTime, setDailyDigestTime] = useState('09:00');
   const [weeklyReviewDay, setWeeklyReviewDay] = useState('sunday');
   const [weeklyReviewTime, setWeeklyReviewTime] = useState('16:00');
@@ -66,6 +67,7 @@ export default function ConfigTab({ onRefresh }) {
       setSelectedProvider(settingsData.defaultProvider || '');
       setSelectedModel(settingsData.defaultModel || '');
       setConfidenceThreshold(settingsData.confidenceThreshold ?? 0.6);
+      setScheduledReviewsEnabled(settingsData.scheduledReviewsEnabled === true);
       setDailyDigestTime(settingsData.dailyDigestTime || '09:00');
       setWeeklyReviewDay(settingsData.weeklyReviewDay || 'sunday');
       setWeeklyReviewTime(settingsData.weeklyReviewTime || '16:00');
@@ -158,6 +160,7 @@ export default function ConfigTab({ onRefresh }) {
       defaultProvider: selectedProvider,
       defaultModel: selectedModel,
       confidenceThreshold: parseFloat(confidenceThreshold),
+      scheduledReviewsEnabled,
       dailyDigestTime,
       weeklyReviewDay,
       weeklyReviewTime
@@ -189,6 +192,7 @@ export default function ConfigTab({ onRefresh }) {
       selectedProvider !== settings.defaultProvider ||
       selectedModel !== settings.defaultModel ||
       parseFloat(confidenceThreshold) !== settings.confidenceThreshold ||
+      scheduledReviewsEnabled !== (settings.scheduledReviewsEnabled === true) ||
       dailyDigestTime !== settings.dailyDigestTime ||
       weeklyReviewDay !== settings.weeklyReviewDay ||
       weeklyReviewTime !== settings.weeklyReviewTime
@@ -392,6 +396,26 @@ export default function ConfigTab({ onRefresh }) {
         </div>
 
         <div className="space-y-4">
+          <div>
+            <label htmlFor="scheduledReviewsEnabled" className="flex items-center gap-2 text-sm font-medium text-gray-300">
+              <input
+                id="scheduledReviewsEnabled"
+                type="checkbox"
+                checked={scheduledReviewsEnabled}
+                onChange={(e) => setScheduledReviewsEnabled(e.target.checked)}
+                className="w-4 h-4"
+              />
+              Run daily digest and weekly review automatically
+            </label>
+            <p className="mt-1 text-xs text-gray-500">
+              Off by default. When on, scheduled runs (and one catch-up after a restart) call{' '}
+              <span className="text-gray-300">{selectedProvider || 'no provider selected'}</span>
+              {' / '}
+              <span className="text-gray-300">{selectedModel || 'no model selected'}</span>
+              {' '}(Default Provider and Model above).
+            </p>
+          </div>
+
           {/* Daily Digest Time */}
           <div>
             <label htmlFor="digestTime" className="block text-sm font-medium text-gray-300 mb-2">

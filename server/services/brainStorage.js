@@ -169,6 +169,8 @@ const DEFAULT_META = {
   weeklyReviewDay: 'sunday',
   defaultProvider: 'lmstudio',
   defaultModel: 'gptoss-20b',
+  // Opt-in: digests/reviews call an AI provider, so nothing runs until enabled.
+  scheduledReviewsEnabled: false,
   lastDailyDigest: null,
   lastWeeklyReview: null
 };

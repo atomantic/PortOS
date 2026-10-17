@@ -24,6 +24,11 @@ let lastWeeklyFailure = null;
 let dailyRunning = false;
 let weeklyRunning = false;
 
+// At most one catch-up per type per boot (a failed catch-up is not retried
+// until the next restart; the in-memory cooldown alone resets on restart).
+let dailyCatchUpAttempted = false;
+let weeklyCatchUpAttempted = false;
+
 // Day name to number mapping
 const DAY_MAP = {
   sunday: 0,
@@ -75,7 +80,7 @@ function isInCooldown(lastFailure, now) {
  */
 function isDailyDigestMissed(settings, now) {
   // Don't re-trigger while already running
-  if (dailyRunning) return false;
+  if (dailyRunning || dailyCatchUpAttempted) return false;
   // Respect cooldown after failure
   if (isInCooldown(lastDailyFailure, now)) return false;
 
@@ -101,7 +106,7 @@ function isDailyDigestMissed(settings, now) {
  */
 function isWeeklyReviewMissed(settings, now) {
   // Don't re-trigger while already running
-  if (weeklyRunning) return false;
+  if (weeklyRunning || weeklyCatchUpAttempted) return false;
   // Respect cooldown after failure
   if (isInCooldown(lastWeeklyFailure, now)) return false;
 
@@ -127,11 +132,15 @@ async function checkSchedule() {
   if (lastCheckTime === currentMinute) return;
   lastCheckTime = currentMinute;
 
+  // Digests and reviews call an AI provider: run only when the user opted in.
+  if (settings.scheduledReviewsEnabled !== true) return;
+
   // Check for daily digest
   if (!dailyRunning && (isDailyDigestTime(settings, now) || isDailyDigestMissed(settings, now))) {
     const isCatchUp = !isDailyDigestTime(settings, now);
     console.log(`🧠 Scheduler: Running ${isCatchUp ? 'missed ' : ''}daily digest${isCatchUp ? ' (catch-up)' : ''}...`);
     dailyRunning = true;
+    if (isCatchUp) dailyCatchUpAttempted = true;
     runDailyDigest()
       .catch(err => {
         lastDailyFailure = new Date();
@@ -145,6 +154,7 @@ async function checkSchedule() {
     const isCatchUp = !isWeeklyReviewTime(settings, now);
     console.log(`🧠 Scheduler: Running ${isCatchUp ? 'missed ' : ''}weekly review${isCatchUp ? ' (catch-up)' : ''}...`);
     weeklyRunning = true;
+    if (isCatchUp) weeklyCatchUpAttempted = true;
     runWeeklyReview()
       .catch(err => {
         lastWeeklyFailure = new Date();
