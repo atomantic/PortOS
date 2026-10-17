@@ -1025,6 +1025,19 @@ async function cleanupOrphanedAgents() {
   return orphaned;
 }
 
+// Terminal JSON error handler: without it Express answers a thrown route error
+// with an HTML page and drops err.code, which cosRunnerClient cannot classify.
+app.use((err, _req, res, next) => {
+  if (res.headersSent) return next(err);
+  const isValidation = err?.name === 'ZodError' || Array.isArray(err?.issues);
+  const status = isValidation ? 400 : Number.isInteger(err?.status) ? err.status : 500;
+  const message = Array.isArray(err?.issues) ? bodyErrorMessage(err) : err?.message || 'Internal runner error';
+  res.status(status).json({
+    error: message,
+    code: isValidation ? 'VALIDATION_ERROR' : err?.code || 'RUNNER_ERROR',
+  });
+});
+
 /**
  * Start the server
  */
