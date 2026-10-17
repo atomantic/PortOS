@@ -48,6 +48,7 @@ import { trainingEvents } from '../loraTraining/events.js';
 import { audioGenEvents } from '../audioGen/events.js';
 import { getSettings } from '../settings.js';
 import { IMAGE_GEN_MODE, CLOUD_IMAGE_GEN_MODES } from '../imageGen/modes.js';
+import { parseQuotaDeferral, formatDeferral } from '../../lib/imageQuotaSignal.js';
 import { VIDEO_GEN_MODE, CLOUD_VIDEO_GEN_MODES, mediaJobExecutionLane } from '../../lib/generationModes.js';
 import { REMOTE_MEDIA_MODULES, isRemoteMediaJob } from './remoteMediaJob.js';
 import { createVideoHolds } from './videoHolds.js';
@@ -640,6 +641,84 @@ function trimArchiveForSnapshot() {
 }
 
 // Capture the rows and eligible acknowledgements together, before storage yields.
+// Per-backend quota cooldowns: mode → epoch ms the provider said it resets.
+//
+// A subscription image backend answers an exhausted quota with the instant it
+// recovers ("Your quota will reset after 2h26m1s"). Without this, every job
+// queued behind the one that hit the wall dispatches straight into the same
+// 429 and fails within seconds — on 2026-10-17 a single comic run burned ten
+// renders that way, each one a failed slot the user had to notice and re-drive
+// by hand.
+//
+// Keyed by MODE, not by job: the quota belongs to the provider account, so one
+// job's rejection is evidence about every queued job routed to that backend.
+// Queue-level rather than per-job because `captureQueueSnapshot` serializes a
+// fixed field whitelist, so a new per-job field would silently not survive a
+// restart; this rides alongside `videoHolds` in the same snapshot instead.
+const quotaCooldowns = new Map();
+
+/** Remaining cooldown for a job's backend, 0 when it is clear to dispatch. */
+function quotaCooldownRemaining(job, now = Date.now()) {
+  const mode = job?.params?.mode;
+  if (!mode) return 0;
+  const resumeAt = quotaCooldowns.get(mode);
+  if (!resumeAt) return 0;
+  if (resumeAt <= now) {
+    // Expired — drop it so a later failure starts a fresh window rather than
+    // extending a stale one, and so the map cannot grow without bound.
+    quotaCooldowns.delete(mode);
+    return 0;
+  }
+  return resumeAt - now;
+}
+
+/**
+ * Record a cooldown when a failure carries the provider's own reset time.
+ * Called from the failed handler for its EVIDENCE only — the job still fails
+ * through the normal terminal path, so no lifecycle invariant changes here.
+ */
+function recordQuotaCooldown(job, errorText) {
+  const mode = job?.params?.mode;
+  if (!mode) return;
+  const deferral = parseQuotaDeferral(errorText);
+  if (!deferral) return;
+  const existing = quotaCooldowns.get(mode) || 0;
+  // Keep the later instant: a second rejection during the same outage reports a
+  // shorter remaining wait, and taking it would release the queue early.
+  if (deferral.resumeAt <= existing) return;
+  quotaCooldowns.set(mode, deferral.resumeAt);
+  console.warn(`⏳ media-job: ${mode} quota exhausted — holding queued ${mode} renders for ${formatDeferral(deferral.resetsInMs)}`);
+}
+
+/** Snapshot shape: [[mode, resumeAt], ...], dropping anything already expired. */
+function snapshotQuotaCooldowns(now = Date.now()) {
+  return [...quotaCooldowns.entries()].filter(([, resumeAt]) => resumeAt > now);
+}
+
+/**
+ * Restore cooldowns across a restart. Returns false on a malformed snapshot so
+ * the caller can latch persistence the same way a malformed hold does — but
+ * never throws: an unreadable cooldown must not keep the server from booting.
+ */
+function restoreQuotaCooldowns(raw, now = Date.now()) {
+  quotaCooldowns.clear();
+  if (raw === undefined || raw === null) return true;
+  if (!Array.isArray(raw)) return false;
+  let ok = true;
+  for (const entry of raw) {
+    if (!Array.isArray(entry) || entry.length !== 2) { ok = false; continue; }
+    const [mode, resumeAt] = entry;
+    if (typeof mode !== 'string' || !mode || !Number.isFinite(resumeAt)) { ok = false; continue; }
+    if (resumeAt > now) quotaCooldowns.set(mode, resumeAt);
+  }
+  return ok;
+}
+
+/** Test-only reset so a suite cannot leak a cooldown into the next case. */
+export function __resetQuotaCooldownsForTest() {
+  quotaCooldowns.clear();
+}
+
 function captureQueueSnapshot() {
   const live = [
     ...(running ? [running] : []),
@@ -661,7 +740,7 @@ function captureQueueSnapshot() {
     ({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs }),
   );
   const transitions = [...pendingTransitions].filter(([job]) => canWriteOutcome(job));
-  return { data: { jobs: serializable, videoHolds: videoHolds.snapshot() }, transitions, hasDeferredCompletion };
+  return { data: { jobs: serializable, videoHolds: videoHolds.snapshot(), quotaCooldowns: snapshotQuotaCooldowns() }, transitions, hasDeferredCompletion };
 }
 
 async function acknowledgeWrittenTransitions(transitions) {
@@ -712,6 +791,12 @@ export async function initMediaJobQueue() {
       // the user has a queue that silently stops surviving restarts and no
       // indication that repairing or deleting one file restores it.
       console.error(`❌ media-job queue: ${JOBS_FILE} is present but unreadable — starting empty and NOT persisting so it is preserved; repair or delete it and restart to re-enable persistence`);
+    }
+    if (!restoreQuotaCooldowns(data?.quotaCooldowns)) {
+      // Same latch as a malformed hold: preserve the file rather than
+      // overwriting it, but boot normally with no cooldown in force.
+      persistBlocked = true;
+      console.error('❌ media-job queue: invalid quota cooldowns — snapshot preserved and cooldowns cleared; repair the file and restart');
     }
     const holdsReadable = videoHolds.restore(data?.videoHolds);
     if (!holdsReadable) {
@@ -1074,6 +1159,19 @@ async function drainLoop() {
     };
     for (const job of candidates) {
       if (job.status !== 'queued' || job.hold || job.admitting) continue;
+      // The provider told us when it recovers; dispatching before then just
+      // converts a queued job into a failed one. Hold rather than fail, and say
+      // when it resumes — `statusMsg` is in the persisted field whitelist, so
+      // the Render Queue shows the wait across a restart too.
+      const cooling = quotaCooldownRemaining(job);
+      if (cooling > 0) {
+        const waiting = `Waiting for ${job.params.mode} quota — resumes in ${formatDeferral(cooling)}`;
+        if (job.statusMsg !== waiting) {
+          job.statusMsg = waiting;
+          persist().catch((e) => console.error(`❌ media-job [${job.id.slice(0, 8)}] mediaJobQueue persist on quota hold failed: ${e.message}`));
+        }
+        continue;
+      }
       const lane = jobLane(job);
       if (slots[lane] <= 0) continue;
       // One GPU job per peer initially. Different peers and this Mac remain
@@ -1485,6 +1583,10 @@ async function runJobLifecycle(job, markDispatched, permit) {
       trackTerminalOperation(
         terminate('failed', (j) => {
           j.error = payload.error || 'unknown error';
+          // Evidence only — this job still fails through the normal terminal
+          // path. What it buys is every job queued BEHIND it: they hold for the
+          // provider's stated reset instead of dispatching into the same 429.
+          recordQuotaCooldown(j, j.error);
           videoHolds.captureFailure(j, j.error, payload);
         }, payload.remoteInputsDisposable === true)
           .catch((e) => console.error(`❌ media-job [${job.id.slice(0, 8)}] terminal handler failed: ${e.message}`)),

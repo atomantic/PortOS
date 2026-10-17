@@ -3877,3 +3877,78 @@ describe('mediaJobQueue per-kind runtime wiring', () => {
     }
   });
 });
+
+describe('provider quota cooldowns', () => {
+  // Verbatim from this install on 2026-10-17 (redacted of nothing — it carries
+  // no private state). The duration is the only machine-readable part.
+  const QUOTA_ERROR = 'Agy did not produce an image at the directed path. Agy said: "The `generate_image` tool failed due to a rate-limit / quota exhaustion error: `429 RESOURCE_EXHAUSTED: "You have exhausted your capacity on this model. Your quota will reset after 2h26m1s."`"';
+
+  // No local beforeEach: the file-level one already gives each test a fresh
+  // temp data dir and a fresh module instance, so the cooldown map starts
+  // empty. Re-importing here would reset modules mid-setup.
+
+  it('holds a later render for the same backend instead of dispatching it into the same 429', async () => {
+    stubs.generateImageCodex.mockImplementation(() => new Promise(() => {}));
+    const first = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'page 1' } });
+    await waitFor(() => stubs.generateImageCodex.mock.calls.length === 1);
+
+    imageGenEvents.emit('failed', { generationId: first.jobId, error: QUOTA_ERROR });
+    await waitFor(() => mediaJobQueue.getJob(first.jobId)?.status === 'failed');
+
+    const second = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'page 2' } });
+    await waitFor(() => (mediaJobQueue.getJob(second.jobId)?.statusMsg || '').startsWith('Waiting for codex quota'));
+
+    // The point of the whole change: it is still queued, not burned.
+    expect(mediaJobQueue.getJob(second.jobId).status).toBe('queued');
+    expect(stubs.generateImageCodex).toHaveBeenCalledTimes(1);
+    expect(mediaJobQueue.getJob(second.jobId).statusMsg).toMatch(/resumes in 2h2[56]m/);
+  });
+
+  it('leaves a different backend free to run during another backend\'s cooldown', async () => {
+    stubs.generateImageCodex.mockImplementation(() => new Promise(() => {}));
+    const first = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'page 1' } });
+    await waitFor(() => stubs.generateImageCodex.mock.calls.length === 1);
+    imageGenEvents.emit('failed', { generationId: first.jobId, error: QUOTA_ERROR });
+    await waitFor(() => mediaJobQueue.getJob(first.jobId)?.status === 'failed');
+
+    stubs.generateImage.mockImplementation(() => new Promise(() => {}));
+    const local = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'local', prompt: 'page 2' } });
+    await waitFor(() => stubs.generateImage.mock.calls.length === 1);
+    expect(mediaJobQueue.getJob(local.jobId).status).toBe('running');
+  });
+
+  it('does not hold anything for an ordinary failure that states no reset', async () => {
+    // Resolve rather than hang: the lane is released by the gen call settling,
+    // so a hanging stub would keep the cloud slot and mask the assertion.
+    stubs.generateImageCodex.mockResolvedValue({ jobId: 'codex-job' });
+    const first = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'page 1' } });
+    await waitFor(() => stubs.generateImageCodex.mock.calls.length === 1);
+    imageGenEvents.emit('failed', { generationId: first.jobId, error: 'Agy generation failed: Exit code 1' });
+    await waitFor(() => mediaJobQueue.getJob(first.jobId)?.status === 'failed');
+    await flush();
+
+    const second = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'page 2' } });
+    await waitFor(() => stubs.generateImageCodex.mock.calls.length === 2);
+    expect(mediaJobQueue.getJob(second.jobId).status).toBe('running');
+  });
+
+  it('keeps the cooldown across a restart so a reboot does not release the queue early', async () => {
+    stubs.generateImageCodex.mockResolvedValue({ jobId: 'codex-job' });
+    const first = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'page 1' } });
+    await waitFor(() => stubs.generateImageCodex.mock.calls.length === 1);
+    imageGenEvents.emit('failed', { generationId: first.jobId, error: QUOTA_ERROR });
+    await waitFor(() => mediaJobQueue.getJob(first.jobId)?.status === 'failed');
+    await flush();
+
+    const persisted = JSON.parse(readFileSync(join(tempDataDir, 'media-jobs.json'), 'utf8'));
+    expect(persisted.quotaCooldowns).toEqual([['codex', expect.any(Number)]]);
+
+    stubs.generateImageCodex.mockClear();
+    await importFresh();
+    // The restart itself: init is what re-reads the snapshot.
+    await mediaJobQueue.initMediaJobQueue();
+    const second = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'page 2' } });
+    await waitFor(() => (mediaJobQueue.getJob(second.jobId)?.statusMsg || '').startsWith('Waiting for codex quota'));
+    expect(stubs.generateImageCodex).not.toHaveBeenCalled();
+  });
+});
