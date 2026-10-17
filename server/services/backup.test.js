@@ -2309,6 +2309,20 @@ describe('restoreSnapshot manifest verification', () => {
     ]));
   });
 
+  it.each(['brain/', './brain', 'brain/.', 'brain//'])(
+    'selects and verifies the same files for the equivalent scope %s',
+    async (spelling) => {
+      const relativePath = 'brain/example.json';
+      await writeManifest({ [relativePath]: await writeSnapshotFile(relativePath, 'snapshot data') });
+
+      await expect(finishRestore({ dryRun: true, subdirFilter: spelling })).resolves.toMatchObject({
+        subdirFilter: 'brain',
+        verification: { status: 'verified', checkedFiles: 1 },
+      });
+      expect(spawn.mock.calls[0][1]).toEqual(expect.arrayContaining(['--include=/brain', '--include=/brain/***']));
+    },
+  );
+
   it.each([
     ['missing', async (path) => realFs.unlink(path)],
     ['unreadable', async (path) => {

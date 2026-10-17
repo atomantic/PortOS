@@ -91,15 +91,16 @@ export const csvIdsParam = ({ max, maxIdLength = 64, truncate = false } = {}) =>
 // arg (rsync runs shell:false, so this is not shell injection — but `*` would
 // expand to `--include=*/***` and defeat the filter chain, and `../foo` would
 // traverse out of the snapshot subdir). Restrict to a relative path of safe
-// characters with no wildcard, traversal, or absolute segments. Exported as a
+// characters with no wildcard, traversal, or absolute segments, and no empty
+// or `.` segment (`brain/`, `./brain`, `a//b`) — those spell the same path
+// differently at each restore call site. Exported as a
 // predicate so the restoreSnapshot service guard and the sprite run-id schemas
 // reuse the exact same rule (mirrors isSafeRecordId in validation.js) — see
 // issue #1822.
 export const isSafeSubdirFilter = (v) =>
   typeof v === 'string'
   && /^[a-z0-9._/-]+$/i.test(v)
-  && !v.split('/').includes('..')
-  && !v.startsWith('/');
+  && !v.split('/').some(part => part === '' || part === '.' || part === '..');
 
 // Backup sources are directory names under snapshots/. `@legacy` is reserved
 // for the pre-namespace snapshots root; `@` cannot occur in the sanitized
