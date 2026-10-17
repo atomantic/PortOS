@@ -89,6 +89,15 @@ socket.on('logs:subscribed', (data) => {
 });
 
 socket.on('logs:error', (data) => {
+  // A subscribe whose processName failed validation echoes an empty name that
+  // no entry owns; fail the streams still waiting on their ack instead of
+  // leaving them in 'connecting'.
+  if (data.code === 'VALIDATION_ERROR' && !data.processName) {
+    registry.forEach((pending) => {
+      if (pending.status === CONNECTING) setEntryStatus(pending, ERROR, String(data.error));
+    });
+    return;
+  }
   const entry = registry.get(data.processName);
   if (!entry) return;
   appendToEntry(entry, { line: `Error: ${data.error}`, type: 'stderr', timestamp: Date.now() });

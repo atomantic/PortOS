@@ -362,6 +362,14 @@ describe('useProcessLogs', () => {
     expect(result.current.statusDetail).toBe('pm2 unreachable');
   });
 
+  it('a validation error with no process name fails a stream still connecting', () => {
+    const { result } = renderHook(() => useProcessLogs('game'));
+    fire('logs:error', { processName: '', code: 'VALIDATION_ERROR', error: 'processName is required' });
+
+    expect(result.current.status).toBe('error');
+    expect(result.current.statusDetail).toBe('processName is required');
+  });
+
   it('ignores close/error frames for another process', () => {
     const { result } = renderHook(() => useProcessLogs('game'));
     fire('logs:subscribed', { processName: 'game' });

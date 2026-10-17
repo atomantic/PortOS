@@ -10,6 +10,8 @@ import {
   shellResizeSchema,
   shellSessionIdSchema,
   shellStopSchema,
+  shellStartSchema,
+  itermSessionRefSchema,
   appUpdateSchema,
   appStandardizeSchema,
   appDeploySchema,
@@ -238,7 +240,10 @@ describe('validateSocketData helper', () => {
     expect(result).toBeNull();
     expect(socket.emit).toHaveBeenCalledTimes(1);
     const [event, payload] = socket.emit.mock.calls[0];
-    expect(event).toBe('detect:start:error');
+    expect(event).toBe('detect:complete');
+    expect(payload.success).toBe(false);
+    expect(payload.code).toBe('VALIDATION_ERROR');
+    expect(payload.error).toEqual(expect.any(String));
     expect(payload.message).toBe('Validation failed');
     expect(Array.isArray(payload.details)).toBe(true);
     expect(payload.details[0]).toEqual(
@@ -257,5 +262,39 @@ describe('validateSocketData helper', () => {
     expect(result).toBeNull();
     const [, payload] = socket.emit.mock.calls[0];
     expect(payload.details.some(d => d.path === 'rows')).toBe(true);
+  });
+
+  it.each([
+    ['shell:resize', shellResizeSchema, { sessionId: 's1', cols: 80, rows: 9999 }, 'shell:error', { sessionId: 's1' }],
+    ['iterm:attach', itermSessionRefSchema, { id: 'bad id' }, 'iterm:error', { id: 'bad id' }],
+    ['logs:subscribe', logsSubscribeSchema, { processName: '' }, 'logs:error', { processName: '' }],
+    ['logs:subscribe', logsSubscribeSchema, { processName: 42 }, 'logs:error', { processName: '' }],
+    ['standardize:start', standardizeStartSchema, { path: '' }, 'standardize:complete', { success: false }],
+    ['app:update', appUpdateSchema, { appId: 7 }, 'app:update:error', { appId: undefined }],
+    ['app:standardize', appStandardizeSchema, { appId: 'a', overwriteEcosystem: 'x' }, 'app:standardize:error', { appId: 'a' }]
+  ])('routes %s failures to %s', (event, schema, input, channel, extras) => {
+    const socket = makeSocket();
+    expect(validateSocketData(schema, input, socket, event)).toBeNull();
+    const [emitted, payload] = socket.emit.mock.calls[0];
+    expect(emitted).toBe(channel);
+    expect(payload).toEqual(expect.objectContaining({
+      ...extras,
+      error: payload.details[0].message,
+      message: 'Validation failed',
+      code: 'VALIDATION_ERROR'
+    }));
+  });
+});
+
+describe('shellStartSchema', () => {
+  it('accepts undefined, null, empty and string fields', () => {
+    expect(shellStartSchema.safeParse(undefined).success).toBe(true);
+    expect(shellStartSchema.safeParse(null).success).toBe(true);
+    expect(shellStartSchema.safeParse({ cwd: '/tmp', initialCommand: 'ls', providerId: 'p' }).success).toBe(true);
+  });
+
+  it('rejects non-string cwd or initialCommand', () => {
+    expect(shellStartSchema.safeParse({ cwd: { a: 1 } }).success).toBe(false);
+    expect(shellStartSchema.safeParse({ initialCommand: 5 }).success).toBe(false);
   });
 });

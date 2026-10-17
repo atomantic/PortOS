@@ -6,6 +6,7 @@ import {
   shellCdSchema,
   shellInputSchema,
   shellResizeSchema,
+  shellStartSchema,
   shellStopSchema,
   validateSocketData
 } from '../lib/socketValidation.js';
@@ -16,7 +17,9 @@ export const registerShellHandlers = (socket, _io) => {
   // `providerId` is the AI Providers page's "Launch in Shell" path. The client
   // sends only the ID and the server resolves the command and secret-bearing
   // environment, preventing both backend drift and client-selected commands.
-  socket.on('shell:start', async (options) => {
+  socket.on('shell:start', async (rawOptions) => {
+    const options = validateSocketData(shellStartSchema, rawOptions, socket, 'shell:start');
+    if (options === null) return;
     try {
       const cwd = options?.cwd || undefined;
       const providerId = typeof options?.providerId === 'string' ? options.providerId : null;
