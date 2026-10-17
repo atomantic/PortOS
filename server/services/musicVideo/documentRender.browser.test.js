@@ -81,7 +81,7 @@ const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
 ].find((path) => path && existsSync(path));
 const ffmpeg = await findFfmpeg();
 // Imported discovery helpers can initialize mocked paths even on a skip.
-const canRun = browserSuiteCanRun('documentRender browser suite', { 'Chrome with H.264': chromeWithH264(chrome), ffmpeg }, { onUnavailable: cleanupTempDataRoots });
+const canRun = browserSuiteCanRun('documentRender browser suite', { 'Chrome with H.264': await chromeWithH264(chrome), ffmpeg }, { onUnavailable: cleanupTempDataRoots });
 
 describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
   let proc;
