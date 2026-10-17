@@ -267,6 +267,11 @@ import {
   OOM_NUDGE_TEXT,
   TRUNCATION_NUDGE_MAX_ATTEMPTS,
   TRUNCATION_NUDGE_TEXT,
+  CAPACITY_NUDGE_SETTLE_MS,
+  CAPACITY_NUDGE_ARM_WINDOW_MS,
+  CAPACITY_NUDGE_COOLDOWN_MS,
+  CAPACITY_NUDGE_MAX_ATTEMPTS,
+  CAPACITY_NUDGE_TEXT,
   STALL_NUDGE_IDLE_MS,
   STALL_NUDGE_MAX_ATTEMPTS,
   STALL_NUDGE_TEXT,
@@ -2035,6 +2040,84 @@ describe('spawnTuiAgent runtime', () => {
         success: false,
         completionReason: 'fallback-signal',
         error: expect.stringContaining('cut the response off'),
+      })
+    );
+  });
+
+  // ── Model at capacity: a nudge after a long quiet, then fail over ──────────
+  // Codex halts the turn on `Selected model is at capacity.` and waits at the
+  // composer. Provider load clears in minutes, so the settle window is far
+  // longer than the OOM one; the same three behaviors are pinned.
+  const CAPACITY_BANNER = 'Selected model is at capacity. Please try a different model.';
+  const PAST_CAPACITY_SETTLE_MS = CAPACITY_NUDGE_SETTLE_MS + 10000;
+
+  it('nudges a session a model-at-capacity rejection parked, without re-sending the prompt', async () => {
+    await driveAgyToSubmittedPrompt();
+    vi.mocked(shellService.pasteToSession).mockClear();
+
+    await capturedOnData(Buffer.from(CAPACITY_BANNER));
+    await flushMicrotasks();
+    // Well past the OOM settle window, still inside the capacity one.
+    await vi.advanceTimersByTimeAsync(OOM_NUDGE_SETTLE_MS + 10000);
+    await flushMicrotasks();
+    expect(shellService.pasteToSession).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(PAST_CAPACITY_SETTLE_MS);
+    await flushMicrotasks();
+    expect(shellService.pasteToSession).toHaveBeenCalledWith(
+      SESSION_ID,
+      CAPACITY_NUDGE_TEXT,
+      expect.objectContaining({ label: expect.stringContaining('model-capacity') }),
+    );
+    expect(shellService.pasteToSession).toHaveBeenCalledTimes(1);
+    expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
+  });
+
+  it('leaves a session that kept working after the capacity rejection alone', async () => {
+    await driveAgyToSubmittedPrompt();
+    vi.mocked(shellService.pasteToSession).mockClear();
+
+    await capturedOnData(Buffer.from(CAPACITY_BANNER));
+    await flushMicrotasks();
+    for (let elapsed = 0; elapsed <= CAPACITY_NUDGE_ARM_WINDOW_MS; elapsed += 5000) {
+      await capturedOnData(Buffer.from('still working\n'));
+      await flushMicrotasks();
+      await vi.advanceTimersByTimeAsync(5000);
+      await flushMicrotasks();
+    }
+    await vi.advanceTimersByTimeAsync(PAST_CAPACITY_SETTLE_MS);
+    await flushMicrotasks();
+
+    expect(shellService.pasteToSession).not.toHaveBeenCalled();
+  });
+
+  it('falls back once the capacity rejections outlast every nudge', async () => {
+    let resolveComplete;
+    const completeDone = new Promise((r) => { resolveComplete = r; });
+    vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
+
+    await driveAgyToSubmittedPrompt();
+    vi.mocked(shellService.pasteToSession).mockClear();
+
+    for (let i = 0; i < CAPACITY_NUDGE_MAX_ATTEMPTS; i += 1) {
+      await capturedOnData(Buffer.from(CAPACITY_BANNER));
+      await flushMicrotasks();
+      await vi.advanceTimersByTimeAsync(PAST_CAPACITY_SETTLE_MS);
+      await flushMicrotasks();
+      // Clear the dedupe cooldown so the next banner reads as a NEW rejection.
+      await vi.advanceTimersByTimeAsync(CAPACITY_NUDGE_COOLDOWN_MS);
+      await flushMicrotasks();
+    }
+    expect(shellService.pasteToSession).toHaveBeenCalledTimes(CAPACITY_NUDGE_MAX_ATTEMPTS);
+
+    await capturedOnData(Buffer.from(CAPACITY_BANNER));
+    vi.useRealTimers();
+    await completeDone;
+
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        completionReason: 'fallback-signal',
       })
     );
   });
