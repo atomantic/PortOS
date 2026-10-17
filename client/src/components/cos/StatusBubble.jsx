@@ -8,7 +8,7 @@ const GENERIC_MESSAGES = new Set(Object.values(STATE_MESSAGES));
 export const isGenericStatusMessage = (message) => GENERIC_MESSAGES.has(message);
 
 export function StatusPill({ state, message }) {
-  const label = state === 'sleeping' ? 'Sleeping' : 'Working on task';
+  const label = state === 'sleeping' ? 'Sleeping' : message.replace(/\.+$/, '');
   return (
     <div
       className="absolute top-1 right-1 z-20 px-2.5 py-0.5 rounded-full text-xs font-mono bg-port-card/90 border border-port-border text-port-text-muted shadow-sm pointer-events-none"
