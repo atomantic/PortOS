@@ -13,10 +13,6 @@ vi.mock('../../services/apiMusicVideo.js', () => ({
   resumeMusicVideoProduction: vi.fn(),
   stopMusicVideoProduction: vi.fn(),
   cancelMusicVideoProduction: vi.fn(),
-  startAutoReview: vi.fn(),
-  resumeAutoReview: vi.fn(),
-  stopAutoReview: vi.fn(),
-  cancelAutoReview: vi.fn(),
 }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), info: vi.fn(), error: vi.fn() } }));
 vi.mock('../../hooks/useProviderModels.js', () => ({

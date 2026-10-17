@@ -17,13 +17,16 @@ vi.mock('./calendarAccounts.js', () => ({
   mergeDiscoveredSubcalendars: vi.fn((existing, discovered) => discovered),
 }));
 
+// The real mutateCache persists the mutated cache after the callback; this spy
+// records that write so tests assert on what mutateCache would have saved.
+const persistedCache = vi.hoisted(() => vi.fn(async () => {}));
+
 vi.mock('./calendarSync.js', () => ({
   loadCache: vi.fn(),
-  saveCache: vi.fn(async () => {}),
   mutateCache: vi.fn(async (id, mutate) => {
     const cache = await loadCache(id);
     const result = await mutate(cache, await getAccount(id));
-    await saveCache(id, cache);
+    await persistedCache(id, cache);
     return result;
   }),
   logCalendarTouchpoints: vi.fn(async () => {}),
@@ -36,7 +39,7 @@ vi.mock('./settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
 import { mcpSyncAccount, mcpDiscoverCalendars, pushSyncEvents } from './calendarGoogleSync.js';
 import { runCliProviderPrompt } from '../lib/cliProviderRun.js';
 import { getAccount, updateSyncStatus, updateSubcalendars } from './calendarAccounts.js';
-import { loadCache, saveCache, logCalendarTouchpoints } from './calendarSync.js';
+import { loadCache, logCalendarTouchpoints } from './calendarSync.js';
 
 const ACCOUNT_ID = '22222222-2222-2222-2222-222222222222';
 const CAL_ID = 'work@example.com';
@@ -67,7 +70,7 @@ const rawEvent = (id, summary) => ({
   end: { dateTime: '2026-03-02T11:00:00Z' },
 });
 
-const savedCache = () => saveCache.mock.calls.at(-1)[1];
+const savedCache = () => persistedCache.mock.calls.at(-1)[1];
 
 // The completion contract (#10869): a zero-exit reply only licenses a prune for a
 // calendar that echoes the requested window, carries `complete: true` and has no
@@ -152,7 +155,7 @@ describe('mcpSyncAccount CLI exit-status agreement (#5302)', () => {
       status: 502,
       message: expect.stringContaining('MCP server not connected'),
     });
-    expect(saveCache).not.toHaveBeenCalled();
+    expect(persistedCache).not.toHaveBeenCalled();
     expect(updateSyncStatus).toHaveBeenCalledWith(ACCOUNT_ID, 'error');
   });
 });
@@ -220,17 +223,17 @@ describe('MCP transcript extraction', () => {
     runCliProviderPrompt.mockImplementation(cliReply([{ calendarId: CAL_ID, events: [] }]));
     expect((await mcpSyncAccount(ACCOUNT_ID, null)).pruned).toBe(1);
     expect(savedCache().events).toEqual([]);
-    saveCache.mockClear();
+    persistedCache.mockClear();
     runCliProviderPrompt.mockResolvedValue({ text: '{"calendars":[]}', exitCode: 0 });
     // Nothing was described, so nothing was reconciled: not a success.
     expect(await mcpSyncAccount(ACCOUNT_ID, null)).toMatchObject({ calendars: [], status: 'partial' });
-    expect(saveCache).not.toHaveBeenCalled();
+    expect(persistedCache).not.toHaveBeenCalled();
   });
 
   it.each(['{"calendars":{}}', '{"calendars":[{"calendarId":"example","events":[null]}]}', 'not JSON', 'prompt only'])('rejects invalid sync payload %s before touching events', async text => {
     runCliProviderPrompt.mockImplementation(async ({ prompt }) => ({ text: text === 'prompt only' ? `${prompt}\n${prompt}` : text, exitCode: 0 }));
     await expect(mcpSyncAccount(ACCOUNT_ID, null)).rejects.toMatchObject({ status: 502 });
-    expect(saveCache).not.toHaveBeenCalled();
+    expect(persistedCache).not.toHaveBeenCalled();
     expect(updateSyncStatus).toHaveBeenCalledWith(ACCOUNT_ID, 'error');
   });
 

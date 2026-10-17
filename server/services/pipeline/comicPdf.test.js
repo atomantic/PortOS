@@ -52,7 +52,6 @@ const mockSeries = {
 const getIssueMock = vi.fn(async () => structuredClone(mockIssue));
 const getSeriesMock = vi.fn(async () => structuredClone(mockSeries));
 vi.mock('./issues.js', () => ({
-tryReadFile: vi.fn().mockResolvedValue(null),
   getIssue: (...a) => getIssueMock(...a),
   VISUAL_STAGE_IDS: ['comicPages', 'storyboards', 'episodeVideo'],
   STAGE_IDS: ['idea', 'prose', 'comicScript', 'teleplay', 'comicPages', 'storyboards', 'episodeVideo'],

@@ -70,7 +70,7 @@ vi.mock('../services/userActions.js', () => ({ recordUserAction: vi.fn() }));
 vi.mock('../services/character.js', () => ({ setAvatar: vi.fn() }));
 vi.mock('../services/videoGen/submitJob.js', () => ({ submitVideoGenJob: effects.video }));
 vi.mock('../services/videoGen/local.js', () => ({
-  BYOV_RUNTIME_INFO: {}, getHistoryItem: vi.fn(async id => ({ id, filename: 'example.mp4' })), checkConnection: vi.fn(async () => ({})),
+  BYOV_RUNTIME_INFO: {}, getHistoryItem: vi.fn(async id => ({ id, filename: 'example.mp4' })),
 }));
 vi.mock('../services/videoGen/batch.js', () => ({ MAX_VIDEO_BATCH_SIZE: 8 }));
 vi.mock('../services/sprites/records.js', () => ({

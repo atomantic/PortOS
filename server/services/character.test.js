@@ -18,7 +18,6 @@ vi.mock('../lib/fileUtils.js', () => ({
   // Independent snapshots, like the real JSON read — a shared object reference would hide the
   // lost-update race by letting concurrent writers mutate the same record.
   readJSONFile: vi.fn(async (_file, fallback) => (store.value ? JSON.parse(JSON.stringify(store.value)) : fallback)),
-  writeFile: vi.fn(),
   // atomicWrite replaced the raw writeFile(JSON.stringify) site (#1837); route
   // it through the mocked fs/promises.writeFile so the in-memory store update
   // (and read-modify-save round-trip) keeps working unchanged.

@@ -41,7 +41,6 @@ vi.mock('../services/imageGen/index.js', async () => {
 });
 
 vi.mock('../services/settings.js', () => ({
-tryReadFile: vi.fn().mockResolvedValue(null),
   getSettings: vi.fn(async () => ({ imageGen: { mode: 'external' } })),
   settingsEvents: { on: () => {}, emit: () => {} },
 }));

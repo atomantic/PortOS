@@ -21,7 +21,7 @@ const { handlers, emitted, socketMock } = vi.hoisted(() => {
   };
   return { handlers, emitted, socketMock };
 });
-vi.mock('../services/socket', () => ({ default: socketMock, getSocket: () => socketMock }));
+vi.mock('../services/socket', () => ({ default: socketMock }));
 vi.mock('../components/ThemeContext', () => ({
   useThemeContext: () => ({ themeId: 'test', theme: { mode: 'night' } }),
 }));

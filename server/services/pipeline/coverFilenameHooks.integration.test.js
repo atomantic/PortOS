@@ -64,7 +64,6 @@ const seasonsOf = (seriesId) => [...seasonStore.entries()]
   .map(([key, season]) => ({ id: key.split('::')[1], ...season }));
 
 vi.mock('./series.js', () => ({
-tryReadFile: vi.fn().mockResolvedValue(null),
   getSeries: vi.fn(async (id) => {
     const series = seriesStore.get(id);
     return series ? { ...series, seasons: seasonsOf(id) } : null;
