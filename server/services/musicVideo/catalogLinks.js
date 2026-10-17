@@ -8,7 +8,7 @@ import { isFileBackend } from '../../lib/pgFileFacade.js';
 const REF_KIND = 'music-video';
 
 // `ingredientId → role` for the project's catalog-linked subjects.
-export function desiredCatalogLinks(project, roleForType) {
+function desiredCatalogLinks(project, roleForType) {
   const subjects = project && !project.deleted && Array.isArray(project.concept?.subjects) ? project.concept.subjects : [];
   const links = new Map();
   for (const subject of subjects) {
@@ -27,7 +27,7 @@ const syncing = new Map();
  * casts. A deleted (or missing) project unlinks everything. Fire-and-forget
  * from the project write paths: the save already succeeded.
  */
-export function syncProjectCatalogLinks(projectId) {
+function syncProjectCatalogLinks(projectId) {
   if (!projectId || isFileBackend()) return Promise.resolve(null);
   const running = syncing.get(projectId);
   if (running) {
@@ -62,8 +62,11 @@ export function syncProjectCatalogLinks(projectId) {
   return state.promise;
 }
 
+// Fire-and-forget from the project write paths; resolves to the sync's
+// { linked, unlinked } (null on failure or the file backend).
 export function queueProjectCatalogLinkSync(projectId) {
-  syncProjectCatalogLinks(projectId).catch((err) => {
+  return syncProjectCatalogLinks(projectId).catch((err) => {
     console.error(`❌ Music Video ${String(projectId).slice(0, 8)}: catalog link sync failed: ${err.message}`);
+    return null;
   });
 }

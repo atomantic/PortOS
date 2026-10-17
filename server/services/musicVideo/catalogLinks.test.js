@@ -11,7 +11,7 @@ vi.mock('../catalogDB.js', () => catalogDB);
 const getProject = vi.hoisted(() => vi.fn());
 vi.mock('./projects.js', () => ({ getProject }));
 
-const { syncProjectCatalogLinks } = await import('./catalogLinks.js');
+const { queueProjectCatalogLinkSync: syncProjectCatalogLinks } = await import('./catalogLinks.js');
 
 const subject = (id, kind, ingredientId) => ({ id, kind, name: id, ...(ingredientId ? { ingredientId } : {}) });
 
