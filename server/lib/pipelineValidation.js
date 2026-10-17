@@ -32,6 +32,8 @@ import { CHECK_SCOPES, CHECK_SEVERITIES } from './editorial/checkInfra/taxonomy.
 import { SHOT_TYPES, SCREEN_DIRECTIONS } from './shotGrammar.js';
 import { characterEvolutionSchema } from './characterEvolutionValidation.js';
 
+export const pipelineStageRecoverySchema = z.object({ revision: z.string().regex(/^[a-f0-9]{64}$/) });
+
 // =============================================================================
 // WRITERS ROOM SCHEMAS
 // =============================================================================

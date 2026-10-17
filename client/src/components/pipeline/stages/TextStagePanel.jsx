@@ -11,7 +11,7 @@ import toast from '../../ui/Toast';
 import InlineDiff from '../../ui/InlineDiff';
 import ProseEditor from '../../ui/ProseEditor';
 import {
-  generatePipelineStage, updatePipelineIssue,
+  generatePipelineStage, updatePipelineIssue, getPipelineStageRecovery, recoverPipelineStage,
   pipelineStageProgressUrl,
   PIPELINE_STAGE_LABELS,
   PIPELINE_TEXT_STAGES,
@@ -107,6 +107,37 @@ export default function TextStagePanel({
   const progressKey = `${issue.id}:${stageId}`;
   const activeKeyRef = useRef(progressKey);
   useEffect(() => { activeKeyRef.current = progressKey; }, [progressKey]);
+
+  const recoveryTargetRef = useRef(null);
+  useEffect(() => {
+    recoveryTargetRef.current = { key: progressKey, stage };
+    return () => { recoveryTargetRef.current = null; };
+  }, [progressKey, stage]);
+  const [recovery, setRecovery] = useState(null);
+  useEffect(() => {
+    let active = true;
+    if (stage.status === 'generating') {
+      getPipelineStageRecovery(issue.id, stageId, { silent: true }).then((data) => {
+        if (active) setRecovery({ key: progressKey, stage, data });
+      }).catch(() => { if (active) setRecovery(null); });
+    }
+    return () => { active = false; };
+  }, [issue.id, stageId, stage, progressKey]);
+  const recoveryInfo = recovery?.key === progressKey && recovery.stage === stage ? recovery.data : null;
+  const [runRecover, recovering] = useAsyncAction(
+    (requestTarget) => recoverPipelineStage(issue.id, stageId, recoveryInfo.revision, { silent: true }).catch((error) => {
+      if (recoveryTargetRef.current !== requestTarget) return null;
+      throw error;
+    }),
+    { errorMessage: 'Recovery failed' },
+  );
+  const handleRecover = async () => {
+    const requestTarget = recoveryTargetRef.current;
+    const result = await runRecover(requestTarget);
+    if (!result || recoveryTargetRef.current !== requestTarget) return;
+    onStageUpdate?.(stageId, result.stage, result.issue);
+    toast.success('Stage recovered. You can generate again; editorial locks still apply.');
+  };
 
   // Other text stages that currently have content — the candidate source
   // material for this generation. Excludes the target stage itself. Lets you
@@ -288,7 +319,7 @@ export default function TextStagePanel({
           <button
             type="button"
             onClick={handleSave}
-            disabled={!dirty || saving || !!activeDiff}
+            disabled={!dirty || saving || recovering || !!activeDiff}
             title={activeDiff ? 'Resolve the new-version comparison first' : undefined}
             className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-card border border-port-border text-white text-sm hover:border-port-accent/50 disabled:opacity-40"
           >
@@ -300,7 +331,7 @@ export default function TextStagePanel({
             onClick={outputDirty ? () => setConfirmRegenerate(true) : handleGenerate}
             // `saving` too: an in-flight save PATCH writes the same stage record
             // this run will overwrite when it lands.
-            disabled={generating || actionsGated || saving || !!activeDiff}
+            disabled={generating || actionsGated || saving || recovering || !!activeDiff}
             title={actionsGated
               ? 'Saving settings…'
               : (outputDirty ? 'You have unsaved edits — you’ll compare them against the new version first' : undefined)}
@@ -311,6 +342,29 @@ export default function TextStagePanel({
           </button>
         </div>
       </div>
+
+      {stage.status === 'generating' && recoveryInfo ? (
+        <div className="border border-port-warning/40 rounded p-3 space-y-2 text-sm">
+          <p>{recoveryInfo.live
+            ? 'A generation is active on this machine.'
+            : recoveryInfo.ownership === 'foreign'
+              ? 'This generation belongs to another machine. Its current progress is not known here.'
+              : recoveryInfo.ownership === 'unknown'
+                ? 'Execution ownership is unknown. This work may still be running on another machine. Taking over allows a fresh local generation and preserves your draft and history.'
+                : 'This generation belongs to this machine.'}</p>
+          {recoveryInfo.recoverable && !localGenerating ? (
+            <button
+              type="button"
+              onClick={handleRecover}
+              disabled={recovering || saving || dirty || actionsGated}
+              title={dirty ? 'Save your edits before taking over.' : undefined}
+              className="px-3 py-1.5 rounded-lg bg-port-card border border-port-border disabled:opacity-50"
+            >
+              {recovering ? 'Taking over…' : 'Take over stage'}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       {confirmRegenerate && outputDirty ? (
         <div className="flex items-center justify-between gap-3 flex-wrap border border-port-warning/40 rounded p-3 bg-port-warning/5">
@@ -323,7 +377,7 @@ export default function TextStagePanel({
               onClick={handleGenerate}
               // Same gates as the Generate button it stands in for — the confirm
               // row can sit open while a save or a settings write starts.
-              disabled={generating || actionsGated || saving}
+              disabled={generating || actionsGated || saving || recovering}
               className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-accent text-white text-sm font-medium disabled:opacity-50"
             >
               <GitCompare size={14} />
@@ -453,6 +507,7 @@ export default function TextStagePanel({
         <label className="block">
           <span className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Seed idea</span>
           <textarea
+            disabled={recovering}
             value={draftInput}
             onChange={(e) => setDraftInput(e.target.value)}
             placeholder={seedPlaceholder}
@@ -466,6 +521,7 @@ export default function TextStagePanel({
         <div className="block">
           <span className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Output</span>
           <ProseEditor
+            disabled={recovering}
             value={draftOutput}
             onChange={(e) => setDraftOutput(e.target.value)}
             placeholder={outputPlaceholder}
@@ -479,6 +535,7 @@ export default function TextStagePanel({
         <span className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Output</span>
         <textarea
           id={`pipeline-stage-${stageId}-output`}
+          disabled={recovering}
           value={draftOutput}
           onChange={(e) => setDraftOutput(e.target.value)}
           placeholder={outputPlaceholder}
