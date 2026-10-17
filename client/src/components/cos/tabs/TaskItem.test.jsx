@@ -294,7 +294,7 @@ describe('TaskItem delete action', () => {
     metadata: { blockedReason: 'Needs manual intervention' },
   };
 
-  it('calls deleteCosTask, onTaskDeleted, toast success, and onRefresh in order when confirmed', async () => {
+  it('removes the row optimistically, then toasts success without a full refetch', async () => {
     api.deleteCosTask.mockResolvedValueOnce({ ok: true });
     const onRefresh = vi.fn();
     const onTaskDeleted = vi.fn();
@@ -309,8 +309,22 @@ describe('TaskItem delete action', () => {
 
     await waitFor(() => expect(api.deleteCosTask).toHaveBeenCalledWith('sys-blocked-delete', 'internal', { silent: true }));
     expect(onTaskDeleted).toHaveBeenCalledWith('sys-blocked-delete', 'internal');
-    expect(toast.success).toHaveBeenCalledWith('Task deleted');
-    expect(onRefresh).toHaveBeenCalled();
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Task deleted'));
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
+
+  it('restores the row via refetch when the delete fails', async () => {
+    api.deleteCosTask.mockRejectedValueOnce(new Error('boom'));
+    const onRefresh = vi.fn();
+    const onTaskDeleted = vi.fn();
+
+    render(<TaskItem task={blockedTask} isSystem onRefresh={onRefresh} onTaskDeleted={onTaskDeleted} providers={providers} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Delete task' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => expect(onRefresh).toHaveBeenCalled());
+    expect(onTaskDeleted).toHaveBeenCalledWith('sys-blocked-delete', 'internal');
+    expect(toast.error).toHaveBeenCalledWith('boom');
   });
 });
 
