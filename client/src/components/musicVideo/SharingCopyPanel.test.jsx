@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import SharingCopyPanel from './SharingCopyPanel.jsx';
 
 const { api, sse } = vi.hoisted(() => ({ api: {
@@ -59,7 +59,8 @@ it('isolates a delayed lookup when navigating to another final render', async ()
   const view = render(<SharingCopyPanel key="old" projectId="mv-old" />);
   view.rerender(<SharingCopyPanel key="new" projectId="mv-new" />);
   await screen.findByRole('button', { name: 'Prepare sharing copy' });
-  resolveOld({ copy: { bytes: 10, width: 10, height: 10, fps: 10 }, jobId: 'old-job' });
-  await waitFor(() => expect(screen.queryByRole('link', { name: 'Download sharing copy' })).not.toBeInTheDocument());
+  await act(async () => { resolveOld({ copy: { bytes: 10, width: 10, height: 10, fps: 10 }, jobId: 'old-job' }); });
+  expect(screen.queryByRole('link', { name: 'Download sharing copy' })).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Prepare sharing copy' })).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Cancel export' })).not.toBeInTheDocument();
 });

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import ReviewDraftPanel from './ReviewDraftPanel.jsx';
 
 const artifact = (id, day, version) => {
@@ -41,7 +41,8 @@ describe('implicit imported draft review', () => {
     await waitFor(() => expect(finishOld).toBeTypeOf('function'));
     rerender(<ReviewDraftPanel project={{ id: 'other', devArtifacts: [artifact('old', '01', 2)] }} onOpen={vi.fn()} />);
     expect(await screen.findByLabelText('old film v2')).toHaveAttribute('src', '/api/music-video/other/dev-artifacts/old/file?version=2');
-    finishOld({ ok: true });
-    await waitFor(() => expect(screen.queryByLabelText('new film v3')).toBeNull());
+    await act(async () => { finishOld({ ok: true }); });
+    expect(screen.queryByLabelText('new film v3')).toBeNull();
+    expect(screen.getByLabelText('old film v2')).toBeInTheDocument();
   });
 });

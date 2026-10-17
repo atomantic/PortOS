@@ -989,9 +989,10 @@ describe('PromptManager job skill unsaved-edit guard', () => {
     fireEvent.click(screen.getByRole('button', { name: /preview/i }));
     fireEvent.click(screen.getByText('doc-writer'));
     await screen.findByText('Job doc-writer');
-    resolvePreview({ preview: 'code-fixer rendered' });
+    await act(async () => { resolvePreview({ preview: 'code-fixer rendered' }); });
 
-    await waitFor(() => expect(screen.queryByText('code-fixer rendered')).toBeNull());
+    expect(screen.queryByText('code-fixer rendered')).toBeNull();
+    expect(screen.getByText('Job doc-writer')).toBeTruthy();
   });
 
   it('does not prompt when a clean editor switches skills', async () => {
