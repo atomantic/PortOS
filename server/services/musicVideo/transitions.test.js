@@ -18,6 +18,9 @@ afterAll(() => rmSync(dir, { recursive: true, force: true }));
 // reduced the observed peak to 16. These tiny frames need no native fan-out.
 // Bound synchronous children too: Vitest's timer cannot interrupt execFileSync.
 const FFMPEG_BUDGET_MS = 25000; // Leave 5s of the existing 30s test budget for diagnostics/cleanup.
+// The long-edit encode is ~4s idle but single-threaded, so a saturated full-suite run (hundreds of workers) stretches it past 25s.
+const LONG_EDIT_BUDGET_MS = 110000;
+const LONG_EDIT_TEST_TIMEOUT_MS = LONG_EDIT_BUDGET_MS + 10000;
 const run = (args, timeout = FFMPEG_BUDGET_MS) => execFileSync(ffmpeg, [
   '-v', 'error', '-nostdin', '-filter_threads', '1', '-filter_complex_threads', '1',
   // Decoder options apply to the NEXT input; one leading -threads only caps
@@ -190,13 +193,13 @@ describe.skipIf(!ffmpeg)('film and camera effects on a cut in the final render',
 // the graph must go by file and still render all 360 frames.
 describe.skipIf(!ffmpeg)('effects on every cut of a long edit', () => {
   it('passes the filter graph to ffmpeg in a file and renders every frame', async () => {
-    const deadline = performance.now() + FFMPEG_BUDGET_MS;
+    const deadline = performance.now() + LONG_EDIT_BUDGET_MS;
     const timings = [];
     let version = 'unprobed';
     let graphBytes = 0;
     const remaining = () => {
       const ms = Math.floor(deadline - performance.now());
-      if (ms <= 0) throw new Error(`Long-edit cumulative ${FFMPEG_BUDGET_MS}ms subprocess budget exhausted`);
+      if (ms <= 0) throw new Error(`Long-edit cumulative ${LONG_EDIT_BUDGET_MS}ms subprocess budget exhausted`);
       return ms;
     };
     const measured = async (phase, fn) => {
@@ -236,9 +239,9 @@ describe.skipIf(!ffmpeg)('effects on every cut of a long edit', () => {
       await measured('encode', () => run(encode.args.filter((arg, i) => !(arg === '-progress' || encode.args[i - 1] === '-progress')), remaining()));
       expect(await measured('decode', () => frameSpreads(output, remaining()))).toHaveLength(30 * FPS);
     } finally {
-      console.log(`⏱️ Long-edit ${version}; workers=${process.env.PORTOS_PREGATE_MAX_WORKERS || process.env.PORTOS_CI_MAX_WORKERS || 'runner default'}; threads=1/input,1/output,1/filter; budget=${FFMPEG_BUDGET_MS}ms; graph=${graphBytes}B; ${timings.join(', ')}`);
+      console.log(`⏱️ Long-edit ${version}; workers=${process.env.PORTOS_PREGATE_MAX_WORKERS || process.env.PORTOS_CI_MAX_WORKERS || 'runner default'}; threads=1/input,1/output,1/filter; budget=${LONG_EDIT_BUDGET_MS}ms; graph=${graphBytes}B; ${timings.join(', ')}`);
     }
-  });
+  }, LONG_EDIT_TEST_TIMEOUT_MS);
 });
 
 // Uniquely catches the in-shot glitch filters failing in ffmpeg, landing on
