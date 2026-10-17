@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { tmpdir, platform, arch } from 'node:os';
@@ -10,6 +10,7 @@ import { runNpm, toRunnerPath } from './run-ci-tests.js';
 import { BROWSER_FIDELITY_FILES, browserTestProfileArgs, assertBrowserProfileExecuted } from './lib/browserTestProfiles.js';
 import { browserFidelityTarget, browserFidelityContext, browserReceiptDigest, browserFidelityActor } from './lib/browserFidelity.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
+import { sweepStaleRunRoots, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
 import { safeFailureReason } from './lib/fidelityDiagnostic.js';
 
 const repoRoot = fileURLToPath(new URL('../', import.meta.url));
@@ -100,7 +101,10 @@ export async function publishBrowserFidelity({ pr, repository, receiptPath, env 
   const user = await request('user');
   if (user?.login?.toLowerCase() !== browserFidelityActor(repository)) throw Error('Existing GitHub authentication is not a trusted fidelity publisher.');
   const context = browserFidelityContext(target);
+  // Rejected runs retain diagnostics; reclaim those from dead or aged prior runs.
+  sweepStaleRunRoots(tmpdir(), { prefix: 'portos-browser-fidelity-' });
   const root = mkdtempSync(join(tmpdir(), 'portos-browser-fidelity-'));
+  writeOwnerFile(root);
   const diagnostics = join(root, 'diagnostics');
   mkdirSync(diagnostics);
   const output = receiptPath ? resolve(receiptPath) : join(root, 'receipt.json');
@@ -141,6 +145,9 @@ export async function publishBrowserFidelity({ pr, repository, receiptPath, env 
     assertCheckout(git, target);
     controller.signal.throwIfAborted();
     await post('success', `receipt sha256=${browserReceiptDigest(receipt)}`);
+    // Admitted: only the receipt is kept. A root holding nothing else goes too.
+    rmSync(diagnostics, { recursive: true, force: true });
+    if (dirname(output) !== root) rmSync(root, { recursive: true, force: true });
     return { receiptPath: output, diagnosticsPath: diagnostics, context, executed };
   } catch (cause) {
     await post('failure', 'Required browser fidelity failed, changed, or did not complete.').catch(() => {});
