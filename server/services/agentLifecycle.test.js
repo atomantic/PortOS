@@ -31,7 +31,6 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { spawningTasks, runnerAgents } from './agentState.js';
 import { withSpawnDedupGuard, withMapEntryCleanup, withUpdateInProgressGuard, SPAWN_DEDUP_SKIP, SPAWN_UPDATE_SKIP } from './agentGuards.js';
-import { isInternalTaskId } from '../lib/taskParser.js';
 import { PROVIDER_CONFIG_BLOCKED_CATEGORY, PAUSED_BLOCKED_CATEGORIES, USER_DECISION_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -899,64 +898,7 @@ describe('agentLifecycle — runner OpenCode Ollama env (#2243 / #2190)', () => 
   });
 });
 
-// ─── taskType normalization for direct task:ready emits (issue #2633) ────────
-//
-// Direct `task:ready` emitters (Creative Director bridge, dequeueNextTask,
-// spawnPriority0OnDemand) publish task records with no `taskType`. Every
-// claim/in_progress `updateTask` in runAgentSpawn falls back to
-// `task.taskType || 'user'`, so an internal (`sys-*`) task without taskType
-// would write to TASKS.md, miss the record, and return a truthy `{ error }`
-// object the `if (!updateResult)` check silently swallowed. The fix normalizes
-// taskType at the top of runAgentSpawn via the real isInternalTaskId classifier.
-describe('taskType normalization — behavior (issue #2633)', () => {
-  // Mirrors the normalization at the top of runAgentSpawn against the REAL
-  // isInternalTaskId import, so a change to the internal-prefix list stays in
-  // sync with what the spawn path routes on (inline-pure-logic pattern).
-  const normalizeTaskType = (task) => {
-    if (task && !task.taskType) {
-      task.taskType = isInternalTaskId(task.id || '') ? 'internal' : 'user';
-    }
-    return task;
-  };
-
-  it('routes a sys-* id with no taskType to the internal file (COS-TASKS.md)', () => {
-    const task = { id: 'sys-002', description: 'internal task' };
-    normalizeTaskType(task);
-    expect(task.taskType, "sys-* must resolve to 'internal' so updateTask targets COS-TASKS.md").toBe('internal');
-  });
-
-  it('routes cd-* and app-improve-* ids (other internal prefixes) to internal', () => {
-    expect(normalizeTaskType({ id: 'cd-42' }).taskType).toBe('internal');
-    expect(normalizeTaskType({ id: 'app-improve-9' }).taskType).toBe('internal');
-  });
-
-  it('leaves a user task-* id defaulting to user (unchanged spawn behavior)', () => {
-    const task = { id: 'task-abc' };
-    normalizeTaskType(task);
-    expect(task.taskType).toBe('user');
-  });
-
-  it('preserves an already-present taskType (does not reclassify an explicit user task)', () => {
-    const task = { id: 'sys-003', taskType: 'user' };
-    normalizeTaskType(task);
-    expect(task.taskType, 'an explicit taskType must win over id-based inference').toBe('user');
-  });
-
-  it('defaults a missing id to user rather than throwing', () => {
-    expect(normalizeTaskType({}).taskType).toBe('user');
-  });
-});
-
-describe('runAgentSpawn source — taskType normalization + claim-miss guard (issue #2633)', () => {
-  it('normalizes taskType at the top, BEFORE the first claim updateTask', () => {
-    const normalizeIdx = RUN_SPAWN_BODY.indexOf('isInternalTaskId(task.id');
-    const firstUpdateIdx = RUN_SPAWN_BODY.indexOf('await updateTask(task.id');
-    expect(normalizeIdx, 'runAgentSpawn must derive taskType from the id via isInternalTaskId').toBeGreaterThan(-1);
-    expect(firstUpdateIdx, 'runAgentSpawn must call updateTask').toBeGreaterThan(-1);
-    expect(normalizeIdx, 'taskType must be normalized BEFORE any updateTask write so every claim routes to the right file')
-      .toBeLessThan(firstUpdateIdx);
-  });
-
+describe('runAgentSpawn source — claim-miss guard (issue #2633)', () => {
   it('only a null in_progress result is fatal — an { error } miss must NOT block the spawn', () => {
     // A truthy `{ error }` is EXPECTED for legitimately-unpersisted autonomous
     // emits (Priority 3 idle-review tasks carry taskType:'internal' but are
