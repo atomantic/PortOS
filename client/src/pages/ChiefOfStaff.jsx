@@ -32,7 +32,7 @@ import StateLabel from '../components/cos/StateLabel';
 import TerminalCoSPanel from '../components/cos/TerminalCoSPanel';
 import StatusIndicator from '../components/cos/StatusIndicator';
 import StatCard from '../components/cos/StatCard';
-import StatusBubble from '../components/cos/StatusBubble';
+import StatusBubble, { StatusPill, isGenericStatusMessage } from '../components/cos/StatusBubble';
 import EventLog from '../components/cos/EventLog';
 import ActionableInsightsBanner from '../components/cos/ActionableInsightsBanner';
 const AgentsTab = lazy(() => import('../components/cos/tabs/AgentsTab'));
@@ -1325,13 +1325,14 @@ export default function ChiefOfStaff() {
                 Chief of Staff
               </h1>
 
+              {isGenericStatusMessage(statusMessage) && <StatusPill state={agentState} message={statusMessage} />}
               {!hasCanvasAvatar && renderAvatar()}
               {hasCanvasAvatar && <div className="flex-none h-[5.75rem] sm:h-[4rem] md:h-[3rem] lg:h-[11rem] xl:h-[12rem]" aria-hidden="true" />}
               <div className="hidden lg:block">
                 <StateLabel state={agentState} />
               </div>
               <div className={`${hasCanvasAvatar ? 'sm:-mt-4 md:-mt-6 lg:mt-0' : ''} hidden sm:block`}>
-                <StatusBubble message={statusMessage} />
+                {!isGenericStatusMessage(statusMessage) && <StatusBubble message={statusMessage} />}
               </div>
 
               {/* Desktop Stats Grid - integrated into CoS sidebar (matches mobile compressed layout) */}
