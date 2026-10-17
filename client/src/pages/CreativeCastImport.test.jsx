@@ -7,6 +7,13 @@ vi.mock('../services/apiCatalog', () => ({
   commitMusicVideoCastImport: vi.fn(),
 }));
 vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../components/IngredientPicker', () => ({
+  default: ({ open, type, onSelect }) => (open ? (
+    <div role="dialog" aria-label={`Pick ${type}`}>
+      <button type="button" onClick={() => onSelect({ id: 'cat-plc-9', type: 'place', name: 'Corner cafe' })}>Corner cafe</button>
+    </div>
+  ) : null),
+}));
 vi.mock('../components/MediaImage', () => ({
   default: ({ src, alt, ...rest }) => <img src={src} alt={alt} {...rest} />,
 }));
@@ -58,5 +65,19 @@ describe('CreativeCastImport', () => {
 
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Imported: 501 new, 0 linked, 0 kept in their videos'));
     expect(commitMusicVideoCastImport.mock.calls.map(([rows]) => rows.length)).toEqual([500, 1]);
+  });
+
+  it('links a row to a record the director picks', async () => {
+    previewMusicVideoCastImport.mockResolvedValueOnce(PREVIEW).mockResolvedValueOnce({ projects: [] });
+    commitMusicVideoCastImport.mockResolvedValue({ projects: 1, created: 1, linked: 2, kept: 0 });
+    renderPage();
+
+    fireEvent.change(await screen.findByLabelText('What to do with Night diner'), { target: { value: 'pick' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Corner cafe' }));
+    expect(screen.getByLabelText('What to do with Night diner')).toHaveDisplayValue('Use Corner cafe');
+    fireEvent.click(screen.getByRole('button', { name: 'Import 3' }));
+
+    await waitFor(() => expect(commitMusicVideoCastImport).toHaveBeenCalledTimes(1));
+    expect(commitMusicVideoCastImport.mock.calls[0][0][2]).toEqual({ projectId: 'mv-1', subjectId: 'cs-set-diner', action: 'link', ingredientId: 'cat-plc-9' });
   });
 });

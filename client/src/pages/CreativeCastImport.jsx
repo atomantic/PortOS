@@ -13,6 +13,7 @@ import { Link } from 'react-router';
 import { ArrowLeft, Import, Loader2, Sparkles } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
 import MediaImage from '../components/MediaImage';
+import IngredientPicker from '../components/IngredientPicker';
 import toast from '../components/ui/Toast';
 import { previewMusicVideoCastImport, commitMusicVideoCastImport } from '../services/apiCatalog';
 import { libraryForType } from '../lib/creativeLibraries';
@@ -33,7 +34,9 @@ async function commitInChunks(selections) {
   return totals;
 }
 
-function ImportRow({ project, item, action, onChange }) {
+// A row's choice: the server's proposal unless the director changed it. A
+// record picked by hand is a link carrying its own id and name.
+function ImportRow({ project, item, choice, onChange, onPick }) {
   const id = `cast-import-${project.projectId}-${item.subjectId}`;
   const kindLabel = libraryForType(item.kind)?.singular || item.kind;
   return (
@@ -50,13 +53,20 @@ function ImportRow({ project, item, action, onChange }) {
       <label htmlFor={id} className="sr-only">What to do with {item.name}</label>
       <select
         id={id}
-        value={action}
-        onChange={(e) => onChange(e.target.value)}
+        value={choice.action === 'link' && choice.ingredientId !== item.ingredientId ? 'picked' : choice.action}
+        onChange={(e) => {
+          const value = e.target.value;
+          if (value === 'pick') onPick();
+          else if (value === 'link') onChange({ action: 'link', ingredientId: item.ingredientId, ingredientName: item.ingredientName });
+          else if (value !== 'picked') onChange({ action: value });
+        }}
         className="max-w-[11rem] sm:max-w-xs bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
       >
         {item.action === 'link' && <option value="link">Use {item.ingredientName}</option>}
+        {choice.action === 'link' && choice.ingredientId !== item.ingredientId && <option value="picked">Use {choice.ingredientName}</option>}
         <option value="create">Add as new</option>
         <option value="local">Keep in this video only</option>
+        <option value="pick">Use another record…</option>
       </select>
     </li>
   );
@@ -66,6 +76,7 @@ export default function CreativeCastImport() {
   const [projects, setProjects] = useState(null);
   const [decisions, setDecisions] = useState({});
   const [importing, setImporting] = useState(false);
+  const [picking, setPicking] = useState(null);
 
   const load = useCallback(async (signal) => {
     const data = await previewMusicVideoCastImport({ signal, silent: true }).catch((err) => {
@@ -83,10 +94,12 @@ export default function CreativeCastImport() {
     return () => controller.abort();
   }, [load]);
 
-  const actionFor = (project, item) => decisions[decisionKey(project.projectId, item.subjectId)] || item.action;
+  const choiceFor = (project, item) => decisions[decisionKey(project.projectId, item.subjectId)]
+    || { action: item.action, ingredientId: item.ingredientId, ingredientName: item.ingredientName };
+  const setChoice = (project, item, choice) => setDecisions((d) => ({ ...d, [decisionKey(project.projectId, item.subjectId)]: choice }));
   const selections = useMemo(() => (projects || []).flatMap((project) => project.items.map((item) => {
-    const action = decisions[decisionKey(project.projectId, item.subjectId)] || item.action;
-    return { projectId: project.projectId, subjectId: item.subjectId, action, ...(action === 'link' ? { ingredientId: item.ingredientId } : {}) };
+    const choice = decisions[decisionKey(project.projectId, item.subjectId)] || item;
+    return { projectId: project.projectId, subjectId: item.subjectId, action: choice.action, ...(choice.action === 'link' ? { ingredientId: choice.ingredientId } : {}) };
   })), [projects, decisions]);
   const toCatalog = selections.filter((s) => s.action !== 'local').length;
 
@@ -145,8 +158,9 @@ export default function CreativeCastImport() {
                     key={item.subjectId}
                     project={project}
                     item={item}
-                    action={actionFor(project, item)}
-                    onChange={(action) => setDecisions((d) => ({ ...d, [decisionKey(project.projectId, item.subjectId)]: action }))}
+                    choice={choiceFor(project, item)}
+                    onChange={(choice) => setChoice(project, item, choice)}
+                    onPick={() => setPicking({ project, item })}
                   />
                 ))}
               </ul>
@@ -154,6 +168,15 @@ export default function CreativeCastImport() {
           ))}
         </>
       )}
+      <IngredientPicker
+        open={!!picking}
+        type={picking?.item.kind}
+        onClose={() => setPicking(null)}
+        onSelect={(ingredient) => {
+          if (ingredient && picking) setChoice(picking.project, picking.item, { action: 'link', ingredientId: ingredient.id, ingredientName: ingredient.name });
+          setPicking(null);
+        }}
+      />
     </div>
   );
 }

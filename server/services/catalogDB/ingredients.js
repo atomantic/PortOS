@@ -465,6 +465,26 @@ export async function searchIngredientsByEmbedding(vector, { type, limit = 20, t
   return result.rows.map((row) => ({ ingredient: rowToIngredient(row), score: parseFloat(row.score) }));
 }
 
+/**
+ * Live records of `type` whose name or one of whose aliases equals one of
+ * `names` (trimmed, case-insensitive), oldest first. Used to link to an
+ * existing record instead of creating a same-named duplicate.
+ */
+export async function findIngredientsByName(type, names) {
+  const keys = [...new Set((names || []).map((n) => String(n || '').trim().toLowerCase()).filter(Boolean))];
+  if (!type || !keys.length) return [];
+  const result = await query(
+    `SELECT * FROM catalog_ingredients
+       WHERE deleted = false AND type = $1
+         AND (lower(btrim(name)) = ANY($2)
+           OR (jsonb_typeof(payload->'aliases') = 'array'
+             AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(payload->'aliases') a WHERE lower(btrim(a)) = ANY($2))))
+       ORDER BY created_at, id`,
+    [type, keys],
+  );
+  return result.rows.map(rowToIngredient);
+}
+
 export async function searchIngredientsByText(q, { type, limit = 20 } = {}) {
   if (!q) return [];
   const conditions = ['deleted = false', `search_tsv @@ websearch_to_tsquery('english', $1)`];
