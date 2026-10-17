@@ -25,6 +25,8 @@ import {
   rowToRevision,
   HAS_LIVE_HOMING_REF,
   HAS_ANY_HOMING_REF,
+  HOMING_REF_KINDS_SQL,
+  liveHomingTargetSql,
 } from './shared.js';
 import { normalizeTags } from './tags.js';
 
@@ -331,6 +333,7 @@ const REF_USAGE_SUBQUERY = `(
     SELECT jsonb_object_agg(u.ref_kind, u.n) FROM (
       SELECT r.ref_kind, COUNT(DISTINCT r.ref_id) AS n FROM catalog_ingredient_refs r
        WHERE r.ingredient_id = catalog_ingredients.id AND r.deleted = false
+         AND (r.ref_kind NOT IN (${HOMING_REF_KINDS_SQL}) OR ${liveHomingTargetSql('r')})
        GROUP BY r.ref_kind
     ) u
   ) AS ref_usage`;
