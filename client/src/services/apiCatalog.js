@@ -198,3 +198,8 @@ export const bulkImportCatalogIngredients = (body, options) =>
 
 export const rerunCatalogMigration = ({ force, ...options } = {}) =>
   request('/catalog/migration/rerun', { method: 'POST', body: JSON.stringify({ force }), ...options });
+
+// Casting › Import from music videos: the dry run, then the reviewed decisions.
+export const previewMusicVideoCastImport = (options) => request('/catalog/import/music-videos', options);
+export const commitMusicVideoCastImport = (selections, options) =>
+  request('/catalog/import/music-videos', { method: 'POST', body: JSON.stringify({ selections }), ...options });

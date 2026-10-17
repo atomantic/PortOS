@@ -399,6 +399,14 @@ export function castAndSetsSubjects(project, stage) {
       description: trimTo([set.description, set.lighting && `Light: ${set.lighting}`].filter(Boolean).join(' '), 1000),
     });
   }
-  const fresh = ours.filter((s) => s.name && !taken.has(`${s.kind}:${s.name.toLowerCase()}`));
+  // A re-approval keeps each subject's catalog link and keep-local choice.
+  const previous = new Map((project?.concept?.subjects || []).map((s) => [s.id, s]));
+  const fresh = ours
+    .filter((s) => s.name && !taken.has(`${s.kind}:${s.name.toLowerCase()}`))
+    .map((s) => {
+      const prior = previous.get(s.id);
+      if (prior?.kind !== s.kind) return s;
+      return { ...s, ...(prior.ingredientId ? { ingredientId: prior.ingredientId } : {}), ...(prior.localOnly ? { localOnly: true } : {}) };
+    });
   return [...authored, ...fresh].slice(0, MAX_SUBJECTS);
 }

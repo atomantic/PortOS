@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { Drama, Mountain, Package, Plus, Search, Loader2, Sparkles, Library } from 'lucide-react';
+import { Drama, Mountain, Package, Plus, Search, Loader2, Sparkles, Library, Import } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
 import MediaImage from '../components/MediaImage';
 import InfiniteScrollFooter from '../components/ui/InfiniteScrollFooter';
@@ -121,6 +121,14 @@ export default function CreativeLibrary({ libraryId }) {
         )}
         actions={(
           <div className="flex items-center gap-2">
+            <Link
+              to="/casting/import"
+              aria-label="Import from music videos"
+              title="Import from music videos"
+              className="inline-flex items-center gap-1.5 px-3 py-2 min-h-[40px] rounded-lg border border-port-border bg-port-card hover:bg-port-bg text-gray-300 hover:text-white text-sm"
+            >
+              <Import size={16} aria-hidden="true" /> <span className="hidden sm:inline">From videos</span>
+            </Link>
             <Link
               to={`/catalog?type=${encodeURIComponent(library.type)}`}
               className="inline-flex items-center gap-1.5 px-3 py-2 min-h-[40px] rounded-lg border border-port-border bg-port-card hover:bg-port-bg text-gray-300 hover:text-white text-sm"

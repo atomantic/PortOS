@@ -514,6 +514,17 @@ export const catalogEmbeddingsBackfillSchema = z.object({
   includeStale: z.boolean().optional(),
 }).strict();
 
+// Music video cast import commit (Casting › Import from music videos): one
+// reviewed decision per subject. `local` keeps the subject in its video only.
+export const catalogMusicVideoImportSchema = z.object({
+  selections: z.array(z.object({
+    projectId: z.string().min(1).max(128),
+    subjectId: z.string().min(1).max(64),
+    action: z.enum(['create', 'link', 'local']),
+    ingredientId: z.string().min(1).max(128).optional(),
+  }).strict().refine((s) => s.action !== 'link' || s.ingredientId, { message: 'link needs an ingredientId' })).min(1).max(2000),
+}).strict();
+
 // /migration/rerun — pass `force: true` to ignore the marker file.
 export const catalogMigrationRerunSchema = z.object({
   force: z.boolean().optional(),
