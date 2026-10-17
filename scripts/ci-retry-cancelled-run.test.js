@@ -46,7 +46,9 @@ const json = (body) => ({ ok: true, status: 200, json: async () => body });
  * A fetch stub routed by URL shape. `jobs`/`runs` default to the clean
  * external-cancel case so each test overrides only what it is about.
  */
-function stubFetch({ jobs = [], runs = [], rerunStatus = 201, checkStatus = 201, jobsStatus = 200, live } = {}) {
+function stubFetch({
+  jobs = [], runs = [], annotations = {}, rerunStatus = 201, checkStatus = 201, jobsStatus = 200, live,
+} = {}) {
   const calls = [];
   const impl = vi.fn(async (url, init = {}) => {
     calls.push({ url, method: init.method || 'GET', body: init.body });
@@ -62,6 +64,8 @@ function stubFetch({ jobs = [], runs = [], rerunStatus = 201, checkStatus = 201,
         workflow_runs: runs.map((r) => ({ head_repository: { id: 555 }, ...r })),
       });
     }
+    const annotated = url.match(/\/check-runs\/(\d+)\/annotations\?/);
+    if (annotated) return json(annotations[annotated[1]] || []);
     if (url.endsWith('/rerun')) return { ok: rerunStatus < 300, status: rerunStatus };
     if (url.endsWith('/check-runs')) return { ok: checkStatus < 300, status: checkStatus };
     if (/\/actions\/runs\/\d+$/.test(url)) {
@@ -116,7 +120,7 @@ describe('retryTargetFromEnv', () => {
 describe('retryCancelledCiRun guards', () => {
   it('re-dispatches a cancelled pull-request run with no failing job and no successor', async () => {
     const fetchStub = stubFetch({
-      jobs: [{ name: 'DB tests', conclusion: 'success' }, { name: 'Client', conclusion: 'cancelled' }],
+      jobs: [{ id: 1, name: 'DB tests', conclusion: 'success' }, { id: 2, name: 'Client', conclusion: 'cancelled' }],
       runs: [{ id: 4242, run_number: 900 }],
     });
 
@@ -153,6 +157,29 @@ describe('retryCancelledCiRun guards', () => {
       expect(fetchStub.rerunRequested()).toBe(false);
     },
   );
+
+  it('never retries a run whose job hit its own timeout-minutes, which GitHub reports as cancelled', async () => {
+    // The jobs API gives a timed-out job conclusion `cancelled` and leaves its
+    // running step unconcluded; only the check-run annotation names the
+    // timeout (#11910). A re-run would just time out again.
+    const fetchStub = stubFetch({
+      jobs: [
+        { id: 7, name: 'DB tests', conclusion: 'cancelled', steps: [{ conclusion: 'success' }, { conclusion: null }] },
+        { id: 8, name: 'Client', conclusion: 'cancelled' },
+      ],
+      annotations: {
+        7: [{ annotation_level: 'failure', message: 'The job has exceeded the maximum execution time of 20m0s' }],
+        8: [{ annotation_level: 'failure', message: 'The operation was canceled.' }],
+      },
+    });
+    await expect(run(BASE_ENV, fetchStub))
+      .resolves.toMatchObject({ outcome: 'skipped', reason: 'job-timed-out', phase: 'before-wait' });
+    expect(fetchStub.rerunRequested()).toBe(false);
+    const { summary } = fetchStub.publishedCheck().output;
+    expect(summary).toContain('reason: `job-timed-out`');
+    expect(summary).toContain('`DB tests` exceeded its timeout of `20m0s`');
+    expect(summary).not.toContain('`Client`');
+  });
 
   it('retries a job whose STEP failed but whose conclusion reads cancelled', async () => {
     // The fail-fast self-cancel can land while the failing job is still in its

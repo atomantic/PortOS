@@ -789,6 +789,7 @@ retries only when every one of these holds:
 | event is `pull_request` | Nightly, dispatch, and release-called runs are not ours to re-drive. |
 | `run_attempt == 1` | The retry budget. `POST /rerun` makes attempt 2, whose cancel sees attempt 2 and stops — one retry per run, and a PR run is one run per head SHA. |
 | no job concluded `failure`/`timed_out` | Fail-fast cancellation makes a genuinely red run *look* cancelled. Retrying it would re-run the suite on a broken tree. |
+| no job hit its own `timeout-minutes` | GitHub reports a timed-out job as `cancelled`; only its check-run annotation ("exceeded the maximum execution time") tells it from an external cancel (#11910). A re-run would time out again, so it skips as `job-timed-out`. |
 | no newer run for the branch | That is a supersession; the newer run already covers this code. |
 
 Any API lookup that cannot be completed skips the retry rather than assuming a
@@ -851,7 +852,7 @@ That summary lives on the recovery run, which nobody finds from the pull
 request, so the workflow also **publishes the verdict back onto the cancelled
 head SHA as a check run** named `CI cancel recovery` (issue #7438). It carries
 the same fixed reason code the step summary renders — `superseded`,
-`job-failed`, `re-dispatched`, `retry-budget-exhausted`, `run-state-moved-on`,
+`job-failed`, `job-timed-out`, `re-dispatched`, `retry-budget-exhausted`, `run-state-moved-on`,
 or one of the `*-unavailable` lookup failures — plus one sentence saying what
 to do about it.
 
