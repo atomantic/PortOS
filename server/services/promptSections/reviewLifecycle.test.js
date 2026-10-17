@@ -100,6 +100,13 @@ describe('reviewLifecycle reviewer invocation details', () => {
   // The route validates `backend` against a z.enum of the local-LLM reviewers, so
   // a leftover `<lmstudio|ollama>` placeholder in a run configured for MTPLX is a
   // 400 the agent has to guess its way out of.
+  // Each local review runs as one bash block with fresh mktemp files; without an
+  // EXIT trap the response JSON and its .findings file accumulate in <tmpdir>.
+  it('removes its mktemp review response and findings files on exit', () => {
+    const section = buildReviewLoopFollowUpSection({ ...metadata, reviewLoopReviewers: ['ollama'] });
+    expect(section).toMatch(/REVIEW_RESPONSE=\$\(mktemp\)\ntrap 'rm -f "\$REVIEW_RESPONSE" "\$\{REVIEW_RESPONSE\}\.findings"' EXIT\n/);
+  });
+
   it('names the local backend this run actually configured', () => {
     const section = buildReviewLoopFollowUpSection({ ...metadata, reviewLoopReviewers: ['mtplx'] });
     expect(section).toContain('backend: "mtplx"');
