@@ -1647,7 +1647,13 @@ function restoreIdleTimeoutMs(largestFileBytes = 0) {
  * @param {boolean} [options.dryRun=true] - If true, do not write any files
  * @param {string|null} [options.subdirFilter=null] - Limit restore to a subdirectory
  */
-export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, subdirFilter = null, source } = {}) {
+export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, subdirFilter: requestedFilter = null, source } = {}) {
+  // Canonicalize once: manifest selection, the inventory and the rsync include
+  // chain each spell the filter differently, so `brain/` or `./brain` would
+  // select nothing yet verify clean. An all-dot/empty filter means no filter.
+  const subdirFilter = typeof requestedFilter === 'string'
+    ? requestedFilter.split('/').filter(part => part && part !== '.').join('/') || null
+    : requestedFilter;
   const resolved = resolveSnapshotPath(destPath, snapshotId, source);
   await assertExplicitSnapshotSourceSafe(resolved, snapshotId);
 
@@ -1656,8 +1662,8 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
   // so a `*` would override the filter chain (restoring everything) and `..`
   // would traverse out of the snapshot subdir. Reuse the same predicate the
   // schema does so the two can't drift — see issue #1822.
-  if (subdirFilter != null && !isSafeSubdirFilter(subdirFilter)) {
-    throw new Error(`Invalid subdirFilter: ${subdirFilter}`);
+  if (requestedFilter != null && (String(requestedFilter).startsWith('/') || (subdirFilter != null && !isSafeSubdirFilter(subdirFilter)))) {
+    throw new Error(`Invalid subdirFilter: ${requestedFilter}`);
   }
   // Refused for previews too, before any verification or transfer, so a preview
   // never promises a restore that execution would silently skip.
@@ -1739,8 +1745,7 @@ async function restoreHeldSnapshot({ snapshotDir, currentSource }, snapshotId, {
     return { dryRun, snapshotId, subdirFilter, changedFiles, verification };
   }
 
-  // Applicability uses the normalized scope; reconciliation keeps the raw filter.
-  const scope = subdirFilter?.split('/').filter(part => part && part !== '.').join('/');
+  const scope = subdirFilter;
   const changedFiles = await withLiveFileRestoreOwners(scope, () => transferAndReconcileLiveFiles({
     subdirFilter,
     transfer: () => transferWithIdentityFence({ scope, srcDir, transferFiles }),
