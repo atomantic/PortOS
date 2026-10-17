@@ -13,7 +13,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 
-vi.mock('../../services/api', () => ({ setHfToken: vi.fn() }));
+vi.mock('../../services/api', () => ({}));
 
 import Image3dHfAccessNotice from './Image3dHfAccessNotice';
 

@@ -79,7 +79,6 @@ vi.mock('../lib/slashdoLoader.js', async (importOriginal) => {
   };
 });
 vi.mock('./jira.js', () => ({
-tryReadFile: vi.fn().mockResolvedValue(null),
   createTicket: vi.fn().mockResolvedValue(null),
 }));
 // Code Review Defaults resolver — mocked so tests can control the install-wide

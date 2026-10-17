@@ -17,7 +17,11 @@
  *    takes that shape.
  * 2. A test's `vi.mock` factory for one of those modules defines only members
  *    the real export has, so a mock cannot paper over a missing member again.
- * 3. No browser `alert`/`confirm`/`prompt` (client/src/AGENTS.md: inline
+ * 3. Every other literal `vi.mock` factory (notably `services/api*.js` and
+ *    `services/socket.js`) defines only members its target exports, via the
+ *    static scanner in scripts/lib/mockContractScan.js shared with the server.
+ *    `MOCK_ADAPTERS` allowlists deliberate fixture adapters, with a reason.
+ * 4. No browser `alert`/`confirm`/`prompt` (client/src/AGENTS.md: inline
  *    confirmations or toasts instead). Blocking dialogs freeze the tab and are
  *    unusable from a PWA or a remote session.
  *
@@ -31,6 +35,7 @@ import { fileURLToPath } from 'url';
 import { execSync } from 'child_process';
 import { trackedSourceFiles } from './test/trackedFiles.js';
 import { lineOf, maskComments } from './test/classNameScan.js';
+import { mockDrift as scanMockDriftIn } from '../../scripts/lib/mockContractScan.js';
 
 const CLIENT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -47,6 +52,11 @@ const CONTRACT_MODULES = [
     },
   },
 ];
+
+/** `<test file>|<module specifier>|<key>` -> reason, for mock keys that are deliberate adapters. */
+const MOCK_ADAPTERS = new Map([
+  ['src/pages/MusicVideo.test.jsx|../services/apiMusicVideo.js|listMusicVideoProjects', 'in-test project store: the suite backs listMusicVideoProjectSummaries and getMusicVideoProject with it'],
+]);
 
 const IMPORT_RE = /import\s+([^'"]+?)\s+from\s+['"]([^'"]+)['"]/g;
 
@@ -124,6 +134,8 @@ export function blockingDialogs(rawSource, file) {
     .map((match) => `${file}:${lineOf(source, match.index)} — ${match[0].replace(/\s*\($/, '')}()`);
 }
 
+const scanMockDrift = (testFile, source) => scanMockDriftIn(testFile, source, { root: CLIENT_ROOT, allowed: MOCK_ADAPTERS });
+
 const read = (file) => readFileSync(join(CLIENT_ROOT, file), 'utf8');
 
 const trackedTestFiles = () => execSync('git ls-files src', { cwd: CLIENT_ROOT, encoding: 'utf8' })
@@ -163,6 +175,17 @@ describe('module contract conventions', () => {
       expect(drift, 'a mock must not define a member the real module lacks').toEqual([]);
     });
   }
+
+  it('flags a planted mock key the real module does not export', () => {
+    const probe = join(CLIENT_ROOT, 'src/__probe.test.jsx');
+    expect(scanMockDrift(probe, "vi.mock('./services/socket.js', () => ({ default: {}, plantedDeadKey: vi.fn() }));"))
+      .toEqual(['src/__probe.test.jsx:1 — ./services/socket.js mocks plantedDeadKey']);
+  });
+
+  it('mocks only members the real modules export', () => {
+    const drift = trackedTestFiles().flatMap((file) => scanMockDrift(join(CLIENT_ROOT, file), read(file)));
+    expect(drift, 'delete the dead key, or mock the module that really exports it').toEqual([]);
+  }, 60_000); // reads every tracked client test file; a loaded runner overran the 15s default
 
   it('never calls the browser alert/confirm/prompt dialogs', () => {
     const violations = files.flatMap((file) => blockingDialogs(read(file), file));

@@ -66,7 +66,6 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   deleteMusicVideoProject: vi.fn(),
   analyzeMusicVideoProject: vi.fn(),
   prepareMusicVideoSong: vi.fn((id) => Promise.resolve({ project: { id }, analyzed: false, alignJobId: null })),
-  getMusicVideoLyricPlaythroughPreview: vi.fn(() => new Promise(() => {})),
   getMusicVideoLyricOverlayPreview: vi.fn(() => new Promise(() => {})),
   planMusicVideoProject: vi.fn(),
   addMusicVideoScene: vi.fn(),
@@ -152,9 +151,7 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   resolveMusicVideoDevArtifactNote: vi.fn(),
   reviewMusicVideoDevArtifact: vi.fn(),
   deleteMusicVideoDevArtifact: vi.fn(),
-  getMusicVideoCompositionPreview: vi.fn(async () => ({ html: '<!doctype html><p>preview</p>', assets: [], width: 1920, height: 1080, fps: 24, durationSec: 60 })),
   getMusicVideoCompositionDocument: vi.fn(),
-  fetchMusicVideoPreviewAsset: vi.fn(),
   startMusicVideoCompositionTemplate: vi.fn(),
   importMusicVideoCompositionZip: vi.fn(),
   importMusicVideoCompositionDirectory: vi.fn(),
@@ -202,7 +199,6 @@ vi.mock('../services/apiSystem.js', () => ({
   getInstances: vi.fn(async () => ({ peers: [] })),
   generateImage: vi.fn(async () => ({ status: 'queued', jobId: 'example-frame-job' })),
   uploadGalleryImage: vi.fn(),
-  listImageModels: vi.fn(async () => []),
   getSettings: vi.fn(async () => ({})),
 }));
 vi.mock('../services/apiMoodBoard.js', () => ({
@@ -219,6 +215,7 @@ vi.mock('../hooks/useMidiNotes.js', () => ({
   default: () => ({ status: 'idle', data: null, error: null, reload: vi.fn() }),
 }));
 vi.mock('../services/apiImageVideo.js', () => ({
+  listImageModels: vi.fn(async () => []),
   getVideoGenModelContext: vi.fn(async () => null),
   generateVideo: vi.fn(),
   uploadGalleryVideo: vi.fn(),

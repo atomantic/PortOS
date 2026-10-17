@@ -14,7 +14,6 @@ vi.mock('../services/git.js', () => ({
   push: vi.fn().mockResolvedValue({ pushed: true }),
   getGitInfo: vi.fn().mockResolvedValue({}),
   getBranches: vi.fn().mockResolvedValue([]),
-  getAppById: vi.fn(),
   updateBranches: vi.fn().mockResolvedValue({}),
   getBranchComparison: vi.fn().mockResolvedValue({}),
   pushAll: vi.fn().mockResolvedValue({}),

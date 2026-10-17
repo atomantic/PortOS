@@ -18,7 +18,6 @@ vi.mock('../../lib/fileUtils.js', async () => {
 const synthesizeMock = vi.fn();
 const listVoicesMock = vi.fn();
 vi.mock('../voice/tts.js', () => ({
-  tryReadFile: vi.fn().mockResolvedValue(null),
   synthesize: (...a) => synthesizeMock(...a),
   listVoices: (...a) => listVoicesMock(...a),
   normalizeVoiceEngine: (engine) => engine === 'qwen3' ? 'qwen3-tts' : engine,

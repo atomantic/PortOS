@@ -38,8 +38,6 @@ vi.mock('../services/browserService.js', () => ({
   // other exports are referenced by sibling routes but not by these tests
   restartBrowser: vi.fn(),
   getHealthStatus: vi.fn(),
-  getBrowserStatus: vi.fn(),
-  getBrowserLogs: vi.fn(),
   getRecentLogs: vi.fn(async () => ({ stdout: '', stderr: '' })),
 }));
 

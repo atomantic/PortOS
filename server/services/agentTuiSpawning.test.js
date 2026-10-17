@@ -79,7 +79,6 @@ vi.mock('./ollamaAgentContext.js', () => ({
 }));
 
 vi.mock('./agentFinalization.js', () => ({
-  persistSimplifySummaries: vi.fn().mockResolvedValue(undefined),
   finalizeAgent: vi.fn().mockResolvedValue(undefined),
   releaseAgentLane: vi.fn()
 }));

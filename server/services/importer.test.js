@@ -58,7 +58,6 @@ vi.mock('./sharing/peerSync.js', () => mockNoPeerSync());
 // LLM call resolves to a canned JSON shape we control per-test.
 const mockRunStagedLLM = vi.fn();
 vi.mock('./stageRunner.js', () => ({
-tryReadFile: vi.fn().mockResolvedValue(null),
   runStagedLLM: (...args) => mockRunStagedLLM(...args),
 }));
 

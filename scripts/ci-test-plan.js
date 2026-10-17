@@ -343,6 +343,9 @@ export const ALWAYS_RUN_TESTS = [
   // Whole-tree scanner: any server file can log a failure through
   // `console.log`, and the guard only ever sees it as a path string.
   'server/logLevelConventions.test.js',
+  // Whole-tree scanner: a renamed export in any module leaves a dead key in some
+  // suite's vi.mock factory, with no import edge from that suite to this guard (#11891).
+  'server/mockContractConventions.test.js',
   // Whole-tree scanner: any server file can spawn a child and await before
   // attaching its error/exit listener (#11761), with no import edge to this file.
   'server/childListenerOrderConventions.test.js',

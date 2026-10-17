@@ -27,7 +27,6 @@ const arc = { logline: 'A logline.', summary: 'A summary.', shape: 'man-in-hole'
 const issues = { issues: [{ title: 'Cold Iron', arcPosition: 1, proseExcerpt: 'The vault loomed.' }] };
 
 vi.mock('../services/stageRunner.js', () => ({
-  tryReadFile: vi.fn().mockResolvedValue(null),
   runStagedLLM: vi.fn(async (stage) => ({
     content: { 'importer-canon-extract': canon, 'importer-arc-extract': arc, 'importer-issue-proposal': issues }[stage],
     model: 'mock', providerId: 'mock', runId: `run-${stage}`,
