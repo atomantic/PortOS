@@ -37,11 +37,15 @@ const fsFailures = vi.hoisted(() => ({ dateBucketWritesFail: false, rmFailsFor: 
 
 vi.mock('fs/promises', async (importOriginal) => {
   const actual = await importOriginal();
+  const { relative } = await import('node:path');
   // Accept either separator: the archive path is composed with path.join, so on
   // Windows the date bucket reads '\2026-08-14\' and a '/'-only pattern never
   // matched — the injected failure never fired and completeAgent RESOLVED,
   // making this rollback test assert nothing.
-  const failsFor = (p) => fsFailures.dateBucketWritesFail && /[\\/]\d{4}-\d{2}-\d{2}[\\/]/.test(String(p));
+  const failsFor = (p) => {
+    const target = relative(mockCosState.agentsDir, String(p));
+    return fsFailures.dateBucketWritesFail && /^\d{4}-\d{2}-\d{2}[\\/]/.test(target);
+  };
   return {
     ...actual,
     rename: async (from, to, ...rest) => {
