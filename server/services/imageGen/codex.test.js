@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdir, writeFile, rm, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join } from 'path';
+import { join, relative, resolve } from 'path';
 import { tmpdir } from 'os';
 import { EventEmitter } from 'events';
 import sharp from 'sharp';
@@ -80,6 +80,7 @@ vi.mock('../../lib/fileUtils.js', async () => {
   // a spread-only override would leave the original PATHS.images intact
   // for any function closing over the actual module's binding.
   actual.PATHS.images = FAKE_IMAGES_DIR;
+  actual.PATHS.tmp = join(TEST_HOME, 'tmp');
   return {
     ...actual,
     ensureDir: vi.fn(async (dir) => mkdir(dir, { recursive: true })),
@@ -99,6 +100,7 @@ const flush = () => new Promise((r) => setImmediate(r));
 
 beforeEach(async () => {
   setPlatform('linux');
+  vi.stubEnv('CODEX_HOME', join(TEST_HOME, '.codex'));
   spawnCalls.length = 0;
   imageGenEvents.removeAllListeners();
   codex._internals.setHarvestTimeoutForTests(10);
@@ -445,6 +447,7 @@ describe('codex provider — image harvest', () => {
     }
 
     expect(completedListener).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(existsSync(spawnCalls[0].options.cwd)).toBe(false));
     const finalPath = join(FAKE_IMAGES_DIR, job.filename);
     expect(existsSync(finalPath)).toBe(true);
     const written = await readFile(finalPath);
@@ -565,7 +568,7 @@ describe('codex provider — image harvest', () => {
     child.emit('close', 0, null);
 
     await vi.waitFor(() => expect(failedListener).toHaveBeenCalledTimes(1));
-    expect(failedListener.mock.calls[0][0].error).toMatch(/no image|account may not allow/i);
+    expect(failedListener.mock.calls[0][0].error).toMatch(/no generated image/i);
   });
 
   it('captures the session id even when banner + long prompt echo arrive in a single >4KB stderr chunk', async () => {
@@ -772,10 +775,10 @@ something else`;
 });
 
 describe('codex provider — noImageReason (no-image diagnostics)', () => {
-  it('flags a "generated" claim with no file as tool-unavailable / rate-limited', () => {
+  it('reports a success claim without guessing tool availability', () => {
     const msg = codex.noImageReason('codex\nGenerated with the built-in image tool using the imagegen skill.\ntokens used\n11484');
-    expect(msg).toMatch(/wrote no image file/i);
-    expect(msg).toMatch(/unavailable or rate-limited/i);
+    expect(msg).toMatch(/no generated image file was found/i);
+    expect(msg).not.toMatch(/unavailable|rate-limited|didn.t run/i);
     // the model's own words are surfaced…
     expect(msg).toContain('Generated with the built-in image tool');
     // …but codex's structural labels + token count are stripped out
@@ -790,9 +793,9 @@ describe('codex provider — noImageReason (no-image diagnostics)', () => {
     expect(msg).not.toMatch(/rate-limited/i);
   });
 
-  it('falls back to the account/enablement hint when codex said nothing usable', () => {
-    expect(codex.noImageReason('')).toMatch(/may not allow image_gen/i);
-    expect(codex.noImageReason('codex\nuser\n----\ntokens used\n42')).toMatch(/may not allow image_gen/i);
+  it('falls back to session/settings guidance when codex said nothing usable', () => {
+    expect(codex.noImageReason('')).toMatch(/Check the Codex session and Settings/i);
+    expect(codex.noImageReason('codex\nuser\n----\ntokens used\n42')).toMatch(/Check the Codex session and Settings/i);
   });
 
   it('strips ANSI escape codes from the surfaced narration', () => {
@@ -817,6 +820,7 @@ it('settles admission rejection from the actual close event and clears the activ
     const response = { writeHead: vi.fn(), write: vi.fn(), end: vi.fn(), req: new EventEmitter() };
     expect(codex.attachSseClient(job.jobId, response)).toBe(true);
     expect(response.write.mock.calls[0][0]).toContain('injected publication admission refusal');
+    await vi.waitFor(() => expect(existsSync(spawnCalls[0].options.cwd)).toBe(false));
     response.req.emit('close');
   } finally { admissionFault.error = null; }
 });
@@ -866,6 +870,7 @@ describe('codex provider — launch refusal settlement', () => {
     child.pid = 4242;
 
     expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    expect(existsSync(spawnCalls[0].options.cwd)).toBe(true);
     expect(failed).not.toHaveBeenCalled();
     expect(codex.getActiveJob()).toMatchObject({ generationId: job.jobId });
 
@@ -880,6 +885,7 @@ describe('codex provider — launch refusal settlement', () => {
     await flush();
     expect(failed).toHaveBeenCalledTimes(1);
     expect(failed.mock.calls[0][0].error).toMatch(/launch setup failed: synthetic stream setup failure/);
+    await vi.waitFor(() => expect(existsSync(spawnCalls[0].options.cwd)).toBe(false));
     expect(codex.getActiveJob()).toBeNull();
     expect(codex.cancel(job.jobId)).toBe(false);
   });
@@ -983,5 +989,93 @@ describe('codex provider — Windows shim lifecycle', () => {
     await flush();
     expect(codex.cancel(job.jobId)).toBe(false);
     vi.clearAllTimers();
+  });
+});
+
+describe('Codex cached defaults and isolated workspace', () => {
+  const cacheModels = async slugs => {
+    await mkdir(join(TEST_HOME, '.codex'), { recursive: true });
+    await writeFile(join(TEST_HOME, '.codex', 'models_cache.json'), JSON.stringify({
+      models: slugs.map(slug => ({ slug, visibility: 'list' })),
+    }));
+  };
+  const finish = async call => {
+    call.child.exitCode = 1;
+    call.child.emit('close', 1, null);
+    await vi.waitFor(() => expect(existsSync(call.options.cwd)).toBe(false));
+  };
+
+  it.each([
+    [['gpt-6-luna', 'gpt-5.6-luna'], {}, 'gpt-6-luna'],
+    [['gpt-5.6-terra', 'gpt-5.6-luna'], {}, 'gpt-5.6-luna'],
+    [['gpt-5.6-terra'], { model: 'gpt-6-luna', modelIsShippedDefault: true }, 'gpt-5.6-terra'],
+    [['gpt-5.6-luna'], { model: 'gpt-6-luna' }, 'gpt-6-luna'],
+    [['gpt-5.6-luna'], { model: 'custom-explicit' }, 'custom-explicit'],
+  ])('uses cached defaults without replacing explicit selection (%j, %j)', async (models, options, expected) => {
+    await cacheModels(models);
+    const job = await codex.generateImage({ prompt: 'synthetic', ...options });
+    const call = spawnCalls[0];
+    expect(job.model).toBe(expected);
+    expect(call.args[call.args.indexOf('-m') + 1]).toBe(expected);
+    await finish(call);
+  });
+
+  it('rejects a known-absent default without silently buying a more expensive tier', async () => {
+    await cacheModels(['gpt-6.1-sol']);
+    await expect(codex.generateImage({ prompt: 'synthetic' })).rejects.toThrow(/Select an available model explicitly/);
+    expect(spawnCalls).toHaveLength(0);
+  });
+
+  it.each(['{broken', '{"models":[]}', '{"other":true}'])('treats an unusable cache as unknown: %s', async content => {
+    await mkdir(join(TEST_HOME, '.codex'), { recursive: true });
+    await writeFile(join(TEST_HOME, '.codex', 'models_cache.json'), content);
+    expect((await codex.generateImage({ prompt: 'synthetic' })).model).toBe('gpt-6-luna');
+    await finish(spawnCalls[0]);
+  });
+
+  it('preserves relative CLI and CODEX_HOME resolution when changing cwd', async () => {
+    vi.stubEnv('CODEX_HOME', relative(process.cwd(), join(TEST_HOME, '.codex')));
+    await codex.generateImage({ prompt: 'synthetic', codexPath: './bin/codex' });
+    const call = spawnCalls[0];
+    expect(call.bin).toBe(resolve('./bin/codex'));
+    expect(call.options.env.CODEX_HOME).toBe(join(TEST_HOME, '.codex'));
+    await finish(call);
+  });
+
+  it('cleans scratch after a spawn error with no physical child', async () => {
+    await codex.generateImage({ prompt: 'synthetic' });
+    const call = spawnCalls[0];
+    call.child.emit('error', new Error('spawn ENOENT'));
+    await vi.waitFor(() => expect(existsSync(call.options.cwd)).toBe(false));
+    expect(codex.getActiveJob()).toBeNull();
+  });
+
+  it('keeps scratch files until physical exit and never harvests shell drawings', async () => {
+    const sessionId = '019e2513-c506-7de1-815e-c1f589229242';
+    const sessions = join(TEST_HOME, '.codex', 'sessions');
+    await mkdir(sessions, { recursive: true });
+    await writeFile(join(sessions, `rollout-${sessionId}.jsonl`), JSON.stringify({
+      type: 'response_item', payload: { type: 'function_call', name: 'exec_command', arguments: 'draw a picture' },
+    }));
+    const failed = vi.fn();
+    imageGenEvents.on('failed', failed);
+    const job = await codex.generateImage({ prompt: 'synthetic' });
+    const call = spawnCalls[0];
+    expect(call.options.cwd.startsWith(join(TEST_HOME, 'tmp', 'codex-image-'))).toBe(true);
+    expect(call.options.env.PWD).toBe(call.options.cwd);
+    expect(call.args.at(-1)).toContain('Only the image_gen tool may produce this image');
+    await writeFile(join(call.options.cwd, 'drawing.svg'), '<svg/>');
+    await writeFile(join(call.options.cwd, 'drawing.png'), 'not a generated image');
+    codex.cancel(job.jobId);
+    expect(existsSync(call.options.cwd)).toBe(true);
+    call.child.stderr.emit('data', Buffer.from(`session id: ${sessionId}\n`));
+    call.child.exitCode = 0;
+    call.child.emit('close', 0, null);
+    await vi.waitFor(() => expect(existsSync(call.options.cwd)).toBe(false));
+    expect(existsSync(join(FAKE_IMAGES_DIR, job.filename))).toBe(false);
+    expect(failed).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(failed.mock.calls)).toContain('No image_gen call was observed');
+    expect(JSON.stringify(failed.mock.calls)).toContain('shell activity was recorded');
+    expect(JSON.stringify(failed.mock.calls)).toContain('does not establish whether the tool is available');
   });
 });
