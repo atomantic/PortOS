@@ -178,7 +178,89 @@ async function safeUnlinkUpload(path) {
 // edit to one of them rather than a mode string slipping through.
 // 'supercollider' (#9413) is likewise local-only: it executes untrusted source
 // inside this machine's verified container, so no peer map names it.
-export const JOB_KINDS = Object.freeze(['video', 'video-upscale', 'video-sharing', 'html-composition', 'image', 'training', 'audio', 'supercollider']);
+const flatWatchdog = (ms) => () => ms;
+const chunkScaledWatchdog = ({ chunks }) => WATCHDOG_VIDEO_MS * Math.max(1, Number(chunks) || 1);
+
+// The single declaration of how each kind runs: its lazily-loaded module (by
+// `params.mode`, falling back to `default`), the event bus its progress rides,
+// its idle-watchdog window, entry point and progress verb. Module loads stay
+// thunks so no static import edge is added (server/AGENTS.md, "Import scoping").
+const MEDIA_JOB_RUNTIME = Object.freeze({
+  video: {
+    events: videoGenEvents,
+    verb: 'Rendering',
+    watchdogMs: chunkScaledWatchdog,
+    modules: {
+      [IMAGE_GEN_MODE.GROK]: () => import('../videoGen/grok.js'),
+      [VIDEO_GEN_MODE.FAL]: () => import('../videoGen/fal.js'),
+      [VIDEO_GEN_MODE.REACTOR]: () => import('../videoGen/reactor.js'),
+      default: () => import('../videoGen/local.js'),
+    },
+    invoke: (mod, request, { chunks }) => (chunks > 1 ? mod.generateChainedVideo(request) : mod.generateVideo(request)),
+  },
+  // An upscale is a single GPU render with no chunking, so it takes the video
+  // idle window flat rather than the chunk-scaled one.
+  'video-upscale': {
+    events: videoGenEvents,
+    verb: 'Upscaling',
+    watchdogMs: flatWatchdog(WATCHDOG_VIDEO_MS),
+    modules: { default: () => import('../videoGen/upscaleJob.js') },
+    invoke: (mod, request) => mod.runVideoUpscale(request),
+  },
+  'video-sharing': {
+    events: videoGenEvents,
+    verb: 'Generating',
+    watchdogMs: flatWatchdog(WATCHDOG_VIDEO_MS),
+    modules: { default: () => import('../musicVideo/sharingCopy.js') },
+    invoke: (mod, request) => mod.runSharingCopy(request),
+  },
+  // Window and verb are the values this kind inherited from the old default
+  // arms, not a reviewed choice; changing them is a separate decision.
+  'html-composition': {
+    events: videoGenEvents,
+    verb: 'Generating',
+    watchdogMs: flatWatchdog(WATCHDOG_IMAGE_MS),
+    modules: { default: () => import('../htmlComposition/index.js') },
+    invoke: (mod, request) => mod.renderComposition(request),
+  },
+  image: {
+    events: imageGenEvents,
+    verb: 'Generating',
+    watchdogMs: flatWatchdog(WATCHDOG_IMAGE_MS),
+    modules: {
+      [IMAGE_GEN_MODE.CODEX]: () => import('../imageGen/codex.js'),
+      [IMAGE_GEN_MODE.GROK]: () => import('../imageGen/grok.js'),
+      [IMAGE_GEN_MODE.AGY]: () => import('../imageGen/agy.js'),
+      [IMAGE_GEN_MODE.FAL]: () => import('../imageGen/fal.js'),
+      default: () => import('../imageGen/local.js'),
+    },
+    invoke: (mod, request) => mod.generateImage(request),
+  },
+  training: {
+    events: trainingEvents,
+    verb: 'Training',
+    watchdogMs: flatWatchdog(WATCHDOG_TRAINING_MS),
+    modules: { default: () => import('../loraTraining/index.js') },
+    invoke: (mod, request) => mod.runTraining(request),
+  },
+  audio: {
+    events: audioGenEvents,
+    verb: 'Generating',
+    watchdogMs: flatWatchdog(WATCHDOG_AUDIO_MS),
+    modules: { default: () => import('../audioGen/local.js') },
+    invoke: (mod, request) => mod.generateAudio(request),
+  },
+  // Window and verb inherited from the old default arms (see html-composition).
+  supercollider: {
+    events: audioGenEvents,
+    verb: 'Generating',
+    watchdogMs: flatWatchdog(WATCHDOG_IMAGE_MS),
+    modules: { default: () => import('../superColliderRender.js') },
+    invoke: (mod, request) => mod.renderSuperCollider(request),
+  },
+});
+
+export const JOB_KINDS = Object.freeze(Object.keys(MEDIA_JOB_RUNTIME));
 export const JOB_STATUSES = Object.freeze(['queued', 'running', 'completed', 'failed', 'canceled']);
 
 // Returns a Promise that resolves to the gen module for the given job's
@@ -191,22 +273,9 @@ function getGenModuleForJob(job) {
   // later local branch would happily claim it and render a second time on this
   // machine.
   if (isRemoteMediaJob(job)) return REMOTE_MEDIA_MODULES[job.kind]();
-  if (job.kind === 'html-composition') return import('../htmlComposition/index.js');
-  if (job.kind === 'video-upscale') return import('../videoGen/upscaleJob.js');
-  if (job.kind === 'video-sharing') return import('../musicVideo/sharingCopy.js');
-  if (job.kind === 'video' && job.params?.mode === IMAGE_GEN_MODE.GROK) return import('../videoGen/grok.js');
-  if (job.kind === 'video' && job.params?.mode === VIDEO_GEN_MODE.FAL) return import('../videoGen/fal.js');
-  if (job.kind === 'video' && job.params?.mode === VIDEO_GEN_MODE.REACTOR) return import('../videoGen/reactor.js');
-  if (job.kind === 'video') return import('../videoGen/local.js');
-  if (job.kind === 'training') return import('../loraTraining/index.js');
-  if (job.kind === 'audio') return import('../audioGen/local.js');
-  if (job.kind === 'supercollider') return import('../superColliderRender.js');
-  if (job.kind === 'image' && job.params?.mode === IMAGE_GEN_MODE.CODEX) return import('../imageGen/codex.js');
-  if (job.kind === 'image' && job.params?.mode === IMAGE_GEN_MODE.GROK) return import('../imageGen/grok.js');
-  if (job.kind === 'image' && job.params?.mode === IMAGE_GEN_MODE.AGY) return import('../imageGen/agy.js');
-  if (job.kind === 'image' && job.params?.mode === IMAGE_GEN_MODE.FAL) return import('../imageGen/fal.js');
-  if (job.kind === 'image') return import('../imageGen/local.js');
-  return Promise.resolve(null);
+  const runtime = MEDIA_JOB_RUNTIME[job.kind];
+  if (!runtime) return Promise.resolve(null);
+  return (runtime.modules[job.params?.mode] ?? runtime.modules.default)();
 }
 
 // #1332: probe (via loraTraining, which owns the run's on-disk layout) whether
@@ -1110,7 +1179,7 @@ function recomputeQueuePositions() {
 // the queue, even though the underlying emitters don't supply one.
 function synthesizeMessage(e, kind) {
   if (typeof e.step === 'number' && typeof e.totalSteps === 'number' && e.totalSteps > 0) {
-    const verb = kind === 'video' ? 'Rendering' : kind === 'video-upscale' ? 'Upscaling' : kind === 'training' ? 'Training' : 'Generating';
+    const verb = MEDIA_JOB_RUNTIME[kind]?.verb ?? 'Generating';
     return `${verb} step ${e.step}/${e.totalSteps}`;
   }
   return undefined;
@@ -1441,10 +1510,8 @@ async function runJobLifecycle(job, markDispatched, permit) {
 
   await resolveLiveParams(job, safeParams);
 
-  const emitter = job.kind === 'video' || job.kind === 'video-upscale' || job.kind === 'video-sharing' || job.kind === 'html-composition' ? videoGenEvents
-    : job.kind === 'training' ? trainingEvents
-    : job.kind === 'audio' || job.kind === 'supercollider' ? audioGenEvents
-    : imageGenEvents;
+  const runtime = MEDIA_JOB_RUNTIME[job.kind];
+  const emitter = runtime?.events ?? imageGenEvents;
   // A watchdog outcome records why the job failed; it does not prove that
   // cancellation has reached physical exit and provider cleanup. Only a real
   // provider terminal event can release that additional wait.
@@ -1467,19 +1534,10 @@ async function runJobLifecycle(job, markDispatched, permit) {
   // prose) regularly while it's actually working. Any non-noise line in
   // imageGen/videoGen/local.js#handleLine emits 'activity' which resets
   // lastActivityAt; only true hangs (process wedged, no output) trip it.
-  const idleTimeoutMs = (() => {
-    // Cloud check first — a grok VIDEO job must take the cloud watchdog, not
-    // the chunk-scaled local-video one (the provider emits 'activity' on
-    // stdout so a long-but-active render never trips the idle cap).
-    if (isCloudImageJob(job)) return WATCHDOG_CODEX_MS;
-    // An upscale is a single GPU render with no chunking, so it takes the
-    // video idle window flat rather than the chunk-scaled one.
-    if (job.kind === 'video-upscale' || job.kind === 'video-sharing') return WATCHDOG_VIDEO_MS;
-    if (job.kind === 'video') return WATCHDOG_VIDEO_MS * Math.max(1, Number(safeParams.chunks) || 1);
-    if (job.kind === 'training') return WATCHDOG_TRAINING_MS;
-    if (job.kind === 'audio') return WATCHDOG_AUDIO_MS;
-    return WATCHDOG_IMAGE_MS;
-  })();
+  // Cloud check first: a grok VIDEO job must take the cloud watchdog, not the
+  // chunk-scaled local-video one (the provider emits 'activity' on stdout so a
+  // long-but-active render never trips the idle cap).
+  const idleTimeoutMs = isCloudImageJob(job) ? WATCHDOG_CODEX_MS : (runtime?.watchdogMs ?? flatWatchdog(WATCHDOG_IMAGE_MS))(safeParams);
   let lastActivityAt = Date.now();
   const onActivity = (e) => {
     if (e?.generationId === job.id) lastActivityAt = Date.now();
@@ -1576,15 +1634,7 @@ async function runJobLifecycle(job, markDispatched, permit) {
     // Transient, like terminating: no await between this flag and invocation.
     job.providerInvoked = true;
     const request = { ...safeParams, jobId: job.id };
-    const kickoff = job.kind === 'video' && safeParams.chunks > 1 ? mod.generateChainedVideo(request)
-      : job.kind === 'video' ? mod.generateVideo(request)
-      : job.kind === 'html-composition' ? mod.renderComposition(request)
-      : job.kind === 'video-upscale' ? mod.runVideoUpscale(request)
-      : job.kind === 'video-sharing' ? mod.runSharingCopy(request)
-      : job.kind === 'training' ? mod.runTraining(request)
-      : job.kind === 'audio' ? mod.generateAudio(request)
-      : job.kind === 'supercollider' ? mod.renderSuperCollider(request)
-      : mod.generateImage(request);
+    const kickoff = (runtime?.invoke ?? MEDIA_JOB_RUNTIME.image.invoke)(mod, request, safeParams);
     markDispatched();
     await kickoff;
   } catch (err) {
