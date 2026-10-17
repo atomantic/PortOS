@@ -25,7 +25,13 @@ vi.mock('../services/universeBuilder.js', () => ({
   // guard can be exercised independently by overriding this mock per-test.
   listUniverses: vi.fn(async ({ includeDeleted = true } = {}) =>
     (includeDeleted ? universes : universes.filter((u) => !u.deleted))),
-  getUniverse: vi.fn(async (id) => universes.find((u) => u.id === id) || null),
+  ERR_NOT_FOUND: 'NOT_FOUND',
+  // Throws NOT_FOUND for a missing or soft-deleted universe, like the real one.
+  getUniverse: vi.fn(async (id, { includeDeleted = false } = {}) => {
+    const u = universes.find((x) => x.id === id);
+    if (!u || (u.deleted && !includeDeleted)) throw Object.assign(new Error(`Universe not found: ${id}`), { code: 'NOT_FOUND' });
+    return u;
+  }),
   updateUniverse: vi.fn(async (id, patchOrMutator) => {
     const u = universes.find((x) => x.id === id);
     if (!u) return null;
@@ -230,5 +236,22 @@ describe('promoteUniverseCanon', () => {
     await first;
     expect(ingredients.size).toBe(4);
     expect(createIngredient).toHaveBeenCalledTimes(4);
+  });
+
+  it('quietly does nothing for a universe deleted or removed before it runs', async () => {
+    universes[0].deleted = true;
+    expect(await promoteUniverseCanon('u-1')).toBeNull();
+    expect(await promoteUniverseCanon('u-missing')).toBeNull();
+    expect(createIngredient).not.toHaveBeenCalled();
+  });
+
+  it('waits for the boot walk instead of racing it for the same catalog ids', async () => {
+    const boot = migrateBibleToCatalog({ force: true });
+    universes[0].places.push({ id: 'p-3', name: 'Rooftop' });
+    const save = promoteUniverseCanon('u-1');
+    const [bootResult] = await Promise.all([boot, save]);
+    expect(bootResult.stats.errors).toBe(0);
+    expect(universes[0].places.every((p) => p.ingredientId)).toBe(true);
+    expect(new Set(createIngredient.mock.calls.map(([input]) => input.id)).size).toBe(createIngredient.mock.calls.length);
   });
 });

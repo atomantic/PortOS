@@ -22,7 +22,7 @@
 import { createHash } from 'crypto';
 import { readMarker, writeMarker } from '../lib/migrationMarker.js';
 import { BIBLE_KINDS, BIBLE_FIELD } from '../lib/storyBible.js';
-import { listUniverses, getUniverse, updateUniverse } from '../services/universeBuilder.js';
+import { listUniverses, getUniverse, updateUniverse, ERR_NOT_FOUND } from '../services/universeBuilder.js';
 import * as catalogDB from '../services/catalogDB.js';
 
 // v2 re-walks every install once: before canon entries were promoted on save,
@@ -211,8 +211,35 @@ export function hasUnpromotedCanon(universe) {
 }
 
 // One promotion per universe at a time; a save landing mid-walk re-runs once
-// the current walk finishes so its new entries are not missed.
+// the current walk finishes so its new entries are not missed. The boot walk
+// goes through the same map so a save during it can't race the same
+// deterministic catalog id.
 const promoting = new Map();
+
+// A deleted or missing universe has nothing left to promote.
+async function loadLiveUniverse(universeId) {
+  const universe = await getUniverse(universeId, { includeDeleted: true }).catch((err) => {
+    if (err?.code === ERR_NOT_FOUND) return null;
+    throw err;
+  });
+  return universe && !universe.deleted ? universe : null;
+}
+
+function startPromotion(universeId, firstPass = null) {
+  const state = { again: !firstPass, promise: null };
+  state.promise = (async () => {
+    let stats = firstPass ? await firstPass() : null;
+    while (state.again) {
+      state.again = false;
+      const universe = await loadLiveUniverse(universeId);
+      if (!universe || !hasUnpromotedCanon(universe)) break;
+      stats = await migrateUniverse(universe);
+    }
+    return stats;
+  })().finally(() => promoting.delete(universeId));
+  promoting.set(universeId, state);
+  return state.promise;
+}
 
 /**
  * Promote one universe's not-yet-promoted canon entries to catalog rows and
@@ -225,19 +252,7 @@ export function promoteUniverseCanon(universeId) {
     running.again = true;
     return running.promise;
   }
-  const state = { again: false, promise: null };
-  state.promise = (async () => {
-    let stats = null;
-    do {
-      state.again = false;
-      const universe = await getUniverse(universeId);
-      if (!universe || universe.deleted || !hasUnpromotedCanon(universe)) break;
-      stats = await migrateUniverse(universe);
-    } while (state.again);
-    return stats;
-  })().finally(() => promoting.delete(universeId));
-  promoting.set(universeId, state);
-  return state.promise;
+  return startPromotion(universeId);
 }
 
 /**
@@ -256,7 +271,9 @@ export async function migrateBibleToCatalog({ force = false } = {}) {
   const totals = { universesScanned: 0, promoted: 0, peerReconciled: 0, skipped: 0, errors: 0 };
   for (const universe of universes) {
     if (universe.deleted) continue;
-    const result = await migrateUniverse(universe);
+    while (promoting.has(universe.id)) await promoting.get(universe.id).promise.catch(() => {});
+    let result;
+    await startPromotion(universe.id, async () => { result = await migrateUniverse(universe); });
     totals.universesScanned++;
     totals.promoted += result.promoted;
     totals.peerReconciled += result.peerReconciled;
