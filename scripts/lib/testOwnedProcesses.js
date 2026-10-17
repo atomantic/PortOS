@@ -57,15 +57,16 @@ function linuxProcess(pid) {
 
 // The Darwin reader uses the existing system Python, with no installation or
 // cache. Missing capabilities fail closed; raw metadata never reaches a log.
-export function readTestProcesses(pids = null, { platform = process.platform, exec = execFileSync } = {}) {
+export function readTestProcesses(pids = null, { platform = process.platform, exec } = {}) {
   try {
+    const execute = exec ?? execFileSync;
     if (platform === 'darwin') {
       try {
-        return JSON.parse(exec('/usr/bin/python3', ['-I', '-S', reader], {
+        return JSON.parse(execute('/usr/bin/python3', ['-I', '-S', reader], {
           input: JSON.stringify(pids), encoding: 'utf8', timeout: 5000,
           maxBuffer: 16 * 1024 * 1024, stdio: ['pipe', 'pipe', 'ignore'],
         }));
-      } catch { return legacyBrowserProcesses(pids, exec); }
+      } catch { return legacyBrowserProcesses(pids, execute); }
     }
     if (platform !== 'linux') return null;
     const ids = pids ?? readdirSync('/proc').filter(name => /^\d+$/.test(name)).map(Number);
