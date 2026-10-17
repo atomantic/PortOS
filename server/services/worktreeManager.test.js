@@ -1602,7 +1602,7 @@ describe('cleanupOrphanedWorktrees ownership and removal', () => {
     lstat.mockReset().mockResolvedValue({});
   });
 
-  it('removes only the clean inactive agent and preserves active, human, locked and dirty trees', async () => {
+  it('removes only the clean inactive agent and preserves active, human, locked, dirty and detached trees', async () => {
     const entries = [
       { path: '/repo', branch: 'main' },
       { path: join(PATHS.worktrees + '-old', 'agent-outside'), branch: 'outside' },
@@ -1611,12 +1611,15 @@ describe('cleanupOrphanedWorktrees ownership and removal', () => {
       { path: tree('agent-locked'), branch: 'cos/task/agent-locked', locked: true },
       { path: tree('agent-dead'), branch: 'cos/task/agent-dead' },
       { path: tree('agent-dirty'), branch: 'cos/task/agent-dirty' },
+      // Detached HEAD (e.g. interrupted rebase) may carry commits no ref holds; removal would orphan them.
+      { path: tree('agent-detached'), detached: true },
     ];
     // `worktree list` reflects removals made so far, as real git does — removal is
     // verified against the registration afterwards.
     const removedPaths = new Set();
     const listing = () => entries.filter(entry => !removedPaths.has(entry.path)).flatMap(entry => [
-      'worktree ' + entry.path, 'HEAD abc123', 'branch refs/heads/' + entry.branch,
+      'worktree ' + entry.path, 'HEAD abc123',
+      entry.detached ? 'detached' : 'branch refs/heads/' + entry.branch,
       ...(entry.locked ? ['locked protected'] : []), '',
     ]).join('\n');
     // Include the same on-disk entries in the external-repo scan: ownership
