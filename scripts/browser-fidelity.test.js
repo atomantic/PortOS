@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -13,6 +13,7 @@ afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: 
 function fixture({ outcome = 'passed', changed = false, dirty = false, wrongTree = false } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'browser-fidelity-contract-')); roots.push(root);
   const posts = [];
+  const seen = {};
   let finished = false;
   const request = vi.fn(async (path, body) => {
     if (body) { posts.push(body); return { state: body.state, context: body.context, creator: { login: 'fixture' } }; }
@@ -32,6 +33,7 @@ function fixture({ outcome = 'passed', changed = false, dirty = false, wrongTree
     expect(env.PORTOS_BROWSER_TEST_PROFILE).toBe('fidelity');
     expect(env.PORTOS_REQUIRE_BROWSER_SUITES).toBe('1');
     roots.push(dirname(env.PORTOS_CI_DIAGNOSTICS_DIR));
+    seen.diagnostics = env.PORTOS_CI_DIAGNOSTICS_DIR;
     expect(env.PORTOS_CI_BROWSER_OWNER).toBeUndefined();
     expect(env.CHROME_PATH).toBe('/synthetic/chrome');
     const dir = join(env.PORTOS_CI_DIAGNOSTICS_DIR, 'portos-vitest-contract');
@@ -52,7 +54,7 @@ function fixture({ outcome = 'passed', changed = false, dirty = false, wrongTree
       () => resolve({ status: 143, interrupted: 'SIGTERM' }), { once: true }));
     return { status: outcome === 'launcher' ? 1 : 0 };
   });
-  return { root, posts, run, options: { pr: 12, repository: 'fixture/PortOS', receiptPath: join(root, 'receipt.json'),
+  return { root, posts, run, seen, options: { pr: 12, repository: 'fixture/PortOS', receiptPath: join(root, 'receipt.json'),
     request, git, run, toolchain: async () => ({ chromePath: '/synthetic/chrome',
       receipt: { chrome: 'Chrome synthetic', ffmpeg: 'FFmpeg synthetic', renderBackend: { kind: 'unknown' } } }), env: { PATH: process.env.PATH, PORTOS_CI_BROWSER_OWNER: 'unit', GITHUB_TOKEN: 'synthetic credential', OPENAI_API_KEY: 'synthetic key' } } };
 }
@@ -69,6 +71,25 @@ describe('local fidelity publication through the existing runner and status boun
     expect(f.posts[1].context.length).toBeLessThanOrEqual(100);
     expect(f.posts[1].description).toMatch(/^receipt sha256=[a-f0-9]{64}$/);
     expect(JSON.stringify(receipt)).not.toMatch(/synthetic credential|synthetic key/);
+  });
+
+  it('removes diagnostics and the private root after an admitted run, keeping an external receipt', async () => {
+    const f = fixture();
+    const result = await publishBrowserFidelity(f.options);
+    expect(existsSync(result.receiptPath)).toBe(true);
+    expect(existsSync(f.seen.diagnostics)).toBe(false);
+    expect(existsSync(dirname(f.seen.diagnostics))).toBe(false);
+  });
+
+  it('retains diagnostics for a rejected run, then a later run reclaims the dead-owner root', async () => {
+    const failed = fixture({ outcome: 'failed' });
+    await expect(publishBrowserFidelity(failed.options)).rejects.toThrow('not admitted');
+    expect(existsSync(failed.seen.diagnostics)).toBe(true);
+    expect(existsSync(join(dirname(failed.seen.diagnostics), '.owner.pid'))).toBe(true);
+    // Simulate the owning process having exited.
+    writeFileSync(join(dirname(failed.seen.diagnostics), '.owner.pid'), '2147483646 0\n');
+    await publishBrowserFidelity(fixture().options);
+    expect(existsSync(dirname(failed.seen.diagnostics))).toBe(false);
   });
 
   it('binds default git identity to the script checkout when invoked from another directory', () => {
