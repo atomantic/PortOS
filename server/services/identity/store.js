@@ -142,7 +142,11 @@ export async function loadJSON(filePath, defaultVal, { strict = false } = {}) {
   // costs no goals, so reporting Strategist "unavailable" off it would be a lie in
   // the opposite direction: the goals were right there and readable.
   if (strict && !ok && !mlGoals) {
-    throw Object.assign(new Error(`Unreadable identity file: ${filePath}`), { code: 'UNREADABLE_STORE' });
+    throw Object.assign(new Error(`Unreadable identity file: ${filePath}`), {
+      code: 'UNREADABLE_STORE',
+      // Host path stays in server logs; the HTTP envelope uses this message.
+      responseMessage: 'Durable data store is unreadable',
+    });
   }
   return data;
 }

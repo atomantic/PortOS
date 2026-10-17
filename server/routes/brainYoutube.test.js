@@ -5,7 +5,9 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 
 const listIngests = vi.fn();
 
-vi.mock('../services/youtubeIngest.js', () => ({ listIngests }));
+const attachIngestSseClient = vi.fn();
+
+vi.mock('../services/youtubeIngest.js', () => ({ listIngests, attachIngestSseClient }));
 
 const { default: routes } = await import('./brainYoutube.js');
 
@@ -19,6 +21,22 @@ const makeApp = () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe('GET /api/brain/youtube/ingest/:jobId/events', () => {
+  it('answers an unknown job with the standard NOT_FOUND envelope before any SSE headers', async () => {
+    attachIngestSseClient.mockReturnValue(false);
+
+    const response = await request(makeApp()).get('/api/brain/youtube/ingest/job-missing/events');
+
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({
+      error: 'Ingest job not found',
+      code: 'NOT_FOUND',
+      timestamp: expect.any(Number),
+    });
+    expect(attachIngestSseClient).toHaveBeenCalledWith('job-missing', expect.anything());
+  });
 });
 
 describe('GET /api/brain/youtube/ingests', () => {

@@ -10,7 +10,7 @@ import {
   parseRiggedVariant,
   riggedVariantForId,
 } from '../lib/avatarVariants.js';
-import { ServerError, getErrorCode } from '../lib/errorHandler.js';
+import { ServerError, asyncHandler, getErrorCode } from '../lib/errorHandler.js';
 import { buildClipCoverage } from '../services/rigging/clipCapabilities.js';
 import { retargetRunPaths } from '../services/rigging/retarget.js';
 import { getModel, listModels } from '../services/imageTo3d/db.js';
@@ -71,13 +71,15 @@ router.head('/model.glb', async (req, res) => {
   return res.status(200).end();
 });
 
-router.get('/model.glb', async (req, res) => {
+router.get('/model.glb', asyncHandler(async (req, res) => {
   const path = await resolveAvatarPath(req.query.variant);
   if (!path || !(await pathExists(path))) {
+    // A missing model is the normal pre-generation state, not a server fault.
+    const severity = 'warning';
     if (isRiggedSpelling(req.query.variant)) {
-      throw new ServerError('That animated character is not available. Rig and animate the record first.', { status: 404 });
+      throw new ServerError('That animated character is not available. Rig and animate the record first.', { status: 404, severity });
     }
-    throw new ServerError('No avatar model configured. Drop a GLB at data/avatar/model.glb', { status: 404 });
+    throw new ServerError('No avatar model configured. Drop a GLB at data/avatar/model.glb', { status: 404, severity });
   }
   res.set('Content-Type', 'model/gltf-binary');
   res.set('Cache-Control', 'public, max-age=60');
@@ -102,7 +104,7 @@ router.get('/model.glb', async (req, res) => {
     }
   });
   stream.pipe(res);
-});
+}));
 
 // One selector entry for a ready animated record: the `?variant=` spelling
 // that selects it, the avatar-route URL that serves it (variant-guarded and
@@ -125,10 +127,10 @@ const riggedAvatarEntry = (record) => {
 // The animated records the avatar selectors may offer. Read-only: a DB list
 // filtered to verified retargets, each carrying its coverage — an empty list
 // (no records, none animated yet) is the normal fresh-install answer, not an error.
-router.get('/rigged', async (_req, res) => {
+router.get('/rigged', asyncHandler(async (_req, res) => {
   const records = await listModels();
   const ready = records.filter(isAnimatedRecordReady).map(riggedAvatarEntry).filter((entry) => entry.variant);
   res.json({ records: ready });
-});
+}));
 
 export default router;

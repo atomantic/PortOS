@@ -91,6 +91,14 @@ describe('loadJSON — { strict: true } (#2726)', () => {
       .rejects.toThrow(/Unreadable identity file/);
   });
 
+  it('keeps the host path in the error message but redacts the HTTP-facing responseMessage', async () => {
+    writeFileSync(GOALS_FILE, '{"goals": [{');
+    const err = await loadJSON(GOALS_FILE, DEFAULT_GOALS, { strict: true }).catch((e) => e);
+    expect(err.code).toBe('UNREADABLE_STORE');
+    expect(err.message).toContain(GOALS_FILE);
+    expect(err.responseMessage).toBe('Durable data store is unreadable');
+  });
+
   it('throws for a file truncated to zero bytes (a partial write, not an empty list)', async () => {
     writeFileSync(GOALS_FILE, '');
     await expect(loadJSON(GOALS_FILE, DEFAULT_GOALS, { strict: true }))
