@@ -311,3 +311,18 @@ describe('health archive/import coordination (#10698)', () => {
     });
   }
 });
+
+describe('backup directory shared with the backup service state (#11781)', () => {
+  it('lists and deletes only archive-shaped names, never state.json', async () => {
+    const backup = join(root, 'backup');
+    await mkdir(backup, { recursive: true });
+    const archive = 'health-2026-01-01T00-00-00-00000000-0000-4000-8000-000000000000.tar.gz';
+    await writeFile(join(backup, 'state.json'), '{}');
+    await writeFile(join(backup, archive), 'fixture');
+    expect((await getBackups()).map(row => row.name)).toEqual([archive]);
+    await expect(deleteBackup('state.json')).rejects.toMatchObject({ status: 400, code: 'INVALID_FILENAME' });
+    expect(await readFile(join(backup, 'state.json'), 'utf8')).toBe('{}');
+    await expect(deleteBackup(archive)).resolves.toEqual({ deleted: archive });
+    await rm(join(backup, 'state.json'), { force: true });
+  });
+});
