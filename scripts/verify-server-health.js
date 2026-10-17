@@ -20,7 +20,7 @@
  * is reported as unhealthy. The recovery it triggers is one extra `pm2 start`,
  * which cannot make an already-healthy install worse.
  *
- * `/api/system/health` is in the always-public set (`PUBLIC_API_PATHS`), so
+ * `/api/system/health` is in the always-public set (`ALWAYS_PUBLIC_API_PATHS`), so
  * this works with the optional instance password on. All three candidate URLs
  * are probed because the listening scheme/port depends on whether a cert is
  * provisioned: HTTPS on :5555 plus the loopback HTTP mirror on :5553, or plain
