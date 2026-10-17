@@ -57,6 +57,7 @@ vi.mock('./codeReview.js', async (importOriginal) => ({
 
 import { completeAgent } from './cosAgentLifecycle.js';
 import { removeCompletionSentinel } from './agentCompletionCleanup.js';
+import { getTaskOutputHook } from './taskTypeHooks.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { retireDeadAgent } from './agentFinalization.js';
 import { PRIVATE_SECURITY_TASK_TYPE } from '../lib/privateSecurityPolicy.js';
@@ -121,10 +122,23 @@ describe('retireDeadAgent (#8440)', () => {
       executionInterruption, errorAnalysis: expect.objectContaining({ category: 'content-refusal' }) }));
   });
 
-  it('removes the completion sentinel before checking for a runId', async () => {
-    await retireDeadAgent({ agent: AGENT, task: TASK, success: false, exitCode: 1, duration: 0 });
+  it('dispatches the output hook before removing the sentinel, and the run and agent records close after both', async () => {
+    const order = [];
+    getTaskOutputHook.mockResolvedValueOnce(async () => { order.push('hook'); return { accepted: true }; });
+    removeCompletionSentinel.mockImplementation(async () => { order.push('sentinel-removed'); });
+    completeAgentRun.mockImplementation(async () => { order.push('run'); });
+    completeAgent.mockImplementation(async () => { order.push('agent'); });
 
-    expect(removeCompletionSentinel).toHaveBeenCalledWith({ agentId: 'agent-dead', agentState: AGENT });
+    await retireDeadAgent({
+      agent: { ...AGENT, metadata: { runId: 'run-1' } },
+      task: TASK,
+      success: false,
+      exitCode: 1,
+      duration: 0,
+    });
+
+    expect(removeCompletionSentinel).toHaveBeenCalledWith({ agentId: 'agent-dead', agentState: expect.objectContaining({ id: 'agent-dead' }) });
+    expect(order).toEqual(['hook', 'sentinel-removed', 'run', 'agent']);
   });
 
   // No immutable source inventory survives to validate a recovered private-security
