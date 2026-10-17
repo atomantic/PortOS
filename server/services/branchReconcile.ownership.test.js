@@ -55,6 +55,7 @@ vi.mock('./supersededLedger.js', async (importOriginal) => ({
 }));
 
 const { reconcile, cleanupMerged, reapSupersededBranches } = await import('./branchReconcile.js');
+const { clearAgentDispatching, getActiveAgentIds, markAgentDispatching } = await import('./agentState.js');
 const { deleteMergedBranches } = await import('./git.js');
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -152,6 +153,25 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     expect(result.wip).toContainEqual(expect.objectContaining({ branch: 'claim/issue-14' }));
     for (const path of [locked, dirty, unmerged]) expect(existsSync(path)).toBe(true);
     expect(await branches()).toEqual(expect.arrayContaining(['claim/issue-12', 'claim/issue-13', 'claim/issue-14']));
+  });
+
+  it('holds a clean agent tree at the default HEAD while its dispatch is still registering (#11775)', async () => {
+    const root = join(repo, '.claude', 'worktrees');
+    await mkdir(root, { recursive: true });
+    const tree = await addTree(join(root, 'agent-dispatching'), 'agent/dispatching');
+    markAgentDispatching('agent-dispatching');
+    try {
+      const held = await reconcile(repo, { activeAgentIds: new Set(getActiveAgentIds()) });
+      expect(held.cleaned).not.toContain('agent/dispatching');
+      expect(held.skipped).toContainEqual(expect.objectContaining({ branch: 'agent/dispatching', reason: 'worktree-active-agent' }));
+      expect(existsSync(tree)).toBe(true);
+    } finally {
+      clearAgentDispatching('agent-dispatching');
+    }
+    // Once dispatch settles without registering an owner, the same tree is reaped.
+    const reaped = await reconcile(repo, { activeAgentIds: new Set(getActiveAgentIds()) });
+    expect(reaped.cleaned).toContain('agent/dispatching');
+    expect(existsSync(tree)).toBe(false);
   });
 
   it('leaves the operator-initiated merged-branch cleanup able to remove an unmanaged tree', async () => {
