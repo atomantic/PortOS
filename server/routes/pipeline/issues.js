@@ -51,6 +51,8 @@ import {
 import { ARC_ROLES } from '../../lib/storyArc.js';
 import { mapServiceError, countExtractedCanon } from './shared.js';
 
+import textStageRecoveryRouter from './textStageRecovery.js';
+
 const router = Router();
 
 // ---- Issue schemas ----
@@ -431,6 +433,8 @@ router.delete('/issues/:id', asyncHandler(async (req, res) => {
 // =====================
 // Stage operations
 // =====================
+
+router.use(textStageRecoveryRouter);
 
 router.post('/issues/:id/stages/:stageId/generate', asyncHandler(async (req, res) => {
   const { id, stageId } = req.params;

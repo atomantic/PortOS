@@ -5,6 +5,8 @@ import { MockEventSource, lastEventSource } from '../../../test/mockEventSource'
 
 vi.mock('../../../services/api', () => ({
   generatePipelineStage: vi.fn(),
+  getPipelineStageRecovery: vi.fn(async () => ({ recoverable: false, ownership: 'local', live: true })),
+  recoverPipelineStage: vi.fn(),
   updatePipelineIssue: vi.fn(),
   restorePipelineStageVersion: vi.fn(),
   pipelineStageProgressUrl: (issueId, stageId) => `/api/pipeline/issues/${issueId}/stages/${stageId}/generate/progress`,
@@ -21,7 +23,7 @@ vi.mock('../../ui/Toast', () => ({
 
 import TextStagePanel from './TextStagePanel';
 import toast from '../../ui/Toast';
-import { generatePipelineStage, updatePipelineIssue } from '../../../services/api';
+import { generatePipelineStage, updatePipelineIssue, getPipelineStageRecovery, recoverPipelineStage } from '../../../services/api';
 
 const makeIssue = (ideaOverrides = {}) => ({
   id: 'iss-1',
@@ -44,6 +46,137 @@ const renderPanel = (issue, extra = {}) => render(
 describe('TextStagePanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('offers explicit legacy takeover, preserves content and unlocks generation after success', async () => {
+    getPipelineStageRecovery.mockResolvedValueOnce({ revision: 'legacy-revision', ownership: 'unknown', live: false, recoverable: true });
+    const issue = makeIssue({ status: 'generating', output: 'Preserved draft' });
+    const stage = { ...issue.stages.idea, status: 'error' };
+    recoverPipelineStage.mockResolvedValueOnce({ issue: { ...issue, stages: { idea: stage } }, stage });
+    const onStageUpdate = vi.fn();
+    const { rerender } = renderPanel(issue, { onStageUpdate });
+    expect(screen.getByRole('button', { name: 'Generate' })).toBeDisabled();
+    await userEvent.click(await screen.findByRole('button', { name: 'Take over stage' }));
+    expect(screen.getByText(/may still be running on another machine/)).toBeInTheDocument();
+    expect(recoverPipelineStage).toHaveBeenCalledWith('iss-1', 'idea', 'legacy-revision', { silent: true });
+    expect(onStageUpdate).toHaveBeenCalledWith('idea', stage, expect.any(Object));
+    rerender(<TextStagePanel issue={{ ...issue, stages: { idea: stage } }} stageId="idea" />);
+    expect(screen.getByRole('button', { name: 'Generate' })).toBeEnabled();
+    expect(screen.getByLabelText('Output')).toHaveValue('Preserved draft');
+  });
+
+  it.each(['success', 'failure'])('ignores a pending takeover %s after switching issue and stage', async (outcome) => {
+    getPipelineStageRecovery.mockResolvedValueOnce({ revision: 'revision-a', ownership: 'unknown', live: false, recoverable: true });
+    let resolveRecovery;
+    let rejectRecovery;
+    recoverPipelineStage.mockReturnValueOnce(new Promise((resolve, reject) => {
+      resolveRecovery = resolve;
+      rejectRecovery = reject;
+    }));
+    const issueA = makeIssue({ status: 'generating', output: 'Draft A' });
+    const onStageUpdate = vi.fn();
+    const { rerender } = renderPanel(issueA, { onStageUpdate });
+    await userEvent.click(await screen.findByRole('button', { name: 'Take over stage' }));
+    const issueB = { id: 'iss-2', stages: { prose: { status: 'ready', input: '', output: 'Draft B', runHistory: [] } } };
+    rerender(<TextStagePanel issue={issueB} stageId="prose" onStageUpdate={onStageUpdate} />);
+    expect(screen.getByLabelText('Output')).toHaveValue('Draft B');
+    await act(async () => {
+      if (outcome === 'success') {
+        const stage = { ...issueA.stages.idea, status: 'error' };
+        resolveRecovery({ issue: { ...issueA, stages: { idea: stage } }, stage });
+      } else {
+        rejectRecovery(new Error('Stage A changed'));
+      }
+    });
+    expect(onStageUpdate).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Output')).toHaveValue('Draft B');
+    expect(screen.getByRole('button', { name: 'Generate' })).toBeEnabled();
+  });
+
+  it.each(['success', 'failure'])('ignores takeover %s after leaving and returning to a replaced stage', async (outcome) => {
+    getPipelineStageRecovery.mockResolvedValueOnce({ revision: 'old-revision', ownership: 'unknown', live: false, recoverable: true });
+    let resolveRecovery;
+    let rejectRecovery;
+    recoverPipelineStage.mockReturnValueOnce(new Promise((resolve, reject) => {
+      resolveRecovery = resolve;
+      rejectRecovery = reject;
+    }));
+    const issueA = makeIssue({ status: 'generating', output: 'Old draft A' });
+    const onStageUpdate = vi.fn();
+    const { rerender } = renderPanel(issueA, { onStageUpdate });
+    await userEvent.click(await screen.findByRole('button', { name: 'Take over stage' }));
+    rerender(<TextStagePanel issue={{ id: 'iss-2', stages: { idea: { status: 'ready', output: 'Draft B' } } }} stageId="idea" onStageUpdate={onStageUpdate} />);
+    const updatedIssueA = makeIssue({ status: 'ready', output: 'New draft A from another action' });
+    rerender(<TextStagePanel issue={updatedIssueA} stageId="idea" onStageUpdate={onStageUpdate} />);
+    await act(async () => {
+      if (outcome === 'success') {
+        const stage = { ...issueA.stages.idea, status: 'error' };
+        resolveRecovery({ issue: { ...issueA, stages: { idea: stage } }, stage });
+      } else {
+        rejectRecovery(new Error('Old takeover failed'));
+      }
+    });
+    expect(onStageUpdate).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Output')).toHaveValue('New draft A from another action');
+    expect(screen.getByRole('button', { name: 'Generate' })).toBeEnabled();
+  });
+
+  it.each(['success', 'failure'])('ignores takeover %s after the panel unmounts', async (outcome) => {
+    getPipelineStageRecovery.mockResolvedValueOnce({ revision: 'old-revision', ownership: 'unknown', live: false, recoverable: true });
+    let settle;
+    recoverPipelineStage.mockReturnValueOnce(new Promise((resolve, reject) => {
+      settle = () => outcome === 'success' ? resolve({ stage: { status: 'error' } }) : reject(new Error('Old takeover failed'));
+    }));
+    const onStageUpdate = vi.fn();
+    const { unmount } = renderPanel(makeIssue({ status: 'generating' }), { onStageUpdate });
+    await userEvent.click(await screen.findByRole('button', { name: 'Take over stage' }));
+    unmount();
+    await act(async () => settle());
+    expect(onStageUpdate).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('disables takeover while preserving unsaved seed and output edits', async () => {
+    getPipelineStageRecovery.mockResolvedValueOnce({ revision: 'legacy-revision', ownership: 'unknown', live: false, recoverable: true });
+    renderPanel(makeIssue({ status: 'generating', input: 'Saved seed', output: 'Saved draft' }));
+    const takeover = await screen.findByRole('button', { name: 'Take over stage' });
+    expect(takeover).toBeEnabled();
+    await userEvent.type(screen.getByPlaceholderText('seed…'), ' with unsaved detail');
+    await userEvent.type(screen.getByLabelText('Output'), '\nUnsaved second paragraph.');
+    expect(takeover).toBeDisabled();
+    await userEvent.click(takeover);
+    expect(recoverPipelineStage).not.toHaveBeenCalled();
+    expect(screen.getByPlaceholderText('seed…')).toHaveValue('Saved seed with unsaved detail');
+    expect(screen.getByLabelText('Output')).toHaveValue('Saved draft\nUnsaved second paragraph.');
+  });
+
+  it.each(['A local generation is active.', 'The stage changed. Refresh it before taking over.'])(
+    'keeps generation blocked and content intact when takeover is refused: %s', async (message) => {
+      getPipelineStageRecovery.mockResolvedValueOnce({ revision: 'shown-revision', ownership: 'unknown', live: false, recoverable: true });
+      recoverPipelineStage.mockRejectedValueOnce(new Error(message));
+      const onStageUpdate = vi.fn();
+      renderPanel(makeIssue({ status: 'generating', output: 'Keep this draft' }), { onStageUpdate });
+      await userEvent.click(await screen.findByRole('button', { name: 'Take over stage' }));
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith(message));
+      expect(onStageUpdate).not.toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: 'Generate' })).toBeDisabled();
+      expect(screen.getByLabelText('Output')).toHaveValue('Keep this draft');
+    },
+  );
+
+  it.each([
+    { ownership: 'foreign', live: false, text: /belongs to another machine/ },
+    { ownership: 'unknown', live: true, text: /active on this machine/ },
+  ])('does not offer recovery for $ownership ownership with live=$live', async ({ ownership, live, text }) => {
+    getPipelineStageRecovery.mockResolvedValueOnce({ ownership, live, recoverable: false });
+    renderPanel(makeIssue({ status: 'generating' }));
+    expect(await screen.findByText(text)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Take over stage' })).not.toBeInTheDocument();
   });
 
   it('Generate success: calls the generate API with the right shape and reflects the new content once the parent lifts it', async () => {
@@ -122,9 +255,10 @@ describe('TextStagePanel', () => {
     expect(screen.getByRole('button', { name: /Save edits/i })).toBeDisabled();
   });
 
-  it('resume-on-mount: mounting with server-side "generating" status keeps Generate disabled without starting a fresh run', () => {
+  it('resume-on-mount: mounting with server-side "generating" status keeps Generate disabled without starting a fresh run', async () => {
     const issue = makeIssue({ status: 'generating' });
     renderPanel(issue);
+    await screen.findByText('A generation is active on this machine.');
 
     expect(screen.getByRole('button', { name: 'Generate' })).toBeDisabled();
     expect(generatePipelineStage).not.toHaveBeenCalled();

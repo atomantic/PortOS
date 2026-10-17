@@ -18,6 +18,7 @@
  * emit is a no-op and generation is byte-for-byte the un-streamed path.
  */
 
+import { codedError } from '../../lib/codedError.js';
 import { randomUUID } from 'node:crypto';
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instanceIdentity.js';
 import { runStagedLLM, resolveStageContext } from '../stageRunner.js';
@@ -25,7 +26,7 @@ import { getStage } from '../promptService.js';
 import { beginStageProgress, emitStageProgress, finishStageProgress } from './textStageProgress.js';
 import { getSeries } from './series.js';
 import { extractCanonFromProse, summarizeCanonExtraction } from '../universeCanon.js';
-import { getIssue, listIssues, updateStage, updateStageWithLatest, assertStageUnlocked, TEXT_STAGE_IDS } from './issues.js';
+import { getIssue, listIssues, updateStage, updateStageWithLatest, assertStageUnlocked, textStageRevision, TEXT_STAGE_IDS } from './issues.js';
 import { pickCanon } from './seriesCanon.js';
 import { getUniverse } from '../universeBuilder.js';
 import { compareIssuesByPosition, NO_LINKED_UNIVERSE_PLACEHOLDER } from './arcPlanner.js';
@@ -38,7 +39,9 @@ import { usableInputTokens, trimContextToBudget, CHARS_PER_TOKEN } from '../../l
 import { escapeRegExp } from '../../lib/textUtils.js';
 
 // Separate from the advisory progress channel: overlapping runs each stay live.
-const liveGenerations = new Set();
+const liveGenerations = new Map();
+const hasLiveGeneration = (issueId, stageId) => [...liveGenerations.values()]
+  .some((run) => run.issueId === issueId && run.stageId === stageId);
 
 const STAGE_TO_TEMPLATE = Object.freeze({
   idea: 'pipeline-idea-expansion',
@@ -885,8 +888,8 @@ export async function generateStage(issueId, stageId, options = {}) {
     throw new Error(`generateStage: unsupported stageId "${stageId}"`);
   }
   // Generation may overlap, but only the first run owns this stream.
-  const generation = { id: randomUUID(), instanceId: await getInstanceId() };
-  liveGenerations.add(generation.id);
+  const generation = { id: randomUUID(), instanceId: null };
+  liveGenerations.set(generation.id, { issueId, stageId });
   const ownsProgress = beginStageProgress(issueId, stageId);
   const emit = (payload) => {
     if (ownsProgress) emitStageProgress(issueId, stageId, payload);
@@ -894,7 +897,10 @@ export async function generateStage(issueId, stageId, options = {}) {
   emit({ type: 'start', issueId, stageId, at: new Date().toISOString() });
   // Settle to an outcome object rather than try/catch so the terminal frame
   // ships on BOTH paths before the error resumes bubbling to the caller.
-  const outcome = await runTextStage(issueId, stageId, options, emit, generation)
+  const outcome = await getInstanceId().then((instanceId) => {
+    generation.instanceId = instanceId;
+    return runTextStage(issueId, stageId, options, emit, generation);
+  })
     .then((result) => ({ result }), (error) => ({ error }));
   liveGenerations.delete(generation.id);
   if (outcome.error) {
@@ -977,6 +983,37 @@ async function runTextStage(issueId, stageId, options, emit, generation) {
     });
     throw error;
   }
+}
+
+const hasUnknownOwner = (stage) => !stage.generation?.instanceId
+  || stage.generation.instanceId === UNKNOWN_INSTANCE_ID;
+
+export async function getStageRecovery(issueId, stageId) {
+  const issue = await getIssue(issueId);
+  const stage = issue.stages[stageId];
+  const instanceId = await getInstanceId();
+  const ownership = hasUnknownOwner(stage) ? 'unknown'
+    : (stage.generation.instanceId === instanceId ? 'local' : 'foreign');
+  const live = hasLiveGeneration(issueId, stageId);
+  return { revision: textStageRevision(stage), ownership, live,
+    recoverable: stage.status === 'generating' && ownership === 'unknown' && !live };
+}
+
+export function recoverLegacyStage(issueId, stageId, revision) {
+  return updateStageWithLatest(issueId, stageId, (current) => {
+    if (hasLiveGeneration(issueId, stageId)) {
+      throw codedError('A local generation is active. Wait for it to finish.', 'PIPELINE_RECOVERY_CONFLICT');
+    }
+    if (textStageRevision(current) !== revision) {
+      throw codedError('The stage changed. Refresh it before taking over.', 'PIPELINE_RECOVERY_CONFLICT');
+    }
+    if (current.status !== 'generating' || !hasUnknownOwner(current)) {
+      throw codedError('Only generating stages with unknown execution ownership can be taken over.', 'PIPELINE_RECOVERY_CONFLICT');
+    }
+    // Keep drafts, run history and editorial locks; this does not generate or publish.
+    return { status: 'error', generation: null,
+      errorMessage: 'Operator recovered unknown execution ownership — generate again.' };
+  });
 }
 
 /** Only this install's abandoned generations may be demoted; legacy ownership is unknown. */

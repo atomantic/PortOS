@@ -1,3 +1,8 @@
+import express from 'express';
+import { request } from '../../lib/testHelper.js';
+import { errorMiddleware } from '../../lib/errorHandler.js';
+import recoveryRouter from '../../routes/pipeline/textStageRecovery.js';
+import { getInstanceId } from '../instanceIdentity.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
@@ -118,6 +123,61 @@ describe('pipeline text stage generator', () => {
     const issue = await issuesSvc.createIssue({ seriesId: series.id, title: 'The Hush' });
     return { series, issue };
   }
+
+  const recoveryApp = express();
+  recoveryApp.use(express.json(), recoveryRouter, errorMiddleware);
+  const recoveryPath = (id, action) => `/issues/${id}/stages/idea/${action}`;
+
+  it('route takeover preserves drafts, history and locks, then allows a fresh generation after unlocking', async () => {
+    const { issue } = await seed();
+    await issuesSvc.updateStage(issue.id, 'idea', { status: 'generating', input: 'Seed', output: 'Draft',
+      locked: true, lastRunId: 'old-run', runHistory: [{ runId: 'earlier', input: 'Prior seed', output: 'Prior draft' }] });
+    const before = (await issuesSvc.getIssue(issue.id)).stages.idea;
+    const status = await request(recoveryApp).get(recoveryPath(issue.id, 'recovery'));
+    expect(status.body).toMatchObject({ ownership: 'unknown', live: false, recoverable: true });
+    const result = await request(recoveryApp).post(recoveryPath(issue.id, 'recover')).send({ revision: status.body.revision });
+    expect(result.status).toBe(200);
+    expect(result.body.stage).toMatchObject({ status: 'error', input: before.input, output: before.output,
+      runHistory: before.runHistory, lastRunId: before.lastRunId, locked: true });
+    await expect(textStages.generateStage(issue.id, 'idea')).rejects.toThrow(/locked/i);
+    await issuesSvc.updateStage(issue.id, 'idea', { locked: false });
+    expect((await textStages.generateStage(issue.id, 'idea')).stage.status).toBe('ready');
+  });
+
+  it('route refuses a run started after the action was shown, before ownership is persisted', async () => {
+    const { issue } = await seed();
+    await issuesSvc.updateStage(issue.id, 'idea', { status: 'generating', output: 'Preserved' });
+    const status = await request(recoveryApp).get(recoveryPath(issue.id, 'recovery'));
+    let releaseIdentity;
+    vi.mocked(getInstanceId).mockImplementationOnce(() => new Promise((resolve) => { releaseIdentity = resolve; }));
+    const running = textStages.generateStage(issue.id, 'idea');
+    const refused = await request(recoveryApp).post(recoveryPath(issue.id, 'recover')).send({ revision: status.body.revision });
+    releaseIdentity('test-instance');
+    await running;
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toMatch(/local generation is active/i);
+  });
+
+  it('route rejects a revision race even when a user edit retains the stage timestamp', async () => {
+    const { issue } = await seed();
+    await issuesSvc.updateStage(issue.id, 'idea', { status: 'generating', output: 'Original' });
+    const before = (await issuesSvc.getIssue(issue.id)).stages.idea;
+    const status = await request(recoveryApp).get(recoveryPath(issue.id, 'recovery'));
+    await issuesSvc.updateIssue(issue.id, { stages: { idea: { output: 'New edit' } } });
+    const refused = await request(recoveryApp).post(recoveryPath(issue.id, 'recover')).send({ revision: status.body.revision });
+    expect(refused.status).toBe(409);
+    expect((await issuesSvc.getIssue(issue.id)).stages.idea).toMatchObject({ output: 'New edit', updatedAt: before.updatedAt });
+  });
+
+  it('route identifies foreign execution and rejects takeover and malformed requests', async () => {
+    const { issue } = await seed();
+    await issuesSvc.updateStage(issue.id, 'idea', { status: 'generating', generation: { id: 'foreign-run', instanceId: 'other-instance' } });
+    const status = await request(recoveryApp).get(recoveryPath(issue.id, 'recovery'));
+    expect(status.body).toMatchObject({ ownership: 'foreign', recoverable: false });
+    expect((await request(recoveryApp).post(recoveryPath(issue.id, 'recover')).send({ revision: status.body.revision })).status).toBe(409);
+    expect((await request(recoveryApp).post(recoveryPath(issue.id, 'recover')).send({ revision: null })).status).toBe(400);
+    expect((await request(recoveryApp).post(`/issues/${issue.id}/stages/audio/recover`).send({ revision: status.body.revision })).status).toBe(400);
+  });
 
   it('generateStage moves a stage idle → ready and persists output + runId', async () => {
     const { issue } = await seed();
