@@ -1147,21 +1147,26 @@ async function pruneOldSnapshots(destPath, retentionCount) {
     const snapshotDir = join(sourceRoot, id);
     const { incomplete, failed } = await snapshotState(snapshotDir, id, true);
     if (incomplete || failed) return null;
-    // Read-only listing metadata; matches listSnapshots' own read.
-    const manifest = await readJSONFile(join(snapshotDir, 'manifest.json'), null, { logError: false });
-    return { id, snapshotDir, createdAt: manifest?.generatedAt ?? null };
+    // A manifest that exists but cannot be read must not date or delete the
+    // snapshot: fail toward keeping data (#11859).
+    const manifestRead = await readJSONFileStrict(join(snapshotDir, 'manifest.json'), null, { logError: false });
+    return { id, snapshotDir, createdAt: manifestRead.value?.generatedAt ?? null, protectedFromPrune: !manifestRead.ok };
   }))).filter(Boolean);
 
-  // Newest-first, same tiebreak as listSnapshots: dated entries by date, then
-  // undated (pre-manifest legacy-in-namespace) entries by id.
-  descriptors.sort((a, b) => {
-    if (a.createdAt && b.createdAt) return b.createdAt.localeCompare(a.createdAt);
-    if (a.createdAt) return -1;
-    if (b.createdAt) return 1;
-    return b.id.localeCompare(a.id);
-  });
+  // Newest-first by snapshot id (an ISO-style timestamp that never depends on
+  // reading the manifest); manifest.generatedAt is only a tiebreak.
+  descriptors.sort((a, b) => b.id.localeCompare(a.id)
+    || (b.createdAt ?? '').localeCompare(a.createdAt ?? ''));
 
-  const toDelete = descriptors.slice(retentionCount);
+  // Unreadable-manifest snapshots still count toward retention but are never deleted.
+  const toDelete = [];
+  descriptors.slice(retentionCount).forEach(d => {
+    if (d.protectedFromPrune) {
+      console.warn(`⚠️ Backup retention: kept snapshot ${d.id} (manifest unreadable)`);
+    } else {
+      toDelete.push(d);
+    }
+  });
   let pruned = 0;
   for (const { snapshotDir, id } of toDelete) {
     // A snapshot a restore or download is reading stays; a later run prunes it
