@@ -2,6 +2,7 @@
 
 import { existsSync, statSync } from 'fs';
 import { join } from 'path';
+import { randomUUID } from 'crypto';
 import { tmpdir } from 'os';
 import { spawn } from '../../lib/childProcess.js';
 import { ensureDir, PATHS, UUID_RE, tryReadFile, copyFileGuarded, writeFileGuarded, unlinkGuarded, rmGuarded } from '../../lib/fileUtils.js';
@@ -82,7 +83,22 @@ async function decodeTailCandidates(ffmpeg, videoPath, candidateDir) {
 // When no candidate carries any signal at all (a genuinely black or flat
 // tail) or nothing decodes, this falls back to the original single-seek
 // behavior and says so: a degraded anchor still beats failing the chain.
-export async function extractLastFrame(historyId) {
+// Coalesce concurrent extractions of one clip: the on-disk cache is only
+// written at the end, so overlapping runs would both scan and the second would
+// delete the first's candidates mid-flight, pinning a degraded anchor.
+const inFlight = new Map();
+
+export function extractLastFrame(historyId) {
+  const pending = inFlight.get(historyId);
+  if (pending) return pending;
+  const run = extractLastFrameUncoalesced(historyId).finally(() => {
+    if (inFlight.get(historyId) === run) inFlight.delete(historyId);
+  });
+  inFlight.set(historyId, run);
+  return run;
+}
+
+async function extractLastFrameUncoalesced(historyId) {
   // Keep this service safe for callers outside the route layer too. Shared
   // gallery uploads deliberately use `upload-<uuid8>` ids, while generated
   // clips retain UUID ids.
@@ -183,7 +199,7 @@ export async function extractLastFrame(historyId) {
   // ── Scored pick over the tail window ──────────────────────────────────────
   // Everything here degrades to the single-seek fallback below rather than
   // throwing: this runs mid-chain, and a scan failure must not lose a render.
-  const candidateDir = join(tmpdir(), `anchorcand-${item.id}`);
+  const candidateDir = join(tmpdir(), `anchorcand-${item.id}-${randomUUID()}`);
   const { paths: candidates, complete: scanComplete } = await decodeTailCandidates(ffmpeg, videoPath, candidateDir)
     .catch((err) => {
       console.log(`⚠️ Anchor candidate scan failed: ${err.message}`);
