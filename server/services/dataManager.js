@@ -586,12 +586,19 @@ export async function purgeCategory(categoryKey, options = {}) {
   });
 }
 
+// Names archiveCategory produces: `<category>-<timestamp>[-<uuid>].tar.gz`
+// (the uuid is absent on archives written before same-second collisions were
+// handled). data/backup/ is shared with the backup service's state.json, so
+// listing and deletion are limited to this shape. The pattern excludes `/`,
+// `\\` and bare dots, so no traversal segment can form (issue #1822).
+const ARCHIVE_FILENAME = /^[a-z0-9_-]+-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?\.tar\.gz$/i;
+
 export async function getBackups() {
   const backupDir = join(DATA_DIR, 'backup');
   if (!existsSync(backupDir)) return [];
 
   const entries = await readdir(backupDir, { withFileTypes: true }).catch(() => []);
-  const files = entries.filter(e => e.isFile());
+  const files = entries.filter(e => e.isFile() && ARCHIVE_FILENAME.test(e.name));
 
   const backups = await Promise.all(files.map(async (entry) => {
     const fileStat = await stat(join(backupDir, entry.name)).catch(() => null);
@@ -606,17 +613,8 @@ export async function getBackups() {
   return backups;
 }
 
-// Backup archives are named like `agents-2026-06-30T12-34-56.tar.gz`, so the raw
-// filename legitimately contains dots. Validate the dotted value directly — the
-// old `filename.replace(/[.]/g,'')` double-pass never checked the real filename,
-// leaving only the startsWith(backupDir) guard against traversal (issue #1822).
-// The regex forbids `/` and `\`, so no traversal segment can form; the only
-// regex-passing names that resolve dangerously are the bare `.`/`..` (e.g.
-// join(backupDir,'.') === backupDir), so reject those explicitly.
-const SAFE_FILENAME = /^[a-z0-9._-]+$/i;
-
 export async function deleteBackup(filename) {
-  if (!SAFE_FILENAME.test(filename) || filename === '.' || filename === '..') {
+  if (!ARCHIVE_FILENAME.test(filename)) {
     throw new ServerError('Invalid filename', { status: 400, code: 'INVALID_FILENAME' });
   }
   const backupDir = join(DATA_DIR, 'backup');
