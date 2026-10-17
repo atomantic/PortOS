@@ -22,10 +22,12 @@
 import { createHash } from 'crypto';
 import { readMarker, writeMarker } from '../lib/migrationMarker.js';
 import { BIBLE_KINDS, BIBLE_FIELD } from '../lib/storyBible.js';
-import { listUniverses, updateUniverse } from '../services/universeBuilder.js';
+import { listUniverses, getUniverse, updateUniverse } from '../services/universeBuilder.js';
 import * as catalogDB from '../services/catalogDB.js';
 
-const MARKER_VERSION = 1;
+// v2 re-walks every install once: before canon entries were promoted on save,
+// an entry added after the first walk stayed out of the catalog.
+const MARKER_VERSION = 2;
 const MARKER_FILENAME = 'catalog-backfill.applied.json';
 
 // Derived from BIBLE_KINDS so a future kind added there flows through here
@@ -197,6 +199,45 @@ async function migrateUniverse(universe) {
   }, { silent: true });
 
   return stats;
+}
+
+/**
+ * True when a canon entry has no catalog row yet. Exported so the universe
+ * write path can decide, without a DB round-trip, whether to promote.
+ */
+export function hasUnpromotedCanon(universe) {
+  return KINDS.some(({ array }) => (Array.isArray(universe?.[array]) ? universe[array] : [])
+    .some((entry) => entry?.id && entry?.name && !entry.ingredientId));
+}
+
+// One promotion per universe at a time; a save landing mid-walk re-runs once
+// the current walk finishes so its new entries are not missed.
+const promoting = new Map();
+
+/**
+ * Promote one universe's not-yet-promoted canon entries to catalog rows and
+ * stamp the ids back. Called after a universe save adds canon entries, so the
+ * Casting / Environments / Objects pages see them without a manual sync.
+ */
+export function promoteUniverseCanon(universeId) {
+  const running = promoting.get(universeId);
+  if (running) {
+    running.again = true;
+    return running.promise;
+  }
+  const state = { again: false, promise: null };
+  state.promise = (async () => {
+    let stats = null;
+    do {
+      state.again = false;
+      const universe = await getUniverse(universeId);
+      if (!universe || universe.deleted || !hasUnpromotedCanon(universe)) break;
+      stats = await migrateUniverse(universe);
+    } while (state.again);
+    return stats;
+  })().finally(() => promoting.delete(universeId));
+  promoting.set(universeId, state);
+  return state.promise;
 }
 
 /**
