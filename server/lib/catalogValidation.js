@@ -381,12 +381,25 @@ export const catalogPortraitSetSchema = z.object({
 
 // Reference-sheet render/preview body. The prompt overrides are the user's own
 // words and are sent exactly as typed — no trim (#11317).
+// `wardrobeId` picks the outfit a `look` render dresses the character in: it
+// is required for `look` and refused for every other variant, so a stray id
+// never silently renders a plain sheet. 59 = the 64-char media role cap minus
+// the `look:` prefix the render tags its image with.
+export const CATALOG_LOOK_VARIANT_ID = 'look';
 export const catalogSheetRenderSchema = z.object({
   variant: z.string().trim().min(1).max(48).optional(),
+  wardrobeId: z.string().trim().min(1).max(59).optional(),
   overridePrompt: z.string().max(8000).optional(),
   overrideNegativePrompt: z.string().max(2000).optional(),
   modelId: z.string().trim().max(64).optional(),
-}).strict();
+}).strict().superRefine((body, ctx) => {
+  const isLook = body.variant === CATALOG_LOOK_VARIANT_ID;
+  if (isLook && !body.wardrobeId) {
+    ctx.addIssue({ code: 'custom', path: ['wardrobeId'], message: 'wardrobeId is required for a look render' });
+  } else if (!isLook && body.wardrobeId) {
+    ctx.addIssue({ code: 'custom', path: ['wardrobeId'], message: 'wardrobeId is only accepted for a look render' });
+  }
+});
 
 // Media detach body — identifies the tuple to soft-delete.
 export const catalogMediaDetachSchema = z.object({

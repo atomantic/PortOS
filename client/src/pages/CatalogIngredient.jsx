@@ -2,14 +2,14 @@
  * CatalogIngredient — detail/editor for a single catalog ingredient. Loaded
  * via /catalog/:type/:id (one untabbed scroll) or a library route
  * (/casting/:id/:tab?, /environments/…, /objects/…) where the library's
- * `detailTabs` split it into Profile / Sheets / Plates / References|Images.
+ * `detailTabs` split it into Profile / Sheets / Looks|Plates / References|Images.
  * The tab lives in the URL; form state lives here so switching tabs keeps an
  * unsaved draft. Full-width page; owns its scroll.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useLocation, Link } from 'react-router';
-import { Sparkles, Save, Trash2, ArrowLeft, Loader2, Plus, X, History, RotateCcw, Image as ImageIcon, ChevronDown, Upload, Mic, Square, UserRound, LayoutGrid, Images, Clapperboard } from 'lucide-react';
+import { Sparkles, Save, Trash2, ArrowLeft, Loader2, Plus, X, History, RotateCcw, Image as ImageIcon, ChevronDown, Upload, Mic, Square, UserRound, LayoutGrid, Images, Clapperboard, Shirt } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import FilePickerButton from '../components/ui/FilePickerButton';
 import Modal from '../components/ui/Modal.jsx';
@@ -54,6 +54,7 @@ import MediaImage from '../components/MediaImage';
 import CatalogMediaTile from '../components/catalog/CatalogMediaTile';
 import CatalogSheetsPanel, { ReferenceSheetPanel } from '../components/catalog/CatalogSheetsPanel';
 import CatalogPlatesPanel from '../components/catalog/CatalogPlatesPanel';
+import CatalogLooksPanel from '../components/catalog/CatalogLooksPanel';
 import CharacterLoraChip from '../components/loraTraining/CharacterLoraChip';
 import TagPicker from '../components/TagPicker';
 import GenericIngredientFields from '../components/GenericIngredientFields';
@@ -61,7 +62,7 @@ import useUnsavedChangesGuard from '../hooks/useUnsavedChangesGuard';
 import { getCatalogType, CATALOG_BADGE_BY_ID, RELATION_KINDS, getRelationKind } from '../lib/catalogTypes';
 import {
   libraryForPathname, ingredientPath, resolveDetailTab, detailTabPath,
-  isSheetMedia, isPlateMedia, isReferenceTabMedia,
+  isSheetMedia, isPlateMedia, isReferenceTabMedia, lookIdOf,
 } from '../lib/creativeLibraries';
 import { useCatalogTypes } from '../hooks/useCatalogTypes.jsx';
 import { timeAgo, formatDateTime } from '../utils/formatters';
@@ -124,6 +125,7 @@ export function buildGenerationPromptSeed(payload, typeDef, tags = []) {
 const DETAIL_TAB_ICONS = {
   profile: UserRound,
   sheets: LayoutGrid,
+  looks: Shirt,
   plates: Clapperboard,
   references: Images,
   images: ImageIcon,
@@ -172,6 +174,9 @@ export default function CatalogIngredient() {
   const [tags, setTags] = useState([]);
   const [payload, setPayload] = useState({});
   const [saving, setSaving] = useState(false);
+  // A Looks-tab wardrobe save in flight; the profile Save waits for it so its
+  // draft payload can't write back the previous wardrobes.
+  const [lookSaving, setLookSaving] = useState(false);
   const [armedDelete, setArmedDelete] = useState(false);
   // { outbound: [...], inbound: [...] } — relations are loaded separately from
   // the ingredient record so the panel can refresh independently after add/
@@ -366,10 +371,10 @@ export default function CatalogIngredient() {
     toast.success('Voice memo attached');
   }, [record, refreshMedia]);
 
-  // Re-attach an existing media row under a new role (mark/unmark a plate).
-  // The attach endpoint upserts role/caption on the (ingredient, key, kind)
-  // row, so the caption is passed back unchanged.
-  const handleSetMediaRole = useCallback(async (m, role) => {
+  // Re-attach an existing media row under a new role (mark/unmark a plate, add
+  // an image to a look). The attach endpoint upserts role/caption on the
+  // (ingredient, key, kind) row, so the caption is passed back unchanged.
+  const handleSetMediaRole = useCallback(async (m, role, message) => {
     if (!record || !m?.mediaKey) return false;
     const updated = await attachCatalogIngredientMedia(
       record.id,
@@ -380,21 +385,41 @@ export default function CatalogIngredient() {
     setMedia((prev) => prev.map((row) => (
       row.mediaKey === m.mediaKey && row.kind === m.kind ? { ...row, ...updated, role } : row
     )));
-    toast.success(role ? 'Marked as plate' : 'Plate unmarked');
+    toast.success(message || (role ? 'Marked as plate' : 'Plate unmarked'));
     return true;
   }, [record]);
 
   // A finished catalog-only sheet render: attach it under its `sheet:<variant>`
   // role right away (the server-side attach hook files the same row and is
   // idempotent against this), then reconcile the media list.
-  const handleSheetFile = useCallback(async (filename, role) => {
+  const handleSheetFile = useCallback(async (filename, role, readyMessage = 'Reference sheet ready') => {
     if (!record || !filename) return;
     const ok = await attachCatalogIngredientMedia(record.id, { mediaKey: filename, kind: 'reference', role }, { silent: true })
       .then(() => true)
-      .catch((err) => { toast.error(err?.message || 'Failed to attach the rendered sheet'); return false; });
+      .catch((err) => { toast.error(err?.message || 'Failed to attach the rendered image'); return false; });
     refreshMedia();
-    if (ok) toast.success('Reference sheet ready');
+    if (ok) toast.success(readyMessage);
   }, [record, refreshMedia]);
+  const handleLookFile = useCallback((filename, role) => handleSheetFile(filename, role, 'Look ready'), [handleSheetFile]);
+
+  // Save the Looks tab's wardrobe list straight onto the SAVED payload, then
+  // copy just `wardrobes` into the draft so unsaved profile edits stay intact
+  // and exactly as dirty as they were.
+  const handleSaveWardrobes = useCallback(async (wardrobes) => {
+    if (!record) return false;
+    const submittedId = record.id;
+    const nextPayload = { ...ingredientPayload(record.payload), wardrobes };
+    setLookSaving(true);
+    const updated = await updateCatalogIngredient(submittedId, { payload: nextPayload }, { silent: true })
+      .catch((err) => { toast.error(err?.message || 'Failed to save looks'); return null; });
+    setLookSaving(false);
+    if (activeVisitRef.current.id !== submittedId || !updated) return false;
+    const persisted = Object.hasOwn(updated, 'payload') ? ingredientPayload(updated.payload) : nextPayload;
+    setRecord((prev) => (prev?.id === submittedId ? { ...prev, ...updated, payload: persisted } : prev));
+    setPayload((cur) => ({ ...cur, wardrobes: persisted.wardrobes }));
+    refreshRevisions();
+    return true;
+  }, [record, refreshRevisions]);
 
   // A universe-delegated sheet landed as a canon pointer, which the canon→catalog
   // projection already copied onto this row. Pull just the pointer fields into
@@ -568,6 +593,14 @@ export default function CatalogIngredient() {
     ? library.detailTabs.map((t) => ({ ...t, icon: DETAIL_TAB_ICONS[t.id] }))
     : null;
   const activeTab = tabs ? resolveDetailTab(library, tabParam) : 'profile';
+  const wardrobes = record.type === 'character' && Array.isArray(ingredientPayload(record.payload).wardrobes)
+    ? record.payload.wardrobes
+    : [];
+  const liveLookIds = new Set(wardrobes.map((w) => w?.id).filter(Boolean));
+  const isReferenceTabRow = (m) => isReferenceTabMedia(m, liveLookIds);
+  const renderBlockedReason = (subject) => (saving
+    ? `Saving — the ${subject} renders from the saved record.`
+    : isDirty ? `Save your profile edits first — the ${subject} renders from the saved record.` : null);
 
   return (
     <section className="h-full overflow-y-auto p-4 md:p-6">
@@ -601,7 +634,7 @@ export default function CatalogIngredient() {
             <Link to={backPath} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-gray-400 hover:text-white">
               <ArrowLeft size={14} aria-hidden="true" /> Back
             </Link>
-            <button type="button" onClick={handleSave} disabled={saving}
+            <button type="button" onClick={handleSave} disabled={saving || lookSaving}
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 text-white text-sm font-medium">
               {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save
             </button>
@@ -720,19 +753,34 @@ export default function CatalogIngredient() {
             sheetMedia={media.filter(isSheetMedia)}
             missingMedia={missingMedia}
             onDetach={handleDetachMedia}
-            blockedReason={saving
-              ? 'Saving — the sheet renders from the saved record.'
-              : isDirty ? 'Save your profile edits first — the sheet renders from the saved record.' : null}
+            blockedReason={renderBlockedReason('sheet')}
             savedStamp={record.updatedAt || null}
             onSheetFile={handleSheetFile}
             onPointerSheetReady={refreshSheetPointers}
           />
         )}
 
+        {activeTab === 'looks' && (
+          <CatalogLooksPanel
+            ingredientId={record.id}
+            wardrobes={wardrobes}
+            lookMedia={media.filter((m) => liveLookIds.has(lookIdOf(m)))}
+            candidates={media.filter((m) => m.kind === 'reference' && isReferenceTabRow(m))}
+            missingMedia={missingMedia}
+            editLocked={saving}
+            blockedReason={renderBlockedReason('look')}
+            savedStamp={record.updatedAt || null}
+            onSaveWardrobes={handleSaveWardrobes}
+            onSetRole={handleSetMediaRole}
+            onDetach={handleDetachMedia}
+            onLookFile={handleLookFile}
+          />
+        )}
+
         {activeTab === 'plates' && (
           <CatalogPlatesPanel
             plates={media.filter(isPlateMedia)}
-            candidates={media.filter((m) => m.kind === 'reference' && isReferenceTabMedia(m))}
+            candidates={media.filter((m) => m.kind === 'reference' && isReferenceTabRow(m))}
             missingMedia={missingMedia}
             onSetRole={handleSetMediaRole}
             onDetach={handleDetachMedia}
@@ -741,7 +789,7 @@ export default function CatalogIngredient() {
 
         {(activeTab === 'profile' ? !tabs : activeTab === 'references' || activeTab === 'images') && (
           <MediaPanel
-            media={tabs ? media.filter(isReferenceTabMedia) : media}
+            media={tabs ? media.filter(isReferenceTabRow) : media}
             missingMedia={missingMedia}
             onAttach={handleAttachMedia}
             onSetPortrait={handleSetPortrait}
