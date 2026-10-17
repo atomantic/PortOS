@@ -256,7 +256,7 @@ export default function FableLoomHostedJoin() {
   const handleSendText = (e) => {
     e?.preventDefault();
     if (!textInput.trim() || textInput.length > MAX_TEXT_CHARACTERS || !socket) return;
-    socket.emit('hosted:turn:text', { text: textInput.trim() });
+    socket.emit('hosted:turn:text', { text: textInput });
     setTextInput('');
   };
 

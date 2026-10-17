@@ -69,7 +69,7 @@ describe('FableLoomHostedJoin', () => {
     render(<FableLoomHostedJoin />);
 
     const input = screen.getByPlaceholderText('Or type a message…');
-    fireEvent.change(input, { target: { value: 'Look around the room' } });
+    fireEvent.change(input, { target: { value: '  Look around the room  ' } });
 
     const sendButton = screen.getByRole('button', { name: 'Send message' });
     expect(sendButton).toBeInTheDocument();
@@ -82,7 +82,7 @@ describe('FableLoomHostedJoin', () => {
     );
     fireEvent.submit(input.closest('form'));
 
-    expect(mockSocket.emit).toHaveBeenCalledWith('hosted:turn:text', { text: 'Look around the room' });
+    expect(mockSocket.emit).toHaveBeenCalledWith('hosted:turn:text', { text: '  Look around the room  ' });
   });
 
   it('preserves an over-limit paste, refuses to send, and lets the guest shorten the message', async () => {

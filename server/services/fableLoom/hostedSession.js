@@ -710,10 +710,10 @@ export async function processHostedUtterance(sessionId, {
   emitIfLive('hosted:turn:phase', { phase: 'thinking', turnId: turn.id });
 
   try {
-    let message = (textMessage || '').trim();
+    let message = textMessage || '';
 
     // 1. Transcribe audio if supplied
-    if (audioBuffer && !message) {
+    if (audioBuffer && !message.trim()) {
       let wavPayload = audioBuffer;
       if (audioBuffer instanceof Int16Array || (ArrayBuffer.isView(audioBuffer) && !(audioBuffer instanceof Buffer))) {
         const floatPcm = pcmToFloat(audioBuffer);
@@ -731,7 +731,7 @@ export async function processHostedUtterance(sessionId, {
     }
 
     // Check for echo / empty message
-    if (!message || isEchoOfRecentTts(message, session.recentTts)) {
+    if (!message.trim() || isEchoOfRecentTts(message, session.recentTts)) {
       session.turnPhase = 'listening';
       emitIfLive('hosted:turn:phase', {
         phase: 'listening',

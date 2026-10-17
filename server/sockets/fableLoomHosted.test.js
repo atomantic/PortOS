@@ -181,7 +181,7 @@ describe('fableLoomHosted Socket.IO namespace', () => {
       }
     });
 
-    async function guestTurn(input) {
+    async function guestTurn(input, text = 'go next') {
       const { session, token, preflight } = await createHostedSession('loom-1', 'ep-1');
       const audience = makeSocket({ role: 'audience', sessionId: session.id });
       audience.handshake = { auth: { role: 'audience', sessionId: session.id, token } };
@@ -191,7 +191,7 @@ describe('fableLoomHosted Socket.IO namespace', () => {
       connectionHandler(audience);
       await audience.listeners['hosted:mic:start']();
       if (input === 'audio') await audience.listeners['hosted:mic:stop'](Buffer.from('synthetic audio'));
-      else await audience.listeners['hosted:turn:text']({ text: 'go next', callerPolicy: 'any-text', providerId: cli.id });
+      else await audience.listeners['hosted:turn:text']({ text, callerPolicy: 'any-text', providerId: cli.id });
       expect(runner.executeCliRun).not.toHaveBeenCalled();
       expect(tuiRunner.executeTuiRun).not.toHaveBeenCalled();
       return { preflight, session: getHostedSession(session.id) };
@@ -219,6 +219,13 @@ describe('fableLoomHosted Socket.IO namespace', () => {
         requestCapabilities: expect.objectContaining({ allowedModes: ['api'] }),
       }));
       expect(runner.executeApiRun).toHaveBeenCalledTimes(1);
+    });
+
+    it('preserves the full accepted guest text through the real play prompt boundary', async () => {
+      const text = `  ${'x'.repeat(996)}  `;
+      const { session } = await guestTurn('text', text);
+      expect(prompts.buildPrompt).toHaveBeenCalledWith('fableloom-play-turn', expect.objectContaining({ readerMessage: text }));
+      expect(session.transcript.find((item) => item.role === 'audience')?.text).toBe(text);
     });
 
     it('refuses proactive process substitution and retains authored narration', async () => {
