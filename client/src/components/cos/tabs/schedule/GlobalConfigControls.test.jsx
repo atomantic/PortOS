@@ -175,6 +175,23 @@ describe('GlobalConfigControls — branch-reconcile batch size', () => {
   });
 });
 
+describe('GlobalConfigControls — dependency-freedom removal bar', () => {
+  it('is hidden for other audits', () => {
+    renderControls({ taskType: 'better-complexity' });
+    expect(screen.queryByLabelText('Removal bar')).not.toBeInTheDocument();
+  });
+
+  it('shows the default bar and persists the extreme bar explicitly', () => {
+    const onUpdate = renderControls({ taskType: 'better-dependency-freedom', taskMetadata: { fileIssues: true } });
+    const select = screen.getByLabelText('Removal bar');
+    expect(select).toHaveValue('default');
+    fireEvent.change(select, { target: { value: 'extreme' } });
+    expect(onUpdate).toHaveBeenCalledWith('better-dependency-freedom', {
+      taskMetadata: { fileIssues: true, depfreeMode: 'extreme' }
+    });
+  });
+});
+
 describe('GlobalConfigControls — issue exclude labels', () => {
   it('is hidden for a task type without the issue author filter', () => {
     renderControls({ taskType: 'feature-ideas' });

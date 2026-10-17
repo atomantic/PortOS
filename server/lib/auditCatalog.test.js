@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { QUOTA_BURN_PROMPT_PRESETS } from './quotaBurnPresets.js';
 import { requireSlashdoSubmoduleInCi } from './testHelper.js';
 import {
+  applyDepfreeMode,
   AUDIT_DEFINITIONS,
   AUDIT_TASK_TYPES,
   AUDIT_TASK_TYPE_LIST,
@@ -387,4 +388,49 @@ it('keeps the quota-burn maintenance preset on registered tasks in the advisory 
       expect(MAINTENANCE_TASK_ORDER.indexOf(predecessor), predecessor).toBeLessThan(index);
     }
   }
+});
+
+describe('applyDepfreeMode — the dependency-freedom {depfreeMode} block', () => {
+  const TYPE = 'better-dependency-freedom';
+
+  it('renders the default bar when no mode is stored', () => {
+    const out = applyDepfreeMode('Bar:\n{depfreeMode}\nEnd', TYPE, {});
+    expect(out).toContain('## Removal bar for this run: default');
+    expect(out).toContain('Keep large, widely audited libraries');
+    expect(out).not.toContain('{depfreeMode}');
+    expect(out.startsWith('Bar:')).toBe(true);
+  });
+
+  it('renders the extreme bar with its design and parity requirements', () => {
+    const out = applyDepfreeMode('{depfreeMode}', TYPE, { depfreeMode: 'extreme' });
+    expect(out).toContain('## Removal bar for this run: extreme — the goal is zero dependencies');
+    expect(out).toContain('There is no line ceiling.');
+    expect(out).toContain('write a replacement design first');
+    expect(out).toContain('parity test');
+    // The security-sensitive classes stay exempt at every bar.
+    expect(out).toContain('TLS, cryptography');
+    expect(out).toContain('native bindings');
+    expect(out).toContain('strongest available model at maximum');
+  });
+
+  it('renders the heavy bar', () => {
+    const out = applyDepfreeMode('{depfreeMode}', TYPE, { depfreeMode: 'heavy' });
+    expect(out).toContain('## Removal bar for this run: heavy');
+    expect(out).toContain('Popularity and download counts do not exempt a library');
+  });
+
+  it('prepends the block once to a customized prompt that dropped the token', () => {
+    const out = applyDepfreeMode('my custom depfree prompt', TYPE, { depfreeMode: 'extreme' });
+    expect(out.startsWith('## Removal bar for this run: extreme')).toBe(true);
+    expect(out.match(/## Removal bar for this run/g)).toHaveLength(1);
+    expect(out.endsWith('my custom depfree prompt')).toBe(true);
+  });
+
+  it('falls back to the default bar for a value the sanitizer would have dropped', () => {
+    expect(applyDepfreeMode('{depfreeMode}', TYPE, { depfreeMode: 'zero' })).toContain('Removal bar for this run: default');
+  });
+
+  it('leaves every other task type untouched', () => {
+    expect(applyDepfreeMode('{depfreeMode}', 'better-complexity', { depfreeMode: 'extreme' })).toBe('{depfreeMode}');
+  });
 });

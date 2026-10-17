@@ -266,7 +266,7 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
   const {
     command, app, provider, model, effort, simplify, issueTarget, prCompletion,
     target, issueContext, overrideContext, issueAuthorFilter, reviewers, usernames, optionalReviewers,
-    reviewerMaxRounds, reviewerModels, reviewerEfforts
+    reviewerMaxRounds, reviewerModels, reviewerEfforts, depfreeMode
   } = validateRequest(slashdoTaskSchema, req.body);
 
   const workflow = getSlashdoWorkflow(command);
@@ -390,10 +390,17 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
       },
     };
   } else {
+    // `/do:depfree`'s removal bar rides along as the command's own flag: the
+    // bundled body parses `--heavy` / `--extreme` itself, and the default bar
+    // is the flag-less invocation. Ignored for every other command, whose body
+    // has no such flag to read.
+    const depfreeArgs = command === 'depfree' && depfreeMode && depfreeMode !== 'default'
+      ? { slashdoArgs: `--${depfreeMode}` }
+      : {};
     shape = {
-      description: `${workflow.label} for ${appObj.name} — ${workflow.description}`,
+      description: `${workflow.label} for ${appObj.name} — ${workflow.description}${depfreeArgs.slashdoArgs ? ` (${depfreeMode} mode)` : ''}`,
       slashdoCommand: command,
-      taskMetadata: { useWorktree, openPR, worktreeChangesExpected },
+      taskMetadata: { useWorktree, openPR, worktreeChangesExpected, ...depfreeArgs },
     };
   }
 

@@ -223,12 +223,12 @@ describe('taskPromptDefaults integrity snapshot', () => {
     ['better-complexity', ['1 + the number of independent decision points', 'Length is not complexity', 'Name the transformation', 'Behavior preservation is the contract']],
     ['better-cognitive-load', ['reader cost', 'Flag arguments', 'Action at a distance', 'are not your findings']],
     ['better-runtime-safety', ['Sentinel confusion', 'a failure scenario, not a code shape', 'Not yours']],
-    ['better-dependency-freedom', ['Acceptable', 'Suspect', 'Removable', 'Respect documented decisions', 'file no version bumps here']],
+    ['better-dependency-freedom', ['Acceptable', 'Suspect', 'Removable', 'Respect documented decisions', 'file no version bumps here', '{depfreeMode}', 'The\nremoval bar above decides where the Acceptable line sits']],
     ['better-test-quality', ['Vacuous', 'mutation probe', 'Deletion is a valid outcome', 'Missing coverage is separate work']],
     ['better-dev-environment', ['Measure, do not only read', 'before and after', 'Prefer a guard to a patch', 'Not yours']],
   ])('%s states the discipline that makes it its own lane', (key, markers) => {
     const current = DEFAULT_TASK_PROMPTS[key];
-    const versions = { 'better-cognitive-load': 2, 'better-complexity': 2, 'better-runtime-safety': 3, 'better-test-quality': 2 };
+    const versions = { 'better-cognitive-load': 2, 'better-complexity': 2, 'better-dependency-freedom': 2, 'better-runtime-safety': 3, 'better-test-quality': 2 };
     expect(PROMPT_VERSIONS[key]).toBe(versions[key] ?? 1);
     for (const marker of markers) expect(current, key).toContain(marker);
   });

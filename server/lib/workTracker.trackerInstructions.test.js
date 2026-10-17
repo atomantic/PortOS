@@ -25,7 +25,7 @@ import { getAuditFilingPreset } from './auditCatalog.js';
 // budget when a full run is contending for CPU. File scope is unbudgeted
 // (#7951, #10356).
 const { DEFAULT_TASK_PROMPTS } = await import('../services/taskPromptDefaults.js');
-const { AUDIT_TASK_TYPES, modeContractFor } = await import('./auditCatalog.js');
+const { AUDIT_TASK_TYPES, applyDepfreeMode, modeContractFor } = await import('./auditCatalog.js');
 
 const REF_WATCH = { slugPrefix: 'ref-watch-', label: 'reference-watch', issueLabel: 'reference-watch' };
 
@@ -265,7 +265,9 @@ describe('formatTrackerInstructions — ux preset (#3273)', () => {
             taskType,
             { fileIssues },
           );
-          const rendered = template
+          // Mirrors the generator: the dependency-freedom removal bar is
+          // rendered from task metadata (absent = default) before the mode seams.
+          const rendered = applyDepfreeMode(template, taskType, {})
             .replace(/\{modeInstructions\}/g, () => modeContractFor(fileIssues))
             .replace(/\{trackerInstructions\}/g, () => trackerInstructions)
             .replace(/\{appName\}/g, () => 'Example App')

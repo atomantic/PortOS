@@ -70,6 +70,7 @@ import {
   auditDoWorkRequiresWorktree,
   modeContractFor,
   applyAuditModeWrapper,
+  applyDepfreeMode,
   FILE_ISSUES_DELIVERY_SETTINGS,
 } from '../lib/auditCatalog.js';
 import { TIMED_COOLDOWN_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
@@ -2731,7 +2732,7 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
     ? `${modeContractFor(fileIssues)}\n\n${auditQualityInstructions(taskType)}`
     : '';
   const baseDescription = await buildImprovementTaskDescription({
-    promptTemplate: applyAuditModeWrapper(applyReleaseOptions(promptTemplate, promptTaskType, metadata), modeInstructions),
+    promptTemplate: applyAuditModeWrapper(applyDepfreeMode(applyReleaseOptions(promptTemplate, promptTaskType, metadata), promptTaskType, metadata), modeInstructions),
     app, promptTaskType, metadata,
     blocks: {
       referenceData: referenceDataBlock,

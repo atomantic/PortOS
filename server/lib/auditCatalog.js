@@ -1,4 +1,5 @@
 import { isTruthyMeta } from './metadataFlags.js';
+import { renderOrPrependSection } from './promptSectionRenderer.js';
 /**
  * Shared catalog of scheduled AUDIT task types — the ones that can either
  * implement a fix or just file tracker issues, matching the quota-burn
@@ -786,6 +787,90 @@ export function applyAuditModeWrapper(promptTemplate, modeInstructions) {
   if (prompt.includes('{modeInstructions}')) return prompt;
   return `${modeInstructions}\n\n---\n\n${prompt}`;
 }
+
+// better-dependency-freedom's removal bar — the same vocabulary as slashdo's
+// `/do:depfree` / `--heavy` / `--extreme`. `default` keeps large, widely
+// audited libraries; `heavy` exempts only foundational frameworks, runtimes and
+// core tooling; `extreme` exempts only what cannot be owned responsibly (the
+// runtime, security-sensitive protocols and primitives, native bindings,
+// CI-required tooling) and is written for the strongest model at max effort.
+// Catalog-owned, like the mode contracts above, so the sanitizer
+// (lib/cosValidation.js), the generator, and the prompt-expansion guard all
+// read ONE list and a value cannot be settable yet silently absent from the
+// prompt. Absent = default.
+export const DEPFREE_MODES = ['default', 'heavy', 'extreme'];
+export const DEFAULT_DEPFREE_MODE = 'default';
+
+// One block per DEPFREE_MODES entry: where the "Acceptable" line sits for the
+// dependency-freedom audit. Keyed by the same list the sanitizer allowlists, so
+// a mode cannot be settable yet silently absent from the prompt. The wording
+// tracks slashdo's `/do:depfree` default / --heavy / --extreme rules so a
+// PortOS-scheduled audit and a terminal run of the command draw the same line.
+const DEPFREE_MODE_BLOCKS = {
+  default: `## Removal bar for this run: default
+
+Keep large, widely audited libraries that do real work — frameworks, runtimes,
+database drivers, build toolchains, rendering and math libraries — without
+relitigating them. Candidates are small single-purpose packages, wrappers over
+capabilities the platform now provides, micro-packages, and libraries where the
+project uses one or two functions. A replacement above ~300 lines of owned code
+is Infeasible at this bar; prefer a native API or a short owned helper.`,
+  heavy: `## Removal bar for this run: heavy
+
+Only foundational frameworks, core platform tooling, and language runtimes are
+exempt. Popularity and download counts do not exempt a library: utility
+collections, HTTP clients, logging, CLI parsers, date, glob, validation, retry,
+color, and event-emitter libraries are all candidates, and devDependencies get
+the same priority as production ones. Maintenance status is irrelevant — the
+question is whether the project can own the code. The replacement ceiling is
+~300 lines of owned code per package; when a package sits on the line, lean
+toward removal.`,
+  extreme: `## Removal bar for this run: extreme — the goal is zero dependencies
+
+Exempt ONLY what cannot be owned responsibly: the language runtime and its
+standard library, the package manager and compiler the build needs,
+security-sensitive protocol and primitive implementations (TLS, cryptography,
+authentication protocols, database wire protocols with authentication, codecs
+with conformance suites you cannot run), native bindings to the OS or hardware,
+and the lint/format/test tooling CI requires. Everything else is a candidate —
+web frameworks, UI libraries, client SDKs, ORMs, parsers, build plugins — judged
+by whether its USED surface can be rebuilt behind a parity test suite, never by
+its size or popularity. There is no line ceiling.
+
+For any replacement above ~100 lines, write a replacement design first: the
+exact used surface (symbols, options, behaviors relied on), the owned module's
+API, the parity test plan, the edge cases the call sites reach versus the ones
+provably unreachable, and the risk the swap carries. The design is part of the
+finding, and part of the PR when you implement. Work extra hard: read the
+library's source for the behaviors the call sites depend on — option defaults,
+error shapes, ordering guarantees, encoding edge cases — instead of guessing
+from its README, and write the parity tests so they fail against a stub before
+any call site switches over.
+
+A package you leave in place needs a reason a reviewer could argue with;
+"popular", "large", or "too much code" is not one. Record what a future run
+would need instead (a conformance suite, a native addon, a product-level
+rewrite). This bar is written for the strongest available model at maximum
+reasoning effort; if this run is on a budget provider or model, say so at the
+top of the report rather than quietly lowering the bar.`,
+};
+
+/**
+ * Render the operator's dependency-freedom removal bar into the audit prompt.
+ * `depfreeMode` was merged (global → per-app override) and value-constrained
+ * by sanitizeTaskMetadata, so read it straight from the metadata; absent means
+ * the default bar. A customized stored prompt that dropped `{depfreeMode}`
+ * still gets the block PREPENDED, so choosing the heavy or extreme bar is never
+ * a silent no-op on that install. Every other task type passes through.
+ */
+export function applyDepfreeMode(promptTemplate, taskType, metadata) {
+  const prompt = typeof promptTemplate === 'string' ? promptTemplate : '';
+  if (taskType !== 'better-dependency-freedom') return prompt;
+  const mode = DEPFREE_MODES.includes(metadata?.depfreeMode) ? metadata.depfreeMode : DEFAULT_DEPFREE_MODE;
+  // The block carries its own heading, so the prepend path passes null.
+  return renderOrPrependSection(prompt, '{depfreeMode}', null, DEPFREE_MODE_BLOCKS[mode]);
+}
+
 
 /**
  * Scheduled audit types mapped onto the scope table in slashdo's

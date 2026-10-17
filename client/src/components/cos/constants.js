@@ -439,6 +439,18 @@ export const RELEASE_OPTIONS = [
   { field: 'autoDecide', label: 'Make decisions', description: 'Make routine design and preference decisions and list them for your review, instead of stopping to ask' },
 ];
 
+// better-dependency-freedom's removal bar — the slashdo `/do:depfree` modes.
+// Values mirror DEPFREE_MODES in server/lib/cosValidation.js; the server drops
+// anything else, and an absent key means the default bar.
+export const DEPFREE_MODE_DEFAULT = 'default';
+export const DEPFREE_MODE_TASK_TYPES = new Set(['better-dependency-freedom']);
+export const DEPFREE_MODE_OPTIONS = [
+  { value: 'default', label: 'Default — small and wrapper packages', description: 'Keep large, widely audited libraries; replace micro-packages, native-API wrappers, and one-function imports' },
+  { value: 'heavy', label: 'Heavy — everything but foundations', description: 'Only frameworks, runtimes, and core platform tooling are exempt; popularity does not protect a library' },
+  { value: 'extreme', label: 'Extreme — toward zero dependencies', description: 'Only the runtime, security-sensitive protocols, native bindings, and CI-required tooling are exempt; large libraries are replaced when their used surface can be rebuilt behind parity tests. Pair with the strongest model at max effort' },
+];
+export const depfreeModeOption = (value) => DEPFREE_MODE_OPTIONS.find((o) => o.value === (value || DEPFREE_MODE_DEFAULT));
+
 // Returns the Tailwind className string for an agent option toggle button.
 // effective: whether the option is on (global + override resolved)
 // hasOverride: whether there's an explicit per-app override set

@@ -1659,23 +1659,31 @@ Repository: {repoPath}
 
 {modeInstructions}
 
+{depfreeMode}
+
 This audit asks whether a dependency should exist at all. Keeping the
 dependencies you do have current is separate work — file no version bumps here.
 
 ## Inventory and classify
 
-Read the project's manifest(s) and classify every direct dependency:
+Read the project's manifest(s) and classify every direct dependency. **The
+removal bar above decides where the Acceptable line sits** — read it before
+classifying; the examples below describe the default bar, and the heavy and
+extreme bars shrink Acceptable to what they exempt.
 
-- **Acceptable** — large, widely audited, doing real work you would never
-  reimplement: frameworks, runtimes, database drivers, build toolchains,
-  rendering and math libraries. Skip these; do not spend the run relitigating
-  them.
+- **Acceptable** — exempt under the removal bar: at the default bar, large,
+  widely audited libraries doing real work you would never reimplement —
+  frameworks, runtimes, database drivers, build toolchains, rendering and math
+  libraries. Skip these; do not spend the run relitigating them.
 - **Suspect** — a smaller library where the project appears to use one or two
   functions, a wrapper over capabilities the platform now provides, or a
-  single-purpose utility.
+  single-purpose utility. Under the heavy and extreme bars, every package the
+  bar does not exempt starts here.
 - **Removable** — the used functionality is small enough to own outright, the
   package wraps an API that is now native, it is unmaintained, or it is a
-  micro-package whose whole body is a few lines.
+  micro-package whose whole body is a few lines. Under the extreme bar, also
+  any package whose used surface can be rebuilt behind a parity test suite,
+  whatever its size.
 
 ## Prove usage before proposing removal
 
@@ -1688,9 +1696,12 @@ grep -rn "<package-name>" --include='*.*' . | grep -v node_modules
 List every symbol imported, count the call sites and files, and check for
 dynamic or string-keyed usage a plain grep misses — config files, plugin
 registries, build tooling, CI. Then size the replacement honestly: Trivial
-(under ~20 lines), Moderate (~20–100), Complex (~100–300), or Infeasible. Check
-maintenance status: last release, open advisories, and whether it still supports
-the runtime versions the project targets.
+(under ~20 lines), Moderate (~20–100), Complex (~100–300), or Infeasible. Under
+the extreme bar the sizes describe rather than gate — Infeasible means a class
+the bar exempts, not a line count — and a Complex-or-larger finding carries the
+replacement design the bar asks for. Check maintenance status: last release,
+open advisories, and whether it still supports the runtime versions the project
+targets.
 
 **A platform capability that has replaced a package is the strongest case** — a
 built-in UUID generator, structured cloning, array flattening, promise-based
@@ -1712,8 +1723,12 @@ status, and the risk the removal carries. Severity follows real exposure —
 unmaintained with a known advisory on a reachable path is the top of the list; a
 suspect package with a complex replacement is the bottom.
 
-In implement mode, remove exactly ONE package per run, and cover its replacement
-with a test exercising the behavior the package used to provide.`,
+In implement mode, remove exactly ONE package per run (or one family of packages
+that share a single owned replacement module), and cover its replacement with a
+test exercising the behavior the package used to provide. A large replacement
+under the extreme bar is still one run: the design, the parity suite, and the
+swap ship together, and the package stays in the manifest until the suite
+passes against the owned code.`,
 
   'better-test-quality': `[Improvement: {appName}] Test quality audit
 

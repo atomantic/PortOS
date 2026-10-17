@@ -171,3 +171,24 @@ PLAN.md keeps its existing checklist IDs. New forge and JIRA issues use plain
 human-readable titles, with the issue number/key as the ID and category/metric
 labels for filtering. Earlier bracketed title prefixes are read only when
 checking for duplicates; new issue titles do not add them.
+
+### The dependency-freedom removal bar
+
+`better-dependency-freedom` carries one more knob than its siblings: the
+**removal bar** (`taskMetadata.depfreeMode`, set globally on the Schedule page
+and overridable per app), rendered at `{depfreeMode}` and prepended when a
+customized prompt dropped the token. Its values are the slashdo `/do:depfree`
+modes, so a scheduled audit and a terminal run draw the same line:
+
+| Bar | Exempt | Ceiling |
+|:--|:--|:--|
+| `default` | large, widely audited libraries | ~300 lines of owned code |
+| `heavy` | foundational frameworks, runtimes, core tooling | ~300 lines; popularity is not an exemption |
+| `extreme` | the runtime, security-sensitive protocols and primitives, native bindings, CI-required tooling | none — a parity test suite and a written replacement design gate each swap |
+
+The extreme bar is written for the strongest available model at maximum
+reasoning effort; it tells the agent to say so at the top of its report when it
+is running on a budget provider, rather than quietly lowering the bar. Pin the
+model and effort on the same Schedule card. The server-side vocabulary is
+`DEPFREE_MODES` in `server/lib/auditCatalog.js`, beside the block text in
+`applyDepfreeMode`; `server/lib/cosValidation.js` re-exports the vocabulary.

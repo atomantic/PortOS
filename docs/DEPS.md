@@ -155,6 +155,18 @@ If `/do:depfree --heavy` is run, the following Tier 1 entries would drop to Tier
 
 This is intentionally NOT done in default mode — current dependency footprint is reasonable for the project's deployment context (single-user, Tailscale-private).
 
+## Extreme-Mode Notes
+
+`/do:depfree --extreme` (and the `better-dependency-freedom` scheduled audit with its removal bar set to **Extreme**) aims at zero dependencies: it forces the strongest model tier at maximum reasoning effort, drops the line ceiling in favor of a parity-test gate, and keeps only what cannot be owned responsibly — the Node runtime and npm, security-sensitive protocol implementations (the `pg` wire protocol and its authentication, TLS), native bindings (`node-pty`, `better-sqlite3-multiple-ciphers`, `sharp`), and the CI-required test runner. Under that bar the following Tier 1 entries become candidates, each needing a written replacement design and a parity suite before any call site switches:
+
+- `express` and `compression` — the used surface is routing, middleware chaining, static files, body parsing, and Brotli/gzip negotiation over `node:http` and `node:zlib`.
+- `socket.io` — the used surface is rooms, acks, and reconnection over WebSocket; a design must cover the client half too.
+- `react` / `react-dom` — a product-level rewrite rather than a dependency swap; expected to be recorded `SKIPPED_INFEASIBLE` with a design sketch and a filed issue, which is the mode's required output for a package it cannot remove.
+- `@googleapis/*` — direct REST calls plus owned OAuth signing.
+- `chokidar`, `@dnd-kit/*`, `@xterm/*`, `lucide-react`, `recharts`, `three` — re-evaluated by used surface, not size.
+
+An extreme run re-tests every `SKIPPED_INFEASIBLE` row here rather than honoring it, so this section is a forecast, not a decision log; the decision log is the tables above, which record the mode each row was reached under.
+
 ## Override Pins (`overrides`)
 
 Defined in `package.json` (root + server + client + autofixer) — kept current to dodge known upstream advisories:

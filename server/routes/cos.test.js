@@ -1124,6 +1124,38 @@ describe('CoS Routes', () => {
       expect(cos.addTask.mock.calls.at(-1)[0].worktreeChangesExpected).toBe(expected);
     });
 
+    // The run drawer's removal bar reaches the bundled command as its own flag;
+    // the default bar is the flag-less invocation, and no other command gets
+    // the flag (its body has nothing to read it).
+    it.each([
+      ['depfree', 'extreme', '--extreme'],
+      ['depfree', 'heavy', '--heavy'],
+      ['depfree', 'default', undefined],
+      ['depfree', undefined, undefined],
+      ['better', 'extreme', undefined]
+    ])('forwards the depfree removal bar as a command flag — %s + %s ⇒ %s', async (command, depfreeMode, slashdoArgs) => {
+      getAppById.mockResolvedValue({ id: 'my-app', name: 'MyApp', type: 'web', repoPath: '/repo' });
+      cos.addTask.mockResolvedValue({ id: 'task-depfree-mode', status: 'pending' });
+
+      const response = await request(app)
+        .post('/api/cos/tasks/slashdo')
+        .send({ command, app: 'my-app', ...(depfreeMode ? { depfreeMode } : {}) });
+
+      expect(response.status).toBe(200);
+      const [taskData] = cos.addTask.mock.calls.at(-1);
+      expect(taskData.slashdoArgs).toBe(slashdoArgs);
+      expect(taskData.description.includes('mode)')).toBe(slashdoArgs !== undefined);
+    });
+
+    it('rejects an unknown depfree removal bar', async () => {
+      getAppById.mockResolvedValue({ id: 'my-app', name: 'MyApp', type: 'web', repoPath: '/repo' });
+      const response = await request(app)
+        .post('/api/cos/tasks/slashdo')
+        .send({ command: 'depfree', app: 'my-app', depfreeMode: 'zero' });
+      expect(response.status).toBe(400);
+      expect(cos.addTask).not.toHaveBeenCalled();
+    });
+
     it('queues the SwiftUI audit for a Swift app', async () => {
       getAppById.mockResolvedValue({ id: 'my-ios', name: 'MyPhone', type: 'ios-native', repoPath: '/repo' });
       cos.addTask.mockResolvedValue({ id: 'task-sd-swift', status: 'pending' });
