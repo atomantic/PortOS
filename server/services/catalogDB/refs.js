@@ -142,6 +142,15 @@ const UNIVERSE_REF_ROLE_BY_TYPE = Object.freeze({
 });
 export const universeRefRoleForType = (type) => UNIVERSE_REF_ROLE_BY_TYPE[type] || 'reference';
 
+// Music video subject kind → ref role. A music video casts characters and
+// films in sets with props; the subject kind is the catalog type.
+const MUSIC_VIDEO_REF_ROLE_BY_TYPE = Object.freeze({
+  character: 'cast',
+  place: 'set',
+  object: 'prop',
+});
+export const musicVideoRefRoleForType = (type) => MUSIC_VIDEO_REF_ROLE_BY_TYPE[type] || 'reference';
+
 
 // Link a batch of already-resolved catalog ingredients to a Creative Director
 // project via catalog_ingredient_refs with ref_kind='creative-director' (#1808)

@@ -62,7 +62,7 @@ export const THREAD_REF_KINDS = Object.freeze({
   },
 
   // ─── App-native creative records ─────────────────────────────────────────
-  // These five are the vocabulary `catalog_ingredient_refs` already stores
+  // These are the vocabulary `catalog_ingredient_refs` already stores
   // (server/services/catalogRefResolver.js REF_TARGET_TABLES). Their routes
   // moved here from the hard-coded switch in client/src/pages/CatalogIngredient.jsx
   // so there is exactly one kind→route table in the repo.
@@ -70,6 +70,7 @@ export const THREAD_REF_KINDS = Object.freeze({
   series: { label: 'Series', external: false, navPath: '/pipeline', basePath: '/pipeline/series', segment: true },
   issue: { label: 'Issues', external: false, navPath: '/pipeline', basePath: '/pipeline/issues', segment: true, suffix: '/concept' },
   'creative-director': { label: 'Creative Director', external: false, navPath: '/creative-director', segment: true, suffix: '/overview' },
+  'music-video': { label: 'Music Videos', external: false, navPath: '/music-video', segment: true },
   'writers-room': { label: "Writers' Room", external: false, navPath: '/writers-room' },
 
   // ─── Other PortOS records ────────────────────────────────────────────────

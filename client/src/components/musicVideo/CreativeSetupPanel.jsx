@@ -6,10 +6,24 @@ import { listUniverseNames, getUniverse } from '../../services/apiUniverseBuilde
 import { uuidv4 } from '../../lib/uuid.js';
 import { pullUniverseCanonReferences } from '../../lib/musicVideoUniverseRefs.js';
 import CharacterStylePicker from './CharacterStylePicker.jsx';
+import IngredientPicker from '../IngredientPicker.jsx';
 
 const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
 const kinds = [['character', 'Cast'], ['place', 'Places'], ['object', 'Objects']];
 const fields = { character: 'characters', place: 'places', object: 'objects' };
+
+// A catalog record as a canon-shaped entry, so its image joins the look
+// references the same way a universe entry's does. Attached catalog media wins.
+// No canonId: that names an entry in this video's own universe.
+const catalogEntry = (ingredient) => {
+  const payload = ingredient.payload || {};
+  return {
+    ingredientId: ingredient.id,
+    name: ingredient.name,
+    primaryImageRef: ingredient.thumbnailKey || payload.primaryImageRef || null,
+    imageRefs: Array.isArray(payload.imageRefs) ? payload.imageRefs : [],
+  };
+};
 
 /** Project-owned snapshots: changing source canon never silently recasts a video. */
 export default function CreativeSetupPanel({ project, onSave, onPendingChange }) {
@@ -25,6 +39,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
   const [newName, setNewName] = useState('');
   const [newDescription, setNewDescription] = useState('');
   const [selectedCanon, setSelectedCanon] = useState([]);
+  const [catalogKind, setCatalogKind] = useState(null);
   const universeId = draft?.universeId ?? project.concept?.universeId ?? '';
   const universeReady = !universeId || (!loading && universe?.id === universeId);
   const subjects = editing ? (draft?.subjects || []) : (project.concept?.subjects || []);
@@ -69,7 +84,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
   };
   const add = (kind, name, description, canon) => {
     if (!name.trim() || subjects.length >= 24) return;
-    const subject = { id: `mvc-${uuidv4()}`, kind, name: name.trim().slice(0, 120), description: (description || '').slice(0, 1000), ...(kind === 'character' ? { role: subjects.some((s) => s.kind === 'character') ? 'supporting' : 'protagonist' } : {}), ...(canon?.id ? { canonId: canon.id } : {}) };
+    const subject = { id: `mvc-${uuidv4()}`, kind, name: name.trim().slice(0, 120), description: (description || '').slice(0, 1000), ...(kind === 'character' ? { role: subjects.some((s) => s.kind === 'character') ? 'supporting' : 'protagonist' } : {}), ...(canon?.id ? { canonId: canon.id } : {}), ...(canon?.ingredientId ? { ingredientId: canon.ingredientId } : {}) };
     setDraft((d) => ({ ...d, subjects: [...d.subjects, subject] }));
     if (canon) setSelectedCanon((items) => [...items, { subjectId: subject.id, kind, entry: canon }]);
   };
@@ -125,8 +140,25 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
         <select id={idFor(`pick-${kind}`)} value="" className={inputClass} disabled={subjects.length >= 24} onChange={(e) => {
           const entry = (universe[fields[kind]] || []).find((item) => item.id === e.target.value);
           if (entry) add(kind, entry.name, entry.physicalDescription || entry.description, entry);
-        }}><option value="">Add from universe…</option>{(universe[fields[kind]] || []).filter((entry) => !subjects.some((s) => s.canonId === entry.id && s.kind === kind)).map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select>
+        }}><option value="">Add from universe…</option>{(universe[fields[kind]] || []).filter((entry) => !subjects.some((s) => s.kind === kind && (s.canonId === entry.id || (entry.ingredientId && s.ingredientId === entry.ingredientId)))).map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select>
       </div>)}</div>}
+      <div className="flex flex-wrap items-center gap-x-3" role="group" aria-label="Add from catalog">
+        <span className="text-xs text-port-text-muted">From the catalog:</span>
+        {kinds.map(([kind, label]) => <button key={kind} type="button" disabled={subjects.length >= 24} onClick={() => setCatalogKind(kind)} className="text-sm text-port-accent min-h-[44px] disabled:opacity-50">Add {label.toLowerCase()}</button>)}
+      </div>
+      <IngredientPicker
+        open={!!catalogKind}
+        type={catalogKind || undefined}
+        excludeIds={subjects.map((s) => s.ingredientId).filter(Boolean)}
+        onClose={() => setCatalogKind(null)}
+        onSelect={(ingredient) => {
+          const kind = catalogKind;
+          setCatalogKind(null);
+          if (!ingredient || !kind) return;
+          const payload = ingredient.payload || {};
+          add(kind, ingredient.name || '', payload.physicalDescription || payload.description || '', catalogEntry(ingredient));
+        }}
+      />
       <p className="text-xs text-port-text-muted">Up to 24 subjects. Selected canon images are added as look references when space is available; enable “Condition frames” in Look references to use their pixels.</p>
       <ul className="space-y-2">{subjects.map((subject) => <li key={subject.id} className="border border-port-border rounded p-2 space-y-1">
         <div className="flex flex-wrap items-center gap-2"><span className="text-sm min-w-0 flex-1 break-words">{subject.name} · {subject.kind}</span>

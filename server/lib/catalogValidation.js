@@ -55,6 +55,7 @@ export const REF_KINDS = Object.freeze([
   'issue',
   'work',
   'creative-director',
+  'music-video',
 ]);
 
 // Relation kinds derived from the shared registry (`catalogTypes.js`) — adding
