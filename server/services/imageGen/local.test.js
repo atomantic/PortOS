@@ -1401,3 +1401,65 @@ it('drives a child that dies during the heavy-claim handoff to a terminal state 
     expect(releaseClaim.mock.calls.length).toBe(releasedBefore + 1);
   } finally { claimSpy.mockRestore(); }
 });
+
+describe('local render launch unwind (#11862)', () => {
+  const setup = () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    mockIsFlux2VenvHealthy.mockResolvedValue(true);
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+    child.kill = vi.fn();
+    return child;
+  };
+
+  it('a synchronous spawn throw clears the active job and emits a terminal failure', async () => {
+    setup();
+    mockSpawn.mockImplementationOnce(() => { throw new Error('ERR_INVALID_ARG_VALUE: NUL'); });
+    const { imageGenEvents } = await import('../imageGenEvents.js');
+    const { getActiveJob } = await import('./local.js');
+    const failed = new Promise((resolve) => imageGenEvents.once('failed', resolve));
+    await expect(generateImage({ modelId: 'qwen-image-2.1', prompt: 'spawn throws' })).rejects.toThrow('NUL');
+    expect((await failed).error).toContain('NUL');
+    expect(getActiveJob()).toBeNull();
+  });
+
+  it('a rejected claim handoff kills the spawned child and clears the active process', async () => {
+    const child = setup();
+    child.pid = 5151;
+    mockSpawn.mockReturnValue(child);
+    const heavyJobClaim = await import('../../lib/heavyJobClaim.js');
+    const claimSpy = vi.spyOn(heavyJobClaim, 'claimHeavyLocalJob').mockResolvedValueOnce({
+      ok: true,
+      release: releaseClaim,
+      handoffTo: async () => { throw new Error('ENOSPC: no space left'); },
+    });
+    const { getActiveJob } = await import('./local.js');
+    try {
+      await expect(generateImage({ modelId: 'qwen-image-2.1', prompt: 'handoff fails' })).rejects.toThrow('ENOSPC');
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+      expect(getActiveJob()).toBeNull();
+    } finally { claimSpy.mockRestore(); }
+  });
+
+  it('a spawn ENOENT closes the stepwise watcher, which carries an error listener', async () => {
+    const child = setup();
+    const fsMod = await import('fs');
+    const watcher = Object.assign(new EventEmitter(), { close: vi.fn() });
+    fsMod.watch.mockReturnValueOnce(watcher);
+    mockSpawn.mockReturnValue(child);
+    const heavyJobClaim = await import('../../lib/heavyJobClaim.js');
+    const claimSpy = vi.spyOn(heavyJobClaim, 'claimHeavyLocalJob').mockResolvedValueOnce({
+      ok: true,
+      release: releaseClaim,
+      handoffTo: async () => { child.emit('error', Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' })); },
+    });
+    const { imageGenEvents } = await import('../imageGenEvents.js');
+    const failed = new Promise((resolve) => imageGenEvents.once('failed', resolve));
+    try {
+      await generateImage({ modelId: 'qwen-image-2.1', prompt: 'enoent' });
+      await failed;
+      expect(watcher.close).toHaveBeenCalled();
+      expect(watcher.listenerCount('error')).toBeGreaterThan(0);
+    } finally { claimSpy.mockRestore(); }
+  });
+});
