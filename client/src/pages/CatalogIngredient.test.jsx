@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { act, render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 
 // Stable navigate mock — returning a fresh vi.fn() per call would change the
@@ -117,7 +117,7 @@ vi.mock('../services/apiImageVideo', () => ({
   })),
 }));
 vi.mock('../components/IngredientPicker', () => ({ default: () => null }));
-vi.mock('../components/MediaImage', () => ({ default: ({ src, alt }) => <img src={src} alt={alt} /> }));
+vi.mock('../components/MediaImage', () => ({ default: ({ src, alt, fallbackSrc }) => <img src={src} alt={alt} data-fallback-src={fallbackSrc} /> }));
 vi.mock('../components/loraTraining/CharacterLoraChip', () => ({ default: () => null }));
 vi.mock('../components/TagPicker', () => ({
   default: ({ value = [], onChange }) => (
@@ -417,6 +417,107 @@ describe('CatalogIngredient — character sheet', () => {
     expect(screen.getByDisplayValue('she/her')).toBeTruthy();
     expect(screen.getByDisplayValue('Decode the machine.')).toBeTruthy();
     expect(screen.getByDisplayValue('Being underestimated.')).toBeTruthy();
+  });
+
+  it('shows additional stored canon read-only on a locked character and preserves it on an unrelated save', async () => {
+    const character = {
+      ...CHAR_FIXTURE, name: 'Example courier',
+      payload: {
+        ...CHAR_FIXTURE.payload, locked: true,
+        ghost: 'Lost the first dispatch.', want: 'Deliver the final letter.', arcType: 'positive',
+        secrets: ['Keeps a duplicate map.'], sliders: { proactivity: 0, competence: null },
+        psychology: { assessment: 'unknown', assessmentNote: 'The narrator cannot read this mind.',
+          drives: { connection: { desire: 'A place at the table.' } } },
+        props: [{ name: 'Compass', purpose: 'Find the route.', materials: 'Brass', notes: 'One dent.' }],
+        expressions: [{ name: 'Alert', description: 'Eyes follow every doorway.' }],
+        handGestures: [{ name: 'Wait', description: 'Palm held forward.' }],
+        relationshipLinks: [{ targetCharacterId: 'chr-example-guide', type: 'ally', description: 'Shared a crossing.' }],
+        voiceCanon: { description: 'Low and steady.', approved: false, pronunciations: [{ term: 'Example', pronunciation: 'ig-ZAM-pul' }] },
+        firstAppearance: 'Opening chapter', missingFromProse: ['The compass origin.'],
+        futureCanon: { retained: true },
+      },
+    };
+    getCatalogIngredientDetails.mockResolvedValue(detailsOf(character));
+    updateCatalogIngredient.mockImplementation(async (_id, patch) => ({ ...character, ...patch }));
+    await renderPage('/casting/cat-chr-1/profile');
+    const panel = screen.getByRole('region', { name: 'Additional character canon' });
+    const canon = within(panel);
+    for (const value of ['Lost the first dispatch.', 'Deliver the final letter.', 'Keeps a duplicate map.', '0',
+      'unknown', 'The narrator cannot read this mind.', 'A place at the table.', 'Compass',
+      'Eyes follow every doorway.', 'Palm held forward.', 'chr-example-guide', 'Low and steady.',
+      'Candidate', 'ig-ZAM-pul', 'Opening chapter', 'The compass origin.']) {
+      expect(canon.getByText(value)).toBeInTheDocument();
+    }
+    expect(canon.getByText(/Materials: Brass/)).toBeInTheDocument();
+    expect(canon.queryByRole('textbox')).not.toBeInTheDocument();
+    expect(canon.queryByText('Competence')).not.toBeInTheDocument();
+    expect(canon.queryByText(/futureCanon|retained/)).not.toBeInTheDocument();
+    expect(updateCatalogIngredient).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Example route keeper' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => expect(updateCatalogIngredient).toHaveBeenCalledWith(character.id,
+      expect.objectContaining({ name: 'Example route keeper', payload: character.payload }), expect.anything()));
+  });
+
+  it('preserves an explicit not-applicable assessment and safely skips malformed optional canon', async () => {
+    getCatalogIngredientDetails.mockResolvedValue(detailsOf({
+      ...CHAR_FIXTURE,
+      payload: { ...CHAR_FIXTURE.payload, ghost: { invalid: true }, secrets: [null, {}],
+        props: [null, {}, { name: { invalid: true } }], expressions: 'invalid', handGestures: [false],
+        relationshipLinks: [null], voiceCanon: [], sliders: { competence: false },
+        psychology: { assessment: 'not-applicable', drives: { survival: null } } },
+    }));
+    await renderPage();
+    const canon = within(screen.getByRole('region', { name: 'Additional character canon' }));
+    expect(canon.getByText('not-applicable')).toBeInTheDocument();
+    expect(canon.queryByRole('button', { name: 'Props' })).not.toBeInTheDocument();
+    expect(canon.queryByText(/\[object Object\]|false|invalid/)).not.toBeInTheDocument();
+  });
+
+  it('does not invent additional canon for an unfilled legacy character', async () => {
+    await renderPage();
+    expect(screen.queryByRole('region', { name: 'Additional character canon' })).not.toBeInTheDocument();
+  });
+
+  it('shows a stored generation prompt for a legacy character with no other canon details', async () => {
+    getCatalogIngredientDetails.mockResolvedValue(detailsOf({
+      ...CHAR_FIXTURE, payload: { prompt: 'An example courier in a blue coat, standing beside a milestone.' },
+    }));
+    await renderPage();
+    const canon = within(screen.getByRole('region', { name: 'Additional character canon' }));
+    expect(canon.getByText('Generation prompt')).toBeInTheDocument();
+    expect(canon.getByText('An example courier in a blue coat, standing beside a milestone.')).toBeInTheDocument();
+    expect(canon.queryByRole('textbox')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['nested canon', { psychology: { strategy: 'Takes the long route.' } }, 'Psychology'],
+    ['array fields', { aliases: ['Example alias'] }, 'Aliases'],
+    ['previously absent fields', { notes: '' }, 'Notes'],
+  ])('reports revision changes to %s even when editable scalar text matches', async (_label, changed, fieldLabel) => {
+    getCatalogIngredientDetails.mockResolvedValue({
+      ...detailsOf(CHAR_FIXTURE),
+      revisions: [{ ...CHAR_FIXTURE, id: 'rev-1', source: 'user', payload: { ...CHAR_FIXTURE.payload, ...changed } }],
+    });
+    await renderPage();
+    const history = within(screen.getByRole('heading', { name: /Revision history/ }).closest('section'));
+    fireEvent.click(history.getByRole('button'));
+    expect(history.queryByText('Identical to the current saved state.')).not.toBeInTheDocument();
+    expect(history.getByText('Additional fields changed')).toBeInTheDocument();
+    expect(history.getByText(fieldLabel)).toBeInTheDocument();
+  });
+
+  it('recognizes an identical complete revision despite object key order', async () => {
+    const payload = { ...CHAR_FIXTURE.payload, psychology: { strategy: 'Waits.', assessment: 'unknown' } };
+    const revisionPayload = { ...payload, psychology: { assessment: 'unknown', strategy: 'Waits.' } };
+    getCatalogIngredientDetails.mockResolvedValue({
+      ...detailsOf({ ...CHAR_FIXTURE, payload }),
+      revisions: [{ ...CHAR_FIXTURE, id: 'rev-1', source: 'user', payload: revisionPayload }],
+    });
+    await renderPage();
+    const history = within(screen.getByRole('heading', { name: /Revision history/ }).closest('section'));
+    fireEvent.click(history.getByRole('button'));
+    expect(history.getByText('Identical to the current saved state.')).toBeInTheDocument();
   });
 
   it('shows the source scrap by TITLE (not the bare id) and links to it, with siblings from the same source (#7617)', async () => {
@@ -791,6 +892,35 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     // Sheets don't carry the profile form or the general media panel.
     expect(screen.queryByLabelText('Name')).toBeNull();
     expect(screen.queryByAltText('mood.png')).toBeNull();
+  });
+
+  it('shows existing canon images on References even when no catalog media is attached', async () => {
+    getCatalogIngredientDetails.mockResolvedValue(detailsOf({
+      ...HERO, payload: { ...HERO.payload, locked: true,
+        imageRefs: ['existing.png', 'existing.png', null, {}], primaryImageRef: 'existing.png' },
+    }));
+    await renderPage('/casting/cat-chr-hero/references');
+    expect(screen.getAllByAltText('Example Hero canon reference')).toHaveLength(1);
+    expect(screen.getByAltText('Example Hero canon reference')).toHaveAttribute('src', '/data/images/existing.png');
+    expect(screen.getByAltText('Example Hero canon reference')).toHaveAttribute('data-fallback-src', '/data/image-refs/existing.png');
+    expect(screen.getByText('Primary canon reference')).toBeInTheDocument();
+    expect(screen.queryByText(/No media yet/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Detach', exact: true })).not.toBeInTheDocument();
+    const api = await import('../services/apiCatalog');
+    expect(api.attachCatalogIngredientMedia).not.toHaveBeenCalled();
+    expect(updateCatalogIngredient).not.toHaveBeenCalled();
+  });
+
+  it('does not repeat canon images already attached in a media role', async () => {
+    getCatalogIngredientDetails.mockResolvedValue({
+      ...detailsOf({ ...HERO, payload: { ...HERO.payload, imageRefs: ['mood.png', 'sheet-1.png', 'canon-only.png'] } }),
+      media: MEDIA,
+    });
+    await renderPage('/casting/cat-chr-hero/references');
+    const images = screen.getAllByRole('img').map((image) => image.getAttribute('src'));
+    expect(images.filter((src) => src === '/data/images/mood.png')).toHaveLength(1);
+    expect(images.filter((src) => src === '/data/images/canon-only.png')).toHaveLength(1);
+    expect(images).not.toContain('/data/images/sheet-1.png');
   });
 
   it('previews the chosen variant and posts it on Generate, then attaches the finished sheet', async () => {

@@ -56,6 +56,7 @@ import CatalogSheetsPanel, { ReferenceSheetPanel } from '../components/catalog/C
 import CatalogUnlockNotice from '../components/catalog/CatalogUnlockNotice';
 import CatalogPlatesPanel from '../components/catalog/CatalogPlatesPanel';
 import CatalogLooksPanel from '../components/catalog/CatalogLooksPanel';
+import CatalogCharacterCanon from '../components/catalog/CatalogCharacterCanon';
 import CharacterLoraChip from '../components/loraTraining/CharacterLoraChip';
 import TagPicker from '../components/TagPicker';
 import GenericIngredientFields from '../components/GenericIngredientFields';
@@ -67,6 +68,7 @@ import {
 } from '../lib/creativeLibraries';
 import { useCatalogTypes } from '../hooks/useCatalogTypes.jsx';
 import { timeAgo, formatDateTime } from '../utils/formatters';
+import { humanizeIntegrityField } from '../lib/characterIntegrity';
 
 // Per-type editor field list + badge color now come from the shared registry
 // (`client/src/lib/catalogTypes.js`). Each editor entry is `[key, label, kind]`
@@ -723,6 +725,7 @@ export default function CatalogIngredient() {
 
             {record.type === 'character' && (
               <>
+                <CatalogCharacterCanon payload={payload} />
                 {!tabs && <ReferenceSheetPanel payload={payload} universeRef={universeRef} />}
                 {/* Trained-LoRA link + dataset entry point. The catalog id IS the
                     ingredientId the trained sidecars carry; the universe entryId
@@ -804,6 +807,9 @@ export default function CatalogIngredient() {
         {(activeTab === 'profile' ? !tabs : activeTab === 'references' || activeTab === 'images') && (
           <MediaPanel
             media={tabs ? media.filter(isReferenceTabRow) : media}
+            canonImageRefs={Array.isArray(payload.imageRefs) ? payload.imageRefs.filter((ref) =>
+              !media.some((m) => (m.kind === 'portrait' || m.kind === 'reference') && m.mediaKey === ref)) : []}
+            primaryImageRef={payload.primaryImageRef}
             missingMedia={missingMedia}
             onAttach={handleAttachMedia}
             onSetPortrait={handleSetPortrait}
@@ -1369,7 +1375,7 @@ function GenerateImageControl({ ingredientId, name, description, universeId, onC
   );
 }
 
-function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, onUploadFile, onRecordVoice, genIngredientId, genName, genDescription, genUniverseId, onGenerated }) {
+function MediaPanel({ media, canonImageRefs = [], primaryImageRef, missingMedia, onAttach, onSetPortrait, onDetach, onUploadFile, onRecordVoice, genIngredientId, genName, genDescription, genUniverseId, onGenerated }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [busy, setBusy] = useState(false); // upload or transcription in flight
@@ -1378,6 +1384,7 @@ function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, on
   const list = Array.isArray(media) ? media : [];
   const portrait = list.find((m) => m.kind === 'portrait');
   const others = list.filter((m) => m.kind !== 'portrait');
+  const canonImages = [...new Set(canonImageRefs.filter((ref) => typeof ref === 'string' && ref.trim()))];
 
   const doUpload = async (file) => {
     if (!file || busy) return;
@@ -1485,7 +1492,26 @@ function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, on
         </div>
       )}
 
-      {list.length === 0 && (
+      {canonImages.length > 0 && (
+        <div className="mt-3 space-y-2">
+          <h3 className="text-xs font-semibold text-gray-300">Canon images</h3>
+          <p className="text-xs text-gray-500">Existing canon references, shown read-only.</p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            {canonImages.map((filename) => (
+              <figure key={filename} className="min-w-0 rounded border border-port-border overflow-hidden bg-port-bg">
+                <MediaImage src={`/data/images/${encodeURIComponent(filename)}`} alt={`${genName} canon reference`}
+                  fallbackSrc={`/data/image-refs/${encodeURIComponent(filename)}`}
+                  className="w-full aspect-square object-contain" />
+                <figcaption className="text-xs text-gray-400 p-2 break-words">
+                  {filename === primaryImageRef ? 'Primary canon reference' : 'Canon reference'}
+                </figcaption>
+              </figure>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {list.length === 0 && canonImages.length === 0 && (
         <p className="text-xs text-gray-500">No media yet. Attach a generated portrait, a mood/reference image, an uploaded file, or a recorded voice memo.</p>
       )}
 
@@ -1696,6 +1722,15 @@ function diffRevisionAgainstCurrent(revision, current, fields) {
     const to = curPayload[key] ?? '';
     if (String(from) !== String(to)) out.push({ key, label, from: String(from), to: String(to) });
   }
+  // Array editors and read-only/forward-compatible canon fields are not in
+  // editorFields. Their changes must never make a revision look identical.
+  const displayed = new Set(out.map((change) => change.key));
+  const additional = [...new Set([...Object.keys(revPayload), ...Object.keys(curPayload)])]
+    .filter((key) => !displayed.has(key) && !sameValue(revPayload[key], curPayload[key]));
+  if (additional.length > 0) out.push({
+    key: '__additional', label: 'Additional fields changed',
+    summary: additional.map(humanizeIntegrityField).join(', '),
+  });
   return out;
 }
 
@@ -1784,14 +1819,14 @@ function RevisionsPanel({ revisions, current, fields, onRestore }) {
                         {diff.map((d) => (
                           <div key={d.key} className="text-[11px]">
                             <dt className="text-gray-500 uppercase tracking-wider text-[9px] mb-0.5">{d.label}</dt>
-                            <dd className="grid grid-cols-1 sm:grid-cols-2 gap-1">
+                            {d.summary ? <dd className="text-gray-300 break-words">{d.summary}</dd> : <dd className="grid grid-cols-1 sm:grid-cols-2 gap-1">
                               <span className="px-1.5 py-0.5 rounded bg-port-error/10 text-port-error/90 break-words">
                                 {d.from || <em className="text-gray-600">empty</em>}
                               </span>
                               <span className="px-1.5 py-0.5 rounded bg-port-success/10 text-port-success/90 break-words">
                                 {d.to || <em className="text-gray-600">empty</em>}
                               </span>
-                            </dd>
+                            </dd>}
                           </div>
                         ))}
                       </dl>
