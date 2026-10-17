@@ -992,7 +992,7 @@ export async function generateManifest(snapshotDataDir, manifestPath, pgDumpPath
       }
       throw manifestReadFailure('data stat', err);
     });
-    if (!info || !info.isFile()) continue;
+    if (!info || !info.isFile() || isOsMetadataFile(basename(entry))) continue;
     files[entry] = await sha256File(filePath)
       .catch(err => { throw manifestReadFailure('data hash', err); });
   }
@@ -1444,7 +1444,9 @@ function manifestDataEntries(manifest, srcDir, subdirFilter) {
     if (dataPaths.has(normalized)) return null;
     dataPaths.add(normalized);
 
-    if (isRestorePreservedPath(normalized)) continue;
+    // Still recorded in dataPaths (inventory consistency), but never hashed:
+    // Finder may rewrite a hashed metadata file that restore never transfers.
+    if (isRestorePreservedPath(normalized) || isOsMetadataFile(segments.at(-1))) continue;
     if (!subdirFilter || normalized === subdirFilter || normalized.startsWith(`${subdirFilter}/`)) {
       selected.push({ filePath, expectedHash });
     }
