@@ -594,3 +594,49 @@ describe('FaceTime incoming-call watcher', () => {
     expect(probe).not.toHaveBeenCalled();
   });
 });
+
+describe('FaceTime call teardown re-entry', () => {
+  it('ends once when two overlapping polls both observe a remote hangup', async () => {
+    attachHost(socket());
+    await startCall({ origin: 'mind' });
+    recordTurn('caller', 'Bye');
+    probe.mockResolvedValue({ state: 'ended' });
+    await Promise.all([pollCall(), pollCall()]);
+    expect(appendJournal).toHaveBeenCalledTimes(1);
+    expect(enqueueMindMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('joins a teardown already held on hangup instead of pressing hangup again', async () => {
+    attachHost(socket());
+    await startCall({ origin: 'mind' });
+    recordTurn('caller', 'Bye');
+    let release;
+    hangup.mockImplementation(() => new Promise(resolve => { release = () => resolve({ state: 'ended' }); }));
+    const first = endCall('user-hangup');
+    const second = endCall('max-duration');
+    await vi.waitFor(() => expect(hangup).toHaveBeenCalledTimes(1));
+    release();
+    await Promise.all([first, second]);
+    expect(hangup).toHaveBeenCalledTimes(1);
+    expect(appendJournal).toHaveBeenCalledTimes(1);
+    expect(enqueueMindMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not start a second probe while the previous tick is still pending', async () => {
+    vi.useFakeTimers();
+    try {
+      attachHost(socket());
+      let release;
+      probe.mockImplementation(() => new Promise(resolve => { release = () => resolve({ state: 'connected' }); }));
+      await startCall();
+      probe.mockClear();
+      await vi.advanceTimersByTimeAsync(PROBE_INTERVAL_MS * 3);
+      expect(probe).toHaveBeenCalledTimes(1);
+      release();
+      await vi.advanceTimersByTimeAsync(PROBE_INTERVAL_MS);
+      expect(probe).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
