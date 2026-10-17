@@ -29,7 +29,8 @@ import { emitLog } from './cosEvents.js';
  * per-project tally, and exposes the exact `canSpawn` / `trackSpawn` closure the
  * scheduler uses to enforce the global slot cap AND the per-project cap.
  *
- * `availableSlots` = global cap minus currently-running agents (may be 0 or
+ * `availableSlots` = global cap minus currently-running agents minus in-flight
+ * spawns that have no running agent record yet (may be 0 or
  * negative if a config change shrank the cap below live load — callers still
  * guard with `availableSlots <= 0`). `perProjectLimit` falls back to the global
  * cap when `maxConcurrentAgentsPerProject` is unset/0, matching the scheduler's
@@ -40,6 +41,16 @@ import { emitLog } from './cosEvents.js';
  * against both the global slots and the budget. A task with no `metadata.app`
  * buckets into the `_self` project key (PortOS-on-itself work) so app-less tasks
  * can't bypass the per-project cap.
+ *
+ * Task ownership is tracked here too, so an id is admitted at most once. Two
+ * kinds of owner are invisible to `hasActiveTaskOwner` (it reads registered
+ * agents only): a task admitted earlier in THIS cycle (Priority 0 persists its
+ * task as pending, so Priority 2 reads it back with no agent yet), and a task
+ * whose spawn is still in flight from an earlier cycle (`inFlightTaskIds`, the
+ * `spawningTasks` set — passed in so this stays pure). Re-admitting either one
+ * spent a global/project/autonomous slot on a duplicate `task:ready` that the
+ * spawn guard then discarded. `isTaskOwned` exposes the same predicate so the
+ * admission passes can skip an owned task before their gates record deferrals.
  *
  * The THIRD cap is per local inference endpoint (issue #4834): a single GPU
  * can't hold N model contexts at once, so agents whose provider resolves to the
@@ -68,6 +79,7 @@ import { emitLog } from './cosEvents.js';
  * Idle review prechecks global/project capacity before preparation below.
  */
 export function createDequeueCapacity(state, {
+  inFlightTaskIds = [],
   agentsByProject = {},
   localEndpointCounts = {},
   localEndpointLimit = Infinity,
@@ -75,7 +87,8 @@ export function createDequeueCapacity(state, {
   onLocalEndpointHold = null,
 } = {}) {
   const runningAgents = Object.values(state.agents).filter(a => a.status === 'running').length;
-  const availableSlots = state.config.maxConcurrentAgents - runningAgents;
+  const inFlight = new Set(inFlightTaskIds);
+  const availableSlots = state.config.maxConcurrentAgents - runningAgents - countUnregisteredInFlight(inFlight, state.agents);
   const perProjectLimit = state.config.maxConcurrentAgentsPerProject || state.config.maxConcurrentAgents;
   // A caller passing 0/NaN would wedge every local-endpoint task forever; floor
   // at 1 so the cap degrades to "serialize", never to "never dispatch".
@@ -87,10 +100,13 @@ export function createDequeueCapacity(state, {
   const spawnedTaskIds = [];
   let spawned = 0;
 
+  // App eligibility probes have no task id yet; only real tasks can have an
+  // owner (a running legacy agent may also have no taskId).
+  const isTaskOwned = (task) => Boolean(task?.id)
+    && (hasActiveTaskOwner(task.id, state.agents) || inFlight.has(task.id) || spawnedTaskIds.includes(task.id));
+
   const admit = (task, ceiling, gateLocalEndpoint) => {
-    // App eligibility probes have no task id yet; only real tasks can have
-    // an owner (a running legacy agent may also have no taskId).
-    if (task.id && hasActiveTaskOwner(task.id, state.agents)) return false;
+    if (isTaskOwned(task)) return false;
     if (spawned >= ceiling) return false;
     const project = task.metadata?.app || '_self';
     if ((spawnProjectCounts[project] || 0) >= perProjectLimit) return false;
@@ -129,11 +145,26 @@ export function createDequeueCapacity(state, {
     canSpawn,
     canSpawnCommitted,
     trackSpawn,
+    isTaskOwned,
     // Live read of the running spawn count — a getter so callers always see the
     // current total after trackSpawn mutations rather than a stale snapshot.
     get spawned() { return spawned; },
     get spawnedTaskIds() { return spawnedTaskIds; },
   };
+}
+
+/**
+ * How many in-flight spawns hold a slot that `runningAgents` does not count yet:
+ * a task sits in `spawningTasks` for the whole spawn, but its agent only shows
+ * as `running` in state once registered. Both engines subtract this from their
+ * free-slot count so skipping the in-flight task cannot over-spawn past
+ * `maxConcurrentAgents`.
+ */
+export function countUnregisteredInFlight(inFlightTaskIds, agents = {}) {
+  const running = new Set(Object.values(agents).filter(a => a.status === 'running').map(a => a.taskId));
+  let count = 0;
+  for (const id of inFlightTaskIds) if (!running.has(id)) count++;
+  return count;
 }
 
 /**
