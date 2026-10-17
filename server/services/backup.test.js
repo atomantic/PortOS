@@ -4909,6 +4909,28 @@ describe('runBackup lifecycle', () => {
       await expect(fsp.stat(old)).rejects.toThrow();
     });
 
+    it('keeps the newest snapshot and prunes the oldest when the newest manifest is corrupt, and never deletes an unreadable-manifest snapshot (#11859)', async () => {
+      const fsp = await actualFs();
+      const oldest = await seedSnapshot(machineHost, '2020-01-01T00-00-00', { generatedAt: '2020-01-01T00:00:00.000Z' });
+      const corrupt = await seedSnapshot(machineHost, '2020-01-02T00-00-00');
+      await fsp.writeFile(joinPath(corrupt, 'manifest.json'), '{truncated');
+      const unreadable = await seedSnapshot(machineHost, '2019-12-31T00-00-00');
+      await fsp.writeFile(joinPath(unreadable, 'manifest.json'), '{truncated');
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const rsync = fakeProc();
+      spawn.mockReturnValue(rsync);
+      const pending = runBackup(destRoot, { emit: vi.fn() }, { retentionCount: 2 });
+      await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+      rsync.emit('close', 0);
+      await expect(pending).resolves.toMatchObject({ status: 'ok', prunedSnapshots: 1 });
+
+      await expect(fsp.stat(oldest)).rejects.toThrow();
+      await expect(fsp.stat(corrupt)).resolves.toBeDefined();
+      await expect(fsp.stat(unreadable)).resolves.toBeDefined();
+      expect(warn).toHaveBeenCalledWith('⚠️ Backup retention: kept snapshot 2019-12-31T00-00-00 (manifest unreadable)');
+    });
+
     it('does not prune anything when retentionCount is null (unlimited — the legacy/unset default)', async () => {
       const fsp = await actualFs();
       const old1 = await seedSnapshot(machineHost, '2020-01-01T00-00-00', { generatedAt: '2020-01-01T00:00:00.000Z' });
