@@ -37,6 +37,7 @@ const MODEL_RATE_AS_OF = Object.freeze({
   'claude-haiku-5-5': '2026-10-07',
   'claude-sonnet-5-5': '2026-10-07',
   'claude-opus-5-5': '2026-09-23',
+  'gemini-4-argon': '2026-10-17',
   'gpt-6.1-sol': '2026-09-29',
   'gpt-6-sol': '2026-09-22',
   'gpt-6-luna': '2026-09-22',
@@ -122,6 +123,8 @@ const EXACT_RATES = {
   'grok-4.3': [1.25, 2.5],
   'grok-build-0.1': [1.0, 2.0],
   // Google (Antigravity)
+  // Introductory standard rate through 2026-11-30; doubles to $4/$20 on 2026-12-01.
+  'gemini-4-argon': [2.0, 10.0],
   'gemini-3.1-pro-preview': [2.0, 12.0], // ≤200k-token tier
   'gemini-3.5-flash': [1.5, 9.0],
   'gemini-3.1-flash-lite': [0.25, 1.5],

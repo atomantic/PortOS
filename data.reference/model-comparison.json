@@ -58518,6 +58518,84 @@
       },
       "quota": null,
       "notes": "Sourced from Artificial Analysis (Claude Haiku 5.5 (Max)). Independent measurement; supersedes the publisher-launch-eval calibration for this effort. End-to-end response time is not published for this model."
+    },
+    {
+      "id": "google-gemini-4-argon-pricing-2026-10-17-standard",
+      "provider": "Google",
+      "model": "gemini-4-argon",
+      "effort": "unspecified",
+      "configuration": "Gemini API standard tier; uncached input / output tokens incl. thinking, introductory rate through 2026-11-30",
+      "billing": "api",
+      "benchmark": "Official API pricing (2026-10-17)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "retrievedAt": "2026-10-17T00:00:00.000Z",
+          "methodology": "Publisher list price, USD per million uncached input tokens, standard tier, introductory rate through 2026-11-30."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "retrievedAt": "2026-10-17T00:00:00.000Z",
+          "methodology": "Publisher list price, USD per million output tokens (thinking included), standard tier, introductory rate through 2026-11-30."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Official Gemini 4 Argon standard API rates: $2/M uncached input and $10/M output through 2026-11-30; from 2026-12-01 the standard rates double to $4/M input and $20/M output. Cached input (implicit caching) is $0.10/M, then $0.20/M. Batch and Flex are $1/$5 per M (then $2/$10); Priority is $3.60/$18 (then $7.20/$36). No prompt-length tier is published and there is no free tier. Cached input and the other tiers are separate classes not represented here. Quality, latency, and throughput are not published on this source."
+    },
+    {
+      "id": "aa-v4.3.2-google-gemini-4-argon-high",
+      "provider": "Google",
+      "model": "gemini-4-argon",
+      "effort": "high",
+      "configuration": "Published API model; high",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v4.3.2",
+      "quality": {
+        "value": 53,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-argon",
+          "retrievedAt": "2026-10-17T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2 composite score."
+        }
+      },
+      "costPerTask": {
+        "value": 1.99,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-argon",
+          "retrievedAt": "2026-10-17T00:00:00.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2; cost per task evaluation at the introductory $2/$10 rate (about $3.98 at the $4/$20 rate from 2026-12-01)."
+        }
+      },
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-argon",
+          "retrievedAt": "2026-10-17T00:00:00.000Z",
+          "methodology": "Published USD per million uncached input tokens (introductory rate through 2026-11-30)."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-argon",
+          "retrievedAt": "2026-10-17T00:00:00.000Z",
+          "methodology": "Published USD per million output tokens (introductory rate through 2026-11-30)."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Sourced from Artificial Analysis (Gemini 4 Argon (high)). Averages about 62k output tokens per index task. Speed is not yet published. Low and medium thinking levels have no published scores."
     }
   ]
 }
