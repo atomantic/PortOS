@@ -25,8 +25,8 @@
 
 import { spawn } from 'child_process';
 import { waitForChild, COMMAND_TIMEOUT_MS } from './childProcess.js';
-import { writeFile, rm, mkdir } from 'fs/promises';
-import { join, isAbsolute, normalize } from 'path';
+import { writeFile, rm, mkdir, readdir } from 'fs/promises';
+import { join, isAbsolute, normalize, resolve, dirname } from 'path';
 import { randomBytes } from 'crypto';
 
 // ---------------------------------------------------------------------------
@@ -412,6 +412,29 @@ export async function removeWorktree(repoPath, worktreePath) {
   await execGit(['worktree', 'remove', '--force', worktreePath], repoPath);
   await execGit(['worktree', 'prune'], repoPath);
   await rm(worktreePath, { recursive: true, force: true }).catch(() => {});
+}
+
+/**
+ * Remove every worktree left in `parentDir` by a repair a restart interrupted.
+ * The daemon runs one repair at a time, so at startup nothing there is in use.
+ * Each entry is unregistered from the repository that owns it (found via its
+ * git common dir) before the directory is deleted. Returns the swept ids.
+ */
+export async function sweepStaleWorktrees(parentDir) {
+  const entries = await readdir(parentDir).catch(() => []);
+  const swept = [];
+  for (const id of entries) {
+    const entry = join(parentDir, id);
+    const { code, stdout } = await execGit(['rev-parse', '--git-common-dir'], entry);
+    if (code === 0 && stdout.trim()) {
+      const repoPath = dirname(resolve(entry, stdout.trim()));
+      await execGit(['worktree', 'remove', '--force', entry], repoPath);
+      await execGit(['worktree', 'prune'], repoPath);
+    }
+    await rm(entry, { recursive: true, force: true }).catch(() => {});
+    swept.push(id);
+  }
+  return swept;
 }
 
 /**

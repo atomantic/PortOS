@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { writeFile, rename } from 'fs/promises';
 
 const harness = vi.hoisted(() => ({
-  apps: vi.fn(), pm2: vi.fn(), list: vi.fn(), provider: vi.fn(),
+  apps: vi.fn(), sweep: vi.fn(), validate: vi.fn(), pm2: vi.fn(), list: vi.fn(), provider: vi.fn(),
 }));
 vi.mock('./shared.js', () => ({
   DATA_DIR: '/example/data', AUTOFIXER_DIR: '/example/autofixer', INDEX_FILE: '/example/index.json',
@@ -10,6 +11,7 @@ vi.mock('./shared.js', () => ({
 vi.mock('fs/promises', () => ({
   readFile: vi.fn(async file => file.endsWith('index.json') ? '[]' : '{}'),
   writeFile: vi.fn(async () => {}), mkdir: vi.fn(async () => {}), access: vi.fn(async () => {}),
+  rename: vi.fn(async () => {}),
 }));
 vi.mock('../server/lib/agentGuard/index.js', () => ({ agentGuardEnv: () => ({}) }));
 vi.mock('../server/lib/cliProviderRun.js', () => ({
@@ -22,7 +24,8 @@ vi.mock('./sandbox.js', () => ({
   restrictedToolArgs: () => [], isGitRepo: async () => true,
   createDisposableWorktree: async () => ({ path: '/example/worktree' }),
   collectWorktreeDiff: async () => '', removeWorktree: vi.fn(),
-  validateProposedDiff: () => ({ ok: false, reason: 'No changes', files: [] }),
+  sweepStaleWorktrees: harness.sweep,
+  validateProposedDiff: harness.validate,
   applyDiffToLive: vi.fn(), revertDiffFromLive: vi.fn(), runVerifyCommand: vi.fn(),
 }));
 
@@ -36,6 +39,8 @@ beforeEach(() => {
   progressLog = vi.spyOn(console, 'log').mockImplementation(() => {});
   harness.apps.mockReset().mockResolvedValue([{ id: 'example', name: 'Example app', repoPath: '/example/repo', pm2ProcessNames: ['example-process'] }]);
   harness.list.mockReset().mockResolvedValue([{ name: 'example-process', pm2_env: { status: 'errored' } }]);
+  harness.validate.mockReset().mockReturnValue({ ok: false, reason: 'No changes', files: [] });
+  harness.sweep.mockReset().mockResolvedValue([]);
   harness.pm2.mockReset().mockResolvedValue({ stdout: '' });
   harness.provider.mockReset().mockResolvedValue({ error: 'Example agent stopped', exitCode: 1 });
 });
@@ -85,5 +90,29 @@ describe('Autofixer daemon repair input boundary', () => {
     expect(errorLog).not.toHaveBeenCalled();
     expect(harness.list).not.toHaveBeenCalled();
     expect(harness.provider).not.toHaveBeenCalled();
+  });
+
+  it('records an interrupted session for each worktree swept at startup', async () => {
+    harness.apps.mockResolvedValue([]);
+    harness.sweep.mockResolvedValue(['autofixer_example-process_1700000000000_abc123']);
+    await start();
+    const meta = writeFile.mock.calls.find(([f]) => String(f).endsWith('metadata.json'));
+    expect(JSON.parse(meta[1])).toMatchObject({ processName: 'example-process', interrupted: true, success: false });
+  });
+
+  it('writes the history index via temp file + rename', async () => {
+    await start();
+    const tmpWrite = writeFile.mock.calls.findIndex(([f]) => f === '/example/index.json.tmp');
+    expect(tmpWrite).toBeGreaterThanOrEqual(0);
+    expect(rename).toHaveBeenCalledWith('/example/index.json.tmp', '/example/index.json');
+  });
+
+  it('still cools the process down when persisting the session fails', async () => {
+    harness.provider.mockResolvedValue({ exitCode: 0 });
+    harness.validate.mockReturnValue({ ok: true, files: ['a.js'] });
+    writeFile.mockImplementation(async (f) => { if (String(f).endsWith('prompt.txt')) throw new Error('disk full'); });
+    await start();
+    await nextCycle();
+    expect(harness.provider).toHaveBeenCalledOnce();
   });
 });

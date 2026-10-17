@@ -12,6 +12,7 @@ import {
   createDisposableWorktree,
   collectWorktreeDiff,
   removeWorktree,
+  sweepStaleWorktrees,
   applyDiffToLive,
   execGit,
 } from './sandbox.js';
@@ -48,6 +49,18 @@ describe('git worktree isolation (integration)', () => {
   afterEach(async () => {
     assertTempPath(scratch, 'autofixer git fixture teardown');
     await rm(scratch, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it('sweeps leftover worktrees: removes the directory and unregisters it from the repo', async () => {
+    const parent = join(scratch, 'worktrees');
+    const wt = await createDisposableWorktree(repo, parent, 'autofixer_leaked_1_abc');
+    expect(await execGit(['worktree', 'list', '--porcelain'], repo).then((r) => r.stdout)).toContain('autofixer_leaked_1_abc');
+
+    expect(await sweepStaleWorktrees(parent)).toEqual(['autofixer_leaked_1_abc']);
+
+    await expect(readFile(join(wt.path, 'app.js'), 'utf8')).rejects.toThrow();
+    expect(await execGit(['worktree', 'list', '--porcelain'], repo).then((r) => r.stdout)).not.toContain('autofixer_leaked_1_abc');
+    expect(await sweepStaleWorktrees(join(scratch, 'missing'))).toEqual([]);
   });
 
   it('detects a git checkout', async () => {

@@ -218,6 +218,10 @@ describe('DEFAULT_EXCLUDES anchoring', () => {
   // ANY depth, so `model.obj` would drop a file of that name anywhere under data/.
   // That is a silent data-loss bug rather than a style nit, which is why it gets a
   // test rather than a convention.
+  it('excludes disposable Autofixer repair worktrees', () => {
+    expect(DEFAULT_EXCLUDES.map((e) => e.path)).toContain('/autofixer/worktrees/');
+  });
+
   it('anchors every default exclude at the data root', () => {
     const unanchored = DEFAULT_EXCLUDES.filter((e) => !e.path.startsWith('/'));
     expect(unanchored.map((e) => e.path)).toEqual([]);
