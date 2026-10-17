@@ -24,7 +24,7 @@ const syncLocks = new Map();
 // `updateMessageEvaluations` all share the one `${accountId}.json` cache file, so
 // two that interleave their load/save would clobber each other's writes. The tail
 // makes each one await the previous and re-read the freshest persisted state
-// inside its serialized region — mirroring `issueWriteTail` in pipeline/issues.js.
+// inside its serialized region — mirroring `queueSeriesIssuesWrite` in pipeline/issuesShared.js.
 const accountWriteQueue = createKeyCachedQueue();
 const summarySnapshots = createBoundedStateMap({ maxSize: 8 });
 const summaryReads = new Map();

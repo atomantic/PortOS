@@ -99,7 +99,7 @@ export async function getHistoryItem(id) {
 // same stale array and the later save clobbers the earlier's new entry, leaving
 // an orphaned file that's absent from the list/media-index and undeletable. A
 // module-level promise tail collapses concurrent mutations to a single writer
-// per file (the `issueWriteTail` pattern in AGENTS.md). `mutator(list)` receives
+// per file (the `createKeyCachedQueue` pattern in AGENTS.md). `mutator(list)` receives
 // the freshest persisted array and returns the array to persist (return the
 // same reference after mutating it in place, or a new array). Any writer that
 // can race another on this file should route through here.
