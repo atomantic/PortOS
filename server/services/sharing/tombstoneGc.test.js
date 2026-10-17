@@ -727,6 +727,31 @@ describe('sweepTombstones — per-record confirmed-push clamp (peer-sync-per-rec
     expect(A_DELETED_AT).toBeGreaterThanOrEqual(cutoff); // A NOT pruned
   });
 
+  it('keeps a tombstone whose row was last pushed after the delete but only confirmed a pre-delete snapshot (#11772)', async () => {
+    // peerSyncPush stamps lastConfirmedPushedAt at payload-snapshot time; a
+    // live push answered after the delete leaves lastPushedAt past deletedAt.
+    // GC must read the snapshot floor, not the response time, even on the
+    // manual graceMs:0 sweep with the per-peer ack cursor past deletedAt.
+    const snapshotAt = A_DELETED_AT - 1000;
+    getMinAckAcrossPeers.mockResolvedValue(B_DELETED_AT);
+    getPeers.mockResolvedValue([{ instanceId: 'peer-a', enabled: true }]);
+    mockSubs({
+      universe: [
+        {
+          peerId: 'peer-a', recordId: 'u-A',
+          createdAt: new Date(NOW - 60 * 60 * 1000).toISOString(),
+          lastConfirmedPushedAt: snapshotAt,
+          lastPushedAt: new Date(A_DELETED_AT + 1000).toISOString(),
+        },
+        { peerId: 'peer-a', recordId: 'u-B', createdAt: new Date(NOW - 60 * 60 * 1000).toISOString(), lastConfirmedPushedAt: NOW },
+      ],
+    });
+    await sweepTombstones({ now: NOW, graceMs: 0 });
+    const cutoff = pruneTombstonedUniverses.mock.calls[0][0];
+    expect(cutoff).toBe(snapshotAt + 1);
+    expect(A_DELETED_AT).toBeGreaterThanOrEqual(cutoff); // A NOT pruned
+  });
+
   it('prunes record-A tombstone once A push is confirmed past its deletedAt', async () => {
     // After A's delete-push finally lands, A's row confirm advances above its
     // deletedAt and the clamp no longer holds the line — A is prunable.
