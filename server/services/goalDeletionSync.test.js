@@ -90,6 +90,18 @@ describe('goal deletion across snapshot-federated peers (#9816)', () => {
     expect(await read()).toEqual(backOnA);
   });
 
+  it('persists a tombstone for a goal this peer never held (tombstone-only delta)', async () => {
+    const remote = { ...shared(), goalTombstones: [{ id: 'goal-never-held', deletedAt: DELETED_AT }] };
+    const before = shared();
+
+    const after = await pull(before, remote);
+    expect(after.goalTombstones).toEqual([{ id: 'goal-never-held', deletedAt: DELETED_AT }]);
+    expect(ids(after)).toEqual(ids(before));
+
+    // Replaying the same delta is a no-op: nothing further to write.
+    expect(await dataSync.applyRemote('goals', remote)).toEqual({ applied: false, count: 0 });
+  });
+
   it('rejects a stale goal from an older peer that omits tombstones, and keeps the tombstone', async () => {
     const peerA = await deleteOnPeer(shared(), 'goal-example');
     const legacyPayload = { goals: shared().goals, updatedAt: '2026-01-01T00:00:00.000Z' };

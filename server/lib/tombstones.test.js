@@ -126,12 +126,38 @@ describe('mergeTombstones', () => {
   });
 
   it('keeps the newest deletion on a key collision', () => {
-    const { merged } = mergeTombstones(
+    const { merged, changed } = mergeTombstones(
       [tomb('a.md', '2026-01-01T00:00:00.000Z')],
       [tomb('a.md', '2026-05-01T00:00:00.000Z')],
       OPTS
     );
     expect(merged).toEqual([tomb('a.md', '2026-05-01T00:00:00.000Z')]);
+    expect(changed).toBe(true);
+  });
+
+  it('reports a change when the remote brings only a new tombstone for a key local never held', () => {
+    const { merged, changed } = mergeTombstones([], [tomb('gone.md', '2026-04-01T00:00:00.000Z')], OPTS);
+    expect(merged).toEqual([tomb('gone.md', '2026-04-01T00:00:00.000Z')]);
+    expect(changed).toBe(true);
+  });
+
+  it('reports a change when only the deletion stamp advances (same key and count)', () => {
+    const { changed } = mergeTombstones(
+      [tomb('a.md', '2026-01-01T00:00:00.000Z')],
+      [tomb('a.md', '2026-02-01T00:00:00.000Z')],
+      OPTS
+    );
+    expect(changed).toBe(true);
+  });
+
+  it('keeps the local deletion when the remote one is older', () => {
+    const { merged, changed } = mergeTombstones(
+      [tomb('a.md', '2026-05-01T00:00:00.000Z')],
+      [tomb('a.md', '2026-01-01T00:00:00.000Z')],
+      OPTS
+    );
+    expect(merged).toEqual([tomb('a.md', '2026-05-01T00:00:00.000Z')]);
+    expect(changed).toBe(false);
   });
 
   it('reports no change when the remote adds nothing (older peer sends no key)', () => {
@@ -167,8 +193,8 @@ describe('pruneTombstones', () => {
 
   it('uses the newest matching record when several share a key', () => {
     const records = [
-      { filename: 'a.md', createdAt: '2026-01-01T00:00:00.000Z' },
       { filename: 'a.md', createdAt: '2026-06-01T00:00:00.000Z' },
+      { filename: 'a.md', createdAt: '2026-01-01T00:00:00.000Z' },
     ];
     expect(pruneTombstones(list, records, OPTS)).toEqual([]);
   });

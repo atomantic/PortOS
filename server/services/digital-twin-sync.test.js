@@ -486,6 +486,14 @@ describe('mergeAutobiographyStories', () => {
     expect(mergeAutobiographyStories(local, { stories: [{ id: 's1', createdAt: '2026-01-01' }], usedPrompts: ['a'] }).changed).toBe(false);
   });
 
+  it('reports a change when the peer brings only a tombstone for a story we never held', () => {
+    const local = { stories: [{ id: 's1', createdAt: '2026-01-01' }], usedPrompts: [] };
+    const remote = { stories: [{ id: 's1', createdAt: '2026-01-01' }], usedPrompts: [], deletedStories: [{ id: 'gone', deletedAt: '2026-03-01T00:00:00.000Z' }] };
+    const { merged, changed } = mergeAutobiographyStories(local, remote);
+    expect(changed).toBe(true);
+    expect(merged.deletedStories).toEqual([{ id: 'gone', deletedAt: '2026-03-01T00:00:00.000Z' }]);
+  });
+
   it('sorts merged stories by id (stable on-disk order for checksum convergence)', () => {
     const local = { stories: [{ id: 's3', createdAt: '2026-01-03' }], usedPrompts: ['z'] };
     const remote = { stories: [{ id: 's1', createdAt: '2026-01-01' }, { id: 's2', createdAt: '2026-01-02' }], usedPrompts: ['a'] };
@@ -567,6 +575,14 @@ describe('mergeSocialAccounts', () => {
     const { merged, changed } = mergeSocialAccounts(local, remote);
     expect(Object.keys(merged.accounts).sort()).toEqual(['a1', 'a2']);
     expect(changed).toBe(true);
+  });
+
+  it('reports a change when the peer brings only a tombstone for an account we never held', () => {
+    const local = { accounts: { a1: { platform: 'github', updatedAt: '2026-01-01' } } };
+    const remote = { accounts: { a1: { platform: 'github', updatedAt: '2026-01-01' } }, deletedAccounts: [{ id: 'gone', deletedAt: '2026-03-01T00:00:00.000Z' }] };
+    const { merged, changed } = mergeSocialAccounts(local, remote);
+    expect(changed).toBe(true);
+    expect(merged.deletedAccounts).toEqual([{ id: 'gone', deletedAt: '2026-03-01T00:00:00.000Z' }]);
   });
 
   it('LWW on a shared account by updatedAt', () => {
