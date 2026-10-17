@@ -1,10 +1,11 @@
-import { readFile, writeFile, mkdir, access } from 'fs/promises';
+import { readFile, writeFile, mkdir, access, rename } from 'fs/promises';
 import { join } from 'path';
 // Dependency-light shared module (node builtins + pure arg builder only), so
 // importing it from this standalone process doesn't pull in the AI toolkit.
 // Lets the autofixer honor the user's configured CLI provider/model instead
 // of hardcoding `claude -p`.
 import { pickCliProvider, runCliProviderPrompt } from '../server/lib/cliProviderRun.js';
+import { signalDetachedGroups } from '../server/lib/credentialBootstrap.js';
 import { agentGuardEnv } from '../server/lib/agentGuard/index.js';
 import {
   sanitizeChildEnv,
@@ -16,6 +17,7 @@ import {
   createDisposableWorktree,
   collectWorktreeDiff,
   removeWorktree,
+  sweepStaleWorktrees,
   applyDiffToLive,
   revertDiffFromLive,
   runVerifyCommand,
@@ -45,6 +47,8 @@ const FIX_COOLDOWN = 30 * 60 * 1000; // 30 minutes
 const CHECK_INTERVAL = 15 * 60 * 1000; // 15 minutes
 let checkTimer = null;
 let shuttingDown = false;
+// The repair in flight, so a shutdown can record it as interrupted.
+let activeRepair = null;
 
 // Parse JSON, returning `fallback` on read OR parse failure. A corrupt config
 // file (partial write, hand-edit) must not throw inside fixProcess — this runs
@@ -97,6 +101,33 @@ async function findAppByProcess(processName) {
 }
 
 // History management
+// Record a repair that never reached finalize (daemon restarted mid-run).
+async function recordInterrupted({ sessionId, processName, app, startTime, prompt = '', output = '' }) {
+  const endTime = new Date().toISOString();
+  const metadata = {
+    sessionId, startTime, endTime,
+    duration: new Date(endTime).getTime() - new Date(startTime).getTime(),
+    exitCode: -1, success: false, processName,
+    appName: app?.name, appId: app?.id, repoPath: app?.repoPath,
+    type: 'autofixer', isolated: true, interrupted: true,
+    error: 'interrupted: autofixer restarted during repair',
+  };
+  await saveSession(sessionId, prompt, output, metadata);
+}
+
+// Sweep worktrees leaked by repairs a restart interrupted, and record each.
+async function sweepInterruptedRepairs() {
+  const swept = await sweepStaleWorktrees(WORKTREES_DIR);
+  for (const sessionId of swept) {
+    const processName = sessionId.match(/^autofixer_(.+)_\d+_[a-z0-9]+$/)?.[1] || 'unknown';
+    const now = new Date().toISOString();
+    await recordInterrupted({ sessionId, processName, startTime: now }).catch((err) => {
+      console.error(`❌ [Autofixer] Could not record interrupted session ${sessionId}: ${err.message}`);
+    });
+  }
+  if (swept.length) console.warn(`🧹 [Autofixer] Swept ${swept.length} worktree(s) left by interrupted repairs`);
+}
+
 async function ensureHistoryDir() {
   await mkdir(SESSIONS_DIR, { recursive: true });
   await access(INDEX_FILE).catch(async () => {
@@ -116,7 +147,10 @@ async function loadIndex() {
 }
 
 async function saveIndex(index) {
-  await writeFile(INDEX_FILE, JSON.stringify(index, null, 2));
+  // Temp + rename: a signal mid-write must not truncate the live index.
+  const tmp = `${INDEX_FILE}.tmp`;
+  await writeFile(tmp, JSON.stringify(index, null, 2));
+  await rename(tmp, INDEX_FILE);
 }
 
 async function saveSession(sessionId, prompt, output, metadata, patch) {
@@ -243,13 +277,14 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
       ...(error ? { error } : {}),
     };
 
-    await saveSession(sessionId, prompt, output, metadata, patch);
-    console.log(`💾 [Autofixer] Saved session: ${sessionId}`);
-
     // Cool down whenever a usable fix was produced (promoted, staged, OR
     // applied-but-restart-failed) — not just on full success — so a crash the
     // agent already addressed doesn't re-trigger the LLM every 15-min cycle.
+    // Set before persisting: a failed history write must not disable the cooldown.
     if (cooldown ?? success) markAsFixed(processName);
+    activeRepair = null;
+    await saveSession(sessionId, prompt, output, metadata, patch);
+    console.log(`💾 [Autofixer] Saved session: ${sessionId}`);
     return { success, sessionId, output, ...(error ? { error } : {}) };
   };
 
@@ -273,6 +308,7 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
     return finalize({ success: false, exitCode: -1, error: `worktree isolation failed: ${wt.error}`, extra: { isolated: false } });
   }
   const worktreePath = wt.path;
+  activeRepair = { sessionId, processName, app, startTime, prompt, outputBuffer, worktreePath };
   // Strip host credentials the agent has no business seeing — it keeps only
   // system + AI-provider auth. provider.envVars still overlays inside the runner.
   const childEnv = sanitizeChildEnv(process.env);
@@ -469,13 +505,17 @@ async function main() {
   console.log(`⏳ [Autofixer] Fix cooldown: ${FIX_COOLDOWN / 60000} minutes per process`);
 
   await ensureHistoryDir();
+  await sweepInterruptedRepairs().catch((err) => {
+    console.error(`❌ [Autofixer] Worktree sweep failed: ${err.message}`);
+  });
 
   // Run immediately, then wait a full interval after each pass completes.
   await runCheckCycle();
 }
 
 // Graceful shutdown
-function shutdown() {
+async function shutdown() {
+  if (shuttingDown) return;
   shuttingDown = true;
   if (checkTimer) {
     clearTimeout(checkTimer);
@@ -483,6 +523,15 @@ function shutdown() {
   }
 
   console.log(`\n🛑 [Autofixer] Shutting down...`);
+  // Stop the in-flight provider (its detached group) and record the attempt.
+  // Worktree removal is left to the next startup's sweep, the guarantee.
+  signalDetachedGroups('SIGTERM');
+  if (activeRepair) {
+    const { outputBuffer, ...repair } = activeRepair;
+    await recordInterrupted({ ...repair, output: outputBuffer.join('') }).catch((err) => {
+      console.error(`❌ [Autofixer] Could not record interrupted session: ${err.message}`);
+    });
+  }
   process.exit(0);
 }
 
