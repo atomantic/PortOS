@@ -173,6 +173,11 @@ export async function pushRecordToPeer(sub, options = {}) {
     return { pushed: false, reason: 'unknown-local-instance' };
   }
 
+  // Delivery evidence is "peer holds state as of this time" (#11772): stamp
+  // BEFORE the record is read, not at response time, so a slow push of a
+  // pre-delete snapshot cannot raise lastConfirmedPushedAt past a tombstone
+  // it never carried and let tombstoneGc prune it.
+  const payloadSnapshotAtMs = Date.now();
   const payload = await buildPushPayload(sub, ourInstanceId);
   if (!payload) return { pushed: false, reason: 'record-not-found' };
 
@@ -365,7 +370,7 @@ export async function pushRecordToPeer(sub, options = {}) {
   const linkedTrackObligationSatisfied = sub.recordKind === 'musicVideoProject'
     && !trackSyncPending
     && (!trackOwed || Boolean(payload.linkedTrack));
-  const recordPushAcceptedAtMs = Date.now();
+  const recordPushAcceptedAtMs = payloadSnapshotAtMs;
   const deliveryEvidence = {
     recordPushAcceptedAtMs,
     linkedTrackObligationSatisfiedAtMs: linkedTrackObligationSatisfied ? recordPushAcceptedAtMs : null,

@@ -2148,6 +2148,33 @@ describe('peerSync', () => {
       expect(afterFail.lastConfirmedPushedAt).toBe(stamped); // unchanged
     });
 
+    it('stamps lastConfirmedPushedAt at payload-snapshot time, so a live push answered after the delete stays below deletedAt (#11772)', async () => {
+      // A push that read the record while live and whose response lands after
+      // the user deleted it only proves the peer holds the LIVE state. Stamping
+      // the floor at response time would lift it past the tombstone and let
+      // tombstoneGc prune a deletion the peer never received.
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+      let releaseFetch;
+      vi.mocked(peerFetch).mockImplementation(() => new Promise((resolve) => {
+        releaseFetch = () => resolve({ ok: true, json: async () => ({ missingAssets: [] }) });
+      }));
+      const sub = await subscribePeer(
+        { peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' },
+        { adoptedFromReverse: true },
+      );
+      const inFlight = pushRecordToPeer(sub);
+      await vi.waitFor(() => expect(releaseFetch).toBeTypeOf('function'));
+      await new Promise((r) => setTimeout(r, 5));
+      const deletedAt = Date.now();
+      await new Promise((r) => setTimeout(r, 5));
+      releaseFetch();
+      expect((await inFlight).pushed).toBe(true);
+      const refreshed = await findPeerSubscription('peer-a', 'universe', 'u1');
+      expect(refreshed.lastConfirmedPushedAt).toBeLessThan(deletedAt);
+      // The human-facing "last pushed" time still reports the response.
+      expect(Date.parse(refreshed.lastPushedAt)).toBeGreaterThan(deletedAt);
+    });
+
     it('handles a network-level failure without throwing (returns pushed:false)', async () => {
       vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
       vi.mocked(peerFetch).mockRejectedValue(new Error('ECONNREFUSED'));
