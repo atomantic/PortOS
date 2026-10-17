@@ -1080,7 +1080,7 @@ describe('mediaJobQueue', () => {
     expect(mediaJobQueue.getJob(job.jobId).error).toBe('History write failed');
   });
 
-  it.each([true, undefined])('preserves accepted or legacy cancellation results (%s)', async (accepted) => {
+  it.each([true, undefined, 'pending'])('preserves accepted, pending or legacy cancellation results (%s)', async (accepted) => {
     const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: { mode: 'grok', prompt: 'cancel render', videoProduction: { projectId: 'example-project', attemptId: 'example-attempt' } } });
     await waitFor(() => stubs.generateVideoGrok.mock.calls.length === 1);
     stubs.cancelVideo.mockImplementationOnce(() => {

@@ -42,7 +42,7 @@ import { isDisplaySleepEnabled, sleepDisplayForVideo, wakeDisplayForVideo } from
 import { loadHistory, mutateVideoHistory } from './history.js';
 import { estimateRenderMs } from './eta.js';
 import { spliceExtendSource } from './extendSplice.js';
-import { videoJobState } from './jobState.js';
+import { videoJobState, cancel as cancelLocalVideo } from './jobState.js';
 
 const MODULE_NOT_FOUND_RE = /ModuleNotFoundError: No module named ['"]([^'"]+)['"]/;
 const STDERR_TAIL_LINES = 40;
@@ -58,6 +58,7 @@ export async function spawnAndWatchVideo({
   jobId,
   batch = null,
   speedProfileId = null,
+  preparation = null,
   cleanupTempFiles,
   stepwiseDir,
   job,
@@ -837,6 +838,8 @@ export async function spawnAndWatchVideo({
     // still `proc.kill()` it directly by PID on cancel / watchdog. `cleanup: true`
     // lets the helper drop that scratch dir on every terminal path (close/error)
     // so it can't accumulate under data/videos.
+    // Last spawn gate; the spawn call follows with no intervening await.
+    preparation?.throwIfCanceled();
     firstProc = await spawnDetached(bin, args, {
       env: childEnv,
       controlDir: join(PATHS.videos, '.detached', jobId),
@@ -854,6 +857,8 @@ export async function spawnAndWatchVideo({
     // with it.
     takeEarlyExit = bufferChildExit(firstProc, { bufferOutput: true });
     videoJobState.activeProcess = firstProc;
+    // A cancel() during the spawn await saw no process; deliver it now.
+    if (preparation?.wasCanceled()) cancelLocalVideo();
     await heavyClaim.handoffTo?.(firstProc.pid);
   } catch (err) {
     await abandonBeforeWiring(err);

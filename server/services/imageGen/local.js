@@ -69,8 +69,17 @@ export const getActiveJob = () => activeJob;
 
 export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 
+// The job between stepwise-dir creation and a wired child. cancel() has no
+// process to signal in that window (heavy-claim wait, model unload), so it flags
+// the job and the pre-spawn gate aborts it.
+let preparing = null;
+
 export const cancel = () => {
-  if (!activeProcess) return false;
+  if (!activeProcess) {
+    if (!preparing) return false;
+    preparing.cancelRequested = true;
+    return 'pending';
+  }
   const proc = activeProcess;
   // KEEP activeProcess + activeJob set until proc.on('close') clears them.
   // Otherwise BUSY immediately allows a new generation while the SIGTERM'd
@@ -711,6 +720,8 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   // Per-job stepwise output dir under the OS temp dir. mflux writes one PNG
   // per inference step here; we watch and stream the latest as `currentImage`.
   const stepwiseDir = await mkdtemp(join(tmpdir(), 'portos-stepwise-'));
+  const preparation = { cancelRequested: false };
+  preparing = preparation;
 
   let heavyClaim = null;
   const releaseHeavyClaim = () => {
@@ -748,15 +759,23 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     }
     if (memoryReport.unloaded.length) console.log(`🧹 Image generation [${jobId.slice(0, 8)}] freed ${memoryReport.unloaded.length} resident model(s)`);
 
+    const childEnv = await hfChildEnv();
+    // Last spawn gate: a cancel() during the awaits above found no child to signal.
+    if (preparation.cancelRequested) {
+      throw new ServerError('Canceled before the render started', { status: 409, code: 'IMAGE_GEN_CANCELED' });
+    }
+
     console.log(`🎨 Generating image [${jobId.slice(0, 8)}] local: ${modelId} ${width}x${height} steps=${actualSteps} references=${validReferenceImagePaths.length}`);
     imageGenEvents.emit('started', { generationId: jobId, totalSteps: actualSteps });
     activeJob = { ...meta, generationId: jobId, totalSteps: actualSteps, step: 0, progress: 0, currentImage: null, mode: IMAGE_GEN_MODE.LOCAL };
 
-    proc = spawn(bin, args, safeChildProcessOptions({ env: await hfChildEnv(), stdio: ['ignore', 'pipe', 'pipe'] }));
+    proc = spawn(bin, args, safeChildProcessOptions({ env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] }));
     activeProcess = proc;
+    preparing = null;
     await heavyClaim.handoffTo?.(proc.pid);
     claimHandedOff = true;
   } catch (err) {
+    if (preparing === preparation) preparing = null;
     // Nothing is wired to this job yet, so it can never report its own terminal
     // event — unwind it exactly the way the busy branch above does, or a refusal
     // strands a `running` entry and its stepwise dir every time.

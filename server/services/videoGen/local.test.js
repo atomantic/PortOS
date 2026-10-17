@@ -3191,6 +3191,42 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
     ))).toEqual(expectedAnchors);
   });
 
+  it('cancel() while first-run weights are still preparing answers pending and never spawns', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const { cancel } = await import('./local.js');
+    vi.mocked(spawnDetached).mockClear();
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    let enteredWeights;
+    const entered = new Promise((resolve) => { enteredWeights = resolve; });
+    // quant_config.json is probed only by ensureMiniMaxH3Weights.
+    mockFindCachedRepoFile.mockImplementation(async (_repo, filename) => {
+      if (filename === 'quant_config.json') {
+        enteredWeights();
+        await gate;
+      }
+      return join('/mock/hf/snap', filename);
+    });
+    try {
+      const rendering = generateVideo({
+        jobId: 'h3-cancel-while-preparing',
+        modelId: 'minimax_h3_8bit',
+        prompt: 'a fox watches the rain',
+        width: 512, height: 320, numFrames: 141, fps: 24, mode: 'text',
+      });
+      const refused = expect(rendering).rejects.toMatchObject({ code: 'VIDEO_GEN_CANCELED' });
+      await entered;
+      expect(cancel()).toBe('pending');
+      release();
+      await refused;
+    } finally {
+      mockFindCachedRepoFile.mockImplementation(async (_repo, filename) => join('/mock/hf/snap', filename));
+    }
+    expect(spawnDetached).not.toHaveBeenCalled();
+    // Preparation ended with the render, so a later cancel has nothing to claim.
+    expect(cancel()).toBe(false);
+  });
+
   it('uses the pinned cache-only helper, locked sampler and credential-free environment', async () => {
     const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     const { hfChildEnv } = await import('../hfToken.js');
@@ -5466,6 +5502,33 @@ describe('generateVideo — Gemma prompt-encode watchdog relaunch', () => {
     expect(second.proc.kill).toHaveBeenCalledWith('SIGTERM');
     // …and the job still reports a terminal failure instead of hanging.
     expect(failures).toHaveLength(1);
+  });
+
+  // Before activeProcess is set, cancel() has no child to signal; the epoch
+  // taken at render entry is what delivers it once the spawn resolves.
+  it('stops the first child when a cancel lands during its spawn await', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const { cancel } = await import('./local.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    const first = makeDrivenProc(113);
+    spawnMock.mockClear();
+    spawnMock.mockImplementationOnce(async () => {
+      expect(cancel()).toBe('pending');
+      return first.proc;
+    });
+    await generateVideo({
+      jobId: 'cancel-during-first-spawn',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'a lighthouse in fog',
+      width: 512,
+      height: 512,
+      numFrames: 25,
+      fps: 24,
+      seed: 987654,
+    });
+
+    expect(first.proc.kill).toHaveBeenCalledWith('SIGTERM');
   });
 
   // A replacement child that never gets its close listener can never report a
