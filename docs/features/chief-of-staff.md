@@ -236,7 +236,7 @@ Nothing picks a tier automatically — not the description, priority, context si
 
 ### Temporary thinking sessions in the Mind UI
 
-Saved alternates are managed in **Mind → Models** (`/cos/mind?panel=models`). Adding, editing, previewing, or removing a preset writes only `persistentMindThinkingPresets` through `PATCH /api/cos/config` — it never starts a turn, never resumes a paused mind, never infers, and never downloads a model. A list PATCH replaces the whole array, because a merge cannot express "remove this one entry" and would resurrect a deleted preset.
+Saved alternates are managed in **Mind → Models** (`/cos/mind?panel=models`). Adding, editing, previewing, or removing a preset writes only `persistentMindThinkingPresets` through `PUT /api/cos/config` — it never starts a turn, never resumes a paused mind, never infers, and never downloads a model. Sending the list replaces the whole array (PUT merges top-level keys only), because a merge cannot express "remove this one entry" and would resurrect a deleted preset.
 
 The composer's **Send with another model** picker arms one preset for the **next single message**, and nothing else:
 
