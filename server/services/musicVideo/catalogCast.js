@@ -20,6 +20,8 @@ const PRIMARY_KEY = { character: 'physicalDescription', place: 'description', ob
 const UNIVERSE_FIELD = { character: 'characters', place: 'places', object: 'objects' };
 const REFERENCE_ROLE = { character: 'character', place: 'set', object: 'prop' };
 
+const isMusicVideoCastId = (id, kind) => new RegExp(`^cat-${TYPE_PREFIX[kind]}-mv-[0-9a-f]{32}$`).test(String(id || ''));
+
 function musicVideoCastIngredientId(projectId, subject) {
   const seed = `music-video:${projectId}:${subject.kind}:${subject.id}`;
   return `cat-${TYPE_PREFIX[subject.kind]}-mv-${createHash('sha256').update(seed).digest('hex').slice(0, 32)}`;
@@ -65,28 +67,39 @@ function catalogCastCandidates(project, { checkinOnly = false } = {}) {
     }));
 }
 
+const nameKey = (kind, name) => `${kind}:${String(name || '').trim().toLowerCase()}`;
+
 /**
- * Decide each candidate: link to the universe entry it was cast from, link to
- * a same-named record of the video's universe, link to the row a synced machine
- * already saved, or create. Reads only.
+ * Decide each candidate: link to the universe entry it was cast from, to a
+ * same-named record of the video's universe, to any other same-named catalog
+ * record, or to the row a synced machine already saved; otherwise create.
+ * `claimed` carries the creates already proposed in this run, so a name shared
+ * by two videos is created once and linked from the other. Reads only.
  */
-async function planCatalogCast(project, candidates, deps) {
+async function planCatalogCast(project, candidates, deps, claimed = new Map()) {
   const { catalogDB, getUniverse } = deps;
   const universeId = project.concept?.universeId || null;
   const universe = universeId ? await getUniverse(universeId).catch(() => null) : null;
   const universeRows = universeId ? await catalogDB.listIngredientsForRef('universe', universeId) : [];
   const plan = [];
   for (const candidate of candidates) {
+    const key = nameKey(candidate.kind, candidate.name);
     const canon = candidate.canonId && universe
       ? (universe[UNIVERSE_FIELD[candidate.kind]] || []).find((e) => e.id === candidate.canonId && e.ingredientId)
       : null;
-    const named = universeRows.find(({ ingredient }) => ingredient.type === candidate.kind
-      && ingredient.name.trim().toLowerCase() === candidate.name.trim().toLowerCase())?.ingredient;
+    const inUniverse = universeRows.find(({ ingredient }) => nameKey(ingredient.type, ingredient.name) === key)?.ingredient;
     const ownId = musicVideoCastIngredientId(project.id, { id: candidate.subjectId, kind: candidate.kind });
-    const target = canon ? { id: canon.ingredientId, name: canon.name } : named || await catalogDB.getIngredient(ownId);
-    plan.push(target
-      ? { ...candidate, action: 'link', ingredientId: target.id, ingredientName: target.name }
-      : { ...candidate, action: 'create', ingredientId: ownId });
+    // A canon entry keeps its ingredientId after its record is deleted.
+    const canonLive = canon ? await catalogDB.getIngredient(canon.ingredientId) : null;
+    const target = canonLive ? { id: canonLive.id, name: canonLive.name }
+      : inUniverse || (await catalogDB.findIngredientsByName(candidate.kind, [candidate.name]))[0]
+        || await catalogDB.getIngredient(ownId) || claimed.get(key);
+    if (target) {
+      plan.push({ ...candidate, action: 'link', ingredientId: target.id, ingredientName: target.name });
+    } else {
+      claimed.set(key, { id: ownId, name: candidate.name });
+      plan.push({ ...candidate, action: 'create', ingredientId: ownId });
+    }
   }
   return plan;
 }
@@ -127,20 +140,36 @@ async function commitCatalogCast(projectId, decisions, deps) {
     if (d.action === 'local') {
       stamps.set(subject.id, { localOnly: true });
       stats.kept++;
-    } else if (d.action === 'create') {
-      const item = { kind: subject.kind, name: subject.name, description: subject.description || '', imageId: images.get(subject.id) || null, ingredientId: musicVideoCastIngredientId(projectId, subject) };
+      continue;
+    }
+    if (d.action === 'link' && d.ingredientId) {
+      const target = await catalogDB.getIngredient(d.ingredientId);
+      if (target) {
+        if (target.type !== subject.kind) continue;
+        stamps.set(subject.id, { ingredientId: target.id });
+        stats.linked++;
+        continue;
+      }
+      // Only the record another video's subject was to create in this import
+      // (kept local there) is made here, at that same id: a later video then
+      // links to it, and a tombstone at the id blocks it. Any other missing
+      // target was deleted by the director and stays unlinked.
+      if (!isMusicVideoCastId(d.ingredientId, subject.kind)) continue;
+      const item = { kind: subject.kind, name: subject.name, description: subject.description || '', imageId: images.get(subject.id) || null, ingredientId: d.ingredientId };
       if (await createRecord(project, item, catalogDB)) {
         stamps.set(subject.id, { ingredientId: item.ingredientId });
         stats.created++;
-      } else {
-        stamps.set(subject.id, { localOnly: true });
-        stats.kept++;
       }
-    } else if (d.action === 'link' && d.ingredientId) {
-      const target = await catalogDB.getIngredient(d.ingredientId);
-      if (!target || target.type !== subject.kind) continue;
-      stamps.set(subject.id, { ingredientId: target.id });
-      stats.linked++;
+      continue;
+    }
+    if (d.action !== 'create') continue;
+    const item = { kind: subject.kind, name: subject.name, description: subject.description || '', imageId: images.get(subject.id) || null, ingredientId: musicVideoCastIngredientId(projectId, subject) };
+    if (await createRecord(project, item, catalogDB)) {
+      stamps.set(subject.id, { ingredientId: item.ingredientId });
+      stats.created++;
+    } else {
+      stamps.set(subject.id, { localOnly: true });
+      stats.kept++;
     }
   }
   if (!stamps.size) return { project, ...stats };
@@ -186,10 +215,11 @@ export async function saveCheckinCastToCatalog(projectId, deps = null) {
 export async function previewCatalogCastImport(deps = null) {
   const d = deps || await defaultDeps();
   const out = [];
+  const claimed = new Map();
   for (const project of await d.listProjects()) {
     const candidates = catalogCastCandidates(project);
     if (!candidates.length) continue;
-    out.push({ projectId: project.id, name: project.name || 'Untitled', items: await planCatalogCast(project, candidates, d) });
+    out.push({ projectId: project.id, name: project.name || 'Untitled', items: await planCatalogCast(project, candidates, d, claimed) });
   }
   return out;
 }

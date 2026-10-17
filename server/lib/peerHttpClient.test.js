@@ -149,6 +149,15 @@ describe('peerHttpClient', () => {
         expect(derivePeerAuthToken(syncSecret, 'other-instance-id')).not.toBe(token());
       });
 
+      it('does not send a pair token for a secret shorter than 32 characters', async () => {
+        await peerFetch('http://peer.example/api/cos/agents', {}, {
+          auth: { password: 'example-password' }, syncSecret: 'x'.repeat(31), peerAuthAccepted: true,
+        });
+        const { headers } = calls[0].options;
+        expect(headers['X-PortOS-Peer-Auth']).toBeUndefined();
+        expect(headers.Authorization).toBe(basic);
+      });
+
       it('keeps Basic beside the token until the receiver confirms it, and for unpaired peers', async () => {
         await peerFetch('http://peer.example/api/cos/agents', {}, { auth: { password: 'example-password' }, syncSecret });
         expect(calls[0].options.headers.Authorization).toBe(basic);

@@ -226,3 +226,23 @@ describe.skipIf(!runDb)('catalogDB facets + album filters (#1762)', () => {
     expect(facets.total).toBeGreaterThanOrEqual(4);
   });
 });
+
+describe.skipIf(!runDb)('catalogDB.findIngredientsByName', () => {
+  it('matches a live record of the type by trimmed, case-insensitive name or alias, oldest first', async () => {
+    const make = async (type, name, payload = {}) => {
+      const row = await catalogDB.createIngredient({ type, name, payload });
+      createdIngredientIds.add(row.id);
+      return row;
+    };
+    const first = await make('character', `  Juno Example ${nonce} `);
+    const aliased = await make('character', `The Drummer ${nonce}`, { aliases: [`juno example ${nonce}`] });
+    const otherType = await make('place', `Juno Example ${nonce}`);
+    const gone = await make('character', `Juno Example ${nonce}`);
+    await catalogDB.deleteIngredient(gone.id);
+
+    const found = await catalogDB.findIngredientsByName('character', [`JUNO EXAMPLE ${nonce}`]);
+    expect(found.map((r) => r.id)).toEqual([first.id, aliased.id]);
+    expect(found.map((r) => r.id)).not.toContain(otherType.id);
+    expect(await catalogDB.findIngredientsByName('character', ['  '])).toEqual([]);
+  });
+});

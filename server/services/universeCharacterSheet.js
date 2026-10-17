@@ -384,15 +384,6 @@ function subscribeToSheetJob(jobId, handlers) {
 }
 
 /**
- * Returns immediately with `{ jobId, generationId, filename, path }`.
- * Deferred copy + character stamp run when imageGenEvents emits 'completed';
- * any failure there is logged (the client tracks the render via SSE).
- *
- * `variant` selects the sheet style ('standard' = illustrated turnaround,
- * 'blueprint' = annotated concept sheet on white). Defaults to 'standard'
- * so existing callers (and the legacy route) stay unchanged.
- */
-/**
  * The queued image params for a sheet: typed overrides, labeled additions
  * (#11317), size, and the cloud/local model choice. Shared by every sheet
  * renderer AND its preview so what a preview shows is what the render sends.

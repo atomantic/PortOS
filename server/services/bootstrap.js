@@ -1222,6 +1222,9 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     // (ERR_SERVER_NOT_RUNNING → treated as success by closeServer), and
     // the bounded backstop in closeServer guarantees neither can hang shutdown even
     // if a future socket.io version changes which server it owns.
+    // Upgraded (WebSocket) sockets are invisible to closeAllConnections() but
+    // keep server.close() pending; Socket.IO has already sent its close frames.
+    httpDrain.destroyUpgraded();
     await Promise.all([
       closeServer(httpServer, 'HTTP server'),
       closeServer(localHttpServer, 'Local HTTP mirror')
