@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { createDatabaseMaintenanceJournal } from '../lib/databaseMaintenanceJournal.js';
 import { join, basename } from 'node:path';
 import { runInNewContext } from 'node:vm';
+import { z } from 'zod';
 
 // The runner body runs in a VM, but its extracted completion helper and
 // publication/rollback boundary must stay real. Share the VM's virtual files
@@ -131,7 +132,8 @@ function runner(assertDatabaseAdmission = vi.fn()) {
     } }, res);
     return { res, done };
   };
-  return { request, process, server, io, state, files, children, spawn, pty, commandExists, writeFile, withState, drainState };
+  const errorHandler = () => app.use.mock.calls.map(c => c[0]).findLast(fn => fn.length === 4);
+  return { errorHandler, request, process, server, io, state, files, children, spawn, pty, commandExists, writeFile, withState, drainState };
 }
 
 beforeEach(() => {
@@ -288,5 +290,35 @@ describe('runner shutdown through its real spawn and signal handlers', () => {
     expect(run.children[0].kill).not.toHaveBeenCalled();
     expect(run.process.exit).not.toHaveBeenCalled();
     expect(run.state.agents['agent-1']).toBeDefined();
+  });
+
+  it('answers rejected spawns with JSON error bodies and keeps a clean shutdown exit', async () => {
+    const maintenance = Object.assign(new Error('Database maintenance in progress'), { status: 503, code: 'DATABASE_MAINTENANCE' });
+    const run = runner(vi.fn(() => { throw maintenance; }));
+    const handler = run.errorHandler();
+    const reply = () => ({ headersSent: false, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; } });
+    for (const path of ['/spawn', '/spawn-tui']) {
+      const err = await run.request(path).done.catch(e => e);
+      const res = reply();
+      handler(err, {}, res, vi.fn());
+      expect(res.statusCode).toBe(503);
+      expect(res.body).toEqual({ error: 'Database maintenance in progress', code: 'DATABASE_MAINTENANCE' });
+    }
+    const zodErr = z.object({ agentId: z.string() }).safeParse({}).error;
+    const res = reply();
+    handler(zodErr, {}, res, vi.fn());
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toMatchObject({ code: 'VALIDATION_ERROR', error: expect.stringContaining('agentId') });
+    const generic = reply();
+    handler(new Error('boom'), {}, generic, vi.fn());
+    expect(generic.statusCode).toBe(500);
+    expect(generic.body).toEqual({ error: 'boom', code: 'RUNNER_ERROR' });
+    const sent = { ...reply(), headersSent: true };
+    const next = vi.fn();
+    handler(maintenance, {}, sent, next);
+    expect(next).toHaveBeenCalledWith(maintenance);
+    run.process.emit('SIGTERM');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(run.process.exit).toHaveBeenCalledExactlyOnceWith(0);
   });
 });
