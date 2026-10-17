@@ -208,6 +208,20 @@ describe('listIngredients card thumbnail', () => {
     const { items } = await catalogDB.listIngredients({ limit: 10 });
     expect(items[0].thumbnailKey).toBeNull();
   });
+
+  it('returns per-kind link counts as usage, defaulting to an empty object', async () => {
+    const db = await import('../lib/db.js');
+    db.query.mockResolvedValueOnce({ rows: [
+      ingredientRow({ id: 'cat-chr-a', ref_usage: { universe: 1, 'creative-director': 2 } }),
+      ingredientRow({ id: 'cat-chr-b', ref_usage: null }),
+    ] });
+    const { items } = await catalogDB.listIngredients({ limit: 10 });
+    const sql = db.query.mock.calls.at(-1)[0].replace(/\s+/g, ' ');
+    expect(sql).toMatch(/COUNT\(DISTINCT r\.ref_id\)/i);
+    expect(sql).toMatch(/r\.deleted = false/i);
+    expect(items[0].usage).toEqual({ universe: 1, 'creative-director': 2 });
+    expect(items[1].usage).toEqual({});
+  });
 });
 
 describe('getMaxSequences includes the media cursor', () => {

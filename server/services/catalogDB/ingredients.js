@@ -25,6 +25,8 @@ import {
   rowToRevision,
   HAS_LIVE_HOMING_REF,
   HAS_ANY_HOMING_REF,
+  HOMING_REF_KINDS_SQL,
+  liveHomingTargetSql,
 } from './shared.js';
 import { normalizeTags } from './tags.js';
 
@@ -324,6 +326,18 @@ const THUMBNAIL_KEY_SUBQUERY = `(
      LIMIT 1
   ) AS thumbnail_key`;
 
+// Per-kind count of the distinct records each row is linked to ({ universe: 1,
+// series: 2 }), for the "used in" line on library cards. Same light-path scope
+// as the thumbnail subquery.
+const REF_USAGE_SUBQUERY = `(
+    SELECT jsonb_object_agg(u.ref_kind, u.n) FROM (
+      SELECT r.ref_kind, COUNT(DISTINCT r.ref_id) AS n FROM catalog_ingredient_refs r
+       WHERE r.ingredient_id = catalog_ingredients.id AND r.deleted = false
+         AND (r.ref_kind NOT IN (${HOMING_REF_KINDS_SQL}) OR ${liveHomingTargetSql('r')})
+       GROUP BY r.ref_kind
+    ) u
+  ) AS ref_usage`;
+
 export async function listIngredients({ ids, type, tag, query: q, refKind = null, refId = null, unlinked = false, orphaned = false, scrapId = null, limit = 50, offset = 0, includeEmbedding = false, embeddingMissing = false, staleEmbeddingModel = null } = {}) {
   const conditions = ['deleted = false'];
   const params = [];
@@ -415,13 +429,13 @@ export async function listIngredients({ ids, type, tag, query: q, refKind = null
   // don't pay for the correlated subquery. The field rides ALONGSIDE
   // rowToIngredient's shape (attached below), so the sync/revision payloads
   // that share rowToIngredient stay untouched.
-  const cols = includeEmbedding ? '*' : `${INGREDIENT_LIGHT_COLS}, ${THUMBNAIL_KEY_SUBQUERY}`;
+  const cols = includeEmbedding ? '*' : `${INGREDIENT_LIGHT_COLS}, ${THUMBNAIL_KEY_SUBQUERY}, ${REF_USAGE_SUBQUERY}`;
   const result = await query(
     `SELECT ${cols} FROM catalog_ingredients ${where} ${orderBy} LIMIT $${idx++} OFFSET $${idx}`,
     params,
   );
   return {
-    items: result.rows.map((row) => ({ ...rowToIngredient(row), thumbnailKey: row.thumbnail_key ?? null })),
+    items: result.rows.map((row) => ({ ...rowToIngredient(row), thumbnailKey: row.thumbnail_key ?? null, usage: row.ref_usage ?? {} })),
     nextOffset: offset + result.rows.length,
   };
 }
